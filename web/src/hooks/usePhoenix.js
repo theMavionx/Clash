@@ -431,6 +431,30 @@ function phoenixSubaccountIndex(value) {
   return Number.isInteger(n) && n >= 0 ? n : 0;
 }
 
+function normalizePhoenixSubaccountIndices(indices) {
+  const set = new Set([0]);
+  for (const value of indices || []) {
+    const n = Number(value);
+    if (Number.isInteger(n) && n >= 0 && n <= 255) set.add(n);
+  }
+  return Array.from(set).sort((a, b) => a - b);
+}
+
+function phoenixSessionDelegatedSubaccounts(session) {
+  if (!session) return [];
+  if (!Array.isArray(session.delegatedSubaccounts)) return [];
+  return normalizePhoenixSubaccountIndices(
+    session.delegatedSubaccounts
+  );
+}
+
+function phoenixSessionCoversSubaccounts(session, requiredIndices = [0]) {
+  if (!session?.enabled || !session?.approved) return false;
+  const delegated = new Set(phoenixSessionDelegatedSubaccounts(session));
+  if (!delegated.size) return false;
+  return normalizePhoenixSubaccountIndices(requiredIndices).every(index => delegated.has(index));
+}
+
 function phoenixSubaccountSymbols(subaccount) {
   const symbols = new Set();
   for (const position of subaccount?.positions || []) {
@@ -1287,6 +1311,7 @@ export function usePhoenix() {
   const txClientFlightDisabledRef = useRef(false);
   const txClientReadyAtRef = useRef(0);
   const txClientInFlightRef = useRef(null);
+  const txClientInFlightKeyRef = useRef(null);
   const sessionKeyRef = useRef(null);
   const inviteCheckInFlightRef = useRef(null);
   useEffect(() => {
@@ -1381,15 +1406,17 @@ export function usePhoenix() {
     txClientFlightDisabledRef.current = false;
     txClientReadyAtRef.current = 0;
     txClientInFlightRef.current = null;
+    txClientInFlightKeyRef.current = null;
   }, []);
 
   useEffect(() => () => {
     disposeTransactionClient();
   }, [disposeTransactionClient]);
 
-  const getTransactionClient = useCallback(async (forceFresh = false) => {
+  const getTransactionClient = useCallback(async (forceFresh = false, options = {}) => {
     const endpoint = connection?.rpcEndpoint || null;
-    const disableFlight = shouldBypassPhoenixFlightForAuthority(walletAddr);
+    const disableFlight = shouldBypassPhoenixFlightForAuthority(walletAddr) || !!options?.disableFlight;
+    const clientKey = `${endpoint || ''}:${disableFlight ? 'no-flight' : 'flight'}`;
     const now = Date.now();
     const cached = txClientRef.current;
     const cacheFresh = cached
@@ -1398,7 +1425,9 @@ export function usePhoenix() {
       && now - txClientReadyAtRef.current < PHOENIX_TX_METADATA_TTL_MS;
 
     if (!forceFresh && cacheFresh) return cached;
-    if (!forceFresh && txClientInFlightRef.current) return txClientInFlightRef.current;
+    if (!forceFresh && txClientInFlightRef.current && txClientInFlightKeyRef.current === clientKey) {
+      return txClientInFlightRef.current;
+    }
 
     if (cached) disposeTransactionClient();
     const promise = (async () => {
@@ -1433,11 +1462,13 @@ export function usePhoenix() {
       throw new Error(errors.map(row => `${row.name}: ${row.message}`).join(' | ') || 'Phoenix metadata client failed');
     })();
     txClientInFlightRef.current = promise;
+    txClientInFlightKeyRef.current = clientKey;
     try {
       return await promise;
     } finally {
       if (txClientInFlightRef.current === promise) {
         txClientInFlightRef.current = null;
+        txClientInFlightKeyRef.current = null;
       }
     }
   }, [connection?.rpcEndpoint, disposeTransactionClient, walletAddr]);
@@ -1502,10 +1533,12 @@ export function usePhoenix() {
       : buildDepositIxsResolved(resolved);
   }, []);
 
-  const withFreshPhoenixMetadataRetry = useCallback(async (label, symbol, buildAndSend) => {
+  const withFreshPhoenixMetadataRetry = useCallback(async (label, symbol, buildAndSend, options = {}) => {
     const phx = phoenixSymbol(symbol);
     const runWithTransactionClient = async (forceFresh = false) => {
-      const orderClient = await getTransactionClient(forceFresh);
+      const orderClient = await getTransactionClient(forceFresh, {
+        disableFlight: !!options?.disableFlight,
+      });
       return buildAndSend(orderClient);
     };
     try {
@@ -1650,11 +1683,14 @@ export function usePhoenix() {
       return null;
     }
     const gasLamports = await getPhoenixOneTapSolLamports(connection, session.publicKey);
+    const delegatedSubaccounts = phoenixSessionDelegatedSubaccounts(session);
+    const ready = !!session.enabled && !!session.approved && delegatedSubaccounts.includes(0);
     setOneTapTrading({
-      enabled: !!session.enabled,
-      approved: !!session.approved,
+      enabled: ready,
+      approved: ready,
       required: false,
       delegate: session.publicKey,
+      delegatedSubaccounts,
       expiresAt: session.expiresAt,
       gasLamports,
       gasSol: gasLamports == null ? null : gasLamports / LAMPORTS_PER_SOL,
@@ -1672,8 +1708,23 @@ export function usePhoenix() {
     if (!walletAddr || walletMismatch) return null;
     const session = getPhoenixOneTapSession(walletAddr);
     if (!session?.enabled || !session?.approved) return null;
+    if (!phoenixSessionCoversSubaccounts(session, [0])) return null;
     return session;
   }, [walletAddr, walletMismatch]);
+
+  const getOneTapSessionForSubaccounts = useCallback((requiredIndices = [0]) => {
+    if (!walletAddr || walletMismatch) return null;
+    const session = getPhoenixOneTapSession(walletAddr);
+    if (!phoenixSessionCoversSubaccounts(session, requiredIndices)) return null;
+    return session;
+  }, [walletAddr, walletMismatch]);
+
+  const collectOneTapDelegationSubaccounts = useCallback(() => normalizePhoenixSubaccountIndices([
+    0,
+    ...subaccountsRef.current.map(phoenixSubaccountIndex),
+    ...positionsRef.current.map(phoenixSubaccountIndex),
+    ...ordersRef.current.map(phoenixSubaccountIndex),
+  ]), []);
 
   const sendOrderIxs = useCallback((instructions, label = 'phoenix.order', options = {}) => {
     const session = options?.allowOneTap === false ? null : getActiveOneTapSession();
@@ -2906,7 +2957,9 @@ export function usePhoenix() {
       if (nextEnabled) {
         const ok = await activate();
         if (!ok) throw new Error('Phoenix account is not ready');
+        await refreshTraderState({ force: true }).catch(() => null);
         const session = getOrCreatePhoenixOneTapSession(walletAddr);
+        const delegatedSubaccounts = collectOneTapDelegationSubaccounts();
         const gasLamports = await getPhoenixOneTapSolLamports(connection, session.publicKey);
         const topUpLamports = Math.max(
           0,
@@ -2920,17 +2973,19 @@ export function usePhoenix() {
             lamports: topUpLamports,
           }));
         }
-        instructions.push(await orderClient.ixs.buildDelegateTrader({
-          traderWallet: walletAddr,
-          traderPdaIndex: 0,
-          traderSubaccountIndex: 0,
-          newPositionAuthority: session.publicKey,
-        }));
+        for (const subaccountIndex of delegatedSubaccounts) {
+          instructions.push(await orderClient.ixs.buildDelegateTrader({
+            traderWallet: walletAddr,
+            traderPdaIndex: 0,
+            traderSubaccountIndex: subaccountIndex,
+            newPositionAuthority: session.publicKey,
+          }));
+        }
         const signature = await sendIxs(
           instructions,
           'phoenix.one_tap.enable',
           {
-            computeUnitLimit: 400_000,
+            computeUnitLimit: Math.min(1_000_000, 250_000 + delegatedSubaccounts.length * 100_000),
             preferWalletSendTransaction: true,
             fastBlockhash: true,
           },
@@ -2938,6 +2993,7 @@ export function usePhoenix() {
         markPhoenixOneTapSession(walletAddr, {
           enabled: true,
           approved: true,
+          delegatedSubaccounts,
           delegatedAt: Date.now(),
           lastSetupSignature: signature,
         });
@@ -2947,14 +3003,21 @@ export function usePhoenix() {
 
       const existing = getPhoenixOneTapSession(walletAddr);
       if (existing?.enabled) {
-        const revokeIx = await orderClient.ixs.buildDelegateTrader({
-          traderWallet: walletAddr,
-          traderPdaIndex: 0,
-          traderSubaccountIndex: 0,
-          newPositionAuthority: walletAddr,
-        });
-        await sendIxs(revokeIx, 'phoenix.one_tap.disable', {
-          computeUnitLimit: 300_000,
+        const revokeSubaccounts = normalizePhoenixSubaccountIndices([
+          ...phoenixSessionDelegatedSubaccounts(existing),
+          ...collectOneTapDelegationSubaccounts(),
+        ]);
+        const revokeIxs = [];
+        for (const subaccountIndex of revokeSubaccounts) {
+          revokeIxs.push(await orderClient.ixs.buildDelegateTrader({
+            traderWallet: walletAddr,
+            traderPdaIndex: 0,
+            traderSubaccountIndex: subaccountIndex,
+            newPositionAuthority: walletAddr,
+          }));
+        }
+        await sendIxs(revokeIxs, 'phoenix.one_tap.disable', {
+          computeUnitLimit: Math.min(1_000_000, 250_000 + revokeSubaccounts.length * 100_000),
           preferWalletSendTransaction: true,
           fastBlockhash: true,
         });
@@ -2976,7 +3039,7 @@ export function usePhoenix() {
     } finally {
       setLoading(false);
     }
-  }, [activate, connection, getTransactionClient, ownerPk, refreshOneTapTradingState, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [activate, collectOneTapDelegationSubaccounts, connection, getTransactionClient, ownerPk, refreshOneTapTradingState, refreshTraderState, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || walletMismatch || traderRegistered) return undefined;
@@ -3110,6 +3173,7 @@ export function usePhoenix() {
         const baseUnits = buildBaseUnitsFromMargin(phx, amount, leverage);
         const oneTapSession = getActiveOneTapSession();
         let rewardSubaccountIndex = 0;
+        let rewardPositionAuthority = oneTapSession?.publicKey || null;
         if (oneTapSession) {
           const policyCheck = oneTapOrderWithinPolicy({
             notionalUsd: Number(amount) * Number(leverage || 1),
@@ -3130,11 +3194,13 @@ export function usePhoenix() {
           });
           if (isPhoenixIsolatedOnlyMarket(market)) {
             const isolated = await resolvePhoenixIsolatedSubaccount(orderClient, phx);
-            if (oneTapSession && isolated.registerIx) {
+            const isolatedOneTapSession = getOneTapSessionForSubaccounts([0, isolated.subaccountIndex]);
+            if (isolatedOneTapSession && isolated.registerIx) {
               throw new Error('Phoenix one tap needs one wallet setup tx before trading this isolated market. Turn one tap off, place the first isolated order once, then enable one tap again.');
             }
             rewardSubaccountIndex = isolated.subaccountIndex;
-            const oneTapParams = oneTapSession ? { positionAuthority: oneTapSession.publicKey } : {};
+            const oneTapParams = isolatedOneTapSession ? { positionAuthority: isolatedOneTapSession.publicKey } : {};
+            rewardPositionAuthority = isolatedOneTapSession?.publicKey || null;
             const transferUsdc = Math.max(
               Number(amount),
               phoenixRequiredIsolatedTransferUsdc({
@@ -3165,7 +3231,7 @@ export function usePhoenix() {
               subaccount_index: isolated.subaccountIndex,
               subaccount_source: isolated.source,
               transfer_usdc: formatUsdcAmount(transferUsdc),
-              one_tap: !!oneTapSession,
+              one_tap: !!isolatedOneTapSession,
             });
             return sendOrderIxs(
               [isolated.registerIx, transferIx, orderIx].filter(Boolean),
@@ -3183,7 +3249,7 @@ export function usePhoenix() {
             traderSubaccountIndex: 0,
           });
           return sendOrderIxs(ix, 'phoenix.market', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
-        });
+        }, { disableFlight: !!oneTapSession });
         applyOptimisticMarginUse(amount);
         refreshTraderStateSoon([250, 1_000, 3_500, 8_000]);
         void reportPhoenixTradeTx({
@@ -3196,7 +3262,7 @@ export function usePhoenix() {
           price: mark,
           order_type: 'market',
           trade_kind: 'open',
-          position_authority: oneTapSession?.publicKey || null,
+          position_authority: rewardPositionAuthority,
           trader_subaccount_index: rewardSubaccountIndex,
         }).then(() => claimGold({ force: true, importFills: false }));
         setTimeout(() => claimGold({ force: true, importFills: false }), 12_000);
@@ -3219,7 +3285,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, ensurePhoenixPrice, getActiveOneTapSession, refreshTraderStateSoon, reportPhoenixTradeTx, resolvePhoenixIsolatedSubaccount, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, ensurePhoenixPrice, getActiveOneTapSession, getOneTapSessionForSubaccounts, refreshTraderStateSoon, reportPhoenixTradeTx, resolvePhoenixIsolatedSubaccount, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     void _tif;
@@ -3255,10 +3321,11 @@ export function usePhoenix() {
           });
           if (isPhoenixIsolatedOnlyMarket(market)) {
             const isolated = await resolvePhoenixIsolatedSubaccount(orderClient, phx);
-            if (oneTapSession && isolated.registerIx) {
+            const isolatedOneTapSession = getOneTapSessionForSubaccounts([0, isolated.subaccountIndex]);
+            if (isolatedOneTapSession && isolated.registerIx) {
               throw new Error('Phoenix one tap needs one wallet setup tx before trading this isolated market. Turn one tap off, place the first isolated order once, then enable one tap again.');
             }
-            const oneTapParams = oneTapSession ? { positionAuthority: oneTapSession.publicKey } : {};
+            const oneTapParams = isolatedOneTapSession ? { positionAuthority: isolatedOneTapSession.publicKey } : {};
             const transferUsdc = Math.max(
               Number(amount),
               phoenixRequiredIsolatedTransferUsdc({
@@ -3289,7 +3356,7 @@ export function usePhoenix() {
               subaccount_index: isolated.subaccountIndex,
               subaccount_source: isolated.source,
               transfer_usdc: formatUsdcAmount(transferUsdc),
-              one_tap: !!oneTapSession,
+              one_tap: !!isolatedOneTapSession,
             });
             return sendOrderIxs(
               [isolated.registerIx, transferIx, orderIx].filter(Boolean),
@@ -3307,7 +3374,7 @@ export function usePhoenix() {
             traderSubaccountIndex: 0,
           });
           return sendOrderIxs(ix, 'phoenix.limit', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
-        });
+        }, { disableFlight: !!oneTapSession });
         applyOptimisticMarginUse(amount);
         refreshTraderStateSoon([250, 1_000, 3_500, 8_000]);
         return { success: true, signature };
@@ -3319,7 +3386,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, getActiveOneTapSession, refreshTraderStateSoon, resolvePhoenixIsolatedSubaccount, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, getActiveOneTapSession, getOneTapSessionForSubaccounts, refreshTraderStateSoon, resolvePhoenixIsolatedSubaccount, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
     void _pairIndex;
@@ -3354,7 +3421,7 @@ export function usePhoenix() {
         if (!(Number(baseUnits) > 0)) throw new Error('Phoenix close amount is below this market lot size');
         const mark = Number(existing?.mark_price || pricesRef.current.find(p => p.symbol === phx)?.mark || 0);
         const priceLimitUsd = marketOrderPriceLimitUsd(closeSide, mark);
-        const oneTapSession = getActiveOneTapSession();
+        const oneTapSession = getOneTapSessionForSubaccounts(subaccountIndex > 0 ? [0, subaccountIndex] : [0]);
         const oneTapParams = oneTapSession ? { positionAuthority: oneTapSession.publicKey } : {};
         const signature = await withFreshPhoenixMetadataRetry('phoenix.close', phx, async (orderClient) => {
           const packet = await orderClient.orderPackets.buildMarketOrderPacket({
@@ -3377,7 +3444,7 @@ export function usePhoenix() {
             traderSubaccountIndex: subaccountIndex,
           });
           return sendOrderIxs(ix, 'phoenix.close', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
-        });
+        }, { disableFlight: !!oneTapSession });
         refreshTraderStateSoon();
         void reportPhoenixTradeTx({
           signature,
@@ -3402,7 +3469,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [claimGold, ensurePhoenixPrice, getActiveOneTapSession, positions, refreshTraderStateSoon, reportPhoenixTradeTx, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [claimGold, ensurePhoenixPrice, getOneTapSessionForSubaccounts, positions, refreshTraderStateSoon, reportPhoenixTradeTx, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
@@ -3418,7 +3485,7 @@ export function usePhoenix() {
         try {
           const existing = orders.find(o => String(o.order_id) === String(orderId) || String(o.orderSequenceNumber) === String(orderId));
           const subaccountIndex = Number(existing?._phoenixSubaccountIndex || 0);
-          const oneTapSession = getActiveOneTapSession();
+          const oneTapSession = getOneTapSessionForSubaccounts(subaccountIndex > 0 ? [0, subaccountIndex] : [0]);
           const oneTapParams = oneTapSession ? { positionAuthority: oneTapSession.publicKey } : {};
           const signature = await withFreshPhoenixMetadataRetry('phoenix.cancel', phx, async (orderClient) => {
             const ix = existing?.price
@@ -3438,7 +3505,7 @@ export function usePhoenix() {
                   traderSubaccountIndex: subaccountIndex,
                 });
           return sendOrderIxs(ix, 'phoenix.cancel', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
-        });
+        }, { disableFlight: !!oneTapSession });
         refreshTraderStateSoon();
         return { success: true, signature };
       } catch (e) {
@@ -3449,7 +3516,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [getActiveOneTapSession, orders, refreshTraderStateSoon, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [getOneTapSessionForSubaccounts, orders, refreshTraderStateSoon, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const setLeverage = useCallback(async () => ({ success: true }), []);
   const setMarginMode = useCallback(async (_symbol, isolated) => (
@@ -3523,8 +3590,8 @@ export function usePhoenix() {
           else lessTriggerOrder = trigger;
         }
 
+        const oneTapSession = getOneTapSessionForSubaccounts([subaccountIndex]);
         const signature = await withFreshPhoenixMetadataRetry('phoenix.tpsl', phx, async (orderClient) => {
-          const oneTapSession = getActiveOneTapSession();
           const oneTapParams = oneTapSession ? {
             positionAuthority: oneTapSession.publicKey,
             payer: oneTapSession.publicKey,
@@ -3560,7 +3627,7 @@ export function usePhoenix() {
             one_tap: !!oneTapSession,
           });
           return sendOrderIxs(instructions, 'phoenix.tpsl', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
-        });
+        }, { disableFlight: !!oneTapSession });
         const optimisticKey = phoenixPositionTpslKey(phx, position.side, subaccountIndex);
         tpslOptimisticRef.current.set(optimisticKey, {
           takeProfit: tp,
@@ -3619,7 +3686,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [ensureConditionalOrdersAccountIx, getActiveOneTapSession, positions, refreshTraderStateSoon, runOnce, sendOrderIxs, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [ensureConditionalOrdersAccountIx, getOneTapSessionForSubaccounts, positions, refreshTraderStateSoon, runOnce, sendOrderIxs, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
