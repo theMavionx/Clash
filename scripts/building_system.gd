@@ -4,6 +4,9 @@ extends Node3D
 ## Grid-based building system (Clash of Clans style)
 ## Grid is aligned to the gridPlane node in the scene
 
+const ALTAR_MODEL_SCENE_PATH: String = "res://Model/Altar/Models/Stylized_Altar_web.tscn"
+const ALTAR_MODEL_SCENE = preload(ALTAR_MODEL_SCENE_PATH)
+
 # ── Grid Settings ─────────────────────────────────────────────
 @export var grid_width: int = 27
 @export var grid_height: int = 27
@@ -102,7 +105,7 @@ var building_defs: Dictionary = {
 		"cells": Vector2i(3, 3),
 		"color": Color(0.45, 0.25, 0.55, 0.5),
 		"height": 0.35,
-		"scene": "res://Model/Altar/Models/Stylized_Altar.fbx",
+		"scene": ALTAR_MODEL_SCENE_PATH,
 		"model_scale": 0.21,
 		"model_offset": Vector3(0, -0.04, 0),
 		"model_rotation_y": 0.0,
@@ -480,6 +483,8 @@ static var _altar_effect_script_res: Script = null
 static func _load_packed_scene_resource(path: String) -> PackedScene:
 	if path == "":
 		return null
+	if path == ALTAR_MODEL_SCENE_PATH:
+		return ALTAR_MODEL_SCENE as PackedScene
 	if not ResourceLoader.exists(path, "PackedScene"):
 		return null
 	return ResourceLoader.load(path, "PackedScene") as PackedScene

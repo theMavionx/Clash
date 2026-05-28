@@ -1,6 +1,6 @@
 [gd_scene load_steps=214 format=3]
 
-[ext_resource type="PackedScene" path="res://Model/Altar/Models/Stylized_Altar.fbx" id="1"]
+[ext_resource type="PackedScene" path="res://Model/Altar/Models/Stylized_Altar_web.tscn" id="1"]
 [ext_resource type="Texture2D" path="res://Model/Altar/Textures/UnityHD/Stylized_Altar_MAT_BaseMap.png" id="2"]
 [ext_resource type="Texture2D" path="res://Model/Altar/Textures/UnityHD/Stylized_Altar_MAT_Emissive.png" id="3"]
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/3,4,5.glb" id="4"]

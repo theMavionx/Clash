@@ -32,6 +32,12 @@ const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'
 const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
 const AiChatPanel = lazy(lazyWithClientReload(() => import('./AiChatPanel'), 'AiChatPanel'));
 
+function isLocalAuthBypassEnabled() {
+  if (import.meta.env.VITE_DISABLE_LOCAL_AUTH_BYPASS === '1') return false;
+  if (typeof window === 'undefined') return false;
+  return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+}
+
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
   const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
@@ -201,7 +207,7 @@ export default function GameUI() {
 
   if (!ready) return null;
 
-  if (showRegister) {
+  if (showRegister && !isLocalAuthBypassEnabled()) {
     return <RegisterPanel />;
   }
 

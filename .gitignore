@@ -30,6 +30,12 @@ secrets/
 # Godot imports generated for web-only share images
 web/public/win.jpg.import
 web/public/lose.jpg.import
+8a23c78d-3b91-4342-922e-e474f4a136a1.jpg.import
+image copy.png.import
+image.png.import
+server/public/nft/voidspore/L1.png.import
+server/public/nft/voidspore/L2.png.import
+server/public/nft/voidspore/L3.jpg.import
 
 # MCP
 .mcp.json
