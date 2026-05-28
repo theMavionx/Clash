@@ -153,6 +153,11 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (!GODOT_RUNTIME_ASSETS.includes(url.pathname)) return;
 
+  if (IS_LOCAL_DEV) {
+    event.respondWith(fetch(new Request(event.request, { cache: 'reload' })));
+    return;
+  }
+
   event.respondWith(
     caches.open(CACHE_NAME).then((cache) =>
       cache.match(event.request).then((cached) => {

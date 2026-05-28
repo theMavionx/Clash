@@ -125,18 +125,27 @@ func send_to_react(action: String, data: Dictionary) -> void:
 	JavaScriptBridge.eval("window.onGodotMessage && window.onGodotMessage(%s)" % payload)
 
 
-func _local_guest_mode_enabled() -> bool:
+func _is_local_web_host() -> bool:
 	if not _is_web:
 		return false
 	var origin_value = JavaScriptBridge.eval("window.location.origin", true)
-	var href_value = JavaScriptBridge.eval("window.location.href", true)
-	var storage_value = JavaScriptBridge.eval("window.localStorage && window.localStorage.getItem('clash.localGuest')", true)
 	var origin: String = String(origin_value)
-	var href: String = String(href_value)
-	var storage: String = String(storage_value)
-	var is_local: bool = origin.contains("localhost") or origin.contains("127.0.0.1")
-	var requested: bool = href.contains("guest=1") or href.contains("guest=true") or storage == "1"
-	return is_local and requested
+	return origin.contains("localhost") or origin.contains("127.0.0.1") or origin.contains("[::1]")
+
+
+func _clear_local_web_auth(net: Node) -> void:
+	if not _is_local_web_host():
+		return
+	if not net:
+		return
+	net.token = ""
+	net.player_id = ""
+	net.display_name = ""
+	net.trophies = 0
+	net.wallet = ""
+	var cfg = ConfigFile.new()
+	cfg.save("user://auth.cfg")
+	JavaScriptBridge.eval("window.localStorage && window.localStorage.removeItem('clash.localGuest')", true)
 
 
 func _send_initial_state() -> void:
@@ -181,11 +190,10 @@ func _send_initial_state() -> void:
 		bs._sync_react_buildings()
 	# Check if need to register
 	var net = get_node_or_null("/root/Net")
+	if net:
+		_clear_local_web_auth(net)
 	if net and not net.has_token():
-		if _local_guest_mode_enabled():
-			call_deferred("_do_register", "LocalTester", "", "pacifica", 0)
-		else:
-			send_to_react("show_register", {})
+		send_to_react("show_register", {})
 	elif net:
 		send_to_react("state", {
 			"player_name": net.display_name,

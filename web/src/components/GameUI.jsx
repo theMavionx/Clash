@@ -33,11 +33,6 @@ const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'
 const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
 const AiChatPanel = lazy(lazyWithClientReload(() => import('./AiChatPanel'), 'AiChatPanel'));
 
-function isLocalRegistrationHidden() {
-  if (typeof window === 'undefined') return false;
-  return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-}
-
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
   const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
@@ -50,7 +45,6 @@ export default function GameUI() {
   const seekerMarkRef = useRef('');
   const guideAudioMutedRef = useRef(false);
   const guideAudioRestoreTimerRef = useRef(null);
-  const localRegisterStartedRef = useRef(false);
   useAgentActions();
 
   const [showTroops, setShowTroops] = useState(false);
@@ -68,16 +62,6 @@ export default function GameUI() {
     if (!ready) return;
     sendToGodot('set_sound_enabled', { enabled: readSoundEnabled() });
   }, [ready, sendToGodot]);
-
-  useEffect(() => {
-    if (!ready || !showRegister || !isLocalRegistrationHidden()) return;
-    if (player?.token || localRegisterStartedRef.current) return;
-    localRegisterStartedRef.current = true;
-    try {
-      window.localStorage?.setItem('clash.localGuest', '1');
-    } catch {}
-    sendToGodot('register', { name: 'LocalTester', wallet: '', dex: 'pacifica', fid: 0 });
-  }, [player?.token, ready, sendToGodot, showRegister]);
 
   useEffect(() => {
     if (!ready) return undefined;
@@ -217,7 +201,7 @@ export default function GameUI() {
 
   if (!ready) return null;
 
-  if (showRegister && !isLocalRegistrationHidden()) {
+  if (showRegister) {
     return <RegisterPanel />;
   }
 
