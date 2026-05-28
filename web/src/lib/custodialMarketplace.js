@@ -59,7 +59,7 @@ function isTransientDepositVerifyError(err) {
   const status = Number(err?.status || 0);
   const message = String(err?.body?.error || err?.message || '').toLowerCase();
   return [400, 403, 409, 502, 503].includes(status)
-    && /not confirmed|not found|not the nft owner|custody vault|transfer to custody|rpc/i.test(message);
+    && /not confirmed|not found|not the (?:nft|asset) owner|source wallet is not the asset owner|custody vault|transfer to custody|rpc/i.test(message);
 }
 
 function publicKeyString(value) {
