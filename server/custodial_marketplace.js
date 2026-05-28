@@ -237,6 +237,20 @@ function getRecoverableCustodiedOrderByAsset(assetChain, assetId, sellerPlayerId
   `).get(assetChain, assetId, sellerPlayerId, sellerWallet) || null;
 }
 
+function cancelAwaitingDepositOrder(order, { actorPlayerId = null, eventType = 'cancelled_before_deposit', data = {} } = {}) {
+  gameDb.db.transaction(() => {
+    gameDb.db.prepare(`
+      UPDATE custodial_marketplace_orders
+         SET status = 'cancelled',
+             cancelled_at = datetime('now'),
+             updated_at = datetime('now')
+       WHERE id = ? AND status = 'awaiting_deposit'
+    `).run(order.id);
+    insertEvent(order.id, eventType, { actorPlayerId, data });
+  })();
+  return getOrder(order.id);
+}
+
 function markOrderDepositVerified(order, { actorPlayerId = null, txHash = null, eventType = 'deposit_verified' } = {}) {
   gameDb.db.transaction(() => {
     gameDb.db.prepare(`
@@ -2050,7 +2064,8 @@ function mountCustodialMarketplace(router, ctx = {}) {
       const priceUnits = parseUsdcUnits(req.body?.priceUsdc ?? req.body?.price, 'Listing price');
       const { fee, royalty, sellerAmount } = quoteMarketplaceSplit(priceUnits, config.feeBps, config.royaltyBps);
       if (sellerAmount <= 0n) throw httpError(400, 'Listing price is too small after marketplace fee and royalty');
-      const existing = getOpenOrderByAsset(assetChain, assetId);
+      let assetInfo = null;
+      let existing = getOpenOrderByAsset(assetChain, assetId);
       if (existing) {
         if (String(existing.seller_player_id || '') !== String(req.player.id || '')) {
           throw httpError(409, 'This NFT already has an active custodial listing');
@@ -2067,16 +2082,46 @@ function mountCustodialMarketplace(router, ctx = {}) {
           } catch (err) {
             if (Number(err?.status) !== 403) throw err;
           }
-          return res.status(409).json({
-            error: 'This NFT already has a pending listing. Finish the custody transfer or cancel it from Orders.',
-            order: publicOrder(existing, { includePrivate: true }),
-          });
+          if (assetChain === 'solana') {
+            const onChainInfo = await verifyAssetOwner(assetChain, assetId, null).catch(() => null);
+            const onChainOwner = onChainInfo?.owner || '';
+            const playerWallet = normalizeAddressForChainSafe(assetChain, req.player?.wallet);
+            const requestOwnsAsset = onChainOwner && (
+              sameChainAddress(assetChain, onChainOwner, sellerWallet)
+              || sameChainAddress(assetChain, onChainOwner, connectedSellerWallet)
+              || sameChainAddress(assetChain, onChainOwner, playerWallet)
+            );
+            if (requestOwnsAsset && !sameChainAddress(assetChain, onChainOwner, existing.seller_wallet)) {
+              cancelAwaitingDepositOrder(existing, {
+                actorPlayerId: req.player.id,
+                eventType: 'cancelled_stale_seller_wallet',
+                data: {
+                  assetChain,
+                  assetId,
+                  staleSellerWallet: existing.seller_wallet,
+                  requestedSellerWallet: sellerWallet,
+                  connectedSellerWallet,
+                  onChainOwner,
+                },
+              });
+              console.warn(`[marketplace] cancelled stale pending Solana listing ${existing.id} for ${shortId(assetId)}; owner moved from ${shortId(existing.seller_wallet)} to ${shortId(onChainOwner)}`);
+              sellerWallet = onChainOwner;
+              assetInfo = onChainInfo;
+              existing = null;
+            }
+          }
+          if (existing) {
+            return res.status(409).json({
+              error: 'This NFT already has a pending listing. Finish the custody transfer or cancel it from Orders.',
+              order: publicOrder(existing, { includePrivate: true }),
+            });
+          }
+        } else {
+          return res.json({ success: true, alreadyListed: true, order: publicOrder(existing, { includePrivate: true }) });
         }
-        return res.json({ success: true, alreadyListed: true, order: publicOrder(existing, { includePrivate: true }) });
       }
-      let assetInfo = null;
       try {
-        assetInfo = await verifyAssetOwner(assetChain, assetId, sellerWallet);
+        assetInfo = assetInfo || await verifyAssetOwner(assetChain, assetId, sellerWallet);
       } catch (err) {
         if (assetChain === 'solana') {
           const onChainInfo = await verifyAssetOwner(assetChain, assetId, null).catch(() => null);
@@ -2198,10 +2243,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
       requireOrderSeller(order, req.player.id);
       if (!canCancelStatus(order)) throw httpError(409, `Listing is ${order.status}`);
       if (order.status === 'awaiting_deposit') {
-        gameDb.db.transaction(() => {
-          gameDb.db.prepare(`UPDATE custodial_marketplace_orders SET status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(order.id);
-          insertEvent(order.id, 'cancelled_before_deposit', { actorPlayerId: req.player.id });
-        })();
+        cancelAwaitingDepositOrder(order, { actorPlayerId: req.player.id });
         return res.json({ success: true, order: publicOrder(getOrder(order.id), { includePrivate: true }) });
       }
       const txHash = await transferAssetSameChain(order, order.seller_wallet, ctx);

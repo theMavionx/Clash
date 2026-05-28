@@ -15,6 +15,8 @@ import {
   getPhoenixBrowserRestClient,
   getPhoenixClient,
   getPhoenixProxyRestClient,
+  phoenixCandlesRoute,
+  phoenixFetch,
   phoenixSymbol,
   shouldBypassPhoenixFlightForAuthority,
 } from '../lib/phoenixClient';
@@ -496,6 +498,16 @@ function normalizeMarket(m) {
   const baseLotsDecimals = Number(m?.baseLotsDecimals ?? m?.units?.baseLotsDecimals ?? 4);
   const lotSize = 1 / 10 ** baseLotsDecimals;
   const maxLev = Math.max(1, ...(m?.leverageTiers || []).map(t => Number(t?.maxLeverage || 0)));
+  const stats = m?.stats || m?.marketStats || {};
+  const mark = firstFinite(
+    m?.markPrice?.price,
+    m?.markPrice,
+    m?.price,
+    stats.markPrice,
+    stats.mark_price,
+    stats.lastPrice,
+    stats.last_price
+  );
   return {
     symbol,
     base: symbol,
@@ -513,6 +525,7 @@ function normalizeMarket(m) {
     next_funding_rate: phoenixFundingToDecimal(m),
     volume_24h: 0,
     open_interest: 0,
+    ...(mark != null && mark > 0 ? { _mark: mark } : {}),
     _phoenix: m,
     _phoenixBaseLotsDecimals: baseLotsDecimals,
     _phoenixTickSizeRaw: tickSizeRaw,
@@ -693,7 +706,7 @@ function pricesFromFundingOverview(markets, fundingOverview) {
   }
   return markets
     .map(m => {
-      const p = bySymbol[m.symbol];
+      const p = bySymbol[m.symbol] || priceRowFromRawMarket(m);
       if (!p) return null;
       return {
         ...p,
@@ -702,6 +715,97 @@ function pricesFromFundingOverview(markets, fundingOverview) {
       };
     })
     .filter(Boolean);
+}
+
+function priceRowFromRawMarket(market = {}) {
+  const raw = market?._phoenix || market || {};
+  const symbol = phoenixSymbol(raw?.symbol || market?.symbol);
+  const stats = raw?.stats || raw?.marketStats || {};
+  const mark = firstFinite(
+    market?._mark,
+    raw?.markPrice?.price,
+    raw?.markPrice,
+    raw?.price,
+    stats.markPrice,
+    stats.mark_price,
+    stats.lastPrice,
+    stats.last_price
+  );
+  if (!symbol || mark == null || mark <= 0) return null;
+  const oracle = firstFinite(stats.oraclePrice, stats.oracle_price, raw?.oraclePrice, raw?.oracle_price, mark);
+  const previous = firstFinite(stats.prevDayMarkPrice, stats.prev_day_mark_price, mark);
+  const volume = firstFinite(stats.dayVolumeUsd, stats.day_volume_usd, market?.volume_24h, raw?.volume_24h, 0);
+  const openInterest = firstFinite(stats.openInterest, stats.open_interest, market?.open_interest, raw?.open_interest, 0);
+  return {
+    symbol,
+    mark: String(mark),
+    oracle: String(oracle ?? mark),
+    yesterday_price: previous != null && previous > 0 ? String(previous) : String(mark),
+    volume_24h: String(volume ?? 0),
+    open_interest: String(openInterest ?? 0),
+  };
+}
+
+function normalizePhoenixCandleRow(row) {
+  if (!row) return null;
+  const c = row.candle || row;
+  const mark = firstFinite(
+    c.markClose,
+    c.mark_close,
+    c.close,
+    c.c,
+    c.price,
+    c.markPrice,
+    c.mark_price
+  );
+  if (mark == null || mark <= 0) return null;
+  return {
+    mark,
+    previous: firstFinite(c.open, c.o, mark) || mark,
+    volume: firstFinite(c.volumeQuote, c.volume_quote, c.volume, 0) || 0,
+  };
+}
+
+async function priceRowFromPhoenixCandles(symbol, market = {}) {
+  const phx = phoenixSymbol(symbol);
+  if (!phx) return null;
+  const json = await phoenixFetch(phoenixCandlesRoute(phx, { timeframe: '1m', limit: 2 }));
+  const rows = Array.isArray(json)
+    ? json
+    : Array.isArray(json?.data)
+      ? json.data
+      : Array.isArray(json?.value)
+        ? json.value
+        : [];
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const candle = normalizePhoenixCandleRow(rows[i]);
+    if (!candle) continue;
+    return {
+      symbol: phx,
+      mark: String(candle.mark),
+      oracle: String(candle.mark),
+      yesterday_price: String(candle.previous),
+      volume_24h: String(firstFinite(market?.volume_24h, candle.volume, 0) || 0),
+      open_interest: String(firstFinite(market?.open_interest, 0) || 0),
+    };
+  }
+  return null;
+}
+
+async function fillMissingPriceRowsFromCandles(markets, rows, maxFallbacks = 6) {
+  const current = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  const existing = new Set(current.map(row => phoenixSymbol(row?.symbol)).filter(Boolean));
+  const missing = (markets || [])
+    .filter(market => {
+      const symbol = phoenixSymbol(market?.symbol);
+      return symbol && !existing.has(symbol);
+    })
+    .slice(0, maxFallbacks);
+  if (!missing.length) return current;
+  const fallbackRows = await Promise.all(missing.map(market => (
+    priceRowFromPhoenixCandles(market.symbol, market).catch(() => null)
+  )));
+  return [...current, ...fallbackRows.filter(Boolean)];
 }
 
 function phoenixSoftRateLimitedPayload(value) {
@@ -1853,7 +1957,11 @@ export function usePhoenix() {
   const fetchPrices = useCallback(async (marketList = marketsRef.current, options = {}) => {
     if (!isActiveDex || !marketList.length) return [];
     if (options.overview) {
-      return applyPriceRows(pricesFromFundingOverview(marketList, options.overview));
+      const rows = await fillMissingPriceRowsFromCandles(
+        marketList,
+        pricesFromFundingOverview(marketList, options.overview)
+      );
+      return applyPriceRows(rows);
     }
     const now = Date.now();
     if (!options.force && pricesRef.current.length && now - pricesFetchedAtRef.current < PHOENIX_PRICE_CACHE_MS) {
@@ -1872,7 +1980,11 @@ export function usePhoenix() {
         priceBackoffUntilRef.current = Date.now() + PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS;
         return pricesRef.current;
       }
-      return applyPriceRows(pricesFromFundingOverview(marketList, overview));
+      const rows = await fillMissingPriceRowsFromCandles(
+        marketList,
+        pricesFromFundingOverview(marketList, overview)
+      );
+      return applyPriceRows(rows);
     } catch (e) {
       const text = String(e?.message || e || '');
       if (/429|Too Many Requests/i.test(text) || Number(e?.status) === 429) {
@@ -1932,6 +2044,25 @@ export function usePhoenix() {
       return marketsRef.current;
     }
   }, [fetchPrices, isActiveDex, readPhoenixRestFallback, setPhoenixAccount]);
+
+  const ensurePhoenixPrice = useCallback(async (symbol) => {
+    const phx = phoenixSymbol(symbol);
+    if (!phx) return null;
+    const existing = pricesRef.current.find(p => phoenixSymbol(p?.symbol) === phx && Number(p?.mark) > 0);
+    if (existing) return existing;
+    const market = marketsBySymbolRef.current[phx];
+    const rawRow = priceRowFromRawMarket(market);
+    if (rawRow) {
+      mergePriceRows([rawRow]);
+      return rawRow;
+    }
+    const candleRow = await priceRowFromPhoenixCandles(phx, market).catch(() => null);
+    if (candleRow) {
+      mergePriceRows([candleRow]);
+      return candleRow;
+    }
+    return null;
+  }, [mergePriceRows]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -2785,6 +2916,7 @@ export function usePhoenix() {
       try {
         const ok = await activate();
         if (!ok) throw new Error('Phoenix account is not ready');
+        await ensurePhoenixPrice(phx);
         const priceRow = pricesRef.current.find(p => p.symbol === phx);
         const mark = Number(priceRow?.mark || 0);
         const sideEnum = sideToPhoenix(side);
@@ -2825,11 +2957,6 @@ export function usePhoenix() {
               traderPdaIndex: 0,
               traderSubaccountIndex: isolated.subaccountIndex,
             });
-            const sweepIx = await orderClient.ixs.buildTransferCollateralChildToParent({
-              authority: walletAddr,
-              traderPdaIndex: 0,
-              childSubaccountIndex: isolated.subaccountIndex,
-            });
             console.info('[Phoenix] isolated market order path', {
               symbol: phx,
               subaccount_index: isolated.subaccountIndex,
@@ -2837,7 +2964,7 @@ export function usePhoenix() {
               transfer_usdc: formatUsdcAmount(transferUsdc),
             });
             return sendIxs(
-              [isolated.registerIx, transferIx, orderIx, sweepIx].filter(Boolean),
+              [isolated.registerIx, transferIx, orderIx].filter(Boolean),
               'phoenix.market.isolated',
               { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT }
             );
@@ -2884,7 +3011,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, reportPhoenixTradeTx, resolvePhoenixIsolatedSubaccount, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, ensurePhoenixPrice, refreshTraderStateSoon, reportPhoenixTradeTx, resolvePhoenixIsolatedSubaccount, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     void _tif;
@@ -2935,11 +3062,6 @@ export function usePhoenix() {
               traderPdaIndex: 0,
               traderSubaccountIndex: isolated.subaccountIndex,
             });
-            const sweepIx = await orderClient.ixs.buildTransferCollateralChildToParent({
-              authority: walletAddr,
-              traderPdaIndex: 0,
-              childSubaccountIndex: isolated.subaccountIndex,
-            });
             console.info('[Phoenix] isolated limit order path', {
               symbol: phx,
               subaccount_index: isolated.subaccountIndex,
@@ -2947,7 +3069,7 @@ export function usePhoenix() {
               transfer_usdc: formatUsdcAmount(transferUsdc),
             });
             return sendIxs(
-              [isolated.registerIx, transferIx, orderIx, sweepIx].filter(Boolean),
+              [isolated.registerIx, transferIx, orderIx].filter(Boolean),
               'phoenix.limit.isolated',
               { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT }
             );
@@ -2988,6 +3110,7 @@ export function usePhoenix() {
       setLoading(true);
       setError(null);
       try {
+        await ensurePhoenixPrice(phx);
         const existing = positions.find(p => p.symbol === phx && p.side === side)
           || positions.find(p => p.symbol === phx)
           || null;
@@ -3049,7 +3172,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [claimGold, positions, refreshTraderStateSoon, reportPhoenixTradeTx, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [claimGold, ensurePhoenixPrice, positions, refreshTraderStateSoon, reportPhoenixTradeTx, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!walletAddr) return { error: 'Wallet not connected' };

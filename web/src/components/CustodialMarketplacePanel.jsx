@@ -817,27 +817,70 @@ export default function CustodialMarketplacePanel({
       } catch (err) {
         const pendingOrder = err?.body?.order;
         if (Number(err?.status) === 409 && pendingOrder?.status === 'awaiting_deposit') {
-          reportSeekerListingEvent('server_pending_listing', {
-            orderId: pendingOrder?.id || null,
-            assetChain,
-            assetId,
-            sellerWallet,
-            orderStatus: pendingOrder?.status || null,
-            error: errorDebug(err),
-          }, solWallet, 'warn');
-          updateListingFlow({
-            order: pendingOrder,
-            steps: { details: 'complete', transfer: 'active' },
-            message: 'Existing listing found. Continue by transferring the NFT to escrow.',
-          });
-          const deposited = await depositListingOrder(pendingOrder, selectedNft);
-          setNotice(listedNotice(deposited));
-          setPriceInput('');
-          setView('orders');
-          await Promise.all([loadListings(), loadOrders(), loadOwned()]);
-          return;
+          const pendingSellerWallet = String(pendingOrder?.sellerWallet || '').trim();
+          if (pendingSellerWallet && !chainAddressEqual(assetChain, pendingSellerWallet, sellerWallet)) {
+            reportSeekerListingEvent('server_pending_stale_seller_wallet', {
+              orderId: pendingOrder?.id || null,
+              assetChain,
+              assetId,
+              requestedSellerWallet: sellerWallet,
+              pendingSellerWallet,
+              connectedSellerWallet,
+            }, solWallet, 'warn');
+            updateListingFlow({
+              order: pendingOrder,
+              steps: { details: 'active', transfer: 'pending', verify: 'pending', listed: 'pending' },
+              message: 'Cleaning up an old pending listing for this NFT.',
+            });
+            await cancelCustodialListing({ token: sessionToken, orderId: pendingOrder.id });
+            created = await createCustodialListing({
+              token: sessionToken,
+              assetChain,
+              assetId,
+              sellerWallet,
+              connectedSellerWallet,
+              sellerPayoutChain: payoutChain,
+              sellerPayoutAddress: payoutAddress,
+              priceUsdc: priceInput,
+            });
+            reportSeekerListingEvent('server_recreate_after_stale_pending_ok', {
+              oldOrderId: pendingOrder?.id || null,
+              orderId: created?.order?.id || null,
+              assetChain,
+              assetId,
+              sellerWallet,
+              onServerSellerWallet: created?.order?.sellerWallet || null,
+            }, solWallet);
+            updateListingFlow({
+              order: created?.order || null,
+              steps: { details: 'complete', transfer: 'active' },
+              message: created?.order?.status === 'awaiting_deposit'
+                ? 'Listing recreated. Confirm the NFT transfer to escrow.'
+                : 'Listing details verified.',
+            });
+          } else {
+            reportSeekerListingEvent('server_pending_listing', {
+              orderId: pendingOrder?.id || null,
+              assetChain,
+              assetId,
+              sellerWallet,
+              orderStatus: pendingOrder?.status || null,
+              error: errorDebug(err),
+            }, solWallet, 'warn');
+            updateListingFlow({
+              order: pendingOrder,
+              steps: { details: 'complete', transfer: 'active' },
+              message: 'Existing listing found. Continue by transferring the NFT to escrow.',
+            });
+            const deposited = await depositListingOrder(pendingOrder, selectedNft);
+            setNotice(listedNotice(deposited));
+            setPriceInput('');
+            setView('orders');
+            await Promise.all([loadListings(), loadOrders(), loadOwned()]);
+            return;
+          }
         }
-        throw err;
+        if (!created) throw err;
       }
       const order = created.order;
       if (order?.status === 'awaiting_deposit' && !created.resumed) {
