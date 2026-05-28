@@ -389,6 +389,27 @@ app.get('/api/admin/panel', (req, res) => {
   .log-pre { margin-top: 6px; max-height: 220px; overflow: auto; background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 8px; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }
   .feedback-message { max-width: 520px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
   .feedback-contact { font-size: 12px; color: #fbbf24; word-break: break-word; }
+  .local-tools-backdrop { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; background: rgba(2, 6, 23, 0.74); padding: 18px; }
+  .local-tools { width: min(720px, 96vw); max-height: 92vh; overflow: auto; background: #172033; border: 1px solid #334155; border-radius: 14px; box-shadow: 0 24px 80px rgba(0,0,0,0.55); }
+  .local-tools-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; background: #1f2937; border-bottom: 1px solid #334155; }
+  .local-tools-title { color: #f59e0b; font-size: 17px; font-weight: 900; }
+  .local-tools-sub { color: #94a3b8; font-size: 12px; margin-top: 2px; }
+  .local-tools-body { padding: 16px; }
+  .local-tool-section { margin-bottom: 18px; }
+  .local-tool-label { color: #dbeafe; font-size: 13px; font-weight: 900; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .local-tool-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; align-items: center; margin-bottom: 9px; }
+  .local-tool-name { color: #e5e7eb; font-size: 14px; font-weight: 800; }
+  .local-tool-buttons { display: grid; grid-template-columns: repeat(5, minmax(44px, 1fr)); gap: 7px; }
+  .local-tool-buttons.local-resource-buttons { grid-template-columns: repeat(4, minmax(78px, 1fr)); }
+  .local-wide { grid-column: 1 / -1; }
+  .local-danger { border-color: #f59e0b !important; color: #fef3c7 !important; background: #3b2a12 !important; }
+  .local-tool-status { min-height: 20px; color: #93c5fd; font-size: 12px; font-weight: 700; margin-top: 10px; }
+  @media (max-width: 620px) {
+    .local-tools-backdrop { padding: 0; align-items: stretch; }
+    .local-tools { width: 100vw; max-height: none; border-radius: 0; }
+    .local-tool-row { grid-template-columns: 1fr; gap: 5px; }
+    .local-tool-buttons.local-resource-buttons { grid-template-columns: repeat(2, minmax(78px, 1fr)); }
+  }
 </style>
 </head><body>
 
@@ -1073,21 +1094,69 @@ app.get('/api/admin/panel', (req, res) => {
   </div>
 </div>
 
+<div class="local-tools-backdrop" id="localToolsModal" onclick="if(event.target===this)closeBuildingTools()">
+  <div class="local-tools">
+    <div class="local-tools-head">
+      <div>
+        <div class="local-tools-title" id="localToolsTitle">Local Building Tools</div>
+        <div class="local-tools-sub">Localhost only. Adds buildings without resource cost.</div>
+      </div>
+      <button class="btn" onclick="closeBuildingTools()">Close</button>
+    </div>
+    <div class="local-tools-body">
+      <div class="local-tool-section">
+        <div class="local-tool-label">Max Village by Town Hall</div>
+        <div class="local-tool-buttons" id="localMaxVillageButtons"></div>
+      </div>
+      <div class="local-tool-section">
+        <div class="local-tool-label">Resources</div>
+        <div id="localResourceRows"></div>
+      </div>
+      <div class="local-tool-section">
+        <div class="local-tool-label">Everything</div>
+        <div class="local-tool-buttons local-resource-buttons">
+          <button class="btn local-danger local-wide" onclick="maxEverything()">Max Everything</button>
+        </div>
+      </div>
+      <div class="local-tool-section">
+        <div class="local-tool-label">Spawn Any Building</div>
+        <div id="localBuildingRows"></div>
+      </div>
+      <div class="local-tool-status" id="localToolsStatus"></div>
+    </div>
+  </div>
+</div>
+
 <script>
 let KEY = localStorage.getItem('admin_key') || '';
 let players = [], replays = [];
-const ADMIN_BUILDING_TYPES = [
-  'town_hall',
-  'mine',
-  'sawmill',
-  'barn',
-  'storage',
-  'port',
-  'altar',
-  'archer_tower',
-  'tombstone',
-  'turret',
-  'mage_tower',
+const IS_LOCAL_ADMIN_PANEL = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+let localToolsPlayer = '';
+const ADMIN_BUILDING_TOOL_DEFS = [
+  { type: 'altar', label: 'Altar', max: 1 },
+  { type: 'archer_tower', label: 'Archer Tower', max: 5 },
+  { type: 'barn', label: 'Barn', max: 4 },
+  { type: 'mage_tower', label: 'Mage Tower', max: 3 },
+  { type: 'mine', label: 'Mine', max: 4 },
+  { type: 'port', label: 'Port', max: 4 },
+  { type: 'sawmill', label: 'Sawmill', max: 4 },
+  { type: 'storage', label: 'Storage', max: 4 },
+  { type: 'tombstone', label: 'Tombstone', max: 4 },
+  { type: 'town_hall', label: 'Town Hall', max: 4 },
+  { type: 'turret', label: 'Turret', max: 5 },
+];
+const ADMIN_BUILDING_TYPES = ADMIN_BUILDING_TOOL_DEFS.map((b) => b.type);
+const ADMIN_RESOURCE_TOOL_DEFS = [
+  { key: 'gold', label: 'Gold' },
+  { key: 'wood', label: 'Wood' },
+  { key: 'ore', label: 'Ore' },
+  { key: 'all', label: 'All Resources' },
+];
+const ADMIN_RESOURCE_AMOUNTS = [
+  { label: '+10k', value: 10000 },
+  { label: '+50k', value: 50000 },
+  { label: '+100k', value: 100000 },
+  { label: 'Max', value: 999999999 },
 ];
 
 async function api(path) {
@@ -1264,7 +1333,7 @@ function renderPlayers() {
     '<td>' + (p.shield_active ? '<span class="badge badge-shield">' + p.shield_remaining + 'm left</span>' : '<span class="badge badge-off">none</span>') + '</td>' +
     '<td title="' + (p.last_seen_age_sec != null ? Math.round(p.last_seen_age_sec/60) + ' min ago' : 'never') + '">' + statusBadge(p) + '</td>' +
     '<td class="mono">' + (p.created_at||'').split(' ')[0] + '</td>' +
-    '<td><button class="btn" onclick="addResPlayer(\\'' + esc(p.name) + '\\')">+Res</button> <button class="btn" onclick="addBuildingPlayer(\\'' + esc(p.name) + '\\')">+Building</button> <button class="btn" onclick="resetTrophies(\\'' + esc(p.name) + '\\')">0 Troph</button> <button class="btn" onclick="resetPlayer(\\'' + esc(p.name) + '\\')">Reset</button> <button class="btn btn-danger" onclick="deletePlayer(\\'' + esc(p.name) + '\\')">Delete</button></td>' +
+    '<td><button class="btn" onclick="addResPlayer(\\'' + esc(p.name) + '\\')">+Res</button> ' + (IS_LOCAL_ADMIN_PANEL ? '<button class="btn" onclick="openBuildingTools(\\'' + esc(p.name) + '\\')">Build Tools</button> ' : '') + '<button class="btn" onclick="resetTrophies(\\'' + esc(p.name) + '\\')">0 Troph</button> <button class="btn" onclick="resetPlayer(\\'' + esc(p.name) + '\\')">Reset</button> <button class="btn btn-danger" onclick="deletePlayer(\\'' + esc(p.name) + '\\')">Delete</button></td>' +
     '</tr>'
   ).join('');
 }
@@ -1344,48 +1413,126 @@ async function addResPlayer(name) {
   loadAll();
 }
 
-async function addBuildingPlayer(name) {
-  const type = prompt(
-    'Building type for ' + name + ':\\n' + ADMIN_BUILDING_TYPES.join(', '),
-    'altar'
-  );
-  if (type === null) return;
-  const buildingType = String(type).trim().toLowerCase();
-  if (!ADMIN_BUILDING_TYPES.includes(buildingType)) {
-    alert('Unknown building type. Use one of:\\n' + ADMIN_BUILDING_TYPES.join(', '));
-    return;
-  }
+function setLocalToolsStatus(text, isError) {
+  const el = document.getElementById('localToolsStatus');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? '#fca5a5' : '#93c5fd';
+}
 
-  const levelText = prompt('Level:', '1');
-  if (levelText === null) return;
-  const level = Math.max(1, Math.floor(Number(levelText) || 1));
-  const useAutoSlot = confirm('Auto place in first free slot?\\nOK = auto, Cancel = enter grid/x/z');
-  const body = {
-    type: buildingType,
-    level,
-    auto_slot: useAutoSlot,
-    grant_purchase: true,
-  };
+function renderBuildingTools() {
+  const maxBox = document.getElementById('localMaxVillageButtons');
+  const rowsBox = document.getElementById('localBuildingRows');
+  const resourceBox = document.getElementById('localResourceRows');
+  if (!maxBox || !rowsBox || !resourceBox) return;
+  maxBox.innerHTML = [1, 2, 3, 4].map((level) =>
+    '<button class="btn" onclick="buildMaxVillage(' + level + ')">' + level + '</button>'
+  ).join('');
+  resourceBox.innerHTML = ADMIN_RESOURCE_TOOL_DEFS.map((def) => {
+    const buttons = ADMIN_RESOURCE_AMOUNTS.map((amount) =>
+      '<button class="btn" onclick="addAdminResources(\\'' + def.key + '\\',' + amount.value + ')">' + amount.label + '</button>'
+    ).join('');
+    return '<div class="local-tool-row">' +
+      '<div class="local-tool-name">' + esc(def.label) + '</div>' +
+      '<div class="local-tool-buttons local-resource-buttons">' + buttons + '</div>' +
+      '</div>';
+  }).join('');
+  rowsBox.innerHTML = ADMIN_BUILDING_TOOL_DEFS.map((def) => {
+    const buttons = Array.from({ length: def.max }, (_, i) => {
+      const level = i + 1;
+      return '<button class="btn" onclick="spawnAdminBuilding(\\'' + def.type + '\\',' + level + ')">' + level + '</button>';
+    }).join('');
+    return '<div class="local-tool-row">' +
+      '<div class="local-tool-name">' + esc(def.label) + '</div>' +
+      '<div class="local-tool-buttons">' + buttons + '</div>' +
+      '</div>';
+  }).join('');
+}
 
-  if (!useAutoSlot) {
-    const defaultGrid = buildingType === 'port' ? '1' : '0';
-    const gridIndex = prompt('Grid index:', defaultGrid);
-    if (gridIndex === null) return;
-    const gridX = prompt('Grid X:', '0');
-    if (gridX === null) return;
-    const gridZ = prompt('Grid Z:', '0');
-    if (gridZ === null) return;
-    body.grid_index = Math.floor(Number(gridIndex));
-    body.grid_x = Math.floor(Number(gridX));
-    body.grid_z = Math.floor(Number(gridZ));
-  }
+function openBuildingTools(name) {
+  if (!IS_LOCAL_ADMIN_PANEL) return;
+  localToolsPlayer = name;
+  document.getElementById('localToolsTitle').textContent = 'Local Building Tools - ' + name;
+  setLocalToolsStatus('Choose a building level or max village preset.');
+  renderBuildingTools();
+  document.getElementById('localToolsModal').style.display = 'flex';
+}
 
+function closeBuildingTools() {
+  document.getElementById('localToolsModal').style.display = 'none';
+}
+
+async function spawnAdminBuilding(type, level) {
+  if (!localToolsPlayer) return;
+  setLocalToolsStatus('Adding ' + type + ' Lv.' + level + '...');
   try {
-    const data = await apiPost('/admin/players/' + encodeURIComponent(name) + '/add-building', body);
-    alert('Added ' + data.building.type + ' #' + data.building.id + ' at grid ' + data.building.grid_index + ' (' + data.building.grid_x + ', ' + data.building.grid_z + ')');
+    const data = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/add-building', {
+      type,
+      level,
+      auto_slot: true,
+      grant_purchase: true,
+    });
+    setLocalToolsStatus('Added ' + data.building.type + ' Lv.' + data.building.level + ' at grid ' + data.building.grid_index + ' (' + data.building.grid_x + ', ' + data.building.grid_z + ').');
     loadAll();
   } catch (e) {
-    alert('Failed to add building: ' + e.message);
+    setLocalToolsStatus('Failed: ' + e.message, true);
+  }
+}
+
+async function addAdminResources(kind, amount) {
+  if (!localToolsPlayer) return;
+  const body = { gold: 0, wood: 0, ore: 0 };
+  if (kind === 'all') {
+    body.gold = amount;
+    body.wood = amount;
+    body.ore = amount;
+  } else if (body.hasOwnProperty(kind)) {
+    body[kind] = amount;
+  } else {
+    return;
+  }
+  setLocalToolsStatus('Adding resources...');
+  try {
+    const data = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/add-resources', body);
+    setLocalToolsStatus('Resources: gold ' + data.resources.gold + ', wood ' + data.resources.wood + ', ore ' + data.resources.ore + '.');
+    loadAll();
+  } catch (e) {
+    setLocalToolsStatus('Failed: ' + e.message, true);
+  }
+}
+
+async function buildMaxVillage(level) {
+  if (!localToolsPlayer) return;
+  if (!confirm('Clear current buildings and build max TH' + level + ' village for ' + localToolsPlayer + '?')) return;
+  setLocalToolsStatus('Building max TH' + level + ' village...');
+  try {
+    const data = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/max-village', {
+      town_hall_level: level,
+    });
+    setLocalToolsStatus('Built TH' + data.town_hall_level + ' village: ' + data.buildings_added + ' buildings.');
+    loadAll();
+  } catch (e) {
+    setLocalToolsStatus('Failed: ' + e.message, true);
+  }
+}
+
+async function maxEverything() {
+  if (!localToolsPlayer) return;
+  if (!confirm('Clear buildings, build max TH4 village, and fill all resources for ' + localToolsPlayer + '?')) return;
+  setLocalToolsStatus('Building max village...');
+  try {
+    const village = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/max-village', {
+      town_hall_level: 4,
+    });
+    const resources = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/add-resources', {
+      gold: 999999999,
+      wood: 999999999,
+      ore: 999999999,
+    });
+    setLocalToolsStatus('Maxed: ' + village.buildings_added + ' buildings, resources ' + resources.resources.gold + '/' + resources.resources.wood + '/' + resources.resources.ore + '.');
+    loadAll();
+  } catch (e) {
+    setLocalToolsStatus('Failed: ' + e.message, true);
   }
 }
 

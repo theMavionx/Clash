@@ -1252,7 +1252,9 @@ func _on_town_hall_destroyed() -> void:
 		if result.has("ships"):
 			bs._apply_ships_from_server(result.get("ships", []))
 		if result.has("trophies"):
-			net_node.trophies = int(result.get("trophies", net_node.trophies))
+			var net_after_result: Node = bs._net
+			if net_after_result:
+				net_after_result.trophies = int(result.get("trophies", net_after_result.trophies))
 			if bs.has_method("_update_resource_ui"):
 				bs._update_resource_ui()
 		var loot: Dictionary = result.get("loot", {})

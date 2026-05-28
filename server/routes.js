@@ -10925,6 +10925,24 @@ router.post('/admin/shop/solana/reconcile', adminAuth, async (req, res) => {
   }
 });
 
+function isLocalAdminToolsRequest(req) {
+  if (process.env.CLASH_LOCAL_ADMIN_TOOLS === '1') return true;
+  const host = String(req.hostname || req.headers.host || '').split(':')[0].toLowerCase();
+  const ip = String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+  return host === 'localhost'
+    || host === '127.0.0.1'
+    || host === '::1'
+    || ip === '127.0.0.1'
+    || ip === '::1';
+}
+
+function localAdminToolsOnly(req, res, next) {
+  if (!isLocalAdminToolsRequest(req)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  next();
+}
+
 // List all players with full details (shields, wallet, last attack)
 router.get('/admin/players', adminAuth, (req, res) => {
   const players = db.db.prepare(`
@@ -11983,10 +12001,74 @@ function adminGrantUtilityPurchase(playerId, utility) {
   return true;
 }
 
+const ADMIN_MAX_VILLAGE_BUILD_ORDER = [
+  'town_hall',
+  'mine',
+  'sawmill',
+  'barn',
+  'storage',
+  'tombstone',
+  'altar',
+  'archer_tower',
+  'turret',
+  'mage_tower',
+  'port',
+];
+
+const ADMIN_TH_MAX_COUNT = {
+  mine: [1, 2, 3, 3],
+  sawmill: [1, 2, 3, 3],
+  barn: [1, 1, 1, 1],
+  port: [1, 2, 5, 5],
+  archer_tower: [1, 2, 3, 3],
+  tombstone: [0, 1, 3, 3],
+  altar: [1, 1, 1, 1],
+  turret: [0, 0, 3, 3],
+  storage: [0, 1, 2, 3],
+  mage_tower: [0, 0, 0, 2],
+  town_hall: [1, 1, 1, 1],
+};
+
+function adminMaxBuildingCountForTh(type, townHallLevel) {
+  const limits = ADMIN_TH_MAX_COUNT[type] || [];
+  const idx = Math.max(0, Math.min(limits.length - 1, townHallLevel - 1));
+  return Number(limits[idx]) || 0;
+}
+
+function adminBuildingTargetLevelForTh(type, def, townHallLevel) {
+  const maxLevel = adminBuildingMaxLevel(type, def);
+  if (type === 'town_hall') return Math.max(1, Math.min(maxLevel, townHallLevel));
+  return Math.max(1, Math.min(maxLevel, townHallLevel));
+}
+
+function adminBuildingMaxLevel(type, def) {
+  if (type === 'turret') return Math.max(5, Number(def?.max_level) || 1);
+  return Number(def?.max_level) || 1;
+}
+
+function adminInsertBuilding(playerId, type, level, requestedGridIndex = null) {
+  const def = db.BUILDING_DEFS[type];
+  if (!def) return { error: `Unknown building type: ${type}` };
+  const slot = adminFindBuildingSlot(playerId, type, requestedGridIndex);
+  if (!slot) return { error: `No open slot for ${type}` };
+  const targetLevel = Math.min(Math.max(Number(level) || 1, 1), adminBuildingMaxLevel(type, def));
+  const hpLevels = Array.isArray(def.hp_levels) && def.hp_levels.length ? def.hp_levels : [1000];
+  const maxHp = hpLevels[Math.min(targetLevel - 1, hpLevels.length - 1)] || hpLevels[0];
+  const purchaseGranted = def.requires_purchase
+    ? adminGrantUtilityPurchase(playerId, def.shop_sku || type)
+    : false;
+  const insert = db.db.prepare(`
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp, has_ship)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+  `).run(playerId, type, targetLevel, slot.grid_x, slot.grid_z, slot.grid_index, maxHp, maxHp);
+  const building = db.db.prepare('SELECT * FROM buildings WHERE id = ?').get(insert.lastInsertRowid);
+  return { building, purchase_granted: purchaseGranted };
+}
+
 // Add a building to a specific player from the local admin panel.
 // This bypasses resource cost and max-count checks, but still validates that
 // the target tile is legal and unoccupied.
-router.post('/admin/players/:name/add-building', adminAuth, (req, res) => {
+router.post('/admin/players/:name/add-building', adminAuth, localAdminToolsOnly, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ?').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
@@ -12002,48 +12084,84 @@ router.post('/admin/players/:name/add-building', adminAuth, (req, res) => {
 
     const hasManualCoords = req.body?.grid_x != null && req.body?.grid_z != null;
     const autoSlot = req.body?.auto_slot !== false || !hasManualCoords;
-    let gridX;
-    let gridZ;
     let gridIndex = req.body?.grid_index == null
       ? null
       : adminParseGridIndex(req.body.grid_index, type === 'port' ? 1 : 0);
 
+    let building;
+    let purchaseGranted = false;
     if (autoSlot) {
-      const slot = adminFindBuildingSlot(player.id, type, gridIndex);
-      if (!slot) return res.status(400).json({ error: `No open slot for ${type}` });
-      gridX = slot.grid_x;
-      gridZ = slot.grid_z;
-      gridIndex = slot.grid_index;
+      const inserted = adminInsertBuilding(player.id, type, Number(req.body?.level || 1), gridIndex);
+      if (inserted.error) return res.status(400).json({ error: inserted.error });
+      building = inserted.building;
+      purchaseGranted = inserted.purchase_granted;
     } else {
-      gridX = Number(req.body.grid_x);
-      gridZ = Number(req.body.grid_z);
+      const gridX = Number(req.body.grid_x);
+      const gridZ = Number(req.body.grid_z);
       gridIndex = gridIndex == null ? (type === 'port' ? 1 : 0) : gridIndex;
       if (!Number.isInteger(gridX) || !Number.isInteger(gridZ)) {
         return res.status(400).json({ error: 'grid_x and grid_z must be integers' });
       }
       const placement = db.canPlaceBuildingAt(player.id, type, gridX, gridZ, gridIndex);
       if (!placement.ok) return res.status(400).json({ error: placement.reason || 'Invalid placement' });
+
+      const requestedLevel = Number(req.body?.level || 1);
+      const level = Math.min(Math.max(Number.isInteger(requestedLevel) ? requestedLevel : 1, 1), adminBuildingMaxLevel(type, def));
+      const hpLevels = Array.isArray(def.hp_levels) && def.hp_levels.length ? def.hp_levels : [1000];
+      const maxHp = hpLevels[Math.min(level - 1, hpLevels.length - 1)] || hpLevels[0];
+      purchaseGranted = def.requires_purchase && req.body?.grant_purchase !== false
+        ? adminGrantUtilityPurchase(player.id, def.shop_sku || type)
+        : false;
+      const insert = db.db.prepare(`
+        INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp, has_ship)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+      `).run(player.id, type, level, gridX, gridZ, gridIndex, maxHp, maxHp);
+      building = db.db.prepare('SELECT * FROM buildings WHERE id = ?').get(insert.lastInsertRowid);
     }
-
-    const requestedLevel = Number(req.body?.level || 1);
-    const level = Math.min(Math.max(Number.isInteger(requestedLevel) ? requestedLevel : 1, 1), def.max_level || 1);
-    const hpLevels = Array.isArray(def.hp_levels) && def.hp_levels.length ? def.hp_levels : [1000];
-    const maxHp = hpLevels[Math.min(level - 1, hpLevels.length - 1)] || hpLevels[0];
-    const purchaseGranted = def.requires_purchase && req.body?.grant_purchase !== false
-      ? adminGrantUtilityPurchase(player.id, def.shop_sku || type)
-      : false;
-
-    const insert = db.db.prepare(`
-      INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp, has_ship)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-    `).run(player.id, type, level, gridX, gridZ, gridIndex, maxHp, maxHp);
-    const building = db.db.prepare('SELECT * FROM buildings WHERE id = ?').get(insert.lastInsertRowid);
 
     res.json({
       success: true,
       player: { id: player.id, name: player.name },
       building,
       purchase_granted: purchaseGranted,
+      buildings_count: db.getPlayerBuildings(player.id).length,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/admin/players/:name/max-village', adminAuth, localAdminToolsOnly, (req, res) => {
+  try {
+    const player = db.db.prepare('SELECT id, name FROM players WHERE name = ?').get(req.params.name);
+    if (!player) return res.status(404).json({ error: 'Player not found' });
+    const townHallLevel = Math.max(1, Math.min(4, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
+    const result = db.db.transaction(() => {
+      db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
+      const added = [];
+      const purchases = [];
+      for (const type of ADMIN_MAX_VILLAGE_BUILD_ORDER) {
+        const def = db.BUILDING_DEFS[type];
+        if (!def) continue;
+        const count = adminMaxBuildingCountForTh(type, townHallLevel);
+        if (count <= 0) continue;
+        const level = adminBuildingTargetLevelForTh(type, def, townHallLevel);
+        for (let i = 0; i < count; i += 1) {
+          const inserted = adminInsertBuilding(player.id, type, level);
+          if (inserted.error) throw new Error(inserted.error);
+          added.push(inserted.building);
+          if (inserted.purchase_granted) purchases.push(type);
+        }
+      }
+      return { added, purchases };
+    })();
+    res.json({
+      success: true,
+      player: { id: player.id, name: player.name },
+      town_hall_level: townHallLevel,
+      buildings_added: result.added.length,
+      buildings: result.added,
+      purchases_granted: result.purchases,
       buildings_count: db.getPlayerBuildings(player.id).length,
     });
   } catch (e) {
