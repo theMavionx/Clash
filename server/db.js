@@ -1151,6 +1151,36 @@ try {
   `);
 } catch (e) { console.warn('[db] utility_purchases migration:', e.message); }
 
+// Server-side recovery for Solana shop purchases. Mobile wallets can submit
+// the transfer successfully and fail to return to the browser before
+// /shop/solana/redeem runs. Store every signed quote so the backend can later
+// match on-chain memo bytes to a trusted quote and grant idempotently.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS shop_solana_quotes (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id        TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      buyer            TEXT NOT NULL,
+      sku              TEXT NOT NULL,
+      quantity         INTEGER NOT NULL,
+      payment          TEXT NOT NULL,
+      memo             TEXT NOT NULL,
+      memo_hash        TEXT NOT NULL UNIQUE,
+      signature        TEXT NOT NULL,
+      treasury         TEXT NOT NULL,
+      mint             TEXT,
+      amount           TEXT NOT NULL,
+      usd_price_e6     TEXT NOT NULL,
+      deadline         INTEGER NOT NULL,
+      consumed_tx_hash TEXT,
+      consumed_at      TEXT,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_shop_solana_quotes_player ON shop_solana_quotes(player_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_shop_solana_quotes_consumed ON shop_solana_quotes(consumed_tx_hash);
+  `);
+} catch (e) { console.warn('[db] shop_solana_quotes migration:', e.message); }
+
 // ---------- Indexes on hot player_id columns (tables defined above) ----------
 // Without these, /battle-log and /buildings endpoints degrade to full-table
 // scans once the DB reaches a few thousand rows. Idempotent on existing DBs.

@@ -75,6 +75,7 @@ export async function ensureInkChain(provider) {
       if (i < 4) await delay(120);
     }
     throw new Error('Wallet is not on Ink. Switch to Ink and retry.');
+    
   };
   try {
     await provider.request({

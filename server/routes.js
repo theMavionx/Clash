@@ -4297,23 +4297,89 @@ function txTransfersToTreasury({ parsedTx, expectedMint, expectedTreasury, expec
   return false;
 }
 
-async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}) {
-  const signature = String(req.body?.txSignature || req.body?.signature || '').trim();
-  if (!/^[1-9A-HJ-NP-Za-km-z]{43,90}$/.test(signature)) {
-    const err = new Error('Bad Solana tx signature');
-    err.status = 400;
-    throw err;
+function shopMemoHash(memo) {
+  return crypto.createHash('sha256').update(String(memo || ''), 'utf8').digest('hex');
+}
+
+function saveSolanaShopQuoteIntent({
+  playerId,
+  buyer,
+  sku,
+  quantity,
+  payment,
+  memo,
+  signature,
+  treasury,
+  mint,
+  amount,
+  usdPriceE6,
+  deadline,
+}) {
+  try {
+    db.db.prepare(`
+      INSERT OR IGNORE INTO shop_solana_quotes
+        (player_id, buyer, sku, quantity, payment, memo, memo_hash, signature, treasury, mint, amount, usd_price_e6, deadline)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      playerId,
+      String(buyer || ''),
+      String(sku || ''),
+      Number(quantity || 0),
+      String(payment || ''),
+      String(memo || ''),
+      shopMemoHash(memo),
+      String(signature || ''),
+      String(treasury || ''),
+      mint == null ? null : String(mint),
+      String(amount || ''),
+      String(usdPriceE6 || ''),
+      Number(deadline || 0),
+    );
+  } catch (err) {
+    console.warn('[shop-solana] quote intent save failed', err?.message || err);
   }
+}
+
+function getSolanaShopQuoteIntent(memo) {
+  try {
+    return db.db.prepare('SELECT * FROM shop_solana_quotes WHERE memo_hash = ? LIMIT 1').get(shopMemoHash(memo));
+  } catch {
+    return null;
+  }
+}
+
+function setSolanaShopQuoteConsumed(memo, txHash) {
+  try {
+    db.db.prepare(`
+      UPDATE shop_solana_quotes
+      SET consumed_tx_hash = ?, consumed_at = datetime('now')
+      WHERE memo_hash = ? AND consumed_tx_hash IS NULL
+    `).run(String(txHash || ''), shopMemoHash(memo));
+  } catch {}
+}
+
+function solanaTxSigner(parsedTx) {
+  const keys = parsedTx?.transaction?.message?.accountKeys || [];
+  const signer = keys.find((key) => key?.signer);
+  return String(signer?.pubkey || signer || '');
+}
+
+async function verifySolanaShopPurchaseFromTx({
+  signature,
+  parsedTx,
+  player = null,
+  memoSignature = '',
+  buyer = '',
+  expectedSku = null,
+  requireQuoteIntent = false,
+  source = 'redeem',
+} = {}) {
   const solana = gameShopSolanaConfig();
   if (!solana.ready) {
     const err = new Error('Solana game shop is not configured');
     err.status = 503;
     throw err;
   }
-  const parsedTx = await getParsedTransactionWithSolanaFallback(signature, {
-    commitment: 'confirmed',
-    maxSupportedTransactionVersion: 0,
-  });
   if (!parsedTx) {
     const err = new Error('Solana tx not found or not confirmed yet');
     err.status = 400;
@@ -4331,15 +4397,24 @@ async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}
     err.status = 400;
     throw err;
   }
-  const memoSig = String(req.body?.signature || req.body?.serverSignature || '').trim();
-  if (!memoSig) {
+
+  const quoteIntent = getSolanaShopQuoteIntent(memoInfo.memo);
+  const effectiveMemoSig = String(memoSignature || quoteIntent?.signature || '').trim();
+  if (!effectiveMemoSig) {
     const err = new Error('Missing memo signature');
-    err.status = 400;
+    err.status = requireQuoteIntent ? 409 : 400;
+    err.code = 'SHOP_SOLANA_QUOTE_INTENT_MISSING';
     throw err;
   }
-  if (!verifySolanaShopMemoSignature(memoInfo.memo, memoSig)) {
+  if (!verifySolanaShopMemoSignature(memoInfo.memo, effectiveMemoSig)) {
     const err = new Error('Bad memo signature');
     err.status = 403;
+    throw err;
+  }
+  if (requireQuoteIntent && !quoteIntent) {
+    const err = new Error('Shop quote intent not found for on-chain memo');
+    err.status = 409;
+    err.code = 'SHOP_SOLANA_QUOTE_INTENT_MISSING';
     throw err;
   }
 
@@ -4349,13 +4424,18 @@ async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}
     err.status = 400;
     throw err;
   }
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (Number(memoData.deadline) < nowSec - 600) {
-    const err = new Error('Quote deadline expired');
-    err.status = 400;
+
+  let grantPlayer = player;
+  if (!grantPlayer && quoteIntent?.player_id) {
+    grantPlayer = db.db.prepare('SELECT * FROM players WHERE id = ?').get(quoteIntent.player_id);
+  }
+  if (!grantPlayer?.id) {
+    const err = new Error('Purchase player not found');
+    err.status = 404;
     throw err;
   }
-  const expectedAccount = gameAccountHash(req.player.id);
+
+  const expectedAccount = gameAccountHash(grantPlayer.id);
   if (String(memoData.acc).toLowerCase() !== expectedAccount.toLowerCase()) {
     const err = new Error('Purchase belongs to another game account');
     err.status = 403;
@@ -4380,6 +4460,7 @@ async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}
     err.status = 400;
     throw err;
   }
+
   const payment = String(memoData.pay || 'usdc');
   if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr') {
     const err = new Error('Bad memo payment token');
@@ -4391,6 +4472,7 @@ async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}
     err.status = 503;
     throw err;
   }
+
   const expectedAmount = BigInt(memoData.amt);
   const expectedMint = payment === 'usdc' ? solana.usdcMint
                       : payment === 'skr'  ? solana.skrMint
@@ -4398,6 +4480,45 @@ async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}
   const expectedDecimals = payment === 'usdc' ? 6
                           : payment === 'skr'  ? await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals)
                           : 9;
+
+  if (quoteIntent) {
+    const quoteDeadline = Number(quoteIntent.deadline || 0);
+    const txTime = Number(parsedTx.blockTime || 0);
+    if (quoteDeadline && txTime && txTime > quoteDeadline + 600) {
+      const err = new Error('Quote deadline expired before tx confirmation');
+      err.status = 400;
+      throw err;
+    }
+    const quoteChecks = [
+      [String(quoteIntent.player_id), String(grantPlayer.id), 'player'],
+      [String(quoteIntent.buyer), String(buyer || quoteIntent.buyer || ''), 'buyer'],
+      [String(quoteIntent.sku), sku, 'sku'],
+      [String(quoteIntent.quantity), String(quantity), 'quantity'],
+      [String(quoteIntent.payment), payment, 'payment'],
+      [String(quoteIntent.treasury), String(solana.treasury), 'treasury'],
+      [String(quoteIntent.amount), expectedAmount.toString(), 'amount'],
+      [String(quoteIntent.usd_price_e6), (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(), 'usd_price_e6'],
+    ];
+    for (const [actual, expected, field] of quoteChecks) {
+      if (actual !== expected) {
+        const err = new Error(`Shop quote ${field} mismatch`);
+        err.status = 403;
+        throw err;
+      }
+    }
+    if (quoteIntent.mint != null && String(quoteIntent.mint) !== String(expectedMint || '')) {
+      const err = new Error('Shop quote mint mismatch');
+      err.status = 403;
+      throw err;
+    }
+  } else {
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Number(memoData.deadline) < nowSec - 600) {
+      const err = new Error('Quote deadline expired');
+      err.status = 400;
+      throw err;
+    }
+  }
 
   if (!txTransfersToTreasury({
     parsedTx,
@@ -4415,7 +4536,10 @@ async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}
     signature,
     solana,
     parsedTx,
+    memoInfo,
     memoData,
+    quoteIntent,
+    player: grantPlayer,
     sku,
     product,
     quantity,
@@ -4424,8 +4548,81 @@ async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}
     expectedMint,
     expectedDecimals,
     tokenLabel: payment === 'usdc' ? expectedMint : payment === 'skr' ? expectedMint : 'SOL',
-    buyer: String(req.body?.buyer || ''),
+    buyer: String(buyer || quoteIntent?.buyer || solanaTxSigner(parsedTx) || ''),
+    source,
   };
+}
+
+function recordSolanaShopPurchaseGrant(paymentInfo) {
+  return db.db.transaction(() => {
+    const duplicate = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(paymentInfo.signature);
+    if (duplicate) {
+      setSolanaShopQuoteConsumed(paymentInfo.memoInfo?.memo, paymentInfo.signature);
+      return {
+        duplicate: true,
+        resources: db.getResources(paymentInfo.player.id),
+        purchase: duplicate,
+      };
+    }
+    const applied = applyGameShopProduct(
+      paymentInfo.player.id,
+      paymentInfo.product,
+      paymentInfo.quantity,
+      { chain: 'solana', payment: paymentInfo.payment, source: paymentInfo.source },
+    );
+    db.db.prepare(`
+      INSERT INTO utility_purchases
+        (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      paymentInfo.player.id,
+      paymentInfo.sku,
+      'solana',
+      paymentInfo.signature,
+      paymentInfo.buyer,
+      paymentInfo.tokenLabel,
+      paymentInfo.solana.treasury,
+      paymentInfo.expectedAmount.toString(),
+      (BigInt(paymentInfo.product.usdPriceE6) * BigInt(paymentInfo.quantity)).toString(),
+      paymentInfo.product.durationHours ? paymentInfo.product.durationHours * paymentInfo.quantity : null,
+      applied.shield_until || null,
+    );
+    setSolanaShopQuoteConsumed(paymentInfo.memoInfo?.memo, paymentInfo.signature);
+    const purchase = db.db.prepare('SELECT id, player_id, utility, tx_hash, created_at FROM utility_purchases WHERE tx_hash = ?').get(paymentInfo.signature);
+    return {
+      duplicate: false,
+      ...applied,
+      purchase,
+    };
+  })();
+}
+
+async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}) {
+  const signature = String(req.body?.txSignature || req.body?.signature || '').trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{43,90}$/.test(signature)) {
+    const err = new Error('Bad Solana tx signature');
+    err.status = 400;
+    throw err;
+  }
+  const solana = gameShopSolanaConfig();
+  if (!solana.ready) {
+    const err = new Error('Solana game shop is not configured');
+    err.status = 503;
+    throw err;
+  }
+  const parsedTx = await getParsedTransactionWithSolanaFallback(signature, {
+    commitment: 'confirmed',
+    maxSupportedTransactionVersion: 0,
+  });
+  return verifySolanaShopPurchaseFromTx({
+    signature,
+    parsedTx,
+    player: req.player,
+    memoSignature: String(req.body?.signature || req.body?.serverSignature || '').trim(),
+    buyer: String(req.body?.buyer || ''),
+    expectedSku,
+    source: 'redeem',
+  });
 }
 
 router.post('/shop/solana/redeem', auth, async (req, res) => {
@@ -4456,6 +4653,28 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
       commitment: 'confirmed',
       maxSupportedTransactionVersion: 0,
     });
+    {
+      const paymentInfo = await verifySolanaShopPurchaseFromTx({
+        signature,
+        parsedTx,
+        player: req.player,
+        memoSignature: String(req.body?.signature || req.body?.serverSignature || '').trim(),
+        buyer: String(req.body?.buyer || ''),
+        source: 'redeem',
+      });
+      const grant = recordSolanaShopPurchaseGrant(paymentInfo);
+      return res.json({
+        success: true,
+        product: gameShopProductsForClient().find((item) => item.id === paymentInfo.product.id),
+        quantity: paymentInfo.quantity,
+        txSignature: signature,
+        payment: paymentInfo.payment,
+        amount: paymentInfo.expectedAmount.toString(),
+        amountFormatted: unitsToDecimalString(paymentInfo.expectedAmount, paymentInfo.expectedDecimals),
+        ...grant,
+      });
+    }
+    /*
     if (!parsedTx) return res.status(400).json({ error: 'Solana tx not found or not confirmed yet' });
     if (parsedTx.meta?.err) {
       return res.status(400).json({ error: 'Solana tx failed on-chain' });
@@ -4566,6 +4785,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
       amountFormatted: unitsToDecimalString(expectedAmount, expectedDecimals),
       ...grant,
     });
+    */
   } catch (err) {
     const message = err?.message || 'redeem failed';
     res.status(err?.status || 500).json({ error: message.slice(0, 180) });
@@ -4766,6 +4986,20 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     });
     const signature = signSolanaShopMemo(memo);
     const signerPubkey = getSolanaSignerKeypair().publicKey.toBase58();
+    saveSolanaShopQuoteIntent({
+      playerId: req.player.id,
+      buyer,
+      sku: product.sku,
+      quantity,
+      payment,
+      memo,
+      signature,
+      treasury: solana.treasury,
+      mint,
+      amount,
+      usdPriceE6: usdPriceE6.toString(),
+      deadline,
+    });
 
     res.set('Cache-Control', 'no-store');
     res.json({
@@ -4795,6 +5029,147 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     res.status(status).json({ error: message.slice(0, 180) });
   }
 });
+
+let solanaShopReconcileTimer = null;
+let solanaShopReconcileRunning = false;
+
+async function runSolanaShopReconcileSweep(options = {}) {
+  const limit = Math.max(10, Math.min(250, Number(options.limit || process.env.GAME_SHOP_SOLANA_RECONCILE_LIMIT || 100)));
+  const source = String(options.source || 'manual');
+  const summary = {
+    source,
+    limit,
+    checked: 0,
+    skipped: 0,
+    granted: 0,
+    duplicates: 0,
+    errors: [],
+    grants: [],
+  };
+  const solana = gameShopSolanaConfig();
+  if (!solana.ready) {
+    summary.disabled = 'solana_shop_not_configured';
+    return summary;
+  }
+
+  const { Connection, PublicKey } = require('@solana/web3.js');
+  const treasuryPk = new PublicKey(solana.treasury);
+  let signatures = [];
+  try {
+    signatures = await withSolanaRpcFallback(async (rpcUrl) => {
+      const connection = createSolanaConnection(Connection, rpcUrl, 'confirmed');
+      return connection.getSignaturesForAddress(treasuryPk, { limit }, 'confirmed');
+    }, { label: 'Solana shop reconcile signature scan' });
+  } catch (err) {
+    summary.errors.push({ stage: 'signatures', message: err?.message || String(err) });
+    return summary;
+  }
+
+  for (const row of [...signatures].reverse()) {
+    const signature = String(row?.signature || '');
+    if (!signature) continue;
+    summary.checked += 1;
+    try {
+      if (row.err) {
+        summary.skipped += 1;
+        continue;
+      }
+      const existing = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(signature);
+      if (existing) {
+        summary.duplicates += 1;
+        continue;
+      }
+      const parsedTx = await getParsedTransactionWithSolanaFallback(signature, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      });
+      const memoInfo = extractShopMemoFromTx(parsedTx, solana.memoProgram);
+      if (!memoInfo) {
+        summary.skipped += 1;
+        continue;
+      }
+      const quoteIntent = getSolanaShopQuoteIntent(memoInfo.memo);
+      if (!quoteIntent) {
+        summary.skipped += 1;
+        continue;
+      }
+      const product = GAME_SHOP_PRODUCTS[String(quoteIntent.sku || '')];
+      if (!product || product.kind === 'nft_upgrade') {
+        // NFT upgrades need a separate on-chain metadata update after payment.
+        // Do not mark those payments consumed from the generic resource worker.
+        summary.skipped += 1;
+        continue;
+      }
+      const paymentInfo = await verifySolanaShopPurchaseFromTx({
+        signature,
+        parsedTx,
+        requireQuoteIntent: true,
+        source: `reconcile:${source}`,
+      });
+      const grant = recordSolanaShopPurchaseGrant(paymentInfo);
+      if (grant.duplicate) {
+        summary.duplicates += 1;
+      } else {
+        summary.granted += 1;
+        summary.grants.push({
+          tx_hash: signature,
+          player_id: paymentInfo.player.id,
+          sku: paymentInfo.sku,
+          quantity: paymentInfo.quantity,
+          payment: paymentInfo.payment,
+          purchase_id: grant.purchase?.id || null,
+          resources: grant.resources || null,
+          shield_until: grant.shield_until || null,
+        });
+        console.log('[shop-solana] reconciled missing purchase', {
+          tx_hash: signature,
+          player_id: paymentInfo.player.id,
+          sku: paymentInfo.sku,
+          quantity: paymentInfo.quantity,
+          source,
+        });
+      }
+    } catch (err) {
+      summary.errors.push({
+        tx_hash: signature,
+        message: err?.message || String(err),
+        code: err?.code || null,
+      });
+      console.warn('[shop-solana] reconcile tx failed', signature, err?.message || err);
+    }
+  }
+  return summary;
+}
+
+function startSolanaShopReconciler() {
+  if (solanaShopReconcileTimer || process.env.GAME_SHOP_SOLANA_RECONCILE_ENABLED === '0') return;
+  const intervalMs = Math.max(30_000, Number(process.env.GAME_SHOP_SOLANA_RECONCILE_INTERVAL_MS || 90_000));
+  const tick = async () => {
+    if (solanaShopReconcileRunning) return;
+    solanaShopReconcileRunning = true;
+    try {
+      const result = await runSolanaShopReconcileSweep({ source: 'interval' });
+      if (result.granted || result.errors.length) {
+        console.log('[shop-solana] reconcile sweep', {
+          checked: result.checked,
+          granted: result.granted,
+          duplicates: result.duplicates,
+          skipped: result.skipped,
+          errors: result.errors.length,
+        });
+      }
+    } catch (err) {
+      console.warn('[shop-solana] reconcile sweep failed', err?.message || err);
+    } finally {
+      solanaShopReconcileRunning = false;
+    }
+  };
+  solanaShopReconcileTimer = setInterval(tick, intervalMs);
+  solanaShopReconcileTimer.unref?.();
+  setTimeout(tick, Math.min(15_000, intervalMs)).unref?.();
+}
+
+startSolanaShopReconciler();
 
 // ---------- Game shop: generic EVM (Arbitrum, Monad) USDC transfer ----------
 
@@ -10540,6 +10915,16 @@ function adminAuth(req, res, next) {
 function isAdminRequest(req) {
   return !!(ADMIN_KEY && req.headers['x-admin-key'] === ADMIN_KEY);
 }
+
+router.post('/admin/shop/solana/reconcile', adminAuth, async (req, res) => {
+  try {
+    const limit = Number(req.body?.limit || req.query?.limit || 100);
+    const result = await runSolanaShopReconcileSweep({ source: 'admin', limit });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err?.status || 500).json({ error: err?.message || 'Solana shop reconcile failed' });
+  }
+});
 
 // List all players with full details (shields, wallet, last attack)
 router.get('/admin/players', adminAuth, (req, res) => {
