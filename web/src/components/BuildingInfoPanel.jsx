@@ -548,7 +548,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <span style={styles.actionName}>{building.name}</span>
         <span style={styles.actionLevel}>Level {building.level}</span>
       </div>
-      {(building.is_enemy || (isMaxLevel && building.id !== 'altar')) && (
+      {(building.is_enemy || building.id === 'altar' || (isMaxLevel && building.id !== 'altar')) && (
         <button
           style={{ ...styles.circleBtn, ...styles.btnInfo }}
           onClick={() => setView('INFO')}
@@ -656,11 +656,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
         {/* Header */}
         <div style={{...LT.header, height: isMobile ? 44 : 54}}>
           <span style={{...LT.headerTitle, fontSize: isMobile ? 18 : 24}}>{title}</span>
-          <button style={LT.closeBtn} onClick={handleDeselect}>✖</button>
+          <button style={LT.closeBtn} onClick={handleDeselect}>X</button>
         </div>
 
         {/* Scrollable content area */}
-        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 8 : 12, flexDirection: isMobile ? 'column' : 'row', flexWrap: 'nowrap', gap: isMobile ? 12 : (isAltarModal ? 34 : 20), minHeight: 0, padding: isMobile ? '8px 12px' : undefined }}>
+        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 8 : 12, flexDirection: isMobile ? 'column' : 'row', flexWrap: 'nowrap', gap: isMobile ? 12 : (isAltarModal ? 34 : 20), minHeight: 0, padding: isMobile ? '8px 12px 22px' : (isAltarModal ? '0 20px 26px' : undefined) }}>
 
           {/* Image column (on mobile: first, smaller) */}
           <div style={{ flex: isMobile ? 'none' : (isAltarModal ? '0 0 460px' : 1), display: 'flex', flexDirection: 'column', alignItems: 'center', ...isMobile && { order: 1 } }}>
@@ -746,11 +746,28 @@ function BuildingInfoPanel({ onOpenTroops }) {
   );
 
   const buildingImg = THUMBNAIL_MAP[building.id] ? (
-    <img 
-      src={THUMBNAIL_MAP[building.id]} 
-      alt={building.name} 
-      style={styles.characterImg} 
-    />
+    building.id === 'altar' ? (
+      <div className="altar-magic-wrap" style={styles.characterImg}>
+        <div className="altar-magic-ring altar-magic-ring-outer" />
+        <div className="altar-magic-ring altar-magic-ring-inner" />
+        <div className="altar-magic-core" />
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <span key={i} className={`altar-magic-streak altar-magic-streak-${i}`} />
+        ))}
+        <img
+          src={THUMBNAIL_MAP[building.id]}
+          alt={building.name}
+          className="altar-magic-img"
+          style={styles.altarMagicImg}
+        />
+      </div>
+    ) : (
+      <img
+        src={THUMBNAIL_MAP[building.id]}
+        alt={building.name}
+        style={styles.characterImg}
+      />
+    )
   ) : (
     <div style={{...styles.characterImg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 150}}>🏠</div>
   );
@@ -763,6 +780,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <StatBox label="Level" current={building.level} />
       </>
     );
+    if (building.id === 'altar') {
+      return renderModal('ALTAR', building.level, leftContent, buildingImg, null, null, null);
+    }
     const rightContent = (
       <>
          {description && (
@@ -832,68 +852,93 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const canAffordUpgrade = !!nextCost && canAffordAltarCost(nextCost);
     const canClickUpgrade = current < 3 && nextCost && !altarBusy;
 
-    const leftContent = (
-      <>
-        <StatBox label="Health" current={building.max_hp || 900} />
-        <StatBox label="Level" current={building.level || 1} />
-      </>
-    );
-    const rightContent = (
-      <div style={styles.altarSkillPanel}>
-        <h3 style={{ ...styles.sectionTitle, marginBottom: 10 }}>Branches</h3>
-        <div style={{ ...styles.altarTabs, ...(isMobile ? { gridTemplateColumns: '1fr' } : null) }}>
-          {ALTAR_SKILL_ORDER.map((skillId) => {
-            const selected = altarTab === skillId;
-            return (
-              <button
-                key={skillId}
-                style={{ ...styles.altarTab, ...(selected ? styles.altarTabActive : null) }}
-                onClick={() => { setAltarTab(skillId); setAltarError(''); }}
-              >
-                <span>{ALTAR_SKILLS[skillId].label}</span>
-                <b>Lv {Number(altarLevels[skillId] || 0)}/3</b>
-              </button>
-            );
-          })}
-        </div>
-
-        <div style={styles.altarBranchInfo}>
-          <div style={styles.altarBranchTitle}>{active.title}</div>
-          <div style={styles.altarSubtext}>Current: +{current > 0 ? active.values[current - 1] : 0}% {active.bonus}</div>
-        </div>
-
-        <div style={{ ...styles.altarLevelGrid, ...(isMobile ? { gridTemplateColumns: '1fr' } : null) }}>
-          {[1, 2, 3].map((level) => {
-            const unlocked = level <= current;
-            return (
-              <div key={level} style={{ ...styles.altarLevelCard, ...(unlocked ? styles.altarLevelCardActive : null) }}>
-                <div style={styles.altarLevelTitle}>Lv{level}{unlocked ? ' ACTIVE' : ''}</div>
-                <div style={styles.altarBonus}>+{active.values[level - 1]}% {active.bonus}</div>
-                <AltarResourceCards cost={active.costs[level - 1]} />
-              </div>
-            );
-          })}
-        </div>
-
-        {altarError && <div style={styles.altarError}>{altarError}</div>}
-        <button
-          style={{ ...styles.actionBtn, width: '100%', marginTop: 14, opacity: canClickUpgrade ? (canAffordUpgrade ? 1 : 0.82) : 0.55 }}
-          disabled={!canClickUpgrade}
-          onClick={() => handleAltarUpgrade(altarTab)}
-        >
-          {current >= 3 ? 'MAX LEVEL' : altarBusy ? 'Upgrading...' : `Upgrade to Lv.${current + 1} (${formatCost(nextCost || {})})`}
-        </button>
+    const CompactCost = ({ cost = {} }) => (
+      <div style={styles.altarTreeCostList}>
+        {['gold', 'ore', 'wood'].map((res) => {
+          const amt = Number(cost[res] || 0);
+          if (amt <= 0) return null;
+          return (
+            <div key={res} style={styles.altarTreeCostPill}>
+              <img src={ICONS[res] || goldIcon} style={styles.altarTreeCostIcon} alt={res} />
+              <span>{amt.toLocaleString()}</span>
+            </div>
+          );
+        })}
       </div>
     );
 
-    return renderModal(
-      'ALTAR',
-      building.level,
-      leftContent,
-      buildingImg,
-      rightContent,
-      null,
-      null
+    return (
+      <div style={{ ...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {}) }} onClick={handleDeselect}>
+        <div style={{ ...LT.panel, ...styles.altarTreePanel, ...(isMobile ? styles.altarTreePanelMobile : null) }} onClick={e => e.stopPropagation()}>
+          <div style={{ ...LT.header, height: isMobile ? 44 : 54 }}>
+            <span style={{ ...LT.headerTitle, fontSize: isMobile ? 18 : 24 }}>ALTAR UPGRADES</span>
+            <button style={LT.closeBtn} onClick={handleDeselect}>X</button>
+          </div>
+
+          <div style={{ ...styles.altarTabs, ...styles.altarTreeTabs, ...(isMobile ? { gridTemplateColumns: '1fr' } : null) }}>
+            {ALTAR_SKILL_ORDER.map((skillId) => {
+              const selected = altarTab === skillId;
+              return (
+                <button
+                  key={skillId}
+                  style={{ ...styles.altarTab, ...(selected ? styles.altarTabActive : null) }}
+                  onClick={() => { setAltarTab(skillId); setAltarError(''); }}
+                >
+                  <span>{ALTAR_SKILLS[skillId].label}</span>
+                  <b>Lv {Number(altarLevels[skillId] || 0)}/3</b>
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ ...styles.altarTreeBody, ...(isMobile ? styles.altarTreeBodyMobile : null) }}>
+            <div style={styles.altarTreeCanvas}>
+              <div style={styles.altarTreeBranchTitle}>{active.title}</div>
+              <div style={styles.altarTreeBranchSub}>Current: +{current > 0 ? active.values[current - 1] : 0}% {active.bonus}</div>
+              <div style={styles.altarTreePath}>
+                {[1, 2, 3].map((level) => {
+                  const unlocked = level <= current;
+                  const isNext = level === current + 1;
+                  return (
+                    <div key={level} style={styles.altarTreeRow}>
+                      <div style={styles.altarTreeNodeWrap}>
+                        {level < 3 && <div style={styles.altarTreeLine} />}
+                        <div style={{ ...styles.altarTreeNode, ...(unlocked ? styles.altarTreeNodeUnlocked : null), ...(isNext ? styles.altarTreeNodeNext : null) }}>
+                          <span style={styles.altarTreeNodeLevel}>Lv{level}</span>
+                          <span style={styles.altarTreeNodeValue}>+{active.values[level - 1]}%</span>
+                        </div>
+                      </div>
+                      <div style={{ ...styles.altarTreeNodeInfo, ...(unlocked ? styles.altarTreeNodeInfoUnlocked : null) }}>
+                        <div style={styles.altarTreeNodeName}>
+                          {active.label} {level}{unlocked ? ' ACTIVE' : isNext ? ' NEXT' : ''}
+                        </div>
+                        <div style={styles.altarTreeNodeBonus}>{active.values[level - 1]}% {active.bonus}</div>
+                        <CompactCost cost={active.costs[level - 1]} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={styles.altarTreeSide}>
+              <div style={styles.altarTreeSideTitle}>{current >= 3 ? 'Branch Complete' : `Upgrade to Lv.${current + 1}`}</div>
+              <div style={styles.altarTreeSideText}>
+                {current >= 3 ? `+${active.values[2]}% ${active.bonus}` : `Next bonus: +${active.values[current]}% ${active.bonus}`}
+              </div>
+              {nextCost ? <AltarResourceCards cost={nextCost} /> : <div style={styles.altarTreeDone}>MAX LEVEL</div>}
+              {altarError && <div style={styles.altarError}>{altarError}</div>}
+              <button
+                style={{ ...styles.actionBtn, width: '100%', marginTop: 16, opacity: canClickUpgrade ? (canAffordUpgrade ? 1 : 0.82) : 0.55 }}
+                disabled={!canClickUpgrade}
+                onClick={() => handleAltarUpgrade(altarTab)}
+              >
+                {current >= 3 ? 'MAX LEVEL' : altarBusy ? 'UPGRADING...' : 'UPGRADE NOW'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     );
   };
 
@@ -1026,7 +1071,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
             <span style={{...LT.headerTitle, fontSize: isMobile ? 18 : 24}}>
               {portNumber ? `Choose Troops - P${portNumber}` : 'Choose Troops'}
             </span>
-            <button style={LT.closeBtn} onClick={handleClose}>✖</button>
+            <button style={LT.closeBtn} onClick={handleClose}>X</button>
           </div>
 
           {/* Loaded troops slots */}
@@ -1209,6 +1254,93 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
   return (
     <>
+      <style>{`
+        @keyframes altarFloat {
+          0%, 100% { transform: translateY(0) scale(1); }
+          50% { transform: translateY(-5px) scale(1.018); }
+        }
+        @keyframes altarGlowPulse {
+          0%, 100% { opacity: 0.42; transform: translate(-50%, -50%) scale(0.92); }
+          50% { opacity: 0.78; transform: translate(-50%, -50%) scale(1.06); }
+        }
+        @keyframes altarRingPulse {
+          0%, 100% { opacity: 0.22; transform: translate(-50%, -50%) scale(0.92) rotate(0deg); }
+          50% { opacity: 0.62; transform: translate(-50%, -50%) scale(1.04) rotate(12deg); }
+        }
+        @keyframes altarRingSpin {
+          to { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+        @keyframes altarStreakFlash {
+          0%, 82%, 100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--r)) scaleX(0.45); }
+          86% { opacity: 0.9; transform: translate(-50%, -50%) rotate(var(--r)) scaleX(1.18); }
+          91% { opacity: 0.25; transform: translate(-50%, -50%) rotate(var(--r)) scaleX(0.72); }
+        }
+        .altar-magic-wrap {
+          overflow: visible;
+          animation: altarFloat 2.7s ease-in-out infinite;
+        }
+        .altar-magic-img {
+          animation: altarFloat 3.1s ease-in-out infinite reverse;
+        }
+        .altar-magic-core {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          width: 72%;
+          height: 72%;
+          border-radius: 50%;
+          transform: translate(-50%, -50%);
+          background: radial-gradient(circle, rgba(36,214,255,0.42), rgba(36,214,255,0.12) 42%, rgba(36,214,255,0) 72%);
+          filter: blur(2px);
+          animation: altarGlowPulse 1.65s ease-in-out infinite;
+          z-index: 1;
+          pointer-events: none;
+        }
+        .altar-magic-ring {
+          position: absolute;
+          left: 50%;
+          top: 58%;
+          border-radius: 50%;
+          transform: translate(-50%, -50%);
+          border: 3px dashed rgba(34, 205, 255, 0.58);
+          box-shadow: 0 0 14px rgba(34, 205, 255, 0.45), inset 0 0 10px rgba(34, 205, 255, 0.25);
+          z-index: 2;
+          pointer-events: none;
+        }
+        .altar-magic-ring-outer {
+          width: 82%;
+          height: 38%;
+          animation: altarRingSpin 8.5s linear infinite, altarRingPulse 2.1s ease-in-out infinite;
+        }
+        .altar-magic-ring-inner {
+          width: 56%;
+          height: 25%;
+          border-width: 2px;
+          opacity: 0.45;
+          animation: altarRingSpin 5.2s linear infinite reverse, altarRingPulse 1.7s ease-in-out infinite;
+        }
+        .altar-magic-streak {
+          position: absolute;
+          left: 50%;
+          top: 45%;
+          width: 34%;
+          height: 4px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(43,216,255,0), rgba(43,216,255,0.92), rgba(255,255,255,0.95), rgba(43,216,255,0));
+          box-shadow: 0 0 12px rgba(43,216,255,0.9);
+          transform-origin: center;
+          opacity: 0;
+          z-index: 6;
+          pointer-events: none;
+          animation: altarStreakFlash 2.35s ease-in-out infinite;
+        }
+        .altar-magic-streak-0 { --r: 8deg; top: 30%; left: 61%; animation-delay: 0s; }
+        .altar-magic-streak-1 { --r: 62deg; top: 42%; left: 71%; animation-delay: 0.28s; }
+        .altar-magic-streak-2 { --r: 118deg; top: 58%; left: 66%; animation-delay: 0.56s; }
+        .altar-magic-streak-3 { --r: 188deg; top: 63%; left: 42%; animation-delay: 0.84s; }
+        .altar-magic-streak-4 { --r: 238deg; top: 45%; left: 30%; animation-delay: 1.12s; }
+        .altar-magic-streak-5 { --r: 305deg; top: 28%; left: 40%; animation-delay: 1.4s; }
+      `}</style>
       {view === 'ACTIONS' && renderActions()}
       {view === 'INFO' && renderInfo()}
       {view === 'UPGRADE' && renderUpgrade()}
@@ -1401,6 +1533,198 @@ const styles = {
   },
   altarSkillPanel: {
     minWidth: 330,
+  },
+  altarTreePanel: {
+    width: 1000,
+    maxWidth: '94vw',
+    minHeight: 640,
+    overflow: 'hidden',
+  },
+  altarTreePanelMobile: {
+    width: '100vw',
+    maxWidth: '100vw',
+    height: '100%',
+    maxHeight: 'none',
+    borderRadius: 0,
+  },
+  altarTreeTabs: {
+    padding: '16px 22px 0',
+    marginBottom: 0,
+  },
+  altarTreeBody: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) 310px',
+    gap: 18,
+    padding: '16px 22px 24px',
+  },
+  altarTreeBodyMobile: {
+    display: 'flex',
+    flexDirection: 'column',
+    padding: '12px',
+  },
+  altarTreeCanvas: {
+    minHeight: 500,
+    borderRadius: 8,
+    background: 'transparent',
+    position: 'relative',
+    padding: '22px 22px 18px',
+    overflow: 'hidden',
+  },
+  altarTreeBranchTitle: {
+    color: '#1a3c4f',
+    fontSize: 26,
+    fontWeight: 900,
+    textShadow: '0 2px 0 rgba(255,255,255,0.65)',
+    textAlign: 'center',
+  },
+  altarTreeBranchSub: {
+    color: '#377d9f',
+    fontSize: 14,
+    fontWeight: 900,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  altarTreePath: {
+    margin: '20px auto 0',
+    width: 'min(100%, 620px)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 18,
+  },
+  altarTreeRow: {
+    display: 'grid',
+    gridTemplateColumns: '120px minmax(0, 1fr)',
+    alignItems: 'center',
+    minHeight: 116,
+  },
+  altarTreeNodeWrap: {
+    position: 'relative',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: 116,
+  },
+  altarTreeLine: {
+    position: 'absolute',
+    left: '50%',
+    top: 78,
+    width: 5,
+    height: 76,
+    transform: 'translateX(-50%)',
+    background: 'linear-gradient(180deg, #67d7ff, #2d8bc9)',
+    boxShadow: '0 0 10px rgba(103, 215, 255, 0.55)',
+  },
+  altarTreeNode: {
+    width: 88,
+    height: 88,
+    borderRadius: 18,
+    border: '4px solid #84dfff',
+    background: 'linear-gradient(180deg, #1cc9ff, #1182d5)',
+    boxShadow: '0 8px 0 rgba(2, 30, 54, 0.55), 0 10px 20px rgba(0,0,0,0.35), inset 0 2px 0 rgba(255,255,255,0.45)',
+    color: '#fff',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    zIndex: 1,
+  },
+  altarTreeNodeUnlocked: {
+    borderColor: '#dfffe4',
+    background: 'linear-gradient(180deg, #6edc3a, #36a825)',
+  },
+  altarTreeNodeNext: {
+    borderColor: '#ffe391',
+    boxShadow: '0 8px 0 rgba(2, 30, 54, 0.55), 0 10px 20px rgba(0,0,0,0.35), 0 0 18px rgba(255, 213, 80, 0.75), inset 0 2px 0 rgba(255,255,255,0.45)',
+  },
+  altarTreeNodeLevel: {
+    fontSize: 22,
+    fontWeight: 900,
+    textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+  },
+  altarTreeNodeValue: {
+    fontSize: 16,
+    fontWeight: 900,
+    opacity: 0.95,
+  },
+  altarTreeNodeInfo: {
+    borderRadius: 8,
+    border: '1px solid rgba(0,0,0,0.12)',
+    background: 'rgba(0,0,0,0.05)',
+    padding: '12px 14px',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.55)',
+  },
+  altarTreeNodeInfoUnlocked: {
+    background: 'rgba(203, 245, 224, 0.48)',
+  },
+  altarTreeNodeName: {
+    color: '#1a3c4f',
+    fontSize: 17,
+    fontWeight: 900,
+    textShadow: '0 1px 0 rgba(255,255,255,0.65)',
+  },
+  altarTreeNodeBonus: {
+    color: '#377d9f',
+    fontSize: 13,
+    fontWeight: 900,
+    marginTop: 2,
+  },
+  altarTreeCostList: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 9,
+  },
+  altarTreeCostPill: {
+    minWidth: 78,
+    height: 30,
+    borderRadius: 8,
+    background: 'rgba(0,0,0,0.06)',
+    border: '1px solid rgba(0,0,0,0.12)',
+    color: '#1a3c4f',
+    fontWeight: 900,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    fontSize: 13,
+  },
+  altarTreeCostIcon: {
+    width: 22,
+    height: 20,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 2px 1px rgba(0,0,0,0.28))',
+  },
+  altarTreeSide: {
+    borderRadius: 8,
+    border: '1px solid rgba(0,0,0,0.13)',
+    background: 'rgba(0,0,0,0.05)',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.55)',
+    padding: 14,
+    alignSelf: 'stretch',
+  },
+  altarTreeSideTitle: {
+    color: '#1a3c4f',
+    fontSize: 21,
+    fontWeight: 900,
+    marginBottom: 5,
+  },
+  altarTreeSideText: {
+    color: '#377d9f',
+    fontSize: 14,
+    fontWeight: 900,
+    lineHeight: 1.35,
+    marginBottom: 12,
+  },
+  altarTreeDone: {
+    borderRadius: 8,
+    padding: 18,
+    textAlign: 'center',
+    color: '#1a3c4f',
+    fontSize: 22,
+    fontWeight: 900,
+    background: 'rgba(203, 245, 224, 0.48)',
+    border: '2px solid #2f9e6f',
   },
   altarBranchInfo: {
     background: 'rgba(0,0,0,0.05)',
