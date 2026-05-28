@@ -263,6 +263,12 @@ export function GodotProvider({ children }) {
         case 'battle_result':
           setBattleResult(data);
           setBattleTimer(null);
+          if (Object.prototype.hasOwnProperty.call(data || {}, 'trophies')) {
+            setPlayerState(prev => {
+              if (!prev || prev.trophies === data.trophies) return prev;
+              return { ...prev, trophies: data.trophies };
+            });
+          }
           if (data.casualties) {
             const paidCasualties = Object.fromEntries(
               Object.entries(data.casualties).filter(([name, count]) => !isDemonKingTroopName(name) && count > 0),

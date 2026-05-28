@@ -2478,13 +2478,14 @@ const ALTAR_SKILL_DEFS = {
       { wood: 120000, ore: 60000, gold: 20000 },
     ],
   },
-  conquest: {
+  glory: {
     max_level: 3,
-    bonuses: [4, 8, 12],
+    bonuses: [5, 7, 10],
+    min_bonus: 1,
     cost: [
-      { wood: 8000, ore: 15000, gold: 2500 },
-      { wood: 25000, ore: 45000, gold: 7500 },
-      { wood: 60000, ore: 120000, gold: 20000 },
+      { wood: 12000, ore: 12000, gold: 3000 },
+      { wood: 36000, ore: 36000, gold: 9000 },
+      { wood: 90000, ore: 90000, gold: 24000 },
     ],
   },
 };
@@ -3452,6 +3453,16 @@ function getAltarBonusPct(playerId, skillId) {
   return altarBonusPctFromLevels(getAltarSkillLevels(playerId), skillId);
 }
 
+function rollAltarTrophyBonus(playerId) {
+  const levels = getAltarSkillLevels(playerId);
+  const level = Math.max(0, Math.min(ALTAR_SKILL_DEFS.glory.max_level, Number(levels.glory) || 0));
+  if (level <= 0) return { level: 0, bonus: 0, min: 0, max: 0 };
+  const max = Number(ALTAR_SKILL_DEFS.glory.bonuses[level - 1]) || 0;
+  const min = Number(ALTAR_SKILL_DEFS.glory.min_bonus) || 1;
+  const bonus = Math.floor(Math.random() * (max - min + 1)) + min;
+  return { level, bonus, min, max };
+}
+
 function applyAltarBuildingBonuses(buildings, levels = {}) {
   const wardPct = altarBonusPctFromLevels(levels, 'ward');
   const hpMultiplier = 1 + wardPct / 100;
@@ -4138,7 +4149,9 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   // applyTrophyDelta so a tournament-joined player has their main
   // trophies frozen and the delta credited (with boost on positive
   // delta) to their tournament_participants row instead.
-  applyTrophyDelta(attackerId,  TROPHY_WIN, { source: 'attack_win', eventId: battleSessionId });
+  const trophyBonus = rollAltarTrophyBonus(attackerId);
+  const attackerTrophyDelta = TROPHY_WIN + trophyBonus.bonus;
+  applyTrophyDelta(attackerId, attackerTrophyDelta, { source: 'attack_win', eventId: battleSessionId });
   applyTrophyDelta(defenderId, -TROPHY_LOSS, { source: 'defense_loss', eventId: battleSessionId });
   stmts.incrementBattleWins.run(attackerId);
   finishBattleSession(battleSessionId, attackerId, defenderId, 'completed');
@@ -4147,6 +4160,11 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
     success: true,
     loot: { gold: lootGold, wood: lootWood, ore: lootOre },
     attacker_resources: getResources(attackerId),
+    trophy_base: TROPHY_WIN,
+    trophy_bonus: trophyBonus.bonus,
+    trophy_bonus_level: trophyBonus.level,
+    trophy_bonus_range: { min: trophyBonus.min, max: trophyBonus.max },
+    trophy_delta: attackerTrophyDelta,
     // Re-read main trophies for response. For attacker frozen by a
     // tournament this stays at the pre-battle value (the tournament
     // counter took the increment); the futures/HUD UI reads tournament

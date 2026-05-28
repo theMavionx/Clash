@@ -586,20 +586,22 @@ const ALTAR_SKILL_DEFS: Dictionary = {
 			{"wood": 120000, "ore": 60000, "gold": 20000},
 		],
 	},
-	"conquest": {
-		"name": "Conquest",
-		"title": "Warrior Blood",
-		"bonus_label": "troop damage",
-		"bonuses": [4, 8, 12],
+	"glory": {
+		"name": "Glory",
+		"title": "Cup Offering",
+		"bonus_label": "bonus trophies on attack win",
+		"bonus_format": "range",
+		"min_bonus": 1,
+		"bonuses": [5, 7, 10],
 		"costs": [
-			{"wood": 8000, "ore": 15000, "gold": 2500},
-			{"wood": 25000, "ore": 45000, "gold": 7500},
-			{"wood": 60000, "ore": 120000, "gold": 20000},
+			{"wood": 12000, "ore": 12000, "gold": 3000},
+			{"wood": 36000, "ore": 36000, "gold": 9000},
+			{"wood": 90000, "ore": 90000, "gold": 24000},
 		],
 	},
 }
-const ALTAR_SKILL_ORDER: Array[String] = ["prosperity", "ward", "conquest"]
-var altar_skill_levels: Dictionary = {"prosperity": 0, "ward": 0, "conquest": 0}
+const ALTAR_SKILL_ORDER: Array[String] = ["prosperity", "ward", "glory"]
+var altar_skill_levels: Dictionary = {"prosperity": 0, "ward": 0, "glory": 0}
 
 # ── Registration UI ──────────────────────────────────────────
 var register_panel: PanelContainer
@@ -3930,7 +3932,7 @@ func _create_altar_level_card(skill_id: String, level: int) -> Control:
 	box.add_child(title)
 
 	var bonus = Label.new()
-	bonus.text = "+%d%% %s" % [int(def.get("bonuses", [0, 0, 0])[level - 1]), str(def.get("bonus_label", ""))]
+	bonus.text = _format_altar_skill_bonus(def, level)
 	bonus.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	bonus.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	bonus.add_theme_font_size_override("font_size", 13)
@@ -3953,6 +3955,18 @@ func _get_altar_skill_cost(skill_id: String, level: int) -> Dictionary:
 	if level < 1 or level > costs.size():
 		return {}
 	return (costs[level - 1] as Dictionary).duplicate()
+
+
+func _format_altar_skill_bonus(def: Dictionary, level: int) -> String:
+	var bonuses: Array = def.get("bonuses", [])
+	if level < 1 or level > bonuses.size():
+		return "No bonus"
+	var label: String = str(def.get("bonus_label", ""))
+	if str(def.get("bonus_format", "")) == "range":
+		var min_bonus: int = int(def.get("min_bonus", 1))
+		var max_bonus: int = int(bonuses[level - 1])
+		return "+%d-%d %s" % [min_bonus, max_bonus, label]
+	return "+%d%% %s" % [int(bonuses[level - 1]), label]
 
 
 func _format_altar_cost(cost: Dictionary) -> String:

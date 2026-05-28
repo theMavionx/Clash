@@ -8398,7 +8398,6 @@ router.post('/attack/result', auth, (req, res) => {
     gridConfig,
     gridConfigs,
     serverTroopLevels,
-    attackerAltarSkills: db.getAltarSkillLevels(req.player.id),
     debugTrace: BATTLE_DEBUG_TRACE,
   });
 
@@ -11954,6 +11953,102 @@ router.post('/admin/players/:name/add-resources', adminAuth, (req, res) => {
   }
   db.addResources(player.id, gold, wood, ore);
   res.json({ success: true, resources: db.getResources(player.id) });
+});
+
+function adminParseGridIndex(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function adminFindBuildingSlot(playerId, type, requestedGridIndex = null) {
+  const preferred = requestedGridIndex == null
+    ? (type === 'port' ? [1, 0, 2] : [0, 1, 2])
+    : [requestedGridIndex];
+  for (const gridIndex of preferred) {
+    const slot = db.findOpenBuildingSlots(playerId, type, gridIndex, 1)[0];
+    if (slot) return slot;
+  }
+  return null;
+}
+
+function adminGrantUtilityPurchase(playerId, utility) {
+  if (!utility) return false;
+  if (db.hasUtilityPurchase(playerId, utility)) return false;
+  const txHash = `local-admin-grant-${playerId}-${utility}-${Date.now()}`;
+  db.db.prepare(`
+    INSERT INTO utility_purchases
+      (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(playerId, utility, 'local_admin', txHash, 'local-admin', 'LOCAL', 'local-admin', '0', '0');
+  return true;
+}
+
+// Add a building to a specific player from the local admin panel.
+// This bypasses resource cost and max-count checks, but still validates that
+// the target tile is legal and unoccupied.
+router.post('/admin/players/:name/add-building', adminAuth, (req, res) => {
+  try {
+    const player = db.db.prepare('SELECT id, name FROM players WHERE name = ?').get(req.params.name);
+    if (!player) return res.status(404).json({ error: 'Player not found' });
+
+    const type = String(req.body?.type || '').trim().toLowerCase();
+    const def = db.BUILDING_DEFS[type];
+    if (!def) {
+      return res.status(400).json({
+        error: 'Unknown building type',
+        allowed: Object.keys(db.BUILDING_DEFS),
+      });
+    }
+
+    const hasManualCoords = req.body?.grid_x != null && req.body?.grid_z != null;
+    const autoSlot = req.body?.auto_slot !== false || !hasManualCoords;
+    let gridX;
+    let gridZ;
+    let gridIndex = req.body?.grid_index == null
+      ? null
+      : adminParseGridIndex(req.body.grid_index, type === 'port' ? 1 : 0);
+
+    if (autoSlot) {
+      const slot = adminFindBuildingSlot(player.id, type, gridIndex);
+      if (!slot) return res.status(400).json({ error: `No open slot for ${type}` });
+      gridX = slot.grid_x;
+      gridZ = slot.grid_z;
+      gridIndex = slot.grid_index;
+    } else {
+      gridX = Number(req.body.grid_x);
+      gridZ = Number(req.body.grid_z);
+      gridIndex = gridIndex == null ? (type === 'port' ? 1 : 0) : gridIndex;
+      if (!Number.isInteger(gridX) || !Number.isInteger(gridZ)) {
+        return res.status(400).json({ error: 'grid_x and grid_z must be integers' });
+      }
+      const placement = db.canPlaceBuildingAt(player.id, type, gridX, gridZ, gridIndex);
+      if (!placement.ok) return res.status(400).json({ error: placement.reason || 'Invalid placement' });
+    }
+
+    const requestedLevel = Number(req.body?.level || 1);
+    const level = Math.min(Math.max(Number.isInteger(requestedLevel) ? requestedLevel : 1, 1), def.max_level || 1);
+    const hpLevels = Array.isArray(def.hp_levels) && def.hp_levels.length ? def.hp_levels : [1000];
+    const maxHp = hpLevels[Math.min(level - 1, hpLevels.length - 1)] || hpLevels[0];
+    const purchaseGranted = def.requires_purchase && req.body?.grant_purchase !== false
+      ? adminGrantUtilityPurchase(player.id, def.shop_sku || type)
+      : false;
+
+    const insert = db.db.prepare(`
+      INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp, has_ship)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+    `).run(player.id, type, level, gridX, gridZ, gridIndex, maxHp, maxHp);
+    const building = db.db.prepare('SELECT * FROM buildings WHERE id = ?').get(insert.lastInsertRowid);
+
+    res.json({
+      success: true,
+      player: { id: player.id, name: player.name },
+      building,
+      purchase_granted: purchaseGranted,
+      buildings_count: db.getPlayerBuildings(player.id).length,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Server logs — in-memory ring buffer

@@ -542,28 +542,7 @@ function clearDeadOwnerProjectiles(projectiles, phase = null, onLost = null) {
 
 // ---------- Replay Verifier ----------
 
-function _altarBonusPct(levels, skillId) {
-  const bonusBySkill = {
-    conquest: [4, 8, 12],
-    ward: [5, 10, 15],
-    prosperity: [10, 20, 30],
-  };
-  const bonuses = bonusBySkill[skillId] || [];
-  const level = Math.max(0, Math.min(bonuses.length, Math.trunc(Number(levels?.[skillId]) || 0)));
-  return level > 0 ? bonuses[level - 1] : 0;
-}
-
-function _applyTroopDamageBonus(stats, altarSkills) {
-  const bonusPct = _altarBonusPct(altarSkills, 'conquest');
-  if (!stats || bonusPct <= 0) return stats;
-  return {
-    ...stats,
-    damage: Math.max(1, Math.round((Number(stats.damage) || 0) * (1 + bonusPct / 100))),
-    altarConquestBonusPct: bonusPct,
-  };
-}
-
-function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, gridConfigs, serverTroopLevels, attackerAltarSkills, debugTrace = false }) {
+function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, gridConfigs, serverTroopLevels, debugTrace = false }) {
   const gridConfigMap = normalizeGridConfigs(gridConfig, gridConfigs);
   const defaultGridConfig = gridConfigMap['0'] || Object.values(gridConfigMap)[0];
   if (!isValidGridConfig(defaultGridConfig)) {
@@ -974,7 +953,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         const baseStats = sp.troopType === 'demon_king'
           ? computeDemonKingStats(sp.playerTroopLevels, sp.troopLevel)
           : (TROOP_STATS[sp.troopType]?.[sp.troopLevel] || TROOP_STATS[sp.troopType]?.[1]);
-        const stats = _applyTroopDamageBonus(baseStats, attackerAltarSkills);
+        const stats = baseStats;
         if (!stats) continue;
         // One troop per spawn entry
         const troopId = nextTroopId++;

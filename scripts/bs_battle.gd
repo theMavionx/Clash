@@ -1251,6 +1251,10 @@ func _on_town_hall_destroyed() -> void:
 			return
 		if result.has("ships"):
 			bs._apply_ships_from_server(result.get("ships", []))
+		if result.has("trophies"):
+			net_node.trophies = int(result.get("trophies", net_node.trophies))
+			if bs.has_method("_update_resource_ui"):
+				bs._update_resource_ui()
 		var loot: Dictionary = result.get("loot", {})
 		var server_casualties: Dictionary = result.get("casualties", casualties_early)
 		if bridge:
@@ -1261,7 +1265,15 @@ func _on_town_hall_destroyed() -> void:
 					"ore": loot.get("ore", 0),
 				})
 			bridge.send_to_react("battle_result", {
-				"type": "victory", "loot": loot, "casualties": server_casualties,
+				"type": "victory",
+				"loot": loot,
+				"casualties": server_casualties,
+				"trophy_base": result.get("trophy_base", 0),
+				"trophy_bonus": result.get("trophy_bonus", 0),
+				"trophy_bonus_level": result.get("trophy_bonus_level", 0),
+				"trophy_bonus_range": result.get("trophy_bonus_range", {}),
+				"trophy_delta": result.get("trophy_delta", 0),
+				"trophies": result.get("trophies", 0),
 			})
 		return
 	if bridge:

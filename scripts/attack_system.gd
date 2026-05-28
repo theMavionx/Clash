@@ -842,9 +842,6 @@ func _spawn_troop_after_delay(
 	troop.set_script(script_res)
 	troop.name = troop_node_name
 	troop.set_meta("replay_order", replay_order)
-	if troop.has_method("set_altar_damage_bonus"):
-		var conquest_pct: int = bs_ref._get_altar_skill_bonus_pct("conquest") if bs_ref and bs_ref.has_method("_get_altar_skill_bonus_pct") else 0
-		troop.set_altar_damage_bonus(conquest_pct)
 	if troop.has_method("set_player_troop_levels"):
 		var player_levels: Dictionary = bs_ref.troop_levels if bs_ref and "troop_levels" in bs_ref else {}
 		troop.set_player_troop_levels(player_levels)

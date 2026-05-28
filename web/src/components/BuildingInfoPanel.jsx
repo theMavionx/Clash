@@ -121,19 +121,30 @@ const ALTAR_SKILLS = {
       { wood: 120000, ore: 60000, gold: 20000 },
     ],
   },
-  conquest: {
-    label: 'Conquest',
-    title: 'Warrior Blood',
-    bonus: 'troop damage',
-    values: [4, 8, 12],
+  glory: {
+    label: 'Glory',
+    title: 'Cup Offering',
+    bonus: 'bonus trophies on attack win',
+    bonusType: 'range',
+    minValue: 1,
+    values: [5, 7, 10],
     costs: [
-      { wood: 8000, ore: 15000, gold: 2500 },
-      { wood: 25000, ore: 45000, gold: 7500 },
-      { wood: 60000, ore: 120000, gold: 20000 },
+      { wood: 12000, ore: 12000, gold: 3000 },
+      { wood: 36000, ore: 36000, gold: 9000 },
+      { wood: 90000, ore: 90000, gold: 24000 },
     ],
   },
 };
-const ALTAR_SKILL_ORDER = ['prosperity', 'ward', 'conquest'];
+const ALTAR_SKILL_ORDER = ['prosperity', 'ward', 'glory'];
+
+function formatAltarSkillBonus(skill, level) {
+  if (!skill || !level) return `+0 ${skill?.bonus || ''}`.trim();
+  const max = Number(skill.values?.[level - 1] || 0);
+  if (skill.bonusType === 'range') {
+    return `+${Number(skill.minValue || 1)}-${max} ${skill.bonus}`;
+  }
+  return `+${max}% ${skill.bonus}`;
+}
 
 function troopBaseName(name) {
   const base = String(name || '').split(':')[0];
@@ -356,7 +367,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const [demonKingNftLoading, setDemonKingNftLoading] = useState(false);
   const [demonKingNftError, setDemonKingNftError] = useState(null);
   const [altarTab, setAltarTab] = useState('prosperity');
-  const [altarLevels, setAltarLevels] = useState({ prosperity: 0, ward: 0, conquest: 0 });
+  const [altarLevels, setAltarLevels] = useState({ prosperity: 0, ward: 0, glory: 0 });
   const [altarBusy, setAltarBusy] = useState(false);
   const [altarError, setAltarError] = useState('');
   const demonKingPortForceSyncRef = useRef(new Map());
@@ -374,7 +385,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
       setAltarLevels({
         prosperity: Number(building.altar_skills.prosperity || 0),
         ward: Number(building.altar_skills.ward || 0),
-        conquest: Number(building.altar_skills.conquest || 0),
+        glory: Number(building.altar_skills.glory || 0),
       });
     }
   }, [building?.altar_skills]);
@@ -393,7 +404,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         setAltarLevels({
           prosperity: Number(json.levels.prosperity || 0),
           ward: Number(json.levels.ward || 0),
-          conquest: Number(json.levels.conquest || 0),
+          glory: Number(json.levels.glory || 0),
         });
       })
       .catch(() => {});
@@ -521,7 +532,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         const nextLevels = {
           prosperity: Number(json.altar_skills.prosperity || 0),
           ward: Number(json.altar_skills.ward || 0),
-          conquest: Number(json.altar_skills.conquest || 0),
+          glory: Number(json.altar_skills.glory || 0),
         };
         setAltarLevels(nextLevels);
         sendToGodot('set_altar_skills', nextLevels);
@@ -806,15 +817,15 @@ function BuildingInfoPanel({ onOpenTroops }) {
   };
 
   const AltarResourceCards = ({ cost = {} }) => (
-    <div style={styles.altarReqGrid}>
+    <div style={{ ...styles.altarReqGrid, ...(isMobile ? styles.altarReqGridMobile : null) }}>
       {['gold', 'ore', 'wood'].map((res) => {
         const amt = Number(cost[res] || 0);
         if (amt <= 0) return null;
         const amountLabel = amt.toLocaleString().replace(/,/g, ' ');
         return (
-          <div key={res} style={styles.altarReqBox}>
-            <img src={ICONS[res] || goldIcon} style={styles.altarReqIcon} alt={res} />
-            <span style={styles.altarReqAmt}>{amountLabel}</span>
+          <div key={res} style={{ ...styles.altarReqBox, ...(isMobile ? styles.altarReqBoxMobile : null) }}>
+            <img src={ICONS[res] || goldIcon} style={{ ...styles.altarReqIcon, ...(isMobile ? styles.altarReqIconMobile : null) }} alt={res} />
+            <span style={{ ...styles.altarReqAmt, ...(isMobile ? styles.altarReqAmtMobile : null) }}>{amountLabel}</span>
           </div>
         );
       })}
@@ -836,13 +847,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const canClickUpgrade = current < 3 && nextCost && !altarBusy;
 
     const CompactCost = ({ cost = {} }) => (
-      <div style={styles.altarTreeCostList}>
+      <div style={{ ...styles.altarTreeCostList, ...(isMobile ? styles.altarTreeCostListMobile : null) }}>
         {['gold', 'ore', 'wood'].map((res) => {
           const amt = Number(cost[res] || 0);
           if (amt <= 0) return null;
           return (
-            <div key={res} style={styles.altarTreeCostPill}>
-              <img src={ICONS[res] || goldIcon} style={styles.altarTreeCostIcon} alt={res} />
+            <div key={res} style={{ ...styles.altarTreeCostPill, ...(isMobile ? styles.altarTreeCostPillMobile : null) }}>
+              <img src={ICONS[res] || goldIcon} style={{ ...styles.altarTreeCostIcon, ...(isMobile ? styles.altarTreeCostIconMobile : null) }} alt={res} />
               <span>{amt.toLocaleString()}</span>
             </div>
           );
@@ -858,13 +869,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
             <button style={LT.closeBtn} onClick={handleDeselect}>X</button>
           </div>
 
-          <div style={{ ...styles.altarTabs, ...styles.altarTreeTabs, ...(isMobile ? { gridTemplateColumns: '1fr' } : null) }}>
+          <div style={{ ...styles.altarTabs, ...styles.altarTreeTabs, ...(isMobile ? styles.altarTreeTabsMobile : null) }}>
             {ALTAR_SKILL_ORDER.map((skillId) => {
               const selected = altarTab === skillId;
               return (
                 <button
                   key={skillId}
-                  style={{ ...styles.altarTab, ...(selected ? styles.altarTabActive : null) }}
+                  style={{ ...styles.altarTab, ...(isMobile ? styles.altarTabMobile : null), ...(selected ? styles.altarTabActive : null) }}
                   onClick={() => { setAltarTab(skillId); setAltarError(''); }}
                 >
                   <span>{ALTAR_SKILLS[skillId].label}</span>
@@ -875,27 +886,27 @@ function BuildingInfoPanel({ onOpenTroops }) {
           </div>
 
           <div style={{ ...styles.altarTreeBody, ...(isMobile ? styles.altarTreeBodyMobile : null) }}>
-            <div style={styles.altarTreeCanvas}>
-              <div style={styles.altarTreeBranchTitle}>{active.title}</div>
-              <div style={styles.altarTreeBranchSub}>Current: +{current > 0 ? active.values[current - 1] : 0}% {active.bonus}</div>
-              <div style={styles.altarTreePath}>
+            <div style={{ ...styles.altarTreeCanvas, ...(isMobile ? styles.altarTreeCanvasMobile : null) }}>
+              <div style={{ ...styles.altarTreeBranchTitle, ...(isMobile ? styles.altarTreeBranchTitleMobile : null) }}>{active.title}</div>
+              <div style={{ ...styles.altarTreeBranchSub, ...(isMobile ? styles.altarTreeBranchSubMobile : null) }}>Current: {formatAltarSkillBonus(active, current)}</div>
+              <div style={{ ...styles.altarTreePath, ...(isMobile ? styles.altarTreePathMobile : null) }}>
                 {[1, 2, 3].map((level) => {
                   const unlocked = level <= current;
                   const isNext = level === current + 1;
                   return (
-                    <div key={level} style={styles.altarTreeRow}>
-                      <div style={styles.altarTreeNodeWrap}>
-                        {level < 3 && <div style={styles.altarTreeLine} />}
-                        <div style={{ ...styles.altarTreeNode, ...(unlocked ? styles.altarTreeNodeUnlocked : null), ...(isNext ? styles.altarTreeNodeNext : null) }}>
-                          <span style={styles.altarTreeNodeLevel}>Lv{level}</span>
-                          <span style={styles.altarTreeNodeValue}>+{active.values[level - 1]}%</span>
+                    <div key={level} style={{ ...styles.altarTreeRow, ...(isMobile ? styles.altarTreeRowMobile : null) }}>
+                      <div style={{ ...styles.altarTreeNodeWrap, ...(isMobile ? styles.altarTreeNodeWrapMobile : null) }}>
+                        {level < 3 && <div style={{ ...styles.altarTreeLine, ...(isMobile ? styles.altarTreeLineMobile : null) }} />}
+                        <div style={{ ...styles.altarTreeNode, ...(isMobile ? styles.altarTreeNodeMobile : null), ...(unlocked ? styles.altarTreeNodeUnlocked : null), ...(isNext ? styles.altarTreeNodeNext : null) }}>
+                          <span style={{ ...styles.altarTreeNodeLevel, ...(isMobile ? styles.altarTreeNodeLevelMobile : null) }}>Lv{level}</span>
+                          <span style={{ ...styles.altarTreeNodeValue, ...(isMobile ? styles.altarTreeNodeValueMobile : null) }}>{active.bonusType === 'range' ? `+${active.minValue}-${active.values[level - 1]}` : `+${active.values[level - 1]}%`}</span>
                         </div>
                       </div>
-                      <div style={{ ...styles.altarTreeNodeInfo, ...(unlocked ? styles.altarTreeNodeInfoUnlocked : null) }}>
-                        <div style={styles.altarTreeNodeName}>
+                      <div style={{ ...styles.altarTreeNodeInfo, ...(isMobile ? styles.altarTreeNodeInfoMobile : null), ...(unlocked ? styles.altarTreeNodeInfoUnlocked : null) }}>
+                        <div style={{ ...styles.altarTreeNodeName, ...(isMobile ? styles.altarTreeNodeNameMobile : null) }}>
                           {active.label} {level}{unlocked ? ' ACTIVE' : isNext ? ' NEXT' : ''}
                         </div>
-                        <div style={styles.altarTreeNodeBonus}>{active.values[level - 1]}% {active.bonus}</div>
+                        <div style={{ ...styles.altarTreeNodeBonus, ...(isMobile ? styles.altarTreeNodeBonusMobile : null) }}>{formatAltarSkillBonus(active, level)}</div>
                         <CompactCost cost={active.costs[level - 1]} />
                       </div>
                     </div>
@@ -904,15 +915,15 @@ function BuildingInfoPanel({ onOpenTroops }) {
               </div>
             </div>
 
-            <div style={styles.altarTreeSide}>
-              <div style={styles.altarTreeSideTitle}>{current >= 3 ? 'Branch Complete' : `Upgrade to Lv.${current + 1}`}</div>
-              <div style={styles.altarTreeSideText}>
-                {current >= 3 ? `+${active.values[2]}% ${active.bonus}` : `Next bonus: +${active.values[current]}% ${active.bonus}`}
+            <div style={{ ...styles.altarTreeSide, ...(isMobile ? styles.altarTreeSideMobile : null) }}>
+              <div style={{ ...styles.altarTreeSideTitle, ...(isMobile ? styles.altarTreeSideTitleMobile : null) }}>{current >= 3 ? 'Branch Complete' : `Upgrade to Lv.${current + 1}`}</div>
+              <div style={{ ...styles.altarTreeSideText, ...(isMobile ? styles.altarTreeSideTextMobile : null) }}>
+                {current >= 3 ? formatAltarSkillBonus(active, 3) : `Next bonus: ${formatAltarSkillBonus(active, current + 1)}`}
               </div>
               {nextCost ? <AltarResourceCards cost={nextCost} /> : <div style={styles.altarTreeDone}>MAX LEVEL</div>}
               {altarError && <div style={styles.altarError}>{altarError}</div>}
               <button
-                style={{ ...styles.actionBtn, width: '100%', marginTop: 16, opacity: canClickUpgrade ? (canAffordUpgrade ? 1 : 0.82) : 0.55 }}
+                style={{ ...styles.actionBtn, width: '100%', marginTop: isMobile ? 10 : 16, minHeight: isMobile ? 46 : undefined, opacity: canClickUpgrade ? (canAffordUpgrade ? 1 : 0.82) : 0.55 }}
                 disabled={!canClickUpgrade}
                 onClick={() => handleAltarUpgrade(altarTab)}
               >
@@ -1529,10 +1540,26 @@ const styles = {
     height: '100%',
     maxHeight: 'none',
     borderRadius: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
   },
   altarTreeTabs: {
     padding: '16px 22px 0',
     marginBottom: 0,
+  },
+  altarTreeTabsMobile: {
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: 5,
+    padding: '8px 8px 0',
+  },
+  altarTabMobile: {
+    borderRadius: 8,
+    padding: '7px 3px',
+    minHeight: 44,
+    fontSize: 11,
+    lineHeight: 1.05,
+    gap: 2,
   },
   altarTreeBody: {
     display: 'grid',
@@ -1543,7 +1570,11 @@ const styles = {
   altarTreeBodyMobile: {
     display: 'flex',
     flexDirection: 'column',
-    padding: '12px',
+    flex: 1,
+    gap: 10,
+    minHeight: 0,
+    overflowY: 'auto',
+    padding: '8px 10px 14px',
   },
   altarTreeCanvas: {
     minHeight: 500,
@@ -1553,12 +1584,21 @@ const styles = {
     padding: '22px 22px 18px',
     overflow: 'hidden',
   },
+  altarTreeCanvasMobile: {
+    minHeight: 'auto',
+    padding: '6px 0 0',
+    overflow: 'visible',
+  },
   altarTreeBranchTitle: {
     color: '#1a3c4f',
     fontSize: 26,
     fontWeight: 900,
     textShadow: '0 2px 0 rgba(255,255,255,0.65)',
     textAlign: 'center',
+  },
+  altarTreeBranchTitleMobile: {
+    fontSize: 18,
+    lineHeight: 1.08,
   },
   altarTreeBranchSub: {
     color: '#377d9f',
@@ -1567,6 +1607,10 @@ const styles = {
     textAlign: 'center',
     marginTop: 4,
   },
+  altarTreeBranchSubMobile: {
+    fontSize: 12,
+    marginTop: 2,
+  },
   altarTreePath: {
     margin: '20px auto 0',
     width: 'min(100%, 620px)',
@@ -1574,11 +1618,20 @@ const styles = {
     flexDirection: 'column',
     gap: 18,
   },
+  altarTreePathMobile: {
+    margin: '10px auto 0',
+    width: '100%',
+    gap: 8,
+  },
   altarTreeRow: {
     display: 'grid',
     gridTemplateColumns: '120px minmax(0, 1fr)',
     alignItems: 'center',
     minHeight: 116,
+  },
+  altarTreeRowMobile: {
+    gridTemplateColumns: '70px minmax(0, 1fr)',
+    minHeight: 74,
   },
   altarTreeNodeWrap: {
     position: 'relative',
@@ -1586,6 +1639,9 @@ const styles = {
     justifyContent: 'center',
     alignItems: 'center',
     height: 116,
+  },
+  altarTreeNodeWrapMobile: {
+    height: 74,
   },
   altarTreeLine: {
     position: 'absolute',
@@ -1596,6 +1652,12 @@ const styles = {
     transform: 'translateX(-50%)',
     background: 'linear-gradient(180deg, #67d7ff, #2d8bc9)',
     boxShadow: '0 0 10px rgba(103, 215, 255, 0.55)',
+  },
+  altarTreeLineMobile: {
+    top: 54,
+    width: 3,
+    height: 38,
+    boxShadow: '0 0 6px rgba(103, 215, 255, 0.45)',
   },
   altarTreeNode: {
     width: 88,
@@ -1612,6 +1674,13 @@ const styles = {
     position: 'relative',
     zIndex: 1,
   },
+  altarTreeNodeMobile: {
+    width: 58,
+    height: 58,
+    borderRadius: 12,
+    borderWidth: 3,
+    boxShadow: '0 5px 0 rgba(2, 30, 54, 0.48), 0 7px 12px rgba(0,0,0,0.26), inset 0 2px 0 rgba(255,255,255,0.42)',
+  },
   altarTreeNodeUnlocked: {
     borderColor: '#dfffe4',
     background: 'linear-gradient(180deg, #6edc3a, #36a825)',
@@ -1625,10 +1694,16 @@ const styles = {
     fontWeight: 900,
     textShadow: '0 2px 0 rgba(0,0,0,0.35)',
   },
+  altarTreeNodeLevelMobile: {
+    fontSize: 15,
+  },
   altarTreeNodeValue: {
     fontSize: 16,
     fontWeight: 900,
     opacity: 0.95,
+  },
+  altarTreeNodeValueMobile: {
+    fontSize: 12,
   },
   altarTreeNodeInfo: {
     borderRadius: 8,
@@ -1636,6 +1711,9 @@ const styles = {
     background: 'rgba(0,0,0,0.05)',
     padding: '12px 14px',
     boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.55)',
+  },
+  altarTreeNodeInfoMobile: {
+    padding: '7px 8px',
   },
   altarTreeNodeInfoUnlocked: {
     background: 'rgba(203, 245, 224, 0.48)',
@@ -1646,17 +1724,28 @@ const styles = {
     fontWeight: 900,
     textShadow: '0 1px 0 rgba(255,255,255,0.65)',
   },
+  altarTreeNodeNameMobile: {
+    fontSize: 13,
+  },
   altarTreeNodeBonus: {
     color: '#377d9f',
     fontSize: 13,
     fontWeight: 900,
     marginTop: 2,
   },
+  altarTreeNodeBonusMobile: {
+    fontSize: 11,
+    lineHeight: 1.15,
+  },
   altarTreeCostList: {
     display: 'flex',
     flexWrap: 'wrap',
     gap: 7,
     marginTop: 9,
+  },
+  altarTreeCostListMobile: {
+    gap: 4,
+    marginTop: 5,
   },
   altarTreeCostPill: {
     minWidth: 78,
@@ -1672,11 +1761,23 @@ const styles = {
     gap: 5,
     fontSize: 13,
   },
+  altarTreeCostPillMobile: {
+    minWidth: 0,
+    height: 23,
+    padding: '0 5px',
+    borderRadius: 6,
+    gap: 3,
+    fontSize: 10,
+  },
   altarTreeCostIcon: {
     width: 22,
     height: 20,
     objectFit: 'contain',
     filter: 'drop-shadow(0 2px 1px rgba(0,0,0,0.28))',
+  },
+  altarTreeCostIconMobile: {
+    width: 15,
+    height: 14,
   },
   altarTreeSide: {
     borderRadius: 8,
@@ -1686,11 +1787,19 @@ const styles = {
     padding: 14,
     alignSelf: 'stretch',
   },
+  altarTreeSideMobile: {
+    padding: 10,
+    flexShrink: 0,
+  },
   altarTreeSideTitle: {
     color: '#1a3c4f',
     fontSize: 21,
     fontWeight: 900,
     marginBottom: 5,
+  },
+  altarTreeSideTitleMobile: {
+    fontSize: 16,
+    marginBottom: 3,
   },
   altarTreeSideText: {
     color: '#377d9f',
@@ -1698,6 +1807,10 @@ const styles = {
     fontWeight: 900,
     lineHeight: 1.35,
     marginBottom: 12,
+  },
+  altarTreeSideTextMobile: {
+    fontSize: 12,
+    marginBottom: 8,
   },
   altarTreeDone: {
     borderRadius: 8,
@@ -1779,6 +1892,10 @@ const styles = {
     gap: 8,
     marginTop: 8,
   },
+  altarReqGridMobile: {
+    gap: 6,
+    marginTop: 6,
+  },
   altarReqBox: {
     width: 78,
     height: 70,
@@ -1792,16 +1909,28 @@ const styles = {
     justifyContent: 'center',
     gap: 2,
   },
+  altarReqBoxMobile: {
+    width: 68,
+    height: 52,
+    borderRadius: 10,
+  },
   altarReqIcon: {
     width: 34,
     height: 30,
     objectFit: 'contain',
     filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.28))',
   },
+  altarReqIconMobile: {
+    width: 25,
+    height: 22,
+  },
   altarReqAmt: {
     color: '#1a3c4f',
     fontSize: 18,
     fontWeight: 900,
+  },
+  altarReqAmtMobile: {
+    fontSize: 13,
   },
   altarError: {
     marginTop: 12,

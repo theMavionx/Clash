@@ -1076,6 +1076,19 @@ app.get('/api/admin/panel', (req, res) => {
 <script>
 let KEY = localStorage.getItem('admin_key') || '';
 let players = [], replays = [];
+const ADMIN_BUILDING_TYPES = [
+  'town_hall',
+  'mine',
+  'sawmill',
+  'barn',
+  'storage',
+  'port',
+  'altar',
+  'archer_tower',
+  'tombstone',
+  'turret',
+  'mage_tower',
+];
 
 async function api(path) {
   const r = await fetch('/api' + path, { headers: { 'x-admin-key': KEY } });
@@ -1251,7 +1264,7 @@ function renderPlayers() {
     '<td>' + (p.shield_active ? '<span class="badge badge-shield">' + p.shield_remaining + 'm left</span>' : '<span class="badge badge-off">none</span>') + '</td>' +
     '<td title="' + (p.last_seen_age_sec != null ? Math.round(p.last_seen_age_sec/60) + ' min ago' : 'never') + '">' + statusBadge(p) + '</td>' +
     '<td class="mono">' + (p.created_at||'').split(' ')[0] + '</td>' +
-    '<td><button class="btn" onclick="addResPlayer(\\'' + esc(p.name) + '\\')">+Res</button> <button class="btn" onclick="resetTrophies(\\'' + esc(p.name) + '\\')">0 Troph</button> <button class="btn" onclick="resetPlayer(\\'' + esc(p.name) + '\\')">Reset</button> <button class="btn btn-danger" onclick="deletePlayer(\\'' + esc(p.name) + '\\')">Delete</button></td>' +
+    '<td><button class="btn" onclick="addResPlayer(\\'' + esc(p.name) + '\\')">+Res</button> <button class="btn" onclick="addBuildingPlayer(\\'' + esc(p.name) + '\\')">+Building</button> <button class="btn" onclick="resetTrophies(\\'' + esc(p.name) + '\\')">0 Troph</button> <button class="btn" onclick="resetPlayer(\\'' + esc(p.name) + '\\')">Reset</button> <button class="btn btn-danger" onclick="deletePlayer(\\'' + esc(p.name) + '\\')">Delete</button></td>' +
     '</tr>'
   ).join('');
 }
@@ -1329,6 +1342,51 @@ async function addResPlayer(name) {
     body: JSON.stringify({ gold: +gold, wood: +wood, ore: +ore })
   });
   loadAll();
+}
+
+async function addBuildingPlayer(name) {
+  const type = prompt(
+    'Building type for ' + name + ':\\n' + ADMIN_BUILDING_TYPES.join(', '),
+    'altar'
+  );
+  if (type === null) return;
+  const buildingType = String(type).trim().toLowerCase();
+  if (!ADMIN_BUILDING_TYPES.includes(buildingType)) {
+    alert('Unknown building type. Use one of:\\n' + ADMIN_BUILDING_TYPES.join(', '));
+    return;
+  }
+
+  const levelText = prompt('Level:', '1');
+  if (levelText === null) return;
+  const level = Math.max(1, Math.floor(Number(levelText) || 1));
+  const useAutoSlot = confirm('Auto place in first free slot?\\nOK = auto, Cancel = enter grid/x/z');
+  const body = {
+    type: buildingType,
+    level,
+    auto_slot: useAutoSlot,
+    grant_purchase: true,
+  };
+
+  if (!useAutoSlot) {
+    const defaultGrid = buildingType === 'port' ? '1' : '0';
+    const gridIndex = prompt('Grid index:', defaultGrid);
+    if (gridIndex === null) return;
+    const gridX = prompt('Grid X:', '0');
+    if (gridX === null) return;
+    const gridZ = prompt('Grid Z:', '0');
+    if (gridZ === null) return;
+    body.grid_index = Math.floor(Number(gridIndex));
+    body.grid_x = Math.floor(Number(gridX));
+    body.grid_z = Math.floor(Number(gridZ));
+  }
+
+  try {
+    const data = await apiPost('/admin/players/' + encodeURIComponent(name) + '/add-building', body);
+    alert('Added ' + data.building.type + ' #' + data.building.id + ' at grid ' + data.building.grid_index + ' (' + data.building.grid_x + ', ' + data.building.grid_z + ')');
+    loadAll();
+  } catch (e) {
+    alert('Failed to add building: ' + e.message);
+  }
 }
 
 async function resetPlayer(name) {

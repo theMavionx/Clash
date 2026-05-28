@@ -4,6 +4,7 @@ import { useFarcaster } from '../hooks/useFarcaster';
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
+import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
@@ -69,6 +70,9 @@ function BattleResultOverlay({ result, onClose }) {
   const hasLootObject = !!result.loot && typeof result.loot === 'object';
   const hasLootValue = hasLootObject && ['gold', 'wood', 'ore'].some((key) => Number(result.loot?.[key] || 0) > 0);
   const showLootPanel = isVictory && hasLootObject && (hasLootValue || isAiOnlineBattle);
+  const trophyDelta = Number(result.trophy_delta || 0);
+  const trophyBase = Number(result.trophy_base || 0);
+  const trophyBonus = Number(result.trophy_bonus || 0);
   const subtitle = isError
     ? battleErrorMessage(result)
     : isReplay
@@ -113,6 +117,21 @@ function BattleResultOverlay({ result, onClose }) {
                <LootItem icon={woodIcon} value={result.loot.wood} delay={0.9} />
                <LootItem icon={stoneIcon} value={result.loot.ore} delay={1.1} />
             </div>
+          </div>
+        )}
+
+        {!isError && isVictory && trophyDelta > 0 && !isReplay && !isAiOnlineBattle && (
+          <div style={styles.panel}>
+            <div style={styles.panelTitle}>Trophies won</div>
+            <div className="loot-pop" style={{ ...styles.trophyReward, animationDelay: '1.15s' }}>
+              <img src={trophyIcon} alt="" style={styles.trophyIcon} />
+              <span style={styles.trophyValue}>+{fmt(trophyDelta)}</span>
+            </div>
+            {trophyBonus > 0 && (
+              <div style={styles.trophyBreakdown}>
+                Base +{trophyBase} · Altar +{trophyBonus}
+              </div>
+            )}
           </div>
         )}
 
@@ -307,6 +326,32 @@ const styles = {
     fontSize: 16,
     fontWeight: 900,
     color: '#fff',
+    textShadow: textOutline,
+  },
+  trophyReward: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  trophyIcon: {
+    width: 52,
+    height: 52,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
+  },
+  trophyValue: {
+    fontSize: 30,
+    fontWeight: 900,
+    color: '#ffd766',
+    textShadow: textOutline,
+  },
+  trophyBreakdown: {
+    marginTop: -8,
+    color: '#fff7d6',
+    fontSize: 13,
+    fontWeight: 900,
+    textAlign: 'center',
     textShadow: textOutline,
   },
   btnWrap: {
