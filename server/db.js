@@ -2409,27 +2409,27 @@ const ALTAR_SKILL_DEFS = {
     max_level: 3,
     bonuses: [10, 20, 30],
     cost: [
-      { wood: 5000, ore: 5000, gold: 1250 },
-      { wood: 15000, ore: 15000, gold: 3750 },
-      { wood: 40000, ore: 40000, gold: 10000 },
+      { wood: 10000, ore: 10000, gold: 2500 },
+      { wood: 30000, ore: 30000, gold: 7500 },
+      { wood: 80000, ore: 80000, gold: 20000 },
     ],
   },
   ward: {
     max_level: 3,
     bonuses: [5, 10, 15],
     cost: [
-      { wood: 7500, ore: 4000, gold: 1250 },
-      { wood: 22500, ore: 12500, gold: 3750 },
-      { wood: 60000, ore: 30000, gold: 10000 },
+      { wood: 15000, ore: 8000, gold: 2500 },
+      { wood: 45000, ore: 25000, gold: 7500 },
+      { wood: 120000, ore: 60000, gold: 20000 },
     ],
   },
   conquest: {
     max_level: 3,
     bonuses: [4, 8, 12],
     cost: [
-      { wood: 4000, ore: 7500, gold: 1250 },
-      { wood: 12500, ore: 22500, gold: 3750 },
-      { wood: 30000, ore: 60000, gold: 10000 },
+      { wood: 8000, ore: 15000, gold: 2500 },
+      { wood: 25000, ore: 45000, gold: 7500 },
+      { wood: 60000, ore: 120000, gold: 20000 },
     ],
   },
 };

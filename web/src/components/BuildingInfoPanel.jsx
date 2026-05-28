@@ -105,9 +105,9 @@ const ALTAR_SKILLS = {
     bonus: 'wood and ore production',
     values: [10, 20, 30],
     costs: [
-      { wood: 5000, ore: 5000, gold: 1250 },
-      { wood: 15000, ore: 15000, gold: 3750 },
-      { wood: 40000, ore: 40000, gold: 10000 },
+      { wood: 10000, ore: 10000, gold: 2500 },
+      { wood: 30000, ore: 30000, gold: 7500 },
+      { wood: 80000, ore: 80000, gold: 20000 },
     ],
   },
   ward: {
@@ -116,9 +116,9 @@ const ALTAR_SKILLS = {
     bonus: 'defense building HP',
     values: [5, 10, 15],
     costs: [
-      { wood: 7500, ore: 4000, gold: 1250 },
-      { wood: 22500, ore: 12500, gold: 3750 },
-      { wood: 60000, ore: 30000, gold: 10000 },
+      { wood: 15000, ore: 8000, gold: 2500 },
+      { wood: 45000, ore: 25000, gold: 7500 },
+      { wood: 120000, ore: 60000, gold: 20000 },
     ],
   },
   conquest: {
@@ -127,9 +127,9 @@ const ALTAR_SKILLS = {
     bonus: 'troop damage',
     values: [4, 8, 12],
     costs: [
-      { wood: 4000, ore: 7500, gold: 1250 },
-      { wood: 12500, ore: 22500, gold: 3750 },
-      { wood: 30000, ore: 60000, gold: 10000 },
+      { wood: 8000, ore: 15000, gold: 2500 },
+      { wood: 25000, ore: 45000, gold: 7500 },
+      { wood: 60000, ore: 120000, gold: 20000 },
     ],
   },
 };
