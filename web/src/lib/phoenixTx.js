@@ -174,3 +174,37 @@ export async function sendPhoenixInstructions(args) {
     venueLabel: args?.venueLabel || 'Phoenix',
   });
 }
+
+export async function sendPhoenixInstructionsWithKeypair({
+  instructions,
+  keypair,
+  connection,
+  label = 'phoenix.one_tap',
+  computeUnitLimit = null,
+  skipPreflight = false,
+  fastBlockhash = false,
+  maxAttempts,
+}) {
+  if (!keypair?.publicKey || !keypair?.secretKey) {
+    throw new Error('Phoenix one tap session key is not available');
+  }
+  const list = Array.isArray(instructions) ? instructions : [instructions];
+  const web3Instructions = list.filter(Boolean).map(kitInstructionToWeb3);
+  return sendSolanaTransactionWithRetry({
+    instructions: web3Instructions,
+    ownerPk: keypair.publicKey,
+    connection,
+    sendTransaction: null,
+    signTransaction: async (tx) => {
+      tx.sign(keypair);
+      return tx;
+    },
+    label,
+    computeUnitLimit,
+    skipPreflight,
+    fastBlockhash,
+    maxAttempts,
+    preferWalletSendTransaction: false,
+    walletPathOverride: 'phoenix_one_tap_keypair',
+  });
+}

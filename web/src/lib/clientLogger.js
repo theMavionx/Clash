@@ -233,6 +233,17 @@ export function reportClientEvent(type, data = {}, opts = {}) {
       },
       context: opts.context || {},
     }));
+    if (opts.flush || opts.immediate) flushClientLogs();
+  } catch { /* noop */ }
+}
+
+export function flushClientLogs() {
+  try {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    flush();
   } catch { /* noop */ }
 }
 

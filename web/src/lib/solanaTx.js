@@ -124,6 +124,7 @@ function logTx(label, type, data = {}, level = 'info') {
         level,
         source: seekerNftNamespace,
         message: `${seekerNftNamespace}.${type}`,
+        flush: true,
       });
     } catch {}
   }
@@ -852,6 +853,7 @@ export async function sendSignedSolanaTransactionWithRetry({
         cluster_block_height: clusterBlockHeight,
         rpc_lag_blocks: lagBlocks,
         last_valid_block_height: lastValidBlockHeight,
+        min_context_slot: Number.isFinite(Number(selected.currentSlot)) ? Number(selected.currentSlot) : null,
         remaining_blocks: remainingBlocks,
         remaining_cluster_blocks: remainingClusterBlocks,
         skip_preflight: !!skipPreflight,
@@ -878,7 +880,11 @@ export async function sendSignedSolanaTransactionWithRetry({
         throw new Error('Signed Solana transaction did not include raw bytes');
       }
 
-      const sendOptions = { ...SEND_OPTIONS, skipPreflight: !!skipPreflight };
+      const sendOptions = {
+        ...SEND_OPTIONS,
+        skipPreflight: !!skipPreflight,
+        ...(Number.isFinite(Number(selected.currentSlot)) ? { minContextSlot: Number(selected.currentSlot) } : {}),
+      };
       const broadcast = await sendRawTransactionWithFallback({
         rawTransaction,
         signature,
@@ -1015,6 +1021,7 @@ export async function sendSolanaTransactionWithRetry({
         cluster_block_height: clusterBlockHeight,
         rpc_lag_blocks: lagBlocks,
         last_valid_block_height: lastValidBlockHeight,
+        min_context_slot: Number.isFinite(Number(selected.currentSlot)) ? Number(selected.currentSlot) : null,
         remaining_blocks: remainingBlocks,
         remaining_cluster_blocks: remainingClusterBlocks,
         compute_unit_limit: appliedComputeUnitLimit,
@@ -1029,7 +1036,11 @@ export async function sendSolanaTransactionWithRetry({
         ...transactionSummary(tx),
       });
 
-      const sendOptions = { ...SEND_OPTIONS, skipPreflight: !!skipPreflight };
+      const sendOptions = {
+        ...SEND_OPTIONS,
+        skipPreflight: !!skipPreflight,
+        ...(Number.isFinite(Number(selected.currentSlot)) ? { minContextSlot: Number(selected.currentSlot) } : {}),
+      };
       let sig = null;
       let rawTransaction = null;
       if (preferAdapterSendPath) {

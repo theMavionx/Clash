@@ -2,8 +2,9 @@
 //
 // Primary production path is event-driven: after the browser submits a
 // Phoenix order transaction, it reports that tx signature here. We verify
-// on-chain that the transaction was signed by the player's wallet and invoked
-// the Phoenix program, then write a rewardable trade_history row. The old
+// on-chain that the transaction was signed by either the player's wallet or
+// a delegated Phoenix position authority for that player's trader account,
+// then write a rewardable trade_history row. The old
 // wallet-history poller remains as an explicit emergency backfill only,
 // because polling every Phoenix wallet quickly hits upstream 429s.
 
@@ -84,13 +85,69 @@ function txAccountKeyText(key) {
   return String(key?.pubkey || key?.publicKey || key || '');
 }
 
-function txSignedByWallet(parsedTx, wallet) {
+function collectTxAccountKeys(parsedTx) {
+  const keys = new Set();
+  for (const key of parsedTx?.transaction?.message?.accountKeys || []) {
+    const text = txAccountKeyText(key);
+    if (text) keys.add(text);
+  }
+  const loaded = parsedTx?.meta?.loadedAddresses;
+  for (const key of loaded?.writable || []) {
+    const text = txAccountKeyText(key);
+    if (text) keys.add(text);
+  }
+  for (const key of loaded?.readonly || []) {
+    const text = txAccountKeyText(key);
+    if (text) keys.add(text);
+  }
+  return keys;
+}
+
+function txSignerWallets(parsedTx) {
   const keys = parsedTx?.transaction?.message?.accountKeys || [];
-  return keys.some((key, index) => {
+  const signers = [];
+  keys.forEach((key, index) => {
     const text = txAccountKeyText(key);
     const signer = key?.signer === true || (index === 0 && key?.signer !== false);
-    return signer && text === wallet;
+    if (signer && text) signers.push(text);
   });
+  return signers;
+}
+
+function txSignedByWallet(parsedTx, wallet) {
+  return txSignerWallets(parsedTx).includes(wallet);
+}
+
+function phoenixTraderSubaccountAddress(wallet, subaccountIndex = 0) {
+  const { PublicKey } = require('@solana/web3.js');
+  const index = Math.max(0, Math.min(255, Number(subaccountIndex) || 0));
+  const [pda] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from('trader'),
+      new PublicKey(wallet).toBuffer(),
+      Buffer.from([0]),
+      Buffer.from([index]),
+    ],
+    new PublicKey(PHOENIX_PROGRAM_ID),
+  );
+  return pda.toBase58();
+}
+
+function txPhoenixTraderAccountForWallet(parsedTx, wallet, preferredSubaccountIndex = null) {
+  const keys = collectTxAccountKeys(parsedTx);
+  const preferred = Number(preferredSubaccountIndex);
+  const indices = [];
+  if (Number.isInteger(preferred) && preferred >= 0 && preferred <= 255) indices.push(preferred);
+  for (let index = 0; index < 100; index += 1) {
+    if (!indices.includes(index)) indices.push(index);
+  }
+  for (const index of indices) {
+    const traderAccount = phoenixTraderSubaccountAddress(wallet, index);
+    if (keys.has(traderAccount)) {
+      return { traderAccount, traderSubaccountIndex: index };
+    }
+  }
+  return null;
 }
 
 function collectTxProgramIds(parsedTx) {
@@ -135,7 +192,7 @@ async function getParsedTransactionWithRetry(signature, attempts = 6, delayMs = 
   return last;
 }
 
-async function verifyPhoenixTradeTransaction({ wallet, signature }) {
+async function verifyPhoenixTradeTransaction({ wallet, signature, delegateSigner = '', traderSubaccountIndex = null }) {
   if (!isSolanaSignature(signature)) {
     throw new Error('invalid Solana tx signature');
   }
@@ -150,18 +207,36 @@ async function verifyPhoenixTradeTransaction({ wallet, signature }) {
   if (blockTimeMs && Date.now() - blockTimeMs > PHOENIX_TX_REWARD_MAX_AGE_MS) {
     throw new Error('transaction is too old for automatic rewards');
   }
-  if (!txSignedByWallet(parsed, wallet)) {
-    throw new Error('transaction was not signed by this wallet');
-  }
   const programs = collectTxProgramIds(parsed);
   if (!programs.has(PHOENIX_PROGRAM_ID)) {
     throw new Error('transaction did not invoke Phoenix');
+  }
+  const signers = txSignerWallets(parsed);
+  const signedByWallet = signers.includes(wallet);
+  const normalizedDelegate = isSolanaWallet(delegateSigner) ? normalizeSolanaWallet(delegateSigner) : '';
+  const signedByReportedDelegate = normalizedDelegate && signers.includes(normalizedDelegate);
+  const traderAccountMatch = txPhoenixTraderAccountForWallet(parsed, wallet, traderSubaccountIndex);
+  if (!signedByWallet) {
+    if (!traderAccountMatch) {
+      throw new Error('delegated Phoenix transaction did not reference this wallet trader account');
+    }
+    if (normalizedDelegate && !signedByReportedDelegate) {
+      throw new Error('transaction was not signed by the reported Phoenix one tap session');
+    }
+    if (!signers.length) {
+      throw new Error('transaction has no signer');
+    }
   }
   return {
     signature,
     slot: parsed.slot || null,
     blockTime: parsed.blockTime || null,
     programs: Array.from(programs),
+    signedBy: signedByWallet ? 'wallet' : 'delegate',
+    signers,
+    delegateSigner: signedByWallet ? null : (normalizedDelegate || signers.find(signer => signer !== wallet) || null),
+    traderAccount: traderAccountMatch?.traderAccount || null,
+    traderSubaccountIndex: traderAccountMatch?.traderSubaccountIndex ?? null,
   };
 }
 
@@ -245,7 +320,12 @@ async function importTransactionForPlayer(playerId, wallet, details = {}) {
     return { ok: true, imported: 0, skipped: 1, total: 1, reason: 'duplicate_tx', tx_hash: signature };
   }
 
-  const verified = await verifyPhoenixTradeTransaction({ wallet: cleanWallet, signature });
+  const verified = await verifyPhoenixTradeTransaction({
+    wallet: cleanWallet,
+    signature,
+    delegateSigner: details.position_authority || details.positionAuthority || details.delegate || '',
+    traderSubaccountIndex: details.trader_subaccount_index ?? details.traderSubaccountIndex ?? null,
+  });
   const notional = computeRewardNotional(details);
   const price = finitePositive(details.price || details.mark_price || details.markPrice);
   const orderType = String(details.order_type || details.orderType || 'market').toLowerCase();

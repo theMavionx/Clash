@@ -71,11 +71,12 @@ const SEEKER_NFT_REPORT_TYPES = new Set([
   'mwa_capabilities_failed',
   'mwa_capabilities',
   'mwa_authorized',
+  'mwa_sign_and_send_start',
+  'mwa_sign_and_send_result',
   'mwa_sign_and_send_ok',
   'mwa_sign_and_send_failed',
-  'mwa_sign_and_send_skipped',
-  'mwa_sign_fallback_start',
-  'mwa_signed_fallback_sent',
+  'mwa_no_sign_and_send_capability',
+  'mwa_sign_and_send_no_signature',
 ]);
 
 function seekerNftLogNamespace(label) {
@@ -96,6 +97,7 @@ function defaultLog(type, data = {}, level = 'info') {
       level,
       source: namespace,
       message: `${namespace}.${type}`,
+      flush: true,
     });
   } else {
     addClientBreadcrumb(`solana.seeker.${type}`, data, level);
@@ -110,37 +112,53 @@ function txVersion(transaction) {
   return transaction?.version === 0 || transaction?.message?.version === 0 ? 'v0' : 'legacy';
 }
 
-function solanaMobileErrorText(error) {
-  return [
-    error?.name,
-    error?.code,
-    error?.message,
-    error?.cause?.name,
-    error?.cause?.code,
-    error?.cause?.message,
-  ].filter(Boolean).join('\n') || String(error || '');
-}
-
-function isUserRejectedSolanaMobileError(error) {
-  return /user rejected|rejected the request|denied|cancelled|canceled|declined/i
-    .test(solanaMobileErrorText(error));
-}
-
-function isSolanaMobileFallbackCandidate(error) {
-  const text = solanaMobileErrorText(error);
-  if (isUserRejectedSolanaMobileError(error)) return false;
-  if (/insufficient|simulation failed|custom program error|instruction error|blockhash|already processed/i.test(text)) return false;
-  return /walletconfig|walletnotready|not implemented|does not support|wallet not found|browser not supported|local network|network access|permission|association|authorization|failed to fetch|networkerror|websocket|signandsend|signature verification failed|missing signature/i
-    .test(text);
-}
-
-function firstTransactionSignatureBytes(transaction) {
-  const signature = transaction?.signature;
-  if (signature instanceof Uint8Array) return signature;
-  const first = transaction?.signatures?.[0];
-  if (first instanceof Uint8Array) return first;
-  if (first?.signature instanceof Uint8Array) return first.signature;
+function transactionAccountKeyCount(transaction) {
+  try {
+    if (Array.isArray(transaction?.message?.staticAccountKeys)) return transaction.message.staticAccountKeys.length;
+    if (Array.isArray(transaction?.instructions)) {
+      const keys = new Set();
+      if (transaction?.feePayer) keys.add(String(transaction.feePayer));
+      for (const ix of transaction.instructions) {
+        if (ix?.programId) keys.add(String(ix.programId));
+        for (const key of ix?.keys || []) if (key?.pubkey) keys.add(String(key.pubkey));
+      }
+      return keys.size;
+    }
+  } catch {}
   return null;
+}
+
+function transactionProgramSummary(transaction) {
+  try {
+    if (Array.isArray(transaction?.instructions)) {
+      return transaction.instructions.map((ix) => String(ix?.programId || '')).filter(Boolean);
+    }
+    const keys = transaction?.message?.staticAccountKeys || [];
+    return (transaction?.message?.compiledInstructions || [])
+      .map((ix) => keys[ix?.programIdIndex]?.toString?.() || '')
+      .filter(Boolean);
+  } catch {}
+  return [];
+}
+
+function unsignedTransactionBytes(transaction) {
+  try {
+    if (transaction?.version === 0 || transaction?.message?.version === 0) return transaction.serialize()?.length || null;
+    return transaction.serialize({ requireAllSignatures: false, verifySignatures: false })?.length || null;
+  } catch {
+    return null;
+  }
+}
+
+function transactionDebugSummary(transaction) {
+  const programs = transactionProgramSummary(transaction);
+  return {
+    tx_version: txVersion(transaction),
+    tx_instruction_count: programs.length,
+    tx_instruction_programs: programs.slice(0, 12).map(shortSolanaAddress),
+    tx_account_key_count: transactionAccountKeyCount(transaction),
+    tx_unsigned_bytes: unsignedTransactionBytes(transaction),
+  };
 }
 
 async function encodeBase58(bytes) {
@@ -148,23 +166,47 @@ async function encodeBase58(bytes) {
   return (bs58.default || bs58).encode(bytes);
 }
 
-async function sendSignedTransactionFallback({ signed, connection, options = {}, label, venueLabel, log }) {
-  if (!connection?.sendRawTransaction) throw new Error('Solana connection is not available for signed fallback');
-  const signatureBytes = firstTransactionSignatureBytes(signed);
-  if (!signatureBytes) throw new Error('Signed Solana transaction did not include a signature');
-  const signature = await encodeBase58(signatureBytes);
-  const raw = signed.serialize();
-  await connection.sendRawTransaction(raw, {
-    preflightCommitment: options?.preflightCommitment || 'confirmed',
-    skipPreflight: !!options?.skipPreflight,
-    maxRetries: options?.maxRetries,
-  });
-  log('mwa_signed_fallback_sent', {
-    label,
-    venue: venueLabel,
-    signature_short: shortSolanaAddress(signature),
-  }, 'warn');
-  return signature;
+function decodeBase64Bytes(value) {
+  const text = String(value || '');
+  if (!text) return null;
+  try {
+    const decode = typeof atob === 'function'
+      ? (raw) => Uint8Array.from(atob(raw), (char) => char.charCodeAt(0))
+      : (raw) => Uint8Array.from(Buffer.from(raw, 'base64'));
+    return decode(text);
+  } catch {
+    return null;
+  }
+}
+
+async function signatureToBase58(signature) {
+  if (typeof signature === 'string') {
+    const text = signature.trim();
+    if (!text) return '';
+    const bs58 = await import('bs58');
+    const codec = bs58.default || bs58;
+    try {
+      if (codec.decode(text).length === 64) return text;
+    } catch {}
+    const base64Bytes = decodeBase64Bytes(text);
+    if (base64Bytes?.length === 64) return codec.encode(base64Bytes);
+    return text;
+  }
+  if (signature instanceof Uint8Array) return encodeBase58(signature);
+  if (Array.isArray(signature)) return encodeBase58(Uint8Array.from(signature));
+  if (signature?.signature instanceof Uint8Array) return encodeBase58(signature.signature);
+  if (Array.isArray(signature?.signature)) return encodeBase58(Uint8Array.from(signature.signature));
+  return String(signature || '');
+}
+
+function signatureResultShape(value) {
+  if (value == null) return { type: 'null' };
+  if (typeof value === 'string') return { type: 'string', length: value.length };
+  if (value instanceof Uint8Array) return { type: 'uint8array', length: value.length };
+  if (Array.isArray(value)) return { type: 'array', length: value.length };
+  if (value?.signature instanceof Uint8Array) return { type: 'object.signature_uint8array', length: value.signature.length };
+  if (Array.isArray(value?.signature)) return { type: 'object.signature_array', length: value.signature.length };
+  return { type: typeof value, keys: Object.keys(value || {}).slice(0, 8) };
 }
 
 export async function sendSolanaMobileProtocolTransaction({
@@ -181,9 +223,10 @@ export async function sendSolanaMobileProtocolTransaction({
     label,
     venue: venueLabel,
     expected_wallet: shortSolanaAddress(expectedAddress),
-    tx_version: txVersion(transaction),
     skip_preflight: !!options?.skipPreflight,
     max_retries: options?.maxRetries ?? null,
+    min_context_slot: options?.minContextSlot ?? null,
+    ...transactionDebugSummary(transaction),
   });
 
   return transact(async (wallet) => {
@@ -207,7 +250,16 @@ export async function sendSolanaMobileProtocolTransaction({
     });
 
     const canSignAndSend = capabilities?.supports_sign_and_send_transactions !== false;
-    let signAndSendError = null;
+    if (!canSignAndSend) {
+      log('mwa_no_sign_and_send_capability', {
+        label,
+        venue: venueLabel,
+        supports_sign_and_send: capabilities?.supports_sign_and_send_transactions ?? null,
+        features: Array.isArray(capabilities?.features) ? capabilities.features.slice(0, 12) : null,
+      }, 'error');
+      throw new Error(`${venueLabel} wallet does not support signAndSendTransactions for this Solana transaction`);
+    }
+
     if (canSignAndSend) {
       try {
         const authorization = await wallet.authorize({
@@ -229,13 +281,38 @@ export async function sendSolanaMobileProtocolTransaction({
           throw new Error(`Mobile wallet authorized ${authorizedAddress}, but ${venueLabel} is connected to ${expectedAddress}`);
         }
 
-        const [signature] = await wallet.signAndSendTransactions({
+        log('mwa_sign_and_send_start', {
+          label,
+          venue: venueLabel,
+          commitment: options?.preflightCommitment || 'confirmed',
+          skip_preflight: !!options?.skipPreflight,
+          max_retries: options?.maxRetries ?? null,
+          min_context_slot: options?.minContextSlot ?? null,
+          ...transactionDebugSummary(transaction),
+        });
+        const [rawSignature] = await wallet.signAndSendTransactions({
           auth_token: authorization.auth_token,
           transactions: [transaction],
+          minContextSlot: options?.minContextSlot,
           commitment: options?.preflightCommitment || 'confirmed',
           skipPreflight: !!options?.skipPreflight,
           maxRetries: options?.maxRetries,
         });
+        const signature = await signatureToBase58(rawSignature);
+        log('mwa_sign_and_send_result', {
+          label,
+          venue: venueLabel,
+          result_shape: signatureResultShape(rawSignature),
+          signature_short: shortSolanaAddress(signature),
+        });
+        if (!signature) {
+          log('mwa_sign_and_send_no_signature', {
+            label,
+            venue: venueLabel,
+            result_shape: signatureResultShape(rawSignature),
+          }, 'error');
+          throw new Error(`${venueLabel} wallet did not return a transaction signature`);
+        }
         log('mwa_sign_and_send_ok', {
           label,
           venue: venueLabel,
@@ -243,48 +320,19 @@ export async function sendSolanaMobileProtocolTransaction({
         });
         return signature;
       } catch (error) {
-        signAndSendError = error;
-        const fallbackCandidate = isSolanaMobileFallbackCandidate(error);
         log('mwa_sign_and_send_failed', {
           label,
           venue: venueLabel,
           name: error?.name || null,
           code: error?.code || error?.cause?.code || null,
+          data: error?.data || error?.cause?.data || null,
           message: error?.message || String(error || ''),
-          fallback_candidate: fallbackCandidate,
-        }, fallbackCandidate ? 'warn' : 'error');
-        if (!connection || !fallbackCandidate) throw error;
+          min_context_slot: options?.minContextSlot ?? null,
+          ...transactionDebugSummary(transaction),
+        }, 'error');
+        throw error;
       }
-    } else {
-      log('mwa_sign_and_send_skipped', {
-        label,
-        venue: venueLabel,
-        reason: 'wallet_capability_disabled',
-      }, 'warn');
     }
-
-    if (!connection) {
-      throw signAndSendError || new Error('Solana connection is not available for Mobile Wallet Adapter signed fallback');
-    }
-    log('mwa_sign_fallback_start', {
-      label,
-      venue: venueLabel,
-      tx_version: txVersion(transaction),
-    }, 'warn');
-    const signAuthorization = await wallet.authorize({
-      chain: 'solana:mainnet',
-      identity: solanaMobileAppIdentity(),
-      features: ['solana:signTransactions'],
-    });
-    const signAddress = base64AddressToBase58(signAuthorization?.accounts?.[0]?.address);
-    if (expectedAddress && signAddress && signAddress !== expectedAddress) {
-      throw new Error(`Mobile wallet authorized ${signAddress}, but ${venueLabel} is connected to ${expectedAddress}`);
-    }
-    const [signed] = await wallet.signTransactions({
-      auth_token: signAuthorization.auth_token,
-      transactions: [transaction],
-    });
-    return sendSignedTransactionFallback({ signed, connection, options, label, venueLabel, log });
   });
 }
 
@@ -300,7 +348,7 @@ export async function signSolanaMobileProtocolTransaction({
     label,
     venue: venueLabel,
     expected_wallet: shortSolanaAddress(expectedAddress),
-    tx_version: txVersion(transaction),
+    ...transactionDebugSummary(transaction),
   });
 
   return transact(async (wallet) => {
@@ -329,7 +377,7 @@ export async function signSolanaMobileProtocolTransaction({
     log('mwa_sign_ok', {
       label,
       venue: venueLabel,
-      tx_version: txVersion(signed),
+      ...transactionDebugSummary(signed),
     });
     return signed;
   });
@@ -342,9 +390,7 @@ export function buildSolanaWalletTxOptions({
   venueLabel = 'Solana',
   log = defaultLog,
   forceMobileVersionedTransaction = true,
-  preferMobileAdapterSend = false,
   preferMobileSignTransaction = false,
-  allowMobileProtocolFallback = true,
 }) {
   const adapterName = solanaWalletAdapterName(solWallet) || 'wallet';
   const mobileWalletAdapter = isSolanaMobileWalletAdapter(solWallet);
@@ -372,36 +418,6 @@ export function buildSolanaWalletTxOptions({
     canSignSolanaTx,
     sendTransaction: canSendSolanaTx
       ? async (tx, conn, opts) => {
-          if (mobileWalletAdapter && preferMobileAdapterSend && typeof solWallet?.sendTransaction === 'function') {
-            try {
-              log('mwa_adapter_send_start', {
-                label,
-                venue: venueLabel,
-                tx_version: txVersion(tx),
-                adapter: adapterName,
-              });
-              const signature = await solWallet.sendTransaction(tx, conn, opts);
-              log('mwa_adapter_send_ok', {
-                label,
-                venue: venueLabel,
-                adapter: adapterName,
-                signature_short: shortSolanaAddress(signature),
-              });
-              return signature;
-            } catch (error) {
-              const fallbackCandidate = allowMobileProtocolFallback && isSolanaMobileFallbackCandidate(error);
-              log('mwa_adapter_send_failed', {
-                label,
-                venue: venueLabel,
-                adapter: adapterName,
-                name: error?.name || null,
-                code: error?.code || error?.cause?.code || null,
-                message: error?.message || String(error || ''),
-                fallback_candidate: fallbackCandidate,
-              }, fallbackCandidate ? 'warn' : 'error');
-              if (!fallbackCandidate) throw error;
-            }
-          }
           return mobileWalletAdapter
             ? sendSolanaMobileProtocolTransaction({
                 transaction: tx,

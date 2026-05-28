@@ -412,6 +412,7 @@ async function waitForSolanaAssetBurned(conn, asset, minContextSlot) {
       last = { owner, lamports: info.lamports, dataLength: info.data?.length || 0 };
       if (owner !== SOLANA_MPL_CORE_PROGRAM) return { burned: true, reason: `owner=${owner}` };
       if (!info.data || info.data.length === 0) return { burned: true, reason: 'empty-data' };
+      if (info.data.length === 1 && info.data[0] === 0) return { burned: true, reason: 'core-burned-tombstone' };
     } catch (err) {
       const msg = String(err?.message || err);
       last = { error: msg };

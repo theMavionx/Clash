@@ -1,5 +1,6 @@
 import { getAddress } from 'viem';
-import { buildSolanaWalletTxOptions } from './solanaSeekerTx';
+import { reportClientEvent } from './clientLogger';
+import { buildSolanaWalletTxOptions, isSolanaMobileWalletAdapter, shortSolanaAddress } from './solanaSeekerTx';
 
 export const CUSTODIAL_EVM_CHAIN_IDS = {
   base: 8453,
@@ -40,6 +41,20 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function errorDebug(err) {
+  return {
+    name: err?.name || null,
+    code: err?.code || err?.cause?.code || null,
+    status: err?.status || null,
+    message: err?.message || String(err || ''),
+    body: err?.body || null,
+    causeName: err?.cause?.name || null,
+    causeCode: err?.cause?.code || null,
+    causeMessage: err?.cause?.message || null,
+    data: err?.data || err?.cause?.data || null,
+  };
+}
+
 function isTransientDepositVerifyError(err) {
   const status = Number(err?.status || 0);
   const message = String(err?.body?.error || err?.message || '').toLowerCase();
@@ -53,6 +68,38 @@ function publicKeyString(value) {
   if (typeof value.toBase58 === 'function') return value.toBase58();
   if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) return value.toString();
   return '';
+}
+
+function reportSolanaCustodyEvent(type, data = {}, solWallet, level = 'info') {
+  if (!isSolanaMobileWalletAdapter(solWallet)) return;
+  reportClientEvent(`marketplace.seeker.deposit.${type}`, data, {
+    level,
+    source: 'marketplace.seeker.deposit',
+    message: `marketplace.seeker.deposit.${type}`,
+    flush: true,
+  });
+}
+
+function instructionDebugSummary(instructions) {
+  return (instructions || []).map((ix) => ({
+    program: shortSolanaAddress(publicKeyString(ix?.programId)),
+    keys: Array.isArray(ix?.keys) ? ix.keys.length : null,
+    signers: Array.isArray(ix?.keys) ? ix.keys.filter((k) => k?.isSigner).length : null,
+    writable: Array.isArray(ix?.keys) ? ix.keys.filter((k) => k?.isWritable).length : null,
+    dataBytes: ix?.data?.length ?? null,
+  }));
+}
+
+function corePluginSummary(asset) {
+  const plugins = asset?.plugins;
+  if (!plugins) return null;
+  if (Array.isArray(plugins)) {
+    return plugins.slice(0, 12).map((plugin) => String(plugin?.type || plugin?.__kind || plugin?.name || 'unknown'));
+  }
+  if (typeof plugins === 'object') {
+    return Object.keys(plugins).slice(0, 12);
+  }
+  return String(plugins);
 }
 
 function solanaCoreAssetCollection(asset) {
@@ -143,6 +190,55 @@ export async function confirmCustodialDeposit({ token, orderId, txHash }) {
     } catch (err) {
       lastError = err;
       if (!txHash || !isTransientDepositVerifyError(err) || attempt >= 7) throw err;
+      await sleep(1200 + attempt * 500);
+    }
+  }
+  throw lastError || new Error('Deposit verification failed');
+}
+
+async function confirmSolanaCustodialDeposit({ token, orderId, txHash, solWallet, assetId, standard, vaultAddress }) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    reportSolanaCustodyEvent('confirm_start', {
+      orderId,
+      assetId,
+      standard,
+      vaultAddress,
+      txHash: txHash || null,
+      attempt: attempt + 1,
+    }, solWallet);
+    try {
+      const result = await apiJson(`/api/marketplace/custodial/listings/${encodeURIComponent(orderId)}/deposit`, {
+        method: 'POST',
+        token,
+        body: { txHash },
+      });
+      reportSolanaCustodyEvent('confirm_ok', {
+        orderId,
+        assetId,
+        standard,
+        vaultAddress,
+        txHash: txHash || null,
+        attempt: attempt + 1,
+        status: result?.order?.status || null,
+        depositTxHash: result?.order?.depositTxHash || null,
+      }, solWallet);
+      return result;
+    } catch (err) {
+      lastError = err;
+      const transient = !!txHash && isTransientDepositVerifyError(err);
+      reportSolanaCustodyEvent('confirm_failed', {
+        orderId,
+        assetId,
+        standard,
+        vaultAddress,
+        txHash: txHash || null,
+        attempt: attempt + 1,
+        transient,
+        finalAttempt: attempt >= 7,
+        error: errorDebug(err),
+      }, solWallet, transient && attempt < 7 ? 'warn' : 'error');
+      if (!txHash || !transient || attempt >= 7) throw err;
       await sleep(1200 + attempt * 500);
     }
   }
@@ -474,6 +570,14 @@ export async function depositToken2022NftToCustody({
   if (nft?.standard && nft.standard !== 'token2022') {
     throw new Error('Automatic custody deposit currently supports Token-2022 Demon King NFTs only');
   }
+  reportSolanaCustodyEvent('token2022_prepare_start', {
+    orderId: order?.id || null,
+    assetId: order?.assetId || null,
+    vaultAddress: order?.vaultAddress || null,
+    owner,
+    tokenAccount: nft?.tokenAccount || null,
+    standard: nft?.standard || null,
+  }, solWallet);
 
   const [
     { Connection, PublicKey },
@@ -496,6 +600,15 @@ export async function depositToken2022NftToCustody({
     ? new PublicKey(nft.tokenAccount)
     : await splToken.getAssociatedTokenAddress(mintPk, ownerPk, false, tokenProgram);
   const vaultAta = await splToken.getAssociatedTokenAddress(mintPk, vaultPk, false, tokenProgram);
+  reportSolanaCustodyEvent('token2022_accounts_ready', {
+    orderId: order?.id || null,
+    assetId: order?.assetId || null,
+    owner,
+    sourceAta: sourceAta.toBase58(),
+    vaultAta: vaultAta.toBase58(),
+    vaultAddress: order?.vaultAddress || null,
+    rpc: connection?.rpcEndpoint || null,
+  }, solWallet);
 
   const instructions = [
     splToken.createAssociatedTokenAccountIdempotentInstruction(
@@ -517,25 +630,59 @@ export async function depositToken2022NftToCustody({
       tokenProgram,
     ),
   ];
+  reportSolanaCustodyEvent('token2022_instructions_ready', {
+    orderId: order?.id || null,
+    assetId: order?.assetId || null,
+    vaultAddress: order?.vaultAddress || null,
+    instructionCount: instructions.length,
+    instructions: instructionDebugSummary(instructions),
+  }, solWallet);
 
-  const txHash = await sendSolanaTransactionWithRetry({
-    instructions,
-    ownerPk,
-    connection,
-    ...buildSolanaWalletTxOptions({
-      solWallet,
+  let txHash = null;
+  try {
+    txHash = await sendSolanaTransactionWithRetry({
+      instructions,
+      ownerPk,
+      connection,
+      ...buildSolanaWalletTxOptions({
+        solWallet,
+        owner,
+        label: 'custodial_marketplace.deposit_solana_token2022',
+        venueLabel: 'Marketplace',
+        // Seeker/MWA docs recommend signAndSendTransactions. Keep the tx
+        // legacy-shaped for clearer wallet simulation, but do not raw-sign.
+        forceMobileVersionedTransaction: false,
+      }),
+      maxAttempts: 4,
+      priorityFeeMicroLamports: 250_000,
+    });
+    reportSolanaCustodyEvent('token2022_tx_sent', {
+      orderId: order?.id || null,
+      assetId: order?.assetId || null,
+      vaultAddress: order?.vaultAddress || null,
+      txHash,
+    }, solWallet);
+  } catch (err) {
+    reportSolanaCustodyEvent('token2022_tx_failed', {
+      orderId: order?.id || null,
+      assetId: order?.assetId || null,
+      vaultAddress: order?.vaultAddress || null,
       owner,
-      label: 'custodial_marketplace.deposit_solana_token2022',
-      venueLabel: 'Marketplace',
-      // Seeker wallet simulates and displays simple escrow transfers more
-      // reliably as legacy sign-only transactions. No address lookup table is needed.
-      forceMobileVersionedTransaction: false,
-      preferMobileSignTransaction: true,
-    }),
-    maxAttempts: 4,
-    priorityFeeMicroLamports: 250_000,
+      sourceAta: sourceAta.toBase58(),
+      vaultAta: vaultAta.toBase58(),
+      error: errorDebug(err),
+    }, solWallet, 'error');
+    throw err;
+  }
+  const confirmed = await confirmSolanaCustodialDeposit({
+    token,
+    orderId: order.id,
+    txHash,
+    solWallet,
+    assetId: order.assetId,
+    standard: 'token2022',
+    vaultAddress: order.vaultAddress,
   });
-  const confirmed = await confirmCustodialDeposit({ token, orderId: order.id, txHash });
   return { txHash, confirmed };
 }
 
@@ -549,6 +696,14 @@ export async function depositCoreNftToCustody({
   const owner = solWallet?.publicKey?.toBase58?.();
   if (!owner) throw new Error('Solana wallet is not connected');
   if (!order?.assetId || !order?.vaultAddress) throw new Error('Listing deposit data is incomplete');
+  reportSolanaCustodyEvent('core_prepare_start', {
+    orderId: order?.id || null,
+    assetId: order?.assetId || null,
+    vaultAddress: order?.vaultAddress || null,
+    owner,
+    nftCollection: nft?.collection || nft?.collectionAddress || null,
+    nftStandard: nft?.standard || nft?.tokenStandard || null,
+  }, solWallet);
 
   const [
     { createUmi },
@@ -573,22 +728,97 @@ export async function depositCoreNftToCustody({
   const umi = createUmi(rpcUrl).use(mplCore());
   const ownerPk = new PublicKey(owner);
   const ownerSigner = createNoopSigner(publicKey(owner));
-  const asset = await fetchAsset(umi, publicKey(order.assetId));
+  reportSolanaCustodyEvent('core_rpc_selected', {
+    orderId: order?.id || null,
+    assetId: order?.assetId || null,
+    vaultAddress: order?.vaultAddress || null,
+    rpcUrl,
+    rpcHost: (() => {
+      try { return new URL(rpcUrl).host; } catch { return rpcUrl; }
+    })(),
+  }, solWallet);
+  let asset = null;
+  try {
+    reportSolanaCustodyEvent('core_fetch_asset_start', {
+      orderId: order?.id || null,
+      assetId: order?.assetId || null,
+    }, solWallet);
+    asset = await fetchAsset(umi, publicKey(order.assetId));
+    reportSolanaCustodyEvent('core_fetch_asset_ok', {
+      orderId: order?.id || null,
+      assetId: order?.assetId || null,
+      owner: publicKeyString(asset?.owner),
+      updateAuthorityType: asset?.updateAuthority?.type || asset?.updateAuthority?.__kind || null,
+      collection: solanaCoreAssetCollection(asset) || null,
+      frozen: asset?.frozen ?? null,
+      hasPlugins: !!asset?.plugins,
+      plugins: corePluginSummary(asset),
+    }, solWallet);
+  } catch (err) {
+    reportSolanaCustodyEvent('core_fetch_asset_failed', {
+      orderId: order?.id || null,
+      assetId: order?.assetId || null,
+      error: errorDebug(err),
+    }, solWallet, 'error');
+    throw err;
+  }
   const onChainOwner = publicKeyString(asset?.owner);
   if (onChainOwner && onChainOwner !== owner) {
     if (order.vaultAddress && onChainOwner === String(order.vaultAddress)) {
-      const confirmed = await confirmCustodialDeposit({ token, orderId: order.id, txHash: null });
+      reportSolanaCustodyEvent('core_already_in_custody', {
+        orderId: order?.id || null,
+        assetId: order?.assetId || null,
+        onChainOwner,
+        vaultAddress: order?.vaultAddress || null,
+      }, solWallet, 'warn');
+      const confirmed = await confirmSolanaCustodialDeposit({
+        token,
+        orderId: order.id,
+        txHash: null,
+        solWallet,
+        assetId: order.assetId,
+        standard: 'mpl-core',
+        vaultAddress: order.vaultAddress,
+      });
       return { txHash: null, confirmed, alreadyInCustody: true };
     }
+    reportSolanaCustodyEvent('core_owner_mismatch', {
+      orderId: order?.id || null,
+      assetId: order?.assetId || null,
+      expectedOwner: owner,
+      onChainOwner,
+      vaultAddress: order?.vaultAddress || null,
+    }, solWallet, 'error');
     throw new Error(`Solana source wallet is not the asset owner (expected ${owner}, on-chain owner ${onChainOwner})`);
   }
   const collectionAddress = solanaCoreAssetCollection(asset)
     || String(order.assetCollection || order.asset_collection || nft?.collection || nft?.collectionAddress || '').trim();
   const collection = collectionAddress
-    ? await fetchCollection(umi, publicKey(collectionAddress)).catch((err) => {
+    ? await fetchCollection(umi, publicKey(collectionAddress)).then((loaded) => {
+      reportSolanaCustodyEvent('core_fetch_collection_ok', {
+        orderId: order?.id || null,
+        assetId: order?.assetId || null,
+        collectionAddress,
+      }, solWallet);
+      return loaded;
+    }).catch((err) => {
+      reportSolanaCustodyEvent('core_fetch_collection_failed', {
+        orderId: order?.id || null,
+        assetId: order?.assetId || null,
+        collectionAddress,
+        error: errorDebug(err),
+      }, solWallet, 'error');
       throw new Error(`Solana Core collection ${collectionAddress} could not be loaded for marketplace escrow transfer: ${err?.message || err}`);
     })
     : null;
+  reportSolanaCustodyEvent('core_transfer_build_start', {
+    orderId: order?.id || null,
+    assetId: order?.assetId || null,
+    owner,
+    newOwner: order?.vaultAddress || null,
+    collectionAddress: collectionAddress || null,
+    hasCollection: !!collection,
+  }, solWallet);
   const builder = transfer(umi, {
     asset,
     ...(collection ? { collection } : {}),
@@ -598,24 +828,63 @@ export async function depositCoreNftToCustody({
   });
   const instructions = builder.getInstructions().map(toWeb3JsInstruction);
   const connection = createSolanaConnection(Connection, rpcUrl, 'confirmed');
-  const txHash = await sendSolanaTransactionWithRetry({
-    instructions,
-    ownerPk,
-    connection,
-    ...buildSolanaWalletTxOptions({
-      solWallet,
+  reportSolanaCustodyEvent('core_instructions_ready', {
+    orderId: order?.id || null,
+    assetId: order?.assetId || null,
+    owner,
+    vaultAddress: order?.vaultAddress || null,
+    collectionAddress: collectionAddress || null,
+    instructionCount: instructions.length,
+    instructions: instructionDebugSummary(instructions),
+  }, solWallet);
+  let txHash = null;
+  try {
+    txHash = await sendSolanaTransactionWithRetry({
+      instructions,
+      ownerPk,
+      connection,
+      ...buildSolanaWalletTxOptions({
+        solWallet,
+        owner,
+        label: 'custodial_marketplace.deposit_solana_core',
+        venueLabel: 'Marketplace',
+        // Seeker/MWA docs recommend signAndSendTransactions. Keep the tx
+        // legacy-shaped for clearer wallet simulation, but do not raw-sign.
+        forceMobileVersionedTransaction: false,
+      }),
+      maxAttempts: 4,
+      priorityFeeMicroLamports: 250_000,
+    });
+    reportSolanaCustodyEvent('core_tx_sent', {
+      orderId: order?.id || null,
+      assetId: order?.assetId || null,
+      vaultAddress: order?.vaultAddress || null,
+      collectionAddress: collectionAddress || null,
+      txHash,
+    }, solWallet);
+  } catch (err) {
+    reportSolanaCustodyEvent('core_tx_failed', {
+      orderId: order?.id || null,
+      assetId: order?.assetId || null,
       owner,
-      label: 'custodial_marketplace.deposit_solana_core',
-      venueLabel: 'Marketplace',
-      // Seeker wallet simulates and displays simple escrow transfers more
-      // reliably as legacy sign-only transactions. No address lookup table is needed.
-      forceMobileVersionedTransaction: false,
-      preferMobileSignTransaction: true,
-    }),
-    maxAttempts: 4,
-    priorityFeeMicroLamports: 250_000,
+      onChainOwner,
+      vaultAddress: order?.vaultAddress || null,
+      collectionAddress: collectionAddress || null,
+      instructionCount: instructions.length,
+      instructions: instructionDebugSummary(instructions),
+      error: errorDebug(err),
+    }, solWallet, 'error');
+    throw err;
+  }
+  const confirmed = await confirmSolanaCustodialDeposit({
+    token,
+    orderId: order.id,
+    txHash,
+    solWallet,
+    assetId: order.assetId,
+    standard: 'mpl-core',
+    vaultAddress: order.vaultAddress,
   });
-  const confirmed = await confirmCustodialDeposit({ token, orderId: order.id, txHash });
   return { txHash, confirmed };
 }
 
@@ -654,9 +923,28 @@ export async function depositNftToCustody({
 }) {
   const chain = order?.assetChain || nft?.chain;
   const standard = nft?.standard || order?.assetStandard;
-  if (CUSTODIAL_EVM_CHAIN_IDS[chain]) return depositEvmNftToCustody({ evmWallet, token, order, owner });
-  if (chain === 'solana' && standard === 'token2022') return depositToken2022NftToCustody({ solWallet, token, order, nft });
-  if (chain === 'solana') return depositCoreNftToCustody({ solWallet, token, order, nft });
-  if (chain === 'aptos') return depositAptosNftToCustody({ aptosWallet, token, order });
+  reportSolanaCustodyEvent('route_selected', {
+    orderId: order?.id || null,
+    chain: chain || null,
+    standard: standard || null,
+    assetId: order?.assetId || nft?.assetId || nft?.mint || null,
+    vaultAddress: order?.vaultAddress || null,
+  }, solWallet);
+  try {
+    if (CUSTODIAL_EVM_CHAIN_IDS[chain]) return await depositEvmNftToCustody({ evmWallet, token, order, owner });
+    if (chain === 'solana' && standard === 'token2022') return await depositToken2022NftToCustody({ solWallet, token, order, nft });
+    if (chain === 'solana') return await depositCoreNftToCustody({ solWallet, token, order, nft });
+    if (chain === 'aptos') return await depositAptosNftToCustody({ aptosWallet, token, order });
+  } catch (err) {
+    reportSolanaCustodyEvent('route_failed', {
+      orderId: order?.id || null,
+      chain: chain || null,
+      standard: standard || null,
+      assetId: order?.assetId || nft?.assetId || nft?.mint || null,
+      vaultAddress: order?.vaultAddress || null,
+      error: errorDebug(err),
+    }, solWallet, 'error');
+    throw err;
+  }
   throw new Error(`Unsupported NFT chain ${chain || ''}`);
 }

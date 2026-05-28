@@ -60,6 +60,11 @@ const PHOENIX_DEFAULT_TAKER_FEE_RATE = 0.00035;
 const PHOENIX_FEE_BUFFER_RATE = 0.0001;
 const PHOENIX_DEFAULT_REFERRAL_CODE = 'MVWG4BTW';
 
+function shortAddr(value) {
+  const text = String(value || '');
+  return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text;
+}
+
 function decimalPlaces(value) {
   const text = String(value || '');
   const exponent = text.match(/e-(\d+)$/i);
@@ -1575,10 +1580,23 @@ function FuturesPanel() {
     if (error && clearError) clearError();
   }, [clearError, error]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid') return;
+    if (dex !== 'hyperliquid' && dex !== 'phoenix') return;
     if (oneTapTrading?.enabled) {
-      if (typeof setOneTapTradingEnabled === 'function') setOneTapTradingEnabled(false);
-      setLocalAlert('One tap trading disabled. Opening a Hyperliquid order will ask to enable it again.');
+      if (typeof setOneTapTradingEnabled === 'function') await setOneTapTradingEnabled(false);
+      setSuccessMsg(dex === 'phoenix'
+        ? 'Phoenix one tap trading disabled.'
+        : 'One tap trading disabled. Opening a Hyperliquid order will ask to enable it again.');
+      return;
+    }
+    if (dex === 'phoenix') {
+      setReferralLinking(true);
+      try {
+        const ok = await setOneTapTradingEnabled?.(true);
+        if (ok === false) setLocalAlert('Phoenix one tap setup was not completed.');
+        else setSuccessMsg('Phoenix one tap trading enabled.');
+      } finally {
+        setReferralLinking(false);
+      }
       return;
     }
     if (!linkOurReferrer || referralLinking) {
@@ -1589,7 +1607,7 @@ function FuturesPanel() {
     try {
       const result = await linkOurReferrer();
       if (result?.error) setLocalAlert(result.error);
-      else setLocalAlert('One tap trading enabled.');
+      else setSuccessMsg('One tap trading enabled.');
     } finally {
       setReferralLinking(false);
     }
@@ -2425,6 +2443,58 @@ function FuturesPanel() {
             <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
           </div>
         </div>
+
+        {dex === 'phoenix' && oneTapTrading && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
+            borderWidth: 1,
+            borderStyle: 'solid',
+            borderColor: oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.30)',
+            borderRadius: 8,
+            padding: '7px 9px',
+          }}>
+            <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
+              <span style={{fontSize: 11, fontWeight: 900, color: oneTapTrading?.enabled ? '#166534' : '#7C2D12'}}>
+                Phoenix one tap trading
+              </span>
+              <span style={{
+                fontSize: 10,
+                fontWeight: 700,
+                color: '#8a7252',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
+                {oneTapTrading?.enabled
+                  ? `Session ${oneTapTrading?.delegate ? shortAddr(oneTapTrading.delegate) : 'ready'}${oneTapTrading?.gasSol != null ? ` - ${oneTapTrading.gasSol.toFixed(4)} SOL gas` : ''}`
+                  : 'One wallet approval, then browser session signs Phoenix orders.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleOneTapTrading}
+              disabled={referralLinking || loading}
+              style={{
+                ...S.btnSmall,
+                flex: '0 0 auto',
+                minWidth: 72,
+                padding: '5px 10px',
+                background: oneTapTrading?.enabled ? '#16A34A' : '#fff6dc',
+                color: oneTapTrading?.enabled ? '#fff' : '#5C3A21',
+                borderWidth: 2,
+                borderStyle: 'solid',
+                borderColor: oneTapTrading?.enabled ? '#15803D' : '#b58b2a',
+                opacity: (referralLinking || loading) ? 0.7 : 1,
+              }}
+            >
+              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'ENABLE'}
+            </button>
+          </div>
+        )}
 
         {/* Leverage modal */}
         {showLeverage && (

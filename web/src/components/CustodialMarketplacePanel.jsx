@@ -126,6 +126,7 @@ function reportSeekerListingEvent(type, data = {}, solWallet, level = 'info') {
     level,
     source: 'marketplace.seeker.list',
     message: `marketplace.seeker.list.${type}`,
+    flush: true,
   });
 }
 
