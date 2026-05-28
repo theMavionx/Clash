@@ -7,7 +7,6 @@
 [ext_resource type="Script" path="res://scripts/attack_system.gd" id="5_vcsgt"]
 [ext_resource type="PackedScene" uid="uid://cl3mm08tunr88" path="res://Model/Ship/MainShip/MainShip.glb" id="16_cvmbd"]
 [ext_resource type="Script" path="res://scripts/warmup.gd" id="17_warmup"]
-[ext_resource type="Script" path="res://scripts/test_scene_harness.gd" id="18_harness"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_r0du0"]
 
@@ -143,7 +142,3 @@ transform = Transform3D(-0.055034157, 0, -0.043257855, 0, 0.07, 0, 0.043257855, 
 
 [node name="Warmup" type="Node3D" parent="."]
 script = ExtResource("17_warmup")
-
-[node name="LocalTestSceneHarness" type="Node" parent="."]
-script = ExtResource("18_harness")
-local_web_only = true

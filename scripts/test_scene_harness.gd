@@ -1,8 +1,6 @@
 extends Node
 ## Test-only one-button village builder for scenes/TestMain.tscn.
 
-@export var local_web_only: bool = false
-
 var _panel: PanelContainer
 var _status: Label
 var _spawn_list: VBoxContainer
@@ -76,9 +74,6 @@ func _core_layout() -> Array:
 
 
 func _ready() -> void:
-	if local_web_only and not _is_local_web_server():
-		queue_free()
-		return
 	_create_panel()
 	call_deferred("_populate_spawn_list")
 	call_deferred("_set_status", "Scene ready. F1 panel, 1 build random village.")
@@ -86,14 +81,6 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	Engine.time_scale = 1.0
-
-
-func _is_local_web_server() -> bool:
-	if not OS.has_feature("web"):
-		return false
-	var host_value = JavaScriptBridge.eval("window.location.hostname", true)
-	var host := String(host_value).strip_edges().to_lower()
-	return host == "localhost" or host == "127.0.0.1" or host == "::1"
 
 
 func _unhandled_input(event: InputEvent) -> void:

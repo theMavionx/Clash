@@ -3,10 +3,10 @@ extends Node3D
 
 @export var pulse_speed: float = 4.0
 @export var glitch_speed: float = 6.2
-@export var stretch_amount: float = 0.075
-@export var bend_amount: float = 0.04
-@export var burst_amount: float = 1.35
-@export var streak_count: int = 10
+@export var stretch_amount: float = 0.025
+@export var bend_amount: float = 0.012
+@export var burst_amount: float = 0.55
+@export var streak_count: int = 6
 
 var _sparks: Array[Dictionary] = []
 var _streaks: Array[Dictionary] = []
@@ -17,7 +17,7 @@ var _effect_span: float = 1.0
 
 const SPARK_GLITCH_SHADER := """
 shader_type spatial;
-render_mode unshaded, blend_add, cull_disabled, depth_draw_always;
+render_mode unshaded, blend_add, cull_disabled;
 
 uniform vec4 glow_color : source_color = vec4(0.14, 0.86, 1.0, 0.55);
 uniform float phase = 0.0;
@@ -44,8 +44,8 @@ void fragment() {
 	float flicker = 0.45 + 0.55 * sin(TIME * 15.0 + phase);
 	float scan = mix(0.55, 1.45, scan_mask);
 	ALBEDO = glow_color.rgb;
-	ALPHA = glow_color.a * (0.28 + glitch * 0.62 + burst * 0.45) * flicker * scan;
-	EMISSION = glow_color.rgb * (1.5 + glitch * 4.2 + burst * 5.0) * scan;
+	ALPHA = glow_color.a * (0.18 + glitch * 0.34 + burst * 0.22) * flicker * scan;
+	EMISSION = glow_color.rgb * (1.2 + glitch * 2.2 + burst * 2.4) * scan;
 }
 """
 
@@ -96,19 +96,19 @@ func _process(delta: float) -> void:
 
 		var mat: ShaderMaterial = item.get("material", null)
 		if mat != null:
-			var glitch := clampf(0.38 + pulse * 0.45 + snap * 0.95 + burst * 0.5, 0.0, 1.75)
+			var glitch := clampf(0.18 + pulse * 0.24 + snap * 0.45 + burst * 0.25, 0.0, 0.95)
 			mat.set_shader_parameter("glitch", glitch)
 			mat.set_shader_parameter("stretch", _effect_span * stretch_amount * (0.45 + snap + burst * 0.65))
 			mat.set_shader_parameter("bend", _effect_span * bend_amount * (0.55 + pulse + burst * 0.55))
 			mat.set_shader_parameter("burst", burst)
-			mat.set_shader_parameter("glow_color", Color(0.08, 0.74 + snap * 0.24, 1.0, 0.34 + pulse * 0.28 + snap * 0.24 + burst * 0.12))
+			mat.set_shader_parameter("glow_color", Color(0.08, 0.72 + snap * 0.18, 1.0, 0.22 + pulse * 0.16 + snap * 0.12 + burst * 0.08))
 
 	if is_instance_valid(_ring) and _ring_mat != null:
 		var ring_pulse := 0.5 + 0.5 * sin(_time * 2.25)
 		var ring_burst := pow(maxf(0.0, sin(_time * 3.0)), 10.0)
 		_ring.scale = Vector3.ONE * (1.0 + ring_pulse * 0.045 + ring_burst * 0.12)
-		_ring_mat.albedo_color = Color(0.12, 0.78, 1.0, 0.2 + ring_pulse * 0.22 + ring_burst * 0.26)
-		_ring_mat.emission_energy_multiplier = 1.2 + ring_pulse * 2.2 + ring_burst * 3.0
+		_ring_mat.albedo_color = Color(0.12, 0.78, 1.0, 0.14 + ring_pulse * 0.14 + ring_burst * 0.18)
+		_ring_mat.emission_energy_multiplier = 1.0 + ring_pulse * 1.4 + ring_burst * 1.8
 
 	for i in range(_streaks.size()):
 		var streak: Dictionary = _streaks[i]
@@ -119,9 +119,9 @@ func _process(delta: float) -> void:
 		var phase: float = float(streak.get("phase", 0.0))
 		var burst := pow(maxf(0.0, sin(_time * 4.4 + phase)), 12.0)
 		var flicker := 0.35 + 0.65 * maxf(0.0, sin(_time * 17.0 + phase * 2.0))
-		node.scale = Vector3.ONE * (0.92 + burst * 0.42)
-		mat.albedo_color = Color(0.1, 0.84, 1.0, (0.06 + burst * 0.68) * flicker)
-		mat.emission_energy_multiplier = 1.5 + burst * 5.5
+		node.scale = Vector3.ONE * (0.92 + burst * 0.24)
+		mat.albedo_color = Color(0.1, 0.84, 1.0, (0.035 + burst * 0.34) * flicker)
+		mat.emission_energy_multiplier = 1.2 + burst * 2.8
 
 
 func _collect_named_sparks(root: Node, bounds: AABB) -> void:
@@ -138,10 +138,12 @@ func _collect_named_sparks(root: Node, bounds: AABB) -> void:
 
 func _collect_small_spark_meshes(root: Node, bounds: AABB) -> void:
 	var max_span := maxf(0.001, maxf(bounds.size.x, bounds.size.z))
+	var upper_y := bounds.position.y + bounds.size.y * 0.42
 	for mesh_instance in _get_mesh_instances(root):
 		var local_aabb := _aabb_to_self(mesh_instance, mesh_instance.get_aabb())
 		var span := maxf(local_aabb.size.x, maxf(local_aabb.size.y, local_aabb.size.z))
-		if span <= max_span * 0.16 and _mesh_vertex_count(mesh_instance.mesh) <= 96:
+		var center := local_aabb.get_center()
+		if center.y >= upper_y and span <= max_span * 0.11 and _mesh_vertex_count(mesh_instance.mesh) <= 96:
 			_add_spark(mesh_instance)
 
 
@@ -258,7 +260,6 @@ func _make_streak_material() -> StandardMaterial3D:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	mat.albedo_color = Color(0.1, 0.84, 1.0, 0.2)
 	mat.emission_enabled = true
 	mat.emission = Color(0.1, 0.82, 1.0)
@@ -273,7 +274,6 @@ func _make_ring_material() -> StandardMaterial3D:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	mat.albedo_color = Color(0.18, 0.85, 1.0, 0.24)
 	mat.emission_enabled = true
 	mat.emission = Color(0.18, 0.8, 1.0)

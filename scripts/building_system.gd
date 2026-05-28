@@ -2120,8 +2120,6 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 					var mine_cart_script := _load_script_resource("res://scripts/mine_cart.gd")
 					if mine_cart_script != null:
 						model.set_script(mine_cart_script)
-				elif building_type == "altar":
-					_attach_altar_effect(model)
 				node.add_child(model)
 				_apply_cel_shader(model)
 				_apply_building_albedo(model, def)
@@ -2870,8 +2868,6 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			model.set_meta("building_visual_model", true)
 			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			model.position = def.get("model_offset", Vector3.ZERO)
-			if current_building_id == "altar":
-				_attach_altar_effect(model)
 			node.add_child(model)
 			_apply_cel_shader(model)
 			_apply_building_albedo(model, def)

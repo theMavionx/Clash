@@ -746,28 +746,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
   );
 
   const buildingImg = THUMBNAIL_MAP[building.id] ? (
-    building.id === 'altar' ? (
-      <div className="altar-magic-wrap" style={styles.characterImg}>
-        <div className="altar-magic-ring altar-magic-ring-outer" />
-        <div className="altar-magic-ring altar-magic-ring-inner" />
-        <div className="altar-magic-core" />
-        {[0, 1, 2, 3, 4, 5].map((i) => (
-          <span key={i} className={`altar-magic-streak altar-magic-streak-${i}`} />
-        ))}
-        <img
-          src={THUMBNAIL_MAP[building.id]}
-          alt={building.name}
-          className="altar-magic-img"
-          style={styles.altarMagicImg}
-        />
-      </div>
-    ) : (
-      <img
-        src={THUMBNAIL_MAP[building.id]}
-        alt={building.name}
-        style={styles.characterImg}
-      />
-    )
+    <img
+      src={THUMBNAIL_MAP[building.id]}
+      alt={building.name}
+      style={building.id === 'altar' ? { ...styles.characterImg, ...styles.altarStaticImg } : styles.characterImg}
+    />
   ) : (
     <div style={{...styles.characterImg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 150}}>🏠</div>
   );
@@ -1864,6 +1847,11 @@ const styles = {
     zIndex: 5,
     pointerEvents: 'none',
     filter: 'drop-shadow(0 10px 20px rgba(0,0,0,0.4))',
+  },
+  altarStaticImg: {
+    width: '88%',
+    height: '88%',
+    objectFit: 'contain',
   },
   upgradeBadge: {
     position: 'absolute',
