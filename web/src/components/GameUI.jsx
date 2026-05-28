@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import ResourceBar from './ResourceBar';
 import PlayerInfo from './PlayerInfo';
 import ActionButtons from './ActionButtons';
@@ -12,6 +12,7 @@ import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
 import TutorialOverlay, { FLAG_ARMY, FLAG_ATTACK, FLAG_TRADE, FLAG_VIDEO } from './TutorialOverlay';
 import NftGoldBoostButton from './NftGoldBoostButton';
+import FeedbackButton from './FeedbackButton';
 import { useSend, useUI, useSelectedBuilding, useTutorial, usePlayer } from '../hooks/useGodot';
 import { useAgentActions } from '../hooks/useAgentActions';
 import { useLayout } from '../hooks/useIsMobile';
@@ -172,7 +173,6 @@ export default function GameUI() {
   }, [setShopOpen, sendToGodot]);
 
   const handleCloseTroops = useCallback(() => setShowTroops(false), []);
-  const handleDeselectBuilding = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleOpenTroops = useCallback(() => setShowTroops(true), []);
 
   // Tutorial: mark phase complete on server and advance to next
@@ -221,6 +221,7 @@ export default function GameUI() {
       {!enemyMode?.active && (
         <NftGoldBoostButton placement="side" />
       )}
+      {!enemyMode?.active && <FeedbackButton />}
       {canShowAiChatButton && (() => {
         // Mirror ActionButtons sizing so we land cleanly between the
         // SHOP / TRADE columns regardless of which phone the player has.

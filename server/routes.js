@@ -5553,6 +5553,11 @@ const insertReplayTelemetry = db.db.prepare(`
      expected_duration, actual_elapsed, actual_wall_elapsed, summary, events)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
+const insertUserFeedback = db.db.prepare(`
+  INSERT INTO user_feedback
+    (player_id, kind, message, contact_type, contact_value, page_url, ua, viewport, ip)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
 
 function clampText(v, max) {
   if (v == null) return null;
@@ -5623,6 +5628,71 @@ router.post('/client-log', (req, res) => {
 
 router.all('/client-log', (_req, res) => {
   res.status(204).end();
+});
+
+const FEEDBACK_WINDOW_MS = 10 * 60_000;
+const FEEDBACK_MAX_PER_WINDOW = 5;
+const feedbackBuckets = new Map(); // playerId -> { count, resetAt }
+const FEEDBACK_KINDS = new Set(['problem', 'feedback']);
+const FEEDBACK_CONTACT_TYPES = new Set(['email', 'twitter', 'telegram', 'discord']);
+
+function feedbackRateOk(playerId) {
+  const now = Date.now();
+  const b = feedbackBuckets.get(playerId);
+  if (b && b.resetAt > now) {
+    if (b.count >= FEEDBACK_MAX_PER_WINDOW) return false;
+    b.count += 1;
+    return true;
+  }
+  feedbackBuckets.set(playerId, { count: 1, resetAt: now + FEEDBACK_WINDOW_MS });
+  return true;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of feedbackBuckets) if (v.resetAt < now) feedbackBuckets.delete(k);
+}, 5 * 60_000).unref?.();
+
+router.post('/feedback', auth, (req, res) => {
+  if (!feedbackRateOk(req.player.id)) return res.status(429).json({ error: 'Too many feedback messages. Try again later.' });
+  const body = req.body || {};
+  const kindRaw = String(body.kind || 'feedback').toLowerCase();
+  const kind = FEEDBACK_KINDS.has(kindRaw) ? kindRaw : 'feedback';
+  const contactTypeRaw = String(body.contact_type || body.contactType || '').toLowerCase();
+  const contactType = FEEDBACK_CONTACT_TYPES.has(contactTypeRaw) ? contactTypeRaw : '';
+  const message = String(clampText(body.message, 2000) || '').trim();
+  const contactValue = String(clampText(body.contact_value || body.contact || '', 160) || '').trim();
+  if (message.length < 6) return res.status(400).json({ error: 'Describe the issue or feedback in a few words.' });
+  if (!contactType) return res.status(400).json({ error: 'Choose a contact type.' });
+  if (contactValue.length < 2) return res.status(400).json({ error: 'Add your contact handle.' });
+
+  const ip = clampText(req.headers['x-real-ip'] || req.ip || 'anon', 64);
+  const pageUrl = clampText(body.page_url || body.url || '', 512);
+  const ua = clampText(req.headers['user-agent'] || body.ua || '', 512);
+  const viewport = clampText(body.viewport || body.metadata?.viewport || '', 80);
+  try {
+    const result = insertUserFeedback.run(
+      req.player.id,
+      kind,
+      message,
+      contactType,
+      contactValue,
+      pageUrl,
+      ua,
+      viewport,
+      ip
+    );
+    addLog('feedback', 'Player feedback submitted', {
+      id: result.lastInsertRowid,
+      player: req.player.name,
+      kind,
+      contact_type: contactType,
+    });
+    res.json({ ok: true, id: result.lastInsertRowid });
+  } catch (e) {
+    console.warn('[feedback] insert failed:', e.message);
+    res.status(500).json({ error: 'Failed to save feedback' });
+  }
 });
 
 router.post('/replay-telemetry', (req, res) => {
@@ -11565,6 +11635,56 @@ router.get('/admin/client-logs', adminAuth, (req, res) => {
     payload: (() => { try { return r.payload ? JSON.parse(r.payload) : null; } catch { return r.payload; } })(),
   }));
   res.json({ rows, total: rows.length, retention_days: CLIENT_LOG_RETENTION_DAYS });
+});
+
+router.get('/admin/feedback', adminAuth, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+  const rawSinceMin = parseInt(req.query.since_min, 10);
+  const sinceMin = Number.isFinite(rawSinceMin) && rawSinceMin > 0 ? Math.min(rawSinceMin, 60 * 24 * 90) : null;
+  const kind = FEEDBACK_KINDS.has(String(req.query.kind || '').toLowerCase())
+    ? String(req.query.kind).toLowerCase()
+    : null;
+  const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 80) : '';
+  const conds = [];
+  const args = [];
+  if (sinceMin) {
+    conds.push(`uf.created_at >= datetime('now', ?)`);
+    args.push(`-${sinceMin} minutes`);
+  }
+  if (kind) {
+    conds.push('uf.kind = ?');
+    args.push(kind);
+  }
+  if (q) {
+    conds.push('(uf.message LIKE ? OR uf.contact_value LIKE ? OR p.name LIKE ? OR p.wallet LIKE ? OR p.dex LIKE ?)');
+    const like = `%${q}%`;
+    args.push(like, like, like, like, like);
+  }
+  args.push(limit);
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const rows = db.db.prepare(`
+    SELECT
+      uf.id, uf.player_id, uf.kind, uf.message, uf.contact_type, uf.contact_value,
+      uf.page_url, uf.ua, uf.viewport, uf.ip, uf.status, uf.created_at, uf.updated_at,
+      p.name AS player_name,
+      p.wallet AS player_wallet,
+      p.dex AS player_dex,
+      p.futures_mode AS player_futures_mode
+    FROM user_feedback uf
+    LEFT JOIN players p ON p.id = uf.player_id
+    ${where}
+    ORDER BY uf.id DESC
+    LIMIT ?
+  `).all(...args);
+  const summary = db.db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      COALESCE(SUM(CASE WHEN created_at >= datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS day,
+      COALESCE(SUM(CASE WHEN kind = 'problem' THEN 1 ELSE 0 END), 0) AS problems,
+      COALESCE(SUM(CASE WHEN kind = 'feedback' THEN 1 ELSE 0 END), 0) AS feedback
+    FROM user_feedback
+  `).get();
+  res.json({ rows, total: rows.length, summary });
 });
 
 function parseDevicePayloadText(payload) {

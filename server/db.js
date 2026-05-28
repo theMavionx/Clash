@@ -597,6 +597,31 @@ try {
   `);
 } catch (e) { console.warn('[db] client_logs migration:', e.message); }
 
+// Player-submitted feedback and bug reports. Kept separate from client_logs:
+// these are intentional messages with contact details, not telemetry.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_feedback (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id     TEXT REFERENCES players(id) ON DELETE SET NULL,
+      kind          TEXT NOT NULL DEFAULT 'feedback',
+      message       TEXT NOT NULL,
+      contact_type  TEXT NOT NULL,
+      contact_value TEXT NOT NULL,
+      page_url      TEXT,
+      ua            TEXT,
+      viewport      TEXT,
+      ip            TEXT,
+      status        TEXT NOT NULL DEFAULT 'new',
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_feedback_recent ON user_feedback(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_user_feedback_player_recent ON user_feedback(player_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_user_feedback_status_recent ON user_feedback(status, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] user_feedback migration:', e.message); }
+
 try {
   db.exec(`
     CREATE TABLE IF NOT EXISTS replay_telemetry (

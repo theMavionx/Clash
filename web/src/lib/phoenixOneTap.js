@@ -3,7 +3,7 @@ import { kitInstructionToWeb3 } from './phoenixTx';
 
 export const PHOENIX_ONE_TAP_STORAGE_PREFIX = 'clash:phoenix:one_tap:v1';
 export const PHOENIX_ONE_TAP_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-export const PHOENIX_ONE_TAP_MIN_SOL_LAMPORTS = 3_000_000;
+export const PHOENIX_ONE_TAP_MIN_SOL_LAMPORTS = 60_000_000;
 export const PHOENIX_ONE_TAP_POLICY = {
   maxNotionalUsd: 1_000,
   maxLeverage: 50,

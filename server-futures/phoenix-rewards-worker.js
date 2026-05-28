@@ -449,6 +449,12 @@ function tradeKey(wallet, fill) {
   return `phoenix:${String(wallet)}:${base}`;
 }
 
+function sqlDateFromMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return new Date(n).toISOString().slice(0, 19).replace('T', ' ');
+}
+
 function fillTimestampMs(fill) {
   const raw = Number(fill?.timestamp ?? fill?.created_at ?? fill?.time ?? 0);
   if (Number.isFinite(raw) && raw > 0) return raw > 1e12 ? raw : raw * 1000;
@@ -552,13 +558,28 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       continue;
     }
     try {
+      const signature = String(fill.signature || '').trim();
+      if (signature) {
+        const txClientOrderId = phoenixTxTradeKey(cleanWallet, signature, {});
+        const txExisting = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(txClientOrderId);
+        if (txExisting) {
+          skipped++;
+          continue;
+        }
+      }
       const before = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
       if (before) {
         skipped++;
         continue;
       }
-      db.addTrade(playerId, trade);
-      inserted++;
+      const added = db.addTrade(playerId, trade);
+      if (added?.id && tsMs) {
+        const createdAt = sqlDateFromMs(tsMs);
+        if (createdAt) {
+          db.db.prepare('UPDATE trade_history SET created_at = ? WHERE id = ?').run(createdAt, added.id);
+        }
+      }
+      if (added?.id) inserted++;
     } catch (e) {
       skipped++;
       if (!String(e.message).includes('UNIQUE')) {

@@ -2000,11 +2000,16 @@ router.post('/phoenix/import-fills', auth, async (req, res) => {
       return res.json(result);
     }
 
+    const historyReason = String(req.body?.reason || req.body?.history_reason || '').trim().toLowerCase();
+    const allowHistoryImport = process.env.PHOENIX_ALLOW_HISTORY_IMPORT === '1'
+      || historyReason === 'limit_order_fill_check'
+      || historyReason === 'manual_backfill';
     // The previous implementation fetched /trader/{wallet}/trades-history on
     // every claim/poll. That endpoint is now intentionally not called from
-    // wallet-only imports because it rate-limits the whole server. The browser
-    // reports concrete tx signatures after successful Phoenix orders instead.
-    if (process.env.PHOENIX_ALLOW_HISTORY_IMPORT !== '1') {
+    // generic wallet-only imports because it rate-limits the whole server.
+    // Limit orders can fill later without a fresh wallet tx, so the client is
+    // allowed to request a narrow fill-history check right after placing one.
+    if (!allowHistoryImport) {
       return res.json({
         ok: true,
         imported: 0,
@@ -2016,7 +2021,7 @@ router.post('/phoenix/import-fills', auth, async (req, res) => {
     }
 
     const result = await phoenixRewards.importFillsForPlayer(req.playerId, wallet, {
-      limit: 100,
+      limit: historyReason === 'limit_order_fill_check' ? 200 : 100,
       timeoutMs: PHOENIX_PROXY_TIMEOUT_MS,
       cacheTtlMs: 20_000,
     });

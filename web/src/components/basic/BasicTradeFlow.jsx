@@ -92,8 +92,7 @@ function BasicTradeFlow({
   dex,
   maxTradableMargin,
   setActiveTab,
-  // Pacifica agent-wallet — silent-trade infra. Pro tab doesn't need it
-  // because the user is already comfortable with multi-popup flow there.
+  // Pacifica agent-wallet - silent-trade infra shared with Pro mode.
   pacAgent, bindAgent, bindingAgent, bindAgentError,
 }) {
   const [step, setStep] = useState('token');

@@ -1398,7 +1398,7 @@ function FuturesPanel() {
     // Avantis-only — undefined on the Pacifica branch.
     hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
-    pacAgent, bindAgent, bindingAgent, bindAgentError,
+    pacAgent, bindAgent, bindingAgent, bindAgentError, forgetAgentLocally, revokeAgentOnServer,
     // Decibel-only — drives the blocking activation modal + gate screen.
     // setupVerified is the on-chain verification: null=checking,
     // true=delegation confirmed on-chain, false=needs activation.
@@ -1514,6 +1514,7 @@ function FuturesPanel() {
     } catch { setReferralDismissed(false); }
   }, [referralDismissKey]);
   const [referralLinking, setReferralLinking] = useState(false);
+  const [pacificaAgentToggling, setPacificaAgentToggling] = useState(false);
   const handleLinkReferrer = useCallback(async () => {
     if (!linkOurReferrer || referralLinking) return;
     setReferralLinking(true);
@@ -1580,23 +1581,10 @@ function FuturesPanel() {
     if (error && clearError) clearError();
   }, [clearError, error]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid' && dex !== 'phoenix') return;
+    if (dex !== 'hyperliquid') return;
     if (oneTapTrading?.enabled) {
       if (typeof setOneTapTradingEnabled === 'function') await setOneTapTradingEnabled(false);
-      setSuccessMsg(dex === 'phoenix'
-        ? 'Phoenix one tap trading disabled.'
-        : 'One tap trading disabled. Opening a Hyperliquid order will ask to enable it again.');
-      return;
-    }
-    if (dex === 'phoenix') {
-      setReferralLinking(true);
-      try {
-        const ok = await setOneTapTradingEnabled?.(true);
-        if (ok === false) setLocalAlert('Phoenix one tap setup was not completed.');
-        else setSuccessMsg('Phoenix one tap trading enabled.');
-      } finally {
-        setReferralLinking(false);
-      }
+      setSuccessMsg('One tap trading disabled. Opening a Hyperliquid order will ask to enable it again.');
       return;
     }
     if (!linkOurReferrer || referralLinking) {
@@ -1612,6 +1600,34 @@ function FuturesPanel() {
       setReferralLinking(false);
     }
   }, [dex, oneTapTrading?.enabled, setOneTapTradingEnabled, linkOurReferrer, referralLinking]);
+  const handleTogglePacificaOneTap = useCallback(async () => {
+    if (dex !== 'pacifica' || pacificaAgentToggling) return;
+    clearTradeFeedback();
+    if (pacAgent) {
+      setPacificaAgentToggling(true);
+      try {
+        if (typeof revokeAgentOnServer === 'function') await revokeAgentOnServer();
+        else if (typeof forgetAgentLocally === 'function') forgetAgentLocally();
+        setSuccessMsg('Pacifica one tap trading disabled.');
+      } catch (e) {
+        setLocalAlert(e?.message || 'Failed to disable Pacifica one tap trading.');
+      } finally {
+        setPacificaAgentToggling(false);
+      }
+      return;
+    }
+    if (!bindAgent || bindingAgent) return;
+    setPacificaAgentToggling(true);
+    try {
+      const bound = await bindAgent();
+      if (bound || pacAgent) setSuccessMsg('Pacifica one tap trading enabled.');
+      else setLocalAlert('1-tap trading is still enabling. Try again in a moment.');
+    } catch (e) {
+      setLocalAlert(e?.message || PACIFICA_AGENT_REQUIRED_MESSAGE);
+    } finally {
+      setPacificaAgentToggling(false);
+    }
+  }, [bindAgent, bindingAgent, clearTradeFeedback, dex, forgetAgentLocally, pacAgent, pacificaAgentToggling, revokeAgentOnServer]);
   // Pending-tx state for LONG/SHORT buttons, including pre-wallet prep time.
   const [tradePhase, setTradePhase] = useState(null); // 'preparing' | 'signing' | 'confirming' | null
   const [tradeBusy, setTradeBusy] = useState(false);
@@ -2444,57 +2460,62 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {dex === 'phoenix' && oneTapTrading && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 8,
-            background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
-            borderWidth: 1,
-            borderStyle: 'solid',
-            borderColor: oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.30)',
-            borderRadius: 8,
-            padding: '7px 9px',
-          }}>
-            <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
-              <span style={{fontSize: 11, fontWeight: 900, color: oneTapTrading?.enabled ? '#166534' : '#7C2D12'}}>
-                Phoenix one tap trading
-              </span>
-              <span style={{
-                fontSize: 10,
-                fontWeight: 700,
-                color: '#8a7252',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                {oneTapTrading?.enabled
-                  ? `Session ${oneTapTrading?.delegate ? shortAddr(oneTapTrading.delegate) : 'ready'}${oneTapTrading?.gasSol != null ? ` - ${oneTapTrading.gasSol.toFixed(4)} SOL gas` : ''}`
-                  : 'One wallet approval, then browser session signs Phoenix orders.'}
-              </span>
+        {(dex === 'pacifica' && bindAgent) && (() => {
+          const enabled = !!pacAgent;
+          const busy = !!bindingAgent || !!pacificaAgentToggling;
+          const subtitle = enabled
+            ? `Agent ${pacAgent?.agentPubkey ? shortAddr(pacAgent.agentPubkey) : 'ready'} - no wallet popups for orders.`
+            : (bindAgentError || 'One wallet approval, then browser session signs Pacifica orders.');
+          return (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              background: enabled ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
+              borderWidth: 1,
+              borderStyle: 'solid',
+              borderColor: enabled ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.30)',
+              borderRadius: 8,
+              padding: '7px 9px',
+            }}>
+              <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
+                <span style={{fontSize: 11, fontWeight: 900, color: enabled ? '#166534' : '#7C2D12'}}>
+                  Pacifica one tap trading
+                </span>
+                <span style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: bindAgentError && !enabled ? '#B91C1C' : '#8a7252',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {subtitle}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleTogglePacificaOneTap}
+                disabled={busy || loading}
+                style={{
+                  ...S.btnSmall,
+                  flex: '0 0 auto',
+                  minWidth: 72,
+                  padding: '5px 10px',
+                  background: enabled ? '#16A34A' : '#fff6dc',
+                  color: enabled ? '#fff' : '#5C3A21',
+                  borderWidth: 2,
+                  borderStyle: 'solid',
+                  borderColor: enabled ? '#15803D' : '#b58b2a',
+                  opacity: (busy || loading) ? 0.7 : 1,
+                }}
+              >
+                {busy ? '...' : enabled ? 'ON' : 'ENABLE'}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={handleToggleOneTapTrading}
-              disabled={referralLinking || loading}
-              style={{
-                ...S.btnSmall,
-                flex: '0 0 auto',
-                minWidth: 72,
-                padding: '5px 10px',
-                background: oneTapTrading?.enabled ? '#16A34A' : '#fff6dc',
-                color: oneTapTrading?.enabled ? '#fff' : '#5C3A21',
-                borderWidth: 2,
-                borderStyle: 'solid',
-                borderColor: oneTapTrading?.enabled ? '#15803D' : '#b58b2a',
-                opacity: (referralLinking || loading) ? 0.7 : 1,
-              }}
-            >
-              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'ENABLE'}
-            </button>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Leverage modal */}
         {showLeverage && (

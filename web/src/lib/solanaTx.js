@@ -96,6 +96,29 @@ function isPhoenixTpslDiagnostic(label, type) {
     && /^(attempt_start|signed|confirmed|status_ok|status_poll|rebroadcast|late_status_check)$/i.test(String(type || ''));
 }
 
+function phoenixIsolatedDiagnosticNamespace(label) {
+  return /^phoenix\.(market|limit)\.isolated$/i.test(String(label || ''))
+    ? 'phoenix.isolated.tx'
+    : '';
+}
+
+function isPhoenixIsolatedDiagnostic(label, type) {
+  return !!phoenixIsolatedDiagnosticNamespace(label)
+    && /^(attempt_start|simulate_start|simulate_ok|simulate_error|simulate_failed|attempt_error|raw_send_error|signed|confirmed|status_ok|rebroadcast|late_status_check)$/i.test(String(type || ''));
+}
+
+function phoenixOneTapDiagnosticNamespace(label, data = {}) {
+  const text = String(label || '');
+  if (!/^phoenix\./i.test(text)) return '';
+  const walletPath = String(data?.wallet_path || data?.wallet_path_override || '');
+  return walletPath === 'phoenix_one_tap_keypair' ? 'phoenix.one_tap.tx' : '';
+}
+
+function isPhoenixOneTapDiagnostic(label, type, data = {}) {
+  return !!phoenixOneTapDiagnosticNamespace(label, data)
+    && /^(attempt_start|simulate_start|simulate_ok|simulate_error|simulate_failed|wallet_signed_tx|raw_sent|raw_send_error|confirmed_after_send_error|attempt_error|signed|confirmed|status_ok|status_poll|rebroadcast|late_status_check)$/i.test(String(type || ''));
+}
+
 function seekerNftDiagnosticNamespace(label) {
   const text = String(label || '');
   if (/^custodial_marketplace\.deposit_solana/i.test(text)) return 'marketplace.seeker.tx';
@@ -109,14 +132,26 @@ function isSeekerNftDiagnostic(label, type) {
 }
 
 function logTx(label, type, data = {}, level = 'info') {
-  if (level === 'info' && !isPhoenixTpslDiagnostic(label, type) && !isSeekerNftDiagnostic(label, type)) return;
+  if (
+    level === 'info'
+    && !isPhoenixTpslDiagnostic(label, type)
+    && !isPhoenixIsolatedDiagnostic(label, type)
+    && !isPhoenixOneTapDiagnostic(label, type, data)
+    && !isSeekerNftDiagnostic(label, type)
+  ) return;
   const payload = { label, ...data };
   if (/^phoenix\.tpsl(?:\.setup)?$/i.test(String(label || '')) && payload.signature_short && !payload.txid_short) {
     payload.txid_short = payload.signature_short;
   }
   const seekerNftNamespace = seekerNftDiagnosticNamespace(label);
+  const phoenixIsolatedNamespace = phoenixIsolatedDiagnosticNamespace(label);
+  const phoenixOneTapNamespace = phoenixOneTapDiagnosticNamespace(label, payload);
   const reportSeekerNft = seekerNftNamespace
     && /^(attempt_start|attempt_error|signed|confirmed)$/i.test(String(type || ''));
+  const reportPhoenixIsolated = phoenixIsolatedNamespace
+    && /^(attempt_start|simulate_start|simulate_ok|simulate_error|simulate_failed|attempt_error|raw_send_error|signed|confirmed)$/i.test(String(type || ''));
+  const reportPhoenixOneTap = phoenixOneTapNamespace
+    && /^(attempt_start|simulate_start|simulate_ok|simulate_error|simulate_failed|wallet_signed_tx|raw_sent|raw_send_error|confirmed_after_send_error|attempt_error|signed|confirmed)$/i.test(String(type || ''));
   try { addClientBreadcrumb(`solana_tx.${type}`, payload, level); } catch {}
   if (reportSeekerNft) {
     try {
@@ -124,6 +159,26 @@ function logTx(label, type, data = {}, level = 'info') {
         level,
         source: seekerNftNamespace,
         message: `${seekerNftNamespace}.${type}`,
+        flush: true,
+      });
+    } catch {}
+  }
+  if (reportPhoenixIsolated) {
+    try {
+      reportClientEvent(`${phoenixIsolatedNamespace}.${type}`, payload, {
+        level,
+        source: phoenixIsolatedNamespace,
+        message: `${phoenixIsolatedNamespace}.${type}`,
+        flush: true,
+      });
+    } catch {}
+  }
+  if (reportPhoenixOneTap) {
+    try {
+      reportClientEvent(`${phoenixOneTapNamespace}.${type}`, payload, {
+        level,
+        source: phoenixOneTapNamespace,
+        message: `${phoenixOneTapNamespace}.${type}`,
         flush: true,
       });
     } catch {}
@@ -204,6 +259,108 @@ function transactionSummary(tx) {
     tx_has_lighthouse_assertion: programs.includes(LIGHTHOUSE_PROGRAM_ID),
     tx_unsigned_bytes: raw?.length || null,
   };
+}
+
+function simulationResultSummary(result) {
+  const value = result?.value || result || {};
+  return {
+    err: value.err || null,
+    logs: Array.isArray(value.logs) ? value.logs.slice(-30) : [],
+    units_consumed: value.unitsConsumed ?? null,
+    replacement_blockhash: value.replacementBlockhash?.blockhash
+      ? String(value.replacementBlockhash.blockhash).slice(0, 8)
+      : null,
+  };
+}
+
+async function simulateLegacyTransactionRaw(connection, tx, config = {}) {
+  const raw = tx.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  });
+  const endpoint = connection?.rpcEndpoint;
+  if (!endpoint) throw new Error('Solana RPC endpoint unavailable for simulation');
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: `simulate-${Date.now()}`,
+      method: 'simulateTransaction',
+      params: [
+        Buffer.from(raw).toString('base64'),
+        {
+          encoding: 'base64',
+          commitment: 'confirmed',
+          sigVerify: false,
+          replaceRecentBlockhash: false,
+          ...config,
+        },
+      ],
+    }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.error) {
+    const detail = data?.error?.message || data?.message || `${res.status} ${res.statusText}`.trim();
+    const error = new Error(detail || 'Solana simulation failed');
+    error.name = 'SolanaRpcSimulationError';
+    error.simulationResult = data?.error?.data;
+    error.simulationLogs = data?.error?.data?.logs;
+    error.simulationErr = data?.error?.data?.err;
+    throw error;
+  }
+  return { value: data?.result?.value || null };
+}
+
+async function simulateBeforeWalletIfNeeded({ connection, tx, label, attempt, walletPath }) {
+  if (!phoenixIsolatedDiagnosticNamespace(label) && walletPath !== 'phoenix_one_tap_keypair') return null;
+  logTx(label, 'simulate_start', {
+    attempt,
+    rpc_host: rpcHost(connection),
+    wallet_path: walletPath,
+    sig_verify: false,
+    replace_recent_blockhash: false,
+    ...transactionSummary(tx),
+  });
+  try {
+    const result = await withTimeout(
+      simulateLegacyTransactionRaw(connection, tx, {
+        sigVerify: false,
+        replaceRecentBlockhash: false,
+        commitment: 'confirmed',
+      }),
+      SOLANA_RPC_PROBE_TIMEOUT_MS + 5_000,
+      'Solana pre-wallet simulation timeout',
+    );
+    const summary = simulationResultSummary(result);
+    logTx(label, summary.err ? 'simulate_error' : 'simulate_ok', {
+      attempt,
+      rpc_host: rpcHost(connection),
+      wallet_path: walletPath,
+      ...summary,
+    }, summary.err ? 'error' : 'info');
+    if (summary.err) {
+      const err = new Error(`Solana pre-wallet simulation failed: ${JSON.stringify(summary.err)}`);
+      err.name = 'SolanaPreWalletSimulationError';
+      err.simulationErr = summary.err;
+      err.simulationLogs = summary.logs;
+      err.simulationUnitsConsumed = summary.units_consumed;
+      throw err;
+    }
+    return result;
+  } catch (error) {
+    if (error?.name === 'SolanaPreWalletSimulationError') throw error;
+    logTx(label, 'simulate_failed', {
+      attempt,
+      rpc_host: rpcHost(connection),
+      wallet_path: walletPath,
+      name: error?.name || null,
+      message: error?.message || String(error || 'simulate failed'),
+      error_keys: Object.getOwnPropertyNames(error || {}).slice(0, 30),
+      logs: errorLogs(error).slice(-30),
+    }, 'warn');
+    return null;
+  }
 }
 
 function extractPrivySignature(result) {
@@ -693,6 +850,7 @@ async function sendRawTransactionWithFallback({
   sendOptions,
   label,
   attempt,
+  walletPathOverride = null,
 }) {
   const connections = statusConnectionList(primaryConnection, statusConnections);
   let lastSendError = null;
@@ -704,6 +862,7 @@ async function sendRawTransactionWithFallback({
         rpc_host: rpcHost(candidate),
         signature_short: shortSig(signature),
         fallback_broadcast: candidate !== primaryConnection,
+        wallet_path_override: walletPathOverride,
       });
       return { sent: true, landed: false, connection: candidate };
     } catch (sendError) {
@@ -711,11 +870,12 @@ async function sendRawTransactionWithFallback({
       const state = await readSignatureStateAny(connections, signature);
       if (state.ok) {
         logTx(label, 'confirmed_after_send_error', {
-          attempt,
-          source: state.source,
-          signature_short: shortSig(signature),
-          failed_rpc_host: rpcHost(candidate),
-        }, 'warn');
+        attempt,
+        source: state.source,
+        signature_short: shortSig(signature),
+        failed_rpc_host: rpcHost(candidate),
+        wallet_path_override: walletPathOverride,
+      }, 'warn');
         return { sent: false, landed: true, connection: candidate };
       }
       logTx(label, 'raw_send_error', {
@@ -723,6 +883,7 @@ async function sendRawTransactionWithFallback({
         rpc_host: rpcHost(candidate),
         signature_short: shortSig(signature),
         message: sendError?.message || String(sendError || 'sendRawTransaction failed'),
+        wallet_path_override: walletPathOverride,
       }, 'warn');
     }
   }
@@ -803,6 +964,7 @@ export async function sendSignedSolanaTransactionWithRetry({
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   skipPreflight = false,
   label = 'transaction',
+  walletPathOverride = null,
 }) {
   if (typeof buildSignedTransaction !== 'function') {
     throw new Error('buildSignedTransaction callback is required');
@@ -893,6 +1055,7 @@ export async function sendSignedSolanaTransactionWithRetry({
         sendOptions,
         label,
         attempt,
+        walletPathOverride,
       });
       if (broadcast.landed) return { signature, rawTransaction, buildResult: built };
 
@@ -904,8 +1067,13 @@ export async function sendSignedSolanaTransactionWithRetry({
         rawTransaction,
         label,
         attempt,
+        walletPathOverride,
       });
-      logTx(label, 'confirmed', { attempt, signature_short: shortSig(signature) });
+      logTx(label, 'confirmed', {
+        attempt,
+        signature_short: shortSig(signature),
+        wallet_path_override: walletPathOverride,
+      });
       return { signature, rawTransaction, buildResult: built };
     } catch (error) {
       lastError = error;
@@ -1036,6 +1204,14 @@ export async function sendSolanaTransactionWithRetry({
         ...transactionSummary(tx),
       });
 
+      await simulateBeforeWalletIfNeeded({
+        connection: attemptConnection,
+        tx,
+        label,
+        attempt,
+        walletPath,
+      });
+
       const sendOptions = {
         ...SEND_OPTIONS,
         skipPreflight: !!skipPreflight,
@@ -1088,7 +1264,14 @@ export async function sendSolanaTransactionWithRetry({
         throw new Error('Wallet cannot send Solana transactions');
       }
 
-      logTx(label, 'signed', { attempt, signature_short: shortSig(sig), txid: sig, txid_short: shortSig(sig) });
+      logTx(label, 'signed', {
+        attempt,
+        signature_short: shortSig(sig),
+        txid: sig,
+        txid_short: shortSig(sig),
+        wallet_path: walletPath,
+        wallet_path_override: walletPathOverride || null,
+      });
       if (rawTransaction) {
         const broadcast = await sendRawTransactionWithFallback({
           rawTransaction,
@@ -1098,6 +1281,7 @@ export async function sendSolanaTransactionWithRetry({
           sendOptions,
           label,
           attempt,
+          walletPathOverride,
         });
         if (broadcast.landed) return sig;
         attemptConnection = broadcast.connection || attemptConnection;
@@ -1110,8 +1294,16 @@ export async function sendSolanaTransactionWithRetry({
         rawTransaction,
         label,
         attempt,
+        walletPathOverride,
       });
-      logTx(label, 'confirmed', { attempt, signature_short: shortSig(sig), txid: sig, txid_short: shortSig(sig) });
+      logTx(label, 'confirmed', {
+        attempt,
+        signature_short: shortSig(sig),
+        txid: sig,
+        txid_short: shortSig(sig),
+        wallet_path: walletPath,
+        wallet_path_override: walletPathOverride || null,
+      });
       return sig;
     } catch (error) {
       lastError = error;
@@ -1159,6 +1351,7 @@ async function waitForSignature({
   rawTransaction = null,
   label,
   attempt,
+  walletPathOverride = null,
 }) {
   let lastBroadcastAt = 0;
   let polls = 0;
@@ -1179,6 +1372,7 @@ async function waitForSignature({
         signature_short: shortSig(signature),
         confirmation_status: status?.confirmationStatus || (state.transaction ? 'confirmed' : null),
         slot: status?.slot || state.transaction?.slot,
+        wallet_path_override: walletPathOverride,
       });
       return true;
     }
@@ -1203,6 +1397,7 @@ async function waitForSignature({
         remaining_blocks: Number.isFinite(currentBlockHeight) ? lastValidBlockHeight - currentBlockHeight : null,
         rpc_hosts: state.rpcHosts || connections.map(rpcHost).slice(0, 5),
         rpc_errors: state.rpcErrors || [],
+        wallet_path_override: walletPathOverride,
       });
     }
 
@@ -1219,6 +1414,7 @@ async function waitForSignature({
         signature_short: shortSig(signature),
         current_block_height: currentBlockHeight,
         last_valid_block_height: lastValidBlockHeight,
+        wallet_path_override: walletPathOverride,
       });
     }
 

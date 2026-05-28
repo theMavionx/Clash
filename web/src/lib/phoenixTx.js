@@ -6,6 +6,7 @@ import {
   isSolanaMobileWalletAdapter,
   solanaWalletAdapterName,
 } from './solanaSeekerTx';
+import { reportClientEvent } from './clientLogger';
 
 const ACCOUNT_ROLE = {
   READONLY: 0,
@@ -55,11 +56,12 @@ function instructionSummary(instructions) {
         writable_count: flags.filter(flag => flag.isWritable).length,
         signer_count: flags.filter(flag => flag.isSigner).length,
         data_bytes: ix?.data?.length || 0,
-        account_roles: accounts.slice(0, 10).map((account, index) => {
+        account_roles: accounts.slice(0, 24).map((account, index) => {
           const flag = flags[index] || {};
           return {
             index,
             address: shortAddress(account.address || account.pubkey),
+            full_address: String(account.address || account.pubkey || ''),
             writable: !!flag.isWritable,
             signer: !!flag.isSigner,
           };
@@ -190,6 +192,26 @@ export async function sendPhoenixInstructionsWithKeypair({
   }
   const list = Array.isArray(instructions) ? instructions : [instructions];
   const web3Instructions = list.filter(Boolean).map(kitInstructionToWeb3);
+  const payload = {
+    label,
+    one_tap_signer: shortAddress(keypair.publicKey),
+    one_tap_signer_full: keypair.publicKey.toBase58(),
+    compute_unit_limit: computeUnitLimit,
+    skip_preflight: !!skipPreflight,
+    fast_blockhash: !!fastBlockhash,
+    max_attempts: maxAttempts ?? null,
+    wallet_path_override: 'phoenix_one_tap_keypair',
+    ...instructionSummary(list.filter(Boolean)),
+  };
+  console.info('[Phoenix one tap] keypair transaction input', payload);
+  try {
+    reportClientEvent('phoenix.one_tap.tx.input', payload, {
+      level: 'info',
+      source: 'phoenix.one_tap.tx',
+      message: 'phoenix.one_tap.tx.input',
+      flush: true,
+    });
+  } catch {}
   return sendSolanaTransactionWithRetry({
     instructions: web3Instructions,
     ownerPk: keypair.publicKey,

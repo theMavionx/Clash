@@ -349,7 +349,7 @@ app.get('/api/admin/panel', (req, res) => {
   #app { display: none; padding: 24px; max-width: 1200px; margin: 0 auto; }
   h1 { color: #f59e0b; font-size: 24px; margin-bottom: 4px; }
   .sub { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
-  .tabs { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 2px solid #374151; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 0; margin-bottom: 24px; border-bottom: 2px solid #374151; }
   .tab { padding: 10px 20px; cursor: pointer; font-weight: 700; font-size: 14px; color: #9ca3af; border-bottom: 2px solid transparent; margin-bottom: -2px; }
   .tab.active { color: #f59e0b; border-color: #f59e0b; }
   .tab:hover { color: #d1d5db; }
@@ -387,6 +387,8 @@ app.get('/api/admin/panel', (req, res) => {
   details.log-details { margin-top: 6px; }
   details.log-details summary { cursor: pointer; color: #fbbf24; font-size: 11px; }
   .log-pre { margin-top: 6px; max-height: 220px; overflow: auto; background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 8px; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }
+  .feedback-message { max-width: 520px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+  .feedback-contact { font-size: 12px; color: #fbbf24; word-break: break-word; }
 </style>
 </head><body>
 
@@ -411,6 +413,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="tab" onclick="switchTab('elfa')">Elfa</div>
     <div class="tab" onclick="switchTab('logs')">Logs</div>
     <div class="tab" onclick="switchTab('client')">Client Logs</div>
+    <div class="tab" onclick="switchTab('feedback')">Feedback</div>
     <div class="tab" onclick="switchTab('stats')">Stats</div>
     <div class="tab" onclick="switchTab('earnings')">Earnings</div>
     <div class="tab" onclick="switchTab('shop')">Shop</div>
@@ -433,6 +436,7 @@ app.get('/api/admin/panel', (req, res) => {
         <option value="battle">Battle</option>
         <option value="economy">Economy</option>
         <option value="auth">Auth</option>
+        <option value="feedback">Feedback</option>
         <option value="error">Error</option>
       </select>
       <button class="btn" onclick="loadLogs()">Refresh</button>
@@ -473,6 +477,31 @@ app.get('/api/admin/panel', (req, res) => {
     <table><thead><tr>
       <th>User group</th><th>Time</th><th>Level</th><th>Source</th><th>Message</th><th>URL / Details</th>
     </tr></thead><tbody id="clientLogsBody"></tbody></table>
+  </div>
+
+  <div class="panel" id="tab-feedback">
+    <div class="stats" id="feedbackStats"></div>
+    <div class="filter" style="flex-wrap:wrap">
+      <span style="color:#9ca3af;font-size:13px">Type:</span>
+      <select id="feedbackKind" onchange="loadFeedback()">
+        <option value="">All</option>
+        <option value="problem">Problem</option>
+        <option value="feedback">Feedback</option>
+      </select>
+      <span style="color:#9ca3af;font-size:13px">Window:</span>
+      <select id="feedbackSince" onchange="loadFeedback()">
+        <option value="1440" selected>24h</option>
+        <option value="10080">7d</option>
+        <option value="43200">30d</option>
+        <option value="">All</option>
+      </select>
+      <input id="feedbackSearch" placeholder="Search message / contact / player" onkeydown="if(event.key==='Enter')loadFeedback()">
+      <button class="btn" onclick="loadFeedback()">Refresh</button>
+      <span id="feedbackCount" style="color:#6b7280;font-size:12px;margin-left:8px"></span>
+    </div>
+    <table><thead><tr>
+      <th>Time</th><th>Type</th><th>Player</th><th>Contact</th><th>Message</th><th>Context</th>
+    </tr></thead><tbody id="feedbackBody"></tbody></table>
   </div>
 
   <div class="panel" id="tab-stats">
@@ -1509,6 +1538,51 @@ async function loadClientLogs() {
       }).join('');
       return header + rowsHtml;
     }).join('') || '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No client logs for this filter</td></tr>';
+  } catch(e) { console.error(e); }
+}
+
+async function loadFeedback() {
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', '200');
+    const kind = document.getElementById('feedbackKind').value;
+    const since = document.getElementById('feedbackSince').value;
+    const q = document.getElementById('feedbackSearch').value.trim();
+    if (kind) params.set('kind', kind);
+    if (since) params.set('since_min', since);
+    if (q) params.set('q', q);
+    const data = await api('/admin/feedback?' + params.toString());
+    const rows = data.rows || [];
+    const summary = data.summary || {};
+    document.getElementById('feedbackStats').innerHTML =
+      '<div class="stat"><div class="v">' + (summary.total || 0) + '</div><div class="l">All feedback</div></div>' +
+      '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + (summary.day || 0) + '</div><div class="l">Last 24h</div></div>' +
+      '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5">' + (summary.problems || 0) + '</div><div class="l">Problems</div></div>' +
+      '<div class="stat" style="border-color:#38bdf8"><div class="v" style="color:#7dd3fc">' + (summary.feedback || 0) + '</div><div class="l">Feedback</div></div>';
+    document.getElementById('feedbackCount').textContent = rows.length + ' entries shown';
+    document.getElementById('feedbackBody').innerHTML = rows.map((r) => {
+      const isProblem = r.kind === 'problem';
+      const badge = isProblem
+        ? '<span class="badge" style="background:#7f1d1d;color:#fecaca">problem</span>'
+        : '<span class="badge" style="background:#075985;color:#bae6fd">feedback</span>';
+      const player = r.player_name
+        ? '<strong>' + esc(r.player_name) + '</strong> ' + clientDexBadge(r.player_dex) + '<div class="log-meta mono">' + esc(shortWallet(r.player_wallet)) + '</div>'
+        : '<span class="log-meta">Anonymous</span>';
+      const contact = '<div class="feedback-contact">' + esc(r.contact_type || '-') + ': ' + esc(r.contact_value || '-') + '</div>';
+      const context = [
+        r.page_url ? '<div class="log-url" title="' + esc(r.page_url) + '">' + esc(compactUrl(r.page_url)) + '</div>' : '',
+        r.viewport ? '<div class="log-meta">Viewport ' + esc(r.viewport) + '</div>' : '',
+        r.ua ? detailsBlock('User agent', r.ua) : '',
+      ].join('');
+      return '<tr>' +
+        '<td class="mono" style="white-space:nowrap">' + formatClientLogTime(r.created_at) + '</td>' +
+        '<td>' + badge + '</td>' +
+        '<td>' + player + '</td>' +
+        '<td>' + contact + '</td>' +
+        '<td class="feedback-message">' + esc(r.message || '') + '</td>' +
+        '<td>' + (context || '<span class="log-meta">-</span>') + '</td>' +
+      '</tr>';
+    }).join('') || '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No feedback for this filter</td></tr>';
   } catch(e) { console.error(e); }
 }
 
@@ -3821,6 +3895,7 @@ switchTab = function(name) {
   origSwitch(name);
   if (name === 'logs') loadLogs();
   if (name === 'client') loadClientLogs();
+  if (name === 'feedback') loadFeedback();
   if (name === 'stats') loadStats();
   if (name === 'tasks') loadTasks();
   if (name === 'tournaments') { updateTournamentDexScopeUi(); updateTournamentTeamUi(); updateTournamentPointsUi(); updateTournamentPrizeUi(); loadTournaments(); }
