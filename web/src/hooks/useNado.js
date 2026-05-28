@@ -11,6 +11,7 @@ import {
   NADO_QUOTE_PRODUCT_ID,
   NADO_QUOTE_TOKEN_ADDRESS,
   NADO_QUOTE_TOKEN_DECIMALS,
+  NADO_SUBACCOUNT_NAME,
   NADO_USDT_ABI,
 } from '../lib/nadoConfig';
 import {
@@ -26,6 +27,7 @@ const POLL_INTERVAL_MS = 5_000;
 const CLAIM_LOOKBACK_ATTEMPTS = 5;
 const NADO_WITHDRAW_FEE_USDT = 1;
 const NADO_TRIGGER_CACHE_PREFIX = 'nado_trigger_orders:';
+const NADO_TRIGGER_ACTIVE_STATUSES = ['waiting_price', 'waiting_dependency', 'triggering', 'twap_executing'];
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -41,6 +43,88 @@ function nadoTriggerRequirement(closeOrderSide, kind) {
   const closeShortSide = String(closeOrderSide || '').toLowerCase() === 'bid';
   if (kind === 'tp') return closeShortSide ? 'oracle_price_below' : 'oracle_price_above';
   return closeShortSide ? 'oracle_price_above' : 'oracle_price_below';
+}
+
+function nadoIntegerText(value) {
+  if (value == null) return '0';
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value?.integerValue === 'function') return value.integerValue().toFixed(0);
+  if (typeof value?.toFixed === 'function') return value.toFixed(0);
+  return String(value || '0').split('.')[0] || '0';
+}
+
+function nadoRawSign(value) {
+  try {
+    const raw = BigInt(nadoIntegerText(value));
+    return raw < 0n ? -1 : raw > 0n ? 1 : 0;
+  } catch {
+    const n = Number(value);
+    return n < 0 ? -1 : n > 0 ? 1 : 0;
+  }
+}
+
+function nadoRawAbsDecimal(value) {
+  try {
+    const raw = BigInt(nadoIntegerText(value));
+    return formatUnits(raw < 0n ? -raw : raw, 18);
+  } catch {
+    return '0';
+  }
+}
+
+function nadoDecimalText(value) {
+  if (value == null) return '';
+  if (typeof value?.toFixed === 'function') return value.toFixed();
+  return String(value);
+}
+
+function nadoTriggerKind(order) {
+  const requirement = String(order?.triggerCriteria?.criteria?.type || '').toLowerCase();
+  const closeShortSide = nadoRawSign(order?.amount) > 0;
+  if (requirement.includes('above')) return closeShortSide ? 'sl' : 'tp';
+  if (requirement.includes('below')) return closeShortSide ? 'tp' : 'sl';
+  return 'trigger';
+}
+
+function nadoTriggerPrice(order) {
+  return nadoDecimalText(order?.triggerCriteria?.criteria?.triggerPrice || order?.price);
+}
+
+function normalizeNadoTriggerOrderInfo(info, markets = []) {
+  const order = info?.order || {};
+  const status = typeof info?.status === 'string' ? info.status : String(info?.status?.type || '');
+  if (!NADO_TRIGGER_ACTIVE_STATUSES.includes(status)) return null;
+  const productId = Number(order.productId ?? info?.serverOrder?.product_id);
+  const market = (markets || []).find(m => Number(m?.market_id ?? m?.pair_index) === productId);
+  const symbol = String(market?.symbol || order?.symbol || '').toUpperCase();
+  const digest = String(order.digest || info?.serverOrder?.digest || '');
+  const triggerPrice = nadoTriggerPrice(order);
+  if (!Number.isFinite(productId) || !symbol || !digest || !triggerPrice) return null;
+  const side = nadoRawSign(order.amount) < 0 ? 'ask' : 'bid';
+  const kind = nadoTriggerKind(order);
+  const placed = Number(info?.placementTime || info?.placedAt || 0);
+  const createdAt = placed > 1e12 ? placed : (placed > 0 ? placed * 1000 : Date.now());
+  return {
+    dex: 'nado',
+    is_trigger: true,
+    trigger_kind: kind,
+    symbol,
+    side,
+    amount: nadoRawAbsDecimal(order.amount),
+    initial_amount: nadoRawAbsDecimal(order.amount),
+    price: nadoDecimalText(order.price) || triggerPrice,
+    stop_price: triggerPrice,
+    trigger_price: triggerPrice,
+    order_id: digest,
+    digest,
+    order_type: kind === 'tp' ? 'take_profit' : kind === 'sl' ? 'stop_loss' : 'trigger',
+    tif: 'trigger',
+    reduce_only: order?.appendix?.reduceOnly !== false,
+    pair_index: productId,
+    created_at: createdAt,
+    status,
+    _raw: info,
+  };
 }
 
 function triggerCacheKey(wallet) {
@@ -305,13 +389,45 @@ export function useNado() {
     setLocalTriggerOrders(readCachedTriggerOrders(walletAddr));
   }, [walletAddr]);
 
+  const ensureReady = useCallback(async () => {
+    if (!walletAddr) throw new Error('Connect your EVM wallet first');
+    if (walletMismatch) throw new Error('Connected wallet does not match your registered Nado wallet');
+    if (typeof ensureChain === 'function') await ensureChain(INK_CHAIN_ID);
+    setSetupVerified(true);
+    return true;
+  }, [walletAddr, walletMismatch, ensureChain]);
+
+  const fetchTriggerOrdersFromNado = useCallback(async ({ ensureWallet = false } = {}) => {
+    if (!walletAddr) return [];
+    if (ensureWallet) await ensureReady();
+    const currentMarkets = marketsRef.current?.length ? marketsRef.current : await fetchMarkets();
+    const productIds = (currentMarkets || []).map(m => Number(m?.market_id)).filter(Number.isFinite);
+    const client = createClient();
+    const result = await client.market.getTriggerOrders({
+      subaccountOwner: walletAddr,
+      subaccountName: NADO_SUBACCOUNT_NAME,
+      ...(productIds.length ? { productIds } : {}),
+      statusTypes: NADO_TRIGGER_ACTIVE_STATUSES,
+      triggerTypes: ['price_trigger'],
+      reduceOnly: true,
+      limit: 100,
+    });
+    const rows = (Array.isArray(result?.orders) ? result.orders : [])
+      .map(info => normalizeNadoTriggerOrderInfo(info, currentMarkets))
+      .filter(Boolean);
+    writeCachedTriggerOrders(walletAddr, rows);
+    setLocalTriggerOrders(rows);
+    return rows;
+  }, [walletAddr, ensureReady, fetchMarkets, createClient]);
+
   const activate = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      if (!walletAddr) throw new Error('Connect your EVM wallet first');
-      if (typeof ensureChain === 'function') await ensureChain(INK_CHAIN_ID);
-      setSetupVerified(true);
+      await ensureReady();
+      await fetchTriggerOrdersFromNado().catch((e) => {
+        console.warn('[useNado] trigger order sync failed:', e?.message || e);
+      });
       await fetchAccount();
       return { success: true };
     } catch (e) {
@@ -322,15 +438,7 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, ensureChain, fetchAccount]);
-
-  const ensureReady = useCallback(async () => {
-    if (!walletAddr) throw new Error('Connect your EVM wallet first');
-    if (walletMismatch) throw new Error('Connected wallet does not match your registered Nado wallet');
-    if (typeof ensureChain === 'function') await ensureChain(INK_CHAIN_ID);
-    setSetupVerified(true);
-    return true;
-  }, [walletAddr, walletMismatch, ensureChain]);
+  }, [ensureReady, fetchTriggerOrdersFromNado, fetchAccount]);
 
   const importFills = useCallback(async ({ attempts = CLAIM_LOOKBACK_ATTEMPTS, delayMs = 1500 } = {}) => {
     if (!walletAddr || !token) return null;
@@ -456,6 +564,7 @@ export function useNado() {
   }, [findMarket, fetchMarkets, placeOrder, fetchAccount, syncRewards]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
+    void _tif;
     setLoading(true);
     setError(null);
     try {
@@ -531,13 +640,13 @@ export function useNado() {
         ? await client.market.cancelTriggerOrders({
           productIds: [Number(market.market_id)],
           digests: [digest],
-          subaccountName: 'default',
+          subaccountName: NADO_SUBACCOUNT_NAME,
           nonce: getOrderNonce(),
         })
         : await client.market.cancelOrders({
           productIds: [Number(market.market_id)],
           digests: [digest],
-          subaccountName: 'default',
+          subaccountName: NADO_SUBACCOUNT_NAME,
           nonce: getOrderNonce(),
         });
       if (isTriggerOrder) {
@@ -569,7 +678,7 @@ export function useNado() {
       const client = createClient();
       await client.spot.approveAllowance({ productId: NADO_QUOTE_PRODUCT_ID, amount: parsed });
       const txHash = await client.spot.deposit({
-        subaccountName: 'default',
+        subaccountName: NADO_SUBACCOUNT_NAME,
         productId: NADO_QUOTE_PRODUCT_ID,
         amount: parsed,
       });
@@ -603,7 +712,7 @@ export function useNado() {
       }
       const client = createClient();
       const result = await client.spot.withdraw({
-        subaccountName: 'default',
+        subaccountName: NADO_SUBACCOUNT_NAME,
         productId: NADO_QUOTE_PRODUCT_ID,
         amount: parsed,
         spotLeverage: true,
@@ -651,13 +760,18 @@ export function useNado() {
 
       const client = createClient();
       const cleanSymbol = String(symbol || market.symbol || '').toUpperCase();
-      const cached = readCachedTriggerOrders(walletAddr);
+      let cached = readCachedTriggerOrders(walletAddr);
+      try {
+        cached = await fetchTriggerOrdersFromNado();
+      } catch (e) {
+        console.warn('[useNado] remote TP/SL sync failed:', e?.message || e);
+      }
       const oldForSymbol = cached.filter(o => String(o?.symbol || '').toUpperCase() === cleanSymbol && o?.is_trigger);
       if (oldForSymbol.length) {
         await client.market.cancelTriggerOrders({
           productIds: [Number(market.market_id)],
           digests: oldForSymbol.map(o => String(o.order_id || o.digest)).filter(Boolean),
-          subaccountName: 'default',
+          subaccountName: NADO_SUBACCOUNT_NAME,
           nonce: getOrderNonce(),
         }).catch((e) => {
           console.warn('[useNado] old TP/SL cancel failed:', e?.message || e);
@@ -729,7 +843,7 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [ensureReady, findMarket, fetchMarkets, createClient, walletAddr, positions, fetchAccount]);
+  }, [ensureReady, findMarket, fetchMarkets, createClient, walletAddr, positions, fetchAccount, fetchTriggerOrdersFromNado]);
 
   return {
     connected: !!walletAddr,

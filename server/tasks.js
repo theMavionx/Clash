@@ -393,13 +393,26 @@ async function fetchWalletTrades(player, opts = {}) {
 const PACIFICA_PAGE_LIMIT = 200;
 const PACIFICA_MAX_PAGES = 8;
 const PACIFICA_FETCH_FANOUT_CAP = 6; // master + up to 5 agents
+const PACIFICA_BUILDER_CODE = process.env.PACIFICA_BUILDER_CODE || 'clashofperps';
+
+function isPacificaBuilderTrade(trade) {
+  const raw = trade?.builder_code ?? trade?.builderCode ?? trade?.builder;
+  // Pacifica's builder-filtered history endpoint may omit builder_code in
+  // response rows. If it is present, enforce it defensively.
+  if (raw == null || raw === '') return true;
+  return String(raw).toLowerCase() === PACIFICA_BUILDER_CODE.toLowerCase();
+}
 
 async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA_MAX_PAGES) {
   const collected = [];
   let cursor = null;
   let crossedSince = false;
   for (let page = 0; page < maxPages; page++) {
-    const params = new URLSearchParams({ account, limit: String(PACIFICA_PAGE_LIMIT) });
+    const params = new URLSearchParams({
+      account,
+      limit: String(PACIFICA_PAGE_LIMIT),
+      builder_code: PACIFICA_BUILDER_CODE,
+    });
     if (cursor) params.set('cursor', cursor);
     const t0 = Date.now();
     let r, j;
@@ -431,9 +444,10 @@ async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA
       break;
     }
     const ms = Date.now() - t0;
-    const data = (j && j.success && Array.isArray(j.data)) ? j.data : [];
+    const rawData = (j && j.success && Array.isArray(j.data)) ? j.data : [];
+    const data = rawData.filter(isPacificaBuilderTrade);
     if (page === 0) {
-      console.log(`[pacifica fetch] ${label} status=${r.status} success=${j?.success} page0_count=${data.length} ms=${ms} cursor=${j?.next_cursor ? 'yes' : '-'}`);
+      console.log(`[pacifica fetch] ${label} builder=${PACIFICA_BUILDER_CODE} status=${r.status} success=${j?.success} page0_count=${data.length}/${rawData.length} ms=${ms} cursor=${j?.next_cursor ? 'yes' : '-'}`);
     }
     for (const t of data) {
       const id = Number(t.history_id) || 0;

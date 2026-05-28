@@ -1,8 +1,24 @@
 import BigNumber from 'bignumber.js';
 import { getOrderNonce, packOrderAppendix } from '@nadohq/shared';
+import {
+  NADO_BUILDER_FEE_RATE,
+  NADO_BUILDER_ID,
+  NADO_SUBACCOUNT_NAME,
+} from './nadoConfig';
 
 export const NADO_PRODUCT_DECIMALS = 18;
 const SCALE = new BigNumber(10).pow(NADO_PRODUCT_DECIMALS);
+
+function nadoBuilderAppendix() {
+  const builderId = Math.floor(Number(NADO_BUILDER_ID));
+  const builderFeeRate = Math.floor(Number(NADO_BUILDER_FEE_RATE));
+  if (builderId <= 0) return undefined;
+  if (builderId > 65535) throw new Error('Nado builder ID must fit into 16 bits');
+  if (builderFeeRate < 0 || builderFeeRate > 1023) {
+    throw new Error('Nado builder fee rate must be 0-1023 in 0.1 bps units');
+  }
+  return { builderId, builderFeeRate };
+}
 
 export function isNadoAddress(addr) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(addr || '').trim());
@@ -54,6 +70,15 @@ export function normalizeNadoMarkets(rows = []) {
       const marketId = Number(m?.market_id ?? m?.productId ?? m?.id ?? m?._nado?.productId);
       const symbol = normalizeNadoSymbol(m?.symbol || m?.market_name || m?._nado?.symbol);
       const mark = finiteNumber(m?.mark ?? m?.mid ?? m?.oracle);
+      const lotSize = String(m?.lot_size ?? m?.size_increment ?? rawToDecimal(m?._nado?.sizeIncrementRaw || 0).toFixed());
+      const minOrderSize = String(m?.min_order_size ?? rawToDecimal(m?._nado?.minSizeRaw || 0).toFixed());
+      const minNotionalInput = Number(m?.min_notional_usd);
+      const minBase = Number(minOrderSize);
+      const derivedMinNotional = mark > 0 && Number.isFinite(minBase) && minBase > 0 ? minBase * mark : 0;
+      const minNotionalUsd = Math.max(
+        Number.isFinite(minNotionalInput) && minNotionalInput > 0 ? minNotionalInput : 0,
+        derivedMinNotional,
+      );
       return {
         symbol,
         base: symbol,
@@ -62,10 +87,10 @@ export function normalizeNadoMarkets(rows = []) {
         market_id: marketId,
         asset_id: marketId,
         pair_index: marketId,
-        lot_size: String(m?.lot_size ?? m?.size_increment ?? rawToDecimal(m?._nado?.sizeIncrementRaw || 0).toFixed()),
+        lot_size: lotSize,
         tick_size: String(m?.tick_size ?? m?.price_increment ?? 0.01),
-        min_order_size: String(m?.min_order_size ?? m?.min_notional_usd ?? 100),
-        min_notional_usd: Number(m?.min_notional_usd ?? m?.min_order_size ?? 100),
+        min_order_size: minOrderSize,
+        min_notional_usd: minNotionalUsd,
         max_leverage: Number(m?.max_leverage ?? 25),
         mark,
         mid: finiteNumber(m?.mid, mark),
@@ -75,8 +100,8 @@ export function normalizeNadoMarkets(rows = []) {
         funding_rate: Number(m?.funding_rate ?? 0),
         _nado: {
           productId: marketId,
-          sizeIncrementRaw: String(m?._nado?.sizeIncrementRaw ?? bn(m?.lot_size || 0).times(SCALE).toFixed(0)),
-          minSizeRaw: String(m?._nado?.minSizeRaw ?? bn(m?.min_order_size || 0).times(SCALE).toFixed(0)),
+          sizeIncrementRaw: String(m?._nado?.sizeIncrementRaw ?? bn(lotSize || 0).times(SCALE).toFixed(0)),
+          minSizeRaw: String(m?._nado?.minSizeRaw ?? bn(minOrderSize || 0).times(SCALE).toFixed(0)),
           raw: m?._nado?.raw || m,
         },
         _raw: m,
@@ -134,13 +159,22 @@ export function buildNadoOrderParams({
   const notional = Number(amountBase) > 0
     ? bn(amountBase).times(mark)
     : bn(amountUsd || 0).times(lev);
-  const minNotional = Number(market.min_notional_usd ?? market.min_order_size ?? 0);
-  if (!reduceOnly && Number.isFinite(minNotional) && minNotional > 0 && notional.lt(minNotional)) {
-    throw new Error(`Nado minimum order size is $${minNotional.toFixed(0)} notional`);
-  }
   const baseSize = Number(amountBase) > 0 ? bn(amountBase) : notional.div(mark);
   const rawSize = roundRawToStep(baseSize.times(SCALE), market?._nado?.sizeIncrementRaw || bn(market.lot_size || 0).times(SCALE));
   if (!rawSize.isFinite() || rawSize.lte(0)) throw new Error('Enter a positive order size');
+  if (!reduceOnly) {
+    const minSizeRaw = bn(market?._nado?.minSizeRaw ?? bn(market.min_order_size || 0).times(SCALE));
+    if (minSizeRaw.gt(0) && rawSize.abs().lt(minSizeRaw)) {
+      const minBase = minSizeRaw.div(SCALE);
+      throw new Error(`Nado minimum order size is ${minBase.toFixed()} ${market.symbol || 'base'}`);
+    }
+    const minNotional = Number(market.min_notional_usd ?? 0);
+    const roundedNotional = rawSize.abs().div(SCALE).times(mark);
+    if (Number.isFinite(minNotional) && minNotional > 0 && roundedNotional.lt(minNotional)) {
+      const label = minNotional < 1 ? minNotional.toFixed(4) : minNotional.toFixed(0);
+      throw new Error(`Nado minimum order size is $${label} notional`);
+    }
+  }
 
   const sideText = String(side || '').toLowerCase();
   const isShort = sideText === 'ask' || sideText === 'short' || sideText === 'sell';
@@ -155,7 +189,7 @@ export function buildNadoOrderParams({
   return {
     productId,
     order: {
-      subaccountName: 'default',
+      subaccountName: NADO_SUBACCOUNT_NAME,
       expiration: String(Math.floor(Date.now() / 1000) + (expirationSeconds || (isLimit ? 7 * 24 * 60 * 60 : 5 * 60))),
       price: roundedPrice,
       amount: signedAmount,
@@ -164,6 +198,7 @@ export function buildNadoOrderParams({
         orderExecutionType: isLimit ? 'default' : 'ioc',
         reduceOnly: !!reduceOnly,
         triggerType,
+        builder: nadoBuilderAppendix(),
       }),
     },
     spotLeverage: true,

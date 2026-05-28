@@ -111,6 +111,8 @@ async function fetchMarketInfoFresh() {
     const ask = num(price.ask);
     const mark = bid > 0 && ask > 0 ? (bid + ask) / 2 : num(product.oraclePrice);
     const symbol = symbolOf(s.symbol);
+    const minBaseSize = rawToDecimal(s.minSize || 0);
+    const minNotional = mark > 0 ? minBaseSize.times(mark) : new BigNumber(0);
     return {
       symbol,
       base: symbol,
@@ -121,8 +123,8 @@ async function fetchMarketInfoFresh() {
       pair_index: productId,
       lot_size: rawToString(s.sizeIncrement),
       tick_size: String(s.priceIncrement || 0.01),
-      min_order_size: rawToString(s.minSize),
-      min_notional_usd: rawToString(s.minSize),
+      min_order_size: minBaseSize.toFixed(),
+      min_notional_usd: minNotional.toFixed(),
       max_leverage: maxLeverage(s),
       mark,
       mid: mark,
