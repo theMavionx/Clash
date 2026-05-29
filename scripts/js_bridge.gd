@@ -128,9 +128,9 @@ func send_to_react(action: String, data: Dictionary) -> void:
 func _is_local_web_host() -> bool:
 	if not _is_web:
 		return false
-	var origin_value = JavaScriptBridge.eval("window.location.origin", true)
-	var origin: String = String(origin_value)
-	return origin.contains("localhost") or origin.contains("127.0.0.1") or origin.contains("[::1]")
+	var host_value = JavaScriptBridge.eval("window.location.hostname", true)
+	var host: String = String(host_value).strip_edges().to_lower()
+	return host == "localhost" or host == "127.0.0.1" or host == "::1" or host == "[::1]"
 
 
 func _local_guest_mode_enabled() -> bool:
