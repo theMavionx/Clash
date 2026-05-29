@@ -13,6 +13,11 @@ const POLL_MS = Number(process.env.HYPERLIQUID_REWARDS_POLL_MS || 2 * 60 * 1000)
 const LOOKBACK_MS = Number(process.env.HYPERLIQUID_REWARDS_LOOKBACK_MS || 7 * 24 * 60 * 60 * 1000);
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
+const HYPERLIQUID_BUILDER_ADDRESS = String(
+  process.env.HYPERLIQUID_BUILDER_ADDRESS
+  || process.env.VITE_HYPERLIQUID_BUILDER_ADDRESS
+  || '',
+).trim().toLowerCase();
 
 function fillTimeMs(fill) {
   const n = Number(fill?.time ?? fill?.timestamp ?? 0);
@@ -66,6 +71,35 @@ function normalizeFill(wallet, fill) {
   };
 }
 
+function fillBuilderAddress(fill) {
+  const raw = fill?.builder
+    ?? fill?.builderAddress
+    ?? fill?.builder_address
+    ?? fill?.builderCode
+    ?? fill?.builder_code;
+  if (typeof raw === 'string') return raw.trim().toLowerCase();
+  if (raw && typeof raw === 'object') {
+    return String(raw.b || raw.address || raw.builder || '').trim().toLowerCase();
+  }
+  return '';
+}
+
+function fillBuilderFee(fill) {
+  const raw = fill?.builderFee
+    ?? fill?.builder_fee
+    ?? fill?.builderFeeUsd
+    ?? fill?.builder_fee_usd
+    ?? fill?.builder?.fee;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function isClashBuilderFill(fill) {
+  if (!hyperliquid.isEvmAddress(HYPERLIQUID_BUILDER_ADDRESS)) return false;
+  return fillBuilderAddress(fill) === HYPERLIQUID_BUILDER_ADDRESS
+    && fillBuilderFee(fill) > 0;
+}
+
 async function importFillsForPlayer(playerId, wallet, opts = {}) {
   const cleanWallet = String(wallet || '').trim().toLowerCase();
   if (!hyperliquid.isEvmAddress(cleanWallet)) {
@@ -94,6 +128,19 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
     }
     const trade = normalizeFill(cleanWallet, fill);
     if (!trade) {
+      skipped++;
+      continue;
+    }
+    if (!isClashBuilderFill(fill)) {
+      try {
+        db.db.prepare(`
+          UPDATE trade_history
+          SET status = 'ignored'
+          WHERE dex = 'hyperliquid'
+            AND verified_source = 'hyperliquid_api'
+            AND client_order_id = ?
+        `).run(trade.clientOrderId);
+      } catch {}
       skipped++;
       continue;
     }

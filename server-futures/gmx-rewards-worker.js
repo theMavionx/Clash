@@ -20,10 +20,10 @@ const GMX_REFERRAL_CODE_BYTES32 = `0x${Buffer.from(GMX_REFERRAL_CODE, 'utf8').to
 const REFERRAL_STORAGE_ABI = [
   {
     type: 'function',
-    name: 'getTraderReferralCode',
+    name: 'traderReferralCodes',
     stateMutability: 'view',
-    inputs: [{ name: '_account', type: 'address' }],
-    outputs: [{ name: 'code', type: 'bytes32' }, { name: 'referrer', type: 'address' }],
+    inputs: [{ name: '', type: 'address' }],
+    outputs: [{ name: '', type: 'bytes32' }],
   },
 ];
 
@@ -104,10 +104,10 @@ async function hasClashGmxReferral(wallet) {
   const result = await getPublicClient().readContract({
     address: GMX_REFERRAL_STORAGE,
     abi: REFERRAL_STORAGE_ABI,
-    functionName: 'getTraderReferralCode',
+    functionName: 'traderReferralCodes',
     args: [account],
   });
-  const code = String(Array.isArray(result) ? result[0] : result?.code || '').toLowerCase();
+  const code = String(Array.isArray(result) ? result[0] : result || '').toLowerCase();
   const ok = code === GMX_REFERRAL_CODE_BYTES32.toLowerCase();
   referralCache.set(key, { at: Date.now(), ok, code });
   if (!ok) {
