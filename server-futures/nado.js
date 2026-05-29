@@ -6,6 +6,18 @@ const { ink } = require('viem/chains');
 const NADO_CHAIN_ENV = 'inkMainnet';
 const NADO_SUBACCOUNT_NAME = process.env.NADO_SUBACCOUNT_NAME || 'default';
 const NADO_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.env.NADO_FILL_LOOKBACK_LIMIT || 100)));
+const NADO_INDEXER_URL = String(
+  process.env.NADO_INDEXER_URL
+    || process.env.VITE_NADO_INDEXER_URL
+    || 'https://archive.prod.nado.xyz/v1',
+).replace(/\/+$/u, '');
+const NADO_BUILDER_ID = Number(
+  process.env.NADO_BUILDER_ID
+    || process.env.VITE_NADO_BUILDER_ID
+    || 3600,
+) || 3600;
+const NADO_MATCH_PAGE_LIMIT = Math.max(10, Math.min(250, Number(process.env.NADO_MATCH_PAGE_LIMIT || 100)));
+const NADO_MATCH_PAGE_CAP = Math.max(1, Math.min(25, Number(process.env.NADO_MATCH_PAGE_CAP || 8)));
 const NADO_RPC_URLS = String(
   process.env.NADO_INK_RPC_URLS
     || process.env.INK_RPC_URLS
@@ -52,6 +64,79 @@ function rawToDecimal(value, decimals = PRODUCT_DECIMALS) {
 function rawToString(value, decimals = PRODUCT_DECIMALS, fallback = '0') {
   const x = rawToDecimal(value, decimals);
   return x.isFinite() ? x.toFixed() : fallback;
+}
+
+function nadoSubaccountHex(owner, name = NADO_SUBACCOUNT_NAME) {
+  const addr = normalizeAddress(owner);
+  if (!addr) return null;
+  const buf = Buffer.alloc(12);
+  Buffer.from(String(name || '').slice(0, 12), 'utf8').copy(buf);
+  return `0x${addr.slice(2)}${buf.toString('hex')}`;
+}
+
+function unpackBuilderAppendix(appendix) {
+  try {
+    let temp = BigInt(String(appendix ?? '0'));
+    temp >>= 8n;  // version
+    temp >>= 1n;  // isolated
+    temp >>= 2n;  // order type
+    temp >>= 1n;  // reduce only
+    temp >>= 2n;  // trigger
+    temp >>= 24n; // reserved
+    const builderFeeRate = Number(temp & 1023n);
+    temp >>= 10n;
+    const builderId = Number(temp & 65535n);
+    return builderId ? { builderId, builderFeeRate } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function nadoIndexerQuery(body) {
+  const r = await fetch(NADO_INDEXER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`Nado indexer HTTP ${r.status}: ${(await r.text()).slice(0, 180)}`);
+  return r.json();
+}
+
+async function findBuilderMatchedDigests(wallet, digests) {
+  const subaccount = nadoSubaccountHex(wallet);
+  const wanted = new Set((digests || []).map(d => String(d || '').toLowerCase()).filter(Boolean));
+  const matched = new Set();
+  if (!subaccount || wanted.size <= 0) return matched;
+
+  let cursor = null;
+  const seen = new Set();
+  for (let page = 0; page < NADO_MATCH_PAGE_CAP; page += 1) {
+    const params = { subaccounts: [subaccount], limit: NADO_MATCH_PAGE_LIMIT };
+    if (cursor) params.idx = cursor;
+    const payload = await nadoIndexerQuery({ matches: params });
+    const matches = Array.isArray(payload?.matches) ? payload.matches : [];
+    if (!matches.length) break;
+
+    for (const match of matches) {
+      const idx = String(match?.submission_idx || '');
+      const digest = String(match?.digest || '').toLowerCase();
+      const key = `${idx}:${digest}:${match?.base_filled || ''}:${match?.quote_filled || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!wanted.has(digest)) continue;
+      const builder = unpackBuilderAppendix(match?.order?.appendix);
+      if (!builder || builder.builderId !== NADO_BUILDER_ID) continue;
+      const builderFee = rawToDecimal(match?.builder_fee || 0);
+      if (!builderFee.isFinite() || builderFee.lte(0)) continue;
+      matched.add(digest);
+    }
+
+    const lastIdx = String(matches[matches.length - 1]?.submission_idx || '');
+    if (!lastIdx || lastIdx === cursor) break;
+    cursor = lastIdx;
+    if (matched.size >= wanted.size) break;
+  }
+  return matched;
 }
 
 function num(value, fallback = 0) {
@@ -416,10 +501,35 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   }
   if (!Array.isArray(fills)) fills = [];
 
+  let builderMatched = new Set();
+  if (fills.length) {
+    const digests = fills.map(f => String(f?.orderId || '').toLowerCase()).filter(Boolean);
+    try {
+      builderMatched = await findBuilderMatchedDigests(cleanWallet, digests);
+    } catch (e) {
+      console.warn('[nado] builder attribution check failed:', e?.message || e);
+      return { ok: false, imported: 0, adopted: 0, skipped: fills.length, total: fills.length, reason: 'builder_attribution_unavailable' };
+    }
+  }
+
   let imported = 0;
   let adopted = 0;
   let skipped = 0;
   for (const trade of fills) {
+    const digest = String(trade?.orderId || '').toLowerCase();
+    if (!digest || !builderMatched.has(digest)) {
+      try {
+        db.db.prepare(`
+          UPDATE trade_history
+          SET status = 'ignored'
+          WHERE dex = 'nado'
+            AND verified_source = 'nado_api'
+            AND client_order_id = ?
+        `).run(trade.clientOrderId);
+      } catch {}
+      skipped++;
+      continue;
+    }
     try {
       const before = db.db.prepare('SELECT id, player_id FROM trade_history WHERE client_order_id = ? LIMIT 1').get(trade.clientOrderId);
       if (before) {

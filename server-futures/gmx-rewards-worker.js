@@ -5,12 +5,27 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const db = require('./db');
-const { getAddress } = require('viem');
+const { createPublicClient, getAddress, http } = require('viem');
+const { arbitrum } = require('viem/chains');
 
 const SUBSQUID_URL = 'https://gmx.squids.live/gmx-synthetics-arbitrum/graphql';
 const POLL_MS = 60 * 1000;
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
+const ARBITRUM_RPC = process.env.ARBITRUM_RPC_URL || 'https://1rpc.io/arb';
+const GMX_REFERRAL_STORAGE = process.env.GMX_REFERRAL_STORAGE
+  || '0xe6fab3F0c7199b0d34d7FbE83394fc0e0D06e99d';
+const GMX_REFERRAL_CODE = String(process.env.GMX_REFERRAL_CODE || 'clashofperps');
+const GMX_REFERRAL_CODE_BYTES32 = `0x${Buffer.from(GMX_REFERRAL_CODE, 'utf8').toString('hex').padEnd(64, '0')}`;
+const REFERRAL_STORAGE_ABI = [
+  {
+    type: 'function',
+    name: 'getTraderReferralCode',
+    stateMutability: 'view',
+    inputs: [{ name: '_account', type: 'address' }],
+    outputs: [{ name: 'code', type: 'bytes32' }, { name: 'referrer', type: 'address' }],
+  },
+];
 
 // GMX V2 OrderType enum. Credit every executed position-changing order:
 // market opens/closes, limit opens, TP and SL closes. Pending limit orders
@@ -72,6 +87,34 @@ function marketSymbol(marketsByAddr, addr) {
 // explicit recent lookback and rely on client_order_id uniqueness for dedupe.
 const lastSeenAt = new Map();
 const lastSeenIds = new Map();
+const referralCache = new Map();
+let publicClient = null;
+
+function getPublicClient() {
+  if (publicClient) return publicClient;
+  publicClient = createPublicClient({ chain: arbitrum, transport: http(ARBITRUM_RPC) });
+  return publicClient;
+}
+
+async function hasClashGmxReferral(wallet) {
+  const account = getAddress(wallet);
+  const key = account.toLowerCase();
+  const cached = referralCache.get(key);
+  if (cached && Date.now() - cached.at < 60 * 1000) return cached.ok;
+  const result = await getPublicClient().readContract({
+    address: GMX_REFERRAL_STORAGE,
+    abi: REFERRAL_STORAGE_ABI,
+    functionName: 'getTraderReferralCode',
+    args: [account],
+  });
+  const code = String(Array.isArray(result) ? result[0] : result?.code || '').toLowerCase();
+  const ok = code === GMX_REFERRAL_CODE_BYTES32.toLowerCase();
+  referralCache.set(key, { at: Date.now(), ok, code });
+  if (!ok) {
+    console.log(`[gmx-rewards-worker] skipping ${key}: referral code is ${code || 'unset'}, expected ${GMX_REFERRAL_CODE}`);
+  }
+  return ok;
+}
 
 async function querySubsquid(account, sinceTs) {
   const query = `query($acc: String!, $since: Int!) {
@@ -139,6 +182,14 @@ async function importActionsForRow(row, marketsByAddr, { since, updateCursor = t
     return { imported: 0, skipped: 0, total: 0, maxTs: fromTs };
   }
 
+  let referralOk = false;
+  try {
+    referralOk = await hasClashGmxReferral(row.wallet);
+  } catch (e) {
+    console.warn(`[gmx-rewards-worker] referral check failed for ${addrLower}:`, e?.message || e);
+    return { imported: 0, skipped: 0, total: actions.length, maxTs: fromTs };
+  }
+
   let imported = 0;
   let skipped = 0;
   let maxTs = fromTs;
@@ -166,6 +217,20 @@ async function importActionsForRow(row, marketsByAddr, { since, updateCursor = t
       ? (a.isLong ? 'long' : 'short')
       : (a.isLong ? 'close_long' : 'close_short');
     const dedupKey = `gmx:${kind.isOpen ? 'open' : 'close'}:${addrLower}:${a.orderKey}`;
+
+    if (!referralOk) {
+      try {
+        db.db.prepare(`
+          UPDATE trade_history
+          SET status = 'ignored'
+          WHERE dex = 'gmx'
+            AND verified_source = 'worker'
+            AND client_order_id = ?
+        `).run(dedupKey);
+      } catch {}
+      skipped++;
+      continue;
+    }
 
     try {
       const r = db.addTrade(row.id, {
