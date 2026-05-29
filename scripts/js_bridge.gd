@@ -133,24 +133,16 @@ func _is_local_web_host() -> bool:
 	return host == "localhost" or host == "127.0.0.1" or host == "::1" or host == "[::1]"
 
 
-func _guest_mode_host_allowed() -> bool:
-	if not _is_web:
-		return false
-	var host_value = JavaScriptBridge.eval("window.location.hostname", true)
-	var host: String = String(host_value).strip_edges().to_lower()
-	return _is_local_web_host() or host == "clashofperps.fun" or host == "www.clashofperps.fun"
-
-
-func _guest_mode_enabled() -> bool:
-	if not _guest_mode_host_allowed():
+func _local_guest_mode_enabled() -> bool:
+	if not _is_local_web_host():
 		return false
 	var href_value = JavaScriptBridge.eval("window.location.href", true)
 	var href: String = String(href_value)
 	return href.contains("?guest=1") or href.contains("&guest=1") or href.contains("?guest=true") or href.contains("&guest=true")
 
 
-func _get_guest_wallet() -> String:
-	if not _guest_mode_enabled():
+func _get_local_guest_wallet() -> String:
+	if not _local_guest_mode_enabled():
 		return ""
 	var guest_id_value = JavaScriptBridge.eval("(function(){try{var u=new URL(window.location.href);var g=u.searchParams.get('guest');if(g!=='1'&&g!=='true')return '';var id=u.searchParams.get('guest_id');if(!id){id='g_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);u.searchParams.set('guest_id',id);window.history.replaceState(null,'',u.toString());}return id;}catch(e){return '';}})()", true)
 	var guest_id: String = String(guest_id_value).strip_edges()
@@ -159,8 +151,8 @@ func _get_guest_wallet() -> String:
 	return "local_guest_%s" % guest_id
 
 
-func _clear_guest_web_auth(net: Node) -> void:
-	if not _guest_mode_enabled():
+func _clear_local_web_auth(net: Node) -> void:
+	if not _is_local_web_host():
 		return
 	if not net:
 		return
@@ -217,9 +209,9 @@ func _send_initial_state() -> void:
 	# Check if need to register
 	var net = get_node_or_null("/root/Net")
 	if net:
-		_clear_guest_web_auth(net)
+		_clear_local_web_auth(net)
 	if net and not net.has_token():
-		var guest_wallet: String = _get_guest_wallet()
+		var guest_wallet: String = _get_local_guest_wallet()
 		if guest_wallet != "":
 			call_deferred("_do_register", "LocalTester", guest_wallet, "pacifica", 0)
 		else:
