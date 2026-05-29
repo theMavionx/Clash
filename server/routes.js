@@ -12068,6 +12068,29 @@ router.post('/admin/players/:name/reset-trophies', adminAuth, (req, res) => {
   res.json({ reset_trophies: req.params.name });
 });
 
+// Adjust or set main account trophies for one player.
+router.post('/admin/players/:name/trophies', adminAuth, (req, res) => {
+  const player = db.db.prepare('SELECT id, name, trophies FROM players WHERE name = ?').get(req.params.name);
+  if (!player) return res.status(404).json({ error: 'Player not found' });
+  const hasSet = req.body && Object.prototype.hasOwnProperty.call(req.body, 'set');
+  const raw = hasSet ? req.body.set : (req.body?.delta ?? req.body?.trophies ?? req.body?.amount);
+  const value = Math.trunc(Number(raw));
+  if (!Number.isFinite(value)) return res.status(400).json({ error: 'numeric trophies value required' });
+  if (!hasSet && value === 0) return res.status(400).json({ error: 'non-zero trophies delta required' });
+  if (Math.abs(value) > 1000000) return res.status(400).json({ error: 'trophies value too large' });
+  const before = Number(player.trophies || 0);
+  const after = Math.max(0, hasSet ? value : before + value);
+  db.db.prepare('UPDATE players SET trophies = ? WHERE id = ?').run(after, player.id);
+  res.json({
+    ok: true,
+    player_id: player.id,
+    name: player.name,
+    before,
+    delta: after - before,
+    trophies: after,
+  });
+});
+
 // Reset trophies for ALL players
 router.post('/admin/reset-all-trophies', adminAuth, (req, res) => {
   const result = db.db.prepare('UPDATE players SET trophies = 0').run();

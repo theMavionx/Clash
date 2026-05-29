@@ -17,12 +17,31 @@ const POLL_MS = Number(process.env.PHOENIX_REWARDS_POLL_MS || 2 * 60 * 1000);
 const LOOKBACK_MS = Number(process.env.PHOENIX_REWARDS_LOOKBACK_MS || 7 * 24 * 60 * 60 * 1000);
 const PHOENIX_API_TIMEOUT_MS = Math.max(1000, Math.min(10_000, Number(process.env.PHOENIX_API_TIMEOUT_MS || 4500)));
 const PHOENIX_API_STALE_MS = Math.max(30_000, Math.min(10 * 60_000, Number(process.env.PHOENIX_API_STALE_MS || 2 * 60_000)));
+const PHOENIX_HISTORY_TX_CHECK_LIMIT = Math.max(1, Math.min(200, Number(process.env.PHOENIX_HISTORY_TX_CHECK_LIMIT || 25)));
+const PHOENIX_POLL_WALLETS_PER_TICK = Math.max(1, Math.min(50, Number(process.env.PHOENIX_POLL_WALLETS_PER_TICK || 6)));
+const PHOENIX_POLL_TX_CHECK_LIMIT = Math.max(1, Math.min(50, Number(process.env.PHOENIX_POLL_TX_CHECK_LIMIT || 4)));
+const PHOENIX_POLL_IMPORT_LIMIT = Math.max(1, Math.min(200, Number(process.env.PHOENIX_POLL_IMPORT_LIMIT || 50)));
+const PHOENIX_REWARDS_POLL_SCOPE = String(process.env.PHOENIX_REWARDS_POLL_SCOPE || 'active_tournaments').trim().toLowerCase();
 const PHOENIX_REWARDS_POLLING_ENABLED = /^(1|true|yes)$/i.test(String(
   process.env.PHOENIX_REWARDS_WORKER
   || process.env.PHOENIX_REWARDS_POLLING
   || '',
 ));
 const PHOENIX_PROGRAM_ID = process.env.PHOENIX_PROGRAM_ID || 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
+const PHOENIX_FLIGHT_PROGRAM_ID = process.env.PHOENIX_FLIGHT_PROGRAM_ID || 'F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W';
+const PHOENIX_FLIGHT_BUILDER_AUTHORITY = (
+  process.env.PHOENIX_FLIGHT_BUILDER_AUTHORITY
+  || process.env.VITE_PHOENIX_FLIGHT_BUILDER_AUTHORITY
+  || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9'
+).trim();
+const PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT = (
+  process.env.PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT
+  || process.env.VITE_PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT
+  || 'Czk948LDdK9iTWbRB8MEoV4ngX2EAxxHdXx8mfgZxuTA'
+).trim();
+const PHOENIX_REQUIRE_FLIGHT_REWARDS = !/^(0|false|no)$/i.test(String(
+  process.env.PHOENIX_REQUIRE_FLIGHT_REWARDS || '1',
+));
 const PHOENIX_TX_REWARD_MAX_AGE_MS = Math.max(
   60_000,
   Number(process.env.PHOENIX_TX_REWARD_MAX_AGE_MS || 24 * 60 * 60_000),
@@ -34,7 +53,9 @@ let marketCache = null;
 let marketCacheAt = 0;
 const apiCache = new Map();
 const apiInflight = new Map();
+const flightTxCache = new Map();
 let solanaConnection = null;
+let pollCursor = 0;
 
 function isSolanaWallet(addr) {
   const text = String(addr || '').trim();
@@ -133,6 +154,19 @@ function phoenixTraderSubaccountAddress(wallet, subaccountIndex = 0) {
   return pda.toBase58();
 }
 
+function phoenixFlightBuilderStateAddress() {
+  const { PublicKey } = require('@solana/web3.js');
+  const [pda] = PublicKey.findProgramAddressSync(
+    [
+      new PublicKey(PHOENIX_PROGRAM_ID).toBuffer(),
+      new PublicKey(PHOENIX_FLIGHT_BUILDER_AUTHORITY).toBuffer(),
+      Buffer.from('builder_state'),
+    ],
+    new PublicKey(PHOENIX_FLIGHT_PROGRAM_ID),
+  );
+  return pda.toBase58();
+}
+
 function txPhoenixTraderAccountForWallet(parsedTx, wallet, preferredSubaccountIndex = null) {
   const keys = collectTxAccountKeys(parsedTx);
   const preferred = Number(preferredSubaccountIndex);
@@ -148,6 +182,35 @@ function txPhoenixTraderAccountForWallet(parsedTx, wallet, preferredSubaccountIn
     }
   }
   return null;
+}
+
+function txHasPhoenixFlightBuilderRoute(parsedTx) {
+  if (!PHOENIX_REQUIRE_FLIGHT_REWARDS) {
+    return { ok: true, reason: 'flight_check_disabled' };
+  }
+  const programs = collectTxProgramIds(parsedTx);
+  if (!programs.has(PHOENIX_FLIGHT_PROGRAM_ID)) {
+    return { ok: false, reason: 'missing_flight_program' };
+  }
+  const keys = collectTxAccountKeys(parsedTx);
+  const builderState = phoenixFlightBuilderStateAddress();
+  if (!keys.has(PHOENIX_FLIGHT_BUILDER_AUTHORITY)) {
+    return { ok: false, reason: 'missing_builder_authority' };
+  }
+  if (!keys.has(builderState)) {
+    return { ok: false, reason: 'missing_builder_state' };
+  }
+  if (PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT && !keys.has(PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT)) {
+    return { ok: false, reason: 'missing_fee_collector_trader' };
+  }
+  return {
+    ok: true,
+    reason: 'flight_builder_route',
+    flightProgram: PHOENIX_FLIGHT_PROGRAM_ID,
+    builderAuthority: PHOENIX_FLIGHT_BUILDER_AUTHORITY,
+    builderState,
+    feeCollectorTrader: PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT || null,
+  };
 }
 
 function collectTxProgramIds(parsedTx) {
@@ -192,6 +255,52 @@ async function getParsedTransactionWithRetry(signature, attempts = 6, delayMs = 
   return last;
 }
 
+function rememberFlightTx(signature, value) {
+  const key = String(signature || '').trim();
+  if (!key) return value;
+  flightTxCache.set(key, { at: Date.now(), value });
+  if (flightTxCache.size > 2500) {
+    const cutoff = Date.now() - 6 * 60 * 60_000;
+    for (const [sig, row] of flightTxCache) {
+      if (row.at < cutoff) flightTxCache.delete(sig);
+    }
+    while (flightTxCache.size > 2000) {
+      const first = flightTxCache.keys().next().value;
+      if (!first) break;
+      flightTxCache.delete(first);
+    }
+  }
+  return value;
+}
+
+async function verifyPhoenixFlightTransaction(signature, opts = {}) {
+  const clean = String(signature || '').trim();
+  if (!isSolanaSignature(clean)) {
+    return { ok: false, reason: 'invalid_tx_signature' };
+  }
+  const cached = flightTxCache.get(clean);
+  if (cached && Date.now() - cached.at < 6 * 60 * 60_000) return cached.value;
+
+  try {
+    const parsed = await getParsedTransactionWithRetry(
+      clean,
+      opts.attempts == null ? 3 : opts.attempts,
+      opts.delayMs == null ? 450 : opts.delayMs,
+    );
+    if (!parsed) return { ok: false, reason: 'transaction_not_found' };
+    if (parsed?.meta?.err) return rememberFlightTx(clean, { ok: false, reason: 'transaction_failed' });
+    const route = txHasPhoenixFlightBuilderRoute(parsed);
+    return rememberFlightTx(clean, {
+      ...route,
+      signature: clean,
+      slot: parsed.slot || null,
+      blockTime: parsed.blockTime || null,
+    });
+  } catch (e) {
+    return { ok: false, reason: 'tx_fetch_failed', error: e?.message || String(e) };
+  }
+}
+
 async function verifyPhoenixTradeTransaction({ wallet, signature, delegateSigner = '', traderSubaccountIndex = null }) {
   if (!isSolanaSignature(signature)) {
     throw new Error('invalid Solana tx signature');
@@ -210,6 +319,10 @@ async function verifyPhoenixTradeTransaction({ wallet, signature, delegateSigner
   const programs = collectTxProgramIds(parsed);
   if (!programs.has(PHOENIX_PROGRAM_ID)) {
     throw new Error('transaction did not invoke Phoenix');
+  }
+  const flightRoute = txHasPhoenixFlightBuilderRoute(parsed);
+  if (!flightRoute.ok) {
+    throw new Error(`transaction did not route through Clash Phoenix Flight builder (${flightRoute.reason})`);
   }
   const signers = txSignerWallets(parsed);
   const signedByWallet = signers.includes(wallet);
@@ -232,6 +345,7 @@ async function verifyPhoenixTradeTransaction({ wallet, signature, delegateSigner
     slot: parsed.slot || null,
     blockTime: parsed.blockTime || null,
     programs: Array.from(programs),
+    flight: flightRoute,
     signedBy: signedByWallet ? 'wallet' : 'delegate',
     signers,
     delegateSigner: signedByWallet ? null : (normalizedDelegate || signers.find(signer => signer !== wallet) || null),
@@ -524,6 +638,10 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   }
   let inserted = 0;
   let skipped = 0;
+  let skippedNoSignature = 0;
+  let skippedNoBuilderRoute = 0;
+  let skippedTxCheckBudget = 0;
+  let txChecks = 0;
 
   let payload;
   try {
@@ -559,14 +677,37 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
     }
     try {
       const signature = String(fill.signature || '').trim();
-      if (signature) {
-        const txClientOrderId = phoenixTxTradeKey(cleanWallet, signature, {});
-        const txExisting = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(txClientOrderId);
-        if (txExisting) {
-          skipped++;
-          continue;
-        }
+      if (!signature) {
+        skipped++;
+        skippedNoSignature++;
+        continue;
       }
+
+      const txClientOrderId = phoenixTxTradeKey(cleanWallet, signature, {});
+      const txExisting = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(txClientOrderId);
+      if (txExisting) {
+        skipped++;
+        continue;
+      }
+
+      const maxTxChecks = Math.max(1, Math.min(200, Number(opts.txCheckLimit || PHOENIX_HISTORY_TX_CHECK_LIMIT)));
+      const cachedFlight = flightTxCache.get(signature);
+      if (!cachedFlight && txChecks >= maxTxChecks) {
+        skipped++;
+        skippedTxCheckBudget++;
+        continue;
+      }
+      if (!cachedFlight) txChecks++;
+      const flightVerified = await verifyPhoenixFlightTransaction(signature, {
+        attempts: opts.txAttempts,
+        delayMs: opts.txDelayMs,
+      });
+      if (!flightVerified.ok) {
+        skipped++;
+        skippedNoBuilderRoute++;
+        continue;
+      }
+
       const before = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
       if (before) {
         skipped++;
@@ -588,23 +729,69 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
     }
   }
 
-  return { ok: true, imported: inserted, skipped, total: fills.length };
+  return {
+    ok: true,
+    imported: inserted,
+    skipped,
+    total: fills.length,
+    builder_route_required: PHOENIX_REQUIRE_FLIGHT_REWARDS,
+    tx_checks: txChecks,
+    tx_check_limit: Math.max(1, Math.min(200, Number(opts.txCheckLimit || PHOENIX_HISTORY_TX_CHECK_LIMIT))),
+    skipped_no_signature: skippedNoSignature,
+    skipped_no_builder_route: skippedNoBuilderRoute,
+    skipped_tx_check_budget: skippedTxCheckBudget,
+  };
 }
 
 async function pollOnce(mainDb) {
-  const rows = mainDb.prepare(
-    `SELECT id, wallet FROM players WHERE dex='phoenix' AND wallet IS NOT NULL AND wallet != ''`
-  ).all();
+  const activeTournamentScope = PHOENIX_REWARDS_POLL_SCOPE !== 'all';
+  let rows = [];
+  if (activeTournamentScope) {
+    rows = mainDb.prepare(`
+      SELECT DISTINCT p.id, p.wallet
+      FROM tournament_participants tp
+      JOIN tournaments t ON t.id = tp.tournament_id
+      JOIN players p ON p.id = tp.player_id
+      WHERE tp.left_at IS NULL
+        AND p.dex = 'phoenix'
+        AND p.wallet IS NOT NULL
+        AND p.wallet != ''
+        AND t.status != 'ended'
+        AND datetime(COALESCE(t.start_at, '1970-01-01 00:00:00')) <= datetime('now')
+        AND (t.end_at IS NULL OR datetime(t.end_at) >= datetime('now'))
+        AND (
+          lower(COALESCE(t.dex, '')) = 'phoenix'
+          OR lower(COALESCE(t.eligible_dexes, '')) LIKE '%phoenix%'
+          OR lower(COALESCE(tp.team_dex, '')) = 'phoenix'
+        )
+      ORDER BY COALESCE(tp.last_activity_at, tp.joined_at, p.created_at) DESC
+    `).all();
+  } else {
+    rows = mainDb.prepare(
+      `SELECT id, wallet FROM players WHERE dex='phoenix' AND wallet IS NOT NULL AND wallet != ''`
+    ).all();
+  }
   if (!rows.length) return 0;
 
   let inserted = 0;
+  const batch = [];
+  for (let i = 0; i < Math.min(PHOENIX_POLL_WALLETS_PER_TICK, rows.length); i += 1) {
+    batch.push(rows[(pollCursor + i) % rows.length]);
+  }
+  pollCursor = (pollCursor + batch.length) % rows.length;
 
-  for (const row of rows) {
+  for (const row of batch) {
     const wallet = String(row.wallet || '').trim();
     if (!isSolanaWallet(wallet)) continue;
 
     try {
-      const result = await importFillsForPlayer(row.id, wallet);
+      const result = await importFillsForPlayer(row.id, wallet, {
+        limit: PHOENIX_POLL_IMPORT_LIMIT,
+        txCheckLimit: PHOENIX_POLL_TX_CHECK_LIMIT,
+        txAttempts: 1,
+        txDelayMs: 250,
+        cacheTtlMs: 30_000,
+      });
       inserted += result.imported || 0;
     } catch (e) {
       console.warn(`[phoenix-rewards-worker] history fetch failed for ${wallet.slice(0, 8)}:`, e.message);
@@ -632,7 +819,7 @@ function start() {
   const tick = async () => {
     try {
       const n = await pollOnce(mainDb);
-      if (n > 0) console.log(`[phoenix-rewards-worker] Recorded ${n} Phoenix trade row(s)`);
+      if (n > 0) console.log(`[phoenix-rewards-worker] Recorded ${n} Phoenix Flight-routed trade row(s)`);
     } catch (e) {
       console.error('[phoenix-rewards-worker] tick failed:', e?.message || e);
     }
@@ -641,7 +828,7 @@ function start() {
   tick();
   const iv = setInterval(tick, POLL_MS);
   iv.unref?.();
-  console.log(`[phoenix-rewards-worker] started (polling every ${POLL_MS / 1000}s)`);
+  console.log(`[phoenix-rewards-worker] started (polling every ${POLL_MS / 1000}s, scope=${PHOENIX_REWARDS_POLL_SCOPE}, wallets/tick=${PHOENIX_POLL_WALLETS_PER_TICK}, tx-checks/wallet=${PHOENIX_POLL_TX_CHECK_LIMIT})`);
 }
 
 module.exports = {

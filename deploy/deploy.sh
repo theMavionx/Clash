@@ -21,7 +21,9 @@ DEPLOY_ROOT="/opt/clash"
 RELEASES_DIR="$DEPLOY_ROOT/releases"
 SHARED_DIR="$DEPLOY_ROOT/shared"
 CURRENT_LINK="$DEPLOY_ROOT/current"
-KEEP_RELEASES="${KEEP_RELEASES:-7}"
+KEEP_RELEASES="${KEEP_RELEASES:-2}"
+BACKUP_RETENTION_DAYS="${CLASH_BACKUP_RETENTION_DAYS:-3}"
+BACKUP_KEEP="${CLASH_BACKUP_KEEP:-10}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -220,7 +222,7 @@ copy_db_family() {
 install_system_dependencies() {
     log "[1/9] Installing system dependencies..."
     apt-get update -qq
-    apt-get install -y -qq nginx certbot python3-certbot-nginx curl rsync brotli
+    apt-get install -y -qq nginx certbot python3-certbot-nginx curl rsync brotli sqlite3 zstd
 
     if ! command -v node >/dev/null 2>&1; then
         log "Installing Node.js 20..."
@@ -379,13 +381,62 @@ backup_shared_databases() {
     ts="$(date -u +%Y%m%d%H%M%S)"
     local backup_dir="$SHARED_DIR/backups/$ts"
     mkdir -p "$backup_dir/server" "$backup_dir/server-futures"
-    copy_db_family "$SHARED_SERVER_DIR" "$backup_dir/server" "clash.db" || true
-    copy_db_family "$SHARED_FUTURES_DIR" "$backup_dir/server-futures" "futures.db" || true
+    backup_sqlite_db "$SHARED_SERVER_DIR/clash.db" "$backup_dir/server/clash.db" || true
+    backup_sqlite_db "$SHARED_FUTURES_DIR/futures.db" "$backup_dir/server-futures/futures.db" || true
     if [ -f "$ENV_FILE" ]; then
         cp -a "$ENV_FILE" "$backup_dir/.env"
         chmod 600 "$backup_dir/.env" || true
     fi
     log "Shared backup written to $backup_dir"
+    prune_shared_backups
+}
+
+compress_backup_file() {
+    local file="$1"
+    if command -v zstd >/dev/null 2>&1; then
+        zstd -q -T1 -6 --rm "$file"
+    else
+        gzip -f -9 "$file"
+    fi
+}
+
+backup_sqlite_db() {
+    local src="$1"
+    local dst="$2"
+    [ -f "$src" ] || return 0
+
+    mkdir -p "$(dirname "$dst")"
+    rm -f "$dst" "$dst.zst" "$dst.gz"
+    sqlite3 "$src" ".backup '$dst'"
+    chmod 600 "$dst" || true
+    compress_backup_file "$dst"
+}
+
+prune_shared_backups() {
+    local backups_dir="$SHARED_DIR/backups"
+    [ -d "$backups_dir" ] || return 0
+
+    local pruned=0
+    while IFS= read -r -d '' old; do
+        rm -rf -- "$old"
+        pruned=$((pruned + 1))
+    done < <(find "$backups_dir" -mindepth 1 -maxdepth 1 -type d -mtime "+$BACKUP_RETENTION_DAYS" -print0)
+
+    if [[ "$BACKUP_KEEP" =~ ^[0-9]+$ ]] && [ "$BACKUP_KEEP" -gt 0 ]; then
+        local kept=0 backup
+        while IFS= read -r backup; do
+            [ -n "$backup" ] || continue
+            kept=$((kept + 1))
+            if [ "$kept" -gt "$BACKUP_KEEP" ]; then
+                rm -rf -- "$backup"
+                pruned=$((pruned + 1))
+            fi
+        done < <(find "$backups_dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\t%p\n' | sort -r | cut -f2-)
+    fi
+
+    if [ "$pruned" -gt 0 ]; then
+        log "Pruned $pruned shared backup(s); retention=${BACKUP_RETENTION_DAYS}d keep=$BACKUP_KEEP"
+    fi
 }
 
 copy_source_to_release() {
@@ -604,6 +655,7 @@ build_frontend() {
         log "Static compression skipped by CLASH_SKIP_STATIC_COMPRESSION=1"
         write_owned_assets_manifest
         preserve_previous_frontend_assets
+        slim_runtime_release
         return
     fi
 
@@ -629,6 +681,49 @@ build_frontend() {
     log "Static compression: compressed=$STATIC_COMPRESSED reused=$STATIC_REUSED godot_compressed=$GODOT_COMPRESSED godot_reused=$GODOT_REUSED"
     write_owned_assets_manifest
     preserve_previous_frontend_assets
+    slim_runtime_release
+}
+
+slim_runtime_release() {
+    log "Slimming runtime release..."
+
+    local path removed=0
+    for path in \
+        "$RELEASE_DIR/.codex" \
+        "$RELEASE_DIR/.logs" \
+        "$RELEASE_DIR/.tmp" \
+        "$RELEASE_DIR/Model" \
+        "$RELEASE_DIR/Musik" \
+        "$RELEASE_DIR/assets" \
+        "$RELEASE_DIR/docs" \
+        "$RELEASE_DIR/scenes" \
+        "$RELEASE_DIR/scripts" \
+        "$RELEASE_DIR/shaders" \
+        "$RELEASE_DIR/textures" \
+        "$RELEASE_DIR/tools" \
+        "$RELEASE_DIR/youtube-example-ai-studio-main" \
+        "$WEB_DIR/node_modules" \
+        "$WEB_DIR/public" \
+        "$WEB_DIR/src" \
+        "$WEB_DIR/.codex" \
+        "$WEB_DIR/index.html" \
+        "$WEB_DIR/eslint.config.js" \
+        "$WEB_DIR/generate-godot-export-manifest.cjs" \
+        "$WEB_DIR/optimize-images.cjs" \
+        "$WEB_DIR/package-lock.json" \
+        "$WEB_DIR/package.json" \
+        "$WEB_DIR/vite.config.js" \
+        "$WEB_DIR/watch-export.js" \
+        "$WEB_DIR/write-godot-runtime-manifest.cjs" \
+        "$RELEASE_DIR/project.godot" \
+        "$RELEASE_DIR/export_presets.cfg"; do
+        if [ -e "$path" ]; then
+            rm -rf "$path"
+            removed=$((removed + 1))
+        fi
+    done
+
+    log "Slimmed runtime release; removed $removed source-only path(s)"
 }
 
 validate_release() {

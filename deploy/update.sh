@@ -48,10 +48,13 @@ git pull --ff-only origin "$BRANCH"
 # web/public/godot is intentionally gitignored because the export is large.
 # Normal flow: export Godot locally and upload it here before deploying.
 if [ ! -f "$SOURCE_DIR/web/public/godot/Work.pck" ]; then
-    if [ "${CLASH_REUSE_GODOT_EXPORT:-0}" = "1" ] && [ -f "$DEPLOY_ROOT/current/web/public/godot/Work.pck" ]; then
+    if [ "${CLASH_REUSE_GODOT_EXPORT:-0}" = "1" ] && [ -f "$DEPLOY_ROOT/current/web/dist/godot/Work.pck" ]; then
         echo "Source Godot export missing; reusing current live export."
         mkdir -p "$SOURCE_DIR/web/public"
-        rsync -a --delete "$DEPLOY_ROOT/current/web/public/godot" "$SOURCE_DIR/web/public/"
+        rsync -a --delete \
+            --exclude='*.br' \
+            --exclude='*.gz' \
+            "$DEPLOY_ROOT/current/web/dist/godot" "$SOURCE_DIR/web/public/"
     else
         echo "ERROR: source Godot export missing at web/public/godot/Work.pck" >&2
         echo "Export Godot locally and upload it to $SOURCE_DIR/web/public/godot before deploying." >&2

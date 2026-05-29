@@ -401,6 +401,7 @@ app.get('/api/admin/panel', (req, res) => {
   .local-tool-name { color: #e5e7eb; font-size: 14px; font-weight: 800; }
   .local-tool-buttons { display: grid; grid-template-columns: repeat(5, minmax(44px, 1fr)); gap: 7px; }
   .local-tool-buttons.local-resource-buttons { grid-template-columns: repeat(4, minmax(78px, 1fr)); }
+  .local-tool-buttons.local-trophy-buttons { grid-template-columns: repeat(6, minmax(62px, 1fr)); }
   .local-wide { grid-column: 1 / -1; }
   .local-danger { border-color: #f59e0b !important; color: #fef3c7 !important; background: #3b2a12 !important; }
   .local-tool-status { min-height: 20px; color: #93c5fd; font-size: 12px; font-weight: 700; margin-top: 10px; }
@@ -777,7 +778,7 @@ app.get('/api/admin/panel', (req, res) => {
         <h3 style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Live Leaderboard</h3>
         <div id="tn_lb_meta" style="font-size:12px;color:#9ca3af;margin-bottom:8px">Pick a tournament below to view its leaderboard.</div>
         <table style="font-size:12px"><thead><tr>
-          <th>#</th><th>Player</th><th>Team</th><th>Score</th><th>Prize</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th>
+          <th>#</th><th>Player</th><th>Team</th><th>Score</th><th>Prize</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th><th>Actions</th>
         </tr></thead><tbody id="tn_lb_body"></tbody></table>
         <h3 style="color:#f59e0b;font-size:13px;margin:18px 0 10px;text-transform:uppercase;letter-spacing:0.5px">Daily Point Logs</h3>
         <div id="tn_daily_meta" style="font-size:12px;color:#9ca3af;margin-bottom:8px">Pick a tournament daily log to inspect UTC day awards.</div>
@@ -1114,6 +1115,10 @@ app.get('/api/admin/panel', (req, res) => {
         <div id="localResourceRows"></div>
       </div>
       <div class="local-tool-section">
+        <div class="local-tool-label">Account Trophies</div>
+        <div class="local-tool-buttons local-trophy-buttons" id="localTrophyRows"></div>
+      </div>
+      <div class="local-tool-section">
         <div class="local-tool-label">Everything</div>
         <div class="local-tool-buttons local-resource-buttons">
           <button class="btn local-danger local-wide" onclick="maxEverything()">Max Everything</button>
@@ -1159,6 +1164,7 @@ const ADMIN_RESOURCE_AMOUNTS = [
   { label: '+100k', value: 100000 },
   { label: 'Max', value: 999999999 },
 ];
+const ADMIN_TROPHY_AMOUNTS = [-500, -100, -10, 10, 100, 500];
 
 async function api(path) {
   const r = await fetch('/api' + path, { headers: { 'x-admin-key': KEY } });
@@ -1215,6 +1221,7 @@ async function loadAll() {
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function jsq(s) { return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' '); }
 function fmtAdminTime(t) { return t ? new Date(String(t).replace(' ', 'T') + 'Z').toLocaleString() : '-'; }
 function fmtAdminUsd(v, maxDigits = 2) {
   const n = Number(v) || 0;
@@ -1334,7 +1341,7 @@ function renderPlayers() {
     '<td>' + (p.shield_active ? '<span class="badge badge-shield">' + p.shield_remaining + 'm left</span>' : '<span class="badge badge-off">none</span>') + '</td>' +
     '<td title="' + (p.last_seen_age_sec != null ? Math.round(p.last_seen_age_sec/60) + ' min ago' : 'never') + '">' + statusBadge(p) + '</td>' +
     '<td class="mono">' + (p.created_at||'').split(' ')[0] + '</td>' +
-    '<td><button class="btn" onclick="addResPlayer(\\'' + esc(p.name) + '\\')">+Res</button> ' + (IS_LOCAL_ADMIN_PANEL ? '<button class="btn" onclick="openBuildingTools(\\'' + esc(p.name) + '\\')">Build Tools</button> ' : '') + '<button class="btn" onclick="resetTrophies(\\'' + esc(p.name) + '\\')">0 Troph</button> <button class="btn" onclick="resetPlayer(\\'' + esc(p.name) + '\\')">Reset</button> <button class="btn btn-danger" onclick="deletePlayer(\\'' + esc(p.name) + '\\')">Delete</button></td>' +
+    '<td><button class="btn" onclick="addResPlayer(\\'' + esc(p.name) + '\\')">+Res</button> <button class="btn" onclick="adjustAccountTrophies(\\'' + esc(jsq(p.name)) + '\\')">+/- Troph</button> ' + (IS_LOCAL_ADMIN_PANEL ? '<button class="btn" onclick="openBuildingTools(\\'' + esc(jsq(p.name)) + '\\')">Local Tools</button> ' : '') + '<button class="btn" onclick="resetTrophies(\\'' + esc(p.name) + '\\')">0 Troph</button> <button class="btn" onclick="resetPlayer(\\'' + esc(p.name) + '\\')">Reset</button> <button class="btn btn-danger" onclick="deletePlayer(\\'' + esc(p.name) + '\\')">Delete</button></td>' +
     '</tr>'
   ).join('');
 }
@@ -1382,6 +1389,22 @@ async function resetAllTrophies() {
   loadAll();
 }
 
+async function adjustAccountTrophies(name, quickDelta) {
+  const raw = quickDelta == null ? prompt('Account trophy delta for ' + name + ' (use negative to subtract):', '100') : String(quickDelta);
+  if (raw === null) return;
+  const delta = Math.trunc(Number(raw));
+  if (!Number.isFinite(delta) || delta === 0) { alert('Enter a non-zero number.'); return; }
+  try {
+    const data = await apiPost('/admin/players/' + encodeURIComponent(name) + '/trophies', { delta });
+    const sign = data.delta >= 0 ? '+' : '';
+    setLocalToolsStatus(name + ' account trophies: ' + data.before + ' -> ' + data.trophies + ' (' + sign + data.delta + ').');
+    loadAll();
+  } catch (e) {
+    alert(e.message || 'Failed to adjust account trophies');
+    setLocalToolsStatus('Failed: ' + e.message, true);
+  }
+}
+
 async function addResAll() {
   const gold = prompt('Gold to add to ALL players:', '1000');
   if (gold === null) return;
@@ -1425,7 +1448,8 @@ function renderBuildingTools() {
   const maxBox = document.getElementById('localMaxVillageButtons');
   const rowsBox = document.getElementById('localBuildingRows');
   const resourceBox = document.getElementById('localResourceRows');
-  if (!maxBox || !rowsBox || !resourceBox) return;
+  const trophyBox = document.getElementById('localTrophyRows');
+  if (!maxBox || !rowsBox || !resourceBox || !trophyBox) return;
   maxBox.innerHTML = [1, 2, 3, 4].map((level) =>
     '<button class="btn" onclick="buildMaxVillage(' + level + ')">' + level + '</button>'
   ).join('');
@@ -1438,6 +1462,9 @@ function renderBuildingTools() {
       '<div class="local-tool-buttons local-resource-buttons">' + buttons + '</div>' +
       '</div>';
   }).join('');
+  trophyBox.innerHTML = ADMIN_TROPHY_AMOUNTS.map((amount) =>
+    '<button class="btn" onclick="adjustAccountTrophies(\\'' + esc(jsq(localToolsPlayer)) + '\\',' + amount + ')">' + (amount > 0 ? '+' : '') + amount + '</button>'
+  ).join('') + '<button class="btn local-wide" onclick="adjustAccountTrophies(\\'' + esc(jsq(localToolsPlayer)) + '\\')">Custom</button>';
   rowsBox.innerHTML = ADMIN_BUILDING_TOOL_DEFS.map((def) => {
     const buttons = Array.from({ length: def.max }, (_, i) => {
       const level = i + 1;
@@ -1453,8 +1480,8 @@ function renderBuildingTools() {
 function openBuildingTools(name) {
   if (!IS_LOCAL_ADMIN_PANEL) return;
   localToolsPlayer = name;
-  document.getElementById('localToolsTitle').textContent = 'Local Building Tools - ' + name;
-  setLocalToolsStatus('Choose a building level or max village preset.');
+  document.getElementById('localToolsTitle').textContent = 'Local Admin Tools - ' + name;
+  setLocalToolsStatus('Choose resources, trophies, a building level, or max village preset.');
   renderBuildingTools();
   document.getElementById('localToolsModal').style.display = 'flex';
 }
@@ -3120,6 +3147,7 @@ async function loadTournamentLeaderboard(id) {
         + '<td>' + r.trades_count + '</td>'
         + '<td>$' + Math.round(r.volume_usd || 0).toLocaleString() + '</td>'
         + '<td style="color:' + ((r.pnl_usd || 0) >= 0 ? '#34d399' : '#fca5a5') + '">$' + (r.pnl_usd || 0).toFixed(2) + '</td>'
+        + '<td><button class="btn" onclick="adjustTournamentTrophies(' + t.id + ',\\'' + esc(jsq(r.player_id)) + '\\',\\'' + esc(jsq(r.name || r.player_id)) + '\\')">+/- Troph</button></td>'
         + '</tr>';
     }).join('');
     if (isTournamentDailyPool(t)) {
@@ -3129,6 +3157,22 @@ async function loadTournamentLeaderboard(id) {
       document.getElementById('tn_daily_body').innerHTML = '';
     }
   } catch(e) { console.error(e); }
+}
+
+async function adjustTournamentTrophies(tournamentId, playerId, label, quickDelta) {
+  const raw = quickDelta == null ? prompt('Tournament trophy delta for ' + label + ' (use negative to subtract):', '100') : String(quickDelta);
+  if (raw === null) return;
+  const delta = Math.trunc(Number(raw));
+  if (!Number.isFinite(delta) || delta === 0) { alert('Enter a non-zero number.'); return; }
+  try {
+    const data = await apiPost('/admin/tournaments/' + tournamentId + '/participants/' + encodeURIComponent(playerId) + '/adjust-trophies', { delta });
+    const sign = data.delta >= 0 ? '+' : '';
+    alert('Tournament trophies: ' + data.before + ' -> ' + data.trophies + ' (' + sign + data.delta + ')');
+    loadTournamentLeaderboard(tournamentId);
+    loadTournaments();
+  } catch (e) {
+    alert(e.message || 'Failed to adjust tournament trophies');
+  }
 }
 
 function fmtTournamentPoints(n) {
