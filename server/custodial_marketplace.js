@@ -1547,6 +1547,24 @@ async function bridgeAssetToDestination(order, ctx) {
   };
 }
 
+function rememberBuyerDeliveryWallet(order) {
+  const playerId = String(order?.buyer_player_id || '').trim();
+  const destAddress = String(order?.buyer_dest_address || '').trim();
+  const destChain = String(order?.buyer_dest_chain || '').toLowerCase();
+  if (!playerId || !destAddress) return;
+  if (!['base', 'arbitrum', 'monad', 'aptos'].includes(destChain)) return;
+  try {
+    gameDb.db.prepare(`
+      UPDATE players
+         SET nft_gold_boost_wallet = ?
+       WHERE id = ?
+         AND (nft_gold_boost_wallet IS NULL
+              OR TRIM(nft_gold_boost_wallet) = ''
+              OR lower(nft_gold_boost_wallet) = lower(?))
+    `).run(destAddress, playerId, destAddress);
+  } catch {}
+}
+
 async function maybeAutoDeliver(order, ctx, actorPlayerId) {
   const fresh = getOrder(order.id);
   if (!fresh || fresh.status !== 'paid') return fresh || order;
@@ -1574,6 +1592,7 @@ async function maybeAutoDeliver(order, ctx, actorPlayerId) {
   `).run(txHash, fresh.id);
   insertEvent(fresh.id, 'delivered', { actorPlayerId, txHash, data: { mode, sourceChain, destChain } });
   const afterDelivery = getOrder(fresh.id);
+  rememberBuyerDeliveryWallet(afterDelivery);
   if (ctx.config?.autoPayoutEnabled) {
     const payout = await maybeAutoPayoutBestEffort(afterDelivery, ctx, actorPlayerId);
     return payout.order;
@@ -2239,12 +2258,25 @@ function mountCustodialMarketplace(router, ctx = {}) {
 
   router.post('/marketplace/custodial/listings/:id/cancel', auth, async (req, res) => {
     try {
-      const order = getOrder(req.params.id);
+      let order = getOrder(req.params.id);
       requireOrderSeller(order, req.player.id);
       if (!canCancelStatus(order)) throw httpError(409, `Listing is ${order.status}`);
       if (order.status === 'awaiting_deposit') {
-        cancelAwaitingDepositOrder(order, { actorPlayerId: req.player.id });
-        return res.json({ success: true, order: publicOrder(getOrder(order.id), { includePrivate: true }) });
+        try {
+          const deposited = await activateOrderIfVaultOwnsAsset(order, {
+            actorPlayerId: req.player.id,
+            eventType: 'deposit_verified_during_cancel',
+          });
+          if (deposited?.status === 'active') {
+            order = deposited;
+          } else {
+            cancelAwaitingDepositOrder(order, { actorPlayerId: req.player.id });
+            return res.json({ success: true, order: publicOrder(getOrder(order.id), { includePrivate: true }) });
+          }
+        } catch {
+          cancelAwaitingDepositOrder(order, { actorPlayerId: req.player.id });
+          return res.json({ success: true, order: publicOrder(getOrder(order.id), { includePrivate: true }) });
+        }
       }
       const txHash = await transferAssetSameChain(order, order.seller_wallet, ctx);
       gameDb.db.transaction(() => {
@@ -2678,6 +2710,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
           insertEvent(order.id, 'delivered', { txHash, data: { mode: 'manual' } });
         })();
         let after = getOrder(order.id);
+        rememberBuyerDeliveryWallet(after);
         let payoutError = null;
         if (config.autoPayoutEnabled && !after.payout_tx_hash) {
           const payout = await maybeAutoPayoutBestEffort(after, { ...ctx, config }, null);
