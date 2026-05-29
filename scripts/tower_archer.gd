@@ -22,6 +22,7 @@ var state: State = State.IDLE
 
 var level: int = 1
 var damage: int = 90
+var ward_bonus_pct: int = 0
 var fire_rate: float = 1.2
 var detect_range: float = 1.0
 var _fire_timer: float = 0.0
@@ -58,13 +59,18 @@ func _ready() -> void:
 
 func _apply_stats() -> void:
 	var s = LEVEL_STATS.get(level, LEVEL_STATS[1])
-	damage = s.damage
+	damage = ceili(float(s.damage) * (1.0 + float(ward_bonus_pct) / 100.0))
 	fire_rate = s.fire_rate
 	detect_range = s.detect_range
 
 
 func set_level(lvl: int) -> void:
 	level = lvl
+	_apply_stats()
+
+
+func set_ward_bonus_pct(pct: int) -> void:
+	ward_bonus_pct = maxi(0, pct)
 	_apply_stats()
 
 

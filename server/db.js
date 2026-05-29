@@ -3453,6 +3453,30 @@ function getAltarBonusPct(playerId, skillId) {
   return altarBonusPctFromLevels(getAltarSkillLevels(playerId), skillId);
 }
 
+function applyAltarProsperityResourceBonus(playerId, resources = {}) {
+  const pct = getAltarBonusPct(playerId, 'prosperity');
+  const base = {
+    gold: Math.max(0, Math.floor(Number(resources.gold) || 0)),
+    wood: Math.max(0, Math.floor(Number(resources.wood) || 0)),
+    ore: Math.max(0, Math.floor(Number(resources.ore) || 0)),
+  };
+  const total = { ...base };
+  const bonus = { gold: 0, wood: 0, ore: 0 };
+  if (pct > 0) {
+    for (const key of ['gold', 'wood', 'ore']) {
+      if (base[key] <= 0) continue;
+      total[key] = Math.ceil(base[key] * (1 + pct / 100));
+      bonus[key] = total[key] - base[key];
+    }
+  }
+  return {
+    ...total,
+    base,
+    bonus,
+    prosperity_bonus_pct: pct,
+  };
+}
+
 function rollAltarTrophyBonus(playerId) {
   const levels = getAltarSkillLevels(playerId);
   const level = Math.max(0, Math.min(ALTAR_SKILL_DEFS.glory.max_level, Number(levels.glory) || 0));
@@ -3481,6 +3505,7 @@ function applyAltarBuildingBonuses(buildings, levels = {}) {
       base_hp: baseHp,
       base_max_hp: baseMaxHp,
       altar_ward_bonus_pct: wardPct,
+      altar_ward_damage_bonus_pct: wardPct,
     };
   });
 }
@@ -3532,7 +3557,7 @@ function getBuildingProductionSnapshot(building, now = new Date(), altarLevels =
   const lvl = Math.max(1, Math.floor(Number(building.level) || 1));
   const lvlIdx = Math.min(lvl - 1, prod.rate.length - 1);
   const levels = altarLevels || (building.player_id ? getAltarSkillLevels(building.player_id) : {});
-  const prosperityApplies = prod.resource === 'wood' || prod.resource === 'ore';
+  const prosperityApplies = prod.resource === 'gold' || prod.resource === 'wood' || prod.resource === 'ore';
   const prosperityPct = prosperityApplies ? altarBonusPctFromLevels(levels, 'prosperity') : 0;
   const ratePerMin = prod.rate[lvlIdx] * (1 + prosperityPct / 100);
   const maxStored = prod.max[lvlIdx];
@@ -4133,9 +4158,16 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   const lootWood = Math.floor((defender.wood || 0) * LOOT_PERCENT);
   const lootOre = Math.floor((defender.ore || 0) * LOOT_PERCENT);
 
-  // Transfer resources
+  const boostedLoot = applyAltarProsperityResourceBonus(attackerId, {
+    gold: lootGold,
+    wood: lootWood,
+    ore: lootOre,
+  });
+
+  // Transfer resources. The defender loses the base raid loot; Prosperity
+  // creates the extra resources for the attacker.
   subtractResources(defenderId, lootGold, lootWood, lootOre);
-  addResources(attackerId, lootGold, lootWood, lootOre);
+  addResources(attackerId, boostedLoot.gold, boostedLoot.wood, boostedLoot.ore);
 
   // Tournament admins can override post-raid shield length. Zero means
   // "no shield" while still stamping last_attacked_by/at for cooldowns.
@@ -4158,7 +4190,10 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
 
   return {
     success: true,
-    loot: { gold: lootGold, wood: lootWood, ore: lootOre },
+    loot: { gold: boostedLoot.gold, wood: boostedLoot.wood, ore: boostedLoot.ore },
+    loot_base: boostedLoot.base,
+    altar_prosperity_bonus_pct: boostedLoot.prosperity_bonus_pct,
+    altar_prosperity_bonus: boostedLoot.bonus,
     attacker_resources: getResources(attackerId),
     trophy_base: TROPHY_WIN,
     trophy_bonus: trophyBonus.bonus,
@@ -4338,6 +4373,7 @@ module.exports = {
   upgradeAltarSkill,
   getAltarSkillLevels,
   getAltarBonusPct,
+  applyAltarProsperityResourceBonus,
   findEnemy,
   inspectEnemyByName,
   findEnemyByName,

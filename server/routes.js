@@ -8398,6 +8398,7 @@ router.post('/attack/result', auth, (req, res) => {
     gridConfig,
     gridConfigs,
     serverTroopLevels,
+    defenderAltarLevels: db.getAltarSkillLevels(defender_id),
     debugTrace: BATTLE_DEBUG_TRACE,
   });
 
@@ -10273,7 +10274,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       // amount is recorded in tournament_participants.gold). Outside any
       // tournament this returns the original number — same as the legacy
       // behaviour.
-      const paidGold = boostedTotalGold > 0 ? db.applyGoldReward(req.player.id, boostedTotalGold) : 0;
+      const tournamentGold = boostedTotalGold > 0 ? db.applyGoldReward(req.player.id, boostedTotalGold) : 0;
+      const prosperityGold = db.applyAltarProsperityResourceBonus(req.player.id, { gold: tournamentGold, wood: 0, ore: 0 });
+      const paidGold = prosperityGold.gold;
       db.db.prepare(`
         UPDATE trading_rewards SET
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
@@ -10305,7 +10308,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         });
       }
       syncDecibelTournamentPnl();
-      return { raced: false, paid: paidGold };
+      return {
+        raced: false,
+        paid: paidGold,
+        prosperity_bonus_pct: prosperityGold.prosperity_bonus_pct,
+        prosperity_bonus: prosperityGold.bonus.gold,
+      };
     });
 
     const txnResult = creditTxn();
@@ -10320,6 +10328,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         reason: reasons.join(' + ') || 'Trading reward',
         dex,
         nft_boost: nftGoldBoostPayload(nftGoldBoost),
+        altar_prosperity_bonus_pct: txnResult.prosperity_bonus_pct || 0,
+        altar_prosperity_bonus: txnResult.prosperity_bonus || 0,
       });
     }
     console.log(`[claim-gold ${dex}] player=${req.player.name} -> ZERO PAID (had ${newTrades.length} raw trades, all clamped/below threshold)`);
@@ -10462,7 +10472,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       // Tournament boost: gold credit is multiplied by gold_boost when the
       // player is in an active Pacifica tournament. The boosted amount
       // also lands in tournament_participants.gold for the leaderboard.
-      const paidGold = boostedTotalGold > 0 ? db.applyGoldReward(req.player.id, boostedTotalGold) : 0;
+      const tournamentGold = boostedTotalGold > 0 ? db.applyGoldReward(req.player.id, boostedTotalGold) : 0;
+      const prosperityGold = db.applyAltarProsperityResourceBonus(req.player.id, { gold: tournamentGold, wood: 0, ore: 0 });
+      const paidGold = prosperityGold.gold;
       db.db.prepare(`
         UPDATE trading_rewards SET
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
@@ -10492,7 +10504,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         }
         db.recordTournamentTrade(req.player.id, newVolume, netPnl, uniqueTradeCount);
       }
-      return { raced: false, paid: paidGold };
+      return {
+        raced: false,
+        paid: paidGold,
+        prosperity_bonus_pct: prosperityGold.prosperity_bonus_pct,
+        prosperity_bonus: prosperityGold.bonus.gold,
+      };
     });
     const txnResPac = creditTxnPac();
     if (txnResPac.raced) {
@@ -10506,6 +10523,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       reason: reasons.join(' + ') || 'No new rewards',
       total_gold_earned: (reward.total_gold || 0) + txnResPac.paid,
       nft_boost: nftGoldBoostPayload(nftGoldBoost),
+      altar_prosperity_bonus_pct: txnResPac.prosperity_bonus_pct || 0,
+      altar_prosperity_bonus: txnResPac.prosperity_bonus || 0,
     });
   } catch (e) {
     console.error(`[claim-gold pacifica] player=${req.player.name} ERROR:`, e.message, e.stack);
@@ -10775,10 +10794,15 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     if (latest && latest.claimed_at && (!task.repeatable || latest.claimed_at !== pt.claimed_at)) {
       return { raced: true };
     }
-    db.addResources(req.player.id, task.reward_gold || 0, task.reward_wood || 0, task.reward_ore || 0);
-    if (task.reward_gold > 0) {
+    const reward = db.applyAltarProsperityResourceBonus(req.player.id, {
+      gold: task.reward_gold || 0,
+      wood: task.reward_wood || 0,
+      ore: task.reward_ore || 0,
+    });
+    db.addResources(req.player.id, reward.gold, reward.wood, reward.ore);
+    if (reward.gold > 0) {
       db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)')
-        .run(req.player.id, task.reward_gold, `Quest: ${task.title}`);
+        .run(req.player.id, reward.gold, `Quest: ${task.title}`);
     }
     if (task.repeatable) {
       const cooldownHours = Number(task.cooldown_hours) || 0;
@@ -10807,24 +10831,28 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     } else {
       db.db.prepare(`UPDATE player_tasks SET claimed_at = datetime('now') WHERE player_id = ? AND task_id = ?`).run(req.player.id, id);
     }
-    return { raced: false };
+    return { raced: false, reward };
   });
   const payoutRes = payout();
   if (payoutRes.raced) {
     console.log(`[task ${id} claim] player=${req.player.name} -> RACED (parallel claim)`);
     return res.status(409).json({ error: 'Already claimed by parallel request' });
   }
-  console.log(`[task ${id} claim] player=${req.player.name} -> PAID gold=${task.reward_gold||0} wood=${task.reward_wood||0} ore=${task.reward_ore||0} (${task.title})`);
+  const paidReward = payoutRes.reward || { gold: task.reward_gold || 0, wood: task.reward_wood || 0, ore: task.reward_ore || 0 };
+  console.log(`[task ${id} claim] player=${req.player.name} -> PAID gold=${paidReward.gold||0} wood=${paidReward.wood||0} ore=${paidReward.ore||0} prosperity=${paidReward.prosperity_bonus_pct||0}% (${task.title})`);
 
   try {
-    logEconomy('Task claimed', { player: req.player.name, task: task.title, gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore });
+    logEconomy('Task claimed', { player: req.player.name, task: task.title, gold: paidReward.gold, wood: paidReward.wood, ore: paidReward.ore, altar_prosperity_bonus_pct: paidReward.prosperity_bonus_pct || 0 });
   } catch {}
 
   res.json({
     ok: true,
     completed: true,
     auto_restarted: Boolean(task.repeatable && (Number(task.cooldown_hours) || 0) <= 0),
-    reward: { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore },
+    reward: { gold: paidReward.gold, wood: paidReward.wood, ore: paidReward.ore },
+    reward_base: paidReward.base || { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore },
+    altar_prosperity_bonus_pct: paidReward.prosperity_bonus_pct || 0,
+    altar_prosperity_bonus: paidReward.bonus || { gold: 0, wood: 0, ore: 0 },
     progress_value: result.progress_value,
     target_value: result.target_value,
   });

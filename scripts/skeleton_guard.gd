@@ -33,7 +33,14 @@ var tombstone_avoid_radius: float = 0.14  ## hard avoidance radius for own tombs
 var hp: int = 380
 var max_hp: int = 380
 var damage: int = 42
+var base_damage: int = 42
+var ward_bonus_pct: int = 0
 var atk_speed: float = 0.85
+
+
+func set_ward_bonus_pct(pct: int) -> void:
+	ward_bonus_pct = maxi(0, pct)
+	damage = ceili(float(base_damage) * (1.0 + float(ward_bonus_pct) / 100.0))
 
 var tombstone_pos: Vector3 = Vector3.ZERO
 var _relocate_target_pos: Vector3 = Vector3.ZERO

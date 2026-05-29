@@ -542,7 +542,7 @@ function clearDeadOwnerProjectiles(projectiles, phase = null, onLost = null) {
 
 // ---------- Replay Verifier ----------
 
-function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, gridConfigs, serverTroopLevels, debugTrace = false }) {
+function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, gridConfigs, serverTroopLevels, defenderAltarLevels = {}, debugTrace = false }) {
   const gridConfigMap = normalizeGridConfigs(gridConfig, gridConfigs);
   const defaultGridConfig = gridConfigMap['0'] || Object.values(gridConfigMap)[0];
   if (!isValidGridConfig(defaultGridConfig)) {
@@ -573,6 +573,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
   const defenses = [];
   const projectiles = [];
   let townHallId = null;
+  const wardLevel = Math.max(0, Math.min(3, Number(defenderAltarLevels?.ward) || 0));
+  const wardPct = [0, 5, 10, 15][wardLevel] || 0;
+  const wardDamage = (damage) => Math.ceil((Number(damage) || 0) * (1 + wardPct / 100));
   let nextTroopId = 0;
   let shipsPlaced = 0;
   const pendingSpawns = [];
@@ -738,7 +741,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       const s = DEFENSE_STATS.turret[b.level] || DEFENSE_STATS.turret[1];
       defenses.push({
         buildingId: b.id, type: 'turret',
-        damage: s.damage, fireRate: s.fireRate, detectRange: s.detectRange,
+        damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
         projSpeed: s.projSpeed,
         x: b.x, z: b.z,
         timer: 0, isAttacking: false, targetId: null,
@@ -749,7 +752,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       const s = DEFENSE_STATS.archer_tower[b.level] || DEFENSE_STATS.archer_tower[1];
       defenses.push({
         buildingId: b.id, type: 'archer_tower',
-        damage: s.damage, fireRate: s.fireRate, detectRange: s.detectRange,
+        damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
         projSpeed: s.projSpeed,
         x: b.x, z: b.z,
         timer: 0, isAttacking: false, targetId: null,
@@ -761,11 +764,11 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       const s = DEFENSE_STATS.mage_tower[mageLevel] || DEFENSE_STATS.mage_tower[1];
       defenses.push({
         buildingId: b.id, type: 'mage_tower',
-        damage: s.damage, fireRate: s.fireRate, detectRange: s.detectRange,
+        damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
         projSpeed: s.projSpeed,
         beam: !!s.beam,
-        baseDamage: s.baseDamage ?? s.damage,
-        maxDamage: s.maxDamage ?? s.damage,
+        baseDamage: wardDamage(s.baseDamage ?? s.damage),
+        maxDamage: wardDamage(s.maxDamage ?? s.damage),
         tickRate: s.tickRate ?? s.fireRate,
         rampTime: s.rampTime ?? 1,
         beamCharge: 0,
@@ -782,7 +785,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         guards.push({
           id: `g${nextTroopId++}`,
           tombstoneId: b.id,
-          hp: SKELETON_GUARD.hp, damage: SKELETON_GUARD.damage,
+          hp: SKELETON_GUARD.hp, damage: wardDamage(SKELETON_GUARD.damage),
           atkSpeed: SKELETON_GUARD.atkSpeed, moveSpeed: SKELETON_GUARD.moveSpeed,
           detectionRadius: SKELETON_GUARD.detectionRadius,
           attackRange: SKELETON_GUARD.attackRange,
