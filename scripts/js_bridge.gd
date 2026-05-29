@@ -141,10 +141,14 @@ func _local_guest_mode_enabled() -> bool:
 	return href.contains("?guest=1") or href.contains("&guest=1") or href.contains("?guest=true") or href.contains("&guest=true")
 
 
-func _make_local_guest_wallet() -> String:
-	var timestamp: int = Time.get_unix_time_from_system()
-	var random_id: int = randi()
-	return "local_guest_%d_%d" % [timestamp, random_id]
+func _get_local_guest_wallet() -> String:
+	if not _local_guest_mode_enabled():
+		return ""
+	var guest_id_value = JavaScriptBridge.eval("(function(){try{var u=new URL(window.location.href);var g=u.searchParams.get('guest');if(g!=='1'&&g!=='true')return '';var id=u.searchParams.get('guest_id');if(!id){id='g_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);u.searchParams.set('guest_id',id);window.history.replaceState(null,'',u.toString());}return id;}catch(e){return '';}})()", true)
+	var guest_id: String = String(guest_id_value).strip_edges()
+	if guest_id == "":
+		return ""
+	return "local_guest_%s" % guest_id
 
 
 func _clear_local_web_auth(net: Node) -> void:
@@ -207,8 +211,9 @@ func _send_initial_state() -> void:
 	if net:
 		_clear_local_web_auth(net)
 	if net and not net.has_token():
-		if _local_guest_mode_enabled():
-			call_deferred("_do_register", "LocalTester", _make_local_guest_wallet(), "pacifica", 0)
+		var guest_wallet: String = _get_local_guest_wallet()
+		if guest_wallet != "":
+			call_deferred("_do_register", "LocalTester", guest_wallet, "pacifica", 0)
 		else:
 			send_to_react("show_register", {})
 	elif net:

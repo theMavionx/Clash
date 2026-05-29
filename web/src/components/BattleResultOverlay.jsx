@@ -338,7 +338,7 @@ const styles = {
     width: 52,
     height: 52,
     objectFit: 'contain',
-    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
+    filter: 'invert(88%) sepia(87%) saturate(2224%) hue-rotate(334deg) brightness(105%) contrast(106%) drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
   },
   trophyValue: {
     fontSize: 30,
