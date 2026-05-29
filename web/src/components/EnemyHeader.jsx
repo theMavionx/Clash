@@ -8,7 +8,7 @@ import stoneIcon from '../assets/resources/stone_bar.png';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
-const LOOT_PERCENT = 0.30;
+const LOOT_PERCENT = 0.15;
 
 function EnemyHeader() {
   const { enemyMode } = useUI();

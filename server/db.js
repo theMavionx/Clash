@@ -4064,7 +4064,7 @@ function buyShip(playerId, buildingId) {
   return { success: true, resources: getResources(playerId) };
 }
 
-const LOOT_PERCENT = 0.30;
+const LOOT_PERCENT = 0.15;
 
 const RAID_ATTACK_COST_GOLD = 200;
 const TARGETED_ATTACK_COST_MULTIPLIER = 2;
