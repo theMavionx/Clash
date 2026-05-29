@@ -49,6 +49,7 @@ static var _attack_sfx_loaded: bool = false
 var level: int = 1
 var base_damage: int = 4
 var max_damage: int = 18
+var ward_bonus_pct: int = 0
 var tick_rate: float = 0.25
 var ramp_time: float = 4.0
 
@@ -111,10 +112,16 @@ func set_level(lvl: int) -> void:
 func _apply_stats() -> void:
 	level = clampi(level, 1, LEVEL_STATS.size())
 	var s: Dictionary = LEVEL_STATS.get(level, LEVEL_STATS[1])
-	base_damage = int(s.base_damage)
-	max_damage = int(s.max_damage)
+	var multiplier: float = 1.0 + float(ward_bonus_pct) / 100.0
+	base_damage = ceili(float(s.base_damage) * multiplier)
+	max_damage = ceili(float(s.max_damage) * multiplier)
 	tick_rate = float(s.tick_rate)
 	ramp_time = float(s.ramp_time)
+
+
+func set_ward_bonus_pct(pct: int) -> void:
+	ward_bonus_pct = maxi(0, pct)
+	_apply_stats()
 
 
 func _find_crystal() -> void:

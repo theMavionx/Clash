@@ -34,6 +34,7 @@ const ATTACK_SFX_PITCH_JITTER: float = 0.04
 
 var level: int = 1
 var damage: int = 80
+var ward_bonus_pct: int = 0
 var fire_rate: float = 1.0
 var _fire_timer: float = 0.0
 var _target: Node3D = null
@@ -242,12 +243,17 @@ func _get_pooled_bullet() -> Dictionary:
 
 func _apply_stats() -> void:
 	var s: Dictionary = LEVEL_STATS.get(level, LEVEL_STATS[1])
-	damage   = s.damage
+	damage = ceili(float(s.damage) * (1.0 + float(ward_bonus_pct) / 100.0))
 	fire_rate = s.fire_rate
 
 
 func set_level(lvl: int) -> void:
 	level = lvl
+	_apply_stats()
+
+
+func set_ward_bonus_pct(pct: int) -> void:
+	ward_bonus_pct = maxi(0, pct)
 	_apply_stats()
 
 

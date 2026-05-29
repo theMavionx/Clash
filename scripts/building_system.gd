@@ -567,7 +567,7 @@ const ALTAR_SKILL_DEFS: Dictionary = {
 	"prosperity": {
 		"name": "Prosperity",
 		"title": "Resource Blessing",
-		"bonus_label": "wood and ore production",
+		"bonus_label": "gold, wood, and ore gains",
 		"bonuses": [10, 20, 30],
 		"costs": [
 			{"wood": 10000, "ore": 10000, "gold": 2500},
@@ -578,7 +578,7 @@ const ALTAR_SKILL_DEFS: Dictionary = {
 	"ward": {
 		"name": "Ward",
 		"title": "Stone Ward",
-		"bonus_label": "defense building HP",
+		"bonus_label": "defense HP and damage",
 		"bonuses": [5, 10, 15],
 		"costs": [
 			{"wood": 15000, "ore": 8000, "gold": 2500},
@@ -2438,6 +2438,7 @@ func _apply_altar_bonuses_to_buildings() -> void:
 		var ratio: float = 1.0 if old_hp >= old_max else clampf(float(old_hp) / float(old_max), 0.0, 1.0)
 		b["max_hp"] = new_max
 		b["hp"] = new_max if ratio >= 0.999 else maxi(1, roundi(float(new_max) * ratio))
+		_apply_building_runtime_level(b)
 
 
 func _show_error(msg: String) -> void:
@@ -4246,12 +4247,20 @@ const TOWER_ARCHER_SCRIPT_PATH = "res://scripts/tower_archer.gd"
 
 func _apply_building_runtime_level(b: Dictionary) -> void:
 	var lvl: int = int(b.get("level", 1))
+	var ward_pct: int = _get_altar_skill_bonus_pct("ward")
 	var node: Node = b.get("node", null)
 	if is_instance_valid(node) and node.has_method("set_level"):
 		node.set_level(lvl)
+	if is_instance_valid(node) and node.has_method("set_ward_bonus_pct"):
+		node.set_ward_bonus_pct(ward_pct)
 	var tower_unit: Node = b.get("tower_unit_node", null)
 	if is_instance_valid(tower_unit) and tower_unit.has_method("set_level"):
 		tower_unit.set_level(lvl)
+	if is_instance_valid(tower_unit) and tower_unit.has_method("set_ward_bonus_pct"):
+		tower_unit.set_ward_bonus_pct(ward_pct)
+	for skel in b.get("skeletons", []):
+		if is_instance_valid(skel) and skel.has_method("set_ward_bonus_pct"):
+			skel.set_ward_bonus_pct(ward_pct)
 
 
 func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> void:
@@ -4425,6 +4434,8 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_exi
 	# instead of dropping the new one onto a stale spot.
 	for i in range(alive.size()):
 		if is_instance_valid(alive[i]):
+			if alive[i].has_method("set_ward_bonus_pct"):
+				alive[i].set_ward_bonus_pct(_get_altar_skill_bonus_pct("ward"))
 			alive[i].tombstone_pos = tomb_pos
 			if reposition_existing or i >= existing_count:
 				alive[i].global_position = tomb_pos + _tombstone_skeleton_offset(i, target_count)

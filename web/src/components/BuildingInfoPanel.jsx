@@ -102,7 +102,7 @@ const ALTAR_SKILLS = {
   prosperity: {
     label: 'Prosperity',
     title: 'Resource Blessing',
-    bonus: 'wood and ore production',
+    bonus: 'gold, wood, and ore gains',
     values: [10, 20, 30],
     costs: [
       { wood: 10000, ore: 10000, gold: 2500 },
@@ -113,7 +113,7 @@ const ALTAR_SKILLS = {
   ward: {
     label: 'Ward',
     title: 'Stone Ward',
-    bonus: 'defense building HP',
+    bonus: 'defense HP and damage',
     values: [5, 10, 15],
     costs: [
       { wood: 15000, ore: 8000, gold: 2500 },
