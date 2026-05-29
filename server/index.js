@@ -1221,7 +1221,7 @@ async function loadAll() {
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-function jsq(s) { return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' '); }
+function jsq(s) { return String(s || '').replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'").replace(/\\r?\\n/g, ' '); }
 function fmtAdminTime(t) { return t ? new Date(String(t).replace(' ', 'T') + 'Z').toLocaleString() : '-'; }
 function fmtAdminUsd(v, maxDigits = 2) {
   const n = Number(v) || 0;
