@@ -133,6 +133,20 @@ func _is_local_web_host() -> bool:
 	return origin.contains("localhost") or origin.contains("127.0.0.1") or origin.contains("[::1]")
 
 
+func _local_guest_mode_enabled() -> bool:
+	if not _is_local_web_host():
+		return false
+	var href_value = JavaScriptBridge.eval("window.location.href", true)
+	var href: String = String(href_value)
+	return href.contains("?guest=1") or href.contains("&guest=1") or href.contains("?guest=true") or href.contains("&guest=true")
+
+
+func _make_local_guest_wallet() -> String:
+	var timestamp: int = Time.get_unix_time_from_system()
+	var random_id: int = randi()
+	return "local_guest_%d_%d" % [timestamp, random_id]
+
+
 func _clear_local_web_auth(net: Node) -> void:
 	if not _is_local_web_host():
 		return
@@ -193,7 +207,10 @@ func _send_initial_state() -> void:
 	if net:
 		_clear_local_web_auth(net)
 	if net and not net.has_token():
-		send_to_react("show_register", {})
+		if _local_guest_mode_enabled():
+			call_deferred("_do_register", "LocalTester", _make_local_guest_wallet(), "pacifica", 0)
+		else:
+			send_to_react("show_register", {})
 	elif net:
 		send_to_react("state", {
 			"player_name": net.display_name,
