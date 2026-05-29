@@ -548,6 +548,10 @@ const DEMON_KING_OWNED_MEMORY_TTL_MS = Math.max(
   15_000,
   Number(process.env.NFT_DEMON_KING_OWNED_MEMORY_TTL_MS || 2 * 60_000)
 );
+const EVM_OWNER_SCAN_CHUNK_SIZE = Math.max(
+  5,
+  Math.min(40, Number(process.env.NFT_EVM_OWNER_SCAN_CHUNK_SIZE || 24))
+);
 const _demonKingSyncInflight = new Map();
 
 function normalizeDemonKingSyncChains(value) {
@@ -610,6 +614,23 @@ function playerLinkedDemonKingWallet(player, chainKey, wallet, getAddress) {
     return candidates.some((candidate) => String(candidate || '').trim() === expected);
   }
   return false;
+}
+
+function multicallErrorText(err, depth = 0) {
+  if (!err || depth > 4) return '';
+  return [
+    err.shortMessage,
+    err.details,
+    err.message,
+    multicallErrorText(err.cause, depth + 1),
+  ].filter(Boolean).join(' ');
+}
+
+function multicallChunkLooksLikeRpcFailure(results) {
+  if (!Array.isArray(results) || !results.length) return false;
+  if (!results.every((r) => r?.status === 'failure')) return false;
+  const text = results.map((r) => multicallErrorText(r?.error)).join(' ');
+  return /rate limit|over rate|rpc request|timeout|network|fetch/i.test(text);
 }
 
 async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
@@ -678,11 +699,17 @@ async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
   const ownerAbi = [{ name: 'ownerOf', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'address' }] }];
   const levelAbi = [{ name: 'tokenLevel', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint8' }] }];
   const ownerResults = [];
-  const chunkSize = 80;
+  const chunkSize = EVM_OWNER_SCAN_CHUNK_SIZE;
   for (let i = 0; i < ids.length; i += chunkSize) {
     const contracts = ids.slice(i, i + chunkSize)
       .map((id) => ({ address: proxy, abi: ownerAbi, functionName: 'ownerOf', args: [id] }));
-    ownerResults.push(...await tryRpcs((client) => client.multicall({ contracts, allowFailure: true })));
+    ownerResults.push(...await tryRpcs(async (client) => {
+      const results = await client.multicall({ contracts, allowFailure: true });
+      if (multicallChunkLooksLikeRpcFailure(results)) {
+        throw new Error(`${chainKey} owner scan multicall RPC failure`);
+      }
+      return results;
+    }));
   }
 
   const mine = [];
@@ -698,7 +725,13 @@ async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
   for (let i = 0; i < mine.length; i += chunkSize) {
     const contracts = mine.slice(i, i + chunkSize)
       .map((id) => ({ address: proxy, abi: levelAbi, functionName: 'tokenLevel', args: [id] }));
-    const levelResults = await tryRpcs((client) => client.multicall({ contracts, allowFailure: true }));
+    const levelResults = await tryRpcs(async (client) => {
+      const results = await client.multicall({ contracts, allowFailure: true });
+      if (multicallChunkLooksLikeRpcFailure(results)) {
+        throw new Error(`${chainKey} level scan multicall RPC failure`);
+      }
+      return results;
+    });
     levels.push(...levelResults.map((r, offset) => {
       if (r?.status === 'success') return Number(r.result);
       failedLevelIds.push(String(mine[i + offset]));
@@ -806,11 +839,17 @@ async function listOwnedEvmCollectionNfts(collectionSlugRaw, chainKey, ownerRaw,
   const ownerAbi = [{ name: 'ownerOf', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'address' }] }];
   const levelAbi = [{ name: 'tokenLevel', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint8' }] }];
   const ownerResults = [];
-  const chunkSize = 80;
+  const chunkSize = EVM_OWNER_SCAN_CHUNK_SIZE;
   for (let i = 0; i < ids.length; i += chunkSize) {
     const contracts = ids.slice(i, i + chunkSize)
       .map((id) => ({ address: proxy, abi: ownerAbi, functionName: 'ownerOf', args: [id] }));
-    ownerResults.push(...await tryRpcs((client) => client.multicall({ contracts, allowFailure: true })));
+    ownerResults.push(...await tryRpcs(async (client) => {
+      const results = await client.multicall({ contracts, allowFailure: true });
+      if (multicallChunkLooksLikeRpcFailure(results)) {
+        throw new Error(`${collectionDisplayName(collectionSlug)} ${chainKey} owner scan multicall RPC failure`);
+      }
+      return results;
+    }));
   }
 
   const mine = [];
@@ -824,7 +863,13 @@ async function listOwnedEvmCollectionNfts(collectionSlugRaw, chainKey, ownerRaw,
   for (let i = 0; i < mine.length; i += chunkSize) {
     const contracts = mine.slice(i, i + chunkSize)
       .map((id) => ({ address: proxy, abi: levelAbi, functionName: 'tokenLevel', args: [id] }));
-    const levelResults = await tryRpcs((client) => client.multicall({ contracts, allowFailure: true }));
+    const levelResults = await tryRpcs(async (client) => {
+      const results = await client.multicall({ contracts, allowFailure: true });
+      if (multicallChunkLooksLikeRpcFailure(results)) {
+        throw new Error(`${collectionDisplayName(collectionSlug)} ${chainKey} level scan multicall RPC failure`);
+      }
+      return results;
+    });
     levels.push(...levelResults.map((r, offset) => {
       if (r?.status === 'success') return Number(r.result);
       failedLevelIds.push(String(mine[i + offset]));
