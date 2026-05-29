@@ -377,6 +377,11 @@ prepare_shared_runtime() {
 }
 
 backup_shared_databases() {
+    if [ "${CLASH_SKIP_SHARED_BACKUP:-0}" = "1" ]; then
+        log "Skipping shared DB backup because CLASH_SKIP_SHARED_BACKUP=1"
+        return 0
+    fi
+
     local ts
     ts="$(date -u +%Y%m%d%H%M%S)"
     local backup_dir="$SHARED_DIR/backups/$ts"
