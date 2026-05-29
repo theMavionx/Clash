@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createNadoClient } from '@nadohq/client';
 import { getOrderNonce } from '@nadohq/shared';
-import { formatUnits, parseUnits } from 'viem';
+import { createWalletClient, formatUnits, http, parseUnits, zeroAddress } from 'viem';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import {
   INK_CHAIN_ID,
+  INK_RPC_URLS,
   NADO_CHAIN_ENV,
   NADO_QUOTE_PRODUCT_ID,
   NADO_QUOTE_TOKEN_ADDRESS,
   NADO_QUOTE_TOKEN_DECIMALS,
   NADO_SUBACCOUNT_NAME,
   NADO_USDT_ABI,
+  inkChain,
 } from '../lib/nadoConfig';
 import {
   buildNadoOrderParams,
@@ -24,10 +27,16 @@ import {
 } from '../lib/nadoClient';
 
 const POLL_INTERVAL_MS = 5_000;
+const NADO_REFRESH_BACKOFF_MS = 60_000;
+const NADO_REFRESH_WARNING_INTERVAL_MS = 5 * 60_000;
 const CLAIM_LOOKBACK_ATTEMPTS = 5;
 const NADO_WITHDRAW_FEE_USDT = 1;
-const NADO_TRIGGER_CACHE_PREFIX = 'nado_trigger_orders:';
+const NADO_LEGACY_TRIGGER_CACHE_PREFIX = 'nado_trigger_orders:';
+const NADO_LINKED_SIGNER_STORAGE_PREFIX = 'clash_nado_linked_signer_v1';
+const NADO_LINKED_SIGNER_TTL_SECONDS = 30 * 24 * 60 * 60;
 const NADO_TRIGGER_ACTIVE_STATUSES = ['waiting_price', 'waiting_dependency', 'triggering', 'twap_executing'];
+const ZERO_ADDRESS = zeroAddress.toLowerCase();
+const runtimeLinkedSignerCache = new Map();
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -127,24 +136,126 @@ function normalizeNadoTriggerOrderInfo(info, markets = []) {
   };
 }
 
-function triggerCacheKey(wallet) {
-  return `${NADO_TRIGGER_CACHE_PREFIX}${String(wallet || '').toLowerCase()}`;
-}
-
-function readCachedTriggerOrders(wallet) {
-  if (!wallet || typeof window === 'undefined') return [];
+function clearLegacyTriggerOrders(wallet) {
+  if (!wallet || typeof window === 'undefined') return;
   try {
-    const rows = JSON.parse(window.localStorage.getItem(triggerCacheKey(wallet)) || '[]');
-    return Array.isArray(rows) ? rows.filter(o => o?.order_id || o?.digest) : [];
+    window.localStorage.removeItem(`${NADO_LEGACY_TRIGGER_CACHE_PREFIX}${String(wallet || '').toLowerCase()}`);
   } catch {
-    return [];
+    // Ignore storage access failures; remote Nado state remains the source of truth.
   }
 }
 
-function writeCachedTriggerOrders(wallet, rows) {
-  if (!wallet || typeof window === 'undefined') return;
-  const next = (Array.isArray(rows) ? rows : []).slice(-50);
-  window.localStorage.setItem(triggerCacheKey(wallet), JSON.stringify(next));
+function linkedSignerStorages() {
+  if (typeof window === 'undefined') return null;
+  const storages = [];
+  try {
+    if (window.localStorage) storages.push(window.localStorage);
+  } catch { /* noop */ }
+  try {
+    if (window.sessionStorage) storages.push(window.sessionStorage);
+  } catch { /* noop */ }
+  return storages.length ? storages : null;
+}
+
+function linkedSignerStorageKey(owner) {
+  return `${NADO_LINKED_SIGNER_STORAGE_PREFIX}:${String(owner || '').toLowerCase()}`;
+}
+
+function isPrivateKey(value) {
+  return /^0x[0-9a-fA-F]{64}$/.test(String(value || '').trim());
+}
+
+function nadoAddressToBytes32(address) {
+  const clean = String(address || '').trim().toLowerCase();
+  if (!isNadoAddress(clean)) throw new Error('Nado signer address is invalid');
+  return `${clean}${'0'.repeat(24)}`;
+}
+
+function nadoSignerAddress(value) {
+  const clean = String(value || '').trim().toLowerCase();
+  if (isNadoAddress(clean)) return clean;
+  if (!/^0x[0-9a-f]{64}$/.test(clean)) return clean;
+
+  const rightPadded = `0x${clean.slice(2, 42)}`;
+  if (/^0+$/.test(clean.slice(42)) && isNadoAddress(rightPadded)) return rightPadded;
+
+  const leftPadded = `0x${clean.slice(26)}`;
+  if (/^0+$/.test(clean.slice(2, 26)) && isNadoAddress(leftPadded)) return leftPadded;
+
+  return clean;
+}
+
+function linkedSignerFromPrivateKey(privateKey, expiresAt = Math.floor(Date.now() / 1000) + NADO_LINKED_SIGNER_TTL_SECONDS) {
+  const account = privateKeyToAccount(privateKey);
+  return {
+    account,
+    privateKey,
+    address: account.address.toLowerCase(),
+    expiresAt: Number(expiresAt) || Math.floor(Date.now() / 1000) + NADO_LINKED_SIGNER_TTL_SECONDS,
+  };
+}
+
+function readNadoLinkedSigner(owner) {
+  const key = linkedSignerStorageKey(owner);
+  const storages = linkedSignerStorages();
+  const raw = runtimeLinkedSignerCache.get(key) || (() => {
+    if (!storages) return null;
+    for (const storage of storages) {
+      try {
+        const value = storage.getItem(key);
+        if (value) return value;
+      } catch { /* try next storage */ }
+    }
+    return null;
+  })();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!isPrivateKey(parsed?.privateKey)) return null;
+    if (Number(parsed?.expiresAt || 0) <= Math.floor(Date.now() / 1000) + 60) return null;
+    return linkedSignerFromPrivateKey(parsed.privateKey, parsed.expiresAt);
+  } catch {
+    return null;
+  }
+}
+
+function rememberNadoLinkedSigner(owner, record) {
+  if (!owner || !record?.privateKey) return record;
+  const next = linkedSignerFromPrivateKey(record.privateKey, record.expiresAt);
+  const payload = JSON.stringify({
+    privateKey: next.privateKey,
+    address: next.address,
+    expiresAt: next.expiresAt,
+  });
+  const key = linkedSignerStorageKey(owner);
+  runtimeLinkedSignerCache.set(key, payload);
+  const storages = linkedSignerStorages();
+  if (storages) {
+    for (const storage of storages) {
+      try { storage.setItem(key, payload); } catch { /* browser storage is best-effort */ }
+    }
+  }
+  return next;
+}
+
+function forgetNadoLinkedSigner(owner) {
+  const key = linkedSignerStorageKey(owner);
+  runtimeLinkedSignerCache.delete(key);
+  const storages = linkedSignerStorages();
+  if (storages) {
+    for (const storage of storages) {
+      try { storage.removeItem(key); } catch { /* noop */ }
+    }
+  }
+}
+
+function createLinkedSignerWalletClient(record) {
+  if (!record?.account) return null;
+  return createWalletClient({
+    account: record.account,
+    chain: inkChain,
+    transport: http(INK_RPC_URLS[0]),
+  });
 }
 
 function mergeOrders(normalOrders, triggerOrders, positions = []) {
@@ -192,7 +303,6 @@ export function useNado() {
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [, setLocalTriggerOrders] = useState([]);
   const [prices, setPrices] = useState([]);
   const [markets, setMarkets] = useState([]);
   const [walletUsdc, setWalletUsdc] = useState(null);
@@ -206,8 +316,16 @@ export function useNado() {
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
   const [setupVerified, setSetupVerified] = useState(null);
+  const [linkedSignerState, setLinkedSignerState] = useState({ enabled: false, approved: false, signer: null });
 
   const marketsRef = useRef([]);
+  const triggerOrdersRef = useRef([]);
+  const linkedSignerRef = useRef(null);
+  const linkedSignerWalletClientRef = useRef(null);
+  const accountRef = useRef(null);
+  const positionsRef = useRef([]);
+  const refreshBackoffRef = useRef({ accountUntil: 0, positionsUntil: 0 });
+  const refreshWarnRef = useRef({});
   const claimGoldRef = useRef(null);
   const importFillsRef = useRef(null);
 
@@ -241,18 +359,94 @@ export function useNado() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+  const warnNadoRefreshIssue = useCallback((key, label, error) => {
+    const now = Date.now();
+    const last = Number(refreshWarnRef.current?.[key] || 0);
+    if (now - last < NADO_REFRESH_WARNING_INTERVAL_MS) return;
+    refreshWarnRef.current = { ...(refreshWarnRef.current || {}), [key]: now };
+    console.warn(label, nadoErrorMessage(error));
+  }, []);
+  const setNadoAccount = useCallback((next) => {
+    accountRef.current = next || null;
+    setAccount(next || null);
+  }, []);
+
+  useEffect(() => {
+    positionsRef.current = positions || [];
+  }, [positions]);
 
   const findMarket = useCallback((symbol) => {
     const target = String(symbol || '').toUpperCase().replace(/-PERP$/u, '');
     return (marketsRef.current || []).find(m => m.symbol === target || m.pair === target || m.market_name === target) || null;
   }, []);
 
-  const createClient = useCallback(() => {
+  const setActiveLinkedSigner = useCallback((record, meta = {}) => {
+    linkedSignerRef.current = record || null;
+    linkedSignerWalletClientRef.current = record ? createLinkedSignerWalletClient(record) : null;
+    setLinkedSignerState(record
+      ? { enabled: true, approved: meta.approved !== false, signer: record.address, ...meta }
+      : { enabled: false, approved: false, signer: null, ...meta });
+    return record || null;
+  }, []);
+
+  const createClient = useCallback(({ useLinkedSigner = true } = {}) => {
     const publicClient = typeof getPublicClient === 'function' ? getPublicClient(INK_CHAIN_ID) : null;
     const walletClient = typeof getWalletClient === 'function' ? getWalletClient(INK_CHAIN_ID) : null;
     if (!publicClient || !walletClient) throw new Error('Nado wallet signer is not ready');
-    return createNadoClient(NADO_CHAIN_ENV, { publicClient, walletClient });
+    const linkedSignerWalletClient = useLinkedSigner ? linkedSignerWalletClientRef.current : null;
+    return createNadoClient(NADO_CHAIN_ENV, {
+      publicClient,
+      walletClient,
+      ...(linkedSignerWalletClient ? { linkedSignerWalletClient } : {}),
+    });
   }, [getPublicClient, getWalletClient]);
+
+  const replaceTriggerOrders = useCallback((rows = []) => {
+    const next = (Array.isArray(rows) ? rows : []).filter(o => o?.order_id || o?.digest);
+    triggerOrdersRef.current = next;
+    return next;
+  }, []);
+
+  const getRemoteLinkedSigner = useCallback(async () => {
+    if (!walletAddr) return null;
+    const client = createClient({ useLinkedSigner: false });
+    return client.subaccount.getSubaccountLinkedSignerWithRateLimit({
+      subaccount: {
+        subaccountOwner: walletAddr,
+        subaccountName: NADO_SUBACCOUNT_NAME,
+      },
+    });
+  }, [walletAddr, createClient]);
+
+  const refreshLinkedSignerStatus = useCallback(async () => {
+    if (!walletAddr) {
+      setActiveLinkedSigner(null);
+      return { ready: false };
+    }
+    const stored = readNadoLinkedSigner(walletAddr);
+    if (!stored) {
+      setActiveLinkedSigner(null);
+      return { ready: false };
+    }
+    setActiveLinkedSigner(stored, { approved: false, checking: true });
+    try {
+      const remote = await getRemoteLinkedSigner();
+      const remoteSigner = nadoSignerAddress(remote?.signer);
+      const approved = !!remoteSigner && remoteSigner !== ZERO_ADDRESS && remoteSigner === stored.address;
+      if (!approved) {
+        forgetNadoLinkedSigner(walletAddr);
+        setActiveLinkedSigner(null, { remoteSigner: remoteSigner || null, approved: false });
+        return { ready: false, remote };
+      }
+      const next = rememberNadoLinkedSigner(walletAddr, stored);
+      setActiveLinkedSigner(next, { approved: true, remoteSigner });
+      return { ready: true, record: next, remote };
+    } catch (e) {
+      console.warn('[useNado] linked signer status:', e?.message || e);
+      setActiveLinkedSigner(stored, { approved: false, error: nadoErrorMessage(e) });
+      return { ready: false, record: stored, error: e };
+    }
+  }, [walletAddr, getRemoteLinkedSigner, setActiveLinkedSigner]);
 
   const fetchMarkets = useCallback(async () => {
     try {
@@ -307,52 +501,107 @@ export function useNado() {
     }
   }, [walletAddr, getPublicClient]);
 
-  const fetchAccount = useCallback(async () => {
+  const fetchAccount = useCallback(async ({ force = false } = {}) => {
     if (!walletAddr) return;
     if (!token) {
       const walletBal = await readWalletUsdt().catch(() => null);
       setWalletUsdc(walletBal);
-      setAccount(null);
+      setNadoAccount(null);
       setPositions([]);
       setOrders([]);
+      replaceTriggerOrders([]);
       setDataReady(false);
       return;
     }
     try {
-      const [acct, pos, ord, walletBal] = await Promise.all([
-        fetchJson(`/api/futures/account?dex=nado&address=${walletAddr}`, {
-          headers: authHeaders({ 'Content-Type': undefined }),
-        }),
-        fetchJson(`/api/futures/positions?dex=nado&address=${walletAddr}`, {
-          headers: authHeaders({ 'Content-Type': undefined }),
-        }).catch(() => []),
+      const now = Date.now();
+      const backoff = refreshBackoffRef.current || {};
+      const skipAccount = !force && Number(backoff.accountUntil || 0) > now;
+      const skipPositions = !force && Number(backoff.positionsUntil || 0) > now;
+      const [acctResult, posResult, ord, walletBal] = await Promise.all([
+        skipAccount
+          ? Promise.resolve({ _nadoSkipped: true })
+          : fetchJson(`/api/futures/account?dex=nado&address=${walletAddr}`, {
+            headers: authHeaders({ 'Content-Type': undefined }),
+          }).catch(e => ({ _nadoFetchError: e })),
+        skipPositions
+          ? Promise.resolve({ _nadoSkipped: true })
+          : fetchJson(`/api/futures/positions?dex=nado&address=${walletAddr}`, {
+            headers: authHeaders({ 'Content-Type': undefined }),
+          }).catch(e => ({ _nadoFetchError: e })),
         fetchJson(`/api/futures/orders?dex=nado&address=${walletAddr}`, {
           headers: authHeaders({ 'Content-Type': undefined }),
         }).catch(() => []),
         readWalletUsdt().catch(() => null),
       ]);
-      const positionRows = Array.isArray(pos) ? pos : [];
-      const cachedTriggers = readCachedTriggerOrders(walletAddr);
-      const mergedOrders = mergeOrders(Array.isArray(ord) ? ord : [], cachedTriggers, positionRows);
-      const stillCachedTriggers = mergedOrders.filter(o => o?.is_trigger);
-      if (stillCachedTriggers.length !== cachedTriggers.length) writeCachedTriggerOrders(walletAddr, stillCachedTriggers);
-      setLocalTriggerOrders(stillCachedTriggers);
-      setAccount({
-        ...acct,
+      const accountError = acctResult?._nadoFetchError || null;
+      const positionsError = posResult?._nadoFetchError || null;
+      if (accountError) {
+        refreshBackoffRef.current = {
+          ...(refreshBackoffRef.current || {}),
+          accountUntil: Date.now() + NADO_REFRESH_BACKOFF_MS,
+        };
+      } else if (!acctResult?._nadoSkipped) {
+        refreshBackoffRef.current = {
+          ...(refreshBackoffRef.current || {}),
+          accountUntil: 0,
+        };
+      }
+      if (positionsError) {
+        refreshBackoffRef.current = {
+          ...(refreshBackoffRef.current || {}),
+          positionsUntil: Date.now() + NADO_REFRESH_BACKOFF_MS,
+        };
+      } else if (!posResult?._nadoSkipped) {
+        refreshBackoffRef.current = {
+          ...(refreshBackoffRef.current || {}),
+          positionsUntil: 0,
+        };
+      }
+      const acct = accountError || acctResult?._nadoSkipped ? null : acctResult;
+      const positionRows = positionsError || posResult?._nadoSkipped
+        ? (positionsRef.current || [])
+        : (Array.isArray(posResult) ? posResult : []);
+      const currentTriggers = triggerOrdersRef.current || [];
+      const mergedOrders = mergeOrders(Array.isArray(ord) ? ord : [], currentTriggers, positionRows);
+      const visibleTriggers = replaceTriggerOrders(mergedOrders.filter(o => o?.is_trigger));
+      const previousAccount = accountRef.current || {};
+      const walletBalanceText = walletBal != null ? String(walletBal) : undefined;
+      const nextAccount = {
+        ...(acct || previousAccount),
+        ...(acct ? {} : {
+          exists: previousAccount.exists ?? true,
+          balance: previousAccount.balance ?? walletBalanceText ?? '0',
+          usdc: previousAccount.usdc ?? walletBalanceText ?? '0',
+          usdt: previousAccount.usdt ?? walletBalanceText ?? '0',
+          account_equity: previousAccount.account_equity ?? previousAccount.balance ?? walletBalanceText ?? '0',
+          available_to_spend: previousAccount.available_to_spend ?? walletBalanceText ?? '0',
+          available_to_withdraw: previousAccount.available_to_withdraw ?? walletBalanceText ?? '0',
+          total_margin_used: previousAccount.total_margin_used ?? '0',
+          maintenance_margin: previousAccount.maintenance_margin ?? '0',
+          _stale: true,
+        }),
         positions_count: positionRows.length,
         orders_count: mergedOrders.length,
-      });
-      setPositions(annotatePositionsWithTpsl(positionRows, stillCachedTriggers));
+      };
+      setNadoAccount(nextAccount);
+      setPositions(annotatePositionsWithTpsl(positionRows, visibleTriggers));
       setOrders(mergedOrders);
       setWalletUsdc(walletBal);
       setSetupVerified(true);
       setDataReady(true);
+      if (accountError) {
+        warnNadoRefreshIssue('account', '[useNado] account summary refresh failed; kept latest state:', accountError);
+      }
+      if (positionsError) {
+        warnNadoRefreshIssue('positions', '[useNado] positions refresh failed; kept latest state:', positionsError);
+      }
     } catch (e) {
       console.warn('[useNado] fetchAccount:', e?.message || e);
       setError(nadoErrorMessage(e));
       setDataReady(false);
     }
-  }, [walletAddr, token, fetchJson, authHeaders, readWalletUsdt]);
+  }, [walletAddr, token, fetchJson, authHeaders, readWalletUsdt, replaceTriggerOrders, setNadoAccount, warnNadoRefreshIssue]);
 
   const fetchOrders = useCallback(fetchAccount, [fetchAccount]);
 
@@ -375,19 +624,20 @@ export function useNado() {
   useEffect(() => {
     if (walletAddr) return;
     setWalletUsdc(null);
-    setLocalTriggerOrders([]);
+    replaceTriggerOrders([]);
     setSetupVerified(false);
     setWalletUsdcStatus({
       status: 'idle',
       message: 'Connect wallet to check Ink USDt0 balance',
       chainId: null,
     });
-  }, [walletAddr]);
+  }, [walletAddr, replaceTriggerOrders]);
 
   useEffect(() => {
     if (!walletAddr) return;
-    setLocalTriggerOrders(readCachedTriggerOrders(walletAddr));
-  }, [walletAddr]);
+    replaceTriggerOrders([]);
+    clearLegacyTriggerOrders(walletAddr);
+  }, [walletAddr, replaceTriggerOrders]);
 
   const ensureReady = useCallback(async () => {
     if (!walletAddr) throw new Error('Connect your EVM wallet first');
@@ -397,9 +647,74 @@ export function useNado() {
     return true;
   }, [walletAddr, walletMismatch, ensureChain]);
 
-  const fetchTriggerOrdersFromNado = useCallback(async ({ ensureWallet = false } = {}) => {
+  const enableLinkedSigner = useCallback(async () => {
+    await ensureReady();
+    const client = createClient({ useLinkedSigner: false });
+    const created = readNadoLinkedSigner(walletAddr)
+      || linkedSignerFromPrivateKey(generatePrivateKey());
+    const signerAddress = created.account.address;
+    const signerBytes32 = nadoAddressToBytes32(signerAddress);
+    let remote = await getRemoteLinkedSigner().catch(() => null);
+    const remoteSigner = nadoSignerAddress(remote?.signer);
+    if (remoteSigner !== created.address) {
+      await client.subaccount.linkSigner({
+        subaccountName: NADO_SUBACCOUNT_NAME,
+        signer: signerBytes32,
+      });
+      for (let i = 0; i < 6; i += 1) {
+        remote = await getRemoteLinkedSigner().catch(() => null);
+        if (nadoSignerAddress(remote?.signer) === created.address) break;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    const verifiedSigner = nadoSignerAddress(remote?.signer);
+    if (verifiedSigner !== created.address) {
+      throw new Error('Nado linked signer was submitted but is not active yet. Wait a few seconds and retry.');
+    }
+    const remembered = rememberNadoLinkedSigner(walletAddr, created);
+    setActiveLinkedSigner(remembered, { approved: true, remoteSigner: verifiedSigner });
+    return remembered;
+  }, [walletAddr, ensureReady, createClient, getRemoteLinkedSigner, setActiveLinkedSigner]);
+
+  const ensureLinkedSignerReady = useCallback(async () => {
+    await ensureReady();
+    if (linkedSignerRef.current && linkedSignerWalletClientRef.current) return linkedSignerRef.current;
+    const refreshed = await refreshLinkedSignerStatus();
+    if (refreshed.ready && refreshed.record) return refreshed.record;
+    return enableLinkedSigner();
+  }, [ensureReady, refreshLinkedSignerStatus, enableLinkedSigner]);
+
+  const disableLinkedSigner = useCallback(async () => {
+    if (!walletAddr) return { success: true };
+    const stored = linkedSignerRef.current || readNadoLinkedSigner(walletAddr);
+    try {
+      await ensureReady();
+      const remote = await getRemoteLinkedSigner().catch(() => null);
+      const remoteSigner = nadoSignerAddress(remote?.signer);
+      if (stored?.address && remoteSigner === stored.address) {
+        const client = createClient({ useLinkedSigner: false });
+        await client.subaccount.linkSigner({
+          subaccountName: NADO_SUBACCOUNT_NAME,
+          signer: nadoAddressToBytes32(zeroAddress),
+        });
+      }
+      forgetNadoLinkedSigner(walletAddr);
+      setActiveLinkedSigner(null);
+      replaceTriggerOrders([]);
+      clearLegacyTriggerOrders(walletAddr);
+      return { success: true };
+    } catch (e) {
+      const msg = nadoErrorMessage(e, 'Nado one tap disable failed');
+      setError(msg);
+      return { error: msg };
+    }
+  }, [walletAddr, ensureReady, getRemoteLinkedSigner, createClient, setActiveLinkedSigner, replaceTriggerOrders]);
+
+  const fetchTriggerOrdersFromNado = useCallback(async ({ ensureWallet = false, ensureSigner = false, allowWalletSignature = false } = {}) => {
     if (!walletAddr) return [];
-    if (ensureWallet) await ensureReady();
+    if (ensureSigner) await ensureLinkedSignerReady();
+    else if (ensureWallet) await ensureReady();
+    if (!linkedSignerWalletClientRef.current && !allowWalletSignature) return triggerOrdersRef.current || [];
     const currentMarkets = marketsRef.current?.length ? marketsRef.current : await fetchMarkets();
     const productIds = (currentMarkets || []).map(m => Number(m?.market_id)).filter(Number.isFinite);
     const client = createClient();
@@ -415,16 +730,16 @@ export function useNado() {
     const rows = (Array.isArray(result?.orders) ? result.orders : [])
       .map(info => normalizeNadoTriggerOrderInfo(info, currentMarkets))
       .filter(Boolean);
-    writeCachedTriggerOrders(walletAddr, rows);
-    setLocalTriggerOrders(rows);
+    replaceTriggerOrders(rows);
+    clearLegacyTriggerOrders(walletAddr);
     return rows;
-  }, [walletAddr, ensureReady, fetchMarkets, createClient]);
+  }, [walletAddr, ensureReady, ensureLinkedSignerReady, fetchMarkets, createClient, replaceTriggerOrders]);
 
   const activate = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      await ensureReady();
+      await enableLinkedSigner();
       await fetchTriggerOrdersFromNado().catch((e) => {
         console.warn('[useNado] trigger order sync failed:', e?.message || e);
       });
@@ -438,7 +753,39 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [ensureReady, fetchTriggerOrdersFromNado, fetchAccount]);
+  }, [enableLinkedSigner, fetchTriggerOrdersFromNado, fetchAccount]);
+
+  const setNadoOneTapTradingEnabled = useCallback(async (enabled = true) => {
+    if (enabled === false) return disableLinkedSigner();
+    return activate();
+  }, [activate, disableLinkedSigner]);
+
+  useEffect(() => {
+    if (!walletAddr) {
+      setActiveLinkedSigner(null);
+      return;
+    }
+    const stored = readNadoLinkedSigner(walletAddr);
+    if (!stored) {
+      setActiveLinkedSigner(null);
+      return;
+    }
+    setActiveLinkedSigner(stored, { approved: false, checking: true });
+    if (isActiveDex) refreshLinkedSignerStatus().catch(() => null);
+  }, [isActiveDex, walletAddr, refreshLinkedSignerStatus, setActiveLinkedSigner]);
+
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr) return undefined;
+    const sync = async () => {
+      if (!linkedSignerWalletClientRef.current) return;
+      await fetchTriggerOrdersFromNado().catch((e) => {
+        console.warn('[useNado] trigger order sync failed:', e?.message || e);
+      });
+    };
+    const kickoff = setTimeout(sync, 1200);
+    const iv = setInterval(sync, POLL_INTERVAL_MS);
+    return () => { clearTimeout(kickoff); clearInterval(iv); };
+  }, [isActiveDex, walletAddr, fetchTriggerOrdersFromNado]);
 
   const importFills = useCallback(async ({ attempts = CLAIM_LOOKBACK_ATTEMPTS, delayMs = 1500 } = {}) => {
     if (!walletAddr || !token) return null;
@@ -527,10 +874,10 @@ export function useNado() {
   }, [walletAddr, isActiveDex]);
 
   const placeOrder = useCallback(async (params) => {
-    await ensureReady();
+    await ensureLinkedSignerReady();
     const client = createClient();
     return client.market.placeOrder(params);
-  }, [ensureReady, createClient]);
+  }, [ensureLinkedSignerReady, createClient]);
 
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage = '0.5', leverage = 1) => {
     setLoading(true);
@@ -628,12 +975,12 @@ export function useNado() {
     setLoading(true);
     setError(null);
     try {
-      await ensureReady();
+      await ensureLinkedSignerReady();
       const market = pairIndex != null ? { market_id: Number(pairIndex) } : findMarket(symbol);
       const digest = String(orderId || '').trim();
       if (!market?.market_id || !digest) throw new Error('Nado order digest is missing');
       const client = createClient();
-      const cached = readCachedTriggerOrders(walletAddr);
+      const cached = triggerOrdersRef.current || [];
       const cachedOrder = cached.find(o => String(o?.order_id || o?.digest) === digest);
       const isTriggerOrder = !!cachedOrder?.is_trigger;
       const result = isTriggerOrder
@@ -651,8 +998,8 @@ export function useNado() {
         });
       if (isTriggerOrder) {
         const next = cached.filter(o => String(o?.order_id || o?.digest) !== digest);
-        writeCachedTriggerOrders(walletAddr, next);
-        setLocalTriggerOrders(next);
+        replaceTriggerOrders(next);
+        clearLegacyTriggerOrders(walletAddr);
         setOrders(prev => (prev || []).filter(o => String(o?.order_id || o?.digest) !== digest));
       }
       await fetchAccount();
@@ -664,7 +1011,7 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [ensureReady, findMarket, createClient, fetchAccount, walletAddr]);
+  }, [ensureLinkedSignerReady, findMarket, createClient, fetchAccount, walletAddr, replaceTriggerOrders]);
 
   const depositToPacifica = useCallback(async (amount) => {
     const amountText = String(amount ?? '').trim();
@@ -675,7 +1022,7 @@ export function useNado() {
       await ensureReady();
       const parsed = parseUnits(amountText, NADO_QUOTE_TOKEN_DECIMALS);
       if (parsed <= 0n) throw new Error('Enter a positive USDt0 amount');
-      const client = createClient();
+      const client = createClient({ useLinkedSigner: false });
       await client.spot.approveAllowance({ productId: NADO_QUOTE_PRODUCT_ID, amount: parsed });
       const txHash = await client.spot.deposit({
         subaccountName: NADO_SUBACCOUNT_NAME,
@@ -694,7 +1041,10 @@ export function useNado() {
     }
   }, [walletAddr, ensureReady, createClient, fetchAccount]);
 
-  const switchToInk = useCallback(async () => activate(), [activate]);
+  const switchToInk = useCallback(async () => {
+    await ensureReady();
+    return { success: true };
+  }, [ensureReady]);
   const withdraw = useCallback(async (amount) => {
     const amountText = String(amount ?? '').trim();
     setLoading(true);
@@ -710,7 +1060,7 @@ export function useNado() {
           throw new Error(`Nado max withdrawal is ${availableAfterFee.toFixed(2)} USDt0 after the 1 USDt0 fee`);
         }
       }
-      const client = createClient();
+      const client = createClient({ useLinkedSigner: false });
       const result = await client.spot.withdraw({
         subaccountName: NADO_SUBACCOUNT_NAME,
         productId: NADO_QUOTE_PRODUCT_ID,
@@ -738,7 +1088,7 @@ export function useNado() {
     setLoading(true);
     setError(null);
     try {
-      await ensureReady();
+      await ensureLinkedSignerReady();
       let market = findMarket(symbol);
       if (!market) {
         await fetchMarkets();
@@ -760,7 +1110,7 @@ export function useNado() {
 
       const client = createClient();
       const cleanSymbol = String(symbol || market.symbol || '').toUpperCase();
-      let cached = readCachedTriggerOrders(walletAddr);
+      let cached = triggerOrdersRef.current || [];
       try {
         cached = await fetchTriggerOrdersFromNado();
       } catch (e) {
@@ -830,10 +1180,10 @@ export function useNado() {
         ...cached.filter(o => String(o?.symbol || '').toUpperCase() !== cleanSymbol),
         ...newCached,
       ];
-      writeCachedTriggerOrders(walletAddr, nextCache);
-      setLocalTriggerOrders(nextCache);
-      setPositions(prev => annotatePositionsWithTpsl(prev, nextCache));
-      setOrders(prev => mergeOrders((prev || []).filter(o => !o?.is_trigger || String(o?.symbol || '').toUpperCase() !== cleanSymbol), newCached, positions));
+      const nextTriggers = replaceTriggerOrders(nextCache);
+      clearLegacyTriggerOrders(walletAddr);
+      setPositions(prev => annotatePositionsWithTpsl(prev, nextTriggers));
+      setOrders(prev => mergeOrders((prev || []).filter(o => !o?.is_trigger || String(o?.symbol || '').toUpperCase() !== cleanSymbol), nextTriggers, positions));
       await fetchAccount();
       return { success: true, result, orders: newCached };
     } catch (e) {
@@ -843,7 +1193,7 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [ensureReady, findMarket, fetchMarkets, createClient, walletAddr, positions, fetchAccount, fetchTriggerOrdersFromNado]);
+  }, [ensureLinkedSignerReady, findMarket, fetchMarkets, createClient, walletAddr, positions, fetchAccount, fetchTriggerOrdersFromNado, replaceTriggerOrders]);
 
   return {
     connected: !!walletAddr,
@@ -882,8 +1232,8 @@ export function useNado() {
     setupVerified,
     walletMismatch,
     registeredEvmWallet,
-    oneTapTrading: { enabled: setupVerified === true },
-    setOneTapTradingEnabled: activate,
+    oneTapTrading: linkedSignerState,
+    setOneTapTradingEnabled: setNadoOneTapTradingEnabled,
     hasReferrer: setupVerified === true,
     linkOurReferrer: activate,
   };

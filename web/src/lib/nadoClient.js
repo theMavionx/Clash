@@ -54,6 +54,14 @@ function finiteNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function formatUsdThreshold(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n < 1) return n.toFixed(4);
+  if (n < 100) return n.toFixed(2);
+  return n.toFixed(0);
+}
+
 export function normalizeNadoSymbol(value) {
   return String(value || '')
     .trim()
@@ -71,14 +79,24 @@ export function normalizeNadoMarkets(rows = []) {
       const symbol = normalizeNadoSymbol(m?.symbol || m?.market_name || m?._nado?.symbol);
       const mark = finiteNumber(m?.mark ?? m?.mid ?? m?.oracle);
       const lotSize = String(m?.lot_size ?? m?.size_increment ?? rawToDecimal(m?._nado?.sizeIncrementRaw || 0).toFixed());
-      const minOrderSize = String(m?.min_order_size ?? rawToDecimal(m?._nado?.minSizeRaw || 0).toFixed());
+      const minNotionalRawValue = m?._nado?.minNotionalRaw ?? m?.min_notional_raw ?? m?._nado?.minSizeRaw;
+      const minNotionalRaw = minNotionalRawValue != null ? String(minNotionalRawValue) : '';
+      const minNotionalFromRaw = minNotionalRaw ? rawToDecimal(minNotionalRaw).toNumber() : 0;
       const minNotionalInput = Number(m?.min_notional_usd);
-      const minBase = Number(minOrderSize);
-      const derivedMinNotional = mark > 0 && Number.isFinite(minBase) && minBase > 0 ? minBase * mark : 0;
-      const minNotionalUsd = Math.max(
-        Number.isFinite(minNotionalInput) && minNotionalInput > 0 ? minNotionalInput : 0,
-        derivedMinNotional,
-      );
+      const explicitMinNotional = Number.isFinite(minNotionalFromRaw) && minNotionalFromRaw > 0
+        ? minNotionalFromRaw
+        : Number.isFinite(minNotionalInput) && minNotionalInput > 0
+          ? minNotionalInput
+          : 0;
+      const suppliedMinBase = Number(m?.min_order_size);
+      const minBase = explicitMinNotional > 0 && mark > 0
+        ? explicitMinNotional / mark
+        : Number.isFinite(suppliedMinBase) && suppliedMinBase > 0
+          ? suppliedMinBase
+          : 0;
+      const minOrderSize = String(minBase || 0);
+      const derivedMinNotional = mark > 0 && minBase > 0 ? minBase * mark : 0;
+      const minNotionalUsd = explicitMinNotional > 0 ? explicitMinNotional : derivedMinNotional;
       return {
         symbol,
         base: symbol,
@@ -101,6 +119,7 @@ export function normalizeNadoMarkets(rows = []) {
         _nado: {
           productId: marketId,
           sizeIncrementRaw: String(m?._nado?.sizeIncrementRaw ?? bn(lotSize || 0).times(SCALE).toFixed(0)),
+          minNotionalRaw: minNotionalRaw || bn(minNotionalUsd || 0).times(SCALE).toFixed(0),
           minSizeRaw: String(m?._nado?.minSizeRaw ?? bn(minOrderSize || 0).times(SCALE).toFixed(0)),
           raw: m?._nado?.raw || m,
         },
@@ -163,16 +182,17 @@ export function buildNadoOrderParams({
   const rawSize = roundRawToStep(baseSize.times(SCALE), market?._nado?.sizeIncrementRaw || bn(market.lot_size || 0).times(SCALE));
   if (!rawSize.isFinite() || rawSize.lte(0)) throw new Error('Enter a positive order size');
   if (!reduceOnly) {
-    const minSizeRaw = bn(market?._nado?.minSizeRaw ?? bn(market.min_order_size || 0).times(SCALE));
-    if (minSizeRaw.gt(0) && rawSize.abs().lt(minSizeRaw)) {
-      const minBase = minSizeRaw.div(SCALE);
-      throw new Error(`Nado minimum order size is ${minBase.toFixed()} ${market.symbol || 'base'}`);
-    }
-    const minNotional = Number(market.min_notional_usd ?? 0);
+    const minNotionalRaw = market?._nado?.minNotionalRaw;
+    const minNotionalFromRaw = minNotionalRaw != null ? rawToDecimal(minNotionalRaw).toNumber() : 0;
+    const minNotional = Number.isFinite(minNotionalFromRaw) && minNotionalFromRaw > 0
+      ? minNotionalFromRaw
+      : Number(market.min_notional_usd ?? 0);
     const roundedNotional = rawSize.abs().div(SCALE).times(mark);
     if (Number.isFinite(minNotional) && minNotional > 0 && roundedNotional.lt(minNotional)) {
-      const label = minNotional < 1 ? minNotional.toFixed(4) : minNotional.toFixed(0);
-      throw new Error(`Nado minimum order size is $${label} notional`);
+      throw new Error(
+        `Nado minimum order size is $${formatUsdThreshold(minNotional)} notional `
+        + `(yours is $${formatUsdThreshold(roundedNotional.toNumber())} after lot rounding)`,
+      );
     }
   }
 
@@ -201,7 +221,6 @@ export function buildNadoOrderParams({
         builder: nadoBuilderAppendix(),
       }),
     },
-    spotLeverage: true,
   };
 }
 
@@ -235,6 +254,5 @@ export function buildNadoTriggerOrderParams({
         triggerPrice: bn(triggerPrice),
       },
     },
-    spotLeverage: true,
   };
 }

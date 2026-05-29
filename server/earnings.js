@@ -582,6 +582,227 @@ async function fetchHyperliquidEarnings() {
   };
 }
 
+// Nado (Ink): exact builder fees from Nado indexer match events.
+// Orders carry builderId/builderFeeRate in the packed appendix; the indexer
+// exposes the resulting builder_fee per match event, keyed by the on-chain
+// Nado submission index. We scope the scan to locally indexed Clash Nado
+// fills so the admin number matches our app-attributed trading activity.
+const NADO_INDEXER_URL = (
+  process.env.NADO_INDEXER_URL
+  || process.env.VITE_NADO_INDEXER_URL
+  || 'https://archive.prod.nado.xyz/v1'
+).replace(/\/+$/, '');
+const NADO_SUBACCOUNT_NAME = String(
+  process.env.NADO_SUBACCOUNT_NAME
+  || process.env.VITE_NADO_SUBACCOUNT_NAME
+  || 'default',
+).trim() || 'default';
+const NADO_BUILDER_ID = Number(
+  process.env.NADO_BUILDER_ID
+  || process.env.VITE_NADO_BUILDER_ID
+  || 3600,
+) || 3600;
+// Nado builder fee rate uses 0.1 bps units: 50 = 5 bps = 0.05%.
+const NADO_BUILDER_FEE_RATE = Number(
+  process.env.NADO_BUILDER_FEE_RATE
+  || process.env.VITE_NADO_BUILDER_FEE_RATE
+  || 50,
+) || 50;
+const NADO_BUILDER_FEE_BPS = Number(process.env.NADO_BUILDER_FEE_BPS)
+  || (NADO_BUILDER_FEE_RATE / 10);
+const NADO_MATCH_PAGE_LIMIT = Math.max(10, Math.min(250, Number(process.env.NADO_MATCH_PAGE_LIMIT || 100)));
+const NADO_MATCH_PAGE_CAP = Math.max(1, Math.min(25, Number(process.env.NADO_MATCH_PAGE_CAP || 8)));
+
+function nadoUnpackBuilderAppendix(appendix) {
+  try {
+    let temp = BigInt(String(appendix ?? '0'));
+    temp >>= 8n;  // version
+    temp >>= 1n;  // isolated
+    temp >>= 2n;  // order type
+    temp >>= 1n;  // reduce only
+    temp >>= 2n;  // trigger
+    temp >>= 24n; // reserved
+    const builderFeeRate = Number(temp & 1023n);
+    temp >>= 10n;
+    const builderId = Number(temp & 65535n);
+    return builderId ? { builderId, builderFeeRate } : null;
+  } catch {
+    return null;
+  }
+}
+
+function nadoRawX18ToNumber(value) {
+  const raw = String(value ?? '0').trim();
+  if (!/^-?\d+$/.test(raw)) return safeNumber(raw) / 1e18;
+  const neg = raw.startsWith('-');
+  const abs = neg ? raw.slice(1) : raw;
+  const padded = abs.padStart(19, '0');
+  const whole = padded.slice(0, -18) || '0';
+  const frac = padded.slice(-18).replace(/0+$/, '');
+  const text = `${neg ? '-' : ''}${whole}${frac ? `.${frac}` : ''}`;
+  return safeNumber(text);
+}
+
+function nadoSubaccountHex(owner, name = NADO_SUBACCOUNT_NAME) {
+  const addr = String(owner || '').trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(addr)) return null;
+  const buf = Buffer.alloc(12);
+  Buffer.from(String(name || '').slice(0, 12), 'utf8').copy(buf);
+  return `0x${addr.slice(2)}${buf.toString('hex')}`;
+}
+
+function readNadoTrackedFills() {
+  const Db = loadSqlite();
+  const empty = { wallets: [], volume_usd: 0, trades: 0 };
+  if (!Db || !FS.existsSync(FUTURES_DB)) return empty;
+
+  let fdb = null;
+  try {
+    fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    const rows = fdb.prepare(`
+      SELECT client_order_id, notional_usd
+      FROM trade_history
+      WHERE dex = 'nado'
+        AND status = 'filled'
+        AND verified_source = 'nado_api'
+    `).all();
+    const byWallet = new Map();
+    let volume = 0;
+    for (const row of rows) {
+      volume += safeNumber(row?.notional_usd);
+      const m = String(row?.client_order_id || '').match(/^nado:(0x[0-9a-f]{40}):(.+)$/i);
+      if (!m) continue;
+      const wallet = m[1].toLowerCase();
+      const digest = String(m[2] || '').toLowerCase();
+      if (!byWallet.has(wallet)) byWallet.set(wallet, new Set());
+      if (digest) byWallet.get(wallet).add(digest);
+    }
+    return {
+      wallets: Array.from(byWallet, ([wallet, digests]) => ({
+        wallet,
+        digests: Array.from(digests),
+      })),
+      volume_usd: roundUsd(volume),
+      trades: rows.length,
+    };
+  } catch {
+    return empty;
+  } finally {
+    if (fdb) fdb.close();
+  }
+}
+
+async function nadoIndexerQuery(body) {
+  return fetchJson(NADO_INDEXER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, 12_000);
+}
+
+async function fetchNadoWalletBuilderMatches(walletInfo) {
+  const subaccount = nadoSubaccountHex(walletInfo.wallet);
+  const wantedDigests = new Set((walletInfo.digests || []).map(d => String(d).toLowerCase()));
+  if (!subaccount || wantedDigests.size <= 0) return [];
+
+  const out = [];
+  const seen = new Set();
+  let cursor = null;
+  const foundDigests = new Set();
+  for (let page = 0; page < NADO_MATCH_PAGE_CAP; page += 1) {
+    const params = {
+      subaccounts: [subaccount],
+      limit: NADO_MATCH_PAGE_LIMIT,
+    };
+    if (cursor) params.idx = cursor;
+    const payload = await nadoIndexerQuery({ matches: params });
+    const matches = Array.isArray(payload?.matches) ? payload.matches : [];
+    const txByIdx = new Map((Array.isArray(payload?.txs) ? payload.txs : [])
+      .map(tx => [String(tx?.submission_idx || ''), tx]));
+    if (!matches.length) break;
+
+    for (const match of matches) {
+      const idx = String(match?.submission_idx || '');
+      const digest = String(match?.digest || '').toLowerCase();
+      const key = `${idx}:${digest}:${match?.base_filled || ''}:${match?.quote_filled || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!wantedDigests.has(digest)) continue;
+      const builder = nadoUnpackBuilderAppendix(match?.order?.appendix);
+      if (!builder || builder.builderId !== NADO_BUILDER_ID) continue;
+      const builderFeeRaw = String(match?.builder_fee || '0');
+      if (nadoRawX18ToNumber(builderFeeRaw) <= 0) continue;
+      foundDigests.add(digest);
+      out.push({
+        wallet: walletInfo.wallet,
+        digest,
+        submission_idx: idx,
+        timestamp: txByIdx.get(idx)?.timestamp || null,
+        tx_type: txByIdx.get(idx)?.tx ? Object.keys(txByIdx.get(idx).tx)[0] : null,
+        builder_fee_raw: builderFeeRaw,
+        builder_fee_usd: nadoRawX18ToNumber(builderFeeRaw),
+        builder_id: builder.builderId,
+        builder_fee_rate: builder.builderFeeRate,
+      });
+    }
+
+    const lastIdx = String(matches[matches.length - 1]?.submission_idx || '');
+    if (!lastIdx || lastIdx === cursor) break;
+    cursor = lastIdx;
+    if (foundDigests.size >= wantedDigests.size) break;
+  }
+  return out;
+}
+
+async function fetchNadoEarnings() {
+  const tracked = readNadoTrackedFills();
+  const estimated = tracked.volume_usd * (NADO_BUILDER_FEE_BPS / 10000);
+  if (!tracked.wallets.length) {
+    return {
+      earned_usd: 0,
+      currency: 'USDt0 (Ink)',
+      volume_usd: tracked.volume_usd,
+      trades: tracked.trades,
+      estimated_fee_usd: roundUsd(estimated),
+      builder_id: NADO_BUILDER_ID,
+      builder_fee_rate: NADO_BUILDER_FEE_RATE,
+      builder_fee_bps: NADO_BUILDER_FEE_BPS,
+      builder_fee_pct: NADO_BUILDER_FEE_BPS / 100,
+      model: 'nado_indexer_builder_fee_exact',
+      source_detail: 'nado_indexer_match_builder_fee',
+      note: 'No locally indexed Nado fills yet, so there are no builder-fee match events to verify.',
+    };
+  }
+
+  const settled = await Promise.allSettled(tracked.wallets.map(fetchNadoWalletBuilderMatches));
+  const matches = settled.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
+  const earned = matches.reduce((sum, row) => sum + safeNumber(row.builder_fee_usd), 0);
+  const latest = matches.slice().sort((a, b) => Number(b.submission_idx || 0) - Number(a.submission_idx || 0))[0] || null;
+  const failures = settled.filter(r => r.status === 'rejected').length;
+  return {
+    ok: true,
+    earned_usd: roundUsd(earned),
+    currency: 'USDt0 (Ink)',
+    volume_usd: tracked.volume_usd,
+    trades: tracked.trades,
+    matched_events: matches.length,
+    indexed_wallets: tracked.wallets.length,
+    estimated_fee_usd: roundUsd(estimated),
+    builder_id: NADO_BUILDER_ID,
+    builder_fee_rate: NADO_BUILDER_FEE_RATE,
+    builder_fee_bps: NADO_BUILDER_FEE_BPS,
+    builder_fee_pct: NADO_BUILDER_FEE_BPS / 100,
+    latest_submission_idx: latest?.submission_idx || null,
+    latest_tx_type: latest?.tx_type || null,
+    sample_fills: matches.slice(0, 5),
+    partial_failures: failures,
+    model: 'nado_indexer_builder_fee_exact',
+    source_detail: 'nado_indexer_match_builder_fee',
+    note: `Exact Nado indexer builder_fee from on-chain match events where packed order appendix has builderId=${NADO_BUILDER_ID} and feeRate=${NADO_BUILDER_FEE_RATE} (0.1 bps units). Local volume x ${NADO_BUILDER_FEE_BPS}bps estimate is shown only for comparison.`,
+  };
+}
+
 // Revenue analytics for admin: fast local stats by time window and by
 // tournament. Exact cumulative readers above stay authoritative where a DEX
 // exposes them; this section focuses on comparable volume x rate reporting.
@@ -605,7 +826,6 @@ const ANALYTICS_WINDOWS = [
 ];
 
 const RISEX_BUILDER_FEE_BPS = Number(process.env.RISEX_BUILDER_FEE_BPS) || 0;
-const NADO_BUILDER_FEE_BPS = Number(process.env.NADO_BUILDER_FEE_BPS) || 0;
 
 function safeNumber(value) {
   const n = Number(value);
@@ -1086,7 +1306,7 @@ async function fetchAllEarnings({ force = false } = {}) {
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, phx, mon, hl] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, phx, mon, hl, nado] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
@@ -1094,6 +1314,7 @@ async function fetchAllEarnings({ force = false } = {}) {
     fetchPhoenixEarnings(),
     fetchPerplEarnings(),
     fetchHyperliquidEarnings(),
+    fetchNadoEarnings(),
   ]);
   const wrap = (label, r) => r.status === 'fulfilled'
     ? { ok: true, ...r.value }
@@ -1107,7 +1328,7 @@ async function fetchAllEarnings({ force = false } = {}) {
     phoenix:  { ...wrap('phoenix',  phx), source: 'phoenix_flight_collateral_transfers' },
     monad:    { ...wrap('monad',    mon), source: 'perpl_builder_fee_not_configured' },
     hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_referral_builder_rewards' },
-    nado: { ok: true, earned_usd: 0, volume_usd: 0, trades: 0, model: 'nado_builder_not_configured', source: 'nado_builder_not_configured' },
+    nado: { ...wrap('nado', nado), source: 'nado_indexer_match_builder_fee' },
     last_updated: new Date(now).toISOString(),
   };
   out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','nado'].reduce(

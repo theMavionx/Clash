@@ -820,6 +820,7 @@ app.get('/api/admin/panel', (req, res) => {
       • <strong>Phoenix</strong> — reads actual Flight fee-collector <code style="color:#fbbf24">collateral-history transfer</code> events from Phoenix REST / on-chain indexed state. Local volume × bps is shown only as an estimate for comparison; deposits are excluded.<br>
       • <strong>Perpl</strong> — currently shown as $0 commission. We index verified Perpl fills for game rewards, but no builder/referrer fee is passed in our order flow and no exact fee-income source is configured; local volume × bps is only a hypothetical estimate.<br>
       • <strong>Hyperliquid</strong> — reads exact <code style="color:#fbbf24">builderRewards</code> from Hyperliquid <code>/info</code> referral state for our builder wallet. Local volume × bps is shown only as an estimate.
+      <br>* <strong>Nado</strong> - reads exact indexed <code style="color:#fbbf24">builder_fee</code> from Nado match events where packed order appendix has our <code>builderId</code>. Local volume x bps is shown only as an estimate.
     </div>
   </div>
 
@@ -845,22 +846,22 @@ app.get('/api/admin/panel', (req, res) => {
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Payments by Chain</h2>
     <table><thead><tr>
-      <th>Chain</th><th>Payments</th><th>Buyers</th><th>Revenue</th><th>24h</th><th>7d</th><th>Last</th>
+      <th>Chain</th><th>Payments</th><th>Buyers</th><th>Gross value</th><th>24h</th><th>7d</th><th>Last</th>
     </tr></thead><tbody id="aiChatPaymentChainsBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Payments by Token</h2>
     <table><thead><tr>
-      <th>Chain</th><th>Token</th><th>Payments</th><th>Buyers</th><th>Revenue</th><th>Last</th>
+      <th>Chain</th><th>Token</th><th>Payments</th><th>Buyers</th><th>Gross value</th><th>Last</th>
     </tr></thead><tbody id="aiChatPaymentTokensBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Payments by Product / Chain</h2>
     <table><thead><tr>
-      <th>Product</th><th>Chain</th><th>Token</th><th>Payments</th><th>Buyers</th><th>Revenue</th><th>Last</th>
+      <th>Product</th><th>Chain</th><th>Token</th><th>Payments</th><th>Buyers</th><th>Gross value</th><th>Last</th>
     </tr></thead><tbody id="aiChatPaymentProductsBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Recent AI Payments</h2>
     <table><thead><tr>
-      <th>Time</th><th>Player</th><th>Product</th><th>Chain / token</th><th>Price</th><th>Payer</th><th>Tx</th>
+      <th>Time</th><th>Player</th><th>Product</th><th>Chain / token</th><th>Gross price</th><th>Payer</th><th>Tx</th>
     </tr></thead><tbody id="aiChatPaymentRecentBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Agent Model Stats</h2>
@@ -880,17 +881,17 @@ app.get('/api/admin/panel', (req, res) => {
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">By Product</h2>
     <table><thead><tr>
-      <th>Product</th><th>SKU</th><th>Kind</th><th>Purchases</th><th>Unique buyers</th><th>Revenue (USD)</th><th>First</th><th>Last</th>
+      <th>Product</th><th>SKU</th><th>Kind</th><th>Purchases</th><th>Unique buyers</th><th>Gross value</th><th>First</th><th>Last</th>
     </tr></thead><tbody id="shopBySkuBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Top Buyers</h2>
     <table><thead><tr>
-      <th>#</th><th>Player</th><th>DEX</th><th>Purchases</th><th>Spent (USD)</th><th>Last buy</th>
+      <th>#</th><th>Player</th><th>DEX</th><th>Purchases</th><th>Gross spent</th><th>Last buy</th>
     </tr></thead><tbody id="shopTopBuyersBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Recent purchases (200)</h2>
     <table><thead><tr>
-      <th>Time</th><th>Player</th><th>Product</th><th>Price</th><th>Payer (Base)</th><th>Tx</th>
+      <th>Time</th><th>Player</th><th>Product</th><th>Gross price</th><th>Payer</th><th>Tx</th>
     </tr></thead><tbody id="shopRecentBody"></tbody></table>
   </div>
 
@@ -3412,6 +3413,15 @@ async function loadEarnings(force) {
             : '';
           return '<span style="color:#9ca3af;font-size:11px">exact builderRewards' + unclaimed + claimed + estimate + '</span>';
         }
+        if (d.model === 'nado_indexer_builder_fee_exact') {
+          const estimate = Number.isFinite(Number(d.estimated_fee_usd))
+            ? ' / local estimate $' + Number(d.estimated_fee_usd).toFixed(4)
+            : '';
+          const latest = d.latest_submission_idx
+            ? ' / last idx ' + esc(String(d.latest_submission_idx))
+            : '';
+          return '<span style="color:#9ca3af;font-size:11px">builder #' + esc(String(d.builder_id || '')) + ' / ' + (d.matched_events || 0) + ' indexed fill(s) / ' + (d.indexed_wallets || 0) + ' wallet(s)' + latest + estimate + '</span>';
+        }
         if (d.model === 'perpl_builder_fee_not_configured') {
           const pct = Number(d.builder_fee_pct ?? d.fee_per_side_pct ?? 0);
           const estimate = Number.isFinite(Number(d.estimated_fee_usd))
@@ -3486,12 +3496,16 @@ async function loadShop() {
 
     document.getElementById('shopSummary').innerHTML =
       '<div class="stat"><div class="v">' + (s.total_purchases || 0) + '</div><div class="l">Total purchases</div></div>' +
-      '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + fmtUsd(s.total_revenue_usd) + '</div><div class="l">Total revenue</div></div>' +
+      '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + fmtUsd(s.total_revenue_usd) + '</div><div class="l">Cash/native revenue</div></div>' +
+      '<div class="stat"><div class="v">' + fmtUsd(s.gross_sales_usd) + '</div><div class="l">Gross shop value</div></div>' +
+      '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + fmtUsd(s.project_token_value_usd) + '</div><div class="l">SKR/CoP value</div></div>' +
+      '<div class="stat"><div class="v" style="color:#4ade80">' + fmtUsd(s.stable_revenue_usd) + '</div><div class="l">USDC revenue</div></div>' +
+      '<div class="stat"><div class="v" style="color:#38bdf8">' + fmtUsd(s.native_revenue_usd) + '</div><div class="l">Native est.</div></div>' +
       '<div class="stat" style="border-color:#0ea5e9"><div class="v" style="color:#38bdf8">' + (s.unique_buyers || 0) + '</div><div class="l">Unique buyers</div></div>' +
       '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + (s.altar_purchases || 0) + '</div><div class="l">Altar bought</div></div>' +
       '<div class="stat"><div class="v">' + (s.last_1h_purchases || 0) + '</div><div class="l">1h purchases</div></div>' +
       '<div class="stat"><div class="v">' + (s.last_24h_purchases || 0) + '</div><div class="l">24h purchases</div></div>' +
-      '<div class="stat"><div class="v" style="color:#4ade80">' + fmtUsd(s.last_24h_revenue_usd) + '</div><div class="l">24h revenue</div></div>' +
+      '<div class="stat"><div class="v" style="color:#4ade80">' + fmtUsd(s.last_24h_revenue_usd) + '</div><div class="l">24h cash/native</div></div>' +
       '<div class="stat"><div class="v">' + (s.last_7d_purchases || 0) + '</div><div class="l">7d purchases</div></div>';
 
     if (aiBilling && !aiBilling.error) {
@@ -3499,11 +3513,14 @@ async function loadShop() {
       const b = aiBilling.balances || {};
       const h = aiBilling.hermes || {};
       const w = aiBilling.usage_windows || {};
+      const aiRevenue = aiBilling.revenue_summary || {};
       const aiPaymentTotals = (aiBilling.payments_by_chain || []).reduce((acc, row) => {
         acc.payments += Number(row.payments || 0);
         acc.revenue += Number(row.revenue_usd || 0);
         return acc;
       }, { payments: 0, revenue: 0 });
+      const aiCashRevenue = aiRevenue.revenue_usd ?? aiPaymentTotals.revenue;
+      const aiGrossValue = aiRevenue.gross_sales_usd ?? aiPaymentTotals.revenue;
       document.getElementById('aiFreeMessagesPerDay').value = aiBilling.settings?.free_messages_per_day ?? 0;
       document.getElementById('aiChatBillingSummary').innerHTML =
         '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + (aiBilling.settings?.free_messages_per_day ?? 0) + '</div><div class="l">Free msgs / day</div></div>' +
@@ -3512,7 +3529,9 @@ async function loadShop() {
         '<div class="stat"><div class="v">' + (u.all || 0) + '</div><div class="l">AI msgs all</div></div>' +
         '<div class="stat"><div class="v">' + (w.users_7d || 0) + '</div><div class="l">AI users 7d</div></div>' +
         '<div class="stat"><div class="v">' + aiPaymentTotals.payments + '</div><div class="l">AI payments</div></div>' +
-        '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + fmtUsd(aiPaymentTotals.revenue) + '</div><div class="l">AI revenue</div></div>' +
+        '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + fmtUsd(aiCashRevenue) + '</div><div class="l">AI cash/native</div></div>' +
+        '<div class="stat"><div class="v">' + fmtUsd(aiGrossValue) + '</div><div class="l">AI gross value</div></div>' +
+        '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + fmtUsd(aiRevenue.project_token_value_usd) + '</div><div class="l">AI SKR/CoP value</div></div>' +
         '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + (b.outstanding_credits || 0) + '</div><div class="l">Outstanding credits</div></div>' +
         '<div class="stat"><div class="v">' + (b.lifetime_players || 0) + '</div><div class="l">Lifetime passes</div></div>' +
         '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5">' + (h.h24_errors || 0) + '</div><div class="l">Hermes errors 24h</div></div>' +

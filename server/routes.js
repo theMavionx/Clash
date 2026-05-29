@@ -11097,10 +11097,100 @@ router.post('/admin/seed-town-halls', adminAuth, (req, res) => {
 // Shop stats — aggregated view over utility_purchases. Returns summary
 // counters, per-SKU breakdown, top buyers, and the recent purchase tail.
 // USD figures are derived from usd_price_e6 (microdollars × quantity);
+// revenue_usd excludes project-token payments like SKR/CoP so the admin
+// panel does not report token face value as cash revenue.
 // quantity is encoded in `amount` only as a raw token-units string so we
 // fall back to 1× when the SKU lookup fails (unknown SKU shipped before
 // a migration). Wrapped in try/catch so a fresh DB without purchases
 // returns empty buckets instead of a 500.
+function normalizeShopRevenueToken(token) {
+  return String(token || '').trim().toLowerCase();
+}
+
+function addShopRevenueToken(set, token) {
+  const normalized = normalizeShopRevenueToken(token);
+  if (normalized) set.add(normalized);
+}
+
+function shopRevenueTokenBuckets() {
+  const stableTokens = new Set();
+  const projectTokens = new Set();
+  const nativeTokens = new Set(['apt', 'eth', 'mon', 'sol']);
+
+  for (const chainKey of Object.keys(GAME_SHOP_EVM_CHAINS)) {
+    addShopRevenueToken(stableTokens, evmPaymentSpec(chainKey, 'usdc')?.token);
+  }
+
+  const solana = gameShopSolanaConfig();
+  addShopRevenueToken(stableTokens, solana.usdcMint);
+  addShopRevenueToken(projectTokens, solana.skrMint);
+
+  const aptos = gameShopAptosConfig();
+  addShopRevenueToken(stableTokens, aptos.usdcAddress);
+
+  const baseShop = gameShopConfig();
+  addShopRevenueToken(projectTokens, baseShop.copToken);
+
+  return { stableTokens, projectTokens, nativeTokens };
+}
+
+function classifyShopRevenueToken(chain, token) {
+  const normalized = normalizeShopRevenueToken(token);
+  if (!normalized) return 'other';
+
+  const buckets = shopRevenueTokenBuckets();
+  if (buckets.projectTokens.has(normalized)) return 'project_token';
+  if (buckets.stableTokens.has(normalized)) return 'stable';
+  if (buckets.nativeTokens.has(normalized)) return 'native';
+
+  const chainKey = String(chain || '').toLowerCase();
+  if (chainKey === 'solana' && normalized === normalizeShopRevenueToken(SOLANA_USDC_MINT_DEFAULT)) {
+    return 'stable';
+  }
+  return 'other';
+}
+
+function emptyShopRevenueTotals() {
+  return {
+    gross_sales_usd: 0,
+    revenue_usd: 0,
+    stable_revenue_usd: 0,
+    native_revenue_usd: 0,
+    project_token_value_usd: 0,
+    other_token_value_usd: 0,
+  };
+}
+
+function addShopRevenueRow(totals, row) {
+  const usd = (Number(row?.usd_e6_sum) || 0) / 1_000_000;
+  const kind = classifyShopRevenueToken(row?.chain, row?.token);
+  totals.gross_sales_usd += usd;
+  if (kind === 'project_token') {
+    totals.project_token_value_usd += usd;
+  } else if (kind === 'stable') {
+    totals.stable_revenue_usd += usd;
+    totals.revenue_usd += usd;
+  } else if (kind === 'native') {
+    totals.native_revenue_usd += usd;
+    totals.revenue_usd += usd;
+  } else {
+    totals.other_token_value_usd += usd;
+  }
+  return totals;
+}
+
+function getShopRevenueTotals(whereSql = '', params = []) {
+  const rows = db.db.prepare(`
+    SELECT chain, token,
+           COUNT(*) AS purchases,
+           COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum
+    FROM utility_purchases
+    ${whereSql}
+    GROUP BY chain, token
+  `).all(...params);
+  return rows.reduce(addShopRevenueRow, emptyShopRevenueTotals());
+}
+
 router.get('/admin/shop', adminAuth, (req, res) => {
   try {
     // Aggregate counts by SKU, joined with the live product table so the
@@ -11187,33 +11277,41 @@ router.get('/admin/shop', adminAuth, (req, res) => {
     // shows velocity at a glance without scrolling the recent list.
     const totals = db.db.prepare(`
       SELECT COUNT(*) AS purchases,
-             COUNT(DISTINCT player_id) AS unique_buyers,
-             COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum
+             COUNT(DISTINCT player_id) AS unique_buyers
       FROM utility_purchases
     `).get();
     const windowed = db.db.prepare(`
       SELECT
         COUNT(CASE WHEN created_at > datetime('now', '-1 hour')  THEN 1 END) AS h1,
         COUNT(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 END) AS h24,
-        COUNT(CASE WHEN created_at > datetime('now', '-7 days')   THEN 1 END) AS d7,
-        COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN CAST(usd_price_e6 AS INTEGER) END), 0) AS h24_usd_e6
+        COUNT(CASE WHEN created_at > datetime('now', '-7 days')   THEN 1 END) AS d7
       FROM utility_purchases
     `).get();
+    const revenueTotals = getShopRevenueTotals();
+    const h24RevenueTotals = getShopRevenueTotals("WHERE created_at > datetime('now', '-24 hours')");
 
     res.json({
       summary: {
         total_purchases: totals.purchases || 0,
         unique_buyers: totals.unique_buyers || 0,
-        total_revenue_usd: (Number(totals.usd_e6_sum) || 0) / 1_000_000,
+        total_revenue_usd: revenueTotals.revenue_usd,
+        gross_sales_usd: revenueTotals.gross_sales_usd,
+        stable_revenue_usd: revenueTotals.stable_revenue_usd,
+        native_revenue_usd: revenueTotals.native_revenue_usd,
+        project_token_value_usd: revenueTotals.project_token_value_usd,
+        other_token_value_usd: revenueTotals.other_token_value_usd,
         last_1h_purchases: windowed.h1 || 0,
         last_24h_purchases: windowed.h24 || 0,
         last_7d_purchases: windowed.d7 || 0,
-        last_24h_revenue_usd: (Number(windowed.h24_usd_e6) || 0) / 1_000_000,
+        last_24h_revenue_usd: h24RevenueTotals.revenue_usd,
+        last_24h_gross_sales_usd: h24RevenueTotals.gross_sales_usd,
+        last_24h_project_token_value_usd: h24RevenueTotals.project_token_value_usd,
         altar_purchases: altarStats.purchases || 0,
         altar_unique_buyers: altarStats.unique_buyers || 0,
         altar_revenue_usd: altarStats.revenue_usd || 0,
         altar_first_at: altarStats.first_at || null,
         altar_last_at: altarStats.last_at || null,
+        revenue_breakdown: revenueTotals,
       },
       by_sku: bySkuEnriched,
       top_buyers: topBuyers,
@@ -11499,6 +11597,7 @@ router.get('/admin/ai-chat/billing', adminAuth, (req, res) => {
       title: GAME_SHOP_PRODUCTS[row.sku]?.title || row.sku,
       price_usd: (Number(row.usd_price_e6) || 0) / 1_000_000,
     }));
+    const revenueSummary = getShopRevenueTotals(`WHERE ${aiPurchaseWhere}`);
     const hermesErrorsRecent = db.db.prepare(`
       SELECT e.id, e.created_at, e.trace_id, e.event_type, e.intent, e.player_id,
              COALESCE(e.player_name, p.name) AS player_name,
@@ -11545,6 +11644,7 @@ router.get('/admin/ai-chat/billing', adminAuth, (req, res) => {
       },
       purchases,
       users,
+      revenue_summary: revenueSummary,
       payments_by_chain: paymentsByChain,
       payments_by_token: paymentsByToken,
       payments_by_product_chain: paymentsByProductChain,

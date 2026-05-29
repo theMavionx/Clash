@@ -1581,10 +1581,17 @@ function FuturesPanel() {
     if (error && clearError) clearError();
   }, [clearError, error]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid') return;
+    if (dex !== 'hyperliquid' && dex !== 'nado') return;
+    const dexLabel = dex === 'nado' ? 'Nado' : 'Hyperliquid';
     if (oneTapTrading?.enabled) {
-      if (typeof setOneTapTradingEnabled === 'function') await setOneTapTradingEnabled(false);
-      setSuccessMsg('One tap trading disabled. Opening a Hyperliquid order will ask to enable it again.');
+      const result = typeof setOneTapTradingEnabled === 'function'
+        ? await setOneTapTradingEnabled(false)
+        : null;
+      if (result?.error) {
+        setLocalAlert(result.error);
+        return;
+      }
+      setSuccessMsg(`One tap trading disabled. Opening a ${dexLabel} order will ask to enable it again.`);
       return;
     }
     if (!linkOurReferrer || referralLinking) {
@@ -1891,7 +1898,7 @@ function FuturesPanel() {
   // number so callers can format or gate on it without re-parsing.
   const positionUsdc = useMemo(() => {
     if (amountInUsdc) {
-      if (dex === 'pacifica') {
+      if (dex === 'pacifica' || dex === 'nado') {
         const t = parseFloat(tokenAmount);
         const p = parseFloat(orderSizingPrice || currentPrice);
         return Number.isFinite(t) && Number.isFinite(p) && t > 0 && p > 0 ? t * p : 0;
@@ -2423,6 +2430,45 @@ function FuturesPanel() {
             </button>
           </div>
         </div>
+
+        {dex === 'nado' && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(92,58,33,0.06)',
+            border: `1px solid ${oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(92,58,33,0.18)'}`,
+            borderRadius: 8,
+            padding: '6px 8px',
+          }}>
+            <span style={{
+              fontSize: 11,
+              fontWeight: 900,
+              color: oneTapTrading?.enabled ? '#166534' : '#5C3A21',
+            }}>
+              One tap{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
+            </span>
+            <button
+              type="button"
+              onClick={handleToggleOneTapTrading}
+              disabled={referralLinking || loading}
+              title="Nado linked signer"
+              style={{
+                ...S.btnSmall,
+                flex: '0 0 auto',
+                minWidth: 56,
+                padding: '4px 10px',
+                background: oneTapTrading?.enabled ? '#16A34A' : '#fff6dc',
+                color: oneTapTrading?.enabled ? '#fff' : '#5C3A21',
+                border: `2px solid ${oneTapTrading?.enabled ? '#15803D' : '#b58b2a'}`,
+                opacity: (referralLinking || loading) ? 0.7 : 1,
+              }}
+            >
+              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'OFF'}
+            </button>
+          </div>
+        )}
 
         {/* Position size readout — always on when the user has entered an
             amount. This is the leveraged exposure Avantis/Pacifica actually

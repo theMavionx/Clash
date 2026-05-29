@@ -24,6 +24,8 @@ const MARKET_CACHE_TTL_MS = 10_000;
 
 let readClient = null;
 let marketsCache = null;
+const accountCache = new Map();
+const positionsCache = new Map();
 
 function isEvmAddress(addr) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(addr || '').trim());
@@ -111,8 +113,8 @@ async function fetchMarketInfoFresh() {
     const ask = num(price.ask);
     const mark = bid > 0 && ask > 0 ? (bid + ask) / 2 : num(product.oraclePrice);
     const symbol = symbolOf(s.symbol);
-    const minBaseSize = rawToDecimal(s.minSize || 0);
-    const minNotional = mark > 0 ? minBaseSize.times(mark) : new BigNumber(0);
+    const minNotional = rawToDecimal(s.minSize || 0);
+    const minBaseSize = mark > 0 ? minNotional.div(mark) : new BigNumber(0);
     return {
       symbol,
       base: symbol,
@@ -139,6 +141,7 @@ async function fetchMarketInfoFresh() {
         productId,
         symbol: s.symbol,
         sizeIncrementRaw: String(s.sizeIncrement || '0'),
+        minNotionalRaw: String(s.minSize || '0'),
         minSizeRaw: String(s.minSize || '0'),
         raw: s,
       },
@@ -193,42 +196,57 @@ async function getSubaccountSummary(address) {
 async function getAccountByAddress(address) {
   const clean = normalizeAddress(address);
   if (!clean) throw new Error('address query param required (0x...)');
-  const [summary, byMarket] = await Promise.all([
-    getSubaccountSummary(clean).catch((e) => {
-      if (/not found|404|does not exist/i.test(e.message || '')) return null;
-      throw e;
-    }),
-    marketMap(),
-  ]);
-  const balances = Array.isArray(summary?.balances) ? summary.balances : [];
-  const quote = balances.find(b => Number(b.productId) === QUOTE_PRODUCT_ID);
-  const quoteAmount = balanceAmount(quote);
-  const initialHealth = healthAmount(summary?.health?.initial?.health);
-  const maintHealth = healthAmount(summary?.health?.maintenance?.health);
-  const positionBalances = balances.filter(b => Number(b.type) === PRODUCT_TYPE_PERP && !balanceAmount(b).isZero());
-  const perpEquity = positionBalances.reduce((acc, b) => {
-    const amount = balanceAmount(b);
-    const mark = bn(byMarket.get(Number(b.productId))?.mark || b?.oraclePrice || 0);
-    return acc.plus(amount.times(mark).plus(rawToDecimal(b.vQuoteBalance || 0)));
-  }, new BigNumber(0));
-  const equity = quoteAmount.plus(perpEquity);
-  const available = BigNumber.maximum(initialHealth, quoteAmount, new BigNumber(0));
-  return {
-    exists: !!summary?.exists,
-    balance: equity.toFixed(),
-    usdc: quoteAmount.toFixed(),
-    usdt: quoteAmount.toFixed(),
-    account_equity: equity.toFixed(),
-    available_to_spend: available.toFixed(),
-    available_to_withdraw: quoteAmount.isPositive() ? quoteAmount.toFixed() : '0',
-    total_margin_used: BigNumber.maximum(equity.minus(available), 0).toFixed(),
-    maintenance_margin: maintHealth.toFixed(),
-    positions_count: positionBalances.length,
-    orders_count: 0,
-    maker_fee: 0.0001,
-    taker_fee: 0.00035,
-    _raw: summary,
-  };
+  try {
+    const [summary, byMarket] = await Promise.all([
+      getSubaccountSummary(clean).catch((e) => {
+        if (/not found|404|does not exist/i.test(e.message || '')) return null;
+        throw e;
+      }),
+      marketMap(),
+    ]);
+    const balances = Array.isArray(summary?.balances) ? summary.balances : [];
+    const quote = balances.find(b => Number(b.productId) === QUOTE_PRODUCT_ID);
+    const quoteAmount = balanceAmount(quote);
+    const initialHealth = healthAmount(summary?.health?.initial?.health);
+    const maintHealth = healthAmount(summary?.health?.maintenance?.health);
+    const positionBalances = balances.filter(b => Number(b.type) === PRODUCT_TYPE_PERP && !balanceAmount(b).isZero());
+    const perpEquity = positionBalances.reduce((acc, b) => {
+      const amount = balanceAmount(b);
+      const mark = bn(byMarket.get(Number(b.productId))?.mark || b?.oraclePrice || 0);
+      return acc.plus(amount.times(mark).plus(rawToDecimal(b.vQuoteBalance || 0)));
+    }, new BigNumber(0));
+    const equity = quoteAmount.plus(perpEquity);
+    const available = BigNumber.maximum(initialHealth, quoteAmount, new BigNumber(0));
+    const result = {
+      exists: !!summary?.exists,
+      balance: equity.toFixed(),
+      usdc: quoteAmount.toFixed(),
+      usdt: quoteAmount.toFixed(),
+      account_equity: equity.toFixed(),
+      available_to_spend: available.toFixed(),
+      available_to_withdraw: quoteAmount.isPositive() ? quoteAmount.toFixed() : '0',
+      total_margin_used: BigNumber.maximum(equity.minus(available), 0).toFixed(),
+      maintenance_margin: maintHealth.toFixed(),
+      positions_count: positionBalances.length,
+      orders_count: 0,
+      maker_fee: 0.0001,
+      taker_fee: 0.00035,
+      _raw: summary,
+    };
+    accountCache.set(clean, { at: Date.now(), value: result });
+    return result;
+  } catch (e) {
+    const cached = accountCache.get(clean);
+    if (cached?.value) {
+      return {
+        ...cached.value,
+        _stale: true,
+        _stale_at: cached.at,
+        _stale_reason: e?.message || 'Nado account refresh failed',
+      };
+    }
+    throw e;
+  }
 }
 
 function normalizePosition(balance, market) {
@@ -267,12 +285,27 @@ function normalizePosition(balance, market) {
 async function getPositionsByAddress(address) {
   const clean = normalizeAddress(address);
   if (!clean) throw new Error('address query param required (0x...)');
-  const [summary, byMarket] = await Promise.all([getSubaccountSummary(clean), marketMap()]);
-  const balances = Array.isArray(summary?.balances) ? summary.balances : [];
-  return balances
-    .filter(b => Number(b.type) === PRODUCT_TYPE_PERP)
-    .map(b => normalizePosition(b, byMarket.get(Number(b.productId))))
-    .filter(Boolean);
+  try {
+    const [summary, byMarket] = await Promise.all([getSubaccountSummary(clean), marketMap()]);
+    const balances = Array.isArray(summary?.balances) ? summary.balances : [];
+    const result = balances
+      .filter(b => Number(b.type) === PRODUCT_TYPE_PERP)
+      .map(b => normalizePosition(b, byMarket.get(Number(b.productId))))
+      .filter(Boolean);
+    positionsCache.set(clean, { at: Date.now(), value: result });
+    return result;
+  } catch (e) {
+    const cached = positionsCache.get(clean);
+    if (cached?.value) {
+      return cached.value.map(row => ({
+        ...row,
+        _stale: true,
+        _stale_at: cached.at,
+        _stale_reason: e?.message || 'Nado positions refresh failed',
+      }));
+    }
+    throw e;
+  }
 }
 
 function normalizeOpenOrder(order, market) {
