@@ -5034,7 +5034,10 @@ let solanaShopReconcileTimer = null;
 let solanaShopReconcileRunning = false;
 
 async function runSolanaShopReconcileSweep(options = {}) {
-  const limit = Math.max(10, Math.min(250, Number(options.limit || process.env.GAME_SHOP_SOLANA_RECONCILE_LIMIT || 100)));
+  const requestedSignature = String(options.txSignature || options.signature || '').trim();
+  const limit = requestedSignature
+    ? 1
+    : Math.max(10, Math.min(250, Number(options.limit || process.env.GAME_SHOP_SOLANA_RECONCILE_LIMIT || 100)));
   const source = String(options.source || 'manual');
   const summary = {
     source,
@@ -5053,6 +5056,88 @@ async function runSolanaShopReconcileSweep(options = {}) {
   }
 
   const { Connection, PublicKey } = require('@solana/web3.js');
+  const processSignature = async (signature, row = {}) => {
+    if (!signature) return;
+    summary.checked += 1;
+    if (row.err) {
+      summary.skipped += 1;
+      return;
+    }
+    const existing = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(signature);
+    if (existing) {
+      summary.duplicates += 1;
+      return;
+    }
+    const parsedTx = await getParsedTransactionWithSolanaFallback(signature, {
+      commitment: 'confirmed',
+      maxSupportedTransactionVersion: 0,
+    });
+    const memoInfo = extractShopMemoFromTx(parsedTx, solana.memoProgram);
+    if (!memoInfo) {
+      summary.skipped += 1;
+      return;
+    }
+    const quoteIntent = getSolanaShopQuoteIntent(memoInfo.memo);
+    if (!quoteIntent) {
+      summary.skipped += 1;
+      return;
+    }
+    const product = GAME_SHOP_PRODUCTS[String(quoteIntent.sku || '')];
+    if (!product || product.kind === 'nft_upgrade') {
+      // NFT upgrades need a separate on-chain metadata update after payment.
+      // Do not mark those payments consumed from the generic resource worker.
+      summary.skipped += 1;
+      return;
+    }
+    const paymentInfo = await verifySolanaShopPurchaseFromTx({
+      signature,
+      parsedTx,
+      requireQuoteIntent: true,
+      source: `reconcile:${source}`,
+    });
+    const grant = recordSolanaShopPurchaseGrant(paymentInfo);
+    if (grant.duplicate) {
+      summary.duplicates += 1;
+      return;
+    }
+    summary.granted += 1;
+    summary.grants.push({
+      tx_hash: signature,
+      player_id: paymentInfo.player.id,
+      sku: paymentInfo.sku,
+      quantity: paymentInfo.quantity,
+      payment: paymentInfo.payment,
+      purchase_id: grant.purchase?.id || null,
+      resources: grant.resources || null,
+      shield_until: grant.shield_until || null,
+    });
+    console.log('[shop-solana] reconciled missing purchase', {
+      tx_hash: signature,
+      player_id: paymentInfo.player.id,
+      sku: paymentInfo.sku,
+      quantity: paymentInfo.quantity,
+      source,
+    });
+  };
+
+  if (requestedSignature) {
+    if (!/^[1-9A-HJ-NP-Za-km-z]{43,90}$/.test(requestedSignature)) {
+      summary.errors.push({ tx_hash: requestedSignature, message: 'Bad Solana tx signature', code: 'BAD_SIGNATURE' });
+      return summary;
+    }
+    try {
+      await processSignature(requestedSignature);
+    } catch (err) {
+      summary.errors.push({
+        tx_hash: requestedSignature,
+        message: err?.message || String(err),
+        code: err?.code || null,
+      });
+      console.warn('[shop-solana] reconcile tx failed', requestedSignature, err?.message || err);
+    }
+    return summary;
+  }
+
   const treasuryPk = new PublicKey(solana.treasury);
   let signatures = [];
   try {
@@ -5068,67 +5153,8 @@ async function runSolanaShopReconcileSweep(options = {}) {
   for (const row of [...signatures].reverse()) {
     const signature = String(row?.signature || '');
     if (!signature) continue;
-    summary.checked += 1;
     try {
-      if (row.err) {
-        summary.skipped += 1;
-        continue;
-      }
-      const existing = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(signature);
-      if (existing) {
-        summary.duplicates += 1;
-        continue;
-      }
-      const parsedTx = await getParsedTransactionWithSolanaFallback(signature, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
-      });
-      const memoInfo = extractShopMemoFromTx(parsedTx, solana.memoProgram);
-      if (!memoInfo) {
-        summary.skipped += 1;
-        continue;
-      }
-      const quoteIntent = getSolanaShopQuoteIntent(memoInfo.memo);
-      if (!quoteIntent) {
-        summary.skipped += 1;
-        continue;
-      }
-      const product = GAME_SHOP_PRODUCTS[String(quoteIntent.sku || '')];
-      if (!product || product.kind === 'nft_upgrade') {
-        // NFT upgrades need a separate on-chain metadata update after payment.
-        // Do not mark those payments consumed from the generic resource worker.
-        summary.skipped += 1;
-        continue;
-      }
-      const paymentInfo = await verifySolanaShopPurchaseFromTx({
-        signature,
-        parsedTx,
-        requireQuoteIntent: true,
-        source: `reconcile:${source}`,
-      });
-      const grant = recordSolanaShopPurchaseGrant(paymentInfo);
-      if (grant.duplicate) {
-        summary.duplicates += 1;
-      } else {
-        summary.granted += 1;
-        summary.grants.push({
-          tx_hash: signature,
-          player_id: paymentInfo.player.id,
-          sku: paymentInfo.sku,
-          quantity: paymentInfo.quantity,
-          payment: paymentInfo.payment,
-          purchase_id: grant.purchase?.id || null,
-          resources: grant.resources || null,
-          shield_until: grant.shield_until || null,
-        });
-        console.log('[shop-solana] reconciled missing purchase', {
-          tx_hash: signature,
-          player_id: paymentInfo.player.id,
-          sku: paymentInfo.sku,
-          quantity: paymentInfo.quantity,
-          source,
-        });
-      }
+      await processSignature(signature, row);
     } catch (err) {
       summary.errors.push({
         tx_hash: signature,
@@ -10946,7 +10972,8 @@ function isAdminRequest(req) {
 router.post('/admin/shop/solana/reconcile', adminAuth, async (req, res) => {
   try {
     const limit = Number(req.body?.limit || req.query?.limit || 100);
-    const result = await runSolanaShopReconcileSweep({ source: 'admin', limit });
+    const txSignature = String(req.body?.txSignature || req.body?.signature || req.query?.txSignature || req.query?.signature || '').trim();
+    const result = await runSolanaShopReconcileSweep({ source: 'admin', limit, txSignature });
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(err?.status || 500).json({ error: err?.message || 'Solana shop reconcile failed' });

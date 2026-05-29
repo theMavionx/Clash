@@ -334,7 +334,7 @@ async function getAccountByAddress(address) {
   }
 }
 
-function normalizePosition(balance, market) {
+function positionStats(balance, market) {
   const amountRaw = bn(balance?.amount);
   if (amountRaw.isZero()) return null;
   const amount = amountRaw.div(DECIMAL_SCALE);
@@ -346,8 +346,20 @@ function normalizePosition(balance, market) {
   const entry = absAmount.gt(0) ? vQuote.abs().div(absAmount) : new BigNumber(mark || 0);
   const notional = absAmount.times(mark || entry);
   const pnl = amount.times(mark || 0).plus(vQuote);
-  const maxLev = num(market?.max_leverage, 25);
-  const margin = maxLev > 0 ? notional.div(maxLev) : notional;
+  return { amount, absAmount, symbol, mark, vQuote, entry, notional, pnl };
+}
+
+function normalizePosition(balance, market, marginOverride = null) {
+  const stats = positionStats(balance, market);
+  if (!stats) return null;
+  const { amount, absAmount, symbol, mark, entry, notional, pnl } = stats;
+  const initialHealth = rawToDecimal(balance?.healthContributions?.initial || 0);
+  const unweightedHealth = rawToDecimal(balance?.healthContributions?.unweighted || 0);
+  const riskMargin = unweightedHealth.minus(initialHealth).abs();
+  const margin = BigNumber.isBigNumber(marginOverride) && marginOverride.gt(0)
+    ? marginOverride
+    : riskMargin;
+  const leverage = margin.gt(0) ? notional.div(margin) : new BigNumber(0);
   return {
     symbol,
     side: amount.isNegative() ? 'ask' : 'bid',
@@ -357,7 +369,7 @@ function normalizePosition(balance, market) {
     mark_price: String(mark || entry.toFixed()),
     liquidation_price: null,
     margin: margin.toFixed(),
-    leverage: String(maxLev),
+    leverage: leverage.gt(0) ? leverage.toFixed(2) : null,
     pnl_usd: pnl.toFixed(),
     pnl_pct: margin.gt(0) ? pnl.div(margin).times(100).toNumber() : 0,
     pair_index: Number(balance.productId),
@@ -373,9 +385,28 @@ async function getPositionsByAddress(address) {
   try {
     const [summary, byMarket] = await Promise.all([getSubaccountSummary(clean), marketMap()]);
     const balances = Array.isArray(summary?.balances) ? summary.balances : [];
-    const result = balances
-      .filter(b => Number(b.type) === PRODUCT_TYPE_PERP)
-      .map(b => normalizePosition(b, byMarket.get(Number(b.productId))))
+    const positionBalances = balances.filter(b => Number(b.type) === PRODUCT_TYPE_PERP && !balanceAmount(b).isZero());
+    const quote = balances.find(b => Number(b.productId) === QUOTE_PRODUCT_ID);
+    const quoteAmount = balanceAmount(quote);
+    const statsByProduct = new Map();
+    const totalNotional = positionBalances.reduce((acc, b) => {
+      const stats = positionStats(b, byMarket.get(Number(b.productId)));
+      if (!stats) return acc;
+      statsByProduct.set(Number(b.productId), stats);
+      return acc.plus(stats.notional);
+    }, new BigNumber(0));
+    const perpEquity = [...statsByProduct.values()].reduce((acc, stats) => (
+      acc.plus(stats.amount.times(stats.mark || 0).plus(stats.vQuote))
+    ), new BigNumber(0));
+    const accountEquity = quoteAmount.plus(perpEquity);
+    const result = positionBalances
+      .map((b) => {
+        const stats = statsByProduct.get(Number(b.productId));
+        const allocatedMargin = stats && totalNotional.gt(0) && accountEquity.gt(0)
+          ? accountEquity.times(stats.notional).div(totalNotional)
+          : null;
+        return normalizePosition(b, byMarket.get(Number(b.productId)), allocatedMargin);
+      })
       .filter(Boolean);
     positionsCache.set(clean, { at: Date.now(), value: result });
     return result;
