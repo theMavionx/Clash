@@ -1054,7 +1054,7 @@ server {
     }
 
     location /dashboard {
-        proxy_pass http://127.0.0.1:4000/;
+        proxy_pass http://127.0.0.1:4000/api/admin/panel;
         proxy_set_header Host $host;
     }
 
