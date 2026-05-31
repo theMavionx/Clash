@@ -44,9 +44,9 @@ backup_sqlite_db() {
 
     local tmp="${dst}.tmp"
     mkdir -p "$(dirname "$dst")"
-    rm -f "$dst" "$dst.zst" "$dst.gz" "$tmp" "$tmp.zst" "$tmp.gz"
+    rm -f "$dst" "$dst.zst" "$dst.gz" "$tmp" "$tmp.zst" "$tmp.gz" "$tmp-journal"
     if ! timeout "${BACKUP_SQLITE_TIMEOUT_SECONDS}s" sqlite3 "$src" ".backup '$tmp'"; then
-        rm -f "$tmp" "$tmp.zst" "$tmp.gz"
+        rm -f "$tmp" "$tmp.zst" "$tmp.gz" "$tmp-journal"
         echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) WARNING: SQLite backup timed out or failed for $src after ${BACKUP_SQLITE_TIMEOUT_SECONDS}s"
         return 1
     fi
