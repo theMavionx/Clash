@@ -5,14 +5,23 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const db = require('./db');
-const { createPublicClient, getAddress, http } = require('viem');
+const { createPublicClient, fallback, getAddress, http } = require('viem');
 const { arbitrum } = require('viem/chains');
 
 const SUBSQUID_URL = 'https://gmx.squids.live/gmx-synthetics-arbitrum/graphql';
 const POLL_MS = 60 * 1000;
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
-const ARBITRUM_RPC = process.env.ARBITRUM_RPC_URL || 'https://1rpc.io/arb';
+const ARBITRUM_RPC_URLS = String(process.env.ARBITRUM_RPC_URLS || process.env.ARBITRUM_RPC_URL || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const DEFAULT_ARBITRUM_RPCS = [
+  'https://arb1.arbitrum.io/rpc',
+  'https://arbitrum.llamarpc.com',
+  'https://arbitrum-one.publicnode.com',
+];
+const ARBITRUM_RPCS = [...new Set([...ARBITRUM_RPC_URLS, ...DEFAULT_ARBITRUM_RPCS])];
 const GMX_REFERRAL_STORAGE = process.env.GMX_REFERRAL_STORAGE
   || '0xe6fab3F0c7199b0d34d7FbE83394fc0e0D06e99d';
 const GMX_REFERRAL_CODE = String(process.env.GMX_REFERRAL_CODE || 'clashofperps');
@@ -90,13 +99,26 @@ const lastSeenIds = new Map();
 const referralCache = new Map();
 let publicClient = null;
 
+function isEvmAddress(value) {
+  return /^0x[0-9a-fA-F]{40}$/.test(String(value || ''));
+}
+
+function conciseRpcError(error) {
+  const msg = String(error?.shortMessage || error?.details || error?.message || error || '');
+  return msg.split('\n')[0].slice(0, 240);
+}
+
 function getPublicClient() {
   if (publicClient) return publicClient;
-  publicClient = createPublicClient({ chain: arbitrum, transport: http(ARBITRUM_RPC) });
+  publicClient = createPublicClient({
+    chain: arbitrum,
+    transport: fallback(ARBITRUM_RPCS.map(url => http(url)), { rank: false }),
+  });
   return publicClient;
 }
 
 async function hasClashGmxReferral(wallet) {
+  if (!isEvmAddress(wallet)) return false;
   const account = getAddress(wallet);
   const key = account.toLowerCase();
   const cached = referralCache.get(key);
@@ -163,7 +185,7 @@ function classifyOrderAction(a) {
 
 async function importActionsForRow(row, marketsByAddr, { since, updateCursor = true } = {}) {
   const addrLower = String(row.wallet || '').toLowerCase();
-  if (!/^0x[0-9a-f]{40}$/.test(addrLower)) {
+  if (!isEvmAddress(addrLower)) {
     return { imported: 0, skipped: 0, total: 0, maxTs: since || 0 };
   }
 
@@ -178,7 +200,7 @@ async function importActionsForRow(row, marketsByAddr, { since, updateCursor = t
   try {
     actions = await querySubsquid(getAddress(row.wallet), fromTs);
   } catch (e) {
-    console.warn(`[gmx-rewards-worker] subsquid query failed for ${addrLower}:`, e.message);
+    console.warn(`[gmx-rewards-worker] subsquid query failed for ${addrLower}:`, conciseRpcError(e));
     return { imported: 0, skipped: 0, total: 0, maxTs: fromTs };
   }
 
@@ -186,7 +208,7 @@ async function importActionsForRow(row, marketsByAddr, { since, updateCursor = t
   try {
     referralOk = await hasClashGmxReferral(row.wallet);
   } catch (e) {
-    console.warn(`[gmx-rewards-worker] referral check failed for ${addrLower}:`, e?.message || e);
+    console.warn(`[gmx-rewards-worker] referral check failed for ${addrLower}:`, conciseRpcError(e));
     return { imported: 0, skipped: 0, total: actions.length, maxTs: fromTs };
   }
 

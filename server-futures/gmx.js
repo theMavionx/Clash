@@ -25,7 +25,7 @@ const { arbitrum } = require('viem/chains');
 const CHAIN_ID = 42161;
 // 1rpc.io is the public default — see web/src/lib/gmxConfig.js for the
 // reasoning (canonical arb1.arbitrum.io/rpc has CORS + rate-limit issues).
-const ARBITRUM_RPC = process.env.ARBITRUM_RPC_URL || 'https://1rpc.io/arb';
+const ARBITRUM_RPC = process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc';
 
 // REST API hosts (primary + failover). We try primary first per request,
 // then fall through on 5xx / network error. Same convention as the SDK's

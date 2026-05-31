@@ -15,7 +15,7 @@ const FETCH_RECOVERY_WINDOW_MS = 10 * 60_000;
 const REDACT_KEY_RE = /(token|secret|private|password|authorization|signature|signedmessage|signed_message|x-token|cookie)/i;
 const IMPORTANT_BREADCRUMB_RE = /(Phoenix|phoenix|solana|wallet|rpc|transaction|fetch)/i;
 const NOISY_LOG_RE = /^\[load\] stage(1 download|2 signal)/;
-const NOISY_SERVER_RE = /^(WalletConnect Core is already initialized|Backpack couldn't override `window\.ethereum`)/;
+const NOISY_SERVER_RE = /^(WalletConnect Core is already initialized|Backpack couldn't override `window\.ethereum`|Mobile Wallet Adapter was registered as a Standard Wallet)/;
 const EXTENSION_ERROR_RE = /(chrome-extension:\/\/|moz-extension:\/\/|safari-web-extension:\/\/|Cannot redefine property: ethereum|Invalid property descriptor|tpweb3_|tronlinkParams|Backpack was unable to override window\.ethereum|Attempting to use a disconnected port object)/i;
 const NOISY_CLIENT_EVENT_RE = /^(page-load: iframe=|SDK imported, calling ready\(\)|ready\(\) done)/;
 const CHUNK_ERROR_RE = /(Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \d+ failed|ChunkLoadError|dynamically imported module)/i;
@@ -539,13 +539,19 @@ function describeFetch(input, init) {
 }
 
 function shouldIgnoreFetch(path) {
-  return !path || path.includes('/api/client-log');
+  return !path
+    || path.includes('/api/client-log')
+    || path === 'http://localhost/'
+    || /^\/api\/agent-events\/pending(?:\?|$)/.test(path)
+    || /\/funding\/overview\?perMarketLimit=2/.test(path);
 }
 
 function shouldStoreFetchFailure(path, status) {
   if (status === 400 && /^\/api\/find-enemy(?:\?|$)/.test(path || '')) return false;
   if (status === 400 && /^\/api\/ai-chat\/status(?:\?|$)/.test(path || '')) return false;
+  if (status === 404 && /^\/api\/players\/login-wallet(?:\?|$)/.test(path || '')) return false;
   if (status === 429 && /^\/api\/troop-died(?:\?|$)/.test(path || '')) return false;
+  if (/\/funding\/overview\?perMarketLimit=2/.test(path || '')) return false;
   return true;
 }
 

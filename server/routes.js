@@ -6051,6 +6051,37 @@ function normalizeClientLevel(v) {
   return s.replace(/[^a-z0-9_-]/g, '').slice(0, 24) || 'info';
 }
 
+function normalizeStoredClientLog(row) {
+  const message = String(row.message || '');
+  const payload = String(row.payload || '');
+  if (message === 'Mobile Wallet Adapter was registered as a Standard Wallet. The Wallet Adapter for Mobile Wallet Adapter can be removed from your app.') {
+    return null;
+  }
+  if (message.includes('/api/agent-events/pending failed: Failed to fetch')) {
+    return { ...row, level: 'debug', source: 'fetch.noise' };
+  }
+  if (message.includes('/api/players/login-wallet -> 404')
+    && payload.includes('No account found for this wallet on this DEX')) {
+    return { ...row, level: 'debug', source: 'fetch.expected_http_status' };
+  }
+  if (message.includes('funding/overview?perMarketLimit=2')
+    && (message.includes('Failed to fetch') || message.includes('signal is aborted'))) {
+    return { ...row, level: 'debug', source: 'fetch.transient' };
+  }
+  if (message.includes('http://localhost/')
+    || message.includes('wallet websocket at ws://localhost:')
+    || message.includes('Local Network Access')) {
+    return { ...row, level: 'debug', source: 'wallet.local_network' };
+  }
+  if (message.includes('/rpc/solana') && message.includes('signal is aborted')) {
+    return { ...row, level: 'debug', source: 'fetch.aborted' };
+  }
+  if (message.includes('/api/nft/demon-king/sync failed: signal is aborted')) {
+    return { ...row, level: 'debug', source: 'fetch.aborted' };
+  }
+  return row;
+}
+
 function clientLogRateOk(ip, n) {
   const now = Date.now();
   const b = clientLogBuckets.get(ip);
@@ -6086,7 +6117,7 @@ router.post('/client-log', (req, res) => {
     } catch {}
   }
 
-  const rows = events.map((ev) => ({
+  const rows = events.map((ev) => normalizeStoredClientLog({
     player_id: playerId,
     ip,
     level: normalizeClientLevel(ev.level),
@@ -6096,7 +6127,8 @@ router.post('/client-log', (req, res) => {
     message: clampText(ev.message || ev.msg || '', 2048) || '(empty)',
     stack: clampText(ev.stack, 4096),
     payload: ev.payload == null ? null : clampText(ev.payload, 8192),
-  }));
+  })).filter(Boolean);
+  if (rows.length === 0) return res.json({ ok: true, stored: 0 });
   try {
     insertClientLogBatch(rows);
     res.json({ ok: true, stored: rows.length });
