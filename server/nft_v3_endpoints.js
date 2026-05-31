@@ -2454,6 +2454,20 @@ function mountNftV3Endpoints(router, ctx) {
     };
   }
 
+  function evmBridgeFeePaidFromReceipt(txRcp, sourceProxy, keccak256) {
+    const bridgeFeeTopic = keccak256(new TextEncoder().encode('BridgeFeePaid(address,uint256,uint256,uint256)'));
+    const proxy = String(sourceProxy || '').toLowerCase();
+    let paid = 0n;
+    for (const log of txRcp?.logs || []) {
+      if (String(log.address || '').toLowerCase() !== proxy) continue;
+      if (log.topics?.[0] !== bridgeFeeTopic) continue;
+      const dataHex = String(log.data || '').replace(/^0x/, '');
+      if (dataHex.length < 128) continue;
+      paid += BigInt(`0x${dataHex.slice(64, 128)}`);
+    }
+    return paid;
+  }
+
   function bridgeLogRequestId(req) {
     const fromHeader = req.headers?.['x-request-id'] || req.headers?.['x-correlation-id'];
     if (Array.isArray(fromHeader) && fromHeader[0]) return String(fromHeader[0]).slice(0, 128);
@@ -2767,14 +2781,17 @@ function mountNftV3Endpoints(router, ctx) {
         }
         const sourceTx = await client.getTransaction({ hash: burnTxHash });
         const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceProxyAddress);
-        const feePaid = BigInt(sourceTx?.value || 0);
+        const sourceProxy = getAddress(sourceProxyAddress).toLowerCase();
+        const feePaid = [
+          BigInt(sourceTx?.value || 0),
+          evmBridgeFeePaidFromReceipt(txRcp, sourceProxy, keccak256),
+        ].reduce((max, n) => n > max ? n : max, 0n);
         if (!grandfatheredBridge && feePaid < requiredFee.amount) {
           return res.status(402).json({
             error: `Bridge fee under-paid: need ${requiredFee.amount} wei, paid ${feePaid}`,
             bridgeFee: bridgeFeeJson(requiredFee),
           });
         }
-        const sourceProxy = getAddress(sourceProxyAddress).toLowerCase();
         const burnTopic = keccak256(new TextEncoder().encode('BridgeBurn(uint256,address,uint8,uint256)'));
         const log = txRcp.logs.find((l) => l.address.toLowerCase() === sourceProxy && l.topics[0] === burnTopic);
         if (!log) return res.status(404).json({ error: 'BridgeBurn event not in tx logs' });
@@ -3173,14 +3190,17 @@ function mountNftV3Endpoints(router, ctx) {
         }
         const sourceTx = await client.getTransaction({ hash: burnTxHash });
         const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceProxyAddress);
-        const feePaid = BigInt(sourceTx?.value || 0);
+        const sourceProxy = getAddress(sourceProxyAddress).toLowerCase();
+        const feePaid = [
+          BigInt(sourceTx?.value || 0),
+          evmBridgeFeePaidFromReceipt(txRcp, sourceProxy, keccak256),
+        ].reduce((max, n) => n > max ? n : max, 0n);
         if (!grandfatheredBridge && feePaid < requiredFee.amount) {
           return res.status(402).json({
             error: `Bridge fee under-paid: need ${requiredFee.amount} wei, paid ${feePaid}`,
             bridgeFee: bridgeFeeJson(requiredFee),
           });
         }
-        const sourceProxy = getAddress(sourceProxyAddress).toLowerCase();
         const burnTopic = keccak256(new TextEncoder().encode('BridgeBurn(uint256,address,uint8,uint256)'));
         const log = txRcp.logs.find((l) => l.address.toLowerCase() === sourceProxy && l.topics[0] === burnTopic);
         if (!log) return res.status(404).json({ error: 'BridgeBurn event not in tx logs' });
