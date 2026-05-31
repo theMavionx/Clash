@@ -250,6 +250,35 @@ function isEvmDemonKingChain(chain) {
   return ['base', 'arbitrum', 'monad'].includes(String(chain || '').toLowerCase());
 }
 
+function isEvmWalletAddress(value) {
+  return /^0x[0-9a-fA-F]{40}$/.test(String(value || '').trim());
+}
+
+function isSolanaWalletAddress(value) {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || '').trim());
+}
+
+function isAptosWalletAddress(value) {
+  const text = String(value || '').trim();
+  return /^0x[0-9a-fA-F]{1,64}$/.test(text) && !isEvmWalletAddress(text);
+}
+
+function linkedDemonKingWalletHints(playerState) {
+  const hints = { evmAddress: null, solAddress: null, aptosAddress: null };
+  const candidates = [
+    playerState?.wallet,
+    playerState?.nft_gold_boost_wallet,
+  ];
+  for (const raw of candidates) {
+    const wallet = String(raw || '').trim();
+    if (!wallet) continue;
+    if (!hints.evmAddress && isEvmWalletAddress(wallet)) hints.evmAddress = wallet;
+    else if (!hints.solAddress && isSolanaWalletAddress(wallet)) hints.solAddress = wallet;
+    else if (!hints.aptosAddress && isAptosWalletAddress(wallet)) hints.aptosAddress = wallet;
+  }
+  return hints;
+}
+
 function demonKingTokenSortValue(token) {
   const tokenId = String(token?.tokenId || token?.id || '').trim();
   if (/^\d+$/.test(tokenId)) return tokenId.padStart(20, '0');
@@ -345,14 +374,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const resources = useResources();
   const { isMobile } = useLayout();
   const evmWallet = useEvmWallet();
-  const evmAddress = evmWallet?.address || null;
+  const linkedDemonKingWallets = useMemo(() => linkedDemonKingWalletHints(player), [
+    player?.wallet,
+    player?.nft_gold_boost_wallet,
+  ]);
+  const evmAddress = evmWallet?.address || linkedDemonKingWallets.evmAddress || null;
   const solWallet = useSolWallet();
   const optionalPrivy = useOptionalPrivy();
   const solAddress = solWallet?.publicKey?.toBase58?.()
     || (optionalPrivy.solanaWallets || []).find((wallet) => wallet?.address)?.address
+    || linkedDemonKingWallets.solAddress
     || null;
   const aptosWallet = useAptosWallet();
-  const aptosAddress = aptosWallet?.address || null;
+  const aptosAddress = aptosWallet?.address || linkedDemonKingWallets.aptosAddress || null;
   const demonKingSyncTarget = useMemo(() => resolveDemonKingInventorySyncTarget({
     evmAddress,
     solAddress,
