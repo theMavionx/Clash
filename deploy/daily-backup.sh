@@ -20,7 +20,8 @@ set -Eeuo pipefail
 SHARED_DIR="${CLASH_SHARED_DIR:-/opt/clash/shared}"
 BACKUPS_DIR="$SHARED_DIR/backups"
 RETENTION_DAYS="${CLASH_BACKUP_RETENTION_DAYS:-3}"
-BACKUP_KEEP="${CLASH_BACKUP_KEEP:-10}"
+BACKUP_KEEP="${CLASH_BACKUP_KEEP:-1}"
+BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-120}"
 
 ts="$(date -u +%Y%m%d%H%M%S)"
 backup_dir="$BACKUPS_DIR/$ts"
@@ -41,15 +42,21 @@ backup_sqlite_db() {
     local dst="$2"
     [ -f "$src" ] || return 0
 
+    local tmp="${dst}.tmp"
     mkdir -p "$(dirname "$dst")"
-    rm -f "$dst" "$dst.zst" "$dst.gz"
-    sqlite3 "$src" ".backup '$dst'"
+    rm -f "$dst" "$dst.zst" "$dst.gz" "$tmp" "$tmp.zst" "$tmp.gz"
+    if ! timeout "${BACKUP_SQLITE_TIMEOUT_SECONDS}s" sqlite3 "$src" ".backup '$tmp'"; then
+        rm -f "$tmp" "$tmp.zst" "$tmp.gz"
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) WARNING: SQLite backup timed out or failed for $src after ${BACKUP_SQLITE_TIMEOUT_SECONDS}s"
+        return 1
+    fi
+    mv -f "$tmp" "$dst"
     chmod 600 "$dst" || true
     compress_backup_file "$dst"
 }
 
-backup_sqlite_db "$SHARED_DIR/server/clash.db" "$backup_dir/server/clash.db"
-backup_sqlite_db "$SHARED_DIR/server-futures/futures.db" "$backup_dir/server-futures/futures.db"
+backup_sqlite_db "$SHARED_DIR/server/clash.db" "$backup_dir/server/clash.db" || true
+backup_sqlite_db "$SHARED_DIR/server-futures/futures.db" "$backup_dir/server-futures/futures.db" || true
 
 if [ -f "$SHARED_DIR/.env" ]; then
     cp -a "$SHARED_DIR/.env" "$backup_dir/.env"

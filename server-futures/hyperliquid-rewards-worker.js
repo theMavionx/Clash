@@ -96,12 +96,8 @@ function fillBuilderFee(fill) {
 
 function isClashBuilderFill(fill) {
   if (!hyperliquid.isEvmAddress(HYPERLIQUID_BUILDER_ADDRESS)) return false;
-  const fee = fillBuilderFee(fill);
-  if (fee <= 0) return false;
-  const builder = fillBuilderAddress(fill);
-  // Hyperliquid's userFills response currently includes builderFee but may
-  // omit the builder address. When it is present, keep enforcing our builder.
-  return builder ? builder === HYPERLIQUID_BUILDER_ADDRESS : true;
+  return fillBuilderAddress(fill) === HYPERLIQUID_BUILDER_ADDRESS
+    && fillBuilderFee(fill) > 0;
 }
 
 async function importFillsForPlayer(playerId, wallet, opts = {}) {

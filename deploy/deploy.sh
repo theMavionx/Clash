@@ -23,7 +23,8 @@ SHARED_DIR="$DEPLOY_ROOT/shared"
 CURRENT_LINK="$DEPLOY_ROOT/current"
 KEEP_RELEASES="${KEEP_RELEASES:-2}"
 BACKUP_RETENTION_DAYS="${CLASH_BACKUP_RETENTION_DAYS:-3}"
-BACKUP_KEEP="${CLASH_BACKUP_KEEP:-10}"
+BACKUP_KEEP="${CLASH_BACKUP_KEEP:-1}"
+BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-120}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -412,9 +413,15 @@ backup_sqlite_db() {
     local dst="$2"
     [ -f "$src" ] || return 0
 
+    local tmp="${dst}.tmp"
     mkdir -p "$(dirname "$dst")"
-    rm -f "$dst" "$dst.zst" "$dst.gz"
-    sqlite3 "$src" ".backup '$dst'"
+    rm -f "$dst" "$dst.zst" "$dst.gz" "$tmp" "$tmp.zst" "$tmp.gz"
+    if ! timeout "${BACKUP_SQLITE_TIMEOUT_SECONDS}s" sqlite3 "$src" ".backup '$tmp'"; then
+        rm -f "$tmp" "$tmp.zst" "$tmp.gz"
+        log "WARNING: SQLite backup timed out or failed for $src after ${BACKUP_SQLITE_TIMEOUT_SECONDS}s"
+        return 1
+    fi
+    mv -f "$tmp" "$dst"
     chmod 600 "$dst" || true
     compress_backup_file "$dst"
 }
