@@ -252,6 +252,17 @@ function cancelAwaitingDepositOrder(order, { actorPlayerId = null, eventType = '
   return getOrder(order.id);
 }
 
+function awaitingDepositTtlSeconds() {
+  return Math.max(300, Math.min(86_400, Number(process.env.CUSTODIAL_MARKETPLACE_DEPOSIT_TTL_SECONDS || 1800) || 1800));
+}
+
+function isAwaitingDepositStale(order) {
+  if (!order || order.status !== 'awaiting_deposit') return false;
+  const createdMs = Date.parse(`${String(order.created_at || '').replace(' ', 'T')}Z`);
+  if (!Number.isFinite(createdMs)) return false;
+  return Date.now() - createdMs > awaitingDepositTtlSeconds() * 1000;
+}
+
 function markOrderDepositVerified(order, { actorPlayerId = null, txHash = null, eventType = 'deposit_verified' } = {}) {
   gameDb.db.transaction(() => {
     gameDb.db.prepare(`
@@ -2113,7 +2124,21 @@ function mountCustodialMarketplace(router, ctx = {}) {
           } catch (err) {
             if (Number(err?.status) !== 403) throw err;
           }
-          if (assetChain === 'solana') {
+          if (isAwaitingDepositStale(existing)) {
+            cancelAwaitingDepositOrder(existing, {
+              actorPlayerId: req.player.id,
+              eventType: 'cancelled_stale_awaiting_deposit',
+              data: {
+                assetChain,
+                assetId,
+                ageSeconds: Math.floor((Date.now() - Date.parse(`${String(existing.created_at || '').replace(' ', 'T')}Z`)) / 1000),
+                ttlSeconds: awaitingDepositTtlSeconds(),
+              },
+            });
+            console.warn(`[marketplace] cancelled stale pending listing ${existing.id} for ${shortId(assetId)} after failed deposit verification`);
+            existing = null;
+          }
+          if (existing && assetChain === 'solana') {
             const onChainInfo = await verifyAssetOwner(assetChain, assetId, null).catch(() => null);
             const onChainOwner = onChainInfo?.owner || '';
             const playerWallet = normalizeAddressForChainSafe(assetChain, req.player?.wallet);

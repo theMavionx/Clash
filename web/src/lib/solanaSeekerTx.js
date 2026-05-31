@@ -65,7 +65,7 @@ function base64AddressToBase58(address) {
   }
 }
 
-const SEEKER_NFT_LABEL_RE = /^(custodial_marketplace\.deposit_solana|bridge\.burn_solana)/i;
+const SEEKER_NFT_LABEL_RE = /^(custodial_marketplace\.(deposit_solana|payment_solana)|bridge\.burn_solana)/i;
 const SEEKER_NFT_REPORT_TYPES = new Set([
   'mwa_open',
   'mwa_capabilities_failed',
@@ -80,9 +80,10 @@ const SEEKER_NFT_REPORT_TYPES = new Set([
 ]);
 
 function seekerNftLogNamespace(label) {
-  return /^bridge\.burn_solana/i.test(String(label || ''))
-    ? 'bridge.seeker'
-    : 'marketplace.seeker';
+  const text = String(label || '');
+  if (/^bridge\.burn_solana/i.test(text)) return 'bridge.seeker';
+  if (/^custodial_marketplace\.payment_solana/i.test(text)) return 'marketplace.seeker.payment';
+  return 'marketplace.seeker.deposit';
 }
 
 function shouldReportSeekerNftLog(type, data = {}) {

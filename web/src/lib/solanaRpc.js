@@ -6,9 +6,10 @@ const preferProxyRpc = allowProxyFallback
   && !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || '1'));
 const includeLeoRpcProxy = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_LEORPC || ''));
 const includeAlchemyRpcProxy = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_ALCHEMY_RPC || '1'));
-const includeTatumRpcProxy = /^(1|true|yes)$/i.test(String(
-  import.meta.env.VITE_SOLANA_ENABLE_TATUM_RPC || import.meta.env.VITE_SOLANA_ENABLE_TATUM || '',
-));
+// Tatum is intentionally excluded from the browser fallback list. Expired or
+// quota-limited Tatum accounts return 402/429 and can break mobile payment
+// flows even when Alchemy and the primary proxy are healthy.
+const includeTatumRpcProxy = false;
 
 export const SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS = 50;
 export const SOLANA_RPC_MAX_BLOCK_HEIGHT_LAG = 40;

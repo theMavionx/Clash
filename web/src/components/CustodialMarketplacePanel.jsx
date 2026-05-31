@@ -202,7 +202,7 @@ function formatReservationTime(order) {
 }
 
 function isPaymentPreSubmitError(message) {
-  return /reject|denied|cancel|signature verification failed|missing signature|cannot sign|wallet cannot|not enough|insufficient|connect .*wallet|failed to sign/i.test(String(message || ''));
+  return /reject|denied|cancel|signature verification failed|missing signature|cannot sign|wallet cannot|not enough|insufficient|connect .*wallet|failed to sign|failed to fetch|networkerror|timeout|timed out|rpc.*unavailable|stale latest blockhash|wallet protocol|wallet not found|no installed wallet/i.test(String(message || ''));
 }
 
 const PURCHASE_STEPS = [

@@ -80,6 +80,16 @@ function reportSolanaCustodyEvent(type, data = {}, solWallet, level = 'info') {
   });
 }
 
+function reportSolanaPaymentEvent(type, data = {}, solWallet, level = 'info') {
+  if (!isSolanaMobileWalletAdapter(solWallet)) return;
+  reportClientEvent(`marketplace.seeker.payment.${type}`, data, {
+    level,
+    source: 'marketplace.seeker.payment',
+    message: `marketplace.seeker.payment.${type}`,
+    flush: true,
+  });
+}
+
 function instructionDebugSummary(instructions) {
   return (instructions || []).map((ix) => ({
     program: shortSolanaAddress(publicKeyString(ix?.programId)),
@@ -392,6 +402,12 @@ export async function payCustodialOrderOnSolana({
   const owner = buyerWallet || solWallet?.publicKey?.toBase58?.();
   if (!owner) throw new Error('Solana wallet is not connected');
   onProgress?.({ step: 'reservation', status: 'active' });
+  reportSolanaPaymentEvent('reservation_start', {
+    orderId,
+    buyerWallet: shortSolanaAddress(owner),
+    destChain,
+    destAddress: shortSolanaAddress(destAddress || owner),
+  }, solWallet);
   const intent = await createCustodialBuyIntent({
     token,
     orderId,
@@ -402,6 +418,15 @@ export async function payCustodialOrderOnSolana({
   });
   const payment = intent.order?.payment;
   onProgress?.({ step: 'reservation', status: 'complete', order: intent.order });
+  reportSolanaPaymentEvent('reservation_ok', {
+    orderId,
+    status: intent.order?.status || null,
+    buyerWallet: shortSolanaAddress(owner),
+    amountTokenUnits: payment?.amountTokenUnits || null,
+    tokenAddress: shortSolanaAddress(payment?.tokenAddress),
+    treasury: shortSolanaAddress(payment?.treasury),
+    deadline: payment?.deadline || null,
+  }, solWallet);
   if (!payment?.treasury || !payment?.tokenAddress || !payment?.amountTokenUnits) throw new Error('Payment intent is incomplete');
 
   const [
@@ -443,22 +468,65 @@ export async function payCustodialOrderOnSolana({
     ),
   ];
   onProgress?.({ step: 'payment', status: 'active', order: intent.order });
-  const txHash = await sendSolanaTransactionWithRetry({
-    instructions,
-    ownerPk,
-    connection,
-    ...buildSolanaWalletTxOptions({
-      solWallet,
-      owner,
-      label: 'custodial_marketplace.payment_solana',
-      venueLabel: 'Marketplace',
-    }),
-    maxAttempts: 4,
-    priorityFeeMicroLamports: 250_000,
-  });
+  reportSolanaPaymentEvent('tx_start', {
+    orderId,
+    buyerWallet: shortSolanaAddress(owner),
+    sourceAta: shortSolanaAddress(sourceAta),
+    treasuryAta: shortSolanaAddress(treasuryAta),
+    treasury: shortSolanaAddress(payment.treasury),
+    amountTokenUnits: payment.amountTokenUnits,
+    instructionCount: instructions.length,
+  }, solWallet);
+  let txHash = null;
+  try {
+    txHash = await sendSolanaTransactionWithRetry({
+      instructions,
+      ownerPk,
+      connection,
+      ...buildSolanaWalletTxOptions({
+        solWallet,
+        owner,
+        label: 'custodial_marketplace.payment_solana',
+        venueLabel: 'Marketplace',
+      }),
+      maxAttempts: 4,
+      priorityFeeMicroLamports: 250_000,
+    });
+  } catch (err) {
+    reportSolanaPaymentEvent('tx_failed', {
+      orderId,
+      buyerWallet: shortSolanaAddress(owner),
+      error: errorDebug(err),
+    }, solWallet, 'error');
+    throw err;
+  }
+  reportSolanaPaymentEvent('tx_confirmed', {
+    orderId,
+    buyerWallet: shortSolanaAddress(owner),
+    txHash,
+  }, solWallet);
   onProgress?.({ step: 'payment', status: 'complete', order: intent.order, txHash });
   onProgress?.({ step: 'transfer', status: 'active', order: intent.order, txHash });
-  const confirmed = await confirmCustodialPayment({ token, orderId, txHash });
+  reportSolanaPaymentEvent('server_confirm_start', {
+    orderId,
+    txHash,
+  }, solWallet);
+  let confirmed = null;
+  try {
+    confirmed = await confirmCustodialPayment({ token, orderId, txHash });
+  } catch (err) {
+    reportSolanaPaymentEvent('server_confirm_failed', {
+      orderId,
+      txHash,
+      error: errorDebug(err),
+    }, solWallet, 'error');
+    throw err;
+  }
+  reportSolanaPaymentEvent('server_confirm_ok', {
+    orderId,
+    txHash,
+    status: confirmed?.order?.status || null,
+  }, solWallet);
   onProgress?.({ step: 'transfer', status: confirmed?.order?.status === 'delivered' ? 'complete' : 'active', order: confirmed?.order, txHash });
   return { intent, txHash, confirmed };
 }

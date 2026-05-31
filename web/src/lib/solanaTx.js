@@ -122,6 +122,7 @@ function isPhoenixOneTapDiagnostic(label, type, data = {}) {
 function seekerNftDiagnosticNamespace(label) {
   const text = String(label || '');
   if (/^custodial_marketplace\.deposit_solana/i.test(text)) return 'marketplace.seeker.tx';
+  if (/^custodial_marketplace\.payment_solana/i.test(text)) return 'marketplace.seeker.payment.tx';
   if (/^bridge\.burn_solana/i.test(text)) return 'bridge.seeker.tx';
   return '';
 }
