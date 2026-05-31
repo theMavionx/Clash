@@ -305,7 +305,7 @@ prepare_shared_runtime() {
     ensure_env_default "SOLANA_TATUM_API_KEY" ""
     ensure_env_default "VITE_SOLANA_ENABLE_ALCHEMY_RPC" "1"
     ensure_env_default "VITE_SOLANA_ENABLE_PUBLIC_RPC" "0"
-    ensure_env_default "VITE_SOLANA_ENABLE_TATUM_RPC" "1"
+    ensure_env_default "VITE_SOLANA_ENABLE_TATUM_RPC" "0"
     ensure_env_default "VITE_PHOENIX_ACCESS_CODE" ""
     ensure_env_default "VITE_PHOENIX_REFERRAL_CODE" ""
     ensure_env_default "VITE_APTOS_GAS_STATION_API_KEY" ""
@@ -356,6 +356,8 @@ prepare_shared_runtime() {
     set_env_value "CLASH_HERMES_ACTION_FALLBACK_RETRIES" "1"
     set_env_value "CLASH_HERMES_ACTION_CHAT_TIMEOUT_MS" "240000"
     set_env_value "CLASH_HERMES_BACKEND_TIMEOUT_MS" "300000"
+    set_env_value "VITE_SOLANA_ENABLE_TATUM_RPC" "0"
+    set_env_value "SOLANA_ENABLE_TATUM_RPC" "0"
 
     if [ ! -f "$SHARED_SERVER_DIR/clash.db" ]; then
         if copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db"; then

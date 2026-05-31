@@ -113,6 +113,7 @@ export default function GameUI() {
   // input can't reach the canvas through the panel anyway.
   const barnOpen = showTroops;
   const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard);
+  const showFloatingUtilities = !enemyMode?.active && !anyPanelOpen;
   useEffect(() => {
     sendToGodot('ui_overlay', { active: anyPanelOpen });
   }, [anyPanelOpen, sendToGodot]);
@@ -212,10 +213,10 @@ export default function GameUI() {
     <div style={styles.overlay}>
       {!enemyMode?.active && <ResourceBar />}
       {!enemyMode?.active && <PlayerInfo onOpenProfile={() => setShowProfile(true)} onOpenLeaderboard={() => setShowLeaderboard(true)} />}
-      {!enemyMode?.active && (
+      {showFloatingUtilities && (
         <NftGoldBoostButton placement="side" />
       )}
-      {!enemyMode?.active && <FeedbackButton />}
+      {showFloatingUtilities && <FeedbackButton />}
       {canShowAiChatButton && (() => {
         // Mirror ActionButtons sizing so we land cleanly between the
         // SHOP / TRADE columns regardless of which phone the player has.

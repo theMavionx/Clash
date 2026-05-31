@@ -2020,10 +2020,18 @@ router.post('/phoenix/import-fills', auth, async (req, res) => {
       });
     }
 
+    const requestedTxCheckLimit = Number(req.body?.tx_check_limit ?? req.body?.txCheckLimit);
+    const txCheckLimit = historyReason === 'limit_order_fill_check'
+      ? (Number.isFinite(requestedTxCheckLimit) ? Math.max(1, Math.min(200, requestedTxCheckLimit)) : 200)
+      : undefined;
     const result = await phoenixRewards.importFillsForPlayer(req.playerId, wallet, {
       limit: historyReason === 'limit_order_fill_check' ? 200 : 100,
       timeoutMs: PHOENIX_PROXY_TIMEOUT_MS,
       cacheTtlMs: 20_000,
+      txCheckLimit,
+      limitOrderSignature: req.body?.limit_order_signature || req.body?.limitOrderSignature,
+      symbol: req.body?.symbol,
+      placementTtlMs: req.body?.placement_ttl_ms || req.body?.placementTtlMs,
     });
     if (result.imported > 0) {
       console.log(`[phoenix] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${wallet.slice(0, 8)}...`);

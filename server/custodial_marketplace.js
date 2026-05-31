@@ -14,6 +14,7 @@ const {
   solanaConnection,
 } = require('./bridge_helpers');
 const {
+  createSolanaConnection,
   solanaNonHeliusRpcUrls,
   solanaRpcUrls,
   withSolanaRpcFallback,
@@ -1171,11 +1172,17 @@ async function sendAndConfirmFresh(connection, transaction, signers, label) {
     preflightCommitment: 'confirmed',
     maxRetries: 5,
   });
-  const confirmed = await connection.confirmTransaction({
-    signature,
-    blockhash: latest.blockhash,
-    lastValidBlockHeight: latest.lastValidBlockHeight,
-  }, 'confirmed');
+  let confirmed;
+  try {
+    confirmed = await connection.confirmTransaction({
+      signature,
+      blockhash: latest.blockhash,
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+    }, 'confirmed');
+  } catch (err) {
+    if (await waitForSolanaSignature(signature, label)) return signature;
+    throw err;
+  }
   if (confirmed.value?.err) throw new Error(`${label || 'Solana transaction'} failed: ${JSON.stringify(confirmed.value.err)}`);
   return signature;
 }
@@ -1191,15 +1198,18 @@ function extractSolanaSignatureFromError(err) {
 
 async function waitForSolanaSignature(signature, label) {
   if (!signature) return false;
-  const conn = solanaConnection();
-  for (let i = 0; i < 20; i += 1) {
-    if (i > 0) await new Promise((resolve) => setTimeout(resolve, 1500));
-    const status = await conn.getSignatureStatuses([signature], { searchTransactionHistory: true }).catch(() => null);
-    const value = status?.value?.[0];
-    if (value?.err) throw new Error(`${label || 'Solana transaction'} failed: ${JSON.stringify(value.err)}`);
-    if (value && ['confirmed', 'finalized'].includes(value.confirmationStatus)) return true;
-  }
-  return false;
+  return withSolanaRpcFallback(async (rpc) => {
+    const { Connection } = require('@solana/web3.js');
+    const conn = createSolanaConnection(Connection, rpc, 'confirmed');
+    for (let i = 0; i < 20; i += 1) {
+      if (i > 0) await new Promise((resolve) => setTimeout(resolve, 1500));
+      const status = await conn.getSignatureStatuses([signature], { searchTransactionHistory: true }).catch(() => null);
+      const value = status?.value?.[0];
+      if (value?.err) throw new Error(`${label || 'Solana transaction'} failed: ${JSON.stringify(value.err)}`);
+      if (value && ['confirmed', 'finalized'].includes(value.confirmationStatus)) return true;
+    }
+    return false;
+  }, { label: `${label || 'Solana transaction'} signature lookup` }).catch(() => false);
 }
 
 async function sendUmiBuilder(builder, umi, label) {
@@ -1303,7 +1313,7 @@ async function transferSolanaToken2022Nft({ mint, to }) {
   const from = signer.publicKey.toBase58();
   const info = await getSolanaBridgeAssetInfo(mint, from);
   if (info.standard !== 'token2022') throw httpError(409, 'Automatic Solana delivery supports Token-2022 Demon King NFTs only');
-  const { PublicKey, Transaction } = require('@solana/web3.js');
+  const { Connection, PublicKey, Transaction } = require('@solana/web3.js');
   const {
     ASSOCIATED_TOKEN_PROGRAM_ID,
     TOKEN_2022_PROGRAM_ID,
@@ -1311,16 +1321,18 @@ async function transferSolanaToken2022Nft({ mint, to }) {
     createTransferCheckedInstruction,
     getAssociatedTokenAddressSync,
   } = require('@solana/spl-token');
-  const conn = solanaConnection();
   const mintPk = new PublicKey(mint);
   const destOwner = new PublicKey(normalizeSolanaPubkey(to, 'Destination Solana wallet'));
   const srcAta = new PublicKey(info.tokenAccount);
   const destAta = getAssociatedTokenAddressSync(mintPk, destOwner, false, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
-  const tx = new Transaction().add(
-    createAssociatedTokenAccountIdempotentInstruction(signer.publicKey, destAta, destOwner, mintPk, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID),
-    createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, 1, 0, [], TOKEN_2022_PROGRAM_ID),
-  );
-  return sendAndConfirmFresh(conn, tx, [signer], 'Custodial marketplace Solana NFT transfer');
+  return withSolanaRpcFallback(async (rpc) => {
+    const conn = createSolanaConnection(Connection, rpc, 'confirmed');
+    const tx = new Transaction().add(
+      createAssociatedTokenAccountIdempotentInstruction(signer.publicKey, destAta, destOwner, mintPk, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID),
+      createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, 1, 0, [], TOKEN_2022_PROGRAM_ID),
+    );
+    return sendAndConfirmFresh(conn, tx, [signer], 'Custodial marketplace Solana NFT transfer');
+  }, { label: 'Custodial marketplace Solana NFT transfer' });
 }
 
 async function transferSolanaCoreNft({ assetId, to }) {

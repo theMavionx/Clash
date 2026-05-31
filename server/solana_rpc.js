@@ -33,6 +33,13 @@ function alchemySolanaRpcUrl(env = process.env) {
 }
 
 function tatumSolanaRpcUrl(env = process.env) {
+  const enabled = /^(1|true|yes)$/i.test(String(
+    env.SOLANA_ENABLE_TATUM_RPC
+    || env.VITE_SOLANA_ENABLE_TATUM_RPC
+    || env.VITE_SOLANA_ENABLE_TATUM
+    || ''
+  ));
+  if (!enabled) return '';
   const key = String(
     env.SOLANA_TATUM_API_KEY
     || env.TATUM_API_KEY

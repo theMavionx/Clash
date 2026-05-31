@@ -17,7 +17,6 @@ const { broadcastToPlayer, consumePendingAgentEvents } = require('./websocket');
 const {
   solanaToken2022CollectionId,
   solanaToken2022Symbol,
-  getToken2022NftInfo,
   upgradeToken2022NftLevel,
 } = require('./solana_token2022_nft');
 const {
@@ -233,6 +232,58 @@ function nftImageUrl(req, level) {
     return `${nftPublicBase(req)}/api/nft/image/${lvl}`;
   }
   return process.env.NFT_IMAGE_URL || `${nftPublicBase(req)}/api/nft/image`;
+}
+
+function solanaCoreUpgradeMetadataUrl(req, level, sourceRef) {
+  const url = new URL('/api/nft/solana/bridged', `${nftPublicBase(req)}/`);
+  url.searchParams.set('level', String(normalizeNftLevel(level)));
+  if (sourceRef) url.searchParams.set('src', String(sourceRef).slice(0, 80));
+  return url.toString();
+}
+
+async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef }) {
+  const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
+  if (!rawKey) throw Object.assign(new Error('Solana NFT authority key is not configured'), { status: 503 });
+  const { parseSolanaSecretKey } = require('./bridge_helpers');
+  const secretBytes = parseSolanaSecretKey(rawKey);
+  const metadataUri = solanaCoreUpgradeMetadataUrl(req, level, sourceRef);
+  const metadataName = `${process.env.NFT_NAME || 'Demon King'} L${normalizeNftLevel(level)}`;
+  return withSolanaRpcFallback(async (rpc) => {
+    const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
+    const { keypairIdentity, publicKey } = await import('@metaplex-foundation/umi');
+    const { base58 } = await import('@metaplex-foundation/umi/serializers');
+    const { mplCore, fetchAsset, fetchCollection, update } = await import('@metaplex-foundation/mpl-core');
+    const umi = createUmi(rpc).use(mplCore());
+    const authKeypair = umi.eddsa.createKeypairFromSecretKey(secretBytes);
+    umi.use(keypairIdentity(authKeypair));
+    const asset = await fetchAsset(umi, publicKey(assetId));
+    const actualOwner = String(asset?.owner || '');
+    if (owner && actualOwner && actualOwner !== owner) {
+      const err = new Error(`Solana source wallet is not the asset owner (expected ${owner}, on-chain owner ${actualOwner})`);
+      err.status = 403;
+      throw err;
+    }
+    const collectionAddress = String(asset?.updateAuthority?.type || '') === 'Collection'
+      ? String(asset.updateAuthority.address || '')
+      : '';
+    const collection = collectionAddress ? await fetchCollection(umi, publicKey(collectionAddress)) : undefined;
+    const sig = await update(umi, {
+      asset,
+      ...(collection ? { collection } : {}),
+      authority: umi.identity,
+      name: metadataName,
+      uri: metadataUri,
+    }).sendAndConfirm(umi, {
+      send: { skipPreflight: true, commitment: 'processed', maxRetries: 5 },
+      confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+    });
+    return {
+      standard: 'mpl-core',
+      updateTxSig: base58.deserialize(sig.signature)[0],
+      uri: metadataUri,
+      name: metadataName,
+    };
+  }, { label: 'Solana Core NFT upgrade' });
 }
 
 function nftSellerFeeBasisPoints(chain) {
@@ -4796,17 +4847,6 @@ router.post('/nft/solana/upgrade/redeem', auth, async (req, res) => {
   try {
     const paymentInfo = await verifySolanaShopPaymentForPlayer(req, { expectedSku: 'demon_king_upgrade' });
     const signature = paymentInfo.signature;
-    const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(signature);
-    if (existing) {
-      if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Upgrade payment already redeemed' });
-      return res.json({
-        success: true,
-        alreadyRedeemed: true,
-        chain: 'solana',
-        txSignature: signature,
-      });
-    }
-
     const owner = String(req.body?.buyer || '').trim();
     if (!SOLANA_WALLET_RE.test(owner)) return res.status(400).json({ error: 'Invalid Solana owner address' });
     const mint = String(req.body?.tokenId || req.body?.mint || req.body?.tokenAddress || '').trim();
@@ -4814,7 +4854,36 @@ router.post('/nft/solana/upgrade/redeem', auth, async (req, res) => {
     const newLevel = Number(req.body?.newLevel || req.body?.level || 0);
     if (![2, 3].includes(newLevel)) return res.status(400).json({ error: 'newLevel must be 2 or 3' });
 
-    const current = await getToken2022NftInfo({ mint, expectedOwner: owner });
+    const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(signature);
+    if (existing) {
+      if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Upgrade payment already redeemed' });
+      const { getSolanaBridgeAssetInfo } = require('./bridge_helpers');
+      const current = await getSolanaBridgeAssetInfo(mint, owner);
+      const level = normalizeNftLevel(current.level);
+      const bound = db.bindPlayerDemonKingNft(req.player.id, owner, {
+        chain: 'solana',
+        tokenId: mint,
+        level,
+        imageUrl: nftImageUrl(req, level),
+        txHash: signature,
+      }, {
+        source: 'solana-upgrade-redeem-replay',
+        txHash: signature,
+      });
+      return res.json({
+        success: true,
+        alreadyRedeemed: true,
+        chain: 'solana',
+        tokenId: mint,
+        level,
+        requestedLevel: newLevel,
+        txSignature: signature,
+        bound,
+      });
+    }
+
+    const { getSolanaBridgeAssetInfo, parseSolanaSecretKey } = require('./bridge_helpers');
+    const current = await getSolanaBridgeAssetInfo(mint, owner);
     const currentLevel = normalizeNftLevel(current.level);
     if (newLevel !== currentLevel + 1) {
       return res.status(409).json({ error: `Must upgrade by exactly 1. Current level: ${currentLevel}` });
@@ -4833,22 +4902,32 @@ router.post('/nft/solana/upgrade/redeem', auth, async (req, res) => {
 
     const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
     if (!rawKey) return res.status(503).json({ error: 'Solana NFT authority key is not configured' });
-    const { parseSolanaSecretKey } = require('./bridge_helpers');
-    const { Connection } = require('@solana/web3.js');
-    const connection = await withSolanaRpcFallback(async (rpc) => {
-      const candidate = createSolanaConnection(Connection, rpc, 'confirmed');
-      await candidate.getLatestBlockhash('confirmed');
-      return candidate;
-    }, {
-      label: 'Solana Token-2022 upgrade RPC probe',
-    });
-    const upgraded = await upgradeToken2022NftLevel({
-      mint,
-      owner,
-      level: newLevel,
-      payerSecretKey: parseSolanaSecretKey(rawKey),
-      connection,
-    });
+    let upgraded;
+    if (current.standard === 'mpl-core') {
+      upgraded = await upgradeSolanaCoreNftLevel({
+        req,
+        assetId: mint,
+        owner,
+        level: newLevel,
+        sourceRef: signature,
+      });
+    } else {
+      const { Connection } = require('@solana/web3.js');
+      const connection = await withSolanaRpcFallback(async (rpc) => {
+        const candidate = createSolanaConnection(Connection, rpc, 'confirmed');
+        await candidate.getLatestBlockhash('confirmed');
+        return candidate;
+      }, {
+        label: 'Solana Token-2022 upgrade RPC probe',
+      });
+      upgraded = await upgradeToken2022NftLevel({
+        mint,
+        owner,
+        level: newLevel,
+        payerSecretKey: parseSolanaSecretKey(rawKey),
+        connection,
+      });
+    }
 
     const bound = db.db.transaction(() => {
       const duplicate = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(signature);

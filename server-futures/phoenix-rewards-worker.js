@@ -46,6 +46,10 @@ const PHOENIX_TX_REWARD_MAX_AGE_MS = Math.max(
   60_000,
   Number(process.env.PHOENIX_TX_REWARD_MAX_AGE_MS || 24 * 60 * 60_000),
 );
+const PHOENIX_LIMIT_PLACEMENT_MAX_AGE_MS = Math.max(
+  10 * 60_000,
+  Number(process.env.PHOENIX_LIMIT_PLACEMENT_MAX_AGE_MS || 36 * 60 * 60_000),
+);
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
 
@@ -56,6 +60,25 @@ const apiInflight = new Map();
 const flightTxCache = new Map();
 let solanaConnection = null;
 let pollCursor = 0;
+
+try {
+  db.db.exec(`
+    CREATE TABLE IF NOT EXISTS phoenix_limit_order_placements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id TEXT NOT NULL,
+      wallet TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      signature TEXT NOT NULL,
+      block_time_ms INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(player_id, wallet, signature)
+    );
+    CREATE INDEX IF NOT EXISTS idx_phoenix_limit_placements_lookup
+      ON phoenix_limit_order_placements(player_id, wallet, symbol, block_time_ms);
+  `);
+} catch (e) {
+  console.warn('[phoenix-rewards-worker] limit placement table unavailable:', e.message);
+}
 
 function isSolanaWallet(addr) {
   const text = String(addr || '').trim();
@@ -360,6 +383,92 @@ function normalizeRewardSymbol(symbol) {
   return text;
 }
 
+function limitPlacementSignature(details) {
+  return String(
+    details?.limitOrderSignature
+    || details?.limit_order_signature
+    || details?.limit_signature
+    || ''
+  ).trim();
+}
+
+function rememberPhoenixLimitOrderPlacement(playerId, wallet, details = {}) {
+  const signature = limitPlacementSignature(details);
+  const symbol = normalizeRewardSymbol(details.symbol);
+  if (!signature || !symbol) return null;
+  if (!isSolanaSignature(signature)) {
+    return { ok: false, reason: 'invalid_limit_order_signature' };
+  }
+
+  const cleanWallet = normalizeSolanaWallet(wallet);
+  return verifyPhoenixTradeTransaction({
+    wallet: cleanWallet,
+    signature,
+  }).then((verified) => {
+    const blockTimeMs = Number(verified.blockTime || 0) > 0 ? Number(verified.blockTime) * 1000 : Date.now();
+    db.db.prepare(`
+      INSERT OR IGNORE INTO phoenix_limit_order_placements
+        (player_id, wallet, symbol, signature, block_time_ms)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      playerId,
+      cleanWallet,
+      symbol,
+      signature,
+      blockTimeMs,
+    );
+    return {
+      ok: true,
+      wallet: cleanWallet,
+      symbol,
+      signature,
+      block_time_ms: blockTimeMs,
+    };
+  }).catch((e) => ({
+    ok: false,
+    reason: 'limit_order_placement_not_verified',
+    error: e?.message || String(e),
+  }));
+}
+
+function loadLimitOrderPlacements(playerId, wallet, opts = {}) {
+  const symbol = normalizeRewardSymbol(opts.symbol);
+  const maxAgeMs = Math.max(
+    10 * 60_000,
+    Math.min(7 * 24 * 60 * 60_000, Number(opts.placementTtlMs || PHOENIX_LIMIT_PLACEMENT_MAX_AGE_MS)),
+  );
+  const minBlockTimeMs = Date.now() - maxAgeMs;
+  const params = [playerId, normalizeSolanaWallet(wallet), minBlockTimeMs];
+  const symbolSql = symbol ? 'AND symbol = ?' : '';
+  if (symbol) params.push(symbol);
+  return db.db.prepare(`
+    SELECT player_id, wallet, symbol, signature, block_time_ms
+    FROM phoenix_limit_order_placements
+    WHERE player_id = ?
+      AND wallet = ?
+      AND block_time_ms >= ?
+      ${symbolSql}
+    ORDER BY block_time_ms DESC
+  `).all(...params);
+}
+
+function fillHasVerifiedLimitPlacement(fill, trade, placements) {
+  if (!placements.length) return false;
+  const instructionType = String(fill?.instructionType || '').toLowerCase();
+  const liquidity = String(fill?.liquidity || '').toLowerCase();
+  const tradeType = String(fill?.tradeType || fill?.orderType || '').toLowerCase();
+  const makerLimitFill = tradeType === 'limit'
+    && (liquidity === 'maker' || instructionType === 'uncrosscrank');
+  if (!makerLimitFill) return false;
+  const symbol = normalizeRewardSymbol(trade?.symbol || fill?.marketSymbol || fill?.symbol || fill?.market);
+  const tsMs = fillTimestampMs(fill);
+  if (!symbol || !tsMs) return false;
+  return placements.some((placement) => (
+    placement.symbol === symbol
+    && tsMs + 5 * 60_000 >= Number(placement.block_time_ms || 0)
+  ));
+}
+
 function normalizeRewardSide(side, tradeKind) {
   const s = String(side || '').toLowerCase();
   const kind = String(tradeKind || '').toLowerCase();
@@ -642,6 +751,13 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   let skippedNoBuilderRoute = 0;
   let skippedTxCheckBudget = 0;
   let txChecks = 0;
+  let limitPlacement = null;
+  try {
+    limitPlacement = await rememberPhoenixLimitOrderPlacement(playerId, cleanWallet, opts);
+  } catch (e) {
+    limitPlacement = { ok: false, reason: 'limit_order_placement_store_failed', error: e?.message || String(e) };
+  }
+  const verifiedLimitPlacements = loadLimitOrderPlacements(playerId, cleanWallet, opts);
 
   let payload;
   try {
@@ -703,9 +819,11 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
         delayMs: opts.txDelayMs,
       });
       if (!flightVerified.ok) {
-        skipped++;
-        skippedNoBuilderRoute++;
-        continue;
+        if (!fillHasVerifiedLimitPlacement(fill, trade, verifiedLimitPlacements)) {
+          skipped++;
+          skippedNoBuilderRoute++;
+          continue;
+        }
       }
 
       const before = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
@@ -740,6 +858,8 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
     skipped_no_signature: skippedNoSignature,
     skipped_no_builder_route: skippedNoBuilderRoute,
     skipped_tx_check_budget: skippedTxCheckBudget,
+    limit_order_placement: limitPlacement,
+    verified_limit_placements: verifiedLimitPlacements.length,
   };
 }
 

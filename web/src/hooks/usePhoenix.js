@@ -2417,7 +2417,8 @@ export function usePhoenix() {
           reason: details.reason || 'limit_order_fill_check',
           symbol: details.symbol,
           limit_order_signature: details.signature,
-          trader_authority: details.trader_authority || reportWallet,
+          tx_check_limit: details.tx_check_limit,
+          placement_ttl_ms: details.placement_ttl_ms,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -4478,14 +4479,14 @@ export function usePhoenix() {
         });
         applyOptimisticMarginUse(amount);
         refreshTraderStateSoon([250, 1_000, 3_500, 8_000]);
-        [8_000, 35_000, 120_000].forEach((delayMs) => {
+        [8_000, 35_000, 120_000, 10 * 60_000, 60 * 60_000].forEach((delayMs) => {
           setTimeout(() => {
             void importPhoenixHistoryFills({
               reason: 'limit_order_fill_check',
               signature,
               symbol: phx,
-              wallet: orderAuthority,
-              trader_authority: orderAuthority,
+              wallet: walletAddr,
+              tx_check_limit: 200,
               minGapMs: 10_000,
               force: delayMs >= 120_000,
             }).then((data) => {
