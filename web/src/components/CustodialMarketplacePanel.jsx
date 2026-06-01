@@ -24,6 +24,13 @@ import {
 
 const PAGE_SIZE = 50;
 const CHAIN_LABEL = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', solana: 'Solana', aptos: 'Aptos' };
+const CHAIN_LOGO_SRC = {
+  base: '/tokens/BASE.svg',
+  arbitrum: '/tokens/ARB.svg',
+  monad: '/tokens/MON.svg',
+  solana: '/tokens/SOL.svg',
+  aptos: '/tokens/APT.png',
+};
 const SORT_OPTIONS = [
   { value: 'newest', label: 'Newest', sub: 'Latest listings' },
   { value: 'oldest', label: 'Oldest', sub: 'Earliest first' },
@@ -149,7 +156,7 @@ function orderImage(order) {
 }
 
 function orderPrice(order) {
-  return `${formatCustodialUsdc(order?.priceUsdcUnits || 0)} USDC`;
+  return `$${formatCustodialUsdc(order?.priceUsdcUnits || 0)}`;
 }
 
 function usdcUnitsBigInt(value) {
@@ -164,6 +171,21 @@ function formatCompactUsdc(units) {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
   if (value >= 1_000) return `$${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
   return `$${value.toLocaleString('en-US', { maximumFractionDigits: value >= 100 ? 0 : 2 })}`;
+}
+
+function paymentConfig(config, chain) {
+  return config?.payments?.[chain] || null;
+}
+
+function paymentTokenLabel(config, chain) {
+  const payment = paymentConfig(config, chain);
+  return payment?.tokenLabel || payment?.paymentLabel || String(payment?.token || 'USDC').toUpperCase();
+}
+
+function paymentChainLabel(config, chain) {
+  const chainLabel = CHAIN_LABEL[chain] || chain || '';
+  const tokenLabel = paymentTokenLabel(config, chain);
+  return tokenLabel ? `${chainLabel} ${tokenLabel}` : chainLabel;
 }
 
 function tokenAssetId(token) {
@@ -188,6 +210,10 @@ function chainAddressEqual(chain, a, b) {
   return CUSTODIAL_EVM_CHAIN_IDS[chain] || chain === 'aptos'
     ? left.toLowerCase() === right.toLowerCase()
     : left === right;
+}
+
+function chainLogo(chain) {
+  return CHAIN_LOGO_SRC[chain] || null;
 }
 
 function reservationDeadlineMs(order) {
@@ -305,12 +331,13 @@ export default function CustodialMarketplacePanel({
   const [selectedAsset, setSelectedAsset] = useState('');
   const [priceInput, setPriceInput] = useState('');
   const [buyTarget, setBuyTarget] = useState(null);
-  const [paymentChain, setPaymentChain] = useState('base');
+  const [paymentChain, setPaymentChain] = useState('solana');
   const [deliveryChain, setDeliveryChain] = useState('base');
   const [purchaseFlow, setPurchaseFlow] = useState(null);
   const [listingFlow, setListingFlow] = useState(null);
   const [browseSort, setBrowseSort] = useState('newest');
   const [browseLevel, setBrowseLevel] = useState('all');
+  const [sellWalletModalOpen, setSellWalletModalOpen] = useState(false);
 
   const ready = !!config?.ready;
   const supportedAssets = config?.supportedAssets || [];
@@ -478,6 +505,21 @@ export default function CustodialMarketplacePanel({
       setNotice((err?.message || `Connect ${CHAIN_LABEL[chain] || chain} wallet failed`).slice(0, 160));
     }
   }, [aptosWallet, evmAddress, onConnectAptos, onConnectBase, onConnectSolana, onOpenEvmModal]);
+
+  const changeSellWalletForChain = useCallback(async (chain) => {
+    try {
+      if (CUSTODIAL_EVM_CHAIN_IDS[chain]) {
+        onOpenEvmModal?.(chain);
+        setSellWalletModalOpen(false);
+        return;
+      }
+      await connectForChain(chain);
+      setSellWalletModalOpen(false);
+      setTimeout(() => loadOwned(), 500);
+    } catch (err) {
+      setNotice((err?.message || `Connect ${CHAIN_LABEL[chain] || chain} wallet failed`).slice(0, 160));
+    }
+  }, [connectForChain, loadOwned, onOpenEvmModal]);
 
   const updatePurchaseFlow = useCallback((patch) => {
     setPurchaseFlow((prev) => mergePurchaseFlow(prev, patch));
@@ -1154,6 +1196,7 @@ export default function CustodialMarketplacePanel({
           busy={busy === 'list'}
           onSubmit={handleCreateListing}
           onRefresh={loadOwned}
+          onChangeWallet={() => setSellWalletModalOpen(true)}
         />
       )}
       {view === 'orders' && (
@@ -1185,6 +1228,7 @@ export default function CustodialMarketplacePanel({
                 value={paymentChain}
                 setValue={setPaymentChain}
                 walletMap={walletMap}
+                config={config}
                 onConnectChain={connectForChain}
                 busy={busy === 'buy'}
               />
@@ -1200,6 +1244,7 @@ export default function CustodialMarketplacePanel({
                 value={deliveryChain}
                 setValue={setDeliveryChain}
                 walletMap={walletMap}
+                config={config}
                 onConnectChain={connectForChain}
                 busy={busy === 'buy'}
               />
@@ -1211,7 +1256,7 @@ export default function CustodialMarketplacePanel({
               )}
             </div>
             <button type="button" style={s.primaryBtn} disabled={busy === 'buy'} onClick={handleBuy}>
-              {busy === 'buy' ? 'Paying...' : 'Pay USDC'}
+              {busy === 'buy' ? 'Paying...' : `Pay ${paymentTokenLabel(config, paymentChain)}`}
             </button>
           </div>
         </div>
@@ -1240,6 +1285,15 @@ export default function CustodialMarketplacePanel({
         />
       ), document.body)}
 
+      {sellWalletModalOpen && canUsePortal && createPortal((
+        <SellWalletModal
+          chains={supportedAssets.length ? supportedAssets : ['base', 'arbitrum', 'monad', 'solana', 'aptos']}
+          walletMap={walletMap}
+          onChoose={changeSellWalletForChain}
+          onClose={() => setSellWalletModalOpen(false)}
+        />
+      ), document.body)}
+
       {notice && <div style={/^(Listed|Payment|Purchase|Listing cancelled)/.test(notice) ? s.noticeOk : s.notice}>{notice}</div>}
     </div>
   );
@@ -1249,7 +1303,7 @@ function Tab({ label, active, onClick }) {
   return <button type="button" onClick={onClick} style={{ ...s.tab, ...(active ? s.tabActive : null) }}>{label}</button>;
 }
 
-function ChipRow({ chains, value, setValue, walletMap, onConnectChain, busy }) {
+function ChipRow({ chains, value, setValue, walletMap, config, onConnectChain, busy }) {
   return (
     <div style={s.deliveryChips}>
       {chains.map((chain) => {
@@ -1264,9 +1318,9 @@ function ChipRow({ chains, value, setValue, walletMap, onConnectChain, busy }) {
             }}
             disabled={busy}
             style={{ ...s.chip, ...(value === chain ? s.chipActive : null), ...(!connected ? s.chipMuted : null) }}
-            title={connected ? CHAIN_LABEL[chain] : `Connect ${CHAIN_LABEL[chain]} wallet`}
+            title={connected ? paymentChainLabel(config, chain) : `Connect ${CHAIN_LABEL[chain]} wallet`}
           >
-            <span style={s.chipLabel}>{CHAIN_LABEL[chain] || chain}</span>
+            <span style={s.chipLabel}>{paymentChainLabel(config, chain)}</span>
             {!connected && <span style={s.chipStatus}>Connect</span>}
           </button>
         );
@@ -1312,7 +1366,7 @@ function PurchaseProgressModal({ flow, busy, onClose }) {
           <img src={orderImage(order)} alt="" style={s.progressImg} />
           <div style={s.progressMeta}>
             <b>{orderPrice(order)}</b>
-            <span>Pay with {CHAIN_LABEL[flow?.paymentChain] || flow?.paymentChain || 'USDC'}</span>
+            <span>Pay with {order?.payment?.label || order?.paymentLabel || CHAIN_LABEL[flow?.paymentChain] || flow?.paymentChain || 'USDC'}</span>
             <span>Receive on {CHAIN_LABEL[flow?.deliveryChain] || flow?.deliveryChain || '-'}</span>
           </div>
         </div>
@@ -1350,7 +1404,7 @@ function listingImage(flow) {
 function listingPrice(flow) {
   if (flow?.order?.priceUsdcUnits != null) return orderPrice(flow.order);
   const price = String(flow?.priceUsdc || '').trim();
-  return price ? `${price} USDC` : 'USDC price';
+  return price ? `$${price}` : 'USD price';
 }
 
 function ListingProgressModal({ flow, busy, onClose }) {
@@ -1502,7 +1556,7 @@ function BrowseView({ listings, loading, walletMap, compact, sort, setSort, leve
   );
 }
 
-function SellView({ ready, config, owned, loading, supportedAssets, walletMap, selectedAsset, setSelectedAsset, priceInput, setPriceInput, busy, onSubmit, onRefresh }) {
+function SellView({ ready, config, owned, loading, supportedAssets, walletMap, selectedAsset, setSelectedAsset, priceInput, setPriceInput, busy, onSubmit, onRefresh, onChangeWallet }) {
   const connectedChains = (supportedAssets || []).filter((chain) => walletForChain(chain, walletMap));
   const feeBps = Number(config?.feeBps || 0);
   const royaltyBps = Number(config?.royaltyBps || 0);
@@ -1513,7 +1567,10 @@ function SellView({ ready, config, owned, loading, supportedAssets, walletMap, s
     <div style={s.form}>
       <div style={s.formHeader}>
         <span style={s.formLabel}>Your Demon King NFTs</span>
-        <button type="button" style={s.smallBtn} onClick={onRefresh}>Reload</button>
+        <div style={s.formHeaderActions}>
+          <button type="button" style={s.smallBtn} onClick={onChangeWallet}>Change wallet</button>
+          <button type="button" style={s.smallBtn} onClick={onRefresh}>Reload</button>
+        </div>
       </div>
       {loading ? <div style={s.meta}>Loading your NFTs...</div> : (
         <div style={s.nftRow}>
@@ -1538,7 +1595,7 @@ function SellView({ ready, config, owned, loading, supportedAssets, walletMap, s
           : 'connect a wallet on the chain that holds your NFT'}
       </div>
       <label style={s.label}>
-        Price in USDC
+        List price in USD
         <input value={priceInput} onChange={(e) => setPriceInput(e.target.value)} placeholder="e.g. 50" style={s.input} />
       </label>
       <div style={s.feeLine}>
@@ -1547,6 +1604,57 @@ function SellView({ ready, config, owned, loading, supportedAssets, walletMap, s
       <button type="button" onClick={onSubmit} disabled={busy || !selectedAsset || !priceInput} style={{ ...s.primaryBtn, ...(busy ? s.disabledBtn : null) }}>
         {busy ? 'Listing...' : 'List and transfer to escrow'}
       </button>
+    </div>
+  );
+}
+
+function SellWalletModal({ chains, walletMap, onChoose, onClose }) {
+  const supported = (chains || []).filter(Boolean);
+  return (
+    <div style={s.modalOverlay} onClick={onClose}>
+      <div style={s.walletModal} onClick={(e) => e.stopPropagation()}>
+        <div style={s.modalHeader}>
+          <span style={s.modalTitle}>Choose NFT wallet</span>
+          <button type="button" style={s.closeBtn} onClick={onClose}>x</button>
+        </div>
+        <div style={s.walletModalSub}>
+          Select the network that holds the Demon King NFT you want to sell.
+        </div>
+        <div style={s.walletChoiceList}>
+          {supported.map((chain) => {
+            const connected = walletForChain(chain, walletMap);
+            const logo = chainLogo(chain);
+            return (
+              <button
+                key={chain}
+                type="button"
+                onClick={() => onChoose(chain)}
+                style={s.walletChoiceBtn}
+              >
+                <span style={s.walletChoiceBadge}>
+                  {logo ? (
+                    <img
+                      src={logo}
+                      alt=""
+                      style={s.walletChoiceLogo}
+                      onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                    />
+                  ) : (
+                    String(CHAIN_LABEL[chain] || chain).slice(0, 3).toUpperCase()
+                  )}
+                </span>
+                <span style={s.walletChoiceMain}>
+                  <span style={s.walletChoiceName}>{CHAIN_LABEL[chain] || chain}</span>
+                  <span style={s.walletChoiceStatus}>
+                    {connected ? `Connected ${shortAddr(connected, 6, 4)}` : 'Connect wallet'}
+                  </span>
+                </span>
+                <span style={s.walletChoiceAction}>{connected ? 'Change' : 'Connect'}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1664,6 +1772,7 @@ const s = {
   disabledBtn: { opacity: 0.55, cursor: 'not-allowed' },
   form: { display: 'flex', flexDirection: 'column', gap: 10 },
   formHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  formHeaderActions: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' },
   formLabel: { fontSize: 12, color: '#5C3A21', fontWeight: 900, textTransform: 'uppercase' },
   nftRow: { display: 'flex', gap: 8, overflowX: 'auto', padding: 6, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff8e6' },
   nftPick: { width: 104, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center', borderRadius: 8, border: '2px solid transparent', background: '#fff', padding: 5, color: '#5C3A21', fontSize: 10, fontWeight: 800, cursor: 'pointer' },
@@ -1685,9 +1794,19 @@ const s = {
   orderError: { color: '#a12a1e', fontWeight: 900 },
   modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 },
   modal: { width: 380, maxWidth: '94vw', padding: 12, borderRadius: 14, border: '4px solid #d4c8b0', background: '#fdf8e7', display: 'flex', flexDirection: 'column', gap: 10 },
+  walletModal: { width: 360, maxWidth: '94vw', padding: 12, borderRadius: 14, border: '4px solid #d4c8b0', background: '#fdf8e7', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: '0 18px 50px rgba(0,0,0,0.45)' },
   modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   modalTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21' },
   closeBtn: { width: 24, height: 24, borderRadius: 12, border: '2px solid #fff', background: '#E53935', color: '#fff', fontWeight: 900, cursor: 'pointer' },
+  walletModalSub: { fontSize: 12, fontWeight: 800, color: '#7a5a30', lineHeight: 1.35 },
+  walletChoiceList: { display: 'flex', flexDirection: 'column', gap: 7 },
+  walletChoiceBtn: { width: '100%', minHeight: 54, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc', color: '#5C3A21', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' },
+  walletChoiceBadge: { width: 38, height: 34, borderRadius: 9, background: '#fffaf0', border: '1px solid rgba(92,58,33,0.22)', color: '#5C3A21', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 900, letterSpacing: 0.4, flex: '0 0 auto', overflow: 'hidden', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.75)' },
+  walletChoiceLogo: { width: '82%', height: '82%', objectFit: 'contain', display: 'block' },
+  walletChoiceMain: { minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 },
+  walletChoiceName: { fontSize: 13, fontWeight: 900, color: '#5C3A21' },
+  walletChoiceStatus: { fontSize: 10, fontWeight: 800, color: '#7a5a30', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  walletChoiceAction: { flex: '0 0 auto', fontSize: 11, fontWeight: 900, color: '#1d6fe0', textTransform: 'uppercase' },
   modalImg: { width: '100%', aspectRatio: '1 / 1', objectFit: 'cover', borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff' },
   progressHead: { display: 'flex', gap: 10, alignItems: 'center', padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff8e6' },
   progressImg: { width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #d4c8b0', background: '#fff' },

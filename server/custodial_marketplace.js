@@ -158,6 +158,39 @@ function scaleUsdc6ToDecimals(units, decimals) {
   return raw / (10n ** BigInt(6 - d));
 }
 
+function decimalToScaledBigInt(value, scaleDecimals = 12) {
+  const raw = String(value ?? '').trim();
+  if (!raw || /^nan$/i.test(raw)) return 0n;
+  if (/e/i.test(raw)) {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return 0n;
+    return decimalToScaledBigInt(n.toFixed(scaleDecimals), scaleDecimals);
+  }
+  const sign = raw.startsWith('-') ? -1n : 1n;
+  const unsigned = raw.replace(/^[+-]/, '');
+  if (!/^\d+(?:\.\d+)?$/.test(unsigned)) return 0n;
+  const [whole, frac = ''] = unsigned.split('.');
+  const scaledFrac = (frac + '0'.repeat(scaleDecimals)).slice(0, scaleDecimals);
+  return sign * (BigInt(whole || '0') * (10n ** BigInt(scaleDecimals)) + BigInt(scaledFrac || '0'));
+}
+
+function usd6ToTokenUnits(usdUnits, tokenUsdPrice, decimals) {
+  const rawUsd = BigInt(String(usdUnits || '0'));
+  const priceScale = 12;
+  const price = decimalToScaledBigInt(tokenUsdPrice, priceScale);
+  const d = Math.max(0, Number(decimals) || 0);
+  if (price <= 0n) {
+    throw httpError(503, 'CLASH price is unavailable');
+  }
+  const numerator = rawUsd * (10n ** BigInt(d)) * (10n ** BigInt(priceScale));
+  const denominator = 1_000_000n * price;
+  const units = (numerator + denominator - 1n) / denominator;
+  if (units <= 0n) {
+    throw httpError(503, 'CLASH quote could not be calculated');
+  }
+  return units;
+}
+
 function shortLabel(chain) {
   return EVM_CHAIN_META[chain]?.label || (chain === 'solana' ? 'Solana' : chain === 'aptos' ? 'Aptos' : chain);
 }
@@ -195,6 +228,42 @@ function quoteMarketplaceSplit(priceUnits, feeBps = marketplaceFeeBps(), royalty
   const royalty = price * BigInt(royaltyBps) / 10_000n;
   const sellerAmount = price - fee - royalty;
   return { feeBps, royaltyBps, fee, royalty, sellerAmount };
+}
+
+function proportionalTokenAmount(totalTokenUnits, partUsdUnits, totalUsdUnits) {
+  const total = BigInt(String(totalTokenUnits || '0'));
+  const part = BigInt(String(partUsdUnits || '0'));
+  const whole = BigInt(String(totalUsdUnits || '0'));
+  if (total <= 0n || part <= 0n || whole <= 0n) return 0n;
+  return total * part / whole;
+}
+
+function solanaSellerPayoutUnits(order) {
+  if (String(order?.payment_chain || '').toLowerCase() !== 'solana') {
+    return BigInt(String(order?.seller_amount_usdc_units || '0'));
+  }
+  if (String(order?.payment_token || 'usdc').toLowerCase() === 'usdc') {
+    return BigInt(String(order?.seller_amount_usdc_units || '0'));
+  }
+  return proportionalTokenAmount(
+    order?.payment_amount_usdc_units,
+    order?.seller_amount_usdc_units,
+    order?.price_usdc_units
+  );
+}
+
+function solanaRevenuePayoutUnits(order, sellerTokenUnits) {
+  if (String(order?.payment_chain || '').toLowerCase() !== 'solana') return 0n;
+  const paid = BigInt(String(order?.payment_amount_usdc_units || '0'));
+  if (paid <= 0n) return 0n;
+  if (String(order?.payment_token || 'usdc').toLowerCase() === 'usdc') {
+    const feeRoyalty = BigInt(String(order?.fee_usdc_units || '0')) + BigInt(String(order?.royalty_usdc_units || '0'));
+    const priceAmount = BigInt(String(order?.price_usdc_units || '0'));
+    const paymentSalt = paid > priceAmount ? paid - priceAmount : 0n;
+    return feeRoyalty + paymentSalt;
+  }
+  const seller = BigInt(String(sellerTokenUnits || '0'));
+  return paid > seller ? paid - seller : 0n;
 }
 
 function insertEvent(orderId, eventType, { actorPlayerId = null, txHash = null, data = {} } = {}) {
@@ -830,6 +899,7 @@ function paymentConfigs(ctx) {
       chainId: EVM_CHAIN_META[chain].chainId,
       label: EVM_CHAIN_META[chain].label,
       token: 'usdc',
+      tokenLabel: 'USDC',
       tokenAddress: fallbackToken ? normalizeEvmAddress(fallbackToken, `${chain} USDC token`) : null,
       decimals: Number(usdcSpec.decimals || shop.usdcDecimals || (chain === 'monad' ? 18 : 6)),
       treasury: treasury ? normalizeEvmAddress(treasury, `${chain} USDC treasury`) : null,
@@ -842,14 +912,29 @@ function paymentConfigs(ctx) {
   const solanaPaymentTreasury = solanaMarketplacePaymentTreasury(ctx);
   const solanaRevenueTreasuryRaw = configuredSolanaRevenueTreasury(ctx);
   const solanaRevenueTreasury = solanaRevenueTreasuryRaw
-    ? normalizeSolanaPubkey(solanaRevenueTreasuryRaw, 'Solana USDC revenue treasury')
+    ? normalizeSolanaPubkey(solanaRevenueTreasuryRaw, 'Solana marketplace revenue treasury')
     : null;
+  const solanaClashMint = firstEnv(
+    'MARKETPLACE_SOLANA_CLASH_MINT',
+    'GAME_SHOP_SOLANA_CLASH_MINT',
+    'NFT_SOLANA_CLASH_MINT',
+    'SOLANA_CLASH_MINT'
+  ) || sol.clashMint || null;
+  const solanaClashReady = !!solanaClashMint && !!solanaPaymentTreasury;
   payments.solana = {
     chain: 'solana',
     label: 'Solana',
-    token: 'usdc',
-    tokenAddress: normalizeSolanaPubkey(process.env.MARKETPLACE_SOLANA_USDC_MINT || sol.usdcMint || SOLANA_USDC_MINT, 'Solana USDC mint'),
-    decimals: 6,
+    token: solanaClashReady ? 'clash' : 'usdc',
+    tokenLabel: solanaClashReady ? 'CLASH' : 'USDC',
+    tokenAddress: normalizeSolanaPubkey(
+      solanaClashReady
+        ? solanaClashMint
+        : (process.env.MARKETPLACE_SOLANA_USDC_MINT || sol.usdcMint || SOLANA_USDC_MINT),
+      solanaClashReady ? 'Solana CLASH mint' : 'Solana USDC mint'
+    ),
+    decimals: Number(solanaClashReady
+      ? (process.env.MARKETPLACE_SOLANA_CLASH_DECIMALS || sol.clashDecimals || process.env.CLASH_DECIMALS || 9)
+      : 6),
     treasury: solanaPaymentTreasury,
     revenueTreasury: solanaRevenueTreasury,
     rpcUrl: null,
@@ -872,6 +957,7 @@ function paymentConfigs(ctx) {
     chain: 'aptos',
     label: 'Aptos',
     token: 'usdc',
+    tokenLabel: 'USDC',
     tokenAddress: normalizeAptosWallet(process.env.MARKETPLACE_APTOS_USDC || apt.usdcAddress || aptDeployment.usdcMetadata || APTOS_USDC_METADATA, 'Aptos USDC metadata'),
     decimals: 6,
     treasury: aptosTreasury ? normalizeAptosWallet(aptosTreasury, 'Aptos USDC treasury') : null,
@@ -888,7 +974,12 @@ async function marketplaceRuntimeConfig(ctx) {
   const royaltyBps = marketplaceRoyaltyBps();
   const allowExternalVault = process.env.CUSTODIAL_MARKETPLACE_ALLOW_EXTERNAL_VAULT === '1';
   const supportedChains = ALL_CHAINS.filter((chain) => isVaultUsable(vaults[chain], allowExternalVault));
-  const supportedPaymentChains = ALL_CHAINS.filter((chain) => payments[chain]?.ready);
+  const supportedPaymentChains = ALL_CHAINS.filter((chain) => payments[chain]?.ready)
+    .sort((a, b) => {
+      const aMain = a === 'solana' && payments[a]?.token === 'clash' ? 0 : 1;
+      const bMain = b === 'solana' && payments[b]?.token === 'clash' ? 0 : 1;
+      return aMain - bMain;
+    });
   const supportedDestinationChains = ALL_CHAINS.filter((chain) => deliveryReady[chain]);
   return {
     enabled: process.env.CUSTODIAL_MARKETPLACE_ENABLED !== '0',
@@ -1065,13 +1156,14 @@ async function verifyAssetOwner(chain, assetId, expectedOwner) {
   throw httpError(400, `Unsupported asset chain ${chain}`);
 }
 
-async function verifyEvmUsdcPayment({ payment, txHash, amount, expectedFrom = null }) {
+async function verifyEvmTokenPayment({ payment, txHash, amount, expectedFrom = null }) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(String(txHash || ''))) throw httpError(400, 'Bad transaction hash');
   const receipt = await rpcCall(payment.rpcUrl, 'eth_getTransactionReceipt', [txHash]);
   if (!receipt) throw httpError(400, 'Tx not found or not confirmed yet');
   if (receipt.status !== '0x1') throw httpError(400, 'Tx failed on-chain');
-  const token = normalizeEvmAddress(payment.tokenAddress, 'USDC token');
-  const toWanted = normalizeEvmAddress(payment.treasury, 'USDC treasury');
+  const label = String(payment.label || payment.token || 'token').toUpperCase();
+  const token = normalizeEvmAddress(payment.tokenAddress, `${label} token`);
+  const toWanted = normalizeEvmAddress(payment.treasury, `${label} treasury`);
   const fromWanted = expectedFrom ? normalizeEvmAddress(expectedFrom, 'Buyer wallet') : null;
   let best = null;
   for (const log of receipt.logs || []) {
@@ -1086,13 +1178,14 @@ async function verifyEvmUsdcPayment({ payment, txHash, amount, expectedFrom = nu
     best = { from, to, value: value.toString(), blockNumber: receipt.blockNumber };
     break;
   }
-  if (!best) throw httpError(400, 'USDC transfer to treasury not found or under-paid');
+  if (!best) throw httpError(400, `${label} transfer to treasury not found or under-paid`);
   return { receipt, transfer: best };
 }
 
-async function verifySolanaUsdcPayment({ payment, txHash, amount, expectedFrom = null }) {
+async function verifySolanaTokenPayment({ payment, txHash, amount, expectedFrom = null }) {
   const { PublicKey } = require('@solana/web3.js');
   const { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } = require('@solana/spl-token');
+  const label = String(payment.label || payment.token || 'token').toUpperCase();
   const sig = String(txHash || '').trim();
   if (!/^[1-9A-HJ-NP-Za-km-z]{64,100}$/.test(sig)) throw httpError(400, 'Bad Solana transaction signature');
   const conn = solanaConnection();
@@ -1122,11 +1215,11 @@ async function verifySolanaUsdcPayment({ payment, txHash, amount, expectedFrom =
     best = { from: authority || expectedAuthority || '', to: treasuryAta, value: value.toString() };
     break;
   }
-  if (!best) throw httpError(400, 'Solana USDC transfer to treasury not found or under-paid');
+  if (!best) throw httpError(400, `Solana ${label} transfer to treasury not found or under-paid`);
   return { receipt: parsed, transfer: best };
 }
 
-async function verifyAptosUsdcPayment({ payment, txHash, amount, expectedFrom = null }) {
+async function verifyAptosTokenPayment({ payment, txHash, amount, expectedFrom = null }) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(String(txHash || ''))) throw httpError(400, 'Bad Aptos tx hash');
   const tx = await aptosFetchTx(txHash);
   if (!tx) throw httpError(400, 'Tx not found or not confirmed');
@@ -1134,8 +1227,9 @@ async function verifyAptosUsdcPayment({ payment, txHash, amount, expectedFrom = 
   if (expectedFrom && normalizeAptosWallet(tx.sender, 'Aptos tx sender') !== normalizeAptosWallet(expectedFrom, 'Buyer Aptos wallet')) {
     throw httpError(403, 'Aptos tx sender mismatch');
   }
-  const expectedAsset = normalizeAptosWallet(payment.tokenAddress, 'Aptos USDC metadata');
-  const expectedTreasury = normalizeAptosWallet(payment.treasury, 'Aptos USDC treasury');
+  const label = String(payment.label || payment.token || 'token').toUpperCase();
+  const expectedAsset = normalizeAptosWallet(payment.tokenAddress, `Aptos ${label} metadata`);
+  const expectedTreasury = normalizeAptosWallet(payment.treasury, `Aptos ${label} treasury`);
   const expectedPrimaryStore = require('./bridge_helpers').aptosPrimaryFungibleStoreAddress(expectedTreasury, expectedAsset);
   let creditedAmount = 0n;
   for (const ev of tx.events || []) {
@@ -1162,14 +1256,14 @@ async function verifyAptosUsdcPayment({ payment, txHash, amount, expectedFrom = 
       }
     }
   }
-  if (creditedAmount < BigInt(amount)) throw httpError(400, 'Aptos USDC transfer to treasury not found or under-paid');
+  if (creditedAmount < BigInt(amount)) throw httpError(400, `Aptos ${label} transfer to treasury not found or under-paid`);
   return { receipt: tx, transfer: { from: tx.sender, to: expectedTreasury, value: creditedAmount.toString() } };
 }
 
 async function verifyPayment({ payment, txHash, amount, expectedFrom = null }) {
-  if (isEvmChain(payment.chain)) return verifyEvmUsdcPayment({ payment, txHash, amount, expectedFrom });
-  if (payment.chain === 'solana') return verifySolanaUsdcPayment({ payment, txHash, amount, expectedFrom });
-  if (payment.chain === 'aptos') return verifyAptosUsdcPayment({ payment, txHash, amount, expectedFrom });
+  if (isEvmChain(payment.chain)) return verifyEvmTokenPayment({ payment, txHash, amount, expectedFrom });
+  if (payment.chain === 'solana') return verifySolanaTokenPayment({ payment, txHash, amount, expectedFrom });
+  if (payment.chain === 'aptos') return verifyAptosTokenPayment({ payment, txHash, amount, expectedFrom });
   throw httpError(400, `Unsupported payment chain ${payment.chain}`);
 }
 
@@ -1639,10 +1733,18 @@ async function payoutEvmUsdc({ chain, to, amount, ctx }) {
   return hash;
 }
 
-async function payoutSolanaUsdc({ to, amount, ctx, order = null }) {
+async function payoutSolanaToken({ to, amount, ctx, order = null }) {
   const signer = solanaCustodyKeypair();
   if (!signer) throw httpError(503, 'Solana payout signer is not configured');
-  const config = paymentConfigs(ctx).solana;
+  const baseConfig = paymentConfigs(ctx).solana;
+  const config = {
+    ...baseConfig,
+    token: order?.payment_token || baseConfig.token,
+    tokenAddress: order?.payment_token_address || baseConfig.tokenAddress,
+    decimals: Number(order?.payment_decimals || baseConfig.decimals || 6),
+    label: order?.payment_label || baseConfig.label || baseConfig.token || 'token',
+  };
+  const label = String(config.label || config.token || 'token').toUpperCase();
   const { PublicKey, Transaction } = require('@solana/web3.js');
   const {
     ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1672,14 +1774,10 @@ async function payoutSolanaUsdc({ to, amount, ctx, order = null }) {
 
   const revenueOwnerRaw = config.revenueTreasury || configuredSolanaRevenueTreasury(ctx);
   const revenueOwner = revenueOwnerRaw
-    ? new PublicKey(normalizeSolanaPubkey(revenueOwnerRaw, 'Solana USDC revenue treasury'))
+    ? new PublicKey(normalizeSolanaPubkey(revenueOwnerRaw, `Solana ${label} revenue treasury`))
     : null;
-  const feeRoyalty = BigInt(String(order?.fee_usdc_units || '0')) + BigInt(String(order?.royalty_usdc_units || '0'));
-  const paidAmount = order?.payment_chain === 'solana' ? BigInt(String(order?.payment_amount_usdc_units || '0')) : 0n;
-  const priceAmount = BigInt(String(order?.price_usdc_units || '0'));
-  const paymentSalt = paidAmount > priceAmount ? paidAmount - priceAmount : 0n;
   const revenueAmount = revenueOwner && revenueOwner.toBase58() !== signerAddress && order?.payment_chain === 'solana'
-    ? feeRoyalty + paymentSalt
+    ? solanaRevenuePayoutUnits(order, sellerAmount)
     : 0n;
   const requiredSourceAmount = sellerAmount + revenueAmount;
 
@@ -1703,7 +1801,7 @@ async function payoutSolanaUsdc({ to, amount, ctx, order = null }) {
   if (sourceUsdc < requiredSourceAmount) {
     throw httpError(
       409,
-      `Solana payout treasury has insufficient USDC: need ${formatUnits(requiredSourceAmount, 6)}, available ${formatUnits(sourceUsdc, 6)}`
+      `Solana payout treasury has insufficient ${label}: need ${formatUnits(requiredSourceAmount, config.decimals)}, available ${formatUnits(sourceUsdc, config.decimals)}`
     );
   }
   const rentNeeded = (destInfo ? 0 : tokenRentLamports) + (revenueAta && !revenueInfo ? tokenRentLamports : 0);
@@ -1723,7 +1821,7 @@ async function payoutSolanaUsdc({ to, amount, ctx, order = null }) {
     TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID
   ));
-  tx.add(createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, sellerAmount, 6, [], TOKEN_PROGRAM_ID));
+  tx.add(createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, sellerAmount, config.decimals, [], TOKEN_PROGRAM_ID));
   if (revenueAmount > 0n && revenueAta) {
     tx.add(createAssociatedTokenAccountIdempotentInstruction(
       signer.publicKey,
@@ -1733,7 +1831,7 @@ async function payoutSolanaUsdc({ to, amount, ctx, order = null }) {
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID
     ));
-    tx.add(createTransferCheckedInstruction(srcAta, mintPk, revenueAta, signer.publicKey, revenueAmount, 6, [], TOKEN_PROGRAM_ID));
+    tx.add(createTransferCheckedInstruction(srcAta, mintPk, revenueAta, signer.publicKey, revenueAmount, config.decimals, [], TOKEN_PROGRAM_ID));
   }
   return sendAndConfirmFresh(conn, tx, [signer], 'Custodial marketplace seller payout');
 }
@@ -1765,7 +1863,7 @@ async function maybeAutoPayout(order, ctx, actorPlayerId) {
   const chain = String(fresh.seller_payout_chain || '').toLowerCase();
   let txHash;
   if (isEvmChain(chain)) txHash = await payoutEvmUsdc({ chain, to: fresh.seller_payout_address, amount: fresh.seller_amount_usdc_units, ctx });
-  else if (chain === 'solana') txHash = await payoutSolanaUsdc({ to: fresh.seller_payout_address, amount: fresh.seller_amount_usdc_units, ctx, order: fresh });
+  else if (chain === 'solana') txHash = await payoutSolanaToken({ to: fresh.seller_payout_address, amount: solanaSellerPayoutUnits(fresh), ctx, order: fresh });
   else if (chain === 'aptos') txHash = await payoutAptosUsdc({ to: fresh.seller_payout_address, amount: fresh.seller_amount_usdc_units, ctx });
   else return fresh;
   gameDb.db.prepare(`
@@ -2340,12 +2438,16 @@ function mountCustodialMarketplace(router, ctx = {}) {
       if (!config.ready) throw httpError(503, 'Custodial marketplace wallets are not configured');
       const paymentChain = normalizeChain(req.body?.paymentChain || req.body?.chain || 'base', 'paymentChain');
       const payment = config.payments[paymentChain];
-      if (!payment?.ready) throw httpError(503, `${shortLabel(paymentChain)} USDC payments are not configured`);
+      if (!payment?.ready) throw httpError(503, `${shortLabel(paymentChain)} payments are not configured`);
       const buyerWallet = normalizeAddressForChain(paymentChain, req.body?.buyerWallet || req.body?.buyer, 'Buyer wallet');
       const destChain = normalizeChain(req.body?.destChain || req.body?.destinationChain || paymentChain, 'destinationChain');
       if (!config.supportedDestinationChains.includes(destChain)) throw httpError(400, 'Unsupported destination chain');
       const destAddress = normalizeAddressForChain(destChain, req.body?.destAddress || req.body?.destinationAddress || buyerWallet, 'Destination wallet');
       const ttlSeconds = Math.max(60, Math.min(300, Number(process.env.CUSTODIAL_MARKETPLACE_PAYMENT_TTL_SECONDS || 300)));
+      let clashUsd = null;
+      if (paymentChain === 'solana' && String(payment.token || '').toLowerCase() === 'clash') {
+        clashUsd = await ctx.fetchNftUsdPrice?.('clash');
+      }
       const result = gameDb.db.transaction(() => {
         const order = getOrder(req.params.id);
         if (!order) throw httpError(404, 'Listing not found');
@@ -2358,7 +2460,9 @@ function mountCustodialMarketplace(router, ctx = {}) {
         if (order.status !== 'active' && !expiredReservation && !sameBuyer) throw httpError(409, `Listing is ${order.status}`);
         if (sameBuyer && deadline >= nowSec() && order.payment_amount_usdc_units) return order;
         const nonce = `0x${crypto.randomBytes(12).toString('hex')}`;
-        const baseAmount = scaleUsdc6ToDecimals(order.price_usdc_units, payment.decimals);
+        const baseAmount = paymentChain === 'solana' && String(payment.token || '').toLowerCase() === 'clash'
+          ? usd6ToTokenUnits(order.price_usdc_units, clashUsd, payment.decimals)
+          : scaleUsdc6ToDecimals(order.price_usdc_units, payment.decimals);
         const salt = BigInt(crypto.randomInt(1, 1000));
         const amount = baseAmount + salt;
         const nextDeadline = nowSec() + ttlSeconds;
@@ -2370,10 +2474,10 @@ function mountCustodialMarketplace(router, ctx = {}) {
                  buyer_dest_chain = ?,
                  buyer_dest_address = ?,
                  payment_chain = ?,
-                 payment_token = 'usdc',
+                 payment_token = ?,
                  payment_token_address = ?,
                  payment_decimals = ?,
-                 payment_label = 'USDC',
+                 payment_label = ?,
                  payment_treasury = ?,
                  payment_amount_usdc_units = ?,
                  payment_nonce = ?,
@@ -2387,8 +2491,10 @@ function mountCustodialMarketplace(router, ctx = {}) {
           destChain,
           destAddress,
           paymentChain,
+          payment.token || 'usdc',
           payment.tokenAddress,
           payment.decimals,
+          payment.tokenLabel || String(payment.token || 'USDC').toUpperCase(),
           payment.treasury,
           amount.toString(),
           nonce,
@@ -2397,7 +2503,16 @@ function mountCustodialMarketplace(router, ctx = {}) {
         );
         insertEvent(order.id, 'buy_intent', {
           actorPlayerId: req.player.id,
-          data: { buyerWallet, paymentChain, destChain, destAddress, amountTokenUnits: amount.toString(), deadline: nextDeadline },
+          data: {
+            buyerWallet,
+            paymentChain,
+            paymentToken: payment.token || 'usdc',
+            paymentLabel: payment.tokenLabel || String(payment.token || 'USDC').toUpperCase(),
+            destChain,
+            destAddress,
+            amountTokenUnits: amount.toString(),
+            deadline: nextDeadline,
+          },
         });
         return getOrder(order.id);
       })();

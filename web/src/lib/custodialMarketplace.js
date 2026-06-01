@@ -361,6 +361,7 @@ export async function payCustodialOrderOnEvm({
   if (!publicClient || !walletClient) throw new Error('EVM wallet client is not ready');
 
   const amount = BigInt(payment.amountTokenUnits);
+  const tokenLabel = payment.label || 'USDC';
   const usdc = getAddress(payment.tokenAddress);
   const treasury = getAddress(payment.treasury);
   const buyer = getAddress(buyerWallet);
@@ -371,7 +372,7 @@ export async function payCustodialOrderOnEvm({
     args: [buyer],
   });
   if (BigInt(balance) < amount) {
-    throw new Error(`Not enough USDC. Need ${formatCustodialUnits(amount, payment.decimals)}, wallet has ${formatCustodialUnits(balance, payment.decimals)}.`);
+    throw new Error(`Not enough ${tokenLabel}. Need ${formatCustodialUnits(amount, payment.decimals)}, wallet has ${formatCustodialUnits(balance, payment.decimals)}.`);
   }
   onProgress?.({ step: 'payment', status: 'active', order });
   const txHash = await walletClient.writeContract({
@@ -475,6 +476,7 @@ export async function payCustodialOrderOnSolana({
     treasuryAta: shortSolanaAddress(treasuryAta),
     treasury: shortSolanaAddress(payment.treasury),
     amountTokenUnits: payment.amountTokenUnits,
+    tokenLabel: payment.label || payment.token || null,
     instructionCount: instructions.length,
   }, solWallet);
   let txHash = null;

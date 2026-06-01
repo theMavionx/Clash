@@ -1017,16 +1017,19 @@ async function fetchNftUsdPrice(asset) {
     : asset === 'apt' ? 'NFT_APT_USD'
     : asset === 'mon' ? 'NFT_MON_USD'
     : asset === 'skr' ? 'NFT_SKR_USD'
+    : asset === 'clash' ? 'NFT_CLASH_USD'
     : null;
   if (envKey && process.env[envKey]) return String(process.env[envKey]);
 
   // SKR — no major CoinGecko/Binance feed (newly launched Solana Mobile
   // token). Resolve via DexScreener using the SKR mint configured on the
   // Solana shop. Cached for 60s to avoid hammering on every quote.
-  if (asset === 'skr') {
-    const mint = process.env.GAME_SHOP_SOLANA_SKR_MINT || process.env.NFT_SOLANA_SKR_MINT || SOLANA_SKR_MINT_DEFAULT;
+  if (asset === 'skr' || asset === 'clash') {
+    const mint = asset === 'skr'
+      ? (process.env.GAME_SHOP_SOLANA_SKR_MINT || process.env.NFT_SOLANA_SKR_MINT || SOLANA_SKR_MINT_DEFAULT)
+      : (process.env.GAME_SHOP_SOLANA_CLASH_MINT || process.env.NFT_SOLANA_CLASH_MINT || process.env.SOLANA_CLASH_MINT);
     if (!mint) {
-      throw new Error('SKR price unavailable: GAME_SHOP_SOLANA_SKR_MINT / NFT_SOLANA_SKR_MINT not set');
+      throw new Error(`${asset.toUpperCase()} price unavailable: set ${asset === 'skr' ? 'GAME_SHOP_SOLANA_SKR_MINT / NFT_SOLANA_SKR_MINT' : 'GAME_SHOP_SOLANA_CLASH_MINT / NFT_SOLANA_CLASH_MINT'} or ${envKey}`);
     }
     return fetchSplTokenUsdPrice(mint);
   }
@@ -1776,6 +1779,13 @@ function gameShopSolanaConfig() {
   // SKR uses 6 decimals. The quote path still reads the mint account on-chain
   // so a future replacement mint cannot silently misprice payments.
   const skrDecimals = Number(process.env.GAME_SHOP_SOLANA_SKR_DECIMALS || process.env.NFT_SOLANA_SKR_DECIMALS || SOLANA_SKR_DECIMALS_DEFAULT);
+  const clashMint = process.env.GAME_SHOP_SOLANA_CLASH_MINT
+    || process.env.NFT_SOLANA_CLASH_MINT
+    || process.env.SOLANA_CLASH_MINT
+    || nftDeployment.clashMint
+    || nftDeployment.paymentGroups?.clash?.mint
+    || null;
+  const clashDecimals = Number(process.env.GAME_SHOP_SOLANA_CLASH_DECIMALS || process.env.NFT_SOLANA_CLASH_DECIMALS || process.env.CLASH_DECIMALS || 9);
   const saleActive = process.env.GAME_SHOP_SOLANA_SALE_ACTIVE
     ? process.env.GAME_SHOP_SOLANA_SALE_ACTIVE !== '0'
     : !!treasury; // any wallet that's configured = open
@@ -1787,6 +1797,9 @@ function gameShopSolanaConfig() {
     skrMint,
     skrDecimals,
     skrReady: !!skrMint,
+    clashMint,
+    clashDecimals,
+    clashReady: !!clashMint,
     memoProgram: SOLANA_MEMO_PROGRAM_ID,
     saleActive,
     ready: !!treasury,
@@ -15555,6 +15568,7 @@ try {
     gameShopEvmConfig,
     gameShopAptosConfig,
     gameShopSolanaConfig,
+    fetchNftUsdPrice,
     logError,
   });
 } catch (err) {
