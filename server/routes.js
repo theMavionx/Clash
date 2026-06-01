@@ -5982,6 +5982,7 @@ function auth(req, res, next) {
     if (now - prev >= LAST_SEEN_THROTTLE_MS) {
       _lastSeenBumpAt.set(player.id, now);
       db.stmts.bumpPlayerLastSeen.run(player.id);
+      db.stmts.insertPlayerActivity.run(player.id, 'heartbeat', 'api');
     }
   } catch { /* never block auth on a write failure */ }
   next();
@@ -12921,6 +12922,189 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     LIMIT 100
   `).all();
 
+  const playerAnalytics = (() => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const sessionGapMs = 30 * 60 * 1000;
+    const toMs = (value) => {
+      if (!value) return 0;
+      const t = new Date(String(value).replace(' ', 'T') + 'Z').getTime();
+      return Number.isFinite(t) ? t : 0;
+    };
+    const dayKey = (ms) => new Date(ms).toISOString().slice(0, 10);
+    const eventRows = [];
+    try {
+      eventRows.push(...db.db.prepare(`
+        SELECT player_id, created_at, event_type AS action, source
+        FROM player_activity_events
+        WHERE created_at > datetime('now', '-30 days')
+      `).all());
+    } catch {}
+    try {
+      eventRows.push(...db.db.prepare(`
+        SELECT player_id, created_at, COALESCE(NULLIF(source, ''), level, 'client_log') AS action, 'client_log' AS source
+        FROM client_logs
+        WHERE player_id IS NOT NULL AND created_at > datetime('now', '-30 days')
+      `).all());
+    } catch {}
+
+    const eventsByPlayer = new Map();
+    const activeDays7 = new Map();
+    const activeDays30 = new Map();
+    const activePlayersByDay7 = new Map();
+    const activePlayersByDay30 = new Map();
+    const actionCounts = new Map();
+    for (const row of eventRows) {
+      const ms = toMs(row.created_at);
+      if (!row.player_id || !ms) continue;
+      if (!eventsByPlayer.has(row.player_id)) eventsByPlayer.set(row.player_id, []);
+      eventsByPlayer.get(row.player_id).push({ ...row, ms });
+
+      const age = now - ms;
+      const d = dayKey(ms);
+      if (age <= 30 * dayMs) {
+        if (!activeDays30.has(row.player_id)) activeDays30.set(row.player_id, new Set());
+        activeDays30.get(row.player_id).add(d);
+        if (!activePlayersByDay30.has(d)) activePlayersByDay30.set(d, new Set());
+        activePlayersByDay30.get(d).add(row.player_id);
+      }
+      if (age <= 7 * dayMs) {
+        if (!activeDays7.has(row.player_id)) activeDays7.set(row.player_id, new Set());
+        activeDays7.get(row.player_id).add(d);
+        if (!activePlayersByDay7.has(d)) activePlayersByDay7.set(d, new Set());
+        activePlayersByDay7.get(d).add(row.player_id);
+        const key = String(row.action || row.source || 'activity').slice(0, 80);
+        actionCounts.set(key, (actionCounts.get(key) || 0) + 1);
+      }
+    }
+
+    const sessionsByPlayer = new Map();
+    const allSessions = [];
+    for (const [playerId, rows] of eventsByPlayer.entries()) {
+      rows.sort((a, b) => a.ms - b.ms);
+      const sessions = [];
+      let start = 0;
+      let end = 0;
+      let events = 0;
+      for (const row of rows) {
+        if (!start || row.ms - end > sessionGapMs) {
+          if (start) sessions.push({ start, end, events, durationMs: Math.max(0, end - start) });
+          start = row.ms;
+          events = 0;
+        }
+        end = row.ms;
+        events += 1;
+      }
+      if (start) sessions.push({ start, end, events, durationMs: Math.max(0, end - start) });
+      sessionsByPlayer.set(playerId, sessions);
+      allSessions.push(...sessions);
+    }
+
+    const activeAvg = (map, days) => {
+      let total = 0;
+      for (let i = 0; i < days; i += 1) {
+        total += map.get(dayKey(now - i * dayMs))?.size || 0;
+      }
+      return Math.round((total / days) * 10) / 10;
+    };
+    const avgDurationMin = (sessions) => {
+      const withDuration = sessions.filter(s => s.durationMs > 0);
+      if (!withDuration.length) return 0;
+      const avg = withDuration.reduce((sum, s) => sum + s.durationMs, 0) / withDuration.length;
+      return Math.round((avg / 60000) * 10) / 10;
+    };
+
+    const thRows = db.db.prepare(`
+      WITH player_th AS (
+        SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
+        FROM players p
+        LEFT JOIN buildings b ON b.player_id = p.id
+        GROUP BY p.id
+      ),
+      total AS (SELECT COUNT(*) AS n FROM player_th)
+      SELECT th_level,
+             COUNT(*) AS players,
+             ROUND(COUNT(*) * 100.0 / NULLIF((SELECT n FROM total), 0), 1) AS pct
+      FROM player_th
+      GROUP BY th_level
+      ORDER BY th_level
+    `).all();
+    const thAvgRow = db.db.prepare(`
+      WITH player_th AS (
+        SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
+        FROM players p
+        LEFT JOIN buildings b ON b.player_id = p.id
+        GROUP BY p.id
+      )
+      SELECT ROUND(AVG(th_level), 2) AS avg_th FROM player_th
+    `).get() || {};
+
+    const battleRows = db.db.prepare(`
+      SELECT attacker_id AS player_id,
+             COUNT(*) AS battles_7d,
+             COALESCE(SUM(CASE WHEN verified_result = 'accepted' THEN 1 ELSE 0 END), 0) AS accepted_7d
+      FROM battle_replays
+      WHERE created_at > datetime('now', '-7 days')
+      GROUP BY attacker_id
+    `).all();
+    const battlesByPlayer = new Map(battleRows.map(r => [r.player_id, r]));
+    const playerRows = db.db.prepare(`
+      SELECT p.id, p.name, p.dex, p.last_seen_at,
+             COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level,
+             COUNT(b.id) AS buildings_count
+      FROM players p
+      LEFT JOIN buildings b ON b.player_id = p.id
+      GROUP BY p.id
+      ORDER BY p.last_seen_at DESC
+      LIMIT 200
+    `).all().map((p) => {
+      const sessions = sessionsByPlayer.get(p.id) || [];
+      const evs = eventsByPlayer.get(p.id) || [];
+      const latest = evs.length ? evs[evs.length - 1] : null;
+      const b = battlesByPlayer.get(p.id) || {};
+      return {
+        id: p.id,
+        name: p.name,
+        dex: p.dex || 'unknown',
+        th_level: p.th_level || 1,
+        buildings_count: p.buildings_count || 0,
+        active_days_7d: activeDays7.get(p.id)?.size || 0,
+        active_days_30d: activeDays30.get(p.id)?.size || 0,
+        sessions_7d: sessions.filter(s => now - s.start <= 7 * dayMs).length,
+        avg_session_min_7d: avgDurationMin(sessions.filter(s => now - s.start <= 7 * dayMs)),
+        events_7d: evs.filter(e => now - e.ms <= 7 * dayMs).length,
+        battles_7d: b.battles_7d || 0,
+        accepted_battles_7d: b.accepted_7d || 0,
+        last_seen_at: p.last_seen_at,
+        last_action_at: latest?.created_at || p.last_seen_at || null,
+        last_action: latest?.action || null,
+      };
+    });
+
+    return {
+      summary: {
+        avg_daily_active_7d: activeAvg(activePlayersByDay7, 7),
+        avg_daily_active_30d: activeAvg(activePlayersByDay30, 30),
+        sessions_7d: allSessions.filter(s => now - s.start <= 7 * dayMs).length,
+        avg_session_min_7d: avgDurationMin(allSessions.filter(s => now - s.start <= 7 * dayMs)),
+        observed_events_7d: eventRows.filter(r => {
+          const ms = toMs(r.created_at);
+          return ms && now - ms <= 7 * dayMs;
+        }).length,
+        note: 'Session length is estimated from heartbeat/client-log events; a new session starts after 30 minutes of inactivity.',
+      },
+      town_hall: {
+        average: thAvgRow.avg_th || 0,
+        distribution: thRows,
+      },
+      actions: Array.from(actionCounts.entries())
+        .map(([action, count]) => ({ action, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 20),
+      players: playerRows,
+    };
+  })();
+
   res.json({
     players: playerCount, buildings: buildingCount, replays: replayCount,
     accepted, rejected, shielded, recentBattles,
@@ -12956,6 +13140,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
       popular_errors: mcpPopularErrors,
       recent: mcpRecent,
     },
+    player_analytics: playerAnalytics,
     uptime: Math.floor(process.uptime()),
     memory: Math.round(process.memoryUsage().rss / 1024 / 1024),
   });

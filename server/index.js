@@ -529,6 +529,28 @@ app.get('/api/admin/panel', (req, res) => {
   <div class="panel" id="tab-stats">
     <div class="stats" id="serverStats"></div>
 
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Player Analytics</h2>
+    <div class="stats" id="playerAnalyticsStats"></div>
+    <div style="font-size:12px;color:#9ca3af;margin:-10px 0 14px" id="playerAnalyticsNote"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+      <div style="flex:1;min-width:360px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Town Hall Distribution</h3>
+        <table><thead><tr>
+          <th>TH</th><th>Players</th><th>%</th><th>Share</th>
+        </tr></thead><tbody id="thDistributionBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Top Actions 7d</h3>
+        <table><thead><tr>
+          <th>Action</th><th>Events</th>
+        </tr></thead><tbody id="playerActionsBody"></tbody></table>
+      </div>
+    </div>
+    <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Players Activity</h3>
+    <table style="margin-bottom:20px"><thead><tr>
+      <th>Player</th><th>DEX</th><th>TH</th><th>Active Days 7d</th><th>Sessions 7d</th><th>Avg Session</th><th>Events 7d</th><th>Battles 7d</th><th>Last Action</th>
+    </tr></thead><tbody id="playerActivityBody"></tbody></table>
+
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">MCP Agent Usage</h2>
     <div class="stats" id="mcpStats"></div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
@@ -1845,6 +1867,54 @@ async function loadStats() {
       '<div class="stat"><div class="v" style="color:#8a9aaa">' + Math.round(s.economy.totalOre/1000) + 'K</div><div class="l">Total Ore</div></div>' +
       '<div class="stat"><div class="v">' + Math.floor(s.uptime/60) + 'm</div><div class="l">Uptime</div></div>' +
       '<div class="stat"><div class="v">' + s.memory + 'MB</div><div class="l">Memory</div></div>';
+
+    const pa = s.player_analytics || {};
+    const paSummary = pa.summary || {};
+    const th = pa.town_hall || {};
+    document.getElementById('playerAnalyticsStats').innerHTML =
+      '<div class="stat" style="border-color:#38bdf8"><div class="v" style="color:#38bdf8">' + (paSummary.avg_daily_active_7d || 0) + '</div><div class="l">Avg DAU 7d</div></div>' +
+      '<div class="stat"><div class="v" style="color:#a78bfa">' + (paSummary.avg_daily_active_30d || 0) + '</div><div class="l">Avg DAU 30d</div></div>' +
+      '<div class="stat"><div class="v">' + (paSummary.sessions_7d || 0) + '</div><div class="l">Sessions 7d</div></div>' +
+      '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + (paSummary.avg_session_min_7d || 0) + 'm</div><div class="l">Avg Session 7d</div></div>' +
+      '<div class="stat"><div class="v">' + (paSummary.observed_events_7d || 0) + '</div><div class="l">Observed Events 7d</div></div>' +
+      '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + (th.average || 0) + '</div><div class="l">Avg TH</div></div>';
+    document.getElementById('playerAnalyticsNote').textContent = paSummary.note || '';
+
+    const thRows = th.distribution || [];
+    document.getElementById('thDistributionBody').innerHTML = thRows.length
+      ? thRows.map(row => {
+          const pct = Number(row.pct || 0);
+          return '<tr>' +
+            '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.th_level || 1) + '</span></td>' +
+            '<td style="font-weight:800">' + (row.players || 0) + '</td>' +
+            '<td>' + pct.toFixed(1) + '%</td>' +
+            '<td><div style="width:140px;height:8px;background:#111827;border:1px solid #374151;border-radius:4px;overflow:hidden"><div style="height:100%;width:' + Math.max(0, Math.min(100, pct)) + '%;background:#f59e0b"></div></div></td>' +
+          '</tr>';
+        }).join('')
+      : '<tr><td colspan="4" style="color:#6b7280;text-align:center;padding:20px">No TH data yet</td></tr>';
+
+    const actionRows = pa.actions || [];
+    document.getElementById('playerActionsBody').innerHTML = actionRows.length
+      ? actionRows.map(row => '<tr>' +
+          '<td class="mono" style="font-size:12px;color:#e5e7eb">' + esc(row.action || '-') + '</td>' +
+          '<td style="font-weight:800">' + (row.count || 0) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="2" style="color:#6b7280;text-align:center;padding:20px">No action events yet</td></tr>';
+
+    const activityRows = pa.players || [];
+    document.getElementById('playerActivityBody').innerHTML = activityRows.length
+      ? activityRows.map(row => '<tr>' +
+          '<td><strong>' + esc(row.name || row.id || '-') + '</strong></td>' +
+          '<td>' + dexBadge(row.dex) + ' <span style="color:#9ca3af">' + esc(row.dex || 'unknown') + '</span></td>' +
+          '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.th_level || 1) + '</span><div style="font-size:10px;color:#6b7280;margin-top:3px">' + (row.buildings_count || 0) + ' buildings</div></td>' +
+          '<td>' + (row.active_days_7d || 0) + '</td>' +
+          '<td>' + (row.sessions_7d || 0) + '</td>' +
+          '<td>' + (row.avg_session_min_7d || 0) + 'm</td>' +
+          '<td>' + (row.events_7d || 0) + '</td>' +
+          '<td>' + (row.battles_7d || 0) + ' <span style="color:#4ade80">(' + (row.accepted_battles_7d || 0) + ' ok)</span></td>' +
+          '<td><div class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.last_action_at || row.last_seen_at)) + '</div><div style="font-size:11px;color:#6b7280">' + esc(row.last_action || 'heartbeat') + '</div></td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="9" style="color:#6b7280;text-align:center;padding:20px">No player activity yet</td></tr>';
 
     const mcp = s.mcp || {};
     const mcpSummary = mcp.summary || {};

@@ -597,6 +597,23 @@ try {
   `);
 } catch (e) { console.warn('[db] client_logs migration:', e.message); }
 
+// Lightweight presence event stream for admin analytics. last_seen_at gives
+// current presence, while these sampled heartbeat rows let the admin panel
+// compute daily active players and approximate session lengths over time.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS player_activity_events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id   TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      event_type  TEXT NOT NULL DEFAULT 'heartbeat',
+      source      TEXT NOT NULL DEFAULT 'api',
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_activity_recent ON player_activity_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_player_activity_player_recent ON player_activity_events(player_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] player_activity_events migration:', e.message); }
+
 // Player-submitted feedback and bug reports. Kept separate from client_logs:
 // these are intentional messages with contact details, not telemetry.
 try {
@@ -1282,6 +1299,10 @@ const stmts = {
   // The TEXT column stores ISO-ish "YYYY-MM-DD HH:MM:SS" so SQLite's
   // datetime() comparisons work directly.
   bumpPlayerLastSeen: db.prepare(`UPDATE players SET last_seen_at = datetime('now') WHERE id = ?`),
+  insertPlayerActivity: db.prepare(`
+    INSERT INTO player_activity_events (player_id, event_type, source)
+    VALUES (?, ?, ?)
+  `),
   markPlayerSeeker: db.prepare(`
     UPDATE players
     SET is_seeker = 1,
