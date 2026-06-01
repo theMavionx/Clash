@@ -11092,24 +11092,6 @@ router.post('/admin/shop/solana/reconcile', adminAuth, async (req, res) => {
   }
 });
 
-function isLocalAdminToolsRequest(req) {
-  if (process.env.CLASH_LOCAL_ADMIN_TOOLS === '1') return true;
-  const host = String(req.hostname || req.headers.host || '').split(':')[0].toLowerCase();
-  const ip = String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
-  return host === 'localhost'
-    || host === '127.0.0.1'
-    || host === '::1'
-    || ip === '127.0.0.1'
-    || ip === '::1';
-}
-
-function localAdminToolsOnly(req, res, next) {
-  if (!isLocalAdminToolsRequest(req)) {
-    return res.status(404).json({ error: 'Not found' });
-  }
-  next();
-}
-
 // List all players with full details (shields, wallet, last attack)
 router.get('/admin/players', adminAuth, (req, res) => {
   const players = db.db.prepare(`
@@ -12355,10 +12337,10 @@ function adminInsertBuilding(playerId, type, level, requestedGridIndex = null) {
   return { building, purchase_granted: purchaseGranted };
 }
 
-// Add a building to a specific player from the local admin panel.
+// Add a building to a specific player from the admin panel.
 // This bypasses resource cost and max-count checks, but still validates that
 // the target tile is legal and unoccupied.
-router.post('/admin/players/:name/add-building', adminAuth, localAdminToolsOnly, (req, res) => {
+router.post('/admin/players/:name/add-building', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ?').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
@@ -12421,7 +12403,7 @@ router.post('/admin/players/:name/add-building', adminAuth, localAdminToolsOnly,
   }
 });
 
-router.post('/admin/players/:name/max-village', adminAuth, localAdminToolsOnly, (req, res) => {
+router.post('/admin/players/:name/max-village', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ?').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });

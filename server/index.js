@@ -1122,8 +1122,8 @@ app.get('/api/admin/panel', (req, res) => {
   <div class="local-tools">
     <div class="local-tools-head">
       <div>
-        <div class="local-tools-title" id="localToolsTitle">Local Building Tools</div>
-        <div class="local-tools-sub">Localhost only. Adds buildings without resource cost.</div>
+        <div class="local-tools-title" id="localToolsTitle">Admin Building Tools</div>
+        <div class="local-tools-sub">Admin-only. Can alter live accounts and bypass resource costs.</div>
       </div>
       <button class="btn" onclick="closeBuildingTools()">Close</button>
     </div>
@@ -1158,7 +1158,6 @@ app.get('/api/admin/panel', (req, res) => {
 <script>
 let KEY = localStorage.getItem('admin_key') || '';
 let players = [], replays = [];
-const IS_LOCAL_ADMIN_PANEL = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 let localToolsPlayer = '';
 const ADMIN_BUILDING_TOOL_DEFS = [
   { type: 'altar', label: 'Altar', max: 1 },
@@ -1363,7 +1362,7 @@ function renderPlayers() {
     '<td>' + (p.shield_active ? '<span class="badge badge-shield">' + p.shield_remaining + 'm left</span>' : '<span class="badge badge-off">none</span>') + '</td>' +
     '<td title="' + (p.last_seen_age_sec != null ? Math.round(p.last_seen_age_sec/60) + ' min ago' : 'never') + '">' + statusBadge(p) + '</td>' +
     '<td class="mono">' + (p.created_at||'').split(' ')[0] + '</td>' +
-    '<td><button class="btn" onclick="addResPlayer(\\'' + esc(p.name) + '\\')">+Res</button> <button class="btn" onclick="adjustAccountTrophies(\\'' + esc(jsq(p.name)) + '\\')">+/- Troph</button> ' + (IS_LOCAL_ADMIN_PANEL ? '<button class="btn" onclick="openBuildingTools(\\'' + esc(jsq(p.name)) + '\\')">Local Tools</button> ' : '') + '<button class="btn" onclick="resetTrophies(\\'' + esc(p.name) + '\\')">0 Troph</button> <button class="btn" onclick="resetPlayer(\\'' + esc(p.name) + '\\')">Reset</button> <button class="btn btn-danger" onclick="deletePlayer(\\'' + esc(p.name) + '\\')">Delete</button></td>' +
+    '<td><button class="btn" onclick="addResPlayer(\\'' + esc(p.name) + '\\')">+Res</button> <button class="btn" onclick="adjustAccountTrophies(\\'' + esc(jsq(p.name)) + '\\')">+/- Troph</button> <button class="btn" onclick="openBuildingTools(\\'' + esc(jsq(p.name)) + '\\')">Admin Tools</button> <button class="btn" onclick="resetTrophies(\\'' + esc(p.name) + '\\')">0 Troph</button> <button class="btn" onclick="resetPlayer(\\'' + esc(p.name) + '\\')">Reset</button> <button class="btn btn-danger" onclick="deletePlayer(\\'' + esc(p.name) + '\\')">Delete</button></td>' +
     '</tr>'
   ).join('');
 }
@@ -1500,10 +1499,9 @@ function renderBuildingTools() {
 }
 
 function openBuildingTools(name) {
-  if (!IS_LOCAL_ADMIN_PANEL) return;
   localToolsPlayer = name;
-  document.getElementById('localToolsTitle').textContent = 'Local Admin Tools - ' + name;
-  setLocalToolsStatus('Choose resources, trophies, a building level, or max village preset.');
+  document.getElementById('localToolsTitle').textContent = 'Admin Tools - ' + name;
+  setLocalToolsStatus('Choose resources, trophies, a building level, or max village preset. These actions affect this account immediately.');
   renderBuildingTools();
   document.getElementById('localToolsModal').style.display = 'flex';
 }
