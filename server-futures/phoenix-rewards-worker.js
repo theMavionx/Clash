@@ -452,14 +452,18 @@ function loadLimitOrderPlacements(playerId, wallet, opts = {}) {
   `).all(...params);
 }
 
-function fillHasVerifiedLimitPlacement(fill, trade, placements) {
+function fillHasVerifiedPlacement(fill, trade, placements) {
   if (!placements.length) return false;
   const instructionType = String(fill?.instructionType || '').toLowerCase();
   const liquidity = String(fill?.liquidity || '').toLowerCase();
   const tradeType = String(fill?.tradeType || fill?.orderType || '').toLowerCase();
   const makerLimitFill = tradeType === 'limit'
     && (liquidity === 'maker' || instructionType === 'uncrosscrank');
-  if (!makerLimitFill) return false;
+  const conditionalFill = instructionType === 'executeconditionalorders'
+    || tradeType === 'conditional'
+    || tradeType === 'trigger'
+    || tradeType === 'stop';
+  if (!makerLimitFill && !conditionalFill) return false;
   const symbol = normalizeRewardSymbol(trade?.symbol || fill?.marketSymbol || fill?.symbol || fill?.market);
   const tsMs = fillTimestampMs(fill);
   if (!symbol || !tsMs) return false;
@@ -819,7 +823,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
         delayMs: opts.txDelayMs,
       });
       if (!flightVerified.ok) {
-        if (!fillHasVerifiedLimitPlacement(fill, trade, verifiedLimitPlacements)) {
+        if (!fillHasVerifiedPlacement(fill, trade, verifiedLimitPlacements)) {
           skipped++;
           skippedNoBuilderRoute++;
           continue;

@@ -4479,7 +4479,7 @@ export function usePhoenix() {
         });
         applyOptimisticMarginUse(amount);
         refreshTraderStateSoon([250, 1_000, 3_500, 8_000]);
-        [8_000, 35_000, 120_000, 10 * 60_000, 60 * 60_000].forEach((delayMs) => {
+        [0, 8_000, 35_000, 120_000, 10 * 60_000, 60 * 60_000].forEach((delayMs) => {
           setTimeout(() => {
             void importPhoenixHistoryFills({
               reason: 'limit_order_fill_check',
@@ -4488,7 +4488,7 @@ export function usePhoenix() {
               wallet: walletAddr,
               tx_check_limit: 200,
               minGapMs: 10_000,
-              force: delayMs >= 120_000,
+              force: delayMs === 0 || delayMs >= 120_000,
             }).then((data) => {
               if (Number(data?.imported || 0) > 0) {
                 return claimGold({ force: true, importFills: false });
@@ -4832,6 +4832,24 @@ export function usePhoenix() {
           ...tpslOrdersFromPositions([optimisticPosition]),
         ]);
         refreshTraderStateSoon([1_000, 4_000, 10_000, 20_000]);
+        [0, 30_000, 2 * 60_000, 10 * 60_000, 60 * 60_000].forEach((delayMs) => {
+          setTimeout(() => {
+            void importPhoenixHistoryFills({
+              reason: 'limit_order_fill_check',
+              signature,
+              symbol: phx,
+              wallet: walletAddr,
+              tx_check_limit: 200,
+              minGapMs: 10_000,
+              force: delayMs === 0 || delayMs >= 10 * 60_000,
+            }).then((data) => {
+              if (Number(data?.imported || 0) > 0) {
+                return claimGold({ force: true, importFills: false });
+              }
+              return null;
+            });
+          }, delayMs);
+        });
         return { success: true, signature };
       } catch (e) {
         const msg = phoenixInsufficientLamportsMessage(e) || e?.message || 'Phoenix TP/SL failed';
@@ -4852,7 +4870,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [ensureConditionalOrdersAccountIx, getOneTapSessionForSubaccounts, positions, refreshTraderStateSoon, runOnce, sendOrderIxs, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [claimGold, ensureConditionalOrdersAccountIx, getOneTapSessionForSubaccounts, importPhoenixHistoryFills, positions, refreshTraderStateSoon, runOnce, sendOrderIxs, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
