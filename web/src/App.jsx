@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, lazy, Suspense } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
-import { GodotProvider, usePlayer } from './hooks/useGodot';
+import { GodotProvider, usePlayer, useUI } from './hooks/useGodot';
 import WalletProvider from './components/WalletProvider';
 import PrivyAuthProvider from './components/PrivyAuthProvider';
 import { DexProvider, DexServerSync, useDex } from './contexts/DexContext';
@@ -27,6 +27,8 @@ import './index.css';
 // Lazy load heavy components — only after Farcaster SDK is ready
 const GodotCanvas = lazy(lazyWithClientReload(() => import('./components/GodotCanvas'), 'GodotCanvas'));
 const GameUI = lazy(lazyWithClientReload(() => import('./components/GameUI'), 'GameUI'));
+const CLASH_SOLANA_MINT = '9mM1Mc4Ta9UJJ32v5qsHef91PiXi7EWyiSsqF5WXpump';
+const CLASH_MIGRATION_NOTICE_KEY = 'clash_solana_migration_notice_v1';
 
 function FarcasterGate({ children }) {
   const { isInFrame, user, loading } = useFarcaster();
@@ -90,10 +92,68 @@ function AppInner() {
           <div style={styles.container}>
             <GodotCanvas />
             <GameUI />
+            <ClashMigrationNotice />
           </div>
         </Suspense>
       </ChunkErrorBoundary>
     </FarcasterGate>
+  );
+}
+
+function ClashMigrationNotice() {
+  const player = usePlayer();
+  const ui = useUI();
+  const [open, setOpen] = useState(false);
+  const canShow = !!(ui?.ready && !ui?.showRegister && (player?.token || (typeof window !== 'undefined' ? window._playerToken : null)));
+
+  useEffect(() => {
+    if (!canShow) return;
+    try {
+      setOpen(localStorage.getItem(CLASH_MIGRATION_NOTICE_KEY) !== '1');
+    } catch {
+      setOpen(true);
+    }
+  }, [canShow]);
+
+  function closeNotice() {
+    try { localStorage.setItem(CLASH_MIGRATION_NOTICE_KEY, '1'); } catch { /* storage disabled */ }
+    setOpen(false);
+  }
+
+  async function copyMint() {
+    try { await navigator.clipboard?.writeText?.(CLASH_SOLANA_MINT); } catch { /* clipboard unavailable */ }
+  }
+
+  if (!canShow || !open) return null;
+
+  return (
+    <div style={styles.noticeOverlay} role="dialog" aria-modal="true" aria-labelledby="clash-migration-title">
+      <div style={styles.noticePanel}>
+        <div style={styles.noticeHeader}>
+          <div style={styles.noticeBadge}>SOL</div>
+          <button type="button" style={styles.noticeClose} onClick={closeNotice} aria-label="Close">x</button>
+        </div>
+        <h2 id="clash-migration-title" style={styles.noticeTitle}>$CLASH Token Is Live On Solana</h2>
+        <p style={styles.noticeText}>
+          We completed the migration from the old Base token. The live Clash of Perps token ticker is now $CLASH on Solana.
+        </p>
+        <div style={styles.noticeContractBox}>
+          <span style={styles.noticeContractLabel}>Token contract</span>
+          <button type="button" style={styles.noticeContractValue} onClick={copyMint} title="Copy token contract">
+            {CLASH_SOLANA_MINT}
+          </button>
+        </div>
+        <div style={styles.noticeActions}>
+          <a href="https://x.com/xaitoshi_/status/2061513559180493074" target="_blank" rel="noreferrer" style={styles.noticeSecondaryBtn}>
+            Read article
+          </a>
+          <a href="https://migration.clashofperps.fun/" target="_blank" rel="noreferrer" style={styles.noticePrimaryBtn}>
+            Open migration
+          </a>
+        </div>
+        <button type="button" style={styles.noticeDoneBtn} onClick={closeNotice}>Got it</button>
+      </div>
+    </div>
   );
 }
 
@@ -287,5 +347,151 @@ const styles = {
     fontSize: 12,
     fontWeight: 600,
     fontFamily: '"Inter", "Segoe UI", sans-serif',
+  },
+  noticeOverlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 20000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    background: 'rgba(6, 8, 18, 0.72)',
+    backdropFilter: 'blur(3px)',
+    pointerEvents: 'auto',
+  },
+  noticePanel: {
+    width: 430,
+    maxWidth: 'calc(100vw - 28px)',
+    border: '4px solid #44a9d5',
+    background: '#f6e9c7',
+    boxShadow: '0 20px 55px rgba(0,0,0,0.45), inset 0 2px 0 rgba(255,255,255,0.7)',
+    color: '#5C3A21',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    padding: 18,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+  noticeHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  noticeBadge: {
+    height: 30,
+    minWidth: 50,
+    borderRadius: 8,
+    background: '#111827',
+    color: '#8dfd9a',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 12,
+    fontWeight: 900,
+    letterSpacing: 0.4,
+    border: '2px solid rgba(255,255,255,0.25)',
+  },
+  noticeClose: {
+    width: 30,
+    height: 30,
+    borderRadius: '50%',
+    border: '2px solid #fff',
+    background: '#E53935',
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 900,
+    lineHeight: 1,
+    cursor: 'pointer',
+  },
+  noticeTitle: {
+    margin: 0,
+    color: '#287ea7',
+    fontSize: 24,
+    fontWeight: 1000,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    textShadow: '0 2px 0 rgba(255,255,255,0.8)',
+  },
+  noticeText: {
+    margin: 0,
+    fontSize: 14,
+    fontWeight: 800,
+    lineHeight: 1.45,
+    textAlign: 'center',
+    color: '#6a5439',
+  },
+  noticeContractBox: {
+    border: '2px solid #c2ae83',
+    borderRadius: 10,
+    background: '#fff7dc',
+    padding: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  noticeContractLabel: {
+    fontSize: 11,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+    color: '#8a6b43',
+  },
+  noticeContractValue: {
+    width: '100%',
+    border: 0,
+    background: 'transparent',
+    padding: 0,
+    textAlign: 'left',
+    color: '#1f5f86',
+    fontSize: 12,
+    fontWeight: 900,
+    overflowWrap: 'anywhere',
+    cursor: 'copy',
+    fontFamily: '"JetBrains Mono", "Consolas", monospace',
+  },
+  noticeActions: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 10,
+  },
+  noticePrimaryBtn: {
+    minHeight: 42,
+    borderRadius: 12,
+    background: 'linear-gradient(180deg,#ffbe24,#ff7d18)',
+    color: '#fff',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    textDecoration: 'none',
+    fontSize: 13,
+    fontWeight: 1000,
+    textTransform: 'uppercase',
+    textShadow: '0 2px 2px rgba(0,0,0,0.35)',
+    boxShadow: '0 8px 18px rgba(230,112,20,0.25)',
+  },
+  noticeSecondaryBtn: {
+    minHeight: 42,
+    borderRadius: 12,
+    border: '2px solid #c2ae83',
+    background: '#fff8e6',
+    color: '#5C3A21',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    textDecoration: 'none',
+    fontSize: 13,
+    fontWeight: 1000,
+    textTransform: 'uppercase',
+  },
+  noticeDoneBtn: {
+    minHeight: 40,
+    borderRadius: 10,
+    border: '2px solid #c2ae83',
+    background: '#fff8e6',
+    color: '#5C3A21',
+    fontSize: 13,
+    fontWeight: 1000,
+    textTransform: 'uppercase',
+    cursor: 'pointer',
   },
 };
