@@ -1543,21 +1543,28 @@ function gameShopDeployment() {
   return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'game-shop-base-mainnet.json')) || {};
 }
 
+function gameShopBaseCopEnabled() {
+  return process.env.GAME_SHOP_BASE_COP_ENABLED === '1';
+}
+
 function gameShopConfig() {
   const deployment = gameShopDeployment();
   const nftBase = baseNftConfig();
-  const copToken = process.env.GAME_SHOP_COP_TOKEN
-    || process.env.NFT_BASE_CLASH_TOKEN
-    || process.env.CLASH_BASE_TOKEN
-    || deployment.copToken
-    || nftBase.clashToken
-    || ZERO_EVM_ADDRESS;
+  const baseCopEnabled = gameShopBaseCopEnabled();
+  const copToken = baseCopEnabled
+    ? (process.env.GAME_SHOP_COP_TOKEN
+      || process.env.NFT_BASE_CLASH_TOKEN
+      || process.env.CLASH_BASE_TOKEN
+      || deployment.copToken
+      || nftBase.clashToken
+      || ZERO_EVM_ADDRESS)
+    : ZERO_EVM_ADDRESS;
   const shop = process.env.GAME_SHOP_BASE_CONTRACT || deployment.shop || deployment.proxy || null;
   return {
     chainId: 8453,
     shop,
     copToken,
-    copReady: !!copToken && !/^0x0{40}$/i.test(copToken),
+    copReady: baseCopEnabled && !!copToken && !/^0x0{40}$/i.test(copToken),
     saleActive: process.env.GAME_SHOP_SALE_ACTIVE
       ? process.env.GAME_SHOP_SALE_ACTIVE !== '0'
       : !!deployment.saleActive,
@@ -1852,7 +1859,7 @@ const GAME_SHOP_PRODUCTS = {
     id: 'ai_messages_100',
     sku: 'ai_messages_100',
     title: 'AI Message Pack',
-    subtitle: '100 AI agent messages, or 150 when paid with CoP',
+    subtitle: '100 AI agent messages, or 150 when paid with CLASH',
     kind: 'ai_messages',
     usdPriceE6: '5000000',
     messageCredits: 100,
@@ -1893,7 +1900,9 @@ function getGameShopCopDiscountBps(product) {
 
 function gameShopUsdPriceE6ForPayment(product, { chain = '', payment = '' } = {}) {
   const base = BigInt(product.usdPriceE6);
-  if (String(chain).toLowerCase() === 'base' && String(payment).toLowerCase() === 'cop') {
+  const chainKey = String(chain).toLowerCase();
+  const paymentKey = String(payment).toLowerCase();
+  if ((chainKey === 'base' && paymentKey === 'cop') || (chainKey === 'solana' && paymentKey === 'clash')) {
     if (product.copUsdPriceE6) return BigInt(product.copUsdPriceE6);
     const discountBps = BigInt(getGameShopCopDiscountBps(product) || 0);
     return (base * (10_000n - discountBps)) / 10_000n;
@@ -1905,6 +1914,7 @@ function gameShopProductsForClient() {
   return Object.values(GAME_SHOP_PRODUCTS).filter((product) => !product.hidden).map((product) => {
     const copDiscountBps = getGameShopCopDiscountBps(product);
     const copUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'base', payment: 'cop' });
+    const clashUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'solana', payment: 'clash' });
     const hasCopPrice = product.copUsdPriceE6 || copDiscountBps != null;
     return {
       id: product.id,
@@ -1917,6 +1927,8 @@ function gameShopProductsForClient() {
       priceUsd: unitsToDecimalString(BigInt(product.usdPriceE6), 6),
       copUsdPriceE6: hasCopPrice ? copUsdPriceE6.toString() : null,
       copPriceUsd: hasCopPrice ? unitsToDecimalString(copUsdPriceE6, 6) : null,
+      clashUsdPriceE6: hasCopPrice ? clashUsdPriceE6.toString() : null,
+      clashPriceUsd: hasCopPrice ? unitsToDecimalString(clashUsdPriceE6, 6) : null,
       copDiscountBps,
       durationHours: product.durationHours || null,
       rewards: product.rewards || null,
@@ -3957,39 +3969,28 @@ router.get('/shop/config', async (req, res) => {
   const solanaSkrDecimals = solana.skrReady
     ? await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals)
     : solana.skrDecimals;
+  const solanaClashDecimals = solana.clashReady
+    ? await resolveSolanaMintDecimals(solana.clashMint, solana.clashDecimals)
+    : solana.clashDecimals;
   const baseEvm = gameShopEvmConfig('base');
   const arbitrum = gameShopEvmConfig('arbitrum');
   const monad = gameShopEvmConfig('monad');
   const aptos = gameShopAptosConfig();
   const copDiscountBps = Math.max(0, Math.min(9000, Number(process.env.GAME_SHOP_COP_DISCOUNT_BPS || 2000)));
-  const basePayments = [
-    ...(baseEvm?.payments || []),
-    {
-      id: 'cop',
-      kind: 'erc20',
-      label: 'CoP',
-      decimals: Number(process.env.GAME_SHOP_COP_DECIMALS || process.env.NFT_BASE_CLASH_DECIMALS || 18),
-      stable: false,
-      token: config.copToken,
-      discountBps: copDiscountBps,
-    },
-  ];
+  const basePayments = baseEvm?.payments || [];
   res.set('Cache-Control', 'no-store');
   res.json({
     base: {
       chainId: config.chainId,
       shop: config.shop,
       treasury: baseEvm?.treasury || config.deployment?.treasury || null,
-      copToken: config.copToken,
-      copReady: config.copReady,
       usdcMint: baseEvm?.usdcMint || BASE_USDC_TOKEN,
       usdcDecimals: baseEvm?.usdcDecimals || 6,
       nativeSymbol: baseEvm?.nativeSymbol || 'ETH',
       nativeDecimals: baseEvm?.nativeDecimals || 18,
       payments: basePayments,
-      copDiscountBps,
       saleActive: config.saleActive,
-      ready: !!((config.shop && config.copReady) || baseEvm?.ready),
+      ready: !!baseEvm?.ready,
     },
     solana: {
       chain: solana.chain,
@@ -3999,6 +4000,10 @@ router.get('/shop/config', async (req, res) => {
       skrMint: solana.skrMint,
       skrDecimals: solanaSkrDecimals,
       skrReady: solana.skrReady,
+      clashMint: solana.clashMint,
+      clashDecimals: solanaClashDecimals,
+      clashReady: solana.clashReady,
+      clashDiscountBps: copDiscountBps,
       memoProgram: solana.memoProgram,
       saleActive: solana.saleActive,
       ready: solana.ready,
@@ -4526,7 +4531,7 @@ async function verifySolanaShopPurchaseFromTx({
   }
 
   const payment = String(memoData.pay || 'usdc');
-  if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr') {
+  if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr' && payment !== 'clash') {
     const err = new Error('Bad memo payment token');
     err.status = 400;
     throw err;
@@ -4536,13 +4541,20 @@ async function verifySolanaShopPurchaseFromTx({
     err.status = 503;
     throw err;
   }
+  if (payment === 'clash' && !solana.clashReady) {
+    const err = new Error('CLASH shop is not configured on this server');
+    err.status = 503;
+    throw err;
+  }
 
   const expectedAmount = BigInt(memoData.amt);
   const expectedMint = payment === 'usdc' ? solana.usdcMint
                       : payment === 'skr'  ? solana.skrMint
+                      : payment === 'clash' ? solana.clashMint
                       : null;
   const expectedDecimals = payment === 'usdc' ? 6
                           : payment === 'skr'  ? await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals)
+                          : payment === 'clash' ? await resolveSolanaMintDecimals(solana.clashMint, solana.clashDecimals)
                           : 9;
 
   if (quoteIntent) {
@@ -4561,7 +4573,7 @@ async function verifySolanaShopPurchaseFromTx({
       [String(quoteIntent.payment), payment, 'payment'],
       [String(quoteIntent.treasury), String(solana.treasury), 'treasury'],
       [String(quoteIntent.amount), expectedAmount.toString(), 'amount'],
-      [String(quoteIntent.usd_price_e6), (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(), 'usd_price_e6'],
+      [String(quoteIntent.usd_price_e6), (gameShopUsdPriceE6ForPayment(product, { chain: 'solana', payment }) * BigInt(quantity)).toString(), 'usd_price_e6'],
     ];
     for (const [actual, expected, field] of quoteChecks) {
       if (actual !== expected) {
@@ -4590,7 +4602,7 @@ async function verifySolanaShopPurchaseFromTx({
     expectedTreasury: solana.treasury,
     expectedAmount,
   })) {
-    const tokenLabel = payment === 'usdc' ? 'USDC' : payment === 'skr' ? 'SKR' : 'SOL';
+    const tokenLabel = payment === 'usdc' ? 'USDC' : payment === 'skr' ? 'SKR' : payment === 'clash' ? 'CLASH' : 'SOL';
     const err = new Error(`${tokenLabel} transfer to treasury not found or under-paid`);
     err.status = 400;
     throw err;
@@ -4611,7 +4623,7 @@ async function verifySolanaShopPurchaseFromTx({
     expectedAmount,
     expectedMint,
     expectedDecimals,
-    tokenLabel: payment === 'usdc' ? expectedMint : payment === 'skr' ? expectedMint : 'SOL',
+    tokenLabel: payment === 'usdc' ? expectedMint : payment === 'skr' ? expectedMint : payment === 'clash' ? expectedMint : 'SOL',
     buyer: String(buyer || quoteIntent?.buyer || solanaTxSigner(parsedTx) || ''),
     source,
   };
@@ -4782,18 +4794,23 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
     }
 
     const payment = String(memoData.pay || 'usdc');
-    if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr') {
+    if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr' && payment !== 'clash') {
       return res.status(400).json({ error: 'Bad memo payment token' });
     }
     if (payment === 'skr' && !solana.skrReady) {
       return res.status(503).json({ error: 'SKR shop is not configured on this server' });
     }
+    if (payment === 'clash' && !solana.clashReady) {
+      return res.status(503).json({ error: 'CLASH shop is not configured on this server' });
+    }
     const expectedAmount = BigInt(memoData.amt);
     const expectedMint = payment === 'usdc' ? solana.usdcMint
                         : payment === 'skr'  ? solana.skrMint
+                        : payment === 'clash' ? solana.clashMint
                         : null;  // null for native SOL
     const expectedDecimals = payment === 'usdc' ? 6
                             : payment === 'skr'  ? await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals)
+                            : payment === 'clash' ? await resolveSolanaMintDecimals(solana.clashMint, solana.clashDecimals)
                             : 9;
 
     if (!txTransfersToTreasury({
@@ -4802,7 +4819,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
       expectedTreasury: solana.treasury,
       expectedAmount,
     })) {
-      const tokenLabel = payment === 'usdc' ? 'USDC' : payment === 'skr' ? 'SKR' : 'SOL';
+      const tokenLabel = payment === 'usdc' ? 'USDC' : payment === 'skr' ? 'SKR' : payment === 'clash' ? 'CLASH' : 'SOL';
       return res.status(400).json({
         error: `${tokenLabel} transfer to treasury not found or under-paid`,
       });
@@ -4818,6 +4835,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
       const applied = applyGameShopProduct(req.player.id, product, quantity, { chain: 'solana', payment });
       const tokenLabel = payment === 'usdc' ? expectedMint
                        : payment === 'skr'  ? expectedMint
+                       : payment === 'clash' ? expectedMint
                        : 'SOL';
       db.db.prepare(`
         INSERT INTO utility_purchases
@@ -4832,7 +4850,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
         tokenLabel,
         solana.treasury,
         expectedAmount.toString(),
-        (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
+        (gameShopUsdPriceE6ForPayment(product, { chain: 'solana', payment }) * BigInt(quantity)).toString(),
         product.durationHours ? product.durationHours * quantity : null,
         applied.shield_until || null,
       );
@@ -5019,11 +5037,15 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     }
 
     const payment = String(req.body?.payment || 'usdc').toLowerCase();
-    if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr') {
-      return res.status(400).json({ error: 'Bad payment token (usdc | sol | skr)' });
+    if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr' && payment !== 'clash') {
+      return res.status(400).json({ error: 'Bad payment token (usdc | sol | skr | clash)' });
     }
     if (payment === 'skr' && !solana.skrReady) {
       return res.status(503).json({ error: 'SKR shop is not configured yet — set GAME_SHOP_SOLANA_SKR_MINT' });
+    }
+
+    if (payment === 'clash' && !solana.clashReady) {
+      return res.status(503).json({ error: 'CLASH shop is not configured yet - set GAME_SHOP_SOLANA_CLASH_MINT' });
     }
 
     const buyer = String(req.body?.buyer || '').trim();
@@ -5032,7 +5054,7 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     }
 
     const quantity = parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10);
-    const usdPriceE6 = BigInt(product.usdPriceE6) * BigInt(quantity);
+    const usdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'solana', payment }) * BigInt(quantity);
     const usdAmount = unitsToDecimalString(usdPriceE6, 6);
 
     let amount;       // raw on-chain units (lamports for SOL, 1e6 for USDC)
@@ -5049,7 +5071,7 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
       amount = usdToNativeUnits(usdAmount, solUsd, 9); // lamports
       decimals = 9;
       priceSource = `SOL/USD ${solUsd}`;
-    } else {
+    } else if (payment === 'skr') {
       // SKR (Solana Mobile Seeker). Oracle price comes from env override
       // because no major price API has a canonical SKR/USD feed yet —
       // operator sets NFT_SKR_USD when ready to accept this token. Decimals
@@ -5060,6 +5082,13 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
       decimals = skrDecimals;
       priceSource = `SKR/USD ${skrUsd}`;
       mint = solana.skrMint;
+    } else {
+      const clashUsd = await fetchNftUsdPrice('clash');
+      const clashDecimals = await resolveSolanaMintDecimals(solana.clashMint, solana.clashDecimals);
+      amount = usdToNativeUnits(usdAmount, clashUsd, clashDecimals);
+      decimals = clashDecimals;
+      priceSource = `CLASH/USD ${clashUsd}`;
+      mint = solana.clashMint;
     }
 
     const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.GAME_SHOP_QUOTE_TTL_SECONDS || 600)));

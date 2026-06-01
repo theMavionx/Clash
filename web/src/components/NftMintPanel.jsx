@@ -16,7 +16,7 @@ import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { BASE_CHAIN_ID, BASE_PRIMARY_RPC_URL, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig';
-import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
+import { fetchGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
 import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, resolveDemonKingConnectedSyncTarget, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
@@ -34,7 +34,6 @@ const SALE_NFT_IMG = null;
 const SALE_NFT_DISPLAY_SUPPLY_CAP = 555;
 const SALE_NFT_MINT_SOLD_OUT = false;
 const SALE_NFT_MINT_LOCKED = !SALE_NFT_PUBLIC_REVEAL;
-const copLogoImg = '/icons/icon-192.png';
 const nftBasePublicClient = createPublicClient({ chain: base, transport: http(BASE_PRIMARY_RPC_URL) });
 const nftArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport: http() });
 const nftMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
@@ -63,16 +62,15 @@ function sameEvmAddress(a, b) {
     && String(a).toLowerCase() === String(b).toLowerCase();
 }
 
-// Token → asset URL. CoP uses the game's app icon (it's our token); the
-// rest map to brand SVG/PNG files already shipped in /public/tokens.
+// Token asset URLs already shipped in /public/tokens.
 // Unknown tokens fall back to a generic coin glyph in the renderer.
 const TOKEN_LOGO_SRC = {
-  CoP:  '/icons/icon-192.png',
   ETH:  '/tokens/ETH.svg',
   USDC: '/tokens/USDC.svg',
   SOL:  '/tokens/SOL.svg',
   ARB:  '/tokens/ARB.svg',
   MON:  '/tokens/MON.svg',
+  CLASH: '/icons/icon-192.png',
   APT:  '/tokens/APT.png',
   SKR:  '/tokens/SKR.png',
 };
@@ -87,6 +85,19 @@ const CHAIN_LOGO_SRC = {
 };
 function chainLogo(chain) { return CHAIN_LOGO_SRC[chain] || null; }
 
+function ChainLogoBadge({ chain, fallback, small = false }) {
+  const src = chainLogo(chain);
+  return (
+    <span style={small ? styles.chainLogoBadgeSmall : styles.chainLogoBadge}>
+      {src ? (
+        <img src={src} alt="" style={styles.chainLogoImg} />
+      ) : (
+        fallback
+      )}
+    </span>
+  );
+}
+
 const SHOP_TABS = [
   { id: 'resources',   label: 'Game Resources', mobileLabel: 'Resources' },
   ...(SHOW_NFT_MINT_TAB ? [{ id: 'nft', label: 'NFT', mobileLabel: 'NFT' }] : []),
@@ -98,19 +109,19 @@ const GAME_RESOURCE_PRODUCT_PRIORITY = {
 };
 
 const CHAIN_OPTIONS = [
-  { id: 'base', title: 'Base', subtitle: 'ETH / USDC / CoP', badge: 'EVM' },
+  { id: 'base', title: 'Base', subtitle: 'ETH / USDC', badge: 'EVM' },
   { id: 'solana', title: 'Solana', subtitle: 'SOL / USDC / SKR', badge: 'SOL' },
 ];
 
 const PAYMENT_OPTIONS = {
   base: [
-    { id: 'base-clash', chain: 'base', method: 'CoP', price: '$4.00', token: 'CoP', requiresClash: true },
     { id: 'base-eth', chain: 'base', method: 'ETH', price: '$5.50', token: 'ETH' },
     { id: 'base-usdc', chain: 'base', method: 'USDC', price: '$5.50', token: 'USDC' },
   ],
   solana: [
     { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$5.50', token: 'USDC' },
     { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '$5.50', token: 'SOL' },
+    { id: 'sol-clash', chain: 'solana', method: 'CLASH', price: '$4.00', token: 'CLASH', requiresClash: true },
     { id: 'sol-skr', chain: 'solana', method: 'SKR', price: '$5.00', token: 'SKR', requiresSkr: true },
   ],
   // Arbitrum + Monad shops are deployed and saleActive — direct mint with
@@ -131,29 +142,10 @@ const PAYMENT_OPTIONS = {
   ],
 };
 
-// Derive the CoP discount from the payment options so the banner
-// updates automatically if pricing ever changes. We compare CoP on
-// Base against the cheapest non-CoP option across both chains.
 function priceToNumber(price) {
   const n = parseFloat(String(price || '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(n) ? n : null;
 }
-const COP_DISCOUNT = (() => {
-  const clash = PAYMENT_OPTIONS.base.find((o) => o.requiresClash);
-  const regulars = [
-    ...PAYMENT_OPTIONS.base.filter((o) => !o.requiresClash),
-    ...PAYMENT_OPTIONS.solana.filter((o) => !o.requiresClash),
-  ];
-  const clashUsd = priceToNumber(clash?.price);
-  const baselineUsd = regulars
-    .map((o) => priceToNumber(o.price))
-    .filter((n) => n != null)
-    .reduce((min, n) => (min == null ? n : Math.min(min, n)), null);
-  if (!clashUsd || !baselineUsd || clashUsd >= baselineUsd) return null;
-  const savedUsd = baselineUsd - clashUsd;
-  const percent = Math.round((1 - clashUsd / baselineUsd) * 100);
-  return { clashUsd, baselineUsd, savedUsd, percent };
-})();
 
 const DEX_LABELS = {
   decibel: 'Decibel / Aptos',
@@ -164,6 +156,8 @@ const DEX_LABELS = {
   monad: 'Perpl / Monad',
   hyperliquid: 'Hyperliquid / Arbitrum',
   nado: 'Nado / Ink',
+  hotstuff: 'Hotstuff L1',
+  grvt: 'GRVT / GRVT Exchange',
 };
 
 function shortAddress(address) {
@@ -244,9 +238,11 @@ const DEX_TO_NFT_CHAIN = {
   decibel:  'aptos',
   hyperliquid: 'arbitrum',
   nado:     'base',
+  hotstuff: 'base',
+  grvt:     'base',
 };
 // All five chains now have a direct NFT mint endpoint:
-//   - base    /nft/base/quote   (CoP / ETH / USDC)
+//   - base    /nft/base/quote   (ETH / USDC)
 //   - solana  candy machine     (USDC / SOL / SKR)
 //   - arbitrum/monad /nft/evm/quote   (USDC / native)
 //   - aptos   /nft/aptos/quote  (USDC/APT, ed25519-signed)
@@ -302,16 +298,17 @@ function formatUsdAmount(value) {
 
 function shopUnitUsd(product, chain, payment) {
   const baseUsd = Number(product?.priceUsd || 0);
-  if (chain === 'base' && payment === 'cop') {
-    const copUsd = product?.copPriceUsd != null ? Number(product.copPriceUsd) : baseUsd * 0.8;
-    return Number.isFinite(copUsd) ? copUsd : baseUsd;
+  if (chain === 'solana' && payment === 'clash') {
+    const clashUsd = product?.clashPriceUsd != null ? Number(product.clashPriceUsd) : baseUsd * 0.8;
+    return Number.isFinite(clashUsd) ? clashUsd : baseUsd;
   }
   return Number.isFinite(baseUsd) ? baseUsd : 0;
 }
 
 function isShopDiscounted(product, chain, payment) {
   const baseUsd = Number(product?.priceUsd || 0);
-  return chain === 'base' && payment === 'cop' && shopUnitUsd(product, chain, payment) < baseUsd;
+  return (chain === 'solana' && payment === 'clash')
+    && shopUnitUsd(product, chain, payment) < baseUsd;
 }
 
 function formatBoosts(boosts) {
@@ -430,6 +427,7 @@ const DEX_TO_SHOP_CHAIN = {
   decibel:  'aptos',
   hyperliquid: 'arbitrum',
   nado:     'base',
+  hotstuff: 'base',
 };
 
 function shopChainForDex(dex) {
@@ -599,11 +597,11 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   // SHOP_PAYMENTS_BY_CHAIN below.
   useEffect(() => {
     const validPayments = {
-      solana:   ['usdc', 'sol', 'skr'],
+      solana:   ['usdc', 'sol', 'clash', 'skr'],
       aptos:    ['usdc', 'apt'],
       arbitrum: ['usdc', 'eth'],
       monad:    ['usdc', 'mon'],
-      base:     ['usdc', 'eth', 'cop'],
+      base:     ['usdc', 'eth'],
     };
     const allowed = validPayments[shopChain] || ['usdc'];
     if (!allowed.includes(shopPayment)) {
@@ -611,8 +609,13 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     }
   }, [shopChain, shopPayment]);
   const paymentOptions = useMemo(() => {
-    return PAYMENT_OPTIONS[selectedChain] || PAYMENT_OPTIONS.base;
-  }, [selectedChain]);
+    const options = PAYMENT_OPTIONS[selectedChain] || PAYMENT_OPTIONS.base;
+    if (selectedChain !== 'solana') return options;
+    const groups = mintConfig?.solana?.paymentGroups || mintConfig?.solana?.groups || {};
+    return options
+      .filter((option) => !option.requiresSkr || !!groups.skr)
+      .filter((option) => !option.requiresClash || !!groups.clash);
+  }, [mintConfig?.solana?.groups, mintConfig?.solana?.paymentGroups, selectedChain]);
   const selected = useMemo(
     () => paymentOptions.find((option) => option.id === selectedPayment) || paymentOptions[0],
     [paymentOptions, selectedPayment],
@@ -783,14 +786,6 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     }
     setChainPickerOpen(false);
   }, [activeShopTab, handleSelectChain, handleSelectShopChain]);
-
-  const handleSelectCop = useCallback(() => {
-    setSelectedChain('base');
-    setSelectedPayment('base-clash');
-    setStep('payment');
-    setNotice(null);
-    addClientBreadcrumb('nft.cop_discount_selected', { dex });
-  }, [dex]);
 
   const handleBackToChains = useCallback(() => {
     setStep('chain');
@@ -1007,23 +1002,15 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
           quantity,
         });
       } else if (shopChain === 'base') {
-        result = shopPayment === 'cop'
-          ? await buyGameShopItem({
-              evmWallet,
-              buyer: evmAddress,
-              token: sessionToken,
-              sku: product.sku,
-              quantity,
-            })
-          : await buyEvmShopItem({
-              evmWallet,
-              buyer: evmAddress,
-              token: sessionToken,
-              chain: shopChain,
-              sku: product.sku,
-              payment: shopPayment,
-              quantity,
-            });
+        result = await buyEvmShopItem({
+          evmWallet,
+          buyer: evmAddress,
+          token: sessionToken,
+          chain: shopChain,
+          sku: product.sku,
+          payment: shopPayment,
+          quantity,
+        });
       } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
         result = await buyEvmShopItem({
           evmWallet,
@@ -1307,6 +1294,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   style={styles.switchChainBtn}
                   title="Switch payment chain"
                 >
+                  <ChainLogoBadge chain={activePaymentChain} fallback={activePaymentChainLabel.slice(0, 3).toUpperCase()} small />
                   <span>{activePaymentChainLabel}</span>
                   <span style={styles.switchChainArrow}>{chainPickerOpen ? '^' : 'v'}</span>
                 </button>
@@ -1365,7 +1353,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   <div style={{ ...styles.topRow, ...styles.topRowResources }}>
                     <div style={styles.summary}>
                       <span style={styles.heroName}>Game Resources</span>
-                      <span style={styles.editionTag}>{SHOP_CHAIN_LABEL[shopChain] || 'Base'}: {shopChain === 'base' ? 'USDC, ETH, CoP -20%' : 'USDC / native'}</span>
+                      <span style={styles.editionTag}>{SHOP_CHAIN_LABEL[shopChain] || 'Base'}: {shopChain === 'base' ? 'USDC / ETH' : 'USDC / native'}</span>
                     </div>
                   </div>
                   <GameResourcesTab
@@ -1376,6 +1364,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     payment={shopPayment}
                     onPaymentChange={setShopPayment}
                     skrReady={!!gameShopConfig?.solana?.skrReady}
+                    clashReady={!!gameShopConfig?.solana?.clashReady}
                     evmAddress={evmAddress}
                     evmOnChain={evmOnShopChain}
                     solAddress={solAddress}
@@ -1456,11 +1445,6 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                               </span>
                               <span style={styles.optionMain}>
                                 {option.method}
-                                {option.requiresClash && COP_DISCOUNT && (
-                                  <span style={styles.optionDiscountChip}>
-                                    -{COP_DISCOUNT.percent}%
-                                  </span>
-                                )}
                               </span>
                               <span style={styles.optionPrice}>{option.price}</span>
                               {saleMintSoldOut && <span style={styles.soonBadge}>SOLD OUT</span>}
@@ -1638,7 +1622,6 @@ const SHOP_PAYMENTS_BY_CHAIN = {
   base: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'eth',  label: 'ETH',  sub: 'Native' },
-    { id: 'cop',  label: 'CoP',  sub: '20% off' },
   ],
   arbitrum: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
@@ -1651,12 +1634,23 @@ const SHOP_PAYMENTS_BY_CHAIN = {
   solana: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'sol',  label: 'SOL',  sub: 'Native' },
+    { id: 'clash', label: 'CLASH', sub: '20% off' },
     { id: 'skr',  label: 'SKR',  sub: 'Seeker' },
   ],
   aptos: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'apt',  label: 'APT',  sub: 'Native' },
   ],
+};
+
+const SHOP_PAYMENT_TOKEN_ICONS = {
+  usdc: '/tokens/USDC.svg',
+  eth: '/tokens/ETH.svg',
+  mon: '/tokens/MON.svg',
+  sol: '/tokens/SOL.svg',
+  clash: '/icons/icon-192.png',
+  skr: '/tokens/SKR.png',
+  apt: '/tokens/APT.png',
 };
 
 const SHOP_CHAIN_LABEL = {
@@ -1668,10 +1662,10 @@ const SHOP_CHAIN_LABEL = {
 };
 
 const SHOP_CHAIN_CHOICES = [
-  { id: 'base', title: 'Base', subtitle: 'USDC / ETH / CoP', badge: 'EVM' },
+  { id: 'base', title: 'Base', subtitle: 'USDC / ETH', badge: 'EVM' },
   { id: 'arbitrum', title: 'Arbitrum', subtitle: 'USDC / ETH', badge: 'EVM' },
   { id: 'monad', title: 'Monad', subtitle: 'USDC / MON', badge: 'EVM' },
-  { id: 'solana', title: 'Solana', subtitle: 'USDC / SOL / SKR', badge: 'SOL' },
+  { id: 'solana', title: 'Solana', subtitle: 'USDC / SOL / CLASH / SKR', badge: 'SOL' },
   { id: 'aptos', title: 'Aptos', subtitle: 'USDC / APT', badge: 'APT' },
 ];
 
@@ -1711,7 +1705,7 @@ function ShopChainSwitcher({ activeChain, readiness, onSelect }) {
               ...(!ready ? styles.chainSwitchBtnDisabled : null),
             }}
           >
-            <span style={styles.chainSwitchBadge}>{chain.badge}</span>
+            <ChainLogoBadge chain={chain.id} fallback={chain.badge} />
             <span style={styles.chainSwitchMain}>
               <span style={styles.chainSwitchName}>{chain.title}</span>
               <span style={styles.chainSwitchSub}>{ready ? chain.subtitle : 'Not live yet'}</span>
@@ -1731,7 +1725,6 @@ const DEMON_KING_UPGRADE_PRICE_HINT = {
   mon: '~$8.90',
   sol: '~$8.90',
   skr: '~$8.90',
-  cop: '$5.00',
 };
 
 function shopChainChoice(chain) {
@@ -1825,10 +1818,10 @@ function DemonKingUpgradePanel({
   const onCorrectChain = !isEvmUpgradeChain || (!!chainId && Number(evmChainId) === Number(chainId));
   const paymentOptions = useMemo(() => {
     if (isEvmUpgradeChain) {
-      return (SHOP_PAYMENTS_BY_CHAIN[chain] || []).filter((option) => ['usdc', 'eth', 'mon', 'cop'].includes(option.id));
+      return (SHOP_PAYMENTS_BY_CHAIN[chain] || []).filter((option) => ['usdc', 'eth', 'mon'].includes(option.id));
     }
     if (chain === 'solana') {
-      return (SHOP_PAYMENTS_BY_CHAIN.solana || []).filter((option) => ['usdc', 'sol', 'skr'].includes(option.id));
+      return (SHOP_PAYMENTS_BY_CHAIN.solana || []).filter((option) => ['usdc', 'sol', 'clash', 'skr'].includes(option.id));
     }
     if (chain === 'aptos') {
       return (SHOP_PAYMENTS_BY_CHAIN.aptos || []).filter((option) => option.id === 'usdc');
@@ -2369,6 +2362,7 @@ function GameResourcesTab({
   payment,
   onPaymentChange,
   skrReady,
+  clashReady,
   evmAddress,
   evmOnChain,
   solAddress,
@@ -2391,11 +2385,12 @@ function GameResourcesTab({
                        : chain === 'aptos'    ? !!aptosAddress
                        : /* evm */              (!!evmAddress && evmOnChain);
   const walletPreparing = chain === 'solana' && !!preparingSolanaWallet;
-  // Per-chain payment toggle. We filter SKR off when the operator hasn't
-  // configured GAME_SHOP_SOLANA_SKR_MINT (skrReady=false) so the UI never
+  // Per-chain payment toggle. We filter project tokens off when the operator
+  // hasn't configured their mint so the UI never
   // offers a payment path the server will reject with 503.
   const paymentOptions = (SHOP_PAYMENTS_BY_CHAIN[chain] || [])
-    .filter((o) => o.id !== 'skr' || skrReady);
+    .filter((o) => o.id !== 'skr' || skrReady)
+    .filter((o) => o.id !== 'clash' || clashReady);
   const paymentLabel = paymentOptions.length > 0
     ? (paymentOptions.find((o) => o.id === payment)?.label || 'USDC')
     : 'USDC';
@@ -2455,8 +2450,22 @@ function GameResourcesTab({
                   ...(active ? styles.shopPaymentBtnActive : null),
                 }}
               >
-                <span style={styles.shopPaymentLabel}>{opt.label}</span>
-                <span style={styles.shopPaymentSub}>{opt.sub}</span>
+                {SHOP_PAYMENT_TOKEN_ICONS[opt.id] ? (
+                  <img
+                    src={SHOP_PAYMENT_TOKEN_ICONS[opt.id]}
+                    alt=""
+                    style={styles.shopPaymentIcon}
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  />
+                ) : (
+                  <span style={styles.shopPaymentFallbackIcon}>
+                    {opt.label.slice(0, 3).toUpperCase()}
+                  </span>
+                )}
+                <span style={styles.shopPaymentText}>
+                  <span style={styles.shopPaymentLabel}>{opt.label}</span>
+                  <span style={styles.shopPaymentSub}>{opt.sub}</span>
+                </span>
               </button>
             );
           })}
@@ -2688,9 +2697,7 @@ function getContextLine(dex) {
 }
 
 async function handleBaseMint({ selected, evmAddress, evmWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex, quantity = 1 }) {
-  const payment = selected.id === 'base-usdc' ? 'usdc'
-    : selected.id === 'base-clash' ? 'cop'
-      : 'eth';
+  const payment = selected.id === 'base-usdc' ? 'usdc' : 'eth';
   const count = clampQuantity(quantity);
   setBusy('mint');
   setMintStatus?.('pending');
@@ -2821,6 +2828,8 @@ async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setM
 async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex, quantity = 1 }) {
   const payment = String(selected?.token || '').toLowerCase() === 'skr'
     ? 'skr'
+    : String(selected?.token || '').toLowerCase() === 'clash'
+      ? 'clash'
     : selected.id === 'sol-sol' ? 'sol' : 'usdc';
   const count = clampQuantity(quantity);
   setBusy('mint');
@@ -3880,9 +3889,25 @@ const styles = {
     overflow: 'hidden',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.75), 0 2px 4px rgba(0,0,0,0.12)',
   },
+  chainLogoBadgeSmall: {
+    flex: '0 0 auto',
+    width: 22,
+    height: 22,
+    borderRadius: '50%',
+    background: '#fffaf0',
+    border: '1px solid rgba(92,58,33,0.22)',
+    color: '#5C3A21',
+    fontSize: 8,
+    fontWeight: 900,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.75)',
+  },
   chainLogoImg: {
-    width: '100%',
-    height: '100%',
+    width: '82%',
+    height: '82%',
     objectFit: 'contain',
     display: 'block',
   },
@@ -4372,16 +4397,17 @@ const styles = {
   shopPaymentBtn: {
     minHeight: 36,
     display: 'flex',
-    flexDirection: 'column',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
     border: '2px solid #c2ae83',
     borderRadius: 9,
     background: '#fff',
     color: '#77573d',
     cursor: 'pointer',
     fontFamily: 'inherit',
-    padding: '2px 6px',
+    padding: '4px 8px',
   },
   shopPaymentBtnActive: {
     border: '2px solid #1d6fe0',
@@ -4390,13 +4416,47 @@ const styles = {
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 3px rgba(0,0,0,0.12)',
   },
   shopPaymentLabel: {
+    display: 'block',
     fontSize: 12,
     fontWeight: 900,
+    lineHeight: 1.05,
   },
   shopPaymentSub: {
+    display: 'block',
     fontSize: 9,
     fontWeight: 800,
     opacity: 0.7,
+    lineHeight: 1.1,
+  },
+  shopPaymentText: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    textAlign: 'left',
+  },
+  shopPaymentIcon: {
+    width: 20,
+    height: 20,
+    objectFit: 'contain',
+    borderRadius: 6,
+    overflow: 'hidden',
+    flex: '0 0 auto',
+    filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.18))',
+  },
+  shopPaymentFallbackIcon: {
+    width: 24,
+    height: 20,
+    borderRadius: 6,
+    background: '#5C3A21',
+    color: '#fff7df',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 8,
+    fontWeight: 900,
+    letterSpacing: 0.2,
+    flex: '0 0 auto',
   },
   resourceGrid: {
     display: 'grid',
@@ -4727,7 +4787,7 @@ const styles = {
     fontWeight: 900,
     color: '#f8e1a0',
   },
-  // Promotional banner highlighting the CoP-token discount. Sits
+  // Promotional banner highlighting the CLASH-token discount. Sits
   // between the supply box and the chain picker so the saving is the
   // first thing the user reads when deciding which network to mint on.
   clashBanner: {
@@ -5000,7 +5060,7 @@ const styles = {
     objectFit: 'cover',
     display: 'block',
   },
-  // Small green chip pinned next to the CoP option label to mark the
+  // Small green chip pinned next to the discounted option label to mark the
   // discount inline. Matches the green PnL/savings tone used elsewhere
   // (e.g. clashBannerSubAccent) so the savings cue is consistent.
   optionDiscountChip: {
