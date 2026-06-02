@@ -63,6 +63,55 @@ const PHOENIX_DEFAULT_TAKER_FEE_RATE = 0.00035;
 const PHOENIX_FEE_BUFFER_RATE = 0.0001;
 const PHOENIX_DEFAULT_REFERRAL_CODE = 'MVWG4BTW';
 
+function finiteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function firstFinite(...values) {
+  for (const value of values) {
+    const n = finiteNumber(value);
+    if (n != null) return n;
+  }
+  return null;
+}
+
+function baseSymbolForIcon(market, fallbackSymbol = '') {
+  const raw = String(
+    market?.icon_symbol
+    || market?.base
+    || market?.base_asset
+    || market?.base_symbol
+    || market?.display_base_asset_symbol
+    || fallbackSymbol
+    || market?.symbol
+    || '',
+  ).trim();
+  if (!raw) return '';
+  return raw
+    .replace(/[_/-]?(USDT|USDC|USD|PERP)$/iu, '')
+    .replace(/[_/-]?(USDT|USDC|USD)[_/-]?PERP$/iu, '')
+    .replace(/[_/-]?(USDT|USDC|USD)$/iu, '');
+}
+
+function marketChange24h(priceRow) {
+  if (!priceRow) return 0;
+  const explicit = firstFinite(
+    priceRow.price_change_24h,
+    priceRow.change_24h,
+    priceRow.change24h,
+    priceRow.priceChange24h,
+    priceRow.price_change_pct_24h,
+    priceRow.percent_change_24h,
+    priceRow.change_pct,
+    priceRow.daily_change_pct,
+  );
+  if (explicit != null) return explicit;
+  const mark = firstFinite(priceRow.mark, priceRow.mid, priceRow.oracle, priceRow.last_price);
+  const yest = firstFinite(priceRow.yesterday_price, priceRow.prev_day_price, priceRow.open24h, priceRow.price_24h_ago);
+  return mark != null && yest != null && yest > 0 ? ((mark - yest) / yest) * 100 : 0;
+}
+
 function shortAddr(value) {
   const text = String(value || '');
   return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text;
@@ -906,15 +955,15 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
   const rows = useMemo(() => {
     return markets.map(m => {
       const p = prices.find(pr => pr.symbol === m.symbol);
-      const mark = p ? parseFloat(p.mark) : 0;
-      const yest = p ? parseFloat(p.yesterday_price || 0) : 0;
-      const change = yest > 0 ? ((mark - yest) / yest) * 100 : 0;
+      const priceData = { ...m, ...(p || {}) };
+      const mark = firstFinite(priceData.mark, priceData._mark, priceData.mid, priceData.oracle) || 0;
+      const change = marketChange24h(priceData);
       return {
         symbol: m.symbol,
         // Prefer the human-readable pair ("USD/JPY") when present; falls back
         // to the symbol key for legacy Pacifica markets that only ship base.
         label: m.pair || m.symbol,
-        iconSym: m.icon_symbol || m.base || m.base_asset || m.symbol,
+        iconSym: baseSymbolForIcon(m, m.symbol),
         maxLev: m.max_leverage,
         mark,
         change,
@@ -1691,6 +1740,8 @@ function FuturesPanel() {
   const [phoenixInviteKind, setPhoenixInviteKind] = useState('referral');
   const [risexInviteCode, setRisexInviteCode] = useState('');
   const [grvtApiKeyInput, setGrvtApiKeyInput] = useState('');
+  const [grvtOneTapOpen, setGrvtOneTapOpen] = useState(false);
+  const [grvtPrivateKeyInput, setGrvtPrivateKeyInput] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
@@ -1816,8 +1867,10 @@ function FuturesPanel() {
   }, [symbol]);
 
   const currentPrice = useMemo(() => {
-    return prices.find(p => p.symbol === symbol)?.mark || null;
-  }, [prices, symbol]);
+    const priceRow = prices.find(p => p.symbol === symbol);
+    const marketRow = markets.find(m => m.symbol === symbol);
+    return firstFinite(priceRow?.mark, priceRow?.mid, marketRow?._mark, marketRow?.mark, marketRow?.mid) || null;
+  }, [prices, markets, symbol]);
 
   const maxLev = useMemo(() => {
     return markets.find(m => m.symbol === symbol)?.max_leverage || 100;
@@ -2298,12 +2351,12 @@ function FuturesPanel() {
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
-  const curPriceData = useMemo(() => prices.find(p => p.symbol === symbol), [prices, symbol]);
+  const curPriceData = useMemo(() => {
+    const priceRow = prices.find(p => p.symbol === symbol);
+    return { ...(currentMarket || {}), ...(priceRow || {}) };
+  }, [prices, symbol, currentMarket]);
   const change24h = useMemo(() => {
-    if (!curPriceData) return 0;
-    const yest = parseFloat(curPriceData.yesterday_price || 0);
-    const mark = parseFloat(curPriceData.mark || 0);
-    return yest > 0 ? ((mark - yest) / yest) * 100 : 0;
+    return marketChange24h(curPriceData);
   }, [curPriceData]);
   const vol24h = curPriceData ? parseFloat(curPriceData.volume_24h || 0) : 0;
   const oi = curPriceData ? parseFloat(curPriceData.open_interest || 0) : 0;
@@ -2319,7 +2372,7 @@ function FuturesPanel() {
     <>
       <div style={{...S.symbolBar, ...(fullscreen ? {background: '#e8dfc8', borderBottom: '3px solid #d4c8b0'} : {})}}>
         <button style={{...S.symbolBtn, padding: '6px 10px', gap: 6, whiteSpace: 'nowrap', flexShrink: 0}} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
-          <TokenIcon sym={currentMarket?.icon_symbol || currentMarket?.base || symbol} size={20} />
+          <TokenIcon sym={baseSymbolForIcon(currentMarket, symbol)} size={20} />
           <span style={{fontSize: 15, fontWeight: 900}}>{symbol}</span>
           {(() => {
             const loaded = elfaSignals && Object.keys(elfaSignals).length > 0;
@@ -5355,6 +5408,98 @@ function FuturesPanel() {
             read-only info card that explains funds live in the user's own
             wallet. Per-DEX accent colour + chain copy keeps the brand
             consistent (Avantis blue / Base, GMX purple / Arbitrum). */}
+        {dex === 'grvt' && (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={{...S.label, color: '#16A34A'}}>One tap trading</span>
+              <span style={{...S.detail, color: oneTapTrading?.enabled ? '#15803D' : '#9f8759'}}>
+                {oneTapTrading?.enabled ? 'Enabled' : 'Optional'}
+              </span>
+            </div>
+            <button
+              style={{
+                ...S.btnSmall,
+                width: '100%',
+                padding: '9px 10px',
+                background: oneTapTrading?.enabled ? '#DCFCE7' : '#fffaf0',
+                color: oneTapTrading?.enabled ? '#166534' : '#5C3A21',
+                border: `2px solid ${oneTapTrading?.enabled ? '#16A34A' : '#d4c8b0'}`,
+              }}
+              onClick={async () => {
+                if (oneTapTrading?.enabled) {
+                  const res = await setOneTapTradingEnabled?.(false);
+                  if (res?.error) setLocalAlert(res.error);
+                  else {
+                    setGrvtPrivateKeyInput('');
+                    setGrvtOneTapOpen(false);
+                    setSuccessMsg('GRVT one tap trading disabled.');
+                  }
+                } else {
+                  setGrvtOneTapOpen(v => !v);
+                }
+              }}
+            >
+              {oneTapTrading?.enabled ? 'Disable one tap trading' : (grvtOneTapOpen ? 'Hide private key field' : 'Enable one tap trading')}
+            </button>
+            {oneTapTrading?.enabled && oneTapTrading?.signer && (
+              <div style={{
+                marginTop: 8,
+                background: 'rgba(22,163,74,0.08)',
+                border: '2px dashed rgba(22,163,74,0.35)',
+                borderRadius: 10,
+                padding: '8px 10px',
+                fontSize: 10,
+                fontWeight: 800,
+                color: '#166534',
+                wordBreak: 'break-all',
+              }}>
+                Signer: {oneTapTrading.signer}
+              </div>
+            )}
+            {!oneTapTrading?.enabled && grvtOneTapOpen && (
+              <div style={{display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8}}>
+                <input
+                  type="password"
+                  placeholder="Paste GRVT Secret Private Key"
+                  value={grvtPrivateKeyInput}
+                  onChange={e => setGrvtPrivateKeyInput(e.target.value)}
+                  autoComplete="new-password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  style={{...S.input, width: '100%', padding: '9px 10px', fontSize: 13}}
+                />
+                <button
+                  style={{
+                    ...S.btnSmall,
+                    width: '100%',
+                    padding: '9px 10px',
+                    background: '#16A34A',
+                    color: '#fff',
+                    border: '2px solid #15803D',
+                    opacity: !grvtPrivateKeyInput.trim() ? 0.65 : 1,
+                  }}
+                  disabled={!grvtPrivateKeyInput.trim()}
+                  onClick={async () => {
+                    const res = await setOneTapTradingEnabled?.(true, grvtPrivateKeyInput.trim());
+                    if (res?.error) setLocalAlert(res.error);
+                    else {
+                      setGrvtPrivateKeyInput('');
+                      setGrvtOneTapOpen(false);
+                      setSuccessMsg('GRVT one tap trading enabled. Orders will sign from this browser.');
+                    }
+                  }}
+                >
+                  Save private key in browser
+                </button>
+                <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
+                  Clash does not send this key to our servers. It stays in this browser local storage and survives reloads and normal cache clears, but a full browser/site-data reset will remove it.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid') ? (() => {
           const isGmx = dex === 'gmx';
           const isHyperliquid = dex === 'hyperliquid';

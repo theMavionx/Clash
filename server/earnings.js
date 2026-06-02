@@ -803,6 +803,137 @@ async function fetchNadoEarnings() {
   };
 }
 
+// GRVT: builder fees are attributed through GRVT builder fills. When the
+// builder API key/cookie is configured we read the builder fill endpoint
+// directly; otherwise we still surface local imported grvt_builder fills.
+const GRVT_BUILDER_FEE_BPS = Math.max(0, Number(
+  process.env.GRVT_BUILDER_FEE_BPS
+  || process.env.VITE_GRVT_BUILDER_FEE_BPS
+  || 5,
+)) || 5;
+
+function payloadRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.result)) return payload.result;
+  if (Array.isArray(payload?.r)) return payload.r;
+  if (Array.isArray(payload?.results)) return payload.results;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.fills)) return payload.fills;
+  return [];
+}
+
+function valueOfAny(obj, ...keys) {
+  for (const key of keys) {
+    const value = obj?.[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+}
+
+function grvtFillNotional(fill) {
+  const direct = safeNumber(valueOfAny(fill, 'notional', 'notional_usd', 'notionalUsd', 'nv'));
+  if (direct > 0) return direct;
+  const size = Math.abs(safeNumber(valueOfAny(fill, 'size', 's', 'amount')));
+  const price = safeNumber(valueOfAny(fill, 'price', 'p'));
+  return size > 0 && price > 0 ? size * price : 0;
+}
+
+function grvtFillFee(fill) {
+  const raw = valueOfAny(
+    fill,
+    'builder_fee',
+    'builderFee',
+    'builder_fee_usd',
+    'builderFeeUsd',
+    'fee',
+    'f',
+  );
+  const text = String(raw ?? '').trim();
+  if (/^-?\d+$/u.test(text)) {
+    const integer = Math.abs(Number(text));
+    // GRVT fee fields are returned as fixed 1e6 quote-token units when they
+    // have no decimal point. Decimal strings are already human USDC.
+    if (Number.isFinite(integer)) return integer / 1e6;
+  }
+  return Math.abs(safeNumber(text));
+}
+
+function readGrvtLocalStats() {
+  const Db = loadSqlite();
+  if (!Db || !FS.existsSync(FUTURES_DB)) return { trades: 0, volume_usd: 0, earned_usd: 0 };
+  let fdb = null;
+  try {
+    fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    const row = fdb.prepare(`
+      SELECT COUNT(*) AS trades,
+             COALESCE(SUM(
+               CASE
+                 WHEN COALESCE(notional_usd, 0) > 0 THEN notional_usd
+                 ELSE ABS(CAST(amount AS REAL) * CAST(price AS REAL))
+               END
+             ), 0) AS volume_usd,
+             COALESCE(SUM(ABS(CAST(fee AS REAL))), 0) AS earned_usd
+      FROM trade_history
+      WHERE dex = 'grvt'
+        AND status = 'filled'
+        AND verified_source = 'grvt_builder'
+    `).get();
+    return {
+      trades: safeNumber(row?.trades),
+      volume_usd: roundUsd(row?.volume_usd),
+      earned_usd: roundUsd(row?.earned_usd),
+    };
+  } catch {
+    return { trades: 0, volume_usd: 0, earned_usd: 0 };
+  } finally {
+    if (fdb) fdb.close();
+  }
+}
+
+async function fetchGrvtEarnings() {
+  const local = readGrvtLocalStats();
+  const estimated = local.volume_usd * (GRVT_BUILDER_FEE_BPS / 10000);
+  const base = {
+    currency: 'USDC (GRVT)',
+    volume_usd: local.volume_usd,
+    trades: local.trades,
+    local_earned_usd: local.earned_usd,
+    estimated_fee_usd: roundUsd(estimated),
+    builder_fee_bps: GRVT_BUILDER_FEE_BPS,
+    builder_fee_pct: GRVT_BUILDER_FEE_BPS / 100,
+    model: 'grvt_builder_fill_history',
+    source_detail: 'grvt_builder_fill_history',
+  };
+
+  try {
+    const grvt = require('../server-futures/grvt');
+    if (typeof grvt.getBuilderFillHistory !== 'function') throw new Error('GRVT builder fill reader unavailable');
+    const payload = await grvt.getBuilderFillHistory({ limit: 1000 });
+    const fills = payloadRows(payload);
+    const earned = fills.reduce((sum, fill) => sum + grvtFillFee(fill), 0);
+    const volume = fills.reduce((sum, fill) => sum + grvtFillNotional(fill), 0);
+    return {
+      ...base,
+      ok: true,
+      earned_usd: roundUsd(earned),
+      volume_usd: roundUsd(volume || local.volume_usd),
+      trades: fills.length || local.trades,
+      local_trades: local.trades,
+      local_volume_usd: local.volume_usd,
+      local_earned_usd: local.earned_usd,
+      note: `Exact GRVT builder fill history fee sum from ${fills.length} fill(s). Local imported grvt_builder fills: ${local.trades}, $${local.volume_usd.toFixed(2)} volume, $${local.earned_usd.toFixed(4)} fee.`,
+    };
+  } catch (e) {
+    return {
+      ...base,
+      earned_usd: local.earned_usd,
+      source_detail: 'local_grvt_builder_fills',
+      note: `GRVT builder fill history is unavailable (${String(e?.message || e).slice(0, 120)}). Showing local imported grvt_builder fills; local ${GRVT_BUILDER_FEE_BPS}bps estimate is $${roundUsd(estimated).toFixed(4)}.`,
+    };
+  }
+}
+
 async function fetchHotstuffEarnings() {
   const broker = String(
     process.env.HOTSTUFF_BROKER_ADDRESS
@@ -836,6 +967,7 @@ const ANALYTICS_DEXES = [
   { key: 'phoenix', label: 'Phoenix' },
   { key: 'monad', label: 'Perpl' },
   { key: 'hyperliquid', label: 'Hyperliquid' },
+  { key: 'grvt', label: 'GRVT' },
   { key: 'risex', label: 'RISE' },
   { key: 'nado', label: 'Nado' },
   { key: 'hotstuff', label: 'Hotstuff' },
@@ -895,6 +1027,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'decibel') return "verified_source = 'server'";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
+  if (dex === 'grvt') return "verified_source = 'grvt_builder'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
   if (dex === 'nado') return "verified_source = 'nado_api'";
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
@@ -948,6 +1081,18 @@ function revenueModelForDex(dex, dateForRate = null) {
       builder_fee_pct: bps / 100,
       model: 'single_builder_fee',
       source_detail: HYPERLIQUID_BUILDER_ADDRESS ? 'local_volume_x_hyperliquid_bps' : 'hyperliquid_builder_not_configured',
+    };
+  }
+  if (dex === 'grvt') {
+    const bps = Math.max(0, GRVT_BUILDER_FEE_BPS);
+    return {
+      configured: bps > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps builder fee` : 'not configured',
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_grvt_bps' : 'grvt_builder_not_configured',
     };
   }
   if (dex === 'avantis') {
@@ -1008,9 +1153,8 @@ function revenueModelForDex(dex, dateForRate = null) {
   }
   if (dex === 'hotstuff') {
     return {
-      ...base,
+      configured: false,
       rate: 0,
-      earned_usd: 0,
       rate_label: 'broker pending',
       builder_fee_bps: 0,
       model: 'builder_fee_not_configured',
@@ -1341,7 +1485,7 @@ async function fetchAllEarnings({ force = false } = {}) {
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, phx, mon, hl, nado, hotstuff] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, phx, mon, hl, grvt, nado, hotstuff] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
@@ -1349,6 +1493,7 @@ async function fetchAllEarnings({ force = false } = {}) {
     fetchPhoenixEarnings(),
     fetchPerplEarnings(),
     fetchHyperliquidEarnings(),
+    fetchGrvtEarnings(),
     fetchNadoEarnings(),
     fetchHotstuffEarnings(),
   ]);
@@ -1364,11 +1509,12 @@ async function fetchAllEarnings({ force = false } = {}) {
     phoenix:  { ...wrap('phoenix',  phx), source: 'phoenix_flight_collateral_transfers' },
     monad:    { ...wrap('monad',    mon), source: 'perpl_builder_fee_not_configured' },
     hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_referral_builder_rewards' },
+    grvt: { ...wrap('grvt', grvt), source: 'grvt_builder_fill_history' },
     nado: { ...wrap('nado', nado), source: 'nado_indexer_match_builder_fee' },
     hotstuff: { ...wrap('hotstuff', hotstuff), source: 'hotstuff_broker_pending' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','nado','hotstuff'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','grvt','nado','hotstuff'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/tokenLogos';
 
+// v10 = retries all failed logos after symbol normalization fixes and uses
+//       multi-letter ticker badges for final fallback.
 // v9 = adds local Hot Stuff ANTHROPIC / SPCX generated badges and resets
 //      failed logo cache for symbols that previously fell through.
 // v8 = adds local Decibel MU / CBRS / SNDK logos.
@@ -14,7 +16,7 @@ import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/t
 // v4 = invalidated entries from before we added local SKR.
 // v3 invalidated MSATS / MET / SYRUP / BRENTOIL aliases. Bump
 // whenever new local /tokens/* are added so users force a fresh probe.
-const LOGO_CACHE_KEY = 'clash_token_logos_v9';
+const LOGO_CACHE_KEY = 'clash_token_logos_v10';
 const LOGO_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const logoCache = new Map();
@@ -54,6 +56,8 @@ function persistLogoCache() {
 export default function TokenIcon({ sym, size = 20, fallbackColor, style }) {
   const canon = canonTokenSymbol(sym);
   const bg = fallbackColor || tokenFallbackColor(canon);
+  const fallbackLabel = canon.length <= 5 ? canon : canon.slice(0, 5);
+  const fallbackFontSize = size * (fallbackLabel.length <= 2 ? 0.5 : fallbackLabel.length <= 4 ? 0.38 : 0.32);
   const cached = logoCache.get(canon);
   const allSources = useMemo(() => tokenLogoSources(canon), [canon]);
   const sources = useMemo(
@@ -125,12 +129,12 @@ export default function TokenIcon({ sym, size = 20, fallbackColor, style }) {
             justifyContent: 'center',
             width: '100%',
             height: '100%',
-            fontSize: size * 0.5,
+            fontSize: fallbackFontSize,
             fontWeight: 900,
             color: '#fff',
           }}
         >
-          {(canon || '?').charAt(0)}
+          {fallbackLabel || '?'}
         </span>
       )}
     </div>

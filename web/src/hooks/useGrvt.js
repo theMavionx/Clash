@@ -4,8 +4,10 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { GRVT_CHAIN_ID, ensureGrvtChain } from '../lib/grvtConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
 import { usePlayer } from './useGodot';
+import { privateKeyToAccount } from 'viem/accounts';
 
 const STORAGE_KEY = 'clash_grvt_credentials_v1';
+const ONE_TAP_SIGNER_STORAGE_KEY = 'clash_grvt_one_tap_signer_v1';
 const POLL_INTERVAL_MS = 5_000;
 const GRVT_REF_URL = 'https://grvt.io/?ref=UERIHL5';
 const GRVT_BUILDER_ACCOUNT_ID = String(import.meta.env.VITE_GRVT_BUILDER_ACCOUNT_ID || '').trim();
@@ -37,6 +39,50 @@ function writeCredentials(creds) {
 function clearCredentials() {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(STORAGE_KEY);
+}
+
+function normalizePrivateKey(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const hex = raw.startsWith('0x') ? raw : `0x${raw}`;
+  if (!/^0x[a-fA-F0-9]{64}$/u.test(hex)) throw new Error('Enter a valid GRVT Secret Private Key');
+  return hex;
+}
+
+function signerFromPrivateKey(value) {
+  const privateKey = normalizePrivateKey(value);
+  const account = privateKeyToAccount(privateKey);
+  return { privateKey, account, address: account.address };
+}
+
+function readOneTapSigner() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(ONE_TAP_SIGNER_STORAGE_KEY) || 'null');
+    if (!parsed?.privateKey) return null;
+    return signerFromPrivateKey(parsed.privateKey);
+  } catch {
+    return null;
+  }
+}
+
+function writeOneTapSigner(signer) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(ONE_TAP_SIGNER_STORAGE_KEY, JSON.stringify({
+    privateKey: signer.privateKey,
+    address: signer.address,
+    savedAt: Date.now(),
+  }));
+}
+
+function clearOneTapSigner() {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(ONE_TAP_SIGNER_STORAGE_KEY);
+}
+
+function stripDomainTypes(types = {}) {
+  const { EIP712Domain: _domain, ...rest } = types;
+  return rest;
 }
 
 function grvtErrorMessage(error, fallback = 'GRVT request failed') {
@@ -261,13 +307,15 @@ export function useGrvt() {
   const [walletUsdc, setWalletUsdc] = useState(null);
   const [builderConfig, setBuilderConfig] = useState(null);
   const [builderAuthorized, setBuilderAuthorized] = useState(false);
+  const [oneTapSigner, setOneTapSigner] = useState(() => readOneTapSigner());
   const claimGoldRef = useRef(null);
   const rewardSyncTimersRef = useRef([]);
 
   const token = useMemo(() => (
     (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null
   ), [player?.token]);
-  const walletAddr = evmWallet?.address || player?.wallet || null;
+  const oneTapSignerAddress = oneTapSigner?.address || null;
+  const walletAddr = evmWallet?.address || player?.wallet || oneTapSignerAddress || null;
   const registeredEvmWallet = player?.wallet || null;
   const walletMismatch = !!walletAddr
     && /^0x[a-fA-F0-9]{40}$/.test(String(registeredEvmWallet || ''))
@@ -301,6 +349,41 @@ export function useGrvt() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+  const signTypedDataForGrvt = useCallback(async ({ provider, account, domain, types, primaryType, message }) => {
+    if (oneTapSigner?.account) {
+      return oneTapSigner.account.signTypedData({
+        domain,
+        types: stripDomainTypes(types),
+        primaryType,
+        message,
+      });
+    }
+    return signTypedDataCompat({
+      provider,
+      walletClient: null,
+      account,
+      domain,
+      types,
+      primaryType,
+      message,
+    });
+  }, [oneTapSigner]);
+
+  const setGrvtOneTapTradingEnabled = useCallback(async (enabled, privateKey = '') => {
+    if (!enabled) {
+      clearOneTapSigner();
+      setOneTapSigner(null);
+      return { success: true };
+    }
+    try {
+      const signer = signerFromPrivateKey(privateKey);
+      writeOneTapSigner(signer);
+      setOneTapSigner(signer);
+      return { success: true, address: signer.address };
+    } catch (e) {
+      return { error: grvtErrorMessage(e, 'Failed to enable GRVT one tap trading') };
+    }
+  }, []);
 
   const saveServerCredentials = useCallback(async (next) => {
     if (!token) throw new Error('Game session is not ready');
@@ -607,7 +690,9 @@ export function useGrvt() {
       }
     }
     clearCredentials();
+    clearOneTapSigner();
     setCredentials(null);
+    setOneTapSigner(null);
     setAccount(null);
     setPositions([]);
     setOrders([]);
@@ -724,10 +809,13 @@ export function useGrvt() {
   const syncPositionConfig = useCallback(async (instrument, symbol, leverage, isIsolated) => {
     const lev = Number(leverage);
     if (!instrument || !Number.isFinite(lev) || lev <= 0) return null;
-    if (!walletAddr) throw new Error('Connect your GRVT Exchange wallet first');
+    const signerAddress = oneTapSigner?.address || walletAddr;
+    if (!signerAddress) throw new Error('Connect your GRVT Exchange wallet first');
     const provider = evmWallet?.provider;
-    if (!provider) throw new Error('GRVT wallet signer is not ready');
-    await ensureGrvtSigningChain(provider);
+    if (!oneTapSigner?.account) {
+      if (!provider) throw new Error('GRVT wallet signer is not ready');
+      await ensureGrvtSigningChain(provider);
+    }
 
     const nonce = randomUint32();
     const expiration = nowNs() + 24n * 60n * 60n * 1_000_000_000n;
@@ -792,10 +880,9 @@ export function useGrvt() {
             nonce,
             expiration,
           };
-      const rawSignature = await signTypedDataCompat({
+      const rawSignature = await signTypedDataForGrvt({
         provider,
-        walletClient: null,
-        account: walletAddr,
+        account: signerAddress,
         domain: { name: 'GRVT Exchange', version: '0', chainId: GRVT_CHAIN_ID },
         types,
         primaryType,
@@ -808,7 +895,7 @@ export function useGrvt() {
       leverage: String(lev),
       margin_type: marginType,
       signature: {
-        signer: walletAddr,
+        signer: signerAddress,
         r: sig.r,
         s: sig.s,
         v: sig.v,
@@ -845,7 +932,7 @@ export function useGrvt() {
       setMarginModes(prev => ({ ...prev, [sym]: !!isIsolated }));
     }
     return result;
-  }, [authedPost, credentials, evmWallet, walletAddr]);
+  }, [authedPost, credentials, evmWallet, oneTapSigner, signTypedDataForGrvt, walletAddr]);
 
   const setGrvtMarginMode = useCallback(async (symbol, isIsolated) => {
     const market = marketForSymbol(symbol);
@@ -879,15 +966,18 @@ export function useGrvt() {
     trigger = null,
   }) => {
     if (!hasResolvedCredentials) throw new Error('Connect GRVT API session first');
-    if (!walletAddr) throw new Error('Connect your GRVT Exchange wallet first');
+    const signerAddress = oneTapSigner?.address || walletAddr;
+    if (!signerAddress) throw new Error('Connect your GRVT Exchange wallet first');
     const builderAccount = String(builderConfig?.accountId || GRVT_BUILDER_ACCOUNT_ID || '').trim();
     const builderFeeRate = String(builderConfig?.feeRate || GRVT_BUILDER_FEE_RATE || '0').trim();
     if (!builderAccount || !/^0x[a-fA-F0-9]{40}$/.test(builderAccount)) {
       throw new Error('GRVT builder account is not configured');
     }
     const provider = evmWallet?.provider;
-    if (!provider) throw new Error('GRVT wallet signer is not ready');
-    await ensureGrvtSigningChain(provider);
+    if (!oneTapSigner?.account) {
+      if (!provider) throw new Error('GRVT wallet signer is not ready');
+      await ensureGrvtSigningChain(provider);
+    }
 
     const market = marketForSymbol(symbol);
     const instrument = market?._grvt?.instrument || market?.market_name || `${String(symbol || '').toUpperCase()}_USDT_Perp`;
@@ -978,10 +1068,9 @@ export function useGrvt() {
       nonce,
       expiration,
     };
-    const rawSignature = await signTypedDataCompat({
+    const rawSignature = await signTypedDataForGrvt({
       provider,
-      walletClient: null,
-      account: walletAddr,
+      account: signerAddress,
       domain: { name: 'GRVT Exchange', version: '0', chainId: GRVT_CHAIN_ID },
       types,
       primaryType,
@@ -1001,7 +1090,7 @@ export function useGrvt() {
         is_buying_asset: isBuyingAsset,
       }],
       signature: {
-        signer: walletAddr,
+        signer: signerAddress,
         r: sig.r,
         s: sig.s,
         v: sig.v,
@@ -1044,7 +1133,7 @@ export function useGrvt() {
       scheduleRewardSync('order');
       return result;
     }
-  }, [authedPost, authorizeBuilder, builderConfig, credentials, evmWallet, hasResolvedCredentials, marketForSymbol, priceForOrder, scheduleRewardSync, setGrvtInitialLeverage, walletAddr]);
+  }, [authedPost, authorizeBuilder, builderConfig, credentials, evmWallet, hasResolvedCredentials, marketForSymbol, oneTapSigner, priceForOrder, scheduleRewardSync, setGrvtInitialLeverage, signTypedDataForGrvt, walletAddr]);
 
   const placeGrvtMarketOrder = useCallback(async (symbol, side, marginUsdc, _slippage = '0.5', leverage = 1) => {
     try {
@@ -1203,11 +1292,14 @@ export function useGrvt() {
     hasReferrer: hasResolvedCredentials,
     linkOurReferrer: activate,
     oneTapTrading: {
-      enabled: hasResolvedCredentials,
-      approved: false,
-      signer: credentials?.subAccountId || null,
-      note: 'GRVT rewards require configured builder code.',
+      enabled: !!oneTapSigner?.address,
+      approved: !!oneTapSigner?.address,
+      signer: oneTapSigner?.address || null,
+      storage: 'browser',
+      note: oneTapSigner?.address
+        ? 'GRVT orders are signed by the browser-only API key signer.'
+        : 'Add the GRVT Secret Private Key to sign orders without wallet popups.',
     },
-    setOneTapTradingEnabled: activate,
+    setOneTapTradingEnabled: setGrvtOneTapTradingEnabled,
   };
 }

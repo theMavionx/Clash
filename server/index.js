@@ -3544,6 +3544,7 @@ async function loadEarnings(force) {
       ['phoenix',  'Phoenix',  '#fb923c', '#f97316'],
       ['monad',    'Perpl',    '#c4b5fd', '#8b5cf6'],
       ['hyperliquid', 'Hyperliquid', '#86efac', '#16a34a'],
+      ['grvt',     'GRVT',     '#5eead4', '#14b8a6'],
       ['nado',     'Nado',     '#67e8f9', '#00b8d9'],
     ];
     const total = Number(data.total_usd) || 0;
@@ -3588,6 +3589,15 @@ async function loadEarnings(force) {
             ? ' / last idx ' + esc(String(d.latest_submission_idx))
             : '';
           return '<span style="color:#9ca3af;font-size:11px">builder #' + esc(String(d.builder_id || '')) + ' / ' + (d.matched_events || 0) + ' indexed fill(s) / ' + (d.indexed_wallets || 0) + ' wallet(s)' + latest + estimate + '</span>';
+        }
+        if (d.model === 'grvt_builder_fill_history') {
+          const estimate = Number.isFinite(Number(d.estimated_fee_usd))
+            ? ' / local estimate $' + Number(d.estimated_fee_usd).toFixed(4)
+            : '';
+          const local = Number.isFinite(Number(d.local_trades))
+            ? ' / local ' + Number(d.local_trades) + ' fill(s)'
+            : '';
+          return '<span style="color:#9ca3af;font-size:11px">' + (d.trades || 0) + ' builder fill(s) / $' + Number(d.volume_usd || 0).toFixed(0) + ' vol' + local + estimate + '</span>';
         }
         if (d.model === 'perpl_builder_fee_not_configured') {
           const pct = Number(d.builder_fee_pct ?? d.fee_per_side_pct ?? 0);
