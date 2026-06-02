@@ -376,6 +376,11 @@ app.get('/api/admin/panel', (req, res) => {
   .filter { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; }
   .filter select, .filter input { padding: 6px 10px; background: #1f2937; border: 1px solid #4b5563; border-radius: 6px; color: #e5e7eb; font-size: 13px; }
   .filter input { min-width: 220px; }
+  .activity-filter { margin: 0 0 12px; padding: 10px 12px; background: #172033; border: 1px solid #334155; border-radius: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .activity-filter label { color: #9ca3af; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
+  .activity-filter select, .activity-filter input { padding: 7px 10px; background: #111827; border: 1px solid #4b5563; border-radius: 6px; color: #e5e7eb; font-size: 13px; }
+  .activity-filter input { min-width: 210px; }
+  .activity-filter-count { color: #6b7280; font-size: 12px; margin-left: auto; }
   .log-row-error { border-left: 3px solid #ef4444; }
   .log-row-warn { border-left: 3px solid #f59e0b; }
   .log-row-info, .log-row-log { border-left: 3px solid #38bdf8; }
@@ -547,6 +552,25 @@ app.get('/api/admin/panel', (req, res) => {
       </div>
     </div>
     <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Players Activity</h3>
+    <div class="activity-filter">
+      <label for="playerActivitySearch">Filter</label>
+      <input id="playerActivitySearch" placeholder="Search player / DEX / action" oninput="renderPlayerActivity()">
+      <select id="playerActivityDex" onchange="renderPlayerActivity()">
+        <option value="">All DEXes</option>
+      </select>
+      <select id="playerActivityTh" onchange="renderPlayerActivity()">
+        <option value="">All TH</option>
+      </select>
+      <select id="playerActivityMode" onchange="renderPlayerActivity()">
+        <option value="">All players</option>
+        <option value="active7d">Active 7d</option>
+        <option value="sessions">Has sessions</option>
+        <option value="battles">Has battles</option>
+        <option value="events100">100+ events</option>
+      </select>
+      <button class="btn" onclick="resetPlayerActivityFilters()">Reset</button>
+      <span class="activity-filter-count" id="playerActivityCount"></span>
+    </div>
     <table style="margin-bottom:20px"><thead><tr>
       <th>Player</th><th>DEX</th><th>TH</th><th>Active Days 7d</th><th>Sessions 7d</th><th>Avg Session</th><th>Events 7d</th><th>Battles 7d</th><th>Last Action</th>
     </tr></thead><tbody id="playerActivityBody"></tbody></table>
@@ -1689,6 +1713,86 @@ function actionSummaryBlock(payload) {
   return '<div class="log-action">' + bits.join(' &middot; ') + '</div>';
 }
 
+let PLAYER_ACTIVITY_ROWS = [];
+
+function activityNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function setSelectOptions(selectId, values, allLabel, formatter) {
+  const el = document.getElementById(selectId);
+  if (!el) return;
+  const current = el.value;
+  el.innerHTML = '<option value="">' + esc(allLabel) + '</option>' + values.map((value) => {
+    const label = formatter ? formatter(value) : value;
+    return '<option value="' + esc(value) + '">' + esc(label) + '</option>';
+  }).join('');
+  if (values.includes(current)) el.value = current;
+}
+
+function updatePlayerActivityFilters(rows) {
+  const dexes = Array.from(new Set(rows.map((row) => String(row.dex || 'unknown').toLowerCase()))).sort();
+  const thLevels = Array.from(new Set(rows.map((row) => String(activityNumber(row.th_level) || 1))))
+    .sort((a, b) => Number(a) - Number(b));
+  setSelectOptions('playerActivityDex', dexes, 'All DEXes');
+  setSelectOptions('playerActivityTh', thLevels, 'All TH', (value) => 'TH' + value);
+}
+
+function resetPlayerActivityFilters() {
+  const search = document.getElementById('playerActivitySearch');
+  const dex = document.getElementById('playerActivityDex');
+  const th = document.getElementById('playerActivityTh');
+  const mode = document.getElementById('playerActivityMode');
+  if (search) search.value = '';
+  if (dex) dex.value = '';
+  if (th) th.value = '';
+  if (mode) mode.value = '';
+  renderPlayerActivity();
+}
+
+function renderPlayerActivity() {
+  const rows = PLAYER_ACTIVITY_ROWS || [];
+  const search = (document.getElementById('playerActivitySearch')?.value || '').trim().toLowerCase();
+  const dex = (document.getElementById('playerActivityDex')?.value || '').toLowerCase();
+  const th = document.getElementById('playerActivityTh')?.value || '';
+  const mode = document.getElementById('playerActivityMode')?.value || '';
+  const filtered = rows.filter((row) => {
+    const rowDex = String(row.dex || 'unknown').toLowerCase();
+    const rowTh = String(activityNumber(row.th_level) || 1);
+    if (dex && rowDex !== dex) return false;
+    if (th && rowTh !== th) return false;
+    if (mode === 'active7d' && activityNumber(row.active_days_7d) <= 0) return false;
+    if (mode === 'sessions' && activityNumber(row.sessions_7d) <= 0) return false;
+    if (mode === 'battles' && activityNumber(row.battles_7d) <= 0) return false;
+    if (mode === 'events100' && activityNumber(row.events_7d) < 100) return false;
+    if (!search) return true;
+    const haystack = [
+      row.name,
+      row.id,
+      row.dex,
+      row.last_action,
+      'th' + rowTh,
+    ].map((value) => String(value || '').toLowerCase()).join(' ');
+    return haystack.includes(search);
+  });
+  const count = document.getElementById('playerActivityCount');
+  if (count) count.textContent = filtered.length + ' / ' + rows.length + ' players shown';
+  document.getElementById('playerActivityBody').innerHTML = filtered.length
+    ? filtered.map(row => '<tr>' +
+        '<td><strong>' + esc(row.name || row.id || '-') + '</strong></td>' +
+        '<td>' + dexBadge(row.dex) + ' <span style="color:#9ca3af">' + esc(row.dex || 'unknown') + '</span></td>' +
+        '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.th_level || 1) + '</span><div style="font-size:10px;color:#6b7280;margin-top:3px">' + (row.buildings_count || 0) + ' buildings</div></td>' +
+        '<td>' + (row.active_days_7d || 0) + '</td>' +
+        '<td>' + (row.sessions_7d || 0) + '</td>' +
+        '<td>' + (row.avg_session_min_7d || 0) + 'm</td>' +
+        '<td>' + (row.events_7d || 0) + '</td>' +
+        '<td>' + (row.battles_7d || 0) + ' <span style="color:#4ade80">(' + (row.accepted_battles_7d || 0) + ' ok)</span></td>' +
+        '<td><div class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.last_action_at || row.last_seen_at)) + '</div><div style="font-size:11px;color:#6b7280">' + esc(row.last_action || 'heartbeat') + '</div></td>' +
+      '</tr>').join('')
+    : '<tr><td colspan="9" style="color:#6b7280;text-align:center;padding:20px">No players match these filters</td></tr>';
+}
+
 function shortWallet(wallet) {
   const s = String(wallet || '');
   if (!s) return 'no wallet';
@@ -1910,20 +2014,9 @@ async function loadStats() {
         '</tr>').join('')
       : '<tr><td colspan="2" style="color:#6b7280;text-align:center;padding:20px">No action events yet</td></tr>';
 
-    const activityRows = pa.players || [];
-    document.getElementById('playerActivityBody').innerHTML = activityRows.length
-      ? activityRows.map(row => '<tr>' +
-          '<td><strong>' + esc(row.name || row.id || '-') + '</strong></td>' +
-          '<td>' + dexBadge(row.dex) + ' <span style="color:#9ca3af">' + esc(row.dex || 'unknown') + '</span></td>' +
-          '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.th_level || 1) + '</span><div style="font-size:10px;color:#6b7280;margin-top:3px">' + (row.buildings_count || 0) + ' buildings</div></td>' +
-          '<td>' + (row.active_days_7d || 0) + '</td>' +
-          '<td>' + (row.sessions_7d || 0) + '</td>' +
-          '<td>' + (row.avg_session_min_7d || 0) + 'm</td>' +
-          '<td>' + (row.events_7d || 0) + '</td>' +
-          '<td>' + (row.battles_7d || 0) + ' <span style="color:#4ade80">(' + (row.accepted_battles_7d || 0) + ' ok)</span></td>' +
-          '<td><div class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.last_action_at || row.last_seen_at)) + '</div><div style="font-size:11px;color:#6b7280">' + esc(row.last_action || 'heartbeat') + '</div></td>' +
-        '</tr>').join('')
-      : '<tr><td colspan="9" style="color:#6b7280;text-align:center;padding:20px">No player activity yet</td></tr>';
+    PLAYER_ACTIVITY_ROWS = pa.players || [];
+    updatePlayerActivityFilters(PLAYER_ACTIVITY_ROWS);
+    renderPlayerActivity();
 
     const mcp = s.mcp || {};
     const mcpSummary = mcp.summary || {};
