@@ -34,11 +34,22 @@ async function fetchJson(url, opts = {}, timeoutMs = 10_000) {
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { ...opts, signal: ctrl.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      let detail = '';
+      try { detail = await res.text(); } catch {}
+      const err = new Error(`HTTP ${res.status}${detail ? `: ${detail.slice(0, 240)}` : ''}`);
+      err.status = res.status;
+      err.url = url;
+      throw err;
+    }
     return await res.json();
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isRateLimitError(err) {
+  return Number(err?.status) === 429 || /\b429\b|rate limit|too many requests/i.test(String(err?.message || err || ''));
 }
 
 // ── Pacifica ──────────────────────────────────────────────────────────────
@@ -330,6 +341,19 @@ const PHOENIX_FLIGHT_BUILDER_FEE_BPS = Number(
   || 5,
 ) || 5;
 const PHOENIX_API = (process.env.PHOENIX_API_URL || 'https://perp-api.phoenix.trade').replace(/\/+$/, '');
+const PHOENIX_EARNINGS_STALE_MS = Math.max(
+  60_000,
+  Number(process.env.PHOENIX_EARNINGS_STALE_MS || 6 * 60 * 60_000),
+);
+const PHOENIX_EARNINGS_RETRY_MS = Math.max(
+  250,
+  Number(process.env.PHOENIX_EARNINGS_RETRY_MS || 900),
+);
+let phoenixExactEarningsCache = null;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function phoenixTokenAmountToNumber(value, decimals = 6) {
   if (value == null) return 0;
@@ -350,12 +374,30 @@ function parsePhoenixEvents(payload) {
     : [];
 }
 
+async function fetchPhoenixJson(pathWithQuery, timeoutMs = 10_000) {
+  const url = `${PHOENIX_API}${pathWithQuery}`;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await fetchJson(url, {
+        headers: {
+          accept: 'application/json',
+          'user-agent': 'ClashOfPerps/1.0 admin-earnings',
+        },
+      }, timeoutMs);
+    } catch (err) {
+      lastError = err;
+      if (!isRateLimitError(err) || attempt === 2) break;
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(PHOENIX_EARNINGS_RETRY_MS * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
 async function fetchPhoenixTraderState(authority) {
-  const payload = await fetchJson(
-    `${PHOENIX_API}/trader/${encodeURIComponent(authority)}/state?traderPdaIndex=0`,
-    {},
-    10_000,
-  );
+  const payload = await fetchPhoenixJson(`/trader/${encodeURIComponent(authority)}/state?traderPdaIndex=0`);
   const traders = Array.isArray(payload?.traders) ? payload.traders : [];
   return traders.find(t => String(t?.traderKey || '') === PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT)
     || traders.find(t => Number(t?.traderSubaccountIndex || 0) === 0)
@@ -375,11 +417,7 @@ async function fetchPhoenixCollateralTransfers(authority) {
   while (pages < 20) {
     const qs = new URLSearchParams({ limit: '100', traderPdaIndex: '0' });
     if (cursor) qs.set('nextCursor', cursor);
-    const payload = await fetchJson(
-      `${PHOENIX_API}/trader/${encodeURIComponent(authority)}/collateral-history?${qs.toString()}`,
-      {},
-      10_000,
-    );
+    const payload = await fetchPhoenixJson(`/trader/${encodeURIComponent(authority)}/collateral-history?${qs.toString()}`);
     pages++;
     const rows = parsePhoenixEvents(payload);
     for (const ev of rows) {
@@ -427,15 +465,59 @@ async function fetchPhoenixEarnings() {
 
   const feeBps = Math.max(0, PHOENIX_FLIGHT_BUILDER_FEE_BPS);
   const estimated = volume * (feeBps / 10000);
-  const [state, history] = await Promise.all([
-    fetchPhoenixTraderState(PHOENIX_FLIGHT_BUILDER_AUTHORITY),
-    fetchPhoenixCollateralTransfers(PHOENIX_FLIGHT_BUILDER_AUTHORITY),
-  ]);
+  let state = null;
+  let history = null;
+  let exactError = null;
+  try {
+    [state, history] = await Promise.all([
+      fetchPhoenixTraderState(PHOENIX_FLIGHT_BUILDER_AUTHORITY),
+      fetchPhoenixCollateralTransfers(PHOENIX_FLIGHT_BUILDER_AUTHORITY),
+    ]);
+  } catch (err) {
+    exactError = err;
+    const cached = phoenixExactEarningsCache;
+    const ageMs = cached ? Date.now() - cached.at : Infinity;
+    if (cached && ageMs < PHOENIX_EARNINGS_STALE_MS) {
+      return {
+        ...cached.value,
+        stale: true,
+        stale_age_ms: ageMs,
+        note: `${cached.value.note} Phoenix API is currently rate-limited/down (${String(err?.message || err).slice(0, 120)}); serving last exact reading.`,
+      };
+    }
+  }
+
+  if (!history) {
+    return {
+      earned_usd: 0,
+      address: PHOENIX_FLIGHT_BUILDER_AUTHORITY || null,
+      subaccount: PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT || null,
+      currency: 'USDC (Phoenix)',
+      volume_usd: volume,
+      trades,
+      estimated_fee_usd: estimated,
+      collateral_usd: 0,
+      withdrawable_usd: 0,
+      portfolio_value_usd: 0,
+      transfer_events: 0,
+      deposit_usd: 0,
+      deposit_events: 0,
+      open_positions: 0,
+      builder_fee_pct: feeBps / 100,
+      fee_per_side_pct: feeBps / 100,
+      model: 'local_volume_estimate_until_phoenix_api_recovers',
+      exact_unavailable: true,
+      rate_limited: isRateLimitError(exactError),
+      note: `Phoenix exact collateral-history is unavailable (${String(exactError?.message || exactError || 'unknown').slice(0, 160)}). Showing local ${feeBps}bps volume estimate $${estimated.toFixed(4)} only; earned_usd stays 0 until exact Phoenix data is reachable.`,
+      source_detail: 'phoenix_local_volume_estimate_fallback',
+    };
+  }
+
   const collateral = phoenixTokenAmountToNumber(state?.collateralBalance, 6);
   const withdrawable = phoenixTokenAmountToNumber(state?.effectiveCollateralForWithdrawals, 6);
   const portfolio = phoenixTokenAmountToNumber(state?.portfolioValue, 6);
   const openPositions = Array.isArray(state?.positions) ? state.positions.length : 0;
-  return {
+  const result = {
     earned_usd: history.totalTransfers,
     address: PHOENIX_FLIGHT_BUILDER_AUTHORITY || null,
     subaccount: PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT || null,
@@ -456,6 +538,8 @@ async function fetchPhoenixEarnings() {
     note: `Actual Phoenix Flight fee collector transfer events from builder collateral history: ${history.transferEvents} transfer(s). Local ${feeBps}bps volume estimate is $${estimated.toFixed(4)} only for comparison. Builder trader also has $${collateral.toFixed(4)} collateral, $${withdrawable.toFixed(4)} withdrawable, ${openPositions} open position(s); deposits are excluded from earnings.`,
     source_detail: 'phoenix_flight_collateral_transfers',
   };
+  phoenixExactEarningsCache = { at: Date.now(), value: result };
+  return result;
 }
 
 const PERPL_BUILDER_FEE_BPS = Number(process.env.PERPL_BUILDER_FEE_BPS || process.env.DECIBEL_BUILDER_FEE_BPS) || 5;

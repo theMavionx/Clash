@@ -14008,6 +14008,7 @@ function buildTournamentTeamState(rows, t, prize) {
 
 function sanitizePrizeCurrency(v) {
   const s = String(v || DEFAULT_TOURNAMENT_PRIZE_CURRENCY).trim().toUpperCase();
+  if (s === 'COP') return 'CLASH';
   return /^[A-Z0-9]{2,12}$/.test(s) ? s : DEFAULT_TOURNAMENT_PRIZE_CURRENCY;
 }
 
@@ -14022,6 +14023,14 @@ function normalizeRewardEvmWallet(v) {
   const s = String(v || '').trim();
   if (!s) return null;
   return EVM_WALLET_RE.test(s) ? s.toLowerCase() : null;
+}
+
+const SOLANA_REWARD_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+function normalizeRewardSolanaWallet(v) {
+  const s = String(v || '').trim();
+  if (!s) return null;
+  return SOLANA_REWARD_WALLET_RE.test(s) ? s : null;
 }
 
 function normalizePrizePayouts(input) {
@@ -14469,9 +14478,11 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
     return res.status(400).json({ error: 'pre-registration is closed' });
   }
   if (!canJoinTournament(t, now)) return res.status(400).json({ error: phase === 'live' ? 'registration is closed' : 'tournament is not joinable' });
-  const rewardWalletEvm = normalizeRewardEvmWallet(req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm);
-  if (Number(t.rewards_in_cop || 0) && !rewardWalletEvm) {
-    return res.status(400).json({ error: 'valid EVM reward wallet required for COP rewards' });
+  const rewardWallet = Number(t.rewards_in_cop || 0)
+    ? normalizeRewardSolanaWallet(req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm)
+    : normalizeRewardEvmWallet(req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm);
+  if (Number(t.rewards_in_cop || 0) && !rewardWallet) {
+    return res.status(400).json({ error: 'valid Solana reward wallet required for CLASH rewards' });
   }
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.
@@ -14486,23 +14497,23 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
       team_dex = excluded.team_dex,
       reward_wallet_evm = excluded.reward_wallet_evm,
       last_activity_at = datetime('now')
-  `).run(tid, req.player.id, teamDex, rewardWalletEvm);
+  `).run(tid, req.player.id, teamDex, rewardWallet);
   const sync = phase === 'live' ? syncFuturesTournamentRows(req.player.id, req.player.dex) : null;
   console.log(`[tournament ${tid} join] player=${req.player.name} (${req.player.dex}) phase=${phase} -> JOINED ${t.name}`);
   res.json({ ok: true, joined: true, phase, sync: sync ? { ok: !!sync.ok } : null });
 });
 
-// Add or repair the COP payout address for an already-registered player.
+// Add or repair the CLASH payout address for an already-registered player.
 // This deliberately does not call the join path because join reactivates and
 // resets counters on conflict. Older participants may have joined before the
-// COP reward-address requirement existed.
+// reward-address requirement existed. The DB column name is legacy.
 router.post('/tournaments/:id/reward-wallet', auth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
   if (!Number(t.rewards_in_cop || 0)) {
-    return res.status(400).json({ error: 'this tournament does not use COP reward addresses' });
+    return res.status(400).json({ error: 'this tournament does not use CLASH reward addresses' });
   }
   const participant = db.db.prepare(`
     SELECT reward_wallet_evm, left_at
@@ -14512,17 +14523,19 @@ router.post('/tournaments/:id/reward-wallet', auth, (req, res) => {
   if (!participant || participant.left_at !== null) {
     return res.status(400).json({ error: 'you are not registered in this tournament' });
   }
-  const rewardWalletEvm = normalizeRewardEvmWallet(req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm);
-  if (!rewardWalletEvm) {
-    return res.status(400).json({ error: 'valid EVM reward wallet required for COP rewards' });
+  const rewardWallet = normalizeRewardSolanaWallet(
+    req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm,
+  );
+  if (!rewardWallet) {
+    return res.status(400).json({ error: 'valid Solana reward wallet required for CLASH rewards' });
   }
   db.db.prepare(`
     UPDATE tournament_participants
     SET reward_wallet_evm = ?, last_activity_at = datetime('now')
     WHERE tournament_id = ? AND player_id = ? AND left_at IS NULL
-  `).run(rewardWalletEvm, tid, req.player.id);
-  console.log(`[tournament ${tid} reward-wallet] player=${req.player.name} -> ${rewardWalletEvm}`);
-  res.json({ ok: true, reward_wallet_evm: rewardWalletEvm });
+  `).run(rewardWallet, tid, req.player.id);
+  console.log(`[tournament ${tid} reward-wallet] player=${req.player.name} -> ${rewardWallet}`);
+  res.json({ ok: true, reward_wallet_evm: rewardWallet, reward_wallet_solana: rewardWallet });
 });
 
 // Soft leave: sets left_at so getActiveTournamentForPlayer stops returning

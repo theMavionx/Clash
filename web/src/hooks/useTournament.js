@@ -65,6 +65,7 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
       headers: { 'x-token': token, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         reward_wallet_evm: options.rewardWalletEvm || options.reward_wallet_evm || undefined,
+        reward_wallet_solana: options.rewardWalletSolana || options.reward_wallet_solana || options.rewardWalletEvm || options.reward_wallet_evm || undefined,
       }),
     });
     let data = null;
@@ -78,7 +79,7 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     const res = await fetch(`/api/tournaments/${tournamentId}/reward-wallet`, {
       method: 'POST',
       headers: { 'x-token': token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reward_wallet_evm: rewardWalletEvm }),
+      body: JSON.stringify({ reward_wallet_evm: rewardWalletEvm, reward_wallet_solana: rewardWalletEvm }),
     });
     let data = null;
     try { data = await res.json(); } catch {}

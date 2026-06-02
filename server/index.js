@@ -785,7 +785,7 @@ app.get('/api/admin/panel', (req, res) => {
               </label>
             </div>
             <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:8px;margin-bottom:8px">
-              <input id="tn_rewards_cop" type="checkbox" onchange="updateTournamentPrizeUi()" style="width:auto;margin:0"> Rewards in COP token (players must enter EVM payout address)
+              <input id="tn_rewards_cop" type="checkbox" onchange="updateTournamentPrizeUi()" style="width:auto;margin:0"> Rewards in CLASH token (players must enter Solana payout address)
             </label>
             <div id="tn_prize_rows" style="display:flex;flex-direction:column;gap:8px"></div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
@@ -2838,10 +2838,10 @@ function updateTournamentPrizeUi() {
   const tiers = readTournamentPrizeTiers();
   const cop = document.getElementById('tn_rewards_cop')?.checked;
   const currency = document.getElementById('tn_prize_currency');
-  if (currency && cop) currency.value = 'COP';
+  if (currency && cop) currency.value = 'CLASH';
   if (!tiers.length) {
     hint.style.color = '#9ca3af';
-    hint.textContent = cop ? 'COP rewards enabled. Players must enter an EVM payout address when joining.' : 'No prize tiers configured.';
+    hint.textContent = cop ? 'CLASH rewards enabled. Players must enter a Solana payout address when joining.' : 'No prize tiers configured.';
     return;
   }
   const invalid = tiers.find((tier) => tier.payouts.reduce((s, p) => s + Number(p.amount_usd || 0), 0) > Number(tier.pool_usd || 0) + 0.01);
@@ -2854,7 +2854,7 @@ function updateTournamentPrizeUi() {
   hint.style.color = '#9ca3af';
   hint.textContent = tiers.length + ' tier(s), top pool ' + fmtTournamentUsd(top.pool_usd, document.getElementById('tn_prize_currency')?.value || 'USD')
     + ' at ' + fmtTournamentUsd(top.volume_usd, '') + ' total volume.'
-    + (cop ? ' COP payout addresses required.' : '');
+    + (cop ? ' CLASH Solana payout addresses required.' : '');
 }
 
 function tournamentPrizeLabel(t) {
@@ -2864,7 +2864,7 @@ function tournamentPrizeLabel(t) {
   const next = t?.prize_next_tier;
   const totalVolume = Number(t?.prize_total_volume_usd || 0);
   if (pool > 0 && active) {
-    return fmtTournamentUsd(pool, currency) + (t?.rewards_in_cop ? ' <span style="color:#fbbf24">COP</span>' : '')
+    return fmtTournamentUsd(pool, currency) + (t?.rewards_in_cop ? ' <span style="color:#fbbf24">CLASH</span>' : '')
       + '<div style="font-size:10px;color:#9ca3af">active at ' + fmtTournamentUsd(active.volume_usd || 0, '') + ' vol · current ' + fmtTournamentUsd(totalVolume, '') + '</div>';
   }
   if (next) {

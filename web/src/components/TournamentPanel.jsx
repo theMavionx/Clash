@@ -16,7 +16,7 @@ function formatNumber(n, options = {}) {
 }
 
 const fmt = (n) => formatNumber(n, { maximumFractionDigits: 0 });
-const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
+const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -263,8 +263,8 @@ function TournamentPanel({ onClose }) {
     if (!t || busy || !canJoin) return;
     const needsCopWallet = !!t.rewards_in_cop;
     const rewardWallet = rewardWalletEvm.trim();
-    if (needsCopWallet && !EVM_WALLET_RE.test(rewardWallet)) {
-      alert('Enter a valid EVM address for COP rewards.');
+    if (needsCopWallet && !SOLANA_WALLET_RE.test(rewardWallet)) {
+      alert('Enter a valid Solana address for CLASH rewards.');
       return;
     }
     setBusy(true);
@@ -285,13 +285,13 @@ function TournamentPanel({ onClose }) {
   const handleSaveRewardWallet = async () => {
     if (!t || busy || !canAddMissingRewardWallet) return;
     const rewardWallet = rewardWalletEvm.trim();
-    if (!EVM_WALLET_RE.test(rewardWallet)) {
-      alert('Enter a valid EVM address for COP rewards.');
+    if (!SOLANA_WALLET_RE.test(rewardWallet)) {
+      alert('Enter a valid Solana address for CLASH rewards.');
       return;
     }
     setBusy(true);
     const result = await updateRewardWallet(t.id, rewardWallet);
-    if (result && result.ok === false) alert(result.error || 'Could not save COP reward address');
+    if (result && result.ok === false) alert(result.error || 'Could not save CLASH reward address');
     setBusy(false);
   };
 
@@ -434,7 +434,7 @@ function TournamentPanel({ onClose }) {
                   <span style={S.tag}>{t.freeze_trophies === false ? 'Main trophies live' : 'Main trophies frozen'}</span>
                   {Number(t.prize_pool_usd || 0) > 0 && <span style={S.prizeTag}>Prize {fmtPrize(t.prize_pool_usd)}</span>}
                   {!prizeProgress && Number(t.prize_next_tier?.pool_usd || 0) > 0 && <span style={S.tag}>Next {fmtPrize(t.prize_next_tier.pool_usd)} @ {fmtUsd(t.prize_next_tier.volume_usd)} vol</span>}
-                  {t.rewards_in_cop && <span style={S.prizeTag}>COP rewards</span>}
+                  {t.rewards_in_cop && <span style={S.prizeTag}>CLASH rewards</span>}
                   {preregistration && t.start_at && <span style={S.tag}>Starts {fmtDate(t.start_at)}</span>}
                   {preregistration && t.registration_opens_at && <span style={S.tag}>Reg opens {fmtDate(t.registration_opens_at)}</span>}
                   {preregistration && t.registration_closes_at && <span style={S.tag}>Reg closes {fmtDate(t.registration_closes_at)}</span>}
@@ -462,12 +462,12 @@ function TournamentPanel({ onClose }) {
                 <>
                   {t.rewards_in_cop && (
                     <div style={S.rewardBox}>
-                      <div style={S.rewardLabel}>COP reward address</div>
+                      <div style={S.rewardLabel}>CLASH Solana reward address</div>
                       <input
                         style={S.rewardInput}
                         value={rewardWalletEvm}
                         onChange={(e) => setRewardWalletEvm(e.target.value)}
-                        placeholder="0x..."
+                        placeholder="Solana wallet address"
                         autoCapitalize="none"
                         spellCheck={false}
                       />
@@ -481,12 +481,12 @@ function TournamentPanel({ onClose }) {
 
               {canAddMissingRewardWallet && (
                 <div style={S.rewardBox}>
-                  <div style={S.rewardLabel}>COP reward address</div>
+                  <div style={S.rewardLabel}>CLASH Solana reward address</div>
                   <input
                     style={S.rewardInput}
                     value={rewardWalletEvm}
                     onChange={(e) => setRewardWalletEvm(e.target.value)}
-                    placeholder="0x..."
+                    placeholder="Solana wallet address"
                     autoCapitalize="none"
                     spellCheck={false}
                   />
