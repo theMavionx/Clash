@@ -1262,6 +1262,13 @@ function fmtAdminUsd(v, maxDigits = 2) {
     maximumFractionDigits: maxDigits,
   });
 }
+
+document.addEventListener('click', (event) => {
+  const el = event.target?.closest?.('[data-copy]');
+  if (!el) return;
+  const text = el.getAttribute('data-copy') || '';
+  navigator.clipboard?.writeText?.(text).catch(() => {});
+});
 function fmtAdminCompactUsd(v) {
   const n = Number(v) || 0;
   if (Math.abs(n) >= 1000000) return '$' + (n / 1000000).toFixed(2) + 'M';
@@ -1273,7 +1280,7 @@ let PLAYER_ACTIVITY_EXPORT_ROWS = [];
 
 function csvCell(value) {
   const s = String(value == null ? '' : value);
-  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  return /[",\\r\\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
 function exportPlayerActivityData() {
@@ -1384,8 +1391,8 @@ function renderPlayers() {
     // EVM and Solana addresses are different lengths but the start/end
     // pattern is universally readable.
     const slice = s.length > 12 ? s.slice(0, 6) + '…' + s.slice(-4) : s;
-    // Click-to-copy: cheap UX win, no extra deps.
-    return '<span class="mono" style="cursor:pointer;color:#bae6fd" title="' + esc(s) + '" onclick="navigator.clipboard.writeText(\\'' + esc(s) + '\\')">' + esc(slice) + '</span>';
+    // Click-to-copy: keep the generated row free of nested inline JS quoting.
+    return '<span class="mono" data-copy="' + esc(s) + '" style="cursor:pointer;color:#bae6fd" title="' + esc(s) + '">' + esc(slice) + '</span>';
   }
   function fmtUSD(n) {
     const v = Number(n) || 0;
