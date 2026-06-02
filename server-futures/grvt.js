@@ -218,7 +218,7 @@ async function resolveCreds(credsInput) {
   if (creds.apiKey) {
     const session = await apiKeyAuthHeaders(creds.apiKey, creds.accountId);
     const subAccountId = session.subAccountId || creds.subAccountId;
-    if (!subAccountId) throw new Error('GRVT API key login did not return sub_account_id; enter your GRVT trading account ID');
+    if (!subAccountId) throw new Error('GRVT API key login did not return sub_account_id; create the key from the funded GRVT trading account and save it again');
     return {
       ...creds,
       cookie: session.Cookie,

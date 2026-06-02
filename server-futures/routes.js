@@ -2825,7 +2825,7 @@ router.post('/grvt/credentials', auth, async (req, res) => {
       return res.json({
         success: false,
         needs_sub_account_id: true,
-        error: 'Enter your GRVT trading account id, then save again.',
+        error: 'GRVT could not auto-detect a trading account from this API key. Create the key from the funded GRVT trading account and save it again.',
         detail: msg,
       });
     }

@@ -131,14 +131,8 @@ export function tokenLogoSources(sym) {
   }
   if (COMMODITY_SYMBOLS.has(s)) return uniq(srcs);
   if (COINGECKO_LOGOS[s]) srcs.push(COINGECKO_LOGOS[s]);
-  if (STOCK_SYMBOLS.has(s)) {
+  if (STOCK_SYMBOLS.has(s) && s !== 'PAYP' && s !== 'BRKB') {
     srcs.push(`https://assets.parqet.com/logos/symbol/${s}?format=png`);
-  }
-  if (s === 'BRKB') {
-    srcs.push(
-      'https://assets.parqet.com/logos/symbol/BRK.B?format=png',
-      'https://assets.parqet.com/logos/symbol/BRK-B?format=png',
-    );
   }
   if (s === 'PAYP') {
     srcs.push('https://assets.parqet.com/logos/symbol/PYPL?format=png');

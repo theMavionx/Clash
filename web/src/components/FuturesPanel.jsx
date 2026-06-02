@@ -1691,7 +1691,6 @@ function FuturesPanel() {
   const [phoenixInviteKind, setPhoenixInviteKind] = useState('referral');
   const [risexInviteCode, setRisexInviteCode] = useState('');
   const [grvtApiKeyInput, setGrvtApiKeyInput] = useState('');
-  const [grvtSubAccountInput, setGrvtSubAccountInput] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
@@ -3512,7 +3511,7 @@ function FuturesPanel() {
                   </span>
                   <span style={hlGateStyles.stepText}>
                     <span style={{ ...hlGateStyles.stepLabel, ...(isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Store GRVT API key locally</span>
-                    <span style={hlGateStyles.stepHint}>Trading account id is optional if the API key was created from that trading account.</span>
+                    <span style={hlGateStyles.stepHint}>Clash auto-detects the GRVT trading account from that key.</span>
                   </span>
                 </li>
                 <li style={hlGateStyles.stepItem}>
@@ -3548,23 +3547,8 @@ function FuturesPanel() {
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
                   />
                 </label>
-                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Trading account id</span>
-                  <input
-                    type="text"
-                    value={grvtSubAccountInput}
-                    onChange={(e) => setGrvtSubAccountInput(e.target.value)}
-                    placeholder="Enter if GRVT cannot auto-detect it"
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    disabled={isRunning}
-                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
-                  />
-                </label>
                 <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
-                  Stored in this browser and encrypted on Clash servers. If auto-detect fails, enter the trading account id from GRVT.
+                  Stored in this browser and encrypted on Clash servers. Create the key from the GRVT trading account where your funds are held.
                 </div>
               </div>
 
@@ -3580,14 +3564,10 @@ function FuturesPanel() {
                   }
                   setReferralLinking(true);
                   try {
-                    const res = await activate({
-                      apiKey,
-                      subAccountId: grvtSubAccountInput.trim(),
-                    });
+                    const res = await activate({ apiKey });
                     if (res?.error) setLocalAlert(res.error);
                     else {
                       setGrvtApiKeyInput('');
-                      setGrvtSubAccountInput('');
                       setSuccessMsg('GRVT API key saved in this browser.');
                     }
                   } finally {
@@ -5337,17 +5317,6 @@ function FuturesPanel() {
                 spellCheck={false}
                 style={{...S.input, width: '100%', padding: '9px 10px', fontSize: 13}}
               />
-              <input
-                type="text"
-                placeholder="Trading account id"
-                value={grvtSubAccountInput}
-                onChange={e => setGrvtSubAccountInput(e.target.value)}
-                autoComplete="off"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                style={{...S.input, width: '100%', padding: '9px 10px', fontSize: 13}}
-              />
               <button
                 style={{
                   ...S.btnSmall,
@@ -5365,14 +5334,10 @@ function FuturesPanel() {
                     setLocalAlert('Enter your GRVT API key');
                     return;
                   }
-                  const res = await activate?.({
-                    apiKey,
-                    subAccountId: grvtSubAccountInput.trim(),
-                  });
+                  const res = await activate?.({ apiKey });
                   if (res?.error) setLocalAlert(res.error);
                   else {
                     setGrvtApiKeyInput('');
-                    setGrvtSubAccountInput('');
                     setSuccessMsg('GRVT API key saved in this browser.');
                   }
                 }}

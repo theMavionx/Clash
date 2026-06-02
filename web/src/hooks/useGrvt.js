@@ -314,10 +314,10 @@ export function useGrvt() {
       }),
     });
     if (data?.needs_sub_account_id) {
-      throw new Error(data?.error || 'Enter your GRVT trading account id, then save again.');
+      throw new Error(data?.error || 'GRVT could not auto-detect a trading account from this API key. Create the key from the funded GRVT trading account and save it again.');
     }
     if (!data?.sub_account_id) {
-      throw new Error('GRVT trading account id required. Enter the trading account id from GRVT.');
+      throw new Error('GRVT could not auto-detect a trading account from this API key. Create the key from the funded GRVT trading account and save it again.');
     }
     return data;
   }, [authHeaders, fetchJson, token]);
@@ -582,7 +582,7 @@ export function useGrvt() {
         subAccountId: String(saved?.sub_account_id || next.subAccountId || '').trim(),
         fundingAccountAddress: String(saved?.funding_account_address || next.fundingAccountAddress || '').trim(),
       };
-      if (!resolved.subAccountId) return { error: 'GRVT trading account id required. Enter the trading account id from GRVT.' };
+      if (!resolved.subAccountId) return { error: 'GRVT could not auto-detect a trading account from this API key. Create the key from the funded GRVT trading account and save it again.' };
       writeCredentials(resolved);
       setCredentials(resolved);
       return { success: true };
@@ -733,21 +733,26 @@ export function useGrvt() {
     const expiration = nowNs() + 24n * 60n * 60n * 1_000_000_000n;
     const marginType = isIsolated ? 'ISOLATED' : 'CROSS';
     const marginTypeValue = isIsolated ? 1 : 2;
-    const baseFields = {
-      subAccountID: BigInt(credentials.subAccountId),
-      marginType: marginTypeValue,
-      nonce,
-      expiration,
-    };
-    const signConfig = async ({ includePositionFields = false } = {}) => {
-      const primaryType = includePositionFields ? 'SetSubAccountPositionMarginConfig' : 'SetSubAccountMarginType';
+    const signConfig = async ({ variant = 'doc' } = {}) => {
+      const isLegacyAccountOnly = variant === 'account-only';
+      const isLegacyPosition = variant === 'position-camel';
+      const primaryType = isLegacyAccountOnly
+        ? 'SetSubAccountMarginType'
+        : isLegacyPosition
+          ? 'SetSubAccountPositionMarginConfig'
+          : 'ApiSetSubAccountPositionMarginConfigRequest';
       const types = {
         EIP712Domain: [
           { name: 'name', type: 'string' },
           { name: 'version', type: 'string' },
           { name: 'chainId', type: 'uint256' },
         ],
-        [primaryType]: includePositionFields ? [
+        [primaryType]: isLegacyAccountOnly ? [
+          { name: 'subAccountID', type: 'uint64' },
+          { name: 'marginType', type: 'uint8' },
+          { name: 'nonce', type: 'uint32' },
+          { name: 'expiration', type: 'int64' },
+        ] : isLegacyPosition ? [
           { name: 'subAccountID', type: 'uint64' },
           { name: 'instrument', type: 'string' },
           { name: 'marginType', type: 'uint8' },
@@ -755,12 +760,38 @@ export function useGrvt() {
           { name: 'nonce', type: 'uint32' },
           { name: 'expiration', type: 'int64' },
         ] : [
-          { name: 'subAccountID', type: 'uint64' },
-          { name: 'marginType', type: 'uint8' },
+          { name: 'sub_account_id', type: 'string' },
+          { name: 'instrument', type: 'string' },
+          { name: 'margin_type', type: 'string' },
+          { name: 'leverage', type: 'string' },
           { name: 'nonce', type: 'uint32' },
           { name: 'expiration', type: 'int64' },
         ],
       };
+      const message = isLegacyAccountOnly
+        ? {
+          subAccountID: BigInt(credentials.subAccountId),
+          marginType: marginTypeValue,
+          nonce,
+          expiration,
+        }
+        : isLegacyPosition
+          ? {
+            subAccountID: BigInt(credentials.subAccountId),
+            instrument,
+            marginType: marginTypeValue,
+            leverage: String(lev),
+            nonce,
+            expiration,
+          }
+          : {
+            sub_account_id: String(credentials.subAccountId),
+            instrument,
+            margin_type: marginType,
+            leverage: String(lev),
+            nonce,
+            expiration,
+          };
       const rawSignature = await signTypedDataCompat({
         provider,
         walletClient: null,
@@ -768,9 +799,7 @@ export function useGrvt() {
         domain: { name: 'GRVT Exchange', version: '0', chainId: GRVT_CHAIN_ID },
         types,
         primaryType,
-        message: includePositionFields
-          ? { ...baseFields, instrument, leverage: String(lev) }
-          : baseFields,
+        message,
       });
       return splitSignature(rawSignature);
     };
@@ -795,8 +824,20 @@ export function useGrvt() {
     } catch (e) {
       const msg = String(e?.message || e || '');
       if (!/2002|signature does not match payload/i.test(msg)) throw e;
-      sig = await signConfig({ includePositionFields: true });
-      result = await postConfig(sig);
+      let fallbackError = e;
+      for (const variant of ['position-camel', 'account-only']) {
+        try {
+          sig = await signConfig({ variant });
+          result = await postConfig(sig);
+          fallbackError = null;
+          break;
+        } catch (nextError) {
+          fallbackError = nextError;
+          const nextMsg = String(nextError?.message || nextError || '');
+          if (!/2002|signature does not match payload/i.test(nextMsg)) throw nextError;
+        }
+      }
+      if (fallbackError) throw fallbackError;
     }
     const sym = String(symbol || '').toUpperCase();
     if (sym) {
