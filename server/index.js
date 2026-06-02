@@ -546,9 +546,12 @@ app.get('/api/admin/panel', (req, res) => {
         </tr></thead><tbody id="playerActionsBody"></tbody></table>
       </div>
     </div>
-    <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Players Activity</h3>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px;flex-wrap:wrap">
+      <h3 style="color:#9ca3af;font-size:13px;margin:0;text-transform:uppercase;letter-spacing:0.5px">Players Activity</h3>
+      <button class="btn" onclick="exportPlayerActivityData()">Export all data</button>
+    </div>
     <table style="margin-bottom:20px"><thead><tr>
-      <th>Player</th><th>DEX</th><th>TH</th><th>Active Days 7d</th><th>Sessions 7d</th><th>Avg Session</th><th>Events 7d</th><th>Battles 7d</th><th>Last Action</th>
+      <th>Player</th><th>DEX</th><th>TH</th><th>Active Days 7d</th><th>Sessions 7d</th><th>Avg Session</th><th>Events 7d</th><th>Battles 7d</th><th>Futures Volume</th><th>Last Action</th>
     </tr></thead><tbody id="playerActivityBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">MCP Agent Usage</h2>
@@ -1266,6 +1269,40 @@ function fmtAdminCompactUsd(v) {
   return fmtAdminUsd(n, 0);
 }
 
+let PLAYER_ACTIVITY_EXPORT_ROWS = [];
+
+function csvCell(value) {
+  const s = String(value == null ? '' : value);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function exportPlayerActivityData() {
+  const rows = PLAYER_ACTIVITY_EXPORT_ROWS || [];
+  const headers = [
+    'player_id', 'player', 'dex', 'town_hall', 'buildings',
+    'active_days_7d', 'active_days_30d', 'sessions_7d', 'avg_session_min_7d',
+    'events_7d', 'battles_7d', 'accepted_battles_7d',
+    'futures_volume_usd', 'futures_trades_count', 'futures_by_dex',
+    'last_action_at', 'last_action', 'last_seen_at',
+  ];
+  const lines = [headers.join(',')].concat(rows.map((row) => headers.map((key) => {
+    if (key === 'town_hall') return csvCell(row.th_level || 1);
+    if (key === 'buildings') return csvCell(row.buildings_count || 0);
+    if (key === 'player') return csvCell(row.name || row.id || '');
+    if (key === 'futures_by_dex') return csvCell(JSON.stringify(row.futures_by_dex || {}));
+    return csvCell(row[key]);
+  }).join(',')));
+  const blob = new Blob([lines.join('\\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'player-activity-' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function renderPlayers() {
   const shielded   = players.filter(p => p.shield_active).length;
   const pacCount   = players.filter(p => p.dex === 'pacifica').length;
@@ -1911,6 +1948,7 @@ async function loadStats() {
       : '<tr><td colspan="2" style="color:#6b7280;text-align:center;padding:20px">No action events yet</td></tr>';
 
     const activityRows = pa.players || [];
+    PLAYER_ACTIVITY_EXPORT_ROWS = pa.players_export || activityRows;
     document.getElementById('playerActivityBody').innerHTML = activityRows.length
       ? activityRows.map(row => '<tr>' +
           '<td><strong>' + esc(row.name || row.id || '-') + '</strong></td>' +
@@ -1921,9 +1959,10 @@ async function loadStats() {
           '<td>' + (row.avg_session_min_7d || 0) + 'm</td>' +
           '<td>' + (row.events_7d || 0) + '</td>' +
           '<td>' + (row.battles_7d || 0) + ' <span style="color:#4ade80">(' + (row.accepted_battles_7d || 0) + ' ok)</span></td>' +
+          '<td><strong>' + fmtAdminCompactUsd(row.futures_volume_usd || 0) + '</strong><div style="font-size:10px;color:#6b7280;margin-top:3px">' + (row.futures_trades_count || 0) + ' trades</div></td>' +
           '<td><div class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.last_action_at || row.last_seen_at)) + '</div><div style="font-size:11px;color:#6b7280">' + esc(row.last_action || 'heartbeat') + '</div></td>' +
         '</tr>').join('')
-      : '<tr><td colspan="9" style="color:#6b7280;text-align:center;padding:20px">No player activity yet</td></tr>';
+      : '<tr><td colspan="10" style="color:#6b7280;text-align:center;padding:20px">No player activity yet</td></tr>';
 
     const mcp = s.mcp || {};
     const mcpSummary = mcp.summary || {};

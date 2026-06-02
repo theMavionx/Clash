@@ -12839,6 +12839,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
+  const futuresByPlayer = new Map();
   let grvtBuilderStats = null;
   try {
     const fdb = futuresDbReadonly();
@@ -12900,6 +12901,24 @@ router.get('/admin/stats', adminAuth, (req, res) => {
             trades: r.trades,
           };
         });
+        const perPlayer = fdb.prepare(`
+          SELECT player_id, COALESCE(SUM(notional_usd), 0) AS volume, COUNT(*) AS trades
+          FROM trade_history WHERE dex = ? AND status = 'filled' AND ${sourceWhere}
+          GROUP BY player_id
+        `).all(dex);
+        for (const row of perPlayer) {
+          if (!row.player_id) continue;
+          const existing = futuresByPlayer.get(row.player_id) || { volume_usd: 0, trades_count: 0, by_dex: {} };
+          const volume = Number(row.volume || 0);
+          const trades = Number(row.trades || 0);
+          existing.volume_usd += volume;
+          existing.trades_count += trades;
+          existing.by_dex[dex] = {
+            volume_usd: Number(volume.toFixed(2)),
+            trades_count: trades,
+          };
+          futuresByPlayer.set(row.player_id, existing);
+        }
       }
       try {
         const grvt = require('../server-futures/grvt');
@@ -13193,7 +13212,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
       GROUP BY attacker_id
     `).all();
     const battlesByPlayer = new Map(battleRows.map(r => [r.player_id, r]));
-    const playerRows = db.db.prepare(`
+    const playerRowsAll = db.db.prepare(`
       SELECT p.id, p.name, p.dex, p.last_seen_at,
              COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level,
              COUNT(b.id) AS buildings_count
@@ -13201,12 +13220,12 @@ router.get('/admin/stats', adminAuth, (req, res) => {
       LEFT JOIN buildings b ON b.player_id = p.id
       GROUP BY p.id
       ORDER BY p.last_seen_at DESC
-      LIMIT 200
     `).all().map((p) => {
       const sessions = sessionsByPlayer.get(p.id) || [];
       const evs = eventsByPlayer.get(p.id) || [];
       const latest = evs.length ? evs[evs.length - 1] : null;
       const b = battlesByPlayer.get(p.id) || {};
+      const futures = futuresByPlayer.get(p.id) || { volume_usd: 0, trades_count: 0, by_dex: {} };
       return {
         id: p.id,
         name: p.name,
@@ -13220,6 +13239,9 @@ router.get('/admin/stats', adminAuth, (req, res) => {
         events_7d: evs.filter(e => now - e.ms <= 7 * dayMs).length,
         battles_7d: b.battles_7d || 0,
         accepted_battles_7d: b.accepted_7d || 0,
+        futures_volume_usd: Number((Number(futures.volume_usd) || 0).toFixed(2)),
+        futures_trades_count: Number(futures.trades_count) || 0,
+        futures_by_dex: futures.by_dex || {},
         last_seen_at: p.last_seen_at,
         last_action_at: latest?.created_at || p.last_seen_at || null,
         last_action: latest?.action || null,
@@ -13246,7 +13268,8 @@ router.get('/admin/stats', adminAuth, (req, res) => {
         .map(([action, count]) => ({ action, count }))
         .sort((a, b) => b.count - a.count)
         .slice(0, 20),
-      players: playerRows,
+      players: playerRowsAll.slice(0, 200),
+      players_export: playerRowsAll,
     };
   })();
 
