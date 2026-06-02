@@ -803,6 +803,28 @@ async function fetchNadoEarnings() {
   };
 }
 
+async function fetchHotstuffEarnings() {
+  const broker = String(
+    process.env.HOTSTUFF_BROKER_ADDRESS
+    || process.env.VITE_HOTSTUFF_BROKER_ADDRESS
+    || '0xB36402e87a86206D3a114a98B53f31362291fe1B'
+  ).trim();
+  const feeRate = Number(process.env.HOTSTUFF_BROKER_FEE_RATE || process.env.VITE_HOTSTUFF_BROKER_FEE_RATE || 0);
+  const configured = /^0x[0-9a-fA-F]{40}$/.test(broker) && Number.isFinite(feeRate) && feeRate > 0;
+  return {
+    earned_usd: 0,
+    currency: 'USDC (Ethereum)',
+    address: broker || null,
+    broker_fee_rate: configured ? feeRate : 0,
+    builder_fee_bps: configured ? feeRate * 10000 : 0,
+    model: configured ? 'hotstuff_broker_fee_local_index_pending' : 'builder_fee_not_configured',
+    source_detail: configured ? 'hotstuff_broker_fee_local_index_pending' : 'hotstuff_broker_pending',
+    note: configured
+      ? 'Hotstuff broker is configured for order attribution; exact cumulative broker earnings need Hotstuff fill indexing/reconciliation.'
+      : 'Hotstuff broker address/rate are not configured yet. Orders can be wired now; reward credit stays disabled until the broker code/address is provided.',
+  };
+}
+
 // Revenue analytics for admin: fast local stats by time window and by
 // tournament. Exact cumulative readers above stay authoritative where a DEX
 // exposes them; this section focuses on comparable volume x rate reporting.
@@ -816,6 +838,7 @@ const ANALYTICS_DEXES = [
   { key: 'hyperliquid', label: 'Hyperliquid' },
   { key: 'risex', label: 'RISE' },
   { key: 'nado', label: 'Nado' },
+  { key: 'hotstuff', label: 'Hotstuff' },
 ];
 
 const ANALYTICS_WINDOWS = [
@@ -874,6 +897,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
   if (dex === 'nado') return "verified_source = 'nado_api'";
+  if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
   if (dex === 'avantis') return "verified_source IN ('worker', 'client')";
@@ -980,6 +1004,17 @@ function revenueModelForDex(dex, dateForRate = null) {
       builder_fee_bps: bps,
       model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
       source_detail: bps > 0 ? 'local_volume_x_nado_bps' : 'nado_builder_not_configured',
+    };
+  }
+  if (dex === 'hotstuff') {
+    return {
+      ...base,
+      rate: 0,
+      earned_usd: 0,
+      rate_label: 'broker pending',
+      builder_fee_bps: 0,
+      model: 'builder_fee_not_configured',
+      source_detail: 'hotstuff_broker_pending',
     };
   }
   return {
@@ -1306,7 +1341,7 @@ async function fetchAllEarnings({ force = false } = {}) {
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, phx, mon, hl, nado] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, phx, mon, hl, nado, hotstuff] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
@@ -1315,6 +1350,7 @@ async function fetchAllEarnings({ force = false } = {}) {
     fetchPerplEarnings(),
     fetchHyperliquidEarnings(),
     fetchNadoEarnings(),
+    fetchHotstuffEarnings(),
   ]);
   const wrap = (label, r) => r.status === 'fulfilled'
     ? { ok: true, ...r.value }
@@ -1329,9 +1365,10 @@ async function fetchAllEarnings({ force = false } = {}) {
     monad:    { ...wrap('monad',    mon), source: 'perpl_builder_fee_not_configured' },
     hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_referral_builder_rewards' },
     nado: { ...wrap('nado', nado), source: 'nado_indexer_match_builder_fee' },
+    hotstuff: { ...wrap('hotstuff', hotstuff), source: 'hotstuff_broker_pending' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','nado'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','nado','hotstuff'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

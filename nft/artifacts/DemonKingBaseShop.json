@@ -1446,7 +1446,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 12155,
+        "astId": 8693,
         "contract": "DemonKingBaseShop.sol:DemonKingBaseShop",
         "label": "_owner",
         "offset": 0,
@@ -1454,7 +1454,7 @@
         "type": "t_address"
       },
       {
-        "astId": 13524,
+        "astId": 14315,
         "contract": "DemonKingBaseShop.sol:DemonKingBaseShop",
         "label": "_nameFallback",
         "offset": 0,
@@ -1462,7 +1462,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 13526,
+        "astId": 14317,
         "contract": "DemonKingBaseShop.sol:DemonKingBaseShop",
         "label": "_versionFallback",
         "offset": 0,
@@ -1470,7 +1470,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 3355,
+        "astId": 4032,
         "contract": "DemonKingBaseShop.sol:DemonKingBaseShop",
         "label": "quoteSigner",
         "offset": 0,
@@ -1478,7 +1478,7 @@
         "type": "t_address"
       },
       {
-        "astId": 3357,
+        "astId": 4034,
         "contract": "DemonKingBaseShop.sol:DemonKingBaseShop",
         "label": "saleActive",
         "offset": 20,
@@ -1486,7 +1486,7 @@
         "type": "t_bool"
       },
       {
-        "astId": 3361,
+        "astId": 4038,
         "contract": "DemonKingBaseShop.sol:DemonKingBaseShop",
         "label": "paymentTokenAllowed",
         "offset": 0,
@@ -1494,7 +1494,7 @@
         "type": "t_mapping(t_address,t_bool)"
       },
       {
-        "astId": 3365,
+        "astId": 4042,
         "contract": "DemonKingBaseShop.sol:DemonKingBaseShop",
         "label": "usedQuote",
         "offset": 0,

@@ -1,16 +1,44 @@
 import { useEffect, useState } from 'react';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import { BASE_RPC_URLS } from '../lib/avantisContract';
+import { ARC_CHAIN_ID_HEX, ARC_CHAIN_NAME, ARC_EXPLORER_URL, ARC_NETWORK_CTA, ARC_RPC_URLS } from '../lib/arcConfig';
+import { GRVT_CHAIN_ID_HEX, GRVT_CHAIN_NAME, GRVT_EXPLORER_URL, GRVT_RPC_URLS } from '../lib/grvtConfig';
 
 // Styled to match RegisterPanel + BuildingInfoPanel — parchment body, blue
 // header, yellow CTA. The previous dark cartoonPanel look stood out against
 // the rest of the game UI.
 
 const NETWORKS = {
+  mainnet: {
+    chainId: '0x1',
+    label: 'Ethereum',
+    cta: 'Ethereum mainnet',
+    addParams: {
+      chainId: '0x1',
+      chainName: 'Ethereum',
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://ethereum-rpc.publicnode.com'],
+      blockExplorerUrls: ['https://etherscan.io'],
+    },
+  },
   base: {
     chainId: '0x2105',
     label: 'Base',
     cta: 'Base (EVM) network',
+    addParams: {
+      chainId: '0x2105',
+      chainName: 'Base',
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: BASE_RPC_URLS,
+      blockExplorerUrls: ['https://basescan.org'],
+    },
+  },
+  baseConnect: {
+    chainId: '0x2105',
+    label: 'Base',
+    cta: 'Base wallet',
+    connectOnly: true,
+    note: 'Network switching is requested only when signing a transaction.',
     addParams: {
       chainId: '0x2105',
       chainName: 'Base',
@@ -79,6 +107,32 @@ const NETWORKS = {
       blockExplorerUrls: ['https://explorer.inkonchain.com'],
     },
   },
+  arc: {
+    chainId: ARC_CHAIN_ID_HEX,
+    label: 'Arc',
+    cta: ARC_NETWORK_CTA,
+    addParams: {
+      chainId: ARC_CHAIN_ID_HEX,
+      chainName: ARC_CHAIN_NAME,
+      nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 6 },
+      rpcUrls: ARC_RPC_URLS,
+      blockExplorerUrls: [ARC_EXPLORER_URL],
+    },
+  },
+  grvt: {
+    chainId: GRVT_CHAIN_ID_HEX,
+    label: 'GRVT Exchange',
+    cta: 'GRVT wallet',
+    connectOnly: true,
+    note: 'GRVT network is requested only when signing a trade.',
+    addParams: {
+      chainId: GRVT_CHAIN_ID_HEX,
+      chainName: GRVT_CHAIN_NAME,
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: GRVT_RPC_URLS,
+      blockExplorerUrls: [GRVT_EXPLORER_URL],
+    },
+  },
 };
 
 // EIP-6963 provider discovery. Modern wallets (MetaMask, Rabby, Coinbase,
@@ -134,6 +188,7 @@ function useInjectedProviders() {
 
 async function ensureTargetChain(provider, targetChain = 'base') {
   const cfg = NETWORKS[targetChain] || NETWORKS.base;
+  if (cfg.connectOnly) return;
   try {
     const current = await provider.request({ method: 'eth_chainId' });
     if (String(current).toLowerCase() === cfg.chainId) return;
@@ -156,7 +211,8 @@ async function ensureTargetChain(provider, targetChain = 'base') {
 
 // Custom EVM wallet-connect modal. Shows all injected wallets detected
 // via EIP-6963 + legacy `window.ethereum` fallback. On select: requests
-// accounts, switches to target chain, fires onConnected({ address, provider }).
+// accounts, switches to the target chain when the DEX needs it at connect
+// time, then fires onConnected({ address, provider }).
 export default function EvmWalletModal({ open, onClose, onConnected, targetChain = 'base' }) {
   const providers = useInjectedProviders();
   const [connecting, setConnecting] = useState(null); // rdns of connecting provider
@@ -216,6 +272,11 @@ export default function EvmWalletModal({ open, onClose, onConnected, targetChain
           <div style={M.subtitle}>
             Connect or switch to the {target.cta}
           </div>
+          {target.note && (
+            <div style={M.note}>
+              {target.note}
+            </div>
+          )}
           <div style={{...M.subtitle, display: 'none'}}>
             Base (EVM) network · required for Avantis perps
           </div>
@@ -306,6 +367,14 @@ const M = {
   subtitle: {
     fontSize: 12, fontWeight: 700, color: '#5d6d75',
     textAlign: 'center', letterSpacing: 0.3,
+  },
+  note: {
+    marginTop: -6,
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#7b6a4f',
+    textAlign: 'center',
+    lineHeight: 1.35,
   },
   empty: {
     padding: '18px 14px', borderRadius: 12,

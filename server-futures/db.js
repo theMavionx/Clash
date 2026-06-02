@@ -103,6 +103,15 @@ db.exec(`
     pnl            TEXT,
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS grvt_credentials (
+    player_id      TEXT PRIMARY KEY,
+    api_key        TEXT NOT NULL,
+    sub_account_id TEXT,
+    funding_account_address TEXT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // ---------- Pre-statement migrations ----------
@@ -120,6 +129,9 @@ try { db.exec("ALTER TABLE wallets ADD COLUMN chain TEXT NOT NULL DEFAULT 'solan
 try { db.exec("ALTER TABLE trade_history ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN verified_source TEXT NOT NULL DEFAULT 'client'"); } catch {}
+try { db.exec("ALTER TABLE trade_history ADD COLUMN fee TEXT"); } catch {}
+try { db.exec("ALTER TABLE trade_history ADD COLUMN proof_json TEXT"); } catch {}
+try { db.exec("ALTER TABLE grvt_credentials ADD COLUMN funding_account_address TEXT"); } catch {}
 // Dedup: trade_history.client_order_id was nullable + non-unique, so
 // client-reported opens (order_id = tx_hash) and worker-recorded closes
 // (order_id = 'closed_...') for the same underlying trade could both land,
@@ -183,11 +195,22 @@ const stmts = {
   // partial index) silently drops instead of throwing. Prevents one
   // duplicate report from crashing the request handler.
   addTrade: db.prepare(`
-    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source, pnl)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source, pnl, fee, proof_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
+  getGrvtCredentials: db.prepare('SELECT * FROM grvt_credentials WHERE player_id = ?'),
+  upsertGrvtCredentials: db.prepare(`
+    INSERT INTO grvt_credentials (player_id, api_key, sub_account_id, funding_account_address, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(player_id) DO UPDATE SET
+      api_key = excluded.api_key,
+      sub_account_id = excluded.sub_account_id,
+      funding_account_address = excluded.funding_account_address,
+      updated_at = datetime('now')
+  `),
+  deleteGrvtCredentials: db.prepare('DELETE FROM grvt_credentials WHERE player_id = ?'),
 };
 
 // ---------- Wallet Functions ----------
@@ -235,19 +258,56 @@ function getDeposits(playerId) {
 
 // ---------- Trade Functions ----------
 
-function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0, verifiedSource = 'server', pnl = null }) {
+function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0, verifiedSource = 'server', pnl = null, fee = null, proofJson = null }) {
   const info = stmts.addTrade.run(
     playerId, symbol, side, orderType,
     amount, price || null,
     orderId || null, clientOrderId || null,
     status, dex, notional_usd, verifiedSource,
-    pnl != null ? String(pnl) : null
+    pnl != null ? String(pnl) : null,
+    fee != null ? String(fee) : null,
+    proofJson != null ? String(proofJson) : null
   );
   return { id: info.changes ? info.lastInsertRowid : null, changes: info.changes };
 }
 
 function getTrades(playerId) {
   return stmts.getTrades.all(playerId);
+}
+
+// ---------- GRVT Credential Functions ----------
+
+function hydrateGrvtCredentials(row) {
+  if (!row) return null;
+  try {
+    return {
+      apiKey: decryptSecret(row.api_key),
+      subAccountId: row.sub_account_id || '',
+      fundingAccountAddress: row.funding_account_address || '',
+      updatedAt: row.updated_at || null,
+    };
+  } catch (e) {
+    console.error('[futures.db] Failed to decrypt GRVT credentials for player', row.player_id, e.message);
+    return null;
+  }
+}
+
+function getGrvtCredentials(playerId) {
+  return hydrateGrvtCredentials(stmts.getGrvtCredentials.get(playerId));
+}
+
+function saveGrvtCredentials(playerId, { apiKey, subAccountId = '', fundingAccountAddress = '' }) {
+  const normalizedApiKey = String(apiKey || '').trim();
+  if (!normalizedApiKey) throw new Error('GRVT API key required');
+  const normalizedSubAccountId = String(subAccountId || '').trim();
+  const normalizedFunding = String(fundingAccountAddress || '').trim();
+  stmts.upsertGrvtCredentials.run(playerId, encryptSecret(normalizedApiKey), normalizedSubAccountId || null, normalizedFunding || null);
+  return getGrvtCredentials(playerId);
+}
+
+function deleteGrvtCredentials(playerId) {
+  stmts.deleteGrvtCredentials.run(playerId);
+  return { success: true };
 }
 
 // ---------- Exports ----------
@@ -261,6 +321,9 @@ module.exports = {
   getDeposits,
   addTrade,
   getTrades,
+  getGrvtCredentials,
+  saveGrvtCredentials,
+  deleteGrvtCredentials,
 };
 
 // One-time encryption migration: any row where secret_key doesn't start with

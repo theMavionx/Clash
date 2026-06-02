@@ -27,6 +27,18 @@ secrets/
 *.orig
 .asset-backups/
 
+# Private migration portal lives in a separate repository.
+relaunch/
+deploy/migration/
+clash-migration-portal.zip
+lv_*.mp4
+nft/artifacts/COPRELAUNCH.json
+nft/contracts/COPRELAUNCH.sol
+nft/deployments/cop-relaunch-base-mainnet.json
+nft/scripts/*cop-relaunch*.mjs
+nft/scripts/kyberswap-cop-relaunch.mjs
+nft/-
+
 # Godot imports generated for web-only share images
 web/public/win.jpg.import
 web/public/lose.jpg.import

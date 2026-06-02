@@ -6314,13 +6314,13 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt']);
 // DEXes whose trade history is indexed by the futures rewards worker into
 // the trade_history table (server-futures/futures.db). GMX joined Phase 3
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -6340,7 +6340,7 @@ const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'pho
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
   if (!VALID_DEXES.has(dex)) {
-    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex" or "nado"' });
+    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex", "nado", "hibachi", "hotstuff" or "grvt"' });
   }
   if (dex !== req.player.dex) {
     logAuth('set-dex no-op (DEX is now per-account; client should switch via login-wallet)', {
@@ -10104,6 +10104,19 @@ function futuresDbReadonly() {
   return _futuresDb;
 }
 
+async function importGrvtFillsForClaim(playerId) {
+  try {
+    const futuresDb = require('../server-futures/db');
+    const grvt = require('../server-futures/grvt');
+    const creds = futuresDb.getGrvtCredentials(playerId);
+    if (!creds?.apiKey || !creds?.subAccountId) return null;
+    return await grvt.importFillsForPlayer(playerId, creds, { limit: 100 });
+  } catch (e) {
+    console.warn('[claim-gold grvt] pre-import failed:', e.message);
+    return null;
+  }
+}
+
 router.post('/trading/claim-gold', auth, async (req, res) => {
   // Rate limit
   const lastClaim = claimCooldowns.get(req.player.id);
@@ -10171,7 +10184,10 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt') {
+    if (dex === 'grvt') {
+      await importGrvtFillsForClaim(req.player.id);
+    }
     const fdb = futuresDbReadonly();
     if (!fdb) {
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
@@ -10185,7 +10201,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // had a similar early-rollout risk while we were tuning import timing.
     // If a row has never paid anything, rewind the cursor once so verified
     // rows can be credited under the current rules.
-    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado')
+    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt')
       && Number(reward.last_trade_id || 0) > 0
       && Number(reward.total_volume || 0) === 0
       && Number(reward.total_gold || 0) === 0) {
@@ -10205,10 +10221,16 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           ? "AND verified_source = 'hyperliquid_api'"
         : dex === 'risex'
           ? "AND verified_source = 'risex_api'"
-        : dex === 'nado'
-          ? "AND verified_source = 'nado_api'"
-        : dex === 'phoenix'
-          ? "AND verified_source IN ('worker', 'tx')"
+          : dex === 'nado'
+            ? "AND verified_source = 'nado_api'"
+          : dex === 'hibachi'
+            ? "AND verified_source = 'hibachi_api'"
+          : dex === 'hotstuff'
+            ? "AND verified_source = 'hotstuff_api'"
+          : dex === 'grvt'
+            ? "AND verified_source = 'grvt_builder'"
+          : dex === 'phoenix'
+            ? "AND verified_source IN ('worker', 'tx')"
         : "AND verified_source = 'worker'";
     const hyperliquidWalletPrefix = dex === 'hyperliquid' && EVM_WALLET_RE.test(String(wallet || ''))
       ? `hyperliquid:${String(wallet).toLowerCase()}:%`
@@ -10354,7 +10376,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // a sensible micro-trade floor across all four DEXes.
     const SANE_MIN_NOTIONAL = dex === 'gmx'
       ? 0
-      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') ? 10 : 50;
+      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -10750,7 +10772,7 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt') {
     const fdb = futuresDbReadonly();
     if (fdb) {
       try {
@@ -10762,10 +10784,16 @@ router.get('/trading/stats', auth, async (req, res) => {
               ? "AND verified_source = 'hyperliquid_api'"
             : dex === 'risex'
               ? "AND verified_source = 'risex_api'"
-            : dex === 'nado'
-              ? "AND verified_source = 'nado_api'"
-            : dex === 'phoenix'
-              ? "AND verified_source IN ('worker', 'tx')"
+              : dex === 'nado'
+                ? "AND verified_source = 'nado_api'"
+              : dex === 'hibachi'
+                ? "AND verified_source = 'hibachi_api'"
+              : dex === 'hotstuff'
+                ? "AND verified_source = 'hotstuff_api'"
+              : dex === 'grvt'
+                ? "AND verified_source = 'grvt_builder'"
+              : dex === 'phoenix'
+                ? "AND verified_source IN ('worker', 'tx')"
             : "AND verified_source = 'worker'";
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
@@ -10808,7 +10836,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt']);
 
 async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
@@ -11315,6 +11343,7 @@ function shopRevenueTokenBuckets() {
   const solana = gameShopSolanaConfig();
   addShopRevenueToken(stableTokens, solana.usdcMint);
   addShopRevenueToken(projectTokens, solana.skrMint);
+  addShopRevenueToken(projectTokens, solana.clashMint);
 
   const aptos = gameShopAptosConfig();
   addShopRevenueToken(stableTokens, aptos.usdcAddress);
@@ -12158,7 +12187,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
   let futuresTrades = [];
   try {
     const fdb = futuresDbReadonly();
-    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado')) {
+    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado' || player.dex === 'hibachi' || player.dex === 'hotstuff' || player.dex === 'grvt')) {
       futuresTrades = fdb.prepare(
         `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
          FROM trade_history WHERE player_id = ? AND dex = ?
@@ -12807,9 +12836,10 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
+  let grvtBuilderStats = null;
   try {
     const fdb = futuresDbReadonly();
     if (fdb) {
@@ -12819,9 +12849,15 @@ router.get('/admin/stats', adminAuth, (req, res) => {
           ? "verified_source = 'hyperliquid_api'"
         : dex === 'risex'
           ? "verified_source = 'risex_api'"
-        : dex === 'nado'
-          ? "verified_source = 'nado_api'"
-        : dex === 'decibel'
+          : dex === 'nado'
+            ? "verified_source = 'nado_api'"
+          : dex === 'hibachi'
+            ? "verified_source = 'hibachi_api'"
+          : dex === 'hotstuff'
+            ? "verified_source = 'hotstuff_api'"
+          : dex === 'grvt'
+            ? "verified_source = 'grvt_builder'"
+          : dex === 'decibel'
           ? "verified_source = 'server'"
         : dex === 'phoenix'
           ? "verified_source IN ('worker', 'tx')"
@@ -12864,6 +12900,91 @@ router.get('/admin/stats', adminAuth, (req, res) => {
             trades: r.trades,
           };
         });
+      }
+      try {
+        const grvt = require('../server-futures/grvt');
+        const builderConfig = grvt.getBuilderConfig();
+        const feeBps = Number(builderConfig.feeBps || 0) || 0;
+        const tradeHistoryColumns = fdb.prepare("PRAGMA table_info(trade_history)").all();
+        const hasFeeColumn = tradeHistoryColumns
+          .some(col => col && col.name === 'fee');
+        const hasProofColumn = tradeHistoryColumns
+          .some(col => col && col.name === 'proof_json');
+        const feeValue = hasFeeColumn
+          ? "CAST(COALESCE(NULLIF(fee, ''), '0') AS REAL)"
+          : "0";
+        const feeExpr = `CASE
+          WHEN ${feeValue} > 0
+            THEN ${feeValue}
+          ELSE COALESCE(notional_usd, 0) * ? / 10000.0
+        END`;
+        const summary = fdb.prepare(`
+          SELECT COUNT(*) AS fills,
+                 COUNT(DISTINCT player_id) AS traders,
+                 COALESCE(SUM(notional_usd), 0) AS volume,
+                 COALESCE(SUM(${feeExpr}), 0) AS fee_usd,
+                 COALESCE(SUM(CASE WHEN ${feeValue} > 0 THEN ${feeValue} ELSE 0 END), 0) AS actual_fee_usd,
+                 COALESCE(SUM(CASE WHEN ${feeValue} > 0 THEN 0 ELSE COALESCE(notional_usd, 0) * ? / 10000.0 END), 0) AS estimated_fee_usd,
+                 COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN ${feeExpr} ELSE 0 END), 0) AS fee_24h_usd,
+                 COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN notional_usd ELSE 0 END), 0) AS volume_24h
+          FROM trade_history
+          WHERE dex = 'grvt' AND status = 'filled' AND verified_source = 'grvt_builder'
+        `).get(feeBps, feeBps, feeBps) || {};
+        const recent = fdb.prepare(`
+          SELECT id, player_id, symbol, side, amount, price, notional_usd, fee, proof_json,
+                 order_id, client_order_id, created_at
+          FROM trade_history
+          WHERE dex = 'grvt' AND status = 'filled' AND verified_source = 'grvt_builder'
+          ORDER BY id DESC LIMIT 20
+        `.replace(', fee,', hasFeeColumn ? ', fee,' : ", NULL AS fee,")
+          .replace(', proof_json,', hasProofColumn ? ', proof_json,' : ", NULL AS proof_json,")).all().map(row => {
+          const p = nameLookup.get(row.player_id) || {};
+          const clientOrderId = String(row.client_order_id || '');
+          const parts = clientOrderId.split(':');
+          const subAccountId = parts.length >= 3 ? parts[1] : '';
+          const actualFee = Number(row.fee || 0);
+          const estimatedFee = Number(row.notional_usd || 0) * feeBps / 10000;
+          let proofPayload = null;
+          try { proofPayload = row.proof_json ? JSON.parse(row.proof_json) : null; } catch {}
+          const rawFill = proofPayload && proofPayload.fill && typeof proofPayload.fill === 'object'
+            ? proofPayload.fill
+            : {};
+          const onchainProof = proofPayload?.tx_hash
+            || proofPayload?.transaction_hash
+            || proofPayload?.transactionHash
+            || rawFill.tx_hash
+            || rawFill.transaction_hash
+            || rawFill.transactionHash
+            || rawFill.txHash
+            || null;
+          return {
+            ...row,
+            name: p.name || '?',
+            wallet: p.wallet || '',
+            sub_account_id: subAccountId,
+            fee_usd: actualFee > 0 ? actualFee : estimatedFee,
+            fee_source: actualFee > 0 ? 'grvt_fill_fee' : 'estimated_from_builder_bps',
+            proof_source: 'GRVT builder fill history',
+            onchain_proof: onchainProof,
+            proof_json: row.proof_json || null,
+            builder_account_id: builderConfig.accountId || null,
+          };
+        });
+        grvtBuilderStats = {
+          config: builderConfig,
+          fills: summary.fills || 0,
+          traders: summary.traders || 0,
+          volume_usd: summary.volume || 0,
+          volume_24h_usd: summary.volume_24h || 0,
+          fee_usd: summary.fee_usd || 0,
+          fee_24h_usd: summary.fee_24h_usd || 0,
+          actual_fee_usd: summary.actual_fee_usd || 0,
+          estimated_fee_usd: summary.estimated_fee_usd || 0,
+          recent_proofs: recent,
+          proof_note: 'Rows are accepted only when verified_source=grvt_builder from GRVT builder fill history. If GRVT returns an on-chain transaction hash in the raw fill, it is exposed as onchain_proof; otherwise client_order_id/order_id/sub_account_id plus stored proof_json are the audit keys.',
+        };
+      } catch (e) {
+        grvtBuilderStats = { error: e.message || 'GRVT builder stats unavailable' };
       }
     }
   } catch { /* futures unavailable */ }
@@ -13149,6 +13270,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
       // so the deployed admin panel doesn't blank out mid-deploy.
       activity_by_dex: dexActivity,
       top_by_dex: dexTop,
+      grvt_builder: grvtBuilderStats,
       avantis_activity: dexActivity.avantis || null,
       avantis_top: dexTop.avantis || [],
     },
@@ -13406,7 +13528,7 @@ function parseBool(v) {
 const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
 const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
-const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado'];
+const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt'];
 const TOURNAMENT_DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -13417,6 +13539,9 @@ const TOURNAMENT_DEX_LABELS = {
   hyperliquid: 'Hyperliquid',
   risex: 'RISEx',
   nado: 'Nado',
+  hibachi: 'Hibachi',
+  hotstuff: 'Hotstuff',
+  grvt: 'GRVT',
 };
 const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
 const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
@@ -14086,6 +14211,9 @@ function tournamentTradeSourceWhere(dex) {
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
   if (dex === 'nado') return "verified_source = 'nado_api'";
+  if (dex === 'hibachi') return "verified_source = 'hibachi_api'";
+  if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
+  if (dex === 'grvt') return "verified_source = 'grvt_builder'";
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'server')";
   return "verified_source = 'worker'";
@@ -14093,7 +14221,7 @@ function tournamentTradeSourceWhere(dex) {
 
 function syncFuturesTournamentRows(playerId, dex) {
   const normalizedDex = String(dex || '').toLowerCase();
-  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado'].includes(normalizedDex)) {
+  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hotstuff', 'grvt'].includes(normalizedDex)) {
     return { ok: true, skipped: true };
   }
   const fdb = futuresDbReadonly();

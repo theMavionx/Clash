@@ -25,13 +25,14 @@ function Spinner({ label }) {
 
 function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
   const dexOptions = getAvailableDexConfigs({ isInFrame, isSolanaMobile });
+  const isDesktopGrid = useMediaQuery('(min-width: 900px) and (min-height: 620px)');
   return (
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CHOOSE YOUR DEX</h3>
       <p style={S.subtle}>
         Your trading venue for the whole campaign. You can switch any time in profile.
       </p>
-      <div style={S.dexList}>
+      <div style={isDesktopGrid ? { ...S.dexList, ...S.dexListDesktop } : S.dexList}>
         {dexOptions.map(cfg => (
           <button
             key={cfg.id}
@@ -39,6 +40,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
             onClick={() => onPick(cfg.id)}
             style={{
               ...S.dexCard,
+              ...(isDesktopGrid ? S.dexCardDesktop : null),
               border: `3px solid ${cfg.borderColor}`,
               background: `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)`,
               boxShadow: `0 5px 0 ${cfg.borderColor}, 0 7px 14px rgba(0,0,0,0.25)`,
@@ -58,16 +60,18 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   }}
                 />
                 {!cfg.logoIsWordmark && (
-                  <span style={S.dexCardLabel}>{cfg.label.toLowerCase()}</span>
+                  <span style={isDesktopGrid ? { ...S.dexCardLabel, ...S.dexCardLabelDesktop } : S.dexCardLabel}>{cfg.label.toLowerCase()}</span>
                 )}
               </div>
-              <div style={S.dexCardSubtitle}>
+              <div style={isDesktopGrid ? { ...S.dexCardSubtitle, ...S.dexCardSubtitleDesktop } : S.dexCardSubtitle}>
                 {cfg.chain} · {
                   cfg.id === 'avantis' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'risex' ? 'SELF-CUSTODY · RISE' :
                   cfg.id === 'nado' ? 'SELF-CUSTODY · INK' :
+                  cfg.id === 'hotstuff' ? 'SELF-CUSTODY · HOT' :
+                  cfg.id === 'grvt' ? 'SELF-CUSTODY · GRVT' :
                   cfg.id === 'monad' ? 'SELF-CUSTODY · MONAD' :
                   cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
                   'SELF-CUSTODY · SOLANA'
@@ -80,6 +84,26 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
       </div>
     </div>
   );
+}
+
+function useMediaQuery(query) {
+  const getMatches = useCallback(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(query).matches
+      : false
+  ), [query]);
+  const [matches, setMatches] = useState(getMatches);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const media = window.matchMedia(query);
+    const onChange = () => setMatches(media.matches);
+    onChange();
+    media.addEventListener?.('change', onChange);
+    return () => media.removeEventListener?.('change', onChange);
+  }, [query]);
+
+  return matches;
 }
 
 function DexBadge({ dex, onChange }) {
@@ -219,12 +243,16 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hyperliquid' ? 'HYPERLIQUID'
     : dex === 'risex' ? 'RISEX'
     : dex === 'nado' ? 'NADO'
+    : dex === 'hotstuff' ? 'HOTSTUFF'
+    : dex === 'grvt' ? 'GRVT'
     : 'AVANTIS';
   const chainName = dex === 'gmx' ? 'Arbitrum'
     : dex === 'monad' ? 'Monad'
     : dex === 'hyperliquid' ? 'EVM'
     : dex === 'risex' ? 'RISE'
     : dex === 'nado' ? 'Ink'
+    : dex === 'hotstuff' ? 'Hotstuff L1'
+    : dex === 'grvt' ? 'GRVT Exchange'
     : 'Base';
   return (
     <div style={S.bodyStack}>
@@ -340,6 +368,8 @@ function RegisterPanel() {
                   dex === 'hyperliquid' ? 'Hyperliquid' :
                   dex === 'risex' ? 'RISEx' :
                   dex === 'nado' ? 'Nado' :
+                  dex === 'hotstuff' ? 'Hotstuff' :
+                  dex === 'grvt' ? 'GRVT' :
                   dex === 'phoenix' ? 'Phoenix' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
@@ -359,7 +389,7 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -408,13 +438,15 @@ function RegisterPanel() {
     if (dex === 'hyperliquid') return 'HYPERLIQUID LOGIN';
     if (dex === 'risex') return 'RISEX LOGIN';
     if (dex === 'nado') return 'NADO LOGIN';
+    if (dex === 'hotstuff') return 'HOTSTUFF LOGIN';
+    if (dex === 'grvt') return 'GRVT LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
     return 'PACIFICA LOGIN';
   })();
 
   return (
     <div style={S.overlay}>
-      <div style={S.panel}>
+      <div style={state === 'pick_dex' ? { ...S.panel, ...S.dexPickerPanel } : S.panel}>
         <div style={S.header}>
           <span style={S.headerTitle}>{headerTitle}</span>
         </div>
@@ -426,7 +458,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' ? 'baseConnect' : dex === 'hotstuff' ? 'mainnet' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>
@@ -457,6 +489,9 @@ const S = {
     display: 'flex', flexDirection: 'column',
     overflow: 'hidden',
     fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  dexPickerPanel: {
+    width: 'min(760px, 94vw)',
   },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -495,11 +530,22 @@ const S = {
   dexList: {
     display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4, paddingBottom: 6,
   },
+  dexListDesktop: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 12,
+    alignItems: 'stretch',
+  },
   dexCard: {
     width: '100%', display: 'flex', alignItems: 'center', gap: 14,
     padding: '14px 16px', borderRadius: 16,
     cursor: 'pointer', outline: 'none', textAlign: 'left', color: '#fff',
     fontFamily: 'inherit',
+  },
+  dexCardDesktop: {
+    minHeight: 86,
+    padding: '12px 14px',
+    boxSizing: 'border-box',
   },
   dexCardBody: {
     flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4,
@@ -510,10 +556,18 @@ const S = {
     letterSpacing: '0.8px', textShadow: '0 2px 0 rgba(0,0,0,0.35)',
     textTransform: 'lowercase',
   },
+  dexCardLabelDesktop: {
+    fontSize: 18,
+    letterSpacing: '0.4px',
+  },
   dexCardSubtitle: {
     fontSize: 11, fontWeight: 800,
     color: 'rgba(255,255,255,0.88)',
     textShadow: '0 1px 0 rgba(0,0,0,0.3)', letterSpacing: '0.3px',
+  },
+  dexCardSubtitleDesktop: {
+    fontSize: 10,
+    lineHeight: 1.25,
   },
   dexCardChevron: {
     fontSize: 26, color: '#fff', fontWeight: 900,

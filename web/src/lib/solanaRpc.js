@@ -1,11 +1,14 @@
+import { buildRpcFallbackList, envFlag, siteOrigin, splitRpcUrls } from './rpcPolicy';
+
 const rawEnvSolanaRpc = (import.meta.env.VITE_SOLANA_RPC_URL || '').trim();
 const rawDirectSolanaRpc = (import.meta.env.VITE_DIRECT_SOLANA_RPC_URL || '').trim();
 const rawBrowserSolanaRpcUrls = (import.meta.env.VITE_SOLANA_BROWSER_RPC_URLS || '').trim();
-const allowProxyFallback = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC || '1'));
+const allowProxyFallback = envFlag(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC, true);
 const preferProxyRpc = allowProxyFallback
-  && !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || '1'));
-const includeLeoRpcProxy = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_LEORPC || ''));
-const includeAlchemyRpcProxy = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_ALCHEMY_RPC || '1'));
+  && envFlag(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC, true);
+const includePublicRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_PUBLIC_RPC, true);
+const includeLeoRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_LEORPC, true);
+const includeAlchemyRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_ALCHEMY_RPC, true);
 // Tatum is intentionally excluded from the browser fallback list. Expired or
 // quota-limited Tatum accounts return 402/429 and can break mobile payment
 // flows even when Alchemy and the primary proxy are healthy.
@@ -15,22 +18,8 @@ export const SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS = 50;
 export const SOLANA_RPC_MAX_BLOCK_HEIGHT_LAG = 40;
 export const SOLANA_RPC_PROBE_TIMEOUT_MS = 2_000;
 
-function siteOrigin() {
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
-  }
-  return 'https://clashofperps.fun';
-}
-
 function sameOriginPath(path) {
   return `${siteOrigin()}${path}`;
-}
-
-function splitRpcUrls(raw) {
-  return String(raw || '')
-    .split(/[,\s]+/)
-    .map((url) => url.trim())
-    .filter(Boolean);
 }
 
 function isSameOriginRpcUrl(url) {
@@ -85,7 +74,8 @@ try {
 
 export const SAME_ORIGIN_SOLANA_RPC_URL = sameOriginPath('/rpc/solana');
 export const SAME_ORIGIN_SOLANA_ALCHEMY_URL = sameOriginPath('/rpc/solana-alchemy');
-export const SAME_ORIGIN_SOLANA_LEORPC_URL = sameOriginPath('/rpc/solana-leorpc');
+export const DIRECT_SOLANA_PUBLICNODE_URL = 'https://solana-rpc.publicnode.com';
+export const DIRECT_SOLANA_LEORPC_URL = 'https://solana.leorpc.com/?api_key=FREE';
 export const SAME_ORIGIN_SOLANA_TATUM_URL = sameOriginPath('/rpc/solana-tatum');
 
 const DIRECT_SOLANA_RPC_URLS = [
@@ -95,19 +85,27 @@ const DIRECT_SOLANA_RPC_URLS = [
 ];
 
 const PROXY_SOLANA_RPC_URLS = [
-  ...(allowProxyFallback && includeAlchemyRpcProxy ? [SAME_ORIGIN_SOLANA_ALCHEMY_URL] : []),
   envProxySolanaRpc,
-  ...(allowProxyFallback ? [
-    SAME_ORIGIN_SOLANA_RPC_URL,
-    ...(includeLeoRpcProxy ? [SAME_ORIGIN_SOLANA_LEORPC_URL] : []),
-    ...(includeTatumRpcProxy ? [SAME_ORIGIN_SOLANA_TATUM_URL] : []),
-  ] : []),
+  ...(allowProxyFallback ? [SAME_ORIGIN_SOLANA_RPC_URL] : []),
+  ...(allowProxyFallback && includeAlchemyRpcProxy ? [SAME_ORIGIN_SOLANA_ALCHEMY_URL] : []),
+  ...(allowProxyFallback && includeTatumRpcProxy ? [SAME_ORIGIN_SOLANA_TATUM_URL] : []),
 ];
 
-export const SOLANA_RPC_URLS = [
-  ...(preferProxyRpc ? PROXY_SOLANA_RPC_URLS : DIRECT_SOLANA_RPC_URLS),
-  ...(preferProxyRpc ? DIRECT_SOLANA_RPC_URLS : PROXY_SOLANA_RPC_URLS),
-].filter((url, index, all) => url && all.indexOf(url) === index);
+const PUBLIC_SOLANA_RPC_URLS = [
+  ...(includePublicRpcProxy ? [DIRECT_SOLANA_PUBLICNODE_URL] : []),
+  ...(includeLeoRpcProxy ? [DIRECT_SOLANA_LEORPC_URL] : []),
+];
+
+export const SOLANA_RPC_URLS = preferProxyRpc
+  ? buildRpcFallbackList({
+    publicUrls: PUBLIC_SOLANA_RPC_URLS,
+    overrideUrls: DIRECT_SOLANA_RPC_URLS,
+    privateUrls: PROXY_SOLANA_RPC_URLS,
+  })
+  : buildRpcFallbackList({
+    publicUrls: [...DIRECT_SOLANA_RPC_URLS, ...PUBLIC_SOLANA_RPC_URLS],
+    privateUrls: PROXY_SOLANA_RPC_URLS,
+  });
 
 export const DEFAULT_SOLANA_RPC_URL = SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_RPC_URL;
 

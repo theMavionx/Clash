@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/tokenLogos';
 
+// v9 = adds local Hot Stuff ANTHROPIC / SPCX generated badges and resets
+//      failed logo cache for symbols that previously fell through.
+// v8 = adds local Decibel MU / CBRS / SNDK logos.
+// v7 = adds generated full-symbol SVG fallback for GRVT/new market symbols.
 // v6 = removes remote FX/commodity probes that 404 on Parqet.
 // v5 = invalidate cached "failed" entries after we bulk-imported ~120
 //      Hyperliquid token logos (BIO, PNUT, PURR, NIL, GRIFFAIN, BLUR,
@@ -10,7 +14,7 @@ import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/t
 // v4 = invalidated entries from before we added local SKR.
 // v3 invalidated MSATS / MET / SYRUP / BRENTOIL aliases. Bump
 // whenever new local /tokens/* are added so users force a fresh probe.
-const LOGO_CACHE_KEY = 'clash_token_logos_v6';
+const LOGO_CACHE_KEY = 'clash_token_logos_v9';
 const LOGO_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const logoCache = new Map();

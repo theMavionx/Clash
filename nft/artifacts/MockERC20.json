@@ -879,7 +879,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 13917,
+        "astId": 14708,
         "contract": "MockERC20.sol:MockERC20",
         "label": "_balances",
         "offset": 0,
@@ -887,7 +887,7 @@
         "type": "t_mapping(t_address,t_uint256)"
       },
       {
-        "astId": 13923,
+        "astId": 14714,
         "contract": "MockERC20.sol:MockERC20",
         "label": "_allowances",
         "offset": 0,
@@ -895,7 +895,7 @@
         "type": "t_mapping(t_address,t_mapping(t_address,t_uint256))"
       },
       {
-        "astId": 13925,
+        "astId": 14716,
         "contract": "MockERC20.sol:MockERC20",
         "label": "_totalSupply",
         "offset": 0,
@@ -903,7 +903,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 13927,
+        "astId": 14718,
         "contract": "MockERC20.sol:MockERC20",
         "label": "_name",
         "offset": 0,
@@ -911,7 +911,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 13929,
+        "astId": 14720,
         "contract": "MockERC20.sol:MockERC20",
         "label": "_symbol",
         "offset": 0,

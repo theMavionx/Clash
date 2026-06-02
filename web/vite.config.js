@@ -41,9 +41,21 @@ const BASE_ALCHEMY_KEY = process.env.BASE_ALCHEMY_KEY
   || process.env.VITE_BASE_ALCHEMY_KEY
   || viteEnv.VITE_BASE_ALCHEMY_KEY
   || '';
-const BASE_RPC_PROXY_TARGET = BASE_ALCHEMY_KEY
-  ? 'https://base-mainnet.g.alchemy.com'
-  : 'https://mainnet.base.org';
+const ETHEREUM_ALCHEMY_KEY = process.env.ETHEREUM_ALCHEMY_KEY
+  || viteEnv.ETHEREUM_ALCHEMY_KEY
+  || process.env.ALCHEMY_ETHEREUM_API_KEY
+  || viteEnv.ALCHEMY_ETHEREUM_API_KEY
+  || process.env.ETH_ALCHEMY_KEY
+  || viteEnv.ETH_ALCHEMY_KEY
+  || process.env.VITE_ETHEREUM_ALCHEMY_KEY
+  || viteEnv.VITE_ETHEREUM_ALCHEMY_KEY
+  || process.env.ALCHEMY_API_KEY
+  || viteEnv.ALCHEMY_API_KEY
+  || process.env.VITE_ALCHEMY_API_KEY
+  || viteEnv.VITE_ALCHEMY_API_KEY
+  || BASE_ALCHEMY_KEY
+  || '';
+const BASE_RPC_PROXY_TARGET = 'https://mainnet.base.org';
 const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || viteEnv.VITE_FUTURES_PROXY
   || (API_PROXY_TARGET && !/^https?:\/\/(?:localhost|127\.0\.0\.1):4000\b/i.test(API_PROXY_TARGET)
@@ -86,6 +98,7 @@ export default defineConfig({
   define: {
     'process.env': {},
     global: 'globalThis',
+    __ETHEREUM_ALCHEMY_PROXY_ENABLED__: JSON.stringify(Boolean(ETHEREUM_ALCHEMY_KEY)),
   },
   resolve: {
     alias: {
@@ -222,6 +235,18 @@ export default defineConfig({
         },
         rewrite: () => BASE_ALCHEMY_KEY ? `/v2/${BASE_ALCHEMY_KEY}` : '/v2/',
       },
+      '/rpc/eth-alchemy': {
+        target: 'https://eth-mainnet.g.alchemy.com',
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
+        rewrite: () => ETHEREUM_ALCHEMY_KEY ? `/v2/${ETHEREUM_ALCHEMY_KEY}` : '/v2/',
+      },
       '/rpc/base': {
         target: BASE_RPC_PROXY_TARGET,
         changeOrigin: true,
@@ -232,7 +257,7 @@ export default defineConfig({
             proxyReq.removeHeader('referer');
           });
         },
-        rewrite: () => BASE_ALCHEMY_KEY ? `/v2/${BASE_ALCHEMY_KEY}` : '/',
+        rewrite: () => '/',
       },
       // Public Arbitrum RPC pool. `/rpc/arb-pokt` remains as a compatibility
       // path for older hot-loaded modules, but routes to publicnode now because

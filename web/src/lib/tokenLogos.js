@@ -3,6 +3,11 @@ export const TOKEN_COLORS = {
   SUI: '#4DA2FF', TRUMP: '#FFD700', BNB: '#F3BA2F', HYPE: '#00D4AA', ENA: '#7C3AED',
   PAXG: '#E4CE4F', ZEC: '#F4B728', XMR: '#FF6600', AVAX: '#E84142', ADA: '#0033AD',
   DOT: '#E6007A', LINK: '#2A5ADA', ARB: '#213147', OP: '#FF0420', NEAR: '#000',
+  BARD: '#6B7280', BASED: '#0052FF', BLESS: '#22C55E', CBRS: '#2563EB',
+  COAI: '#7C3AED', DRAM: '#0F172A', EDGE: '#06B6D4', GIGGLE: '#F59E0B',
+  KAIA: '#111827', LA: '#84CC16', LITE: '#64748B', RIVER: '#0EA5E9',
+  SAHARA: '#D97706', USAR: '#475569',
+  MU: '#2B5CFF', SNDK: '#E31E24',
   SKR: '#3B82F6',
   GOLD: '#FFD700', SILVER: '#C0C0C0', XAU: '#FFD700', XAG: '#C0C0C0',
   CL: '#1a1a1a', WTI: '#1a1a1a', BRENT: '#1a1a1a', USOILSPOT: '#1a1a1a',
@@ -15,6 +20,8 @@ export const STOCK_SYMBOLS = new Set([
   'COIN', 'HOOD', 'MSTR', 'INTC', 'SPY', 'QQQ', 'DIS', 'IBM', 'ORCL', 'PYPL',
   'PLTR', 'SMCI', 'GME', 'BA', 'WMT', 'MCD', 'SBUX', 'BABA', 'KO', 'PEP',
   'JPM', 'BAC', 'GS', 'WFC', 'V', 'MA', 'CRCL', 'AVNT',
+  'AVGO', 'BRKB', 'BZ', 'CRWV', 'CSCO', 'EWJ', 'EWY', 'FLNC', 'HD', 'H',
+  'MRVL', 'MU', 'PAYP', 'QCOM', 'RKLB', 'SNDK', 'SOXL', 'TSM', 'UBER',
 ]);
 
 export const COMMODITY_SYMBOLS = new Set([
@@ -28,6 +35,8 @@ const FX_SYMBOLS = new Set([
 ]);
 
 const LOCAL_ALIASES = {
+  PAYP: ['PYPL'],
+  BRKB: ['BRK.B', 'BRK-B'],
   POL: ['MATIC'],
   MATIC: ['POL'],
   RNDR: ['RENDER'],
@@ -87,6 +96,16 @@ function fxPairDataUri(sym) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+function generatedTokenDataUri(sym) {
+  const s = canonTokenSymbol(sym);
+  if (!s) return null;
+  const bg = tokenFallbackColor(s, '#475569');
+  const label = s.length <= 5 ? s : s.slice(0, 5);
+  const fontSize = label.length <= 3 ? 22 : label.length <= 4 ? 18 : 15;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${bg}"/><stop offset="1" stop-color="#111827"/></linearGradient></defs><circle cx="32" cy="32" r="31" fill="url(#g)"/><circle cx="32" cy="32" r="27" fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="2"/><text x="32" y="38" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="${fontSize}" font-weight="900" fill="#fff">${label}</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 function commodityCandidates(sym) {
   const s = canonTokenSymbol(sym);
   if (s === 'BRENT' || s === 'BRENTOIL' || s === 'WTI' || s === 'USOILSPOT') return ['CL'];
@@ -115,10 +134,21 @@ export function tokenLogoSources(sym) {
   if (STOCK_SYMBOLS.has(s)) {
     srcs.push(`https://assets.parqet.com/logos/symbol/${s}?format=png`);
   }
+  if (s === 'BRKB') {
+    srcs.push(
+      'https://assets.parqet.com/logos/symbol/BRK.B?format=png',
+      'https://assets.parqet.com/logos/symbol/BRK-B?format=png',
+    );
+  }
+  if (s === 'PAYP') {
+    srcs.push('https://assets.parqet.com/logos/symbol/PYPL?format=png');
+  }
   srcs.push(
     `https://assets.coincap.io/assets/icons/${s.toLowerCase()}@2x.png`,
     `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/${s.toLowerCase()}.svg`,
     `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/${s.toLowerCase()}.png`,
   );
+  const generated = generatedTokenDataUri(s);
+  if (generated) srcs.push(generated);
   return uniq(srcs);
 }

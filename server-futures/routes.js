@@ -14,6 +14,10 @@ const hyperliquid = require('./hyperliquid');
 const hyperliquidRewards = require('./hyperliquid-rewards-worker');
 const risex = require('./risex');
 const nado = require('./nado');
+const hibachi = require('./hibachi');
+const hotstuff = require('./hotstuff');
+const hotstuffRewards = require('./hotstuff-rewards-worker');
+const grvt = require('./grvt');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
 
@@ -590,7 +594,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -610,7 +614,7 @@ function auth(req, res, next) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -640,7 +644,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -697,6 +701,14 @@ router.get('/account', async (req, res) => {
         return res.status(400).json({ error: 'address query param required (0x...)' });
       }
       const info = await nado.getAccountByAddress(address);
+      return res.json(info);
+    }
+    if (dex === 'hotstuff') {
+      const address = String(req.query.address || '').trim();
+      if (!hotstuff.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required (0x...)' });
+      }
+      const info = await hotstuff.getAccountByAddress(address);
       return res.json(info);
     }
     // Pacifica (custodial) — keep legacy auth-gated flow.
@@ -1132,6 +1144,9 @@ router.get('/markets', async (req, res) => {
       : dex === 'hyperliquid' ? await hyperliquid.getMarketInfo()
       : dex === 'risex' ? await risex.getMarketInfo()
       : dex === 'nado' ? await nado.getMarketInfo()
+      : dex === 'hibachi' ? await hibachi.getMarketInfo()
+      : dex === 'hotstuff' ? await hotstuff.getMarketInfo()
+      : dex === 'grvt' ? await grvt.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -1147,6 +1162,9 @@ router.get('/prices', async (req, res) => {
       : dex === 'hyperliquid' ? await hyperliquid.getPrices()
       : dex === 'risex' ? await risex.getPrices()
       : dex === 'nado' ? await nado.getPrices()
+      : dex === 'hibachi' ? await hibachi.getPrices()
+      : dex === 'hotstuff' ? await hotstuff.getPrices()
+      : dex === 'grvt' ? await grvt.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -1297,6 +1315,17 @@ router.get('/positions', async (req, res) => {
       const positions = await nado.getPositionsByAddress(address);
       return res.json(positions);
     }
+    if (dex === 'hotstuff') {
+      const address = String(req.query.address || '').trim();
+      if (!hotstuff.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const positions = await hotstuff.getPositionsByAddress(address);
+      return res.json(positions);
+    }
+    if (dex === 'grvt') {
+      return res.status(400).json({ error: 'GRVT positions require /grvt/positions with session credentials' });
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -1354,6 +1383,17 @@ router.get('/orders', async (req, res) => {
       const orders = await nado.getOrdersByAddress(address);
       return res.json(orders);
     }
+    if (dex === 'hotstuff') {
+      const address = String(req.query.address || '').trim();
+      if (!hotstuff.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const orders = await hotstuff.getOrdersByAddress(address);
+      return res.json(orders);
+    }
+    if (dex === 'grvt') {
+      return res.status(400).json({ error: 'GRVT orders require /grvt/orders with session credentials' });
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -1368,7 +1408,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -2497,6 +2537,525 @@ router.get('/nado/trade-history', auth, async (req, res) => {
   }
 });
 
+function hibachiCredsFromReq(req) {
+  return hibachi.credentials({
+    apiKey: req.body?.api_key || req.body?.apiKey || req.headers['x-hibachi-api-key'],
+    accountId: req.body?.account_id || req.body?.accountId || req.headers['x-hibachi-account-id'],
+    privateKey: req.body?.private_key || req.body?.privateKey || req.headers['x-hibachi-private-key'],
+  });
+}
+
+function requireHibachiOwner(req, res) {
+  if (req.dex !== 'hibachi') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to hibachi before calling Hibachi endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'hibachi',
+    });
+    return null;
+  }
+  try {
+    return hibachiCredsFromReq(req);
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Hibachi credentials required' });
+    return null;
+  }
+}
+
+router.post('/hibachi/account', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    res.json(await hibachi.getAccount(creds));
+  } catch (e) {
+    console.warn('[hibachi] account failed:', e.message);
+    res.status(502).json({ error: 'Failed to load Hibachi account', detail: e.message });
+  }
+});
+
+router.post('/hibachi/positions', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    res.json(await hibachi.getPositions(creds));
+  } catch (e) {
+    console.warn('[hibachi] positions failed:', e.message);
+    res.status(502).json({ error: 'Failed to load Hibachi positions', detail: e.message });
+  }
+});
+
+router.post('/hibachi/orders', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    res.json(await hibachi.getOrders(creds));
+  } catch (e) {
+    console.warn('[hibachi] orders failed:', e.message);
+    res.status(502).json({ error: 'Failed to load Hibachi orders', detail: e.message });
+  }
+});
+
+router.post('/hibachi/order', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    res.json(await hibachi.placeOrder(creds, req.body || {}));
+  } catch (e) {
+    console.warn('[hibachi] order failed:', e.message);
+    res.status(400).json({ error: e.message || 'Failed to place Hibachi order' });
+  }
+});
+
+router.post('/hibachi/order/cancel', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    res.json(await hibachi.cancelOrder(creds, req.body || {}));
+  } catch (e) {
+    console.warn('[hibachi] cancel failed:', e.message);
+    res.status(400).json({ error: e.message || 'Failed to cancel Hibachi order' });
+  }
+});
+
+router.post('/hibachi/import-fills', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    const result = await hibachi.importFillsForPlayer(req.playerId, creds, {
+      limit: req.body?.limit,
+    });
+    if (result.imported > 0) {
+      console.log(`[hibachi] imported ${result.imported} fill(s) for player=${req.playerName} account=${creds.accountId}`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[hibachi] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import Hibachi fills', detail: e.message });
+  }
+});
+
+router.post('/hibachi/trade-history', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    const rows = await hibachi.getAccountTradeHistory(creds, {
+      limit: req.body?.limit,
+    });
+    res.json(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    console.warn('[hibachi] trade-history failed:', e.message);
+    res.status(502).json({ error: 'Failed to load Hibachi trade history', detail: e.message });
+  }
+});
+
+function requireHotstuffOwner(req, res) {
+  if (req.dex !== 'hotstuff') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to hotstuff before calling Hotstuff endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'hotstuff',
+    });
+    return null;
+  }
+  const account = hotstuff.normalizeAddress(req.body?.account || req.query?.account || req.playerWallet);
+  const playerWallet = hotstuff.normalizeAddress(req.playerWallet);
+  if (!account) {
+    res.status(400).json({ error: 'account required (0x...)' });
+    return null;
+  }
+  if (playerWallet && account !== playerWallet) {
+    res.status(403).json({ error: 'account must match the wallet registered to this game account' });
+    return null;
+  }
+  return { account };
+}
+
+router.post('/hotstuff/import-fills', auth, async (req, res) => {
+  try {
+    const verified = requireHotstuffOwner(req, res);
+    if (!verified) return;
+    const result = await hotstuffRewards.importFillsForPlayer(req.playerId, verified.account, {
+      limit: req.body?.limit,
+    });
+    if (result.imported > 0) {
+      console.log(`[hotstuff] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${verified.account.slice(0, 10)}...`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[hotstuff] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import Hotstuff fills', detail: e.message });
+  }
+});
+
+router.get('/hotstuff/status', auth, async (_req, res) => {
+  try {
+    res.json(await hotstuff.getHotstuffConfigStatus());
+  } catch (e) {
+    console.warn('[hotstuff] status failed:', e.message);
+    res.status(502).json({ error: 'Failed to load Hotstuff status', detail: e.message });
+  }
+});
+
+router.get('/hotstuff/trade-history', auth, async (req, res) => {
+  try {
+    const verified = requireHotstuffOwner(req, res);
+    if (!verified) return;
+    const rows = await hotstuff.getAccountTradeHistory(verified.account, {
+      limit: req.query?.limit,
+    });
+    res.json(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    console.warn('[hotstuff] trade-history failed:', e.message);
+    res.status(502).json({ error: 'Failed to load Hotstuff trade history', detail: e.message });
+  }
+});
+
+function grvtCredsFromReq(req) {
+  const saved = db.getGrvtCredentials(req.playerId) || {};
+  return grvt.credentials({
+    apiKey: req.body?.api_key || req.body?.apiKey || req.headers['x-grvt-api-key'] || saved.apiKey,
+    cookie: req.body?.cookie || req.body?.grvt_cookie || req.headers['x-grvt-cookie'],
+    accountId: req.body?.account_id || req.body?.accountId || req.headers['x-grvt-account-id'],
+    subAccountId: req.body?.sub_account_id || req.body?.subAccountId || req.headers['x-grvt-sub-account-id'] || saved.subAccountId,
+  });
+}
+
+function grvtSymbolFromInstrument(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/_USDT?_PERP$/u, '')
+    .replace(/_USD_PERP$/u, '')
+    .replace(/-PERP$/u, '')
+    .replace(/\/USD[TC]?$/u, '');
+}
+
+function requireGrvtOwner(req, res) {
+  if (req.dex !== 'grvt') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to grvt before calling GRVT endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'grvt',
+    });
+    return null;
+  }
+  try {
+    return grvtCredsFromReq(req);
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'GRVT credentials required' });
+    return null;
+  }
+}
+
+router.get('/grvt/credentials', auth, async (req, res) => {
+  if (req.dex !== 'grvt') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to grvt before calling GRVT endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'grvt',
+    });
+  }
+  try {
+    let creds = db.getGrvtCredentials(req.playerId);
+    if (!creds?.apiKey) return res.json({ has_credentials: false });
+    if (!creds.subAccountId || !creds.fundingAccountAddress) {
+      const resolved = await grvt.resolveCreds(creds);
+      creds = db.saveGrvtCredentials(req.playerId, {
+        apiKey: creds.apiKey,
+        subAccountId: resolved.subAccountId,
+        fundingAccountAddress: resolved.fundingAccountAddress || creds.fundingAccountAddress || '',
+      });
+    }
+    res.json({
+      has_credentials: true,
+      api_key: creds.apiKey,
+      sub_account_id: creds.subAccountId || '',
+      funding_account_address: creds.fundingAccountAddress || '',
+      updated_at: creds.updatedAt || null,
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Failed to restore GRVT credentials' });
+  }
+});
+
+router.post('/grvt/credentials', auth, async (req, res) => {
+  if (req.dex !== 'grvt') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to grvt before calling GRVT endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'grvt',
+    });
+  }
+  try {
+    const existing = db.getGrvtCredentials(req.playerId) || {};
+    const apiKey = String(req.body?.api_key || req.body?.apiKey || '').trim();
+    const subAccountId = String(
+      req.body?.sub_account_id
+      || req.body?.subAccountId
+      || existing.subAccountId
+      || ''
+    ).trim();
+    const fundingAccountAddress = String(
+      req.body?.funding_account_address
+      || req.body?.fundingAccountAddress
+      || existing.fundingAccountAddress
+      || ''
+    ).trim();
+    if (!apiKey) return res.status(400).json({ error: 'GRVT API key required' });
+    const incoming = {
+      apiKey,
+      subAccountId,
+    };
+    const resolved = await grvt.resolveCreds(incoming);
+    const saved = db.saveGrvtCredentials(req.playerId, {
+      apiKey,
+      subAccountId: resolved.subAccountId || subAccountId,
+      fundingAccountAddress: resolved.fundingAccountAddress || fundingAccountAddress,
+    });
+    res.json({
+      success: true,
+      has_credentials: true,
+      sub_account_id: saved?.subAccountId || '',
+      funding_account_address: saved?.fundingAccountAddress || '',
+      updated_at: saved?.updatedAt || null,
+    });
+  } catch (e) {
+    const msg = e.message || 'Failed to save GRVT credentials';
+    if (/sub[_ ]?account/i.test(msg)) {
+      return res.json({
+        success: false,
+        needs_sub_account_id: true,
+        error: 'Enter your GRVT trading account id, then save again.',
+        detail: msg,
+      });
+    }
+    res.status(400).json({ error: msg });
+  }
+});
+
+router.delete('/grvt/credentials', auth, (req, res) => {
+  if (req.dex !== 'grvt') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to grvt before calling GRVT endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'grvt',
+    });
+  }
+  db.deleteGrvtCredentials(req.playerId);
+  res.json({ success: true });
+});
+
+router.get('/grvt/config', auth, (req, res) => {
+  if (req.dex !== 'grvt') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to grvt before calling GRVT endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'grvt',
+    });
+  }
+  res.json(grvt.getBuilderConfig());
+});
+
+router.post('/grvt/account', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    res.json(await grvt.getAccount(creds));
+  } catch (e) {
+    console.warn('[grvt] account failed:', e.message);
+    res.status(502).json({ error: 'Failed to load GRVT account', detail: e.message });
+  }
+});
+
+router.post('/grvt/positions', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    res.json(await grvt.getPositions(creds));
+  } catch (e) {
+    console.warn('[grvt] positions failed:', e.message);
+    res.status(502).json({ error: 'Failed to load GRVT positions', detail: e.message });
+  }
+});
+
+router.post('/grvt/leverage', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    res.json(await grvt.getInitialLeverage(creds));
+  } catch (e) {
+    console.warn('[grvt] leverage failed:', e.message);
+    res.status(502).json({ error: 'Failed to load GRVT leverage config', detail: e.message });
+  }
+});
+
+router.post('/grvt/orders', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    res.json(await grvt.getOrders(creds));
+  } catch (e) {
+    console.warn('[grvt] orders failed:', e.message);
+    res.status(502).json({ error: 'Failed to load GRVT orders', detail: e.message });
+  }
+});
+
+router.post('/grvt/create-order', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    const signedOrder = req.body?.order || req.body?.o;
+    if (!signedOrder) return res.status(400).json({ error: 'signed GRVT order required' });
+    const result = await grvt.submitSignedOrder(creds, signedOrder);
+    try {
+      const leg = Array.isArray(signedOrder.legs || signedOrder.l) ? (signedOrder.legs || signedOrder.l)[0] : {};
+      const metadata = signedOrder.metadata || signedOrder.m || {};
+      const notional = Number(req.body?.notional_usd || 0);
+      db.addTrade(req.playerId, {
+        symbol: grvtSymbolFromInstrument(leg?.instrument || leg?.i || req.body?.symbol),
+        side: (leg?.is_buying_asset ?? leg?.ib) ? 'bid' : 'ask',
+        orderType: (signedOrder.is_market ?? signedOrder.im) ? 'market' : 'limit',
+        amount: String(leg?.size || leg?.s || ''),
+        price: String(leg?.limit_price ?? leg?.lp ?? ''),
+        orderId: result.order_id || null,
+        clientOrderId: result.client_order_id || metadata.client_order_id || metadata.co || null,
+        status: result.status || 'pending',
+        dex: 'grvt',
+        notional_usd: Number.isFinite(notional) && notional > 0 ? notional : 0,
+        verifiedSource: 'grvt_signed_order',
+        proofJson: JSON.stringify({
+          source: 'grvt_eip712_signed_order',
+          builder: signedOrder.builder || null,
+          builder_fee: signedOrder.builder_fee || null,
+          sub_account_id: signedOrder.sub_account_id || null,
+          client_order_id: result.client_order_id || metadata.client_order_id || metadata.co || null,
+          order_id: result.order_id || null,
+          signature: signedOrder.signature || null,
+          submitted_result: result || null,
+        }),
+      });
+    } catch (e) {
+      console.warn('[grvt] local trade record failed:', e.message);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[grvt] create-order failed:', e.message);
+    res.status(502).json({ error: 'Failed to create GRVT order', detail: e.message });
+  }
+});
+
+router.post('/grvt/set-leverage', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    const result = await grvt.setInitialLeverage(creds, {
+      instrument: req.body?.instrument || req.body?.i,
+      leverage: req.body?.leverage || req.body?.l,
+    });
+    res.json(result);
+  } catch (e) {
+    console.warn('[grvt] set-leverage failed:', e.message);
+    res.status(502).json({ error: 'Failed to set GRVT leverage', detail: e.message });
+  }
+});
+
+router.post('/grvt/set-position-config', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    const result = await grvt.setPositionConfig(creds, {
+      instrument: req.body?.instrument || req.body?.i,
+      marginType: req.body?.margin_type || req.body?.marginType || req.body?.mt,
+      leverage: req.body?.leverage || req.body?.l,
+      signature: req.body?.signature,
+    });
+    res.json(result);
+  } catch (e) {
+    console.warn('[grvt] set-position-config failed:', e.message);
+    const status = /set_position_config\s+(\d{3})/i.exec(e.message || '')?.[1];
+    res.status(Number(status) || 502).json({ error: 'Failed to set GRVT position config', detail: e.message });
+  }
+});
+
+router.post('/grvt/authorize-builder', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    const saved = db.getGrvtCredentials(req.playerId) || {};
+    const mainAccountId = String(
+      req.body?.main_account_id
+      || req.body?.mainAccountId
+      || saved.fundingAccountAddress
+      || ''
+    ).trim();
+    const result = await grvt.authorizeBuilder({
+      mainAccountId,
+      signature: req.body?.signature,
+      maxFuturesFeeRate: req.body?.max_futures_fee_rate || req.body?.maxFuturesFeeRate,
+      maxSpotFeeRate: req.body?.max_spot_fee_rate || req.body?.maxSpotFeeRate,
+    });
+    res.json(result);
+  } catch (e) {
+    console.warn('[grvt] authorize-builder failed:', e.message);
+    res.status(502).json({ error: 'Failed to authorize GRVT builder', detail: e.message });
+  }
+});
+
+router.post('/grvt/cancel-order', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    const result = await grvt.cancelOrder(creds, {
+      orderId: req.body?.order_id || req.body?.orderId,
+      clientOrderId: req.body?.client_order_id || req.body?.clientOrderId,
+      timeToLiveMs: req.body?.time_to_live_ms || req.body?.timeToLiveMs,
+    });
+    res.json(result);
+  } catch (e) {
+    console.warn('[grvt] cancel-order failed:', e.message);
+    res.status(502).json({ error: 'Failed to cancel GRVT order', detail: e.message });
+  }
+});
+
+router.post('/grvt/trade-history', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    const rows = await grvt.getAccountTradeHistory(creds, {
+      limit: req.body?.limit,
+      start_time: req.body?.start_time,
+      end_time: req.body?.end_time,
+      cursor: req.body?.cursor,
+      base: req.body?.base,
+      quote: req.body?.quote,
+    });
+    res.json(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    console.warn('[grvt] trade-history failed:', e.message);
+    res.status(502).json({ error: 'Failed to load GRVT trade history', detail: e.message });
+  }
+});
+
+router.post('/grvt/import-fills', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    const result = await grvt.importFillsForPlayer(req.playerId, creds, {
+      limit: req.body?.limit,
+      start_time: req.body?.start_time,
+      end_time: req.body?.end_time,
+      cursor: req.body?.cursor,
+    });
+    if (result.imported > 0) {
+      console.log(`[grvt] imported ${result.imported} builder fill(s) for player=${req.playerName} sub=${creds.subAccountId}`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[grvt] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import GRVT fills', detail: e.message });
+  }
+});
+
 router.post('/trade-report', auth, async (req, res) => {
   try {
     if (!TRADE_REPORT_DEXES.has(req.dex)) {
@@ -2583,7 +3142,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado') {
+  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

@@ -2187,7 +2187,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 7859,
+        "astId": 8650,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "_guardStatus",
         "offset": 0,
@@ -2195,7 +2195,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 7892,
+        "astId": 8683,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "__gap",
         "offset": 0,
@@ -2203,15 +2203,15 @@
         "type": "t_array(t_uint256)49_storage"
       },
       {
-        "astId": 1547,
+        "astId": 2224,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "nft",
         "offset": 0,
         "slot": "50",
-        "type": "t_contract(IClashCollectionMintable)1509"
+        "type": "t_contract(IClashCollectionMintable)2186"
       },
       {
-        "astId": 1549,
+        "astId": 2226,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "quoteSigner",
         "offset": 0,
@@ -2219,7 +2219,7 @@
         "type": "t_address"
       },
       {
-        "astId": 1551,
+        "astId": 2228,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "saleActive",
         "offset": 20,
@@ -2227,7 +2227,7 @@
         "type": "t_bool"
       },
       {
-        "astId": 1553,
+        "astId": 2230,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "maxPerTx",
         "offset": 0,
@@ -2235,7 +2235,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 1555,
+        "astId": 2232,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "usdcToken",
         "offset": 0,
@@ -2243,7 +2243,7 @@
         "type": "t_address"
       },
       {
-        "astId": 1557,
+        "astId": 2234,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "clashToken",
         "offset": 0,
@@ -2251,7 +2251,7 @@
         "type": "t_address"
       },
       {
-        "astId": 1559,
+        "astId": 2236,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "baseUsdPriceE6",
         "offset": 0,
@@ -2259,7 +2259,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 1561,
+        "astId": 2238,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "clashUsdPriceE6",
         "offset": 0,
@@ -2267,7 +2267,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 1565,
+        "astId": 2242,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "paymentTokenAllowed",
         "offset": 0,
@@ -2275,7 +2275,7 @@
         "type": "t_mapping(t_address,t_bool)"
       },
       {
-        "astId": 1569,
+        "astId": 2246,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "usedQuote",
         "offset": 0,
@@ -2283,7 +2283,7 @@
         "type": "t_mapping(t_bytes32,t_bool)"
       },
       {
-        "astId": 2275,
+        "astId": 2952,
         "contract": "ClashCollectionShopV1.sol:ClashCollectionShopV1",
         "label": "__gap",
         "offset": 0,
@@ -2319,7 +2319,7 @@
         "label": "bytes32",
         "numberOfBytes": "32"
       },
-      "t_contract(IClashCollectionMintable)1509": {
+      "t_contract(IClashCollectionMintable)2186": {
         "encoding": "inplace",
         "label": "contract IClashCollectionMintable",
         "numberOfBytes": "20"

@@ -39,6 +39,14 @@ func _ready() -> void:
 	_send_initial_state()
 
 
+func _exit_tree() -> void:
+	set_process(false)
+	if not _is_web:
+		return
+	JavaScriptBridge.eval("(function(){try{if(window.godotBridge){window.godotBridge=null;}}catch(e){}})()", true)
+	_callbacks.clear()
+
+
 func _process(delta: float) -> void:
 	if not _is_web:
 		return

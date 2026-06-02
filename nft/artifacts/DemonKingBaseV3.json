@@ -4548,7 +4548,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 7859,
+        "astId": 8650,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "_guardStatus",
         "offset": 0,
@@ -4556,7 +4556,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 7892,
+        "astId": 8683,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "__gap",
         "offset": 0,
@@ -4564,7 +4564,7 @@
         "type": "t_array(t_uint256)49_storage"
       },
       {
-        "astId": 5334,
+        "astId": 6011,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "maxSupply",
         "offset": 0,
@@ -4572,7 +4572,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 5336,
+        "astId": 6013,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "maxPerTx",
         "offset": 0,
@@ -4580,7 +4580,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 5338,
+        "astId": 6015,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "mintPrice",
         "offset": 0,
@@ -4588,7 +4588,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 5340,
+        "astId": 6017,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "totalMinted",
         "offset": 0,
@@ -4596,7 +4596,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 5342,
+        "astId": 6019,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "saleActive",
         "offset": 0,
@@ -4604,7 +4604,7 @@
         "type": "t_bool"
       },
       {
-        "astId": 5344,
+        "astId": 6021,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "baseTokenURI",
         "offset": 0,
@@ -4612,7 +4612,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 5346,
+        "astId": 6023,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "contractMetadataURI",
         "offset": 0,
@@ -4620,7 +4620,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 5350,
+        "astId": 6027,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "authorizedMinters",
         "offset": 0,
@@ -4628,7 +4628,7 @@
         "type": "t_mapping(t_address,t_bool)"
       },
       {
-        "astId": 5354,
+        "astId": 6031,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "_tokenLevelRaw",
         "offset": 0,
@@ -4636,7 +4636,7 @@
         "type": "t_mapping(t_uint256,t_uint8)"
       },
       {
-        "astId": 5358,
+        "astId": 6035,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "usedUpgradeNonces",
         "offset": 0,
@@ -4644,7 +4644,7 @@
         "type": "t_mapping(t_bytes32,t_bool)"
       },
       {
-        "astId": 5362,
+        "astId": 6039,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "usedBridgeRefs",
         "offset": 0,
@@ -4652,7 +4652,7 @@
         "type": "t_mapping(t_bytes32,t_bool)"
       },
       {
-        "astId": 5364,
+        "astId": 6041,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "quoteSigner",
         "offset": 0,
@@ -4660,7 +4660,7 @@
         "type": "t_address"
       },
       {
-        "astId": 5366,
+        "astId": 6043,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "usdcToken",
         "offset": 0,
@@ -4668,7 +4668,7 @@
         "type": "t_address"
       },
       {
-        "astId": 5368,
+        "astId": 6045,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "copToken",
         "offset": 0,
@@ -4676,7 +4676,7 @@
         "type": "t_address"
       },
       {
-        "astId": 5370,
+        "astId": 6047,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "royaltyReceiver",
         "offset": 0,
@@ -4684,7 +4684,7 @@
         "type": "t_address"
       },
       {
-        "astId": 5372,
+        "astId": 6049,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "royaltyBps",
         "offset": 20,
@@ -4692,7 +4692,7 @@
         "type": "t_uint16"
       },
       {
-        "astId": 5374,
+        "astId": 6051,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "totalBurned",
         "offset": 0,
@@ -4700,7 +4700,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 5376,
+        "astId": 6053,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "bridgeFeeWei",
         "offset": 0,
@@ -4708,7 +4708,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 5380,
+        "astId": 6057,
         "contract": "DemonKingBaseV3.sol:DemonKingBaseV3",
         "label": "__gap_v3",
         "offset": 0,

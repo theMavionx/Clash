@@ -6,6 +6,7 @@ import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const HYPERLIQUID_API = import.meta.env.VITE_HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz';
 const READ_TIMEOUT_MS = 8000;
+const GRVT_STORAGE_KEY = 'clash_grvt_credentials_v1';
 
 function timeMs(value) {
   if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
@@ -221,6 +222,72 @@ function normalizeNadoTrade(fill, markets) {
   };
 }
 
+function normalizeHotstuffTrade(fill, markets) {
+  const instrumentId = Number(fill?.pair_index ?? fill?.instrument_id ?? fill?.instrumentId);
+  const m = (markets || []).find(x => Number(x.pair_index ?? x.market_id) === instrumentId)
+    || (markets || []).find(x => String(x.symbol || '').toUpperCase() === String(fill?.symbol || '').toUpperCase());
+  const symbol = String(fill?.symbol || fill?.instrument || m?.symbol || '').toUpperCase().replace(/-PERP$/u, '');
+  if (!symbol) return null;
+  const amount = Math.abs(Number(fill?.amount ?? fill?.size ?? 0));
+  const price = Number(fill?.price ?? fill?.fill_price ?? 0);
+  const sideRaw = String(fill?.side || fill?.direction || fill?.action || '').toLowerCase();
+  const isClose = sideRaw.includes('close') || fill?.reduce_only === true || fill?.reduceOnly === true;
+  const isShort = sideRaw.includes('short') || sideRaw === 's' || sideRaw === 'sell' || sideRaw === 'ask';
+  const side = isClose
+    ? (isShort ? 'close_short' : 'close_long')
+    : (isShort ? 'open_short' : 'open_long');
+  const ts = fill?.created_at ?? fill?.timestamp ?? fill?.block_timestamp ?? fill?.time;
+  return {
+    ...fill,
+    _dex: 'hotstuff',
+    id: fill?.id || fill?.trade_id || fill?.order_id || fill?.client_order_id || `${symbol}:${ts}:${price}:${amount}`,
+    symbol,
+    side,
+    action: side,
+    amount,
+    price,
+    fee: Math.abs(Number(fill?.fee ?? fill?.broker_fee ?? 0)),
+    created_at: ts,
+    realized_pnl_amount: fill?.realized_pnl ?? fill?.realizedPnl ?? fill?.closed_pnl ?? fill?.realized_pnl_amount,
+  };
+}
+
+function readGrvtCredentials() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(GRVT_STORAGE_KEY) || 'null');
+    if (!parsed?.subAccountId) return null;
+    if (!parsed?.apiKey && (!parsed?.cookie || !parsed?.accountId)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeGrvtTrade(fill) {
+  const rawSymbol = String(fill?.symbol || fill?.instrument || '').toUpperCase();
+  const symbol = rawSymbol
+    .replace(/_USDT?_PERP$/u, '')
+    .replace(/_USD_PERP$/u, '')
+    .replace(/-PERP$/u, '')
+    .replace(/\/USD[TC]?$/u, '');
+  if (!symbol) return null;
+  const isBuyer = fill?.is_buyer === true || fill?.side === 'buy';
+  return {
+    ...fill,
+    _dex: 'grvt',
+    id: fill?.id || fill?.trade_id || `${fill?.event_time || fill?.created_at}:${rawSymbol}:${fill?.price}:${fill?.size}`,
+    symbol,
+    side: fill?.side || (isBuyer ? 'open_long' : 'open_short'),
+    action: fill?.action || (isBuyer ? 'open_long' : 'open_short'),
+    amount: Math.abs(Number(fill?.amount ?? fill?.size ?? 0)),
+    price: fill?.price,
+    fee: Math.abs(Number(fill?.fee ?? 0)),
+    created_at: fill?.created_at ?? fill?.event_time,
+    realized_pnl_amount: fill?.realized_pnl_amount ?? fill?.realized_pnl,
+  };
+}
+
 function displayNumber(value, digits = 6) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
@@ -328,6 +395,50 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows.map(t => normalizeNadoTrade(t, markets)).filter(Boolean));
           return;
         }
+        if (dex === 'hotstuff') {
+          const token = typeof window !== 'undefined' ? window._playerToken : null;
+          const r = await fetch(`/api/futures/hotstuff/trade-history?dex=hotstuff&account=${encodeURIComponent(addr)}&limit=100`, {
+            headers: {
+              ...(token ? { 'x-token': token } : {}),
+              'x-dex': 'hotstuff',
+            },
+            signal: controller.signal,
+          });
+          if (!r.ok) throw new Error(`Hotstuff history error ${r.status}`);
+          const d = await r.json();
+          const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : Array.isArray(d?.fills) ? d.fills : [];
+          if (!cancelled) setTrades(rows.map(t => normalizeHotstuffTrade(t, markets)).filter(Boolean));
+          return;
+        }
+        if (dex === 'grvt') {
+          const token = typeof window !== 'undefined' ? window._playerToken : null;
+          const creds = readGrvtCredentials();
+          if (!creds) {
+            if (!cancelled) setTrades([]);
+            return;
+          }
+          const r = await fetch('/api/futures/grvt/trade-history', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { 'x-token': token } : {}),
+              'x-dex': 'grvt',
+            },
+            body: JSON.stringify({
+              api_key: creds.apiKey,
+              cookie: creds.cookie,
+              account_id: creds.accountId,
+              sub_account_id: accountAddr || creds.subAccountId,
+              limit: 100,
+            }),
+            signal: controller.signal,
+          });
+          if (!r.ok) throw new Error(`GRVT history error ${r.status}`);
+          const d = await r.json();
+          const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : Array.isArray(d?.result) ? d.result : [];
+          if (!cancelled) setTrades(rows.map(normalizeGrvtTrade).filter(Boolean));
+          return;
+        }
 
         const r = await fetch(`${PACIFICA_API}/trades/history?account=${addr}`, {
           signal: controller.signal,
@@ -385,12 +496,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
-  const showPnl = dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado';
+  const showPnl = dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt';
 
   return (
     <table style={S.table}>

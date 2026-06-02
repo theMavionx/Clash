@@ -7,6 +7,8 @@ const buildId = String(process.argv[3] || process.env.VITE_BUILD_ID || Date.now(
 const output = path.join(godotDir, 'godot-runtime-manifest.json');
 const requiredFiles = ['Work.js', 'Work.wasm', 'Work.pck'];
 
+require('./patch-godot-runtime.cjs');
+
 function fileInfo(name) {
   const file = path.join(godotDir, name);
   if (!fs.existsSync(file)) {

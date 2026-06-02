@@ -4456,7 +4456,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 7859,
+        "astId": 8650,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "_guardStatus",
         "offset": 0,
@@ -4464,7 +4464,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 7892,
+        "astId": 8683,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "__gap",
         "offset": 0,
@@ -4472,7 +4472,7 @@
         "type": "t_array(t_uint256)49_storage"
       },
       {
-        "astId": 57,
+        "astId": 734,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "maxSupply",
         "offset": 0,
@@ -4480,7 +4480,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 59,
+        "astId": 736,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "maxPerTx",
         "offset": 0,
@@ -4488,7 +4488,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 61,
+        "astId": 738,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "mintPrice",
         "offset": 0,
@@ -4496,7 +4496,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 63,
+        "astId": 740,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "totalMinted",
         "offset": 0,
@@ -4504,7 +4504,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 65,
+        "astId": 742,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "totalBurned",
         "offset": 0,
@@ -4512,7 +4512,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 67,
+        "astId": 744,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "saleActive",
         "offset": 0,
@@ -4520,7 +4520,7 @@
         "type": "t_bool"
       },
       {
-        "astId": 69,
+        "astId": 746,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "baseTokenURI",
         "offset": 0,
@@ -4528,7 +4528,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 71,
+        "astId": 748,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "contractMetadataURI",
         "offset": 0,
@@ -4536,7 +4536,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 75,
+        "astId": 752,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "authorizedMinters",
         "offset": 0,
@@ -4544,7 +4544,7 @@
         "type": "t_mapping(t_address,t_bool)"
       },
       {
-        "astId": 79,
+        "astId": 756,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "_tokenLevelRaw",
         "offset": 0,
@@ -4552,7 +4552,7 @@
         "type": "t_mapping(t_uint256,t_uint8)"
       },
       {
-        "astId": 83,
+        "astId": 760,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "usedUpgradeNonces",
         "offset": 0,
@@ -4560,7 +4560,7 @@
         "type": "t_mapping(t_bytes32,t_bool)"
       },
       {
-        "astId": 87,
+        "astId": 764,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "usedBridgeRefs",
         "offset": 0,
@@ -4568,7 +4568,7 @@
         "type": "t_mapping(t_bytes32,t_bool)"
       },
       {
-        "astId": 89,
+        "astId": 766,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "quoteSigner",
         "offset": 0,
@@ -4576,7 +4576,7 @@
         "type": "t_address"
       },
       {
-        "astId": 91,
+        "astId": 768,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "usdcToken",
         "offset": 0,
@@ -4584,7 +4584,7 @@
         "type": "t_address"
       },
       {
-        "astId": 93,
+        "astId": 770,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "copToken",
         "offset": 0,
@@ -4592,7 +4592,7 @@
         "type": "t_address"
       },
       {
-        "astId": 95,
+        "astId": 772,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "royaltyReceiver",
         "offset": 0,
@@ -4600,7 +4600,7 @@
         "type": "t_address"
       },
       {
-        "astId": 97,
+        "astId": 774,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "royaltyBps",
         "offset": 20,
@@ -4608,7 +4608,7 @@
         "type": "t_uint16"
       },
       {
-        "astId": 99,
+        "astId": 776,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "bridgeFeeWei",
         "offset": 0,
@@ -4616,7 +4616,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 1482,
+        "astId": 2159,
         "contract": "ClashCollectionNftV1.sol:ClashCollectionNftV1",
         "label": "__gap",
         "offset": 0,

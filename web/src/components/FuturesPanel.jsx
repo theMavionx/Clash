@@ -12,6 +12,9 @@ import { usePhoenix } from '../hooks/usePhoenix';
 import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useRisex } from '../hooks/useRisex';
 import { useNado } from '../hooks/useNado';
+import { useHibachi } from '../hooks/useHibachi';
+import { useHotstuff } from '../hooks/useHotstuff';
+import { useGrvt } from '../hooks/useGrvt';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -315,12 +318,19 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   const setLev = rawLev && rawLev > 0
     ? rawLev
     : ((margin > 0 && posValueUsd > 0) ? Math.round((posValueUsd / margin) * 10) / 10 : (leverageSettings[pos.symbol] || 1));
-  const providedPct = numOrNull(pos.pnl_pct);
+  const rawProvidedPct = numOrNull(pos.pnl_pct);
+  const providedPct = rawProvidedPct === 0 && Math.abs(pnlVal) >= 0.005 ? null : rawProvidedPct;
   const pnlPct = providedPct ?? (margin > 0
     ? (pnlVal / margin) * 100
     : (entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0));
   const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
   return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor };
+}
+
+function isSuccessfulTradeClose(result) {
+  if (!result || result.error) return false;
+  const status = String(result.status || result.state || result.result?.status || '').toLowerCase();
+  return !/(fail|reject|cancel|error)/u.test(status);
 }
 
 function getPositionTpsl(pos) {
@@ -904,7 +914,7 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
         // Prefer the human-readable pair ("USD/JPY") when present; falls back
         // to the symbol key for legacy Pacifica markets that only ship base.
         label: m.pair || m.symbol,
-        iconSym: m.icon_symbol || m.base || m.symbol,
+        iconSym: m.icon_symbol || m.base || m.base_asset || m.symbol,
         maxLev: m.max_leverage,
         mark,
         change,
@@ -1175,7 +1185,7 @@ const BottomPanel = memo(function BottomPanel({
   btmSymbols, sortOptionsForTab, hasActiveFilters,
   filteredPositions, filteredOrders,
   prices, walletAddr, dataReady, leverageSettings,
-  closePosition, cancelOrder, dex, loading, historyAccountAddr, markets,
+  closePosition, cancelOrder, dex, loading, historyAccountAddr, markets, onClosedPositionSnapshot,
 }) {
   // Avantis has no order-flow history or funding payments exposed via a
   // public API like Pacifica, so we hide those tabs entirely on that DEX.
@@ -1253,7 +1263,27 @@ const BottomPanel = memo(function BottomPanel({
                       <button
                         style={{...S.tblCloseBtn, opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer'}}
                         disabled={loading}
-                        onClick={() => closePosition(p.symbol, p.side, dex === 'avantis' ? p.margin : p.amount, p.pair_index, p.trade_index, true)}
+                        onClick={async () => {
+                          const snapshot = {
+                            symbol: p.symbol,
+                            side: p.side === 'bid' ? 'long' : 'short',
+                            leverage: lev,
+                            entryPrice,
+                            exitPrice: markPrice,
+                            pnlUsd: pnlVal,
+                            pnlPct,
+                            isOpen: false,
+                          };
+                          const result = await closePosition(
+                            p.symbol,
+                            p.side,
+                            dex === 'avantis' ? p.margin : p.amount,
+                            p.pair_index,
+                            p.trade_index,
+                            true,
+                          );
+                          if (isSuccessfulTradeClose(result)) onClosedPositionSnapshot?.(snapshot);
+                        }}
                       >{loading ? <ClosingButtonLabel text="" /> : 'Close'}</button>
                     </td>
                   </tr>
@@ -1333,12 +1363,18 @@ function FuturesPanel() {
   const { dex } = useDex();
   const evmConnectChain = dex === 'gmx' || dex === 'hyperliquid'
     ? 'arbitrum'
+    : dex === 'hotstuff'
+    ? 'mainnet'
+    : dex === 'grvt'
+    ? 'baseConnect'
     : dex === 'monad'
     ? 'monad'
     : dex === 'risex'
     ? 'rise'
     : dex === 'nado'
     ? 'ink'
+    : dex === 'hibachi'
+    ? 'arc'
     : 'base';
   const { enabled: privyEnabled, ready: privyReady, authenticated: privyAuthed, login: privyLogin } = useOptionalPrivy();
   // Per-account UI mode (basic/pro). NULL until the user picks on first
@@ -1367,6 +1403,9 @@ function FuturesPanel() {
   const hyperliquidHook = useHyperliquid();
   const risexHook = useRisex();
   const nadoHook = useNado();
+  const hibachiHook = useHibachi();
+  const hotstuffHook = useHotstuff();
+  const grvtHook = useGrvt();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -1387,6 +1426,12 @@ function FuturesPanel() {
     ? risexHook
     : dex === 'nado'
     ? nadoHook
+    : dex === 'hibachi'
+    ? hibachiHook
+    : dex === 'hotstuff'
+    ? hotstuffHook
+    : dex === 'grvt'
+    ? grvtHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
@@ -1549,7 +1594,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado') {
+    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -1645,6 +1690,8 @@ function FuturesPanel() {
   const [phoenixInviteCode, setPhoenixInviteCode] = useState(PHOENIX_DEFAULT_REFERRAL_CODE);
   const [phoenixInviteKind, setPhoenixInviteKind] = useState('referral');
   const [risexInviteCode, setRisexInviteCode] = useState('');
+  const [grvtApiKeyInput, setGrvtApiKeyInput] = useState('');
+  const [grvtSubAccountInput, setGrvtSubAccountInput] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
@@ -1921,7 +1968,7 @@ function FuturesPanel() {
     () => orders.some(o => String(o.symbol || o.s || '').toUpperCase() === symbol.toUpperCase()),
     [orders, symbol]
   );
-  const marginModeLocked = dex === 'pacifica' && (hasCurrentSymbolPosition || hasCurrentSymbolOrder);
+  const marginModeLocked = (dex === 'pacifica' || dex === 'grvt') && (hasCurrentSymbolPosition || hasCurrentSymbolOrder);
   const handleMarginModeToggle = useCallback(async () => {
     clearTradeFeedback();
     if (marginModeLocked) {
@@ -1956,7 +2003,8 @@ function FuturesPanel() {
         return;
       }
     }
-    setMarginMode?.(symbol, !marginModes[symbol]);
+    const result = await setMarginMode?.(symbol, !marginModes[symbol]);
+    if (result?.error) setLocalAlert(result.error);
   }, [clearTradeFeedback, marginModeLocked, hasCurrentSymbolPosition, symbol, setMarginMode, marginModes, dex, pacAgent, bindAgent, bindingAgent]);
 
   const handleSizePct = useCallback((pct) => {
@@ -2000,7 +2048,7 @@ function FuturesPanel() {
     setLeverage(v);
     // Avantis + GMX take leverage per-trade (passed in placeOrder call),
     // so no leverage tx ever runs from the slider. Skip cleanly.
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -2040,7 +2088,7 @@ function FuturesPanel() {
       // Guard against missing/NaN currentPrice (feed blip).
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -2229,6 +2277,10 @@ function FuturesPanel() {
         result = await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage);
       }
       setTradePhase(null);
+      if (result?.error) {
+        setLocalAlert(result.error);
+        return;
+      }
       if (result && !result.error) {
         setSuccessMsg(
           orderType === 'market'
@@ -2297,7 +2349,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -2316,10 +2368,14 @@ function FuturesPanel() {
                 ? 'RISEx uses cross margin in your RISE account'
                 : dex === 'nado'
                 ? 'Nado uses cross margin in your Ink account'
+                : dex === 'hotstuff'
+                ? 'Hotstuff uses cross margin in your derivatives account'
+                : dex === 'hibachi'
+                ? 'Hibachi margin is managed in your Hibachi account'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
-                {dex === 'phoenix' ? 'Auto' : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') ? 'Cross' : 'Isolated'}
+              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
+                {dex === 'phoenix' ? 'Auto' : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff') ? 'Cross' : 'Isolated'}
               </span>
             </div>
           ) : (
@@ -2736,7 +2792,7 @@ function FuturesPanel() {
   }
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
-  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') && walletMismatch) {
+  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -2761,7 +2817,7 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'Arc' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
@@ -2802,7 +2858,43 @@ function FuturesPanel() {
             </button>
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
-            {dex === 'decibel' ? (
+            {dex === 'hibachi' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #EF4444 0%, #991B1B 100%)',
+                  border: '4px solid #DC2626',
+                  boxShadow: '0 5px 0 #991B1B, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 32, fontWeight: 900, color: '#fff',
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>HB</div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Arc wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
+                }}>
+                  Hibachi runs through Arc. Connect the same EVM wallet you use for this game account; API keys are requested later only for placing Hibachi orders.
+                </div>
+                {renderPrivyEmailButton('#EF4444', '#991B1B')}
+                <button
+                  style={{...cartoonBtn('#EF4444', '#991B1B'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <span>CONNECT ARC WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#991B1B', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>HIBACHI - ARC</span>
+                </div>
+              </>
+            ) : dex === 'decibel' ? (
               // Decibel runs on Aptos, signed by Petra. Same self-custody
               // story as Avantis but a different wallet ecosystem — we use
               // AptosWalletContext directly instead of EvmWalletModal.
@@ -3107,6 +3199,90 @@ function FuturesPanel() {
                   <span>NADO - INK MAINNET</span>
                 </div>
               </>
+            ) : dex === 'hotstuff' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #FF5A5F 0%, #B91C1C 100%)',
+                  border: '4px solid #DC2626',
+                  boxShadow: '0 5px 0 #7F1D1D, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>
+                  <img src={DEX_CONFIG.hotstuff.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
+                </div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your GRVT wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  Hotstuff trades are signed by your EVM wallet on Ethereum mainnet. Broker fee approval is requested when configured.
+                </div>
+                {renderPrivyEmailButton('#FF5A5F', '#B91C1C')}
+                <button
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#FF5A5F', privyEnabled ? '#6B573E' : '#B91C1C'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT ETHEREUM WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#B91C1C', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>HOTSTUFF - ETHEREUM MAINNET</span>
+                </div>
+              </>
+            ) : dex === 'grvt' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #374151 0%, #111827 100%)',
+                  border: '4px solid #111827',
+                  boxShadow: '0 5px 0 #030712, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>
+                  <img src={DEX_CONFIG.grvt.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
+                </div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your GRVT wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  GRVT trades are signed on GRVT Exchange chain. Save your GRVT session credentials so Clash can read builder-code fills and credit gold.
+                </div>
+                {renderPrivyEmailButton('#374151', '#111827')}
+                <button
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#374151', privyEnabled ? '#6B573E' : '#111827'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT GRVT WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#111827', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>GRVT - EXCHANGE CHAIN</span>
+                </div>
+              </>
             ) : dex === 'phoenix' ? (
               <>
                 <div style={{
@@ -3191,6 +3367,245 @@ function FuturesPanel() {
           onConnected={handleEvmConnected}
           targetChain={evmConnectChain}
         />
+      </>
+    );
+  }
+
+  // ==================== HIBACHI API KEY GATE ====================
+  if (dex === 'hibachi' && hasWallet && setupVerified !== true) {
+    const isRunning = referralLinking || loading;
+
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Connecting Hibachi...' : 'Hibachi setup'}</span>
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{
+            ...S.body,
+            alignItems: 'stretch',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: 0,
+            background: '#fdf8e7',
+          }}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>Add Hibachi API credentials</span>
+                <span style={hlGateStyles.subtitle}>
+                  Arc wallet is connected. Hibachi does not expose builder codes, so Clash credits rewards only after importing fills from this Hibachi account.
+                </span>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_done }}>1</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>Arc wallet connected</span>
+                    <span style={hlGateStyles.stepHint}>{walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)} is linked to this game account.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...(isRunning ? hlGateStyles.stepBubble_active : hlGateStyles.stepBubble_pending) }}>
+                    {isRunning ? <span style={hlGateStyles.spinner} /> : 2}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...(isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Store Hibachi API key locally</span>
+                    <span style={hlGateStyles.stepHint}>The browser stores your API key, account id, and HMAC key for signed order requests.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_pending }}>3</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_pending }}>Trade and import fills</span>
+                    <span style={hlGateStyles.stepHint}>Gold is calculated from Hibachi fill history, not from a referral or builder-code assumption.</span>
+                  </span>
+                </li>
+              </ol>
+
+              <button
+                style={{ ...hlGateStyles.primaryBtn, ...(loading ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={loading}
+                onClick={async () => {
+                  if (!activate) return;
+                  setReferralLinking(true);
+                  try {
+                    const res = await activate();
+                    if (res?.error) setLocalAlert(res.error);
+                  } finally {
+                    setReferralLinking(false);
+                  }
+                }}
+              >
+                {isRunning ? 'Connecting...' : 'Add Hibachi credentials ->'}
+              </button>
+
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== GRVT API KEY GATE ====================
+  if (dex === 'grvt' && hasWallet && setupVerified !== true) {
+    const isRunning = referralLinking || loading;
+    const grvtCanSave = grvtApiKeyInput.trim().length > 0 && !isRunning;
+
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Connecting GRVT...' : 'GRVT setup'}</span>
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>Add GRVT API key</span>
+                <span style={hlGateStyles.subtitle}>
+                  Create a GRVT API key from the trading account where your funds are held. Clash uses it to read balance, orders, positions, and builder-code fills.
+                </span>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_done }}>1</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>Ethereum wallet connected</span>
+                    <span style={hlGateStyles.stepHint}>{walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)} is linked to this game account.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...(isRunning ? hlGateStyles.stepBubble_active : hlGateStyles.stepBubble_pending) }}>
+                    {isRunning ? <span style={hlGateStyles.spinner} /> : 2}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...(isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Store GRVT API key locally</span>
+                    <span style={hlGateStyles.stepHint}>Trading account id is optional if the API key was created from that trading account.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_pending }}>3</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_pending }}>Read GRVT balance</span>
+                    <span style={hlGateStyles.stepHint}>After setup, Clash polls GRVT account summary and fill history.</span>
+                  </span>
+                </li>
+              </ol>
+
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                background: '#fffaf0',
+                border: '2px solid #d4c8b0',
+                borderRadius: 12,
+                padding: 12,
+              }}>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>GRVT API key</span>
+                  <input
+                    type="password"
+                    value={grvtApiKeyInput}
+                    onChange={(e) => setGrvtApiKeyInput(e.target.value)}
+                    placeholder="Paste your GRVT API key"
+                    autoComplete="new-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Trading account id</span>
+                  <input
+                    type="text"
+                    value={grvtSubAccountInput}
+                    onChange={(e) => setGrvtSubAccountInput(e.target.value)}
+                    placeholder="Enter if GRVT cannot auto-detect it"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
+                  Stored in this browser and encrypted on Clash servers. If auto-detect fails, enter the trading account id from GRVT.
+                </div>
+              </div>
+
+              <button
+                style={{ ...hlGateStyles.primaryBtn, ...(!grvtCanSave ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={!grvtCanSave}
+                onClick={async () => {
+                  if (!activate) return;
+                  const apiKey = grvtApiKeyInput.trim();
+                  if (!apiKey) {
+                    setLocalAlert('Enter your GRVT API key');
+                    return;
+                  }
+                  setReferralLinking(true);
+                  try {
+                    const res = await activate({
+                      apiKey,
+                      subAccountId: grvtSubAccountInput.trim(),
+                    });
+                    if (res?.error) setLocalAlert(res.error);
+                    else {
+                      setGrvtApiKeyInput('');
+                      setGrvtSubAccountInput('');
+                      setSuccessMsg('GRVT API key saved in this browser.');
+                    }
+                  } finally {
+                    setReferralLinking(false);
+                  }
+                }}
+              >
+                {isRunning ? 'Connecting...' : 'Add GRVT API key ->'}
+              </button>
+
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </>
     );
   }
@@ -4207,7 +4622,7 @@ function FuturesPanel() {
             filteredOrders={filteredOrders}
             prices={prices}
             walletAddr={walletAddr}
-            historyAccountAddr={dex === 'decibel' ? subaccountAddr : walletAddr}
+            historyAccountAddr={(dex === 'decibel' || dex === 'grvt') ? subaccountAddr : walletAddr}
             markets={markets}
             dataReady={dataReady}
             leverageSettings={leverageSettings}
@@ -4215,6 +4630,7 @@ function FuturesPanel() {
             cancelOrder={cancelOrder}
             dex={dex}
             loading={loading}
+            onClosedPositionSnapshot={setShareTrade}
           />
         </div>
       );
@@ -4287,7 +4703,7 @@ function FuturesPanel() {
               );
               // closePosition returns the API response on success and
               // undefined on error (catches internally + sets `error`).
-              if (result && !result.error && result.status === 'closed') {
+              if (isSuccessfulTradeClose(result)) {
                 setShareTrade(finalSnapshot);
               }
             };
@@ -4389,7 +4805,7 @@ function FuturesPanel() {
             // on error. Only show the share modal when the close was a FULL
             // exit (closeFraction = 1) — partial closes still leave a position
             // open and showing the modal mid-trade is confusing.
-            if (result && !result.error && result.status === 'closed' && closeFraction >= 1) {
+            if (isSuccessfulTradeClose(result) && closeFraction >= 1) {
               setShareTrade(finalSnapshot);
             }
           };
@@ -4629,6 +5045,10 @@ function FuturesPanel() {
       equity = perpEquity || (cross + isol);
       available = cross + isol;
       marginUsed = Math.max(0, totalMargin || maintMargin);
+    } else if (dex === 'grvt') {
+      equity = parseFloat(account?.account_equity ?? account?.total_account_value ?? account?.equity ?? account?.balance ?? account?.usdc ?? 0);
+      available = parseFloat(account?.available_to_withdraw ?? account?.available_to_spend ?? account?.available_balance ?? account?.usdc ?? 0);
+      marginUsed = parseFloat(account?.total_margin_used ?? account?.total_initial_margin ?? account?.initial_margin ?? 0);
     } else {
       equity = parseFloat(account?.account_equity || 0);
       available = parseFloat(account?.available_to_withdraw || 0);
@@ -4645,6 +5065,10 @@ function FuturesPanel() {
       : 0;
     const hyperliquidUnified = dex === 'hyperliquid'
       && (account?.abstraction_mode === 'unifiedAccount' || account?.abstraction_mode === 'portfolioMargin' || account?.is_unified_account === true);
+    const grvtFundingBalance = dex === 'grvt'
+      ? Math.max(0, Number(account?.funding_balance ?? account?.funding_total_equity ?? 0))
+      : 0;
+    const grvtFundingCurrency = account?.funding_currency || 'USDT';
     const risexWalletState = dex === 'risex'
       ? (walletUsdcStatus?.status || (walletUsdc == null ? 'checking' : 'ready'))
       : null;
@@ -4689,6 +5113,7 @@ function FuturesPanel() {
       .includes(String(depositStatus?.status || ''));
     const risexDepositBusy = dex === 'risex' && depositActionBusy;
     const depositButtonLabel = (() => {
+      if (dex === 'grvt') return loading ? '...' : 'Open';
       if (depositStatus?.status === 'preparing') return 'Preparing...';
       if (depositStatus?.status === 'switching') return 'Switching...';
       if (depositStatus?.status === 'signing') return 'Sign...';
@@ -4730,8 +5155,16 @@ function FuturesPanel() {
       ? 'RISE Wallet USDC'
       : dex === 'nado'
       ? 'Ink Wallet USDt0'
+      : dex === 'grvt'
+      ? 'GRVT Trading USDC'
       : 'Wallet USDC';
-    const walletBalanceValue = dex === 'risex' ? risexWalletValue : dex === 'nado' ? nadoWalletValue : `$${walletUsdc !== null ? walletUsdc.toFixed(2) : '--'}`;
+    const walletBalanceValue = dex === 'risex'
+      ? risexWalletValue
+      : dex === 'nado'
+      ? nadoWalletValue
+      : dex === 'grvt'
+      ? `$${pacAccountValue.toFixed(2)}`
+      : `$${walletUsdc !== null ? walletUsdc.toFixed(2) : '--'}`;
     const walletBalanceColor = dex === 'risex' ? risexWalletValueColor : dex === 'nado' ? nadoWalletValueColor : '#5C3A21';
 
     return (
@@ -4871,6 +5304,87 @@ function FuturesPanel() {
             <span style={S.balCardValue}>${available.toFixed(2)}</span>
           </div>
         </div>
+
+        {dex === 'grvt' && grvtFundingBalance > 0.000001 && (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={S.label}>GRVT Funding Account</span>
+              <span style={{fontSize: 18, fontWeight: 900, color: '#5C3A21'}}>
+                {grvtFundingBalance.toFixed(2)} {grvtFundingCurrency}
+              </span>
+            </div>
+            <div style={{marginTop: 6, fontSize: 10, lineHeight: 1.35, color: '#8a7252', fontWeight: 800}}>
+              Deposits can land in GRVT funding first. Move funds to your GRVT trading account in the GRVT app if Free Margin is still $0.
+            </div>
+          </div>
+        )}
+
+        {dex === 'grvt' && (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={{...S.label, color: '#1D4ED8'}}>GRVT API key</span>
+              <span style={S.detail}>Stored in this browser</span>
+            </div>
+            <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+              <input
+                type="password"
+                placeholder="Paste new GRVT API key"
+                value={grvtApiKeyInput}
+                onChange={e => setGrvtApiKeyInput(e.target.value)}
+                autoComplete="new-password"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                style={{...S.input, width: '100%', padding: '9px 10px', fontSize: 13}}
+              />
+              <input
+                type="text"
+                placeholder="Trading account id"
+                value={grvtSubAccountInput}
+                onChange={e => setGrvtSubAccountInput(e.target.value)}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                style={{...S.input, width: '100%', padding: '9px 10px', fontSize: 13}}
+              />
+              <button
+                style={{
+                  ...S.btnSmall,
+                  width: '100%',
+                  padding: '9px 10px',
+                  background: '#2563EB',
+                  color: '#fff',
+                  border: '2px solid #1D4ED8',
+                  opacity: loading || !grvtApiKeyInput.trim() ? 0.65 : 1,
+                }}
+                disabled={loading || !grvtApiKeyInput.trim()}
+                onClick={async () => {
+                  const apiKey = grvtApiKeyInput.trim();
+                  if (!apiKey) {
+                    setLocalAlert('Enter your GRVT API key');
+                    return;
+                  }
+                  const res = await activate?.({
+                    apiKey,
+                    subAccountId: grvtSubAccountInput.trim(),
+                  });
+                  if (res?.error) setLocalAlert(res.error);
+                  else {
+                    setGrvtApiKeyInput('');
+                    setGrvtSubAccountInput('');
+                    setSuccessMsg('GRVT API key saved in this browser.');
+                  }
+                }}
+              >
+                {loading ? 'Saving...' : 'Save API key'}
+              </button>
+              <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
+                Clash uses this key to read GRVT trading balance, positions, orders, and fills. It is stored locally in the player's browser.
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Avantis & GMX are non-custodial — no deposit/withdraw. Show a
             read-only info card that explains funds live in the user's own
@@ -5029,15 +5543,41 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? 'Deposit USDt0' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? 'Deposit USDt0' : dex === 'grvt' ? 'Open GRVT Deposit' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: '#15803D'}}>
                     {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
                   </span>
                 )
-                : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}</span>}
+                : walletUsdc !== null && <span style={S.detail}>{dex === 'hotstuff' ? 'Spot' : 'Wallet'}: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}</span>}
             </div>
+            {dex === 'grvt' ? (
+              <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                <div style={{
+                  background: 'rgba(59,130,246,0.08)',
+                  border: '1px solid rgba(59,130,246,0.24)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  fontSize: 11,
+                  lineHeight: 1.4,
+                  color: '#5C3A21',
+                  fontWeight: 750,
+                }}>
+                  GRVT deposits must be completed in the GRVT app. Clash reads your credited GRVT trading balance and builder-code fills after the deposit is processed.
+                </div>
+                <button
+                  style={{...S.depositBtn, width: '100%', whiteSpace: 'nowrap', padding: '9px 10px'}}
+                  onClick={async () => {
+                    const r = await depositToPacifica('');
+                    if (!r?.error && r?.info) setLocalAlert(r.info);
+                  }}
+                  disabled={loading}
+                >
+                  {loading ? '...' : 'Open'}
+                </button>
+              </div>
+            ) : (
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
               {dex === 'risex' && (
                 <select
@@ -5086,6 +5626,10 @@ function FuturesPanel() {
                   setLocalAlert(`Ink wallet has ${walletUsdc.toFixed(2)} USDt0`);
                   return;
                 }
+                if (dex === 'hotstuff' && walletUsdc !== null && v > walletUsdc + 0.000001) {
+                  setLocalAlert(`Hotstuff spot balance has ${walletUsdc.toFixed(2)} USDC`);
+                  return;
+                }
                 const r = await depositToPacifica(depositAmt, dex === 'risex' ? { sourceChainId: risexDepositSource?.id } : undefined);
                 if (!r?.error) {
                   setDepositAmt('');
@@ -5095,6 +5639,7 @@ function FuturesPanel() {
                 {depositButtonLabel}
               </button>
             </div>
+            )}
             <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
               {dex === 'decibel'
                 ? 'Sends USDC from your Aptos wallet to your Decibel trading subaccount. Needs a small APT float for gas.'
@@ -5104,13 +5649,19 @@ function FuturesPanel() {
                 ? 'Sends USDC from your Solana wallet to your Phoenix trader account. Needs a small SOL float for gas.'
                 : dex === 'nado'
                 ? 'Approves USDt0 on Ink, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
+                : dex === 'hotstuff'
+                ? 'Moves USDC from your Hotstuff spot balance into your Hotstuff derivatives account.'
+                : dex === 'grvt'
+                ? 'Opens GRVT deposit. Native in-game deposit needs GRVT bridge approval data or a GRVT-supported deposit-address API; the current builder API key is not enough for that.'
                 : dex === 'risex'
                 ? (
                   <>
                     Transfers native <b>USDC on {risexDepositSource?.name || 'Arbitrum'}</b> to the RISEx bridge deposit address, then submits the tx to RISEx. Needs source-chain gas.
                   </>
                 )
-                : 'Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.'}
+                : dex === 'pacifica'
+                ? 'Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.'
+                : 'Use the connected venue account to fund or manage your USDC balance.'}
             </span>
           </div>
         )}
@@ -5119,7 +5670,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
@@ -5137,6 +5688,11 @@ function FuturesPanel() {
                 style={{...S.btnPurple, flex: 2, whiteSpace: 'nowrap', padding: '8px 4px', opacity: withdrawMax <= 0 ? 0.5 : 1}}
                 onClick={async () => {
                   const v = parseFloat(withdrawAmt);
+                  if (dex === 'grvt') {
+                    const r = await withdraw(withdrawAmt);
+                    if (r?.info) setLocalAlert(r.info);
+                    return;
+                  }
                   if (!Number.isFinite(v) || v <= 0) {
                     setLocalAlert('Enter a positive amount');
                     return;
@@ -5151,9 +5707,9 @@ function FuturesPanel() {
                     if (r?.info) setLocalAlert(r.info);
                   }
                 }}
-                disabled={loading || !withdrawAmt || withdrawMax <= 0}
+                disabled={loading || (dex !== 'grvt' && (!withdrawAmt || withdrawMax <= 0))}
               >
-                {loading ? '...' : (withdrawMax <= 0 ? 'No funds' : 'Withdraw')}
+                {loading ? '...' : dex === 'grvt' ? 'Open' : (withdrawMax <= 0 ? 'No funds' : 'Withdraw')}
               </button>
             </div>
             <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
@@ -5167,7 +5723,11 @@ function FuturesPanel() {
                 ? 'Withdraws USDC from your Phoenix trader account back to your Solana wallet.'
                 : dex === 'nado'
                 ? 'Withdraws USDt0 from your Nado default subaccount back to your Ink wallet. Nado charges a 1 USDt0 withdrawal fee, so Max subtracts it.'
-                : 'Withdraws USDC from Pacifica back to your wallet.'}
+                : dex === 'grvt'
+                ? 'Opens GRVT so you can withdraw or manage funds on your GRVT account.'
+                : dex === 'pacifica'
+                ? 'Withdraws USDC from Pacifica back to your wallet.'
+                : 'Use the connected venue account to withdraw or manage your USDC balance.'}
             </span>
           </div>
         )}
@@ -5486,6 +6046,42 @@ function FuturesPanel() {
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.nado.colorDark }}>
                 Nado
+              </span>
+            </>
+          ) : dex === 'hotstuff' ? (
+            <>
+              <img
+                src={DEX_CONFIG.hotstuff.logo}
+                alt="Hotstuff"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.hotstuff.colorDark }}>
+                Hotstuff
+              </span>
+            </>
+          ) : dex === 'grvt' ? (
+            <>
+              <img
+                src={DEX_CONFIG.grvt.logo}
+                alt="GRVT"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.grvt.colorDark }}>
+                GRVT
+              </span>
+            </>
+          ) : dex === 'hibachi' ? (
+            <>
+              <img
+                src={DEX_CONFIG.hibachi.logo}
+                alt="Hibachi"
+                style={{ height: 18, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.hibachi.colorDark }}>
+                Hibachi
               </span>
             </>
           ) : (

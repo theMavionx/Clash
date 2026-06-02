@@ -575,6 +575,12 @@ app.get('/api/admin/panel', (req, res) => {
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">DEX Breakdown</h2>
     <div id="dexStats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>
 
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">GRVT Builder Fees & Proofs</h2>
+    <div class="stats" id="grvtBuilderStats"></div>
+    <table><thead><tr>
+      <th>Time</th><th>Player</th><th>Symbol</th><th>Sub Account</th><th>Notional</th><th>Builder Fee</th><th>Proof</th>
+    </tr></thead><tbody id="grvtBuilderProofsBody"></tbody></table>
+
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Device Breakdown</h2>
     <div id="deviceStats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
@@ -642,6 +648,7 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="hyperliquid">Hyperliquid</option>
               <option value="risex">RISEx</option>
               <option value="nado">Nado</option>
+              <option value="grvt">GRVT</option>
             </select>
           </label>
           <label style="font-size:11px;color:#9ca3af">DEX scope
@@ -663,6 +670,7 @@ app.get('/api/admin/panel', (req, res) => {
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="hyperliquid" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Hyperliquid</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="risex" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">RISEx</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="nado" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Nado</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="grvt" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">GRVT</label>
             </div>
             <div id="tn_dex_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Pick at least one DEX.</div>
           </div>
@@ -1269,6 +1277,7 @@ function renderPlayers() {
   const hplCount   = players.filter(p => p.dex === 'hyperliquid').length;
   const risCount   = players.filter(p => p.dex === 'risex').length;
   const ndoCount   = players.filter(p => p.dex === 'nado').length;
+  const grvtCount  = players.filter(p => p.dex === 'grvt').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
   // payload so the badges agree with the per-row "ONLINE" rendering.
@@ -1289,6 +1298,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#16a34a"><div class="v" style="color:#86efac;font-size:22px">' + hplCount + '</div><div class="l">Hyperliquid</div></div>' +
     '<div class="stat" style="border-color:#e11d48"><div class="v" style="color:#fb7185;font-size:22px">' + risCount + '</div><div class="l">RISEx</div></div>' +
     '<div class="stat" style="border-color:#00b8d9"><div class="v" style="color:#67e8f9;font-size:22px">' + ndoCount + '</div><div class="l">Nado</div></div>' +
+    '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24;font-size:22px">' + grvtCount + '</div><div class="l">GRVT</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
@@ -1305,6 +1315,7 @@ function renderPlayers() {
     if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
     if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
     if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
+    if (d === 'grvt') return '<span class="badge" style="background:#78350f;color:#fde68a">GRVT</span>';
     return '<span class="badge badge-off">—</span>';
   }
   function statusBadge(p) {
@@ -2036,6 +2047,7 @@ async function loadStats() {
     const hplCount = (byDex.find(x => x.dex === 'hyperliquid') || {}).n || 0;
     const risCount = (byDex.find(x => x.dex === 'risex') || {}).n || 0;
     const ndoCount = (byDex.find(x => x.dex === 'nado') || {}).n || 0;
+    const grvtCount = (byDex.find(x => x.dex === 'grvt') || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
@@ -2046,6 +2058,7 @@ async function loadStats() {
     const hplRew = rewardsMap.hyperliquid || {};
     const risRew = rewardsMap.risex || {};
     const ndoRew = rewardsMap.nado || {};
+    const grvtRew = rewardsMap.grvt || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
       dexCard('avantis',  'Avantis · Base',    '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, activityLines('avantis')) +
@@ -2056,7 +2069,45 @@ async function loadStats() {
       dexCard('hyperliquid', 'Hyperliquid',     '#16a34a', hplCount, hplRew.total_gold || 0, hplRew.total_volume || 0, activityLines('hyperliquid')) +
       dexCard('risex',    'RISEx',             '#e11d48', risCount, risRew.total_gold || 0, risRew.total_volume || 0, activityLines('risex')) +
       dexCard('nado',     'Nado · Ink',        '#00b8d9', ndoCount, ndoRew.total_gold || 0, ndoRew.total_volume || 0, activityLines('nado')) +
+      dexCard('grvt',     'GRVT / GRVT Exchange', '#f59e0b', grvtCount, grvtRew.total_gold || 0, grvtRew.total_volume || 0, activityLines('grvt')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
+
+    const grvtBuilder = dex.grvt_builder || {};
+    const grvtConfig = grvtBuilder.config || {};
+    if (grvtBuilder.error) {
+      document.getElementById('grvtBuilderStats').innerHTML =
+        '<div class="stat" style="border-color:#ef4444"><div class="v" style="font-size:14px;color:#fca5a5">Unavailable</div><div class="l">' + esc(grvtBuilder.error) + '</div></div>';
+      document.getElementById('grvtBuilderProofsBody').innerHTML =
+        '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:20px">GRVT builder stats unavailable</td></tr>';
+    } else {
+      document.getElementById('grvtBuilderStats').innerHTML =
+        '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + fmtUSD(grvtBuilder.fee_usd || 0) + '</div><div class="l">Builder fees total</div></div>' +
+        '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fde68a">' + fmtUSD(grvtBuilder.fee_24h_usd || 0) + '</div><div class="l">Builder fees 24h</div></div>' +
+        '<div class="stat"><div class="v">' + (grvtBuilder.fills || 0) + '</div><div class="l">Verified fills</div></div>' +
+        '<div class="stat"><div class="v">' + (grvtBuilder.traders || 0) + '</div><div class="l">Fee traders</div></div>' +
+        '<div class="stat"><div class="v">' + fmtUSD(grvtBuilder.volume_usd || 0) + '</div><div class="l">GRVT builder volume</div></div>' +
+        '<div class="stat"><div class="v" style="font-size:15px;color:#9ca3af">' + esc(grvtConfig.feeBps ?? 0) + ' bps</div><div class="l">Configured fee</div></div>' +
+        '<div class="stat"><div class="v" style="font-size:12px;color:#9ca3af">' + esc(grvtConfig.accountId ? grvtConfig.accountId.slice(0, 8) + '...' + grvtConfig.accountId.slice(-6) : 'missing') + '</div><div class="l">Builder account</div></div>' +
+        '<div class="stat"><div class="v" style="font-size:12px;color:#9ca3af">' + esc(grvtConfig.authMode || 'unknown') + '</div><div class="l">Proof source: GRVT fill API</div></div>';
+      const proofRows = grvtBuilder.recent_proofs || [];
+      document.getElementById('grvtBuilderProofsBody').innerHTML = proofRows.length
+        ? proofRows.map(row => '<tr>' +
+            '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.created_at)) + '</td>' +
+            '<td><strong>' + esc(row.name || '?') + '</strong><br><span class="mono" style="font-size:11px;color:#6b7280">' + esc(row.wallet ? row.wallet.slice(0, 6) + '...' + row.wallet.slice(-4) : '-') + '</span></td>' +
+            '<td>' + esc(row.symbol || '-') + ' <span style="color:#9ca3af">' + esc(row.side || '') + '</span></td>' +
+            '<td class="mono" style="font-size:11px">' + esc(row.sub_account_id || '-') + '</td>' +
+            '<td>' + fmtUSD(row.notional_usd || 0) + '</td>' +
+            '<td>' + fmtAdminUsd(row.fee_usd || 0, 4) + '<br><span style="font-size:10px;color:#9ca3af">' + esc(row.fee_source || '-') + '</span></td>' +
+            '<td class="mono" style="font-size:10px;max-width:260px;word-break:break-all">' +
+              'source=' + esc(row.proof_source || '-') + '<br>' +
+              'onchain=' + esc(row.onchain_proof || '-') + '<br>' +
+              'client=' + esc(row.client_order_id || '-') + '<br>' +
+              'order=' + esc(row.order_id || '-') + '<br>' +
+              '<span title="' + esc(row.proof_json || '') + '">proof_json=' + (row.proof_json ? 'stored' : 'missing') + '</span>' +
+            '</td>' +
+          '</tr>').join('')
+        : '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:20px">No GRVT builder fills yet</td></tr>';
+    }
 
     // Device breakdown comes from /admin/stats (s.devices). Solana Mobile
     // is server-counted from seeker flags plus UA/payload fallback.
@@ -2166,6 +2217,9 @@ async function loadStats() {
       topTraderTable('phoenix', 'Phoenix · Solana', '#f97316') +
       topTraderTable('nado',    'Nado · Ink',       '#00b8d9');
 
+    document.getElementById('topTradersByDex').innerHTML +=
+      topTraderTable('grvt', 'GRVT / GRVT Exchange', '#f59e0b');
+
     function dexBadge(d) {
       if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
       if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
@@ -2176,6 +2230,7 @@ async function loadStats() {
       if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
       if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
       if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
+      if (d === 'grvt') return '<span class="badge" style="background:#78350f;color:#fde68a">GRVT</span>';
       return '<span class="badge badge-off">—</span>';
     }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>

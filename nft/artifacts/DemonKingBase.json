@@ -2086,7 +2086,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 12327,
+        "astId": 13339,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "_name",
         "offset": 0,
@@ -2094,7 +2094,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 12329,
+        "astId": 13341,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "_symbol",
         "offset": 0,
@@ -2102,7 +2102,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 12333,
+        "astId": 13345,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "_owners",
         "offset": 0,
@@ -2110,7 +2110,7 @@
         "type": "t_mapping(t_uint256,t_address)"
       },
       {
-        "astId": 12337,
+        "astId": 13349,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "_balances",
         "offset": 0,
@@ -2118,7 +2118,7 @@
         "type": "t_mapping(t_address,t_uint256)"
       },
       {
-        "astId": 12341,
+        "astId": 13353,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "_tokenApprovals",
         "offset": 0,
@@ -2126,7 +2126,7 @@
         "type": "t_mapping(t_uint256,t_address)"
       },
       {
-        "astId": 12347,
+        "astId": 13359,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "_operatorApprovals",
         "offset": 0,
@@ -2134,7 +2134,7 @@
         "type": "t_mapping(t_address,t_mapping(t_address,t_bool))"
       },
       {
-        "astId": 12155,
+        "astId": 8693,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "_owner",
         "offset": 0,
@@ -2142,7 +2142,7 @@
         "type": "t_address"
       },
       {
-        "astId": 13275,
+        "astId": 9374,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "_paused",
         "offset": 20,
@@ -2150,7 +2150,7 @@
         "type": "t_bool"
       },
       {
-        "astId": 2911,
+        "astId": 3588,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "mintPrice",
         "offset": 0,
@@ -2158,7 +2158,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 2913,
+        "astId": 3590,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "totalMinted",
         "offset": 0,
@@ -2166,7 +2166,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 2915,
+        "astId": 3592,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "saleActive",
         "offset": 0,
@@ -2174,7 +2174,7 @@
         "type": "t_bool"
       },
       {
-        "astId": 2917,
+        "astId": 3594,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "baseTokenURI",
         "offset": 0,
@@ -2182,7 +2182,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 2919,
+        "astId": 3596,
         "contract": "DemonKingBase.sol:DemonKingBase",
         "label": "contractMetadataURI",
         "offset": 0,

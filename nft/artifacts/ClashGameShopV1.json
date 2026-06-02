@@ -1933,7 +1933,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 7859,
+        "astId": 8650,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "_guardStatus",
         "offset": 0,
@@ -1941,7 +1941,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 7892,
+        "astId": 8683,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "__gap",
         "offset": 0,
@@ -1949,7 +1949,7 @@
         "type": "t_array(t_uint256)49_storage"
       },
       {
-        "astId": 2334,
+        "astId": 3011,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "quoteSigner",
         "offset": 0,
@@ -1957,7 +1957,7 @@
         "type": "t_address"
       },
       {
-        "astId": 2336,
+        "astId": 3013,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "treasury",
         "offset": 0,
@@ -1965,7 +1965,7 @@
         "type": "t_address"
       },
       {
-        "astId": 2338,
+        "astId": 3015,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "copToken",
         "offset": 0,
@@ -1973,7 +1973,7 @@
         "type": "t_address"
       },
       {
-        "astId": 2340,
+        "astId": 3017,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "saleActive",
         "offset": 20,
@@ -1981,7 +1981,7 @@
         "type": "t_bool"
       },
       {
-        "astId": 2342,
+        "astId": 3019,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "maxQuantityPerPurchase",
         "offset": 0,
@@ -1989,7 +1989,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 2346,
+        "astId": 3023,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "paymentTokenAllowed",
         "offset": 0,
@@ -1997,7 +1997,7 @@
         "type": "t_mapping(t_address,t_bool)"
       },
       {
-        "astId": 2350,
+        "astId": 3027,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "usedQuote",
         "offset": 0,
@@ -2005,7 +2005,7 @@
         "type": "t_mapping(t_bytes32,t_bool)"
       },
       {
-        "astId": 2879,
+        "astId": 3556,
         "contract": "ClashGameShopV1.sol:ClashGameShopV1",
         "label": "__gap",
         "offset": 0,

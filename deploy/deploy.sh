@@ -271,6 +271,21 @@ prepare_shared_runtime() {
                 printf '%s\n' VITE_NADO_SUBACCOUNT_NAME=default
                 printf '%s\n' VITE_NADO_BUILDER_ID=3600
                 printf '%s\n' VITE_NADO_BUILDER_FEE_RATE=50
+                printf '%s\n' GRVT_BUILDER_ACCOUNT_ID=0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45
+                printf '%s\n' GRVT_BUILDER_X_ACCOUNT_ID=3973781287105049
+                printf '%s\n' GRVT_BUILDER_API_KEY=
+                printf '%s\n' GRVT_BUILDER_FEE_BPS=5
+                printf '%s\n' GRVT_BUILDER_FEE_RATE=0.0005
+                printf '%s\n' VITE_GRVT_BUILDER_ACCOUNT_ID=0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45
+                printf '%s\n' VITE_GRVT_BUILDER_FEE_BPS=5
+                printf '%s\n' VITE_GRVT_BUILDER_FEE_RATE=0.0005
+                printf '%s\n' HOTSTUFF_BROKER_ADDRESS=0xB36402e87a86206D3a114a98B53f31362291fe1B
+                printf '%s\n' HOTSTUFF_AGENT_ADDRESS=0xd186C1F7a6ad2A6380fd019978C299DB4cFe5589
+                printf '%s\n' HOTSTUFF_API_WALLET_PRIVATE_KEY=
+                printf '%s\n' HOTSTUFF_BROKER_FEE_RATE=0.0005
+                printf '%s\n' HOTSTUFF_BROKER_MIN_ACCOUNT_VALUE_USDC=100
+                printf '%s\n' VITE_HOTSTUFF_BROKER_ADDRESS=0xB36402e87a86206D3a114a98B53f31362291fe1B
+                printf '%s\n' VITE_HOTSTUFF_BROKER_FEE_RATE=0.0005
                 printf '%s=%s\n' CLASH_WALLET_ENCRYPTION_KEY "$generated_wallet_enc"
             } > "$ENV_FILE"
             chmod 600 "$ENV_FILE"
@@ -295,17 +310,39 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_NADO_SUBACCOUNT_NAME" "default"
     ensure_env_default "VITE_NADO_BUILDER_ID" "3600"
     ensure_env_default "VITE_NADO_BUILDER_FEE_RATE" "50"
+    ensure_env_default "GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
+    ensure_env_default "GRVT_BUILDER_X_ACCOUNT_ID" "3973781287105049"
+    ensure_env_default "GRVT_BUILDER_API_KEY" ""
+    ensure_env_default "GRVT_BUILDER_FEE_BPS" "5"
+    ensure_env_default "GRVT_BUILDER_FEE_RATE" "0.0005"
+    ensure_env_default "VITE_GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
+    ensure_env_default "VITE_GRVT_BUILDER_FEE_BPS" "5"
+    ensure_env_default "VITE_GRVT_BUILDER_FEE_RATE" "0.0005"
+    ensure_env_default "HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    ensure_env_default "HOTSTUFF_AGENT_ADDRESS" "0xd186C1F7a6ad2A6380fd019978C299DB4cFe5589"
+    ensure_env_default "HOTSTUFF_API_WALLET_PRIVATE_KEY" ""
+    ensure_env_default "HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    ensure_env_default "HOTSTUFF_BROKER_MIN_ACCOUNT_VALUE_USDC" "100"
+    ensure_env_default "VITE_HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    ensure_env_default "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0005"
     ensure_env_default "CLASH_WALLET_ENCRYPTION_KEY" "$(openssl rand -hex 32)"
     ensure_env_default "VITE_PRIVY_APP_ID" ""
     ensure_env_default "VITE_APTOS_NODE_API_KEY" ""
     ensure_env_default "VITE_ARBITRUM_RPC_URL" ""
     ensure_env_default "VITE_SOLANA_RPC_URL" ""
+    ensure_env_default "ETHEREUM_ALCHEMY_KEY" ""
     ensure_env_default "BASE_ALCHEMY_KEY" ""
     ensure_env_default "SOLANA_ALCHEMY_API_KEY" ""
     ensure_env_default "SOLANA_HELIUS_API_KEY" ""
     ensure_env_default "SOLANA_TATUM_API_KEY" ""
+    ensure_env_default "VITE_ETHEREUM_ENABLE_PUBLIC_RPC" "1"
+    ensure_env_default "VITE_ETHEREUM_ENABLE_ALCHEMY_RPC" "1"
+    ensure_env_default "VITE_BASE_ENABLE_PUBLIC_RPC" "1"
+    ensure_env_default "VITE_BASE_ENABLE_ALCHEMY_RPC" "1"
+    ensure_env_default "VITE_ARBITRUM_ENABLE_PUBLIC_RPC" "1"
+    ensure_env_default "VITE_ARBITRUM_ENABLE_ALCHEMY_RPC" "1"
     ensure_env_default "VITE_SOLANA_ENABLE_ALCHEMY_RPC" "1"
-    ensure_env_default "VITE_SOLANA_ENABLE_PUBLIC_RPC" "0"
+    ensure_env_default "VITE_SOLANA_ENABLE_PUBLIC_RPC" "1"
     ensure_env_default "VITE_SOLANA_ENABLE_TATUM_RPC" "0"
     ensure_env_default "VITE_PHOENIX_ACCESS_CODE" ""
     ensure_env_default "VITE_PHOENIX_REFERRAL_CODE" ""
@@ -343,6 +380,19 @@ prepare_shared_runtime() {
     set_env_value "VITE_NADO_SUBACCOUNT_NAME" "default"
     set_env_value "VITE_NADO_BUILDER_ID" "3600"
     set_env_value "VITE_NADO_BUILDER_FEE_RATE" "50"
+    set_env_value "GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
+    set_env_value "GRVT_BUILDER_X_ACCOUNT_ID" "3973781287105049"
+    set_env_value "GRVT_BUILDER_FEE_BPS" "5"
+    set_env_value "GRVT_BUILDER_FEE_RATE" "0.0005"
+    set_env_value "VITE_GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
+    set_env_value "VITE_GRVT_BUILDER_FEE_BPS" "5"
+    set_env_value "VITE_GRVT_BUILDER_FEE_RATE" "0.0005"
+    set_env_value "HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    set_env_value "HOTSTUFF_AGENT_ADDRESS" "0xd186C1F7a6ad2A6380fd019978C299DB4cFe5589"
+    set_env_value "HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    set_env_value "HOTSTUFF_BROKER_MIN_ACCOUNT_VALUE_USDC" "100"
+    set_env_value "VITE_HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    set_env_value "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0005"
     set_env_value "CLASH_MAIN_DB" "$SHARED_SERVER_DIR/clash.db"
     set_env_value "CLASH_FUTURES_DB" "$SHARED_FUTURES_DIR/futures.db"
     set_env_value "CLASH_MCP_PUBLIC_URL" "https://$MCP_DOMAIN"
@@ -816,6 +866,7 @@ MCPTEMPCONF
     fi
 
     ARBITRUM_ALCHEMY_KEY="$(env_file_value "ARBITRUM_ALCHEMY_KEY")"
+    ETHEREUM_ALCHEMY_KEY="$(first_env_file_value "ETHEREUM_ALCHEMY_KEY" "ALCHEMY_ETHEREUM_API_KEY" "ETH_ALCHEMY_KEY" "ALCHEMY_API_KEY" "BASE_ALCHEMY_KEY" "ALCHEMY_BASE_API_KEY")"
     BASE_ALCHEMY_KEY="$(first_env_file_value "BASE_ALCHEMY_KEY" "ALCHEMY_BASE_API_KEY")"
     SOLANA_ALCHEMY_API_KEY="$(first_env_file_value "SOLANA_ALCHEMY_API_KEY" "ALCHEMY_SOLANA_API_KEY")"
     SOLANA_HELIUS_API_KEY="$(first_env_file_value \
@@ -984,6 +1035,18 @@ server {
         proxy_pass https://base-mainnet.g.alchemy.com/v2/__BASE_ALCHEMY_KEY__;
         proxy_http_version 1.1;
         proxy_set_header Host base-mainnet.g.alchemy.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
+    }
+    location = /rpc/eth-alchemy {
+        proxy_pass https://eth-mainnet.g.alchemy.com/v2/__ETHEREUM_ALCHEMY_KEY__;
+        proxy_http_version 1.1;
+        proxy_set_header Host eth-mainnet.g.alchemy.com;
         proxy_set_header Origin "";
         proxy_set_header Referer "";
         proxy_ssl_server_name on;
@@ -1164,6 +1227,14 @@ MCPCONF
     else
         sed -i 's|proxy_pass https://base-mainnet.g.alchemy.com/v2/__BASE_ALCHEMY_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
         log "BASE_ALCHEMY_KEY is not set; /rpc/base-alchemy will return 503 and clients should use /rpc/base fallback."
+    fi
+
+    if [ -n "$ETHEREUM_ALCHEMY_KEY" ]; then
+        sed -i "s|__ETHEREUM_ALCHEMY_KEY__|$(sed_escape_replacement "$ETHEREUM_ALCHEMY_KEY")|g" /etc/nginx/sites-available/$DOMAIN
+        log "ETHEREUM_ALCHEMY_KEY is set; /rpc/eth-alchemy will proxy to Alchemy server-side."
+    else
+        sed -i 's|proxy_pass https://eth-mainnet.g.alchemy.com/v2/__ETHEREUM_ALCHEMY_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
+        log "ETHEREUM_ALCHEMY_KEY is not set; /rpc/eth-alchemy will return 503."
     fi
 
     if [ -n "$SOLANA_ALCHEMY_API_KEY" ]; then

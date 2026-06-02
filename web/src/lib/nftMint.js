@@ -256,7 +256,7 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
   }
   if (!config.saleActive) throw new Error('Solana sale is closed');
 
-  const group = payment === 'sol' ? 'sol' : payment === 'skr' ? 'skr' : 'usdc';
+  const group = payment === 'sol' ? 'sol' : payment === 'skr' ? 'skr' : payment === 'clash' ? 'clash' : 'usdc';
   const groupConfig = config.paymentGroups?.[group] || config.groups?.[group] || null;
   if (!groupConfig) throw new Error(`Solana ${group.toUpperCase()} payment is not configured`);
 

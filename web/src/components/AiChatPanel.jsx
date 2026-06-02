@@ -13,7 +13,7 @@ import EvmWalletModal from './EvmWalletModal';
 import { BASE_CHAIN_ID, TRADING_ADDRESS, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig';
-import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
+import { fetchGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import {
   avantisPlaceOrderSignature,
   duplicateAvantisPlaceOrderMessage,
@@ -622,8 +622,8 @@ const AI_SHOP_CHAIN_IDS = {
   monad: MONAD_CHAIN_ID,
 };
 const AI_SHOP_CHAIN_OPTIONS = [
-  { id: 'base', label: 'Base', sub: 'USDC / ETH / CoP' },
-  { id: 'solana', label: 'Solana', sub: 'USDC / SOL / SKR' },
+  { id: 'base', label: 'Base', sub: 'USDC / ETH' },
+  { id: 'solana', label: 'Solana', sub: 'USDC / SOL / CLASH / SKR' },
   { id: 'arbitrum', label: 'Arbitrum', sub: 'USDC / ETH' },
   { id: 'monad', label: 'Monad', sub: 'USDC / MON' },
   { id: 'aptos', label: 'Aptos', sub: 'USDC / APT' },
@@ -632,11 +632,11 @@ const AI_SHOP_PAYMENTS_BY_CHAIN = {
   base: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'eth', label: 'ETH', sub: 'Native' },
-    { id: 'cop', label: 'CoP', sub: 'AI bonus' },
   ],
   solana: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'sol', label: 'SOL', sub: 'Native' },
+    { id: 'clash', label: 'CLASH', sub: '20% off' },
     { id: 'skr', label: 'SKR', sub: 'Seeker' },
   ],
   arbitrum: [
@@ -697,11 +697,11 @@ function aiPaymentLabel(chain, payment) {
 
 // Per-token icon mapping — mirrors NftMintPanel.TOKEN_LOGO_SRC so the
 // AI shop chips read the same as the NFT mint chips (USDC = Circle
-// glyph, ETH = Ethereum diamond, CoP = our app icon, etc).
+// glyph, ETH = Ethereum diamond, CLASH = our app icon, etc).
 const AI_TOKEN_LOGO = {
   usdc: '/tokens/USDC.svg',
   eth:  '/tokens/ETH.svg',
-  cop:  '/icons/icon-192.png',
+  clash: '/icons/icon-192.png',
   sol:  '/tokens/SOL.svg',
   skr:  '/tokens/SKR.png',
   mon:  '/tokens/MON.svg',
@@ -2467,23 +2467,15 @@ function AiChatPanel({ onClose }) {
           quantity: 1,
         });
       } else if (shopChain === 'base') {
-        result = shopPayment === 'cop'
-          ? await buyGameShopItem({
-              evmWallet,
-              buyer: evmAddress,
-              token,
-              sku: product.sku,
-              quantity: 1,
-            })
-          : await buyEvmShopItem({
-              evmWallet,
-              buyer: evmAddress,
-              token,
-              chain: shopChain,
-              sku: product.sku,
-              payment: shopPayment,
-              quantity: 1,
-            });
+        result = await buyEvmShopItem({
+          evmWallet,
+          buyer: evmAddress,
+          token,
+          chain: shopChain,
+          sku: product.sku,
+          payment: shopPayment,
+          quantity: 1,
+        });
       } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
         result = await buyEvmShopItem({
           evmWallet,
@@ -2599,7 +2591,8 @@ function AiChatPanel({ onClose }) {
   ));
   const shopReady = !!shopConfig?.[shopChain]?.ready && !!shopConfig?.[shopChain]?.saleActive;
   const shopPayments = (AI_SHOP_PAYMENTS_BY_CHAIN[shopChain] || [])
-    .filter((payment) => payment.id !== 'skr' || !!shopConfig?.solana?.skrReady);
+    .filter((payment) => payment.id !== 'skr' || !!shopConfig?.solana?.skrReady)
+    .filter((payment) => payment.id !== 'clash' || !!shopConfig?.solana?.clashReady);
 
   return (
     <div style={backdropStyle} onClick={handleBackdropClick}>
@@ -3704,9 +3697,9 @@ function AiShopModal({
             )}
             {!loading && products.map((product) => {
               const isPack = product.kind === 'ai_messages';
-              const paidWithCop = chain === 'base' && payment === 'cop';
-              const credits = paidWithCop && product.copBonusCredits ? product.copBonusCredits : product.messageCredits;
-              const price = paidWithCop && product.copPriceUsd ? product.copPriceUsd : product.priceUsd;
+              const paidWithClash = chain === 'solana' && payment === 'clash';
+              const credits = paidWithClash && product.copBonusCredits ? product.copBonusCredits : product.messageCredits;
+              const price = paidWithClash && (product.clashPriceUsd || product.copPriceUsd) ? (product.clashPriceUsd || product.copPriceUsd) : product.priceUsd;
               const isBusy = busy === product.id;
               const action = !walletConnected
                 ? `Connect ${chainLabel}`
@@ -3763,14 +3756,14 @@ function AiShopModal({
                     </div>
                   </div>
 
-                  {/* Stack the CoP-bonus chip directly above the Buy CTA
+                  {/* Stack the CLASH-bonus chip directly above the Buy CTA
                       so it reads as a label on the action (not buried in
-                      the price meta). When CoP isn't selected the column
+                      the price meta). When CLASH isn't selected the column
                       still holds the button as before. */}
                   <div style={styles.aiProductActionCol}>
-                    {paidWithCop && (
+                    {paidWithClash && (
                       <span style={styles.aiProductBonus}>
-                        {isPack ? '+50% with CoP' : '−$10 with CoP'}
+                        {isPack ? '+50% with CLASH' : '-$10 with CLASH'}
                       </span>
                     )}
                     <button
@@ -4347,7 +4340,7 @@ const styles = {
       ' inset 0 1px 0 rgba(255,255,255,0.5)',
   },
   // Per-token icon circle on the left side of each payment chip — same
-  // approach as NftMintPanel.optionBadge so USDC/ETH/CoP/etc all read
+  // approach as NftMintPanel.optionBadge so token icons all read
   // with their familiar brand glyphs instead of bare text.
   shopPaymentLogo: {
     width: 24, height: 24,
@@ -4691,7 +4684,7 @@ const styles = {
     boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
   },
 
-  // Column that stacks the optional CoP-bonus chip on top of the Buy
+  // Column that stacks the optional CLASH-bonus chip on top of the Buy
   // CTA — pulls the bonus closer to the action instead of leaving it
   // hidden in the price meta on the left side of the card.
   aiProductActionCol: {

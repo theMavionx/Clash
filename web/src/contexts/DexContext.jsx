@@ -162,13 +162,61 @@ export const DEX_CONFIG = {
     chainShort: 'INK',
     description: 'Perps on Ink',
   },
+  hibachi: {
+    id: 'hibachi',
+    label: 'HIBACHI',
+    shortLabel: 'HBC',
+    emoji: 'HB',
+    logo: '/hibachi.png',
+    logoIsWordmark: false,
+    color: '#EF4444',
+    colorDark: '#991B1B',
+    colorLight: 'rgba(239,68,68,0.15)',
+    borderColor: '#DC2626',
+    chain: 'Arc',
+    chainShort: 'ARC',
+    description: 'Perps on Arc',
+  },
+  hotstuff: {
+    id: 'hotstuff',
+    label: 'HOTSTUFF',
+    shortLabel: 'HOT',
+    emoji: 'HOT',
+    logo: '/hotstuff.svg',
+    logoIsWordmark: false,
+    color: '#EF4444',
+    colorDark: '#991B1B',
+    colorLight: 'rgba(239,68,68,0.15)',
+    borderColor: '#DC2626',
+    chain: 'Hotstuff L1',
+    chainShort: 'HOT',
+    description: 'Perps on Hotstuff L1 mainnet',
+  },
+  grvt: {
+    id: 'grvt',
+    label: 'GRVT',
+    shortLabel: 'GRVT',
+    emoji: 'GRVT',
+    logo: '/grvt.png',
+    logoIsWordmark: false,
+    color: '#111827',
+    colorDark: '#111827',
+    colorLight: 'rgba(17,24,39,0.12)',
+    borderColor: '#374151',
+    chain: 'GRVT Exchange',
+    chainShort: 'GRVT',
+    description: 'Perps on GRVT Exchange',
+  },
 };
 
 export const DEX_ORDER = [
+  'grvt',
+  'hotstuff',
   'phoenix',
   'hyperliquid',
   'risex',
   'nado',
+  'hibachi',
   'decibel',
   'pacifica',
   'avantis',
@@ -273,7 +321,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -309,7 +357,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt') {
           setDex(j.dex);
         }
       } catch { /* network error - keep local dex */ }

@@ -10,31 +10,11 @@
 //   collateral × 1e6   (USDC native)
 
 import { parseUnits, stringToHex } from 'viem';
+import { buildRpcFallbackList, envFlag, sameOriginRpcUrl, siteOrigin, splitRpcUrls } from './rpcPolicy';
 
 // ───── Network ─────────────────────────────────────────────────────
 export const BASE_CHAIN_ID = 8453;
 export const BASE_CHAIN_ID_HEX = '0x2105';
-
-function splitRpcUrls(value) {
-  return String(value || '')
-    .split(/[,\s]+/)
-    .map(s => s.trim())
-    .filter(Boolean);
-}
-
-function siteOrigin() {
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
-  }
-  return 'https://clashofperps.fun';
-}
-
-function sameOriginRpcUrl(path) {
-  const raw = String(path || '').trim();
-  if (!raw) return '';
-  if (/^https?:\/\//i.test(raw)) return raw;
-  return `${siteOrigin()}${raw.startsWith('/') ? raw : `/${raw}`}`;
-}
 
 function normalizeBaseRpcUrl(rawUrl) {
   const raw = String(rawUrl || '').trim();
@@ -67,10 +47,14 @@ export const BASE_RPC_URLS = (() => {
   const override = splitRpcUrls(import.meta.env.VITE_BASE_RPC_URLS || import.meta.env.VITE_BASE_RPC_URL);
   const normalizedOverride = override.map(normalizeBaseRpcUrl).filter(Boolean);
   if (normalizedOverride.length) return normalizedOverride;
-  return [
-    sameOriginRpcUrl('/rpc/base-alchemy'),
-    sameOriginRpcUrl('/rpc/base'),
-  ];
+  const includeFree = envFlag(import.meta.env.VITE_BASE_ENABLE_PUBLIC_RPC, true);
+  const includeAlchemy = envFlag(import.meta.env.VITE_BASE_ENABLE_ALCHEMY_RPC, true);
+  return buildRpcFallbackList({
+    publicUrls: ['https://mainnet.base.org'],
+    privateUrls: [sameOriginRpcUrl('/rpc/base-alchemy')],
+    includePublic: includeFree,
+    includePrivate: includeAlchemy,
+  });
 })();
 
 export const BASE_PRIMARY_RPC_URL = BASE_RPC_URLS[0] || sameOriginRpcUrl('/rpc/base');

@@ -18,6 +18,9 @@ import { MONAD_CHAIN_ID, MONAD_RPC_URLS, ensureMonadChain, monadChain } from '..
 import { HYPEREVM_CHAIN_ID, HYPEREVM_RPC_URLS, ensureHyperEvmChain, hyperEvmChain } from '../lib/hyperevmConfig';
 import { RISE_CHAIN_ID, RISE_RPC_URLS, ensureRiseChain, riseChain } from '../lib/risexConfig';
 import { INK_CHAIN_ID, INK_RPC_URLS, ensureInkChain, inkChain } from '../lib/nadoConfig';
+import { ARC_CHAIN_ID, ARC_RPC_URLS, ensureArcChain, arcChain } from '../lib/arcConfig';
+import { GRVT_CHAIN_ID, GRVT_RPC_URLS, ensureGrvtChain, grvtChain } from '../lib/grvtConfig';
+import { ETHEREUM_RPC_URLS } from '../lib/ethereumConfig';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 
@@ -52,7 +55,13 @@ const publicClient = createPublicClient({
     { rank: false, retryCount: 0 },
   ),
 });
-const ethereumPublicClient = createPublicClient({ chain: mainnet, transport: http() });
+const ethereumPublicClient = createPublicClient({
+  chain: mainnet,
+  transport: fallback(
+    ETHEREUM_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+});
 const arbitrumPublicClient = createPublicClient({
   chain: arbitrum,
   // Per-call HTTP timeout = 15s. Default is 10s (fine for Alchemy paid),
@@ -99,6 +108,20 @@ const inkPublicClient = createPublicClient({
     { rank: false, retryCount: 0 },
   ),
 });
+const arcPublicClient = createPublicClient({
+  chain: arcChain,
+  transport: fallback(
+    ARC_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+});
+const grvtPublicClient = createPublicClient({
+  chain: grvtChain,
+  transport: fallback(
+    GRVT_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+});
 
 // chainId → viem chain object map. Centralized so adding the next EVM DEX is
 // a single-line edit instead of a hunt through the codebase.
@@ -110,6 +133,8 @@ const CHAIN_BY_ID = {
   [HYPEREVM_CHAIN_ID]: hyperEvmChain,
   [RISE_CHAIN_ID]: riseChain,
   [INK_CHAIN_ID]: inkChain,
+  [ARC_CHAIN_ID]: arcChain,
+  [GRVT_CHAIN_ID]: grvtChain,
 };
 
 const PUBLIC_CLIENT_BY_ID = {
@@ -120,6 +145,8 @@ const PUBLIC_CLIENT_BY_ID = {
   [HYPEREVM_CHAIN_ID]: hyperEvmPublicClient,
   [RISE_CHAIN_ID]: risePublicClient,
   [INK_CHAIN_ID]: inkPublicClient,
+  [ARC_CHAIN_ID]: arcPublicClient,
+  [GRVT_CHAIN_ID]: grvtPublicClient,
 };
 
 const CHAIN_LABEL_BY_ID = {
@@ -130,6 +157,8 @@ const CHAIN_LABEL_BY_ID = {
   [HYPEREVM_CHAIN_ID]: 'HyperEVM',
   [RISE_CHAIN_ID]: 'RISE',
   [INK_CHAIN_ID]: 'Ink',
+  [ARC_CHAIN_ID]: 'Arc',
+  [GRVT_CHAIN_ID]: 'GRVT Exchange',
 };
 
 function normalizeProviderChainId(value) {
@@ -474,6 +503,10 @@ export function EvmWalletProvider({ children }) {
       await ensureRiseChain(provider);
     } else if (id === INK_CHAIN_ID) {
       await ensureInkChain(provider);
+    } else if (id === ARC_CHAIN_ID) {
+      await ensureArcChain(provider);
+    } else if (id === GRVT_CHAIN_ID) {
+      await ensureGrvtChain(provider);
     } else {
       await ensureBaseChain(provider);
     }

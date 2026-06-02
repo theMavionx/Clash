@@ -264,9 +264,9 @@ function resolveWallet(player) {
 // so verifiers don't need to branch.
 async function fetchWalletTrades(player, opts = {}) {
   if (!player) return [];
-  const wallet = resolveWallet(player);
-  if (!wallet) return [];
   const dexFilter = String(player.dex || 'pacifica').toLowerCase();
+  const wallet = resolveWallet(player);
+  if (!wallet && dexFilter !== 'grvt') return [];
 
   // Self-custody DEXes (Avantis/Base, Decibel/Aptos, GMX/Arbitrum) →
   // read verified trades from futures.db. The per-DEX rewards worker
@@ -279,7 +279,7 @@ async function fetchWalletTrades(player, opts = {}) {
   // returned [] because their wallet is EVM not base58. Net effect: zero
   // quest progress for every GMX trade despite the worker indexing them
   // correctly. Adding 'gmx' wires the verifier into the same path.
-  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix' || dexFilter === 'hyperliquid' || dexFilter === 'risex' || dexFilter === 'nado') {
+  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix' || dexFilter === 'hyperliquid' || dexFilter === 'risex' || dexFilter === 'nado' || dexFilter === 'grvt') {
     if (dexFilter === 'avantis' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'gmx'     && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'monad'   && !isEvmWallet(wallet)) return [];
@@ -305,6 +305,8 @@ async function fetchWalletTrades(player, opts = {}) {
             ? "AND verified_source = 'risex_api'"
           : dexFilter === 'nado'
             ? "AND verified_source = 'nado_api'"
+          : dexFilter === 'grvt'
+            ? "AND verified_source = 'grvt_builder'"
           : dexFilter === 'phoenix'
             ? "AND verified_source IN ('worker', 'tx')"
           : "AND verified_source = 'worker'";

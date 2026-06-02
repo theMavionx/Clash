@@ -26,6 +26,8 @@ const DEX_LABELS = {
   phoenix: 'Phoenix',
   hyperliquid: 'Hyperliquid',
   nado: 'Nado',
+  hotstuff: 'Hotstuff',
+  grvt: 'GRVT',
 };
 
 function fmtUsd(n) {

@@ -7,10 +7,12 @@
 // NftMarketplacePanel and reuses the existing EvmWalletContext helpers
 // (ensureChain / getPublicClient / getWalletClient).
 //
-// Three payment tokens at launch:
+// Current UI payment tokens:
 //   - ETH  (address 0x0)   → buyWithEth(tokenId), value = price
 //   - USDC (Circle Base)   → buyWithToken(tokenId), allowance required
-//   - CoP  (game token)    → buyWithToken(tokenId), allowance required
+//
+// Legacy CoP is kept in metadata only so old indexed listings can still be
+// formatted, but the UI no longer offers it for listing or buying.
 //
 // All write fns return { hash, receipt } so the caller can surface a tx
 // link + refresh listings once the indexer has caught up.
@@ -109,7 +111,6 @@ export function paymentAddressFromId(id, chain = 'base') {
   const cfg = marketplaceConfig(chain);
   if (id === 'eth')  return cfg.paymentTokens.eth;
   if (id === 'usdc') return cfg.paymentTokens.usdc;
-  if (id === 'cop')  return cfg.paymentTokens.cop || null;
   return null;
 }
 
@@ -118,8 +119,12 @@ export function marketplacePaymentOptions(chain = 'base') {
   return [
     cfg.paymentTokens.eth ? { id: 'eth', label: 'ETH', sub: 'Native' } : null,
     cfg.paymentTokens.usdc ? { id: 'usdc', label: 'USDC', sub: 'Stable' } : null,
-    cfg.paymentTokens.cop ? { id: 'cop', label: 'CoP', sub: 'Game' } : null,
   ].filter(Boolean);
+}
+
+export function isLegacyCopPaymentToken(address, chain = 'base') {
+  const cfg = marketplaceConfig(chain);
+  return !!cfg.paymentTokens.cop && String(address || '').toLowerCase() === cfg.paymentTokens.cop.toLowerCase();
 }
 
 export function nftImageUrl(level, tokenId) {

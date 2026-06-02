@@ -268,11 +268,35 @@ function QuestsTab({ markets = [] }) {
       });
       const j = await r.json();
       if (j.ok && j.completed) {
-        setFlash({
-          amount: Number(j.reward.gold || 0),
-          reason: j.reward.reason || 'Quest reward',
-        });
-        setTimeout(() => setFlash(null), 2500);
+        const reward = {
+          gold: Number(j.reward?.gold || 0),
+          wood: Number(j.reward?.wood || 0),
+          ore: Number(j.reward?.ore || 0),
+        };
+        if (reward.gold || reward.wood || reward.ore) {
+          window.onGodotMessage?.({ action: 'resources_add', data: reward });
+          fetch(`${GAME_API}/resources`, { headers: { 'x-token': token } })
+            .then(rr => rr.ok ? rr.json() : null)
+            .then(resources => {
+              if (!resources) return;
+              window.onGodotMessage?.({
+                action: 'resources',
+                data: {
+                  gold: Number(resources.gold || 0),
+                  wood: Number(resources.wood || 0),
+                  ore: Number(resources.ore || 0),
+                },
+              });
+            })
+            .catch(() => {});
+        }
+        if (reward.gold > 0) {
+          setFlash({
+            amount: reward.gold,
+            reason: j.reward?.reason || 'Quest reward',
+          });
+          setTimeout(() => setFlash(null), 2500);
+        }
       } else if (j.ok === false) {
         setError('Not completed yet');
       } else if (!r.ok) {

@@ -2,11 +2,12 @@ import { createContext, useContext, useEffect, useMemo, useRef } from 'react';
 import { PrivyProvider, usePrivy, useSendTransaction, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
 import { toSolanaWalletConnectors, useCreateWallet as useCreateSolanaWallet, useWallets as usePrivySolanaWallets } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
-import { base, arbitrum } from 'viem/chains';
+import { base, arbitrum, mainnet } from 'viem/chains';
 import { monadChain } from '../lib/monadConfig';
 import { hyperEvmChain } from '../lib/hyperevmConfig';
 import { riseChain } from '../lib/risexConfig';
 import { inkChain } from '../lib/nadoConfig';
+import { grvtChain } from '../lib/grvtConfig';
 import { DEFAULT_SOLANA_RPC_URL, solanaWsUrl } from '../lib/solanaRpc';
 // Perpl (Monad mainnet) is too new to ship in viem/chains, so we define it
 // locally in monadConfig and import the same object both here (Privy's
@@ -126,7 +127,7 @@ export default function PrivyAuthProvider({ children }) {
         // ensureChain() before the signing popup. Adding arbitrum unblocks
         // them; defaultChain stays Base so Avantis sessions don't change UX.
         defaultChain: base,
-        supportedChains: [base, arbitrum, monadChain, hyperEvmChain, riseChain, inkChain],
+        supportedChains: [base, arbitrum, mainnet, monadChain, hyperEvmChain, riseChain, inkChain, grvtChain],
         externalWallets: {
           // Privy still reads dashboard wallet-login settings even though our
           // UI uses email-only auth. Passing Solana standard connectors keeps

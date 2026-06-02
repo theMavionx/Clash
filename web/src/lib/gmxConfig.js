@@ -10,6 +10,8 @@
 // failover. We don't override it — passing no `apiUrl` to GmxApiSdk lets
 // the SDK pick host + activate its built-in fallback chain.
 
+import { buildRpcFallbackList, envFlag, sameOriginRpcUrl } from './rpcPolicy';
+
 export const ARBITRUM_CHAIN_ID = 42161;
 export const ARBITRUM_CHAIN_ID_HEX = '0xa4b1';
 
@@ -159,14 +161,20 @@ export const ARBITRUM_RPC_URLS = (() => {
   const envOverride = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ARBITRUM_RPC_URL) || '';
   // Public/free endpoints first. The configured paid same-origin proxy is
   // appended only as fallback so normal reads do not burn paid quota first.
-  const urls = [
-    '/rpc/arb-public',       // publicnode
-    '/rpc/arb-tenderly',     // tenderly gateway public
-    '/rpc/arb',              // 1rpc.io (low daily cap; last)
-    '/rpc/arb-onfinality',   // OnFinality public
-  ];
-  if (envOverride) urls.push(envOverride);
-  return Array.from(new Set(urls));
+  const includeFree = envFlag(import.meta.env.VITE_ARBITRUM_ENABLE_PUBLIC_RPC, true);
+  const includeAlchemy = envFlag(import.meta.env.VITE_ARBITRUM_ENABLE_ALCHEMY_RPC, true);
+  return buildRpcFallbackList({
+    publicUrls: [
+      'https://arbitrum-one.publicnode.com',
+      'https://arbitrum.gateway.tenderly.co',
+      'https://1rpc.io/arb',
+      'https://arbitrum.api.onfinality.io/public',
+    ],
+    overrideUrls: envOverride ? [envOverride] : [],
+    privateUrls: [sameOriginRpcUrl('/rpc/arb-alchemy')],
+    includePublic: includeFree,
+    includePrivate: includeAlchemy,
+  });
 })();
 // Back-compat single-URL export for code paths that haven't migrated to
 // the rotation yet (e.g. server-futures/gmx.js direct RPC reads — those

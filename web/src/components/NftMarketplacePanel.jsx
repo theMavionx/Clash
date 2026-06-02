@@ -23,6 +23,7 @@ import {
   fetchMarketplaceListings,
   fetchTokenLevels,
   formatPriceWei,
+  isLegacyCopPaymentToken,
   isEthPayment,
   listNftOnMarketplace,
   marketplaceChainLabel,
@@ -120,9 +121,10 @@ export default function NftMarketplacePanel({
       const json = await fetchMarketplaceListings({
         chain: chainKey, activeOnly: true, limit: LISTINGS_PAGE_SIZE, offset,
       });
-      const rows = Array.isArray(json?.listings) ? json.listings : [];
+      const rows = (Array.isArray(json?.listings) ? json.listings : [])
+        .filter((row) => !isLegacyCopPaymentToken(row.paymentToken, chainKey));
       setListings(rows);
-      setListingsTotal(Number(json?.total) || rows.length);
+      setListingsTotal(rows.length);
       // Enrich with current levels for proper image URLs.
       const tokenIds = rows.map((r) => r.tokenId).filter(Boolean);
       if (tokenIds.length) {
@@ -203,6 +205,11 @@ export default function NftMarketplacePanel({
 
   const handleBuy = useCallback(async () => {
     if (!buyTarget) return;
+    if (isLegacyCopPaymentToken(buyTarget.paymentToken, chainKey)) {
+      setNotice('Legacy CoP listings are no longer available on the marketplace.');
+      setBuyTarget(null);
+      return;
+    }
     if (!ensureBaseGate()) return;
     setBusy('buy');
     setNotice(null);

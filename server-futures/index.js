@@ -179,4 +179,9 @@ app.listen(PORT, '127.0.0.1', () => {
   } catch (e) {
     console.error('[worker] hyperliquid-rewards-worker failed to start:', e.message);
   }
+  try {
+    require('./hotstuff-rewards-worker').start();
+  } catch (e) {
+    console.error('[worker] hotstuff-rewards-worker failed to start:', e.message);
+  }
 });

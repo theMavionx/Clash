@@ -2,6 +2,7 @@ extends Node
 ## Root game manager — manages the Island view.
 
 var _transitioning := false
+var _visibility_cb: JavaScriptObject = null
 
 # ── Node refs ──
 @onready var island_view: Node3D = $IslandView
@@ -14,17 +15,21 @@ func _ready() -> void:
 	Engine.max_physics_steps_per_frame = 2
 
 	if OS.has_feature("web"):
-		var cb = JavaScriptBridge.create_callback(_on_visibility_change)
+		_visibility_cb = JavaScriptBridge.create_callback(_on_visibility_change)
 		JavaScriptBridge.eval("""
 			(function() {
-				document.addEventListener('visibilitychange', function() {
+				if (window.__clashGodotVisibilityHandler) {
+					document.removeEventListener('visibilitychange', window.__clashGodotVisibilityHandler);
+				}
+				window.__clashGodotVisibilityHandler = function() {
 					if (!document.hidden && window._godotVisibilityCb) {
 						window._godotVisibilityCb(1);
 					}
-				});
+				};
+				document.addEventListener('visibilitychange', window.__clashGodotVisibilityHandler);
 			})();
 		""")
-		JavaScriptBridge.get_interface("window").set("_godotVisibilityCb", cb)
+		JavaScriptBridge.get_interface("window").set("_godotVisibilityCb", _visibility_cb)
 
 	island_view.visible = true
 	island_view.process_mode = Node.PROCESS_MODE_INHERIT
@@ -41,6 +46,13 @@ static var max_delta: float = 0.1
 
 static func clamped_delta(delta: float) -> float:
 	return minf(delta, max_delta)
+
+
+func _exit_tree() -> void:
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("(function(){try{if(window.__clashGodotVisibilityHandler){document.removeEventListener('visibilitychange', window.__clashGodotVisibilityHandler);window.__clashGodotVisibilityHandler=null;}window._godotVisibilityCb=null;}catch(e){}})()", true)
+	_visibility_cb = null
+
 
 func _on_visibility_change(_args: Array) -> void:
 	pass
