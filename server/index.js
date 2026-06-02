@@ -359,10 +359,6 @@ app.get('/api/admin/panel', (req, res) => {
   th { background: #252d3d; color: #9ca3af; text-align: left; padding: 10px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
   td { padding: 8px 14px; border-top: 1px solid #2d3748; font-size: 13px; }
   tr:hover { background: #2d3748; }
-  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
-  th.sortable:hover { color: #d1d5db; }
-  .sort-arrow { display: inline-block; width: 12px; margin-left: 5px; color: #6b7280; font-size: 10px; }
-  th.sortable.active .sort-arrow { color: #f59e0b; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
   .badge-ok { background: #065f46; color: #34d399; }
   .badge-fail { background: #7f1d1d; color: #fca5a5; }
@@ -552,14 +548,7 @@ app.get('/api/admin/panel', (req, res) => {
     </div>
     <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Players Activity</h3>
     <table style="margin-bottom:20px"><thead><tr>
-      <th>Player</th><th>DEX</th>
-      <th class="sortable" data-activity-sort="th_level" onclick="sortPlayerActivity('th_level')">TH<span class="sort-arrow" id="playerActivitySort-th_level"></span></th>
-      <th class="sortable" data-activity-sort="active_days_7d" onclick="sortPlayerActivity('active_days_7d')">Active Days 7d<span class="sort-arrow" id="playerActivitySort-active_days_7d"></span></th>
-      <th class="sortable" data-activity-sort="sessions_7d" onclick="sortPlayerActivity('sessions_7d')">Sessions 7d<span class="sort-arrow" id="playerActivitySort-sessions_7d"></span></th>
-      <th class="sortable" data-activity-sort="avg_session_min_7d" onclick="sortPlayerActivity('avg_session_min_7d')">Avg Session<span class="sort-arrow" id="playerActivitySort-avg_session_min_7d"></span></th>
-      <th class="sortable" data-activity-sort="events_7d" onclick="sortPlayerActivity('events_7d')">Events 7d<span class="sort-arrow" id="playerActivitySort-events_7d"></span></th>
-      <th class="sortable" data-activity-sort="battles_7d" onclick="sortPlayerActivity('battles_7d')">Battles 7d<span class="sort-arrow" id="playerActivitySort-battles_7d"></span></th>
-      <th>Last Action</th>
+      <th>Player</th><th>DEX</th><th>TH</th><th>Active Days 7d</th><th>Sessions 7d</th><th>Avg Session</th><th>Events 7d</th><th>Battles 7d</th><th>Last Action</th>
     </tr></thead><tbody id="playerActivityBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">MCP Agent Usage</h2>
@@ -1700,61 +1689,6 @@ function actionSummaryBlock(payload) {
   return '<div class="log-action">' + bits.join(' &middot; ') + '</div>';
 }
 
-let PLAYER_ACTIVITY_ROWS = [];
-let PLAYER_ACTIVITY_SORT = { key: '', dir: 'desc' };
-
-function numSortValue(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function updatePlayerActivitySortUi() {
-  document.querySelectorAll('th[data-activity-sort]').forEach((th) => {
-    const key = th.getAttribute('data-activity-sort') || '';
-    const arrow = document.getElementById('playerActivitySort-' + key);
-    const active = key === PLAYER_ACTIVITY_SORT.key;
-    th.classList.toggle('active', active);
-    if (arrow) arrow.innerHTML = active ? (PLAYER_ACTIVITY_SORT.dir === 'desc' ? '&#9660;' : '&#9650;') : '';
-  });
-}
-
-function sortPlayerActivity(key) {
-  if (PLAYER_ACTIVITY_SORT.key === key) {
-    PLAYER_ACTIVITY_SORT.dir = PLAYER_ACTIVITY_SORT.dir === 'desc' ? 'asc' : 'desc';
-  } else {
-    PLAYER_ACTIVITY_SORT = { key, dir: 'desc' };
-  }
-  renderPlayerActivityRows();
-}
-
-function renderPlayerActivityRows() {
-  const rows = PLAYER_ACTIVITY_ROWS.slice();
-  if (PLAYER_ACTIVITY_SORT.key) {
-    const key = PLAYER_ACTIVITY_SORT.key;
-    const dir = PLAYER_ACTIVITY_SORT.dir === 'asc' ? 1 : -1;
-    rows.sort((a, b) => {
-      const av = numSortValue(a[key]);
-      const bv = numSortValue(b[key]);
-      if (av === bv) return String(a.name || a.id || '').localeCompare(String(b.name || b.id || ''));
-      return (av - bv) * dir;
-    });
-  }
-  updatePlayerActivitySortUi();
-  document.getElementById('playerActivityBody').innerHTML = rows.length
-    ? rows.map(row => '<tr>' +
-        '<td><strong>' + esc(row.name || row.id || '-') + '</strong></td>' +
-        '<td>' + dexBadge(row.dex) + ' <span style="color:#9ca3af">' + esc(row.dex || 'unknown') + '</span></td>' +
-        '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.th_level || 1) + '</span><div style="font-size:10px;color:#6b7280;margin-top:3px">' + (row.buildings_count || 0) + ' buildings</div></td>' +
-        '<td>' + (row.active_days_7d || 0) + '</td>' +
-        '<td>' + (row.sessions_7d || 0) + '</td>' +
-        '<td>' + (row.avg_session_min_7d || 0) + 'm</td>' +
-        '<td>' + (row.events_7d || 0) + '</td>' +
-        '<td>' + (row.battles_7d || 0) + ' <span style="color:#4ade80">(' + (row.accepted_battles_7d || 0) + ' ok)</span></td>' +
-        '<td><div class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.last_action_at || row.last_seen_at)) + '</div><div style="font-size:11px;color:#6b7280">' + esc(row.last_action || 'heartbeat') + '</div></td>' +
-      '</tr>').join('')
-    : '<tr><td colspan="9" style="color:#6b7280;text-align:center;padding:20px">No player activity yet</td></tr>';
-}
-
 function shortWallet(wallet) {
   const s = String(wallet || '');
   if (!s) return 'no wallet';
@@ -1976,8 +1910,20 @@ async function loadStats() {
         '</tr>').join('')
       : '<tr><td colspan="2" style="color:#6b7280;text-align:center;padding:20px">No action events yet</td></tr>';
 
-    PLAYER_ACTIVITY_ROWS = pa.players || [];
-    renderPlayerActivityRows();
+    const activityRows = pa.players || [];
+    document.getElementById('playerActivityBody').innerHTML = activityRows.length
+      ? activityRows.map(row => '<tr>' +
+          '<td><strong>' + esc(row.name || row.id || '-') + '</strong></td>' +
+          '<td>' + dexBadge(row.dex) + ' <span style="color:#9ca3af">' + esc(row.dex || 'unknown') + '</span></td>' +
+          '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.th_level || 1) + '</span><div style="font-size:10px;color:#6b7280;margin-top:3px">' + (row.buildings_count || 0) + ' buildings</div></td>' +
+          '<td>' + (row.active_days_7d || 0) + '</td>' +
+          '<td>' + (row.sessions_7d || 0) + '</td>' +
+          '<td>' + (row.avg_session_min_7d || 0) + 'm</td>' +
+          '<td>' + (row.events_7d || 0) + '</td>' +
+          '<td>' + (row.battles_7d || 0) + ' <span style="color:#4ade80">(' + (row.accepted_battles_7d || 0) + ' ok)</span></td>' +
+          '<td><div class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.last_action_at || row.last_seen_at)) + '</div><div style="font-size:11px;color:#6b7280">' + esc(row.last_action || 'heartbeat') + '</div></td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="9" style="color:#6b7280;text-align:center;padding:20px">No player activity yet</td></tr>';
 
     const mcp = s.mcp || {};
     const mcpSummary = mcp.summary || {};
