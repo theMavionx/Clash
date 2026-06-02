@@ -266,6 +266,30 @@ function solanaRevenuePayoutUnits(order, sellerTokenUnits) {
   return paid > seller ? paid - seller : 0n;
 }
 
+function solanaSellerPayoutTokenConfig(ctx, order, baseConfig) {
+  const paymentChain = String(order?.payment_chain || '').toLowerCase();
+  if (paymentChain === 'solana') {
+    return {
+      ...baseConfig,
+      token: order?.payment_token || baseConfig.token,
+      tokenAddress: order?.payment_token_address || baseConfig.tokenAddress,
+      decimals: Number(order?.payment_decimals || baseConfig.decimals || 6),
+      label: order?.payment_label || baseConfig.label || baseConfig.token || 'token',
+    };
+  }
+  const sol = ctx.gameShopSolanaConfig?.() || {};
+  return {
+    ...baseConfig,
+    token: 'usdc',
+    tokenAddress: normalizeSolanaPubkey(
+      process.env.MARKETPLACE_SOLANA_USDC_MINT || sol.usdcMint || SOLANA_USDC_MINT,
+      'Solana payout USDC mint'
+    ),
+    decimals: 6,
+    label: 'USDC',
+  };
+}
+
 function insertEvent(orderId, eventType, { actorPlayerId = null, txHash = null, data = {} } = {}) {
   gameDb.db.prepare(`
     INSERT INTO custodial_marketplace_events
@@ -1737,13 +1761,7 @@ async function payoutSolanaToken({ to, amount, ctx, order = null }) {
   const signer = solanaCustodyKeypair();
   if (!signer) throw httpError(503, 'Solana payout signer is not configured');
   const baseConfig = paymentConfigs(ctx).solana;
-  const config = {
-    ...baseConfig,
-    token: order?.payment_token || baseConfig.token,
-    tokenAddress: order?.payment_token_address || baseConfig.tokenAddress,
-    decimals: Number(order?.payment_decimals || baseConfig.decimals || 6),
-    label: order?.payment_label || baseConfig.label || baseConfig.token || 'token',
-  };
+  const config = solanaSellerPayoutTokenConfig(ctx, order, baseConfig);
   const label = String(config.label || config.token || 'token').toUpperCase();
   const { PublicKey, Transaction } = require('@solana/web3.js');
   const {
