@@ -1129,22 +1129,29 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
       tx_wait_ms: result?.timings?.wait_ms,
     });
     let fillRecord = { inserted: 0, rows: 0, volume_usd: 0 };
-    if (result?.success !== false) {
-      try {
-        fillRecord = await recordDecibelActualFills(
+    const shouldRecordImmediateFills = result?.success !== false
+      && verification.effect !== 'open_order'
+      && verification.effect !== 'tx_event_open_order';
+    if (shouldRecordImmediateFills) {
+      fillRecord = { inserted: 0, rows: 0, volume_usd: 0, reason: 'queued_actual_fill_import' };
+      setTimeout(() => {
+        recordDecibelActualFills(
           req.playerId,
           verified.subaccount,
           orderPayload,
           result,
           orderType,
           side,
-        );
-        if (!fillRecord.inserted && fillRecord.reason) {
-          console.log(`[decibel] actual fill row skipped: ${fillRecord.reason} client=${orderPayload.clientOrderId}`);
-        }
-      } catch (e) {
-        console.warn('[decibel] actual fill row skipped:', e.message);
-      }
+        ).then((recorded) => {
+          if (!recorded?.inserted && recorded?.reason) {
+            console.log(`[decibel] actual fill row skipped: ${recorded.reason} client=${orderPayload.clientOrderId}`);
+          }
+        }).catch((e) => {
+          console.warn('[decibel] actual fill row skipped:', e.message);
+        });
+      }, 0);
+    } else if (result?.success !== false) {
+      fillRecord = { inserted: 0, rows: 0, volume_usd: 0, reason: 'open_order_waiting_for_fill' };
     }
     res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: true, verification, fillRecord });
   } catch (e) {
