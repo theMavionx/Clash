@@ -5525,7 +5525,8 @@ function FuturesPanel() {
       if (res?.error) setLocalAlert(res.error);
       else setLocalAlert('Wallet switched to Ink. Balance is refreshing.');
     };
-    const walletBalanceLabel = dex === 'hyperliquid' || dex === 'hibachi'
+    const showWalletBalanceCard = dex !== 'hibachi';
+    const walletBalanceLabel = dex === 'hyperliquid'
       ? 'Arbitrum Wallet USDC'
       : dex === 'risex'
       ? 'RISE Wallet USDC'
@@ -5585,7 +5586,39 @@ function FuturesPanel() {
           </div>
         </div>
 
+        {dex === 'hibachi' && setupVerified === true && (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={S.label}>Hibachi API</span>
+              <button
+                style={{
+                  ...S.btnSmall,
+                  padding: '6px 10px',
+                  fontSize: 10,
+                  background: '#fff8e6',
+                  color: '#991B1B',
+                  border: '2px solid #DC2626',
+                  whiteSpace: 'nowrap',
+                }}
+                onClick={() => {
+                  disconnect?.();
+                  setHibachiApiKeyInput('');
+                  setHibachiAccountIdInput('');
+                  setHibachiPrivateKeyInput('');
+                  setLocalAlert('Enter the correct Hibachi API credentials.');
+                }}
+              >
+                EDIT API
+              </button>
+            </div>
+            <div style={{fontSize: 10, fontWeight: 800, color: '#9f8759', lineHeight: 1.35}}>
+              Stored encrypted in this browser. Balance, margin, positions, and orders are read from Hibachi.
+            </div>
+          </div>
+        )}
+
         {/* Wallet USDC */}
+        {showWalletBalanceCard && (
         <div style={S.fullCard}>
           <div style={S.row}>
             <span style={S.label}>{walletBalanceLabel}</span>
@@ -5644,6 +5677,7 @@ function FuturesPanel() {
             </div>
           )}
         </div>
+        )}
 
         {dex === 'hyperliquid' && hyperliquidSpot > 0.000001 && (
           <div style={S.fullCard}>
@@ -5843,7 +5877,7 @@ function FuturesPanel() {
           </div>
         )}
 
-        {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'hibachi') ? (() => {
+        {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid') ? (() => {
           const isGmx = dex === 'gmx';
           const isHyperliquid = dex === 'hyperliquid';
           const isHibachi = dex === 'hibachi';
