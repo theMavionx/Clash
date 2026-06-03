@@ -1,4 +1,4 @@
-import { ExchangeClient, HttpTransport, InfoClient } from '@hotstuff-labs/ts-sdk';
+import { ExchangeClient, HttpTransport, InfoClient, signAction } from '@hotstuff-labs/ts-sdk';
 import {
   HOTSTUFF_API_BASE,
   HOTSTUFF_BROKER_ADDRESS,
@@ -7,6 +7,46 @@ import {
 } from './hotstuffConfig';
 
 const DEFAULT_TIMEOUT_MS = 12_000;
+const HOTSTUFF_OP_CODES = {
+  updateMarginMode: 1205,
+  updateIsolatedMargin: 1204,
+};
+
+function firstHotstuffStatus(response) {
+  const status = response?.data?.status;
+  return Array.isArray(status) ? status[0] : null;
+}
+
+export function hotstuffExchangeError(response) {
+  const topLevel = String(response?.error || '').trim();
+  if (topLevel) return topLevel;
+  const status = firstHotstuffStatus(response);
+  const nested = status?.error?.error || status?.error?.message || status?.error;
+  if (nested) return typeof nested === 'string' ? nested : JSON.stringify(nested);
+  return '';
+}
+
+export function assertHotstuffExchangeSuccess(response, fallback = 'Hotstuff request failed') {
+  const error = hotstuffExchangeError(response);
+  if (error) throw new Error(error);
+  return response;
+}
+
+export function hotstuffOrderAccepted(response) {
+  const statuses = response?.data?.status;
+  if (!Array.isArray(statuses) || !statuses.length) return !!response?.tx_hash;
+  return statuses.every(status => !!(status?.filled || status?.resting || status?.triggered));
+}
+
+export function hotstuffOrderStatusLabel(response) {
+  const status = firstHotstuffStatus(response);
+  if (!status) return response?.tx_hash ? 'submitted' : 'unknown';
+  if (status.filled) return 'filled';
+  if (status.resting) return 'resting';
+  if (status.triggered) return 'triggered';
+  if (status.error) return 'error';
+  return 'unknown';
+}
 
 export function isHotstuffAddress(addr) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(addr || '').trim());
@@ -22,12 +62,73 @@ function transport() {
   });
 }
 
+async function executeHotstuffAction(client, action, params, txType) {
+  const nonce = params.nonce ?? Date.now();
+  const data = { ...params, nonce };
+  const signature = await signAction({
+    wallet: client.wallet,
+    action: data,
+    txType,
+  }, {
+    isTestnet: client.transport?.isTestnet ?? false,
+  });
+  return client.transport.request('exchange', {
+    action: {
+      data,
+      type: String(txType),
+    },
+    signature,
+    nonce,
+  }).then(response => assertHotstuffExchangeSuccess(response));
+}
+
 export function createHotstuffInfoClient() {
   return new InfoClient({ transport: transport() });
 }
 
 export function createHotstuffExchangeClient(wallet) {
-  return new ExchangeClient({ transport: transport(), wallet });
+  const client = new ExchangeClient({ transport: transport(), wallet });
+  const wrap = (methodName) => {
+    if (typeof client[methodName] !== 'function') return;
+    const original = client[methodName].bind(client);
+    client[methodName] = (...args) => original(...args).then(response => assertHotstuffExchangeSuccess(response));
+  };
+  [
+    'addAgent',
+    'revokeAgent',
+    'updatePerpInstrumentLeverage',
+    'approveBrokerFee',
+    'createReferralCode',
+    'setReferrer',
+    'claimReferralRewards',
+    'placeOrder',
+    'cancelByOid',
+    'cancelByCloid',
+    'cancelByInstrument',
+    'cancelAll',
+    'accountSpotWithdrawRequest',
+    'accountDerivativeWithdrawRequest',
+    'accountSpotBalanceTransferRequest',
+    'accountDerivativeBalanceTransferRequest',
+    'accountInternalBalanceTransferRequest',
+  ].forEach(wrap);
+  if (typeof client.updateMarginMode !== 'function') {
+    client.updateMarginMode = (params) => executeHotstuffAction(
+      client,
+      'updateMarginMode',
+      params,
+      HOTSTUFF_OP_CODES.updateMarginMode,
+    );
+  }
+  if (typeof client.updateIsolatedMargin !== 'function') {
+    client.updateIsolatedMargin = (params) => executeHotstuffAction(
+      client,
+      'updateIsolatedMargin',
+      params,
+      HOTSTUFF_OP_CODES.updateIsolatedMargin,
+    );
+  }
+  return client;
 }
 
 export function hotstuffBrokerConfig() {
@@ -89,14 +190,26 @@ export function buildHotstuffOrder({ market, side, amountUsd, amountBase, levera
   const notional = Number(amountBase) > 0
     ? Number(amountBase) * mark
     : Number(amountUsd || 0) * Number(leverage || 1);
+  const minNotional = Number(market?._hotstuff?.raw?.min_notional_usd ?? market?.min_notional_usd ?? market?.min_order_size ?? 0);
+  if (Number.isFinite(minNotional) && minNotional > 0 && notional + 1e-9 < minNotional) {
+    throw new Error(`Hotstuff minimum position size for ${market.symbol || market.market_name || 'this market'} is $${minNotional}.`);
+  }
   const baseSize = Number(amountBase) > 0 ? Number(amountBase) : notional / mark;
   const isLimit = String(orderType || '').toLowerCase() === 'limit';
+  const size = formatHotstuffSize(baseSize, market);
+  if (!(Number(size) > 0)) throw new Error('Hotstuff order size is too small for this market.');
+  const roundedNotional = Number(size) * mark;
+  if (Number.isFinite(minNotional) && minNotional > 0 && roundedNotional + 1e-9 < minNotional) {
+    throw new Error(
+      `Hotstuff minimum position size for ${market.symbol || market.market_name || 'this market'} is $${minNotional}. Increase margin or leverage.`,
+    );
+  }
   return {
     instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
     side: /short|sell|ask/i.test(String(side)) ? 's' : 'b',
     positionSide: 'BOTH',
     price: formatHotstuffPrice(mark, market, { marketOrder: !isLimit, side }),
-    size: formatHotstuffSize(baseSize, market),
+    size,
     tif: isLimit ? 'GTC' : 'IOC',
     ro: !!reduceOnly,
     po: false,
@@ -104,7 +217,7 @@ export function buildHotstuffOrder({ market, side, amountUsd, amountBase, levera
     triggerPx: '',
     isMarket: !isLimit,
     tpsl: '',
-    grouping: 'normal',
+    grouping: '',
   };
 }
 
@@ -136,6 +249,6 @@ export function hotstuffErrorMessage(error, fallback = 'Hotstuff request failed'
   const text = String(error?.shortMessage || error?.details || error?.message || error || fallback);
   if (/user rejected|denied|cancel/i.test(text)) return 'Signature cancelled';
   if (/broker|fee/i.test(text)) return text.slice(0, 260);
-  if (/margin|balance|collateral/i.test(text)) return 'Insufficient Hotstuff margin. Deposit or reduce size.';
+  if (/margin|balance|collateral/i.test(text)) return text.slice(0, 260);
   return text.slice(0, 260);
 }

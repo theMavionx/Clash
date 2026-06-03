@@ -64,6 +64,9 @@ const PHOENIX_MARKET_SLIPPAGE_RATE = 0.02;
 const PHOENIX_DEFAULT_TAKER_FEE_RATE = 0.00035;
 const PHOENIX_FEE_BUFFER_RATE = 0.0001;
 const PHOENIX_DEFAULT_REFERRAL_CODE = 'MVWG4BTW';
+const HOTSTUFF_MARKET_SLIPPAGE_RATE = 0.015;
+const HOTSTUFF_DEFAULT_TAKER_FEE_RATE = 0.00045;
+const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
 
 function finiteNumber(value) {
   const n = Number(value);
@@ -247,6 +250,36 @@ function phoenixMarginReserveDetails({ balance, leverage, orderType, takerFeeRat
     reserved_per_margin: reservedPerMargin,
     usable_margin: Math.max(0, b / reservedPerMargin),
   };
+}
+
+function hotstuffMarginReserveDetails({ balance, leverage, orderType, takerFeeRate }) {
+  const b = Number(balance);
+  const lev = Number(leverage);
+  if (!Number.isFinite(b) || !Number.isFinite(lev) || b <= 0 || lev <= 0) {
+    return {
+      free_balance: Number.isFinite(b) ? b : null,
+      leverage: Number.isFinite(lev) ? lev : null,
+      slippage_rate: 0,
+      fee_rate: 0,
+      reserved_per_margin: null,
+      usable_margin: 0,
+    };
+  }
+  const slippage = orderType === 'market' ? HOTSTUFF_MARKET_SLIPPAGE_RATE : 0;
+  const feeRate = Math.max(Number(takerFeeRate) || 0, HOTSTUFF_DEFAULT_TAKER_FEE_RATE) + HOTSTUFF_FEE_BUFFER_RATE;
+  const reservedPerMargin = (1 + slippage) * (1 + lev * feeRate);
+  return {
+    free_balance: b,
+    leverage: lev,
+    slippage_rate: slippage,
+    fee_rate: feeRate,
+    reserved_per_margin: reservedPerMargin,
+    usable_margin: Math.max(0, b / reservedPerMargin),
+  };
+}
+
+function hotstuffUsableMargin({ balance, leverage, orderType, takerFeeRate }) {
+  return hotstuffMarginReserveDetails({ balance, leverage, orderType, takerFeeRate }).usable_margin;
 }
 
 function humanizeTradeError(message) {
@@ -725,6 +758,17 @@ const hlGateStyles = {
     letterSpacing: 0.3,
     textShadow: '0 1px 1px rgba(0,0,0,0.35)',
     boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.4)',
+  },
+  secondaryBtn: {
+    padding: '12px 18px', borderRadius: 12,
+    fontSize: 14, fontWeight: 900,
+    background: '#fffaf0',
+    border: '2px solid #bfa77b',
+    color: '#5C3A21',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    letterSpacing: 0.3,
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.65)',
   },
   primaryBtnBusy: { opacity: 0.7, cursor: 'not-allowed' },
 
@@ -1516,7 +1560,7 @@ function FuturesPanel() {
     // subaccountAddr lets the gate distinguish "fresh user" (no
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
-    activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus,
+    activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, hotstuffSetupStatus,
     bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
@@ -1967,6 +2011,10 @@ function FuturesPanel() {
     const fee = Number(account?.taker_fee);
     return Number.isFinite(fee) && fee > 0 ? fee : PHOENIX_DEFAULT_TAKER_FEE_RATE;
   }, [account?.taker_fee]);
+  const hotstuffTakerFeeRate = useMemo(() => {
+    const fee = Number(account?.taker_fee);
+    return Number.isFinite(fee) && fee > 0 ? fee : HOTSTUFF_DEFAULT_TAKER_FEE_RATE;
+  }, [account?.taker_fee]);
   const phoenixMaxMargin = useMemo(() => (
     dex === 'phoenix'
       ? floorUsdCents(phoenixUsableMargin({
@@ -1982,10 +2030,22 @@ function FuturesPanel() {
       ? pacificaUsableMargin({ balance: pacBalance })
       : pacBalance
   ), [dex, pacBalance]);
+  const hotstuffMaxMargin = useMemo(() => (
+    dex === 'hotstuff'
+      ? floorUsdCents(hotstuffUsableMargin({
+          balance: pacBalance,
+          leverage,
+          orderType,
+          takerFeeRate: hotstuffTakerFeeRate,
+        }))
+      : pacBalance
+  ), [dex, pacBalance, leverage, orderType, hotstuffTakerFeeRate]);
   const sizePctMarginBase = dex === 'phoenix'
     ? phoenixMaxMargin
     : dex === 'pacifica'
     ? pacificaMaxMargin
+    : dex === 'hotstuff'
+    ? hotstuffMaxMargin
     : pacBalance;
 
   // UX semantics (updated 2026-04):
@@ -2042,7 +2102,7 @@ function FuturesPanel() {
     () => orders.some(o => String(o.symbol || o.s || '').toUpperCase() === symbol.toUpperCase()),
     [orders, symbol]
   );
-  const marginModeLocked = (dex === 'pacifica' || dex === 'grvt') && (hasCurrentSymbolPosition || hasCurrentSymbolOrder);
+  const marginModeLocked = (dex === 'pacifica' || dex === 'grvt' || dex === 'hotstuff') && (hasCurrentSymbolPosition || hasCurrentSymbolOrder);
   const handleMarginModeToggle = useCallback(async () => {
     clearTradeFeedback();
     if (marginModeLocked) {
@@ -2059,6 +2119,10 @@ function FuturesPanel() {
     }
     if (dex === 'phoenix') {
       setLocalAlert('Phoenix uses cross margin for normal markets and isolated subaccounts automatically for isolated-only markets.');
+      return;
+    }
+    if (dex === 'hotstuff' && currentMarket?.isolated_only && marginModes[symbol]) {
+      setLocalAlert(`${symbol} is isolated-only on Hotstuff.`);
       return;
     }
     if (dex === 'pacifica' && !pacAgent && bindAgent) {
@@ -2079,7 +2143,7 @@ function FuturesPanel() {
     }
     const result = await setMarginMode?.(symbol, !marginModes[symbol]);
     if (result?.error) setLocalAlert(result.error);
-  }, [clearTradeFeedback, marginModeLocked, hasCurrentSymbolPosition, symbol, setMarginMode, marginModes, dex, pacAgent, bindAgent, bindingAgent]);
+  }, [clearTradeFeedback, marginModeLocked, hasCurrentSymbolPosition, symbol, setMarginMode, marginModes, dex, pacAgent, bindAgent, bindingAgent, currentMarket]);
 
   const handleSizePct = useCallback((pct) => {
     clearTradeFeedback();
@@ -2126,7 +2190,7 @@ function FuturesPanel() {
       setLeverageApi(symbol, v);
       return;
     }
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -2258,9 +2322,55 @@ function FuturesPanel() {
             collateralUsdc = Math.min(collateralUsdc, maxMargin);
           }
         }
+        if (dex === 'hotstuff') {
+          const reserve = hotstuffMarginReserveDetails({
+            balance: pacBalance,
+            leverage,
+            orderType,
+            takerFeeRate: hotstuffTakerFeeRate,
+          });
+          const maxMargin = floorUsdCents(reserve.usable_margin);
+          console.info('[Hotstuff UI] margin reserve check', {
+            symbol,
+            orderType,
+            requested_side: side,
+            requested_margin: collateralUsdc,
+            max_margin: maxMargin,
+            position_usdc: Number.isFinite(positionUsdc) ? positionUsdc : null,
+            amount_mode: amountInUsdc ? 'usdc_margin' : 'token_size',
+            ...reserve,
+          });
+          if (Number.isFinite(collateralUsdc) && collateralUsdc > maxMargin + 1e-9) {
+            console.warn('[Hotstuff UI] margin blocked by slippage/fee buffer', {
+              symbol,
+              orderType,
+              requested_side: side,
+              requested_margin: collateralUsdc,
+              max_margin: maxMargin,
+              free_balance: pacBalance,
+              ...reserve,
+            });
+            setLocalAlert(
+              `Hotstuff needs a slippage/fee buffer at ${leverage}x. Use $${maxMargin.toFixed(2)} margin or less from your $${pacBalance.toFixed(2)} free balance.`
+            );
+            return;
+          }
+        }
         qty = String(collateralUsdc.toFixed(6));
       } else {
-        qty = amountInUsdc ? tokenAmount : amount;
+        if (dex === 'hotstuff') {
+          if (amountInUsdc) {
+            qty = amount;
+          } else {
+            const orderPrice = orderType === 'limit' ? parseFloat(limitPrice) : markPrice;
+            const tokenQty = parseFloat(amount);
+            qty = Number.isFinite(tokenQty) && tokenQty > 0 && Number.isFinite(orderPrice) && orderPrice > 0
+              ? String((tokenQty * orderPrice) / Math.max(1, Number(leverage) || 1))
+              : '';
+          }
+        } else {
+          qty = amountInUsdc ? tokenAmount : amount;
+        }
         if (!qty || !Number.isFinite(parseFloat(qty)) || parseFloat(qty) <= 0) return;
         if (dex === 'pacifica') {
           const enteredMargin = amountInUsdc ? parseFloat(amount) : null;
@@ -2323,7 +2433,7 @@ function FuturesPanel() {
       // executes against whatever leverage was last persisted (e.g. 40× from
       // a previous session even though the slider shows 20×). Avantis/GMX
       // take leverage per-trade in the place-order call, so no pre-flush.
-      if (dex === 'pacifica' || dex === 'decibel') {
+      if (dex === 'pacifica' || dex === 'decibel' || dex === 'hotstuff') {
         if (levTimerRef.current) {
           clearTimeout(levTimerRef.current);
           levTimerRef.current = null;
@@ -2373,7 +2483,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, positions, lotSize]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, positions, lotSize]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -2441,7 +2551,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -2460,14 +2570,12 @@ function FuturesPanel() {
                 ? 'RISEx uses cross margin in your RISE account'
                 : dex === 'nado'
                 ? 'Nado uses cross margin in your Ink account'
-                : dex === 'hotstuff'
-                ? 'Hotstuff uses cross margin in your derivatives account'
                 : dex === 'hibachi'
                 ? 'Hibachi margin is managed in your Hibachi account'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
-                {dex === 'phoenix' ? 'Auto' : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff') ? 'Cross' : 'Isolated'}
+              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
+                {dex === 'phoenix' ? 'Auto' : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi') ? 'Cross' : 'Isolated'}
               </span>
             </div>
           ) : (
@@ -2641,7 +2749,7 @@ function FuturesPanel() {
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
-              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica') ? 'usable' : 'balance'}
+              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica' || dex === 'hotstuff') ? 'usable' : 'balance'}
             </span>
             <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
               buying power ${maxUsdc.toFixed(0)}
@@ -4074,6 +4182,155 @@ function FuturesPanel() {
                   }}
                 >
                   {isChecking ? 'Verify or approve builder code ->' : 'Approve builder code ->'}
+                </button>
+              )}
+
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== HOTSTUFF ACTIVATE GATE ====================
+  // Hotstuff needs a funded account before broker approval can succeed.
+  // This mirrors Decibel's blocking setup flow, but includes the bridge
+  // funding step because Hotstuff has no separate account-create method.
+  if (dex === 'hotstuff' && hasWallet && setupVerified !== true) {
+    const isRunning = referralLinking || loading;
+    const walletBal = Number(walletUsdc || 0);
+    const spotBal = Number(spotUsdc || 0);
+    const equityBal = Number(account?.account_equity ?? account?.balance ?? account?.usdc ?? 0);
+    const accountExists = !!hotstuffSetupStatus?.accountExists || equityBal > 0.000001 || spotBal > 0.000001;
+    const brokerApproved = !!hotstuffSetupStatus?.brokerApproved;
+    const agentReady = !!hotstuffSetupStatus?.agentReady;
+    const accountState = accountExists ? 'done' : 'pending';
+    const builderState = brokerApproved ? 'done' : (accountExists && isRunning ? 'active' : 'pending');
+    const agentState = agentReady ? 'done' : (brokerApproved && isRunning ? 'active' : 'pending');
+    const perpsState = equityBal > 0.000001 ? 'done' : 'pending';
+
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Setting up Hotstuff...' : 'Hotstuff setup'}</span>
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{
+            ...S.body,
+            alignItems: 'stretch',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: 0,
+            background: '#fdf8e7',
+          }}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'APPROVE IN WALLET' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>Set up Hotstuff trading</span>
+                <span style={hlGateStyles.subtitle}>
+                  Create or fund your Hotstuff account in Hotstuff official, approve the Clash builder code, then register a browser trading agent.
+                </span>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${accountState}`] }}>
+                    {accountState === 'done' ? 'OK' : 1}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${accountState}`] }}>Hotstuff account credited</span>
+                    <span style={hlGateStyles.stepHint}>Use Hotstuff official to deposit/onboard. Ethereum wallet USDC: ${walletBal.toFixed(2)}.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${builderState}`] }}>
+                    {builderState === 'done' ? 'OK' : builderState === 'active' ? <span style={hlGateStyles.spinner} /> : 2}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${builderState}`] }}>Approve builder code</span>
+                    <span style={hlGateStyles.stepHint}>One wallet signature approves Clash fee routing before orders unlock.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${perpsState}`] }}>3</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${perpsState}`] }}>Derivatives funded</span>
+                    <span style={hlGateStyles.stepHint}>Perps balance: ${equityBal.toFixed(2)}. Move Spot to Perps if funds are still in Spot.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${agentState}`] }}>
+                    {agentState === 'done' ? 'OK' : agentState === 'active' ? <span style={hlGateStyles.spinner} /> : 4}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${agentState}`] }}>Register trading agent</span>
+                    <span style={hlGateStyles.stepHint}>One wallet signature registers a local browser signer for Hotstuff orders.</span>
+                  </span>
+                </li>
+              </ol>
+
+              {!accountExists && referralUrl && (
+                <button
+                  style={{...hlGateStyles.secondaryBtn, width: '100%'}}
+                  onClick={() => {
+                    if (typeof openReferralJoin === 'function') openReferralJoin();
+                    else window.open(referralUrl, '_blank', 'noopener,noreferrer');
+                  }}
+                >
+                  Open Hotstuff official
+                </button>
+              )}
+
+              {(!brokerApproved || !agentReady) && (
+                <button
+                  style={{ ...hlGateStyles.primaryBtn, width: '100%', marginTop: accountExists ? 0 : 8, ...(isRunning ? hlGateStyles.primaryBtnBusy : null) }}
+                  disabled={isRunning}
+                  onClick={async () => {
+                    if (!activate) return;
+                    setReferralLinking(true);
+                    try {
+                      const res = await activate();
+                      if (res?.success) setLocalAlert('Hotstuff builder code and trading agent are ready.');
+                      else if (res?.info) setLocalAlert(res.info);
+                      else if (res?.error) setLocalAlert(res.error);
+                    } finally {
+                      setReferralLinking(false);
+                    }
+                  }}
+                >
+                  {brokerApproved ? 'Register trading agent' : 'Approve builder code'}
+                </button>
+              )}
+
+              {spotBal > 0.000001 && (
+                <button
+                  style={{...S.btnSmall, width: '100%', marginTop: 8, background: '#16A34A', color: '#fff', border: '2px solid #15803D'}}
+                  onClick={async () => {
+                    const amountText = spotBal.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
+                    const r = await moveSpotToPerp?.(amountText);
+                    if (!r?.error) setLocalAlert(r?.info || 'Moved USDC to Hotstuff derivatives.');
+                    else setLocalAlert(r.error);
+                  }}
+                  disabled={isRunning || !moveSpotToPerp}
+                >
+                  Move ${spotBal.toFixed(2)} Spot to Perps
                 </button>
               )}
 
@@ -6192,7 +6449,7 @@ function FuturesPanel() {
                 : dex === 'nado'
                 ? 'Approves USDt0 on Ink, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
                 : dex === 'hotstuff'
-                ? 'Sends native USDC from your Ethereum wallet to the Hotstuff bridge. It lands in Hotstuff spot balance after bridge processing.'
+                ? 'Sends native USDC from your Ethereum wallet to the Hotstuff bridge. After bridge credit, move Spot to Perps.'
                 : dex === 'grvt'
                 ? 'Opens GRVT deposit. Native in-game deposit needs GRVT bridge approval data or a GRVT-supported deposit-address API; the current builder API key is not enough for that.'
                 : dex === 'risex'

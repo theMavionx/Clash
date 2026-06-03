@@ -1,3 +1,4 @@
+const { getAddress } = require('viem');
 const { privateKeyToAccount } = require('viem/accounts');
 
 const DEFAULT_HOTSTUFF_BROKER_ADDRESS = '0xB36402e87a86206D3a114a98B53f31362291fe1B';
@@ -21,8 +22,13 @@ function isEvmAddress(addr) {
 }
 
 function normalizeAddress(addr) {
-  const s = String(addr || '').trim().toLowerCase();
-  return isEvmAddress(s) ? s : null;
+  const s = String(addr || '').trim();
+  if (!isEvmAddress(s)) return null;
+  try {
+    return getAddress(s);
+  } catch {
+    return null;
+  }
 }
 
 function deriveApiWalletAddress() {
@@ -271,7 +277,21 @@ function normalizeFill(wallet, fill) {
     notional_usd: notional,
     verifiedSource: 'hotstuff_api',
     pnl: fill?.closed_pnl != null ? String(fill.closed_pnl) : null,
-    fee: String(fill?.fee || ''),
+    // `fee` in futures.db is used by admin earnings as the project take.
+    // Hotstuff exposes trader fee and broker_fee separately; only broker_fee
+    // is Clash revenue.
+    fee: String(fill?.broker_fee || ''),
+    proofJson: JSON.stringify({
+      source: 'hotstuff_fill_api',
+      broker_address: HOTSTUFF_BROKER_ADDRESS,
+      broker_fee: fill?.broker_fee ?? null,
+      trader_fee: fill?.fee ?? null,
+      cloid: fill?.cloid ?? null,
+      order_id: fill?.order_id ?? null,
+      trade_id: fill?.trade_id ?? null,
+      tx_hash: fill?.tx_hash ?? null,
+      raw: fill,
+    }),
     created_at: Date.parse(fill?.block_timestamp || '') || Date.now(),
     _raw: fill,
   };
@@ -329,6 +349,14 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
     try {
       const before = db.db.prepare('SELECT id, player_id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
       if (before) {
+        db.db.prepare(`
+          UPDATE trade_history
+          SET fee = ?,
+              proof_json = COALESCE(NULLIF(?, ''), proof_json),
+              verified_source = 'hotstuff_api',
+              status = 'filled'
+          WHERE id = ? AND dex = 'hotstuff'
+        `).run(trade.fee || null, trade.proofJson || null, before.id);
         if (before.player_id !== playerId) {
           const moved = db.db.prepare(`
             UPDATE trade_history

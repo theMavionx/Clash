@@ -309,6 +309,17 @@ function BasicTradeFlow({
             return;
           }
         }
+        if (dex === 'hotstuff') {
+          const finalNotional = pickedAmount * pickedLev;
+          const minNotional = Number(pickedToken?.min_notional_usd ?? pickedToken?.min_order_size ?? 10);
+          if (Number.isFinite(minNotional) && minNotional > 0 && finalNotional + 1e-9 < minNotional) {
+            setErrorMsg(`Hotstuff minimum position size for ${pickedToken.symbol} is $${minNotional}.`);
+            submittedRef.current = false;
+            setSubmitting(false);
+            return;
+          }
+          result = await placeMarketOrder(pickedToken.symbol, sideForOpen, String(pickedAmount), '0.5', pickedLev);
+        } else {
         const lotSize = parseFloat(pickedToken?.lot_size) || 0;
         const rawTokenAmt = pacificaQtyFromMargin({
           margin: pickedAmount,
@@ -343,6 +354,7 @@ function BasicTradeFlow({
           : 6;
         const tokenAmtStr = tokenAmt.toFixed(decimals);
         result = await placeMarketOrder(pickedToken.symbol, sideForOpen, tokenAmtStr, '0.5');
+        }
       }
 
       if (result?.error) {

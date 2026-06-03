@@ -1244,24 +1244,160 @@ async function fetchGrvtEarnings() {
   }
 }
 
+const HOTSTUFF_DEFAULT_BROKER_ADDRESS = '0xB36402e87a86206D3a114a98B53f31362291fe1B';
+const HOTSTUFF_BROKER_ADDRESS = String(
+  process.env.HOTSTUFF_BROKER_ADDRESS
+  || process.env.VITE_HOTSTUFF_BROKER_ADDRESS
+  || HOTSTUFF_DEFAULT_BROKER_ADDRESS,
+).trim();
+const HOTSTUFF_BROKER_FEE_RATE = Number(
+  process.env.HOTSTUFF_BROKER_FEE_RATE
+  || process.env.VITE_HOTSTUFF_BROKER_FEE_RATE
+  || 0.0005,
+) || 0;
+const HOTSTUFF_BROKER_FEE_BPS = HOTSTUFF_BROKER_FEE_RATE * 10000;
+
+function readHotstuffLocalStats() {
+  const Db = loadSqlite();
+  if (!Db || !FS.existsSync(FUTURES_DB)) {
+    return {
+      trades: 0,
+      trades_24h: 0,
+      traders: 0,
+      volume_usd: 0,
+      volume_24h_usd: 0,
+      earned_usd: 0,
+      earned_24h_usd: 0,
+      latest_fill_at: null,
+      recent_proofs: [],
+    };
+  }
+  let fdb = null;
+  try {
+    fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    const feeExpr = "ABS(CAST(COALESCE(NULLIF(fee, ''), '0') AS REAL))";
+    const exactProofExpr = "(proof_json LIKE '%\"source\":\"hotstuff_fill_api\"%' OR proof_json LIKE '%\"source\": \"hotstuff_fill_api\"%')";
+    const legacyProofExpr = `(proof_json IS NULL OR proof_json = '' OR NOT ${exactProofExpr})`;
+    const summary = fdb.prepare(`
+      SELECT COUNT(*) AS trades,
+             COUNT(DISTINCT player_id) AS traders,
+             COALESCE(SUM(notional_usd), 0) AS volume_usd,
+             COALESCE(SUM(CASE WHEN ${exactProofExpr} THEN ${feeExpr} ELSE 0 END), 0) AS earned_usd,
+             COALESCE(SUM(CASE WHEN ${legacyProofExpr} THEN 1 ELSE 0 END), 0) AS legacy_unverified_fills,
+             MAX(created_at) AS latest_fill_at
+      FROM trade_history
+      WHERE dex = 'hotstuff'
+        AND status = 'filled'
+        AND verified_source = 'hotstuff_api'
+    `).get() || {};
+    const recent = fdb.prepare(`
+      SELECT COUNT(*) AS trades,
+             COALESCE(SUM(notional_usd), 0) AS volume_usd,
+             COALESCE(SUM(CASE WHEN ${exactProofExpr} THEN ${feeExpr} ELSE 0 END), 0) AS earned_usd
+      FROM trade_history
+      WHERE dex = 'hotstuff'
+        AND status = 'filled'
+        AND verified_source = 'hotstuff_api'
+        AND created_at > datetime('now', '-24 hours')
+    `).get() || {};
+    const proofs = fdb.prepare(`
+      SELECT player_id, symbol, side, amount, price, notional_usd, fee,
+             order_id, client_order_id, created_at, proof_json
+      FROM trade_history
+      WHERE dex = 'hotstuff'
+        AND status = 'filled'
+        AND verified_source = 'hotstuff_api'
+      ORDER BY created_at DESC
+      LIMIT 20
+    `).all().map(row => ({
+      player_id: row.player_id,
+      symbol: row.symbol,
+      side: row.side,
+      amount: row.amount,
+      price: row.price,
+      notional_usd: roundUsd(row.notional_usd),
+      fee_usd: roundUsd(row.fee),
+      order_id: row.order_id,
+      client_order_id: row.client_order_id,
+      created_at: row.created_at,
+      proof_json: row.proof_json || null,
+    }));
+    return {
+      trades: safeNumber(summary.trades),
+      trades_24h: safeNumber(recent.trades),
+      traders: safeNumber(summary.traders),
+      legacy_unverified_fills: safeNumber(summary.legacy_unverified_fills),
+      volume_usd: roundUsd(summary.volume_usd),
+      volume_24h_usd: roundUsd(recent.volume_usd),
+      earned_usd: roundUsd(summary.earned_usd),
+      earned_24h_usd: roundUsd(recent.earned_usd),
+      latest_fill_at: summary.latest_fill_at || null,
+      recent_proofs: proofs,
+    };
+  } catch {
+    return {
+      trades: 0,
+      trades_24h: 0,
+      traders: 0,
+      volume_usd: 0,
+      volume_24h_usd: 0,
+      earned_usd: 0,
+      earned_24h_usd: 0,
+      latest_fill_at: null,
+      recent_proofs: [],
+    };
+  } finally {
+    if (fdb) fdb.close();
+  }
+}
+
 async function fetchHotstuffEarnings() {
-  const broker = String(
-    process.env.HOTSTUFF_BROKER_ADDRESS
-    || process.env.VITE_HOTSTUFF_BROKER_ADDRESS
-    || '0xB36402e87a86206D3a114a98B53f31362291fe1B'
-  ).trim();
-  const feeRate = Number(process.env.HOTSTUFF_BROKER_FEE_RATE || process.env.VITE_HOTSTUFF_BROKER_FEE_RATE || 0);
-  const configured = /^0x[0-9a-fA-F]{40}$/.test(broker) && Number.isFinite(feeRate) && feeRate > 0;
+  const local = readHotstuffLocalStats();
+  const configured = /^0x[0-9a-fA-F]{40}$/.test(HOTSTUFF_BROKER_ADDRESS)
+    && Number.isFinite(HOTSTUFF_BROKER_FEE_RATE)
+    && HOTSTUFF_BROKER_FEE_RATE > 0;
+  const estimated = local.volume_usd * HOTSTUFF_BROKER_FEE_RATE;
+  let config = null;
+  let account = null;
+  let configError = null;
+  try {
+    const hotstuff = require('../server-futures/hotstuff');
+    if (typeof hotstuff.getHotstuffConfigStatus === 'function') {
+      config = await hotstuff.getHotstuffConfigStatus();
+    }
+    if (typeof hotstuff.getAccountByAddress === 'function' && configured) {
+      account = await hotstuff.getAccountByAddress(HOTSTUFF_BROKER_ADDRESS);
+    }
+  } catch (e) {
+    configError = String(e?.message || e).slice(0, 160);
+  }
   return {
-    earned_usd: 0,
-    currency: 'USDC (Ethereum)',
-    address: broker || null,
-    broker_fee_rate: configured ? feeRate : 0,
-    builder_fee_bps: configured ? feeRate * 10000 : 0,
-    model: configured ? 'hotstuff_broker_fee_local_index_pending' : 'builder_fee_not_configured',
-    source_detail: configured ? 'hotstuff_broker_fee_local_index_pending' : 'hotstuff_broker_pending',
+    earned_usd: local.earned_usd,
+    currency: 'USDC (Hotstuff)',
+    address: HOTSTUFF_BROKER_ADDRESS || null,
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    legacy_unverified_fills: local.legacy_unverified_fills || 0,
+    earned_24h_usd: local.earned_24h_usd,
+    estimated_fee_usd: roundUsd(estimated),
+    broker_fee_rate: configured ? HOTSTUFF_BROKER_FEE_RATE : 0,
+    builder_fee_bps: configured ? HOTSTUFF_BROKER_FEE_BPS : 0,
+    builder_fee_pct: configured ? HOTSTUFF_BROKER_FEE_BPS / 100 : 0,
+    broker_account_equity_usd: safeNumber(account?.account_equity ?? account?.balance),
+    broker_withdrawable_usd: safeNumber(account?.available_to_withdraw),
+    broker_margin_used_usd: safeNumber(account?.total_margin_used),
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    config,
+    config_error: configError,
+    model: configured ? 'hotstuff_local_broker_fee_exact' : 'builder_fee_not_configured',
+    source_detail: configured ? 'hotstuff_api_fills_broker_fee' : 'hotstuff_broker_pending',
     note: configured
-      ? 'Hotstuff broker is configured for order attribution; exact cumulative broker earnings need Hotstuff fill indexing/reconciliation.'
+      ? `Exact local Hotstuff broker_fee sum from imported fills with stored Hotstuff proof. ${local.legacy_unverified_fills || 0} legacy fill(s) need re-import to replace old trader-fee rows with broker_fee. Local ${HOTSTUFF_BROKER_FEE_BPS}bps volume estimate is $${roundUsd(estimated).toFixed(4)} only for comparison.${configError ? ` Config/account read issue: ${configError}.` : ''}`
       : 'Hotstuff broker address/rate are not configured yet. Orders can be wired now; reward credit stays disabled until the broker code/address is provided.',
   };
 }
@@ -1462,13 +1598,15 @@ function revenueModelForDex(dex, dateForRate = null) {
     };
   }
   if (dex === 'hotstuff') {
+    const bps = Math.max(0, HOTSTUFF_BROKER_FEE_BPS);
     return {
-      configured: false,
-      rate: 0,
-      rate_label: 'broker pending',
-      builder_fee_bps: 0,
-      model: 'builder_fee_not_configured',
-      source_detail: 'hotstuff_broker_pending',
+      configured: bps > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps broker fee` : 'broker pending',
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_hotstuff_bps' : 'hotstuff_broker_pending',
     };
   }
   return {
@@ -1821,7 +1959,7 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_referral_builder_rewards' },
     grvt: { ...wrap('grvt', grvt), source: 'grvt_builder_fill_history' },
     nado: { ...wrap('nado', nado), source: 'nado_indexer_match_builder_fee' },
-    hotstuff: { ...wrap('hotstuff', hotstuff), source: 'hotstuff_broker_pending' },
+    hotstuff: { ...wrap('hotstuff', hotstuff), source: 'hotstuff_api_fills_broker_fee' },
     last_updated: new Date(now).toISOString(),
   };
   out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','grvt','nado','hotstuff'].reduce(

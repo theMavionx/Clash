@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { formatUnits, parseUnits } from 'viem';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatUnits, getAddress, parseUnits } from 'viem';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
@@ -10,6 +11,8 @@ import {
   createHotstuffInfoClient,
   hotstuffBrokerConfig,
   hotstuffErrorMessage,
+  hotstuffOrderAccepted,
+  hotstuffOrderStatusLabel,
 } from '../lib/hotstuffClient';
 import {
   ensureHotstuffChain,
@@ -26,6 +29,8 @@ import {
 } from '../lib/hotstuffConfig';
 
 const POLL_INTERVAL_MS = 5_000;
+const AGENT_STORAGE_PREFIX = 'clash_hotstuff_agent_v1';
+const AGENT_VALIDITY_MS = 180 * 24 * 60 * 60 * 1000;
 const ERC20_TRANSFER_ABI = [
   {
     type: 'function',
@@ -53,12 +58,103 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function hotstuffAddress(addr) {
+  try {
+    return getAddress(String(addr || '').trim());
+  } catch {
+    return null;
+  }
+}
+
+function normalizePrivateKey(value) {
+  const raw = String(value || '').trim();
+  if (/^0x[0-9a-fA-F]{64}$/u.test(raw)) return raw;
+  if (/^[0-9a-fA-F]{64}$/u.test(raw)) return `0x${raw}`;
+  return null;
+}
+
+function agentStorageKey(owner) {
+  return `${AGENT_STORAGE_PREFIX}:${String(owner || '').toLowerCase()}`;
+}
+
+function loadStoredAgent(owner) {
+  if (!owner || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(agentStorageKey(owner));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (String(parsed?.owner || '').toLowerCase() !== String(owner).toLowerCase()) return null;
+    const privateKey = normalizePrivateKey(parsed?.privateKey);
+    if (!privateKey) return null;
+    const account = privateKeyToAccount(privateKey);
+    const validUntil = Number(parsed?.validUntil || 0);
+    if (validUntil && validUntil <= Date.now() + 60_000) return null;
+    return {
+      owner,
+      privateKey,
+      account,
+      address: account.address,
+      validUntil: validUntil || Date.now() + AGENT_VALIDITY_MS,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredAgent(owner, privateKey, validUntil = Date.now() + AGENT_VALIDITY_MS) {
+  if (!owner || typeof window === 'undefined') return null;
+  const normalized = normalizePrivateKey(privateKey);
+  if (!normalized) return null;
+  const account = privateKeyToAccount(normalized);
+  const record = {
+    owner,
+    privateKey: normalized,
+    address: account.address,
+    validUntil,
+  };
+  try {
+    window.localStorage.setItem(agentStorageKey(owner), JSON.stringify(record));
+  } catch {
+    // localStorage can be unavailable in embedded wallet contexts.
+  }
+  return { ...record, account };
+}
+
+function newStoredAgent(owner) {
+  return saveStoredAgent(owner, generatePrivateKey(), Date.now() + AGENT_VALIDITY_MS);
+}
+
+function agentStillValid(row) {
+  const raw = Number(row?.valid_until_timestamp || row?.validUntil || 0);
+  if (!Number.isFinite(raw) || raw <= 0) return true;
+  const ms = raw > 10_000_000_000 ? raw : raw * 1000;
+  return ms > Date.now() + 60_000;
+}
+
 function apiHeaders(player) {
   return {
     'Content-Type': 'application/json',
     'x-token': player?.token || '',
     'x-dex': 'hotstuff',
   };
+}
+
+async function fetchJsonSafe(url, fallback) {
+  const res = await fetch(url);
+  const text = await res.text();
+  let data = fallback;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text };
+    }
+  }
+  if (!res.ok) {
+    const message = data?.error || data?.message || `HTTP ${res.status}`;
+    return Array.isArray(fallback) ? [] : { ...(data && typeof data === 'object' ? data : {}), error: message, status: res.status };
+  }
+  return data ?? fallback;
 }
 
 export function useHotstuff() {
@@ -69,6 +165,7 @@ export function useHotstuff() {
     walletClient,
     publicClient,
     getPublicClient,
+    getWalletClient,
     switchChain,
     isReady: evmReady,
   } = useEvmWallet();
@@ -83,21 +180,39 @@ export function useHotstuff() {
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
   const [setupVerified, setSetupVerified] = useState(null);
+  const [setupStatus, setSetupStatus] = useState({
+    accountExists: false,
+    brokerApproved: false,
+    agentReady: false,
+    agentAddress: null,
+  });
   const [walletUsdc, setWalletUsdc] = useState(null);
   const [walletUsdcStatus, setWalletUsdcStatus] = useState({ status: 'idle', message: null });
+  const leverageConfigFetchedRef = useRef({ wallet: null, at: 0 });
   const active = dex === 'hotstuff';
+  const hsWalletAddr = useMemo(() => hotstuffAddress(walletAddr), [walletAddr]);
 
   const info = useMemo(() => createHotstuffInfoClient(), []);
+  const hotstuffWalletClient = useMemo(() => (
+    typeof getWalletClient === 'function'
+      ? getWalletClient(HOTSTUFF_CHAIN_ID)
+      : walletClient
+  ), [getWalletClient, walletClient]);
   const exchange = useCallback(() => {
-    if (!walletClient) throw new Error('Connect your EVM wallet first');
-    return createHotstuffExchangeClient(walletClient);
-  }, [walletClient]);
+    if (!hotstuffWalletClient) throw new Error('Connect your EVM wallet first');
+    if (!hsWalletAddr) throw new Error('Connect your Hotstuff EVM wallet first');
+    return createHotstuffExchangeClient(hotstuffWalletClient);
+  }, [hotstuffWalletClient, hsWalletAddr]);
+  const agentExchange = useCallback((agent) => {
+    if (!agent?.account) throw new Error('Hotstuff trading agent is not ready');
+    return createHotstuffExchangeClient(agent.account);
+  }, []);
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
 
   const fetchWalletUsdc = useCallback(async () => {
-    if (!active || !walletAddr) {
+    if (!active || !hsWalletAddr) {
       setWalletUsdc(null);
       setWalletUsdcStatus({ status: 'idle', message: null });
       return null;
@@ -111,7 +226,7 @@ export function useHotstuff() {
         address: HOTSTUFF_USDC_ADDRESS,
         abi: ERC20_BALANCE_ABI,
         functionName: 'balanceOf',
-        args: [walletAddr],
+        args: [hsWalletAddr],
       });
       const next = Number(formatUnits(raw, HOTSTUFF_USDC_DECIMALS));
       const value = Number.isFinite(next) ? next : 0;
@@ -125,17 +240,17 @@ export function useHotstuff() {
       setWalletUsdcStatus({ status: 'error', message: msg });
       return null;
     }
-  }, [active, getPublicClient, publicClient, walletAddr]);
+  }, [active, getPublicClient, hsWalletAddr, publicClient]);
 
   const refresh = useCallback(async () => {
-    if (!active || !walletAddr) return;
+    if (!active || !hsWalletAddr) return;
     try {
-      const qs = `dex=hotstuff&address=${encodeURIComponent(walletAddr)}`;
+      const qs = `dex=hotstuff&address=${encodeURIComponent(hsWalletAddr)}`;
       const [marketsRes, accountRes, positionsRes, ordersRes] = await Promise.all([
-        fetch(`/api/futures/markets?dex=hotstuff`).then(r => r.json()),
-        fetch(`/api/futures/account?${qs}`).then(r => r.json()),
-        fetch(`/api/futures/positions?${qs}`).then(r => r.json()),
-        fetch(`/api/futures/orders?${qs}`).then(r => r.json()),
+        fetchJsonSafe(`/api/futures/markets?dex=hotstuff`, { data: [] }),
+        fetchJsonSafe(`/api/futures/account?${qs}`, null),
+        fetchJsonSafe(`/api/futures/positions?${qs}`, []),
+        fetchJsonSafe(`/api/futures/orders?${qs}`, []),
       ]);
       const nextMarkets = Array.isArray(marketsRes?.data) ? marketsRes.data : [];
       setMarkets(nextMarkets);
@@ -144,6 +259,10 @@ export function useHotstuff() {
       setOrders(Array.isArray(ordersRes) ? ordersRes : []);
       const nextLeverage = {};
       const nextMargins = {};
+      for (const m of nextMarkets) {
+        const sym = String(m?.symbol || '').toUpperCase();
+        if (sym && m?.isolated_only) nextMargins[sym] = true;
+      }
       if (Array.isArray(positionsRes)) {
         for (const p of positionsRes) {
           const sym = String(p?.symbol || '').toUpperCase();
@@ -152,6 +271,29 @@ export function useHotstuff() {
           if (lev > 0) nextLeverage[sym] = lev;
           nextMargins[sym] = !!p?.is_isolated;
         }
+      }
+      const leverageConfigCache = leverageConfigFetchedRef.current || {};
+      if (nextMarkets.length && (
+        leverageConfigCache.wallet !== hsWalletAddr
+        || Date.now() - Number(leverageConfigCache.at || 0) > 60_000
+      )) {
+        leverageConfigFetchedRef.current = { wallet: hsWalletAddr, at: Date.now() };
+        Promise.allSettled(nextMarkets.slice(0, 80).map(m => (
+          info.instrumentLeverage({ user: hsWalletAddr, symbol: m.market_name || `${m.symbol}-PERP` })
+        ))).then(results => {
+          const levs = {};
+          const modes = {};
+          for (const row of results) {
+            if (row.status !== 'fulfilled' || !row.value) continue;
+            const sym = String(row.value.instrument || '').replace(/-PERP$/u, '').toUpperCase();
+            if (!sym) continue;
+            const lev = num(row.value.leverage, 0);
+            if (lev > 0) levs[sym] = lev;
+            if (row.value.margin_type) modes[sym] = String(row.value.margin_type).toLowerCase() === 'isolated';
+          }
+          if (Object.keys(levs).length) setLeverageSettings(prev => ({ ...prev, ...levs }));
+          if (Object.keys(modes).length) setMarginModes(prev => ({ ...prev, ...modes }));
+        }).catch(() => null);
       }
       setLeverageSettings(prev => ({ ...prev, ...nextLeverage }));
       setMarginModes(prev => ({ ...prev, ...nextMargins }));
@@ -164,7 +306,7 @@ export function useHotstuff() {
     } catch (e) {
       setError(hotstuffErrorMessage(e));
     }
-  }, [active, walletAddr]);
+  }, [active, hsWalletAddr, info]);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -179,17 +321,17 @@ export function useHotstuff() {
   }, [active, fetchWalletUsdc, refresh]);
 
   const claimGold = useCallback(async (reason = 'hotstuff') => {
-    if (!player?.token || !walletAddr) return null;
+    if (!player?.token || !hsWalletAddr) return null;
     try {
       await fetch(`${HOTSTUFF_FUTURES_API}/import-fills?dex=hotstuff`, {
         method: 'POST',
         headers: apiHeaders(player),
-        body: JSON.stringify({ account: walletAddr, limit: 100 }),
+        body: JSON.stringify({ account: hsWalletAddr, limit: 100 }),
       }).catch(() => null);
       const res = await fetch('/api/trading/claim-gold', {
         method: 'POST',
         headers: apiHeaders(player),
-        body: JSON.stringify({ wallet: walletAddr, dex: 'hotstuff', reason }),
+        body: JSON.stringify({ wallet: hsWalletAddr, dex: 'hotstuff', reason }),
       });
       const data = await res.json().catch(() => ({}));
       if (data?.gold > 0) setGoldEarned(data);
@@ -198,83 +340,228 @@ export function useHotstuff() {
       console.warn('[useHotstuff] claim-gold:', e?.message || e);
       return null;
     }
-  }, [player, walletAddr]);
+  }, [hsWalletAddr, player]);
 
-  const activate = useCallback(async () => {
-    if (!walletAddr || !walletClient) throw new Error('Connect your EVM wallet first');
+  const hasHotstuffAccount = useCallback(async () => {
+    if (!hsWalletAddr) return false;
+    try {
+      const [summary, transfers] = await Promise.all([
+        info.accountSummary({ user: hsWalletAddr }).catch(() => null),
+        info.transferHistory({ user: hsWalletAddr, page: 1, limit: 1 }).catch(() => []),
+      ]);
+      if (Number(summary?.total_account_equity || summary?.spot_account_equity || summary?.derivative_account_equity || 0) > 0) return true;
+      if (Object.keys(summary?.spot_collateral || {}).length > 0 || Object.keys(summary?.collateral || {}).length > 0) return true;
+      if (Array.isArray(transfers) && transfers.length > 0) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  }, [hsWalletAddr, info]);
+
+  const verifySetup = useCallback(async () => {
+    if (!active || !hsWalletAddr) {
+      setSetupVerified(null);
+      setSetupStatus({
+        accountExists: false,
+        brokerApproved: false,
+        agentReady: false,
+        agentAddress: null,
+      });
+      return null;
+    }
+    try {
+      const accountExists = await hasHotstuffAccount();
+      const broker = hotstuffBrokerConfig();
+      if (!broker) {
+        setSetupStatus({
+          accountExists,
+          brokerApproved: true,
+          agentReady: false,
+          agentAddress: null,
+        });
+        setSetupVerified(false);
+        return false;
+      }
+      const current = await info.brokersCheck({ user: hsWalletAddr, broker: broker.broker, limit: 1, page: 1 }).catch(() => null);
+      const approved = Array.isArray(current?.data)
+        ? current.data.some(row => String(row?.broker || '').toLowerCase() === broker.broker.toLowerCase() && num(row?.max_fee_rate) >= num(broker.fee))
+        : false;
+      const storedAgent = loadStoredAgent(hsWalletAddr);
+      const agents = storedAgent
+        ? await info.allAgents({ user: hsWalletAddr }).catch(() => [])
+        : [];
+      const agentReady = !!storedAgent && Array.isArray(agents) && agents.some(row => (
+        String(row?.agent_address || row?.agent || '').toLowerCase() === storedAgent.address.toLowerCase()
+        && agentStillValid(row)
+      ));
+      setSetupStatus({
+        accountExists: accountExists || approved,
+        brokerApproved: approved,
+        agentReady,
+        agentAddress: agentReady ? storedAgent.address : null,
+      });
+      setSetupVerified(approved && agentReady);
+      return approved && agentReady;
+    } catch (e) {
+      console.warn('[useHotstuff] verify setup:', e?.message || e);
+      setSetupVerified(false);
+      return false;
+    }
+  }, [active, hasHotstuffAccount, hsWalletAddr, info]);
+
+  const ensureTradingAgent = useCallback(async () => {
+    if (!hsWalletAddr) throw new Error('Connect your Hotstuff EVM wallet first');
+    let agent = loadStoredAgent(hsWalletAddr) || newStoredAgent(hsWalletAddr);
+    if (!agent) throw new Error('Could not create Hotstuff browser trading agent');
+
+    const agents = await info.allAgents({ user: hsWalletAddr }).catch(() => []);
+    const registered = Array.isArray(agents) && agents.some(row => (
+      String(row?.agent_address || row?.agent || '').toLowerCase() === agent.address.toLowerCase()
+      && agentStillValid(row)
+    ));
+    if (registered) return agent;
+
+    const validUntil = Date.now() + AGENT_VALIDITY_MS;
+    await exchange().addAgent({
+      agentName: 'clashofperps',
+      agent: agent.address,
+      forAccount: '',
+      signer: hsWalletAddr,
+      agentPrivateKey: agent.privateKey,
+      validUntil,
+      nonce: Date.now(),
+    });
+    agent = saveStoredAgent(hsWalletAddr, agent.privateKey, validUntil) || agent;
+    return agent;
+  }, [exchange, hsWalletAddr, info]);
+
+  const activate = useCallback(async (opts = {}) => {
+    if (!hsWalletAddr || !walletClient) throw new Error('Connect your EVM wallet first');
     await ensureHotstuffChain(switchChain);
+    const accountExists = await hasHotstuffAccount();
     const broker = hotstuffBrokerConfig();
     if (broker) {
-      const current = await info.brokersCheck({ user: walletAddr, broker: broker.broker, limit: 1, page: 1 }).catch(() => null);
+      const current = await info.brokersCheck({ user: hsWalletAddr, broker: broker.broker, limit: 1, page: 1 }).catch(() => null);
       const approved = Array.isArray(current?.data)
         ? current.data.some(row => String(row?.broker || '').toLowerCase() === broker.broker.toLowerCase() && num(row?.max_fee_rate) >= num(broker.fee))
         : false;
       if (!approved) {
-        await exchange().approveBrokerFee({ broker: broker.broker, maxFeeRate: broker.fee, nonce: Date.now() });
+        try {
+          await exchange().approveBrokerFee({ broker: broker.broker, maxFeeRate: broker.fee, nonce: Date.now() });
+        } catch (e) {
+          const msg = hotstuffErrorMessage(e, 'Could not approve Hotstuff builder code');
+          if (/account does not exist/i.test(msg)) {
+            setSetupStatus({ accountExists: false, brokerApproved: false, agentReady: false, agentAddress: null });
+            setSetupVerified(false);
+            throw new Error('Hotstuff account is not active for this wallet yet. Open Hotstuff official with the Clash link, finish account activation there, then approve the builder code here.');
+          }
+          throw e;
+        }
       }
     }
-    if (HOTSTUFF_REFERRAL_CODE) {
-      await exchange().setReferrer({ code: HOTSTUFF_REFERRAL_CODE, nonce: Date.now() }).catch(() => null);
-    }
+    const agent = await ensureTradingAgent();
+    await verifySetup();
+    setSetupStatus(prev => ({
+      ...prev,
+      accountExists: prev.accountExists || accountExists,
+      brokerApproved: true,
+      agentReady: true,
+      agentAddress: agent.address,
+    }));
     setSetupVerified(true);
-    return { success: true };
-  }, [exchange, info, switchChain, walletAddr, walletClient]);
+    return { success: true, agentAddress: agent.address };
+  }, [ensureTradingAgent, exchange, hasHotstuffAccount, hsWalletAddr, info, switchChain, verifySetup, walletClient]);
 
   const openReferralJoin = useCallback(() => {
     if (!HOTSTUFF_REFERRAL_URL) return;
     window.open(HOTSTUFF_REFERRAL_URL, '_blank', 'noopener,noreferrer');
   }, []);
 
-  const placeOrder = useCallback(async ({ symbol, side, amount, price, leverage, orderType, reduceOnly = false }) => {
-    if (!walletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
-    await activate();
+  const placeOrder = useCallback(async ({ symbol, side, amount, amountBase, price, leverage, orderType, reduceOnly = false }) => {
+    if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
+    const activation = await activate();
     const market = markets.find(m => m.symbol === String(symbol || '').toUpperCase() || m.market_name === symbol);
     const order = buildHotstuffOrder({
       market,
       side,
       amountUsd: amount,
+      amountBase,
       leverage,
       price,
       orderType,
       reduceOnly,
     });
     const brokerConfig = hotstuffBrokerConfig();
-    const result = await exchange().placeOrder({
+    const agent = loadStoredAgent(hsWalletAddr);
+    const result = await agentExchange(agent || activation).placeOrder({
       orders: [order],
-      expiresAfter: Date.now() + 60_000,
       ...(brokerConfig ? { brokerConfig } : {}),
+      expiresAfter: Date.now() + 60_000,
       nonce: Date.now(),
     });
+    if (!hotstuffOrderAccepted(result)) {
+      throw new Error(`Hotstuff order was not accepted (${hotstuffOrderStatusLabel(result)}).`);
+    }
     setTimeout(() => claimGold(orderType || 'trade'), 2500);
     await refresh();
-    return { success: true, result, clientOrderId: order.cloid };
-  }, [activate, claimGold, evmReady, exchange, markets, refresh, walletAddr, walletClient]);
+    return { success: true, result, clientOrderId: order.cloid, orderStatus: hotstuffOrderStatusLabel(result) };
+  }, [activate, agentExchange, claimGold, evmReady, hsWalletAddr, markets, refresh, walletClient]);
 
   const setLeverage = useCallback(async (symbol, leverage) => {
     try {
-      if (!walletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
+      if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
       await ensureHotstuffChain(switchChain);
       const sym = String(symbol || '').toUpperCase();
       const market = markets.find(m => m.symbol === sym || m.market_name === symbol);
       if (!market) throw new Error('Select a valid Hotstuff market');
-      const lev = Math.max(1, Math.min(Number(market.max_leverage || 50), Math.floor(Number(leverage || 1))));
-      const result = await exchange().updatePerpInstrumentLeverage({
+      const maxLev = Number(market?.max_leverage || 50);
+      const lev = Math.max(
+        1,
+        Math.min(Number.isFinite(maxLev) && maxLev > 0 ? maxLev : 50, Math.floor(Number(leverage || 1))),
+      );
+      const agent = await ensureTradingAgent();
+      const result = await agentExchange(agent).updatePerpInstrumentLeverage({
         instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
         leverage: lev,
         nonce: Date.now(),
       });
       setLeverageSettings(prev => ({ ...prev, [sym]: lev }));
       await refresh();
-      return { success: true, result };
+      return { success: true, result, leverage: lev };
     } catch (e) {
       const msg = hotstuffErrorMessage(e, 'Hotstuff leverage update failed');
       setError(msg);
       return { error: msg };
     }
-  }, [evmReady, exchange, markets, refresh, switchChain, walletAddr, walletClient]);
+  }, [agentExchange, ensureTradingAgent, evmReady, hsWalletAddr, markets, refresh, switchChain, walletClient]);
+
+  const setMarginMode = useCallback(async (symbol, isIsolated) => {
+    try {
+      if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
+      await ensureHotstuffChain(switchChain);
+      const sym = String(symbol || '').toUpperCase();
+      const market = markets.find(m => m.symbol === sym || m.market_name === symbol);
+      if (!market) throw new Error('Select a valid Hotstuff market');
+      const mode = isIsolated || market?.isolated_only ? 'isolated' : 'cross';
+      const agent = await ensureTradingAgent();
+      const result = await agentExchange(agent).updateMarginMode({
+        instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
+        mode,
+        nonce: Date.now(),
+      });
+      setMarginModes(prev => ({ ...prev, [sym]: mode === 'isolated' }));
+      await refresh();
+      return { success: true, result, isIsolated: mode === 'isolated' };
+    } catch (e) {
+      const msg = hotstuffErrorMessage(e, 'Hotstuff margin mode update failed');
+      setError(msg);
+      return { error: msg };
+    }
+  }, [agentExchange, ensureTradingAgent, evmReady, hsWalletAddr, markets, refresh, switchChain, walletClient]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, _slippage, leverage) => (
     placeOrder({ symbol, side, amount, leverage, orderType: 'market' }).catch(e => {
+      console.warn('[Hotstuff] market order failed', { symbol, side, amount, leverage, error: e });
       const msg = hotstuffErrorMessage(e, 'Hotstuff market order failed');
       setError(msg);
       return { error: msg };
@@ -283,41 +570,85 @@ export function useHotstuff() {
 
   const placeLimitOrder = useCallback((symbol, side, price, amount, _tif, leverage) => (
     placeOrder({ symbol, side, amount, price, leverage, orderType: 'limit' }).catch(e => {
+      console.warn('[Hotstuff] limit order failed', { symbol, side, price, amount, leverage, error: e });
       const msg = hotstuffErrorMessage(e, 'Hotstuff limit order failed');
       setError(msg);
       return { error: msg };
     })
   ), [placeOrder]);
 
-  const closePosition = useCallback(async (position) => {
-    const side = position?.side === 'ask' ? 'bid' : 'ask';
-    const market = markets.find(m => m.symbol === position?.symbol);
-    const mark = Number(position?.mark_price || market?.mark || position?.entry_price || 0);
-    const amountBase = Number(position?.amount || 0);
-    const amountUsd = mark > 0 ? amountBase * mark : Number(position?.size_usd || 0);
-    return placeOrder({
-      symbol: position?.symbol,
-      side,
-      amount: amountUsd,
-      price: mark,
-      leverage: 1,
-      orderType: 'market',
-      reduceOnly: true,
-    }).catch(e => ({ error: hotstuffErrorMessage(e, 'Hotstuff close failed') }));
-  }, [markets, placeOrder]);
+  const closePosition = useCallback(async (symbolOrPosition, sideArg, amountArg, pairIndex = null, _tradeIndex = null, fullClose = false) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const position = typeof symbolOrPosition === 'object' && symbolOrPosition
+        ? symbolOrPosition
+        : positions.find(p => String(p?.symbol || '').toUpperCase() === String(symbolOrPosition || '').toUpperCase() && (!sideArg || p?.side === sideArg))
+          || positions.find(p => Number(p?.pair_index) === Number(pairIndex))
+          || null;
+      const symbol = position?.symbol || symbolOrPosition;
+      const openSide = position?.side || sideArg;
+      const closeSide = openSide === 'ask' ? 'bid' : 'ask';
+      const market = markets.find(m => m.symbol === String(symbol || '').toUpperCase() || Number(m.pair_index) === Number(pairIndex));
+      const mark = Number(position?.mark_price || market?.mark || market?.mid || position?.entry_price || 0);
+      const openAmount = Number(position?.amount || 0);
+      const requestedAmount = Number(amountArg);
+      const amountBase = fullClose && openAmount > 0
+        ? openAmount
+        : openAmount > 0 && Number.isFinite(requestedAmount)
+          ? Math.min(requestedAmount, openAmount)
+          : requestedAmount;
+      if (!(amountBase > 0)) throw new Error('Hotstuff close amount is empty or below this market size.');
+      console.info('[Hotstuff] close position request', {
+        symbol,
+        open_side: openSide,
+        close_side: closeSide,
+        requested_amount: amountArg,
+        amount_base: amountBase,
+        full_close: !!fullClose,
+        pair_index: pairIndex,
+        mark,
+      });
+      return await placeOrder({
+        symbol,
+        side: closeSide,
+        amountBase,
+        price: mark,
+        leverage: 1,
+        orderType: 'market',
+        reduceOnly: true,
+      });
+    } catch (e) {
+      console.warn('[Hotstuff] close failed', {
+        symbol: typeof symbolOrPosition === 'object' ? symbolOrPosition?.symbol : symbolOrPosition,
+        side: typeof symbolOrPosition === 'object' ? symbolOrPosition?.side : sideArg,
+        amount: typeof symbolOrPosition === 'object' ? symbolOrPosition?.amount : amountArg,
+        pairIndex,
+        fullClose,
+        error: e,
+      });
+      const msg = hotstuffErrorMessage(e, 'Hotstuff close failed');
+      setError(msg);
+      return { error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [markets, placeOrder, positions]);
 
   const cancelOrder = useCallback(async (order) => {
     try {
       await ensureHotstuffChain(switchChain);
       const instrumentId = Number(order?.pair_index || order?._raw?.instrument_id);
       if (order?.client_order_id) {
-        await exchange().cancelByCloid({
+        const agent = await ensureTradingAgent();
+        await agentExchange(agent).cancelByCloid({
           cancels: [{ cloid: order.client_order_id, instrumentId }],
           expiresAfter: Date.now() + 60_000,
           nonce: Date.now(),
         });
       } else {
-        await exchange().cancelByOid({
+        const agent = await ensureTradingAgent();
+        await agentExchange(agent).cancelByOid({
           cancels: [{ oid: Number(order?.order_id), instrumentId }],
           expiresAfter: Date.now() + 60_000,
           nonce: Date.now(),
@@ -330,12 +661,12 @@ export function useHotstuff() {
       setError(msg);
       return { error: msg };
     }
-  }, [exchange, refresh, switchChain]);
+  }, [agentExchange, ensureTradingAgent, refresh, switchChain]);
 
   const setTpsl = useCallback(async (symbol, closeSide, takeProfit, stopLoss, pairIndex, _tradeIndex, positionAmount) => {
     try {
-      if (!walletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
-      await activate();
+      if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
+      const activation = await activate();
       const sym = String(symbol || '').toUpperCase();
       const market = markets.find(m => m.symbol === sym || Number(m.pair_index) === Number(pairIndex));
       if (!market) throw new Error('Select a valid Hotstuff market');
@@ -374,20 +705,24 @@ export function useHotstuff() {
       }
       if (!ordersToPlace.length) throw new Error('Enter TP or SL price');
       const brokerConfig = hotstuffBrokerConfig();
-      const result = await exchange().placeOrder({
+      const agent = loadStoredAgent(hsWalletAddr);
+      const result = await agentExchange(agent || activation).placeOrder({
         orders: ordersToPlace,
-        expiresAfter: Date.now() + 60_000,
         ...(brokerConfig ? { brokerConfig } : {}),
+        expiresAfter: Date.now() + 60_000,
         nonce: Date.now(),
       });
+      if (!hotstuffOrderAccepted(result)) {
+        throw new Error(`Hotstuff TP/SL was not accepted (${hotstuffOrderStatusLabel(result)}).`);
+      }
       await refresh();
-      return { success: true, result, clientOrderIds: ordersToPlace.map(o => o.cloid) };
+      return { success: true, result, clientOrderIds: ordersToPlace.map(o => o.cloid), orderStatus: hotstuffOrderStatusLabel(result) };
     } catch (e) {
       const msg = hotstuffErrorMessage(e, 'Hotstuff TP/SL failed');
       setError(msg);
       return { error: msg };
     }
-  }, [activate, evmReady, exchange, markets, positions, refresh, walletAddr, walletClient]);
+  }, [activate, agentExchange, evmReady, hsWalletAddr, markets, positions, refresh, walletClient]);
 
   const parseAmount = useCallback((amount) => {
     const amountText = String(amount || '').trim();
@@ -415,7 +750,7 @@ export function useHotstuff() {
       return {
         success: true,
         txHash: hash,
-        info: 'Hotstuff Ethereum USDC deposit sent. It should appear in your Hotstuff spot balance after bridge processing.',
+        info: 'Hotstuff Ethereum USDC deposit sent. Wait for bridge credit, then approve the Clash builder code before trading.',
       };
     } catch (e) {
       const msg = hotstuffErrorMessage(e, 'Hotstuff deposit failed');
@@ -443,6 +778,13 @@ export function useHotstuff() {
     }
   }, [exchange, parseAmount, refresh, switchChain]);
 
+  useEffect(() => {
+    if (!active || !hsWalletAddr) return undefined;
+    verifySetup();
+    const iv = setInterval(verifySetup, POLL_INTERVAL_MS);
+    return () => clearInterval(iv);
+  }, [active, hsWalletAddr, verifySetup]);
+
   const withdraw = useCallback(async (amount) => {
     try {
       await ensureHotstuffChain(switchChain);
@@ -468,8 +810,8 @@ export function useHotstuff() {
   }, [exchange, parseAmount, refresh, switchChain]);
 
   return {
-    walletAddr,
-    connected: !!walletAddr,
+    walletAddr: hsWalletAddr || walletAddr,
+    connected: !!hsWalletAddr,
     account,
     positions,
     orders,
@@ -503,13 +845,22 @@ export function useHotstuff() {
     claimGold,
     setTpsl,
     setLeverage,
-    setMarginMode: async () => ({ success: true, info: 'Hotstuff margin mode is managed by the venue for this account.' }),
+    setMarginMode,
     moveSpotToPerp,
     hasReferrer: setupVerified,
     setupVerified,
-    isReady: !!walletAddr,
+    hotstuffSetupStatus: setupStatus,
+    oneTapTrading: {
+      enabled: !!setupStatus.agentReady,
+      approved: !!setupStatus.agentReady,
+      signer: setupStatus.agentAddress || null,
+      note: setupStatus.agentReady
+        ? 'Hotstuff orders are signed by a registered browser agent.'
+        : 'Register a browser agent once; orders will not need wallet signatures after that.',
+    },
+    isReady: !!hsWalletAddr,
     activationStep: null,
     walletMismatch: false,
-    registeredEvmWallet: walletAddr,
+    registeredEvmWallet: hsWalletAddr || walletAddr,
   };
 }

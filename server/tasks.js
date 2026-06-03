@@ -71,6 +71,8 @@ try {
 const VALID_TYPES = ['volume', 'positions', 'combo_volume_attack', 'daily_trade_gold'];
 const VALID_SIDES = ['any', 'long', 'short'];
 const TASK_TRADE_SETTLE_DELAY_SECONDS = 0;
+const HOTSTUFF_TASK_IMPORT_MS = Math.max(5_000, Number(process.env.HOTSTUFF_TASK_IMPORT_MS || 15_000));
+const hotstuffTaskImportCache = new Map();
 
 function parseParams(p) {
   try { return typeof p === 'string' ? JSON.parse(p) : (p || {}); } catch { return {}; }
@@ -217,6 +219,21 @@ function isAptosWallet(w) {
   return APTOS_RE.test(padAptos(w));
 }
 
+async function maybeImportHotstuffFills(player, wallet) {
+  if (!player || !isEvmWallet(wallet)) return null;
+  const key = `${player.id}:${String(wallet).toLowerCase()}`;
+  const last = hotstuffTaskImportCache.get(key) || 0;
+  if (Date.now() - last < HOTSTUFF_TASK_IMPORT_MS) return null;
+  hotstuffTaskImportCache.set(key, Date.now());
+  try {
+    const hotstuff = require('../server-futures/hotstuff');
+    return await hotstuff.importFillsForPlayer(player.id, wallet, { limit: 100 });
+  } catch (e) {
+    console.warn(`[tasks hotstuff] fill import failed player=${player.name || player.id}:`, e.message);
+    return null;
+  }
+}
+
 // Resolve which wallet to query upstream APIs with. Order:
 //   1. Pacifica AGENT wallet (if bound) — Pacifica's /v1/trades/history
 //      indexes by signer pubkey, and once a user binds an agent every
@@ -290,6 +307,9 @@ async function fetchWalletTrades(player, opts = {}) {
     if (dexFilter === 'hotstuff' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'decibel' && !isAptosWallet(wallet)) return [];
     if (dexFilter === 'phoenix' && !isSolanaWallet(wallet)) return [];
+    if (dexFilter === 'hotstuff') {
+      await maybeImportHotstuffFills(player, wallet);
+    }
     const fdb = futuresDbReadonly();
     if (!fdb) return [];
     try {

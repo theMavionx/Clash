@@ -652,6 +652,7 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="risex">RISEx</option>
               <option value="nado">Nado</option>
               <option value="grvt">GRVT</option>
+              <option value="hotstuff">Hotstuff</option>
             </select>
           </label>
           <label style="font-size:11px;color:#9ca3af">DEX scope
@@ -674,6 +675,7 @@ app.get('/api/admin/panel', (req, res) => {
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="risex" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">RISEx</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="nado" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Nado</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="grvt" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">GRVT</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="hotstuff" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Hotstuff</label>
             </div>
             <div id="tn_dex_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Pick at least one DEX.</div>
           </div>
@@ -855,6 +857,7 @@ app.get('/api/admin/panel', (req, res) => {
       • <strong>Perpl</strong> — currently shown as $0 commission. We index verified Perpl fills for game rewards, but no builder/referrer fee is passed in our order flow and no exact fee-income source is configured; local volume × bps is only a hypothetical estimate.<br>
       • <strong>Hyperliquid</strong> — reads exact <code style="color:#fbbf24">builderRewards</code> from Hyperliquid <code>/info</code> referral state for our builder wallet. Local volume × bps is shown only as an estimate.
       <br>* <strong>Nado</strong> - reads exact indexed <code style="color:#fbbf24">builder_fee</code> from Nado match events where packed order appendix has our <code>builderId</code>. Local volume x bps is shown only as an estimate.
+      <br>* <strong>Hotstuff</strong> - reads locally imported Hotstuff fills verified by broker fee + Clash cloid prefix. The card sums exact <code style="color:#fbbf24">broker_fee</code> stored from Hotstuff fill API; local volume x bps is shown only as an estimate.
     </div>
   </div>
 
@@ -1322,6 +1325,7 @@ function renderPlayers() {
   const risCount   = players.filter(p => p.dex === 'risex').length;
   const ndoCount   = players.filter(p => p.dex === 'nado').length;
   const grvtCount  = players.filter(p => p.dex === 'grvt').length;
+  const hotCount    = players.filter(p => p.dex === 'hotstuff').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
   // payload so the badges agree with the per-row "ONLINE" rendering.
@@ -1343,6 +1347,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#e11d48"><div class="v" style="color:#fb7185;font-size:22px">' + risCount + '</div><div class="l">RISEx</div></div>' +
     '<div class="stat" style="border-color:#00b8d9"><div class="v" style="color:#67e8f9;font-size:22px">' + ndoCount + '</div><div class="l">Nado</div></div>' +
     '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24;font-size:22px">' + grvtCount + '</div><div class="l">GRVT</div></div>' +
+    '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5;font-size:22px">' + hotCount + '</div><div class="l">Hotstuff</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
@@ -1360,6 +1365,7 @@ function renderPlayers() {
     if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
     if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
     if (d === 'grvt') return '<span class="badge" style="background:#78350f;color:#fde68a">GRVT</span>';
+    if (d === 'hotstuff') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HOT</span>';
     return '<span class="badge badge-off">—</span>';
   }
   function statusBadge(p) {
@@ -1750,6 +1756,7 @@ function clientDexBadge(dex) {
     : d === 'hyperliquid' ? '#86efac'
     : d === 'risex' ? '#fb7185'
     : d === 'nado' ? '#67e8f9'
+    : d === 'hotstuff' ? '#fca5a5'
     : '#9ca3af';
   return '<span class="badge" style="background:' + color + '22;color:' + color + '">' + esc(d) + '</span>';
 }
@@ -2094,6 +2101,7 @@ async function loadStats() {
     const risCount = (byDex.find(x => x.dex === 'risex') || {}).n || 0;
     const ndoCount = (byDex.find(x => x.dex === 'nado') || {}).n || 0;
     const grvtCount = (byDex.find(x => x.dex === 'grvt') || {}).n || 0;
+    const hotCount = (byDex.find(x => x.dex === 'hotstuff') || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
@@ -2105,6 +2113,7 @@ async function loadStats() {
     const risRew = rewardsMap.risex || {};
     const ndoRew = rewardsMap.nado || {};
     const grvtRew = rewardsMap.grvt || {};
+    const hotRew = rewardsMap.hotstuff || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
       dexCard('avantis',  'Avantis · Base',    '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, activityLines('avantis')) +
@@ -2116,6 +2125,7 @@ async function loadStats() {
       dexCard('risex',    'RISEx',             '#e11d48', risCount, risRew.total_gold || 0, risRew.total_volume || 0, activityLines('risex')) +
       dexCard('nado',     'Nado · Ink',        '#00b8d9', ndoCount, ndoRew.total_gold || 0, ndoRew.total_volume || 0, activityLines('nado')) +
       dexCard('grvt',     'GRVT / GRVT Exchange', '#f59e0b', grvtCount, grvtRew.total_gold || 0, grvtRew.total_volume || 0, activityLines('grvt')) +
+      dexCard('hotstuff', 'Hotstuff',          '#ef4444', hotCount, hotRew.total_gold || 0, hotRew.total_volume || 0, activityLines('hotstuff')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
     const grvtBuilder = dex.grvt_builder || {};
@@ -2266,6 +2276,9 @@ async function loadStats() {
     document.getElementById('topTradersByDex').innerHTML +=
       topTraderTable('grvt', 'GRVT / GRVT Exchange', '#f59e0b');
 
+    document.getElementById('topTradersByDex').innerHTML +=
+      topTraderTable('hotstuff', 'Hotstuff', '#ef4444');
+
     function dexBadge(d) {
       if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
       if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
@@ -2277,6 +2290,7 @@ async function loadStats() {
       if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
       if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
       if (d === 'grvt') return '<span class="badge" style="background:#78350f;color:#fde68a">GRVT</span>';
+      if (d === 'hotstuff') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HOT</span>';
       return '<span class="badge badge-off">—</span>';
     }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>
@@ -2511,7 +2525,7 @@ async function deleteTask(id) {
 let TOURNAMENTS_CACHE = [];
 let TOURNAMENT_LB_ID = null;
 let TOURNAMENT_EDIT_ID = null;
-const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado'];
+const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'grvt', 'hotstuff'];
 const TOURNAMENT_DEX_LABELS_ADMIN = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -2522,6 +2536,8 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   hyperliquid: 'Hyperliquid',
   risex: 'RISEx',
   nado: 'Nado',
+  grvt: 'GRVT',
+  hotstuff: 'Hotstuff',
 };
 const TOURNAMENT_TEAM_METRIC_LABELS_ADMIN = {
   volume_usd: 'Volume',
@@ -3515,6 +3531,7 @@ function renderRevenueAnalytics(data) {
     { key: 'hyperliquid', label: 'Hyperliquid' },
     { key: 'risex', label: 'RISE' },
     { key: 'nado', label: 'Nado' },
+    { key: 'hotstuff', label: 'Hotstuff' },
   ];
   const windowKeys = ['24h', '7d', '30d', 'all'];
   const revenueCell = (row) => {
@@ -3592,6 +3609,7 @@ async function loadEarnings(force) {
       ['hyperliquid', 'Hyperliquid', '#86efac', '#16a34a'],
       ['grvt',     'GRVT',     '#5eead4', '#14b8a6'],
       ['nado',     'Nado',     '#67e8f9', '#00b8d9'],
+      ['hotstuff', 'Hotstuff', '#fca5a5', '#ef4444'],
     ];
     const total = Number(data.total_usd) || 0;
     document.getElementById('earningsTotals').innerHTML =
@@ -3644,6 +3662,18 @@ async function loadEarnings(force) {
             ? ' / local ' + Number(d.local_trades) + ' fill(s)'
             : '';
           return '<span style="color:#9ca3af;font-size:11px">' + (d.trades || 0) + ' builder fill(s) / $' + Number(d.volume_usd || 0).toFixed(0) + ' vol' + local + estimate + '</span>';
+        }
+        if (d.model === 'hotstuff_local_broker_fee_exact') {
+          const estimate = Number.isFinite(Number(d.estimated_fee_usd))
+            ? ' / local estimate $' + Number(d.estimated_fee_usd).toFixed(4)
+            : '';
+          const acct = Number.isFinite(Number(d.broker_account_equity_usd))
+            ? ' / broker equity $' + Number(d.broker_account_equity_usd).toFixed(2)
+            : '';
+          const legacy = Number(d.legacy_unverified_fills || 0) > 0
+            ? ' / legacy pending ' + Number(d.legacy_unverified_fills)
+            : '';
+          return '<span style="color:#9ca3af;font-size:11px">' + (d.trades || 0) + ' fill(s) / $' + Number(d.volume_usd || 0).toFixed(0) + ' vol / 24h exact fee $' + Number(d.earned_24h_usd || 0).toFixed(4) + acct + legacy + estimate + '</span>';
         }
         if (d.model === 'perpl_builder_fee_not_configured') {
           const pct = Number(d.builder_fee_pct ?? d.fee_per_side_pct ?? 0);

@@ -10117,6 +10117,17 @@ async function importGrvtFillsForClaim(playerId) {
   }
 }
 
+async function importHotstuffFillsForClaim(playerId, wallet) {
+  try {
+    const hotstuff = require('../server-futures/hotstuff');
+    if (!hotstuff.isEvmAddress(wallet)) return null;
+    return await hotstuff.importFillsForPlayer(playerId, wallet, { limit: 100 });
+  } catch (e) {
+    console.warn('[claim-gold hotstuff] pre-import failed:', e.message);
+    return null;
+  }
+}
+
 router.post('/trading/claim-gold', auth, async (req, res) => {
   // Rate limit
   const lastClaim = claimCooldowns.get(req.player.id);
@@ -10187,6 +10198,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
     if (dex === 'grvt') {
       await importGrvtFillsForClaim(req.player.id);
+    } else if (dex === 'hotstuff') {
+      await importHotstuffFillsForClaim(req.player.id, wallet);
     }
     const fdb = futuresDbReadonly();
     if (!fdb) {
