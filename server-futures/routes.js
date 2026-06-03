@@ -1160,6 +1160,13 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
   }
 });
 
+function isDecibelOrderNotFound(value) {
+  const raw = value instanceof Error
+    ? value.message
+    : (value?.error || value?.message || value?.vm_status || value?.details || value);
+  return /EORDER_NOT_FOUND|ORDER_NOT_FOUND|order not found/i.test(String(raw || ''));
+}
+
 router.post('/decibel/orders/cancel', auth, async (req, res) => {
   try {
     const verified = await requireDecibelOwnerAndSubaccount(req, res);
@@ -1168,9 +1175,28 @@ router.post('/decibel/orders/cancel', auth, async (req, res) => {
       ...req.body,
       subaccountAddr: verified.subaccount,
     });
-    if (result?.success === false) return res.status(400).json(result);
+    if (result?.success === false) {
+      if (isDecibelOrderNotFound(result)) {
+        return res.json({
+          success: true,
+          noop: true,
+          status: 'not_found',
+          reason: 'order_not_found',
+          result,
+        });
+      }
+      return res.status(400).json(result);
+    }
     res.json(result);
   } catch (e) {
+    if (isDecibelOrderNotFound(e)) {
+      return res.json({
+        success: true,
+        noop: true,
+        status: 'not_found',
+        reason: 'order_not_found',
+      });
+    }
     console.error('[decibel] cancel order error:', e);
     res.status(500).json({ error: e.message || 'Failed to cancel Decibel order' });
   }

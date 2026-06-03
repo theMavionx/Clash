@@ -1977,6 +1977,10 @@ export function useDecibel() {
         marketName: market.market_name,
         ...(sub ? { subaccountAddr: sub } : {}),
       });
+      if (res?.noop || res?.status === 'not_found') {
+        fetchOrders();
+        return { status: 'not_found', noop: true };
+      }
       const txHash = assertWriteSuccess(res, 'Cancel order');
       fetchOrders();
       return { tx_hash: txHash, status: 'cancelled' };
