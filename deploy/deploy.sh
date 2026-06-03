@@ -25,8 +25,8 @@ KEEP_RELEASES="${KEEP_RELEASES:-2}"
 BACKUP_RETENTION_DAYS="${CLASH_BACKUP_RETENTION_DAYS:-3}"
 BACKUP_KEEP="${CLASH_BACKUP_KEEP:-1}"
 BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-}"
-BACKUP_SQLITE_TIMEOUT_MIN_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MIN_SECONDS:-180}"
-BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND="${CLASH_BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND:-4}"
+BACKUP_SQLITE_TIMEOUT_MIN_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MIN_SECONDS:-600}"
+BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND="${CLASH_BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND:-1}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -470,12 +470,12 @@ sqlite_backup_timeout_seconds() {
 
     local min_seconds="$BACKUP_SQLITE_TIMEOUT_MIN_SECONDS"
     if ! [[ "$min_seconds" =~ ^[0-9]+$ ]] || [ "$min_seconds" -le 0 ]; then
-        min_seconds=180
+        min_seconds=600
     fi
 
     local mib_per_second="$BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND"
     if ! [[ "$mib_per_second" =~ ^[0-9]+$ ]] || [ "$mib_per_second" -le 0 ]; then
-        mib_per_second=4
+        mib_per_second=1
     fi
 
     local bytes mib size_timeout
@@ -486,6 +486,12 @@ sqlite_backup_timeout_seconds() {
     mib=$(( (bytes + 1048575) / 1048576 ))
     size_timeout=$(( (mib + mib_per_second - 1) / mib_per_second ))
     echo $(( min_seconds + size_timeout ))
+}
+
+checkpoint_sqlite_db() {
+    local src="$1"
+    timeout 30s sqlite3 "$src" "PRAGMA busy_timeout=5000; PRAGMA wal_checkpoint(PASSIVE);" >/dev/null 2>&1 || \
+        log "WARNING: SQLite WAL checkpoint failed before backup for $src"
 }
 
 backup_sqlite_db() {
@@ -500,6 +506,7 @@ backup_sqlite_db() {
     [ -n "$size_label" ] || size_label="unknown size"
     mkdir -p "$(dirname "$dst")"
     rm -f "$dst" "$dst.zst" "$dst.gz" "$tmp" "$tmp.zst" "$tmp.gz" "$tmp-journal"
+    checkpoint_sqlite_db "$src"
     log "Backing up SQLite DB $src (${size_label}) with ${timeout_seconds}s timeout"
     if ! timeout "${timeout_seconds}s" sqlite3 "$src" ".backup '$tmp'"; then
         rm -f "$tmp" "$tmp.zst" "$tmp.gz" "$tmp-journal"
