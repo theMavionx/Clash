@@ -234,6 +234,29 @@ function positionLinePnl(pos, liveMark, entry, amount, isLong) {
   return mark ? (mark - entry) * amount * (isLong ? 1 : -1) : 0;
 }
 
+function classifyTriggerOrder(order, positionsForSymbol, triggerPrice) {
+  const type = String(order?.order_type || order?.ot || order?.trigger_type || order?.triggerType || '').toUpperCase();
+  if (type.includes('TAKE') || type.includes('TP')) return 'tp';
+  if (type.includes('STOP_LOSS') || type.includes('SL')) return 'sl';
+
+  const side = String(order?.side || order?.d || '').toLowerCase();
+  const closesLong = side === 'ask' || side === 'short' || side === 'sell';
+  const closesShort = side === 'bid' || side === 'long' || side === 'buy';
+  const position = positionsForSymbol.find((pos) => {
+    const isLong = positionLineIsLong(pos);
+    return (isLong && closesLong) || (!isLong && closesShort);
+  }) || positionsForSymbol[0];
+  if (!position) return null;
+
+  const isLong = positionLineIsLong(position);
+  const reference = finiteLineNumber(position.entry_price)
+    ?? finiteLineNumber(position.mark_price)
+    ?? finiteLineNumber(triggerPrice);
+  if (!(reference > 0) || !(triggerPrice > 0)) return null;
+  if (isLong) return triggerPrice > reference ? 'tp' : 'sl';
+  return triggerPrice < reference ? 'tp' : 'sl';
+}
+
 async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
   const read = await getReadClient();
   const rows = await read.candlesticks.getByName({
@@ -490,10 +513,10 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         const price = rawPrice > 0 ? rawPrice : stopPrice;
         if (!price) continue;
         const side = ord.side || ord.d;
-        const type = (ord.order_type || ord.ot || '').toUpperCase();
         const isBid = side === 'bid';
-        const isTP = type.includes('TAKE') || type.includes('TP');
-        const isSL = type.includes('STOP_LOSS') || type.includes('SL');
+        const triggerKind = stopPrice > 0 ? classifyTriggerOrder(ord, symPositions, stopPrice) : null;
+        const isTP = triggerKind === 'tp';
+        const isSL = triggerKind === 'sl';
         const color = isTP ? '#4CAF50' : isSL ? '#E53935' : stopPrice > 0 ? '#FF9800' : (isBid ? '#2196F3' : '#9C27B0');
         const label = isTP ? 'TP' : isSL ? 'SL' : stopPrice > 0 ? 'STOP' : 'LIMIT';
         const line = seriesRef.current.createPriceLine({

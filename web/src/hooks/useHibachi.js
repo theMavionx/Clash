@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { formatUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { ARC_CHAIN_ID } from '../lib/arcConfig';
+import { ARBITRUM_CHAIN_ID, ARBITRUM_USDC_DECIMALS, ARBITRUM_USDC_NATIVE } from '../lib/gmxConfig';
 import { usePlayer } from './useGodot';
 
 const STORAGE_KEY = 'clash_hibachi_credentials_v1';
+const LEVERAGE_STORAGE_KEY = 'clash_hibachi_leverage_v1';
 const POLL_INTERVAL_MS = 5_000;
 const HIBACHI_PUBLIC_PROXY_URL = String(
   import.meta.env.VITE_HIBACHI_PUBLIC_PROXY_URL || 'https://clashofperps.fun/api/futures'
@@ -12,6 +15,11 @@ const HIBACHI_PUBLIC_PROXY_URL = String(
 const HIBACHI_AUTH_PROXY_URL = String(
   import.meta.env.VITE_HIBACHI_AUTH_PROXY_URL || HIBACHI_PUBLIC_PROXY_URL
 ).replace(/\/+$/u, '');
+const ERC20_BALANCE_ABI = [
+  { type: 'function', name: 'balanceOf', stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ type: 'uint256' }] },
+];
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -58,6 +66,45 @@ function writeCredentials(creds) {
 function clearCredentials() {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(STORAGE_KEY);
+}
+
+function readLeverageSettings() {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LEVERAGE_STORAGE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLeverageSettings(settings) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(LEVERAGE_STORAGE_KEY, JSON.stringify(settings || {}));
+}
+
+function enrichPositions(rows, leverageSettings = {}) {
+  return (Array.isArray(rows) ? rows : []).map((pos) => {
+    const sym = symbolOf(pos?.symbol);
+    const storedLev = num(leverageSettings[sym], 0);
+    const apiLev = num(pos?.leverage, 0);
+    const leverage = apiLev > 1 ? apiLev : (storedLev > 1 ? storedLev : 20);
+    const sizeUsd = num(pos?.size_usd, 0);
+    const apiMargin = num(pos?.margin, 0);
+    const margin = apiMargin > 0 ? apiMargin : (sizeUsd > 0 && leverage > 0 ? sizeUsd / leverage : 0);
+    const pnlUsd = num(pos?.pnl_usd, 0);
+    const apiPct = num(pos?.pnl_pct, NaN);
+    const pnlPct = Number.isFinite(apiPct) && !(apiPct === 0 && Math.abs(pnlUsd) >= 0.005)
+      ? apiPct
+      : (margin > 0 ? (pnlUsd / margin) * 100 : 0);
+    return {
+      ...pos,
+      symbol: sym || pos?.symbol,
+      leverage: String(leverage),
+      margin: margin > 0 ? String(margin) : (pos?.margin ?? ''),
+      pnl_pct: pnlPct,
+    };
+  });
 }
 
 function promptCredentials(existing = {}) {
@@ -114,12 +161,20 @@ export function useHibachi() {
   const [orders, setOrders] = useState([]);
   const [prices, setPrices] = useState([]);
   const [markets, setMarkets] = useState([]);
+  const [walletUsdc, setWalletUsdc] = useState(null);
+  const [walletUsdcStatus, setWalletUsdcStatus] = useState({ status: 'idle', message: null });
+  const [leverageSettings, setLeverageSettingsState] = useState(() => readLeverageSettings());
   const [dataReady, setDataReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
   const marketsRef = useRef([]);
+  const leverageSettingsRef = useRef(leverageSettings);
   const claimGoldRef = useRef(null);
+
+  useEffect(() => {
+    leverageSettingsRef.current = leverageSettings;
+  }, [leverageSettings]);
 
   const token = (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null;
   const walletAddr = evmWallet?.address || null;
@@ -169,6 +224,34 @@ export function useHibachi() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+
+  const fetchWalletUsdc = useCallback(async () => {
+    if (!walletAddr || typeof evmWallet?.getPublicClient !== 'function') {
+      setWalletUsdc(null);
+      setWalletUsdcStatus({ status: 'idle', message: 'Connect wallet to check Arbitrum USDC balance' });
+      return null;
+    }
+    setWalletUsdcStatus({ status: 'checking', message: 'Checking Arbitrum USDC balance...' });
+    try {
+      const publicClient = evmWallet.getPublicClient(ARBITRUM_CHAIN_ID);
+      const raw = await publicClient.readContract({
+        address: ARBITRUM_USDC_NATIVE,
+        abi: ERC20_BALANCE_ABI,
+        functionName: 'balanceOf',
+        args: [walletAddr],
+      });
+      const balance = Number(formatUnits(raw, ARBITRUM_USDC_DECIMALS));
+      setWalletUsdc(Number.isFinite(balance) ? balance : 0);
+      setWalletUsdcStatus({ status: 'ready', message: null });
+      return Number.isFinite(balance) ? balance : 0;
+    } catch (e) {
+      const msg = hibachiErrorMessage(e, 'Could not read Arbitrum USDC balance');
+      console.warn('[useHibachi] Arbitrum wallet USDC read failed:', msg);
+      setWalletUsdc(null);
+      setWalletUsdcStatus({ status: 'error', message: msg });
+      return null;
+    }
+  }, [walletAddr, evmWallet]);
 
   const fetchMarkets = useCallback(async () => {
     try {
@@ -223,7 +306,7 @@ export function useHibachi() {
         authedPost('/api/futures/hibachi/orders'),
       ]);
       setAccount(acct || null);
-      setPositions(Array.isArray(pos) ? pos : []);
+      setPositions(enrichPositions(pos, leverageSettingsRef.current));
       setOrders(Array.isArray(ord) ? ord : []);
       setDataReady(true);
       return acct;
@@ -235,6 +318,18 @@ export function useHibachi() {
       return null;
     }
   }, [walletAddr, credentials, token, authedPost]);
+
+  const setLeverage = useCallback(async (symbol, value) => {
+    const sym = symbolOf(symbol);
+    const lev = Math.max(1, Math.min(100, Number(value) || 20));
+    if (!sym) return { error: 'Hibachi symbol required' };
+    const next = { ...leverageSettingsRef.current, [sym]: lev };
+    leverageSettingsRef.current = next;
+    setLeverageSettingsState(next);
+    writeLeverageSettings(next);
+    setPositions(prev => enrichPositions(prev, next));
+    return { success: true };
+  }, []);
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -327,14 +422,20 @@ export function useHibachi() {
   }, [isActiveDex, fetchMarkets, fetchPrices]);
 
   useEffect(() => {
+    if (!isActiveDex) return;
+    fetchWalletUsdc();
+  }, [isActiveDex, fetchWalletUsdc]);
+
+  useEffect(() => {
     if (!isActiveDex || !walletAddr || !credentials) return undefined;
     fetchAccount();
     const iv = setInterval(() => {
       fetchPrices();
       fetchAccount();
+      fetchWalletUsdc();
     }, POLL_INTERVAL_MS);
     return () => clearInterval(iv);
-  }, [isActiveDex, walletAddr, credentials, fetchAccount, fetchPrices]);
+  }, [isActiveDex, walletAddr, credentials, fetchAccount, fetchPrices, fetchWalletUsdc]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || !credentials || !token) return undefined;
@@ -545,9 +646,10 @@ export function useHibachi() {
     orders,
     prices,
     markets,
-    walletUsdc: null,
+    walletUsdc,
+    walletUsdcStatus,
     walletEth: null,
-    leverageSettings: {},
+    leverageSettings,
     marginModes: {},
     dataReady,
     loading,
@@ -560,7 +662,7 @@ export function useHibachi() {
     closePosition,
     cancelOrder,
     setTpsl,
-    setLeverage: async () => ({ success: true }),
+    setLeverage,
     setMarginMode: async () => ({ success: true }),
     depositToPacifica: unsupportedFundingAction,
     withdraw: unsupportedFundingAction,

@@ -353,6 +353,13 @@ function cleanSignedZero(value) {
   return Math.abs(n) < 0.005 ? 0 : n;
 }
 
+function formatFeeRate(value) {
+  if (value == null || value === '') return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  return `${(n * 100).toFixed(3)}%`;
+}
+
 function getPositionMetrics(pos, prices, leverageSettings = {}) {
   const priceRowMark = numOrNull(prices.find(p => p.symbol === pos.symbol)?.mark);
   const entryP = numOrNull(pos.entry_price) || 0;
@@ -2106,7 +2113,11 @@ function FuturesPanel() {
     setLeverage(v);
     // Avantis + GMX take leverage per-trade (passed in placeOrder call),
     // so no leverage tx ever runs from the slider. Skip cleanly.
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt') return;
+    if (dex === 'hibachi') {
+      setLeverageApi(symbol, v);
+      return;
+    }
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -5264,7 +5275,7 @@ function FuturesPanel() {
       if (res?.error) setLocalAlert(res.error);
       else setLocalAlert('Wallet switched to Ink. Balance is refreshing.');
     };
-    const walletBalanceLabel = dex === 'hyperliquid'
+    const walletBalanceLabel = dex === 'hyperliquid' || dex === 'hibachi'
       ? 'Arbitrum Wallet USDC'
       : dex === 'risex'
       ? 'RISE Wallet USDC'
@@ -5599,13 +5610,18 @@ function FuturesPanel() {
           const pendingDepositLabel = Number.isFinite(pendingDepositAmount)
             ? pendingDepositAmount.toFixed(2)
             : String(depositStatus?.amount || '');
+          const walletUsdcText = walletUsdc !== null
+            ? `${isHyperliquid || isHibachi ? 'Arbitrum ' : ''}USDC: $${walletUsdc.toFixed(2)}`
+            : isHibachi && walletUsdcStatus?.status === 'checking'
+            ? 'Arbitrum USDC: checking...'
+            : null;
           return (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: accentLight}}>{isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
               {isFundingBusy
                 ? <span style={{...S.detail, color: '#15803D'}}>{isMovingToPerp ? 'Moving to trading' : 'Depositing'}{pendingDepositLabel ? ` ${pendingDepositLabel} USDC` : ''}...</span>
-                : walletUsdc !== null && <span style={S.detail}>{isHyperliquid ? 'Arbitrum ' : ''}USDC: ${walletUsdc.toFixed(2)}</span>}
+                : walletUsdcText && <span style={S.detail}>{walletUsdcText}</span>}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
               {!isHyperliquid && !isHibachi && (
@@ -5959,9 +5975,9 @@ function FuturesPanel() {
           {[
             ['Positions', account?.positions_count || 0],
             ['Open Orders', account?.orders_count || 0],
-            ['Fee Tier', account?.fee_level ?? '—'],
-            ['Maker Fee', account?.maker_fee ? (parseFloat(account.maker_fee) * 100).toFixed(3) + '%' : '—'],
-            ['Taker Fee', account?.taker_fee ? (parseFloat(account.taker_fee) * 100).toFixed(3) + '%' : '—'],
+            ['Fee Tier', account?.fee_level ?? account?._raw?.feeLevel ?? account?._raw?.feeTier ?? '—'],
+            ['Maker Fee', formatFeeRate(account?.maker_fee)],
+            ['Taker Fee', formatFeeRate(account?.taker_fee)],
           ].map(([k, v]) => (
             <div key={k} style={{...S.row, padding: '4px 0', borderBottom: '1px solid #d4c8b0'}}>
               <span style={S.detail}>{k}</span>

@@ -289,6 +289,15 @@ async function authedSend(method, path, body, creds) {
 async function getAccount(credsInput) {
   const creds = credentials(credsInput);
   const j = await authedGet(`/trade/account/info?accountId=${encodeURIComponent(creds.accountId)}`, creds);
+  const feeLevel = j?.feeLevel
+    ?? j?.fee_level
+    ?? j?.feeTier
+    ?? j?.fee_tier
+    ?? j?.feeTierName
+    ?? j?.fee_tier_name
+    ?? j?.vipLevel
+    ?? j?.vip_level
+    ?? null;
   return {
     balance: String(j?.balance ?? 0),
     usdc: String(j?.balance ?? 0),
@@ -298,6 +307,7 @@ async function getAccount(credsInput) {
     total_margin_used: String(num(j?.totalPositionNotional) + num(j?.totalOrderNotional)),
     positions_count: Array.isArray(j?.positions) ? j.positions.length : 0,
     orders_count: 0,
+    fee_level: feeLevel,
     maker_fee: num(j?.tradeMakerFeeRate),
     taker_fee: num(j?.tradeTakerFeeRate),
     _raw: j,
@@ -311,18 +321,25 @@ async function getPositions(credsInput) {
     const amount = Math.abs(num(p.quantity));
     if (!p?.symbol || amount <= 0) return null;
     const side = String(p.direction || '').toUpperCase().includes('SHORT') ? 'ask' : 'bid';
+    const notional = num(p.notionalValue);
+    const rawLeverage = num(p.leverage ?? p.positionLeverage ?? p.initialLeverage);
+    const rawMargin = num(p.margin ?? p.positionMargin ?? p.initialMargin ?? p.openMargin ?? p.collateral);
+    const margin = rawMargin > 0
+      ? rawMargin
+      : (rawLeverage > 0 && notional > 0 ? notional / rawLeverage : 0);
+    const pnlUsd = num(p.unrealizedTradingPnl) + num(p.unrealizedFundingPnl);
     return {
       symbol: symbolOf(p.symbol),
       side,
       amount: String(amount),
-      size_usd: num(p.notionalValue),
+      size_usd: notional,
       entry_price: String(p.openPrice || ''),
       mark_price: String(p.markPrice || ''),
       liquidation_price: null,
-      margin: '',
-      leverage: '1',
-      pnl_usd: String(num(p.unrealizedTradingPnl) + num(p.unrealizedFundingPnl)),
-      pnl_pct: 0,
+      margin: margin > 0 ? String(margin) : '',
+      leverage: rawLeverage > 0 ? String(rawLeverage) : '',
+      pnl_usd: String(pnlUsd),
+      pnl_pct: margin > 0 ? (pnlUsd / margin) * 100 : null,
       pair_index: null,
       trade_index: null,
       is_isolated: false,
