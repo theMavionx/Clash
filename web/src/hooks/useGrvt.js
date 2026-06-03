@@ -5,6 +5,12 @@ import { GRVT_CHAIN_ID, ensureGrvtChain } from '../lib/grvtConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
 import { usePlayer } from './useGodot';
 import { privateKeyToAccount } from 'viem/accounts';
+import {
+  migratePlainLocalStorageCredential,
+  readEncryptedCredential,
+  removeEncryptedCredential,
+  writeEncryptedCredential,
+} from '../lib/encryptedCredentialStorage';
 
 const STORAGE_KEY = 'clash_grvt_credentials_v1';
 const ONE_TAP_SIGNER_STORAGE_KEY = 'clash_grvt_one_tap_signer_v1';
@@ -19,26 +25,32 @@ function rows(payload) {
   return [];
 }
 
-function readCredentials() {
-  if (typeof window === 'undefined') return null;
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || 'null');
-    if (!parsed?.apiKey && (!parsed?.cookie || !parsed?.accountId)) return null;
-    if (parsed?.apiKey && !parsed?.subAccountId) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+function normalizeGrvtCredentials(value) {
+  if (!value?.apiKey && (!value?.cookie || !value?.accountId)) return null;
+  if (value?.apiKey && !value?.subAccountId) return null;
+  return {
+    ...(value.apiKey ? { apiKey: String(value.apiKey) } : {}),
+    ...(value.cookie ? { cookie: String(value.cookie) } : {}),
+    ...(value.accountId ? { accountId: String(value.accountId) } : {}),
+    subAccountId: String(value.subAccountId || ''),
+    fundingAccountAddress: String(value.fundingAccountAddress || ''),
+  };
 }
 
-function writeCredentials(creds) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(creds));
+async function loadCredentials() {
+  const migrated = await migratePlainLocalStorageCredential(STORAGE_KEY, STORAGE_KEY, normalizeGrvtCredentials);
+  const stored = migrated || await readEncryptedCredential(STORAGE_KEY);
+  return normalizeGrvtCredentials(stored);
 }
 
-function clearCredentials() {
-  if (typeof window === 'undefined') return;
-  window.localStorage.removeItem(STORAGE_KEY);
+async function writeCredentials(creds) {
+  await writeEncryptedCredential(STORAGE_KEY, normalizeGrvtCredentials(creds));
+  try { window.localStorage.removeItem(STORAGE_KEY); } catch {}
+}
+
+async function clearCredentials() {
+  await removeEncryptedCredential(STORAGE_KEY);
+  try { window.localStorage.removeItem(STORAGE_KEY); } catch {}
 }
 
 function normalizePrivateKey(value) {
@@ -55,29 +67,35 @@ function signerFromPrivateKey(value) {
   return { privateKey, account, address: account.address };
 }
 
-function readOneTapSigner() {
-  if (typeof window === 'undefined') return null;
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(ONE_TAP_SIGNER_STORAGE_KEY) || 'null');
-    if (!parsed?.privateKey) return null;
-    return signerFromPrivateKey(parsed.privateKey);
-  } catch {
-    return null;
-  }
+function normalizeOneTapSigner(value) {
+  if (!value?.privateKey) return null;
+  const signer = signerFromPrivateKey(value.privateKey);
+  return {
+    privateKey: signer.privateKey,
+    address: signer.address,
+    savedAt: Number(value.savedAt || Date.now()),
+  };
 }
 
-function writeOneTapSigner(signer) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(ONE_TAP_SIGNER_STORAGE_KEY, JSON.stringify({
+async function loadOneTapSigner() {
+  const migrated = await migratePlainLocalStorageCredential(ONE_TAP_SIGNER_STORAGE_KEY, ONE_TAP_SIGNER_STORAGE_KEY, normalizeOneTapSigner);
+  const stored = migrated || await readEncryptedCredential(ONE_TAP_SIGNER_STORAGE_KEY);
+  const normalized = normalizeOneTapSigner(stored);
+  return normalized ? signerFromPrivateKey(normalized.privateKey) : null;
+}
+
+async function writeOneTapSigner(signer) {
+  await writeEncryptedCredential(ONE_TAP_SIGNER_STORAGE_KEY, {
     privateKey: signer.privateKey,
     address: signer.address,
     savedAt: Date.now(),
-  }));
+  });
+  try { window.localStorage.removeItem(ONE_TAP_SIGNER_STORAGE_KEY); } catch {}
 }
 
-function clearOneTapSigner() {
-  if (typeof window === 'undefined') return;
-  window.localStorage.removeItem(ONE_TAP_SIGNER_STORAGE_KEY);
+async function clearOneTapSigner() {
+  await removeEncryptedCredential(ONE_TAP_SIGNER_STORAGE_KEY);
+  try { window.localStorage.removeItem(ONE_TAP_SIGNER_STORAGE_KEY); } catch {}
 }
 
 function stripDomainTypes(types = {}) {
@@ -292,7 +310,7 @@ export function useGrvt() {
   const isActiveDex = dex === 'grvt';
   const player = usePlayer();
   const evmWallet = useEvmWallet();
-  const [credentials, setCredentials] = useState(() => readCredentials());
+  const [credentials, setCredentials] = useState(null);
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -307,7 +325,7 @@ export function useGrvt() {
   const [walletUsdc, setWalletUsdc] = useState(null);
   const [builderConfig, setBuilderConfig] = useState(null);
   const [builderAuthorized, setBuilderAuthorized] = useState(false);
-  const [oneTapSigner, setOneTapSigner] = useState(() => readOneTapSigner());
+  const [oneTapSigner, setOneTapSigner] = useState(null);
   const claimGoldRef = useRef(null);
   const rewardSyncTimersRef = useRef([]);
 
@@ -371,13 +389,13 @@ export function useGrvt() {
 
   const setGrvtOneTapTradingEnabled = useCallback(async (enabled, privateKey = '') => {
     if (!enabled) {
-      clearOneTapSigner();
+      await clearOneTapSigner();
       setOneTapSigner(null);
       return { success: true };
     }
     try {
       const signer = signerFromPrivateKey(privateKey);
-      writeOneTapSigner(signer);
+      await writeOneTapSigner(signer);
       setOneTapSigner(signer);
       return { success: true, address: signer.address };
     } catch (e) {
@@ -385,9 +403,9 @@ export function useGrvt() {
     }
   }, []);
 
-  const saveServerCredentials = useCallback(async (next) => {
+  const resolveBrowserCredentials = useCallback(async (next) => {
     if (!token) throw new Error('Game session is not ready');
-    const data = await fetchJson('/api/futures/grvt/credentials', {
+    const data = await fetchJson('/api/futures/grvt/credentials/resolve', {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({
@@ -404,34 +422,6 @@ export function useGrvt() {
     }
     return data;
   }, [authHeaders, fetchJson, token]);
-
-  const loadServerCredentials = useCallback(async () => {
-    if (!isActiveDex || !token) return null;
-    try {
-      const data = await fetchJson('/api/futures/grvt/credentials?dex=grvt', {
-        headers: authHeaders(),
-      });
-      if (!data?.has_credentials || !data?.api_key) return null;
-      const next = {
-        apiKey: String(data.api_key || '').trim(),
-        subAccountId: String(data.sub_account_id || '').trim(),
-        fundingAccountAddress: String(data.funding_account_address || '').trim(),
-      };
-      if (!next.apiKey || !next.subAccountId) return null;
-      writeCredentials(next);
-      setCredentials((prev) => (
-        prev?.apiKey === next.apiKey
-          && prev?.subAccountId === next.subAccountId
-          && prev?.fundingAccountAddress === next.fundingAccountAddress
-          ? prev
-          : next
-      ));
-      return next;
-    } catch (e) {
-      console.warn('[useGrvt] credentials restore:', e?.message || e);
-      return null;
-    }
-  }, [authHeaders, fetchJson, isActiveDex, token]);
 
   const fetchBuilderConfig = useCallback(async () => {
     if (!isActiveDex || !token) return null;
@@ -617,10 +607,29 @@ export function useGrvt() {
   }, [isActiveDex, fetchMarkets]);
 
   useEffect(() => {
+    if (!isActiveDex) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [storedCredentials, storedOneTapSigner] = await Promise.all([
+          loadCredentials(),
+          loadOneTapSigner(),
+        ]);
+        if (!cancelled) {
+          setCredentials(storedCredentials);
+          setOneTapSigner(storedOneTapSigner);
+        }
+      } catch (e) {
+        console.warn('[useGrvt] encrypted credential load failed:', e?.message || e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isActiveDex]);
+
+  useEffect(() => {
     if (!isActiveDex || !token) return;
-    loadServerCredentials();
     fetchBuilderConfig();
-  }, [isActiveDex, token, loadServerCredentials, fetchBuilderConfig]);
+  }, [isActiveDex, token, fetchBuilderConfig]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -659,14 +668,14 @@ export function useGrvt() {
         }
         : null;
       if (!next?.apiKey) return { error: 'Enter your GRVT API key' };
-      const saved = await saveServerCredentials(next);
+      const saved = await resolveBrowserCredentials(next);
       const resolved = {
         ...next,
         subAccountId: String(saved?.sub_account_id || next.subAccountId || '').trim(),
         fundingAccountAddress: String(saved?.funding_account_address || next.fundingAccountAddress || '').trim(),
       };
       if (!resolved.subAccountId) return { error: 'GRVT could not auto-detect a trading account from this API key. Create the key from the funded GRVT trading account and save it again.' };
-      writeCredentials(resolved);
+      await writeCredentials(resolved);
       setCredentials(resolved);
       return { success: true };
     } catch (e) {
@@ -676,21 +685,11 @@ export function useGrvt() {
     } finally {
       setLoading(false);
     }
-  }, [credentials?.fundingAccountAddress, credentials?.subAccountId, saveServerCredentials]);
+  }, [credentials?.fundingAccountAddress, credentials?.subAccountId, resolveBrowserCredentials]);
 
   const disconnect = useCallback(async () => {
-    if (token) {
-      try {
-        await fetchJson('/api/futures/grvt/credentials?dex=grvt', {
-          method: 'DELETE',
-          headers: authHeaders(),
-        });
-      } catch (e) {
-        console.warn('[useGrvt] credentials delete:', e?.message || e);
-      }
-    }
-    clearCredentials();
-    clearOneTapSigner();
+    await clearCredentials();
+    await clearOneTapSigner();
     setCredentials(null);
     setOneTapSigner(null);
     setAccount(null);
@@ -700,7 +699,7 @@ export function useGrvt() {
     setMarginModes({});
     setDataReady(false);
     setBuilderAuthorized(false);
-  }, [authHeaders, fetchJson, token]);
+  }, []);
 
   const openOfficialDeposit = useCallback(() => {
     try { window.open(GRVT_REF_URL, '_blank', 'noopener,noreferrer'); } catch {}

@@ -2,6 +2,10 @@ import { memo, useEffect, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
 import { fetchPerplFills } from '../lib/perplClient';
 import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
+import {
+  migratePlainLocalStorageCredential,
+  readEncryptedCredential,
+} from '../lib/encryptedCredentialStorage';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const HYPERLIQUID_API = import.meta.env.VITE_HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz';
@@ -252,16 +256,15 @@ function normalizeHotstuffTrade(fill, markets) {
   };
 }
 
-function readGrvtCredentials() {
-  if (typeof window === 'undefined') return null;
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(GRVT_STORAGE_KEY) || 'null');
-    if (!parsed?.subAccountId) return null;
-    if (!parsed?.apiKey && (!parsed?.cookie || !parsed?.accountId)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+function normalizeGrvtCredentials(value) {
+  if (!value?.subAccountId) return null;
+  if (!value?.apiKey && (!value?.cookie || !value?.accountId)) return null;
+  return value;
+}
+
+async function readGrvtCredentials() {
+  const migrated = await migratePlainLocalStorageCredential(GRVT_STORAGE_KEY, GRVT_STORAGE_KEY, normalizeGrvtCredentials);
+  return migrated || await readEncryptedCredential(GRVT_STORAGE_KEY);
 }
 
 function normalizeGrvtTrade(fill) {
@@ -412,7 +415,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
         }
         if (dex === 'grvt') {
           const token = typeof window !== 'undefined' ? window._playerToken : null;
-          const creds = readGrvtCredentials();
+          const creds = await readGrvtCredentials();
           if (!creds) {
             if (!cancelled) setTrades([]);
             return;

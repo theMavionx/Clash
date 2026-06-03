@@ -104,23 +104,6 @@ db.exec(`
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  CREATE TABLE IF NOT EXISTS grvt_credentials (
-    player_id      TEXT PRIMARY KEY,
-    api_key        TEXT NOT NULL,
-    sub_account_id TEXT,
-    funding_account_address TEXT,
-    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS katana_credentials (
-    player_id      TEXT PRIMARY KEY,
-    api_key        TEXT NOT NULL,
-    api_secret     TEXT NOT NULL,
-    wallet         TEXT NOT NULL,
-    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
-  );
 `);
 
 // ---------- Pre-statement migrations ----------
@@ -140,7 +123,6 @@ try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL D
 try { db.exec("ALTER TABLE trade_history ADD COLUMN verified_source TEXT NOT NULL DEFAULT 'client'"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN fee TEXT"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN proof_json TEXT"); } catch {}
-try { db.exec("ALTER TABLE grvt_credentials ADD COLUMN funding_account_address TEXT"); } catch {}
 // Dedup: trade_history.client_order_id was nullable + non-unique, so
 // client-reported opens (order_id = tx_hash) and worker-recorded closes
 // (order_id = 'closed_...') for the same underlying trade could both land,
@@ -209,28 +191,6 @@ const stmts = {
   `),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
-  getGrvtCredentials: db.prepare('SELECT * FROM grvt_credentials WHERE player_id = ?'),
-  upsertGrvtCredentials: db.prepare(`
-    INSERT INTO grvt_credentials (player_id, api_key, sub_account_id, funding_account_address, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(player_id) DO UPDATE SET
-      api_key = excluded.api_key,
-      sub_account_id = excluded.sub_account_id,
-      funding_account_address = excluded.funding_account_address,
-      updated_at = datetime('now')
-  `),
-  deleteGrvtCredentials: db.prepare('DELETE FROM grvt_credentials WHERE player_id = ?'),
-  getKatanaCredentials: db.prepare('SELECT * FROM katana_credentials WHERE player_id = ?'),
-  upsertKatanaCredentials: db.prepare(`
-    INSERT INTO katana_credentials (player_id, api_key, api_secret, wallet, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(player_id) DO UPDATE SET
-      api_key = excluded.api_key,
-      api_secret = excluded.api_secret,
-      wallet = excluded.wallet,
-      updated_at = datetime('now')
-  `),
-  deleteKatanaCredentials: db.prepare('DELETE FROM katana_credentials WHERE player_id = ?'),
 };
 
 // ---------- Wallet Functions ----------
@@ -295,83 +255,6 @@ function getTrades(playerId) {
   return stmts.getTrades.all(playerId);
 }
 
-// ---------- GRVT Credential Functions ----------
-
-function hydrateGrvtCredentials(row) {
-  if (!row) return null;
-  try {
-    return {
-      apiKey: decryptSecret(row.api_key),
-      subAccountId: row.sub_account_id || '',
-      fundingAccountAddress: row.funding_account_address || '',
-      updatedAt: row.updated_at || null,
-    };
-  } catch (e) {
-    console.error('[futures.db] Failed to decrypt GRVT credentials for player', row.player_id, e.message);
-    return null;
-  }
-}
-
-function getGrvtCredentials(playerId) {
-  return hydrateGrvtCredentials(stmts.getGrvtCredentials.get(playerId));
-}
-
-function saveGrvtCredentials(playerId, { apiKey, subAccountId = '', fundingAccountAddress = '' }) {
-  const normalizedApiKey = String(apiKey || '').trim();
-  if (!normalizedApiKey) throw new Error('GRVT API key required');
-  const normalizedSubAccountId = String(subAccountId || '').trim();
-  const normalizedFunding = String(fundingAccountAddress || '').trim();
-  stmts.upsertGrvtCredentials.run(playerId, encryptSecret(normalizedApiKey), normalizedSubAccountId || null, normalizedFunding || null);
-  return getGrvtCredentials(playerId);
-}
-
-function deleteGrvtCredentials(playerId) {
-  stmts.deleteGrvtCredentials.run(playerId);
-  return { success: true };
-}
-
-// ---------- Katana Credential Functions ----------
-
-function hydrateKatanaCredentials(row) {
-  if (!row) return null;
-  try {
-    return {
-      apiKey: decryptSecret(row.api_key),
-      apiSecret: decryptSecret(row.api_secret),
-      wallet: row.wallet || '',
-      updatedAt: row.updated_at || null,
-    };
-  } catch (e) {
-    console.error('[futures.db] Failed to decrypt Katana credentials for player', row.player_id, e.message);
-    return null;
-  }
-}
-
-function getKatanaCredentials(playerId) {
-  return hydrateKatanaCredentials(stmts.getKatanaCredentials.get(playerId));
-}
-
-function saveKatanaCredentials(playerId, { apiKey, apiSecret, wallet }) {
-  const normalizedApiKey = String(apiKey || '').trim();
-  const normalizedApiSecret = String(apiSecret || '').trim();
-  const normalizedWallet = String(wallet || '').trim();
-  if (!normalizedApiKey) throw new Error('Katana API key required');
-  if (!normalizedApiSecret) throw new Error('Katana API secret required');
-  if (!/^0x[0-9a-fA-F]{40}$/u.test(normalizedWallet)) throw new Error('Katana wallet address required');
-  stmts.upsertKatanaCredentials.run(
-    playerId,
-    encryptSecret(normalizedApiKey),
-    encryptSecret(normalizedApiSecret),
-    normalizedWallet,
-  );
-  return getKatanaCredentials(playerId);
-}
-
-function deleteKatanaCredentials(playerId) {
-  stmts.deleteKatanaCredentials.run(playerId);
-  return { success: true };
-}
-
 // ---------- Exports ----------
 
 module.exports = {
@@ -383,12 +266,6 @@ module.exports = {
   getDeposits,
   addTrade,
   getTrades,
-  getGrvtCredentials,
-  saveGrvtCredentials,
-  deleteGrvtCredentials,
-  getKatanaCredentials,
-  saveKatanaCredentials,
-  deleteKatanaCredentials,
 };
 
 // One-time encryption migration: any row where secret_key doesn't start with

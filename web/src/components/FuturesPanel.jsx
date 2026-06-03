@@ -3787,7 +3787,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
-                  Stored in this browser and encrypted on Clash servers. Create the key from the GRVT trading account where your funds are held.
+                  Stored encrypted in this browser only. Create the key from the GRVT trading account where your funds are held.
                 </div>
               </div>
 
@@ -3859,7 +3859,7 @@ function FuturesPanel() {
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CHECKING' : 'ACTION REQUIRED'}</span>
                 <span style={hlGateStyles.title}>Katana Perps setup</span>
                 <span style={hlGateStyles.subtitle}>
-                  Add your Katana API key and secret. Clash stores them encrypted; order placement still requires your wallet to sign Katana EIP-712 data in the browser.
+                  Add your Katana API key and secret. Clash stores them encrypted in this browser only; order placement still requires your wallet to sign Katana EIP-712 data in the browser.
                 </span>
               </div>
 
@@ -5741,7 +5741,7 @@ function FuturesPanel() {
                 {loading ? 'Saving...' : 'Save API key'}
               </button>
               <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
-                Clash uses this key to read GRVT trading balance, positions, orders, and fills. It is stored locally in the player's browser.
+                Clash uses this key to read GRVT trading balance, positions, orders, and fills. It is stored encrypted in this browser only.
               </span>
             </div>
           </div>

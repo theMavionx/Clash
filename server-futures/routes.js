@@ -1113,11 +1113,10 @@ function ensureKatana(req, res) {
 }
 
 function katanaCredsFromReq(req) {
-  const saved = db.getKatanaCredentials(req.playerId) || {};
   return katana.credentials({
-    apiKey: req.body?.api_key || req.body?.apiKey || req.headers['x-katana-api-key'] || saved.apiKey,
-    apiSecret: req.body?.api_secret || req.body?.apiSecret || req.headers['x-katana-api-secret'] || saved.apiSecret,
-    wallet: req.body?.wallet || req.query?.wallet || req.headers['x-katana-wallet'] || saved.wallet || req.playerWallet,
+    apiKey: req.body?.api_key || req.body?.apiKey || req.headers['x-katana-api-key'],
+    apiSecret: req.body?.api_secret || req.body?.apiSecret || req.headers['x-katana-api-secret'],
+    wallet: req.body?.wallet || req.query?.wallet || req.headers['x-katana-wallet'] || req.playerWallet,
   });
 }
 
@@ -1148,37 +1147,31 @@ function katanaRouteError(res, e, fallback) {
 
 router.get('/katana/config', auth, (req, res) => {
   if (!ensureKatana(req, res)) return;
-  res.json({ ...katana.configStatus(), credentials: katana.credentialStatus(db.getKatanaCredentials(req.playerId)) });
+  res.json({ ...katana.configStatus(), credentials: katana.credentialStatus(null) });
 });
 
 router.get('/katana/credentials', auth, (req, res) => {
   if (!ensureKatana(req, res)) return;
-  const status = katana.credentialStatus(db.getKatanaCredentials(req.playerId));
-  res.json(status);
+  res.status(410).json({
+    error: 'Katana credentials are stored only in encrypted browser storage.',
+    browser_storage_only: true,
+  });
 });
 
 router.post('/katana/credentials', auth, (req, res) => {
   if (!ensureKatana(req, res)) return;
-  try {
-    const wallet = String(req.body?.wallet || req.playerWallet || '').trim();
-    if (req.playerWallet && wallet.toLowerCase() !== String(req.playerWallet).toLowerCase()) {
-      return res.status(403).json({ error: 'Katana wallet must match the wallet registered to this game account' });
-    }
-    const saved = db.saveKatanaCredentials(req.playerId, {
-      apiKey: req.body?.api_key || req.body?.apiKey,
-      apiSecret: req.body?.api_secret || req.body?.apiSecret,
-      wallet,
-    });
-    res.json({ success: true, ...katana.credentialStatus(saved) });
-  } catch (e) {
-    res.status(e.status || 400).json({ error: e.message || 'Failed to save Katana credentials' });
-  }
+  res.status(410).json({
+    error: 'Katana credentials are stored only in encrypted browser storage.',
+    browser_storage_only: true,
+  });
 });
 
 router.delete('/katana/credentials', auth, (req, res) => {
   if (!ensureKatana(req, res)) return;
-  db.deleteKatanaCredentials(req.playerId);
-  res.json({ success: true });
+  res.status(410).json({
+    error: 'Katana credentials are stored only in encrypted browser storage.',
+    browser_storage_only: true,
+  });
 });
 
 router.get('/katana/account', auth, async (req, res) => {
@@ -3201,12 +3194,11 @@ router.get('/hotstuff/trade-history', auth, async (req, res) => {
 });
 
 function grvtCredsFromReq(req) {
-  const saved = db.getGrvtCredentials(req.playerId) || {};
   return grvt.credentials({
-    apiKey: req.body?.api_key || req.body?.apiKey || req.headers['x-grvt-api-key'] || saved.apiKey,
+    apiKey: req.body?.api_key || req.body?.apiKey || req.headers['x-grvt-api-key'],
     cookie: req.body?.cookie || req.body?.grvt_cookie || req.headers['x-grvt-cookie'],
     accountId: req.body?.account_id || req.body?.accountId || req.headers['x-grvt-account-id'],
-    subAccountId: req.body?.sub_account_id || req.body?.subAccountId || req.headers['x-grvt-sub-account-id'] || saved.subAccountId,
+    subAccountId: req.body?.sub_account_id || req.body?.subAccountId || req.headers['x-grvt-sub-account-id'],
   });
 }
 
@@ -3245,27 +3237,10 @@ router.get('/grvt/credentials', auth, async (req, res) => {
       requested_dex: 'grvt',
     });
   }
-  try {
-    let creds = db.getGrvtCredentials(req.playerId);
-    if (!creds?.apiKey) return res.json({ has_credentials: false });
-    if (!creds.subAccountId || !creds.fundingAccountAddress) {
-      const resolved = await grvt.resolveCreds(creds);
-      creds = db.saveGrvtCredentials(req.playerId, {
-        apiKey: creds.apiKey,
-        subAccountId: resolved.subAccountId,
-        fundingAccountAddress: resolved.fundingAccountAddress || creds.fundingAccountAddress || '',
-      });
-    }
-    res.json({
-      has_credentials: true,
-      api_key: creds.apiKey,
-      sub_account_id: creds.subAccountId || '',
-      funding_account_address: creds.fundingAccountAddress || '',
-      updated_at: creds.updatedAt || null,
-    });
-  } catch (e) {
-    res.status(400).json({ error: e.message || 'Failed to restore GRVT credentials' });
-  }
+  res.status(410).json({
+    error: 'GRVT credentials are stored only in encrypted browser storage.',
+    browser_storage_only: true,
+  });
 });
 
 router.post('/grvt/credentials', auth, async (req, res) => {
@@ -3276,41 +3251,34 @@ router.post('/grvt/credentials', auth, async (req, res) => {
       requested_dex: 'grvt',
     });
   }
-  try {
-    const existing = db.getGrvtCredentials(req.playerId) || {};
-    const apiKey = String(req.body?.api_key || req.body?.apiKey || '').trim();
-    const subAccountId = String(
-      req.body?.sub_account_id
-      || req.body?.subAccountId
-      || existing.subAccountId
-      || ''
-    ).trim();
-    const fundingAccountAddress = String(
-      req.body?.funding_account_address
-      || req.body?.fundingAccountAddress
-      || existing.fundingAccountAddress
-      || ''
-    ).trim();
-    if (!apiKey) return res.status(400).json({ error: 'GRVT API key required' });
-    const incoming = {
-      apiKey,
-      subAccountId,
-    };
-    const resolved = await grvt.resolveCreds(incoming);
-    const saved = db.saveGrvtCredentials(req.playerId, {
-      apiKey,
-      subAccountId: resolved.subAccountId || subAccountId,
-      fundingAccountAddress: resolved.fundingAccountAddress || fundingAccountAddress,
+  res.status(410).json({
+    error: 'GRVT credentials are stored only in encrypted browser storage.',
+    browser_storage_only: true,
+  });
+});
+
+router.post('/grvt/credentials/resolve', auth, async (req, res) => {
+  if (req.dex !== 'grvt') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to grvt before calling GRVT endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'grvt',
     });
+  }
+  try {
+    const apiKey = String(req.body?.api_key || req.body?.apiKey || '').trim();
+    const subAccountId = String(req.body?.sub_account_id || req.body?.subAccountId || '').trim();
+    const fundingAccountAddress = String(req.body?.funding_account_address || req.body?.fundingAccountAddress || '').trim();
+    if (!apiKey) return res.status(400).json({ error: 'GRVT API key required' });
+    const resolved = await grvt.resolveCreds({ apiKey, subAccountId });
     res.json({
       success: true,
       has_credentials: true,
-      sub_account_id: saved?.subAccountId || '',
-      funding_account_address: saved?.fundingAccountAddress || '',
-      updated_at: saved?.updatedAt || null,
+      sub_account_id: resolved.subAccountId || subAccountId || '',
+      funding_account_address: resolved.fundingAccountAddress || fundingAccountAddress || '',
     });
   } catch (e) {
-    const msg = e.message || 'Failed to save GRVT credentials';
+    const msg = e.message || 'Failed to resolve GRVT credentials';
     if (/sub[_ ]?account/i.test(msg)) {
       return res.json({
         success: false,
@@ -3331,8 +3299,10 @@ router.delete('/grvt/credentials', auth, (req, res) => {
       requested_dex: 'grvt',
     });
   }
-  db.deleteGrvtCredentials(req.playerId);
-  res.json({ success: true });
+  res.status(410).json({
+    error: 'GRVT credentials are stored only in encrypted browser storage.',
+    browser_storage_only: true,
+  });
 });
 
 router.get('/grvt/config', auth, (req, res) => {
@@ -3471,11 +3441,9 @@ router.post('/grvt/authorize-builder', auth, async (req, res) => {
   try {
     const creds = requireGrvtOwner(req, res);
     if (!creds) return;
-    const saved = db.getGrvtCredentials(req.playerId) || {};
     const mainAccountId = String(
       req.body?.main_account_id
       || req.body?.mainAccountId
-      || saved.fundingAccountAddress
       || ''
     ).trim();
     const result = await grvt.authorizeBuilder({

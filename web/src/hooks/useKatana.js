@@ -4,8 +4,15 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import { KATANA_CHAIN_ID, KATANA_PERPS_REFERRAL_CODE, KATANA_PERPS_REFERRAL_URL } from '../lib/katanaConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
+import {
+  migratePlainLocalStorageCredential,
+  readEncryptedCredential,
+  removeEncryptedCredential,
+  writeEncryptedCredential,
+} from '../lib/encryptedCredentialStorage';
 
 const FUTURES_API = '/api/futures';
+const STORAGE_KEY = 'clash_katana_credentials_v1';
 
 function normalizeAddress(value) {
   return String(value || '').trim().toLowerCase();
@@ -29,11 +36,37 @@ async function fetchJson(url, options = {}) {
   return data;
 }
 
-function authHeaders(token) {
+function normalizeKatanaCredentials(value) {
+  if (!value?.apiKey || !value?.apiSecret || !value?.wallet) return null;
+  return {
+    apiKey: String(value.apiKey),
+    apiSecret: String(value.apiSecret),
+    wallet: String(value.wallet),
+  };
+}
+
+function credentialStatus(credentials) {
+  const missing = [];
+  if (!credentials?.apiKey) missing.push('api_key');
+  if (!credentials?.apiSecret) missing.push('api_secret');
+  if (!credentials?.wallet) missing.push('wallet');
+  return {
+    has_credentials: missing.length === 0,
+    account_configured: missing.length === 0,
+    trading_configured: missing.length === 0,
+    missing_fields: missing,
+    wallet: credentials?.wallet || '',
+  };
+}
+
+function authHeaders(token, credentials = null) {
   return {
     'Content-Type': 'application/json',
     'x-dex': 'katana',
     ...(token ? { 'x-token': token } : {}),
+    ...(credentials?.apiKey ? { 'x-katana-api-key': credentials.apiKey } : {}),
+    ...(credentials?.apiSecret ? { 'x-katana-api-secret': credentials.apiSecret } : {}),
+    ...(credentials?.wallet ? { 'x-katana-wallet': credentials.wallet } : {}),
   };
 }
 
@@ -51,7 +84,7 @@ function pricesArray(payload) {
 }
 
 function disabled(message) {
-  return { error: message || 'Katana Perps credentials are not configured on the futures server.' };
+  return { error: message || 'Katana Perps credentials are not saved in encrypted browser storage.' };
 }
 
 export function useKatana() {
@@ -67,6 +100,7 @@ export function useKatana() {
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [credentials, setCredentials] = useState(null);
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -77,6 +111,21 @@ export function useKatana() {
     return !!registered && !!live && registered !== live;
   }, [player?.wallet, walletAddr]);
 
+  useEffect(() => {
+    if (!isActiveDex) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const migrated = await migratePlainLocalStorageCredential(STORAGE_KEY, STORAGE_KEY, normalizeKatanaCredentials);
+        const stored = migrated || await readEncryptedCredential(STORAGE_KEY);
+        if (!cancelled) setCredentials(normalizeKatanaCredentials(stored));
+      } catch (e) {
+        console.warn('[useKatana] encrypted credential load failed:', e?.message || e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isActiveDex]);
+
   const loadPrivate = useCallback(async (health) => {
     if (!token || !walletAddr) {
       setAccount(null);
@@ -84,9 +133,8 @@ export function useKatana() {
       setOrders([]);
       return;
     }
-    const headers = authHeaders(token);
-    const config = await fetchJson(`${FUTURES_API}/katana/config`, { headers });
-    const merged = { ...health, ...(config || {}), ...(config?.credentials || {}) };
+    const localStatus = credentialStatus(credentials);
+    const merged = { ...health, ...localStatus };
     setStatus(merged);
     if (!merged?.has_credentials) {
       setAccount(null);
@@ -95,6 +143,7 @@ export function useKatana() {
       return;
     }
     const query = `wallet=${encodeURIComponent(walletAddr)}`;
+    const headers = authHeaders(token, credentials);
     const [acct, pos, ord] = await Promise.all([
       fetchJson(`${FUTURES_API}/katana/account?${query}`, { headers }),
       fetchJson(`${FUTURES_API}/katana/positions?${query}`, { headers }),
@@ -103,7 +152,7 @@ export function useKatana() {
     setAccount(acct || null);
     setPositions(rows(pos));
     setOrders(rows(ord));
-  }, [token, walletAddr]);
+  }, [credentials, token, walletAddr]);
 
   const refresh = useCallback(async () => {
     if (!isActiveDex) return;
@@ -171,17 +220,16 @@ export function useKatana() {
     if (!walletAddr) return disabled('Connect a Katana wallet first.');
     try {
       await evm.ensureChain?.(KATANA_CHAIN_ID);
-      const result = await fetchJson(`${FUTURES_API}/katana/credentials`, {
-        method: 'POST',
-        headers: authHeaders(token),
-        body: JSON.stringify({ apiKey, apiSecret, wallet: walletAddr }),
-      });
-      await refresh();
-      return { success: true, ...result };
+      const next = normalizeKatanaCredentials({ apiKey, apiSecret, wallet: walletAddr });
+      if (!next) return disabled('Katana API key and secret required.');
+      await writeEncryptedCredential(STORAGE_KEY, next);
+      setCredentials(next);
+      setStatus(prev => ({ ...(prev || {}), ...credentialStatus(next) }));
+      return { success: true, ...credentialStatus(next) };
     } catch (e) {
       return { error: e?.message || 'Failed to save Katana credentials' };
     }
-  }, [evm, refresh, token, walletAddr]);
+  }, [evm, token, walletAddr]);
 
   const signedRequest = useCallback(async (preparePath, submitPath, payload) => {
     if (!token) return disabled('Missing game session token.');
@@ -192,13 +240,13 @@ export function useKatana() {
     try {
       const prepared = await fetchJson(`${FUTURES_API}${preparePath}`, {
         method: 'POST',
-        headers: authHeaders(token),
+        headers: authHeaders(token, credentials),
         body: JSON.stringify({ ...payload, wallet: walletAddr }),
       });
       const signature = await signKatanaTypedData(prepared.typedData);
       const result = await fetchJson(`${FUTURES_API}${submitPath}`, {
         method: 'POST',
-        headers: authHeaders(token),
+        headers: authHeaders(token, credentials),
         body: JSON.stringify({
           parameters: prepared.parameters,
           signature,
@@ -211,7 +259,7 @@ export function useKatana() {
     } catch (e) {
       return { error: e?.message || 'Katana signed request failed' };
     }
-  }, [refresh, signKatanaTypedData, status?.has_credentials, status?.missing_fields, token, walletAddr]);
+  }, [credentials, refresh, signKatanaTypedData, status?.has_credentials, status?.missing_fields, token, walletAddr]);
 
   const placeOrder = useCallback((payload) => {
     return signedRequest('/katana/orders/prepare', '/katana/orders/submit', payload);
@@ -306,6 +354,14 @@ export function useKatana() {
       if (!result?.error) return { ok: true, ...result };
       try { window.open(referralUrl, '_blank', 'noopener,noreferrer'); } catch {}
       return { ...result, referralUrl };
+    },
+    disconnect: async () => {
+      await removeEncryptedCredential(STORAGE_KEY);
+      setCredentials(null);
+      setAccount(null);
+      setPositions([]);
+      setOrders([]);
+      setStatus(prev => ({ ...(prev || {}), ...credentialStatus(null) }));
     },
     refresh,
     activate,

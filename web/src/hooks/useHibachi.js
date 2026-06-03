@@ -4,6 +4,12 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { BASE_CHAIN_ID, USDC_ADDRESS as BASE_USDC_ADDRESS } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_USDC_DECIMALS, ARBITRUM_USDC_NATIVE } from '../lib/gmxConfig';
+import {
+  migratePlainLocalStorageCredential,
+  readEncryptedCredential,
+  removeEncryptedCredential,
+  writeEncryptedCredential,
+} from '../lib/encryptedCredentialStorage';
 import { usePlayer } from './useGodot';
 
 const STORAGE_KEY = 'clash_hibachi_credentials_v1';
@@ -46,29 +52,38 @@ function normalizeEnvelope(payload) {
   return [];
 }
 
-function readCredentials() {
-  if (typeof window === 'undefined') return null;
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || 'null');
-    if (!parsed?.apiKey || !parsed?.accountId || !parsed?.privateKey) return null;
-    return {
-      apiKey: String(parsed.apiKey),
-      accountId: String(parsed.accountId),
-      privateKey: String(parsed.privateKey),
-    };
-  } catch {
-    return null;
-  }
+function normalizeHibachiCredentials(value) {
+  if (!value?.apiKey || !value?.accountId || !value?.privateKey) return null;
+  return {
+    apiKey: String(value.apiKey),
+    accountId: String(value.accountId),
+    privateKey: String(value.privateKey),
+  };
 }
 
-function writeCredentials(creds) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(creds));
+function hibachiCredentialPayload(creds, extra = {}) {
+  return {
+    api_key: creds?.apiKey,
+    account_id: creds?.accountId,
+    private_key: creds?.privateKey,
+    ...extra,
+  };
 }
 
-function clearCredentials() {
-  if (typeof window === 'undefined') return;
-  window.localStorage.removeItem(STORAGE_KEY);
+async function loadCredentials() {
+  const migrated = await migratePlainLocalStorageCredential(STORAGE_KEY, STORAGE_KEY, normalizeHibachiCredentials);
+  const stored = migrated || await readEncryptedCredential(STORAGE_KEY);
+  return normalizeHibachiCredentials(stored);
+}
+
+async function writeCredentials(creds) {
+  await writeEncryptedCredential(STORAGE_KEY, normalizeHibachiCredentials(creds));
+  try { window.localStorage.removeItem(STORAGE_KEY); } catch {}
+}
+
+async function clearCredentials() {
+  await removeEncryptedCredential(STORAGE_KEY);
+  try { window.localStorage.removeItem(STORAGE_KEY); } catch {}
 }
 
 function readLeverageSettings() {
@@ -158,7 +173,7 @@ export function useHibachi() {
   const isActiveDex = dex === 'hibachi';
   const player = usePlayer();
   const evmWallet = useEvmWallet();
-  const [credentials, setCredentials] = useState(() => readCredentials());
+  const [credentials, setCredentials] = useState(null);
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -186,18 +201,27 @@ export function useHibachi() {
     && /^0x[a-fA-F0-9]{40}$/.test(String(registeredEvmWallet || ''))
     && String(registeredEvmWallet).toLowerCase() !== String(walletAddr).toLowerCase();
 
+  useEffect(() => {
+    if (!isActiveDex) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const stored = await loadCredentials();
+        if (!cancelled) setCredentials(stored);
+      } catch (e) {
+        console.warn('[useHibachi] encrypted credential load failed:', e?.message || e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isActiveDex]);
+
   const authHeaders = useCallback((extra = {}) => ({
     'Content-Type': 'application/json',
     ...(token ? { 'x-token': token, 'x-dex': 'hibachi' } : {}),
     ...extra,
   }), [token]);
 
-  const credentialBody = useCallback((extra = {}) => ({
-    api_key: credentials?.apiKey,
-    account_id: credentials?.accountId,
-    private_key: credentials?.privateKey,
-    ...extra,
-  }), [credentials]);
+  const credentialBody = useCallback((extra = {}) => hibachiCredentialPayload(credentials, extra), [credentials]);
 
   const fetchJson = useCallback(async (path, options = {}) => {
     const res = await fetch(path, options);
@@ -489,8 +513,19 @@ export function useHibachi() {
       if (!next.apiKey) throw new Error('Hibachi API key required');
       if (!next.accountId) throw new Error('Hibachi account id required');
       if (!next.privateKey) throw new Error('Hibachi private key required');
-      writeCredentials(next);
+      if (!token) throw new Error('Game session is not ready');
+      const requestPath = shouldPreferPublicProxy() && canUsePublicProxyFallback()
+        ? hibachiProxyPath('/api/futures/hibachi/account', HIBACHI_AUTH_PROXY_URL)
+        : '/api/futures/hibachi/account';
+      const verifiedAccount = await fetchJson(requestPath, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(hibachiCredentialPayload(next)),
+      });
+      await writeCredentials(next);
       setCredentials(next);
+      setAccount(verifiedAccount || null);
+      setDataReady(true);
       return { success: true };
     } catch (e) {
       const msg = hibachiErrorMessage(e, 'Hibachi activation failed');
@@ -499,10 +534,10 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, evmWallet, credentials]);
+  }, [authHeaders, credentials, fetchJson, token, walletAddr]);
 
-  const disconnect = useCallback(() => {
-    clearCredentials();
+  const disconnect = useCallback(async () => {
+    await clearCredentials();
     setCredentials(null);
     setAccount(null);
     setPositions([]);
