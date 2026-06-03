@@ -145,6 +145,14 @@ function hibachiErrorMessage(error, fallback = 'Hibachi request failed') {
   return msg || fallback;
 }
 
+function hibachiCredentialErrorMessage(error) {
+  const msg = hibachiErrorMessage(error, '');
+  if (error?.status === 401 || /401|unauthorized|forbidden|invalid api|invalid key|signature/i.test(msg)) {
+    return 'Hibachi credentials are incorrect. Check your API key, account id, and private key.';
+  }
+  return msg || 'Could not verify Hibachi credentials.';
+}
+
 function isHibachiIpBlocked(error) {
   return error?.code === 'HIBACHI_IP_BLOCKED'
     || /HIBACHI_IP_BLOCKED|Hibachi is not available from your IP address|cloudflare|access denied/i.test(
@@ -528,7 +536,7 @@ export function useHibachi() {
       setDataReady(true);
       return { success: true };
     } catch (e) {
-      const msg = hibachiErrorMessage(e, 'Hibachi activation failed');
+      const msg = hibachiCredentialErrorMessage(e);
       setError(msg);
       return { error: msg };
     } finally {

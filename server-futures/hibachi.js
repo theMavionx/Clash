@@ -143,6 +143,50 @@ function normalizeOrderFlags(args = {}) {
   return null;
 }
 
+function positionMargin(position = {}) {
+  const directMargin = num(
+    position.margin
+      ?? position.positionMargin
+      ?? position.initialMargin
+      ?? position.openMargin
+      ?? position.collateral
+      ?? position.usedMargin
+      ?? position.marginUsed,
+  );
+  if (directMargin > 0) return directMargin;
+  const notional = num(position.notionalValue ?? position.notional ?? position.positionNotional);
+  const leverage = num(position.leverage ?? position.positionLeverage ?? position.initialLeverage);
+  return notional > 0 && leverage > 0 ? notional / leverage : 0;
+}
+
+function accountMarginUsed(account = {}) {
+  const directMargin = num(
+    account.totalMarginUsed
+      ?? account.total_margin_used
+      ?? account.totalInitialMargin
+      ?? account.total_initial_margin
+      ?? account.initialMargin
+      ?? account.initial_margin
+      ?? account.positionMargin
+      ?? account.position_margin
+      ?? account.marginUsed
+      ?? account.margin_used,
+  );
+  if (directMargin > 0) return directMargin;
+
+  const equity = num(account.balance ?? account.accountEquity ?? account.equity);
+  const rawWithdrawable = account.maximalWithdraw ?? account.availableToWithdraw;
+  const hasWithdrawable = rawWithdrawable !== undefined && rawWithdrawable !== null && rawWithdrawable !== '';
+  const withdrawable = num(rawWithdrawable);
+  if (hasWithdrawable && equity > 0 && withdrawable >= 0 && equity >= withdrawable) {
+    return equity - withdrawable;
+  }
+
+  const positions = rows(account.positions);
+  const positionSum = positions.reduce((sum, p) => sum + positionMargin(p), 0);
+  return positionSum > 0 ? positionSum : 0;
+}
+
 function priceBytes(price, contract) {
   const settlementDecimals = Number(contract?.settlementDecimals ?? contract?.settlement_decimals ?? 6);
   const underlyingDecimals = Number(contract?.underlyingDecimals ?? contract?.underlying_decimals ?? 8);
@@ -298,13 +342,14 @@ async function getAccount(credsInput) {
     ?? j?.vipLevel
     ?? j?.vip_level
     ?? null;
+  const marginUsed = accountMarginUsed(j);
   return {
     balance: String(j?.balance ?? 0),
     usdc: String(j?.balance ?? 0),
     account_equity: String(j?.balance ?? 0),
     available_to_spend: String(j?.balance ?? 0),
     available_to_withdraw: String(j?.maximalWithdraw ?? j?.balance ?? 0),
-    total_margin_used: String(num(j?.totalPositionNotional) + num(j?.totalOrderNotional)),
+    total_margin_used: String(marginUsed),
     positions_count: Array.isArray(j?.positions) ? j.positions.length : 0,
     orders_count: 0,
     fee_level: feeLevel,
@@ -323,10 +368,7 @@ async function getPositions(credsInput) {
     const side = String(p.direction || '').toUpperCase().includes('SHORT') ? 'ask' : 'bid';
     const notional = num(p.notionalValue);
     const rawLeverage = num(p.leverage ?? p.positionLeverage ?? p.initialLeverage);
-    const rawMargin = num(p.margin ?? p.positionMargin ?? p.initialMargin ?? p.openMargin ?? p.collateral);
-    const margin = rawMargin > 0
-      ? rawMargin
-      : (rawLeverage > 0 && notional > 0 ? notional / rawLeverage : 0);
+    const margin = positionMargin(p);
     const pnlUsd = num(p.unrealizedTradingPnl) + num(p.unrealizedFundingPnl);
     return {
       symbol: symbolOf(p.symbol),
