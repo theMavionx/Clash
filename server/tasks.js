@@ -279,13 +279,15 @@ async function fetchWalletTrades(player, opts = {}) {
   // returned [] because their wallet is EVM not base58. Net effect: zero
   // quest progress for every GMX trade despite the worker indexing them
   // correctly. Adding 'gmx' wires the verifier into the same path.
-  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix' || dexFilter === 'hyperliquid' || dexFilter === 'risex' || dexFilter === 'nado' || dexFilter === 'grvt') {
+  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix' || dexFilter === 'hyperliquid' || dexFilter === 'risex' || dexFilter === 'nado' || dexFilter === 'hibachi' || dexFilter === 'hotstuff' || dexFilter === 'grvt') {
     if (dexFilter === 'avantis' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'gmx'     && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'monad'   && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'hyperliquid' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'risex'   && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'nado'    && !isEvmWallet(wallet)) return [];
+    if (dexFilter === 'hibachi' && !isEvmWallet(wallet)) return [];
+    if (dexFilter === 'hotstuff' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'decibel' && !isAptosWallet(wallet)) return [];
     if (dexFilter === 'phoenix' && !isSolanaWallet(wallet)) return [];
     const fdb = futuresDbReadonly();
@@ -307,6 +309,10 @@ async function fetchWalletTrades(player, opts = {}) {
             ? "AND verified_source = 'risex_api'"
           : dexFilter === 'nado'
             ? "AND verified_source = 'nado_api'"
+          : dexFilter === 'hibachi'
+            ? "AND verified_source = 'hibachi_api'"
+          : dexFilter === 'hotstuff'
+            ? "AND verified_source = 'hotstuff_api'"
           : dexFilter === 'grvt'
             ? "AND verified_source = 'grvt_builder'"
           : dexFilter === 'phoenix'

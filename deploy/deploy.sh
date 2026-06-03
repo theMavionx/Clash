@@ -24,7 +24,9 @@ CURRENT_LINK="$DEPLOY_ROOT/current"
 KEEP_RELEASES="${KEEP_RELEASES:-2}"
 BACKUP_RETENTION_DAYS="${CLASH_BACKUP_RETENTION_DAYS:-3}"
 BACKUP_KEEP="${CLASH_BACKUP_KEEP:-1}"
-BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-120}"
+BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-}"
+BACKUP_SQLITE_TIMEOUT_MIN_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MIN_SECONDS:-180}"
+BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND="${CLASH_BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND:-4}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -458,17 +460,50 @@ compress_backup_file() {
     fi
 }
 
+sqlite_backup_timeout_seconds() {
+    local src="$1"
+
+    if [[ "$BACKUP_SQLITE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] && [ "$BACKUP_SQLITE_TIMEOUT_SECONDS" -gt 0 ]; then
+        echo "$BACKUP_SQLITE_TIMEOUT_SECONDS"
+        return 0
+    fi
+
+    local min_seconds="$BACKUP_SQLITE_TIMEOUT_MIN_SECONDS"
+    if ! [[ "$min_seconds" =~ ^[0-9]+$ ]] || [ "$min_seconds" -le 0 ]; then
+        min_seconds=180
+    fi
+
+    local mib_per_second="$BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND"
+    if ! [[ "$mib_per_second" =~ ^[0-9]+$ ]] || [ "$mib_per_second" -le 0 ]; then
+        mib_per_second=4
+    fi
+
+    local bytes mib size_timeout
+    bytes="$(stat -c '%s' "$src" 2>/dev/null || echo 0)"
+    if ! [[ "$bytes" =~ ^[0-9]+$ ]]; then
+        bytes=0
+    fi
+    mib=$(( (bytes + 1048575) / 1048576 ))
+    size_timeout=$(( (mib + mib_per_second - 1) / mib_per_second ))
+    echo $(( min_seconds + size_timeout ))
+}
+
 backup_sqlite_db() {
     local src="$1"
     local dst="$2"
     [ -f "$src" ] || return 0
 
     local tmp="${dst}.tmp"
+    local timeout_seconds size_label
+    timeout_seconds="$(sqlite_backup_timeout_seconds "$src")"
+    size_label="$(du -h "$src" 2>/dev/null | awk '{print $1}' || true)"
+    [ -n "$size_label" ] || size_label="unknown size"
     mkdir -p "$(dirname "$dst")"
     rm -f "$dst" "$dst.zst" "$dst.gz" "$tmp" "$tmp.zst" "$tmp.gz" "$tmp-journal"
-    if ! timeout "${BACKUP_SQLITE_TIMEOUT_SECONDS}s" sqlite3 "$src" ".backup '$tmp'"; then
+    log "Backing up SQLite DB $src (${size_label}) with ${timeout_seconds}s timeout"
+    if ! timeout "${timeout_seconds}s" sqlite3 "$src" ".backup '$tmp'"; then
         rm -f "$tmp" "$tmp.zst" "$tmp.gz" "$tmp-journal"
-        log "WARNING: SQLite backup timed out or failed for $src after ${BACKUP_SQLITE_TIMEOUT_SECONDS}s"
+        log "WARNING: SQLite backup timed out or failed for $src after ${timeout_seconds}s"
         return 1
     fi
     mv -f "$tmp" "$dst"
