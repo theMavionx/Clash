@@ -293,10 +293,12 @@ async function fetchWalletTrades(player, opts = {}) {
     try {
       // Filter by player_id AND dex so a legacy row from another DEX on the
       // same player_id can't leak into a different verifier.
-      // Decibel quest progress counts only trades routed through the Clash
-      // app/server signer. Worker rows can include external Decibel activity.
+      // Decibel quest progress counts only trades routed through Clash.
+      // Legacy app-routed rows used verified_source='server'; new actual
+      // fill imports use 'decibel_fill'. Worker rows can include external
+      // Decibel activity and must not drive quests.
       const sourceWhere = dexFilter === 'decibel'
-        ? "AND verified_source = 'decibel_fill'"
+        ? "AND verified_source IN ('decibel_fill', 'server')"
         : dexFilter === 'monad'
           ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
           : dexFilter === 'hyperliquid'
