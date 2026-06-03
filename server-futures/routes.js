@@ -804,8 +804,12 @@ function decibelFieldString(row, keys) {
 
 function decibelFillSymbol(fill, fallback = '') {
   const direct = decibelFieldString(fill, ['marketName', 'market_name', 'symbol']);
-  if (direct) return (direct.split(/[-/]/)[0] || direct).toUpperCase();
-  return String(fallback || decibel.symbolFromMarket(fill) || 'UNKNOWN').toUpperCase();
+  const fallbackSymbol = String(fallback || '').trim();
+  if (fallbackSymbol) return (fallbackSymbol.split(/[-/]/)[0] || fallbackSymbol).toUpperCase();
+  if (direct && !/^0x[0-9a-f]+$/i.test(direct)) {
+    return (direct.split(/[-/]/)[0] || direct).toUpperCase();
+  }
+  return String(decibel.symbolFromMarket(fill) || 'UNKNOWN').toUpperCase();
 }
 
 function decibelFillSide(fill, fallback = '') {
@@ -861,7 +865,10 @@ async function recordDecibelActualFills(playerId, subaccount, orderPayload, txRe
     const current = grouped.get(key) || {
       fills: [],
       side,
-      symbol: decibelFillSymbol(fill, orderPayload?.symbol),
+      symbol: decibelFillSymbol(
+        fill,
+        orderPayload?.symbol || orderPayload?.rewardSymbol || orderPayload?.marketName || orderPayload?.market_name,
+      ),
       amount: 0,
       notional: 0,
       weightedPrice: 0,
@@ -913,6 +920,8 @@ async function recordDecibelActualFills(playerId, subaccount, orderPayload, txRe
         builder: orderPayload.builderAddr,
         builder_fee_bps: orderPayload.builderFee,
         subaccount,
+        symbol: row.symbol,
+        market_name: orderPayload.marketName || orderPayload.market_name || null,
         original_client_order_id: orderPayload.clientOrderId,
         transaction_hash: txResult?.transactionHash || txResult?.hash || null,
         fill_count: row.fills.length,
