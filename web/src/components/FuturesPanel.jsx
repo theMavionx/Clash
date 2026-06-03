@@ -1500,7 +1500,7 @@ function FuturesPanel() {
     ? katanaHook
     : pacificaHook;
   const {
-    walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
+    walletAddr, account, positions, orders, prices, markets, walletUsdc, spotUsdc, leverageSettings, marginModes, dataReady, accountReady,
     connected: tradingConnected,
     loading, error, clearError, goldEarned, clearGoldEarned, depositStatus, walletUsdcStatus,
     bridgeSourceBalances, bridgeSourceBalanceStatus,
@@ -5528,6 +5528,8 @@ function FuturesPanel() {
     const showWalletBalanceCard = dex !== 'hibachi';
     const walletBalanceLabel = dex === 'hyperliquid'
       ? 'Arbitrum Wallet USDC'
+      : dex === 'hotstuff'
+      ? 'Ethereum Wallet USDC'
       : dex === 'risex'
       ? 'RISE Wallet USDC'
       : dex === 'nado'
@@ -6094,7 +6096,7 @@ function FuturesPanel() {
                     {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
                   </span>
                 )
-                : walletUsdc !== null && <span style={S.detail}>{dex === 'hotstuff' ? 'Hotstuff Spot' : 'Wallet'}: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}</span>}
+                : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}</span>}
             </div>
             {dex === 'grvt' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
@@ -6203,17 +6205,17 @@ function FuturesPanel() {
                 ? 'Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.'
                 : 'Use the connected venue account to fund or manage your USDC balance.'}
             </span>
-            {dex === 'hotstuff' && walletUsdc > 0.000001 && (
+            {dex === 'hotstuff' && Number(spotUsdc || 0) > 0.000001 && (
               <button
                 style={{...S.btnSmall, width: '100%', marginTop: 8, background: '#16A34A', color: '#fff', border: '2px solid #15803D'}}
                 onClick={async () => {
-                  const amountText = walletUsdc.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
+                  const amountText = Number(spotUsdc || 0).toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
                   const r = await moveSpotToPerp?.(amountText);
                   if (!r?.error) setLocalAlert(r?.info || 'Moved USDC to Hotstuff derivatives.');
                 }}
                 disabled={loading || !moveSpotToPerp}
               >
-                Move ${walletUsdc.toFixed(2)} Spot to Perps
+                Move ${Number(spotUsdc || 0).toFixed(2)} Spot to Perps
               </button>
             )}
           </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { parseUnits } from 'viem';
+import { formatUnits, parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
@@ -38,6 +38,15 @@ const ERC20_TRANSFER_ABI = [
     outputs: [{ name: 'ok', type: 'bool' }],
   },
 ];
+const ERC20_BALANCE_ABI = [
+  {
+    type: 'function',
+    name: 'balanceOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+];
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -74,6 +83,8 @@ export function useHotstuff() {
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
   const [setupVerified, setSetupVerified] = useState(null);
+  const [walletUsdc, setWalletUsdc] = useState(null);
+  const [walletUsdcStatus, setWalletUsdcStatus] = useState({ status: 'idle', message: null });
   const active = dex === 'hotstuff';
 
   const info = useMemo(() => createHotstuffInfoClient(), []);
@@ -84,6 +95,37 @@ export function useHotstuff() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+
+  const fetchWalletUsdc = useCallback(async () => {
+    if (!active || !walletAddr) {
+      setWalletUsdc(null);
+      setWalletUsdcStatus({ status: 'idle', message: null });
+      return null;
+    }
+    setWalletUsdcStatus({ status: 'checking', message: 'Checking Ethereum wallet USDC...' });
+    try {
+      const pc = typeof getPublicClient === 'function'
+        ? getPublicClient(HOTSTUFF_BRIDGE_CHAIN_ID)
+        : publicClient;
+      const raw = await pc.readContract({
+        address: HOTSTUFF_USDC_ADDRESS,
+        abi: ERC20_BALANCE_ABI,
+        functionName: 'balanceOf',
+        args: [walletAddr],
+      });
+      const next = Number(formatUnits(raw, HOTSTUFF_USDC_DECIMALS));
+      const value = Number.isFinite(next) ? next : 0;
+      setWalletUsdc(value);
+      setWalletUsdcStatus({ status: 'ready', message: null });
+      return value;
+    } catch (e) {
+      const msg = hotstuffErrorMessage(e, 'Could not read Ethereum wallet USDC');
+      console.warn('[useHotstuff] wallet USDC:', msg);
+      setWalletUsdc(null);
+      setWalletUsdcStatus({ status: 'error', message: msg });
+      return null;
+    }
+  }, [active, getPublicClient, publicClient, walletAddr]);
 
   const refresh = useCallback(async () => {
     if (!active || !walletAddr) return;
@@ -127,9 +169,14 @@ export function useHotstuff() {
   useEffect(() => {
     if (!active) return undefined;
     refresh();
+    fetchWalletUsdc();
     const iv = setInterval(refresh, POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
-  }, [active, refresh]);
+    const walletIv = setInterval(fetchWalletUsdc, POLL_INTERVAL_MS);
+    return () => {
+      clearInterval(iv);
+      clearInterval(walletIv);
+    };
+  }, [active, fetchWalletUsdc, refresh]);
 
   const claimGold = useCallback(async (reason = 'hotstuff') => {
     if (!player?.token || !walletAddr) return null;
@@ -428,7 +475,8 @@ export function useHotstuff() {
     orders,
     prices,
     markets,
-    walletUsdc: Number(account?.spot_account_equity || 0),
+    walletUsdc,
+    spotUsdc: Number(account?.spot_account_equity || 0),
     leverageSettings,
     marginModes,
     dataReady: !!markets.length,
@@ -439,7 +487,7 @@ export function useHotstuff() {
     goldEarned,
     clearGoldEarned,
     depositStatus: null,
-    walletUsdcStatus: null,
+    walletUsdcStatus,
     bridgeSourceBalances: {},
     bridgeSourceBalanceStatus: null,
     placeMarketOrder,
