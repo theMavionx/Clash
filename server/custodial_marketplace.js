@@ -938,27 +938,14 @@ function paymentConfigs(ctx) {
   const solanaRevenueTreasury = solanaRevenueTreasuryRaw
     ? normalizeSolanaPubkey(solanaRevenueTreasuryRaw, 'Solana marketplace revenue treasury')
     : null;
-  const solanaClashMint = firstEnv(
-    'MARKETPLACE_SOLANA_CLASH_MINT',
-    'GAME_SHOP_SOLANA_CLASH_MINT',
-    'NFT_SOLANA_CLASH_MINT',
-    'SOLANA_CLASH_MINT'
-  ) || sol.clashMint || null;
-  const solanaClashReady = !!solanaClashMint && !!solanaPaymentTreasury;
+  const solanaUsdcMint = process.env.MARKETPLACE_SOLANA_USDC_MINT || sol.usdcMint || SOLANA_USDC_MINT;
   payments.solana = {
     chain: 'solana',
     label: 'Solana',
-    token: solanaClashReady ? 'clash' : 'usdc',
-    tokenLabel: solanaClashReady ? 'CLASH' : 'USDC',
-    tokenAddress: normalizeSolanaPubkey(
-      solanaClashReady
-        ? solanaClashMint
-        : (process.env.MARKETPLACE_SOLANA_USDC_MINT || sol.usdcMint || SOLANA_USDC_MINT),
-      solanaClashReady ? 'Solana CLASH mint' : 'Solana USDC mint'
-    ),
-    decimals: Number(solanaClashReady
-      ? (process.env.MARKETPLACE_SOLANA_CLASH_DECIMALS || sol.clashDecimals || process.env.CLASH_DECIMALS || 9)
-      : 6),
+    token: 'usdc',
+    tokenLabel: 'USDC',
+    tokenAddress: normalizeSolanaPubkey(solanaUsdcMint, 'Solana USDC mint'),
+    decimals: 6,
     treasury: solanaPaymentTreasury,
     revenueTreasury: solanaRevenueTreasury,
     rpcUrl: null,
@@ -998,12 +985,7 @@ async function marketplaceRuntimeConfig(ctx) {
   const royaltyBps = marketplaceRoyaltyBps();
   const allowExternalVault = process.env.CUSTODIAL_MARKETPLACE_ALLOW_EXTERNAL_VAULT === '1';
   const supportedChains = ALL_CHAINS.filter((chain) => isVaultUsable(vaults[chain], allowExternalVault));
-  const supportedPaymentChains = ALL_CHAINS.filter((chain) => payments[chain]?.ready)
-    .sort((a, b) => {
-      const aMain = a === 'solana' && payments[a]?.token === 'clash' ? 0 : 1;
-      const bMain = b === 'solana' && payments[b]?.token === 'clash' ? 0 : 1;
-      return aMain - bMain;
-    });
+  const supportedPaymentChains = ALL_CHAINS.filter((chain) => payments[chain]?.ready);
   const supportedDestinationChains = ALL_CHAINS.filter((chain) => deliveryReady[chain]);
   return {
     enabled: process.env.CUSTODIAL_MARKETPLACE_ENABLED !== '0',

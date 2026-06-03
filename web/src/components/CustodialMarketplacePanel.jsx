@@ -167,25 +167,14 @@ function formatCompactUsdc(units) {
   const raw = usdcUnitsBigInt(units);
   const text = formatCustodialUsdc(raw);
   const value = Number(text);
-  if (!Number.isFinite(value)) return `${text} USDC`;
+  if (!Number.isFinite(value)) return `$${text}`;
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
   if (value >= 1_000) return `$${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
   return `$${value.toLocaleString('en-US', { maximumFractionDigits: value >= 100 ? 0 : 2 })}`;
 }
 
-function paymentConfig(config, chain) {
-  return config?.payments?.[chain] || null;
-}
-
-function paymentTokenLabel(config, chain) {
-  const payment = paymentConfig(config, chain);
-  return payment?.tokenLabel || payment?.paymentLabel || String(payment?.token || 'USDC').toUpperCase();
-}
-
 function paymentChainLabel(config, chain) {
-  const chainLabel = CHAIN_LABEL[chain] || chain || '';
-  const tokenLabel = paymentTokenLabel(config, chain);
-  return tokenLabel ? `${chainLabel} ${tokenLabel}` : chainLabel;
+  return CHAIN_LABEL[chain] || chain || '';
 }
 
 function tokenAssetId(token) {
@@ -331,7 +320,7 @@ export default function CustodialMarketplacePanel({
   const [selectedAsset, setSelectedAsset] = useState('');
   const [priceInput, setPriceInput] = useState('');
   const [buyTarget, setBuyTarget] = useState(null);
-  const [paymentChain, setPaymentChain] = useState('solana');
+  const [paymentChain, setPaymentChain] = useState('base');
   const [deliveryChain, setDeliveryChain] = useState('base');
   const [purchaseFlow, setPurchaseFlow] = useState(null);
   const [listingFlow, setListingFlow] = useState(null);
@@ -1256,7 +1245,7 @@ export default function CustodialMarketplacePanel({
               )}
             </div>
             <button type="button" style={s.primaryBtn} disabled={busy === 'buy'} onClick={handleBuy}>
-              {busy === 'buy' ? 'Paying...' : `Pay ${paymentTokenLabel(config, paymentChain)}`}
+              {busy === 'buy' ? 'Paying...' : 'Pay'}
             </button>
           </div>
         </div>
@@ -1355,6 +1344,7 @@ function PurchaseProgressModal({ flow, busy, onClose }) {
   const assetId = deliveryAssetId(order);
   const paymentTx = order.paymentTxHash || flow?.txHash;
   const deliveryTx = order.deliveryTxHash;
+  const payChain = order?.payment?.chain || order?.paymentChain || flow?.paymentChain;
   return (
     <div style={s.modalOverlay} onClick={busy ? undefined : onClose}>
       <div style={s.modal} onClick={(e) => e.stopPropagation()}>
@@ -1366,7 +1356,7 @@ function PurchaseProgressModal({ flow, busy, onClose }) {
           <img src={orderImage(order)} alt="" style={s.progressImg} />
           <div style={s.progressMeta}>
             <b>{orderPrice(order)}</b>
-            <span>Pay with {order?.payment?.label || order?.paymentLabel || CHAIN_LABEL[flow?.paymentChain] || flow?.paymentChain || 'USDC'}</span>
+            <span>Pay on {CHAIN_LABEL[payChain] || payChain || '-'}</span>
             <span>Receive on {CHAIN_LABEL[flow?.deliveryChain] || flow?.deliveryChain || '-'}</span>
           </div>
         </div>
