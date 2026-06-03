@@ -10214,7 +10214,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let hyperliquidWalletRowsAvailable = 0;
     const rewardSettleDelaySql = `-${TRADE_REWARD_SETTLE_DELAY_SECONDS} seconds`;
     const sourceWhere = dex === 'decibel'
-      ? "AND verified_source = 'server'"
+      ? "AND verified_source = 'decibel_fill'"
       : dex === 'monad'
         ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
         : dex === 'hyperliquid'
@@ -10777,7 +10777,7 @@ router.get('/trading/stats', auth, async (req, res) => {
     if (fdb) {
       try {
         const sourceClause = dex === 'decibel'
-          ? "AND verified_source = 'server'"
+          ? "AND verified_source = 'decibel_fill'"
           : dex === 'monad'
             ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
             : dex === 'hyperliquid'
@@ -12859,7 +12859,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
           : dex === 'grvt'
             ? "verified_source = 'grvt_builder'"
           : dex === 'decibel'
-          ? "verified_source = 'server'"
+          ? "verified_source = 'decibel_fill'"
         : dex === 'phoenix'
           ? "verified_source IN ('worker', 'tx')"
           : "verified_source = 'worker'";
@@ -14238,7 +14238,7 @@ function tournamentRowToPublic(t, options = {}) {
 }
 
 function tournamentTradeSourceWhere(dex) {
-  if (dex === 'decibel') return "verified_source = 'server'";
+  if (dex === 'decibel') return "verified_source = 'decibel_fill'";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'risex') return "verified_source = 'risex_api'";

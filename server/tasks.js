@@ -296,7 +296,7 @@ async function fetchWalletTrades(player, opts = {}) {
       // Decibel quest progress counts only trades routed through the Clash
       // app/server signer. Worker rows can include external Decibel activity.
       const sourceWhere = dexFilter === 'decibel'
-        ? "AND verified_source = 'server'"
+        ? "AND verified_source = 'decibel_fill'"
         : dexFilter === 'monad'
           ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
           : dexFilter === 'hyperliquid'

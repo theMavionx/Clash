@@ -787,6 +787,144 @@ function requireDecibelBuilderFee(req, res) {
   return { builderAddr, builderFee: DECIBEL_BUILDER_FEE_BPS };
 }
 
+function decibelFieldString(row, keys) {
+  for (const key of keys) {
+    const value = row?.[key];
+    if (value === undefined || value === null || value === '') continue;
+    if (typeof value === 'object') {
+      if (Array.isArray(value.vec) && value.vec.length) return String(value.vec[0]);
+      if (value.value !== undefined && value.value !== null) return String(value.value);
+      if (value.inner !== undefined && value.inner !== null) return String(value.inner);
+      continue;
+    }
+    return String(value);
+  }
+  return '';
+}
+
+function decibelFillSymbol(fill, fallback = '') {
+  const direct = decibelFieldString(fill, ['marketName', 'market_name', 'symbol']);
+  if (direct) return (direct.split(/[-/]/)[0] || direct).toUpperCase();
+  return String(fallback || decibel.symbolFromMarket(fill) || 'UNKNOWN').toUpperCase();
+}
+
+function decibelFillSide(fill, fallback = '') {
+  const action = decibelFieldString(fill, ['action', 'trade_action', 'order_action']).toLowerCase();
+  if (action.includes('closeshort') || (action.includes('close') && action.includes('short'))) return 'close_short';
+  if (action.includes('closelong') || (action.includes('close') && action.includes('long'))) return 'close_long';
+  if (action.includes('openshort') || (action.includes('open') && action.includes('short'))) return 'short';
+  if (action.includes('openlong') || (action.includes('open') && action.includes('long'))) return 'long';
+  const side = decibelFieldString(fill, ['side', 'order_side', 'direction', 'order_direction']).toLowerCase();
+  if (side.includes('short') || side.includes('sell') || side.includes('ask')) return 'short';
+  if (side.includes('long') || side.includes('buy') || side.includes('bid')) return 'long';
+  return fallback || (Number(fill?.size ?? 0) < 0 ? 'short' : 'long');
+}
+
+function decibelFillNotional(fill) {
+  const price = Number(fill?.price ?? fill?.fill_price ?? fill?.avg_price ?? 0);
+  const size = Math.abs(Number(fill?.size ?? fill?.filled_size ?? fill?.base_size ?? 0));
+  return Number.isFinite(price) && Number.isFinite(size) ? price * size : 0;
+}
+
+function decibelFillPnl(fill) {
+  const raw = Number(fill?.realized_pnl_amount ?? fill?.realized_pnl ?? fill?.realised_pnl ?? fill?.pnl);
+  return Number.isFinite(raw) ? raw : null;
+}
+
+async function fetchDecibelFillsForOrder(subaccount, orderPayload, txResult, attempts = 12) {
+  const clientOrderId = String(orderPayload?.clientOrderId || '').toLowerCase();
+  const resultOrderId = String(txResult?.orderId || txResult?.order_id || '').toLowerCase();
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const rows = await decibel.fetchTradeHistory(subaccount, { limit: 100, sortDir: 'DESC' });
+    const matches = (Array.isArray(rows) ? rows : []).filter((fill) => {
+      const fillClientId = decibelFieldString(fill, ['client_order_id', 'clientOrderId', 'clientOrderID']).toLowerCase();
+      const fillOrderId = decibelFieldString(fill, ['order_id', 'orderId', 'orderID']).toLowerCase();
+      return (clientOrderId && fillClientId === clientOrderId)
+        || (resultOrderId && fillOrderId === resultOrderId);
+    });
+    if (matches.length) return matches;
+    await new Promise(resolve => setTimeout(resolve, 750 + attempt * 350));
+  }
+  return [];
+}
+
+async function recordDecibelActualFills(playerId, subaccount, orderPayload, txResult, orderType, sideFallback) {
+  const fills = await fetchDecibelFillsForOrder(subaccount, orderPayload, txResult);
+  if (!fills.length) return { inserted: 0, rows: 0, volume_usd: 0, reason: 'no_actual_fills' };
+
+  const grouped = new Map();
+  for (const fill of fills) {
+    const notional = decibelFillNotional(fill);
+    if (!Number.isFinite(notional) || notional < DECIBEL_MIN_RECORDED_NOTIONAL_USD) continue;
+    const side = decibelFillSide(fill, sideFallback);
+    const key = side;
+    const current = grouped.get(key) || {
+      fills: [],
+      side,
+      symbol: decibelFillSymbol(fill, orderPayload?.symbol),
+      amount: 0,
+      notional: 0,
+      weightedPrice: 0,
+      fee: 0,
+      pnl: 0,
+      hasPnl: false,
+    };
+    const size = Math.abs(Number(fill?.size ?? fill?.filled_size ?? fill?.base_size ?? 0));
+    const price = Number(fill?.price ?? fill?.fill_price ?? fill?.avg_price ?? 0);
+    current.amount += Number.isFinite(size) ? size : 0;
+    current.notional += notional;
+    current.weightedPrice += Number.isFinite(price) && Number.isFinite(size) ? price * size : 0;
+    const fee = Number(fill?.fee_amount ?? fill?.fee ?? 0);
+    if (Number.isFinite(fee)) current.fee += fee;
+    const pnl = decibelFillPnl(fill);
+    if (pnl != null) {
+      current.pnl += pnl;
+      current.hasPnl = true;
+    }
+    current.fills.push(fill);
+    grouped.set(key, current);
+  }
+
+  let inserted = 0;
+  let volume = 0;
+  for (const row of grouped.values()) {
+    if (row.notional > DECIBEL_MAX_REWARD_NOTIONAL_USD) {
+      console.log(`[decibel] actual fill row skipped: notional ${row.notional.toFixed(6)} outside recorded range`);
+      continue;
+    }
+    const avgPrice = row.amount > 0 ? row.weightedPrice / row.amount : 0;
+    const clientOrderId = `decibel:fill:${orderPayload.clientOrderId}:${row.side}`;
+    const info = db.addTrade(playerId, {
+      symbol: row.symbol,
+      side: row.side,
+      orderType: String(row.side || '').startsWith('close_') ? 'close' : orderType,
+      amount: String(row.amount),
+      price: Number.isFinite(avgPrice) && avgPrice > 0 ? String(avgPrice) : null,
+      orderId: txResult?.transactionHash || txResult?.hash || txResult?.orderId || null,
+      clientOrderId,
+      status: 'filled',
+      dex: 'decibel',
+      notional_usd: row.notional,
+      verifiedSource: 'decibel_fill',
+      pnl: row.hasPnl ? row.pnl : null,
+      fee: row.fee,
+      proofJson: JSON.stringify({
+        source: 'decibel_trade_history',
+        builder: orderPayload.builderAddr,
+        builder_fee_bps: orderPayload.builderFee,
+        subaccount,
+        original_client_order_id: orderPayload.clientOrderId,
+        transaction_hash: txResult?.transactionHash || txResult?.hash || null,
+        fill_count: row.fills.length,
+        fills: row.fills,
+      }),
+    });
+    inserted += info.changes || 0;
+    volume += row.notional;
+  }
+  return { inserted, rows: grouped.size, volume_usd: volume };
+}
+
 function decibelRoundToTick(price, tickSize) {
   const p = Number(price);
   const t = Number(tickSize);
@@ -990,38 +1128,25 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
       tx_ms: result?.timings?.total_ms,
       tx_wait_ms: result?.timings?.wait_ms,
     });
+    let fillRecord = { inserted: 0, rows: 0, volume_usd: 0 };
     if (result?.success !== false) {
       try {
-        const reward = decibel.rewardInfoFromPlaceOrder(orderPayload, result);
-        if (reward.rewardable) {
-          const n = Number(reward.notional_usd);
-          if (
-            Number.isFinite(n)
-            && n >= DECIBEL_MIN_RECORDED_NOTIONAL_USD
-            && n <= DECIBEL_MAX_REWARD_NOTIONAL_USD
-          ) {
-            db.addTrade(req.playerId, {
-              symbol: reward.symbol,
-              side: reward.side,
-              orderType: reward.orderType,
-              amount: String(reward.amount),
-              price: String(reward.price),
-              orderId: reward.txHash || result.orderId || null,
-              clientOrderId: reward.clientOrderId,
-              status: 'filled',
-              dex: 'decibel',
-              notional_usd: n,
-              verifiedSource: 'server',
-            });
-          } else {
-            console.log(`[decibel] verified fill row skipped: notional ${Number.isFinite(n) ? n.toFixed(6) : String(n)} outside recorded range`);
-          }
+        fillRecord = await recordDecibelActualFills(
+          req.playerId,
+          verified.subaccount,
+          orderPayload,
+          result,
+          orderType,
+          side,
+        );
+        if (!fillRecord.inserted && fillRecord.reason) {
+          console.log(`[decibel] actual fill row skipped: ${fillRecord.reason} client=${orderPayload.clientOrderId}`);
         }
       } catch (e) {
-        console.warn('[decibel] reward row skipped:', e.message);
+        console.warn('[decibel] actual fill row skipped:', e.message);
       }
     }
-    res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: true, verification });
+    res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: true, verification, fillRecord });
   } catch (e) {
     console.error('[decibel] place order error:', e);
     res.status(500).json({ error: e.message || 'Failed to place Decibel order' });
