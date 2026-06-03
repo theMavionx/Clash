@@ -441,6 +441,7 @@ backup_shared_databases() {
     ts="$(date -u +%Y%m%d%H%M%S)"
     local backup_dir="$SHARED_DIR/backups/$ts"
     mkdir -p "$backup_dir/server" "$backup_dir/server-futures"
+    stop_services_for_database_backup
     backup_sqlite_db "$SHARED_SERVER_DIR/clash.db" "$backup_dir/server/clash.db" || true
     backup_sqlite_db "$SHARED_FUTURES_DIR/futures.db" "$backup_dir/server-futures/futures.db" || true
     if [ -f "$ENV_FILE" ]; then
@@ -490,7 +491,7 @@ sqlite_backup_timeout_seconds() {
 
 checkpoint_sqlite_db() {
     local src="$1"
-    timeout 30s sqlite3 "$src" "PRAGMA busy_timeout=5000; PRAGMA wal_checkpoint(PASSIVE);" >/dev/null 2>&1 || \
+    timeout 30s sqlite3 "$src" "PRAGMA busy_timeout=5000; PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>&1 || \
         log "WARNING: SQLite WAL checkpoint failed before backup for $src"
 }
 
@@ -848,6 +849,18 @@ validate_release() {
     if [ -f "$FUTURES_DIR/index.js" ]; then
         node --check "$FUTURES_DIR/index.js"
     fi
+}
+
+stop_services_for_database_backup() {
+    if [ "${CLASH_BACKUP_QUIESCE_SERVICES:-1}" != "1" ]; then
+        return
+    fi
+
+    log "Stopping runtime services briefly for SQLite backup..."
+    pm2 stop clash-api 2>/dev/null || true
+    pm2 stop clash-hermes-jobs 2>/dev/null || true
+    pm2 stop clash-futures 2>/dev/null || true
+    pm2 stop clash-mcp 2>/dev/null || true
 }
 
 sync_legacy_databases_before_switch() {
@@ -1414,11 +1427,11 @@ main() {
 
     install_system_dependencies
     prepare_shared_runtime
-    backup_shared_databases
     copy_source_to_release
     install_release_dependencies
     build_frontend
     validate_release
+    backup_shared_databases
     sync_legacy_databases_before_switch
     switch_current_release
     write_nginx_config
