@@ -533,6 +533,9 @@ export function useHibachi() {
     try { window.open('https://hibachi.xyz/', '_blank', 'noopener,noreferrer'); } catch {}
     return { success: true, info: 'Opened Hibachi.' };
   }, []);
+  const unsupportedFundingAction = useCallback(async () => ({
+    error: 'Hibachi deposits and withdrawals must be managed in the Hibachi app.',
+  }), []);
 
   return {
     connected: !!walletAddr,
@@ -559,8 +562,8 @@ export function useHibachi() {
     setTpsl,
     setLeverage: async () => ({ success: true }),
     setMarginMode: async () => ({ success: true }),
-    depositToPacifica: openOfficialApp,
-    withdraw: openOfficialApp,
+    depositToPacifica: unsupportedFundingAction,
+    withdraw: unsupportedFundingAction,
     activate,
     disconnect,
     claimGold,

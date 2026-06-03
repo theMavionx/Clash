@@ -376,7 +376,7 @@ async function placeOrder(credsInput, args = {}) {
     throw new Error('Hibachi triggerDirection must be HIGH or LOW for trigger orders');
   }
   const orderFlags = normalizeOrderFlags(args);
-  const nonce = Math.floor(Number(process.hrtime.bigint() / 1000n));
+  const nonce = Date.now();
   const maxFeesPercent = decimalText(args.maxFeesPercent || HIBACHI_MAX_FEES_PERCENT);
   const payload = orderSignaturePayload({ nonce, contract, quantity, side: hibachiSide, price, maxFeesPercent });
   const body = {

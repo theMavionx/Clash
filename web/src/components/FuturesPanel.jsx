@@ -5582,15 +5582,16 @@ function FuturesPanel() {
           </div>
         )}
 
-        {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid') ? (() => {
+        {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'hibachi') ? (() => {
           const isGmx = dex === 'gmx';
           const isHyperliquid = dex === 'hyperliquid';
-          const accentLight = isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
-          const accentDark = isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
-          const accentBg = isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
-          const accentBorder = isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
-          const accentBtnBorder = isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
-          const chainName = isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
+          const isHibachi = dex === 'hibachi';
+          const accentLight = isHibachi ? '#EF4444' : isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
+          const accentDark = isHibachi ? '#991B1B' : isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
+          const accentBg = isHibachi ? 'rgba(239,68,68,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
+          const accentBorder = isHibachi ? 'rgba(239,68,68,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
+          const accentBtnBorder = isHibachi ? '#DC2626' : isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
+          const chainName = isHibachi ? 'Arc' : isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
           const isDepositing = isHyperliquid && depositStatus?.status === 'depositing';
           const isMovingToPerp = isHyperliquid && depositStatus?.status === 'moving_to_perp';
           const isFundingBusy = isDepositing || isMovingToPerp;
@@ -5601,13 +5602,13 @@ function FuturesPanel() {
           return (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: accentLight}}>{isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
+              <span style={{...S.label, color: accentLight}}>{isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
               {isFundingBusy
                 ? <span style={{...S.detail, color: '#15803D'}}>{isMovingToPerp ? 'Moving to trading' : 'Depositing'}{pendingDepositLabel ? ` ${pendingDepositLabel} USDC` : ''}...</span>
                 : walletUsdc !== null && <span style={S.detail}>{isHyperliquid ? 'Arbitrum ' : ''}USDC: ${walletUsdc.toFixed(2)}</span>}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-              {!isHyperliquid && (
+              {!isHyperliquid && !isHibachi && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6,
                 background: accentBg,
@@ -5629,6 +5630,32 @@ function FuturesPanel() {
                   >COPY</button>
                 )}
               </div>
+              )}
+              {isHibachi && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  background: accentBg,
+                  border: `2px dashed ${accentBorder}`,
+                  borderRadius: 10, padding: '8px 10px',
+                }}>
+                  <span style={{
+                    flex: 1,
+                    fontSize: 11,
+                    fontWeight: 800,
+                    color: accentDark,
+                    lineHeight: 1.35,
+                  }}>
+                    Fund and withdraw in the Hibachi app. Clash only reads your Hibachi account and signs trades with the API credentials you saved.
+                  </span>
+                  <button
+                    style={{
+                      ...S.btnSmall, padding: '6px 10px', fontSize: 10,
+                      background: accentLight, color: '#fff',
+                      border: `2px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
+                    }}
+                    onClick={() => window.open('https://hibachi.xyz/', '_blank', 'noopener,noreferrer')}
+                  >OPEN</button>
+                </div>
               )}
               {isHyperliquid && (
                 <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
@@ -5727,6 +5754,8 @@ function FuturesPanel() {
                   ? hyperliquidUnified
                     ? <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Unified account is active, so credited USDC is already available for trading. Minimum is <b>5 USDC</b>.</>
                     : <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Legacy accounts may need one extra move from Spot into the trading balance. Minimum is <b>5 USDC</b>.</>
+                  : isHibachi
+                  ? <>Hibachi deposit and withdrawal are not exposed through this Clash API flow. Use the official Hibachi app to manage funds on <b>{chainName}</b>.</>
                   : <>Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.</>}
               </span>
             </div>
@@ -5862,7 +5891,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hotstuff' && dex !== 'hibachi' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
