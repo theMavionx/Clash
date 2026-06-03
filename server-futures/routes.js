@@ -1303,6 +1303,21 @@ router.post('/decibel/leverage', auth, async (req, res) => {
 
 // ==================== MARKET DATA ====================
 
+function hibachiErrorStatus(error, fallback = 502) {
+  return hibachi.isIpBlockedError?.(error) ? 403 : fallback;
+}
+
+function hibachiErrorBody(error, fallbackError) {
+  if (hibachi.isIpBlockedError?.(error)) {
+    return {
+      error: hibachi.HIBACHI_IP_BLOCKED_MESSAGE || 'Hibachi is not available from your IP address.',
+      code: 'HIBACHI_IP_BLOCKED',
+      detail: error.message,
+    };
+  }
+  return { error: fallbackError, detail: error?.message };
+}
+
 router.get('/markets', async (req, res) => {
   const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
@@ -1317,6 +1332,9 @@ router.get('/markets', async (req, res) => {
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
+    if (dex === 'hibachi') {
+      return res.status(hibachiErrorStatus(e, 500)).json(hibachiErrorBody(e, 'Failed to get Hibachi market info'));
+    }
     res.status(500).json({ error: 'Failed to get market info' });
   }
 });
@@ -1335,6 +1353,9 @@ router.get('/prices', async (req, res) => {
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
+    if (dex === 'hibachi') {
+      return res.status(hibachiErrorStatus(e, 500)).json(hibachiErrorBody(e, 'Failed to get Hibachi prices'));
+    }
     res.status(500).json({ error: 'Failed to get prices' });
   }
 });
@@ -2736,7 +2757,7 @@ router.post('/hibachi/account', auth, async (req, res) => {
     res.json(await hibachi.getAccount(creds));
   } catch (e) {
     console.warn('[hibachi] account failed:', e.message);
-    res.status(502).json({ error: 'Failed to load Hibachi account', detail: e.message });
+    res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to load Hibachi account'));
   }
 });
 
@@ -2747,7 +2768,7 @@ router.post('/hibachi/positions', auth, async (req, res) => {
     res.json(await hibachi.getPositions(creds));
   } catch (e) {
     console.warn('[hibachi] positions failed:', e.message);
-    res.status(502).json({ error: 'Failed to load Hibachi positions', detail: e.message });
+    res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to load Hibachi positions'));
   }
 });
 
@@ -2758,7 +2779,7 @@ router.post('/hibachi/orders', auth, async (req, res) => {
     res.json(await hibachi.getOrders(creds));
   } catch (e) {
     console.warn('[hibachi] orders failed:', e.message);
-    res.status(502).json({ error: 'Failed to load Hibachi orders', detail: e.message });
+    res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to load Hibachi orders'));
   }
 });
 
@@ -2769,7 +2790,7 @@ router.post('/hibachi/order', auth, async (req, res) => {
     res.json(await hibachi.placeOrder(creds, req.body || {}));
   } catch (e) {
     console.warn('[hibachi] order failed:', e.message);
-    res.status(400).json({ error: e.message || 'Failed to place Hibachi order' });
+    res.status(hibachiErrorStatus(e, 400)).json(hibachi.isIpBlockedError?.(e) ? hibachiErrorBody(e, 'Failed to place Hibachi order') : { error: e.message || 'Failed to place Hibachi order' });
   }
 });
 
@@ -2780,7 +2801,7 @@ router.post('/hibachi/order/cancel', auth, async (req, res) => {
     res.json(await hibachi.cancelOrder(creds, req.body || {}));
   } catch (e) {
     console.warn('[hibachi] cancel failed:', e.message);
-    res.status(400).json({ error: e.message || 'Failed to cancel Hibachi order' });
+    res.status(hibachiErrorStatus(e, 400)).json(hibachi.isIpBlockedError?.(e) ? hibachiErrorBody(e, 'Failed to cancel Hibachi order') : { error: e.message || 'Failed to cancel Hibachi order' });
   }
 });
 
@@ -2797,7 +2818,7 @@ router.post('/hibachi/import-fills', auth, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.warn('[hibachi] import-fills failed:', e.message);
-    res.status(502).json({ error: 'Failed to import Hibachi fills', detail: e.message });
+    res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to import Hibachi fills'));
   }
 });
 
@@ -2811,7 +2832,7 @@ router.post('/hibachi/trade-history', auth, async (req, res) => {
     res.json(Array.isArray(rows) ? rows : []);
   } catch (e) {
     console.warn('[hibachi] trade-history failed:', e.message);
-    res.status(502).json({ error: 'Failed to load Hibachi trade history', detail: e.message });
+    res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to load Hibachi trade history'));
   }
 });
 

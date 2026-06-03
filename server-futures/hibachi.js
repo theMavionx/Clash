@@ -1,10 +1,12 @@
 const crypto = require('crypto');
+const { secp256k1 } = require('@noble/curves/secp256k1');
 
 const HIBACHI_API = String(process.env.HIBACHI_API_URL || 'https://api.hibachi.xyz').replace(/\/+$/u, '');
 const HIBACHI_DATA_API = String(process.env.HIBACHI_DATA_API_URL || 'https://data-api.hibachi.xyz').replace(/\/+$/u, '');
 const HIBACHI_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.env.HIBACHI_FILL_LOOKBACK_LIMIT || 100)));
 const HIBACHI_MAX_FEES_PERCENT = String(process.env.HIBACHI_MAX_FEES_PERCENT || '0.001');
 const HIBACHI_REWARD_MIN_NOTIONAL_USD = Math.max(0, Number(process.env.HIBACHI_REWARD_MIN_NOTIONAL_USD || 10));
+const HIBACHI_IP_BLOCKED_MESSAGE = 'Hibachi is not available from your IP address. Try a supported network or IP region.';
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -34,14 +36,14 @@ function rows(payload) {
 async function request(base, method, path, { apiKey, body } = {}) {
   const headers = {
     accept: 'application/json',
-    'hibachi-client': 'ClashOfPerps/1.0',
+    'Hibachi-Client': 'ClashOfPerps/1.0',
   };
   let payload;
   if (body !== undefined) {
     headers['content-type'] = 'application/json';
     payload = JSON.stringify(body);
   }
-  if (apiKey) headers.authorization = apiKey;
+  if (apiKey) headers.Authorization = apiKey;
   const ctrl = new AbortController();
   const timeout = setTimeout(() => ctrl.abort(), 12_000);
   try {
@@ -50,13 +52,30 @@ async function request(base, method, path, { apiKey, body } = {}) {
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
     if (!r.ok) {
+      const contentType = String(r.headers.get('content-type') || '');
+      const looksLikeEdgeBlock = r.status === 403
+        && (contentType.includes('text/html') || /cloudflare|access denied|forbidden/i.test(text || ''));
+      if (looksLikeEdgeBlock) {
+        const err = new Error(HIBACHI_IP_BLOCKED_MESSAGE);
+        err.code = 'HIBACHI_IP_BLOCKED';
+        err.status = 403;
+        err.path = path;
+        throw err;
+      }
       const detail = typeof data === 'string' ? data : (data?.message || data?.error || text);
-      throw new Error(`Hibachi ${path} ${r.status}: ${detail || 'request failed'}`);
+      const err = new Error(`Hibachi ${path} ${r.status}: ${detail || 'request failed'}`);
+      err.status = r.status;
+      err.path = path;
+      throw err;
     }
     return data;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function isIpBlockedError(error) {
+  return error?.code === 'HIBACHI_IP_BLOCKED';
 }
 
 function credentials(input = {}) {
@@ -65,14 +84,20 @@ function credentials(input = {}) {
   const privateKey = String(input.privateKey || input.private_key || '').trim();
   if (!apiKey) throw new Error('Hibachi API key required');
   if (!Number.isFinite(accountId) || accountId <= 0) throw new Error('Hibachi account id required');
-  if (!privateKey) throw new Error('Hibachi HMAC private key required');
-  if (/^0x[0-9a-fA-F]{64}$/.test(privateKey)) {
-    throw new Error('Hibachi wallet ECDSA private keys are not accepted by this proxy. Use a Hibachi API HMAC key.');
-  }
+  if (!privateKey) throw new Error('Hibachi private key required');
   return { apiKey, accountId, privateKey };
 }
 
-function hmacSign(privateKey, payload) {
+function signPayload(privateKey, payload) {
+  const key = String(privateKey || '').trim();
+  const hex = key.startsWith('0x') ? key.slice(2) : key;
+  if (/^[0-9a-fA-F]{64}$/.test(hex)) {
+    const hash = crypto.createHash('sha256').update(payload).digest();
+    const sig = secp256k1.sign(hash, hex, { lowS: true });
+    const compact = Buffer.from(sig.toCompactRawBytes());
+    const recovery = Buffer.from([Number(sig.recovery || 0)]);
+    return Buffer.concat([compact, recovery]).toString('hex');
+  }
   return crypto.createHmac('sha256', privateKey).update(payload).digest('hex');
 }
 
@@ -88,6 +113,34 @@ function toFixedInt(value, decimals) {
   const [whole, frac = ''] = decimalText(value).split('.');
   const padded = `${frac}${'0'.repeat(decimals)}`.slice(0, decimals);
   return BigInt(whole || '0') * (10n ** BigInt(decimals)) + BigInt(padded || '0');
+}
+
+function decimalPlaces(value) {
+  const text = decimalText(value);
+  if (!text.includes('.')) return 0;
+  return text.split('.')[1].replace(/0+$/u, '').length;
+}
+
+function checkTickSize(price, tickSize) {
+  if (tickSize == null || tickSize === '') return;
+  const allowed = decimalPlaces(tickSize);
+  const actual = decimalPlaces(price);
+  if (actual > allowed) {
+    throw new Error(`Invalid Hibachi price precision: ${price} exceeds tick size ${tickSize}`);
+  }
+}
+
+function normalizeTriggerDirection(value) {
+  const text = String(value || '').trim().toUpperCase();
+  if (text === 'HIGH' || text === 'LOW') return text;
+  return null;
+}
+
+function normalizeOrderFlags(args = {}) {
+  const raw = String(args.orderFlags || args.order_flags || '').trim().toUpperCase();
+  if (args.reduceOnly || raw === 'REDUCE_ONLY' || raw === 'REDUCEONLY') return 'REDUCE_ONLY';
+  if (raw === 'POST_ONLY' || raw === 'IOC') return raw;
+  return null;
 }
 
 function priceBytes(price, contract) {
@@ -118,6 +171,9 @@ function orderSignaturePayload({ nonce, contract, quantity, side, price, maxFees
 }
 
 let inventoryCache = { at: 0, payload: null };
+let exchangeInfoCache = { at: 0, payload: null };
+const marketDataCache = new Map();
+
 async function getInventory() {
   if (inventoryCache.payload && Date.now() - inventoryCache.at < 20_000) return inventoryCache.payload;
   const payload = await request(HIBACHI_DATA_API, 'GET', '/market/inventory');
@@ -125,19 +181,58 @@ async function getInventory() {
   return payload;
 }
 
+async function getExchangeInfo() {
+  if (exchangeInfoCache.payload && Date.now() - exchangeInfoCache.at < 20_000) return exchangeInfoCache.payload;
+  const payload = await request(HIBACHI_DATA_API, 'GET', '/market/exchange-info');
+  exchangeInfoCache = { at: Date.now(), payload };
+  return payload;
+}
+
+async function getMarketData(symbol) {
+  const key = String(symbol || '').trim();
+  if (!key) return { price: {}, stats: {} };
+  const cached = marketDataCache.get(key);
+  if (cached && Date.now() - cached.at < 20_000) return cached.payload;
+  const [price, stats] = await Promise.all([
+    request(HIBACHI_DATA_API, 'GET', `/market/data/prices?symbol=${encodeURIComponent(key)}`).catch(() => ({})),
+    request(HIBACHI_DATA_API, 'GET', `/market/data/stats?symbol=${encodeURIComponent(key)}`).catch(() => ({})),
+  ]);
+  const payload = { price: price || {}, stats: stats || {} };
+  marketDataCache.set(key, { at: Date.now(), payload });
+  return payload;
+}
+
 async function contractMap() {
-  const inv = await getInventory();
-  const list = rows(inv?.markets).map(m => m.contract || m).filter(Boolean);
+  let list = [];
+  try {
+    const inv = await getInventory();
+    list = rows(inv?.markets).map(m => m.contract || m).filter(Boolean);
+  } catch {}
+  if (!list.length) {
+    const exchange = await getExchangeInfo();
+    list = rows(exchange?.futureContracts).filter(Boolean);
+  }
   return new Map(list.map(c => [String(c.symbol || '').toUpperCase(), c]));
 }
 
 async function getMarketInfo() {
-  const inv = await getInventory();
-  const data = rows(inv?.markets).map((m) => {
+  let markets = [];
+  try {
+    const inv = await getInventory();
+    markets = rows(inv?.markets);
+  } catch {}
+  if (!markets.length) {
+    const exchange = await getExchangeInfo();
+    markets = rows(exchange?.futureContracts).map(contract => ({ contract, info: {} }));
+  }
+  const enriched = await Promise.all(markets.map(async (m) => {
     const c = m.contract || m;
     const info = m.info || {};
-    const symbol = symbolOf(c.symbol || info.symbol);
-    const mark = num(info.markPrice || info.priceLatest || c.markPrice);
+    const marketData = await getMarketData(c.symbol || info.symbol);
+    const priceInfo = marketData.price || {};
+    const statsInfo = marketData.stats || {};
+    const symbol = symbolOf(c.symbol || info.symbol || priceInfo.symbol);
+    const mark = num(info.markPrice || info.priceLatest || priceInfo.markPrice || priceInfo.tradePrice || priceInfo.spotPrice || c.markPrice);
     const initialMarginRate = num(c.initialMarginRate, 0.1);
     return {
       symbol,
@@ -154,14 +249,15 @@ async function getMarketInfo() {
       mark,
       mid: mark,
       oracle: mark,
-      yesterday_price: num(info.price24hAgo),
+      yesterday_price: num(info.price24hAgo || priceInfo.price24hAgo),
       open_interest: 0,
-      volume_24h: 0,
-      funding_rate: 0,
-      _hibachi: { contract: c, info },
+      volume_24h: num(statsInfo.volume24h),
+      funding_rate: num(priceInfo.fundingRateEstimation?.estimatedFundingRate),
+      _hibachi: { contract: c, info, price: priceInfo, stats: statsInfo },
       _raw: m,
     };
-  }).filter(m => m.symbol && Number.isFinite(m.market_id));
+  }));
+  const data = enriched.filter(m => m.symbol && Number.isFinite(m.market_id));
   return { success: true, data };
 }
 
@@ -192,7 +288,7 @@ async function authedSend(method, path, body, creds) {
 
 async function getAccount(credsInput) {
   const creds = credentials(credsInput);
-  const j = await authedGet('/trade/account/info', creds);
+  const j = await authedGet(`/trade/account/info?accountId=${encodeURIComponent(creds.accountId)}`, creds);
   return {
     balance: String(j?.balance ?? 0),
     usdc: String(j?.balance ?? 0),
@@ -210,7 +306,7 @@ async function getAccount(credsInput) {
 
 async function getPositions(credsInput) {
   const creds = credentials(credsInput);
-  const j = await authedGet('/trade/account/info', creds);
+  const j = await authedGet(`/trade/account/info?accountId=${encodeURIComponent(creds.accountId)}`, creds);
   return rows(j?.positions).map(p => {
     const amount = Math.abs(num(p.quantity));
     if (!p?.symbol || amount <= 0) return null;
@@ -237,7 +333,7 @@ async function getPositions(credsInput) {
 
 async function getOrders(credsInput) {
   const creds = credentials(credsInput);
-  const j = await authedGet('/trade/orders', creds);
+  const j = await authedGet(`/trade/orders?accountId=${encodeURIComponent(creds.accountId)}`, creds);
   return rows(j?.orders || j).map(o => ({
     symbol: symbolOf(o.symbol),
     side: String(o.side || '').toUpperCase() === 'ASK' ? 'ask' : 'bid',
@@ -270,6 +366,16 @@ async function placeOrder(credsInput, args = {}) {
   if (!(num(quantity) > 0)) throw new Error('Order quantity required');
   const orderType = String(args.orderType || 'market').toUpperCase() === 'LIMIT' ? 'LIMIT' : 'MARKET';
   const price = orderType === 'LIMIT' ? decimalText(args.price) : null;
+  if (price != null) checkTickSize(price, contract.tickSize);
+  const triggerPrice = args.triggerPrice != null || args.trigger_price != null
+    ? decimalText(args.triggerPrice ?? args.trigger_price)
+    : null;
+  if (triggerPrice != null) checkTickSize(triggerPrice, contract.tickSize);
+  const triggerDirection = normalizeTriggerDirection(args.triggerDirection || args.trigger_direction);
+  if (triggerPrice != null && !triggerDirection) {
+    throw new Error('Hibachi triggerDirection must be HIGH or LOW for trigger orders');
+  }
+  const orderFlags = normalizeOrderFlags(args);
   const nonce = Math.floor(Number(process.hrtime.bigint() / 1000n));
   const maxFeesPercent = decimalText(args.maxFeesPercent || HIBACHI_MAX_FEES_PERCENT);
   const payload = orderSignaturePayload({ nonce, contract, quantity, side: hibachiSide, price, maxFeesPercent });
@@ -281,9 +387,10 @@ async function placeOrder(credsInput, args = {}) {
     orderType,
     side: hibachiSide,
     maxFeesPercent,
-    signature: hmacSign(creds.privateKey, payload),
+    signature: signPayload(creds.privateKey, payload),
     ...(price != null ? { price } : {}),
-    ...(args.reduceOnly ? { orderFlags: 'REDUCE_ONLY' } : {}),
+    ...(triggerPrice != null ? { triggerPrice, triggerDirection } : {}),
+    ...(orderFlags ? { orderFlags } : {}),
   };
   return authedSend('POST', '/trade/order', body, creds);
 }
@@ -297,7 +404,7 @@ async function cancelOrder(credsInput, { orderId, nonce } = {}) {
   buf.writeBigUInt64BE(id ?? n);
   const body = {
     accountId: creds.accountId,
-    signature: hmacSign(creds.privateKey, buf),
+    signature: signPayload(creds.privateKey, buf),
     ...(id != null ? { orderId: String(id) } : { nonce: String(n) }),
   };
   return authedSend('DELETE', '/trade/order', body, creds);
@@ -330,7 +437,7 @@ function normalizeTrade(accountId, trade) {
 
 async function getAccountTradeHistory(credsInput, { limit = HIBACHI_FILL_LOOKBACK_LIMIT } = {}) {
   const creds = credentials(credsInput);
-  const j = await authedGet('/trade/account/trades', creds);
+  const j = await authedGet(`/trade/account/trades?accountId=${encodeURIComponent(creds.accountId)}`, creds);
   return rows(j?.trades || j)
     .slice(0, Math.max(1, Math.min(250, Number(limit) || HIBACHI_FILL_LOOKBACK_LIMIT)))
     .map(t => normalizeTrade(creds.accountId, t))
@@ -375,7 +482,9 @@ async function importFillsForPlayer(playerId, credsInput, opts = {}) {
 module.exports = {
   HIBACHI_API,
   HIBACHI_DATA_API,
+  HIBACHI_IP_BLOCKED_MESSAGE,
   credentials,
+  isIpBlockedError,
   getMarketInfo,
   getPrices,
   getAccount,

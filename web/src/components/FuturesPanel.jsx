@@ -249,6 +249,9 @@ function phoenixMarginReserveDetails({ balance, leverage, orderType, takerFeeRat
 
 function humanizeTradeError(message) {
   const text = String(message || '');
+  if (/HIBACHI_IP_BLOCKED|Hibachi is not available from your IP address|cloudflare|access denied/i.test(text)) {
+    return 'Hibachi is not available from your IP address. Use a supported network or IP region, then try again.';
+  }
   if (/PERPL_REGION_BLOCKED|Unavailable For Legal Reasons|not available in your country|country or IP region|451/i.test(text)) {
     return 'Perpl is not available in your country or IP region.';
   }
@@ -1740,6 +1743,9 @@ function FuturesPanel() {
   const [phoenixInviteKind, setPhoenixInviteKind] = useState('referral');
   const [risexInviteCode, setRisexInviteCode] = useState('');
   const [grvtApiKeyInput, setGrvtApiKeyInput] = useState('');
+  const [hibachiApiKeyInput, setHibachiApiKeyInput] = useState('');
+  const [hibachiAccountIdInput, setHibachiAccountIdInput] = useState('');
+  const [hibachiPrivateKeyInput, setHibachiPrivateKeyInput] = useState('');
   const [grvtOneTapOpen, setGrvtOneTapOpen] = useState(false);
   const [grvtPrivateKeyInput, setGrvtPrivateKeyInput] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
@@ -3426,6 +3432,10 @@ function FuturesPanel() {
   // ==================== HIBACHI API KEY GATE ====================
   if (dex === 'hibachi' && hasWallet && setupVerified !== true) {
     const isRunning = referralLinking || loading;
+    const hibachiCanSave = hibachiApiKeyInput.trim().length > 0
+      && hibachiAccountIdInput.trim().length > 0
+      && hibachiPrivateKeyInput.trim().length > 0
+      && !isRunning;
 
     return (
       <>
@@ -3476,7 +3486,7 @@ function FuturesPanel() {
                   </span>
                   <span style={hlGateStyles.stepText}>
                     <span style={{ ...hlGateStyles.stepLabel, ...(isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Store Hibachi API key locally</span>
-                    <span style={hlGateStyles.stepHint}>The browser stores your API key, account id, and HMAC key for signed order requests.</span>
+                    <span style={hlGateStyles.stepHint}>The browser stores your API key, account id, and API private key for signed order requests.</span>
                   </span>
                 </li>
                 <li style={hlGateStyles.stepItem}>
@@ -3488,15 +3498,87 @@ function FuturesPanel() {
                 </li>
               </ol>
 
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                background: '#fffaf0',
+                border: '2px solid #d4c8b0',
+                borderRadius: 12,
+                padding: 12,
+              }}>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Hibachi API key</span>
+                  <input
+                    type="password"
+                    value={hibachiApiKeyInput}
+                    onChange={(e) => setHibachiApiKeyInput(e.target.value)}
+                    placeholder="Paste your Hibachi API key"
+                    autoComplete="new-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Account id</span>
+                  <input
+                    type="text"
+                    value={hibachiAccountIdInput}
+                    onChange={(e) => setHibachiAccountIdInput(e.target.value)}
+                    placeholder="Paste your Hibachi account id"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>API private key</span>
+                  <input
+                    type="password"
+                    value={hibachiPrivateKeyInput}
+                    onChange={(e) => setHibachiPrivateKeyInput(e.target.value)}
+                    placeholder="Paste your Hibachi API private key"
+                    autoComplete="new-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
+                  Stored in this browser only. Use the private key shown when you create the Hibachi API key.
+                </div>
+              </div>
+
               <button
-                style={{ ...hlGateStyles.primaryBtn, ...(loading ? hlGateStyles.primaryBtnBusy : null) }}
-                disabled={loading}
+                style={{ ...hlGateStyles.primaryBtn, ...(!hibachiCanSave ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={!hibachiCanSave}
                 onClick={async () => {
                   if (!activate) return;
+                  const apiKey = hibachiApiKeyInput.trim();
+                  const accountId = hibachiAccountIdInput.trim();
+                  const privateKey = hibachiPrivateKeyInput.trim();
+                  if (!apiKey || !accountId || !privateKey) {
+                    setLocalAlert('Enter Hibachi API key, account id, and API private key');
+                    return;
+                  }
                   setReferralLinking(true);
                   try {
-                    const res = await activate();
+                    const res = await activate({ apiKey, accountId, privateKey });
                     if (res?.error) setLocalAlert(res.error);
+                    else {
+                      setHibachiApiKeyInput('');
+                      setHibachiAccountIdInput('');
+                      setHibachiPrivateKeyInput('');
+                      setSuccessMsg('Hibachi credentials saved in this browser.');
+                    }
                   } finally {
                     setReferralLinking(false);
                   }

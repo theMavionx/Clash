@@ -6,6 +6,12 @@ import { usePlayer } from './useGodot';
 
 const STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const POLL_INTERVAL_MS = 5_000;
+const HIBACHI_PUBLIC_PROXY_URL = String(
+  import.meta.env.VITE_HIBACHI_PUBLIC_PROXY_URL || 'https://clashofperps.fun/api/futures'
+).replace(/\/+$/u, '');
+const HIBACHI_AUTH_PROXY_URL = String(
+  import.meta.env.VITE_HIBACHI_AUTH_PROXY_URL || HIBACHI_PUBLIC_PROXY_URL
+).replace(/\/+$/u, '');
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -59,7 +65,7 @@ function promptCredentials(existing = {}) {
   if (!apiKey) return null;
   const accountId = window.prompt('Hibachi account id', existing.accountId || '');
   if (!accountId) return null;
-  const privateKey = window.prompt('Hibachi HMAC private key', existing.privateKey || '');
+  const privateKey = window.prompt('Hibachi API private key', existing.privateKey || '');
   if (!privateKey) return null;
   return { apiKey: apiKey.trim(), accountId: accountId.trim(), privateKey: privateKey.trim() };
 }
@@ -72,6 +78,29 @@ function hibachiErrorMessage(error, fallback = 'Hibachi request failed') {
     || error?.message
     || String(error || '');
   return msg || fallback;
+}
+
+function isHibachiIpBlocked(error) {
+  return error?.code === 'HIBACHI_IP_BLOCKED'
+    || /HIBACHI_IP_BLOCKED|Hibachi is not available from your IP address|cloudflare|access denied/i.test(
+      String(error?.detail || error?.error || error?.message || '')
+    );
+}
+
+function canUsePublicProxyFallback() {
+  if (typeof window === 'undefined') return false;
+  return window.location.hostname !== 'clashofperps.fun'
+    && window.location.hostname !== 'www.clashofperps.fun';
+}
+
+function shouldPreferPublicProxy() {
+  if (typeof window === 'undefined') return false;
+  return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+}
+
+function hibachiProxyPath(path, baseUrl = HIBACHI_PUBLIC_PROXY_URL) {
+  const fallbackPath = String(path || '').replace(/^\/api\/futures/u, '');
+  return `${baseUrl}${fallbackPath}`;
 }
 
 export function useHibachi() {
@@ -115,16 +144,35 @@ export function useHibachi() {
   const fetchJson = useCallback(async (path, options = {}) => {
     const res = await fetch(path, options);
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.detail || data?.error || `Hibachi request failed (${res.status})`);
+    if (!res.ok) {
+      const err = new Error(data?.detail || data?.error || `Hibachi request failed (${res.status})`);
+      err.status = res.status;
+      err.code = data?.code || '';
+      err.error = data?.error;
+      err.detail = data?.detail;
+      throw err;
+    }
     return data;
   }, []);
+
+  const fetchHibachiPublicJson = useCallback(async (path) => {
+    if (canUsePublicProxyFallback() && shouldPreferPublicProxy()) {
+      return fetchJson(hibachiProxyPath(path));
+    }
+    try {
+      return await fetchJson(path);
+    } catch (e) {
+      if (!isHibachiIpBlocked(e) || !canUsePublicProxyFallback()) throw e;
+      return fetchJson(hibachiProxyPath(path));
+    }
+  }, [fetchJson]);
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
 
   const fetchMarkets = useCallback(async () => {
     try {
-      const payload = await fetchJson('/api/futures/markets?dex=hibachi');
+      const payload = await fetchHibachiPublicJson('/api/futures/markets?dex=hibachi');
       const rows = normalizeEnvelope(payload);
       marketsRef.current = rows;
       setMarkets(rows);
@@ -135,22 +183,25 @@ export function useHibachi() {
       setError(msg);
       return [];
     }
-  }, [fetchJson]);
+  }, [fetchHibachiPublicJson]);
 
   const fetchPrices = useCallback(async () => {
     try {
-      const payload = await fetchJson('/api/futures/prices?dex=hibachi');
+      const payload = await fetchHibachiPublicJson('/api/futures/prices?dex=hibachi');
       setPrices(normalizeEnvelope(payload));
     } catch (e) {
       console.warn('[useHibachi] prices:', e?.message || e);
     }
-  }, [fetchJson]);
+  }, [fetchHibachiPublicJson]);
 
   const authedPost = useCallback(async (path, body = {}) => {
     if (!walletAddr) throw new Error('Connect Arc wallet first');
     if (!credentials) throw new Error('Connect Hibachi API credentials first');
     if (!token) throw new Error('Game session is not ready');
-    return fetchJson(path, {
+    const requestPath = shouldPreferPublicProxy() && canUsePublicProxyFallback()
+      ? hibachiProxyPath(path, HIBACHI_AUTH_PROXY_URL)
+      : path;
+    return fetchJson(requestPath, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(credentialBody(body)),
@@ -296,14 +347,23 @@ export function useHibachi() {
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [isActiveDex, walletAddr, credentials, token, importFills]);
 
-  const activate = useCallback(async () => {
+  const activate = useCallback(async (input = null) => {
     setLoading(true);
     setError(null);
     try {
       if (!walletAddr) throw new Error('Connect Arc wallet first');
       await evmWallet?.ensureChain?.(ARC_CHAIN_ID);
-      const next = promptCredentials(credentials || {});
+      const next = input
+        ? {
+            apiKey: String(input.apiKey || input.api_key || '').trim(),
+            accountId: String(input.accountId || input.account_id || '').trim(),
+            privateKey: String(input.privateKey || input.private_key || '').trim(),
+          }
+        : promptCredentials(credentials || {});
       if (!next) return { error: 'Hibachi credentials were not entered' };
+      if (!next.apiKey) throw new Error('Hibachi API key required');
+      if (!next.accountId) throw new Error('Hibachi account id required');
+      if (!next.privateKey) throw new Error('Hibachi private key required');
       writeCredentials(next);
       setCredentials(next);
       return { success: true };
@@ -424,6 +484,51 @@ export function useHibachi() {
     }
   }, [authedPost, fetchOrders]);
 
+  const setTpsl = useCallback(async (symbol, closeSide, tpPrice, slPrice, _pairIndex, _tradeIndex, amountBase) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const side = String(closeSide || '').toLowerCase() === 'bid' ? 'bid' : 'ask';
+      const qty = num(amountBase);
+      if (!(qty > 0)) throw new Error('Hibachi TP/SL requires an open position size');
+      const marketSymbol = `${symbolOf(symbol)}/USDT-P`;
+      const requests = [];
+      const isClosingLong = side === 'ask';
+      if (num(tpPrice) > 0) {
+        requests.push(authedPost('/api/futures/hibachi/order', {
+          symbol: marketSymbol,
+          side,
+          quantity: qty,
+          orderType: 'market',
+          triggerPrice: num(tpPrice),
+          triggerDirection: isClosingLong ? 'HIGH' : 'LOW',
+          reduceOnly: true,
+        }));
+      }
+      if (num(slPrice) > 0) {
+        requests.push(authedPost('/api/futures/hibachi/order', {
+          symbol: marketSymbol,
+          side,
+          quantity: qty,
+          orderType: 'market',
+          triggerPrice: num(slPrice),
+          triggerDirection: isClosingLong ? 'LOW' : 'HIGH',
+          reduceOnly: true,
+        }));
+      }
+      if (!requests.length) throw new Error('Enter TP or SL price');
+      const result = await Promise.all(requests);
+      await fetchOrders();
+      return { success: true, raw: result };
+    } catch (e) {
+      const msg = hibachiErrorMessage(e, 'Hibachi TP/SL failed');
+      setError(msg);
+      return { error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [authedPost, fetchOrders]);
+
   const openOfficialApp = useCallback(() => {
     try { window.open('https://hibachi.xyz/', '_blank', 'noopener,noreferrer'); } catch {}
     return { success: true, info: 'Opened Hibachi.' };
@@ -451,7 +556,7 @@ export function useHibachi() {
     placeLimitOrder,
     closePosition,
     cancelOrder,
-    setTpsl: async () => ({ error: 'Hibachi TP/SL is not wired yet. Use a reduce-only order or the Hibachi app.' }),
+    setTpsl,
     setLeverage: async () => ({ success: true }),
     setMarginMode: async () => ({ success: true }),
     depositToPacifica: openOfficialApp,

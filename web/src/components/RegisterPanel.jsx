@@ -243,6 +243,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hyperliquid' ? 'HYPERLIQUID'
     : dex === 'risex' ? 'RISEX'
     : dex === 'nado' ? 'NADO'
+    : dex === 'hibachi' ? 'HIBACHI'
     : dex === 'hotstuff' ? 'HOTSTUFF'
     : dex === 'grvt' ? 'GRVT'
     : 'AVANTIS';
@@ -251,6 +252,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hyperliquid' ? 'EVM'
     : dex === 'risex' ? 'RISE'
     : dex === 'nado' ? 'Ink'
+    : dex === 'hibachi' ? 'Arc'
     : dex === 'hotstuff' ? 'Hotstuff L1'
     : dex === 'grvt' ? 'GRVT Exchange'
     : 'Base';
@@ -368,6 +370,7 @@ function RegisterPanel() {
                   dex === 'hyperliquid' ? 'Hyperliquid' :
                   dex === 'risex' ? 'RISEx' :
                   dex === 'nado' ? 'Nado' :
+                  dex === 'hibachi' ? 'Hibachi' :
                   dex === 'hotstuff' ? 'Hotstuff' :
                   dex === 'grvt' ? 'GRVT' :
                   dex === 'phoenix' ? 'Phoenix' :
@@ -389,7 +392,7 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -438,6 +441,7 @@ function RegisterPanel() {
     if (dex === 'hyperliquid') return 'HYPERLIQUID LOGIN';
     if (dex === 'risex') return 'RISEX LOGIN';
     if (dex === 'nado') return 'NADO LOGIN';
+    if (dex === 'hibachi') return 'HIBACHI LOGIN';
     if (dex === 'hotstuff') return 'HOTSTUFF LOGIN';
     if (dex === 'grvt') return 'GRVT LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
@@ -458,7 +462,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' ? 'baseConnect' : dex === 'hotstuff' ? 'mainnet' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'arc' : dex === 'grvt' ? 'baseConnect' : dex === 'hotstuff' ? 'mainnet' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

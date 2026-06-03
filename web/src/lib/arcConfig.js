@@ -14,7 +14,7 @@ export const ARC_EXPLORER_URL = String(import.meta.env.VITE_ARC_EXPLORER_URL || 
 export const arcChain = defineChain({
   id: ARC_CHAIN_ID,
   name: ARC_CHAIN_NAME,
-  nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 6 },
+  nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
   rpcUrls: {
     default: {
       http: ARC_RPC_URLS,
@@ -52,7 +52,7 @@ export async function ensureArcChain(provider) {
         params: [{
           chainId: ARC_CHAIN_ID_HEX,
           chainName: ARC_CHAIN_NAME,
-          nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 6 },
+          nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
           rpcUrls: ARC_RPC_URLS,
           blockExplorerUrls: [ARC_EXPLORER_URL],
         }],

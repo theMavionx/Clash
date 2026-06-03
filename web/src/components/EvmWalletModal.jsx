@@ -114,7 +114,7 @@ const NETWORKS = {
     addParams: {
       chainId: ARC_CHAIN_ID_HEX,
       chainName: ARC_CHAIN_NAME,
-      nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 6 },
+      nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
       rpcUrls: ARC_RPC_URLS,
       blockExplorerUrls: [ARC_EXPLORER_URL],
     },
