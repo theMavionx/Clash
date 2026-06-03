@@ -38,6 +38,7 @@ import FilterPopup from './FilterPopup';
 import TokenIcon from './TokenIcon';
 import GoldRewardToast from './GoldRewardToast';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
+import { setClientActivity } from '../lib/updateCoordinator';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
@@ -2379,6 +2380,20 @@ function FuturesPanel() {
   const oi = curPriceData ? parseFloat(curPriceData.open_interest || 0) : 0;
   const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
   const tradeButtonBusy = loading || tradeBusy || tradePhase != null;
+  useEffect(() => {
+    setClientActivity({
+      selected_dex: dex,
+      active_scope: `futures:${dex}`,
+      futures_busy: !!(tradeButtonBusy || tpslSubmittingPos),
+      critical_action: !!(tradeButtonBusy || tpslSubmittingPos),
+    });
+    return () => {
+      setClientActivity({
+        futures_busy: false,
+        critical_action: false,
+      });
+    };
+  }, [dex, tradeButtonBusy, tpslSubmittingPos]);
   const tradeButtonPendingLabel = tradePhase === 'confirming'
     ? 'Confirming...'
     : tradePhase === 'signing'

@@ -1,3 +1,8 @@
+import {
+  hasCriticalClientActivity,
+  requestClientUpdate,
+} from './updateCoordinator';
+
 const ENDPOINT = '/api/client-log';
 const LEVELS = ['log', 'info', 'warn', 'error', 'debug'];
 const SERVER_LEVELS = new Set(['warn', 'error']);
@@ -712,16 +717,12 @@ export function reportLazyChunkError(error, details = {}) {
   }));
 
   if (!isLazyChunkError(error)) return false;
-  try {
-    const key = `clash_lazy_reload_${getBuildId()}_${String(chunkName).replace(/[^a-z0-9_-]+/gi, '_').slice(0, 80)}`;
-    if (sessionStorage.getItem(key) === '1') return false;
-    sessionStorage.setItem(key, '1');
-    setTimeout(() => location.reload(), 120);
-    return true;
-  } catch {
-    setTimeout(() => location.reload(), 120);
-    return true;
-  }
+  requestClientUpdate({
+    reason: hasCriticalClientActivity() ? 'lazy_chunk_deferred' : 'lazy_chunk',
+    scope: 'web',
+    chunk_name: chunkName,
+  });
+  return false;
 }
 
 export function lazyWithClientReload(importer, chunkName) {
@@ -733,7 +734,6 @@ export function lazyWithClientReload(importer, chunkName) {
 }
 
 const SW_VERSION_STORAGE_KEY = 'clash_sw_version';
-let swReloadInProgress = false;
 
 function parseServiceWorkerVersion(text) {
   const m = String(text || '').match(/CACHE_NAME\s*=\s*['"]([^'"]+)['"]/);
@@ -744,28 +744,21 @@ function writeStorage(key, value) {
   try { localStorage.setItem(key, value); } catch { /* storage disabled */ }
 }
 
-function clearOldRuntimeCaches(currentVersion) {
-  if (!window.caches?.keys) return Promise.resolve();
-  return window.caches.keys()
-    .then((names) => Promise.all(
-      names
-        .filter((name) => /^clash-runtime-/.test(name) && name !== currentVersion)
-        .map((name) => window.caches.delete(name))
-    ))
-    .catch(() => {});
-}
-
 function reloadForFreshServiceWorker(version, reason) {
-  if (swReloadInProgress) return;
-  swReloadInProgress = true;
   try {
     const key = `clash_sw_reload_${String(version || reason || 'unknown').replace(/[^a-z0-9_-]+/gi, '_')}`;
     if (sessionStorage.getItem(key) === '1') return;
     sessionStorage.setItem(key, '1');
   } catch { /* storage disabled */ }
-  addBreadcrumbInternal('service_worker.reload', { version, reason }, 'warn');
-  clearOldRuntimeCaches(version).finally(() => {
-    setTimeout(() => location.reload(), 180);
+  addBreadcrumbInternal('service_worker.update_available', {
+    version,
+    reason,
+    deferred: hasCriticalClientActivity(),
+  }, 'warn');
+  requestClientUpdate({
+    reason,
+    version,
+    scope: 'runtime',
   });
 }
 
@@ -809,7 +802,12 @@ function installServiceWorkerFreshnessGuard() {
       return;
     }
     const knownVersion = runtimeContext.sw_version || readStorage(SW_VERSION_STORAGE_KEY);
-    reloadForFreshServiceWorker(knownVersion, 'controllerchange');
+    requestClientUpdate({
+      reason: 'controllerchange',
+      version: knownVersion,
+      scope: 'runtime',
+    });
+    addBreadcrumbInternal('service_worker.controllerchange_deferred', { version: knownVersion }, 'warn');
   });
 
   const requestUpdate = () => {

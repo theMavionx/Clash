@@ -14,6 +14,12 @@ import { usePreloadPanelAssets } from './hooks/usePreloadPanelAssets';
 import { useOptionalPrivy } from './components/PrivyAuthProvider';
 import ChunkErrorBoundary from './components/ChunkErrorBoundary';
 import { addClientBreadcrumb, lazyWithClientReload, setClientLogContext } from './lib/clientLogger';
+import {
+  applyPendingClientUpdate,
+  clearPendingClientUpdate,
+  getPendingClientUpdate,
+  setClientActivity,
+} from './lib/updateCoordinator';
 import WalletSessionRecovery from './components/WalletSessionRecovery';
 // Loading splash assets — served directly from `web/public/` so art can be
 // swapped without rebuilding the bundle. We layer background + logo
@@ -93,6 +99,7 @@ function AppInner() {
             <GodotCanvas />
             <GameUI />
             <ClashMigrationNotice />
+            <ClientUpdateNotice />
           </div>
         </Suspense>
       </ChunkErrorBoundary>
@@ -157,6 +164,50 @@ function ClashMigrationNotice() {
   );
 }
 
+function ClientUpdateNotice() {
+  const [pending, setPending] = useState(() => getPendingClientUpdate());
+
+  useEffect(() => {
+    const onUpdate = (event) => setPending(event?.detail?.update || getPendingClientUpdate());
+    window.addEventListener('clash:update-available', onUpdate);
+    window.addEventListener('storage', onUpdate);
+    return () => {
+      window.removeEventListener('clash:update-available', onUpdate);
+      window.removeEventListener('storage', onUpdate);
+    };
+  }, []);
+
+  if (!pending) return null;
+
+  const reason = String(pending.reason || '').replace(/_/g, ' ');
+  const scope = pending.scope ? String(pending.scope) : 'app';
+  const isDeferred = !!(pending.activity?.critical_action || pending.activity?.futures_busy);
+
+  return (
+    <div style={styles.updateToast} role="status">
+      <div style={styles.updateText}>
+        <strong style={styles.updateTitle}>Update ready</strong>
+        <span style={styles.updateSub}>
+          {isDeferred ? 'Deferred until you refresh.' : `New ${scope} build available.`}
+          {reason ? ` ${reason}.` : ''}
+        </span>
+      </div>
+      <button type="button" style={styles.updateRefreshBtn} onClick={applyPendingClientUpdate}>Refresh</button>
+      <button
+        type="button"
+        style={styles.updateDismissBtn}
+        onClick={() => {
+          clearPendingClientUpdate();
+          setPending(null);
+        }}
+        aria-label="Dismiss update notice"
+      >
+        x
+      </button>
+    </div>
+  );
+}
+
 function ClientLogContextBridge() {
   const { dex } = useDex();
   const { mode } = useFuturesMode();
@@ -192,6 +243,10 @@ function ClientLogContextBridge() {
       wallet_address: walletAddress || null,
       privy_logged_in: !!privy.authenticated,
       has_privy_solana_wallet: hasPrivySolanaWallet,
+    });
+    setClientActivity({
+      selected_dex: dex,
+      active_scope: mode === 'futures' ? `futures:${dex}` : 'game',
     });
 
     const prev = prevRef.current;
@@ -493,5 +548,69 @@ const styles = {
     fontWeight: 1000,
     textTransform: 'uppercase',
     cursor: 'pointer',
+  },
+  updateToast: {
+    position: 'fixed',
+    right: 16,
+    bottom: 16,
+    zIndex: 19000,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    maxWidth: 'calc(100vw - 32px)',
+    padding: '10px 12px',
+    borderRadius: 10,
+    border: '2px solid #44a9d5',
+    background: '#fff7dc',
+    color: '#5C3A21',
+    boxShadow: '0 10px 28px rgba(0,0,0,0.28)',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    pointerEvents: 'auto',
+  },
+  updateText: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    minWidth: 0,
+  },
+  updateTitle: {
+    fontSize: 13,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+  },
+  updateSub: {
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#7a6746',
+    maxWidth: 260,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  updateRefreshBtn: {
+    height: 34,
+    padding: '0 14px',
+    borderRadius: 8,
+    border: '2px solid #c27416',
+    background: 'linear-gradient(180deg, #ffbd2e, #ff8414)',
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: 'pointer',
+    textShadow: '0 1px 0 rgba(0,0,0,0.25)',
+    flexShrink: 0,
+  },
+  updateDismissBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: '50%',
+    border: '2px solid #c2ae83',
+    background: '#fff',
+    color: '#7a5432',
+    fontSize: 15,
+    fontWeight: 900,
+    cursor: 'pointer',
+    lineHeight: 1,
+    flexShrink: 0,
   },
 };

@@ -41,13 +41,15 @@
     <script>
       if ('serviceWorker' in navigator) {
         (function(){
-          var key = 'clash_sw_controller_reload';
           navigator.serviceWorker.addEventListener('controllerchange', function() {
             try {
-              if (sessionStorage.getItem(key) === '1') return;
-              sessionStorage.setItem(key, '1');
+              var update = { reason: 'controllerchange', scope: 'runtime', created_at: new Date().toISOString() };
+              sessionStorage.setItem('clash_pending_update_v1', JSON.stringify(update));
+              localStorage.setItem('clash_pending_update_v1', JSON.stringify(update));
+              window.dispatchEvent(new CustomEvent('clash:update-available', {
+                detail: { update: update }
+              }));
             } catch(e) {}
-            location.reload();
           });
           navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
             .then(function(registration) {

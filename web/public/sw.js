@@ -14,7 +14,6 @@ const GODOT_RUNTIME_ASSETS = [
 const LOCAL_DEV_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const IS_LOCAL_DEV = LOCAL_DEV_HOSTS.has(self.location.hostname);
 const VALIDATE_GODOT_CACHE_WRITES = false;
-let reloadClientsOnActivate = false;
 let manifestPromise = null;
 
 function assetName(pathname) {
@@ -110,7 +109,6 @@ async function cacheGodotResponse(cache, request, pathname, response) {
 }
 
 self.addEventListener('install', () => {
-  reloadClientsOnActivate = !!self.registration.active;
   self.skipWaiting();
 });
 
@@ -126,10 +124,7 @@ self.addEventListener('activate', (event) => {
       .then(() => self.clients.matchAll({ type: 'window', includeUncontrolled: true }))
       .then((clients) => {
         for (const client of clients) {
-          client.postMessage({ type: 'CLASH_SW_ACTIVATED', version: CACHE_NAME });
-          if (reloadClientsOnActivate && client.url) {
-            client.navigate(client.url).catch(() => {});
-          }
+          client.postMessage({ type: 'CLASH_SW_ACTIVATED', version: CACHE_NAME, reload_clients: false });
         }
       })
   );
