@@ -112,6 +112,15 @@ db.exec(`
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS katana_credentials (
+    player_id      TEXT PRIMARY KEY,
+    api_key        TEXT NOT NULL,
+    api_secret     TEXT NOT NULL,
+    wallet         TEXT NOT NULL,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // ---------- Pre-statement migrations ----------
@@ -211,6 +220,17 @@ const stmts = {
       updated_at = datetime('now')
   `),
   deleteGrvtCredentials: db.prepare('DELETE FROM grvt_credentials WHERE player_id = ?'),
+  getKatanaCredentials: db.prepare('SELECT * FROM katana_credentials WHERE player_id = ?'),
+  upsertKatanaCredentials: db.prepare(`
+    INSERT INTO katana_credentials (player_id, api_key, api_secret, wallet, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(player_id) DO UPDATE SET
+      api_key = excluded.api_key,
+      api_secret = excluded.api_secret,
+      wallet = excluded.wallet,
+      updated_at = datetime('now')
+  `),
+  deleteKatanaCredentials: db.prepare('DELETE FROM katana_credentials WHERE player_id = ?'),
 };
 
 // ---------- Wallet Functions ----------
@@ -310,6 +330,48 @@ function deleteGrvtCredentials(playerId) {
   return { success: true };
 }
 
+// ---------- Katana Credential Functions ----------
+
+function hydrateKatanaCredentials(row) {
+  if (!row) return null;
+  try {
+    return {
+      apiKey: decryptSecret(row.api_key),
+      apiSecret: decryptSecret(row.api_secret),
+      wallet: row.wallet || '',
+      updatedAt: row.updated_at || null,
+    };
+  } catch (e) {
+    console.error('[futures.db] Failed to decrypt Katana credentials for player', row.player_id, e.message);
+    return null;
+  }
+}
+
+function getKatanaCredentials(playerId) {
+  return hydrateKatanaCredentials(stmts.getKatanaCredentials.get(playerId));
+}
+
+function saveKatanaCredentials(playerId, { apiKey, apiSecret, wallet }) {
+  const normalizedApiKey = String(apiKey || '').trim();
+  const normalizedApiSecret = String(apiSecret || '').trim();
+  const normalizedWallet = String(wallet || '').trim();
+  if (!normalizedApiKey) throw new Error('Katana API key required');
+  if (!normalizedApiSecret) throw new Error('Katana API secret required');
+  if (!/^0x[0-9a-fA-F]{40}$/u.test(normalizedWallet)) throw new Error('Katana wallet address required');
+  stmts.upsertKatanaCredentials.run(
+    playerId,
+    encryptSecret(normalizedApiKey),
+    encryptSecret(normalizedApiSecret),
+    normalizedWallet,
+  );
+  return getKatanaCredentials(playerId);
+}
+
+function deleteKatanaCredentials(playerId) {
+  stmts.deleteKatanaCredentials.run(playerId);
+  return { success: true };
+}
+
 // ---------- Exports ----------
 
 module.exports = {
@@ -324,6 +386,9 @@ module.exports = {
   getGrvtCredentials,
   saveGrvtCredentials,
   deleteGrvtCredentials,
+  getKatanaCredentials,
+  saveKatanaCredentials,
+  deleteKatanaCredentials,
 };
 
 // One-time encryption migration: any row where secret_key doesn't start with

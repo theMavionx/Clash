@@ -15,6 +15,7 @@ import { useNado } from '../hooks/useNado';
 import { useHibachi } from '../hooks/useHibachi';
 import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
+import { useKatana } from '../hooks/useKatana';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -1427,6 +1428,8 @@ function FuturesPanel() {
     ? 'mainnet'
     : dex === 'grvt'
     ? 'baseConnect'
+    : dex === 'katana'
+    ? 'katana'
     : dex === 'monad'
     ? 'monad'
     : dex === 'risex'
@@ -1466,6 +1469,7 @@ function FuturesPanel() {
   const hibachiHook = useHibachi();
   const hotstuffHook = useHotstuff();
   const grvtHook = useGrvt();
+  const katanaHook = useKatana();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -1492,6 +1496,8 @@ function FuturesPanel() {
     ? hotstuffHook
     : dex === 'grvt'
     ? grvtHook
+    : dex === 'katana'
+    ? katanaHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
@@ -1499,9 +1505,9 @@ function FuturesPanel() {
     loading, error, clearError, goldEarned, clearGoldEarned, depositStatus, walletUsdcStatus,
     bridgeSourceBalances, bridgeSourceBalanceStatus,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
-    closePosition, depositToPacifica, withdraw, activate, setTpsl, setMarginMode, moveSpotToPerp, switchToRise, switchToInk,
+    closePosition, depositToPacifica, withdraw, activate, disconnect, setTpsl, setMarginMode, moveSpotToPerp, switchToRise, switchToInk,
     // Avantis-only — undefined on the Pacifica branch.
-    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, walletMismatch, registeredEvmWallet,
+    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, openReferralJoin, referralCode, referralUrl, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
     pacAgent, bindAgent, bindingAgent, bindAgentError, forgetAgentLocally, revokeAgentOnServer,
     // Decibel-only — drives the blocking activation modal + gate screen.
@@ -1751,6 +1757,8 @@ function FuturesPanel() {
   const [phoenixInviteKind, setPhoenixInviteKind] = useState('referral');
   const [risexInviteCode, setRisexInviteCode] = useState('');
   const [grvtApiKeyInput, setGrvtApiKeyInput] = useState('');
+  const [katanaApiKeyInput, setKatanaApiKeyInput] = useState('');
+  const [katanaApiSecretInput, setKatanaApiSecretInput] = useState('');
   const [hibachiApiKeyInput, setHibachiApiKeyInput] = useState('');
   const [hibachiAccountIdInput, setHibachiAccountIdInput] = useState('');
   const [hibachiPrivateKeyInput, setHibachiPrivateKeyInput] = useState('');
@@ -2876,7 +2884,7 @@ function FuturesPanel() {
   }
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
-  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt') && walletMismatch) {
+  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -2901,7 +2909,7 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'Arc' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
@@ -2942,7 +2950,43 @@ function FuturesPanel() {
             </button>
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
-            {dex === 'hibachi' ? (
+            {dex === 'katana' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #F04438 0%, #991B1B 100%)',
+                  border: '4px solid #B42318',
+                  boxShadow: '0 5px 0 #991B1B, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 28, fontWeight: 900, color: '#fff',
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>KTN</div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Katana wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
+                }}>
+                  Katana Perps runs on Katana. Connect the same EVM wallet you use for this game account.
+                </div>
+                {renderPrivyEmailButton('#F04438', '#991B1B')}
+                <button
+                  style={{...cartoonBtn('#F04438', '#991B1B'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <span>CONNECT KATANA WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#991B1B', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>KATANA PERPS - KATANA</span>
+                </div>
+              </>
+            ) : dex === 'hibachi' ? (
               <>
                 <div style={{
                   width: 80, height: 80, borderRadius: '50%',
@@ -2956,26 +3000,26 @@ function FuturesPanel() {
                 <div style={{
                   color: '#5C3A21', fontSize: 18, fontWeight: 900,
                   textAlign: 'center', letterSpacing: '0.5px',
-                }}>Connect your Arc wallet</div>
+                }}>Connect your EVM wallet</div>
                 <div style={{
                   color: '#8a7252', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
                 }}>
-                  Hibachi runs through Arc. Connect the same EVM wallet you use for this game account; API keys are requested later only for placing Hibachi orders.
+                  Hibachi uses an EVM wallet identity. Connect the same EVM wallet you use for this game account; API keys are requested later only for placing Hibachi orders.
                 </div>
                 {renderPrivyEmailButton('#EF4444', '#991B1B')}
                 <button
                   style={{...cartoonBtn('#EF4444', '#991B1B'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
-                  <span>CONNECT ARC WALLET</span>
+                  <span>CONNECT EVM WALLET</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: '#991B1B', fontSize: 11, fontWeight: 800,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
-                  <span>HIBACHI - ARC</span>
+                  <span>HIBACHI - EVM</span>
                 </div>
               </>
             ) : dex === 'decibel' ? (
@@ -3298,13 +3342,28 @@ function FuturesPanel() {
                 <div style={{
                   color: '#5C3A21', fontSize: 18, fontWeight: 900,
                   textAlign: 'center', letterSpacing: '0.5px',
-                }}>Connect your GRVT wallet</div>
+                }}>Connect your Hotstuff wallet</div>
                 <div style={{
                   color: '#8a7252', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
-                  Hotstuff trades are signed by your EVM wallet on Ethereum mainnet. Broker fee approval is requested when configured.
+                  New Hotstuff users should join with the Clash referral first, then connect the same Ethereum wallet here. Clash also applies the referral best-effort during setup.
                 </div>
+                {referralUrl && (
+                  <button
+                    style={{...cartoonBtn('#111827', '#030712'), padding: '12px 24px', display: 'flex', alignItems: 'center', gap: 10}}
+                    onClick={() => {
+                      if (typeof openReferralJoin === 'function') openReferralJoin();
+                      else window.open(referralUrl, '_blank', 'noopener,noreferrer');
+                    }}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M7 17 17 7"/>
+                      <path d="M8 7h9v9"/>
+                    </svg>
+                    <span>JOIN WITH CLASH REFERRAL</span>
+                  </button>
+                )}
                 {renderPrivyEmailButton('#FF5A5F', '#B91C1C')}
                 <button
                   style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#FF5A5F', privyEnabled ? '#6B573E' : '#B91C1C'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
@@ -3322,7 +3381,7 @@ function FuturesPanel() {
                   color: '#B91C1C', fontSize: 11, fontWeight: 800,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
-                  <span>HOTSTUFF - ETHEREUM MAINNET</span>
+                  <span>HOTSTUFF - ETHEREUM MAINNET{referralCode ? ` - REF ${referralCode}` : ''}</span>
                 </div>
               </>
             ) : dex === 'grvt' ? (
@@ -3494,7 +3553,7 @@ function FuturesPanel() {
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
                 <span style={hlGateStyles.title}>Add Hibachi API credentials</span>
                 <span style={hlGateStyles.subtitle}>
-                  Arc wallet is connected. Hibachi does not expose builder codes, so Clash credits rewards only after importing fills from this Hibachi account.
+                  EVM wallet is connected. Hibachi does not expose builder codes, so Clash credits rewards only after importing fills from this Hibachi account.
                 </span>
               </div>
 
@@ -3502,7 +3561,7 @@ function FuturesPanel() {
                 <li style={hlGateStyles.stepItem}>
                   <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_done }}>1</span>
                   <span style={hlGateStyles.stepText}>
-                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>Arc wallet connected</span>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>EVM wallet connected</span>
                     <span style={hlGateStyles.stepHint}>{walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)} is linked to this game account.</span>
                   </span>
                 </li>
@@ -3582,6 +3641,25 @@ function FuturesPanel() {
                   Stored in this browser only. Use the private key shown when you create the Hibachi API key.
                 </div>
               </div>
+
+              {referralUrl && (
+                <button
+                  style={{
+                    ...hlGateStyles.primaryBtn,
+                    width: '100%',
+                    background: 'linear-gradient(180deg, #fff8e6 0%, #f5e6bd 100%)',
+                    border: '2px solid #9f8759',
+                    color: '#5C3A21',
+                    textShadow: 'none',
+                  }}
+                  onClick={() => {
+                    if (typeof openReferralJoin === 'function') openReferralJoin();
+                    else window.open(referralUrl, '_blank', 'noopener,noreferrer');
+                  }}
+                >
+                  Create Account and Deposit
+                </button>
+              )}
 
               <button
                 style={{ ...hlGateStyles.primaryBtn, ...(!hibachiCanSave ? hlGateStyles.primaryBtnBusy : null) }}
@@ -3738,6 +3816,163 @@ function FuturesPanel() {
               >
                 {isRunning ? 'Connecting...' : 'Add GRVT API key ->'}
               </button>
+
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== KATANA REFERRAL GATE ====================
+  if (dex === 'katana' && hasWallet && setupVerified !== true) {
+    const isRunning = referralLinking || loading;
+    const missingKatanaFields = Array.isArray(inviteStatus?.missing_fields) ? inviteStatus.missing_fields : [];
+    const katanaReadsReady = !!inviteStatus?.account_configured;
+    const katanaCanSave = katanaApiKeyInput.trim().length > 0 && katanaApiSecretInput.trim().length > 0 && !isRunning;
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Checking Katana...' : 'Katana setup'}</span>
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'CHECKING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>Katana Perps setup</span>
+                <span style={hlGateStyles.subtitle}>
+                  Add your Katana API key and secret. Clash stores them encrypted; order placement still requires your wallet to sign Katana EIP-712 data in the browser.
+                </span>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_done }}>1</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>Katana wallet connected</span>
+                    <span style={hlGateStyles.stepHint}>{walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)} is linked to this game account.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...(katanaReadsReady ? hlGateStyles.stepBubble_done : isRunning ? hlGateStyles.stepBubble_active : hlGateStyles.stepBubble_pending) }}>
+                    {isRunning ? <span style={hlGateStyles.spinner} /> : 2}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...(katanaReadsReady ? hlGateStyles.stepLabel_done : isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Save Katana API credentials</span>
+                    <span style={hlGateStyles.stepHint}>Code: {referralCode || 'not configured'}</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_pending }}>3</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_pending }}>Sign trades in wallet</span>
+                    <span style={hlGateStyles.stepHint}>{missingKatanaFields.length ? `Missing: ${missingKatanaFields.join(', ')}` : 'Each order opens a wallet signature request.'}</span>
+                  </span>
+                </li>
+              </ol>
+
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                background: '#fffaf0',
+                border: '2px solid #d4c8b0',
+                borderRadius: 12,
+                padding: 12,
+              }}>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Katana API key</span>
+                  <input
+                    type="password"
+                    value={katanaApiKeyInput}
+                    onChange={(e) => setKatanaApiKeyInput(e.target.value)}
+                    placeholder="Paste your Katana API key"
+                    autoComplete="new-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Katana API secret</span>
+                  <input
+                    type="password"
+                    value={katanaApiSecretInput}
+                    onChange={(e) => setKatanaApiSecretInput(e.target.value)}
+                    placeholder="Paste your Katana API secret"
+                    autoComplete="new-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
+                  Do not enter a wallet private key. Katana orders are signed by the connected wallet popup.
+                </div>
+              </div>
+
+              <button
+                style={{ ...hlGateStyles.primaryBtn, ...(!katanaCanSave ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={!katanaCanSave}
+                onClick={async () => {
+                  if (!activate) return;
+                  setReferralLinking(true);
+                  try {
+                    const res = await activate({
+                      apiKey: katanaApiKeyInput.trim(),
+                      apiSecret: katanaApiSecretInput.trim(),
+                    });
+                    if (res?.error) setLocalAlert(res.error);
+                    else {
+                      setKatanaApiKeyInput('');
+                      setKatanaApiSecretInput('');
+                      setSuccessMsg('Katana API credentials saved.');
+                    }
+                  } finally {
+                    setReferralLinking(false);
+                  }
+                }}
+              >
+                {isRunning ? 'Connecting...' : 'Add Katana API credentials ->'}
+              </button>
+
+              <button
+                style={hlGateStyles.primaryBtn}
+                onClick={() => {
+                  if (openReferralJoin) openReferralJoin();
+                  else if (referralUrl) window.open(referralUrl, '_blank', 'noopener,noreferrer');
+                }}
+              >
+                Open Katana Perps
+              </button>
+
+              {referralUrl && (
+                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35, wordBreak: 'break-all'}}>
+                  {referralUrl}
+                </div>
+              )}
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
@@ -5617,7 +5852,7 @@ function FuturesPanel() {
           const accentBg = isHibachi ? 'rgba(239,68,68,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
           const accentBorder = isHibachi ? 'rgba(239,68,68,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
           const accentBtnBorder = isHibachi ? '#DC2626' : isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
-          const chainName = isHibachi ? 'Arc' : isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
+          const chainName = isHibachi ? 'Base / Arbitrum' : isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
           const isDepositing = isHyperliquid && depositStatus?.status === 'depositing';
           const isMovingToPerp = isHyperliquid && depositStatus?.status === 'moving_to_perp';
           const isFundingBusy = isDepositing || isMovingToPerp;
@@ -5625,10 +5860,16 @@ function FuturesPanel() {
           const pendingDepositLabel = Number.isFinite(pendingDepositAmount)
             ? pendingDepositAmount.toFixed(2)
             : String(depositStatus?.amount || '');
+          const hibachiBaseUsdc = Number(walletUsdcStatus?.balances?.base);
+          const hibachiArbitrumUsdc = Number(walletUsdcStatus?.balances?.arbitrum);
+          const hibachiWalletText = [
+            Number.isFinite(hibachiBaseUsdc) ? `Base $${hibachiBaseUsdc.toFixed(2)}` : null,
+            Number.isFinite(hibachiArbitrumUsdc) ? `Arbitrum $${hibachiArbitrumUsdc.toFixed(2)}` : null,
+          ].filter(Boolean).join(' / ');
           const walletUsdcText = walletUsdc !== null
-            ? `${isHyperliquid || isHibachi ? 'Arbitrum ' : ''}USDC: $${walletUsdc.toFixed(2)}`
+            ? (isHibachi ? `USDC: ${hibachiWalletText || `$${walletUsdc.toFixed(2)}`}` : `${isHyperliquid ? 'Arbitrum ' : ''}USDC: $${walletUsdc.toFixed(2)}`)
             : isHibachi && walletUsdcStatus?.status === 'checking'
-            ? 'Arbitrum USDC: checking...'
+            ? 'Base / Arbitrum USDC: checking...'
             : null;
           return (
           <div style={S.fullCard}>
@@ -5676,7 +5917,7 @@ function FuturesPanel() {
                     color: accentDark,
                     lineHeight: 1.35,
                   }}>
-                    Fund and withdraw in the Hibachi app. Clash only reads your Hibachi account and signs trades with the API credentials you saved.
+                    Fund and withdraw in the Hibachi app. Clash reads your Base and Arbitrum wallet USDC, then trades from the Hibachi account tied to the API credentials you saved.
                   </span>
                   <button
                     style={{
@@ -5684,8 +5925,25 @@ function FuturesPanel() {
                       background: accentLight, color: '#fff',
                       border: `2px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
                     }}
-                    onClick={() => window.open('https://hibachi.xyz/', '_blank', 'noopener,noreferrer')}
+                    onClick={() => {
+                      if (typeof openReferralJoin === 'function') openReferralJoin();
+                      else window.open(referralUrl || 'https://hibachi.xyz/r/M4S4XNAGP4', '_blank', 'noopener,noreferrer');
+                    }}
                   >OPEN</button>
+                  <button
+                    style={{
+                      ...S.btnSmall, padding: '6px 10px', fontSize: 10,
+                      background: '#fff8e6', color: accentDark,
+                      border: `2px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
+                    }}
+                    onClick={() => {
+                      disconnect?.();
+                      setHibachiApiKeyInput('');
+                      setHibachiAccountIdInput('');
+                      setHibachiPrivateKeyInput('');
+                      setLocalAlert('Enter the correct Hibachi API credentials.');
+                    }}
+                  >EDIT API</button>
                 </div>
               )}
               {isHyperliquid && (
@@ -5802,7 +6060,7 @@ function FuturesPanel() {
                     {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
                   </span>
                 )
-                : walletUsdc !== null && <span style={S.detail}>{dex === 'hotstuff' ? 'Spot' : 'Wallet'}: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}</span>}
+                : walletUsdc !== null && <span style={S.detail}>{dex === 'hotstuff' ? 'Hotstuff Spot' : 'Wallet'}: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}</span>}
             </div>
             {dex === 'grvt' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
@@ -5878,10 +6136,6 @@ function FuturesPanel() {
                   setLocalAlert(`Ink wallet has ${walletUsdc.toFixed(2)} USDt0`);
                   return;
                 }
-                if (dex === 'hotstuff' && walletUsdc !== null && v > walletUsdc + 0.000001) {
-                  setLocalAlert(`Hotstuff spot balance has ${walletUsdc.toFixed(2)} USDC`);
-                  return;
-                }
                 const r = await depositToPacifica(depositAmt, dex === 'risex' ? { sourceChainId: risexDepositSource?.id } : undefined);
                 if (!r?.error) {
                   setDepositAmt('');
@@ -5902,7 +6156,7 @@ function FuturesPanel() {
                 : dex === 'nado'
                 ? 'Approves USDt0 on Ink, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
                 : dex === 'hotstuff'
-                ? 'Moves USDC from your Hotstuff spot balance into your Hotstuff derivatives account.'
+                ? 'Sends native USDC from your Ethereum wallet to the Hotstuff bridge. It lands in Hotstuff spot balance after bridge processing.'
                 : dex === 'grvt'
                 ? 'Opens GRVT deposit. Native in-game deposit needs GRVT bridge approval data or a GRVT-supported deposit-address API; the current builder API key is not enough for that.'
                 : dex === 'risex'
@@ -5915,6 +6169,19 @@ function FuturesPanel() {
                 ? 'Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.'
                 : 'Use the connected venue account to fund or manage your USDC balance.'}
             </span>
+            {dex === 'hotstuff' && walletUsdc > 0.000001 && (
+              <button
+                style={{...S.btnSmall, width: '100%', marginTop: 8, background: '#16A34A', color: '#fff', border: '2px solid #15803D'}}
+                onClick={async () => {
+                  const amountText = walletUsdc.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
+                  const r = await moveSpotToPerp?.(amountText);
+                  if (!r?.error) setLocalAlert(r?.info || 'Moved USDC to Hotstuff derivatives.');
+                }}
+                disabled={loading || !moveSpotToPerp}
+              >
+                Move ${walletUsdc.toFixed(2)} Spot to Perps
+              </button>
+            )}
           </div>
         )}
 
@@ -5922,7 +6189,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hotstuff' && dex !== 'hibachi' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'hotstuff' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
@@ -5975,6 +6242,8 @@ function FuturesPanel() {
                 ? 'Withdraws USDC from your Phoenix trader account back to your Solana wallet.'
                 : dex === 'nado'
                 ? 'Withdraws USDt0 from your Nado default subaccount back to your Ink wallet. Nado charges a 1 USDt0 withdrawal fee, so Max subtracts it.'
+                : dex === 'hotstuff'
+                ? 'Requests a Hotstuff derivatives withdrawal to your Ethereum wallet. Hotstuff charges the withdrawal fee shown by the venue.'
                 : dex === 'grvt'
                 ? 'Opens GRVT so you can withdraw or manage funds on your GRVT account.'
                 : dex === 'pacifica'
@@ -6322,6 +6591,18 @@ function FuturesPanel() {
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.grvt.colorDark }}>
                 GRVT
+              </span>
+            </>
+          ) : dex === 'katana' ? (
+            <>
+              <img
+                src={DEX_CONFIG.katana.logo}
+                alt="Katana"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.katana.colorDark }}>
+                Katana
               </span>
             </>
           ) : dex === 'hibachi' ? (

@@ -2,13 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
-import { ARC_CHAIN_ID } from '../lib/arcConfig';
+import { BASE_CHAIN_ID, USDC_ADDRESS as BASE_USDC_ADDRESS } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_USDC_DECIMALS, ARBITRUM_USDC_NATIVE } from '../lib/gmxConfig';
 import { usePlayer } from './useGodot';
 
 const STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const LEVERAGE_STORAGE_KEY = 'clash_hibachi_leverage_v1';
 const POLL_INTERVAL_MS = 5_000;
+const HIBACHI_REFERRAL_URL = String(
+  import.meta.env.VITE_HIBACHI_REFERRAL_URL || 'https://hibachi.xyz/r/M4S4XNAGP4'
+).trim();
 const HIBACHI_PUBLIC_PROXY_URL = String(
   import.meta.env.VITE_HIBACHI_PUBLIC_PROXY_URL || 'https://clashofperps.fun/api/futures'
 ).replace(/\/+$/u, '');
@@ -162,7 +165,7 @@ export function useHibachi() {
   const [prices, setPrices] = useState([]);
   const [markets, setMarkets] = useState([]);
   const [walletUsdc, setWalletUsdc] = useState(null);
-  const [walletUsdcStatus, setWalletUsdcStatus] = useState({ status: 'idle', message: null });
+  const [walletUsdcStatus, setWalletUsdcStatus] = useState({ status: 'idle', message: null, balances: {} });
   const [leverageSettings, setLeverageSettingsState] = useState(() => readLeverageSettings());
   const [dataReady, setDataReady] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -228,27 +231,49 @@ export function useHibachi() {
   const fetchWalletUsdc = useCallback(async () => {
     if (!walletAddr || typeof evmWallet?.getPublicClient !== 'function') {
       setWalletUsdc(null);
-      setWalletUsdcStatus({ status: 'idle', message: 'Connect wallet to check Arbitrum USDC balance' });
+      setWalletUsdcStatus({ status: 'idle', message: 'Connect wallet to check Base and Arbitrum USDC balance', balances: {} });
       return null;
     }
-    setWalletUsdcStatus({ status: 'checking', message: 'Checking Arbitrum USDC balance...' });
+    setWalletUsdcStatus({ status: 'checking', message: 'Checking Base and Arbitrum USDC balance...', balances: {} });
     try {
-      const publicClient = evmWallet.getPublicClient(ARBITRUM_CHAIN_ID);
-      const raw = await publicClient.readContract({
-        address: ARBITRUM_USDC_NATIVE,
-        abi: ERC20_BALANCE_ABI,
-        functionName: 'balanceOf',
-        args: [walletAddr],
+      const readBalance = async (chainId, token) => {
+        const publicClient = evmWallet.getPublicClient(chainId);
+        const raw = await publicClient.readContract({
+          address: token,
+          abi: ERC20_BALANCE_ABI,
+          functionName: 'balanceOf',
+          args: [walletAddr],
+        });
+        const balance = Number(formatUnits(raw, ARBITRUM_USDC_DECIMALS));
+        return Number.isFinite(balance) ? balance : 0;
+      };
+      const [base, arbitrum] = await Promise.all([
+        readBalance(BASE_CHAIN_ID, BASE_USDC_ADDRESS).catch((e) => {
+          console.warn('[useHibachi] Base wallet USDC read failed:', hibachiErrorMessage(e));
+          return null;
+        }),
+        readBalance(ARBITRUM_CHAIN_ID, ARBITRUM_USDC_NATIVE).catch((e) => {
+          console.warn('[useHibachi] Arbitrum wallet USDC read failed:', hibachiErrorMessage(e));
+          return null;
+        }),
+      ]);
+      const values = [base, arbitrum].filter(v => Number.isFinite(v));
+      const total = values.reduce((sum, v) => sum + v, 0);
+      setWalletUsdc(values.length ? total : null);
+      setWalletUsdcStatus({
+        status: values.length ? 'ready' : 'error',
+        message: values.length ? null : 'Could not read Base or Arbitrum USDC balance',
+        balances: {
+          ...(Number.isFinite(base) ? { base } : {}),
+          ...(Number.isFinite(arbitrum) ? { arbitrum } : {}),
+        },
       });
-      const balance = Number(formatUnits(raw, ARBITRUM_USDC_DECIMALS));
-      setWalletUsdc(Number.isFinite(balance) ? balance : 0);
-      setWalletUsdcStatus({ status: 'ready', message: null });
-      return Number.isFinite(balance) ? balance : 0;
+      return values.length ? total : null;
     } catch (e) {
-      const msg = hibachiErrorMessage(e, 'Could not read Arbitrum USDC balance');
-      console.warn('[useHibachi] Arbitrum wallet USDC read failed:', msg);
+      const msg = hibachiErrorMessage(e, 'Could not read Base or Arbitrum USDC balance');
+      console.warn('[useHibachi] wallet USDC read failed:', msg);
       setWalletUsdc(null);
-      setWalletUsdcStatus({ status: 'error', message: msg });
+      setWalletUsdcStatus({ status: 'error', message: msg, balances: {} });
       return null;
     }
   }, [walletAddr, evmWallet]);
@@ -278,7 +303,7 @@ export function useHibachi() {
   }, [fetchHibachiPublicJson]);
 
   const authedPost = useCallback(async (path, body = {}) => {
-    if (!walletAddr) throw new Error('Connect Arc wallet first');
+    if (!walletAddr) throw new Error('Connect EVM wallet first');
     if (!credentials) throw new Error('Connect Hibachi API credentials first');
     if (!token) throw new Error('Game session is not ready');
     const requestPath = shouldPreferPublicProxy() && canUsePublicProxyFallback()
@@ -452,8 +477,7 @@ export function useHibachi() {
     setLoading(true);
     setError(null);
     try {
-      if (!walletAddr) throw new Error('Connect Arc wallet first');
-      await evmWallet?.ensureChain?.(ARC_CHAIN_ID);
+      if (!walletAddr) throw new Error('Connect EVM wallet first');
       const next = input
         ? {
             apiKey: String(input.apiKey || input.api_key || '').trim(),
@@ -631,7 +655,7 @@ export function useHibachi() {
   }, [authedPost, fetchOrders]);
 
   const openOfficialApp = useCallback(() => {
-    try { window.open('https://hibachi.xyz/', '_blank', 'noopener,noreferrer'); } catch {}
+    try { window.open(HIBACHI_REFERRAL_URL || 'https://hibachi.xyz/', '_blank', 'noopener,noreferrer'); } catch {}
     return { success: true, info: 'Opened Hibachi.' };
   }, []);
   const unsupportedFundingAction = useCallback(async () => ({
@@ -677,6 +701,9 @@ export function useHibachi() {
     registeredEvmWallet,
     hasReferrer: !!credentials,
     linkOurReferrer: activate,
+    openReferralJoin: openOfficialApp,
+    referralUrl: HIBACHI_REFERRAL_URL,
+    referralCode: 'M4S4XNAGP4',
     oneTapTrading: { enabled: !!credentials, approved: !!credentials, signer: credentials?.accountId || null },
     setOneTapTradingEnabled: activate,
   };

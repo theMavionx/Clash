@@ -28,6 +28,7 @@ const DEX_LABELS = {
   nado: 'Nado',
   hotstuff: 'Hotstuff',
   grvt: 'GRVT',
+  katana: 'Katana',
 };
 
 function fmtUsd(n) {

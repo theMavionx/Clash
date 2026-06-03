@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import {
+  buildHotstuffTpslOrder,
   buildHotstuffOrder,
   createHotstuffExchangeClient,
   createHotstuffInfoClient,
@@ -11,13 +13,31 @@ import {
 } from '../lib/hotstuffClient';
 import {
   ensureHotstuffChain,
+  HOTSTUFF_CHAIN,
   HOTSTUFF_CHAIN_ID,
+  HOTSTUFF_BRIDGE_ADDRESS,
+  HOTSTUFF_BRIDGE_CHAIN_ID,
   HOTSTUFF_FUTURES_API,
   HOTSTUFF_REFERRAL_CODE,
+  HOTSTUFF_REFERRAL_URL,
+  HOTSTUFF_USDC_ADDRESS,
   HOTSTUFF_USDC_COLLATERAL_ID,
+  HOTSTUFF_USDC_DECIMALS,
 } from '../lib/hotstuffConfig';
 
 const POLL_INTERVAL_MS = 5_000;
+const ERC20_TRANSFER_ABI = [
+  {
+    type: 'function',
+    name: 'transfer',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: 'ok', type: 'bool' }],
+  },
+];
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -35,12 +55,21 @@ function apiHeaders(player) {
 export function useHotstuff() {
   const { dex } = useDex();
   const player = usePlayer();
-  const { address: walletAddr, walletClient, switchChain, isReady: evmReady } = useEvmWallet();
+  const {
+    address: walletAddr,
+    walletClient,
+    publicClient,
+    getPublicClient,
+    switchChain,
+    isReady: evmReady,
+  } = useEvmWallet();
   const [markets, setMarkets] = useState([]);
   const [prices, setPrices] = useState([]);
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [leverageSettings, setLeverageSettings] = useState({});
+  const [marginModes, setMarginModes] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
@@ -71,6 +100,19 @@ export function useHotstuff() {
       setAccount(accountRes && !accountRes.error ? accountRes : null);
       setPositions(Array.isArray(positionsRes) ? positionsRes : []);
       setOrders(Array.isArray(ordersRes) ? ordersRes : []);
+      const nextLeverage = {};
+      const nextMargins = {};
+      if (Array.isArray(positionsRes)) {
+        for (const p of positionsRes) {
+          const sym = String(p?.symbol || '').toUpperCase();
+          if (!sym) continue;
+          const lev = num(p?.leverage, 0);
+          if (lev > 0) nextLeverage[sym] = lev;
+          nextMargins[sym] = !!p?.is_isolated;
+        }
+      }
+      setLeverageSettings(prev => ({ ...prev, ...nextLeverage }));
+      setMarginModes(prev => ({ ...prev, ...nextMargins }));
       setPrices(nextMarkets.map(m => ({
         symbol: m.symbol,
         mark: m.mark,
@@ -131,6 +173,11 @@ export function useHotstuff() {
     return { success: true };
   }, [exchange, info, switchChain, walletAddr, walletClient]);
 
+  const openReferralJoin = useCallback(() => {
+    if (!HOTSTUFF_REFERRAL_URL) return;
+    window.open(HOTSTUFF_REFERRAL_URL, '_blank', 'noopener,noreferrer');
+  }, []);
+
   const placeOrder = useCallback(async ({ symbol, side, amount, price, leverage, orderType, reduceOnly = false }) => {
     if (!walletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
     await activate();
@@ -155,6 +202,29 @@ export function useHotstuff() {
     await refresh();
     return { success: true, result, clientOrderId: order.cloid };
   }, [activate, claimGold, evmReady, exchange, markets, refresh, walletAddr, walletClient]);
+
+  const setLeverage = useCallback(async (symbol, leverage) => {
+    try {
+      if (!walletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
+      await ensureHotstuffChain(switchChain);
+      const sym = String(symbol || '').toUpperCase();
+      const market = markets.find(m => m.symbol === sym || m.market_name === symbol);
+      if (!market) throw new Error('Select a valid Hotstuff market');
+      const lev = Math.max(1, Math.min(Number(market.max_leverage || 50), Math.floor(Number(leverage || 1))));
+      const result = await exchange().updatePerpInstrumentLeverage({
+        instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
+        leverage: lev,
+        nonce: Date.now(),
+      });
+      setLeverageSettings(prev => ({ ...prev, [sym]: lev }));
+      await refresh();
+      return { success: true, result };
+    } catch (e) {
+      const msg = hotstuffErrorMessage(e, 'Hotstuff leverage update failed');
+      setError(msg);
+      return { error: msg };
+    }
+  }, [evmReady, exchange, markets, refresh, switchChain, walletAddr, walletClient]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, _slippage, leverage) => (
     placeOrder({ symbol, side, amount, leverage, orderType: 'market' }).catch(e => {
@@ -215,11 +285,102 @@ export function useHotstuff() {
     }
   }, [exchange, refresh, switchChain]);
 
+  const setTpsl = useCallback(async (symbol, closeSide, takeProfit, stopLoss, pairIndex, _tradeIndex, positionAmount) => {
+    try {
+      if (!walletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
+      await activate();
+      const sym = String(symbol || '').toUpperCase();
+      const market = markets.find(m => m.symbol === sym || Number(m.pair_index) === Number(pairIndex));
+      if (!market) throw new Error('Select a valid Hotstuff market');
+      const position = positions.find(p => String(p?.symbol || '').toUpperCase() === sym)
+        || positions.find(p => Number(p?.pair_index) === Number(pairIndex));
+      const size = Number(positionAmount || position?.amount || 0);
+      if (!(size > 0)) throw new Error('Hotstuff TP/SL requires an open position size');
+      const mark = Number(position?.mark_price || market?.mark || market?.mid || position?.entry_price || 0);
+      const closingLong = String(closeSide || '').toLowerCase() === 'ask';
+      const ordersToPlace = [];
+      const tp = Number(takeProfit || 0);
+      const sl = Number(stopLoss || 0);
+      if (tp > 0) {
+        if (mark > 0 && (closingLong ? tp <= mark : tp >= mark)) {
+          throw new Error(closingLong ? 'Take profit must be above current price' : 'Take profit must be below current price');
+        }
+        ordersToPlace.push(buildHotstuffTpslOrder({
+          market,
+          closeSide,
+          triggerPrice: tp,
+          size,
+          kind: 'tp',
+        }));
+      }
+      if (sl > 0) {
+        if (mark > 0 && (closingLong ? sl >= mark : sl <= mark)) {
+          throw new Error(closingLong ? 'Stop loss must be below current price' : 'Stop loss must be above current price');
+        }
+        ordersToPlace.push(buildHotstuffTpslOrder({
+          market,
+          closeSide,
+          triggerPrice: sl,
+          size,
+          kind: 'sl',
+        }));
+      }
+      if (!ordersToPlace.length) throw new Error('Enter TP or SL price');
+      const brokerConfig = hotstuffBrokerConfig();
+      const result = await exchange().placeOrder({
+        orders: ordersToPlace,
+        expiresAfter: Date.now() + 60_000,
+        ...(brokerConfig ? { brokerConfig } : {}),
+        nonce: Date.now(),
+      });
+      await refresh();
+      return { success: true, result, clientOrderIds: ordersToPlace.map(o => o.cloid) };
+    } catch (e) {
+      const msg = hotstuffErrorMessage(e, 'Hotstuff TP/SL failed');
+      setError(msg);
+      return { error: msg };
+    }
+  }, [activate, evmReady, exchange, markets, positions, refresh, walletAddr, walletClient]);
+
+  const parseAmount = useCallback((amount) => {
+    const amountText = String(amount || '').trim();
+    if (!Number.isFinite(Number(amountText)) || Number(amountText) <= 0) throw new Error('Enter an amount');
+    return amountText;
+  }, []);
+
   const depositToPacifica = useCallback(async (amount) => {
     try {
+      if (!walletClient) throw new Error('Connect your EVM wallet first');
       await ensureHotstuffChain(switchChain);
-      const amountText = String(amount || '').trim();
-      if (!Number.isFinite(Number(amountText)) || Number(amountText) <= 0) throw new Error('Enter an amount');
+      const amountText = parseAmount(amount);
+      const hash = await walletClient.writeContract({
+        address: HOTSTUFF_USDC_ADDRESS,
+        abi: ERC20_TRANSFER_ABI,
+        functionName: 'transfer',
+        args: [HOTSTUFF_BRIDGE_ADDRESS, parseUnits(amountText, HOTSTUFF_USDC_DECIMALS)],
+        chain: HOTSTUFF_CHAIN,
+      });
+      const pc = typeof getPublicClient === 'function'
+        ? getPublicClient(HOTSTUFF_BRIDGE_CHAIN_ID)
+        : publicClient;
+      await pc?.waitForTransactionReceipt?.({ hash }).catch(() => null);
+      await refresh();
+      return {
+        success: true,
+        txHash: hash,
+        info: 'Hotstuff Ethereum USDC deposit sent. It should appear in your Hotstuff spot balance after bridge processing.',
+      };
+    } catch (e) {
+      const msg = hotstuffErrorMessage(e, 'Hotstuff deposit failed');
+      setError(msg);
+      return { error: msg };
+    }
+  }, [getPublicClient, parseAmount, publicClient, refresh, switchChain, walletClient]);
+
+  const moveSpotToPerp = useCallback(async (amount) => {
+    try {
+      await ensureHotstuffChain(switchChain);
+      const amountText = parseAmount(amount);
       const result = await exchange().accountInternalBalanceTransferRequest({
         collateralId: HOTSTUFF_USDC_COLLATERAL_ID,
         amount: amountText,
@@ -227,13 +388,37 @@ export function useHotstuff() {
         nonce: Date.now(),
       });
       await refresh();
-      return { success: true, result };
+      return { success: true, result, info: 'Moved USDC from Hotstuff spot balance to derivatives.' };
     } catch (e) {
-      const msg = hotstuffErrorMessage(e, 'Hotstuff deposit failed');
+      const msg = hotstuffErrorMessage(e, 'Hotstuff internal transfer failed');
       setError(msg);
       return { error: msg };
     }
-  }, [exchange, refresh, switchChain]);
+  }, [exchange, parseAmount, refresh, switchChain]);
+
+  const withdraw = useCallback(async (amount) => {
+    try {
+      await ensureHotstuffChain(switchChain);
+      const amountText = parseAmount(amount);
+      const result = await exchange().accountDerivativeWithdrawRequest({
+        collateralId: HOTSTUFF_USDC_COLLATERAL_ID,
+        amount: amountText,
+        chainId: HOTSTUFF_BRIDGE_CHAIN_ID,
+        nonce: Date.now(),
+      });
+      await refresh();
+      return {
+        success: true,
+        result,
+        txHash: result?.tx_hash || result?.txHash || null,
+        info: 'Hotstuff derivatives withdrawal requested to your Ethereum wallet.',
+      };
+    } catch (e) {
+      const msg = hotstuffErrorMessage(e, 'Hotstuff withdraw failed');
+      setError(msg);
+      return { error: msg };
+    }
+  }, [exchange, parseAmount, refresh, switchChain]);
 
   return {
     walletAddr,
@@ -244,8 +429,8 @@ export function useHotstuff() {
     prices,
     markets,
     walletUsdc: Number(account?.spot_account_equity || 0),
-    leverageSettings: {},
-    marginModes: {},
+    leverageSettings,
+    marginModes,
     dataReady: !!markets.length,
     accountReady: !!account,
     loading,
@@ -262,13 +447,16 @@ export function useHotstuff() {
     cancelOrder,
     closePosition,
     depositToPacifica,
-    withdraw: async () => ({ error: 'Hotstuff withdraw is not wired yet' }),
+    withdraw,
     activate,
+    openReferralJoin,
+    referralCode: HOTSTUFF_REFERRAL_CODE,
+    referralUrl: HOTSTUFF_REFERRAL_URL,
     claimGold,
-    setTpsl: async () => ({ error: 'Hotstuff TP/SL is not wired yet' }),
-    setLeverage: async () => ({ success: true }),
-    setMarginMode: async () => ({ success: true }),
-    moveSpotToPerp: depositToPacifica,
+    setTpsl,
+    setLeverage,
+    setMarginMode: async () => ({ success: true, info: 'Hotstuff margin mode is managed by the venue for this account.' }),
+    moveSpotToPerp,
     hasReferrer: setupVerified,
     setupVerified,
     isReady: !!walletAddr,

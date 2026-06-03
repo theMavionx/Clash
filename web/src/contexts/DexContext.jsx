@@ -207,9 +207,25 @@ export const DEX_CONFIG = {
     chainShort: 'GRVT',
     description: 'Perps on GRVT Exchange',
   },
+  katana: {
+    id: 'katana',
+    label: 'KATANA',
+    shortLabel: 'KTN',
+    emoji: 'KTN',
+    logo: '/katana-perps.svg',
+    logoIsWordmark: false,
+    color: '#D92D20',
+    colorDark: '#991B1B',
+    colorLight: 'rgba(217,45,32,0.15)',
+    borderColor: '#B42318',
+    chain: 'Katana',
+    chainShort: 'KTN',
+    description: 'Perps on Katana',
+  },
 };
 
 export const DEX_ORDER = [
+  'katana',
   'grvt',
   'hotstuff',
   'phoenix',
@@ -321,7 +337,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -357,7 +373,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana') {
           setDex(j.dex);
         }
       } catch { /* network error - keep local dex */ }

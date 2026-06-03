@@ -349,6 +349,14 @@ const PHOENIX_EARNINGS_RETRY_MS = Math.max(
   250,
   Number(process.env.PHOENIX_EARNINGS_RETRY_MS || 900),
 );
+const PHOENIX_EARNINGS_PAGE_PAUSE_MS = Math.max(
+  0,
+  Number(process.env.PHOENIX_EARNINGS_PAGE_PAUSE_MS || 150),
+);
+const PHOENIX_EARNINGS_PAGE_CAP = Math.max(
+  50,
+  Number(process.env.PHOENIX_EARNINGS_PAGE_CAP || 10_000),
+);
 let phoenixExactEarningsCache = null;
 
 function sleep(ms) {
@@ -405,7 +413,215 @@ async function fetchPhoenixTraderState(authority) {
     || null;
 }
 
-async function fetchPhoenixCollateralTransfers(authority) {
+function ensurePhoenixEarningsIndex(mainDb) {
+  if (!mainDb) return false;
+  mainDb.exec(`
+    CREATE TABLE IF NOT EXISTS phoenix_collateral_events (
+      authority                 TEXT NOT NULL,
+      event_key                 TEXT NOT NULL,
+      trader_pda_index          INTEGER NOT NULL DEFAULT 0,
+      trader_subaccount_index   INTEGER NOT NULL DEFAULT 0,
+      event_type                TEXT NOT NULL,
+      amount_raw                INTEGER NOT NULL DEFAULT 0,
+      amount_usd                REAL NOT NULL DEFAULT 0,
+      collateral_after_raw      INTEGER,
+      slot                      INTEGER,
+      slot_index                INTEGER,
+      event_index               INTEGER,
+      event_timestamp           TEXT,
+      raw_json                  TEXT,
+      indexed_at                TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (authority, event_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_phoenix_collateral_events_authority_type
+      ON phoenix_collateral_events(authority, event_type, trader_subaccount_index);
+    CREATE INDEX IF NOT EXISTS idx_phoenix_collateral_events_authority_time
+      ON phoenix_collateral_events(authority, event_timestamp DESC, slot DESC);
+
+    CREATE TABLE IF NOT EXISTS phoenix_earnings_index_state (
+      authority        TEXT PRIMARY KEY,
+      last_backfill_at TEXT,
+      last_sync_at     TEXT,
+      last_cursor      TEXT,
+      pages_fetched    INTEGER NOT NULL DEFAULT 0,
+      events_indexed   INTEGER NOT NULL DEFAULT 0,
+      updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  return true;
+}
+
+function phoenixEventKey(ev) {
+  const slot = ev?.slot ?? '';
+  const slotIndex = ev?.slotIndex ?? '';
+  const eventIndex = ev?.eventIndex ?? '';
+  const traderPdaIndex = ev?.traderPdaIndex ?? '';
+  const subaccount = ev?.traderSubaccountIndex ?? '';
+  const type = ev?.eventType || ev?.type || '';
+  if (slot !== '' && slotIndex !== '' && eventIndex !== '') {
+    return `${slot}:${slotIndex}:${eventIndex}:${traderPdaIndex}:${subaccount}:${type}`;
+  }
+  const raw = JSON.stringify(ev || {});
+  return require('crypto').createHash('sha256').update(raw).digest('hex');
+}
+
+function insertPhoenixCollateralEvent(mainDb, authority, ev) {
+  const amountRaw = Number(ev?.amount) || 0;
+  const eventType = String(ev?.eventType || ev?.type || '').toLowerCase();
+  const info = mainDb.prepare(`
+    INSERT OR IGNORE INTO phoenix_collateral_events (
+      authority, event_key, trader_pda_index, trader_subaccount_index,
+      event_type, amount_raw, amount_usd, collateral_after_raw,
+      slot, slot_index, event_index, event_timestamp, raw_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    authority,
+    phoenixEventKey(ev),
+    Number(ev?.traderPdaIndex ?? 0) || 0,
+    Number(ev?.traderSubaccountIndex ?? 0) || 0,
+    eventType,
+    amountRaw,
+    phoenixTokenAmountToNumber(amountRaw, 6),
+    ev?.collateralAfter == null ? null : Number(ev.collateralAfter),
+    ev?.slot == null ? null : Number(ev.slot),
+    ev?.slotIndex == null ? null : Number(ev.slotIndex),
+    ev?.eventIndex == null ? null : Number(ev.eventIndex),
+    ev?.timestamp == null ? null : String(ev.timestamp),
+    JSON.stringify(ev || {}),
+  );
+  return Number(info?.changes) > 0;
+}
+
+function readPhoenixCollateralTotals(mainDb, authority, extra = {}) {
+  const row = mainDb.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN event_type = 'transfer' AND amount_usd > 0 THEN amount_usd ELSE 0 END), 0) AS totalTransfers,
+      COALESCE(SUM(CASE WHEN event_type = 'deposit' AND amount_usd > 0 THEN amount_usd ELSE 0 END), 0) AS depositTotal,
+      COALESCE(SUM(CASE WHEN event_type = 'transfer' AND amount_usd > 0 THEN 1 ELSE 0 END), 0) AS transferEvents,
+      COALESCE(SUM(CASE WHEN event_type = 'deposit' AND amount_usd > 0 THEN 1 ELSE 0 END), 0) AS depositEvents,
+      COUNT(*) AS indexedEvents
+    FROM phoenix_collateral_events
+    WHERE authority = ? AND trader_subaccount_index = 0
+  `).get(authority);
+  const state = mainDb.prepare(`
+    SELECT last_backfill_at, last_sync_at, pages_fetched, events_indexed
+    FROM phoenix_earnings_index_state
+    WHERE authority = ?
+  `).get(authority) || {};
+  return {
+    totalTransfers: Number(row?.totalTransfers) || 0,
+    transferEvents: Number(row?.transferEvents) || 0,
+    depositTotal: Number(row?.depositTotal) || 0,
+    depositEvents: Number(row?.depositEvents) || 0,
+    indexedEvents: Number(row?.indexedEvents) || 0,
+    lastBackfillAt: state.last_backfill_at || null,
+    lastSyncAt: state.last_sync_at || null,
+    pagesFetchedTotal: Number(state.pages_fetched) || 0,
+    eventsIndexedTotal: Number(state.events_indexed) || 0,
+    ...extra,
+  };
+}
+
+async function indexPhoenixCollateralHistory(authority, mainDb) {
+  ensurePhoenixEarningsIndex(mainDb);
+  const existing = mainDb.prepare(`
+    SELECT COUNT(*) AS n
+    FROM phoenix_collateral_events
+    WHERE authority = ?
+  `).get(authority);
+  const incremental = Number(existing?.n) > 0;
+  let pages = 0;
+  let inserted = 0;
+  let scanned = 0;
+  let cursor = null;
+  let lastCursor = null;
+  let hitExisting = false;
+  let reachedEnd = false;
+  const seenCursors = new Set();
+
+  while (pages < PHOENIX_EARNINGS_PAGE_CAP) {
+    const qs = new URLSearchParams({ limit: '100', traderPdaIndex: '0' });
+    if (cursor) qs.set('nextCursor', cursor);
+    // eslint-disable-next-line no-await-in-loop
+    const payload = await fetchPhoenixJson(`/trader/${encodeURIComponent(authority)}/collateral-history?${qs.toString()}`);
+    pages++;
+    const rows = parsePhoenixEvents(payload);
+    for (const ev of rows) {
+      if (Number(ev?.traderSubaccountIndex ?? 0) !== 0) continue;
+      scanned++;
+      const wasInserted = insertPhoenixCollateralEvent(mainDb, authority, ev);
+      if (wasInserted) {
+        inserted++;
+      } else if (incremental) {
+        hitExisting = true;
+        break;
+      }
+    }
+    if (hitExisting) break;
+    if (!payload?.hasMore) {
+      reachedEnd = true;
+      break;
+    }
+    const next = payload?.nextCursor || payload?.prevCursor || null;
+    if (!next || seenCursors.has(next)) break;
+    seenCursors.add(next);
+    cursor = next;
+    lastCursor = next;
+    if (PHOENIX_EARNINGS_PAGE_PAUSE_MS > 0) {
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(PHOENIX_EARNINGS_PAGE_PAUSE_MS);
+    }
+  }
+
+  mainDb.prepare(`
+    INSERT INTO phoenix_earnings_index_state (
+      authority, last_backfill_at, last_sync_at, last_cursor,
+      pages_fetched, events_indexed, updated_at
+    ) VALUES (
+      ?, CASE WHEN ? THEN datetime('now') ELSE NULL END, datetime('now'), ?, ?, ?, datetime('now')
+    )
+    ON CONFLICT(authority) DO UPDATE SET
+      last_backfill_at = CASE
+        WHEN excluded.last_backfill_at IS NOT NULL THEN excluded.last_backfill_at
+        ELSE phoenix_earnings_index_state.last_backfill_at
+      END,
+      last_sync_at = excluded.last_sync_at,
+      last_cursor = excluded.last_cursor,
+      pages_fetched = phoenix_earnings_index_state.pages_fetched + excluded.pages_fetched,
+      events_indexed = phoenix_earnings_index_state.events_indexed + excluded.events_indexed,
+      updated_at = excluded.updated_at
+  `).run(authority, !incremental && reachedEnd ? 1 : 0, lastCursor, pages, inserted);
+
+  return readPhoenixCollateralTotals(mainDb, authority, {
+    pages,
+    scannedEvents: scanned,
+    insertedEvents: inserted,
+    incremental,
+    hitExisting,
+    reachedEnd,
+    pageCapReached: pages >= PHOENIX_EARNINGS_PAGE_CAP,
+  });
+}
+
+async function fetchPhoenixCollateralTransfers(authority, mainDb = null) {
+  if (mainDb) {
+    try {
+      return await indexPhoenixCollateralHistory(authority, mainDb);
+    } catch (err) {
+      try {
+        ensurePhoenixEarningsIndex(mainDb);
+        const stored = readPhoenixCollateralTotals(mainDb, authority, {
+          pages: 0,
+          insertedEvents: 0,
+          exactIndexError: String(err?.message || err).slice(0, 180),
+          fromStoredIndex: true,
+        });
+        if (stored.indexedEvents > 0) return stored;
+      } catch {}
+      throw err;
+    }
+  }
+
   let totalTransfers = 0;
   let transferEvents = 0;
   let depositTotal = 0;
@@ -414,7 +630,7 @@ async function fetchPhoenixCollateralTransfers(authority) {
   let cursor = null;
   const seenCursors = new Set();
 
-  while (pages < 20) {
+  while (pages < PHOENIX_EARNINGS_PAGE_CAP) {
     const qs = new URLSearchParams({ limit: '100', traderPdaIndex: '0' });
     if (cursor) qs.set('nextCursor', cursor);
     const payload = await fetchPhoenixJson(`/trader/${encodeURIComponent(authority)}/collateral-history?${qs.toString()}`);
@@ -437,12 +653,16 @@ async function fetchPhoenixCollateralTransfers(authority) {
     if (!next || seenCursors.has(next)) break;
     seenCursors.add(next);
     cursor = next;
+    if (PHOENIX_EARNINGS_PAGE_PAUSE_MS > 0) {
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(PHOENIX_EARNINGS_PAGE_PAUSE_MS);
+    }
   }
 
-  return { totalTransfers, transferEvents, depositTotal, depositEvents, pages };
+  return { totalTransfers, transferEvents, depositTotal, depositEvents, pages, indexedEvents: transferEvents + depositEvents };
 }
 
-async function fetchPhoenixEarnings() {
+async function fetchPhoenixEarnings({ mainDb = null } = {}) {
   const Db = loadSqlite();
   let volume = 0;
   let trades = 0;
@@ -471,7 +691,7 @@ async function fetchPhoenixEarnings() {
   try {
     [state, history] = await Promise.all([
       fetchPhoenixTraderState(PHOENIX_FLIGHT_BUILDER_AUTHORITY),
-      fetchPhoenixCollateralTransfers(PHOENIX_FLIGHT_BUILDER_AUTHORITY),
+      fetchPhoenixCollateralTransfers(PHOENIX_FLIGHT_BUILDER_AUTHORITY, mainDb),
     ]);
   } catch (err) {
     exactError = err;
@@ -529,13 +749,19 @@ async function fetchPhoenixEarnings() {
     withdrawable_usd: withdrawable,
     portfolio_value_usd: portfolio,
     transfer_events: history.transferEvents,
+    indexed_events: history.indexedEvents,
+    index_pages: history.pages,
+    index_inserted_events: history.insertedEvents,
+    index_incremental: history.incremental,
+    index_last_backfill_at: history.lastBackfillAt,
+    index_last_sync_at: history.lastSyncAt,
     deposit_usd: history.depositTotal,
     deposit_events: history.depositEvents,
     open_positions: openPositions,
     builder_fee_pct: feeBps / 100,
     fee_per_side_pct: feeBps / 100,
     model: 'onchain_collateral_transfers',
-    note: `Actual Phoenix Flight fee collector transfer events from builder collateral history: ${history.transferEvents} transfer(s). Local ${feeBps}bps volume estimate is $${estimated.toFixed(4)} only for comparison. Builder trader also has $${collateral.toFixed(4)} collateral, $${withdrawable.toFixed(4)} withdrawable, ${openPositions} open position(s); deposits are excluded from earnings.`,
+    note: `Actual Phoenix Flight fee collector transfer events indexed from builder collateral history: ${history.transferEvents} transfer(s). Local ${feeBps}bps volume estimate is $${estimated.toFixed(4)} only for comparison. Builder trader also has $${collateral.toFixed(4)} collateral, $${withdrawable.toFixed(4)} withdrawable, ${openPositions} open position(s); deposits are excluded from earnings.${history.exactIndexError ? ` Phoenix API had an issue; served stored index (${history.exactIndexError}).` : ''}`,
     source_detail: 'phoenix_flight_collateral_transfers',
   };
   phoenixExactEarningsCache = { at: Date.now(), value: result };
@@ -1564,7 +1790,7 @@ const CACHE_TTL_MS = 60 * 1000;
 let _cache = null;
 let _cacheAt = 0;
 
-async function fetchAllEarnings({ force = false } = {}) {
+async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   const now = Date.now();
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
@@ -1574,7 +1800,7 @@ async function fetchAllEarnings({ force = false } = {}) {
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
     fetchGmxEarnings(),
-    fetchPhoenixEarnings(),
+    fetchPhoenixEarnings({ mainDb }),
     fetchPerplEarnings(),
     fetchHyperliquidEarnings(),
     fetchGrvtEarnings(),

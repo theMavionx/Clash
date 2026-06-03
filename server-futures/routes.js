@@ -18,6 +18,7 @@ const hibachi = require('./hibachi');
 const hotstuff = require('./hotstuff');
 const hotstuffRewards = require('./hotstuff-rewards-worker');
 const grvt = require('./grvt');
+const katana = require('./katana');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
 
@@ -594,7 +595,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -614,7 +615,7 @@ function auth(req, res, next) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -644,7 +645,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -710,6 +711,14 @@ router.get('/account', async (req, res) => {
       }
       const info = await hotstuff.getAccountByAddress(address);
       return res.json(info);
+    }
+    if (dex === 'katana') {
+      return authGate(req, res, async () => {
+        const creds = requireKatanaOwner(req, res);
+        if (!creds) return;
+        const account = await katana.getAccount(creds, req.query.address || req.query.wallet || req.playerWallet);
+        res.json(account);
+      });
     }
     // Pacifica (custodial) — keep legacy auth-gated flow.
     return authGate(req, res, async () => {
@@ -1050,6 +1059,272 @@ router.get('/decibel/signer', auth, async (req, res) => {
   }
 });
 
+router.get('/katana/health', async (req, res) => {
+  try {
+    res.json(await katana.getHealth());
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message || 'Katana Perps health check failed' });
+  }
+});
+
+router.get('/katana/access-code', (req, res) => {
+  res.json(katana.checkAccessCode(req.query.code));
+});
+
+router.get('/katana/exchange', async (req, res) => {
+  try {
+    res.json(await katana.getExchange());
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message || 'Katana Perps exchange read failed' });
+  }
+});
+
+router.get('/katana/funding-rates', async (req, res) => {
+  try {
+    const params = {};
+    if (req.query.market) params.market = String(req.query.market).toUpperCase();
+    if (req.query.start) params.start = req.query.start;
+    if (req.query.end) params.end = req.query.end;
+    if (req.query.limit) params.limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+    res.json(await katana.getFundingRates(params));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message || 'Katana Perps funding read failed' });
+  }
+});
+
+router.get('/katana/orderbook', async (req, res) => {
+  try {
+    res.json(await katana.getOrderbook(req.query.symbol || req.query.market, req.query.limit, req.query.level));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message || 'Katana Perps orderbook read failed' });
+  }
+});
+
+function ensureKatana(req, res) {
+  if (req.dex !== 'katana') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to katana before calling Katana endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'katana',
+    });
+    return false;
+  }
+  return true;
+}
+
+function katanaCredsFromReq(req) {
+  const saved = db.getKatanaCredentials(req.playerId) || {};
+  return katana.credentials({
+    apiKey: req.body?.api_key || req.body?.apiKey || req.headers['x-katana-api-key'] || saved.apiKey,
+    apiSecret: req.body?.api_secret || req.body?.apiSecret || req.headers['x-katana-api-secret'] || saved.apiSecret,
+    wallet: req.body?.wallet || req.query?.wallet || req.headers['x-katana-wallet'] || saved.wallet || req.playerWallet,
+  });
+}
+
+function requireKatanaOwner(req, res) {
+  if (!ensureKatana(req, res)) return null;
+  try {
+    const creds = katanaCredsFromReq(req);
+    const playerWallet = String(req.playerWallet || '').toLowerCase();
+    if (playerWallet && String(creds.wallet || '').toLowerCase() !== playerWallet) {
+      res.status(403).json({ error: 'Katana wallet must match the wallet registered to this game account' });
+      return null;
+    }
+    return creds;
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message || 'Katana credentials required' });
+    return null;
+  }
+}
+
+function katanaRouteError(res, e, fallback) {
+  const status = e.status || (e.code === 'KATANA_CONFIG_MISSING' ? 428 : 502);
+  res.status(status).json({
+    error: fallback,
+    detail: e.message,
+    missing_env: e.missing_env || undefined,
+  });
+}
+
+router.get('/katana/config', auth, (req, res) => {
+  if (!ensureKatana(req, res)) return;
+  res.json({ ...katana.configStatus(), credentials: katana.credentialStatus(db.getKatanaCredentials(req.playerId)) });
+});
+
+router.get('/katana/credentials', auth, (req, res) => {
+  if (!ensureKatana(req, res)) return;
+  const status = katana.credentialStatus(db.getKatanaCredentials(req.playerId));
+  res.json(status);
+});
+
+router.post('/katana/credentials', auth, (req, res) => {
+  if (!ensureKatana(req, res)) return;
+  try {
+    const wallet = String(req.body?.wallet || req.playerWallet || '').trim();
+    if (req.playerWallet && wallet.toLowerCase() !== String(req.playerWallet).toLowerCase()) {
+      return res.status(403).json({ error: 'Katana wallet must match the wallet registered to this game account' });
+    }
+    const saved = db.saveKatanaCredentials(req.playerId, {
+      apiKey: req.body?.api_key || req.body?.apiKey,
+      apiSecret: req.body?.api_secret || req.body?.apiSecret,
+      wallet,
+    });
+    res.json({ success: true, ...katana.credentialStatus(saved) });
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message || 'Failed to save Katana credentials' });
+  }
+});
+
+router.delete('/katana/credentials', auth, (req, res) => {
+  if (!ensureKatana(req, res)) return;
+  db.deleteKatanaCredentials(req.playerId);
+  res.json({ success: true });
+});
+
+router.get('/katana/account', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.getAccount(creds, req.query.wallet || req.playerWallet));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to load Katana account');
+  }
+});
+
+router.get('/katana/positions', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.getPositions(creds, req.query.wallet || req.playerWallet, {
+      market: req.query.market || req.query.symbol,
+    }));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to load Katana positions');
+  }
+});
+
+router.get('/katana/orders', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.getOrders(creds, req.query.wallet || req.playerWallet, {
+      market: req.query.market || req.query.symbol,
+      closed: req.query.closed === 'true' ? true : req.query.closed === 'false' ? false : undefined,
+      limit: req.query.limit,
+    }));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to load Katana orders');
+  }
+});
+
+router.get('/katana/fills', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.getFills(creds, req.query.wallet || req.playerWallet, {
+      market: req.query.market || req.query.symbol,
+      fromId: req.query.fromId,
+      limit: req.query.limit,
+    }));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to load Katana fills');
+  }
+});
+
+router.post('/katana/associate-wallet', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.prepareAssociateWallet(creds, req.body?.wallet || req.playerWallet, req.body?.referralCode));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to prepare Katana wallet association');
+  }
+});
+
+router.post('/katana/associate-wallet/submit', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.submitAssociateWallet(creds, req.body || {}));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to submit Katana wallet association');
+  }
+});
+
+router.post('/katana/orders/prepare', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.prepareOrder(creds, { ...req.body, wallet: req.body?.wallet || req.playerWallet }));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to prepare Katana order');
+  }
+});
+
+router.post('/katana/orders/submit', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    const result = await katana.submitOrder(creds, req.body || {});
+    try {
+      const params = req.body?.parameters || {};
+      db.addTrade(req.playerId, {
+        symbol: result.symbol || params.symbol || params.market,
+        side: result.side || params.side,
+        orderType: result.type || params.type || 'market',
+        amount: String(params.quantity || result.amount || ''),
+        price: String(params.price || result.price || ''),
+        orderId: result.order_id || null,
+        clientOrderId: result.client_order_id || params.clientOrderId || null,
+        status: result.status || 'submitted',
+        dex: 'katana',
+        notional_usd: Number(req.body?.notional_usd || 0),
+        verifiedSource: 'katana_api',
+        proofJson: JSON.stringify({ source: 'katana_perps_sdk', order: result._raw || result }),
+      });
+    } catch (dbErr) {
+      console.warn('[katana] trade log failed:', dbErr.message);
+    }
+    res.json(result);
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to submit Katana order');
+  }
+});
+
+router.post('/katana/orders/place', auth, async (req, res) => {
+  res.status(410).json({
+    error: 'Katana orders require browser EIP-712 signing. Use /katana/orders/prepare then /katana/orders/submit.',
+    migrated: true,
+  });
+});
+
+router.post('/katana/orders/cancel/prepare', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.prepareCancelOrders(creds, { ...req.body, wallet: req.body?.wallet || req.playerWallet }));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to prepare Katana cancel');
+  }
+});
+
+router.post('/katana/orders/cancel/submit', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.submitCancelOrders(creds, req.body || {}));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to cancel Katana orders');
+  }
+});
+
+router.post('/katana/orders/cancel', auth, async (req, res) => {
+  res.status(410).json({
+    error: 'Katana cancels require browser EIP-712 signing. Use /katana/orders/cancel/prepare then /katana/orders/cancel/submit.',
+    migrated: true,
+  });
+});
+
 router.get('/decibel/positions', auth, async (req, res) => {
   try {
     const verified = await requireDecibelOwnerAndSubaccount(req, res);
@@ -1329,6 +1604,7 @@ router.get('/markets', async (req, res) => {
       : dex === 'hibachi' ? await hibachi.getMarketInfo()
       : dex === 'hotstuff' ? await hotstuff.getMarketInfo()
       : dex === 'grvt' ? await grvt.getMarketInfo()
+      : dex === 'katana' ? await katana.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -1350,6 +1626,7 @@ router.get('/prices', async (req, res) => {
       : dex === 'hibachi' ? await hibachi.getPrices()
       : dex === 'hotstuff' ? await hotstuff.getPrices()
       : dex === 'grvt' ? await grvt.getPrices()
+      : dex === 'katana' ? await katana.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -1361,10 +1638,13 @@ router.get('/prices', async (req, res) => {
 });
 
 router.get('/orderbook', async (req, res) => {
-  const { symbol, agg_level } = req.query;
+  const dex = (req.query.dex || 'pacifica').toLowerCase();
+  const { symbol, agg_level, limit, level } = req.query;
   if (!symbol) return res.status(400).json({ error: 'symbol required' });
   try {
-    const book = await pacifica.getOrderbook(symbol, agg_level);
+    const book = dex === 'katana'
+      ? await katana.getOrderbook(symbol, limit || 25, level || agg_level || 2)
+      : await pacifica.getOrderbook(symbol, agg_level);
     res.json(book);
   } catch (e) {
     res.status(500).json({ error: 'Failed to get orderbook' });
@@ -1514,6 +1794,16 @@ router.get('/positions', async (req, res) => {
     if (dex === 'grvt') {
       return res.status(400).json({ error: 'GRVT positions require /grvt/positions with session credentials' });
     }
+    if (dex === 'katana') {
+      return authGate(req, res, async () => {
+        const creds = requireKatanaOwner(req, res);
+        if (!creds) return;
+        const positions = await katana.getPositions(creds, req.query.address || req.query.wallet || req.playerWallet, {
+          market: req.query.market || req.query.symbol,
+        });
+        res.json(positions);
+      });
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -1582,6 +1872,18 @@ router.get('/orders', async (req, res) => {
     if (dex === 'grvt') {
       return res.status(400).json({ error: 'GRVT orders require /grvt/orders with session credentials' });
     }
+    if (dex === 'katana') {
+      return authGate(req, res, async () => {
+        const creds = requireKatanaOwner(req, res);
+        if (!creds) return;
+        const orders = await katana.getOrders(creds, req.query.address || req.query.wallet || req.playerWallet, {
+          market: req.query.market || req.query.symbol,
+          closed: req.query.closed === 'true' ? true : req.query.closed === 'false' ? false : undefined,
+          limit: req.query.limit,
+        });
+        res.json(orders);
+      });
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -1596,7 +1898,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -3330,7 +3632,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi') {
+  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

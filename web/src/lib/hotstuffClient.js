@@ -57,6 +57,16 @@ export function formatHotstuffSize(value, market) {
   return trimZeros(rounded.toFixed(decimals));
 }
 
+export function formatHotstuffTriggerPrice(value, market) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  const tick = Number(market?.tick_size || 0.01);
+  if (!Number.isFinite(tick) || tick <= 0) return trimZeros(n.toFixed(4));
+  const rounded = Math.round(n / tick) * tick;
+  const decimals = Math.min(8, Math.max(0, String(tick).split('.')[1]?.length || 0));
+  return trimZeros(rounded.toFixed(decimals));
+}
+
 export function formatHotstuffPrice(value, market, { marketOrder = false, side = 'long' } = {}) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return '0';
@@ -95,6 +105,30 @@ export function buildHotstuffOrder({ market, side, amountUsd, amountBase, levera
     isMarket: !isLimit,
     tpsl: '',
     grouping: 'normal',
+  };
+}
+
+export function buildHotstuffTpslOrder({ market, closeSide, triggerPrice, size, kind }) {
+  if (!market?._hotstuff?.instrumentId && !market?.pair_index) throw new Error('Select a valid Hotstuff market');
+  const normalizedKind = String(kind || '').toLowerCase();
+  if (normalizedKind !== 'tp' && normalizedKind !== 'sl') throw new Error('Hotstuff TP/SL kind must be tp or sl');
+  const trigger = Number(triggerPrice);
+  if (!Number.isFinite(trigger) || trigger <= 0) throw new Error('Enter a valid TP/SL trigger price');
+  const side = /short|sell|ask/i.test(String(closeSide)) ? 's' : 'b';
+  return {
+    instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
+    side,
+    positionSide: 'BOTH',
+    price: formatHotstuffPrice(trigger, market, { marketOrder: true, side }),
+    size: formatHotstuffSize(size, market),
+    tif: 'IOC',
+    ro: true,
+    po: false,
+    cloid: makeHotstuffCloid(),
+    triggerPx: formatHotstuffTriggerPrice(trigger, market),
+    isMarket: true,
+    tpsl: normalizedKind,
+    grouping: 'position',
   };
 }
 

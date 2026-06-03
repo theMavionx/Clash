@@ -13,6 +13,7 @@ const HOTSTUFF_AGENT_ADDRESS = String(
 const HOTSTUFF_API_WALLET_PRIVATE_KEY = String(process.env.HOTSTUFF_API_WALLET_PRIVATE_KEY || '').trim();
 const HOTSTUFF_CLOID_PREFIX = String(process.env.HOTSTUFF_CLOID_PREFIX || 'clash-hs-');
 const HOTSTUFF_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.env.HOTSTUFF_FILL_LOOKBACK_LIMIT || 100)));
+const HOTSTUFF_FILL_IMPORT_MAX_PAGES = Math.max(1, Math.min(50, Number(process.env.HOTSTUFF_FILL_IMPORT_MAX_PAGES || 10)));
 const HOTSTUFF_BROKER_MIN_ACCOUNT_VALUE_USDC = Number(process.env.HOTSTUFF_BROKER_MIN_ACCOUNT_VALUE_USDC || 100);
 
 function isEvmAddress(addr) {
@@ -138,7 +139,10 @@ async function getPrices() {
 async function getAccountByAddress(address) {
   const clean = normalizeAddress(address);
   if (!clean) throw new Error('address query param required (0x...)');
-  const summary = await postInfo('account_summary', { user: clean });
+  const [summary, fees] = await Promise.all([
+    postInfo('account_summary', { user: clean }),
+    postInfo('user_fees', { user: clean }).catch(() => null),
+  ]);
   return {
     balance: String(summary?.total_account_equity ?? summary?.margin_balance ?? 0),
     usdc: String(summary?.total_account_equity ?? summary?.margin_balance ?? 0),
@@ -149,6 +153,10 @@ async function getAccountByAddress(address) {
     derivative_account_equity: String(summary?.derivative_account_equity ?? 0),
     spot_account_equity: String(summary?.spot_account_equity ?? 0),
     positions_count: Object.keys(summary?.perp_positions || {}).length,
+    maker_fee: fees?.perp_maker_fee_rate != null ? String(fees.perp_maker_fee_rate) : null,
+    taker_fee: fees?.perp_taker_fee_rate != null ? String(fees.perp_taker_fee_rate) : null,
+    fee_tier: fees?.total_volume_threshold != null ? String(fees.total_volume_threshold) : null,
+    fee_info: fees || null,
     _raw: summary,
   };
 }
@@ -272,21 +280,33 @@ function normalizeFill(wallet, fill) {
 async function getAccountTradeHistory(address, { limit = HOTSTUFF_FILL_LOOKBACK_LIMIT } = {}) {
   const clean = normalizeAddress(address);
   if (!clean) throw new Error('wallet required (0x...)');
-  const payload = await postInfo('fills', { user: clean, page: 1, limit: Math.max(1, Math.min(250, Number(limit) || HOTSTUFF_FILL_LOOKBACK_LIMIT)) });
-  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  const rows = await fetchFillsPages(clean, { limit, maxPages: HOTSTUFF_FILL_IMPORT_MAX_PAGES });
   return rows.map(f => normalizeFill(clean, f)).filter(Boolean);
+}
+
+async function fetchFillsPages(wallet, { limit = HOTSTUFF_FILL_LOOKBACK_LIMIT, maxPages = HOTSTUFF_FILL_IMPORT_MAX_PAGES } = {}) {
+  const clean = normalizeAddress(wallet);
+  if (!clean) return [];
+  const pageLimit = Math.max(1, Math.min(250, Number(limit) || HOTSTUFF_FILL_LOOKBACK_LIMIT));
+  const pages = Math.max(1, Math.min(50, Number(maxPages) || HOTSTUFF_FILL_IMPORT_MAX_PAGES));
+  const out = [];
+  for (let page = 1; page <= pages; page++) {
+    const payload = await postInfo('fills', { user: clean, page, limit: pageLimit });
+    const rows = Array.isArray(payload?.data) ? payload.data : [];
+    out.push(...rows);
+    if (!payload?.has_next || rows.length < pageLimit) break;
+  }
+  return out;
 }
 
 async function importFillsForPlayer(playerId, wallet, opts = {}) {
   const cleanWallet = normalizeAddress(wallet);
   if (!cleanWallet) return { ok: false, imported: 0, skipped: 0, total: 0, reason: 'invalid_evm_wallet' };
   const db = require('./db');
-  const payload = await postInfo('fills', {
-    user: cleanWallet,
-    page: 1,
-    limit: Math.max(1, Math.min(250, Number(opts.limit) || HOTSTUFF_FILL_LOOKBACK_LIMIT)),
-  }).catch(() => ({ data: [] }));
-  const fills = Array.isArray(payload?.data) ? payload.data : [];
+  const fills = await fetchFillsPages(cleanWallet, {
+    limit: opts.limit,
+    maxPages: opts.maxPages || HOTSTUFF_FILL_IMPORT_MAX_PAGES,
+  }).catch(() => []);
   let imported = 0;
   let adopted = 0;
   let skipped = 0;
@@ -338,6 +358,7 @@ module.exports = {
   HOTSTUFF_BROKER_ADDRESS,
   HOTSTUFF_AGENT_ADDRESS,
   HOTSTUFF_CLOID_PREFIX,
+  HOTSTUFF_FILL_IMPORT_MAX_PAGES,
   isEvmAddress,
   normalizeAddress,
   postInfo,
@@ -348,5 +369,6 @@ module.exports = {
   getPositionsByAddress,
   getOrdersByAddress,
   getAccountTradeHistory,
+  fetchFillsPages,
   importFillsForPlayer,
 };

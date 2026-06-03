@@ -12,6 +12,7 @@
     "@aptos-labs/ts-sdk": "^5.2.1",
     "@decibeltrade/sdk": "^0.6.0",
     "@hotstuff-labs/ts-sdk": "^0.1.1-beta.10",
+    "@katanaperps/katana-perps-sdk": "^2.0.0",
     "@nadohq/client": "0.15.0",
     "@nadohq/shared": "0.15.0",
     "@noble/curves": "^1.9.7",

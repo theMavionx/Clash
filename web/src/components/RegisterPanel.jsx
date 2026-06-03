@@ -70,8 +70,10 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'risex' ? 'SELF-CUSTODY · RISE' :
                   cfg.id === 'nado' ? 'SELF-CUSTODY · INK' :
+                  cfg.id === 'hibachi' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hotstuff' ? 'SELF-CUSTODY · HOT' :
                   cfg.id === 'grvt' ? 'SELF-CUSTODY · GRVT' :
+                  cfg.id === 'katana' ? 'SELF-CUSTODY · KATANA' :
                   cfg.id === 'monad' ? 'SELF-CUSTODY · MONAD' :
                   cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
                   'SELF-CUSTODY · SOLANA'
@@ -246,15 +248,17 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hibachi' ? 'HIBACHI'
     : dex === 'hotstuff' ? 'HOTSTUFF'
     : dex === 'grvt' ? 'GRVT'
+    : dex === 'katana' ? 'KATANA'
     : 'AVANTIS';
   const chainName = dex === 'gmx' ? 'Arbitrum'
     : dex === 'monad' ? 'Monad'
     : dex === 'hyperliquid' ? 'EVM'
     : dex === 'risex' ? 'RISE'
     : dex === 'nado' ? 'Ink'
-    : dex === 'hibachi' ? 'Arc'
+    : dex === 'hibachi' ? 'EVM'
     : dex === 'hotstuff' ? 'Hotstuff L1'
     : dex === 'grvt' ? 'GRVT Exchange'
+    : dex === 'katana' ? 'Katana'
     : 'Base';
   return (
     <div style={S.bodyStack}>
@@ -373,6 +377,7 @@ function RegisterPanel() {
                   dex === 'hibachi' ? 'Hibachi' :
                   dex === 'hotstuff' ? 'Hotstuff' :
                   dex === 'grvt' ? 'GRVT' :
+                  dex === 'katana' ? 'Katana' :
                   dex === 'phoenix' ? 'Phoenix' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
@@ -392,7 +397,7 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -444,6 +449,7 @@ function RegisterPanel() {
     if (dex === 'hibachi') return 'HIBACHI LOGIN';
     if (dex === 'hotstuff') return 'HOTSTUFF LOGIN';
     if (dex === 'grvt') return 'GRVT LOGIN';
+    if (dex === 'katana') return 'KATANA LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
     return 'PACIFICA LOGIN';
   })();
@@ -462,7 +468,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'arc' : dex === 'grvt' ? 'baseConnect' : dex === 'hotstuff' ? 'mainnet' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

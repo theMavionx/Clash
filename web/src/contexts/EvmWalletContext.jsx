@@ -20,6 +20,7 @@ import { RISE_CHAIN_ID, RISE_RPC_URLS, ensureRiseChain, riseChain } from '../lib
 import { INK_CHAIN_ID, INK_RPC_URLS, ensureInkChain, inkChain } from '../lib/nadoConfig';
 import { ARC_CHAIN_ID, ARC_RPC_URLS, ensureArcChain, arcChain } from '../lib/arcConfig';
 import { GRVT_CHAIN_ID, GRVT_RPC_URLS, ensureGrvtChain, grvtChain } from '../lib/grvtConfig';
+import { KATANA_CHAIN_ID, KATANA_RPC_URLS, ensureKatanaChain, katanaChain } from '../lib/katanaConfig';
 import { ETHEREUM_RPC_URLS } from '../lib/ethereumConfig';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useOptionalPrivy } from '../components/PrivyAuthProvider';
@@ -122,6 +123,13 @@ const grvtPublicClient = createPublicClient({
     { rank: false, retryCount: 0 },
   ),
 });
+const katanaPublicClient = createPublicClient({
+  chain: katanaChain,
+  transport: fallback(
+    KATANA_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+});
 
 // chainId → viem chain object map. Centralized so adding the next EVM DEX is
 // a single-line edit instead of a hunt through the codebase.
@@ -135,6 +143,7 @@ const CHAIN_BY_ID = {
   [INK_CHAIN_ID]: inkChain,
   [ARC_CHAIN_ID]: arcChain,
   [GRVT_CHAIN_ID]: grvtChain,
+  [KATANA_CHAIN_ID]: katanaChain,
 };
 
 const PUBLIC_CLIENT_BY_ID = {
@@ -147,6 +156,7 @@ const PUBLIC_CLIENT_BY_ID = {
   [INK_CHAIN_ID]: inkPublicClient,
   [ARC_CHAIN_ID]: arcPublicClient,
   [GRVT_CHAIN_ID]: grvtPublicClient,
+  [KATANA_CHAIN_ID]: katanaPublicClient,
 };
 
 const CHAIN_LABEL_BY_ID = {
@@ -159,6 +169,7 @@ const CHAIN_LABEL_BY_ID = {
   [INK_CHAIN_ID]: 'Ink',
   [ARC_CHAIN_ID]: 'Arc',
   [GRVT_CHAIN_ID]: 'GRVT Exchange',
+  [KATANA_CHAIN_ID]: 'Katana',
 };
 
 function normalizeProviderChainId(value) {
@@ -507,6 +518,8 @@ export function EvmWalletProvider({ children }) {
       await ensureArcChain(provider);
     } else if (id === GRVT_CHAIN_ID) {
       await ensureGrvtChain(provider);
+    } else if (id === KATANA_CHAIN_ID) {
+      await ensureKatanaChain(provider);
     } else {
       await ensureBaseChain(provider);
     }
