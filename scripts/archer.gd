@@ -23,7 +23,7 @@ var _pool_ready: bool = false
 
 const LEVEL_STATS = {
 	1: {"hp": 210, "damage": 40, "atk_speed": 1.05},
-	2: {"hp": 280, "damage": 54, "atk_speed": 0.95},
+	2: {"hp": 280, "damage": 51, "atk_speed": 0.95},
 	3: {"hp": 310, "damage": 58, "atk_speed": 0.85},
 	4: {"hp": 425, "damage": 82, "atk_speed": 0.78},
 }

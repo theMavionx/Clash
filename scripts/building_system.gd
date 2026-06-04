@@ -81,7 +81,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Town_Hall/1.gltf",
 		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [3500, 6000, 12500, 17000],
+		"hp_levels": [3500, 8000, 16000, 24000],
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
@@ -4412,6 +4412,8 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_exi
 	# instead of dropping the new one onto a stale spot.
 	for i in range(alive.size()):
 		if is_instance_valid(alive[i]):
+			if alive[i].has_method("set_level"):
+				alive[i].set_level(target_count)
 			if alive[i].has_method("set_ward_bonus_pct"):
 				alive[i].set_ward_bonus_pct(_get_altar_skill_bonus_pct("ward"))
 			alive[i].tombstone_pos = tomb_pos

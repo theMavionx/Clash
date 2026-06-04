@@ -14,18 +14,18 @@ const LEVEL_STATS := {
 		"detect_range": 1.0,
 	},
 	2: {
-		"base_damage": 8,
-		"max_damage": 38,
-		"tick_rate": 0.22,
-		"ramp_time": 3.4,
-		"detect_range": 1.12,
+		"base_damage": 11,
+		"max_damage": 54,
+		"tick_rate": 0.20,
+		"ramp_time": 3.0,
+		"detect_range": 1.22,
 	},
 	3: {
-		"base_damage": 13,
-		"max_damage": 68,
-		"tick_rate": 0.18,
-		"ramp_time": 2.9,
-		"detect_range": 1.24,
+		"base_damage": 18,
+		"max_damage": 96,
+		"tick_rate": 0.16,
+		"ramp_time": 2.5,
+		"detect_range": 1.38,
 	},
 }
 

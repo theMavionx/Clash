@@ -2373,7 +2373,7 @@ const TH_UPGRADE_REQUIRES = {
 const BUILDING_DEFS = {
   town_hall: {
     size: [4, 4], max_level: 4,
-    hp_levels: [3500, 6000, 12500, 17000],
+    hp_levels: [3500, 8000, 16000, 24000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
       2: { gold: 2000, wood: 6000, ore: 5000 },
@@ -2468,6 +2468,41 @@ function getBuildingUpgradeCost(type, currentLevel) {
     ore: (def.cost.ore || 0) * multiplier,
   };
 }
+
+function normalizeTownHallHpRows() {
+  const hpLevels = BUILDING_DEFS.town_hall?.hp_levels || [];
+  const rows = db.prepare(`
+    SELECT id, level, hp, max_hp
+    FROM buildings
+    WHERE type = 'town_hall'
+  `).all();
+  const update = db.prepare(`
+    UPDATE buildings SET hp = ?, max_hp = ? WHERE id = ?
+  `);
+  let updated = 0;
+
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const level = Math.max(1, Math.min(hpLevels.length, Number(row.level) || 1));
+      const nextMaxHp = hpLevels[level - 1];
+      if (!nextMaxHp || Number(row.max_hp) === nextMaxHp) continue;
+
+      const oldMaxHp = Math.max(1, Number(row.max_hp) || nextMaxHp);
+      const oldHp = Math.max(0, Number(row.hp) || 0);
+      const hpRatio = Math.max(0, Math.min(1, oldHp / oldMaxHp));
+      const nextHp = Math.max(0, Math.min(nextMaxHp, Math.round(nextMaxHp * hpRatio)));
+      update.run(nextHp, nextMaxHp, row.id);
+      updated += 1;
+    }
+  });
+  tx();
+
+  if (updated > 0) {
+    console.log(`[db] normalized Town Hall HP for ${updated} building row(s)`);
+  }
+}
+
+normalizeTownHallHpRows();
 
 // ---------- Troop Definitions ----------
 
@@ -4127,7 +4162,7 @@ function buyShip(playerId, buildingId) {
 
 const LOOT_PERCENT = 0.15;
 
-const RAID_ATTACK_COST_GOLD = 200;
+const RAID_ATTACK_COST_GOLD = 150;
 const TARGETED_ATTACK_COST_MULTIPLIER = 2;
 
 function attackCostForTownHallLevel(thLevel) {

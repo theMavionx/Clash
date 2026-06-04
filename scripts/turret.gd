@@ -4,9 +4,9 @@ extends Node3D
 
 const LEVEL_STATS = {
 	1: {"damage": 35, "fire_rate": 0.70, "detect_range": 0.95},
-	2: {"damage": 56, "fire_rate": 0.52, "detect_range": 1.02},
-	3: {"damage": 92, "fire_rate": 0.38, "detect_range": 1.12},
-	4: {"damage": 124, "fire_rate": 0.33, "detect_range": 1.18},
+	2: {"damage": 68, "fire_rate": 0.48, "detect_range": 1.08},
+	3: {"damage": 122, "fire_rate": 0.34, "detect_range": 1.22},
+	4: {"damage": 170, "fire_rate": 0.29, "detect_range": 1.32},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [
