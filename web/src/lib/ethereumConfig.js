@@ -3,10 +3,7 @@ import { buildRpcFallbackList, envFlag, sameOriginRpcUrl, siteOrigin, splitRpcUr
 
 export const ETHEREUM_CHAIN_ID = mainnet.id;
 
-const ETHEREUM_FREE_RPC_PATHS = [
-  'https://ethereum-rpc.publicnode.com',
-  'https://eth.llamarpc.com',
-];
+const ETHEREUM_FREE_RPC_PATHS = [];
 const ETHEREUM_PAID_RPC_PATHS = [
   '/rpc/eth-alchemy',
 ];
@@ -27,6 +24,9 @@ function normalizeEthereumRpcUrl(rawUrl) {
     if (host.startsWith('eth-mainnet.') && host.includes('alchemy')) return sameOriginRpcUrl('/rpc/eth-alchemy');
     if (host === 'ethereum-rpc.publicnode.com') return 'https://ethereum-rpc.publicnode.com';
     if (host === 'eth.llamarpc.com') return 'https://eth.llamarpc.com';
+    if (host === 'rpc.payload.de') return 'https://rpc.payload.de';
+    if (host === 'eth.drpc.org') return 'https://eth.drpc.org';
+    if (host === 'ethereum.public-rpc.com') return 'https://ethereum.public-rpc.com';
     if (host === 'eth.merkle.io') return '';
     return url.href;
   } catch {
@@ -34,16 +34,34 @@ function normalizeEthereumRpcUrl(rawUrl) {
   }
 }
 
+function isEthereumAlchemyRpcUrl(rawUrl) {
+  const raw = String(rawUrl || '').trim();
+  if (!raw) return false;
+  try {
+    const url = new URL(raw, siteOrigin());
+    const host = url.hostname.toLowerCase();
+    const origin = new URL(siteOrigin()).origin;
+    return (url.origin === origin && url.pathname === '/rpc/eth-alchemy')
+      || (host.startsWith('eth-mainnet.') && host.includes('alchemy'));
+  } catch {
+    return raw === '/rpc/eth-alchemy';
+  }
+}
+
 export const ETHEREUM_RPC_URLS = (() => {
   const override = splitRpcUrls(import.meta.env.VITE_ETHEREUM_RPC_URLS || import.meta.env.VITE_ETHEREUM_RPC_URL);
   const normalizedOverride = override.map(normalizeEthereumRpcUrl).filter(Boolean);
-  if (normalizedOverride.length) return normalizedOverride;
   const includeFree = envFlag(import.meta.env.VITE_ETHEREUM_ENABLE_PUBLIC_RPC, true);
   const includeAlchemy = hasEthereumAlchemyProxy
     && envFlag(import.meta.env.VITE_ETHEREUM_ENABLE_ALCHEMY_RPC, true);
+  const overridePublic = normalizedOverride.filter(url => !isEthereumAlchemyRpcUrl(url));
+  const overridePrivate = normalizedOverride.filter(isEthereumAlchemyRpcUrl);
   return buildRpcFallbackList({
-    publicUrls: ETHEREUM_FREE_RPC_PATHS,
-    privateUrls: ETHEREUM_PAID_RPC_PATHS.map(sameOriginRpcUrl),
+    publicUrls: normalizedOverride.length ? overridePublic : ETHEREUM_FREE_RPC_PATHS,
+    privateUrls: [
+      ...overridePrivate,
+      ...ETHEREUM_PAID_RPC_PATHS.map(sameOriginRpcUrl),
+    ],
     includePublic: includeFree,
     includePrivate: includeAlchemy,
   });

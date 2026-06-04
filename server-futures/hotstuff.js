@@ -226,11 +226,8 @@ async function getPositionsByAddress(address) {
   }).filter(Boolean);
 }
 
-async function getOrdersByAddress(address) {
-  const clean = normalizeAddress(address);
-  if (!clean) throw new Error('address query param required (0x...)');
-  const payload = await postInfo('open_orders', { user: clean, page: 1, limit: 100 });
-  const rows = Array.isArray(payload)
+function hotstuffRows(payload) {
+  return Array.isArray(payload)
     ? payload
     : Array.isArray(payload?.data)
     ? payload.data
@@ -238,39 +235,174 @@ async function getOrdersByAddress(address) {
     ? payload.orders
     : Array.isArray(payload?.open_orders)
     ? payload.open_orders
+    : Array.isArray(payload?.result)
+    ? payload.result
+    : Array.isArray(payload?.rows)
+    ? payload.rows
     : [];
-  return rows.map(o => {
-    const tpsl = o.tpsl || o.tp_sl || o.trigger_type || o.triggerType || null;
-    const trigger = o.trigger_px ?? o.triggerPx ?? o.trigger_price ?? o.triggerPrice ?? o.stop_price ?? o.stopPrice;
-    const limit = o.limit_price ?? o.limitPrice ?? o.price ?? o.px;
-    const orderType = o.is_market || o.isMarket
-      ? 'market'
-      : (tpsl || (trigger != null && trigger !== '' ? 'trigger' : 'limit'));
-    return {
-      symbol: symbolOf(o.instrument || o.symbol || o.market),
-      side: (o.side || o.order_side || o.orderSide) === 'b' ? 'bid' : 'ask',
-      amount: String(o.unfilled ?? o.remaining ?? o.remainingSize ?? o.size ?? ''),
-      initial_amount: String(o.size ?? o.originalSize ?? o.original_size ?? ''),
-      price: String(trigger ?? limit ?? ''),
-      stop_price: trigger != null && trigger !== '' ? String(trigger) : null,
-      trigger_price: trigger != null && trigger !== '' ? String(trigger) : null,
-      order_id: o.order_id ?? o.orderId ?? o.oid ?? o.id,
-      order_type: orderType,
-      tpsl,
-      tif: o.tif || o.timeInForce || o.time_in_force || null,
-      reduce_only: !!(o.reduce_only ?? o.reduceOnly ?? o.ro),
-      pair_index: Number(o.instrument_id ?? o.instrumentId),
-      trade_index: null,
-      client_order_id: o.cloid || o.client_order_id || o.clientOrderId || null,
-      _raw: o,
-    };
+}
+
+async function fetchOrderPages(method, clean) {
+  const rows = [];
+  const pageLimit = 100;
+  for (let page = 1; page <= 20; page++) {
+    const payload = await postInfo(method, { user: clean, page, limit: pageLimit });
+    const pageRows = hotstuffRows(payload);
+    rows.push(...pageRows);
+    if (!payload?.has_next || pageRows.length < pageLimit) break;
+  }
+  return rows;
+}
+
+function normalizeOrderRow(o, source) {
+  const tpsl = o.tpsl || o.tp_sl || o.trigger_type || o.triggerType || o.type || null;
+  const trigger = o.trigger_px ?? o.triggerPx ?? o.trigger_price ?? o.triggerPrice ?? o.stop_price ?? o.stopPrice;
+  const limit = o.limit_price ?? o.limitPrice ?? o.price ?? o.px;
+  const isMarket = !!(o.is_market ?? o.isMarket);
+  const rawSide = String(o.side || o.order_side || o.orderSide || '').trim().toLowerCase();
+  const amount = String(o.unfilled ?? o.remaining ?? o.remaining_size ?? o.remainingSize ?? o.size ?? o.qty ?? '');
+  const reduceOnly = !!(o.reduce_only ?? o.reduceOnly ?? o.ro);
+  const activeHistoryConditional = source === 'hotstuff_order_history'
+    && num(amount) > 0
+    && (tpsl || reduceOnly || (trigger != null && trigger !== '' && String(trigger) !== '0'));
+  const orderType = tpsl
+    ? tpsl
+    : isMarket
+    ? 'market'
+    : (trigger != null && trigger !== '' ? 'trigger' : 'limit');
+  return {
+    symbol: symbolOf(o.instrument || o.symbol || o.market),
+    side: rawSide === 'b' || rawSide === 'buy' || rawSide === 'bid' ? 'bid' : 'ask',
+    amount,
+    initial_amount: String(o.size ?? o.originalSize ?? o.original_size ?? o.qty ?? ''),
+    price: String(trigger ?? limit ?? ''),
+    stop_price: trigger != null && trigger !== '' ? String(trigger) : null,
+    trigger_price: trigger != null && trigger !== '' ? String(trigger) : null,
+    order_id: o.order_id ?? o.orderId ?? o.oid ?? o.id,
+    order_type: orderType,
+    state: activeHistoryConditional ? 'open' : (o.state || null),
+    tpsl,
+    tif: o.tif || o.timeInForce || o.time_in_force || null,
+    reduce_only: reduceOnly,
+    pair_index: Number(o.instrument_id ?? o.instrumentId),
+    trade_index: null,
+    client_order_id: o.cloid || o.client_order_id || o.clientOrderId || null,
+    source,
+    _raw: o,
+  };
+}
+
+function rawOrderSide(o) {
+  const raw = String(o?.side || o?.order_side || o?.orderSide || '').trim().toLowerCase();
+  if (raw === 'b' || raw === 'buy' || raw === 'bid') return 'bid';
+  if (raw === 's' || raw === 'sell' || raw === 'ask') return 'ask';
+  return '';
+}
+
+function historyOrderMatchesOpenPosition(order, positions) {
+  const symbol = symbolOf(order?.instrument || order?.symbol || order?.market);
+  if (!symbol) return false;
+  const unfilled = num(order?.unfilled ?? order?.remaining ?? order?.remaining_size ?? order?.remainingSize ?? order?.size);
+  if (!(unfilled > 0)) return false;
+  const hasTrigger = order?.trigger_px != null
+    && order.trigger_px !== ''
+    && String(order.trigger_px) !== '0';
+  const hasTpsl = !!String(order?.tpsl || order?.tp_sl || order?.trigger_type || order?.triggerType || '').trim();
+  const reduceOnly = !!(order?.reduce_only ?? order?.reduceOnly ?? order?.ro);
+  if (!hasTrigger && !hasTpsl && !reduceOnly) return false;
+  const orderSide = rawOrderSide(order);
+  return positions.some(pos => {
+    if (String(pos?.symbol || '').toUpperCase() !== symbol) return false;
+    const rawPosSize = num(pos?._raw?.size ?? pos?.size ?? pos?.amount);
+    const expectedCloseSide = rawPosSize < 0 || pos?.side === 'ask' ? 'bid' : 'ask';
+    return !orderSide || orderSide === expectedCloseSide;
   });
+}
+
+const TERMINAL_ORDER_STATE_RE = /^(filled|canceled|cancelled|rejected|expired|closed|done)$/i;
+const RESTING_ORDER_STATE_RE = /^(open|opened|resting|pending|accepted)$/i;
+
+function orderLifecycleKey(order) {
+  const cloid = String(order?.cloid || order?.client_order_id || order?.clientOrderId || '').trim();
+  if (cloid) return `cloid:${cloid}`;
+  const orderId = order?.order_id ?? order?.orderId ?? order?.oid ?? order?.id;
+  if (orderId != null && orderId !== '') return `oid:${orderId}`;
+  return '';
+}
+
+function orderTimestampMs(order) {
+  const raw = order?.timestamp ?? order?.updated_at ?? order?.created_at;
+  if (raw == null || raw === '') return 0;
+  const n = Number(raw);
+  if (Number.isFinite(n)) return n > 10_000_000_000 ? n : n * 1000;
+  const parsed = Date.parse(String(raw));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isActiveHistoryOrder(order, positions, newerTerminalByKey = new Map()) {
+  const state = String(order?.state || '').trim();
+  if (TERMINAL_ORDER_STATE_RE.test(state)) return false;
+  const key = orderLifecycleKey(order);
+  if (key) {
+    const newerTerminalAt = Number(newerTerminalByKey.get(key) || 0);
+    const thisAt = orderTimestampMs(order);
+    if (newerTerminalAt && (!thisAt || newerTerminalAt >= thisAt)) return false;
+  }
+  const hasTrigger = order?.trigger_px != null
+    && order.trigger_px !== ''
+    && String(order.trigger_px) !== '0';
+  const hasTpsl = !!String(order?.tpsl || order?.tp_sl || order?.trigger_type || order?.triggerType || '').trim();
+  const reduceOnly = !!(order?.reduce_only ?? order?.reduceOnly ?? order?.ro);
+  const isConditional = hasTrigger || hasTpsl || reduceOnly;
+  if (isConditional) return historyOrderMatchesOpenPosition(order, positions);
+  if (!state) return false;
+  return RESTING_ORDER_STATE_RE.test(state)
+    && num(order?.unfilled ?? order?.remaining ?? order?.remaining_size ?? order?.remainingSize) > 0;
+}
+
+function activeHistoryOrders(historyRows, positions) {
+  const terminalByKey = new Map();
+  for (const order of Array.isArray(historyRows) ? historyRows : []) {
+    const state = String(order?.state || '').trim();
+    if (!TERMINAL_ORDER_STATE_RE.test(state)) continue;
+    const key = orderLifecycleKey(order);
+    if (!key) continue;
+    terminalByKey.set(key, Math.max(Number(terminalByKey.get(key) || 0), orderTimestampMs(order)));
+  }
+  return (Array.isArray(historyRows) ? historyRows : [])
+    .filter(order => isActiveHistoryOrder(order, positions, terminalByKey));
+}
+
+async function getOrdersByAddress(address) {
+  const clean = normalizeAddress(address);
+  if (!clean) throw new Error('address query param required (0x...)');
+  const [rows, positions, historyRows] = await Promise.all([
+    fetchOrderPages('open_orders', clean),
+    getPositionsByAddress(clean).catch(() => []),
+    fetchOrderPages('order_history', clean).catch(() => []),
+  ]);
+  const activeHistoryRows = activeHistoryOrders(historyRows, positions);
+  const seen = new Set();
+  return [...rows, ...activeHistoryRows].map((o, idx) => {
+    const normalized = normalizeOrderRow(o, idx < rows.length ? 'hotstuff_open_orders' : 'hotstuff_order_history');
+    const isHistoryConditional = normalized.source === 'hotstuff_order_history'
+      && (normalized.tpsl || normalized.reduce_only || Number(normalized.trigger_price) > 0);
+    const key = isHistoryConditional
+      ? `conditional:${normalized.symbol}:${normalized.side}:${normalized.price}:${normalized.amount}:${normalized.tpsl || normalized.order_type}`
+      : normalized.order_id != null
+      ? `oid:${normalized.order_id}`
+      : normalized.client_order_id
+      ? `cloid:${normalized.client_order_id}`
+      : `${normalized.symbol}:${normalized.side}:${normalized.price}:${normalized.amount}:${normalized.tpsl || normalized.order_type}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    return normalized;
+  }).filter(Boolean);
 }
 
 function isRewardableFill(fill) {
   if (!isEvmAddress(HOTSTUFF_BROKER_ADDRESS)) return false;
-  return num(fill?.broker_fee) > 0
-    && String(fill?.cloid || '').startsWith(HOTSTUFF_CLOID_PREFIX);
+  return num(fill?.broker_fee) > 0;
 }
 
 function normalizeFill(wallet, fill) {
@@ -417,4 +549,12 @@ module.exports = {
   getAccountTradeHistory,
   fetchFillsPages,
   importFillsForPlayer,
+  __test: {
+    normalizeOrderRow,
+    hotstuffRows,
+    historyOrderMatchesOpenPosition,
+    isActiveHistoryOrder,
+    activeHistoryOrders,
+    orderLifecycleKey,
+  },
 };

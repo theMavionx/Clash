@@ -3,18 +3,13 @@ import {
   HOTSTUFF_API_BASE,
   HOTSTUFF_BROKER_ADDRESS,
   HOTSTUFF_BROKER_FEE_RATE,
-  HOTSTUFF_CLOID_PREFIX,
 } from './hotstuffConfig';
 
 const DEFAULT_TIMEOUT_MS = 12_000;
-const HOTSTUFF_OP_CODES = {
-  updateMarginMode: 1205,
-  updateIsolatedMargin: 1204,
-};
-
 function firstHotstuffStatus(response) {
   const status = response?.data?.status;
-  return Array.isArray(status) ? status[0] : null;
+  if (Array.isArray(status)) return status[0] || null;
+  return status && typeof status === 'object' ? status : null;
 }
 
 export function hotstuffExchangeError(response) {
@@ -36,8 +31,11 @@ export function hotstuffOrderAccepted(response) {
   const error = hotstuffExchangeError(response);
   if (error) return false;
   const statuses = response?.data?.status;
-  if (!Array.isArray(statuses) || !statuses.length) return !!response?.tx_hash;
-  if (statuses.every(status => !!(status?.filled || status?.resting || status?.triggered))) return true;
+  const list = Array.isArray(statuses)
+    ? statuses
+    : (statuses && typeof statuses === 'object' ? [statuses] : []);
+  if (!list.length) return !!response?.tx_hash;
+  if (list.every(status => !!(status?.filled || status?.resting || status?.triggered || status?.oid || status?.success))) return true;
   return !!response?.tx_hash;
 }
 
@@ -47,6 +45,8 @@ export function hotstuffOrderStatusLabel(response) {
   if (status.filled) return 'filled';
   if (status.resting) return 'resting';
   if (status.triggered) return 'triggered';
+  if (status.oid) return 'open';
+  if (status.success) return 'success';
   if (status.error) return 'error';
   return 'unknown';
 }
@@ -65,9 +65,17 @@ function transport() {
   });
 }
 
-async function executeHotstuffAction(client, action, params, txType) {
+async function executeHotstuffAction(client, actionType, params, txType) {
   const nonce = params.nonce ?? Date.now();
   const data = { ...params, nonce };
+  console.info('[Hotstuff client] exchange action', {
+    action_type: String(actionType),
+    tx_type: txType,
+    nonce,
+    instrumentId: data.instrumentId,
+    leverage: data.leverage,
+    leverage_type: typeof data.leverage,
+  });
   const signature = await signAction({
     wallet: client.wallet,
     action: data,
@@ -78,7 +86,7 @@ async function executeHotstuffAction(client, action, params, txType) {
   return client.transport.request('exchange', {
     action: {
       data,
-      type: String(txType),
+      type: actionType,
     },
     signature,
     nonce,
@@ -99,7 +107,6 @@ export function createHotstuffExchangeClient(wallet) {
   [
     'addAgent',
     'revokeAgent',
-    'updatePerpInstrumentLeverage',
     'approveBrokerFee',
     'createReferralCode',
     'setReferrer',
@@ -115,22 +122,15 @@ export function createHotstuffExchangeClient(wallet) {
     'accountDerivativeBalanceTransferRequest',
     'accountInternalBalanceTransferRequest',
   ].forEach(wrap);
-  if (typeof client.updateMarginMode !== 'function') {
-    client.updateMarginMode = (params) => executeHotstuffAction(
-      client,
-      'updateMarginMode',
-      params,
-      HOTSTUFF_OP_CODES.updateMarginMode,
-    );
-  }
-  if (typeof client.updateIsolatedMargin !== 'function') {
-    client.updateIsolatedMargin = (params) => executeHotstuffAction(
-      client,
-      'updateIsolatedMargin',
-      params,
-      HOTSTUFF_OP_CODES.updateIsolatedMargin,
-    );
-  }
+  client.updatePerpInstrumentLeverage = (params) => executeHotstuffAction(
+    client,
+    '1203',
+    {
+      ...params,
+      leverage: String(params.leverage),
+    },
+    1203,
+  );
   return client;
 }
 
@@ -142,7 +142,19 @@ export function hotstuffBrokerConfig() {
 }
 
 export function makeHotstuffCloid() {
-  return `${HOTSTUFF_CLOID_PREFIX}${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+  const timestampHex = Math.floor(Date.now()).toString(16).padStart(12, '0');
+  let randomHex = '';
+  const cryptoObj = globalThis.crypto;
+  if (cryptoObj?.getRandomValues) {
+    const bytes = new Uint8Array(10);
+    cryptoObj.getRandomValues(bytes);
+    randomHex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  } else {
+    randomHex = Array.from({ length: 5 }, () => (
+      Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0')
+    )).join('');
+  }
+  return `0x${timestampHex}${randomHex}`;
 }
 
 function trimZeros(value) {
@@ -241,7 +253,7 @@ export function buildHotstuffTpslOrder({ market, closeSide, triggerPrice, size, 
     positionSide: 'BOTH',
     price: formatHotstuffPrice(trigger, market, { marketOrder: true, side }),
     size: formatHotstuffSize(size, market),
-    tif: 'IOC',
+    tif: 'GTC',
     ro: true,
     po: false,
     cloid: makeHotstuffCloid(),

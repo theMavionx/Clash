@@ -4,6 +4,7 @@ import { BASE_RPC_URLS } from '../lib/avantisContract';
 import { ARC_CHAIN_ID_HEX, ARC_CHAIN_NAME, ARC_EXPLORER_URL, ARC_NETWORK_CTA, ARC_RPC_URLS } from '../lib/arcConfig';
 import { GRVT_CHAIN_ID_HEX, GRVT_CHAIN_NAME, GRVT_EXPLORER_URL, GRVT_RPC_URLS } from '../lib/grvtConfig';
 import { KATANA_CHAIN_ID_HEX, KATANA_CHAIN_NAME, KATANA_EXPLORER_URL, KATANA_RPC_URLS } from '../lib/katanaConfig';
+import { ETHEREUM_RPC_URLS } from '../lib/ethereumConfig';
 
 // Styled to match RegisterPanel + BuildingInfoPanel — parchment body, blue
 // header, yellow CTA. The previous dark cartoonPanel look stood out against
@@ -18,7 +19,7 @@ const NETWORKS = {
       chainId: '0x1',
       chainName: 'Ethereum',
       nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-      rpcUrls: ['https://ethereum-rpc.publicnode.com'],
+      rpcUrls: ETHEREUM_RPC_URLS,
       blockExplorerUrls: ['https://etherscan.io'],
     },
   },

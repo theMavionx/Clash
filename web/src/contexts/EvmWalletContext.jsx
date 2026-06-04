@@ -59,7 +59,7 @@ const publicClient = createPublicClient({
 const ethereumPublicClient = createPublicClient({
   chain: mainnet,
   transport: fallback(
-    ETHEREUM_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    ETHEREUM_RPC_URLS.map(u => http(u, { retryCount: 0, timeout: 10_000 })),
     { rank: false, retryCount: 0 },
   ),
 });

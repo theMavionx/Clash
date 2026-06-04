@@ -458,6 +458,26 @@ function orderTriggerPrice(order) {
   );
 }
 
+function orderDisplayType(order, positions = []) {
+  const kind = orderTpslKind(order);
+  if (kind === 'tp') return 'TAKE PROFIT';
+  if (kind === 'sl') return 'STOP LOSS';
+  const stopPrice = orderTriggerPrice(order);
+  if (stopPrice > 0 && Array.isArray(positions)) {
+    const pos = positions.find(p => orderMatchesPosition(order, p));
+    const inferred = pos ? inferTpslKindFromPosition(order, pos, stopPrice) : '';
+    if (inferred === 'tp') return 'TAKE PROFIT';
+    if (inferred === 'sl') return 'STOP LOSS';
+  }
+  return (order?.order_type || order?.ot || (stopPrice > 0 ? 'trigger' : 'limit')).toUpperCase().replace(/_/g, ' ');
+}
+
+function orderDisplayPrice(order) {
+  const trigger = orderTriggerPrice(order);
+  if (trigger > 0) return trigger;
+  return numOrNull(order?.price ?? order?.ip ?? order?._raw?.limit_price ?? order?._raw?.limitPrice) || 0;
+}
+
 function orderMatchesPosition(order, pos) {
   const orderSymbol = String(order?.symbol || order?.s || '').toUpperCase();
   const posSymbol = String(pos?.symbol || pos?.s || '').toUpperCase();
@@ -1167,7 +1187,7 @@ const ClosingButtonLabel = memo(function ClosingButtonLabel({ text = 'Closing...
 });
 
 // ==================== ORDERS LIST (mobile/tab card view) ====================
-const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
+const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [] }) {
   if (!orders.length) {
     return (
       <div style={S.empty}>
@@ -1183,12 +1203,10 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
       {orders.map((o, i) => {
         const sym = o.symbol || o.s;
         const side = o.side || o.d;
-        const rawPrice = parseFloat(o.price || o.ip || 0);
-        const stopPrice = parseFloat(o.stop_price || o.sp || 0);
-        const price = rawPrice > 0 ? rawPrice : stopPrice;
+        const price = orderDisplayPrice(o);
         const rawAmt = o.initial_amount || o.amount || o.a;
         const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full position';
-        const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
+        const type = orderDisplayType(o, positions);
         const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
         const sideLabel = orderSideLabel(o);
         const isTP = type.includes('TAKE') || type.includes('TP');
@@ -1469,12 +1487,10 @@ const BottomPanel = memo(function BottomPanel({
               </tr></thead>
               <tbody>{filteredOrders.map((o, i) => {
                 const sym = o.symbol || o.s;
-                const rawPrice = parseFloat(o.price || o.ip || 0);
-                const stopPrice = parseFloat(o.stop_price || o.sp || 0);
-                const price = rawPrice > 0 ? rawPrice : stopPrice;
+                const price = orderDisplayPrice(o);
                 const rawAmt = o.initial_amount || o.amount || o.a;
                 const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full';
-                const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
+                const type = orderDisplayType(o, positions);
                 const positionSide = orderPositionSide(o);
                 const sideLabel = orderSideLabel(o);
                 const isTP = type.includes('TAKE') || type.includes('TP');
@@ -2190,6 +2206,10 @@ function FuturesPanel() {
     }
     if (dex === 'phoenix') {
       setLocalAlert('Phoenix uses cross margin for normal markets and isolated subaccounts automatically for isolated-only markets.');
+      return;
+    }
+    if (dex === 'hotstuff') {
+      setLocalAlert('Hotstuff margin mode is read from Hotstuff. Their public API docs only expose leverage changes, not a Cross/Isolated switch.');
       return;
     }
     if (dex === 'hotstuff' && currentMarket?.isolated_only && marginModes[symbol]) {
@@ -5706,12 +5726,10 @@ function FuturesPanel() {
         {orders.map((o, i) => {
           const sym = o.symbol || o.s;
           const side = o.side || o.d;
-          const rawPrice = parseFloat(o.price || o.ip || 0);
-          const stopPrice = parseFloat(o.stop_price || o.sp || 0);
-          const price = rawPrice > 0 ? rawPrice : stopPrice;
+          const price = orderDisplayPrice(o);
           const rawAmt = o.initial_amount || o.amount || o.a;
           const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full position';
-          const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
+          const type = orderDisplayType(o, positions);
           const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
           const sideLabel = orderSideLabel(o);
           const isTP = type.includes('TAKE') || type.includes('TP');

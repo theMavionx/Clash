@@ -90,6 +90,15 @@ function isHotstuffCancelAlreadyGone(error) {
   return /not\s+found|does\s+not\s+exist|unknown\s+order|already\s+(filled|cancelled|canceled)/i.test(String(error?.message || error || ''));
 }
 
+function hotstuffDebugEnabled() {
+  return typeof window !== 'undefined' && window.__CLASH_DEBUG_HOTSTUFF === true;
+}
+
+function logHotstuffDebug(label, payload) {
+  if (!hotstuffDebugEnabled()) return;
+  console.info(label, payload);
+}
+
 function hotstuffAddress(addr) {
   try {
     return getAddress(String(addr || '').trim());
@@ -311,6 +320,8 @@ export function useHotstuff() {
   const refresh = useCallback(async () => {
     if (!active || !hsWalletAddr) return;
     try {
+      const storedAgent = await loadStoredAgent(hsWalletAddr);
+      const agentAddr = storedAgent?.address || setupStatus.agentAddress || null;
       const qs = `dex=hotstuff&address=${encodeURIComponent(hsWalletAddr)}`;
       const [marketsRes, accountRes, positionsRes, ordersRes] = await Promise.all([
         fetchJsonSafe(`/api/futures/markets?dex=hotstuff`, { data: [] }),
@@ -318,11 +329,46 @@ export function useHotstuff() {
         fetchJsonSafe(`/api/futures/positions?${qs}`, []),
         fetchJsonSafe(`/api/futures/orders?${qs}`, []),
       ]);
+      let nextOrders = Array.isArray(ordersRes) ? ordersRes : [];
+      logHotstuffDebug('[useHotstuff] owner open_orders snapshot', {
+        owner: hsWalletAddr,
+        count: nextOrders.length,
+        orders: nextOrders.map(o => ({
+          symbol: o?.symbol,
+          order_id: o?.order_id,
+          client_order_id: o?.client_order_id,
+          tpsl: o?.tpsl || o?._raw?.tpsl,
+          state: o?.state || o?._raw?.state,
+          trigger_price: o?.trigger_price || o?._raw?.trigger_px,
+          source: o?.source,
+        })),
+      });
+      if (!nextOrders.length && agentAddr && agentAddr.toLowerCase() !== hsWalletAddr.toLowerCase()) {
+        const agentQs = `dex=hotstuff&address=${encodeURIComponent(agentAddr)}`;
+        const agentOrders = await fetchJsonSafe(`/api/futures/orders?${agentQs}&owner=${encodeURIComponent(hsWalletAddr)}`, []);
+        logHotstuffDebug('[useHotstuff] agent open_orders snapshot', {
+          owner: hsWalletAddr,
+          agent: agentAddr,
+          count: Array.isArray(agentOrders) ? agentOrders.length : 0,
+        });
+        if (Array.isArray(agentOrders) && agentOrders.length) {
+          console.info('[useHotstuff] using Hotstuff agent-address open orders fallback', {
+            owner: hsWalletAddr,
+            agent: agentAddr,
+            count: agentOrders.length,
+          });
+          nextOrders = agentOrders.map(o => ({
+            ...o,
+            owner_address: hsWalletAddr,
+            queried_address: agentAddr,
+          }));
+        }
+      }
       const nextMarkets = Array.isArray(marketsRes?.data) ? marketsRes.data : [];
       setMarkets(nextMarkets);
       setAccount(accountRes && !accountRes.error ? accountRes : null);
       setPositions(Array.isArray(positionsRes) ? positionsRes : []);
-      setOrders(Array.isArray(ordersRes) ? ordersRes : []);
+      setOrders(nextOrders);
       const nextLeverage = {};
       const nextMargins = {};
       for (const m of nextMarkets) {
@@ -372,7 +418,58 @@ export function useHotstuff() {
     } catch (e) {
       setError(hotstuffErrorMessage(e));
     }
-  }, [active, hsWalletAddr, info]);
+  }, [active, hsWalletAddr, info, setupStatus.agentAddress]);
+
+  const fetchLatestOrders = useCallback(async () => {
+    if (!hsWalletAddr) return [];
+    const ownerQs = `dex=hotstuff&address=${encodeURIComponent(hsWalletAddr)}`;
+    const ownerOrders = await fetchJsonSafe(`/api/futures/orders?${ownerQs}`, []);
+    logHotstuffDebug('[useHotstuff] fetchLatestOrders owner snapshot', {
+      owner: hsWalletAddr,
+      count: Array.isArray(ownerOrders) ? ownerOrders.length : 0,
+    });
+    if (Array.isArray(ownerOrders) && ownerOrders.length) return ownerOrders;
+    const storedAgent = await loadStoredAgent(hsWalletAddr);
+    const agentAddr = storedAgent?.address || setupStatus.agentAddress || null;
+    if (!agentAddr || agentAddr.toLowerCase() === hsWalletAddr.toLowerCase()) return Array.isArray(ownerOrders) ? ownerOrders : [];
+    const agentQs = `dex=hotstuff&address=${encodeURIComponent(agentAddr)}`;
+    const agentOrders = await fetchJsonSafe(`/api/futures/orders?${agentQs}&owner=${encodeURIComponent(hsWalletAddr)}`, []);
+    logHotstuffDebug('[useHotstuff] fetchLatestOrders agent snapshot', {
+      owner: hsWalletAddr,
+      agent: agentAddr,
+      count: Array.isArray(agentOrders) ? agentOrders.length : 0,
+    });
+    if (!Array.isArray(agentOrders)) return [];
+    return agentOrders.map(o => ({
+      ...o,
+      owner_address: hsWalletAddr,
+      queried_address: agentAddr,
+    }));
+  }, [hsWalletAddr, setupStatus.agentAddress]);
+
+  const waitForOrdersByClientIds = useCallback(async (clientOrderIds, { attempts = 8, delayMs = 750 } = {}) => {
+    const ids = new Set((Array.isArray(clientOrderIds) ? clientOrderIds : [])
+      .map(id => String(id || '').trim())
+      .filter(Boolean));
+    if (!ids.size) return [];
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const latest = await fetchLatestOrders();
+      const rows = Array.isArray(latest) ? latest : [];
+      const found = rows.filter(order => ids.has(String(order?.client_order_id || order?._raw?.cloid || '').trim()));
+      if (found.length >= ids.size) {
+        setOrders(rows);
+        return rows;
+      }
+      if (attempt < attempts) await sleep(delayMs);
+    }
+    const latest = await fetchLatestOrders();
+    if (Array.isArray(latest)) setOrders(latest);
+    console.warn('[useHotstuff] TP/SL open_orders did not include submitted cloids yet', {
+      requested: Array.from(ids),
+      returned: Array.isArray(latest) ? latest.map(order => order?.client_order_id || order?._raw?.cloid || order?.order_id).filter(Boolean) : [],
+    });
+    return Array.isArray(latest) ? latest : [];
+  }, [fetchLatestOrders]);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -564,7 +661,7 @@ export function useHotstuff() {
       reduceOnly,
     });
     const brokerConfig = hotstuffBrokerConfig();
-    const agent = await loadStoredAgent(hsWalletAddr) || await ensureTradingAgent();
+    const agent = await ensureTradingAgent();
     console.info('[Hotstuff UI] submitting order', {
       symbol,
       orderType,
@@ -609,16 +706,44 @@ export function useHotstuff() {
         Math.min(Number.isFinite(maxLev) && maxLev > 0 ? maxLev : 50, Math.floor(Number(leverage || 1))),
       );
       const agent = await ensureTradingAgent();
-      const result = await agentExchange(agent).updatePerpInstrumentLeverage({
+      const payload = {
         instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
-        leverage: lev,
+        leverage: String(lev),
         nonce: Date.now(),
+      };
+      console.info('[Hotstuff UI] updating leverage', {
+        symbol: sym,
+        instrumentId: payload.instrumentId,
+        leverage: payload.leverage,
+        signer: agent.address,
+        signer_kind: 'registered_agent',
+        action_type: '1203',
+        doc_action: 'updatePerpLeverage',
+        sdk_method: 'updatePerpInstrumentLeverage',
+        tx_type: 1203,
+        payload_leverage_type: typeof payload.leverage,
+      });
+      const result = await agentExchange(agent).updatePerpInstrumentLeverage(payload);
+      console.info('[Hotstuff UI] leverage update result', {
+        symbol: sym,
+        instrumentId: payload.instrumentId,
+        leverage: lev,
+        tx_hash: result?.tx_hash || result?.txHash || null,
+        tx_type: result?.tx_type || result?.txType || null,
+        error: result?.error || '',
+        address: result?.address || null,
       });
       setLeverageSettings(prev => ({ ...prev, [sym]: lev }));
       await refresh();
       return { success: true, result, leverage: lev };
     } catch (e) {
       const msg = hotstuffErrorMessage(e, 'Hotstuff leverage update failed');
+      console.warn('[Hotstuff UI] leverage update failed', {
+        symbol,
+        leverage,
+        error: msg,
+        raw_error: e?.message || String(e),
+      });
       setError(msg);
       return { error: msg };
     }
@@ -626,27 +751,30 @@ export function useHotstuff() {
 
   const setMarginMode = useCallback(async (symbol, isIsolated) => {
     try {
-      if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
-      await ensureHotstuffChain(switchChain);
       const sym = String(symbol || '').toUpperCase();
       const market = markets.find(m => m.symbol === sym || m.market_name === symbol);
       if (!market) throw new Error('Select a valid Hotstuff market');
-      const mode = isIsolated || market?.isolated_only ? 'isolated' : 'cross';
-      const agent = await ensureTradingAgent();
-      const result = await agentExchange(agent).updateMarginMode({
+      const currentMode = !!marginModes?.[sym];
+      const requestedMode = !!(isIsolated || market?.isolated_only);
+      if (currentMode === requestedMode) {
+        return { success: true, cached: true, isIsolated: currentMode };
+      }
+      const msg = 'Hotstuff API docs do not expose a cross/isolated margin-mode action. Change leverage only; margin type is read from Hotstuff.';
+      console.warn('[Hotstuff UI] margin mode update skipped: undocumented action', {
+        symbol: sym,
+        requested_isolated: requestedMode,
+        current_isolated: currentMode,
         instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
-        mode,
-        nonce: Date.now(),
       });
-      setMarginModes(prev => ({ ...prev, [sym]: mode === 'isolated' }));
+      setError(msg);
       await refresh();
-      return { success: true, result, isIsolated: mode === 'isolated' };
+      return { error: msg };
     } catch (e) {
       const msg = hotstuffErrorMessage(e, 'Hotstuff margin mode update failed');
       setError(msg);
       return { error: msg };
     }
-  }, [agentExchange, ensureTradingAgent, evmReady, hsWalletAddr, markets, refresh, switchChain, walletClient]);
+  }, [marginModes, markets, refresh]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, _slippage, leverage, options) => (
     placeOrder({ symbol, side, amount, leverage, orderType: 'market', options }).catch(e => {
@@ -794,7 +922,7 @@ export function useHotstuff() {
       }
       if (!ordersToPlace.length) throw new Error('Enter TP or SL price');
       const brokerConfig = hotstuffBrokerConfig();
-      const agent = await loadStoredAgent(hsWalletAddr) || await ensureTradingAgent();
+      const agent = await ensureTradingAgent();
       const exchangeClient = agentExchange(agent);
       const instrumentId = Number(market._hotstuff?.instrumentId ?? market.pair_index);
       const requestedKinds = new Set([
@@ -832,11 +960,35 @@ export function useHotstuff() {
       };
       await cancelMatchingTriggers();
       const submitTriggers = async () => {
+        console.info('[Hotstuff UI] submitting TP/SL orders', {
+          symbol: sym,
+          instrumentId,
+          orders: ordersToPlace.map(order => ({
+            side: order.side,
+            size: order.size,
+            price: order.price,
+            triggerPx: order.triggerPx,
+            tif: order.tif,
+            isMarket: order.isMarket,
+            tpsl: order.tpsl,
+            grouping: order.grouping,
+            cloid: order.cloid,
+          })),
+        });
         const result = await exchangeClient.placeOrder({
           orders: ordersToPlace,
           ...(brokerConfig ? { brokerConfig } : {}),
           expiresAfter: Date.now() + 60_000,
           nonce: Date.now(),
+        });
+        console.info('[Hotstuff UI] TP/SL result', {
+          symbol: sym,
+          accepted: hotstuffOrderAccepted(result),
+          status: hotstuffOrderStatusLabel(result),
+          tx_hash: result?.tx_hash || result?.txHash || null,
+          tx_type: result?.tx_type || result?.txType || null,
+          raw_status: result?.data?.status || null,
+          error: result?.error || null,
         });
         if (!hotstuffOrderAccepted(result)) {
           throw new Error(`Hotstuff TP/SL was not accepted (${hotstuffOrderStatusLabel(result)}).`);
@@ -849,21 +1001,19 @@ export function useHotstuff() {
       } catch (placeErr) {
         if (!isDuplicateHotstuffTriggerError(placeErr)) throw placeErr;
         await refresh();
-        const latest = await fetchJsonSafe(
-          `/api/futures/orders?dex=hotstuff&address=${encodeURIComponent(hsWalletAddr)}`,
-          [],
-        );
+        const latest = await fetchLatestOrders();
         await cancelMatchingTriggers(Array.isArray(latest) ? latest : orders);
         result = await submitTriggers();
       }
       await refresh();
+      await waitForOrdersByClientIds(ordersToPlace.map(o => o.cloid));
       return { success: true, result, clientOrderIds: ordersToPlace.map(o => o.cloid), orderStatus: hotstuffOrderStatusLabel(result) };
     } catch (e) {
       const msg = hotstuffErrorMessage(e, 'Hotstuff TP/SL failed');
       setError(msg);
       return { error: msg };
     }
-  }, [activate, agentExchange, ensureTradingAgent, evmReady, hsWalletAddr, info, markets, orders, positions, refresh, walletClient]);
+  }, [activate, agentExchange, ensureTradingAgent, evmReady, fetchLatestOrders, hsWalletAddr, info, markets, orders, positions, refresh, waitForOrdersByClientIds, walletClient]);
 
   const parseAmount = useCallback((amount) => {
     const amountText = String(amount || '').trim();
