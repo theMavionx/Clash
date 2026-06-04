@@ -27,6 +27,11 @@ import {
   HOTSTUFF_USDC_COLLATERAL_ID,
   HOTSTUFF_USDC_DECIMALS,
 } from '../lib/hotstuffConfig';
+import {
+  migratePlainLocalStorageCredential,
+  readEncryptedCredential,
+  writeEncryptedCredential,
+} from '../lib/encryptedCredentialStorage';
 
 const POLL_INTERVAL_MS = 5_000;
 const AGENT_STORAGE_PREFIX = 'clash_hotstuff_agent_v1';
@@ -77,17 +82,14 @@ function agentStorageKey(owner) {
   return `${AGENT_STORAGE_PREFIX}:${String(owner || '').toLowerCase()}`;
 }
 
-function loadStoredAgent(owner) {
-  if (!owner || typeof window === 'undefined') return null;
+function normalizeStoredAgent(owner, value) {
+  if (!owner || !value) return null;
   try {
-    const raw = window.localStorage.getItem(agentStorageKey(owner));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (String(parsed?.owner || '').toLowerCase() !== String(owner).toLowerCase()) return null;
-    const privateKey = normalizePrivateKey(parsed?.privateKey);
+    if (String(value?.owner || '').toLowerCase() !== String(owner).toLowerCase()) return null;
+    const privateKey = normalizePrivateKey(value?.privateKey);
     if (!privateKey) return null;
     const account = privateKeyToAccount(privateKey);
-    const validUntil = Number(parsed?.validUntil || 0);
+    const validUntil = Number(value?.validUntil || 0);
     if (validUntil && validUntil <= Date.now() + 60_000) return null;
     return {
       owner,
@@ -101,7 +103,20 @@ function loadStoredAgent(owner) {
   }
 }
 
-function saveStoredAgent(owner, privateKey, validUntil = Date.now() + AGENT_VALIDITY_MS) {
+async function loadStoredAgent(owner) {
+  if (!owner || typeof window === 'undefined') return null;
+  try {
+    const key = agentStorageKey(owner);
+    const migrated = await migratePlainLocalStorageCredential(key, key, value => normalizeStoredAgent(owner, value));
+    const stored = migrated || await readEncryptedCredential(key);
+    return normalizeStoredAgent(owner, stored);
+  } catch (e) {
+    console.warn('[useHotstuff] load browser agent failed:', e?.message || e);
+    return null;
+  }
+}
+
+async function saveStoredAgent(owner, privateKey, validUntil = Date.now() + AGENT_VALIDITY_MS) {
   if (!owner || typeof window === 'undefined') return null;
   const normalized = normalizePrivateKey(privateKey);
   if (!normalized) return null;
@@ -113,14 +128,16 @@ function saveStoredAgent(owner, privateKey, validUntil = Date.now() + AGENT_VALI
     validUntil,
   };
   try {
-    window.localStorage.setItem(agentStorageKey(owner), JSON.stringify(record));
-  } catch {
-    // localStorage can be unavailable in embedded wallet contexts.
+    await writeEncryptedCredential(agentStorageKey(owner), record);
+    try { window.localStorage.removeItem(agentStorageKey(owner)); } catch {}
+  } catch (e) {
+    console.warn('[useHotstuff] save browser agent failed:', e?.message || e);
+    return null;
   }
   return { ...record, account };
 }
 
-function newStoredAgent(owner) {
+async function newStoredAgent(owner) {
   return saveStoredAgent(owner, generatePrivateKey(), Date.now() + AGENT_VALIDITY_MS);
 }
 
@@ -412,7 +429,7 @@ export function useHotstuff() {
       const approved = Array.isArray(current?.data)
         ? current.data.some(row => String(row?.broker || '').toLowerCase() === broker.broker.toLowerCase() && num(row?.max_fee_rate) >= num(broker.fee))
         : false;
-      const storedAgent = loadStoredAgent(hsWalletAddr);
+      const storedAgent = await loadStoredAgent(hsWalletAddr);
       const agents = storedAgent
         ? await info.allAgents({ user: hsWalletAddr }).catch(() => [])
         : [];
@@ -437,7 +454,7 @@ export function useHotstuff() {
 
   const ensureTradingAgent = useCallback(async () => {
     if (!hsWalletAddr) throw new Error('Connect your Hotstuff EVM wallet first');
-    let agent = loadStoredAgent(hsWalletAddr) || newStoredAgent(hsWalletAddr);
+    let agent = await loadStoredAgent(hsWalletAddr) || await newStoredAgent(hsWalletAddr);
     if (!agent) throw new Error('Could not create Hotstuff browser trading agent');
 
     const agents = await info.allAgents({ user: hsWalletAddr }).catch(() => []);
@@ -457,7 +474,7 @@ export function useHotstuff() {
       validUntil,
       nonce: Date.now(),
     });
-    agent = saveStoredAgent(hsWalletAddr, agent.privateKey, validUntil) || agent;
+    agent = await saveStoredAgent(hsWalletAddr, agent.privateKey, validUntil) || agent;
     return agent;
   }, [exchange, hsWalletAddr, info]);
 
@@ -505,7 +522,7 @@ export function useHotstuff() {
 
   const placeOrder = useCallback(async ({ symbol, side, amount, amountBase, price, leverage, orderType, reduceOnly = false }) => {
     if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
-    const activation = await activate();
+    await activate();
     const market = markets.find(m => m.symbol === String(symbol || '').toUpperCase() || m.market_name === symbol);
     const order = buildHotstuffOrder({
       market,
@@ -518,8 +535,8 @@ export function useHotstuff() {
       reduceOnly,
     });
     const brokerConfig = hotstuffBrokerConfig();
-    const agent = loadStoredAgent(hsWalletAddr);
-    const result = await agentExchange(agent || activation).placeOrder({
+    const agent = await loadStoredAgent(hsWalletAddr) || await ensureTradingAgent();
+    const result = await agentExchange(agent).placeOrder({
       orders: [order],
       ...(brokerConfig ? { brokerConfig } : {}),
       expiresAfter: Date.now() + 60_000,
@@ -531,7 +548,7 @@ export function useHotstuff() {
     setTimeout(() => claimGold(orderType || 'trade'), 2500);
     await refresh();
     return { success: true, result, clientOrderId: order.cloid, orderStatus: hotstuffOrderStatusLabel(result) };
-  }, [activate, agentExchange, claimGold, evmReady, hsWalletAddr, markets, refresh, walletClient]);
+  }, [activate, agentExchange, claimGold, ensureTradingAgent, evmReady, hsWalletAddr, markets, refresh, walletClient]);
 
   const setLeverage = useCallback(async (symbol, leverage) => {
     try {
@@ -692,7 +709,7 @@ export function useHotstuff() {
   const setTpsl = useCallback(async (symbol, closeSide, takeProfit, stopLoss, pairIndex, _tradeIndex, positionAmount) => {
     try {
       if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
-      const activation = await activate();
+      await activate();
       const sym = String(symbol || '').toUpperCase();
       const market = markets.find(m => m.symbol === sym || Number(m.pair_index) === Number(pairIndex));
       if (!market) throw new Error('Select a valid Hotstuff market');
@@ -731,8 +748,8 @@ export function useHotstuff() {
       }
       if (!ordersToPlace.length) throw new Error('Enter TP or SL price');
       const brokerConfig = hotstuffBrokerConfig();
-      const agent = loadStoredAgent(hsWalletAddr);
-      const result = await agentExchange(agent || activation).placeOrder({
+      const agent = await loadStoredAgent(hsWalletAddr) || await ensureTradingAgent();
+      const result = await agentExchange(agent).placeOrder({
         orders: ordersToPlace,
         ...(brokerConfig ? { brokerConfig } : {}),
         expiresAfter: Date.now() + 60_000,
@@ -748,7 +765,7 @@ export function useHotstuff() {
       setError(msg);
       return { error: msg };
     }
-  }, [activate, agentExchange, evmReady, hsWalletAddr, markets, positions, refresh, walletClient]);
+  }, [activate, agentExchange, ensureTradingAgent, evmReady, hsWalletAddr, markets, positions, refresh, walletClient]);
 
   const parseAmount = useCallback((amount) => {
     const amountText = String(amount || '').trim();
