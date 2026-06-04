@@ -6514,7 +6514,7 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? 'Deposit USDt0' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? 'Deposit USDt0' : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: '#15803D'}}>
@@ -6523,7 +6523,46 @@ function FuturesPanel() {
                 )
                 : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}</span>}
             </div>
-            {dex === 'grvt' ? (
+            {dex === 'hotstuff' ? (
+              <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                <div style={{
+                  background: 'rgba(239,68,68,0.08)',
+                  border: '1px solid rgba(239,68,68,0.28)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  fontSize: 11,
+                  lineHeight: 1.4,
+                  color: '#5C3A21',
+                  fontWeight: 750,
+                }}>
+                  Hotstuff deposit and withdrawal are handled in the official Hotstuff app. Clash reads your account balance and trades through the registered browser agent.
+                </div>
+                <button
+                  style={{...S.depositBtn, width: '100%', whiteSpace: 'nowrap', padding: '9px 10px'}}
+                  onClick={() => {
+                    if (typeof openReferralJoin === 'function') openReferralJoin();
+                    else window.open(referralUrl || 'https://app.hotstuff.trade/join/clashofperps', '_blank', 'noopener,noreferrer');
+                  }}
+                  disabled={loading}
+                >
+                  {loading ? '...' : 'Open Hotstuff'}
+                </button>
+                {Number(spotUsdc || 0) > 0.000001 && (
+                  <button
+                    style={{...S.btnSmall, width: '100%', background: '#16A34A', color: '#fff', border: '2px solid #15803D'}}
+                    onClick={async () => {
+                      const amountText = Number(spotUsdc || 0).toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
+                      const r = await moveSpotToPerp?.(amountText);
+                      if (!r?.error) setLocalAlert(r?.info || 'Moved USDC to Hotstuff derivatives.');
+                      else setLocalAlert(r.error);
+                    }}
+                    disabled={loading || !moveSpotToPerp}
+                  >
+                    Move ${Number(spotUsdc || 0).toFixed(2)} Spot to Perps
+                  </button>
+                )}
+              </div>
+            ) : dex === 'grvt' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                 <div style={{
                   background: 'rgba(59,130,246,0.08)',
@@ -6642,7 +6681,7 @@ function FuturesPanel() {
                 : dex === 'nado'
                 ? 'Approves USDt0 on Ink, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
                 : dex === 'hotstuff'
-                ? 'Sends native USDC from your Ethereum wallet to the Hotstuff bridge. After bridge credit, move Spot to Perps.'
+                ? 'Use Hotstuff official to deposit or withdraw. Clash only handles trading and optional Spot to Perps internal transfer.'
                 : dex === 'grvt'
                 ? 'Opens GRVT deposit. Native in-game deposit needs GRVT bridge approval data or a GRVT-supported deposit-address API; the current builder API key is not enough for that.'
                 : dex === 'katana'
@@ -6657,19 +6696,6 @@ function FuturesPanel() {
                 ? 'Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.'
                 : 'Use the connected venue account to fund or manage your USDC balance.'}
             </span>
-            {dex === 'hotstuff' && Number(spotUsdc || 0) > 0.000001 && (
-              <button
-                style={{...S.btnSmall, width: '100%', marginTop: 8, background: '#16A34A', color: '#fff', border: '2px solid #15803D'}}
-                onClick={async () => {
-                  const amountText = Number(spotUsdc || 0).toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
-                  const r = await moveSpotToPerp?.(amountText);
-                  if (!r?.error) setLocalAlert(r?.info || 'Moved USDC to Hotstuff derivatives.');
-                }}
-                disabled={loading || !moveSpotToPerp}
-              >
-                Move ${Number(spotUsdc || 0).toFixed(2)} Spot to Perps
-              </button>
-            )}
           </div>
         )}
 
@@ -6677,7 +6703,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'hotstuff' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
@@ -6730,8 +6756,6 @@ function FuturesPanel() {
                 ? 'Withdraws USDC from your Phoenix trader account back to your Solana wallet.'
                 : dex === 'nado'
                 ? 'Withdraws USDt0 from your Nado default subaccount back to your Ink wallet. Nado charges a 1 USDt0 withdrawal fee, so Max subtracts it.'
-                : dex === 'hotstuff'
-                ? 'Requests a Hotstuff derivatives withdrawal to your Ethereum wallet. Hotstuff charges the withdrawal fee shown by the venue.'
                 : dex === 'grvt'
                 ? 'Opens GRVT so you can withdraw or manage funds on your GRVT account.'
                 : dex === 'pacifica'

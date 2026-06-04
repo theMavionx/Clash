@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { formatUnits, getAddress, parseUnits } from 'viem';
+import { formatUnits, getAddress } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -16,9 +16,7 @@ import {
 } from '../lib/hotstuffClient';
 import {
   ensureHotstuffChain,
-  HOTSTUFF_CHAIN,
   HOTSTUFF_CHAIN_ID,
-  HOTSTUFF_BRIDGE_ADDRESS,
   HOTSTUFF_BRIDGE_CHAIN_ID,
   HOTSTUFF_FUTURES_API,
   HOTSTUFF_REFERRAL_CODE,
@@ -36,18 +34,6 @@ import {
 const POLL_INTERVAL_MS = 5_000;
 const AGENT_STORAGE_PREFIX = 'clash_hotstuff_agent_v1';
 const AGENT_VALIDITY_MS = 180 * 24 * 60 * 60 * 1000;
-const ERC20_TRANSFER_ABI = [
-  {
-    type: 'function',
-    name: 'transfer',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'to', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ name: 'ok', type: 'bool' }],
-  },
-];
 const ERC20_BALANCE_ABI = [
   {
     type: 'function',
@@ -1076,35 +1062,6 @@ export function useHotstuff() {
     return amountText;
   }, []);
 
-  const depositToPacifica = useCallback(async (amount) => {
-    try {
-      if (!walletClient) throw new Error('Connect your EVM wallet first');
-      await ensureHotstuffChain(switchChain);
-      const amountText = parseAmount(amount);
-      const hash = await walletClient.writeContract({
-        address: HOTSTUFF_USDC_ADDRESS,
-        abi: ERC20_TRANSFER_ABI,
-        functionName: 'transfer',
-        args: [HOTSTUFF_BRIDGE_ADDRESS, parseUnits(amountText, HOTSTUFF_USDC_DECIMALS)],
-        chain: HOTSTUFF_CHAIN,
-      });
-      const pc = typeof getPublicClient === 'function'
-        ? getPublicClient(HOTSTUFF_BRIDGE_CHAIN_ID)
-        : publicClient;
-      await pc?.waitForTransactionReceipt?.({ hash }).catch(() => null);
-      await refresh();
-      return {
-        success: true,
-        txHash: hash,
-        info: 'Hotstuff Ethereum USDC deposit sent. Wait for bridge credit, then approve the Clash builder code before trading.',
-      };
-    } catch (e) {
-      const msg = hotstuffErrorMessage(e, 'Hotstuff deposit failed');
-      setError(msg);
-      return { error: msg };
-    }
-  }, [getPublicClient, parseAmount, publicClient, refresh, switchChain, walletClient]);
-
   const moveSpotToPerp = useCallback(async (amount) => {
     try {
       await ensureHotstuffChain(switchChain);
@@ -1130,30 +1087,6 @@ export function useHotstuff() {
     const iv = setInterval(verifySetup, POLL_INTERVAL_MS);
     return () => clearInterval(iv);
   }, [active, hsWalletAddr, verifySetup]);
-
-  const withdraw = useCallback(async (amount) => {
-    try {
-      await ensureHotstuffChain(switchChain);
-      const amountText = parseAmount(amount);
-      const result = await exchange().accountDerivativeWithdrawRequest({
-        collateralId: HOTSTUFF_USDC_COLLATERAL_ID,
-        amount: amountText,
-        chainId: HOTSTUFF_BRIDGE_CHAIN_ID,
-        nonce: Date.now(),
-      });
-      await refresh();
-      return {
-        success: true,
-        result,
-        txHash: result?.tx_hash || result?.txHash || null,
-        info: 'Hotstuff derivatives withdrawal requested to your Ethereum wallet.',
-      };
-    } catch (e) {
-      const msg = hotstuffErrorMessage(e, 'Hotstuff withdraw failed');
-      setError(msg);
-      return { error: msg };
-    }
-  }, [exchange, parseAmount, refresh, switchChain]);
 
   return {
     walletAddr: hsWalletAddr || walletAddr,
@@ -1182,8 +1115,8 @@ export function useHotstuff() {
     placeLimitOrder,
     cancelOrder,
     closePosition,
-    depositToPacifica,
-    withdraw,
+    depositToPacifica: null,
+    withdraw: null,
     activate,
     openReferralJoin,
     referralCode: HOTSTUFF_REFERRAL_CODE,
