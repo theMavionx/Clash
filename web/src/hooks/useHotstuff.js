@@ -340,39 +340,35 @@ export function useHotstuff() {
     }
     setWalletUsdcStatus({ status: 'checking', message: 'Checking Ethereum wallet USDC...' });
     try {
-      const pc = typeof getPublicClient === 'function'
-        ? getPublicClient(HOTSTUFF_BRIDGE_CHAIN_ID)
-        : publicClient;
-      const raw = await pc.readContract({
-        address: HOTSTUFF_USDC_ADDRESS,
-        abi: ERC20_BALANCE_ABI,
-        functionName: 'balanceOf',
-        args: [hsWalletAddr],
-      });
+      let raw;
+      if (Number(HOTSTUFF_BRIDGE_CHAIN_ID) === 1) {
+        raw = await fetchHotstuffWalletUsdcViaAlchemyProxy(hsWalletAddr);
+      } else {
+        const pc = typeof getPublicClient === 'function'
+          ? getPublicClient(HOTSTUFF_BRIDGE_CHAIN_ID)
+          : publicClient;
+        raw = await pc.readContract({
+          address: HOTSTUFF_USDC_ADDRESS,
+          abi: ERC20_BALANCE_ABI,
+          functionName: 'balanceOf',
+          args: [hsWalletAddr],
+        });
+      }
       const next = Number(formatUnits(raw, HOTSTUFF_USDC_DECIMALS));
       const value = Number.isFinite(next) ? next : 0;
       setWalletUsdc(value);
       setWalletUsdcStatus({ status: 'ready', message: null });
       return value;
     } catch (e) {
-      console.warn('[useHotstuff] wallet USDC viem read failed:', hotstuffRpcErrorDetails(e));
-      try {
-        const raw = await fetchHotstuffWalletUsdcViaAlchemyProxy(hsWalletAddr);
-        const next = Number(formatUnits(raw, HOTSTUFF_USDC_DECIMALS));
-        const value = Number.isFinite(next) ? next : 0;
-        setWalletUsdc(value);
-        setWalletUsdcStatus({ status: 'ready', message: null });
-        return value;
-      } catch (fallbackError) {
-        const msg = hotstuffErrorMessage(fallbackError, 'Could not read Ethereum wallet USDC');
-        console.warn('[useHotstuff] wallet USDC fallback failed:', {
-          message: msg,
-          error: hotstuffRpcErrorDetails(fallbackError),
-        });
-        setWalletUsdc(null);
-        setWalletUsdcStatus({ status: 'error', message: msg });
-        return null;
-      }
+      const msg = hotstuffErrorMessage(e, 'Could not read Ethereum wallet USDC');
+      console.warn('[useHotstuff] wallet USDC read failed:', {
+        chainId: HOTSTUFF_BRIDGE_CHAIN_ID,
+        message: msg,
+        error: hotstuffRpcErrorDetails(e),
+      });
+      setWalletUsdc(null);
+      setWalletUsdcStatus({ status: 'error', message: msg });
+      return null;
     }
   }, [active, getPublicClient, hsWalletAddr, publicClient]);
 
