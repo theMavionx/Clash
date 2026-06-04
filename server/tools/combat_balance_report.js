@@ -2,14 +2,16 @@
 /**
  * Dev-only combat balance report.
  *
- * Read-only by design: this script does not import server/db.js, open SQLite,
- * start network services, or write files. It reuses combat_session.js by
- * providing the verifier with the BUILDING_DEFS subset it needs.
+ * Read-only by default: this script does not import server/db.js, open SQLite,
+ * or start network services. It writes only when --write-report is passed.
+ * It reuses combat_session.js by providing the verifier with the BUILDING_DEFS
+ * subset it needs.
  */
 
 'use strict';
 
 const Module = require('module');
+const fs = require('fs');
 const path = require('path');
 
 const {
@@ -1277,6 +1279,79 @@ function worstScenarioEntries(results, limit = 15) {
     .map(({ entry }) => entry);
 }
 
+function reportTotals(results) {
+  const victories = results.filter((entry) => entry.summary.result === 'victory').length;
+  const invalid = results.filter((entry) => !entry.summary.valid || entry.summary.result === 'error').length;
+  const warnings = results.reduce((sum, entry) => sum + entry.warnings.length, 0);
+  return {
+    scenarios: results.length,
+    victories,
+    defeats: results.length - victories,
+    invalid,
+    warnings,
+  };
+}
+
+function scenarioJson(entry) {
+  return {
+    caseId: entry.scenario.caseId || null,
+    matrixIndex: entry.scenario.matrixIndex || null,
+    name: entry.scenario.name,
+    bucket: entry.scenario.bucket || null,
+    attackerTh: entry.scenario.attackerTh || null,
+    defenderTh: entry.scenario.defenderTh || null,
+    layoutVariant: entry.scenario.layoutVariant || null,
+    loadoutKind: entry.scenario.loadoutKind || null,
+    spawn: entry.scenario.spawn || null,
+    tags: entry.scenario.tags || [],
+    summary: entry.summary,
+    warnings: entry.warnings,
+  };
+}
+
+function buildReportPayload(results, options = {}) {
+  const isBatch = options.mode === 'batch';
+  const totals = reportTotals(results);
+  const bucketSummaries = isBatch ? aggregateBuckets(results) : [];
+  const sliceSummaries = isBatch ? aggregateSlices(results) : [];
+  const overallStatus = isBatch
+    ? [...bucketSummaries, ...sliceSummaries].reduce((status, summary) => (
+      verdictRank(summary.status) > verdictRank(status) ? summary.status : status
+    ), 'PASS')
+    : null;
+
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    mode: options.mode || 'batch',
+    coreRoster: CORE_ROSTER,
+    premiumDeferredRoster: PREMIUM_DEFERRED_ROSTER,
+    simulator: 'server/combat_session.js verifyReplay (server/db.js blocked and stubbed)',
+    totals,
+    overallStatus,
+    openBuckets: bucketSummaries
+      .filter((summary) => summary.status !== 'PASS')
+      .map((summary) => ({ bucket: summary.bucket, status: summary.status, reasons: summary.reasons })),
+    openSlices: sliceSummaries
+      .filter((summary) => summary.status !== 'PASS')
+      .map((summary) => ({ title: summary.title, key: summary.key, status: summary.status, reasons: summary.reasons })),
+    bucketSummaries,
+    sliceSummaries,
+    worstCases: worstScenarioEntries(results).map(scenarioJson),
+    scenarios: results.map(scenarioJson),
+  };
+}
+
+function writeJsonReport(payload) {
+  const reportDir = path.resolve(__dirname, '..', 'reports');
+  const timestamp = String(payload.generatedAt).replace(/[:.]/g, '-');
+  const reportPath = path.join(reportDir, `combat_balance_${timestamp}.json`);
+  fs.mkdirSync(reportDir, { recursive: true });
+  payload.reportPath = path.relative(path.resolve(__dirname, '..', '..'), reportPath).replace(/\\/g, '/');
+  fs.writeFileSync(reportPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  return reportPath;
+}
+
 function renderScenarioBlock(entry, index) {
   const { scenario, summary, warnings } = entry;
   const result = summary.result.toUpperCase();
@@ -1358,6 +1433,8 @@ function renderReport(results, options = {}) {
     if (!options.includeDetails) {
       lines.push('Run with --details to print every generated scenario.');
       lines.push('Run with --smoke for the old 15-scenario smoke report.');
+      lines.push('Run with --json for machine-readable output.');
+      lines.push('Run with --write-report to save JSON history under server/reports/.');
       return lines.join('\n');
     }
 
@@ -1387,6 +1464,8 @@ function main() {
   const verifyReplay = loadVerifierWithoutDb();
   const args = new Set(process.argv.slice(2));
   const mode = args.has('--smoke') ? 'smoke' : 'batch';
+  const jsonOutput = args.has('--json');
+  const writeReport = args.has('--write-report');
   const includeDetails = args.has('--details') || mode === 'smoke';
   const selectedScenarios = mode === 'smoke' ? smokeScenarios() : batchScenarios();
   const results = selectedScenarios.map((scenario) => {
@@ -1396,7 +1475,23 @@ function main() {
       return failedScenario(scenario, err);
     }
   });
-  process.stdout.write(`${renderReport(results, { mode, includeDetails })}\n`);
+
+  const payload = buildReportPayload(results, { mode });
+  let reportPath = null;
+  if (writeReport) {
+    reportPath = writeJsonReport(payload);
+  }
+
+  if (jsonOutput) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
+
+  const text = renderReport(results, { mode, includeDetails });
+  const reportLine = reportPath
+    ? `\nJSON report written: ${path.relative(process.cwd(), reportPath).replace(/\\/g, '/')}\n`
+    : '';
+  process.stdout.write(`${text}${reportLine}\n`);
 }
 
 if (require.main === module) {

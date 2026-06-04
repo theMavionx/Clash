@@ -2176,6 +2176,17 @@ function applyGameShopProduct(playerId, product, quantity, context = {}) {
       (rewards.gold || 0) * quantity,
       (rewards.wood || 0) * quantity,
       (rewards.ore || 0) * quantity,
+      {
+        sourceType: 'shop_purchase',
+        metadata: {
+          sku: product.sku,
+          kind: product.kind,
+          quantity,
+          chain: context.chain || null,
+          payment: context.payment || null,
+          source: context.source || null,
+        },
+      },
     );
     return { resources };
   }
@@ -4045,6 +4056,17 @@ router.get('/shop/config', async (req, res) => {
 });
 
 router.post('/shop/base/quote', auth, async (req, res) => {
+  const quoteStartedAt = Date.now();
+  const requestedSku = String(req.body?.sku || '').trim();
+  db.recordShopFunnelEvent({
+    playerId: req.player.id,
+    eventType: 'quote_requested',
+    sku: requestedSku || null,
+    chain: 'base',
+    payment: 'cop',
+    quantity: req.body?.quantity,
+    metadata: { route: '/shop/base/quote' },
+  });
   try {
     const rate = checkUtilityQuoteRateLimit(req);
     if (!rate.ok) {
@@ -4061,7 +4083,7 @@ router.post('/shop/base/quote', auth, async (req, res) => {
     }
 
     const buyer = getAddress(String(req.body?.buyer || ''));
-    const sku = String(req.body?.sku || '').trim();
+    const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
@@ -4115,6 +4137,20 @@ router.post('/shop/base/quote', auth, async (req, res) => {
     });
     const total = unitPrice * quantity;
 
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'quote_succeeded',
+      sku: product.sku,
+      chain: 'base',
+      payment: 'cop',
+      token: paymentToken,
+      quantity: quantity.toString(),
+      usdPriceE6: (usdPriceE6 * quantity).toString(),
+      tokenAmount: total.toString(),
+      priceSource: `CoP/USD ${clashUsd.price} (${clashUsd.source})`,
+      quoteId: nonce.toString(),
+      metadata: { latency_ms: Date.now() - quoteStartedAt, unit_price: unitPrice.toString() },
+    });
     res.set('Cache-Control', 'no-store');
     res.json({
       chainId: 8453,
@@ -4146,13 +4182,34 @@ router.post('/shop/base/quote', auth, async (req, res) => {
   } catch (err) {
     const message = err?.message || 'quote failed';
     const status = /address|sku|quantity|item/i.test(message) ? 400 : 500;
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'quote_failed',
+      sku: requestedSku || null,
+      chain: 'base',
+      payment: 'cop',
+      quantity: req.body?.quantity,
+      errorCode: String(status),
+      errorMessage: message.slice(0, 180),
+      metadata: { latency_ms: Date.now() - quoteStartedAt, route: '/shop/base/quote' },
+    });
     res.status(status).json({ error: message.slice(0, 180) });
   }
 });
 
 router.post('/shop/base/redeem', auth, async (req, res) => {
+  const redeemStartedAt = Date.now();
+  const requestedTxHash = String(req.body?.txHash || req.body?.hash || '').trim();
+  db.recordShopFunnelEvent({
+    playerId: req.player.id,
+    eventType: 'redeem_requested',
+    chain: 'base',
+    payment: 'cop',
+    txHash: requestedTxHash || null,
+    metadata: { route: '/shop/base/redeem' },
+  });
   try {
-    const txHash = String(req.body?.txHash || req.body?.hash || '').trim();
+    const txHash = requestedTxHash;
     if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
       return res.status(400).json({ error: 'Bad transaction hash' });
     }
@@ -4160,6 +4217,16 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
     const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(txHash);
     if (existing) {
       if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Purchase already redeemed' });
+      db.recordShopFunnelEvent({
+        playerId: req.player.id,
+        eventType: 'redeem_duplicate',
+        sku: existing.utility,
+        chain: existing.chain || 'base',
+        payment: 'cop',
+        token: existing.token,
+        txHash,
+        metadata: { latency_ms: Date.now() - redeemStartedAt, purchase_id: existing.id },
+      });
       return res.json({
         success: true,
         alreadyRedeemed: true,
@@ -4244,6 +4311,19 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
       return applied;
     })();
 
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'redeem_succeeded',
+      sku,
+      chain: 'base',
+      payment: 'cop',
+      token: paymentToken,
+      quantity,
+      usdPriceE6: purchase.usdPriceE6?.toString?.() || String(product.usdPriceE6),
+      tokenAmount: (BigInt(purchase.unitPrice) * BigInt(purchase.quantity)).toString(),
+      txHash,
+      metadata: { latency_ms: Date.now() - redeemStartedAt },
+    });
     res.json({
       success: true,
       product: gameShopProductsForClient().find((item) => item.id === product.id),
@@ -4253,6 +4333,16 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
     });
   } catch (err) {
     const message = err?.message || 'redeem failed';
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'redeem_failed',
+      chain: 'base',
+      payment: 'cop',
+      txHash: requestedTxHash || null,
+      errorCode: String(err?.status || 500),
+      errorMessage: message.slice(0, 180),
+      metadata: { latency_ms: Date.now() - redeemStartedAt, route: '/shop/base/redeem' },
+    });
     res.status(err?.status || 500).json({ error: message.slice(0, 180) });
   }
 });
@@ -4702,8 +4792,17 @@ async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}
 }
 
 router.post('/shop/solana/redeem', auth, async (req, res) => {
+  const redeemStartedAt = Date.now();
+  const requestedSignature = String(req.body?.txSignature || req.body?.signature || '').trim();
+  db.recordShopFunnelEvent({
+    playerId: req.player.id,
+    eventType: 'redeem_requested',
+    chain: 'solana',
+    txHash: requestedSignature || null,
+    metadata: { route: '/shop/solana/redeem' },
+  });
   try {
-    const signature = String(req.body?.txSignature || req.body?.signature || '').trim();
+    const signature = requestedSignature;
     // Solana tx signature is base58 of 64 bytes → 87-88 chars.
     if (!/^[1-9A-HJ-NP-Za-km-z]{43,90}$/.test(signature)) {
       return res.status(400).json({ error: 'Bad Solana tx signature' });
@@ -4712,6 +4811,16 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
     const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(signature);
     if (existing) {
       if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Purchase already redeemed' });
+      db.recordShopFunnelEvent({
+        playerId: req.player.id,
+        eventType: 'redeem_duplicate',
+        sku: existing.utility,
+        chain: 'solana',
+        payment: String(existing.token || '').toLowerCase(),
+        token: existing.token,
+        txHash: signature,
+        metadata: { latency_ms: Date.now() - redeemStartedAt, purchase_id: existing.id },
+      });
       return res.json({
         success: true,
         alreadyRedeemed: true,
@@ -4739,6 +4848,20 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
         source: 'redeem',
       });
       const grant = recordSolanaShopPurchaseGrant(paymentInfo);
+      db.recordShopFunnelEvent({
+        playerId: req.player.id,
+        eventType: grant.duplicate ? 'redeem_duplicate' : 'redeem_succeeded',
+        sku: paymentInfo.sku,
+        chain: 'solana',
+        payment: paymentInfo.payment,
+        token: paymentInfo.tokenLabel,
+        quantity: paymentInfo.quantity,
+        usdPriceE6: (BigInt(paymentInfo.product.usdPriceE6) * BigInt(paymentInfo.quantity)).toString(),
+        tokenAmount: paymentInfo.expectedAmount.toString(),
+        txHash: signature,
+        quoteId: paymentInfo.quoteIntent?.id || null,
+        metadata: { latency_ms: Date.now() - redeemStartedAt, source: paymentInfo.source },
+      });
       return res.json({
         success: true,
         product: gameShopProductsForClient().find((item) => item.id === paymentInfo.product.id),
@@ -4870,6 +4993,15 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
     */
   } catch (err) {
     const message = err?.message || 'redeem failed';
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'redeem_failed',
+      chain: 'solana',
+      txHash: requestedSignature || null,
+      errorCode: err?.code || String(err?.status || 500),
+      errorMessage: message.slice(0, 180),
+      metadata: { latency_ms: Date.now() - redeemStartedAt, route: '/shop/solana/redeem' },
+    });
     res.status(err?.status || 500).json({ error: message.slice(0, 180) });
   }
 });
@@ -5016,6 +5148,18 @@ router.post('/nft/solana/upgrade/redeem', auth, async (req, res) => {
 });
 
 router.post('/shop/solana/quote', auth, async (req, res) => {
+  const quoteStartedAt = Date.now();
+  const requestedSku = String(req.body?.sku || '').trim();
+  const requestedPayment = String(req.body?.payment || 'usdc').toLowerCase();
+  db.recordShopFunnelEvent({
+    playerId: req.player.id,
+    eventType: 'quote_requested',
+    sku: requestedSku || null,
+    chain: 'solana',
+    payment: requestedPayment,
+    quantity: req.body?.quantity,
+    metadata: { route: '/shop/solana/quote' },
+  });
   try {
     const rate = checkUtilityQuoteRateLimit(req);
     if (!rate.ok) {
@@ -5029,14 +5173,14 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
       return res.status(423).json({ error: 'Solana game shop sale is not active' });
     }
 
-    const sku = String(req.body?.sku || '').trim();
+    const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
 
-    const payment = String(req.body?.payment || 'usdc').toLowerCase();
+    const payment = requestedPayment;
     if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr' && payment !== 'clash') {
       return res.status(400).json({ error: 'Bad payment token (usdc | sol | skr | clash)' });
     }
@@ -5122,6 +5266,20 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
       deadline,
     });
 
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'quote_succeeded',
+      sku: product.sku,
+      chain: 'solana',
+      payment,
+      token: mint || 'SOL',
+      quantity,
+      usdPriceE6: usdPriceE6.toString(),
+      tokenAmount: amount.toString(),
+      priceSource,
+      quoteId: shopMemoHash(memo),
+      metadata: { latency_ms: Date.now() - quoteStartedAt, deadline, buyer },
+    });
     res.set('Cache-Control', 'no-store');
     res.json({
       chain: 'solana',
@@ -5147,6 +5305,17 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
   } catch (err) {
     const message = err?.message || 'quote failed';
     const status = /address|sku|quantity|item/i.test(message) ? 400 : 500;
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'quote_failed',
+      sku: requestedSku || null,
+      chain: 'solana',
+      payment: requestedPayment,
+      quantity: req.body?.quantity,
+      errorCode: String(status),
+      errorMessage: message.slice(0, 180),
+      metadata: { latency_ms: Date.now() - quoteStartedAt, route: '/shop/solana/quote' },
+    });
     res.status(status).json({ error: message.slice(0, 180) });
   }
 });
@@ -5365,6 +5534,19 @@ function verifyEvmShopMemoSignature(memoString, signatureB58) {
 }
 
 router.post('/shop/evm/quote', auth, async (req, res) => {
+  const quoteStartedAt = Date.now();
+  const requestedChain = String(req.body?.chain || '').toLowerCase();
+  const requestedPayment = String(req.body?.payment || defaultEvmPayment(requestedChain) || 'usdc').toLowerCase();
+  const requestedSku = String(req.body?.sku || '').trim();
+  db.recordShopFunnelEvent({
+    playerId: req.player.id,
+    eventType: 'quote_requested',
+    sku: requestedSku || null,
+    chain: requestedChain || null,
+    payment: requestedPayment,
+    quantity: req.body?.quantity,
+    metadata: { route: '/shop/evm/quote' },
+  });
   try {
     const rate = checkUtilityQuoteRateLimit(req);
     if (!rate.ok) {
@@ -5372,7 +5554,7 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
       return res.status(429).json({ error: 'Too many shop quote requests. Try again shortly.' });
     }
 
-    const chainKey = String(req.body?.chain || '').toLowerCase();
+    const chainKey = requestedChain;
     const config = gameShopEvmConfig(chainKey);
     if (!config) return res.status(400).json({ error: 'Unsupported chain. Use base, arbitrum or monad.' });
     if (!config.ready) return res.status(503).json({ error: `${config.label} shop treasury is not configured` });
@@ -5380,7 +5562,7 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
       return res.status(423).json({ error: `${config.label} shop sale is not active` });
     }
 
-    const paymentKey = String(req.body?.payment || defaultEvmPayment(chainKey) || 'usdc').toLowerCase();
+    const paymentKey = requestedPayment;
     const paymentSpec = evmPaymentSpec(chainKey, paymentKey);
     if (!paymentSpec) {
       return res.status(400).json({ error: `Unsupported payment on ${config.label}: ${paymentKey}` });
@@ -5388,7 +5570,7 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
 
     const { getAddress } = await import('viem');
     const buyer = getAddress(String(req.body?.buyer || ''));
-    const sku = String(req.body?.sku || '').trim();
+    const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
@@ -5443,6 +5625,20 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
     });
     const signature = signEvmShopMemo(memo);
 
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'quote_succeeded',
+      sku: product.sku,
+      chain: chainKey,
+      payment: paymentKey,
+      token: paymentSpec.kind === 'erc20' ? getAddress(paymentSpec.token) : paymentKey.toUpperCase(),
+      quantity,
+      usdPriceE6: usdPriceE6.toString(),
+      tokenAmount: amount.toString(),
+      priceSource,
+      quoteId: nonce,
+      metadata: { latency_ms: Date.now() - quoteStartedAt, kind: paymentSpec.kind, buyer },
+    });
     res.set('Cache-Control', 'no-store');
     res.json({
       chain: chainKey,
@@ -5469,17 +5665,38 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
   } catch (err) {
     const message = err?.message || 'quote failed';
     const status = /address|sku|quantity|item|payment/i.test(message) ? 400 : 500;
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'quote_failed',
+      sku: requestedSku || null,
+      chain: requestedChain || null,
+      payment: requestedPayment,
+      quantity: req.body?.quantity,
+      errorCode: String(status),
+      errorMessage: message.slice(0, 180),
+      metadata: { latency_ms: Date.now() - quoteStartedAt, route: '/shop/evm/quote' },
+    });
     res.status(status).json({ error: message.slice(0, 180) });
   }
 });
 
 router.post('/shop/evm/redeem', auth, async (req, res) => {
+  const redeemStartedAt = Date.now();
+  const requestedChain = String(req.body?.chain || '').toLowerCase();
+  const requestedTxHash = String(req.body?.txHash || '').trim();
+  db.recordShopFunnelEvent({
+    playerId: req.player.id,
+    eventType: 'redeem_requested',
+    chain: requestedChain || null,
+    txHash: requestedTxHash || null,
+    metadata: { route: '/shop/evm/redeem' },
+  });
   try {
-    const chainKey = String(req.body?.chain || '').toLowerCase();
+    const chainKey = requestedChain;
     const config = gameShopEvmConfig(chainKey);
     if (!config) return res.status(400).json({ error: 'Unsupported chain' });
 
-    const txHash = String(req.body?.txHash || '').trim();
+    const txHash = requestedTxHash;
     if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
       return res.status(400).json({ error: 'Bad transaction hash' });
     }
@@ -5487,6 +5704,16 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(txHash);
     if (existing) {
       if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Purchase already redeemed' });
+      db.recordShopFunnelEvent({
+        playerId: req.player.id,
+        eventType: 'redeem_duplicate',
+        sku: existing.utility,
+        chain: existing.chain || chainKey,
+        payment: String(existing.token || '').toLowerCase(),
+        token: existing.token,
+        txHash,
+        metadata: { latency_ms: Date.now() - redeemStartedAt, purchase_id: existing.id },
+      });
       return res.json({
         success: true,
         alreadyRedeemed: true,
@@ -5630,6 +5857,19 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
       return applied;
     })();
 
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'redeem_succeeded',
+      sku,
+      chain: chainKey,
+      payment: memoPayment,
+      token: expectedMint || memoPayment.toUpperCase(),
+      quantity,
+      usdPriceE6: (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
+      tokenAmount: expectedAmount.toString(),
+      txHash,
+      metadata: { latency_ms: Date.now() - redeemStartedAt, kind: memoKind },
+    });
     res.json({
       success: true,
       product: gameShopProductsForClient().find((p) => p.id === product.id),
@@ -5643,6 +5883,15 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     });
   } catch (err) {
     const message = err?.message || 'redeem failed';
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'redeem_failed',
+      chain: requestedChain || null,
+      txHash: requestedTxHash || null,
+      errorCode: String(err?.status || 500),
+      errorMessage: message.slice(0, 180),
+      metadata: { latency_ms: Date.now() - redeemStartedAt, route: '/shop/evm/redeem' },
+    });
     res.status(err?.status || 500).json({ error: message.slice(0, 180) });
   }
 });
@@ -5683,6 +5932,18 @@ function buildAptosShopMemo({ sku, quantity, account, nonce, deadline, payment, 
 }
 
 router.post('/shop/aptos/quote', auth, async (req, res) => {
+  const quoteStartedAt = Date.now();
+  const requestedSku = String(req.body?.sku || '').trim();
+  const requestedPayment = String(req.body?.payment || 'usdc').toLowerCase();
+  db.recordShopFunnelEvent({
+    playerId: req.player.id,
+    eventType: 'quote_requested',
+    sku: requestedSku || null,
+    chain: 'aptos',
+    payment: requestedPayment,
+    quantity: req.body?.quantity,
+    metadata: { route: '/shop/aptos/quote' },
+  });
   try {
     const rate = checkUtilityQuoteRateLimit(req);
     if (!rate.ok) {
@@ -5696,7 +5957,7 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
       return res.status(423).json({ error: 'Aptos game shop sale is not active' });
     }
 
-    const sku = String(req.body?.sku || '').trim();
+    const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
@@ -5704,7 +5965,7 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
     }
     const quantity = parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10);
 
-    const payment = String(req.body?.payment || 'usdc').toLowerCase();
+    const payment = requestedPayment;
     if (payment !== 'usdc' && payment !== 'apt') {
       return res.status(400).json({ error: 'Bad payment token (usdc or apt)' });
     }
@@ -5758,6 +6019,20 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
     });
     const signature = signEvmShopMemo(memo); // same ed25519 server signer
 
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'quote_succeeded',
+      sku: product.sku,
+      chain: 'aptos',
+      payment,
+      token: asset,
+      quantity,
+      usdPriceE6: usdPriceE6.toString(),
+      tokenAmount: amount.toString(),
+      priceSource,
+      quoteId: nonce,
+      metadata: { latency_ms: Date.now() - quoteStartedAt, buyer },
+    });
     res.set('Cache-Control', 'no-store');
     res.json({
       chain: 'aptos',
@@ -5781,13 +6056,33 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
   } catch (err) {
     const message = err?.message || 'quote failed';
     const status = /address|sku|quantity|item/i.test(message) ? 400 : 500;
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'quote_failed',
+      sku: requestedSku || null,
+      chain: 'aptos',
+      payment: requestedPayment,
+      quantity: req.body?.quantity,
+      errorCode: String(status),
+      errorMessage: message.slice(0, 180),
+      metadata: { latency_ms: Date.now() - quoteStartedAt, route: '/shop/aptos/quote' },
+    });
     res.status(status).json({ error: message.slice(0, 180) });
   }
 });
 
 router.post('/shop/aptos/redeem', auth, async (req, res) => {
+  const redeemStartedAt = Date.now();
+  const requestedTxHash = String(req.body?.txHash || req.body?.signature || req.body?.hash || '').trim();
+  db.recordShopFunnelEvent({
+    playerId: req.player.id,
+    eventType: 'redeem_requested',
+    chain: 'aptos',
+    txHash: requestedTxHash || null,
+    metadata: { route: '/shop/aptos/redeem' },
+  });
   try {
-    const txHash = String(req.body?.txHash || req.body?.signature || req.body?.hash || '').trim();
+    const txHash = requestedTxHash;
     if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
       return res.status(400).json({ error: 'Bad Aptos tx hash' });
     }
@@ -5795,6 +6090,16 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
     const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(txHash);
     if (existing) {
       if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Purchase already redeemed' });
+      db.recordShopFunnelEvent({
+        playerId: req.player.id,
+        eventType: 'redeem_duplicate',
+        sku: existing.utility,
+        chain: 'aptos',
+        payment: String(existing.token || '').toLowerCase(),
+        token: existing.token,
+        txHash,
+        metadata: { latency_ms: Date.now() - redeemStartedAt, purchase_id: existing.id },
+      });
       return res.json({
         success: true,
         alreadyRedeemed: true,
@@ -5955,6 +6260,19 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
       return applied;
     })();
 
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'redeem_succeeded',
+      sku,
+      chain: 'aptos',
+      payment,
+      token: payment === 'usdc' ? expectedAsset : 'APT',
+      quantity,
+      usdPriceE6: (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
+      tokenAmount: expectedAmount.toString(),
+      txHash,
+      metadata: { latency_ms: Date.now() - redeemStartedAt },
+    });
     res.json({
       success: true,
       product: gameShopProductsForClient().find((p) => p.id === product.id),
@@ -5967,6 +6285,15 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
     });
   } catch (err) {
     const message = err?.message || 'redeem failed';
+    db.recordShopFunnelEvent({
+      playerId: req.player.id,
+      eventType: 'redeem_failed',
+      chain: 'aptos',
+      txHash: requestedTxHash || null,
+      errorCode: String(err?.status || 500),
+      errorMessage: message.slice(0, 180),
+      metadata: { latency_ms: Date.now() - redeemStartedAt, route: '/shop/aptos/redeem' },
+    });
     res.status(err?.status || 500).json({ error: message.slice(0, 180) });
   }
 });
@@ -8039,7 +8366,10 @@ router.post('/resources/add', adminAuth, (req, res) => {
   if (gold < 0 || wood < 0 || ore < 0) {
     return res.status(400).json({ error: 'Values must be non-negative. Use /resources/subtract instead' });
   }
-  const result = db.addResources(req.player.id, gold, wood, ore);
+  const result = db.addResources(req.player.id, gold, wood, ore, {
+    sourceType: 'admin_resource_add',
+    metadata: { route: '/resources/add' },
+  });
   res.json(result);
 });
 
@@ -8052,7 +8382,10 @@ router.post('/resources/subtract', adminAuth, (req, res) => {
   if (gold < 0 || wood < 0 || ore < 0) {
     return res.status(400).json({ error: 'Values must be non-negative' });
   }
-  const result = db.subtractResources(req.player.id, gold, wood, ore);
+  const result = db.subtractResources(req.player.id, gold, wood, ore, {
+    sourceType: 'admin_resource_subtract',
+    metadata: { route: '/resources/subtract' },
+  });
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
@@ -8067,7 +8400,11 @@ router.post('/resources/set', adminAuth, (req, res) => {
   const result = db.addResources(req.player.id,
     newGold - current.gold,
     newWood - current.wood,
-    newOre - current.ore
+    newOre - current.ore,
+    {
+      sourceType: 'admin_resource_set',
+      metadata: { route: '/resources/set' },
+    },
   );
   res.json(result);
 });
@@ -8947,7 +9284,10 @@ router.post('/troops/buy', auth, (req, res) => {
   if (!db.canAfford(req.player.id, cost, 0, 0)) {
     return res.status(400).json({ error: 'Not enough gold', cost });
   }
-  db.subtractResources(req.player.id, cost, 0, 0);
+  db.subtractResources(req.player.id, cost, 0, 0, {
+    sourceType: 'troop_buy',
+    metadata: { troop_name: normalizedTroop },
+  });
   res.json({ success: true, troop_name: normalizedTroop, cost, resources: db.getResources(req.player.id) });
 });
 
@@ -9403,15 +9743,15 @@ router.get('/trophies/table', (req, res) => {
 
 // ==================== TRADING REWARDS ====================
 
-const GOLD_PER_USD_VOLUME = 0.30;
+const GOLD_PER_USD_VOLUME = 0.50;
 // Decibel was 10× — 33× the Pacifica rate. Combined with a $1 min-notional
 // floor, that turned the DEX into a self-trade gold farm. Pulled to parity
 // with Pacifica for the v2 economy. If we ever need to incentivise Decibel
 // liquidity again, do it via a tournament gold_boost, not a base-rate cliff.
-const GOLD_PER_USD_VOLUME_DECIBEL = 0.30;
+const GOLD_PER_USD_VOLUME_DECIBEL = 0.50;
 const GOLD_FIRST_DEPOSIT = 500;
 const GOLD_FIRST_TRADE = 300;
-const GOLD_DAILY_TRADE = 200;
+const GOLD_DAILY_TRADE = 450;
 const GOLD_PER_10_USD_PROFIT = 150; // +150 gold per $10 positive PnL
 
 function volumeGoldForDex(dex, usdVolume) {
@@ -10182,6 +10522,7 @@ async function importGrvtFillsForClaim(playerId) {
 }
 
 router.post('/trading/claim-gold', auth, async (req, res) => {
+  const claimStartedAt = Date.now();
   // Rate limit
   const lastClaim = claimCooldowns.get(req.player.id);
   const sinceLastClaim = lastClaim ? Date.now() - lastClaim : Infinity;
@@ -10213,11 +10554,27 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   const playerDex = VALID_DEXES.has(String(req.player.dex || '').toLowerCase())
     ? String(req.player.dex).toLowerCase()
     : 'pacifica';
+  const recordClaimTelemetry = (event = {}) => {
+    db.recordTradeClaimResult({
+      playerId: req.player.id,
+      dex: event.dex || playerDex,
+      futuresMode: req.player.futures_mode || null,
+      wallet,
+      claimLatencyMs: Date.now() - claimStartedAt,
+      ...event,
+    });
+  };
   const requestedDex = req.body.dex == null ? playerDex : String(req.body.dex).toLowerCase();
   if (!VALID_DEXES.has(requestedDex)) {
+    recordClaimTelemetry({ result: 'invalid_dex', reason: 'Invalid dex', metadata: { requested_dex: requestedDex } });
     return res.status(400).json({ error: 'Invalid dex' });
   }
   if (requestedDex !== playerDex) {
+    recordClaimTelemetry({
+      result: 'dex_mismatch',
+      reason: 'Requested DEX does not match registered account DEX',
+      metadata: { requested_dex: requestedDex, account_dex: playerDex },
+    });
     return res.status(409).json({
       error: `Account is registered for '${playerDex}'. Switch DEX before claiming ${requestedDex} rewards.`,
       dex: playerDex,
@@ -10254,6 +10611,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     }
     const fdb = futuresDbReadonly();
     if (!fdb) {
+      recordClaimTelemetry({ result: 'service_unavailable', reason: 'Futures service unavailable' });
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
     }
     let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
@@ -10342,6 +10700,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       }
     } catch (e) {
       console.warn(`[claim-gold] ${dex} verified trade query failed:`, e.message);
+      recordClaimTelemetry({ result: 'verifier_error', reason: e.message, metadata: { phase: 'verified_trade_query' } });
       return res.json({ gold: 0, reason: 'Futures trade verifier unavailable - try again later', dex });
     }
     let settlingTrades = { n: 0, first_at: null };
@@ -10389,6 +10748,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       };
     };
     console.log(`[claim-gold ${dex}] player=${req.player.name} id=${req.player.id} wallet=${(wallet||'').slice(0,10)} last_trade_id=${reward.last_trade_id||0} new_trades=${newTrades.length} wallet_rows=${hyperliquidWalletRowsAvailable || '-'} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
+    const lastTradeIdBefore = Number(reward.last_trade_id || 0);
+    const rawTradeCount = newTrades.length;
+    const rawVolumeUsd = newTrades.reduce((sum, t) => {
+      const v = Number(t.notional_usd);
+      return Number.isFinite(v) ? sum + v : sum;
+    }, 0);
     const hyperliquidClaimDebug = () => dex === 'hyperliquid' ? {
       last_trade_id: reward.last_trade_id || 0,
       wallet_rows_available: hyperliquidWalletRowsAvailable,
@@ -10402,6 +10767,17 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       const pnlSync = syncDecibelTournamentPnl();
       if (pnlSync.credited_rows > 0) {
         console.log(`[claim-gold ${dex}] player=${req.player.name} -> SYNCED tournament pnl=$${pnlSync.pnl_usd.toFixed(2)} rows=${pnlSync.credited_rows}`);
+        recordClaimTelemetry({
+          result: 'tournament_pnl_synced',
+          reason: 'Tournament PnL synced',
+          lastTradeIdBefore,
+          lastTradeIdAfter: lastTradeIdBefore,
+          rawTradeCount,
+          rawVolumeUsd,
+          pnlUsd: pnlSync.pnl_usd,
+          settlingTradeCount: Number(settlingTrades.n || 0),
+          metadata: { credited_rows: pnlSync.credited_rows },
+        });
         return res.json({
           gold: 0,
           reason: `Tournament PnL synced: $${pnlSync.pnl_usd.toFixed(2)}`,
@@ -10410,6 +10786,15 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         });
       }
       console.log(`[claim-gold ${dex}] player=${req.player.name} -> SETTLING pending=${settlingTrades.n}`);
+      recordClaimTelemetry({
+        result: 'settling',
+        reason: 'Trade is settling',
+        lastTradeIdBefore,
+        lastTradeIdAfter: lastTradeIdBefore,
+        rawTradeCount,
+        rawVolumeUsd,
+        settlingTradeCount: Number(settlingTrades.n || 0),
+      });
       return res.json(settlingPayload());
     }
 
@@ -10417,6 +10802,16 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       const pnlSync = syncDecibelTournamentPnl();
       if (pnlSync.credited_rows > 0) {
         console.log(`[claim-gold ${dex}] player=${req.player.name} -> SYNCED tournament pnl=$${pnlSync.pnl_usd.toFixed(2)} rows=${pnlSync.credited_rows}`);
+        recordClaimTelemetry({
+          result: 'tournament_pnl_synced',
+          reason: 'Tournament PnL synced',
+          lastTradeIdBefore,
+          lastTradeIdAfter: lastTradeIdBefore,
+          rawTradeCount,
+          rawVolumeUsd,
+          pnlUsd: pnlSync.pnl_usd,
+          metadata: { credited_rows: pnlSync.credited_rows },
+        });
         return res.json({
           gold: 0,
           reason: `Tournament PnL synced: $${pnlSync.pnl_usd.toFixed(2)}`,
@@ -10425,6 +10820,14 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         });
       }
       console.log(`[claim-gold ${dex}] player=${req.player.name} -> NO NEW TRADES (returning 0)`);
+      recordClaimTelemetry({
+        result: 'no_new_trades',
+        reason: 'No new trades',
+        lastTradeIdBefore,
+        lastTradeIdAfter: lastTradeIdBefore,
+        rawTradeCount,
+        rawVolumeUsd,
+      });
       return res.json({
         gold: 0,
         reason: 'No new trades',
@@ -10448,6 +10851,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let maxId = reward.last_trade_id || 0;
     let newVolume = 0;
     let newPnl = 0;
+    let volumeGold = 0;
+    let clampedTradeCount = 0;
     let creditedTrades = 0;
     const creditedTradeRows = [];
     // Track opens separately — "first_trade" bonus should only fire on an
@@ -10463,6 +10868,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       }
       const raw = Number(t.notional_usd);
       if (!Number.isFinite(raw) || raw < SANE_MIN_NOTIONAL || raw > SANE_MAX_NOTIONAL) {
+        clampedTradeCount += 1;
         if (t.id > maxId) maxId = t.id; // still advance cursor to skip it
         continue;
       }
@@ -10475,7 +10881,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       if (Number.isFinite(pnlRaw) && pnlRaw > -SANE_MAX_NOTIONAL && pnlRaw < SANE_MAX_NOTIONAL) {
         newPnl += pnlRaw;
       }
-      totalGold += volumeGoldForDex(dex, raw);
+      const tradeGold = volumeGoldForDex(dex, raw);
+      volumeGold += tradeGold;
+      totalGold += tradeGold;
       creditedTrades++;
       creditedTradeRows.push(t);
       const sideLower = String(t.side || '').toLowerCase();
@@ -10505,10 +10913,25 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     ).all(req.player.id);
     const alreadyPaidFirstDeposit = priorBonuses.some(r => String(r.reason).includes('First deposit!'));
     const alreadyPaidFirstTrade   = priorBonuses.some(r => String(r.reason).includes('First trade!'));
-    if (!reward.first_deposit && !alreadyPaidFirstDeposit && hasRealOpen) { totalGold += GOLD_FIRST_DEPOSIT; reasons.push('First deposit!'); }
-    if (!reward.first_trade && !alreadyPaidFirstTrade && creditedOpens > 0) { totalGold += GOLD_FIRST_TRADE; reasons.push('First trade!'); }
+    let firstDepositGold = 0;
+    let firstTradeGold = 0;
+    let dailyGold = 0;
+    if (!reward.first_deposit && !alreadyPaidFirstDeposit && hasRealOpen) {
+      firstDepositGold = GOLD_FIRST_DEPOSIT;
+      totalGold += firstDepositGold;
+      reasons.push('First deposit!');
+    }
+    if (!reward.first_trade && !alreadyPaidFirstTrade && creditedOpens > 0) {
+      firstTradeGold = GOLD_FIRST_TRADE;
+      totalGold += firstTradeGold;
+      reasons.push('First trade!');
+    }
     const today = new Date().toISOString().split('T')[0];
-    if (reward.last_daily !== today && creditedTrades > 0) { totalGold += GOLD_DAILY_TRADE; reasons.push('Daily bonus'); }
+    if (reward.last_daily !== today && creditedTrades > 0) {
+      dailyGold = GOLD_DAILY_TRADE;
+      totalGold += dailyGold;
+      reasons.push('Daily bonus');
+    }
     let nftGoldBoost = { eligible: false };
     try {
       nftGoldBoost = await getPlayerNftGoldBoost(req.player, { clearIfMissing: true });
@@ -10516,6 +10939,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       console.warn(`[claim-gold ${dex}] NFT gold boost skipped:`, e.message);
     }
     const boostedTotalGold = applyNftGoldBoostAmount(totalGold, nftGoldBoost, reasons);
+    const nftBoostGold = Math.max(0, Math.round(boostedTotalGold - totalGold));
 
     // All writes wrapped in a transaction so two concurrent /claim-gold
     // requests from the same player can't both read the same last_trade_id
@@ -10553,7 +10977,17 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         WHERE player_id = ? AND dex = ?
       `).run(maxId, newVolume, paidGold, creditedOpens, creditedOpens, creditedTrades, today, req.player.id, dex);
       if (paidGold > 0) {
-        db.addResources(req.player.id, paidGold, 0, 0);
+        db.addResources(req.player.id, paidGold, 0, 0, {
+          sourceType: 'trade_claim',
+          metadata: {
+            dex,
+            credited_trades: creditedTrades,
+            credited_opens: creditedOpens,
+            credited_volume_usd: newVolume,
+            pnl_usd: newPnl,
+            reasons,
+          },
+        });
         // Record the payout in gold_history so ProfileModal's trading-stats
         // timeline shows the same ledger as Pacifica. Reason must contain
         // "trade" / "profit" / "daily" / "deposit" / "volume" for the
@@ -10577,28 +11011,72 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       return {
         raced: false,
         paid: paidGold,
+        tournament_gold: tournamentGold,
         prosperity_bonus_pct: prosperityGold.prosperity_bonus_pct,
         prosperity_bonus: prosperityGold.bonus.gold,
       };
     });
 
     const txnResult = creditTxn();
+    const selfClaimTelemetryBase = {
+      lastTradeIdBefore,
+      lastTradeIdAfter: maxId,
+      rawTradeCount,
+      creditedTradeCount: creditedTrades,
+      creditedOpenCount: creditedOpens,
+      rawVolumeUsd,
+      creditedVolumeUsd: newVolume,
+      pnlUsd: newPnl,
+      volumeGold,
+      firstDepositGold,
+      firstTradeGold,
+      dailyGold,
+      nftBoostGold,
+      tournamentGold: txnResult.tournament_gold || 0,
+      altarBonusGold: txnResult.prosperity_bonus || 0,
+      totalGoldPaid: txnResult.paid || 0,
+      clampedTradeCount,
+      settlingTradeCount: Number(settlingTrades.n || 0),
+      metadata: {
+        reasons,
+        wallet_rows_available: hyperliquidWalletRowsAvailable || 0,
+        sane_min_notional: SANE_MIN_NOTIONAL,
+      },
+    };
     if (txnResult.raced) {
       console.log(`[claim-gold ${dex}] player=${req.player.name} -> RACED (parallel claim)`);
+      recordClaimTelemetry({
+        ...selfClaimTelemetryBase,
+        result: 'raced',
+        reason: 'Already claimed by parallel request',
+        totalGoldPaid: 0,
+      });
       return res.json({ gold: 0, reason: 'Already claimed by parallel request', dex });
     }
     if (txnResult.paid > 0) {
       console.log(`[claim-gold ${dex}] player=${req.player.name} -> PAID gold=${txnResult.paid} base_gold=${totalGold} nft_boosted_gold=${boostedTotalGold} new_volume=$${newVolume.toFixed(2)} pnl=$${newPnl.toFixed(2)} credited_trades=${creditedTrades} reasons="${reasons.join(' + ')}"`);
+      recordClaimTelemetry({
+        ...selfClaimTelemetryBase,
+        result: 'paid',
+        reason: reasons.join(' + ') || 'Trading reward',
+      });
       return res.json({
         gold: txnResult.paid,
         reason: reasons.join(' + ') || 'Trading reward',
         dex,
         nft_boost: nftGoldBoostPayload(nftGoldBoost),
+        tournament_gold: txnResult.tournament_gold || 0,
         altar_prosperity_bonus_pct: txnResult.prosperity_bonus_pct || 0,
         altar_prosperity_bonus: txnResult.prosperity_bonus || 0,
       });
     }
     console.log(`[claim-gold ${dex}] player=${req.player.name} -> ZERO PAID (had ${newTrades.length} raw trades, all clamped/below threshold)`);
+    recordClaimTelemetry({
+      ...selfClaimTelemetryBase,
+      result: 'zero_payout',
+      reason: newTrades.length ? 'Below reward threshold' : 'No new trades',
+      totalGoldPaid: 0,
+    });
     return res.json({
       gold: 0,
       reason: newTrades.length ? 'Below reward threshold' : 'No new trades',
@@ -10608,7 +11086,10 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   }
 
   // ── Pacifica branch ──
-  if (!wallet) return res.status(400).json({ error: 'wallet required — connect wallet in profile' });
+  if (!wallet) {
+    recordClaimTelemetry({ result: 'wallet_required', reason: 'wallet required' });
+    return res.status(400).json({ error: 'wallet required — connect wallet in profile' });
+  }
 
   try {
     // Get or create reward record. Agents are managed exclusively by the
@@ -10619,6 +11100,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet);
       reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     }
+    const pacLastTradeIdBefore = Number(reward.last_trade_id || 0);
     // Auto-link wallet to player account ONLY when going from FC placeholder
     // to real wallet — never accept body.wallet as an arbitrary override.
     if (isFcPlaceholder(req.player.wallet) && isValidWallet(wallet)) {
@@ -10637,8 +11119,21 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
 
     // Filter only new trades (after last_trade_id) from the merged set.
     const newTrades = allTrades.filter(t => t.history_id > reward.last_trade_id);
+    const pacRawVolumeUsd = newTrades.reduce((sum, t) => {
+      const volume = parseFloat(t.price || 0) * parseFloat(t.amount || 0);
+      return Number.isFinite(volume) ? sum + volume : sum;
+    }, 0);
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
       console.log(`[claim-gold pacifica] player=${req.player.name} -> NO NEW TRADES (api_total=${allTrades.length}, all <= last_trade_id=${reward.last_trade_id})`);
+      recordClaimTelemetry({
+        result: 'no_new_trades',
+        reason: 'No new trades',
+        lastTradeIdBefore: pacLastTradeIdBefore,
+        lastTradeIdAfter: pacLastTradeIdBefore,
+        rawTradeCount: newTrades.length,
+        rawVolumeUsd: pacRawVolumeUsd,
+        metadata: { api_total: allTrades.length, api_ms: apiMs },
+      });
       return res.json({ gold: 0, reason: 'No new trades' });
     }
     // Pacifica trade history is fill-level: one user order can appear as
@@ -10655,28 +11150,34 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let totalGold = 0;
     const reasons = [];
     let maxTradeId = reward.last_trade_id;
+    let volumeGold = 0;
 
     // Volume rewards
     for (const t of newTrades) {
       const volume = parseFloat(t.price || 0) * parseFloat(t.amount || 0);
-      totalGold += volumeGoldForDex('pacifica', volume);
+      const tradeGold = volumeGoldForDex('pacifica', volume);
+      volumeGold += tradeGold;
+      totalGold += tradeGold;
       if (t.history_id > maxTradeId) maxTradeId = t.history_id;
     }
 
     // PnL profit rewards — check realized PnL from close trades
     let closePnl = 0;
+    let netPnl = 0;
     for (const t of newTrades) {
       const side = (t.side || '').toLowerCase();
       if (side.includes('close')) {
         const pnl = parseFloat(t.realized_pnl || t.pnl || 0);
+        if (Number.isFinite(pnl)) netPnl += pnl;
         if (pnl > 0) closePnl += pnl;
       }
     }
     // Accumulate fractional profit in pool, award 100 gold per $10 crossed
     let pnlPool = (reward.pnl_gold_pool || 0) + closePnl;
+    let pnlGold = 0;
     if (pnlPool >= 10) {
       const chunks = Math.floor(pnlPool / 10);
-      const pnlGold = chunks * GOLD_PER_10_USD_PROFIT;
+      pnlGold = chunks * GOLD_PER_10_USD_PROFIT;
       totalGold += pnlGold;
       pnlPool -= chunks * 10;
       reasons.push(`+$${(chunks * 10).toFixed(0)} profit`);
@@ -10696,19 +11197,25 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     const alreadyPaidFirstDepositPac = priorBonusesPac.some(r => String(r.reason).includes('First deposit!'));
     const alreadyPaidFirstTradePac   = priorBonusesPac.some(r => String(r.reason).includes('First trade!'));
     const hasRealPacificaOpen = uniqueOpenTradeCount > 0 || reward.first_trade;
+    let firstDepositGold = 0;
+    let firstTradeGold = 0;
+    let dailyGold = 0;
     if (!reward.first_deposit && !alreadyPaidFirstDepositPac && hasRealPacificaOpen) {
-      totalGold += GOLD_FIRST_DEPOSIT;
+      firstDepositGold = GOLD_FIRST_DEPOSIT;
+      totalGold += firstDepositGold;
       reasons.push('First deposit!');
     }
     if (!reward.first_trade && !alreadyPaidFirstTradePac && uniqueOpenTradeCount > 0) {
-      totalGold += GOLD_FIRST_TRADE;
+      firstTradeGold = GOLD_FIRST_TRADE;
+      totalGold += firstTradeGold;
       reasons.push('First trade!');
     }
 
     // Daily bonus
     const today = new Date().toISOString().split('T')[0];
     if (reward.last_daily !== today && uniqueTradeCount > 0) {
-      totalGold += GOLD_DAILY_TRADE;
+      dailyGold = GOLD_DAILY_TRADE;
+      totalGold += dailyGold;
       reasons.push('Daily bonus');
     }
     let nftGoldBoost = { eligible: false };
@@ -10718,6 +11225,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       console.warn('[claim-gold pacifica] NFT gold boost skipped:', e.message);
     }
     const boostedTotalGold = applyNftGoldBoostAmount(totalGold, nftGoldBoost, reasons);
+    const nftBoostGold = Math.max(0, Math.round(boostedTotalGold - totalGold));
 
     // Atomic write: guard against two concurrent /claim-gold requests both
     // reading the same last_trade_id and crediting overlapping trades.
@@ -10751,7 +11259,17 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         WHERE player_id = ? AND dex = ?
       `).run(maxTradeId, newVolume, paidGold, uniqueOpenTradeCount, uniqueOpenTradeCount, uniqueTradeCount, today, pnlPool, req.player.id, dex);
       if (paidGold > 0) {
-        db.addResources(req.player.id, paidGold, 0, 0);
+        db.addResources(req.player.id, paidGold, 0, 0, {
+          sourceType: 'trade_claim',
+          metadata: {
+            dex,
+            unique_trades: uniqueTradeCount,
+            unique_opens: uniqueOpenTradeCount,
+            credited_volume_usd: newVolume,
+            pnl_usd: netPnl,
+            reasons,
+          },
+        });
         const reason = reasons.join(' + ') || 'Trading reward';
         db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, paidGold, reason);
       }
@@ -10760,40 +11278,79 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       // (only positive realized PnL counts) but leaderboards typically
       // want NET pnl — recompute the signed sum here.
       if (uniqueTradeCount > 0) {
-        let netPnl = 0;
+        let tournamentNetPnl = 0;
         for (const t of newTrades) {
           const side = (t.side || '').toLowerCase();
           if (side.includes('close')) {
             const v = parseFloat(t.realized_pnl || t.pnl || 0);
-            if (Number.isFinite(v)) netPnl += v;
+            if (Number.isFinite(v)) tournamentNetPnl += v;
           }
         }
-        db.recordTournamentTrade(req.player.id, newVolume, netPnl, uniqueTradeCount);
+        db.recordTournamentTrade(req.player.id, newVolume, tournamentNetPnl, uniqueTradeCount);
       }
       return {
         raced: false,
         paid: paidGold,
+        tournament_gold: tournamentGold,
         prosperity_bonus_pct: prosperityGold.prosperity_bonus_pct,
         prosperity_bonus: prosperityGold.bonus.gold,
       };
     });
     const txnResPac = creditTxnPac();
+    const pacClaimTelemetryBase = {
+      lastTradeIdBefore: pacLastTradeIdBefore,
+      lastTradeIdAfter: maxTradeId,
+      rawTradeCount: newTrades.length,
+      creditedTradeCount: uniqueTradeCount,
+      creditedOpenCount: uniqueOpenTradeCount,
+      rawVolumeUsd: pacRawVolumeUsd,
+      creditedVolumeUsd: newVolume,
+      pnlUsd: netPnl,
+      volumeGold,
+      firstDepositGold,
+      firstTradeGold,
+      dailyGold,
+      pnlGold,
+      nftBoostGold,
+      tournamentGold: txnResPac.tournament_gold || 0,
+      altarBonusGold: txnResPac.prosperity_bonus || 0,
+      totalGoldPaid: txnResPac.paid || 0,
+      metadata: {
+        reasons,
+        api_total: allTrades.length,
+        api_ms: apiMs,
+        close_pnl_positive_usd: closePnl,
+      },
+    };
     if (txnResPac.raced) {
       console.log(`[claim-gold pacifica] player=${req.player.name} -> RACED (parallel claim)`);
+      recordClaimTelemetry({
+        ...pacClaimTelemetryBase,
+        result: 'raced',
+        reason: 'Already claimed by parallel request',
+        totalGoldPaid: 0,
+      });
       return res.json({ gold: 0, reason: 'Already claimed by parallel request' });
     }
     console.log(`[claim-gold pacifica] player=${req.player.name} -> ${txnResPac.paid > 0 ? 'PAID' : 'ZERO'} gold=${txnResPac.paid} base_gold=${totalGold} nft_boosted_gold=${boostedTotalGold} new_volume=$${newVolume.toFixed(2)} unique_trades=${uniqueTradeCount} unique_opens=${uniqueOpenTradeCount} reasons="${reasons.join(' + ')}" maxId=${maxTradeId}`);
+    recordClaimTelemetry({
+      ...pacClaimTelemetryBase,
+      result: txnResPac.paid > 0 ? 'paid' : 'zero_payout',
+      reason: reasons.join(' + ') || 'No new rewards',
+    });
 
     res.json({
       gold: Math.floor(txnResPac.paid),
       reason: reasons.join(' + ') || 'No new rewards',
       total_gold_earned: (reward.total_gold || 0) + txnResPac.paid,
       nft_boost: nftGoldBoostPayload(nftGoldBoost),
+      tournament_gold: txnResPac.tournament_gold || 0,
       altar_prosperity_bonus_pct: txnResPac.prosperity_bonus_pct || 0,
       altar_prosperity_bonus: txnResPac.prosperity_bonus || 0,
     });
   } catch (e) {
     console.error(`[claim-gold pacifica] player=${req.player.name} ERROR:`, e.message, e.stack);
+    recordClaimTelemetry({ result: 'error', reason: e.message, metadata: { phase: 'pacifica_claim' } });
     res.status(500).json({ error: 'Failed to claim rewards' });
   }
 });
@@ -10986,7 +11543,25 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
   const task = tasks.getTaskById(id);
-  if (!task || !task.active) return res.status(404).json({ error: 'Task not active' });
+  const recordTaskTelemetry = (resultName, extra = {}) => {
+    db.recordTaskClaimEvent({
+      playerId: req.player.id,
+      taskId: id,
+      taskType: task?.type || null,
+      taskTitle: task?.title || null,
+      result: resultName,
+      rewardGold: extra.rewardGold ?? extra.reward_gold ?? task?.reward_gold ?? 0,
+      rewardWood: extra.rewardWood ?? extra.reward_wood ?? task?.reward_wood ?? 0,
+      rewardOre: extra.rewardOre ?? extra.reward_ore ?? task?.reward_ore ?? 0,
+      repeatable: Boolean(task?.repeatable),
+      cooldownHours: task?.cooldown_hours || 0,
+      ...extra,
+    });
+  };
+  if (!task || !task.active) {
+    recordTaskTelemetry('not_active', { errorReason: 'Task not active' });
+    return res.status(404).json({ error: 'Task not active' });
+  }
 
   const existing = tasks.getPlayerTask(req.player.id, id);
   if (existing && !existing.claimed_at) {
@@ -11031,7 +11606,10 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     pt = tasks.getPlayerTask(req.player.id, id);
   }
   const claimCheck = tasks.canClaim(pt, task);
-  if (!claimCheck.ok) return res.status(400).json({ error: claimCheck.reason });
+  if (!claimCheck.ok) {
+    recordTaskTelemetry('blocked', { errorReason: claimCheck.reason });
+    return res.status(400).json({ error: claimCheck.reason });
+  }
 
   const snap = tasks.parseParams(pt.snapshot);
   const result = await tasks.verifyTask(req.player, task, snap);
@@ -11045,6 +11623,11 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
 
   if (!result.completed) {
     console.log(`[task ${id} claim] player=${req.player.name} -> NOT_COMPLETED progress=${result.progress_value}/${result.target_value} breakdown=${JSON.stringify(result.breakdown||{})}`);
+    recordTaskTelemetry('not_completed', {
+      progressValue: result.progress_value,
+      targetValue: result.target_value,
+      metadata: { breakdown: result.breakdown || {} },
+    });
     return res.json({ ok: false, completed: false, progress_value: result.progress_value, target_value: result.target_value, breakdown: result.breakdown });
   }
   const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task) : null;
@@ -11071,7 +11654,17 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       wood: task.reward_wood || 0,
       ore: task.reward_ore || 0,
     });
-    db.addResources(req.player.id, reward.gold, reward.wood, reward.ore);
+    db.addResources(req.player.id, reward.gold, reward.wood, reward.ore, {
+      sourceType: 'task_claim',
+      relatedTaskId: id,
+      metadata: {
+        task_title: task.title,
+        task_type: task.type,
+        repeatable: Boolean(task.repeatable),
+        cooldown_hours: Number(task.cooldown_hours) || 0,
+        prosperity_bonus_pct: reward.prosperity_bonus_pct || 0,
+      },
+    });
     if (reward.gold > 0) {
       db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)')
         .run(req.player.id, reward.gold, `Quest: ${task.title}`);
@@ -11108,10 +11701,28 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   const payoutRes = payout();
   if (payoutRes.raced) {
     console.log(`[task ${id} claim] player=${req.player.name} -> RACED (parallel claim)`);
+    recordTaskTelemetry('raced', {
+      progressValue: result.progress_value,
+      targetValue: result.target_value,
+      errorReason: 'Already claimed by parallel request',
+    });
     return res.status(409).json({ error: 'Already claimed by parallel request' });
   }
   const paidReward = payoutRes.reward || { gold: task.reward_gold || 0, wood: task.reward_wood || 0, ore: task.reward_ore || 0 };
   console.log(`[task ${id} claim] player=${req.player.name} -> PAID gold=${paidReward.gold||0} wood=${paidReward.wood||0} ore=${paidReward.ore||0} prosperity=${paidReward.prosperity_bonus_pct||0}% (${task.title})`);
+  recordTaskTelemetry('paid', {
+    progressValue: result.progress_value,
+    targetValue: result.target_value,
+    rewardGold: paidReward.gold || 0,
+    rewardWood: paidReward.wood || 0,
+    rewardOre: paidReward.ore || 0,
+    metadata: {
+      auto_restarted: Boolean(task.repeatable && (Number(task.cooldown_hours) || 0) <= 0),
+      reward_base: paidReward.base || { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore },
+      altar_prosperity_bonus_pct: paidReward.prosperity_bonus_pct || 0,
+      altar_prosperity_bonus: paidReward.bonus || { gold: 0, wood: 0, ore: 0 },
+    },
+  });
 
   try {
     logEconomy('Task claimed', { player: req.player.name, task: task.title, gold: paidReward.gold, wood: paidReward.wood, ore: paidReward.ore, altar_prosperity_bonus_pct: paidReward.prosperity_bonus_pct || 0 });
@@ -12362,7 +12973,10 @@ router.post('/admin/add-resources-all', adminAuth, (req, res) => {
   const players = db.db.prepare('SELECT id FROM players').all();
   let updated = 0;
   for (const p of players) {
-    db.addResources(p.id, gold, wood, ore);
+    db.addResources(p.id, gold, wood, ore, {
+      sourceType: 'admin_resource_add_all',
+      metadata: { route: '/admin/add-resources-all' },
+    });
     updated++;
   }
   res.json({ success: true, players_updated: updated, added: { gold, wood, ore } });
@@ -12376,7 +12990,10 @@ router.post('/admin/players/:name/add-resources', adminAuth, (req, res) => {
   if (typeof gold !== 'number' || typeof wood !== 'number' || typeof ore !== 'number') {
     return res.status(400).json({ error: 'gold, wood, ore must be numbers' });
   }
-  db.addResources(player.id, gold, wood, ore);
+  db.addResources(player.id, gold, wood, ore, {
+    sourceType: 'admin_player_resource_add',
+    metadata: { route: '/admin/players/:name/add-resources', player_name: req.params.name },
+  });
   res.json({ success: true, resources: db.getResources(player.id) });
 });
 
@@ -12850,6 +13467,653 @@ function buildDeviceStats() {
   }
 }
 
+function adminSafeGet(sql, params = [], fallback = {}) {
+  try {
+    return db.db.prepare(sql).get(...params) || fallback;
+  } catch (e) {
+    return { ...fallback, error: e.message };
+  }
+}
+
+function adminSafeAll(sql, params = []) {
+  try {
+    return db.db.prepare(sql).all(...params);
+  } catch {
+    return [];
+  }
+}
+
+function adminNum(value, digits = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const factor = 10 ** Math.max(0, digits);
+  return Math.round(n * factor) / factor;
+}
+
+function adminPct(numerator, denominator, digits = 1) {
+  const den = Number(denominator) || 0;
+  if (den <= 0) return 0;
+  return adminNum((Number(numerator) || 0) * 100 / den, digits);
+}
+
+function adminFunnelStep(key, label, players, previousPlayers, totalPlayers) {
+  const value = Math.max(0, Number(players) || 0);
+  return {
+    key,
+    label,
+    players: value,
+    from_previous_pct: adminPct(value, previousPlayers),
+    from_total_pct: adminPct(value, totalPlayers),
+  };
+}
+
+function normalizeAdminCombatRow(row) {
+  const attacks = Number(row?.attacks || 0);
+  const accepted = Number(row?.accepted || 0);
+  const acceptedVictories = Number(row?.accepted_victories || 0);
+  return {
+    attacks,
+    attackers: Number(row?.attackers || 0),
+    defenders: Number(row?.defenders || 0),
+    accepted,
+    rejected: Number(row?.rejected || 0),
+    claimed_victories: Number(row?.claimed_victories || 0),
+    accepted_victories: acceptedVictories,
+    acceptance_rate_pct: adminPct(accepted, attacks),
+    accepted_win_rate_pct: adminPct(acceptedVictories, attacks),
+    avg_duration_sec: adminNum(row?.avg_duration_sec || 0),
+    avg_loot_gold: adminNum(row?.avg_loot_gold || 0),
+    avg_loot_wood: adminNum(row?.avg_loot_wood || 0),
+    avg_loot_ore: adminNum(row?.avg_loot_ore || 0),
+    avg_th_hp_remaining_pct: adminNum(row?.avg_th_hp_remaining_pct || 0),
+    avg_th_damage_pct: adminNum(row?.avg_th_damage_pct || 0),
+    avg_buildings_destroyed: adminNum(row?.avg_buildings_destroyed || 0, 2),
+  };
+}
+
+function buildAdminCombatStats() {
+  const battleAggSql = `
+    SELECT
+      COUNT(*) AS attacks,
+      COUNT(DISTINCT attacker_id) AS attackers,
+      COUNT(DISTINCT defender_id) AS defenders,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(verified_result, '')) IN ('accepted', 'victory') THEN 1 ELSE 0 END), 0) AS accepted,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(verified_result, '')) = 'rejected' THEN 1 ELSE 0 END), 0) AS rejected,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(claimed_result, '')) = 'victory' THEN 1 ELSE 0 END), 0) AS claimed_victories,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(claimed_result, '')) = 'victory'
+        AND lower(COALESCE(verified_result, '')) IN ('accepted', 'victory') THEN 1 ELSE 0 END), 0) AS accepted_victories,
+      ROUND(COALESCE(AVG(duration_sec), 0), 1) AS avg_duration_sec,
+      ROUND(COALESCE(AVG(loot_gold), 0), 1) AS avg_loot_gold,
+      ROUND(COALESCE(AVG(loot_wood), 0), 1) AS avg_loot_wood,
+      ROUND(COALESCE(AVG(loot_ore), 0), 1) AS avg_loot_ore,
+      ROUND(COALESCE(AVG(CASE WHEN sim_th_hp_pct IS NULL THEN NULL ELSE sim_th_hp_pct * 100 END), 0), 1) AS avg_th_hp_remaining_pct,
+      ROUND(COALESCE(AVG(CASE WHEN sim_th_hp_pct IS NULL THEN NULL ELSE (1.0 - sim_th_hp_pct) * 100 END), 0), 1) AS avg_th_damage_pct,
+      ROUND(COALESCE(AVG(sim_buildings_destroyed), 0), 2) AS avg_buildings_destroyed
+    FROM battle_replays
+    WHERE created_at > datetime('now', ?)
+  `;
+  const windows = [
+    { key: '24h', label: 'Last 24h', modifier: '-24 hours' },
+    { key: '7d', label: 'Last 7d', modifier: '-7 days' },
+    { key: '30d', label: 'Last 30d', modifier: '-30 days' },
+  ].map((window) => ({
+    ...window,
+    ...normalizeAdminCombatRow(adminSafeGet(battleAggSql, [window.modifier])),
+  }));
+
+  const thGapRows = adminSafeAll(`
+    WITH player_th AS (
+      SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
+      FROM players p
+      LEFT JOIN buildings b ON b.player_id = p.id
+      GROUP BY p.id
+    ),
+    replay_th AS (
+      SELECT r.*, COALESCE(a.th_level, 1) AS attacker_th, COALESCE(d.th_level, 1) AS defender_th
+      FROM battle_replays r
+      LEFT JOIN player_th a ON a.id = r.attacker_id
+      LEFT JOIN player_th d ON d.id = r.defender_id
+      WHERE r.created_at > datetime('now', '-30 days')
+    )
+    SELECT
+      CASE
+        WHEN attacker_th < defender_th THEN 'lower_vs_higher'
+        WHEN attacker_th > defender_th THEN 'higher_vs_lower'
+        ELSE 'same_th'
+      END AS bucket,
+      COUNT(*) AS attacks,
+      COUNT(DISTINCT attacker_id) AS attackers,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(verified_result, '')) IN ('accepted', 'victory') THEN 1 ELSE 0 END), 0) AS accepted,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(claimed_result, '')) = 'victory'
+        AND lower(COALESCE(verified_result, '')) IN ('accepted', 'victory') THEN 1 ELSE 0 END), 0) AS accepted_victories,
+      ROUND(COALESCE(AVG(CASE WHEN sim_th_hp_pct IS NULL THEN NULL ELSE (1.0 - sim_th_hp_pct) * 100 END), 0), 1) AS avg_th_damage_pct,
+      ROUND(COALESCE(AVG(sim_buildings_destroyed), 0), 2) AS avg_buildings_destroyed
+    FROM replay_th
+    GROUP BY bucket
+    ORDER BY CASE bucket WHEN 'lower_vs_higher' THEN 1 WHEN 'same_th' THEN 2 ELSE 3 END
+  `).map((row) => ({
+    bucket: row.bucket,
+    ...normalizeAdminCombatRow(row),
+  }));
+
+  const attackerThRows = adminSafeAll(`
+    WITH player_th AS (
+      SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
+      FROM players p
+      LEFT JOIN buildings b ON b.player_id = p.id
+      GROUP BY p.id
+    )
+    SELECT
+      COALESCE(a.th_level, 1) AS attacker_th,
+      COUNT(*) AS attacks,
+      COUNT(DISTINCT r.attacker_id) AS attackers,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory') THEN 1 ELSE 0 END), 0) AS accepted,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(r.claimed_result, '')) = 'victory'
+        AND lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory') THEN 1 ELSE 0 END), 0) AS accepted_victories,
+      ROUND(COALESCE(AVG(CASE WHEN r.sim_th_hp_pct IS NULL THEN NULL ELSE (1.0 - r.sim_th_hp_pct) * 100 END), 0), 1) AS avg_th_damage_pct
+    FROM battle_replays r
+    LEFT JOIN player_th a ON a.id = r.attacker_id
+    WHERE r.created_at > datetime('now', '-30 days')
+    GROUP BY attacker_th
+    ORDER BY attacker_th
+  `).map((row) => ({
+    attacker_th: Number(row.attacker_th || 1),
+    ...normalizeAdminCombatRow(row),
+  }));
+
+  const topAttackers = adminSafeAll(`
+    WITH player_th AS (
+      SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
+      FROM players p
+      LEFT JOIN buildings b ON b.player_id = p.id
+      GROUP BY p.id
+    )
+    SELECT
+      r.attacker_id,
+      COALESCE(p.name, r.attacker_id) AS name,
+      COALESCE(p.dex, 'unknown') AS dex,
+      COALESCE(t.th_level, 1) AS th_level,
+      COUNT(*) AS attacks,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory') THEN 1 ELSE 0 END), 0) AS accepted,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(r.claimed_result, '')) = 'victory'
+        AND lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory') THEN 1 ELSE 0 END), 0) AS accepted_victories,
+      ROUND(COALESCE(AVG(r.loot_gold), 0), 1) AS avg_loot_gold
+    FROM battle_replays r
+    LEFT JOIN players p ON p.id = r.attacker_id
+    LEFT JOIN player_th t ON t.id = r.attacker_id
+    WHERE r.created_at > datetime('now', '-30 days')
+    GROUP BY r.attacker_id
+    ORDER BY attacks DESC, accepted_victories DESC
+    LIMIT 12
+  `).map((row) => ({
+    attacker_id: row.attacker_id,
+    name: row.name,
+    dex: row.dex,
+    th_level: Number(row.th_level || 1),
+    attacks: Number(row.attacks || 0),
+    accepted: Number(row.accepted || 0),
+    accepted_victories: Number(row.accepted_victories || 0),
+    accepted_win_rate_pct: adminPct(row.accepted_victories, row.attacks),
+    avg_loot_gold: adminNum(row.avg_loot_gold || 0),
+  }));
+
+  return {
+    note: 'TH bucket slices use current player Town Hall levels, not historical TH at battle time.',
+    windows,
+    th_gap_30d: thGapRows,
+    attacker_th_30d: attackerThRows,
+    top_attackers_30d: topAttackers,
+  };
+}
+
+function buildAdminGrowthFunnelStats({ playerCount, activeQ }) {
+  const totalPlayers = Number(playerCount || 0);
+  const active24 = Number(activeQ?.active_24h || 0);
+  const dexSelected = Number(adminSafeGet(`
+    SELECT COUNT(*) AS n
+    FROM players
+    WHERE dex IS NOT NULL AND LENGTH(TRIM(dex)) > 0
+  `).n || 0);
+  const futuresModePicked = Number(adminSafeGet(`
+    SELECT COUNT(*) AS n
+    FROM players
+    WHERE futures_mode IS NOT NULL AND LENGTH(TRIM(futures_mode)) > 0
+  `).n || 0);
+  const trading = adminSafeGet(`
+    SELECT
+      COUNT(DISTINCT player_id) AS reward_profiles,
+      COUNT(DISTINCT CASE WHEN first_deposit > 0 THEN player_id END) AS first_deposit_players,
+      COUNT(DISTINCT CASE WHEN first_trade > 0 OR total_volume > 0 THEN player_id END) AS first_trade_players,
+      COUNT(DISTINCT CASE WHEN total_volume > 0 THEN player_id END) AS volume_players,
+      COALESCE(SUM(total_volume), 0) AS total_volume,
+      COALESCE(SUM(total_gold), 0) AS total_gold
+    FROM trading_rewards
+  `);
+  const tradeGold = adminSafeGet(`
+    SELECT
+      COUNT(*) AS claims,
+      COUNT(DISTINCT player_id) AS claimers,
+      COALESCE(SUM(amount), 0) AS gold
+    FROM gold_history
+    WHERE lower(COALESCE(reason, '')) LIKE '%trade%'
+       OR lower(COALESCE(reason, '')) LIKE '%daily%'
+       OR lower(COALESCE(reason, '')) LIKE '%deposit%'
+       OR lower(COALESCE(reason, '')) LIKE '%profit%'
+       OR lower(COALESCE(reason, '')) LIKE '%volume%'
+  `);
+  const taskStats = adminSafeGet(`
+    SELECT
+      COUNT(*) AS started,
+      COUNT(DISTINCT player_id) AS starters,
+      COALESCE(SUM(CASE WHEN claimed_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS claims,
+      COUNT(DISTINCT CASE WHEN claimed_at IS NOT NULL THEN player_id END) AS claimers
+    FROM player_tasks
+  `);
+  const shop = adminSafeGet(`
+    SELECT
+      COUNT(*) AS purchases,
+      COUNT(DISTINCT player_id) AS buyers,
+      ROUND(COALESCE(SUM(CAST(usd_price_e6 AS REAL)), 0) / 1000000.0, 2) AS revenue_usd,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(token, '')) IN ('cop', 'clash', 'skr') THEN 1 ELSE 0 END), 0) AS project_token_purchases,
+      COUNT(DISTINCT CASE WHEN lower(COALESCE(token, '')) IN ('cop', 'clash', 'skr') THEN player_id END) AS project_token_buyers
+    FROM utility_purchases
+  `);
+  const marketplace = adminSafeGet(`
+    SELECT
+      COUNT(*) AS orders,
+      COUNT(DISTINCT buyer_player_id) AS buyers,
+      COUNT(DISTINCT seller_player_id) AS sellers,
+      COALESCE(SUM(CASE WHEN payment_verified_at IS NOT NULL
+        OR status IN ('paid', 'delivering', 'delivered', 'complete', 'completed') THEN 1 ELSE 0 END), 0) AS paid_orders,
+      ROUND(COALESCE(SUM(CASE WHEN payment_verified_at IS NOT NULL
+        OR status IN ('paid', 'delivering', 'delivered', 'complete', 'completed')
+        THEN CAST(price_usdc_units AS REAL) ELSE 0 END), 0) / 1000000.0, 2) AS paid_usdc
+    FROM custodial_marketplace_orders
+  `);
+
+  const rawSteps = [
+    ['total_players', 'Total players', totalPlayers],
+    ['active_24h', 'Active 24h', active24],
+    ['dex_selected', 'DEX selected', dexSelected],
+    ['futures_mode_picked', 'Futures UI picked', futuresModePicked],
+    ['reward_profile', 'Trading reward profile', Number(trading.reward_profiles || 0)],
+    ['first_deposit', 'First deposit rewarded', Number(trading.first_deposit_players || 0)],
+    ['first_trade', 'First trade / volume', Number(trading.first_trade_players || 0)],
+    ['trade_gold_claimer', 'Claimed trade gold', Number(tradeGold.claimers || 0)],
+    ['task_claimer', 'Claimed a task', Number(taskStats.claimers || 0)],
+    ['shop_buyer', 'Shop buyer', Number(shop.buyers || 0)],
+    ['project_token_buyer', 'Paid with project token', Number(shop.project_token_buyers || 0)],
+    ['marketplace_buyer', 'Marketplace buyer', Number(marketplace.buyers || 0)],
+  ];
+  const steps = rawSteps.map(([key, label, players], index) => (
+    adminFunnelStep(key, label, players, index > 0 ? rawSteps[index - 1][2] : players, totalPlayers)
+  ));
+
+  const byDex = adminSafeAll(`
+    WITH trading AS (
+      SELECT player_id,
+             SUM(total_volume) AS total_volume,
+             SUM(total_gold) AS total_gold,
+             MAX(first_deposit) AS first_deposit,
+             MAX(CASE WHEN first_trade > 0 OR total_volume > 0 THEN 1 ELSE 0 END) AS first_trade
+      FROM trading_rewards
+      GROUP BY player_id
+    ),
+    purchases AS (
+      SELECT player_id,
+             COUNT(*) AS purchases,
+             MAX(CASE WHEN lower(COALESCE(token, '')) IN ('cop', 'clash', 'skr') THEN 1 ELSE 0 END) AS project_token_purchase
+      FROM utility_purchases
+      GROUP BY player_id
+    )
+    SELECT
+      COALESCE(NULLIF(p.dex, ''), 'unknown') AS dex,
+      COUNT(*) AS players,
+      COALESCE(SUM(CASE WHEN p.last_seen_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS active_24h,
+      COALESCE(SUM(CASE WHEN t.player_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS reward_profiles,
+      COALESCE(SUM(CASE WHEN t.first_deposit > 0 THEN 1 ELSE 0 END), 0) AS first_deposit_players,
+      COALESCE(SUM(CASE WHEN t.first_trade > 0 THEN 1 ELSE 0 END), 0) AS first_trade_players,
+      ROUND(COALESCE(SUM(t.total_volume), 0), 2) AS total_volume,
+      COALESCE(SUM(t.total_gold), 0) AS total_gold,
+      COALESCE(SUM(CASE WHEN purchases.purchases > 0 THEN 1 ELSE 0 END), 0) AS shop_buyers,
+      COALESCE(SUM(CASE WHEN purchases.project_token_purchase > 0 THEN 1 ELSE 0 END), 0) AS project_token_buyers
+    FROM players p
+    LEFT JOIN trading t ON t.player_id = p.id
+    LEFT JOIN purchases ON purchases.player_id = p.id
+    GROUP BY dex
+    ORDER BY players DESC, dex ASC
+  `).map((row) => ({
+    dex: row.dex,
+    players: Number(row.players || 0),
+    active_24h: Number(row.active_24h || 0),
+    reward_profiles: Number(row.reward_profiles || 0),
+    first_deposit_players: Number(row.first_deposit_players || 0),
+    first_trade_players: Number(row.first_trade_players || 0),
+    total_volume: adminNum(row.total_volume || 0, 2),
+    total_gold: Number(row.total_gold || 0),
+    shop_buyers: Number(row.shop_buyers || 0),
+    project_token_buyers: Number(row.project_token_buyers || 0),
+  }));
+
+  const monetizationWindows = [
+    { key: '24h', label: 'Last 24h', modifier: '-24 hours' },
+    { key: '7d', label: 'Last 7d', modifier: '-7 days' },
+    { key: '30d', label: 'Last 30d', modifier: '-30 days' },
+  ].map((window) => {
+    const row = adminSafeGet(`
+      SELECT
+        COUNT(*) AS purchases,
+        COUNT(DISTINCT player_id) AS buyers,
+        ROUND(COALESCE(SUM(CAST(usd_price_e6 AS REAL)), 0) / 1000000.0, 2) AS revenue_usd,
+        COALESCE(SUM(CASE WHEN lower(COALESCE(token, '')) IN ('cop', 'clash', 'skr') THEN 1 ELSE 0 END), 0) AS project_token_purchases,
+        COUNT(DISTINCT CASE WHEN lower(COALESCE(token, '')) IN ('cop', 'clash', 'skr') THEN player_id END) AS project_token_buyers
+      FROM utility_purchases
+      WHERE created_at > datetime('now', ?)
+    `, [window.modifier]);
+    return {
+      ...window,
+      purchases: Number(row.purchases || 0),
+      buyers: Number(row.buyers || 0),
+      revenue_usd: adminNum(row.revenue_usd || 0, 2),
+      project_token_purchases: Number(row.project_token_purchases || 0),
+      project_token_buyers: Number(row.project_token_buyers || 0),
+    };
+  });
+
+  const topSkus30d = adminSafeAll(`
+    SELECT utility AS sku,
+           COUNT(*) AS purchases,
+           COUNT(DISTINCT player_id) AS buyers,
+           ROUND(COALESCE(SUM(CAST(usd_price_e6 AS REAL)), 0) / 1000000.0, 2) AS revenue_usd
+    FROM utility_purchases
+    WHERE created_at > datetime('now', '-30 days')
+    GROUP BY utility
+    ORDER BY purchases DESC, revenue_usd DESC
+    LIMIT 10
+  `).map((row) => ({
+    sku: row.sku,
+    purchases: Number(row.purchases || 0),
+    buyers: Number(row.buyers || 0),
+    revenue_usd: adminNum(row.revenue_usd || 0, 2),
+  }));
+
+  return {
+    note: 'Project token payments are detected from utility_purchases.token values cop/clash/skr.',
+    steps,
+    trading: {
+      reward_profiles: Number(trading.reward_profiles || 0),
+      first_deposit_players: Number(trading.first_deposit_players || 0),
+      first_trade_players: Number(trading.first_trade_players || 0),
+      total_volume: adminNum(trading.total_volume || 0, 2),
+      total_gold: Number(trading.total_gold || 0),
+      trade_gold_claims: Number(tradeGold.claims || 0),
+      trade_gold_claimers: Number(tradeGold.claimers || 0),
+      trade_gold_paid: Number(tradeGold.gold || 0),
+    },
+    tasks: {
+      started: Number(taskStats.started || 0),
+      starters: Number(taskStats.starters || 0),
+      claims: Number(taskStats.claims || 0),
+      claimers: Number(taskStats.claimers || 0),
+    },
+    shop: {
+      purchases: Number(shop.purchases || 0),
+      buyers: Number(shop.buyers || 0),
+      revenue_usd: adminNum(shop.revenue_usd || 0, 2),
+      project_token_purchases: Number(shop.project_token_purchases || 0),
+      project_token_buyers: Number(shop.project_token_buyers || 0),
+    },
+    marketplace: {
+      orders: Number(marketplace.orders || 0),
+      buyers: Number(marketplace.buyers || 0),
+      sellers: Number(marketplace.sellers || 0),
+      paid_orders: Number(marketplace.paid_orders || 0),
+      paid_usdc: adminNum(marketplace.paid_usdc || 0, 2),
+    },
+    by_dex: byDex,
+    monetization_windows: monetizationWindows,
+    top_skus_30d: topSkus30d,
+  };
+}
+
+function buildAdminTelemetryStats() {
+  const windowRows = [
+    { key: '24h', label: 'Last 24h', modifier: '-24 hours' },
+    { key: '7d', label: 'Last 7d', modifier: '-7 days' },
+    { key: '30d', label: 'Last 30d', modifier: '-30 days' },
+  ].map((window) => {
+    const trade = adminSafeGet(`
+      SELECT
+        COUNT(*) AS events,
+        COUNT(DISTINCT player_id) AS players,
+        COALESCE(SUM(CASE WHEN result = 'paid' THEN 1 ELSE 0 END), 0) AS paid_events,
+        COALESCE(SUM(total_gold_paid), 0) AS gold_paid,
+        ROUND(COALESCE(SUM(credited_volume_usd), 0), 2) AS volume_usd
+      FROM trade_claim_results
+      WHERE created_at > datetime('now', ?)
+    `, [window.modifier]);
+    const shop = adminSafeGet(`
+      SELECT
+        COUNT(*) AS events,
+        COUNT(DISTINCT player_id) AS players,
+        COALESCE(SUM(CASE WHEN event_type LIKE '%succeeded' THEN 1 ELSE 0 END), 0) AS succeeded,
+        COALESCE(SUM(CASE WHEN event_type LIKE '%failed' THEN 1 ELSE 0 END), 0) AS failed
+      FROM shop_funnel_events
+      WHERE created_at > datetime('now', ?)
+    `, [window.modifier]);
+    const resources = adminSafeGet(`
+      SELECT
+        COUNT(*) AS events,
+        COUNT(DISTINCT player_id) AS players,
+        COALESCE(SUM(gold_delta), 0) AS gold_delta,
+        COALESCE(SUM(wood_delta), 0) AS wood_delta,
+        COALESCE(SUM(ore_delta), 0) AS ore_delta,
+        COALESCE(SUM(lost_gold_to_cap), 0) AS lost_gold_to_cap
+      FROM resource_delta_events
+      WHERE created_at > datetime('now', ?)
+    `, [window.modifier]);
+    const task = adminSafeGet(`
+      SELECT
+        COUNT(*) AS events,
+        COUNT(DISTINCT player_id) AS players,
+        COALESCE(SUM(CASE WHEN result = 'paid' THEN 1 ELSE 0 END), 0) AS paid_events,
+        COALESCE(SUM(reward_gold), 0) AS reward_gold,
+        COALESCE(SUM(reward_wood), 0) AS reward_wood,
+        COALESCE(SUM(reward_ore), 0) AS reward_ore
+      FROM task_claim_events
+      WHERE created_at > datetime('now', ?)
+    `, [window.modifier]);
+    return {
+      ...window,
+      trade_claim_events: Number(trade.events || 0),
+      trade_claim_players: Number(trade.players || 0),
+      trade_paid_events: Number(trade.paid_events || 0),
+      trade_gold_paid: Number(trade.gold_paid || 0),
+      trade_volume_usd: adminNum(trade.volume_usd || 0, 2),
+      shop_events: Number(shop.events || 0),
+      shop_players: Number(shop.players || 0),
+      shop_succeeded: Number(shop.succeeded || 0),
+      shop_failed: Number(shop.failed || 0),
+      resource_events: Number(resources.events || 0),
+      resource_players: Number(resources.players || 0),
+      resource_gold_delta: Number(resources.gold_delta || 0),
+      resource_wood_delta: Number(resources.wood_delta || 0),
+      resource_ore_delta: Number(resources.ore_delta || 0),
+      resource_lost_gold_to_cap: Number(resources.lost_gold_to_cap || 0),
+      task_events: Number(task.events || 0),
+      task_players: Number(task.players || 0),
+      task_paid_events: Number(task.paid_events || 0),
+      task_reward_gold: Number(task.reward_gold || 0),
+      task_reward_wood: Number(task.reward_wood || 0),
+      task_reward_ore: Number(task.reward_ore || 0),
+    };
+  });
+
+  const tradeClaimResults7d = adminSafeAll(`
+    SELECT
+      COALESCE(result, 'unknown') AS result,
+      COUNT(*) AS events,
+      COUNT(DISTINCT player_id) AS players,
+      COALESCE(SUM(total_gold_paid), 0) AS gold_paid,
+      ROUND(COALESCE(SUM(credited_volume_usd), 0), 2) AS volume_usd,
+      ROUND(COALESCE(AVG(claim_latency_ms), 0), 1) AS avg_latency_ms,
+      COALESCE(SUM(settling_trade_count), 0) AS settling_trades
+    FROM trade_claim_results
+    WHERE created_at > datetime('now', '-7 days')
+    GROUP BY result
+    ORDER BY events DESC, result ASC
+  `).map((row) => ({
+    result: row.result,
+    events: Number(row.events || 0),
+    players: Number(row.players || 0),
+    gold_paid: Number(row.gold_paid || 0),
+    volume_usd: adminNum(row.volume_usd || 0, 2),
+    avg_latency_ms: adminNum(row.avg_latency_ms || 0),
+    settling_trades: Number(row.settling_trades || 0),
+  }));
+
+  const tradeClaimDex7d = adminSafeAll(`
+    SELECT
+      COALESCE(dex, 'unknown') AS dex,
+      COUNT(*) AS events,
+      COUNT(DISTINCT player_id) AS players,
+      COALESCE(SUM(CASE WHEN result = 'paid' THEN 1 ELSE 0 END), 0) AS paid_events,
+      COALESCE(SUM(total_gold_paid), 0) AS gold_paid,
+      ROUND(COALESCE(SUM(credited_volume_usd), 0), 2) AS volume_usd,
+      ROUND(COALESCE(AVG(claim_latency_ms), 0), 1) AS avg_latency_ms
+    FROM trade_claim_results
+    WHERE created_at > datetime('now', '-7 days')
+    GROUP BY dex
+    ORDER BY events DESC, gold_paid DESC
+  `).map((row) => ({
+    dex: row.dex,
+    events: Number(row.events || 0),
+    players: Number(row.players || 0),
+    paid_events: Number(row.paid_events || 0),
+    paid_rate_pct: adminPct(row.paid_events, row.events),
+    gold_paid: Number(row.gold_paid || 0),
+    volume_usd: adminNum(row.volume_usd || 0, 2),
+    avg_latency_ms: adminNum(row.avg_latency_ms || 0),
+  }));
+
+  const shopSteps7d = adminSafeAll(`
+    SELECT
+      COALESCE(event_type, 'unknown') AS event_type,
+      COUNT(*) AS events,
+      COUNT(DISTINCT player_id) AS players,
+      COALESCE(SUM(CASE WHEN error_code IS NOT NULL OR error_message IS NOT NULL THEN 1 ELSE 0 END), 0) AS errors
+    FROM shop_funnel_events
+    WHERE created_at > datetime('now', '-7 days')
+    GROUP BY event_type
+    ORDER BY events DESC, event_type ASC
+  `).map((row) => ({
+    event_type: row.event_type,
+    events: Number(row.events || 0),
+    players: Number(row.players || 0),
+    errors: Number(row.errors || 0),
+  }));
+
+  const shopSkus7d = adminSafeAll(`
+    SELECT
+      COALESCE(NULLIF(sku, ''), 'unknown') AS sku,
+      COUNT(*) AS events,
+      COUNT(DISTINCT player_id) AS players,
+      COALESCE(SUM(CASE WHEN event_type = 'redeem_succeeded' THEN 1 ELSE 0 END), 0) AS redeems,
+      ROUND(COALESCE(SUM(CAST(usd_price_e6 AS REAL)), 0) / 1000000.0, 2) AS quoted_usd
+    FROM shop_funnel_events
+    WHERE created_at > datetime('now', '-7 days')
+    GROUP BY sku
+    ORDER BY events DESC, redeems DESC
+    LIMIT 12
+  `).map((row) => ({
+    sku: row.sku,
+    events: Number(row.events || 0),
+    players: Number(row.players || 0),
+    redeems: Number(row.redeems || 0),
+    quoted_usd: adminNum(row.quoted_usd || 0, 2),
+  }));
+
+  const resourceSources7d = adminSafeAll(`
+    SELECT
+      COALESCE(source_type, 'resource_change') AS source_type,
+      COUNT(*) AS events,
+      COUNT(DISTINCT player_id) AS players,
+      COALESCE(SUM(gold_delta), 0) AS gold_delta,
+      COALESCE(SUM(wood_delta), 0) AS wood_delta,
+      COALESCE(SUM(ore_delta), 0) AS ore_delta,
+      COALESCE(SUM(lost_gold_to_cap), 0) AS lost_gold_to_cap
+    FROM resource_delta_events
+    WHERE created_at > datetime('now', '-7 days')
+    GROUP BY source_type
+    ORDER BY ABS(COALESCE(SUM(gold_delta), 0)) DESC, events DESC
+    LIMIT 16
+  `).map((row) => ({
+    source_type: row.source_type,
+    events: Number(row.events || 0),
+    players: Number(row.players || 0),
+    gold_delta: Number(row.gold_delta || 0),
+    wood_delta: Number(row.wood_delta || 0),
+    ore_delta: Number(row.ore_delta || 0),
+    lost_gold_to_cap: Number(row.lost_gold_to_cap || 0),
+  }));
+
+  const taskResults7d = adminSafeAll(`
+    SELECT
+      COALESCE(result, 'unknown') AS result,
+      COUNT(*) AS events,
+      COUNT(DISTINCT player_id) AS players,
+      COALESCE(SUM(reward_gold), 0) AS reward_gold,
+      COALESCE(SUM(reward_wood), 0) AS reward_wood,
+      COALESCE(SUM(reward_ore), 0) AS reward_ore
+    FROM task_claim_events
+    WHERE created_at > datetime('now', '-7 days')
+    GROUP BY result
+    ORDER BY events DESC, result ASC
+  `).map((row) => ({
+    result: row.result,
+    events: Number(row.events || 0),
+    players: Number(row.players || 0),
+    reward_gold: Number(row.reward_gold || 0),
+    reward_wood: Number(row.reward_wood || 0),
+    reward_ore: Number(row.reward_ore || 0),
+  }));
+
+  const taskTop7d = adminSafeAll(`
+    SELECT
+      task_id,
+      COALESCE(task_title, task_type, 'unknown') AS task,
+      COUNT(*) AS events,
+      COUNT(DISTINCT player_id) AS players,
+      COALESCE(SUM(CASE WHEN result = 'paid' THEN 1 ELSE 0 END), 0) AS paid_events,
+      ROUND(COALESCE(AVG(CASE WHEN target_value > 0 THEN progress_value * 100.0 / target_value ELSE 0 END), 0), 1) AS avg_progress_pct
+    FROM task_claim_events
+    WHERE created_at > datetime('now', '-7 days')
+    GROUP BY task_id, task
+    ORDER BY events DESC, paid_events DESC
+    LIMIT 12
+  `).map((row) => ({
+    task_id: row.task_id,
+    task: row.task,
+    events: Number(row.events || 0),
+    players: Number(row.players || 0),
+    paid_events: Number(row.paid_events || 0),
+    paid_rate_pct: adminPct(row.paid_events, row.events),
+    avg_progress_pct: adminNum(row.avg_progress_pct || 0),
+  }));
+
+  return {
+    note: 'Structured telemetry is stored in SQLite tables: trade_claim_results, shop_funnel_events, resource_delta_events, task_claim_events.',
+    windows: windowRows,
+    trade_claim_results_7d: tradeClaimResults7d,
+    trade_claim_dex_7d: tradeClaimDex7d,
+    shop_steps_7d: shopSteps7d,
+    shop_skus_7d: shopSkus7d,
+    resource_sources_7d: resourceSources7d,
+    task_results_7d: taskResults7d,
+    task_top_7d: taskTop7d,
+  };
+}
+
 // Server stats
 router.get('/admin/stats', adminAuth, (req, res) => {
   const playerCount = db.db.prepare('SELECT COUNT(*) as c FROM players').get().c;
@@ -13097,6 +14361,9 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     FROM players WHERE last_seen_at IS NOT NULL
     GROUP BY dex
   `).all();
+  const combatStats = buildAdminCombatStats();
+  const growthFunnelStats = buildAdminGrowthFunnelStats({ playerCount, activeQ });
+  const telemetryStats = buildAdminTelemetryStats();
 
   const mcpSummaryFor = (whereSql) => db.db.prepare(`
     SELECT COUNT(*) AS total,
@@ -13363,6 +14630,9 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     },
     ui_modes: byUiMode,
     devices: buildDeviceStats(),
+    combat: combatStats,
+    growth_funnel: growthFunnelStats,
+    telemetry: telemetryStats,
     mcp: {
       summary: {
         day: mcpSummaryFor("WHERE created_at > datetime('now', '-24 hours')"),

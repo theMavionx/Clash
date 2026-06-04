@@ -19,6 +19,7 @@ server-futures/server.log
 # Local runtime logs
 *.log
 .local-logs/
+server/reports/
 
 # Environment
 .env

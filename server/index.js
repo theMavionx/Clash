@@ -554,6 +554,74 @@ app.get('/api/admin/panel', (req, res) => {
       <th>Player</th><th>DEX</th><th>TH</th><th>Active Days 7d</th><th>Sessions 7d</th><th>Avg Session</th><th>Events 7d</th><th>Battles 7d</th><th>Futures Volume</th><th>Last Action</th>
     </tr></thead><tbody id="playerActivityBody"></tbody></table>
 
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Combat Health</h2>
+    <div class="stats" id="combatStats"></div>
+    <div style="font-size:12px;color:#9ca3af;margin:-10px 0 14px" id="combatStatsNote"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">TH Gap 30d</h3>
+        <table><thead><tr>
+          <th>Bucket</th><th>Attacks</th><th>Win %</th><th>Accepted %</th><th>TH Dmg</th>
+        </tr></thead><tbody id="combatGapBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Top Attackers 30d</h3>
+        <table><thead><tr>
+          <th>Player</th><th>DEX</th><th>TH</th><th>Attacks</th><th>Win %</th><th>Avg Gold</th>
+        </tr></thead><tbody id="combatAttackersBody"></tbody></table>
+      </div>
+    </div>
+
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Growth Funnel</h2>
+    <div class="stats" id="growthFunnelStats"></div>
+    <div style="font-size:12px;color:#9ca3af;margin:-10px 0 14px" id="growthFunnelNote"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Player Funnel</h3>
+        <table><thead><tr>
+          <th>Step</th><th>Players</th><th>From Prev</th><th>From Total</th>
+        </tr></thead><tbody id="growthFunnelBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:520px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">DEX Funnel</h3>
+        <table><thead><tr>
+          <th>DEX</th><th>Players</th><th>Active 24h</th><th>First Trade</th><th>Volume</th><th>Shop</th><th>Token Pay</th>
+        </tr></thead><tbody id="growthDexBody"></tbody></table>
+      </div>
+    </div>
+
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Telemetry Events</h2>
+    <div class="stats" id="telemetryStats"></div>
+    <div style="font-size:12px;color:#9ca3af;margin:-10px 0 14px" id="telemetryNote"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Trade Claim Results 7d</h3>
+        <table><thead><tr>
+          <th>Result</th><th>Events</th><th>Players</th><th>Gold</th><th>Volume</th><th>Latency</th>
+        </tr></thead><tbody id="telemetryTradeBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:520px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Resource Flow 7d</h3>
+        <table><thead><tr>
+          <th>Source</th><th>Events</th><th>Players</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Lost Cap</th>
+        </tr></thead><tbody id="telemetryResourceBody"></tbody></table>
+      </div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Shop Funnel 7d</h3>
+        <table><thead><tr>
+          <th>Step</th><th>Events</th><th>Players</th><th>Errors</th>
+        </tr></thead><tbody id="telemetryShopBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Task Claims 7d</h3>
+        <table><thead><tr>
+          <th>Result</th><th>Events</th><th>Players</th><th>Gold</th><th>Wood</th><th>Ore</th>
+        </tr></thead><tbody id="telemetryTaskBody"></tbody></table>
+      </div>
+    </div>
+
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">MCP Agent Usage</h2>
     <div class="stats" id="mcpStats"></div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
@@ -1963,6 +2031,152 @@ async function loadStats() {
           '<td><div class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.last_action_at || row.last_seen_at)) + '</div><div style="font-size:11px;color:#6b7280">' + esc(row.last_action || 'heartbeat') + '</div></td>' +
         '</tr>').join('')
       : '<tr><td colspan="10" style="color:#6b7280;text-align:center;padding:20px">No player activity yet</td></tr>';
+
+    const combat = s.combat || {};
+    const combatWindows = combat.windows || [];
+    function pctText(v) {
+      const n = Number(v) || 0;
+      return n.toFixed(1) + '%';
+    }
+    function combatCard(row, color) {
+      return '<div class="stat" style="border-color:' + color + '">' +
+        '<div class="v" style="color:' + color + '">' + (row.attacks || 0) + '</div>' +
+        '<div class="l">' + esc(row.label || row.key || 'Combat') + ' attacks</div>' +
+        '<div style="font-size:11px;color:#9ca3af;margin-top:8px;line-height:1.5">' +
+          'win: <strong style="color:#4ade80">' + pctText(row.accepted_win_rate_pct) + '</strong> | ' +
+          'accepted: <strong style="color:#e5e7eb">' + pctText(row.acceptance_rate_pct) + '</strong><br>' +
+          'TH dmg: <strong style="color:#fbbf24">' + pctText(row.avg_th_damage_pct) + '</strong> | ' +
+          'avg loot: <strong style="color:#e8b830">' + Math.round(row.avg_loot_gold || 0) + 'G</strong>' +
+        '</div>' +
+      '</div>';
+    }
+    document.getElementById('combatStats').innerHTML = combatWindows.length
+      ? combatWindows.map((row, i) => combatCard(row, i === 0 ? '#38bdf8' : (i === 1 ? '#a78bfa' : '#f59e0b'))).join('')
+      : '<div style="color:#6b7280;padding:16px">No combat data yet</div>';
+    document.getElementById('combatStatsNote').textContent = combat.note || '';
+
+    const gapRows = combat.th_gap_30d || [];
+    document.getElementById('combatGapBody').innerHTML = gapRows.length
+      ? gapRows.map(row => '<tr>' +
+          '<td><span class="badge" style="background:#1f2937;color:#e5e7eb">' + esc(String(row.bucket || '-').replace(/_/g, ' ')) + '</span></td>' +
+          '<td style="font-weight:800">' + (row.attacks || 0) + '</td>' +
+          '<td style="color:#4ade80">' + pctText(row.accepted_win_rate_pct) + '</td>' +
+          '<td>' + pctText(row.acceptance_rate_pct) + '</td>' +
+          '<td style="color:#fbbf24">' + pctText(row.avg_th_damage_pct) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="5" style="color:#6b7280;text-align:center;padding:20px">No TH gap battles yet</td></tr>';
+
+    const attackerRows = combat.top_attackers_30d || [];
+    document.getElementById('combatAttackersBody').innerHTML = attackerRows.length
+      ? attackerRows.map(row => '<tr>' +
+          '<td><strong>' + esc(row.name || row.attacker_id || '-') + '</strong></td>' +
+          '<td>' + dexBadge(row.dex) + '</td>' +
+          '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.th_level || 1) + '</span></td>' +
+          '<td style="font-weight:800">' + (row.attacks || 0) + '</td>' +
+          '<td style="color:#4ade80">' + pctText(row.accepted_win_rate_pct) + '</td>' +
+          '<td style="color:#e8b830">' + Math.round(row.avg_loot_gold || 0) + 'G</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:20px">No attackers yet</td></tr>';
+
+    const funnel = s.growth_funnel || {};
+    const tradingFunnel = funnel.trading || {};
+    const shopFunnel = funnel.shop || {};
+    const marketFunnel = funnel.marketplace || {};
+    function funnelCard(label, value, sub, color) {
+      return '<div class="stat" style="border-color:' + color + '">' +
+        '<div class="v" style="color:' + color + '">' + value + '</div>' +
+        '<div class="l">' + label + '</div>' +
+        (sub ? '<div style="font-size:11px;color:#9ca3af;margin-top:8px;line-height:1.5">' + sub + '</div>' : '') +
+      '</div>';
+    }
+    document.getElementById('growthFunnelStats').innerHTML =
+      funnelCard('Trade volume', fmtAdminCompactUsd(tradingFunnel.total_volume || 0), (tradingFunnel.first_trade_players || 0) + ' traders', '#38bdf8') +
+      funnelCard('Trade gold paid', Math.round(tradingFunnel.trade_gold_paid || 0).toLocaleString() + 'G', (tradingFunnel.trade_gold_claimers || 0) + ' claimers', '#fbbf24') +
+      funnelCard('Shop revenue', fmtAdminUsd(shopFunnel.revenue_usd || 0), (shopFunnel.buyers || 0) + ' buyers', '#4ade80') +
+      funnelCard('Project token payers', shopFunnel.project_token_buyers || 0, (shopFunnel.project_token_purchases || 0) + ' purchases', '#a78bfa') +
+      funnelCard('Marketplace paid', fmtAdminUsd(marketFunnel.paid_usdc || 0), (marketFunnel.paid_orders || 0) + ' paid orders', '#f97316');
+    document.getElementById('growthFunnelNote').textContent = funnel.note || '';
+
+    const funnelRows = funnel.steps || [];
+    document.getElementById('growthFunnelBody').innerHTML = funnelRows.length
+      ? funnelRows.map(row => '<tr>' +
+          '<td><strong>' + esc(row.label || row.key || '-') + '</strong></td>' +
+          '<td style="font-weight:800">' + (row.players || 0) + '</td>' +
+          '<td>' + pctText(row.from_previous_pct) + '</td>' +
+          '<td>' + pctText(row.from_total_pct) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="4" style="color:#6b7280;text-align:center;padding:20px">No funnel data yet</td></tr>';
+
+    const growthDexRows = funnel.by_dex || [];
+    document.getElementById('growthDexBody').innerHTML = growthDexRows.length
+      ? growthDexRows.map(row => '<tr>' +
+          '<td>' + dexBadge(row.dex) + ' <span style="color:#9ca3af">' + esc(row.dex || 'unknown') + '</span></td>' +
+          '<td style="font-weight:800">' + (row.players || 0) + '</td>' +
+          '<td>' + (row.active_24h || 0) + '</td>' +
+          '<td>' + (row.first_trade_players || 0) + '</td>' +
+          '<td style="color:#38bdf8">' + fmtAdminCompactUsd(row.total_volume || 0) + '</td>' +
+          '<td>' + (row.shop_buyers || 0) + '</td>' +
+          '<td style="color:#a78bfa">' + (row.project_token_buyers || 0) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:20px">No DEX funnel data yet</td></tr>';
+
+    const telemetry = s.telemetry || {};
+    const telemetryWindows = telemetry.windows || [];
+    const telemetryDay = telemetryWindows.find(row => row.key === '24h') || telemetryWindows[0] || {};
+    const telemetryWeek = telemetryWindows.find(row => row.key === '7d') || telemetryWindows[1] || {};
+    document.getElementById('telemetryStats').innerHTML =
+      funnelCard('Trade claim events', telemetryWeek.trade_claim_events || 0, (telemetryWeek.trade_gold_paid || 0).toLocaleString() + 'G paid / ' + (telemetryWeek.trade_claim_players || 0) + ' players', '#38bdf8') +
+      funnelCard('Shop funnel events', telemetryWeek.shop_events || 0, (telemetryWeek.shop_succeeded || 0) + ' ok / ' + (telemetryWeek.shop_failed || 0) + ' failed', '#4ade80') +
+      funnelCard('Resource events', telemetryDay.resource_events || 0, '24h gold delta: ' + (telemetryDay.resource_gold_delta || 0).toLocaleString() + 'G', '#fbbf24') +
+      funnelCard('Task claim events', telemetryWeek.task_events || 0, (telemetryWeek.task_paid_events || 0) + ' paid / ' + (telemetryWeek.task_players || 0) + ' players', '#a78bfa');
+    document.getElementById('telemetryNote').textContent = telemetry.note || '';
+
+    const telemetryTradeRows = telemetry.trade_claim_results_7d || [];
+    document.getElementById('telemetryTradeBody').innerHTML = telemetryTradeRows.length
+      ? telemetryTradeRows.map(row => '<tr>' +
+          '<td><span class="badge" style="background:#1f2937;color:#e5e7eb">' + esc(row.result || 'unknown') + '</span></td>' +
+          '<td style="font-weight:800">' + (row.events || 0) + '</td>' +
+          '<td>' + (row.players || 0) + '</td>' +
+          '<td style="color:#fbbf24">' + Math.round(row.gold_paid || 0).toLocaleString() + 'G</td>' +
+          '<td style="color:#38bdf8">' + fmtAdminCompactUsd(row.volume_usd || 0) + '</td>' +
+          '<td>' + Math.round(row.avg_latency_ms || 0) + 'ms</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:20px">No trade claim telemetry yet</td></tr>';
+
+    const telemetryResourceRows = telemetry.resource_sources_7d || [];
+    document.getElementById('telemetryResourceBody').innerHTML = telemetryResourceRows.length
+      ? telemetryResourceRows.map(row => '<tr>' +
+          '<td class="mono" style="font-size:12px;color:#e5e7eb">' + esc(row.source_type || 'resource_change') + '</td>' +
+          '<td style="font-weight:800">' + (row.events || 0) + '</td>' +
+          '<td>' + (row.players || 0) + '</td>' +
+          '<td style="color:' + ((row.gold_delta || 0) >= 0 ? '#4ade80' : '#f87171') + '">' + Math.round(row.gold_delta || 0).toLocaleString() + 'G</td>' +
+          '<td>' + Math.round(row.wood_delta || 0).toLocaleString() + '</td>' +
+          '<td>' + Math.round(row.ore_delta || 0).toLocaleString() + '</td>' +
+          '<td style="color:#f97316">' + Math.round(row.lost_gold_to_cap || 0).toLocaleString() + 'G</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:20px">No resource telemetry yet</td></tr>';
+
+    const telemetryShopRows = telemetry.shop_steps_7d || [];
+    document.getElementById('telemetryShopBody').innerHTML = telemetryShopRows.length
+      ? telemetryShopRows.map(row => '<tr>' +
+          '<td class="mono" style="font-size:12px;color:#e5e7eb">' + esc(row.event_type || 'unknown') + '</td>' +
+          '<td style="font-weight:800">' + (row.events || 0) + '</td>' +
+          '<td>' + (row.players || 0) + '</td>' +
+          '<td style="color:' + ((row.errors || 0) ? '#f87171' : '#4ade80') + '">' + (row.errors || 0) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="4" style="color:#6b7280;text-align:center;padding:20px">No shop telemetry yet</td></tr>';
+
+    const telemetryTaskRows = telemetry.task_results_7d || [];
+    document.getElementById('telemetryTaskBody').innerHTML = telemetryTaskRows.length
+      ? telemetryTaskRows.map(row => '<tr>' +
+          '<td><span class="badge" style="background:#1f2937;color:#e5e7eb">' + esc(row.result || 'unknown') + '</span></td>' +
+          '<td style="font-weight:800">' + (row.events || 0) + '</td>' +
+          '<td>' + (row.players || 0) + '</td>' +
+          '<td style="color:#fbbf24">' + Math.round(row.reward_gold || 0).toLocaleString() + 'G</td>' +
+          '<td>' + Math.round(row.reward_wood || 0).toLocaleString() + '</td>' +
+          '<td>' + Math.round(row.reward_ore || 0).toLocaleString() + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:20px">No task telemetry yet</td></tr>';
 
     const mcp = s.mcp || {};
     const mcpSummary = mcp.summary || {};
