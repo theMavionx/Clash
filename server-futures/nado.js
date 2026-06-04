@@ -29,7 +29,9 @@ const NADO_RPC_URLS = String(
   .filter(Boolean);
 
 const PRODUCT_TYPE_PERP = 1;
+const PRODUCT_TYPE_SPOT = 0;
 const QUOTE_PRODUCT_ID = 0;
+const USDC_PRODUCT_ID = 5;
 const PRODUCT_DECIMALS = 18;
 const DECIMAL_SCALE = new BigNumber(10).pow(PRODUCT_DECIMALS);
 const MARKET_CACHE_TTL_MS = 10_000;
@@ -269,6 +271,19 @@ function healthAmount(value) {
   return rawToDecimal(value ?? 0);
 }
 
+function spotCollateralValue(balance) {
+  const amount = balanceAmount(balance);
+  if (!amount.isFinite() || amount.isZero()) return new BigNumber(0);
+  return amount.times(bn(balance?.oraclePrice || balance?.product?.oraclePrice || 1));
+}
+
+function collateralLabel(productId) {
+  const id = Number(productId);
+  if (id === QUOTE_PRODUCT_ID) return 'USDt0';
+  if (id === USDC_PRODUCT_ID) return 'USDC';
+  return `Product ${id}`;
+}
+
 async function getSubaccountSummary(address) {
   const clean = normalizeAddress(address);
   if (!clean) throw new Error('address query param required (0x...)');
@@ -292,6 +307,10 @@ async function getAccountByAddress(address) {
     const balances = Array.isArray(summary?.balances) ? summary.balances : [];
     const quote = balances.find(b => Number(b.productId) === QUOTE_PRODUCT_ID);
     const quoteAmount = balanceAmount(quote);
+    const spotBalances = balances.filter(b => Number(b.type) === PRODUCT_TYPE_SPOT && !balanceAmount(b).isZero());
+    const spotCollateral = spotBalances.reduce((acc, b) => acc.plus(spotCollateralValue(b)), new BigNumber(0));
+    const usdcSpot = spotBalances.find(b => Number(b.productId) === USDC_PRODUCT_ID);
+    const usdcSpotAmount = balanceAmount(usdcSpot);
     const initialHealth = healthAmount(summary?.health?.initial?.health);
     const maintHealth = healthAmount(summary?.health?.maintenance?.health);
     const positionBalances = balances.filter(b => Number(b.type) === PRODUCT_TYPE_PERP && !balanceAmount(b).isZero());
@@ -300,13 +319,15 @@ async function getAccountByAddress(address) {
       const mark = bn(byMarket.get(Number(b.productId))?.mark || b?.oraclePrice || 0);
       return acc.plus(amount.times(mark).plus(rawToDecimal(b.vQuoteBalance || 0)));
     }, new BigNumber(0));
-    const equity = quoteAmount.plus(perpEquity);
-    const available = BigNumber.maximum(initialHealth, quoteAmount, new BigNumber(0));
+    const equity = spotCollateral.plus(perpEquity);
+    const available = BigNumber.maximum(initialHealth, spotCollateral, quoteAmount, new BigNumber(0));
     const result = {
       exists: !!summary?.exists,
       balance: equity.toFixed(),
-      usdc: quoteAmount.toFixed(),
+      usdc: quoteAmount.plus(usdcSpotAmount).toFixed(),
       usdt: quoteAmount.toFixed(),
+      usdt0: quoteAmount.toFixed(),
+      usdc_spot: usdcSpotAmount.toFixed(),
       account_equity: equity.toFixed(),
       available_to_spend: available.toFixed(),
       available_to_withdraw: quoteAmount.isPositive() ? quoteAmount.toFixed() : '0',
@@ -316,6 +337,12 @@ async function getAccountByAddress(address) {
       orders_count: 0,
       maker_fee: 0.0001,
       taker_fee: 0.00035,
+      collateral_balances: spotBalances.map(b => ({
+        product_id: Number(b.productId),
+        symbol: collateralLabel(b.productId),
+        amount: balanceAmount(b).toFixed(),
+        value_usd: spotCollateralValue(b).toFixed(),
+      })),
       _raw: summary,
     };
     accountCache.set(clean, { at: Date.now(), value: result });
@@ -388,6 +415,9 @@ async function getPositionsByAddress(address) {
     const positionBalances = balances.filter(b => Number(b.type) === PRODUCT_TYPE_PERP && !balanceAmount(b).isZero());
     const quote = balances.find(b => Number(b.productId) === QUOTE_PRODUCT_ID);
     const quoteAmount = balanceAmount(quote);
+    const spotCollateral = balances
+      .filter(b => Number(b.type) === PRODUCT_TYPE_SPOT && !balanceAmount(b).isZero())
+      .reduce((acc, b) => acc.plus(spotCollateralValue(b)), new BigNumber(0));
     const statsByProduct = new Map();
     const totalNotional = positionBalances.reduce((acc, b) => {
       const stats = positionStats(b, byMarket.get(Number(b.productId)));
@@ -398,7 +428,7 @@ async function getPositionsByAddress(address) {
     const perpEquity = [...statsByProduct.values()].reduce((acc, stats) => (
       acc.plus(stats.amount.times(stats.mark || 0).plus(stats.vQuote))
     ), new BigNumber(0));
-    const accountEquity = quoteAmount.plus(perpEquity);
+    const accountEquity = spotCollateral.plus(perpEquity);
     const result = positionBalances
       .map((b) => {
         const stats = statsByProduct.get(Number(b.productId));

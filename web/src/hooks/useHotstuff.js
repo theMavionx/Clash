@@ -44,6 +44,10 @@ const ERC20_BALANCE_ABI = [
   },
 ];
 
+function shouldUseHotstuffAlchemyProxy() {
+  return Number(HOTSTUFF_BRIDGE_CHAIN_ID) === 1;
+}
+
 function num(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -327,23 +331,36 @@ export function useHotstuff() {
     setWalletUsdcStatus({ status: 'checking', message: 'Checking Ethereum wallet USDC...' });
     try {
       let raw;
-      if (Number(HOTSTUFF_BRIDGE_CHAIN_ID) === 1) {
+      let viemError = null;
+      if (shouldUseHotstuffAlchemyProxy()) {
         raw = await fetchHotstuffWalletUsdcViaAlchemyProxy(hsWalletAddr);
       } else {
-        const pc = typeof getPublicClient === 'function'
-          ? getPublicClient(HOTSTUFF_BRIDGE_CHAIN_ID)
-          : publicClient;
-        raw = await pc.readContract({
-          address: HOTSTUFF_USDC_ADDRESS,
-          abi: ERC20_BALANCE_ABI,
-          functionName: 'balanceOf',
-          args: [hsWalletAddr],
-        });
+        try {
+          const pc = typeof getPublicClient === 'function'
+            ? getPublicClient(HOTSTUFF_BRIDGE_CHAIN_ID)
+            : publicClient;
+          raw = await pc.readContract({
+            address: HOTSTUFF_USDC_ADDRESS,
+            abi: ERC20_BALANCE_ABI,
+            functionName: 'balanceOf',
+            args: [hsWalletAddr],
+          });
+        } catch (e) {
+          viemError = e;
+          console.info('[useHotstuff] wallet USDC viem read failed; retrying via Ethereum proxy:', hotstuffRpcErrorDetails(e));
+          raw = await fetchHotstuffWalletUsdcViaAlchemyProxy(hsWalletAddr);
+        }
       }
       const next = Number(formatUnits(raw, HOTSTUFF_USDC_DECIMALS));
       const value = Number.isFinite(next) ? next : 0;
       setWalletUsdc(value);
       setWalletUsdcStatus({ status: 'ready', message: null });
+      if (viemError) {
+        console.info('[useHotstuff] wallet USDC proxy fallback succeeded', {
+          chainId: HOTSTUFF_BRIDGE_CHAIN_ID,
+          wallet: `${hsWalletAddr.slice(0, 6)}...${hsWalletAddr.slice(-4)}`,
+        });
+      }
       return value;
     } catch (e) {
       const msg = hotstuffErrorMessage(e, 'Could not read Ethereum wallet USDC');

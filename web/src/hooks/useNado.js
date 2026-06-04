@@ -10,8 +10,8 @@ import {
   INK_CHAIN_ID,
   INK_RPC_URLS,
   NADO_CHAIN_ENV,
+  NADO_DEPOSIT_ASSETS,
   NADO_QUOTE_PRODUCT_ID,
-  NADO_QUOTE_TOKEN_ADDRESS,
   NADO_QUOTE_TOKEN_DECIMALS,
   NADO_SUBACCOUNT_NAME,
   NADO_USDT_ABI,
@@ -476,27 +476,32 @@ export function useNado() {
     if (!walletAddr || typeof getPublicClient !== 'function') {
       setWalletUsdcStatus({
         status: 'idle',
-        message: 'Connect wallet to check Ink USDt0 balance',
+        message: 'Connect wallet to check Ink stablecoin balances',
         chainId: null,
+        balances: {},
       });
       return null;
     }
-    setWalletUsdcStatus({ status: 'checking', message: 'Checking Ink USDt0 balance...', chainId: null });
+    setWalletUsdcStatus({ status: 'checking', message: 'Checking Ink stablecoin balances...', chainId: null, balances: {} });
     try {
       const publicClient = getPublicClient(INK_CHAIN_ID);
-      const raw = await publicClient.readContract({
-        address: NADO_QUOTE_TOKEN_ADDRESS,
-        abi: NADO_USDT_ABI,
-        functionName: 'balanceOf',
-        args: [walletAddr],
-      });
-      const balance = Number(formatUnits(raw, NADO_QUOTE_TOKEN_DECIMALS));
-      setWalletUsdcStatus({ status: 'ready', message: null, chainId: INK_CHAIN_ID, checkedAt: Date.now() });
-      return balance;
+      const rows = await Promise.all(NADO_DEPOSIT_ASSETS.map(async (asset) => {
+        const raw = await publicClient.readContract({
+          address: asset.address,
+          abi: NADO_USDT_ABI,
+          functionName: 'balanceOf',
+          args: [walletAddr],
+        });
+        return [asset.id, Number(formatUnits(raw, asset.decimals))];
+      }));
+      const balances = Object.fromEntries(rows);
+      const bestBalance = Math.max(...Object.values(balances).map(v => Number(v) || 0), 0);
+      setWalletUsdcStatus({ status: 'ready', message: null, chainId: INK_CHAIN_ID, checkedAt: Date.now(), balances });
+      return bestBalance;
     } catch (e) {
-      const message = nadoErrorMessage(e, 'Could not read Ink USDt0 balance');
-      console.warn('[useNado] wallet USDt0 read failed:', message);
-      setWalletUsdcStatus({ status: 'error', message, chainId: null });
+      const message = nadoErrorMessage(e, 'Could not read Ink stablecoin balances');
+      console.warn('[useNado] wallet stablecoin read failed:', message);
+      setWalletUsdcStatus({ status: 'error', message, chainId: null, balances: {} });
       return null;
     }
   }, [walletAddr, getPublicClient]);
@@ -628,8 +633,9 @@ export function useNado() {
     setSetupVerified(false);
     setWalletUsdcStatus({
       status: 'idle',
-      message: 'Connect wallet to check Ink USDt0 balance',
+      message: 'Connect wallet to check Ink stablecoin balances',
       chainId: null,
+      balances: {},
     });
   }, [walletAddr, replaceTriggerOrders]);
 
@@ -1013,25 +1019,27 @@ export function useNado() {
     }
   }, [ensureLinkedSignerReady, findMarket, createClient, fetchAccount, walletAddr, replaceTriggerOrders]);
 
-  const depositToPacifica = useCallback(async (amount) => {
+  const depositToPacifica = useCallback(async (amount, options = {}) => {
     const amountText = String(amount ?? '').trim();
     setLoading(true);
     setError(null);
     try {
       if (!walletAddr) throw new Error('Connect your EVM wallet first');
       await ensureReady();
-      const parsed = parseUnits(amountText, NADO_QUOTE_TOKEN_DECIMALS);
-      if (parsed <= 0n) throw new Error('Enter a positive USDt0 amount');
+      const assetId = String(options?.asset || options?.assetId || 'usdt0').toLowerCase();
+      const asset = NADO_DEPOSIT_ASSETS.find(row => row.id === assetId) || NADO_DEPOSIT_ASSETS[0];
+      const parsed = parseUnits(amountText, asset.decimals);
+      if (parsed <= 0n) throw new Error(`Enter a positive ${asset.label} amount`);
       const client = createClient({ useLinkedSigner: false });
-      await client.spot.approveAllowance({ productId: NADO_QUOTE_PRODUCT_ID, amount: parsed });
+      await client.spot.approveAllowance({ productId: asset.productId, amount: parsed });
       const txHash = await client.spot.deposit({
         subaccountName: NADO_SUBACCOUNT_NAME,
-        productId: NADO_QUOTE_PRODUCT_ID,
+        productId: asset.productId,
         amount: parsed,
       });
       await fetchAccount();
       setTimeout(fetchAccount, 10_000);
-      return { success: true, txHash, info: 'Nado deposit submitted on Ink. Balance can take a few moments to refresh.' };
+      return { success: true, txHash, info: `Nado ${asset.label} deposit submitted on Ink. Balance can take a few moments to refresh.` };
     } catch (e) {
       const msg = nadoErrorMessage(e, 'Nado deposit failed');
       setError(msg);

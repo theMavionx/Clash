@@ -17,6 +17,26 @@ export const NADO_QUOTE_PRODUCT_ID = 0;
 export const NADO_QUOTE_TOKEN_ADDRESS = '0x0200C29006150606B650577BBE7B6248F58470c1';
 export const NADO_QUOTE_TOKEN_SYMBOL = 'USDt0';
 export const NADO_QUOTE_TOKEN_DECIMALS = 6;
+export const NADO_USDC_PRODUCT_ID = 5;
+export const NADO_USDC_TOKEN_ADDRESS = '0x2D270e6886d130D724215A266106e6832161EAEd';
+export const NADO_USDC_TOKEN_SYMBOL = 'USDC';
+export const NADO_USDC_TOKEN_DECIMALS = 6;
+export const NADO_DEPOSIT_ASSETS = [
+  {
+    id: 'usdt0',
+    label: NADO_QUOTE_TOKEN_SYMBOL,
+    productId: NADO_QUOTE_PRODUCT_ID,
+    address: NADO_QUOTE_TOKEN_ADDRESS,
+    decimals: NADO_QUOTE_TOKEN_DECIMALS,
+  },
+  {
+    id: 'usdc',
+    label: NADO_USDC_TOKEN_SYMBOL,
+    productId: NADO_USDC_PRODUCT_ID,
+    address: NADO_USDC_TOKEN_ADDRESS,
+    decimals: NADO_USDC_TOKEN_DECIMALS,
+  },
+];
 
 export const NADO_USDT_ABI = [
   {

@@ -332,18 +332,29 @@ function logPositions(label, rows, normalized) {
 
 function normalizeOrder(row) {
   const symbol = baseSymbol(row?.market);
+  const type = row?.type;
+  const triggerPrice = row?.triggerPrice || row?.trigger_price;
   return {
     symbol,
     side: row?.side === 'sell' ? 'short' : 'long',
     order_id: row?.orderId,
     client_order_id: row?.clientOrderId,
     price: row?.price,
+    stop_price: triggerPrice || null,
+    trigger_price: triggerPrice || null,
     amount: row?.originalQuantity,
     filled: row?.executedQuantity,
     status: row?.status,
-    type: row?.type,
+    type,
+    order_type: type === 'takeProfitMarket'
+      ? 'take_profit'
+      : type === 'stopLossMarket'
+        ? 'stop_loss'
+        : type,
     tif: row?.timeInForce,
     reduce_only: row?.reduceOnly,
+    trigger_type: row?.triggerType || row?.trigger_type || null,
+    is_trigger: !!triggerPrice || /stopLoss|takeProfit|trailingStop/i.test(String(type || '')),
     market: row?.market,
     pair_index: row?.market,
     trade_index: row?.orderId,
@@ -366,6 +377,8 @@ function normalizeOrderType(type, isMarket) {
   const lower = value.toLowerCase();
   if (lower === 'market') return OrderType.market;
   if (lower === 'limit') return OrderType.limit;
+  if (lower === 'takeprofitmarket' || lower === 'take_profit_market' || lower === 'take-profit-market' || lower === 'tp') return OrderType.takeProfitMarket;
+  if (lower === 'stoplossmarket' || lower === 'stop_loss_market' || lower === 'stop-loss-market' || lower === 'sl') return OrderType.stopLossMarket;
   throw Object.assign(new Error('Unsupported Katana order type'), { status: 400 });
 }
 
@@ -388,6 +401,17 @@ function formatQuantity(value) {
   return floored.toFixed(8);
 }
 
+function normalizeTriggerType(value) {
+  const { TriggerType } = sdk();
+  const raw = String(value || '').trim();
+  if (!raw) return TriggerType.last;
+  if (Object.values(TriggerType || {}).includes(raw)) return raw;
+  const lower = raw.toLowerCase();
+  if (lower === 'last' || lower === 'mark') return TriggerType.last;
+  if (lower === 'index' || lower === 'oracle') return TriggerType.index;
+  throw Object.assign(new Error('Unsupported Katana trigger type'), { status: 400 });
+}
+
 function orderParams(input = {}, creds, options = {}) {
   const { OrderType } = sdk();
   const type = normalizeOrderType(input.type || input.orderType || input.order_type, options.market);
@@ -404,14 +428,28 @@ function orderParams(input = {}, creds, options = {}) {
   }
   if (input.clientOrderId || input.client_order_id) params.clientOrderId = String(input.clientOrderId || input.client_order_id).slice(0, 40);
   if (input.reduceOnly !== undefined || input.reduce_only !== undefined) params.reduceOnly = !!(input.reduceOnly ?? input.reduce_only);
-  if (type === OrderType.limit) {
+  const isTriggerOrder = type === OrderType.takeProfitMarket
+    || type === OrderType.stopLossMarket
+    || type === OrderType.takeProfitLimit
+    || type === OrderType.stopLossLimit
+    || type === OrderType.trailingStopMarket;
+  if (type === OrderType.limit || type === OrderType.takeProfitLimit || type === OrderType.stopLossLimit) {
     const price = String(input.price || '').trim();
     if (!price || !(Number(price) > 0)) throw Object.assign(new Error('Katana limit order price required'), { status: 400 });
     params.price = price;
     Object.assign(params, normalizeTif(input.timeInForce || input.time_in_force || input.tif || 'gtc'));
   }
-  if (input.triggerPrice || input.trigger_price) params.triggerPrice = String(input.triggerPrice || input.trigger_price);
-  if (input.triggerType || input.trigger_type) params.triggerType = String(input.triggerType || input.trigger_type).toLowerCase();
+  if (isTriggerOrder || input.triggerPrice || input.trigger_price) {
+    const triggerPrice = String(input.triggerPrice || input.trigger_price || '').trim();
+    if (!triggerPrice || !(Number(triggerPrice) > 0)) {
+      throw Object.assign(new Error('Katana trigger order price required'), { status: 400 });
+    }
+    params.triggerPrice = triggerPrice;
+    params.triggerType = normalizeTriggerType(input.triggerType || input.trigger_type || 'last');
+    params.reduceOnly = input.reduceOnly !== undefined || input.reduce_only !== undefined
+      ? !!(input.reduceOnly ?? input.reduce_only)
+      : true;
+  }
   logKatana('order params normalized', {
     input: {
       symbol: input.symbol,
@@ -420,6 +458,8 @@ function orderParams(input = {}, creds, options = {}) {
       type: input.type || input.orderType || input.order_type,
       quantity: input.quantity || input.amount,
       price: input.price,
+      triggerPrice: input.triggerPrice || input.trigger_price,
+      triggerType: input.triggerType || input.trigger_type,
       reduceOnly: input.reduceOnly ?? input.reduce_only,
       notional_usd: input.notional_usd,
     },

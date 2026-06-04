@@ -1883,6 +1883,7 @@ function FuturesPanel() {
   const [amountInUsdc, setAmountInUsdc] = useState(true);
   const [sizePct, setSizePct] = useState(0);
   const [depositAmt, setDepositAmt] = useState('');
+  const [nadoDepositAsset, setNadoDepositAsset] = useState('usdt0');
   const [perplAccessCode, setPerplAccessCode] = useState('');
   const [phoenixInviteCode, setPhoenixInviteCode] = useState(PHOENIX_DEFAULT_REFERRAL_CODE);
   const [phoenixInviteKind, setPhoenixInviteKind] = useState('referral');
@@ -5886,8 +5887,18 @@ function FuturesPanel() {
     const nadoWalletBusy = nadoWalletState === 'checking' || nadoWalletState === 'switching';
     const nadoWalletError = nadoWalletState === 'wrong_chain' || nadoWalletState === 'error';
     const nadoWalletMessage = dex === 'nado' ? walletUsdcStatus?.message : null;
+    const nadoDepositAssets = [
+      { id: 'usdt0', label: 'USDt0' },
+      { id: 'usdc', label: 'USDC' },
+    ];
+    const selectedNadoDepositAsset = nadoDepositAssets.find(row => row.id === nadoDepositAsset) || nadoDepositAssets[0];
+    const nadoWalletBalances = dex === 'nado' && walletUsdcStatus?.balances && typeof walletUsdcStatus.balances === 'object'
+      ? walletUsdcStatus.balances
+      : {};
+    const selectedNadoWalletBalance = Number(nadoWalletBalances[selectedNadoDepositAsset.id]);
     const nadoWalletValue = (() => {
       if (dex !== 'nado') return walletUsdc !== null ? `$${walletUsdc.toFixed(2)}` : '$--';
+      if (Number.isFinite(selectedNadoWalletBalance) && !nadoWalletError) return `$${selectedNadoWalletBalance.toFixed(2)}`;
       if (walletUsdc !== null && !nadoWalletError) return `$${walletUsdc.toFixed(2)}`;
       if (nadoWalletState === 'wrong_chain') return 'Switch to Ink';
       if (nadoWalletState === 'error') return 'Unavailable';
@@ -5911,7 +5922,7 @@ function FuturesPanel() {
       : dex === 'risex'
       ? 'RISE Wallet USDC'
       : dex === 'nado'
-      ? 'Ink Wallet USDt0'
+      ? `Ink Wallet ${selectedNadoDepositAsset.label}`
       : dex === 'grvt'
       ? 'GRVT Trading USDC'
       : 'Wallet USDC';
@@ -6516,14 +6527,16 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? 'Deposit USDt0' : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: '#15803D'}}>
                     {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
                   </span>
                 )
-                : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}</span>}
+                : dex === 'nado'
+                ? <span style={S.detail}>Wallet: {nadoWalletValue} {selectedNadoDepositAsset.label}</span>
+                : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
             </div>
             {dex === 'hotstuff' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
@@ -6635,18 +6648,37 @@ function FuturesPanel() {
                   ))}
                 </select>
               )}
+              {dex === 'nado' && (
+                <select
+                  value={nadoDepositAsset}
+                  onChange={e => setNadoDepositAsset(e.target.value)}
+                  disabled={loading}
+                  style={{
+                    ...S.input,
+                    flex: 1.7,
+                    minWidth: 0,
+                    padding: '8px 8px',
+                    fontSize: 12,
+                    fontWeight: 800,
+                  }}
+                >
+                  {nadoDepositAssets.map(asset => (
+                    <option key={asset.id} value={asset.id}>{asset.label}</option>
+                  ))}
+                </select>
+              )}
               {/* Pacifica enforces a $10 deposit floor. Decibel/Phoenix/Perpl
                   do not have this fixed UI floor here (per-market minSize
                   matters for trading; deposits are free-form). */}
               <input type="number"
-                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'nado' && !account?.exists ? 'Min 5 USDt0' : dex === 'nado' ? 'Amount (USDt0)' : dex === 'risex' ? 'Amount (USDC)' : 'Amount (USDC)'}
+                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'nado' && !account?.exists ? `Min 5 ${selectedNadoDepositAsset.label}` : dex === 'nado' ? `Amount (${selectedNadoDepositAsset.label})` : dex === 'risex' ? 'Amount (USDC)' : 'Amount (USDC)'}
                 value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
                 const minDeposit = dex === 'pacifica' ? 10 : (dex === 'nado' && !account?.exists ? 5 : 0);
                 const v = parseFloat(depositAmt);
                 if (!Number.isFinite(v) || v <= 0 || (minDeposit > 0 && v < minDeposit)) {
-                  setLocalAlert(minDeposit > 0 ? `Min deposit ${minDeposit} ${dex === 'nado' ? 'USDt0' : 'USDC'}` : 'Enter a positive amount');
+                  setLocalAlert(minDeposit > 0 ? `Min deposit ${minDeposit} ${dex === 'nado' ? selectedNadoDepositAsset.label : 'USDC'}` : 'Enter a positive amount');
                   return;
                 }
                 if (dex === 'risex') {
@@ -6659,11 +6691,11 @@ function FuturesPanel() {
                     return;
                   }
                 }
-                if (dex === 'nado' && walletUsdc !== null && v > walletUsdc + 0.000001) {
-                  setLocalAlert(`Ink wallet has ${walletUsdc.toFixed(2)} USDt0`);
+                if (dex === 'nado' && Number.isFinite(selectedNadoWalletBalance) && v > selectedNadoWalletBalance + 0.000001) {
+                  setLocalAlert(`Ink wallet has ${selectedNadoWalletBalance.toFixed(2)} ${selectedNadoDepositAsset.label}`);
                   return;
                 }
-                const r = await depositToPacifica(depositAmt, dex === 'risex' ? { sourceChainId: risexDepositSource?.id } : undefined);
+                const r = await depositToPacifica(depositAmt, dex === 'risex' ? { sourceChainId: risexDepositSource?.id } : dex === 'nado' ? { asset: selectedNadoDepositAsset.id } : undefined);
                 if (!r?.error) {
                   setDepositAmt('');
                   if (r?.info) setLocalAlert(r.info);
@@ -6681,7 +6713,7 @@ function FuturesPanel() {
                 : dex === 'phoenix'
                 ? 'Sends USDC from your Solana wallet to your Phoenix trader account. Needs a small SOL float for gas.'
                 : dex === 'nado'
-                ? 'Approves USDt0 on Ink, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
+                ? 'Approves the selected Ink stablecoin, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
                 : dex === 'hotstuff'
                 ? 'Use Hotstuff official to deposit or withdraw. Clash only handles trading and optional Spot to Perps internal transfer.'
                 : dex === 'grvt'

@@ -475,7 +475,8 @@ export function useKatana() {
   }, [credentials, signedRequest, token, walletAddr]);
 
   const closePosition = useCallback((symbol, side, amount) => {
-    const closeSide = String(side || '').toLowerCase() === 'long' ? 'sell' : 'buy';
+    const rawSide = String(side || '').toLowerCase();
+    const closeSide = rawSide === 'long' || rawSide === 'bid' || rawSide === 'buy' ? 'sell' : 'buy';
     return placeOrder({
       symbol,
       side: closeSide,
@@ -483,6 +484,55 @@ export function useKatana() {
       type: 'market',
       reduceOnly: true,
     });
+  }, [placeOrder]);
+
+  const setTpsl = useCallback(async (symbol, closeSideInput, tpPrice, slPrice, _pairIndex, _tradeIndex, amountBase) => {
+    const quantity = String(amountBase || '').trim();
+    const closeSide = String(closeSideInput || '').toLowerCase() === 'ask'
+      || String(closeSideInput || '').toLowerCase() === 'short'
+      || String(closeSideInput || '').toLowerCase() === 'sell'
+      ? 'sell'
+      : 'buy';
+    const requests = [];
+    if (tpPrice) {
+      requests.push({
+        label: 'take profit',
+        payload: {
+          symbol,
+          side: closeSide,
+          quantity,
+          type: 'takeProfitMarket',
+          triggerPrice: String(tpPrice),
+          triggerType: 'last',
+          reduceOnly: true,
+        },
+      });
+    }
+    if (slPrice) {
+      requests.push({
+        label: 'stop loss',
+        payload: {
+          symbol,
+          side: closeSide,
+          quantity,
+          type: 'stopLossMarket',
+          triggerPrice: String(slPrice),
+          triggerType: 'last',
+          reduceOnly: true,
+        },
+      });
+    }
+    if (!requests.length) return disabled('Enter TP or SL price.');
+    if (!Number.isFinite(Number(quantity)) || Number(quantity) <= 0) return disabled('Katana position size is missing.');
+
+    const results = [];
+    for (const item of requests) {
+      logKatana('submitting TPSL order', item.payload);
+      const result = await placeOrder(item.payload);
+      results.push({ ...result, label: item.label });
+      if (result?.error) return result;
+    }
+    return { success: true, results };
   }, [placeOrder]);
 
   const referralCode = status?.access_code || KATANA_PERPS_REFERRAL_CODE;
@@ -564,7 +614,7 @@ export function useKatana() {
     placeLimitOrder,
     cancelOrder,
     closePosition,
-    setTpsl: async () => disabled('Katana TPSL orders must be submitted as explicit official trigger order types.'),
+    setTpsl,
     claimGold: async () => disabled('Katana reward claiming is handled by verified trade import.'),
   };
 }
