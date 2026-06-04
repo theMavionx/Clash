@@ -210,7 +210,7 @@ function envFlag(name, defaultValue = false) {
 }
 
 function marketplaceFeeBps() {
-  return Math.max(0, Math.min(2000, Number(process.env.CUSTODIAL_MARKETPLACE_FEE_BPS || '250') || 0));
+  return Math.max(0, Math.min(2000, Number(process.env.CUSTODIAL_MARKETPLACE_FEE_BPS || '400') || 0));
 }
 
 function marketplaceRoyaltyBps() {
