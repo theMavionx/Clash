@@ -22,13 +22,7 @@ function normalizeEthereumRpcUrl(rawUrl) {
     const origin = new URL(siteOrigin()).origin;
     if (url.origin === origin && url.pathname.startsWith('/rpc/eth')) return url.href;
     if (host.startsWith('eth-mainnet.') && host.includes('alchemy')) return sameOriginRpcUrl('/rpc/eth-alchemy');
-    if (host === 'ethereum-rpc.publicnode.com') return 'https://ethereum-rpc.publicnode.com';
-    if (host === 'eth.llamarpc.com') return 'https://eth.llamarpc.com';
-    if (host === 'rpc.payload.de') return 'https://rpc.payload.de';
-    if (host === 'eth.drpc.org') return 'https://eth.drpc.org';
-    if (host === 'ethereum.public-rpc.com') return 'https://ethereum.public-rpc.com';
-    if (host === 'eth.merkle.io') return '';
-    return url.href;
+    return '';
   } catch {
     return '';
   }
@@ -51,7 +45,7 @@ function isEthereumAlchemyRpcUrl(rawUrl) {
 export const ETHEREUM_RPC_URLS = (() => {
   const override = splitRpcUrls(import.meta.env.VITE_ETHEREUM_RPC_URLS || import.meta.env.VITE_ETHEREUM_RPC_URL);
   const normalizedOverride = override.map(normalizeEthereumRpcUrl).filter(Boolean);
-  const includeFree = envFlag(import.meta.env.VITE_ETHEREUM_ENABLE_PUBLIC_RPC, true);
+  const includeFree = envFlag(import.meta.env.VITE_ETHEREUM_ENABLE_PUBLIC_RPC, false);
   const includeAlchemy = hasEthereumAlchemyProxy
     && envFlag(import.meta.env.VITE_ETHEREUM_ENABLE_ALCHEMY_RPC, true);
   const overridePublic = normalizedOverride.filter(url => !isEthereumAlchemyRpcUrl(url));
