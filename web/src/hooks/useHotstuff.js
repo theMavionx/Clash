@@ -211,6 +211,28 @@ export function useHotstuff() {
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
 
+  const refreshServerResources = useCallback(async () => {
+    const token = player?.token;
+    if (!token) return null;
+    try {
+      const res = await fetch('/api/resources', { headers: { 'x-token': token } });
+      if (!res.ok) return null;
+      const resources = await res.json();
+      window.onGodotMessage?.({
+        action: 'resources',
+        data: {
+          gold: Number(resources.gold || 0),
+          wood: Number(resources.wood || 0),
+          ore: Number(resources.ore || 0),
+        },
+      });
+      return resources;
+    } catch (e) {
+      console.warn('[useHotstuff] refresh resources:', e?.message || e);
+      return null;
+    }
+  }, [player?.token]);
+
   const fetchWalletUsdc = useCallback(async () => {
     if (!active || !hsWalletAddr) {
       setWalletUsdc(null);
@@ -334,13 +356,17 @@ export function useHotstuff() {
         body: JSON.stringify({ wallet: hsWalletAddr, dex: 'hotstuff', reason }),
       });
       const data = await res.json().catch(() => ({}));
-      if (data?.gold > 0) setGoldEarned(data);
+      if (data?.gold > 0) {
+        setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards' });
+        window.onGodotMessage?.({ action: 'resources_add', data: { gold: data.gold, wood: 0, ore: 0 } });
+        setTimeout(refreshServerResources, 500);
+      }
       return data;
     } catch (e) {
       console.warn('[useHotstuff] claim-gold:', e?.message || e);
       return null;
     }
-  }, [hsWalletAddr, player]);
+  }, [hsWalletAddr, player, refreshServerResources]);
 
   const hasHotstuffAccount = useCallback(async () => {
     if (!hsWalletAddr) return false;
