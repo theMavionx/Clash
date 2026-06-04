@@ -107,6 +107,52 @@ function hotstuffAddress(addr) {
   }
 }
 
+function hotstuffRpcErrorDetails(error) {
+  return {
+    name: error?.name || null,
+    message: error?.message || null,
+    shortMessage: error?.shortMessage || null,
+    details: error?.details || null,
+    status: error?.status || error?.statusCode || error?.response?.status || null,
+    cause: error?.cause?.message || error?.cause?.details || null,
+  };
+}
+
+async function fetchHotstuffWalletUsdcViaAlchemyProxy(wallet) {
+  const account = hotstuffAddress(wallet);
+  if (!account) throw new Error('Invalid Hotstuff wallet address');
+  const data = `0x70a08231${account.slice(2).toLowerCase().padStart(64, '0')}`;
+  const res = await fetch('/rpc/eth-alchemy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'eth_call',
+      params: [
+        { to: HOTSTUFF_USDC_ADDRESS, data },
+        'latest',
+      ],
+    }),
+  });
+  const text = await res.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(`Ethereum Alchemy proxy returned non-JSON ${res.status}: ${text.slice(0, 160)}`);
+  }
+  if (!res.ok || payload?.error) {
+    const err = payload?.error?.message || payload?.message || text || `HTTP ${res.status}`;
+    throw new Error(`Ethereum Alchemy proxy failed: ${err}`);
+  }
+  const result = String(payload?.result || '');
+  if (!/^0x[0-9a-fA-F]+$/u.test(result)) {
+    throw new Error(`Ethereum Alchemy proxy returned invalid balance result: ${result || 'empty'}`);
+  }
+  return BigInt(result);
+}
+
 function normalizePrivateKey(value) {
   const raw = String(value || '').trim();
   if (/^0x[0-9a-fA-F]{64}$/u.test(raw)) return raw;
@@ -309,11 +355,24 @@ export function useHotstuff() {
       setWalletUsdcStatus({ status: 'ready', message: null });
       return value;
     } catch (e) {
-      const msg = hotstuffErrorMessage(e, 'Could not read Ethereum wallet USDC');
-      console.warn('[useHotstuff] wallet USDC:', msg);
-      setWalletUsdc(null);
-      setWalletUsdcStatus({ status: 'error', message: msg });
-      return null;
+      console.warn('[useHotstuff] wallet USDC viem read failed:', hotstuffRpcErrorDetails(e));
+      try {
+        const raw = await fetchHotstuffWalletUsdcViaAlchemyProxy(hsWalletAddr);
+        const next = Number(formatUnits(raw, HOTSTUFF_USDC_DECIMALS));
+        const value = Number.isFinite(next) ? next : 0;
+        setWalletUsdc(value);
+        setWalletUsdcStatus({ status: 'ready', message: null });
+        return value;
+      } catch (fallbackError) {
+        const msg = hotstuffErrorMessage(fallbackError, 'Could not read Ethereum wallet USDC');
+        console.warn('[useHotstuff] wallet USDC fallback failed:', {
+          message: msg,
+          error: hotstuffRpcErrorDetails(fallbackError),
+        });
+        setWalletUsdc(null);
+        setWalletUsdcStatus({ status: 'error', message: msg });
+        return null;
+      }
     }
   }, [active, getPublicClient, hsWalletAddr, publicClient]);
 
