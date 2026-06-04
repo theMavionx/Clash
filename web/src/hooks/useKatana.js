@@ -13,6 +13,15 @@ import {
 
 const FUTURES_API = '/api/futures';
 const STORAGE_KEY = 'clash_katana_credentials_v1';
+const DEBUG_KATANA = true;
+
+function logKatana(label, payload = undefined) {
+  if (!DEBUG_KATANA) return;
+  try {
+    if (payload === undefined) console.log(`[Katana UI] ${label}`);
+    else console.log(`[Katana UI] ${label}`, payload);
+  } catch {}
+}
 
 function normalizeAddress(value) {
   return String(value || '').trim().toLowerCase();
@@ -28,7 +37,7 @@ async function fetchJson(url, options = {}) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text || null; }
   if (!res.ok) {
-    const err = new Error(data?.detail || data?.error || data?.message || `Katana request failed (${res.status})`);
+    const err = new Error(data?.error || data?.message || data?.detail || `Katana request failed (${res.status})`);
     err.status = res.status;
     err.data = data;
     throw err;
@@ -93,6 +102,16 @@ function isAccountMissingError(error) {
   return /account.*(not found|does not exist|missing)|wallet.*(not found|does not exist|not associated)|not associated/u.test(text);
 }
 
+function isCredentialError(error) {
+  const text = [
+    error?.message,
+    error?.data?.detail,
+    error?.data?.error,
+    error?.data?.message,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return Number(error?.status) === 401 || /api key|api secret|credential|unauthorized|forbidden|rejected/u.test(text);
+}
+
 function disabled(message) {
   return { error: message || 'Katana Perps credentials are not saved in encrypted browser storage.' };
 }
@@ -111,6 +130,7 @@ export function useKatana() {
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
   const [credentials, setCredentials] = useState(null);
+  const [credentialsLoaded, setCredentialsLoaded] = useState(false);
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -128,9 +148,17 @@ export function useKatana() {
       try {
         const migrated = await migratePlainLocalStorageCredential(STORAGE_KEY, STORAGE_KEY, normalizeKatanaCredentials);
         const stored = migrated || await readEncryptedCredential(STORAGE_KEY);
-        if (!cancelled) setCredentials(normalizeKatanaCredentials(stored));
+        const normalized = normalizeKatanaCredentials(stored);
+        logKatana('credentials loaded', {
+          has_credentials: !!normalized,
+          wallet: normalized?.wallet || null,
+          migrated: !!migrated,
+        });
+        if (!cancelled) setCredentials(normalized);
       } catch (e) {
         console.warn('[useKatana] encrypted credential load failed:', e?.message || e);
+      } finally {
+        if (!cancelled) setCredentialsLoaded(true);
       }
     })();
     return () => { cancelled = true; };
@@ -138,6 +166,7 @@ export function useKatana() {
 
   const loadPrivate = useCallback(async (health, credentialOverride = null) => {
     if (!token || !walletAddr) {
+      logKatana('private read skipped', { has_token: !!token, wallet: walletAddr || null });
       setAccount(null);
       setPositions([]);
       setOrders([]);
@@ -146,8 +175,22 @@ export function useKatana() {
     const activeCredentials = credentialOverride || credentials;
     const localStatus = credentialStatus(activeCredentials);
     const merged = { ...health, ...localStatus };
-    setStatus(merged);
+    logKatana('private read start', {
+      wallet: walletAddr,
+      has_credentials: localStatus.has_credentials,
+      missing_fields: localStatus.missing_fields,
+      previous_account_exists: status?.account_exists,
+    });
+    setStatus(prev => ({
+      ...(prev || {}),
+      ...merged,
+      account_exists: prev?.account_exists,
+      account_error: prev?.account_error,
+      credential_error: prev?.credential_error,
+      private_read_error: prev?.private_read_error,
+    }));
     if (!merged?.has_credentials) {
+      logKatana('private read skipped: missing credentials', merged.missing_fields);
       setAccount(null);
       setPositions([]);
       setOrders([]);
@@ -159,6 +202,24 @@ export function useKatana() {
     try {
       acct = await fetchJson(`${FUTURES_API}/katana/account?${query}`, { headers });
     } catch (accountErr) {
+      logKatana('account read failed', {
+        status: accountErr?.status,
+        message: accountErr?.message,
+        data: accountErr?.data,
+      });
+      if (isCredentialError(accountErr)) {
+        setStatus({
+          ...merged,
+          account_exists: null,
+          account_configured: true,
+          trading_configured: false,
+          credential_error: accountErr?.message || 'Katana API key or secret was rejected.',
+        });
+        setAccount(null);
+        setPositions([]);
+        setOrders([]);
+        throw accountErr;
+      }
       if (!isAccountMissingError(accountErr)) throw accountErr;
       setStatus({
         ...merged,
@@ -166,6 +227,7 @@ export function useKatana() {
         account_configured: true,
         trading_configured: false,
         account_error: accountErr?.message || 'Katana account was not found for this wallet.',
+        credential_error: null,
       });
       setAccount(null);
       setPositions([]);
@@ -173,12 +235,14 @@ export function useKatana() {
       return;
     }
     if (!acct) {
+      logKatana('account read returned empty');
       setStatus({
         ...merged,
         account_exists: false,
         account_configured: true,
         trading_configured: false,
         account_error: 'Katana account was not found for this wallet.',
+        credential_error: null,
       });
       setAccount(null);
       setPositions([]);
@@ -192,23 +256,39 @@ export function useKatana() {
     setAccount(acct || null);
     setPositions(posResult.status === 'fulfilled' ? rows(posResult.value) : []);
     setOrders(ordResult.status === 'fulfilled' ? rows(ordResult.value) : []);
+    logKatana('private read success', {
+      wallet: walletAddr,
+      positions: posResult.status === 'fulfilled' ? rows(posResult.value).length : 'failed',
+      orders: ordResult.status === 'fulfilled' ? rows(ordResult.value).length : 'failed',
+      pos_error: posResult.status === 'rejected' ? posResult.reason?.message : null,
+      orders_error: ordResult.status === 'rejected' ? ordResult.reason?.message : null,
+    });
     setStatus({
       ...merged,
       account_exists: true,
       account_configured: true,
       trading_configured: true,
       account_error: null,
+      credential_error: null,
       private_read_error: [
         posResult.status === 'rejected' ? (posResult.reason?.message || 'positions read failed') : '',
         ordResult.status === 'rejected' ? (ordResult.reason?.message || 'orders read failed') : '',
       ].filter(Boolean).join(' · ') || null,
     });
-  }, [credentials, token, walletAddr]);
+  }, [credentials, status?.account_exists, token, walletAddr]);
 
   const refresh = useCallback(async () => {
-    if (!isActiveDex) return;
+    if (!isActiveDex || !credentialsLoaded) {
+      logKatana('refresh skipped', { isActiveDex, credentialsLoaded });
+      return;
+    }
     setLoading(true);
     try {
+      logKatana('refresh start', {
+        wallet: walletAddr,
+        has_credentials: credentialStatus(credentials).has_credentials,
+        account_exists: status?.account_exists,
+      });
       const [healthResult, marketResult, priceResult] = await Promise.allSettled([
         fetchJson(`${FUTURES_API}/katana/health`),
         fetchJson(`${FUTURES_API}/markets?dex=katana`),
@@ -217,9 +297,22 @@ export function useKatana() {
       const health = healthResult.status === 'fulfilled' ? healthResult.value : {};
       const marketRows = marketResult.status === 'fulfilled' ? marketResult.value : [];
       const priceRows = priceResult.status === 'fulfilled' ? priceResult.value : [];
-      setStatus(health);
+      setStatus(prev => ({
+        ...(prev || {}),
+        ...health,
+        ...credentialStatus(credentials),
+        account_exists: prev?.account_exists,
+        account_error: prev?.account_error,
+        credential_error: prev?.credential_error,
+        private_read_error: prev?.private_read_error,
+      }));
       setMarkets(rows(marketRows));
       setPrices(pricesArray(priceRows));
+      logKatana('public read complete', {
+        health: healthResult.status,
+        markets: rows(marketRows).length,
+        prices: pricesArray(priceRows).length,
+      });
       try {
         await loadPrivate(health);
       } catch (privateErr) {
@@ -230,11 +323,12 @@ export function useKatana() {
       }
       setError('');
     } catch (e) {
+      logKatana('refresh failed', { status: e?.status, message: e?.message, data: e?.data });
       setError(e?.message || 'Katana Perps data unavailable');
     } finally {
       setLoading(false);
     }
-  }, [isActiveDex, loadPrivate]);
+  }, [credentials, credentialsLoaded, isActiveDex, loadPrivate, status?.account_exists, walletAddr]);
 
   useEffect(() => {
     if (!isActiveDex) return;
@@ -276,6 +370,7 @@ export function useKatana() {
       await evm.ensureChain?.(KATANA_CHAIN_ID);
       const next = normalizeKatanaCredentials({ apiKey, apiSecret, wallet: walletAddr });
       if (!next) return disabled('Katana API key and secret required.');
+      logKatana('activate credentials submit', { wallet: walletAddr, has_api_key: !!apiKey, has_api_secret: !!apiSecret });
       await writeEncryptedCredential(STORAGE_KEY, next);
       setCredentials(next);
       const nextStatus = { ...(status || {}), ...credentialStatus(next) };
@@ -287,6 +382,7 @@ export function useKatana() {
       }
       return { success: true, ...credentialStatus(next) };
     } catch (e) {
+      logKatana('activate failed', { status: e?.status, message: e?.message, data: e?.data });
       return { error: e?.message || 'Failed to save Katana credentials' };
     }
   }, [evm, loadPrivate, status, token, walletAddr]);
@@ -294,16 +390,33 @@ export function useKatana() {
   const signedRequest = useCallback(async (preparePath, submitPath, payload) => {
     if (!token) return disabled('Missing game session token.');
     if (!walletAddr) return disabled('Connect a Katana wallet first.');
-    if (!status?.has_credentials) {
-      return disabled(`Missing Katana credentials: ${(status?.missing_fields || []).join(', ') || 'api_key, api_secret'}`);
+    const localStatus = credentialStatus(credentials);
+    if (!localStatus.has_credentials) {
+      return disabled(`Missing Katana credentials: ${localStatus.missing_fields.join(', ') || 'api_key, api_secret'}`);
     }
     try {
+      logKatana('signed request prepare start', {
+        preparePath,
+        submitPath,
+        wallet: walletAddr,
+        payload,
+      });
       const prepared = await fetchJson(`${FUTURES_API}${preparePath}`, {
         method: 'POST',
         headers: authHeaders(token, credentials),
         body: JSON.stringify({ ...payload, wallet: walletAddr }),
       });
+      logKatana('signed request prepared', {
+        endpoint: prepared?.endpoint,
+        method: prepared?.method,
+        has_typed_data: !!prepared?.typedData,
+        parameters: prepared?.parameters,
+      });
       const signature = await signKatanaTypedData(prepared.typedData);
+      logKatana('signed request signature received', {
+        preparePath,
+        signature_len: String(signature || '').length,
+      });
       const result = await fetchJson(`${FUTURES_API}${submitPath}`, {
         method: 'POST',
         headers: authHeaders(token, credentials),
@@ -314,12 +427,14 @@ export function useKatana() {
           notional_usd: payload.notional_usd,
         }),
       });
+      logKatana('signed request submit result', result);
       await refresh();
       return result;
     } catch (e) {
+      logKatana('signed request failed', { status: e?.status, message: e?.message, data: e?.data, payload });
       return { error: e?.message || 'Katana signed request failed' };
     }
-  }, [credentials, refresh, signKatanaTypedData, status?.has_credentials, status?.missing_fields, token, walletAddr]);
+  }, [credentials, refresh, signKatanaTypedData, token, walletAddr]);
 
   const placeOrder = useCallback((payload) => {
     return signedRequest('/katana/orders/prepare', '/katana/orders/submit', payload);
@@ -352,11 +467,12 @@ export function useKatana() {
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!token) return disabled('Missing game session token.');
     if (!walletAddr) return disabled('Connect a Katana wallet first.');
-    if (!status?.has_credentials) {
-      return disabled(`Missing Katana credentials: ${(status?.missing_fields || []).join(', ') || 'api_key, api_secret'}`);
+    const localStatus = credentialStatus(credentials);
+    if (!localStatus.has_credentials) {
+      return disabled(`Missing Katana credentials: ${localStatus.missing_fields.join(', ') || 'api_key, api_secret'}`);
     }
     return signedRequest('/katana/orders/cancel/prepare', '/katana/orders/cancel/submit', { symbol, orderId });
-  }, [signedRequest, status?.has_credentials, status?.missing_fields, token, walletAddr]);
+  }, [credentials, signedRequest, token, walletAddr]);
 
   const closePosition = useCallback((symbol, side, amount) => {
     const closeSide = String(side || '').toLowerCase() === 'long' ? 'sell' : 'buy';
@@ -377,7 +493,7 @@ export function useKatana() {
   }, [referralUrl]);
   const available = Number(account?.availableCollateral ?? account?.available_to_spend ?? account?.usdc ?? 0) || 0;
   const equity = Number(account?.equity ?? account?.balance ?? 0) || 0;
-  const accountReady = !!status?.has_credentials && status?.account_exists === true;
+  const accountReady = credentialStatus(credentials).has_credentials && status?.account_exists === true;
   const tradeReady = accountReady;
 
   return {
@@ -400,7 +516,7 @@ export function useKatana() {
     leverageSettings: {},
     marginModes: {},
     error,
-    loading,
+    loading: loading || (isActiveDex && !credentialsLoaded),
     dataReady: markets.length > 0 || prices.length > 0,
     isReady: tradeReady,
     accountReady,

@@ -405,7 +405,7 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   const posValueUsd = providedValue && providedValue > 0
     ? providedValue
     : (markP ? amt * markP : amt * entryP);
-  const providedPnl = numOrNull(pos.pnl_usd);
+  const providedPnl = numOrNull(pos.pnl_usd ?? pos.unrealized_pnl ?? pos.unrealizedPnL ?? pos.pnl);
   const derivedPnl = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
   const pnlVal = cleanSignedZero(providedPnl ?? derivedPnl);
   const rawLev = displayLeverage(pos.leverage);
@@ -1369,10 +1369,11 @@ const BottomPanel = memo(function BottomPanel({
   bottomH, bottomTab, setBottomTab,
   showFilter, setShowFilter, btmFilters, setBtmFilters,
   btmSymbols, sortOptionsForTab, hasActiveFilters,
-  filteredPositions, filteredOrders,
+  filteredPositions, filteredOrders, orders,
   prices, walletAddr, dataReady, leverageSettings,
   closePosition, cancelOrder, dex, loading, historyAccountAddr, markets, onClosedPositionSnapshot,
 }) {
+  const tpslOrders = Array.isArray(orders) ? orders : filteredOrders;
   // Avantis has no order-flow history or funding payments exposed via a
   // public API like Pacifica, so we hide those tabs entirely on that DEX.
   const tabs = [
@@ -1429,7 +1430,7 @@ const BottomPanel = memo(function BottomPanel({
                   pnlPct,
                   pnlColor,
                 } = getPositionMetrics(p, prices, leverageSettings);
-                const { tp, sl } = getPositionTpsl(p, orders);
+                const { tp, sl } = getPositionTpsl(p, tpslOrders);
                 return (
                   <tr key={positionStableKey(p) || i} style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
@@ -5365,6 +5366,7 @@ function FuturesPanel() {
             hasActiveFilters={hasActiveFilters}
             filteredPositions={filteredPositions}
             filteredOrders={filteredOrders}
+            orders={orders}
             prices={prices}
             walletAddr={walletAddr}
             historyAccountAddr={(dex === 'decibel' || dex === 'grvt') ? subaccountAddr : walletAddr}

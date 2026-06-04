@@ -1137,10 +1137,32 @@ function requireKatanaOwner(req, res) {
 }
 
 function katanaRouteError(res, e, fallback) {
-  const status = e.status || (e.code === 'KATANA_CONFIG_MISSING' ? 428 : 502);
+  const upstreamStatus = e.response?.status || e.statusCode;
+  const status = e.status || upstreamStatus || (e.code === 'KATANA_CONFIG_MISSING' ? 428 : 502);
+  const upstreamBody = e.response?.data;
+  const upstreamDetail = typeof upstreamBody === 'string'
+    ? upstreamBody
+    : (upstreamBody?.message || upstreamBody?.error || upstreamBody?.detail);
+  const message = status === 401
+    ? 'Katana API key or secret was rejected. Create a Read-Write Katana Perps API key and paste both fields again.'
+    : status === 400
+      ? (upstreamDetail || e.message || fallback)
+    : fallback;
+  console.warn('[katana route error]', {
+    fallback,
+    status,
+    upstreamStatus,
+    message,
+    detail: upstreamDetail || e.message,
+    error_name: e.name,
+    error_code: e.code,
+    response: upstreamBody,
+    stack: e.stack,
+  });
   res.status(status).json({
-    error: fallback,
-    detail: e.message,
+    error: message,
+    detail: upstreamDetail || e.message,
+    upstream_status: upstreamStatus || undefined,
     missing_env: e.missing_env || undefined,
   });
 }
@@ -1248,7 +1270,23 @@ router.post('/katana/orders/prepare', auth, async (req, res) => {
   try {
     const creds = requireKatanaOwner(req, res);
     if (!creds) return;
-    res.json(await katana.prepareOrder(creds, { ...req.body, wallet: req.body?.wallet || req.playerWallet }));
+    const payload = { ...req.body, wallet: req.body?.wallet || req.playerWallet };
+    console.log('[katana route] orders/prepare', {
+      playerId: req.playerId,
+      wallet: String(payload.wallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      symbol: payload.symbol,
+      market: payload.market,
+      side: payload.side,
+      type: payload.type || payload.orderType,
+      quantity: payload.quantity,
+      amount: payload.amount,
+      price: payload.price,
+      reduceOnly: payload.reduceOnly,
+      notional_usd: payload.notional_usd,
+      has_api_key: !!creds.apiKey,
+      has_api_secret: !!creds.apiSecret,
+    });
+    res.json(await katana.prepareOrder(creds, payload));
   } catch (e) {
     katanaRouteError(res, e, 'Failed to prepare Katana order');
   }

@@ -23,6 +23,42 @@ const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.KA
 const PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.KATANA_PERPS_PUBLIC_CACHE_TTL_MS || 10_000)));
 const PUBLIC_STALE_TTL_MS = Math.max(PUBLIC_CACHE_TTL_MS, Math.min(900_000, Number(process.env.KATANA_PERPS_PUBLIC_STALE_TTL_MS || 300_000)));
 const publicCache = new Map();
+const KATANA_DEBUG = process.env.KATANA_DEBUG !== '0';
+
+function redact(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  if (text.length <= 10) return `${text.slice(0, 2)}...${text.slice(-2)}`;
+  return `${text.slice(0, 6)}...${text.slice(-4)}`;
+}
+
+function logKatana(label, payload = undefined) {
+  if (!KATANA_DEBUG) return;
+  try {
+    if (payload === undefined) console.log(`[katana] ${label}`);
+    else console.log(`[katana] ${label}`, payload);
+  } catch {}
+}
+
+function errorInfo(e) {
+  return {
+    name: e?.name,
+    message: e?.message,
+    status: e?.status || e?.statusCode || e?.response?.status,
+    code: e?.code,
+    response: e?.response?.data,
+    stack: e?.stack,
+  };
+}
+
+function jsonSafe(value) {
+  if (typeof value === 'bigint') return value.toString();
+  if (Array.isArray(value)) return value.map(jsonSafe);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, jsonSafe(item)]));
+  }
+  return value;
+}
 
 function sdk() {
   return require('@katanaperps/katana-perps-sdk');
@@ -98,6 +134,14 @@ function credentials(input = {}, options = {}) {
 function authenticatedClient(credsInput) {
   const creds = credentials(credsInput);
   const { RestAuthenticatedClient } = sdk();
+  logKatana('authenticated client', {
+    api_url: KATANA_REST_API,
+    sandbox: boolEnv(process.env.KATANA_PERPS_SANDBOX),
+    has_api_key: !!creds.apiKey,
+    has_api_secret: !!creds.apiSecret,
+    wallet: redact(creds.wallet),
+    override_base_url: !!process.env.KATANA_PERPS_API_URL,
+  });
   return new RestAuthenticatedClient({
     sandbox: boolEnv(process.env.KATANA_PERPS_SANDBOX),
     apiKey: creds.apiKey,
@@ -239,9 +283,15 @@ function normalizePrice(row) {
 function normalizePosition(row) {
   const symbol = baseSymbol(row?.market);
   const qty = num(row?.quantity);
+  const rawSide = String(row?.side || row?.positionSide || '').trim().toLowerCase();
+  const side = rawSide === 'buy' || rawSide === 'long' || rawSide === 'bid'
+    ? 'bid'
+    : rawSide === 'sell' || rawSide === 'short' || rawSide === 'ask'
+      ? 'ask'
+      : qty < 0 ? 'ask' : 'bid';
   return {
     symbol,
-    side: qty < 0 ? 'short' : 'long',
+    side,
     amount: String(Math.abs(qty)),
     quantity: row?.quantity,
     entry_price: row?.entryPrice,
@@ -258,6 +308,26 @@ function normalizePosition(row) {
     trade_index: row?.openedByFillId || row?.lastFillId || row?.market,
     _raw: row,
   };
+}
+
+function logPositions(label, rows, normalized) {
+  logKatana(label, {
+    count: Array.isArray(normalized) ? normalized.length : 0,
+    rows: (Array.isArray(rows) ? rows : []).slice(0, 10).map((row, index) => ({
+      index,
+      market: row?.market,
+      side: row?.side ?? row?.positionSide,
+      quantity: row?.quantity,
+      entryPrice: row?.entryPrice,
+      markPrice: row?.markPrice,
+      liquidationPrice: row?.liquidationPrice,
+      unrealizedPnL: row?.unrealizedPnL,
+      realizedPnL: row?.realizedPnL,
+      marginRequirement: row?.marginRequirement,
+      normalized_side: normalized?.[index]?.side,
+      normalized_pnl: normalized?.[index]?.unrealized_pnl ?? normalized?.[index]?.pnl,
+    })),
+  });
 }
 
 function normalizeOrder(row) {
@@ -283,8 +353,8 @@ function normalizeOrder(row) {
 
 function normalizeSide(side) {
   const value = String(side || '').trim().toLowerCase();
-  if (value === 'buy' || value === 'long') return 'buy';
-  if (value === 'sell' || value === 'short') return 'sell';
+  if (value === 'buy' || value === 'long' || value === 'bid') return 'buy';
+  if (value === 'sell' || value === 'short' || value === 'ask') return 'sell';
   throw Object.assign(new Error('Katana order side must be long/buy or short/sell'), { status: 400 });
 }
 
@@ -310,6 +380,14 @@ function normalizeTif(value) {
   throw Object.assign(new Error('Unsupported Katana timeInForce'), { status: 400 });
 }
 
+function formatQuantity(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const floored = Math.floor((n + 1e-12) * 10_000) / 10_000;
+  if (!(floored > 0)) return '';
+  return floored.toFixed(8);
+}
+
 function orderParams(input = {}, creds, options = {}) {
   const { OrderType } = sdk();
   const type = normalizeOrderType(input.type || input.orderType || input.order_type, options.market);
@@ -319,10 +397,10 @@ function orderParams(input = {}, creds, options = {}) {
     nonce: nonce(),
     wallet: walletParam(input.wallet, creds),
     market: marketName(input.market || input.symbol),
-    quantity: String(input.quantity || input.amount || ''),
+    quantity: formatQuantity(input.quantity || input.amount || ''),
   };
   if (!params.quantity || !(Number(params.quantity) > 0)) {
-    throw Object.assign(new Error('Katana order quantity required in base terms'), { status: 400 });
+    throw Object.assign(new Error('Katana order quantity must be at least 0.0001 base units'), { status: 400 });
   }
   if (input.clientOrderId || input.client_order_id) params.clientOrderId = String(input.clientOrderId || input.client_order_id).slice(0, 40);
   if (input.reduceOnly !== undefined || input.reduce_only !== undefined) params.reduceOnly = !!(input.reduceOnly ?? input.reduce_only);
@@ -334,6 +412,19 @@ function orderParams(input = {}, creds, options = {}) {
   }
   if (input.triggerPrice || input.trigger_price) params.triggerPrice = String(input.triggerPrice || input.trigger_price);
   if (input.triggerType || input.trigger_type) params.triggerType = String(input.triggerType || input.trigger_type).toLowerCase();
+  logKatana('order params normalized', {
+    input: {
+      symbol: input.symbol,
+      market: input.market,
+      side: input.side,
+      type: input.type || input.orderType || input.order_type,
+      quantity: input.quantity || input.amount,
+      price: input.price,
+      reduceOnly: input.reduceOnly ?? input.reduce_only,
+      notional_usd: input.notional_usd,
+    },
+    params,
+  });
   return params;
 }
 
@@ -357,7 +448,7 @@ function cancelParams(input = {}, creds) {
 function typedDataPayload(parts) {
   const [domain, types, message] = parts;
   const primaryType = Object.keys(types || {}).find(key => key !== 'EIP712Domain');
-  return { domain, types, primaryType, message };
+  return jsonSafe({ domain, types, primaryType, message });
 }
 
 async function typedDataFor(credsInput, kind, params) {
@@ -365,17 +456,39 @@ async function typedDataFor(credsInput, kind, params) {
   const exchange = await getExchange();
   const chainId = exchange?.chainId;
   const exchangeContractAddress = exchange?.exchangeContractAddress;
+  logKatana('typed data exchange metadata', {
+    kind,
+    chainId,
+    exchangeContractAddress: redact(exchangeContractAddress),
+    has_exchange: !!exchange,
+    params,
+  });
   if (!chainId || !exchangeContractAddress) {
     throw Object.assign(new Error('Katana exchange contract metadata unavailable'), { status: 502 });
   }
   const katana = sdk();
-  if (kind === 'associateWallet') {
-    return typedDataPayload(katana.getWalletAssociationSignatureTypedData(params, exchangeContractAddress, chainId, boolEnv(process.env.KATANA_PERPS_SANDBOX)));
+  try {
+    const sandbox = boolEnv(process.env.KATANA_PERPS_SANDBOX);
+    let payload;
+    if (kind === 'associateWallet') {
+      payload = typedDataPayload(katana.getWalletAssociationSignatureTypedData(params, exchangeContractAddress, chainId, sandbox));
+    } else if (kind === 'cancelOrders') {
+      payload = typedDataPayload(katana.getOrderCancellationSignatureTypedData(params, exchangeContractAddress, chainId, sandbox));
+    } else {
+      payload = typedDataPayload(katana.getOrderSignatureTypedData(params, exchangeContractAddress, chainId, sandbox));
+    }
+    logKatana('typed data created', {
+      kind,
+      domain: payload?.domain,
+      primaryType: payload?.primaryType,
+      type_keys: Object.keys(payload?.types || {}),
+      message: payload?.message,
+    });
+    return payload;
+  } catch (e) {
+    logKatana('typed data failed', errorInfo(e));
+    throw e;
   }
-  if (kind === 'cancelOrders') {
-    return typedDataPayload(katana.getOrderCancellationSignatureTypedData(params, exchangeContractAddress, chainId, boolEnv(process.env.KATANA_PERPS_SANDBOX)));
-  }
-  return typedDataPayload(katana.getOrderSignatureTypedData(params, exchangeContractAddress, chainId, boolEnv(process.env.KATANA_PERPS_SANDBOX)));
 }
 
 async function getHealth() {
@@ -441,7 +554,12 @@ async function getAccount(credsInput, wallet) {
     usdc: account.availableCollateral,
     available_to_spend: account.availableCollateral,
     free_collateral: account.freeCollateral,
-    positions: Array.isArray(account.positions) ? account.positions.map(normalizePosition) : [],
+    positions: (() => {
+      const positionRows = Array.isArray(account.positions) ? account.positions : [];
+      const normalized = positionRows.map(normalizePosition);
+      logPositions('account positions normalized', positionRows, normalized);
+      return normalized;
+    })(),
     _raw: account,
   };
 }
@@ -454,7 +572,10 @@ async function getPositions(credsInput, wallet, params = {}) {
     wallet: walletParam(wallet, creds),
     ...(params.market ? { market: marketName(params.market) } : {}),
   });
-  return (Array.isArray(rows) ? rows : []).map(normalizePosition);
+  const positionRows = Array.isArray(rows) ? rows : [];
+  const normalized = positionRows.map(normalizePosition);
+  logPositions('positions normalized', positionRows, normalized);
+  return normalized;
 }
 
 async function getOrders(credsInput, wallet, params = {}) {
@@ -514,6 +635,23 @@ async function submitAssociateWallet(credsInput, body = {}) {
 
 async function prepareOrder(credsInput, input = {}) {
   const creds = credentials(credsInput);
+  logKatana('prepare order input', {
+    wallet: redact(input.wallet || creds.wallet),
+    has_api_key: !!creds.apiKey,
+    has_api_secret: !!creds.apiSecret,
+    input: {
+      symbol: input.symbol,
+      market: input.market,
+      side: input.side,
+      quantity: input.quantity,
+      amount: input.amount,
+      type: input.type,
+      orderType: input.orderType,
+      price: input.price,
+      reduceOnly: input.reduceOnly,
+      notional_usd: input.notional_usd,
+    },
+  });
   const parameters = orderParams(input, creds, { market: String(input.type || input.orderType || '').toLowerCase() === 'market' });
   return {
     endpoint: '/orders',
