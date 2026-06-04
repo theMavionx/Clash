@@ -83,6 +83,16 @@ function pricesArray(payload) {
   return [];
 }
 
+function isAccountMissingError(error) {
+  const text = [
+    error?.message,
+    error?.data?.detail,
+    error?.data?.error,
+    error?.data?.message,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return /account.*(not found|does not exist|missing)|wallet.*(not found|does not exist|not associated)|not associated/u.test(text);
+}
+
 function disabled(message) {
   return { error: message || 'Katana Perps credentials are not saved in encrypted browser storage.' };
 }
@@ -126,14 +136,15 @@ export function useKatana() {
     return () => { cancelled = true; };
   }, [isActiveDex]);
 
-  const loadPrivate = useCallback(async (health) => {
+  const loadPrivate = useCallback(async (health, credentialOverride = null) => {
     if (!token || !walletAddr) {
       setAccount(null);
       setPositions([]);
       setOrders([]);
       return;
     }
-    const localStatus = credentialStatus(credentials);
+    const activeCredentials = credentialOverride || credentials;
+    const localStatus = credentialStatus(activeCredentials);
     const merged = { ...health, ...localStatus };
     setStatus(merged);
     if (!merged?.has_credentials) {
@@ -143,26 +154,69 @@ export function useKatana() {
       return;
     }
     const query = `wallet=${encodeURIComponent(walletAddr)}`;
-    const headers = authHeaders(token, credentials);
-    const [acct, pos, ord] = await Promise.all([
-      fetchJson(`${FUTURES_API}/katana/account?${query}`, { headers }),
+    const headers = authHeaders(token, activeCredentials);
+    let acct = null;
+    try {
+      acct = await fetchJson(`${FUTURES_API}/katana/account?${query}`, { headers });
+    } catch (accountErr) {
+      if (!isAccountMissingError(accountErr)) throw accountErr;
+      setStatus({
+        ...merged,
+        account_exists: false,
+        account_configured: true,
+        trading_configured: false,
+        account_error: accountErr?.message || 'Katana account was not found for this wallet.',
+      });
+      setAccount(null);
+      setPositions([]);
+      setOrders([]);
+      return;
+    }
+    if (!acct) {
+      setStatus({
+        ...merged,
+        account_exists: false,
+        account_configured: true,
+        trading_configured: false,
+        account_error: 'Katana account was not found for this wallet.',
+      });
+      setAccount(null);
+      setPositions([]);
+      setOrders([]);
+      return;
+    }
+    const [posResult, ordResult] = await Promise.allSettled([
       fetchJson(`${FUTURES_API}/katana/positions?${query}`, { headers }),
       fetchJson(`${FUTURES_API}/katana/orders?${query}&closed=false&limit=100`, { headers }),
     ]);
     setAccount(acct || null);
-    setPositions(rows(pos));
-    setOrders(rows(ord));
+    setPositions(posResult.status === 'fulfilled' ? rows(posResult.value) : []);
+    setOrders(ordResult.status === 'fulfilled' ? rows(ordResult.value) : []);
+    setStatus({
+      ...merged,
+      account_exists: true,
+      account_configured: true,
+      trading_configured: true,
+      account_error: null,
+      private_read_error: [
+        posResult.status === 'rejected' ? (posResult.reason?.message || 'positions read failed') : '',
+        ordResult.status === 'rejected' ? (ordResult.reason?.message || 'orders read failed') : '',
+      ].filter(Boolean).join(' · ') || null,
+    });
   }, [credentials, token, walletAddr]);
 
   const refresh = useCallback(async () => {
     if (!isActiveDex) return;
     setLoading(true);
     try {
-      const [health, marketRows, priceRows] = await Promise.all([
+      const [healthResult, marketResult, priceResult] = await Promise.allSettled([
         fetchJson(`${FUTURES_API}/katana/health`),
         fetchJson(`${FUTURES_API}/markets?dex=katana`),
         fetchJson(`${FUTURES_API}/prices?dex=katana`),
       ]);
+      const health = healthResult.status === 'fulfilled' ? healthResult.value : {};
+      const marketRows = marketResult.status === 'fulfilled' ? marketResult.value : [];
+      const priceRows = priceResult.status === 'fulfilled' ? priceResult.value : [];
       setStatus(health);
       setMarkets(rows(marketRows));
       setPrices(pricesArray(priceRows));
@@ -224,12 +278,18 @@ export function useKatana() {
       if (!next) return disabled('Katana API key and secret required.');
       await writeEncryptedCredential(STORAGE_KEY, next);
       setCredentials(next);
-      setStatus(prev => ({ ...(prev || {}), ...credentialStatus(next) }));
+      const nextStatus = { ...(status || {}), ...credentialStatus(next) };
+      setStatus(nextStatus);
+      try {
+        await loadPrivate(nextStatus, next);
+      } catch (privateErr) {
+        if (privateErr?.status !== 428) throw privateErr;
+      }
       return { success: true, ...credentialStatus(next) };
     } catch (e) {
       return { error: e?.message || 'Failed to save Katana credentials' };
     }
-  }, [evm, token, walletAddr]);
+  }, [evm, loadPrivate, status, token, walletAddr]);
 
   const signedRequest = useCallback(async (preparePath, submitPath, payload) => {
     if (!token) return disabled('Missing game session token.');
@@ -311,10 +371,14 @@ export function useKatana() {
 
   const referralCode = status?.access_code || KATANA_PERPS_REFERRAL_CODE;
   const referralUrl = status?.referral_url || KATANA_PERPS_REFERRAL_URL;
+  const openKatanaApp = useCallback(async () => {
+    try { window.open(referralUrl, '_blank', 'noopener,noreferrer'); } catch {}
+    return { ok: true, info: 'Open Katana Perps to deposit or manage funds.' };
+  }, [referralUrl]);
   const available = Number(account?.availableCollateral ?? account?.available_to_spend ?? account?.usdc ?? 0) || 0;
   const equity = Number(account?.equity ?? account?.balance ?? 0) || 0;
-  const accountReady = !!status?.has_credentials;
-  const tradeReady = !!status?.has_credentials;
+  const accountReady = !!status?.has_credentials && status?.account_exists === true;
+  const tradeReady = accountReady;
 
   return {
     dex: 'katana',
@@ -332,6 +396,9 @@ export function useKatana() {
     balance: equity,
     freeCollateral: available,
     walletUsdc: available,
+    spotUsdc: 0,
+    leverageSettings: {},
+    marginModes: {},
     error,
     loading,
     dataReady: markets.length > 0 || prices.length > 0,
@@ -343,7 +410,14 @@ export function useKatana() {
     referralCode,
     referralUrl,
     hasReferrer: !!referralCode,
-    oneTapTrading: tradeReady,
+    oneTapTrading: {
+      enabled: tradeReady,
+      approved: tradeReady,
+      signer: tradeReady ? walletAddr : '',
+      note: tradeReady
+        ? 'Katana orders use browser wallet EIP-712 signatures.'
+        : 'Save Katana API credentials before trading.',
+    },
     setOneTapTradingEnabled: async () => disabled('Katana Perps signing is configured server-side through the official SDK.'),
     connectPerpl: connectKatana,
     openReferralJoin: () => {
@@ -355,6 +429,8 @@ export function useKatana() {
       try { window.open(referralUrl, '_blank', 'noopener,noreferrer'); } catch {}
       return { ...result, referralUrl };
     },
+    depositToPacifica: openKatanaApp,
+    withdraw: openKatanaApp,
     disconnect: async () => {
       await removeEncryptedCredential(STORAGE_KEY);
       setCredentials(null);

@@ -427,7 +427,59 @@ function isSuccessfulTradeClose(result) {
   return !/(fail|reject|cancel|error)/u.test(status);
 }
 
-function getPositionTpsl(pos) {
+function orderTpslKind(order) {
+  const raw = String(
+    order?.tpsl
+      || order?._raw?.tpsl
+      || order?._raw?.tp_sl
+      || order?._raw?.trigger_type
+      || order?._raw?.triggerType
+      || order?.order_type
+      || order?.ot
+      || '',
+  ).trim().toLowerCase();
+  if (raw === 'tp' || raw === 'take_profit' || raw === 'take-profit' || raw.includes('take')) return 'tp';
+  if (raw === 'sl' || raw === 'stop_loss' || raw === 'stop-loss' || raw.includes('stop')) return 'sl';
+  return '';
+}
+
+function orderTriggerPrice(order) {
+  return numOrNull(
+    order?.stop_price
+      ?? order?.sp
+      ?? order?.trigger_price
+      ?? order?.triggerPrice
+      ?? order?.trigger_px
+      ?? order?.triggerPx
+      ?? order?._raw?.trigger_px
+      ?? order?._raw?.triggerPx
+      ?? order?.price
+      ?? order?.ip
+  );
+}
+
+function orderMatchesPosition(order, pos) {
+  const orderSymbol = String(order?.symbol || order?.s || '').toUpperCase();
+  const posSymbol = String(pos?.symbol || pos?.s || '').toUpperCase();
+  if (orderSymbol && posSymbol && orderSymbol === posSymbol) return true;
+  const orderPair = order?.pair_index ?? order?.pairIndex ?? order?._raw?.instrument_id;
+  const posPair = pos?.pair_index ?? pos?.pairIndex ?? pos?._raw?.instrument_id;
+  return orderPair != null && posPair != null && Number(orderPair) === Number(posPair);
+}
+
+function inferTpslKindFromPosition(order, pos, triggerPrice) {
+  const explicit = orderTpslKind(order);
+  if (explicit) return explicit;
+  const isReduceOnly = order?.reduce_only === true || order?._raw?.reduce_only === true || order?._raw?.ro === true;
+  if (!isReduceOnly || !(triggerPrice > 0)) return '';
+  const reference = numOrNull(pos?.mark_price ?? pos?.entry_price ?? pos?.open_price ?? pos?.price);
+  if (!(reference > 0)) return '';
+  const isLong = orderPositionSide(pos) !== 'ask' && String(pos?.side || '').toLowerCase() !== 'ask';
+  if (isLong) return triggerPrice > reference ? 'tp' : 'sl';
+  return triggerPrice < reference ? 'tp' : 'sl';
+}
+
+function getPositionTpsl(pos, orders = []) {
   const tp = numOrNull(
     pos?.take_profit_price
       ?? pos?.takeProfitPrice
@@ -452,9 +504,20 @@ function getPositionTpsl(pos) {
       ?? pos?.sl_limit_price
       ?? pos?.slLimitPrice
   );
+  let orderTp = 0;
+  let orderSl = 0;
+  for (const order of Array.isArray(orders) ? orders : []) {
+    if (!orderMatchesPosition(order, pos)) continue;
+    const price = orderTriggerPrice(order);
+    if (!(price > 0)) continue;
+    const kind = inferTpslKindFromPosition(order, pos, price);
+    if (!kind) continue;
+    if (kind === 'tp') orderTp = price;
+    if (kind === 'sl') orderSl = price;
+  }
   return {
-    tp: tp && tp > 0 ? tp : 0,
-    sl: sl && sl > 0 ? sl : 0,
+    tp: tp && tp > 0 ? tp : orderTp,
+    sl: sl && sl > 0 ? sl : orderSl,
   };
 }
 
@@ -464,8 +527,8 @@ function formatTpslInputValue(value) {
   return n >= 1 ? String(Number(n.toFixed(2))) : String(Number(n.toFixed(8)));
 }
 
-function PositionTpslRow({ pos }) {
-  const { tp, sl } = getPositionTpsl(pos);
+function PositionTpslRow({ pos, orders }) {
+  const { tp, sl } = getPositionTpsl(pos, orders);
   if (!tp && !sl) return null;
   return (
     <div style={S.row}>
@@ -1158,7 +1221,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
 
 // ==================== POSITIONS LIST (mobile/tab card view) ====================
 const PositionsList = memo(function PositionsList({
-  positions, prices, dataReady, leverageSettings, marginModes, loading, error,
+  positions, orders, prices, dataReady, leverageSettings, marginModes, loading, error,
   closePosition, setTpsl, clearError, isBasic, dex,
 }) {
   const [expandedPos, setExpandedPos] = useState(null);
@@ -1214,7 +1277,7 @@ const PositionsList = memo(function PositionsList({
                 {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
               </span>
             </div>
-            <PositionTpslRow pos={pos} />
+            <PositionTpslRow pos={pos} orders={orders} />
 
             {/* Action buttons. Basic mode hides TP/SL — risk management
                 features are deliberately stripped from the simplified UX. */}
@@ -1226,7 +1289,7 @@ const PositionsList = memo(function PositionsList({
                     setExpandedPos(null);
                     return;
                   }
-                  const { tp, sl } = getPositionTpsl(pos);
+                  const { tp, sl } = getPositionTpsl(pos, orders);
                   setTpPrice(formatTpslInputValue(tp));
                   setSlPrice(formatTpslInputValue(sl));
                   setExpandedPos(`${posKey}:tpsl`);
@@ -1348,7 +1411,7 @@ const BottomPanel = memo(function BottomPanel({
                   pnlPct,
                   pnlColor,
                 } = getPositionMetrics(p, prices, leverageSettings);
-                const { tp, sl } = getPositionTpsl(p);
+                const { tp, sl } = getPositionTpsl(p, orders);
                 return (
                   <tr key={positionStableKey(p) || i} style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
@@ -1428,7 +1491,14 @@ const BottomPanel = memo(function BottomPanel({
                       {isReadOnlyOrder(o) ? (
                         <span style={{color: '#8b7655', fontSize: 11, fontWeight: 800}}>On position</span>
                       ) : (
-                        <button style={S.tblCloseBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>Cancel</button>
+                        <button
+                          style={S.tblCloseBtn}
+                          onClick={() => dex === 'hotstuff'
+                            ? cancelOrder(o)
+                            : cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}
+                        >
+                          Cancel
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -1544,7 +1614,7 @@ function FuturesPanel() {
     ? katanaHook
     : pacificaHook;
   const {
-    walletAddr, account, positions, orders, prices, markets, walletUsdc, spotUsdc, leverageSettings, marginModes, dataReady, accountReady,
+    walletAddr, account, positions, orders, prices, markets, walletUsdc, spotUsdc, leverageSettings = {}, marginModes = {}, dataReady, accountReady,
     connected: tradingConnected,
     loading, error, clearError, goldEarned, clearGoldEarned, depositStatus, walletUsdcStatus,
     bridgeSourceBalances, bridgeSourceBalanceStatus,
@@ -1806,7 +1876,8 @@ function FuturesPanel() {
   const [hibachiApiKeyInput, setHibachiApiKeyInput] = useState('');
   const [hibachiAccountIdInput, setHibachiAccountIdInput] = useState('');
   const [hibachiPrivateKeyInput, setHibachiPrivateKeyInput] = useState('');
-  const [grvtOneTapOpen, setGrvtOneTapOpen] = useState(false);
+  const [grvtAccountModalOpen, setGrvtAccountModalOpen] = useState(false);
+  const [grvtAccountOneTap, setGrvtAccountOneTap] = useState(false);
   const [grvtPrivateKeyInput, setGrvtPrivateKeyInput] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
@@ -2457,12 +2528,15 @@ function FuturesPanel() {
       }
       setTradePhase('signing');
       let result;
+      const tradeOptions = Number.isFinite(positionUsdc) && positionUsdc > 0
+        ? { notional_usd: positionUsdc }
+        : undefined;
       if (orderType === 'market') {
         // 5th arg (leverage) is only read by useAvantis; usePacifica ignores it.
-        result = await placeMarketOrder(symbol, side, qty, '0.5', leverage);
+        result = await placeMarketOrder(symbol, side, qty, '0.5', leverage, tradeOptions);
       } else {
         if (!limitPrice) return;
-        result = await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage);
+        result = await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage, tradeOptions);
       }
       setTradePhase(null);
       if (result?.error) {
@@ -3942,6 +4016,8 @@ function FuturesPanel() {
     const isRunning = referralLinking || loading;
     const missingKatanaFields = Array.isArray(inviteStatus?.missing_fields) ? inviteStatus.missing_fields : [];
     const katanaReadsReady = !!inviteStatus?.account_configured;
+    const katanaAccountExists = inviteStatus?.account_exists === true;
+    const katanaAccountMissing = inviteStatus?.has_credentials === true && inviteStatus?.account_exists === false;
     const katanaCanSave = katanaApiKeyInput.trim().length > 0 && katanaApiSecretInput.trim().length > 0 && !isRunning;
     return (
       <>
@@ -3967,7 +4043,7 @@ function FuturesPanel() {
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CHECKING' : 'ACTION REQUIRED'}</span>
                 <span style={hlGateStyles.title}>Katana Perps setup</span>
                 <span style={hlGateStyles.subtitle}>
-                  Add your Katana API key and secret. Clash stores them encrypted in this browser only; order placement still requires your wallet to sign Katana EIP-712 data in the browser.
+                  Add your Katana API key and secret. Clash stores them encrypted in this browser only, then checks that this wallet has an active Katana Perps account.
                 </span>
               </div>
 
@@ -3989,7 +4065,24 @@ function FuturesPanel() {
                   </span>
                 </li>
                 <li style={hlGateStyles.stepItem}>
-                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_pending }}>3</span>
+                  <span style={{ ...hlGateStyles.stepBubble, ...(katanaAccountExists ? hlGateStyles.stepBubble_done : katanaAccountMissing ? hlGateStyles.stepBubble_active : hlGateStyles.stepBubble_pending) }}>
+                    {katanaAccountExists ? 3 : katanaAccountMissing ? <span style={hlGateStyles.spinner} /> : 3}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...(katanaAccountExists ? hlGateStyles.stepLabel_done : katanaAccountMissing ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>
+                      Katana account exists
+                    </span>
+                    <span style={hlGateStyles.stepHint}>
+                      {katanaAccountMissing
+                        ? 'No Katana account was found for this wallet. Open Katana Perps and create or activate the account first.'
+                        : katanaAccountExists
+                        ? 'Account found. Trading can unlock after market data loads.'
+                        : 'Checked after credentials are saved.'}
+                    </span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_pending }}>4</span>
                   <span style={hlGateStyles.stepText}>
                     <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_pending }}>Sign trades in wallet</span>
                     <span style={hlGateStyles.stepHint}>{missingKatanaFields.length ? `Missing: ${missingKatanaFields.join(', ')}` : 'Each order opens a wallet signature request.'}</span>
@@ -4067,13 +4160,13 @@ function FuturesPanel() {
               </button>
 
               <button
-                style={hlGateStyles.primaryBtn}
+                style={katanaAccountMissing ? hlGateStyles.primaryBtn : hlGateStyles.secondaryBtn}
                 onClick={() => {
                   if (openReferralJoin) openReferralJoin();
                   else if (referralUrl) window.open(referralUrl, '_blank', 'noopener,noreferrer');
                 }}
               >
-                Open Katana Perps
+                {katanaAccountMissing ? 'Create Katana account' : 'Open Katana Perps'}
               </button>
 
               {referralUrl && (
@@ -4307,8 +4400,7 @@ function FuturesPanel() {
                     setReferralLinking(true);
                     try {
                       const res = await activate();
-                      if (res?.success) setLocalAlert('Hotstuff builder code and trading agent are ready.');
-                      else if (res?.info) setLocalAlert(res.info);
+                      if (res?.info) setLocalAlert(res.info);
                       else if (res?.error) setLocalAlert(res.error);
                     } finally {
                       setReferralLinking(false);
@@ -5491,7 +5583,7 @@ function FuturesPanel() {
                   </div>
                 );
               })()}
-              <PositionTpslRow pos={pos} />
+              <PositionTpslRow pos={pos} orders={orders} />
 
               {/* Action buttons: Close + TP/SL + Share-icon. Share lives in
                   Pro too (per-user-request) — same icon as Basic for
@@ -5504,7 +5596,7 @@ function FuturesPanel() {
                       setExpandedPos(null);
                       return;
                     }
-                    const { tp, sl } = getPositionTpsl(pos);
+                    const { tp, sl } = getPositionTpsl(pos, orders);
                     setTpPrice(formatTpslInputValue(tp));
                     setSlPrice(formatTpslInputValue(sl));
                     setExpandedPos(`${posKey}:tpsl`);
@@ -5636,7 +5728,14 @@ function FuturesPanel() {
                 {isReadOnlyOrder(o) ? (
                   <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>On position</span>
                 ) : (
-                  <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
+                  <button
+                    style={S.cancelBtn}
+                    onClick={() => dex === 'hotstuff'
+                      ? cancelOrder(o)
+                      : cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}
+                  >
+                    ✕
+                  </button>
                 )}
               </div>
               <div style={S.row}>
@@ -5787,6 +5886,8 @@ function FuturesPanel() {
       ? 'Arbitrum Wallet USDC'
       : dex === 'hotstuff'
       ? 'Ethereum Wallet USDC'
+      : dex === 'katana'
+      ? 'Katana Available USDC'
       : dex === 'risex'
       ? 'RISE Wallet USDC'
       : dex === 'nado'
@@ -5991,95 +6092,24 @@ function FuturesPanel() {
         {dex === 'grvt' && (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#1D4ED8'}}>GRVT API key</span>
-              <span style={S.detail}>Stored in this browser</span>
+              <span style={{...S.label, color: '#1D4ED8'}}>GRVT account</span>
+              <span style={S.detail}>Browser only</span>
             </div>
-            <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
-              <input
-                type="password"
-                placeholder="Paste new GRVT API key"
-                value={grvtApiKeyInput}
-                onChange={e => setGrvtApiKeyInput(e.target.value)}
-                autoComplete="new-password"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                style={{...S.input, width: '100%', padding: '9px 10px', fontSize: 13}}
-              />
-              <button
-                style={{
-                  ...S.btnSmall,
-                  width: '100%',
-                  padding: '9px 10px',
-                  background: '#2563EB',
-                  color: '#fff',
-                  border: '2px solid #1D4ED8',
-                  opacity: loading || !grvtApiKeyInput.trim() ? 0.65 : 1,
-                }}
-                disabled={loading || !grvtApiKeyInput.trim()}
-                onClick={async () => {
-                  const apiKey = grvtApiKeyInput.trim();
-                  if (!apiKey) {
-                    setLocalAlert('Enter your GRVT API key');
-                    return;
-                  }
-                  const res = await activate?.({ apiKey });
-                  if (res?.error) setLocalAlert(res.error);
-                  else {
-                    setGrvtApiKeyInput('');
-                    setSuccessMsg('GRVT API key saved in this browser.');
-                  }
-                }}
-              >
-                {loading ? 'Saving...' : 'Save API key'}
-              </button>
-              <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
-                Clash uses this key to read GRVT trading balance, positions, orders, and fills. It is stored encrypted in this browser only.
-              </span>
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
+              <div style={{background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 10, fontWeight: 900, color: '#9f8759', textTransform: 'uppercase'}}>API key</div>
+                <div style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>Saved</div>
+              </div>
+              <div style={{background: oneTapTrading?.enabled ? '#DCFCE7' : '#fffaf0', border: `2px solid ${oneTapTrading?.enabled ? '#16A34A' : '#d4c8b0'}`, borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 10, fontWeight: 900, color: oneTapTrading?.enabled ? '#166534' : '#9f8759', textTransform: 'uppercase'}}>One tap</div>
+                <div style={{fontSize: 13, fontWeight: 900, color: oneTapTrading?.enabled ? '#166534' : '#5C3A21'}}>
+                  {oneTapTrading?.enabled ? 'Enabled' : 'Off'}
+                </div>
+              </div>
             </div>
-          </div>
-        )}
-
-        {/* Avantis & GMX are non-custodial — no deposit/withdraw. Show a
-            read-only info card that explains funds live in the user's own
-            wallet. Per-DEX accent colour + chain copy keeps the brand
-            consistent (Avantis blue / Base, GMX purple / Arbitrum). */}
-        {dex === 'grvt' && (
-          <div style={S.fullCard}>
-            <div style={S.row}>
-              <span style={{...S.label, color: '#16A34A'}}>One tap trading</span>
-              <span style={{...S.detail, color: oneTapTrading?.enabled ? '#15803D' : '#9f8759'}}>
-                {oneTapTrading?.enabled ? 'Enabled' : 'Optional'}
-              </span>
-            </div>
-            <button
-              style={{
-                ...S.btnSmall,
-                width: '100%',
-                padding: '9px 10px',
-                background: oneTapTrading?.enabled ? '#DCFCE7' : '#fffaf0',
-                color: oneTapTrading?.enabled ? '#166534' : '#5C3A21',
-                border: `2px solid ${oneTapTrading?.enabled ? '#16A34A' : '#d4c8b0'}`,
-              }}
-              onClick={async () => {
-                if (oneTapTrading?.enabled) {
-                  const res = await setOneTapTradingEnabled?.(false);
-                  if (res?.error) setLocalAlert(res.error);
-                  else {
-                    setGrvtPrivateKeyInput('');
-                    setGrvtOneTapOpen(false);
-                    setSuccessMsg('GRVT one tap trading disabled.');
-                  }
-                } else {
-                  setGrvtOneTapOpen(v => !v);
-                }
-              }}
-            >
-              {oneTapTrading?.enabled ? 'Disable one tap trading' : (grvtOneTapOpen ? 'Hide private key field' : 'Enable one tap trading')}
-            </button>
             {oneTapTrading?.enabled && oneTapTrading?.signer && (
               <div style={{
-                marginTop: 8,
+                marginBottom: 8,
                 background: 'rgba(22,163,74,0.08)',
                 border: '2px dashed rgba(22,163,74,0.35)',
                 borderRadius: 10,
@@ -6092,48 +6122,168 @@ function FuturesPanel() {
                 Signer: {oneTapTrading.signer}
               </div>
             )}
-            {!oneTapTrading?.enabled && grvtOneTapOpen && (
-              <div style={{display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8}}>
+            <button
+              style={{...S.btnSmall, width: '100%', padding: '9px 10px', background: '#2563EB', color: '#fff', border: '2px solid #1D4ED8'}}
+              onClick={() => {
+                setGrvtApiKeyInput('');
+                setGrvtPrivateKeyInput('');
+                setGrvtAccountOneTap(!!oneTapTrading?.enabled);
+                setGrvtAccountModalOpen(true);
+              }}
+            >
+              Change account
+            </button>
+            <span style={{display: 'block', marginTop: 8, fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
+              GRVT credentials are stored encrypted in this browser only. Private keys are never sent to Clash servers.
+            </span>
+          </div>
+        )}
+
+        {/* Avantis & GMX are non-custodial — no deposit/withdraw. Show a
+            read-only info card that explains funds live in the user's own
+            wallet. Per-DEX accent colour + chain copy keeps the brand
+            consistent (Avantis blue / Base, GMX purple / Arbitrum). */}
+        {dex === 'grvt' && grvtAccountModalOpen && (
+          <>
+            <div style={S.levBackdrop} onClick={() => { if (!loading) setGrvtAccountModalOpen(false); }} />
+            <div style={{...S.levModal, width: isMobile ? 'calc(100% - 32px)' : 380, maxWidth: 420, gap: 12}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                <span style={{fontSize: 16, fontWeight: 900, color: '#5C3A21'}}>Change GRVT account</span>
+                <button style={S.levCloseBtn} disabled={loading} onClick={() => setGrvtAccountModalOpen(false)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+              <label style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+                <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>New GRVT API key</span>
                 <input
                   type="password"
-                  placeholder="Paste GRVT Secret Private Key"
-                  value={grvtPrivateKeyInput}
-                  onChange={e => setGrvtPrivateKeyInput(e.target.value)}
+                  placeholder="Paste GRVT API key"
+                  value={grvtApiKeyInput}
+                  onChange={e => setGrvtApiKeyInput(e.target.value)}
                   autoComplete="new-password"
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
-                  style={{...S.input, width: '100%', padding: '9px 10px', fontSize: 13}}
+                  disabled={loading}
+                  style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
                 />
+              </label>
+              <button
+                type="button"
+                style={{
+                  ...S.btnSmall,
+                  width: '100%',
+                  padding: '9px 10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: grvtAccountOneTap ? '#DCFCE7' : '#fffaf0',
+                  color: grvtAccountOneTap ? '#166534' : '#5C3A21',
+                  border: `2px solid ${grvtAccountOneTap ? '#16A34A' : '#d4c8b0'}`,
+                }}
+                disabled={loading}
+                onClick={() => setGrvtAccountOneTap(v => !v)}
+              >
+                <span>One tap trading</span>
+                <span style={{
+                  minWidth: 46,
+                  textAlign: 'center',
+                  borderRadius: 999,
+                  padding: '3px 8px',
+                  background: grvtAccountOneTap ? '#16A34A' : '#e8dfc8',
+                  color: grvtAccountOneTap ? '#fff' : '#5C3A21',
+                  fontSize: 11,
+                  fontWeight: 900,
+                }}>
+                  {grvtAccountOneTap ? 'ON' : 'OFF'}
+                </span>
+              </button>
+              {grvtAccountOneTap && (
+                <label style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>
+                    GRVT Secret Private Key {oneTapTrading?.enabled ? '(optional replacement)' : ''}
+                  </span>
+                  <input
+                    type="password"
+                    placeholder={oneTapTrading?.enabled ? 'Leave empty to keep current signer' : 'Paste GRVT Secret Private Key'}
+                    value={grvtPrivateKeyInput}
+                    onChange={e => setGrvtPrivateKeyInput(e.target.value)}
+                    autoComplete="new-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={loading}
+                    style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+              )}
+              <div style={{fontSize: 10, color: '#8a7252', fontWeight: 800, lineHeight: 1.35}}>
+                API key is used to read your GRVT account. One tap private key stays encrypted in this browser and is used only to sign orders locally.
+              </div>
+              <div style={{display: 'flex', gap: 8}}>
+                <button
+                  style={{...S.btnSmall, flex: 1, padding: '9px 10px', background: '#fffaf0', color: '#5C3A21', border: '2px solid #d4c8b0'}}
+                  disabled={loading}
+                  onClick={() => {
+                    setGrvtAccountModalOpen(false);
+                    setGrvtApiKeyInput('');
+                    setGrvtPrivateKeyInput('');
+                  }}
+                >
+                  Cancel
+                </button>
                 <button
                   style={{
                     ...S.btnSmall,
-                    width: '100%',
+                    flex: 1,
                     padding: '9px 10px',
                     background: '#16A34A',
                     color: '#fff',
                     border: '2px solid #15803D',
-                    opacity: !grvtPrivateKeyInput.trim() ? 0.65 : 1,
+                    opacity: loading || !grvtApiKeyInput.trim() || (grvtAccountOneTap && !oneTapTrading?.enabled && !grvtPrivateKeyInput.trim()) ? 0.65 : 1,
                   }}
-                  disabled={!grvtPrivateKeyInput.trim()}
+                  disabled={loading || !grvtApiKeyInput.trim() || (grvtAccountOneTap && !oneTapTrading?.enabled && !grvtPrivateKeyInput.trim())}
                   onClick={async () => {
-                    const res = await setOneTapTradingEnabled?.(true, grvtPrivateKeyInput.trim());
-                    if (res?.error) setLocalAlert(res.error);
-                    else {
-                      setGrvtPrivateKeyInput('');
-                      setGrvtOneTapOpen(false);
-                      setSuccessMsg('GRVT one tap trading enabled. Orders will sign from this browser.');
+                    const apiKey = grvtApiKeyInput.trim();
+                    if (!apiKey) {
+                      setLocalAlert('Enter your GRVT API key');
+                      return;
                     }
+                    if (grvtAccountOneTap && !oneTapTrading?.enabled && !grvtPrivateKeyInput.trim()) {
+                      setLocalAlert('Enter your GRVT Secret Private Key or turn one tap off');
+                      return;
+                    }
+                    const res = await activate?.({ apiKey });
+                    if (res?.error) {
+                      setLocalAlert(res.error);
+                      return;
+                    }
+                    if (grvtAccountOneTap) {
+                      if (grvtPrivateKeyInput.trim()) {
+                        const oneTapRes = await setOneTapTradingEnabled?.(true, grvtPrivateKeyInput.trim());
+                        if (oneTapRes?.error) {
+                          setLocalAlert(oneTapRes.error);
+                          return;
+                        }
+                      }
+                    } else if (oneTapTrading?.enabled) {
+                      const oneTapRes = await setOneTapTradingEnabled?.(false);
+                      if (oneTapRes?.error) {
+                        setLocalAlert(oneTapRes.error);
+                        return;
+                      }
+                    }
+                    setGrvtApiKeyInput('');
+                    setGrvtPrivateKeyInput('');
+                    setGrvtAccountModalOpen(false);
+                    setSuccessMsg('GRVT account updated.');
                   }}
                 >
-                  Save private key in browser
+                  {loading ? 'Saving...' : 'Confirm'}
                 </button>
-                <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
-                  Clash does not send this key to our servers. It stays in this browser local storage and survives reloads and normal cache clears, but a full browser/site-data reset will remove it.
-                </span>
               </div>
-            )}
-          </div>
+            </div>
+          </>
         )}
 
         {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid') ? (() => {
@@ -6346,7 +6496,7 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? 'Deposit USDt0' : dex === 'grvt' ? 'Open GRVT Deposit' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? 'Deposit USDt0' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: '#15803D'}}>
@@ -6378,6 +6528,31 @@ function FuturesPanel() {
                   disabled={loading}
                 >
                   {loading ? '...' : 'Open'}
+                </button>
+              </div>
+            ) : dex === 'katana' ? (
+              <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                <div style={{
+                  background: 'rgba(34,197,94,0.08)',
+                  border: '1px solid rgba(34,197,94,0.28)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  fontSize: 11,
+                  lineHeight: 1.4,
+                  color: '#5C3A21',
+                  fontWeight: 750,
+                }}>
+                  Katana supports USDC deposits through its official bridge flow, including Arbitrum via Stargate. Native in-game deposit needs the full Katana bridge contract flow; for now Clash opens Katana so the deposit is handled by their app.
+                </div>
+                <button
+                  style={{...S.depositBtn, width: '100%', whiteSpace: 'nowrap', padding: '9px 10px'}}
+                  onClick={async () => {
+                    const r = await depositToPacifica?.('');
+                    if (r?.info) setLocalAlert(r.info);
+                  }}
+                  disabled={loading}
+                >
+                  {loading ? '...' : 'Open Katana Deposit'}
                 </button>
               </div>
             ) : (
@@ -6452,6 +6627,8 @@ function FuturesPanel() {
                 ? 'Sends native USDC from your Ethereum wallet to the Hotstuff bridge. After bridge credit, move Spot to Perps.'
                 : dex === 'grvt'
                 ? 'Opens GRVT deposit. Native in-game deposit needs GRVT bridge approval data or a GRVT-supported deposit-address API; the current builder API key is not enough for that.'
+                : dex === 'katana'
+                ? 'Opens Katana deposit. Katana deposits can be bridged from Arbitrum USDC through the official Stargate/Katana bridge flow.'
                 : dex === 'risex'
                 ? (
                   <>
@@ -6482,7 +6659,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'hotstuff' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'hotstuff' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>

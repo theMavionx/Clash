@@ -230,23 +230,41 @@ async function getOrdersByAddress(address) {
   const clean = normalizeAddress(address);
   if (!clean) throw new Error('address query param required (0x...)');
   const payload = await postInfo('open_orders', { user: clean, page: 1, limit: 100 });
-  const rows = Array.isArray(payload?.data) ? payload.data : [];
-  return rows.map(o => ({
-    symbol: symbolOf(o.instrument),
-    side: o.side === 'b' ? 'bid' : 'ask',
-    amount: String(o.unfilled ?? o.size ?? ''),
-    initial_amount: String(o.size ?? ''),
-    price: String(o.trigger_px || o.limit_price || ''),
-    stop_price: o.trigger_px ? String(o.trigger_px) : null,
-    order_id: o.order_id,
-    order_type: o.is_market ? 'market' : (o.tpsl || 'limit'),
-    tif: o.tif || null,
-    reduce_only: !!o.reduce_only,
-    pair_index: Number(o.instrument_id),
-    trade_index: null,
-    client_order_id: o.cloid || null,
-    _raw: o,
-  }));
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data)
+    ? payload.data
+    : Array.isArray(payload?.orders)
+    ? payload.orders
+    : Array.isArray(payload?.open_orders)
+    ? payload.open_orders
+    : [];
+  return rows.map(o => {
+    const tpsl = o.tpsl || o.tp_sl || o.trigger_type || o.triggerType || null;
+    const trigger = o.trigger_px ?? o.triggerPx ?? o.trigger_price ?? o.triggerPrice ?? o.stop_price ?? o.stopPrice;
+    const limit = o.limit_price ?? o.limitPrice ?? o.price ?? o.px;
+    const orderType = o.is_market || o.isMarket
+      ? 'market'
+      : (tpsl || (trigger != null && trigger !== '' ? 'trigger' : 'limit'));
+    return {
+      symbol: symbolOf(o.instrument || o.symbol || o.market),
+      side: (o.side || o.order_side || o.orderSide) === 'b' ? 'bid' : 'ask',
+      amount: String(o.unfilled ?? o.remaining ?? o.remainingSize ?? o.size ?? ''),
+      initial_amount: String(o.size ?? o.originalSize ?? o.original_size ?? ''),
+      price: String(trigger ?? limit ?? ''),
+      stop_price: trigger != null && trigger !== '' ? String(trigger) : null,
+      trigger_price: trigger != null && trigger !== '' ? String(trigger) : null,
+      order_id: o.order_id ?? o.orderId ?? o.oid ?? o.id,
+      order_type: orderType,
+      tpsl,
+      tif: o.tif || o.timeInForce || o.time_in_force || null,
+      reduce_only: !!(o.reduce_only ?? o.reduceOnly ?? o.ro),
+      pair_index: Number(o.instrument_id ?? o.instrumentId),
+      trade_index: null,
+      client_order_id: o.cloid || o.client_order_id || o.clientOrderId || null,
+      _raw: o,
+    };
+  });
 }
 
 function isRewardableFill(fill) {

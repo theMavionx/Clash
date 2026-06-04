@@ -1,6 +1,24 @@
 import { Component } from 'react';
 import { reportLazyChunkError } from '../lib/clientLogger';
 
+function forceReload() {
+  const current = new URL(window.location.href);
+  current.searchParams.set('_reload', String(Date.now()));
+  try {
+    window.location.reload();
+  } catch {
+    window.location.replace(current.toString());
+    return;
+  }
+  window.setTimeout(() => {
+    try {
+      window.location.replace(current.toString());
+    } catch {
+      window.location.href = current.toString();
+    }
+  }, 250);
+}
+
 export default class ChunkErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -22,7 +40,16 @@ export default class ChunkErrorBoundary extends Component {
     return this.props.fallback || (
       <div style={styles.box}>
         <div style={styles.title}>Error loading game UI</div>
-        <button style={styles.button} onClick={() => window.location.reload()}>
+        <button
+          type="button"
+          style={styles.button}
+          onClick={(event) => {
+            event.preventDefault();
+            event.currentTarget.disabled = true;
+            event.currentTarget.textContent = 'Reloading...';
+            forceReload();
+          }}
+        >
           Reload
         </button>
       </div>

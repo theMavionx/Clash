@@ -6,9 +6,10 @@
 //   - SDK docs: https://sdk-js-docs-v1-perps.katana.network
 //
 // Private trading is per-user:
-//   1. Server stores user's Katana API key/secret encrypted at rest.
+//   1. Browser stores the user's Katana API key/secret encrypted locally.
 //   2. Browser wallet signs Katana EIP-712 typed data.
-//   3. Server submits the signed body with Katana HMAC/API auth.
+//   3. Server receives credentials only per request and submits the signed body
+//      with Katana HMAC/API auth. No Katana user keys are persisted server-side.
 
 const { v1: uuidv1 } = require('uuid');
 
@@ -19,6 +20,9 @@ const KATANA_APP_URL =
 const KATANA_ACCESS_CODE =
   (process.env.KATANA_PERPS_REFERRAL_CODE || process.env.KATANA_PERPS_ACCESS_CODE || '914TO2TD').trim();
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.KATANA_PERPS_TIMEOUT_MS || 5000)));
+const PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.KATANA_PERPS_PUBLIC_CACHE_TTL_MS || 10_000)));
+const PUBLIC_STALE_TTL_MS = Math.max(PUBLIC_CACHE_TTL_MS, Math.min(900_000, Number(process.env.KATANA_PERPS_PUBLIC_STALE_TTL_MS || 300_000)));
+const publicCache = new Map();
 
 function sdk() {
   return require('@katanaperps/katana-perps-sdk');
@@ -148,6 +152,30 @@ async function fetchJson(path, params = undefined) {
     return data;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function publicCacheKey(path, params) {
+  const entries = Object.entries(params || {})
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .sort(([a], [b]) => a.localeCompare(b));
+  return `${path}?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString()}`;
+}
+
+async function fetchPublicJson(path, params = undefined, ttlMs = PUBLIC_CACHE_TTL_MS) {
+  const key = publicCacheKey(path, params);
+  const now = Date.now();
+  const cached = publicCache.get(key);
+  if (cached?.data && now - cached.at <= ttlMs) return cached.data;
+  try {
+    const data = await fetchJson(path, params);
+    publicCache.set(key, { data, at: now });
+    return data;
+  } catch (e) {
+    if (cached?.data && now - cached.at <= PUBLIC_STALE_TTL_MS) {
+      return cached.data;
+    }
+    throw e;
   }
 }
 
@@ -367,16 +395,16 @@ async function getHealth() {
 }
 
 async function getExchange() {
-  return fetchJson('/exchange');
+  return fetchPublicJson('/exchange', undefined, 60_000);
 }
 
 async function getMarketInfo() {
-  const rows = await fetchJson('/markets');
+  const rows = await fetchPublicJson('/markets', undefined, 60_000);
   return (Array.isArray(rows) ? rows : []).map(normalizeMarket).filter(Boolean);
 }
 
 async function getPrices() {
-  const rows = await fetchJson('/tickers');
+  const rows = await fetchPublicJson('/tickers', undefined, 10_000);
   const out = {};
   for (const row of (Array.isArray(rows) ? rows : [])) {
     const price = normalizePrice(row);
@@ -386,15 +414,15 @@ async function getPrices() {
 }
 
 async function getOrderbook(symbol, limit = 25, level = 2) {
-  return fetchJson('/orderbook', {
+  return fetchPublicJson('/orderbook', {
     market: marketName(symbol || 'BTC'),
     limit: Math.max(1, Math.min(100, Number(limit) || 25)),
     level: level === 1 ? 1 : 2,
-  });
+  }, 2_000);
 }
 
 async function getFundingRates(params = {}) {
-  return fetchJson('/fundingRates', params);
+  return fetchPublicJson('/fundingRates', params, 30_000);
 }
 
 async function getAccount(credsInput, wallet) {

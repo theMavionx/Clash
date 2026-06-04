@@ -63,6 +63,33 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function hotstuffOpenOrderKind(order) {
+  const raw = String(
+    order?._raw?.tpsl
+      || order?._raw?.tp_sl
+      || order?._raw?.trigger_type
+      || order?._raw?.triggerType
+      || order?.tpsl
+      || order?.order_type
+      || '',
+  ).trim().toLowerCase();
+  if (raw === 'tp' || raw === 'take_profit' || raw === 'take-profit' || raw.includes('take')) return 'tp';
+  if (raw === 'sl' || raw === 'stop_loss' || raw === 'stop-loss' || raw.includes('stop')) return 'sl';
+  return '';
+}
+
+function isDuplicateHotstuffTriggerError(error) {
+  return /duplicate\s+trigger/i.test(String(error?.message || error || ''));
+}
+
+function isHotstuffCancelAlreadyGone(error) {
+  return /not\s+found|does\s+not\s+exist|unknown\s+order|already\s+(filled|cancelled|canceled)/i.test(String(error?.message || error || ''));
+}
+
 function hotstuffAddress(addr) {
   try {
     return getAddress(String(addr || '').trim());
@@ -520,14 +547,16 @@ export function useHotstuff() {
     window.open(HOTSTUFF_REFERRAL_URL, '_blank', 'noopener,noreferrer');
   }, []);
 
-  const placeOrder = useCallback(async ({ symbol, side, amount, amountBase, price, leverage, orderType, reduceOnly = false }) => {
+  const placeOrder = useCallback(async ({ symbol, side, amount, amountBase, price, leverage, orderType, reduceOnly = false, options = {} }) => {
     if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
     await activate();
     const market = markets.find(m => m.symbol === String(symbol || '').toUpperCase() || m.market_name === symbol);
     const order = buildHotstuffOrder({
       market,
       side,
-      amountUsd: amount,
+      amountUsd: Number(options?.notional_usd) > 0
+        ? Number(options.notional_usd) / Math.max(1, Number(leverage) || 1)
+        : amount,
       amountBase,
       leverage,
       price,
@@ -536,6 +565,23 @@ export function useHotstuff() {
     });
     const brokerConfig = hotstuffBrokerConfig();
     const agent = await loadStoredAgent(hsWalletAddr) || await ensureTradingAgent();
+    console.info('[Hotstuff UI] submitting order', {
+      symbol,
+      orderType,
+      requestedSide: side,
+      requestedMargin: amount,
+      requestedNotional: Number(options?.notional_usd) || null,
+      leverage,
+      market: {
+        instrumentId: market?._hotstuff?.instrumentId ?? market?.pair_index,
+        lotSize: market?.lot_size,
+        tickSize: market?.tick_size,
+        mark: market?.mark,
+        mid: market?.mid,
+      },
+      order,
+      brokerConfig: brokerConfig ? { ...brokerConfig, broker: brokerConfig.broker } : null,
+    });
     const result = await agentExchange(agent).placeOrder({
       orders: [order],
       ...(brokerConfig ? { brokerConfig } : {}),
@@ -602,8 +648,8 @@ export function useHotstuff() {
     }
   }, [agentExchange, ensureTradingAgent, evmReady, hsWalletAddr, markets, refresh, switchChain, walletClient]);
 
-  const placeMarketOrder = useCallback((symbol, side, amount, _slippage, leverage) => (
-    placeOrder({ symbol, side, amount, leverage, orderType: 'market' }).catch(e => {
+  const placeMarketOrder = useCallback((symbol, side, amount, _slippage, leverage, options) => (
+    placeOrder({ symbol, side, amount, leverage, orderType: 'market', options }).catch(e => {
       console.warn('[Hotstuff] market order failed', { symbol, side, amount, leverage, error: e });
       const msg = hotstuffErrorMessage(e, 'Hotstuff market order failed');
       setError(msg);
@@ -611,8 +657,8 @@ export function useHotstuff() {
     })
   ), [placeOrder]);
 
-  const placeLimitOrder = useCallback((symbol, side, price, amount, _tif, leverage) => (
-    placeOrder({ symbol, side, amount, price, leverage, orderType: 'limit' }).catch(e => {
+  const placeLimitOrder = useCallback((symbol, side, price, amount, _tif, leverage, options) => (
+    placeOrder({ symbol, side, amount, price, leverage, orderType: 'limit', options }).catch(e => {
       console.warn('[Hotstuff] limit order failed', { symbol, side, price, amount, leverage, error: e });
       const msg = hotstuffErrorMessage(e, 'Hotstuff limit order failed');
       setError(msg);
@@ -749,14 +795,66 @@ export function useHotstuff() {
       if (!ordersToPlace.length) throw new Error('Enter TP or SL price');
       const brokerConfig = hotstuffBrokerConfig();
       const agent = await loadStoredAgent(hsWalletAddr) || await ensureTradingAgent();
-      const result = await agentExchange(agent).placeOrder({
-        orders: ordersToPlace,
-        ...(brokerConfig ? { brokerConfig } : {}),
-        expiresAfter: Date.now() + 60_000,
-        nonce: Date.now(),
-      });
-      if (!hotstuffOrderAccepted(result)) {
-        throw new Error(`Hotstuff TP/SL was not accepted (${hotstuffOrderStatusLabel(result)}).`);
+      const exchangeClient = agentExchange(agent);
+      const instrumentId = Number(market._hotstuff?.instrumentId ?? market.pair_index);
+      const requestedKinds = new Set([
+        ...(tp > 0 ? ['tp'] : []),
+        ...(sl > 0 ? ['sl'] : []),
+      ]);
+      const cancelMatchingTriggers = async (sourceOrders = orders) => {
+        const existingTriggers = (Array.isArray(sourceOrders) ? sourceOrders : []).filter(order => {
+          const kind = hotstuffOpenOrderKind(order);
+          return requestedKinds.has(kind)
+            && Number(order?.pair_index ?? order?._raw?.instrument_id) === instrumentId
+            && (order?.reduce_only === true || order?._raw?.reduce_only === true || kind);
+        });
+        for (const order of existingTriggers) {
+          try {
+            if (order?.client_order_id) {
+              await exchangeClient.cancelByCloid({
+                cancels: [{ cloid: order.client_order_id, instrumentId }],
+                expiresAfter: Date.now() + 60_000,
+                nonce: Date.now(),
+              });
+            } else if (order?.order_id) {
+              await exchangeClient.cancelByOid({
+                cancels: [{ oid: Number(order.order_id), instrumentId }],
+                expiresAfter: Date.now() + 60_000,
+                nonce: Date.now(),
+              });
+            }
+          } catch (cancelErr) {
+            if (!isHotstuffCancelAlreadyGone(cancelErr)) throw cancelErr;
+          }
+        }
+        if (existingTriggers.length) await sleep(350);
+        return existingTriggers.length;
+      };
+      await cancelMatchingTriggers();
+      const submitTriggers = async () => {
+        const result = await exchangeClient.placeOrder({
+          orders: ordersToPlace,
+          ...(brokerConfig ? { brokerConfig } : {}),
+          expiresAfter: Date.now() + 60_000,
+          nonce: Date.now(),
+        });
+        if (!hotstuffOrderAccepted(result)) {
+          throw new Error(`Hotstuff TP/SL was not accepted (${hotstuffOrderStatusLabel(result)}).`);
+        }
+        return result;
+      };
+      let result;
+      try {
+        result = await submitTriggers();
+      } catch (placeErr) {
+        if (!isDuplicateHotstuffTriggerError(placeErr)) throw placeErr;
+        await refresh();
+        const latest = await fetchJsonSafe(
+          `/api/futures/orders?dex=hotstuff&address=${encodeURIComponent(hsWalletAddr)}`,
+          [],
+        );
+        await cancelMatchingTriggers(Array.isArray(latest) ? latest : orders);
+        result = await submitTriggers();
       }
       await refresh();
       return { success: true, result, clientOrderIds: ordersToPlace.map(o => o.cloid), orderStatus: hotstuffOrderStatusLabel(result) };
@@ -765,7 +863,7 @@ export function useHotstuff() {
       setError(msg);
       return { error: msg };
     }
-  }, [activate, agentExchange, ensureTradingAgent, evmReady, hsWalletAddr, markets, positions, refresh, walletClient]);
+  }, [activate, agentExchange, ensureTradingAgent, evmReady, hsWalletAddr, info, markets, orders, positions, refresh, walletClient]);
 
   const parseAmount = useCallback((amount) => {
     const amountText = String(amount || '').trim();

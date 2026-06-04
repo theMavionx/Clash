@@ -33,9 +33,12 @@ export function assertHotstuffExchangeSuccess(response, fallback = 'Hotstuff req
 }
 
 export function hotstuffOrderAccepted(response) {
+  const error = hotstuffExchangeError(response);
+  if (error) return false;
   const statuses = response?.data?.status;
   if (!Array.isArray(statuses) || !statuses.length) return !!response?.tx_hash;
-  return statuses.every(status => !!(status?.filled || status?.resting || status?.triggered));
+  if (statuses.every(status => !!(status?.filled || status?.resting || status?.triggered))) return true;
+  return !!response?.tx_hash;
 }
 
 export function hotstuffOrderStatusLabel(response) {
@@ -184,12 +187,15 @@ export function formatHotstuffPrice(value, market, { marketOrder = false, side =
 }
 
 export function buildHotstuffOrder({ market, side, amountUsd, amountBase, leverage = 1, price, orderType = 'market', reduceOnly = false }) {
-  if (!market?._hotstuff?.instrumentId && !market?.pair_index) throw new Error('Select a valid Hotstuff market');
+  const instrumentId = Number(market?._hotstuff?.instrumentId ?? market?.pair_index);
+  if (!Number.isInteger(instrumentId) || instrumentId <= 0) throw new Error('Select a valid Hotstuff market');
   const mark = Number(price || market.mark || market.mid || 0);
   if (!Number.isFinite(mark) || mark <= 0) throw new Error('Hotstuff market price is unavailable');
+  const lev = Math.max(1, Number(leverage) || 1);
   const notional = Number(amountBase) > 0
     ? Number(amountBase) * mark
-    : Number(amountUsd || 0) * Number(leverage || 1);
+    : Number(amountUsd || 0) * lev;
+  if (!Number.isFinite(notional) || notional <= 0) throw new Error('Enter a valid Hotstuff order amount');
   const minNotional = Number(market?._hotstuff?.raw?.min_notional_usd ?? market?.min_notional_usd ?? market?.min_order_size ?? 0);
   if (Number.isFinite(minNotional) && minNotional > 0 && notional + 1e-9 < minNotional) {
     throw new Error(`Hotstuff minimum position size for ${market.symbol || market.market_name || 'this market'} is $${minNotional}.`);
@@ -205,7 +211,7 @@ export function buildHotstuffOrder({ market, side, amountUsd, amountBase, levera
     );
   }
   return {
-    instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
+    instrumentId,
     side: /short|sell|ask/i.test(String(side)) ? 's' : 'b',
     positionSide: 'BOTH',
     price: formatHotstuffPrice(mark, market, { marketOrder: !isLimit, side }),
@@ -222,14 +228,15 @@ export function buildHotstuffOrder({ market, side, amountUsd, amountBase, levera
 }
 
 export function buildHotstuffTpslOrder({ market, closeSide, triggerPrice, size, kind }) {
-  if (!market?._hotstuff?.instrumentId && !market?.pair_index) throw new Error('Select a valid Hotstuff market');
+  const instrumentId = Number(market?._hotstuff?.instrumentId ?? market?.pair_index);
+  if (!Number.isInteger(instrumentId) || instrumentId <= 0) throw new Error('Select a valid Hotstuff market');
   const normalizedKind = String(kind || '').toLowerCase();
   if (normalizedKind !== 'tp' && normalizedKind !== 'sl') throw new Error('Hotstuff TP/SL kind must be tp or sl');
   const trigger = Number(triggerPrice);
   if (!Number.isFinite(trigger) || trigger <= 0) throw new Error('Enter a valid TP/SL trigger price');
   const side = /short|sell|ask/i.test(String(closeSide)) ? 's' : 'b';
   return {
-    instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
+    instrumentId,
     side,
     positionSide: 'BOTH',
     price: formatHotstuffPrice(trigger, market, { marketOrder: true, side }),
