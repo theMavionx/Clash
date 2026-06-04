@@ -128,7 +128,7 @@ function toolsFromIntent(intent, message = '') {
   if (direct.length) {
     let tools = unique(direct);
     if (tools.includes('upgrade_building') && tools.includes('upgrade_troop')) {
-      const troopRequest = /\b(knight|mage|archer|ranger|barbarian)\b|військ|войск|troop/i.test(message);
+      const troopRequest = /\b(knight|mage|archer|demon_king|demon king)\b|військ|войск|troop/i.test(message);
       tools = tools.filter((tool) => !['upgrade_building', 'upgrade_troop'].includes(tool));
       tools.push(troopRequest ? 'upgrade_troop' : 'upgrade_building');
     }
@@ -313,8 +313,8 @@ function inferArgs(testCase, intent, tools) {
     const building = String(message).match(/\b(turret|mine|barn|port|sawmill|storage|town hall|archer tower)\b/i)?.[1];
     if (building) args.type = building.toLowerCase().replace(/\s+/g, '_');
   } else if (primaryTool === 'upgrade_building' || primaryTool === 'upgrade_troop') {
-    const upgrade = String(message).match(/\b(sawmill|mine|barn|turret|knight|mage|archer|ranger|barbarian)\b/i)?.[1];
-    if (upgrade) args.target = upgrade.toLowerCase();
+    const upgrade = String(message).match(/\b(sawmill|mine|barn|turret|knight|mage|archer|demon_king|demon king)\b/i)?.[1];
+    if (upgrade) args.target = upgrade.toLowerCase().replace(/\s+/g, '_');
   } else if (primaryTool === 'load_ship_troop') {
     args.autofill = true;
   }

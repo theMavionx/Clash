@@ -11,10 +11,10 @@ const TARGET_SEARCH_INTERVAL: float = 0.15
 
 const LEVEL_STATS = {
 	1: {"damage": 25, "fire_rate": 1.0, "detect_range": 1.0},
-	2: {"damage": 38, "fire_rate": 0.85, "detect_range": 1.1},
-	3: {"damage": 50, "fire_rate": 0.7, "detect_range": 1.2},
-	4: {"damage": 65, "fire_rate": 0.6, "detect_range": 1.3},
-	5: {"damage": 82, "fire_rate": 0.52, "detect_range": 1.4},
+	2: {"damage": 44, "fire_rate": 0.80, "detect_range": 1.18},
+	3: {"damage": 82, "fire_rate": 0.60, "detect_range": 1.38},
+	4: {"damage": 112, "fire_rate": 0.50, "detect_range": 1.52},
+	5: {"damage": 146, "fire_rate": 0.43, "detect_range": 1.68},
 }
 
 enum State { IDLE, ATTACKING, VICTORY }

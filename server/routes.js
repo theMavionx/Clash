@@ -8192,6 +8192,22 @@ function _isSlotFiller(name) {
 function _isDemonKing(name) {
   return _normalizeTroopName(name) === 'DemonKing';
 }
+function _isDisabledTroopName(name) {
+  return db.isTroopDisabled(_normalizeTroopName(name));
+}
+function _disabledTroopPayload(name) {
+  return {
+    error: 'Troop disabled',
+    code: 'TROOP_DISABLED',
+    troop_name: _normalizeTroopName(name),
+  };
+}
+function _activeTroopError(name) {
+  const normalized = _normalizeTroopName(name);
+  return _isDisabledTroopName(normalized)
+    ? _disabledTroopPayload(normalized)
+    : { error: 'Invalid troop type' };
+}
 function _canonicalTroopEntry(name) {
   const normalized = _normalizeTroopName(name);
   if (normalized !== 'DemonKing') return normalized;
@@ -8376,6 +8392,49 @@ function _shipTroopsMatch(a, b) {
   return true;
 }
 
+function _filterDisabledTroopEntries(troops) {
+  if (!Array.isArray(troops)) return [];
+  const out = [];
+  for (const troop of troops) {
+    if (_isSlotFiller(troop)) {
+      if (out.length > 0 && _isDemonKing(out[out.length - 1])) out.push(troop);
+      continue;
+    }
+    if (_isDisabledTroopName(troop)) continue;
+    out.push(troop);
+  }
+  return out;
+}
+
+function _sanitizeDisabledShipTroopsForPlayer(playerId) {
+  const ports = db.db.prepare(
+    'SELECT id, ship_troops, ship_troops_template FROM buildings WHERE player_id = ? AND type = ?'
+  ).all(playerId, 'port');
+  let changed = 0;
+
+  for (const port of ports) {
+    let current = [];
+    let template = [];
+    try { current = JSON.parse(port.ship_troops || '[]'); } catch { current = []; }
+    try { template = JSON.parse(port.ship_troops_template || '[]'); } catch { template = []; }
+
+    const nextCurrent = _filterDisabledTroopEntries(current);
+    const nextTemplate = _filterDisabledTroopEntries(template);
+    if (
+      JSON.stringify(current) === JSON.stringify(nextCurrent)
+      && JSON.stringify(template) === JSON.stringify(nextTemplate)
+    ) {
+      continue;
+    }
+
+    db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?')
+      .run(JSON.stringify(nextCurrent), JSON.stringify(nextTemplate), port.id);
+    changed += 1;
+  }
+
+  return changed;
+}
+
 function _resolvePlayerShipEditBuilding(playerId, buildingId, body = {}) {
   const byId = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, playerId);
   if (byId) return { building: byId, matchedBy: 'id' };
@@ -8490,6 +8549,7 @@ function _paidCasualties(casualties) {
 // Returns current ship_troops for all ports as [{id, level, ship_troops, ship_troops_template}].
 // Used to push the authoritative post-battle state back to the client in /attack/result response.
 function _getShipsPayload(playerId) {
+  _sanitizeDisabledShipTroopsForPlayer(playerId);
   const ports = db.db.prepare('SELECT id, level, ship_troops, ship_troops_template, has_ship FROM buildings WHERE player_id = ? AND type = ?').all(playerId, 'port');
   return ports.filter(p => p.has_ship).map(p => ({
     id: p.id,
@@ -8757,6 +8817,7 @@ router.post('/battle/surrender', auth, (req, res) => {
 // Find enemy with closest trophies
 router.get('/find-enemy', auth, (req, res) => {
   // Pre-flight: player must have a port with a ship loaded with troops
+  _sanitizeDisabledShipTroopsForPlayer(req.player.id);
   const buildings = db.getPlayerBuildings(req.player.id);
   const ports = buildings.filter(b => b.type === 'port');
   if (ports.length === 0) {
@@ -8866,20 +8927,19 @@ router.get('/battle-log', auth, (req, res) => {
 const TROOP_BUY_COSTS = {
   Knight: 100,
   Mage: 100,
-  Barbarian: 100,
   Archer: 100,
-  Ranger: 100,
   DemonKing: 0,
 };
 const VALID_TROOPS = Object.keys(TROOP_BUY_COSTS);
+const KNOWN_TROOPS = new Set(Object.values(TROOP_NAME_MAP));
 function _troopBuyCost(name) {
-  return TROOP_BUY_COSTS[_normalizeTroopName(name)] || 100;
+  return TROOP_BUY_COSTS[_normalizeTroopName(name)] ?? 100;
 }
 router.post('/troops/buy', auth, (req, res) => {
   const { troop_name } = req.body;
   if (!troop_name) return res.status(400).json({ error: 'troop_name required' });
   const normalizedTroop = _normalizeTroopName(troop_name);
-  if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop type' });
+  if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
   const cost = _troopBuyCost(normalizedTroop);
   if (normalizedTroop === 'DemonKing') {
     return res.json({ success: true, troop_name: normalizedTroop, cost: 0, resources: db.getResources(req.player.id), nft_backed: true });
@@ -8901,7 +8961,7 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
   const { troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
-  if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop type' });
+  if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
   let verifiedDemonKing = null;
   if (normalizedTroop === 'DemonKing') {
     verifiedDemonKing = await verifyDemonKingNftLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
@@ -8958,9 +9018,10 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
   const { slot, troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
-  if (!Number.isInteger(slot) || !troop_name || !VALID_TROOPS.includes(normalizedTroop)) {
+  if (!Number.isInteger(slot) || !troop_name) {
     return res.status(400).json({ error: 'Valid integer slot and troop_name required' });
   }
+  if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
   let verifiedDemonKing = null;
   if (normalizedTroop === 'DemonKing') {
     verifiedDemonKing = await verifyDemonKingNftLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
@@ -9073,6 +9134,7 @@ router.post('/buildings/:id/remove-troop', auth, (req, res) => {
 
 // Get current ship troops for all ports (used before attack to sync)
 router.get('/ships', auth, (req, res) => {
+  _sanitizeDisabledShipTroopsForPlayer(req.player.id);
   const ports = db.db.prepare('SELECT id, level, ship_troops, ship_troops_template, has_ship FROM buildings WHERE player_id = ? AND type = ?').all(req.player.id, 'port');
   const ships = ports.filter(p => p.has_ship).map(p => ({
     id: p.id,
@@ -9116,7 +9178,7 @@ router.post('/troop-died', auth, (req, res) => {
 
   const { troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
-  if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop' });
+  if (!troop_name || !KNOWN_TROOPS.has(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop' });
   if (normalizedTroop === 'DemonKing') {
     return res.json({ success: true, recorded: true, removed: null, persistent: true, troop_name: 'DemonKing' });
   }
@@ -9132,6 +9194,7 @@ router.post('/troop-died', auth, (req, res) => {
 
 // Get casualties: compare ship_troops vs ship_troops_template to find missing troops
 router.get('/casualties', auth, (req, res) => {
+  _sanitizeDisabledShipTroopsForPlayer(req.player.id);
   const ports = db.db.prepare('SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
   const casualties = {};
   let totalMissing = 0;
@@ -9174,6 +9237,7 @@ router.get('/casualties', auth, (req, res) => {
 // Reinforce: restore dead troops from template (costs 50 gold per restored troop)
 router.post('/reinforce', auth, (req, res) => {
   const txn = db.db.transaction(() => {
+    _sanitizeDisabledShipTroopsForPlayer(req.player.id);
     const ports = db.db.prepare('SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
 
     let totalToRestore = 0;

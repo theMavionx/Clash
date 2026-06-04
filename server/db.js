@@ -2373,7 +2373,7 @@ const TH_UPGRADE_REQUIRES = {
 const BUILDING_DEFS = {
   town_hall: {
     size: [4, 4], max_level: 4,
-    hp_levels: [3500, 6000, 10000, 17000],
+    hp_levels: [3500, 6000, 12500, 17000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
       2: { gold: 2000, wood: 6000, ore: 5000 },
@@ -2449,8 +2449,8 @@ const BUILDING_DEFS = {
 const BUILDING_UPGRADE_COST_MULTIPLIERS = {
   2: 2,
   3: 3,
-  4: 20,
-  5: 35,
+  4: 8,
+  5: 14,
 };
 
 function getBuildingUpgradeCost(type, currentLevel) {
@@ -2479,6 +2479,12 @@ const TROOP_DEFS = {
   ranger:    { max_level: 4, cost: [{ gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }, { gold: 1000, wood: 1000, ore: 0 }] },
   demon_king: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
 };
+const DISABLED_TROOP_TYPES = new Set(['barbarian', 'ranger']);
+const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_TROOP_TYPES.has(troop));
+
+function isTroopDisabled(troopType) {
+  return DISABLED_TROOP_TYPES.has(String(troopType || '').trim().toLowerCase());
+}
 
 const ALTAR_SKILL_DEFS = {
   prosperity: {
@@ -2876,7 +2882,7 @@ function registerPlayer(name) {
   const token = uuidv4();
   stmts.createPlayer.run(id, name, token);
   // Init troop levels
-  for (const troop of Object.keys(TROOP_DEFS)) {
+  for (const troop of ACTIVE_TROOP_TYPES) {
     stmts.upsertTroopLevel.run(id, troop, 1);
   }
   return { id, name, token };
@@ -3373,6 +3379,15 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
 }
 
 function upgradeTroop(playerId, troopType, options = {}) {
+  if (isTroopDisabled(troopType)) {
+    return {
+      error: 'Troop disabled',
+      code: 'TROOP_DISABLED',
+      troop_type: troopType,
+      status: 400,
+    };
+  }
+
   const def = TROOP_DEFS[troopType];
   if (!def) return { error: `Unknown troop type: ${troopType}` };
 
@@ -4357,6 +4372,9 @@ module.exports = {
   TH_UPGRADE_REQUIRES,
   GRID_SPECS,
   TROOP_DEFS,
+  DISABLED_TROOP_TYPES,
+  ACTIVE_TROOP_TYPES,
+  isTroopDisabled,
   ALTAR_SKILL_DEFS,
   registerPlayer,
   authenticatePlayer,

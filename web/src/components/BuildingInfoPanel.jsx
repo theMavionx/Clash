@@ -1003,7 +1003,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const base = troopBaseName(name);
       return troopLvls[base] || troopLvls[base.toLowerCase()] || troopLvls[name] || troopLvls[String(name || '').toLowerCase()] || 1;
     };
-    const allTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+    const allTroops = ['Knight', 'Mage', 'Archer'];
     const selectedSpan = swapSlot !== null ? troopUnitSpanAt(shipTroops, swapSlot) : null;
     const demonKeysFromTroops = (troops, skipSpan = null) => {
       const keys = [];

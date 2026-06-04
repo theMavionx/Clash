@@ -51,7 +51,8 @@ const CORS_ORIGINS = (process.env.CLASH_MCP_CORS_ORIGINS || DEFAULT_CORS_ORIGINS
 const RATE_LIMIT_WINDOW_MS = Number(process.env.CLASH_MCP_RATE_WINDOW_MS || 60_000);
 const RATE_LIMIT_MAX = Number(process.env.CLASH_MCP_RATE_LIMIT || 180);
 const AI_ATTACK_COOLDOWN_MS = Number(process.env.CLASH_MCP_AI_ATTACK_COOLDOWN_MS || 60_000);
-const VALID_SHIP_TROOPS = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+const VALID_SHIP_TROOPS = ['Knight', 'Mage', 'Archer'];
+const VALID_TROOP_UPGRADES = ['knight', 'mage', 'archer', 'demon_king'];
 const SHIP_TROOP_COST = 100;
 const REINFORCE_COST = 50;
 const AI_ATTACK_MIN_TOTAL_TROOPS = Math.max(1, Math.min(15, Math.floor(Number(process.env.CLASH_MCP_AI_ATTACK_MIN_TOTAL_TROOPS || 3))));
@@ -365,11 +366,52 @@ function parseJsonArray(value) {
   }
 }
 
+function normalizeLoadedTroopName(value) {
+  const text = String(value || '').trim();
+  const base = text.split(':')[0].toLowerCase();
+  if (base === 'demonking' || base === 'demon_king') return 'DemonKing';
+  return VALID_SHIP_TROOPS.find((troop) => troop.toLowerCase() === base) || null;
+}
+
+function filterActiveLoadedTroops(troops) {
+  if (!Array.isArray(troops)) return [];
+  const out = [];
+  for (const troop of troops) {
+    if (String(troop || '') === '_SLOT_FILLER_') {
+      if (out.length > 0 && normalizeLoadedTroopName(out[out.length - 1]) === 'DemonKing') out.push('_SLOT_FILLER_');
+      continue;
+    }
+    const normalized = normalizeLoadedTroopName(troop);
+    if (!normalized) continue;
+    out.push(normalized === 'DemonKing' ? String(troop) : normalized);
+  }
+  return out;
+}
+
+function sanitizeShipLoadoutsForPlayer(playerId) {
+  const ports = game.db
+    .prepare('SELECT id, ship_troops, ship_troops_template FROM buildings WHERE player_id = ? AND type = ?')
+    .all(playerId, 'port');
+  let changed = 0;
+  for (const port of ports) {
+    const current = parseJsonArray(port.ship_troops);
+    const template = parseJsonArray(port.ship_troops_template);
+    const nextCurrent = filterActiveLoadedTroops(current);
+    const nextTemplate = filterActiveLoadedTroops(template);
+    if (JSON.stringify(current) === JSON.stringify(nextCurrent) && JSON.stringify(template) === JSON.stringify(nextTemplate)) continue;
+    game.db
+      .prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?')
+      .run(JSON.stringify(nextCurrent), JSON.stringify(nextTemplate), port.id);
+    changed += 1;
+  }
+  return changed;
+}
+
 function normalizeBuilding(building) {
   return {
     ...building,
-    ship_troops: parseJsonArray(building.ship_troops),
-    ship_troops_template: parseJsonArray(building.ship_troops_template),
+    ship_troops: filterActiveLoadedTroops(parseJsonArray(building.ship_troops)),
+    ship_troops_template: filterActiveLoadedTroops(parseJsonArray(building.ship_troops_template)),
     footprint: game.BUILDING_DEFS[building.type]?.size || [1, 1],
   };
 }
@@ -583,6 +625,8 @@ async function autoBuildBase(playerId, agentKey, options = {}) {
 
 function normalizeTroopType(value) {
   const type = String(value || '').trim().toLowerCase();
+  if (type === 'demonking') return 'demon_king';
+  if (!VALID_TROOP_UPGRADES.includes(type)) return null;
   return game.TROOP_DEFS[type] ? type : null;
 }
 
@@ -593,8 +637,8 @@ function normalizeShipTroop(value) {
 
 function shipPayload(portId, extra = {}) {
   const port = game.db.prepare('SELECT * FROM buildings WHERE id = ?').get(portId);
-  const shipTroops = parseJsonArray(port?.ship_troops);
-  const shipTemplate = parseJsonArray(port?.ship_troops_template);
+  const shipTroops = filterActiveLoadedTroops(parseJsonArray(port?.ship_troops));
+  const shipTemplate = filterActiveLoadedTroops(parseJsonArray(port?.ship_troops_template));
   return {
     port_id: portId,
     ship_troops: shipTroops,
@@ -940,6 +984,7 @@ function buildingWorldPosition(building) {
 }
 
 function getFleet(playerId) {
+  sanitizeShipLoadoutsForPlayer(playerId);
   return game.db
     .prepare(`
       SELECT id, level, ship_troops, ship_troops_template
@@ -951,8 +996,8 @@ function getFleet(playerId) {
     .map((port) => ({
       port_id: port.id,
       level: port.level,
-      troops: parseJsonArray(port.ship_troops).filter((troop) => VALID_SHIP_TROOPS.includes(troop)),
-      template: parseJsonArray(port.ship_troops_template).filter((troop) => VALID_SHIP_TROOPS.includes(troop)),
+      troops: filterActiveLoadedTroops(parseJsonArray(port.ship_troops)),
+      template: filterActiveLoadedTroops(parseJsonArray(port.ship_troops_template)),
     }))
     .filter((ship) => ship.troops.length > 0)
     .slice(0, combat.MAX_SHIPS)
@@ -960,6 +1005,7 @@ function getFleet(playerId) {
 }
 
 function getAttackShips(playerId) {
+  sanitizeShipLoadoutsForPlayer(playerId);
   return game.db
     .prepare(`
       SELECT id, level, ship_troops, ship_troops_template
@@ -970,8 +1016,8 @@ function getAttackShips(playerId) {
     .all(playerId)
     .slice(0, combat.MAX_SHIPS)
     .map((port, ship_index) => {
-      const troops = parseJsonArray(port.ship_troops).filter((troop) => VALID_SHIP_TROOPS.includes(troop));
-      const template = parseJsonArray(port.ship_troops_template).filter((troop) => VALID_SHIP_TROOPS.includes(troop));
+      const troops = filterActiveLoadedTroops(parseJsonArray(port.ship_troops));
+      const template = filterActiveLoadedTroops(parseJsonArray(port.ship_troops_template));
       const capacity = Math.max(0, Number(port.level || 1) * 3);
       return {
         ship_index,
@@ -1247,13 +1293,14 @@ function buildCatalog(playerId) {
   return {
     town_hall_level: thLevel,
     buildings: buildingsCatalog,
-    troops: game.TROOP_DEFS,
+    troops: Object.fromEntries(VALID_TROOP_UPGRADES.map((troop) => [troop, game.TROOP_DEFS[troop]]).filter(([, def]) => def)),
     grids: game.GRID_SPECS,
     town_hall_upgrade_requires: game.TH_UPGRADE_REQUIRES,
   };
 }
 
 function buildBaseState(playerId, includeCatalog = true) {
+  sanitizeShipLoadoutsForPlayer(playerId);
   const state = game.getFullPlayerState(playerId);
   if (!state) return null;
   const buildings = (state.buildings || []).map(normalizeBuilding);
@@ -1293,13 +1340,16 @@ function buildBaseState(playerId, includeCatalog = true) {
 
 function loadShipTroop(playerId, portId, troopName) {
   return game.db.transaction(() => {
+    sanitizeShipLoadoutsForPlayer(playerId);
+    const normalizedTroop = normalizeShipTroop(troopName);
+    if (!normalizedTroop) return { error: 'Troop disabled', code: 'TROOP_DISABLED', troop_name: troopName };
     const building = game.db
       .prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?')
       .get(portId, playerId);
     if (!building) return { error: 'Port not found' };
     if (building.type !== 'port' || !building.has_ship) return { error: 'No ship at this port' };
 
-    const shipTroops = parseJsonArray(building.ship_troops);
+    const shipTroops = filterActiveLoadedTroops(parseJsonArray(building.ship_troops));
     const capacity = building.level * 3;
     if (shipTroops.length >= capacity) return { error: 'Ship is full', capacity };
     if (!game.canAfford(playerId, SHIP_TROOP_COST, 0, 0)) {
@@ -1307,7 +1357,7 @@ function loadShipTroop(playerId, portId, troopName) {
     }
 
     game.subtractResources(playerId, SHIP_TROOP_COST, 0, 0);
-    shipTroops.push(troopName);
+    shipTroops.push(normalizedTroop);
     const troopsJson = JSON.stringify(shipTroops);
     game.db
       .prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?')
@@ -1337,20 +1387,23 @@ function unloadShipTroops(playerId, portId) {
 
 function swapShipTroop(playerId, portId, slot, troopName) {
   return game.db.transaction(() => {
+    sanitizeShipLoadoutsForPlayer(playerId);
+    const normalizedTroop = normalizeShipTroop(troopName);
+    if (!normalizedTroop) return { error: 'Troop disabled', code: 'TROOP_DISABLED', troop_name: troopName };
     const building = game.db
       .prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?')
       .get(portId, playerId);
     if (!building) return { error: 'Port not found' };
     if (building.type !== 'port' || !building.has_ship) return { error: 'No ship at this port' };
 
-    const shipTroops = parseJsonArray(building.ship_troops);
+    const shipTroops = filterActiveLoadedTroops(parseJsonArray(building.ship_troops));
     if (slot < 0 || slot >= shipTroops.length) return { error: 'Invalid slot' };
     if (!game.canAfford(playerId, SHIP_TROOP_COST, 0, 0)) {
       return { error: 'Not enough gold', cost: { gold: SHIP_TROOP_COST } };
     }
 
     game.subtractResources(playerId, SHIP_TROOP_COST, 0, 0);
-    shipTroops[slot] = troopName;
+    shipTroops[slot] = normalizedTroop;
     game.db
       .prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?')
       .run(JSON.stringify(shipTroops), portId);
@@ -1358,7 +1411,7 @@ function swapShipTroop(playerId, portId, slot, troopName) {
       success: true,
       port_id: portId,
       slot,
-      troop_name: troopName,
+      troop_name: normalizedTroop,
       ship_troops: shipTroops,
       ship_level: building.level,
       ship_capacity: building.level * 3,
@@ -1369,6 +1422,7 @@ function swapShipTroop(playerId, portId, slot, troopName) {
 
 function reinforceShips(playerId) {
   return game.db.transaction(() => {
+    sanitizeShipLoadoutsForPlayer(playerId);
     const ports = game.db
       .prepare('SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1')
       .all(playerId, 'port');
@@ -1376,8 +1430,8 @@ function reinforceShips(playerId) {
     let totalToRestore = 0;
     const shipsToRestore = [];
     for (const port of ports) {
-      const current = parseJsonArray(port.ship_troops);
-      const template = parseJsonArray(port.ship_troops_template);
+      const current = filterActiveLoadedTroops(parseJsonArray(port.ship_troops));
+      const template = filterActiveLoadedTroops(parseJsonArray(port.ship_troops_template));
       if (!template.length) continue;
       const currentCounts = {};
       for (const troop of current) currentCounts[troop] = (currentCounts[troop] || 0) + 1;
@@ -3946,14 +4000,14 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
     'upgrade_troop',
     {
       title: 'Upgrade Troop',
-      description: 'Upgrade a troop type: knight, mage, barbarian, archer, or ranger.',
+      description: 'Upgrade an active troop type: knight, mage, archer, or demon_king.',
       inputSchema: {
         troop_type: z.string(),
       },
     },
     async ({ troop_type }) => {
       const normalized = normalizeTroopType(troop_type);
-      if (!normalized) return toolError('Invalid troop_type. Use knight, mage, barbarian, archer, or ranger.');
+      if (!normalized) return toolError('Invalid troop_type. Use knight, mage, archer, or demon_king.');
       const result = game.upgradeTroop(playerId, normalized);
       if (result.error) return toolError(result.error, result);
       await notifyAgentAction(agentKey, 'upgrade_troop', { troop_type: normalized, ...result });

@@ -20,22 +20,22 @@ const ANIM_FILES = [
 ## Shared blade scene — cached so every skeleton after the first doesn't re-load.
 static var _blade_scene_res: Resource = null
 
-var detection_radius: float = 1.0
+var detection_radius: float = 1.1
 var patrol_radius: float = 0.35
 var patrol_inner_radius: float = 0.18  ## min distance from tombstone center (outside building body)
-var move_speed: float = 0.45
+var move_speed: float = 0.5
 var attack_range: float = 0.15
-var separation_radius: float = 0.18
-var separation_force: float = 0.65
+var separation_radius: float = 0.15
+var separation_force: float = 0.4
 var building_push_radius: float = 0.18  ## push-away zone around any building center
 var tombstone_avoid_radius: float = 0.14  ## hard avoidance radius for own tombstone
 
-var hp: int = 380
-var max_hp: int = 380
-var damage: int = 42
-var base_damage: int = 42
+var hp: int = 440
+var max_hp: int = 440
+var damage: int = 52
+var base_damage: int = 52
 var ward_bonus_pct: int = 0
-var atk_speed: float = 0.85
+var atk_speed: float = 0.78
 
 
 func set_ward_bonus_pct(pct: int) -> void:

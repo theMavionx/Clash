@@ -81,7 +81,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Town_Hall/1.gltf",
 		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [3500, 6000, 10000, 17000],
+		"hp_levels": [3500, 6000, 12500, 17000],
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
@@ -212,8 +212,8 @@ var building_defs: Dictionary = {
 const BUILDING_UPGRADE_COST_MULTIPLIERS: Dictionary = {
 	2: 2,
 	3: 3,
-	4: 20,
-	5: 35,
+	4: 8,
+	5: 14,
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -680,7 +680,7 @@ const SHIP_DISPLAY_SCALE: float = 0.05
 var barn_panel: PanelContainer
 var barn_vbox: VBoxContainer
 var troop_levels: Dictionary = {
-	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1, "DemonKing": 1,
+	"Knight": 1, "Mage": 1, "Archer": 1, "DemonKing": 1,
 }
 var troop_defs: Dictionary = {
 	"Knight": {
@@ -705,17 +705,6 @@ var troop_defs: Dictionary = {
 			4: {"gold": 2000, "ore": 2000},
 		}
 	},
-	"Barbarian": {
-		"display": "Berserker (Fast Brawler)",
-		"model": "res://Model/Characters/Model/Barbarian.glb",
-		"script": "res://scripts/barbarian.gd",
-		"costs": {
-			1: {"gold": 150, "ore": 150},
-			2: {"gold": 350, "ore": 350},
-			3: {"gold": 700, "ore": 700},
-			4: {"gold": 1400, "ore": 1400},
-		}
-	},
 	"Archer": {
 		"display": "Archer (Sniper)",
 		"model": "res://Model/Characters/Model/Ranger.glb",
@@ -725,17 +714,6 @@ var troop_defs: Dictionary = {
 			2: {"gold": 350, "wood": 350},
 			3: {"gold": 700, "wood": 700},
 			4: {"gold": 1400, "wood": 1400},
-		}
-	},
-	"Ranger": {
-		"display": "Ranger (Balanced DPS)",
-		"model": "res://Model/Characters/Model/Rogue_Hooded.glb",
-		"script": "res://scripts/ranger.gd",
-		"costs": {
-			1: {"gold": 120, "wood": 120},
-			2: {"gold": 250, "wood": 250},
-			3: {"gold": 500, "wood": 500},
-			4: {"gold": 1000, "wood": 1000},
 		}
 	},
 	"DemonKing": {

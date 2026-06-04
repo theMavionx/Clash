@@ -3,10 +3,10 @@ extends Node3D
 ## Uses object pooling to avoid per-shot allocations and first-fire lag.
 
 const LEVEL_STATS = {
-	1: {"damage": 35, "fire_rate": 0.70},
-	2: {"damage": 50, "fire_rate": 0.55},
-	3: {"damage": 60, "fire_rate": 0.45},
-	4: {"damage": 75, "fire_rate": 0.40},
+	1: {"damage": 35, "fire_rate": 0.70, "detect_range": 0.95},
+	2: {"damage": 56, "fire_rate": 0.52, "detect_range": 1.02},
+	3: {"damage": 92, "fire_rate": 0.38, "detect_range": 1.12},
+	4: {"damage": 124, "fire_rate": 0.33, "detect_range": 1.18},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [
@@ -245,6 +245,7 @@ func _apply_stats() -> void:
 	var s: Dictionary = LEVEL_STATS.get(level, LEVEL_STATS[1])
 	damage = ceili(float(s.damage) * (1.0 + float(ward_bonus_pct) / 100.0))
 	fire_rate = s.fire_rate
+	detect_range = s.detect_range
 
 
 func set_level(lvl: int) -> void:
