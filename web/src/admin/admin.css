@@ -542,6 +542,12 @@ button {
   font-size: 12px;
 }
 
+.admin-wallet-line {
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
 .admin-drawer-backdrop {
   position: fixed;
   inset: 0;

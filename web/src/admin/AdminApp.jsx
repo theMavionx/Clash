@@ -839,20 +839,29 @@ function LeaderboardDrawer({ data, onClose }) {
         <table className="admin-table">
           <thead><tr><th>Rank</th><th>Player</th><th>Team</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th><th>Prize</th></tr></thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.player_id || r.rank}>
-                <td>{r.rank}</td>
-                <td><strong>{r.name || short(r.wallet)}</strong><div className="admin-card-sub admin-mono">{r.player_id}</div></td>
-                <td>{r.team_label || r.dex || '-'}</td>
-                <td>{Number(r.score || 0).toFixed(2)}</td>
-                <td>{r.trophies || 0}</td>
-                <td>{r.gold || 0}</td>
-                <td>{r.trades_count || 0}</td>
-                <td>{fmtUsd(r.volume_usd || 0)}</td>
-                <td style={{ color: Number(r.pnl_usd || 0) >= 0 ? 'var(--admin-green)' : 'var(--admin-red)' }}>{fmtUsd(r.pnl_usd || 0, 2)}</td>
-                <td>{Number(r.prize_amount || 0) > 0 ? fmtUsd(r.prize_amount, 2) : '-'}</td>
-              </tr>
-            ))}
+            {rows.map((r) => {
+              const rewardWallet = compactWallet(r.reward_wallet_evm || r.reward_wallet_solana);
+              return (
+                <tr key={r.player_id || r.rank}>
+                  <td>{r.rank}</td>
+                  <td>
+                    <strong>{r.name || short(r.wallet)}</strong>
+                    {r.wallet ? <div className="admin-card-sub admin-mono admin-wallet-line">{short(r.wallet, 10, 6)}</div> : null}
+                  </td>
+                  <td>{r.team_label || r.dex || '-'}</td>
+                  <td>{Number(r.score || 0).toFixed(2)}</td>
+                  <td>{r.trophies || 0}</td>
+                  <td>{r.gold || 0}</td>
+                  <td>{r.trades_count || 0}</td>
+                  <td>{fmtUsd(r.volume_usd || 0)}</td>
+                  <td style={{ color: Number(r.pnl_usd || 0) >= 0 ? 'var(--admin-green)' : 'var(--admin-red)' }}>{fmtUsd(r.pnl_usd || 0, 2)}</td>
+                  <td>
+                    {Number(r.prize_amount || 0) > 0 ? fmtUsd(r.prize_amount, 2) : '-'}
+                    {rewardWallet ? <div className="admin-card-sub admin-mono admin-wallet-line">{rewardWallet}</div> : null}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1749,6 +1758,12 @@ function short(value, head = 6, tail = 4) {
   const s = String(value || '');
   if (!s) return '-';
   return s.length > head + tail + 3 ? `${s.slice(0, head)}...${s.slice(-tail)}` : s;
+}
+
+function compactWallet(value) {
+  const s = String(value || '').trim();
+  if (!s) return '';
+  return s.replace(/[\s-]+/g, '');
 }
 
 function num(value) {
