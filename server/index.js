@@ -31,6 +31,7 @@ const { startDailyLogAiScheduler } = require('./log_ai_analyzer');
 const { setupWebSocket, getOnlinePlayers } = require('./websocket');
 
 const PORT = process.env.PORT || 4000;
+const WEB_DIST_DIR = path.join(REPO_ROOT, 'web', 'dist');
 
 const app = express();
 // Production traffic is normally behind nginx on the same host. Trust only
@@ -55,6 +56,9 @@ app.use(cors({
   credentials: false,
 }));
 app.use(express.json({ limit: process.env.CLASH_JSON_LIMIT || '2mb' }));
+if (fs.existsSync(WEB_DIST_DIR)) {
+  app.use(express.static(WEB_DIST_DIR, { index: false }));
+}
 
 function dashboardAuth(req, res, next) {
   if (process.env.PUBLIC_DASHBOARD === '1') return next();

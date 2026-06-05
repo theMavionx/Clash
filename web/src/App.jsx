@@ -35,6 +35,61 @@ const GodotCanvas = lazy(lazyWithClientReload(() => import('./components/GodotCa
 const GameUI = lazy(lazyWithClientReload(() => import('./components/GameUI'), 'GameUI'));
 const CLASH_SOLANA_MINT = '9mM1Mc4Ta9UJJ32v5qsHef91PiXi7EWyiSsqF5WXpump';
 const CLASH_TOKEN_NOTICE_KEY = 'clash_solana_token_notice_v2';
+const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
+let localGuestPreflightDone = false;
+
+function makeLocalGuestId() {
+  const randomPart = globalThis.crypto?.randomUUID?.()
+    ? globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 10)
+    : Math.random().toString(36).slice(2, 12);
+  return `g_${Date.now().toString(36)}_${randomPart}`;
+}
+
+function isLocalGuestAuthRecord(raw) {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    const wallet = String(parsed?.wallet || '');
+    const name = String(parsed?.name || '');
+    return wallet.startsWith('local_guest_') || name.startsWith('Guest_');
+  } catch {
+    return false;
+  }
+}
+
+function prepareLocalGuestSession() {
+  if (localGuestPreflightDone || typeof window === 'undefined') return;
+  localGuestPreflightDone = true;
+  try {
+    const localHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+    if (!localHosts.has(window.location.hostname)) return;
+    const url = new URL(window.location.href);
+    const guest = String(url.searchParams.get('guest') || '').toLowerCase();
+    if (guest !== '1' && guest !== 'true' && guest !== 'new') {
+      const rawAuth = window.localStorage.getItem(GAME_AUTH_STORAGE_KEY);
+      if (isLocalGuestAuthRecord(rawAuth)) {
+        window.localStorage.removeItem(GAME_AUTH_STORAGE_KEY);
+        window._playerToken = null;
+      }
+      window.localStorage.removeItem('clash.localGuest');
+      return;
+    }
+
+    let guestId = String(url.searchParams.get('guest_id') || '').trim();
+    if (!guestId || guest === 'new') {
+      guestId = makeLocalGuestId();
+      url.searchParams.set('guest', '1');
+      url.searchParams.set('guest_id', guestId);
+      window.history.replaceState(null, '', url.toString());
+    }
+
+    window.localStorage.removeItem(GAME_AUTH_STORAGE_KEY);
+    window.localStorage.setItem('clash.localGuest', guestId);
+    window._playerToken = null;
+  } catch {
+    // Local test helper only; never block normal app boot.
+  }
+}
 
 function FarcasterGate({ children }) {
   const { isInFrame, user, loading } = useFarcaster();
@@ -258,6 +313,8 @@ function ClientLogContextBridge() {
 }
 
 export default function App() {
+  prepareLocalGuestSession();
+
   return (
     <DexProvider>
       <PrivyAuthProvider>

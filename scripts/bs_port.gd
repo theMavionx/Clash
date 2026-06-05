@@ -2,7 +2,7 @@
 ## Implements the port and ship mechanics defined in the building system design.
 class_name BSPort extends RefCounted
 
-const SHIP_COST_GOLD: int = 500
+const SHIP_COST_GOLD: int = 250
 const SHIP_MODELS: Array[String] = [
 	"res://Model/Ship/Ships/ship-pirate-small_1.glb",
 	"res://Model/Ship/Ships/ship-pirate-medium_2.glb",
@@ -137,7 +137,11 @@ func _buy_ship_level(ship_lvl: int) -> void:
 			bs.resources.ore = result.resources.ore
 			bs._update_resource_ui()
 	else:
-		# Offline fallback — deduct locally
+		if not bs.test_mode:
+			if bs.has_method("_block_without_server"):
+				bs._block_without_server("buy ship")
+			return
+		# Test-mode fallback — deduct locally
 		bs.resources["gold"] -= SHIP_COST_GOLD
 		bs._update_resource_ui()
 	port_node.set_meta("has_ship", true)
@@ -194,7 +198,11 @@ func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
 		if result.has("resources"):
 			bs._apply_resources_from_server(result.resources)
 	else:
-		# Offline fallback. Capacity = ship_level * 3 (was `>= ship_level` before,
+		if not bs.test_mode:
+			if bs.has_method("_block_without_server"):
+				bs._block_without_server("load troop")
+			return
+		# Test-mode fallback. Capacity = ship_level * 3 (was `>= ship_level` before,
 		# a pre-existing bug that capped offline ships to 1/2/3 troops total).
 		if ship_troops.size() + slot_cost > ship_level * 3:
 			return
@@ -243,6 +251,10 @@ func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) 
 		if result.has("resources"):
 			bs._apply_resources_from_server(result.resources)
 	else:
+		if not bs.test_mode:
+			if bs.has_method("_block_without_server"):
+				bs._block_without_server("swap troop")
+			return
 		var span: Dictionary = _swap_span_for_replacement(ship_troops, slot, troop_name, ship_level * 3)
 		if span.is_empty():
 			return
@@ -296,6 +308,10 @@ func _remove_troop_from_ship(slot: int) -> void:
 		if result.has("resources"):
 			bs._apply_resources_from_server(result.resources)
 	else:
+		if not bs.test_mode:
+			if bs.has_method("_block_without_server"):
+				bs._block_without_server("remove troop")
+			return
 		var start: int = int(span.start)
 		var remove_count: int = int(span.end) - start
 		for _i in range(remove_count):

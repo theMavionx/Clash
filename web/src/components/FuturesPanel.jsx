@@ -1400,7 +1400,7 @@ const BottomPanel = memo(function BottomPanel({
   bottomH, bottomTab, setBottomTab,
   showFilter, setShowFilter, btmFilters, setBtmFilters,
   btmSymbols, sortOptionsForTab, hasActiveFilters,
-  filteredPositions, filteredOrders, orders,
+  filteredPositions, filteredOrders, orders, positions,
   prices, walletAddr, dataReady, leverageSettings,
   closePosition, cancelOrder, dex, loading, historyAccountAddr, markets, onClosedPositionSnapshot,
 }) {
@@ -5531,6 +5531,7 @@ function FuturesPanel() {
             filteredPositions={filteredPositions}
             filteredOrders={filteredOrders}
             orders={orders}
+            positions={positions}
             prices={prices}
             walletAddr={walletAddr}
             historyAccountAddr={(dex === 'decibel' || dex === 'grvt') ? subaccountAddr : walletAddr}

@@ -6,6 +6,7 @@ extends Node3D
 
 const ALTAR_MODEL_SCENE_PATH: String = "res://Model/Altar/Models/Stylized_Altar_web.tscn"
 const ALTAR_MODEL_SCENE = preload(ALTAR_MODEL_SCENE_PATH)
+const SHIP_COST_GOLD: int = 250
 
 # ── Grid Settings ─────────────────────────────────────────────
 @export var grid_width: int = 27
@@ -57,6 +58,7 @@ var building_defs: Dictionary = {
 		"model_rotation_y": 0.0,
 		"hp_levels": [1800, 3200, 5500, 8500],
 		"cost": {"gold": 240, "wood": 560, "ore": 480},
+		"ship_cost": {"gold": SHIP_COST_GOLD},
 		"no_outline": true,
 	},
 	"sawmill": {
@@ -668,7 +670,6 @@ var port_panel: PanelContainer
 var port_vbox: VBoxContainer
 var port_ship_count_label: Label
 var owned_ships: int = 0
-const SHIP_COST_GOLD: int = 250
 const SHIP_MODELS: Array[String] = [
 	"res://Model/Ship/Ships/ship-pirate-small_1.glb",
 	"res://Model/Ship/Ships/ship-pirate-medium_2.glb",
@@ -1729,6 +1730,20 @@ func _apply_resources_from_server(res: Dictionary) -> void:
 	if res.has("ore"):
 		resources.ore = res.ore
 	_update_resource_ui()
+
+
+func _block_without_server(action_label: String = "this action") -> bool:
+	if test_mode:
+		return false
+	var net = _net
+	if net and net.has_token():
+		return false
+	var message := "Login is still loading. Try again in a moment before trying to %s." % action_label
+	_show_error(message)
+	var bridge = _bridge
+	if bridge:
+		bridge.send_to_react("error", {"message": message})
+	return true
 
 
 func _update_resource_ui() -> void:
@@ -3138,7 +3153,10 @@ func _try_place_building() -> bool:
 func _request_place_building(building_id: String, grid_pos: Vector2i, def: Dictionary) -> void:
 	var net = _net
 	if not net or not net.has_token():
-		_spawn_building_locally(building_id, grid_pos, def, -1)
+		if test_mode:
+			_spawn_building_locally(building_id, grid_pos, def, -1)
+		else:
+			_block_without_server("build")
 		return
 
 	_server_busy = true
@@ -3356,6 +3374,7 @@ func _select_building(b: Dictionary) -> void:
 			"ship_level": bs_ship_level,
 			"ship_troops": bs_ship_troops,
 			"ship_capacity": bs_ship_level * 3,
+			"ship_cost": def.get("ship_cost", {}),
 			"port_number": bs_port_number,
 			"troop_levels": troop_levels,
 			"altar_skills": altar_skill_levels,
@@ -3502,7 +3521,9 @@ func _upgrade_selected() -> void:
 	var net = _net
 
 	# Ask server first
-	if net and net.has_token():
+	if not test_mode:
+		if _block_without_server("upgrade"):
+			return
 		var sid = b.get("server_id", -1)
 		if sid < 0:
 			_show_error("Building not synced to server")
@@ -3988,12 +4009,15 @@ func _upgrade_altar_skill(skill_id: String) -> void:
 	_server_busy = true
 	var net = _net
 	var result: Dictionary = {}
-	if test_mode or not net or not net.has_token():
+	if test_mode:
 		for res_name in cost:
 			resources[res_name] = int(resources.get(res_name, 0)) - int(cost[res_name])
 		altar_skill_levels[skill_id] = current_level + 1
 		result = {"success": true}
 	else:
+		if _block_without_server("upgrade altar skill"):
+			_server_busy = false
+			return
 		result = await net.upgrade_altar_skill(skill_id)
 		if result.has("resources"):
 			_apply_resources_from_server(result.resources)
@@ -4049,6 +4073,27 @@ func remove_building(b: Dictionary) -> void:
 			})
 		return
 	b = placed_buildings[idx]
+	var server_removed := false
+	if not is_viewing_enemy and not _replay_active and not test_mode:
+		if _block_without_server("remove building"):
+			return
+		var sid := int(b.get("server_id", -1))
+		if sid < 0:
+			_show_error("Building not synced to server")
+			return
+		_server_busy = true
+		var net = _net
+		var result = await net.remove_building(sid)
+		_server_busy = false
+		if not is_instance_valid(self):
+			return
+		if result.has("error"):
+			_show_error(str(result.error))
+			return
+		if result.has("trophies"):
+			net.trophies = result["trophies"]
+			_update_player_name_label()
+		server_removed = true
 	if _replay_active and not bool(b.get("_destroy_telemetry_recorded", false)):
 		b["_destroy_telemetry_recorded"] = true
 		record_replay_telemetry("building_destroyed", {
@@ -4083,11 +4128,11 @@ func remove_building(b: Dictionary) -> void:
 	if b.id == "tombstone":
 		_remove_tombstone_skeletons(b)
 	# Only sync removal of OWN buildings, not enemy's during attack
-	if not is_viewing_enemy:
-		_sync_remove_building(b)
-	else:
+	if is_viewing_enemy:
 		# Enemy building destroyed — grant cannon energy
 		_on_building_destroyed_energy()
+	elif not server_removed:
+		_sync_remove_building(b)
 	var def: Dictionary = building_defs[b.id]
 	var gp: Vector2i = b.grid_pos as Vector2i
 	for x in range(def.cells.x):
@@ -4966,6 +5011,8 @@ func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
 func _reinforce_troops() -> void:
 	# Refill all ships with troops that were lost in battle
 	var net: Node = _net
+	if _block_without_server("reinforce troops"):
+		return
 	if net and net.has_token():
 		var result: Dictionary = await net.reinforce()
 		if not is_instance_valid(self): return
@@ -5345,7 +5392,9 @@ func _upgrade_troop(troop_name: String) -> void:
 
 	# Ask server first
 	var net = _net
-	if net and net.has_token():
+	if not test_mode:
+		if _block_without_server("upgrade troop"):
+			return
 		_server_busy = true
 		var result = await net.upgrade_troop(troop_name)
 		_server_busy = false
@@ -5406,7 +5455,9 @@ func _buy_troop(troop_name: String) -> void:
 		return
 	# Ask server first
 	var net: Node = _net
-	if net and net.has_token():
+	if not test_mode:
+		if _block_without_server("buy troop"):
+			return
 		var result: Dictionary = await net.buy_troop(troop_name)
 		if result.has("error"):
 			_show_error(str(result.error))
@@ -5836,6 +5887,8 @@ func _make_arrow_mesh() -> ImmediateMesh:
 func _start_move(b: Dictionary) -> void:
 	if is_viewing_enemy or _server_busy or _is_moving:
 		return
+	if not test_mode and _block_without_server("move building"):
+		return
 	# Port with a docked ship cannot be moved
 	if b.get("id") == "port":
 		var pnode = b.get("node", null)
@@ -5914,6 +5967,24 @@ func _confirm_move() -> void:
 	var def = building_defs[b.id]
 	if not _can_place(current_grid_pos, def.cells):
 		return
+	var net = _net
+	if not test_mode:
+		if _block_without_server("move building"):
+			_cancel_move()
+			return
+		if b.get("server_id", -1) < 0:
+			_show_error("Building not synced to server")
+			_cancel_move()
+			return
+		_server_busy = true
+		var result = await net.move_building(b.server_id, current_grid_pos.x, current_grid_pos.y)
+		_server_busy = false
+		if not is_instance_valid(self):
+			return
+		if result.has("error"):
+			_show_error(str(result.error))
+			_cancel_move()
+			return
 	# Occupy new grid cells
 	_set_grid_occupied(current_grid_pos, def.cells, true)
 	b["grid_pos"] = current_grid_pos
@@ -5936,10 +6007,6 @@ func _confirm_move() -> void:
 			else:
 				skel.tombstone_pos = tomb_world
 				skel.global_rotation = Vector3.ZERO
-	# Sync with server
-	var net = _net
-	if net and net.has_token() and b.get("server_id", -1) >= 0:
-		net.move_building(b.server_id, current_grid_pos.x, current_grid_pos.y)
 	_play_building_move_sfx()
 	_end_move()
 	_select_building(b)

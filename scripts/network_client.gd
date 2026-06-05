@@ -35,9 +35,15 @@ func _ready() -> void:
 	if cfg.load("user://auth.cfg") == OK:
 		token = cfg.get_value("auth", "token", "")
 		display_name = cfg.get_value("auth", "name", "")
+		player_id = cfg.get_value("auth", "player_id", "")
+		wallet = cfg.get_value("auth", "wallet", "")
+		trophies = int(cfg.get_value("auth", "trophies", 0))
 	if token == "":
 		_load_web_auth_fallback()
-	elif OS.has_feature("web"):
+	if _should_clear_local_guest_for_dex_entry():
+		_clear_saved_auth()
+		WebLoadLogger.report("autoload_net_local_guest_cleared_for_dex_entry")
+	elif token != "" and OS.has_feature("web"):
 		_save_web_auth_fallback()
 	WebLoadLogger.report("autoload_net_ready_done", {"has_token": token != ""})
 
@@ -64,8 +70,48 @@ func _save_token() -> void:
 	var cfg = ConfigFile.new()
 	cfg.set_value("auth", "token", token)
 	cfg.set_value("auth", "name", display_name)
+	cfg.set_value("auth", "player_id", player_id)
+	cfg.set_value("auth", "wallet", wallet)
+	cfg.set_value("auth", "trophies", trophies)
 	cfg.save("user://auth.cfg")
 	_save_web_auth_fallback()
+
+func _clear_saved_auth() -> void:
+	token = ""
+	player_id = ""
+	display_name = ""
+	trophies = 0
+	wallet = ""
+	var cfg = ConfigFile.new()
+	cfg.save("user://auth.cfg")
+	_clear_web_auth_fallback()
+
+func _is_local_web_host() -> bool:
+	if not OS.has_feature("web"):
+		return false
+	var host_value = JavaScriptBridge.eval("window.location.hostname", true)
+	var host: String = String(host_value).strip_edges().to_lower()
+	return host == "localhost" or host == "127.0.0.1" or host == "::1" or host == "[::1]"
+
+func _local_guest_mode_enabled() -> bool:
+	if not _is_local_web_host():
+		return false
+	var enabled_value = JavaScriptBridge.eval("(function(){try{var g=(new URL(window.location.href).searchParams.get('guest')||'').toLowerCase();return g==='1'||g==='true'||g==='new';}catch(e){return false;}})()", true)
+	return bool(enabled_value)
+
+func _web_local_guest_auth_marker() -> String:
+	if not OS.has_feature("web"):
+		return ""
+	var marker_value = JavaScriptBridge.eval("(function(){try{var raw=window.localStorage.getItem('clash_game_auth_v1')||'';if(raw){var parsed=JSON.parse(raw);var wallet=String(parsed&&parsed.wallet||'');var name=String(parsed&&parsed.name||'');if(wallet.indexOf('local_guest_')===0)return 'guest-wallet';if(name.indexOf('Guest_')===0)return 'guest-name';}var guest=window.localStorage.getItem('clash.localGuest')||'';return guest?'guest-id':'';}catch(e){return '';}})()", true)
+	return String(marker_value).strip_edges()
+
+func _should_clear_local_guest_for_dex_entry() -> bool:
+	if token == "" or not _is_local_web_host() or _local_guest_mode_enabled():
+		return false
+	if wallet.begins_with("local_guest_") or display_name.begins_with("Guest_"):
+		return true
+	var marker := _web_local_guest_auth_marker()
+	return marker == "guest-wallet" or marker == "guest-name" or (marker == "guest-id" and wallet == "" and display_name == "")
 
 func _load_web_auth_fallback() -> void:
 	if not OS.has_feature("web"):
@@ -151,7 +197,7 @@ func register(player_name: String, wallet: String = "", dex: String = "", fid: i
 		player_id = _safe_str(response.get("id"))
 		display_name = _safe_str(response.get("name"))
 		trophies = _safe_int(response.get("trophies"))
-		wallet = _safe_str(response.get("wallet"))
+		self.wallet = _safe_str(response.get("wallet"))
 		_save_token()
 		auth_ok.emit(response)
 	return response
@@ -198,7 +244,7 @@ func login_by_wallet(wallet: String, dex: String = "") -> Dictionary:
 		player_id = _safe_str(response.get("id"))
 		display_name = _safe_str(response.get("name"))
 		trophies = _safe_int(response.get("trophies"))
-		wallet = _safe_str(response.get("wallet"))
+		self.wallet = _safe_str(response.get("wallet"))
 		_save_token()
 		auth_ok.emit(response)
 	return response

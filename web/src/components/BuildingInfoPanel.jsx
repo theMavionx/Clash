@@ -971,7 +971,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   };
 
   const renderBuyShip = () => {
-    const shipCost = building.ship_cost || { gold: 1500, wood: 1000 };
+    const shipCost = building.ship_cost || { gold: 250 };
     const leftContent = (
       <>
         <StatBox label="Troop Capacity" current={0} upgradeTo={(building.level || 1) * 3} />

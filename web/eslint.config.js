@@ -18,6 +18,7 @@ export default defineConfig([
       globals: {
         ...globals.browser,
         ...globals.node,
+        __ETHEREUM_ALCHEMY_PROXY_ENABLED__: 'readonly',
       },
       parserOptions: {
         ecmaVersion: 'latest',

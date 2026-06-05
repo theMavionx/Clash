@@ -48,6 +48,31 @@ function validatePlayerNameInput(value) {
   return { name };
 }
 
+function isLocalGuestWallet(wallet) {
+  return /^local_guest_[A-Za-z0-9_-]+$/.test(String(wallet || ''));
+}
+
+function localGuestNameFromWallet(wallet) {
+  const cleaned = String(wallet || '')
+    .replace(/^local_guest_/i, '')
+    .replace(/[^A-Za-z0-9]/g, '')
+    .slice(0, 12);
+  const fallback = crypto.createHash('sha1').update(String(wallet || '')).digest('hex').slice(0, 10);
+  return `Guest_${cleaned || fallback}`.slice(0, 30);
+}
+
+function makeUniquePlayerName(baseName) {
+  const base = normalizePlayerNameInput(baseName).slice(0, 30) || 'Guest';
+  const exists = (name) => db.db.prepare('SELECT id FROM players WHERE lower(name) = lower(?) LIMIT 1').get(name);
+  if (!exists(base)) return base;
+  for (let i = 1; i < 1000; i += 1) {
+    const suffix = String(i);
+    const candidate = `${base.slice(0, Math.max(1, 30 - suffix.length))}${suffix}`;
+    if (!exists(candidate)) return candidate;
+  }
+  return `Guest_${crypto.randomBytes(5).toString('hex')}`;
+}
+
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
 const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;              // Base/Ethereum 20-byte hex
 const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;          // Aptos account, padded or not
@@ -6792,6 +6817,7 @@ router.post('/players/register', (req, res) => {
   // the same EVM wallet. So we only treat a row as "this is your account"
   // when BOTH the wallet AND the requested DEX match.
   if (wallet) {
+    const localGuestWallet = isLocalGuestWallet(wallet);
     let existing = getPlayerByWalletAndDexAnyForm(wallet, requestedDex);
 
     // Migration path for Farcaster placeholder rows (wallet = `fc_<fid>`).
@@ -6815,7 +6841,7 @@ router.post('/players/register', (req, res) => {
       // Optional rename on re-login (same as before, scoped to this row).
       const trimmed = normalizePlayerNameInput(name);
       const looksAutoDerived = /^player_[0-9a-f]{4,}$/i.test(trimmed);
-      if (trimmed.length >= 2 && !looksAutoDerived && trimmed !== existing.name) {
+      if (!localGuestWallet && trimmed.length >= 2 && !looksAutoDerived && trimmed !== existing.name) {
         const validation = validatePlayerNameInput(trimmed);
         if (validation.error) return res.status(400).json({ error: validation.error });
         const clash = db.db.prepare('SELECT id FROM players WHERE lower(name) = lower(?) AND id != ? LIMIT 1').get(validation.name, existing.id);
@@ -6835,11 +6861,15 @@ router.post('/players/register', (req, res) => {
   }
 
   // ── New-row branch ──────────────────────────────────────────────────
-  const validation = validatePlayerNameInput(name);
+  const validation = validatePlayerNameInput(
+    isLocalGuestWallet(wallet) ? localGuestNameFromWallet(wallet) : name
+  );
   if (validation.error) {
     return res.status(400).json({ error: validation.error });
   }
-  const trimmed = validation.name;
+  const trimmed = isLocalGuestWallet(wallet)
+    ? makeUniquePlayerName(validation.name)
+    : validation.name;
   const taken = db.db.prepare('SELECT id FROM players WHERE lower(name) = lower(?) LIMIT 1').get(trimmed);
   if (taken) {
     return res.status(409).json({ error: 'Nickname is already taken' });

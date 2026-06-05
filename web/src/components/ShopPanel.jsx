@@ -305,7 +305,7 @@ function ShopPanel({ onClose }) {
                           alt={def.name}
                         />
                       ) : (
-                        <div style={styles.placeholderBox}>рџЏ </div>
+                        <div style={styles.placeholderBox}>?</div>
                       )}
                     </div>
 

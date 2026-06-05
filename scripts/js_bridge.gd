@@ -146,17 +146,30 @@ func _local_guest_mode_enabled() -> bool:
 		return false
 	var href_value = JavaScriptBridge.eval("window.location.href", true)
 	var href: String = String(href_value)
-	return href.contains("?guest=1") or href.contains("&guest=1") or href.contains("?guest=true") or href.contains("&guest=true")
+	return href.contains("?guest=1") or href.contains("&guest=1") or href.contains("?guest=true") or href.contains("&guest=true") or href.contains("?guest=new") or href.contains("&guest=new")
 
 
-func _get_local_guest_wallet() -> String:
+func _get_local_guest_id() -> String:
 	if not _local_guest_mode_enabled():
 		return ""
-	var guest_id_value = JavaScriptBridge.eval("(function(){try{var u=new URL(window.location.href);var g=u.searchParams.get('guest');if(g!=='1'&&g!=='true')return '';var id=u.searchParams.get('guest_id');if(!id){id='g_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);u.searchParams.set('guest_id',id);window.history.replaceState(null,'',u.toString());}return id;}catch(e){return '';}})()", true)
+	var guest_id_value = JavaScriptBridge.eval("(function(){try{var u=new URL(window.location.href);var g=(u.searchParams.get('guest')||'').toLowerCase();if(g!=='1'&&g!=='true'&&g!=='new')return '';var id=u.searchParams.get('guest_id');if(!id||g==='new'){id='g_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);u.searchParams.set('guest','1');u.searchParams.set('guest_id',id);window.history.replaceState(null,'',u.toString());}try{window.localStorage.removeItem('clash_game_auth_v1');window.localStorage.setItem('clash.localGuest',id);}catch(e){}return id;}catch(e){return '';}})()", true)
 	var guest_id: String = String(guest_id_value).strip_edges()
+	return guest_id
+
+
+func _get_local_guest_wallet(guest_id: String) -> String:
 	if guest_id == "":
 		return ""
 	return "local_guest_%s" % guest_id
+
+
+func _get_local_guest_name(guest_id: String) -> String:
+	var suffix := guest_id.replace("g_", "").replace("_", "").replace("-", "")
+	if suffix.length() > 12:
+		suffix = suffix.substr(0, 12)
+	if suffix == "":
+		suffix = str(Time.get_unix_time_from_system())
+	return "Guest_%s" % suffix
 
 
 func _clear_local_web_auth(net: Node) -> void:
@@ -221,9 +234,10 @@ func _send_initial_state() -> void:
 	if net:
 		_clear_local_web_auth(net)
 	if net and not net.has_token():
-		var guest_wallet: String = _get_local_guest_wallet()
+		var guest_id: String = _get_local_guest_id()
+		var guest_wallet: String = _get_local_guest_wallet(guest_id)
 		if guest_wallet != "":
-			call_deferred("_do_register", "LocalTester", guest_wallet, "pacifica", 0)
+			call_deferred("_do_register", _get_local_guest_name(guest_id), guest_wallet, "pacifica", 0)
 		else:
 			send_to_react("show_register", {})
 	elif net:
