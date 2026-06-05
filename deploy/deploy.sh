@@ -525,6 +525,7 @@ backup_shared_databases() {
     stop_services_for_database_backup
     backup_sqlite_db "$SHARED_SERVER_DIR/clash.db" "$backup_dir/server/clash.db" || true
     backup_sqlite_db "$SHARED_FUTURES_DIR/futures.db" "$backup_dir/server-futures/futures.db" || true
+    resume_services_after_database_backup
     if [ -f "$ENV_FILE" ]; then
         cp -a "$ENV_FILE" "$backup_dir/.env"
         chmod 600 "$backup_dir/.env" || true
@@ -941,7 +942,7 @@ validate_release() {
 }
 
 stop_services_for_database_backup() {
-    if [ "${CLASH_BACKUP_QUIESCE_SERVICES:-1}" != "1" ]; then
+    if [ "${CLASH_BACKUP_QUIESCE_SERVICES:-0}" != "1" ]; then
         return
     fi
 
@@ -950,6 +951,18 @@ stop_services_for_database_backup() {
     pm2 stop clash-hermes-jobs 2>/dev/null || true
     pm2 stop clash-futures 2>/dev/null || true
     pm2 stop clash-mcp 2>/dev/null || true
+}
+
+resume_services_after_database_backup() {
+    if [ "${CLASH_BACKUP_QUIESCE_SERVICES:-0}" != "1" ]; then
+        return
+    fi
+
+    log "Resuming current runtime services after SQLite backup..."
+    pm2 start clash-api 2>/dev/null || true
+    pm2 start clash-hermes-jobs 2>/dev/null || true
+    pm2 start clash-futures 2>/dev/null || true
+    pm2 start clash-mcp 2>/dev/null || true
 }
 
 sync_legacy_databases_before_switch() {
