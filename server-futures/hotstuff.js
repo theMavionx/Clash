@@ -45,6 +45,20 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function hotstuffMarginMode(row) {
+  const raw = row?.margin_mode
+    ?? row?.marginMode
+    ?? row?.margin_type
+    ?? row?.marginType
+    ?? row?.leverage?.type
+    ?? row?.mode
+    ?? '';
+  const s = String(raw || '').trim().toLowerCase();
+  if (s.includes('isolated') || s === 'iso' || row?.is_isolated === true || row?.isolated === true) return 'isolated';
+  if (s.includes('cross') || s === 'crossed' || row?.is_cross === true || row?.cross === true) return 'cross';
+  return '';
+}
+
 async function postInfo(method, params = {}) {
   const r = await fetch(`${HOTSTUFF_API}/info`, {
     method: 'POST',
@@ -220,7 +234,8 @@ async function getPositionsByAddress(address) {
       pnl_pct: 0,
       pair_index: Number(p.instrument_id),
       trade_index: null,
-      is_isolated: String(p.margin_mode || '').toLowerCase() === 'isolated',
+      is_isolated: hotstuffMarginMode(p) === 'isolated',
+      margin_type: hotstuffMarginMode(p) || '',
       _raw: p,
     };
   }).filter(Boolean);

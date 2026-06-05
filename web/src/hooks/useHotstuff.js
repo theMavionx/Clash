@@ -72,6 +72,20 @@ function hotstuffOpenOrderKind(order) {
   return '';
 }
 
+function hotstuffIsolatedMode(row) {
+  const raw = row?.margin_type
+    ?? row?.marginType
+    ?? row?.margin_mode
+    ?? row?.marginMode
+    ?? row?.leverage?.type
+    ?? row?.mode
+    ?? '';
+  const s = String(raw || '').trim().toLowerCase();
+  if (s.includes('isolated') || s === 'iso' || row?.is_isolated === true || row?.isolated === true) return true;
+  if (s.includes('cross') || row?.is_cross === true || row?.cross === true) return false;
+  return null;
+}
+
 function isDuplicateHotstuffTriggerError(error) {
   return /duplicate\s+trigger/i.test(String(error?.message || error || ''));
 }
@@ -278,6 +292,7 @@ export function useHotstuff() {
   const [walletUsdc, setWalletUsdc] = useState(null);
   const [walletUsdcStatus, setWalletUsdcStatus] = useState({ status: 'idle', message: null });
   const leverageConfigFetchedRef = useRef({ wallet: null, at: 0 });
+  const agentRegistrationCacheRef = useRef({ wallet: null, agent: null, at: 0 });
   const active = dex === 'hotstuff';
   const hsWalletAddr = useMemo(() => hotstuffAddress(walletAddr), [walletAddr]);
 
@@ -439,7 +454,8 @@ export function useHotstuff() {
           if (!sym) continue;
           const lev = num(p?.leverage, 0);
           if (lev > 0) nextLeverage[sym] = lev;
-          nextMargins[sym] = !!p?.is_isolated;
+          const isolated = hotstuffIsolatedMode(p);
+          if (isolated != null) nextMargins[sym] = isolated;
         }
       }
       const leverageConfigCache = leverageConfigFetchedRef.current || {};
@@ -459,7 +475,8 @@ export function useHotstuff() {
             if (!sym) continue;
             const lev = num(row.value.leverage, 0);
             if (lev > 0) levs[sym] = lev;
-            if (row.value.margin_type) modes[sym] = String(row.value.margin_type).toLowerCase() === 'isolated';
+            const isolated = hotstuffIsolatedMode(row.value);
+            if (isolated != null) modes[sym] = isolated;
           }
           if (Object.keys(levs).length) setLeverageSettings(prev => ({ ...prev, ...levs }));
           if (Object.keys(modes).length) setMarginModes(prev => ({ ...prev, ...modes }));
@@ -639,12 +656,33 @@ export function useHotstuff() {
     let agent = await loadStoredAgent(hsWalletAddr) || await newStoredAgent(hsWalletAddr);
     if (!agent) throw new Error('Could not create Hotstuff browser trading agent');
 
+    const cached = agentRegistrationCacheRef.current || {};
+    if (
+      cached.wallet === hsWalletAddr
+      && cached.agent === agent.address
+      && Date.now() - Number(cached.at || 0) < 10 * 60_000
+    ) {
+      return agent;
+    }
+    if (
+      setupVerified === true
+      && setupStatus.agentReady
+      && setupStatus.agentAddress
+      && String(setupStatus.agentAddress).toLowerCase() === agent.address.toLowerCase()
+    ) {
+      agentRegistrationCacheRef.current = { wallet: hsWalletAddr, agent: agent.address, at: Date.now() };
+      return agent;
+    }
+
     const agents = await info.allAgents({ user: hsWalletAddr }).catch(() => []);
     const registered = Array.isArray(agents) && agents.some(row => (
       String(row?.agent_address || row?.agent || '').toLowerCase() === agent.address.toLowerCase()
       && agentStillValid(row)
     ));
-    if (registered) return agent;
+    if (registered) {
+      agentRegistrationCacheRef.current = { wallet: hsWalletAddr, agent: agent.address, at: Date.now() };
+      return agent;
+    }
 
     const validUntil = Date.now() + AGENT_VALIDITY_MS;
     await exchange().addAgent({
@@ -657,8 +695,9 @@ export function useHotstuff() {
       nonce: Date.now(),
     });
     agent = await saveStoredAgent(hsWalletAddr, agent.privateKey, validUntil) || agent;
+    agentRegistrationCacheRef.current = { wallet: hsWalletAddr, agent: agent.address, at: Date.now() };
     return agent;
-  }, [exchange, hsWalletAddr, info]);
+  }, [exchange, hsWalletAddr, info, setupStatus.agentAddress, setupStatus.agentReady, setupVerified]);
 
   const activate = useCallback(async (opts = {}) => {
     if (!hsWalletAddr || !walletClient) throw new Error('Connect your EVM wallet first');
@@ -685,7 +724,6 @@ export function useHotstuff() {
       }
     }
     const agent = await ensureTradingAgent();
-    await verifySetup();
     setSetupStatus(prev => ({
       ...prev,
       accountExists: prev.accountExists || accountExists,
@@ -695,7 +733,7 @@ export function useHotstuff() {
     }));
     setSetupVerified(true);
     return { success: true, agentAddress: agent.address };
-  }, [ensureTradingAgent, exchange, hasHotstuffAccount, hsWalletAddr, info, switchChain, verifySetup, walletClient]);
+  }, [ensureTradingAgent, exchange, hasHotstuffAccount, hsWalletAddr, info, switchChain, walletClient]);
 
   const openReferralJoin = useCallback(() => {
     if (!HOTSTUFF_REFERRAL_URL) return;
@@ -704,7 +742,14 @@ export function useHotstuff() {
 
   const placeOrder = useCallback(async ({ symbol, side, amount, amountBase, price, leverage, orderType, reduceOnly = false, options = {} }) => {
     if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
-    await activate();
+    let agent = null;
+    if (setupVerified === true) {
+      agent = await ensureTradingAgent();
+    } else {
+      const activated = await activate();
+      agent = await loadStoredAgent(hsWalletAddr);
+      if (!agent && activated?.agentAddress) agent = await ensureTradingAgent();
+    }
     const market = markets.find(m => m.symbol === String(symbol || '').toUpperCase() || m.market_name === symbol);
     const order = buildHotstuffOrder({
       market,
@@ -719,7 +764,6 @@ export function useHotstuff() {
       reduceOnly,
     });
     const brokerConfig = hotstuffBrokerConfig();
-    const agent = await ensureTradingAgent();
     console.info('[Hotstuff UI] submitting order', {
       symbol,
       orderType,
@@ -747,9 +791,9 @@ export function useHotstuff() {
       throw new Error(`Hotstuff order was not accepted (${hotstuffOrderStatusLabel(result)}).`);
     }
     setTimeout(() => claimGold(orderType || 'trade'), 2500);
-    await refresh();
+    setTimeout(() => refresh(), 350);
     return { success: true, result, clientOrderId: order.cloid, orderStatus: hotstuffOrderStatusLabel(result) };
-  }, [activate, agentExchange, claimGold, ensureTradingAgent, evmReady, hsWalletAddr, markets, refresh, walletClient]);
+  }, [activate, agentExchange, claimGold, ensureTradingAgent, evmReady, hsWalletAddr, markets, refresh, setupVerified, walletClient]);
 
   const setLeverage = useCallback(async (symbol, leverage) => {
     try {
@@ -792,7 +836,7 @@ export function useHotstuff() {
         address: result?.address || null,
       });
       setLeverageSettings(prev => ({ ...prev, [sym]: lev }));
-      await refresh();
+      setTimeout(() => refresh(), 250);
       return { success: true, result, leverage: lev };
     } catch (e) {
       const msg = hotstuffErrorMessage(e, 'Hotstuff leverage update failed');
