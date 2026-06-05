@@ -228,7 +228,10 @@ function TournamentPanel({ onClose }) {
   const joined = !!me?.joined;
   const myStats = isHistory ? (historyTournament?.me || null) : (me?.me || null);
   const needsCopRewardWallet = !!t?.rewards_in_cop;
-  const hasRewardWallet = !!myStats?.reward_wallet_evm;
+  const storedRewardWallet = String(myStats?.reward_wallet_evm || '').trim();
+  const hasRewardWallet = needsCopRewardWallet
+    ? SOLANA_WALLET_RE.test(storedRewardWallet)
+    : !!storedRewardWallet;
   const canAddMissingRewardWallet = !isHistory && joined && needsCopRewardWallet && !hasRewardWallet;
   const phase = t?.phase || me?.phase || null;
   const preregistration = !isHistory && phase === 'preregistration';
@@ -277,8 +280,17 @@ function TournamentPanel({ onClose }) {
   const nextPrizeRewards = rewardPoolSummary(t?.prize_next_tier?.rewards || [], t?.prize_currency || 'USD');
 
   useEffect(() => {
-    if (myStats?.reward_wallet_evm) setRewardWalletEvm(myStats.reward_wallet_evm);
-  }, [myStats?.reward_wallet_evm]);
+    const stored = String(myStats?.reward_wallet_evm || '').trim();
+    if (!stored) {
+      setRewardWalletEvm('');
+      return;
+    }
+    if (needsCopRewardWallet && !SOLANA_WALLET_RE.test(stored)) {
+      setRewardWalletEvm('');
+      return;
+    }
+    setRewardWalletEvm(stored);
+  }, [myStats?.reward_wallet_evm, needsCopRewardWallet]);
 
   useEffect(() => {
     if (!dailyActive) {
