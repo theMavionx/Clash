@@ -29,7 +29,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
 		"hp_levels": [1200, 2200, 3800, 6000],
-		"cost": {"gold": 200, "wood": 500},
+		"cost": {"gold": 80, "wood": 200},
 		"produces": "ore",
 		"produce_rate": [18, 33, 54, 81],    # per minute per level
 		"produce_max": [200, 400, 800, 1600],  # max stored before collection
@@ -43,7 +43,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
 		"hp_levels": [2000, 3500, 6000, 9500],
-		"cost": {"gold": 300, "wood": 800, "ore": 600},
+		"cost": {"gold": 140, "wood": 350, "ore": 280},
 		"max_count": 1,
 	},
 	"port": {
@@ -56,7 +56,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.25,
 		"model_rotation_y": 0.0,
 		"hp_levels": [1800, 3200, 5500, 8500],
-		"cost": {"gold": 500, "wood": 1200, "ore": 1000},
+		"cost": {"gold": 240, "wood": 560, "ore": 480},
 		"no_outline": true,
 	},
 	"sawmill": {
@@ -67,7 +67,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
 		"hp_levels": [1200, 2200, 3800, 6000],
-		"cost": {"gold": 200, "ore": 500},
+		"cost": {"gold": 80, "ore": 200},
 		"produces": "wood",
 		"produce_rate": [24, 45, 72, 108],
 		"produce_max": [250, 500, 1000, 2000],
@@ -85,7 +85,7 @@ var building_defs: Dictionary = {
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}, 4: {"gold": 30000, "wood": 47500, "ore": 45000}},
+		"upgrade_cost": {2: {"gold": 800, "wood": 2400, "ore": 2000}, 3: {"gold": 3000, "wood": 7000, "ore": 6000}, 4: {"gold": 10000, "wood": 20000, "ore": 17000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -97,7 +97,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.25,
 		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3],
 		"hp_levels": [900, 1600, 2800, 4500],
-		"cost": {"gold": 400, "wood": 1500, "ore": 1200},
+		"cost": {"gold": 220, "wood": 700, "ore": 580},
 		"altar_ward_bonus": true,
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
@@ -129,7 +129,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
 		"hp_levels": [1400, 2500, 4200, 6500],
-		"cost": {"gold": 300, "wood": 1200},
+		"cost": {"gold": 140, "wood": 550},
 	},
 	"archer_tower": {
 		"name": "Archer Tower",
@@ -142,7 +142,7 @@ var building_defs: Dictionary = {
 		"model_offset": Vector3(0.11, 0, -0.02),
 		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)],
 		"hp_levels": [800, 1500, 2500, 3800, 5600],
-		"cost": {"gold": 400, "wood": 1500},
+		"cost": {"gold": 180, "wood": 650},
 		"altar_ward_bonus": true,
 		"hp_bar_height": 0.5,
 		"tower_unit": {
@@ -161,7 +161,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
 		"hp_levels": [700, 1200, 2000],
-		"cost": {"gold": 2500, "ore": 4000},
+		"cost": {"gold": 800, "ore": 1300},
 		"max_count": 2,
 		"altar_ward_bonus": true,
 		"hp_bar_height": 0.5,
@@ -183,7 +183,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.3,
 		"model_scales": [0.3, 0.3, 0.3, 0.1],
 		"hp_levels": [1000, 1500, 2000, 2700],
-		"cost": {"gold": 200, "ore": 800},
+		"cost": {"gold": 120, "ore": 500},
 		"altar_ward_bonus": true,
 	},
 	"flag": {
@@ -212,8 +212,8 @@ var building_defs: Dictionary = {
 const BUILDING_UPGRADE_COST_MULTIPLIERS: Dictionary = {
 	2: 2,
 	3: 3,
-	4: 8,
-	5: 14,
+	4: 5,
+	5: 8,
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -668,7 +668,7 @@ var port_panel: PanelContainer
 var port_vbox: VBoxContainer
 var port_ship_count_label: Label
 var owned_ships: int = 0
-const SHIP_COST_GOLD: int = 500
+const SHIP_COST_GOLD: int = 250
 const SHIP_MODELS: Array[String] = [
 	"res://Model/Ship/Ships/ship-pirate-small_1.glb",
 	"res://Model/Ship/Ships/ship-pirate-medium_2.glb",
@@ -688,10 +688,10 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/Knight.glb",
 		"script": "res://scripts/knight.gd",
 		"costs": {
-			1: {"gold": 150, "ore": 100},
-			2: {"gold": 300, "ore": 250},
-			3: {"gold": 600, "ore": 500},
-			4: {"gold": 1200, "ore": 1000},
+			1: {"gold": 150, "ore": 125},
+			2: {"gold": 150, "ore": 125},
+			3: {"gold": 300, "ore": 250},
+			4: {"gold": 600, "ore": 500},
 		}
 	},
 	"Mage": {
@@ -699,10 +699,10 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/Mage.glb",
 		"script": "res://scripts/mage.gd",
 		"costs": {
-			1: {"gold": 200, "ore": 200},
-			2: {"gold": 500, "ore": 500},
-			3: {"gold": 1000, "ore": 1000},
-			4: {"gold": 2000, "ore": 2000},
+			1: {"gold": 250, "ore": 250},
+			2: {"gold": 250, "ore": 250},
+			3: {"gold": 500, "ore": 500},
+			4: {"gold": 1000, "ore": 1000},
 		}
 	},
 	"Archer": {
@@ -710,10 +710,10 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/Ranger.glb",
 		"script": "res://scripts/archer.gd",
 		"costs": {
-			1: {"gold": 150, "wood": 150},
-			2: {"gold": 350, "wood": 350},
-			3: {"gold": 700, "wood": 700},
-			4: {"gold": 1400, "wood": 1400},
+			1: {"gold": 175, "wood": 175},
+			2: {"gold": 175, "wood": 175},
+			3: {"gold": 350, "wood": 350},
+			4: {"gold": 700, "wood": 700},
 		}
 	},
 	"DemonKing": {

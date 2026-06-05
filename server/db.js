@@ -2495,28 +2495,28 @@ const BUILDING_DEFS = {
     hp_levels: [3500, 8000, 16000, 24000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
-      2: { gold: 2000, wood: 6000, ore: 5000 },
-      3: { gold: 5000, wood: 20000, ore: 18000 },
-      4: { gold: 30000, wood: 47500, ore: 45000 },
+      2: { gold: 800, wood: 2400, ore: 2000 },
+      3: { gold: 3000, wood: 7000, ore: 6000 },
+      4: { gold: 10000, wood: 20000, ore: 17000 },
     },
     max_count: 1,
   },
   mine: {
     size: [3, 3], max_level: 4,
     hp_levels: [1200, 2200, 3800, 6000],
-    cost: { gold: 200, wood: 500, ore: 0 },
+    cost: { gold: 80, wood: 200, ore: 0 },
     max_count: 4,
   },
   barn: {
     size: [4, 3], max_level: 4,
     hp_levels: [2000, 3500, 6000, 9500],
-    cost: { gold: 300, wood: 800, ore: 600 },
+    cost: { gold: 140, wood: 350, ore: 280 },
     max_count: 1,
   },
   port: {
     size: [4, 3], max_level: 4,
     hp_levels: [1800, 3200, 5500, 8500],
-    cost: { gold: 500, wood: 1200, ore: 1000 },
+    cost: { gold: 240, wood: 560, ore: 480 },
     max_count: 2,
   },
   altar: {
@@ -2530,37 +2530,37 @@ const BUILDING_DEFS = {
   sawmill: {
     size: [3, 3], max_level: 4,
     hp_levels: [1200, 2200, 3800, 6000],
-    cost: { gold: 200, wood: 0, ore: 500 },
+    cost: { gold: 80, wood: 0, ore: 200 },
     max_count: 4,
   },
   turret: {
     size: [2, 2], max_level: 4,
     hp_levels: [900, 1600, 2800, 4500],
-    cost: { gold: 400, wood: 1500, ore: 1200 },
+    cost: { gold: 220, wood: 700, ore: 580 },
     max_count: 6,
   },
   tombstone: {
     size: [3, 3], max_level: 4,
     hp_levels: [1000, 1500, 2000, 2700],
-    cost: { gold: 200, wood: 0, ore: 800 },
+    cost: { gold: 120, wood: 0, ore: 500 },
     max_count: 4,
   },
   storage: {
     size: [4, 5], max_level: 4,
     hp_levels: [1400, 2500, 4200, 6500],
-    cost: { gold: 300, wood: 1200, ore: 0 },
+    cost: { gold: 140, wood: 550, ore: 0 },
     max_count: 3,
   },
   archer_tower: {
     size: [3, 3], max_level: 5,
     hp_levels: [800, 1500, 2500, 3800, 5600],
-    cost: { gold: 400, wood: 1500, ore: 0 },
+    cost: { gold: 180, wood: 650, ore: 0 },
     max_count: 4,
   },
   mage_tower: {
     size: [3, 3], max_level: 3,
     hp_levels: [700, 1200, 2000],
-    cost: { gold: 2500, wood: 0, ore: 4000 },
+    cost: { gold: 800, wood: 0, ore: 1300 },
     max_count: 2,
   },
 };
@@ -2568,8 +2568,8 @@ const BUILDING_DEFS = {
 const BUILDING_UPGRADE_COST_MULTIPLIERS = {
   2: 2,
   3: 3,
-  4: 8,
-  5: 14,
+  4: 5,
+  5: 8,
 };
 
 function getBuildingUpgradeCost(type, currentLevel) {
@@ -2626,11 +2626,11 @@ normalizeTownHallHpRows();
 // ---------- Troop Definitions ----------
 
 const TROOP_DEFS = {
-  knight:    { max_level: 4, cost: [{ gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 },  { gold: 1200, wood: 0, ore: 1000 }] },
-  mage:      { max_level: 4, cost: [{ gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }, { gold: 2000, wood: 0, ore: 2000 }] },
-  barbarian: { max_level: 4, cost: [{ gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }, { gold: 1400, wood: 0, ore: 1400 }] },
-  archer:    { max_level: 4, cost: [{ gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }, { gold: 1400, wood: 1400, ore: 0 }] },
-  ranger:    { max_level: 4, cost: [{ gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }, { gold: 1000, wood: 1000, ore: 0 }] },
+  knight:    { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 },  { gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 }] },
+  mage:      { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
+  barbarian: { max_level: 4, cost: [{ gold: 175, wood: 0, ore: 175 }, { gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }] },
+  archer:    { max_level: 4, cost: [{ gold: 175, wood: 175, ore: 0 }, { gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }] },
+  ranger:    { max_level: 4, cost: [{ gold: 125, wood: 125, ore: 0 }, { gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }] },
   demon_king: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
 };
 const DISABLED_TROOP_TYPES = new Set(['barbarian', 'ranger']);
@@ -4490,7 +4490,7 @@ function repairAllBuildings(playerId) {
   }
 }
 
-const SHIP_COST_GOLD = 500;
+const SHIP_COST_GOLD = 250;
 
 function buyShip(playerId, buildingId) {
   const building = stmts.getBuildingById.get(buildingId, playerId);
