@@ -841,6 +841,15 @@ const hlGateStyles = {
     borderTopColor: '#5C3A21',
     animation: 'act-spin 0.9s linear infinite',
   },
+  bigSpinner: {
+    width: 42, height: 42, borderRadius: '50%',
+    borderWidth: 4,
+    borderStyle: 'solid',
+    borderColor: 'rgba(92,58,33,0.18)',
+    borderTopColor: '#5C3A21',
+    animation: 'act-spin 0.9s linear infinite',
+    alignSelf: 'center',
+  },
 
   workingHint: {
     fontSize: 13, fontWeight: 800, color: '#5C3A21',
@@ -4432,6 +4441,7 @@ function FuturesPanel() {
   // funding step because Hotstuff has no separate account-create method.
   if (dex === 'hotstuff' && hasWallet && setupVerified !== true) {
     const isRunning = referralLinking || loading;
+    const isChecking = setupVerified === null && !isRunning;
     const walletBal = Number(walletUsdc || 0);
     const spotBal = Number(spotUsdc || 0);
     const equityBal = Number(account?.account_equity ?? account?.balance ?? account?.usdc ?? 0);
@@ -4442,6 +4452,47 @@ function FuturesPanel() {
     const builderState = brokerApproved ? 'done' : (accountExists && isRunning ? 'active' : 'pending');
     const agentState = agentReady ? 'done' : (brokerApproved && isRunning ? 'active' : 'pending');
     const perpsState = equityBal > 0.000001 ? 'done' : 'pending';
+
+    if (isChecking) {
+      return (
+        <>
+          <style>{animCSS}</style>
+          <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+          <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+            ...(fullscreen ? S.containerFull : S.container),
+            ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+            transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+            transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+          }}>
+            <div style={S.header} onPointerDown={handlePointerDown}>
+              <span style={S.headerTitle}>Hotstuff setup</span>
+            </div>
+            <div style={{
+              ...S.body,
+              alignItems: 'stretch',
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              padding: 0,
+              background: '#fdf8e7',
+            }}>
+              <div style={{ ...hlGateStyles.frame, justifyContent: 'center', minHeight: 260 }}>
+                <span style={hlGateStyles.bigSpinner} />
+                <div style={hlGateStyles.titleBlock}>
+                  <span style={hlGateStyles.kicker}>CHECKING</span>
+                  <span style={hlGateStyles.title}>Checking Hotstuff setup</span>
+                  <span style={hlGateStyles.subtitle}>
+                    Reading your Hotstuff account, builder-code approval, funding, and browser trading agent before showing any action steps.
+                  </span>
+                </div>
+                <div style={hlGateStyles.workingHint}>
+                  Please wait while Clash checks your connected wallet.
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      );
+    }
 
     return (
       <>

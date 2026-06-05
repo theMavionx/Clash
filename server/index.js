@@ -333,6 +333,23 @@ app.get('/trading-stats', dashboardAuth, async (req, res) => {
 
 // Admin panel — served under /api so it goes through the proxy
 app.get('/api/admin/panel', (req, res) => {
+  if (req.query.legacy !== '1') {
+    const builtAdmin = path.join(REPO_ROOT, 'web', 'dist', 'admin.html');
+    if (fs.existsSync(builtAdmin)) {
+      return res.sendFile(builtAdmin);
+    }
+    const devOrigin = process.env.CLASH_ADMIN_DEV_ORIGIN || 'http://localhost:5173';
+    return res.send(`<!doctype html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0a0b1a">
+<title>Clash Admin</title>
+</head><body>
+<div id="admin-root"></div>
+<script type="module" src="${devOrigin}/src/admin/main.jsx"></script>
+</body></html>`);
+  }
   res.send(`<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">

@@ -1,0 +1,251 @@
+export const TOURNAMENT_DEXES = [
+  'pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid',
+  'risex', 'nado', 'hibachi', 'grvt', 'hotstuff', 'katana', 'gmtrade',
+];
+
+export const DEX_LABELS = {
+  pacifica: 'Pacifica',
+  avantis: 'Avantis',
+  decibel: 'Decibel',
+  gmx: 'GMX',
+  monad: 'Perpl',
+  phoenix: 'Phoenix',
+  hyperliquid: 'Hyperliquid',
+  risex: 'RISEx',
+  nado: 'Nado',
+  hibachi: 'Hibachi',
+  grvt: 'GRVT',
+  hotstuff: 'Hotstuff',
+  katana: 'Katana',
+  gmtrade: 'GMTrade',
+};
+
+export const PRIZE_PRESETS = [
+  { id: 'winner_take_all', label: 'Winner takes all', weights: [100] },
+  { id: 'equal', label: 'Equal split', equal: true },
+  { id: 'top3_balanced', label: 'Top 3: 50/30/20', weights: [50, 30, 20] },
+  { id: 'top3_aggressive', label: 'Top 3: 60/25/15', weights: [60, 25, 15] },
+  { id: 'top5_balanced', label: 'Top 5: 40/25/15/12/8', weights: [40, 25, 15, 12, 8] },
+  { id: 'top5_aggressive', label: 'Top 5: 50/25/12/8/5', weights: [50, 25, 12, 8, 5] },
+  { id: 'top10_balanced', label: 'Top 10: balanced', weights: [30, 20, 15, 10, 8, 6, 5, 3, 2, 1] },
+  { id: 'top10_flatter', label: 'Top 10: flatter', weights: [25, 18, 14, 11, 9, 7, 6, 4, 3, 3] },
+  { id: 'top10_long_tail', label: 'Top 10: long tail', weights: [35, 18, 12, 9, 7, 6, 5, 4, 2, 2] },
+  { id: 'linear', label: 'Linear drop', linear: true },
+];
+
+export function emptyTournament() {
+  return {
+    name: '',
+    description: '',
+    dex: 'pacifica',
+    dex_scope: 'single',
+    eligible_dexes: ['pacifica'],
+    mode: 'individual',
+    team_score_by: 'volume_usd',
+    team_prize_mode: 'winner_takes_all',
+    team_prize_splits: [],
+    team_member_reward_by: 'volume_usd',
+    attack_match_policy: 'all',
+    start_at: '',
+    end_at: '',
+    preregistration_enabled: false,
+    registration_opens_at: '',
+    registration_closes_at: '',
+    gold_boost: 1,
+    seeker_gold_boost: 1,
+    trophy_boost: 1,
+    shield_hours: '',
+    freeze_trophies: true,
+    seeker_only: false,
+    sort_by: 'points',
+    scoring_mode: 'live',
+    daily_pool_points: 1000,
+    daily_pool_growth_pct: 0,
+    daily_pool_overrides: {},
+    points_trophy_weight: 20,
+    points_volume_weight: 60,
+    points_pnl_weight: 20,
+    prize_currency: 'USD',
+    prize_tiers: [],
+    rewards_in_cop: false,
+    status: 'active',
+  };
+}
+
+export function tournamentToForm(tournament) {
+  if (!tournament) return emptyTournament();
+  const base = emptyTournament();
+  const eligible = Array.isArray(tournament.eligible_dexes) && tournament.eligible_dexes.length
+    ? tournament.eligible_dexes
+    : [tournament.dex || base.dex];
+  return {
+    ...base,
+    ...tournament,
+    eligible_dexes: eligible,
+    dex: tournament.dex || eligible[0] || base.dex,
+    dex_scope: tournament.dex_scope || (eligible.length > 1 ? 'custom' : 'single'),
+    preregistration_enabled: !!tournament.preregistration_enabled,
+    freeze_trophies: tournament.freeze_trophies !== false,
+    seeker_only: !!tournament.seeker_only,
+    rewards_in_cop: !!tournament.rewards_in_cop,
+    shield_hours: tournament.shield_hours == null ? '' : tournament.shield_hours,
+    scoring_mode: tournament.scoring_mode || 'live',
+    sort_by: tournament.sort_by === 'volume_trophies_50_50' ? 'points' : (tournament.sort_by || 'points'),
+    points_trophy_weight: Number(tournament.points_trophy_weight ?? tournament.points_weights?.trophies ?? 20),
+    points_volume_weight: Number(tournament.points_volume_weight ?? tournament.points_weights?.volume ?? 60),
+    points_pnl_weight: Number(tournament.points_pnl_weight ?? tournament.points_weights?.pnl ?? 20),
+    prize_tiers: normalizePrizeTiers(tournament.prize_tiers || []),
+    team_prize_splits: Array.isArray(tournament.team_prize_splits) ? tournament.team_prize_splits : [],
+    daily_pool_overrides: tournament.daily_pool_overrides || {},
+  };
+}
+
+export function normalizeReward(raw = {}) {
+  const type = ['money', 'points', 'amp', 'nft', 'custom'].includes(String(raw.type || '').toLowerCase())
+    ? String(raw.type).toLowerCase()
+    : 'money';
+  const defaults = rewardDefaults(type);
+  const reward = {
+    ...defaults,
+    ...raw,
+    type,
+    label: String(raw.label || raw.name || defaults.label).slice(0, 80),
+    unit: String(raw.unit || raw.currency || defaults.unit).slice(0, 24),
+    currency: String(raw.currency || raw.unit || defaults.currency || 'USD').toUpperCase().slice(0, 12),
+    pool_amount: Math.max(0, Number(raw.pool_amount ?? raw.pool ?? raw.quantity ?? defaults.pool_amount) || 0),
+    winners: Math.max(1, Math.min(100, Math.floor(Number(raw.winners || defaults.winners) || 1))),
+    preset: raw.preset || defaults.preset,
+    payouts: Array.isArray(raw.payouts) ? raw.payouts.map((p) => ({
+      rank: Math.max(1, Math.floor(Number(p.rank) || 1)),
+      amount: Math.max(0, Number(p.amount ?? p.amount_usd ?? p.quantity ?? 0) || 0),
+    })).filter((p) => p.amount > 0) : [],
+  };
+  if (!reward.payouts.length && reward.pool_amount > 0) reward.payouts = buildPayouts(reward);
+  return reward;
+}
+
+export function rewardDefaults(type = 'money') {
+  if (type === 'points') return { type, label: 'Points', unit: 'points', pool_amount: 1000, winners: 10, preset: 'top10_balanced' };
+  if (type === 'amp') return { type, label: 'AMP', unit: 'AMP', pool_amount: 1000, winners: 10, preset: 'top10_balanced' };
+  if (type === 'nft') return { type, label: 'NFT reward', unit: 'NFT', pool_amount: 1, winners: 1, preset: 'winner_take_all' };
+  if (type === 'custom') return { type, label: 'Custom reward', unit: 'reward', pool_amount: 100, winners: 5, preset: 'equal' };
+  return { type: 'money', label: 'Cash', currency: 'USD', unit: 'USD', pool_amount: 200, winners: 5, preset: 'top5_balanced' };
+}
+
+export function normalizePrizeTiers(tiers = []) {
+  return (Array.isArray(tiers) ? tiers : []).map((tier) => ({
+    volume_usd: Math.max(0, Number(tier.volume_usd) || 0),
+    rewards: (Array.isArray(tier.rewards) ? tier.rewards : []).map(normalizeReward),
+  })).filter((tier) => tier.volume_usd > 0 || tier.rewards.length > 0)
+    .sort((a, b) => a.volume_usd - b.volume_usd);
+}
+
+export function buildPayouts(reward) {
+  const pool = Math.max(0, Number(reward.pool_amount) || 0);
+  const winners = Math.max(1, Math.min(100, Math.floor(Number(reward.winners) || 1)));
+  const preset = PRIZE_PRESETS.find((p) => p.id === reward.preset) || PRIZE_PRESETS[1];
+  let weights = [];
+  if (preset.equal) weights = Array(winners).fill(1);
+  else if (preset.linear) weights = Array.from({ length: winners }, (_, i) => winners - i);
+  else weights = Array.from({ length: winners }, (_, i) => Number(preset.weights?.[i] || 0));
+  if (!weights.some((w) => w > 0)) weights = Array(winners).fill(1);
+  const sum = weights.reduce((acc, w) => acc + Math.max(0, Number(w) || 0), 0) || 1;
+  let remaining = pool;
+  return weights.slice(0, winners).map((weight, index) => {
+    const raw = index === winners - 1 ? remaining : pool * Math.max(0, Number(weight) || 0) / sum;
+    const amount = reward.type === 'nft' ? Math.max(0, Math.round(raw)) : Math.max(0, Number(raw.toFixed(2)));
+    remaining = Math.max(0, Number((remaining - amount).toFixed(2)));
+    return { rank: index + 1, amount };
+  }).filter((p) => p.amount > 0);
+}
+
+export function formToTournamentBody(form) {
+  const eligible = form.dex_scope === 'all'
+    ? TOURNAMENT_DEXES
+    : form.dex_scope === 'custom'
+      ? (form.eligible_dexes || []).filter((d) => TOURNAMENT_DEXES.includes(d))
+      : [form.dex || 'pacifica'];
+  return {
+    name: String(form.name || '').trim(),
+    description: String(form.description || '').slice(0, 500),
+    dex: form.dex || eligible[0] || 'pacifica',
+    dex_scope: form.dex_scope || 'single',
+    eligible_dexes: eligible,
+    mode: form.mode || 'individual',
+    team_score_by: form.team_score_by || 'volume_usd',
+    team_prize_mode: form.team_prize_mode || 'winner_takes_all',
+    team_prize_splits: form.team_prize_mode === 'custom_split' ? (form.team_prize_splits || []) : [],
+    team_member_reward_by: form.team_member_reward_by || 'volume_usd',
+    attack_match_policy: form.attack_match_policy || 'all',
+    start_at: form.start_at || undefined,
+    end_at: form.end_at || undefined,
+    preregistration_enabled: !!form.preregistration_enabled,
+    registration_opens_at: form.registration_opens_at || undefined,
+    registration_closes_at: form.registration_closes_at || undefined,
+    gold_boost: Number(form.gold_boost) || 1,
+    seeker_gold_boost: Number(form.seeker_gold_boost) || 1,
+    trophy_boost: Number(form.trophy_boost) || 1,
+    shield_hours: form.shield_hours === '' || form.shield_hours == null ? null : Number(form.shield_hours),
+    freeze_trophies: !!form.freeze_trophies,
+    seeker_only: !!form.seeker_only,
+    sort_by: form.sort_by || 'points',
+    scoring_mode: form.scoring_mode || 'live',
+    daily_pool_points: Math.max(1, Number(form.daily_pool_points) || 1000),
+    daily_pool_growth_pct: Number(form.daily_pool_growth_pct) || 0,
+    daily_pool_overrides: form.daily_pool_overrides || {},
+    points_trophy_weight: Number(form.points_trophy_weight) || 0,
+    points_volume_weight: Number(form.points_volume_weight) || 0,
+    points_pnl_weight: Number(form.points_pnl_weight) || 0,
+    prize_currency: String(form.prize_currency || 'USD').toUpperCase(),
+    prize_tiers: normalizePrizeTiers(form.prize_tiers || []),
+    rewards_in_cop: !!form.rewards_in_cop,
+    status: form.status || 'active',
+  };
+}
+
+export function validateTournamentStep(step, form) {
+  const errors = [];
+  if (step === 0) {
+    if (!String(form.name || '').trim()) errors.push('Tournament name is required.');
+    if (!form.start_at) errors.push('Start time is required.');
+    if (!form.end_at) errors.push('End time is required for operational clarity.');
+    if (form.start_at && form.end_at && new Date(form.end_at) <= new Date(form.start_at)) {
+      errors.push('End time must be after start time.');
+    }
+  }
+  if (step === 1) {
+    const eligible = form.dex_scope === 'all' ? TOURNAMENT_DEXES : form.dex_scope === 'custom' ? form.eligible_dexes : [form.dex];
+    if (!eligible?.length) errors.push('Pick at least one eligible DEX.');
+    if (form.mode === 'dex_vs_dex' && eligible.length < 2) errors.push('DEX vs DEX needs at least two DEXes.');
+    if (form.team_prize_mode === 'custom_split') {
+      const total = (form.team_prize_splits || []).reduce((sum, row) => sum + Number(row.share_pct || 0), 0);
+      if (Math.abs(total - 100) > 0.01) errors.push(`Team prize split must total 100%. Current total is ${total.toFixed(2)}%.`);
+    }
+  }
+  if (step === 2) {
+    const needsPoints = form.scoring_mode === 'daily_pool' || form.sort_by === 'points' || form.mode === 'dex_vs_dex';
+    const total = Number(form.points_trophy_weight || 0) + Number(form.points_volume_weight || 0) + Number(form.points_pnl_weight || 0);
+    if (needsPoints && Math.abs(total - 100) > 0.001) errors.push(`Point weights must total 100%. Current total is ${total}%.`);
+  }
+  if (step === 3) {
+    for (const tier of form.prize_tiers || []) {
+      for (const reward of tier.rewards || []) {
+        const payoutSum = (reward.payouts || []).reduce((sum, p) => sum + Number(p.amount || 0), 0);
+        if (payoutSum > Number(reward.pool_amount || 0) + 0.01) {
+          errors.push(`Reward "${reward.label}" payouts exceed its pool.`);
+        }
+      }
+    }
+  }
+  return errors;
+}
+
+export function fmtUsd(value, maxDigits = 0) {
+  const n = Number(value) || 0;
+  return '$' + n.toLocaleString(undefined, { maximumFractionDigits: maxDigits });
+}
+
+export function fmtTime(value) {
+  if (!value) return '-';
+  return new Date(String(value).replace(' ', 'T') + 'Z').toLocaleString();
+}
