@@ -75,6 +75,7 @@ async function executeHotstuffAction(client, actionType, params, txType) {
     instrumentId: data.instrumentId,
     leverage: data.leverage,
     leverage_type: typeof data.leverage,
+    mode: data.mode,
   });
   const signature = await signAction({
     wallet: client.wallet,
@@ -130,6 +131,16 @@ export function createHotstuffExchangeClient(wallet) {
       leverage: String(params.leverage),
     },
     1203,
+  );
+  client.updatePerpInstrumentMarginMode = (params) => executeHotstuffAction(
+    client,
+    '1205',
+    {
+      instrumentId: params.instrumentId,
+      mode: params.mode,
+      nonce: params.nonce,
+    },
+    1205,
   );
   return client;
 }

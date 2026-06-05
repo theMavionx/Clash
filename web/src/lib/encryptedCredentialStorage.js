@@ -4,11 +4,17 @@ const KEY_STORE = 'keys';
 const VALUE_STORE = 'values';
 const MASTER_KEY_ID = 'master';
 const LOCAL_MIRROR_PREFIX = 'clash_encrypted_credential_mirror_v1:';
+const LOCAL_MASTER_KEY = 'clash_encrypted_credential_master_v2';
 
 function hasCrypto() {
   return typeof window !== 'undefined'
     && window.crypto?.subtle
     && typeof indexedDB !== 'undefined';
+}
+
+function hasSubtleCrypto() {
+  return typeof window !== 'undefined'
+    && window.crypto?.subtle;
 }
 
 function openDb() {
@@ -81,6 +87,11 @@ function removeLocalMirror(name) {
 }
 
 async function getMasterKey(db) {
+  const localKey = await getLocalMasterKey();
+  if (localKey) {
+    try { await idbSet(db, KEY_STORE, MASTER_KEY_ID, localKey); } catch {}
+    return localKey;
+  }
   const existing = await idbGet(db, KEY_STORE, MASTER_KEY_ID);
   if (existing) return existing;
   const key = await crypto.subtle.generateKey(
@@ -91,6 +102,32 @@ async function getMasterKey(db) {
   await idbSet(db, KEY_STORE, MASTER_KEY_ID, key);
   try { await navigator.storage?.persist?.(); } catch {}
   return key;
+}
+
+async function getLocalMasterKey() {
+  if (!hasSubtleCrypto() || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(LOCAL_MASTER_KEY);
+    if (raw) {
+      const jwk = JSON.parse(raw);
+      return await crypto.subtle.importKey('jwk', jwk, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    }
+  } catch {
+    // Fall through and generate a fresh local-backed key.
+  }
+  try {
+    const key = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 },
+      true,
+      ['encrypt', 'decrypt'],
+    );
+    const jwk = await crypto.subtle.exportKey('jwk', key);
+    window.localStorage.setItem(LOCAL_MASTER_KEY, JSON.stringify(jwk));
+    try { await navigator.storage?.persist?.(); } catch {}
+    return await crypto.subtle.importKey('jwk', jwk, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  } catch {
+    return null;
+  }
 }
 
 function bytesToBase64(bytes) {
@@ -107,8 +144,10 @@ function base64ToBytes(value) {
 }
 
 export async function writeEncryptedCredential(name, value) {
-  const db = await openDb();
-  const key = await getMasterKey(db);
+  let db = null;
+  try { db = await openDb(); } catch {}
+  const key = db ? await getMasterKey(db) : await getLocalMasterKey();
+  if (!key) throw new Error('Encrypted browser storage is not available');
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(JSON.stringify(value || null));
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded));
@@ -118,27 +157,46 @@ export async function writeEncryptedCredential(name, value) {
     ciphertext: bytesToBase64(ciphertext),
     updatedAt: Date.now(),
   };
-  await idbSet(db, VALUE_STORE, name, record);
+  if (db) await idbSet(db, VALUE_STORE, name, record);
   writeLocalMirror(name, record);
 }
 
 export async function readEncryptedCredential(name) {
-  const db = await openDb();
-  let record = await idbGet(db, VALUE_STORE, name);
+  let db = null;
+  try { db = await openDb(); } catch {}
+  let record = db ? await idbGet(db, VALUE_STORE, name) : null;
   if (!record?.iv || !record?.ciphertext) {
     record = readLocalMirror(name);
     if (record?.iv && record?.ciphertext) {
-      try { await idbSet(db, VALUE_STORE, name, record); } catch {}
+      try { if (db) await idbSet(db, VALUE_STORE, name, record); } catch {}
     }
   }
   if (!record?.iv || !record?.ciphertext) return null;
-  const key = await getMasterKey(db);
-  const plain = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64ToBytes(record.iv) },
-    key,
-    base64ToBytes(record.ciphertext),
-  );
-  return JSON.parse(new TextDecoder().decode(plain));
+  const tryDecrypt = async (key) => {
+    const plain = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: base64ToBytes(record.iv) },
+      key,
+      base64ToBytes(record.ciphertext),
+    );
+    return JSON.parse(new TextDecoder().decode(plain));
+  };
+  const localKey = await getLocalMasterKey();
+  if (localKey) {
+    try {
+      return await tryDecrypt(localKey);
+    } catch {
+      // Legacy records may have been encrypted with an IndexedDB-only key.
+    }
+  }
+  const legacyKey = db ? await idbGet(db, KEY_STORE, MASTER_KEY_ID) : null;
+  if (legacyKey) {
+    const value = await tryDecrypt(legacyKey);
+    if (localKey) {
+      try { await writeEncryptedCredential(name, value); } catch {}
+    }
+    return value;
+  }
+  return null;
 }
 
 export async function removeEncryptedCredential(name) {

@@ -2267,10 +2267,6 @@ function FuturesPanel() {
       setLocalAlert('Phoenix uses cross margin for normal markets and isolated subaccounts automatically for isolated-only markets.');
       return;
     }
-    if (dex === 'hotstuff') {
-      setLocalAlert('Hotstuff margin mode is read from Hotstuff. Their public API docs only expose leverage changes, not a Cross/Isolated switch.');
-      return;
-    }
     if (dex === 'pacifica' && !pacAgent && bindAgent) {
       if (bindingAgent) {
         setLocalAlert('1-tap trading is still enabling. Try again in a moment.');
@@ -2705,7 +2701,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'katana' || dex === 'gmtrade' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -2726,21 +2722,17 @@ function FuturesPanel() {
                 ? 'Nado uses cross margin in your Ink account'
                 : dex === 'hibachi'
                 ? 'Hibachi margin is managed in your Hibachi account'
-                : dex === 'hotstuff'
-                ? 'Hotstuff margin mode is read from Hotstuff; their public SDK exposes leverage changes, not a Cross/Isolated switch'
                 : dex === 'katana'
                 ? 'Katana uses cross margin in this integration'
                 : dex === 'gmtrade'
                 ? 'GMTrade uses isolated collateral per Solana position account'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: (dex === 'hotstuff' ? (marginModes[symbol] ? '#FF9800' : '#4CAF50') : (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
                   : dex === 'phoenix'
                   ? 'Auto'
-                  : dex === 'hotstuff'
-                  ? (marginModes[symbol] || currentMarket?.isolated_only ? 'Isolated' : 'Cross')
                   : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana')
                   ? 'Cross'
                   : 'Isolated'}

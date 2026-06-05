@@ -853,30 +853,54 @@ export function useHotstuff() {
 
   const setMarginMode = useCallback(async (symbol, isIsolated) => {
     try {
+      if (!hsWalletAddr || !walletClient || !evmReady) throw new Error('Connect your EVM wallet first');
+      await ensureHotstuffChain(switchChain);
       const sym = String(symbol || '').toUpperCase();
       const market = markets.find(m => m.symbol === sym || m.market_name === symbol);
       if (!market) throw new Error('Select a valid Hotstuff market');
       const currentMode = !!marginModes?.[sym];
       const requestedMode = !!(isIsolated || market?.isolated_only);
+      if (market?.isolated_only && !requestedMode) {
+        return { error: `${sym} is isolated-only on Hotstuff.` };
+      }
       if (currentMode === requestedMode) {
         return { success: true, cached: true, isIsolated: currentMode };
       }
-      const msg = 'Hotstuff API docs do not expose a cross/isolated margin-mode action. Change leverage only; margin type is read from Hotstuff.';
-      console.warn('[Hotstuff UI] margin mode update skipped: undocumented action', {
+      const agent = await ensureTradingAgent();
+      const payload = {
+        instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
+        mode: requestedMode ? 'isolated' : 'cross',
+        nonce: Date.now(),
+      };
+      console.info('[Hotstuff UI] updating margin mode', {
         symbol: sym,
         requested_isolated: requestedMode,
         current_isolated: currentMode,
-        instrumentId: Number(market._hotstuff?.instrumentId ?? market.pair_index),
+        instrumentId: payload.instrumentId,
+        mode: payload.mode,
+        signer: agent.address,
+        signer_kind: 'registered_agent',
+        action_type: '1205',
       });
-      setError(msg);
-      await refresh();
-      return { error: msg };
+      const result = await agentExchange(agent).updatePerpInstrumentMarginMode(payload);
+      console.info('[Hotstuff UI] margin mode update result', {
+        symbol: sym,
+        instrumentId: payload.instrumentId,
+        mode: payload.mode,
+        tx_hash: result?.tx_hash || result?.txHash || null,
+        tx_type: result?.tx_type || result?.txType || null,
+        error: result?.error || '',
+        address: result?.address || null,
+      });
+      setMarginModes(prev => ({ ...prev, [sym]: requestedMode }));
+      setTimeout(() => refresh(), 250);
+      return { success: true, result, isIsolated: requestedMode };
     } catch (e) {
       const msg = hotstuffErrorMessage(e, 'Hotstuff margin mode update failed');
       setError(msg);
       return { error: msg };
     }
-  }, [marginModes, markets, refresh]);
+  }, [agentExchange, ensureTradingAgent, evmReady, hsWalletAddr, marginModes, markets, refresh, switchChain, walletClient]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, _slippage, leverage, options) => (
     placeOrder({ symbol, side, amount, leverage, orderType: 'market', options }).catch(e => {
