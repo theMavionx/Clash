@@ -1289,6 +1289,125 @@ try {
   `);
 } catch (e) { console.warn('[db] shop_solana_quotes migration:', e.message); }
 
+// Internal telemetry. These are append-only event ledgers for admin analytics:
+// where claim-gold/shop/task flows fail, and how resources move through the
+// economy. Keep them server-owned so client code cannot spoof analytics.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trade_claim_results (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id             TEXT REFERENCES players(id) ON DELETE SET NULL,
+      dex                   TEXT NOT NULL DEFAULT 'unknown',
+      futures_mode          TEXT,
+      wallet                TEXT,
+      result                TEXT NOT NULL DEFAULT 'unknown',
+      reason                TEXT,
+      last_trade_id_before  INTEGER,
+      last_trade_id_after   INTEGER,
+      raw_trade_count       INTEGER NOT NULL DEFAULT 0,
+      credited_trade_count  INTEGER NOT NULL DEFAULT 0,
+      credited_open_count   INTEGER NOT NULL DEFAULT 0,
+      raw_volume_usd        REAL NOT NULL DEFAULT 0,
+      credited_volume_usd   REAL NOT NULL DEFAULT 0,
+      pnl_usd               REAL NOT NULL DEFAULT 0,
+      volume_gold           REAL NOT NULL DEFAULT 0,
+      first_deposit_gold    INTEGER NOT NULL DEFAULT 0,
+      first_trade_gold      INTEGER NOT NULL DEFAULT 0,
+      daily_gold            INTEGER NOT NULL DEFAULT 0,
+      pnl_gold              INTEGER NOT NULL DEFAULT 0,
+      nft_boost_gold        INTEGER NOT NULL DEFAULT 0,
+      tournament_gold       INTEGER NOT NULL DEFAULT 0,
+      altar_bonus_gold      INTEGER NOT NULL DEFAULT 0,
+      total_gold_paid       INTEGER NOT NULL DEFAULT 0,
+      clamped_trade_count   INTEGER NOT NULL DEFAULT 0,
+      settling_trade_count  INTEGER NOT NULL DEFAULT 0,
+      claim_latency_ms      INTEGER NOT NULL DEFAULT 0,
+      metadata_json         TEXT NOT NULL DEFAULT '{}',
+      created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_trade_claim_results_player ON trade_claim_results(player_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_trade_claim_results_dex ON trade_claim_results(dex, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_trade_claim_results_result ON trade_claim_results(result, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS shop_funnel_events (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id      TEXT REFERENCES players(id) ON DELETE SET NULL,
+      event_type     TEXT NOT NULL,
+      sku            TEXT,
+      chain          TEXT,
+      payment        TEXT,
+      token          TEXT,
+      quantity       INTEGER,
+      usd_price_e6   TEXT,
+      token_amount   TEXT,
+      price_source   TEXT,
+      tx_hash        TEXT,
+      quote_id       TEXT,
+      error_code     TEXT,
+      error_message  TEXT,
+      metadata_json  TEXT NOT NULL DEFAULT '{}',
+      created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_shop_funnel_player ON shop_funnel_events(player_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_shop_funnel_type ON shop_funnel_events(event_type, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_shop_funnel_sku ON shop_funnel_events(sku, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_shop_funnel_chain_payment ON shop_funnel_events(chain, payment, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS resource_delta_events (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id         TEXT REFERENCES players(id) ON DELETE SET NULL,
+      source_type       TEXT NOT NULL DEFAULT 'resource_change',
+      gold_delta        INTEGER NOT NULL DEFAULT 0,
+      wood_delta        INTEGER NOT NULL DEFAULT 0,
+      ore_delta         INTEGER NOT NULL DEFAULT 0,
+      gold_before       INTEGER NOT NULL DEFAULT 0,
+      wood_before       INTEGER NOT NULL DEFAULT 0,
+      ore_before        INTEGER NOT NULL DEFAULT 0,
+      gold_after        INTEGER NOT NULL DEFAULT 0,
+      wood_after        INTEGER NOT NULL DEFAULT 0,
+      ore_after         INTEGER NOT NULL DEFAULT 0,
+      gold_cap_before   INTEGER NOT NULL DEFAULT 0,
+      wood_cap_before   INTEGER NOT NULL DEFAULT 0,
+      ore_cap_before    INTEGER NOT NULL DEFAULT 0,
+      gold_cap_after    INTEGER NOT NULL DEFAULT 0,
+      wood_cap_after    INTEGER NOT NULL DEFAULT 0,
+      ore_cap_after     INTEGER NOT NULL DEFAULT 0,
+      lost_gold_to_cap  INTEGER NOT NULL DEFAULT 0,
+      lost_wood_to_cap  INTEGER NOT NULL DEFAULT 0,
+      lost_ore_to_cap   INTEGER NOT NULL DEFAULT 0,
+      related_purchase_id TEXT,
+      related_task_id     INTEGER,
+      related_replay_id   INTEGER,
+      metadata_json       TEXT NOT NULL DEFAULT '{}',
+      created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_resource_delta_player ON resource_delta_events(player_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_resource_delta_source ON resource_delta_events(source_type, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS task_claim_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id       TEXT REFERENCES players(id) ON DELETE SET NULL,
+      task_id         INTEGER,
+      task_type       TEXT,
+      task_title      TEXT,
+      result          TEXT NOT NULL DEFAULT 'unknown',
+      progress_value  REAL NOT NULL DEFAULT 0,
+      target_value    REAL NOT NULL DEFAULT 0,
+      reward_gold     INTEGER NOT NULL DEFAULT 0,
+      reward_wood     INTEGER NOT NULL DEFAULT 0,
+      reward_ore      INTEGER NOT NULL DEFAULT 0,
+      repeatable      INTEGER NOT NULL DEFAULT 0,
+      cooldown_hours  REAL NOT NULL DEFAULT 0,
+      error_reason    TEXT,
+      metadata_json   TEXT NOT NULL DEFAULT '{}',
+      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_claim_events_player ON task_claim_events(player_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_task_claim_events_task ON task_claim_events(task_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_task_claim_events_result ON task_claim_events(result, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] telemetry migration:', e.message); }
+
 // ---------- Indexes on hot player_id columns (tables defined above) ----------
 // Without these, /battle-log and /buildings endpoints degrade to full-table
 // scans once the DB reaches a few thousand rows. Idempotent on existing DBs.
@@ -2509,31 +2628,31 @@ const TH_UPGRADE_REQUIRES = {
 const BUILDING_DEFS = {
   town_hall: {
     size: [4, 4], max_level: 4,
-    hp_levels: [3500, 6000, 10000, 17000],
+    hp_levels: [3500, 8000, 16000, 24000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
-      2: { gold: 2000, wood: 6000, ore: 5000 },
-      3: { gold: 5000, wood: 20000, ore: 18000 },
-      4: { gold: 30000, wood: 47500, ore: 45000 },
+      2: { gold: 800, wood: 2400, ore: 2000 },
+      3: { gold: 3000, wood: 7000, ore: 6000 },
+      4: { gold: 10000, wood: 20000, ore: 17000 },
     },
     max_count: 1,
   },
   mine: {
     size: [3, 3], max_level: 4,
     hp_levels: [1200, 2200, 3800, 6000],
-    cost: { gold: 200, wood: 500, ore: 0 },
+    cost: { gold: 80, wood: 200, ore: 0 },
     max_count: 4,
   },
   barn: {
     size: [4, 3], max_level: 4,
     hp_levels: [2000, 3500, 6000, 9500],
-    cost: { gold: 300, wood: 800, ore: 600 },
+    cost: { gold: 140, wood: 350, ore: 280 },
     max_count: 1,
   },
   port: {
     size: [4, 3], max_level: 4,
     hp_levels: [1800, 3200, 5500, 8500],
-    cost: { gold: 500, wood: 1200, ore: 1000 },
+    cost: { gold: 240, wood: 560, ore: 480 },
     max_count: 2,
   },
   altar: {
@@ -2547,37 +2666,37 @@ const BUILDING_DEFS = {
   sawmill: {
     size: [3, 3], max_level: 4,
     hp_levels: [1200, 2200, 3800, 6000],
-    cost: { gold: 200, wood: 0, ore: 500 },
+    cost: { gold: 80, wood: 0, ore: 200 },
     max_count: 4,
   },
   turret: {
     size: [2, 2], max_level: 4,
     hp_levels: [900, 1600, 2800, 4500],
-    cost: { gold: 400, wood: 1500, ore: 1200 },
+    cost: { gold: 220, wood: 700, ore: 580 },
     max_count: 6,
   },
   tombstone: {
     size: [3, 3], max_level: 4,
     hp_levels: [1000, 1500, 2000, 2700],
-    cost: { gold: 200, wood: 0, ore: 800 },
+    cost: { gold: 120, wood: 0, ore: 500 },
     max_count: 4,
   },
   storage: {
     size: [4, 5], max_level: 4,
     hp_levels: [1400, 2500, 4200, 6500],
-    cost: { gold: 300, wood: 1200, ore: 0 },
+    cost: { gold: 140, wood: 550, ore: 0 },
     max_count: 3,
   },
   archer_tower: {
     size: [3, 3], max_level: 5,
     hp_levels: [800, 1500, 2500, 3800, 5600],
-    cost: { gold: 400, wood: 1500, ore: 0 },
+    cost: { gold: 180, wood: 650, ore: 0 },
     max_count: 4,
   },
   mage_tower: {
     size: [3, 3], max_level: 3,
     hp_levels: [700, 1200, 2000],
-    cost: { gold: 2500, wood: 0, ore: 4000 },
+    cost: { gold: 800, wood: 0, ore: 1300 },
     max_count: 2,
   },
 };
@@ -2585,8 +2704,8 @@ const BUILDING_DEFS = {
 const BUILDING_UPGRADE_COST_MULTIPLIERS = {
   2: 2,
   3: 3,
-  4: 20,
-  5: 35,
+  4: 5,
+  5: 8,
 };
 
 function getBuildingUpgradeCost(type, currentLevel) {
@@ -2605,16 +2724,57 @@ function getBuildingUpgradeCost(type, currentLevel) {
   };
 }
 
+function normalizeTownHallHpRows() {
+  const hpLevels = BUILDING_DEFS.town_hall?.hp_levels || [];
+  const rows = db.prepare(`
+    SELECT id, level, hp, max_hp
+    FROM buildings
+    WHERE type = 'town_hall'
+  `).all();
+  const update = db.prepare(`
+    UPDATE buildings SET hp = ?, max_hp = ? WHERE id = ?
+  `);
+  let updated = 0;
+
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const level = Math.max(1, Math.min(hpLevels.length, Number(row.level) || 1));
+      const nextMaxHp = hpLevels[level - 1];
+      if (!nextMaxHp || Number(row.max_hp) === nextMaxHp) continue;
+
+      const oldMaxHp = Math.max(1, Number(row.max_hp) || nextMaxHp);
+      const oldHp = Math.max(0, Number(row.hp) || 0);
+      const hpRatio = Math.max(0, Math.min(1, oldHp / oldMaxHp));
+      const nextHp = Math.max(0, Math.min(nextMaxHp, Math.round(nextMaxHp * hpRatio)));
+      update.run(nextHp, nextMaxHp, row.id);
+      updated += 1;
+    }
+  });
+  tx();
+
+  if (updated > 0) {
+    console.log(`[db] normalized Town Hall HP for ${updated} building row(s)`);
+  }
+}
+
+normalizeTownHallHpRows();
+
 // ---------- Troop Definitions ----------
 
 const TROOP_DEFS = {
-  knight:    { max_level: 4, cost: [{ gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 },  { gold: 1200, wood: 0, ore: 1000 }] },
-  mage:      { max_level: 4, cost: [{ gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }, { gold: 2000, wood: 0, ore: 2000 }] },
-  barbarian: { max_level: 4, cost: [{ gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }, { gold: 1400, wood: 0, ore: 1400 }] },
-  archer:    { max_level: 4, cost: [{ gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }, { gold: 1400, wood: 1400, ore: 0 }] },
-  ranger:    { max_level: 4, cost: [{ gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }, { gold: 1000, wood: 1000, ore: 0 }] },
+  knight:    { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 },  { gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 }] },
+  mage:      { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
+  barbarian: { max_level: 4, cost: [{ gold: 175, wood: 0, ore: 175 }, { gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }] },
+  archer:    { max_level: 4, cost: [{ gold: 175, wood: 175, ore: 0 }, { gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }] },
+  ranger:    { max_level: 4, cost: [{ gold: 125, wood: 125, ore: 0 }, { gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }] },
   demon_king: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
 };
+const DISABLED_TROOP_TYPES = new Set(['barbarian', 'ranger']);
+const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_TROOP_TYPES.has(troop));
+
+function isTroopDisabled(troopType) {
+  return DISABLED_TROOP_TYPES.has(String(troopType || '').trim().toLowerCase());
+}
 
 const ALTAR_SKILL_DEFS = {
   prosperity: {
@@ -3012,7 +3172,7 @@ function registerPlayer(name) {
   const token = uuidv4();
   stmts.createPlayer.run(id, name, token);
   // Init troop levels
-  for (const troop of Object.keys(TROOP_DEFS)) {
+  for (const troop of ACTIVE_TROOP_TYPES) {
     stmts.upsertTroopLevel.run(id, troop, 1);
   }
   return { id, name, token };
@@ -3251,25 +3411,230 @@ function getResources(playerId) {
   return stmts.getResources.get(playerId);
 }
 
-function addResources(playerId, gold = 0, wood = 0, ore = 0) {
+function telemetryJson(value) {
+  if (value == null) return '{}';
+  try {
+    const text = JSON.stringify(value);
+    return text && text.length <= 20000 ? text : JSON.stringify({ truncated: true, bytes: text?.length || 0 });
+  } catch {
+    return '{}';
+  }
+}
+
+function textOrNull(value, max = 500) {
+  if (value == null) return null;
+  const text = String(value);
+  return text.length > max ? text.slice(0, max) : text;
+}
+
+function intOr0(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.trunc(n) : 0;
+}
+
+function realOr0(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function recordTradeClaimResult(event = {}) {
+  try {
+    db.prepare(`
+      INSERT INTO trade_claim_results (
+        player_id, dex, futures_mode, wallet, result, reason,
+        last_trade_id_before, last_trade_id_after,
+        raw_trade_count, credited_trade_count, credited_open_count,
+        raw_volume_usd, credited_volume_usd, pnl_usd,
+        volume_gold, first_deposit_gold, first_trade_gold, daily_gold, pnl_gold,
+        nft_boost_gold, tournament_gold, altar_bonus_gold, total_gold_paid,
+        clamped_trade_count, settling_trade_count, claim_latency_ms, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.playerId || event.player_id || null,
+      textOrNull(event.dex || 'unknown', 40),
+      textOrNull(event.futuresMode || event.futures_mode, 40),
+      textOrNull(event.wallet, 160),
+      textOrNull(event.result || 'unknown', 40),
+      textOrNull(event.reason, 300),
+      event.lastTradeIdBefore ?? event.last_trade_id_before ?? null,
+      event.lastTradeIdAfter ?? event.last_trade_id_after ?? null,
+      intOr0(event.rawTradeCount ?? event.raw_trade_count),
+      intOr0(event.creditedTradeCount ?? event.credited_trade_count),
+      intOr0(event.creditedOpenCount ?? event.credited_open_count),
+      realOr0(event.rawVolumeUsd ?? event.raw_volume_usd),
+      realOr0(event.creditedVolumeUsd ?? event.credited_volume_usd),
+      realOr0(event.pnlUsd ?? event.pnl_usd),
+      realOr0(event.volumeGold ?? event.volume_gold),
+      intOr0(event.firstDepositGold ?? event.first_deposit_gold),
+      intOr0(event.firstTradeGold ?? event.first_trade_gold),
+      intOr0(event.dailyGold ?? event.daily_gold),
+      intOr0(event.pnlGold ?? event.pnl_gold),
+      intOr0(event.nftBoostGold ?? event.nft_boost_gold),
+      intOr0(event.tournamentGold ?? event.tournament_gold),
+      intOr0(event.altarBonusGold ?? event.altar_bonus_gold),
+      intOr0(event.totalGoldPaid ?? event.total_gold_paid),
+      intOr0(event.clampedTradeCount ?? event.clamped_trade_count),
+      intOr0(event.settlingTradeCount ?? event.settling_trade_count),
+      intOr0(event.claimLatencyMs ?? event.claim_latency_ms),
+      telemetryJson(event.metadata || event.metadata_json || {}),
+    );
+  } catch (e) {
+    console.warn('[telemetry] trade_claim_results skipped:', e.message);
+  }
+}
+
+function recordShopFunnelEvent(event = {}) {
+  try {
+    db.prepare(`
+      INSERT INTO shop_funnel_events (
+        player_id, event_type, sku, chain, payment, token, quantity,
+        usd_price_e6, token_amount, price_source, tx_hash, quote_id,
+        error_code, error_message, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.playerId || event.player_id || null,
+      textOrNull(event.eventType || event.event_type || 'unknown', 80),
+      textOrNull(event.sku, 80),
+      textOrNull(event.chain, 40),
+      textOrNull(event.payment, 40),
+      textOrNull(event.token, 180),
+      event.quantity == null ? null : intOr0(event.quantity),
+      event.usdPriceE6 == null && event.usd_price_e6 == null ? null : String(event.usdPriceE6 ?? event.usd_price_e6),
+      event.tokenAmount == null && event.token_amount == null ? null : String(event.tokenAmount ?? event.token_amount),
+      textOrNull(event.priceSource || event.price_source, 240),
+      textOrNull(event.txHash || event.tx_hash, 180),
+      textOrNull(event.quoteId || event.quote_id, 180),
+      textOrNull(event.errorCode || event.error_code, 120),
+      textOrNull(event.errorMessage || event.error_message, 500),
+      telemetryJson(event.metadata || event.metadata_json || {}),
+    );
+  } catch (e) {
+    console.warn('[telemetry] shop_funnel_events skipped:', e.message);
+  }
+}
+
+function recordTaskClaimEvent(event = {}) {
+  try {
+    db.prepare(`
+      INSERT INTO task_claim_events (
+        player_id, task_id, task_type, task_title, result,
+        progress_value, target_value, reward_gold, reward_wood, reward_ore,
+        repeatable, cooldown_hours, error_reason, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.playerId || event.player_id || null,
+      event.taskId ?? event.task_id ?? null,
+      textOrNull(event.taskType || event.task_type, 80),
+      textOrNull(event.taskTitle || event.task_title, 240),
+      textOrNull(event.result || 'unknown', 60),
+      realOr0(event.progressValue ?? event.progress_value),
+      realOr0(event.targetValue ?? event.target_value),
+      intOr0(event.rewardGold ?? event.reward_gold),
+      intOr0(event.rewardWood ?? event.reward_wood),
+      intOr0(event.rewardOre ?? event.reward_ore),
+      event.repeatable ? 1 : 0,
+      realOr0(event.cooldownHours ?? event.cooldown_hours),
+      textOrNull(event.errorReason || event.error_reason, 300),
+      telemetryJson(event.metadata || event.metadata_json || {}),
+    );
+  } catch (e) {
+    console.warn('[telemetry] task_claim_events skipped:', e.message);
+  }
+}
+
+function recordResourceDeltaEvent(event = {}) {
+  try {
+    db.prepare(`
+      INSERT INTO resource_delta_events (
+        player_id, source_type,
+        gold_delta, wood_delta, ore_delta,
+        gold_before, wood_before, ore_before,
+        gold_after, wood_after, ore_after,
+        gold_cap_before, wood_cap_before, ore_cap_before,
+        gold_cap_after, wood_cap_after, ore_cap_after,
+        lost_gold_to_cap, lost_wood_to_cap, lost_ore_to_cap,
+        related_purchase_id, related_task_id, related_replay_id, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.playerId || event.player_id || null,
+      textOrNull(event.sourceType || event.source_type || 'resource_change', 80),
+      intOr0(event.goldDelta ?? event.gold_delta),
+      intOr0(event.woodDelta ?? event.wood_delta),
+      intOr0(event.oreDelta ?? event.ore_delta),
+      intOr0(event.goldBefore ?? event.gold_before),
+      intOr0(event.woodBefore ?? event.wood_before),
+      intOr0(event.oreBefore ?? event.ore_before),
+      intOr0(event.goldAfter ?? event.gold_after),
+      intOr0(event.woodAfter ?? event.wood_after),
+      intOr0(event.oreAfter ?? event.ore_after),
+      intOr0(event.goldCapBefore ?? event.gold_cap_before),
+      intOr0(event.woodCapBefore ?? event.wood_cap_before),
+      intOr0(event.oreCapBefore ?? event.ore_cap_before),
+      intOr0(event.goldCapAfter ?? event.gold_cap_after),
+      intOr0(event.woodCapAfter ?? event.wood_cap_after),
+      intOr0(event.oreCapAfter ?? event.ore_cap_after),
+      intOr0(event.lostGoldToCap ?? event.lost_gold_to_cap),
+      intOr0(event.lostWoodToCap ?? event.lost_wood_to_cap),
+      intOr0(event.lostOreToCap ?? event.lost_ore_to_cap),
+      event.relatedPurchaseId ?? event.related_purchase_id ?? null,
+      event.relatedTaskId ?? event.related_task_id ?? null,
+      event.relatedReplayId ?? event.related_replay_id ?? null,
+      telemetryJson(event.metadata || event.metadata_json || {}),
+    );
+  } catch (e) {
+    console.warn('[telemetry] resource_delta_events skipped:', e.message);
+  }
+}
+
+function addResources(playerId, gold = 0, wood = 0, ore = 0, options = {}) {
   const current = stmts.getResources.get(playerId);
   if (!current) return null;
   // Cap to storage capacity
-  const caps = getResourceCaps(playerId);
-  const newGold = Math.min(caps.gold, Math.max(0, current.gold + gold));
-  const newWood = Math.min(caps.wood, Math.max(0, current.wood + wood));
-  const newOre = Math.min(caps.ore, Math.max(0, current.ore + ore));
+  const capsBefore = getResourceCaps(playerId);
+  const newGold = Math.min(capsBefore.gold, Math.max(0, current.gold + gold));
+  const newWood = Math.min(capsBefore.wood, Math.max(0, current.wood + wood));
+  const newOre = Math.min(capsBefore.ore, Math.max(0, current.ore + ore));
   stmts.updateResource.run(newGold, newWood, newOre, playerId);
+  const capsAfter = getResourceCaps(playerId);
+  const lostGoldToCap = Number(gold) > 0 ? Math.max(0, current.gold + Number(gold) - newGold) : 0;
+  const lostWoodToCap = Number(wood) > 0 ? Math.max(0, current.wood + Number(wood) - newWood) : 0;
+  const lostOreToCap = Number(ore) > 0 ? Math.max(0, current.ore + Number(ore) - newOre) : 0;
+  recordResourceDeltaEvent({
+    playerId,
+    sourceType: options.sourceType || options.source_type || 'resource_change',
+    goldDelta: newGold - current.gold,
+    woodDelta: newWood - current.wood,
+    oreDelta: newOre - current.ore,
+    goldBefore: current.gold,
+    woodBefore: current.wood,
+    oreBefore: current.ore,
+    goldAfter: newGold,
+    woodAfter: newWood,
+    oreAfter: newOre,
+    goldCapBefore: capsBefore.gold,
+    woodCapBefore: capsBefore.wood,
+    oreCapBefore: capsBefore.ore,
+    goldCapAfter: capsAfter.gold,
+    woodCapAfter: capsAfter.wood,
+    oreCapAfter: capsAfter.ore,
+    lostGoldToCap,
+    lostWoodToCap,
+    lostOreToCap,
+    relatedPurchaseId: options.relatedPurchaseId || options.related_purchase_id || null,
+    relatedTaskId: options.relatedTaskId || options.related_task_id || null,
+    relatedReplayId: options.relatedReplayId || options.related_replay_id || null,
+    metadata: options.metadata || {},
+  });
   return { gold: newGold, wood: newWood, ore: newOre };
 }
 
-function subtractResources(playerId, gold = 0, wood = 0, ore = 0) {
+function subtractResources(playerId, gold = 0, wood = 0, ore = 0, options = {}) {
   const current = stmts.getResources.get(playerId);
   if (!current) return null;
   if (current.gold < gold || current.wood < wood || current.ore < ore) {
     return { error: 'Not enough resources', current };
   }
-  return addResources(playerId, -gold, -wood, -ore);
+  return addResources(playerId, -gold, -wood, -ore, options);
 }
 
 function canAfford(playerId, gold = 0, wood = 0, ore = 0) {
@@ -3359,7 +3724,10 @@ function placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0) {
   }
 
   // Deduct resources
-  subtractResources(playerId, cost.gold, cost.wood, cost.ore);
+  subtractResources(playerId, cost.gold, cost.wood, cost.ore, {
+    sourceType: 'building_place',
+    metadata: { building_type: type, grid_x: gridX, grid_z: gridZ, grid_index: gridIndex },
+  });
 
   const hp = def.hp_levels[0];
   const info = stmts.placeBuilding.run(playerId, type, gridX, gridZ, gridIndex, hp, hp);
@@ -3411,7 +3779,10 @@ function upgradeBuilding(playerId, buildingId) {
     return { error: 'Not enough resources', cost };
   }
 
-  subtractResources(playerId, cost.gold, cost.wood, cost.ore);
+  subtractResources(playerId, cost.gold, cost.wood, cost.ore, {
+    sourceType: 'building_upgrade',
+    metadata: { building_id: buildingId, building_type: building.type, from_level: building.level, to_level: nextLevel },
+  });
 
   const newHp = def.hp_levels[nextLevel - 1];
   stmts.upgradeBuilding.run(nextLevel, newHp, newHp, buildingId, playerId);
@@ -3509,6 +3880,15 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
 }
 
 function upgradeTroop(playerId, troopType, options = {}) {
+  if (isTroopDisabled(troopType)) {
+    return {
+      error: 'Troop disabled',
+      code: 'TROOP_DISABLED',
+      troop_type: troopType,
+      status: 400,
+    };
+  }
+
   const def = TROOP_DEFS[troopType];
   if (!def) return { error: `Unknown troop type: ${troopType}` };
 
@@ -3574,7 +3954,10 @@ function upgradeTroop(playerId, troopType, options = {}) {
     return { error: 'Not enough resources', cost };
   }
 
-  subtractResources(playerId, cost.gold, cost.wood, cost.ore);
+  subtractResources(playerId, cost.gold, cost.wood, cost.ore, {
+    sourceType: 'troop_upgrade',
+    metadata: { troop_type: troopType, from_level: currentLevel, to_level: currentLevel + 1 },
+  });
   const newLevel = currentLevel + 1;
   stmts.upsertTroopLevel.run(playerId, troopType, newLevel);
 
@@ -3683,7 +4066,10 @@ function upgradeAltarSkill(playerId, skillId) {
     return { error: 'Not enough resources', cost };
   }
 
-  subtractResources(playerId, cost.gold || 0, cost.wood || 0, cost.ore || 0);
+  subtractResources(playerId, cost.gold || 0, cost.wood || 0, cost.ore || 0, {
+    sourceType: 'altar_skill_upgrade',
+    metadata: { skill_id: skillId, from_level: currentLevel, to_level: currentLevel + 1 },
+  });
   const newLevel = currentLevel + 1;
   stmts.upsertAltarSkillLevel.run(playerId, skillId, newLevel);
   return {
@@ -3764,7 +4150,10 @@ function collectResources(playerId, buildingId) {
   // Add resources
   const addObj = { gold: 0, wood: 0, ore: 0 };
   addObj[production.resource] = produced;
-  addResources(playerId, addObj.gold, addObj.wood, addObj.ore);
+  addResources(playerId, addObj.gold, addObj.wood, addObj.ore, {
+    sourceType: 'production_collect',
+    metadata: { building_id: buildingId, building_type: building.type, resource: production.resource, produced },
+  });
 
   // Update last_collected_at
   const now = new Date();
@@ -3928,7 +4317,10 @@ function findEnemy(playerId) {
       resources: getResources(playerId),
     };
   }
-  const attackerResources = subtractResources(playerId, attackCostGold, 0, 0);
+  const attackerResources = subtractResources(playerId, attackCostGold, 0, 0, {
+    sourceType: 'attack_cost',
+    metadata: { match_type: 'random', defender_id: best.id, battle_session_id: sessionId },
+  });
   if (attackerResources?.error) {
     return {
       error: 'Not enough gold to attack',
@@ -4093,7 +4485,10 @@ function findEnemyByName(playerId, rawTargetName) {
         resources: getResources(playerId),
       };
     }
-    const attackerResources = subtractResources(playerId, attackCostGold, 0, 0);
+    const attackerResources = subtractResources(playerId, attackCostGold, 0, 0, {
+      sourceType: 'attack_cost',
+      metadata: { match_type: 'named', defender_id: target.id, battle_session_id: sessionId },
+    });
     if (attackerResources?.error) {
       return {
         error: 'Not enough gold to attack',
@@ -4231,7 +4626,7 @@ function repairAllBuildings(playerId) {
   }
 }
 
-const SHIP_COST_GOLD = 500;
+const SHIP_COST_GOLD = 250;
 
 function buyShip(playerId, buildingId) {
   const building = stmts.getBuildingById.get(buildingId, playerId);
@@ -4241,14 +4636,17 @@ function buyShip(playerId, buildingId) {
   if (!canAfford(playerId, SHIP_COST_GOLD, 0, 0)) {
     return { error: 'Not enough gold', cost: { gold: SHIP_COST_GOLD } };
   }
-  subtractResources(playerId, SHIP_COST_GOLD, 0, 0);
+  subtractResources(playerId, SHIP_COST_GOLD, 0, 0, {
+    sourceType: 'ship_purchase',
+    metadata: { cost_gold: SHIP_COST_GOLD },
+  });
   stmts.setShipOnPort.run(buildingId, playerId);
   return { success: true, resources: getResources(playerId) };
 }
 
 const LOOT_PERCENT = 0.15;
 
-const RAID_ATTACK_COST_GOLD = 200;
+const RAID_ATTACK_COST_GOLD = 150;
 const TARGETED_ATTACK_COST_MULTIPLIER = 2;
 
 function attackCostForTownHallLevel(thLevel) {
@@ -4323,8 +4721,20 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
 
   // Transfer resources. The defender loses the base raid loot; Prosperity
   // creates the extra resources for the attacker.
-  subtractResources(defenderId, lootGold, lootWood, lootOre);
-  addResources(attackerId, boostedLoot.gold, boostedLoot.wood, boostedLoot.ore);
+  subtractResources(defenderId, lootGold, lootWood, lootOre, {
+    sourceType: 'raid_loot_defender',
+    metadata: { attacker_id: attackerId, battle_session_id: battleSessionId },
+  });
+  addResources(attackerId, boostedLoot.gold, boostedLoot.wood, boostedLoot.ore, {
+    sourceType: 'raid_loot_attacker',
+    metadata: {
+      defender_id: defenderId,
+      battle_session_id: battleSessionId,
+      base: boostedLoot.base,
+      bonus: boostedLoot.bonus,
+      prosperity_bonus_pct: boostedLoot.prosperity_bonus_pct,
+    },
+  });
 
   // Tournament admins can override post-raid shield length. Zero means
   // "no shield" while still stamping last_attacked_by/at for cooldowns.
@@ -4493,6 +4903,9 @@ module.exports = {
   TH_UPGRADE_REQUIRES,
   GRID_SPECS,
   TROOP_DEFS,
+  DISABLED_TROOP_TYPES,
+  ACTIVE_TROOP_TYPES,
+  isTroopDisabled,
   ALTAR_SKILL_DEFS,
   registerPlayer,
   authenticatePlayer,
@@ -4512,6 +4925,10 @@ module.exports = {
   markDemonKingNftWalletChecked,
   getResources,
   addResources,
+  recordTradeClaimResult,
+  recordShopFunnelEvent,
+  recordTaskClaimEvent,
+  recordResourceDeltaEvent,
   canAfford,
   subtractResources,
   hasUtilityPurchase,

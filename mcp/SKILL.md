@@ -72,14 +72,14 @@ For Decibel trading requests, do not run a gameplay base preflight. Hermes is th
 - `auto_upgrade_buildings({ focus?, target_type?, max_upgrades? })`: upgrade multiple eligible owned buildings in one action. Use for broad requests like "upgrade all buildings", "upgrade everything", or "upgrade 10 buildings".
 - `move_building({ building_id, grid_x, grid_z, grid_index? })`: move a building. Ports with docked ships cannot be moved.
 - `remove_building({ building_id })`: remove one owned building.
-- `upgrade_troop({ troop_type })`: upgrade `knight`, `mage`, `barbarian`, `archer`, or `ranger`.
+- `upgrade_troop({ troop_type })`: upgrade `knight`, `mage`, `archer`, or `demon_king`.
 
 Town Hall is mandatory and must be placed first on a new base. If `get_base_state` shows no `town_hall`, call `auto_build_base` or place `town_hall` before any mine, sawmill, barn, port, or defense.
 
 ## Ships And Troops
 
 - `buy_ship({ port_id })`: buy a ship at an owned port.
-- `load_ship_troop({ port_id, troop_name })`: load one troop into the ship. Valid troops are `Knight`, `Mage`, `Barbarian`, `Archer`, and `Ranger`.
+- `load_ship_troop({ port_id, troop_name })`: load one normal troop into the ship. Valid normal troops are `Knight`, `Mage`, and `Archer`.
 - `swap_ship_troop({ port_id, slot, troop_name })`: replace one troop slot without changing the reinforcement template.
 - `unload_ship_troops({ port_id })`: remove the ship loadout.
 - `reinforce_ships()`: restore missing troops from templates after battle. Cost is 50 gold per restored troop.

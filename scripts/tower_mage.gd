@@ -11,18 +11,21 @@ const LEVEL_STATS := {
 		"max_damage": 18,
 		"tick_rate": 0.25,
 		"ramp_time": 4.0,
+		"detect_range": 1.0,
 	},
 	2: {
-		"base_damage": 6,
-		"max_damage": 26,
-		"tick_rate": 0.25,
-		"ramp_time": 3.8,
+		"base_damage": 11,
+		"max_damage": 54,
+		"tick_rate": 0.20,
+		"ramp_time": 3.0,
+		"detect_range": 1.22,
 	},
 	3: {
-		"base_damage": 8,
-		"max_damage": 36,
-		"tick_rate": 0.22,
-		"ramp_time": 3.6,
+		"base_damage": 18,
+		"max_damage": 96,
+		"tick_rate": 0.16,
+		"ramp_time": 2.5,
+		"detect_range": 1.38,
 	},
 }
 
@@ -117,6 +120,7 @@ func _apply_stats() -> void:
 	max_damage = ceili(float(s.max_damage) * multiplier)
 	tick_rate = float(s.tick_rate)
 	ramp_time = float(s.ramp_time)
+	detect_range = float(s.detect_range)
 
 
 func set_ward_bonus_pct(pct: int) -> void:

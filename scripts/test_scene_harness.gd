@@ -39,13 +39,11 @@ const TEST_TH_MAX_COUNT: Dictionary = {
 	"town_hall": [1, 1, 1, 1],
 }
 
-const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Barbarian", "Archer", "Ranger", "DemonKing"]
+const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "DemonKing"]
 const TEST_ATTACK_MAX_LEVEL: Dictionary = {
 	"Knight": 4,
 	"Mage": 4,
-	"Barbarian": 4,
 	"Archer": 4,
-	"Ranger": 4,
 	"DemonKing": 3,
 }
 const TEST_ATTACK_SHIP_LEVEL: int = 3
@@ -882,7 +880,7 @@ func _configure_test_ship(bs: Node, b: Dictionary, ship_level: int) -> void:
 	var node: Node = b.get("node", null)
 	if not is_instance_valid(node):
 		return
-	var troops: Array = ["Knight", "Mage", "Archer", "Barbarian", "Ranger", "DemonKing", "_SLOT_FILLER_"]
+	var troops: Array = ["Knight", "Mage", "Archer", "DemonKing", "_SLOT_FILLER_"]
 	var capacity: int = ship_level * 3
 	node.set_meta("has_ship", true)
 	node.set_meta("ship_level", ship_level)

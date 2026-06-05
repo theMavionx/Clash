@@ -23,9 +23,7 @@ import demonKingImg from '../assets/units/demonking.png';
 const ATTACK_TROOPS = [
   { key: 'knight',    label: 'Knight',    img: knightImg,  zoom: 1.35, offsetY: '10%' },
   { key: 'mage',      label: 'Mage',      img: mageImg,    zoom: 1.45, offsetY: '15%' },
-  { key: 'barbarian', label: 'Barbarian', img: berserkImg },
-  { key: 'archer',    label: 'Ranger',    img: arbaletImg },
-  { key: 'ranger',    label: 'Rogue',     img: archerImg  },
+  { key: 'archer',    label: 'Archer',    img: archerImg },
   { key: 'demonking', label: 'Demon King', img: demonKingImg },
 ];
 
@@ -101,8 +99,8 @@ const TROOP_IMG_MAP = {
   knight: { img: knightImg, label: 'Knight', zoom: 1.35, offsetY: '10%' },
   mage: { img: mageImg, label: 'Mage', zoom: 1.45, offsetY: '15%' },
   barbarian: { img: berserkImg, label: 'Barbarian' },
-  archer: { img: arbaletImg, label: 'Ranger' },
-  ranger: { img: archerImg, label: 'Rogue' },
+  archer: { img: archerImg, label: 'Archer' },
+  ranger: { img: arbaletImg, label: 'Ranger' },
   demonking: { img: demonKingImg, label: 'Demon King' },
   demon_king: { img: demonKingImg, label: 'Demon King' },
 };

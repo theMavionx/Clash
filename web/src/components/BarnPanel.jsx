@@ -233,10 +233,10 @@ const TROOP_STATS = {
     stats: {
       1: { hp: 210, damage: 40, atk_speed: 1.05 },
       2: { hp: 280, damage: 54, atk_speed: 0.95 },
-      3: { hp: 365, damage: 71, atk_speed: 0.85 },
-      4: { hp: 470, damage: 94, atk_speed: 0.78 },
+      3: { hp: 310, damage: 58, atk_speed: 0.85 },
+      4: { hp: 425, damage: 82, atk_speed: 0.78 },
     },
-    maxStats: { hp: 470, damage: 94, atk_speed: 1.05 }
+    maxStats: { hp: 425, damage: 82, atk_speed: 1.05 }
   },
   Ranger: {
     display: "Ranger",
@@ -259,7 +259,8 @@ const TROOP_STATS = {
   }
 };
 
-const NORMAL_TROOP_NAMES = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Archer', 'DemonKing'];
+const NORMAL_TROOP_NAMES = ['Knight', 'Mage', 'Archer'];
 const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
 const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL = { 1: 1.2, 2: 1.3, 3: 1.4 };
 const DEMON_KING_SLOT_COUNT = 2;
@@ -361,7 +362,7 @@ function BarnPanel({ building, onClose }) {
   const [demonKingLoading, setDemonKingLoading] = useState(false);
   const [demonKingError, setDemonKingError] = useState(null);
   const troops = buildingDefs?.troops || {};
-  const troopNames = Object.keys(troops);
+  const troopNames = ACTIVE_TROOP_NAMES.filter((name) => troops[name]);
   const safeIndex = troopNames.length ? Math.min(currentIndex, troopNames.length - 1) : 0;
   const currentTroopName = troopNames[safeIndex];
   const tdef = currentTroopName ? troops[currentTroopName] : null;

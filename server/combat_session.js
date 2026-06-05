@@ -780,14 +780,16 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     }
     if (b.type === 'tombstone') {
       const guardCount = b.level || 1;
+      const guardLevel = Math.max(1, Math.min(4, Number(b.level) || 1));
+      const guardStats = SKELETON_GUARD.levels?.[guardLevel] || SKELETON_GUARD;
       for (let i = 0; i < guardCount; i++) {
         const angle = (Math.PI * 2 * i) / guardCount;
         guards.push({
           id: `g${nextTroopId++}`,
           tombstoneId: b.id,
-          hp: SKELETON_GUARD.hp, damage: wardDamage(SKELETON_GUARD.damage),
-          atkSpeed: SKELETON_GUARD.atkSpeed, moveSpeed: SKELETON_GUARD.moveSpeed,
-          detectionRadius: SKELETON_GUARD.detectionRadius,
+          hp: guardStats.hp, damage: wardDamage(guardStats.damage),
+          atkSpeed: guardStats.atkSpeed, moveSpeed: guardStats.moveSpeed,
+          detectionRadius: guardStats.detectionRadius,
           attackRange: SKELETON_GUARD.attackRange,
           separationRadius: SKELETON_GUARD.separationRadius,
           separationForce: SKELETON_GUARD.separationForce,

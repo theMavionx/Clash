@@ -20,6 +20,7 @@ server-futures/gmtrade-builder/target/
 # Local runtime logs
 *.log
 .local-logs/
+server/reports/
 
 # Environment
 .env

@@ -13,7 +13,7 @@ const TROOP_STATS = {
   },
   mage: {
     1: { hp: 150, damage: 58,  atkSpeed: 1.25, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
-    2: { hp: 200, damage: 78,  atkSpeed: 1.12, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    2: { hp: 200, damage: 74,  atkSpeed: 1.12, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     3: { hp: 265, damage: 104, atkSpeed: 1.0,  moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     4: { hp: 345, damage: 138, atkSpeed: 0.9,  moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
   },
@@ -25,9 +25,9 @@ const TROOP_STATS = {
   },
   archer: {
     1: { hp: 210, damage: 40, atkSpeed: 1.05, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
-    2: { hp: 280, damage: 54, atkSpeed: 0.95, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
-    3: { hp: 365, damage: 71, atkSpeed: 0.85, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
-    4: { hp: 470, damage: 94, atkSpeed: 0.78, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    2: { hp: 280, damage: 51, atkSpeed: 0.95, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    3: { hp: 310, damage: 58, atkSpeed: 0.85, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    4: { hp: 425, damage: 82, atkSpeed: 0.78, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
   },
   ranger: {
     1: { hp: 250, damage: 34, atkSpeed: 1.0,  moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
@@ -44,7 +44,7 @@ const TROOP_STATS = {
 
 // Demon King is a 2-slot NFT troop that scales from the player's best normal troops.
 // L1 is +20%, L2 +30%, L3 +40% over two best troop slots by HP and DPS.
-const NORMAL_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger'];
+const NORMAL_TROOP_TYPES = ['knight', 'mage', 'archer'];
 const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
 const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL = { 1: 1.2, 2: 1.3, 3: 1.4 };
 const DEMON_KING_SLOT_COUNT = 2;
@@ -108,16 +108,16 @@ function computeDemonKingStats(troopLevels = {}, demonLevel = 1) {
 const DEFENSE_STATS = {
   turret: {
     1: { damage: 35, fireRate: 0.70, detectRange: 0.95, projSpeed: 4.0 },
-    2: { damage: 50, fireRate: 0.55, detectRange: 0.95, projSpeed: 4.0 },
-    3: { damage: 60, fireRate: 0.45, detectRange: 0.95, projSpeed: 4.0 },
-    4: { damage: 75, fireRate: 0.40, detectRange: 0.95, projSpeed: 4.0 },
+    2: { damage: 68, fireRate: 0.48, detectRange: 1.08, projSpeed: 4.0 },
+    3: { damage: 122, fireRate: 0.34, detectRange: 1.22, projSpeed: 4.0 },
+    4: { damage: 170, fireRate: 0.29, detectRange: 1.32, projSpeed: 4.0 },
   },
   archer_tower: {
     1: { damage: 25, fireRate: 1.0,  detectRange: 1.0, projSpeed: 2.5 },
-    2: { damage: 38, fireRate: 0.85, detectRange: 1.1, projSpeed: 2.5 },
-    3: { damage: 50, fireRate: 0.7,  detectRange: 1.2, projSpeed: 2.5 },
-    4: { damage: 65, fireRate: 0.6,  detectRange: 1.3, projSpeed: 2.5 },
-    5: { damage: 82, fireRate: 0.52, detectRange: 1.4, projSpeed: 2.5 },
+    2: { damage: 62, fireRate: 0.68, detectRange: 1.30, projSpeed: 2.5 },
+    3: { damage: 112, fireRate: 0.52, detectRange: 1.52, projSpeed: 2.5 },
+    4: { damage: 158, fireRate: 0.44, detectRange: 1.68, projSpeed: 2.5 },
+    5: { damage: 210, fireRate: 0.38, detectRange: 1.85, projSpeed: 2.5 },
   },
   mage_tower: {
     1: {
@@ -133,24 +133,24 @@ const DEFENSE_STATS = {
     },
     2: {
       beam: true,
-      baseDamage: 6,
-      maxDamage: 26,
-      tickRate: 0.25,
-      rampTime: 3.8,
-      detectRange: 1.0,
-      damage: 6,
-      fireRate: 0.25,
+      baseDamage: 11,
+      maxDamage: 54,
+      tickRate: 0.20,
+      rampTime: 3.0,
+      detectRange: 1.22,
+      damage: 11,
+      fireRate: 0.20,
       projSpeed: 0,
     },
     3: {
       beam: true,
-      baseDamage: 8,
-      maxDamage: 36,
-      tickRate: 0.22,
-      rampTime: 3.6,
-      detectRange: 1.0,
-      damage: 8,
-      fireRate: 0.22,
+      baseDamage: 18,
+      maxDamage: 96,
+      tickRate: 0.16,
+      rampTime: 2.5,
+      detectRange: 1.38,
+      damage: 18,
+      fireRate: 0.16,
       projSpeed: 0,
     },
   },
@@ -158,11 +158,17 @@ const DEFENSE_STATS = {
 
 // Skeleton guards spawned by tombstone buildings
 const SKELETON_GUARD = {
-  hp: 350,
-  damage: 45,
-  atkSpeed: 0.8,
-  moveSpeed: 0.45,
-  detectionRadius: 1.0,
+  levels: {
+    1: { hp: 360, damage: 38, atkSpeed: 0.86, moveSpeed: 0.46, detectionRadius: 0.95 },
+    2: { hp: 520, damage: 60, atkSpeed: 0.74, moveSpeed: 0.52, detectionRadius: 1.18 },
+    3: { hp: 620, damage: 72, atkSpeed: 0.70, moveSpeed: 0.54, detectionRadius: 1.25 },
+    4: { hp: 820, damage: 96, atkSpeed: 0.64, moveSpeed: 0.58, detectionRadius: 1.40 },
+  },
+  hp: 520,
+  damage: 60,
+  atkSpeed: 0.74,
+  moveSpeed: 0.52,
+  detectionRadius: 1.18,
   attackRange: 0.15,
   separationRadius: 0.15,
   separationForce: 0.4,

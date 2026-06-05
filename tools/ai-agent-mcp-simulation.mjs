@@ -256,13 +256,13 @@ async function main() {
       const portBuilding = findPortForBuy(game, attacker.id) || playerBuildings(game, attacker.id, 'port')[0];
       return callTool('buy_ship', { port_id: portBuilding?.id || 0 });
     });
-    for (const troop of ['Mage', 'Knight', 'Archer', 'Ranger', 'Barbarian']) {
+    for (const troop of ['Mage', 'Knight', 'Archer']) {
       addCase(`load ${troop}`, () => {
         const portBuilding = findPortWithRoom(game, attacker.id) || playerBuildings(game, attacker.id, 'port')[0];
         return callTool('load_ship_troop', { port_id: portBuilding?.id || 0, troop_name: troop });
       });
     }
-    for (const troop of ['mage', 'knight', 'archer', 'ranger', 'barbarian']) {
+    for (const troop of ['mage', 'knight', 'archer', 'demon_king']) {
       addCase(`upgrade troop ${troop}`, () => callTool('upgrade_troop', { troop_type: troop }));
     }
 

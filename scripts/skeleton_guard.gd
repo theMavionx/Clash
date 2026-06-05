@@ -20,22 +20,46 @@ const ANIM_FILES = [
 ## Shared blade scene — cached so every skeleton after the first doesn't re-load.
 static var _blade_scene_res: Resource = null
 
-var detection_radius: float = 1.0
+const LEVEL_STATS: Dictionary = {
+	1: {"hp": 360, "damage": 38, "atk_speed": 0.86, "move_speed": 0.46, "detection_radius": 0.95},
+	2: {"hp": 520, "damage": 60, "atk_speed": 0.74, "move_speed": 0.52, "detection_radius": 1.18},
+	3: {"hp": 620, "damage": 72, "atk_speed": 0.70, "move_speed": 0.54, "detection_radius": 1.25},
+	4: {"hp": 820, "damage": 96, "atk_speed": 0.64, "move_speed": 0.58, "detection_radius": 1.40},
+}
+
+var level: int = 2
+var detection_radius: float = 1.18
 var patrol_radius: float = 0.35
 var patrol_inner_radius: float = 0.18  ## min distance from tombstone center (outside building body)
-var move_speed: float = 0.45
+var move_speed: float = 0.52
 var attack_range: float = 0.15
-var separation_radius: float = 0.18
-var separation_force: float = 0.65
+var separation_radius: float = 0.15
+var separation_force: float = 0.4
 var building_push_radius: float = 0.18  ## push-away zone around any building center
 var tombstone_avoid_radius: float = 0.14  ## hard avoidance radius for own tombstone
 
-var hp: int = 380
-var max_hp: int = 380
-var damage: int = 42
-var base_damage: int = 42
+var hp: int = 520
+var max_hp: int = 520
+var damage: int = 60
+var base_damage: int = 60
 var ward_bonus_pct: int = 0
-var atk_speed: float = 0.85
+var atk_speed: float = 0.74
+
+
+func set_level(lvl: int) -> void:
+	var previous_max: int = max_hp
+	var hp_ratio: float = 1.0
+	if previous_max > 0:
+		hp_ratio = clampf(float(hp) / float(previous_max), 0.0, 1.0)
+	level = clampi(lvl, 1, LEVEL_STATS.size())
+	var stats: Dictionary = LEVEL_STATS.get(level, LEVEL_STATS[1])
+	max_hp = int(stats.hp)
+	hp = maxi(1, roundi(float(max_hp) * hp_ratio))
+	base_damage = int(stats.damage)
+	atk_speed = float(stats.atk_speed)
+	move_speed = float(stats.move_speed)
+	detection_radius = float(stats.detection_radius)
+	set_ward_bonus_pct(ward_bonus_pct)
 
 
 func set_ward_bonus_pct(pct: int) -> void:
