@@ -3760,6 +3760,39 @@ router.post('/gmtrade/order-tx', auth, async (req, res) => {
   }
 });
 
+router.post('/gmtrade/cancel-order-tx', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    console.log('[gmtrade cancel-order-tx] request', JSON.stringify({
+      playerId: req.playerId,
+      wallet: String(req.body?.wallet || req.playerWallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      order_id: req.body?.order_id || req.body?.orderId || req.body?.id,
+      recent_blockhash: req.body?.recent_blockhash,
+      last_valid_block_height: req.body?.last_valid_block_height,
+    }));
+    const built = await gmtrade.buildCancelOrderTx(req.body || {}, req.playerWallet);
+    console.log('[gmtrade cancel-order-tx] built', JSON.stringify({
+      playerId: req.playerId,
+      order_id: built.order_id,
+      symbol: built.symbol,
+      recent_blockhash: built.recent_blockhash,
+      last_valid_block_height: built.last_valid_block_height,
+      transaction_count: Array.isArray(built.transactions) ? built.transactions.length : 0,
+      builder: built.builder,
+    }));
+    res.json(built);
+  } catch (e) {
+    console.warn('[gmtrade] cancel-order-tx failed:', e.message);
+    res.status(e.status || 502).json({ error: 'Failed to build GMTrade cancel transaction', detail: e.message });
+  }
+});
+
 router.post('/gmtrade/trade-report', auth, async (req, res) => {
   if (req.dex !== 'gmtrade') {
     return res.status(409).json({

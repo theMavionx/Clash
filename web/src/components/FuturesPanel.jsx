@@ -366,6 +366,15 @@ const fmtPrice = (p) => {
   return `0.0${subscriptN(zeros)}${String(sig).padStart(3, '0')}`;
 };
 
+function fmtAmount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value ?? '');
+  const nearInt = Math.round(n);
+  if (Math.abs(n - nearInt) < 1e-9) return nearInt.toLocaleString();
+  const digits = Math.abs(n) >= 1 ? 6 : 8;
+  return n.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
 function numOrNull(value) {
   if (value == null || value === '') return null;
   const n = Number(value);
@@ -435,10 +444,15 @@ function orderTpslKind(order) {
       || order?._raw?.tp_sl
       || order?._raw?.trigger_type
       || order?._raw?.triggerType
+      || order?._raw?.kind_name
       || order?.order_type
+      || order?.type
+      || order?.kind
       || order?.ot
       || '',
   ).trim().toLowerCase();
+  if (raw.includes('stoplossdecrease')) return 'sl';
+  if (raw.includes('limitdecrease')) return 'tp';
   if (raw === 'tp' || raw === 'take_profit' || raw === 'take-profit' || raw.includes('take')) return 'tp';
   if (raw === 'sl' || raw === 'stop_loss' || raw === 'stop-loss' || raw.includes('stop')) return 'sl';
   return '';
@@ -480,6 +494,9 @@ function orderDisplayPrice(order) {
 }
 
 function orderMatchesPosition(order, pos) {
+  const orderPosition = String(order?.position || order?.position_id || order?.positionId || order?._raw?.position || '').trim();
+  const posId = String(pos?.position_id || pos?.positionId || pos?.id || pos?._raw?.position || pos?._raw?.key || '').trim();
+  if (orderPosition && posId && orderPosition === posId) return true;
   const orderSymbol = String(order?.symbol || order?.s || '').toUpperCase();
   const posSymbol = String(pos?.symbol || pos?.s || '').toUpperCase();
   if (orderSymbol && posSymbol && orderSymbol === posSymbol) return true;
@@ -491,7 +508,11 @@ function orderMatchesPosition(order, pos) {
 function inferTpslKindFromPosition(order, pos, triggerPrice) {
   const explicit = orderTpslKind(order);
   if (explicit) return explicit;
-  const isReduceOnly = order?.reduce_only === true || order?._raw?.reduce_only === true || order?._raw?.ro === true;
+  const rawType = String(order?.type || order?.kind || order?._raw?.kind_name || '').toLowerCase();
+  const isReduceOnly = order?.reduce_only === true
+    || order?._raw?.reduce_only === true
+    || order?._raw?.ro === true
+    || rawType.includes('decrease');
   if (!isReduceOnly || !(triggerPrice > 0)) return '';
   const reference = numOrNull(pos?.mark_price ?? pos?.entry_price ?? pos?.open_price ?? pos?.price);
   if (!(reference > 0)) return '';
@@ -1206,7 +1227,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
         const side = o.side || o.d;
         const price = orderDisplayPrice(o);
         const rawAmt = o.initial_amount || o.amount || o.a;
-        const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full position';
+        const amt = parseFloat(rawAmt || 0) > 0 ? fmtAmount(rawAmt) : 'Full position';
         const type = orderDisplayType(o, positions);
         const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
         const sideLabel = orderSideLabel(o);
@@ -5824,7 +5845,7 @@ function FuturesPanel() {
           const side = o.side || o.d;
           const price = orderDisplayPrice(o);
           const rawAmt = o.initial_amount || o.amount || o.a;
-          const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full position';
+          const amt = parseFloat(rawAmt || 0) > 0 ? fmtAmount(rawAmt) : 'Full position';
           const type = orderDisplayType(o, positions);
           const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
           const sideLabel = orderSideLabel(o);

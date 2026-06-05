@@ -57,6 +57,7 @@ function fmtRewardAmount(reward, fallbackCurrency = 'USD') {
   if (type === 'money') {
     const currency = String(reward?.currency || fallbackCurrency || 'USD').toUpperCase();
     if (currency === 'USD') return fmtPrize(amount);
+    if (currency === 'CLASH') return `${fmtPrize(amount)} in CLASH`;
     return `${formatNumber(amount, { maximumFractionDigits: 2 })} ${currency}`;
   }
   const unit = reward?.unit || (type === 'amp' ? 'AMP' : type === 'points' ? 'points' : type === 'nft' ? 'NFT' : 'reward');
@@ -65,7 +66,13 @@ function fmtRewardAmount(reward, fallbackCurrency = 'USD') {
 }
 
 function rewardLabel(reward, fallbackCurrency = 'USD') {
-  const label = reward?.label || reward?.type || 'Reward';
+  const type = String(reward?.type || '').toLowerCase();
+  const label = String(reward?.label || reward?.type || 'Reward').trim();
+  const normalizedLabel = label.toLowerCase();
+  if ((type === 'money' && (normalizedLabel === 'cash' || normalizedLabel === 'money'))
+    || (type === 'amp' && normalizedLabel === 'amp')) {
+    return fmtRewardAmount(reward, fallbackCurrency);
+  }
   return `${label}: ${fmtRewardAmount(reward, fallbackCurrency)}`;
 }
 

@@ -3,6 +3,7 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { createReconnectingJsonWebSocket } from '../lib/reconnectingWebSocket';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -170,14 +171,8 @@ export function useGmtrade() {
   }, []);
 
   const requestRealtimeRefresh = useCallback((reason = 'client_refresh') => {
-    const ws = realtimeWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    try {
-      ws.send(JSON.stringify({ type: 'refresh', reason }));
-      return true;
-    } catch {
-      return false;
-    }
+    const client = realtimeWsRef.current;
+    return client?.sendJson?.({ type: 'refresh', reason }) === true;
   }, []);
 
   const refresh = useCallback(async () => {
@@ -242,53 +237,25 @@ export function useGmtrade() {
       setRealtimeStatus({ status: 'idle' });
       return undefined;
     }
-    let cancelled = false;
-    let retryMs = 1000;
-    let retryTimer = null;
-    let ws = null;
-
-    const clearRetry = () => {
-      if (retryTimer) clearTimeout(retryTimer);
-      retryTimer = null;
-    };
-
-    const closeWs = () => {
-      clearRetry();
-      if (ws) {
-        ws.onopen = null;
-        ws.onmessage = null;
-        ws.onerror = null;
-        ws.onclose = null;
-        try { ws.close(); } catch {}
-      }
-      ws = null;
-      realtimeWsRef.current = null;
-    };
-
-    const scheduleReconnect = () => {
-      if (cancelled || retryTimer) return;
-      setRealtimeStatus(prev => ({ ...prev, status: prev.status === 'live' ? 'reconnecting' : 'connecting' }));
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        connect();
-      }, retryMs);
-      retryMs = Math.min(retryMs * 2, REALTIME_RECONNECT_MAX_MS);
-    };
-
-    const connect = () => {
-      if (cancelled || typeof WebSocket === 'undefined') return;
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-      setRealtimeStatus({ status: 'connecting' });
-      ws = new WebSocket(gmtradeRealtimeUrl());
-      realtimeWsRef.current = ws;
-      ws.onopen = () => {
-        retryMs = 1000;
-        setRealtimeStatus({ status: 'authenticating' });
-        ws.send(JSON.stringify({ type: 'subscribe', token, wallet: walletAddr }));
-      };
-      ws.onmessage = (event) => {
-        let msg = null;
-        try { msg = JSON.parse(event.data); } catch { return; }
+    const client = createReconnectingJsonWebSocket({
+      getUrl: gmtradeRealtimeUrl,
+      reconnectMinMs: 1000,
+      reconnectMaxMs: REALTIME_RECONNECT_MAX_MS,
+      pingIntervalMs: 25000,
+      pongTimeoutMs: 10000,
+      onStatus: status => {
+        if (status.status === 'open') {
+          setRealtimeStatus({ status: 'authenticating', at: status.at });
+        } else if (status.status === 'reconnecting') {
+          setRealtimeStatus(prev => ({ ...prev, status: prev.status === 'live' ? 'reconnecting' : 'connecting', retry_ms: status.retry_ms }));
+        } else if (status.status === 'connecting' || status.status === 'stale') {
+          setRealtimeStatus(prev => ({ ...prev, status: status.status, at: status.at }));
+        }
+      },
+      onOpen: (_event, api) => {
+        api.sendJson({ type: 'subscribe', token, wallet: walletAddr });
+      },
+      onMessage: msg => {
         if (msg?.type === 'gmtrade_snapshot') {
           applySnapshot(msg);
           return;
@@ -300,23 +267,16 @@ export function useGmtrade() {
         if (msg?.type === 'error') {
           setRealtimeStatus({ status: 'error', message: msg.message || 'GMTrade realtime error', at: msg.at || Date.now() });
         }
-      };
-      ws.onerror = () => {
+      },
+      onError: () => {
         setRealtimeStatus(prev => ({ ...prev, status: 'error', message: 'GMTrade realtime socket error' }));
-        try { ws?.close(); } catch {}
-      };
-      ws.onclose = () => {
-        const closedWs = ws;
-        ws = null;
-        if (realtimeWsRef.current === closedWs) realtimeWsRef.current = null;
-        if (!cancelled) scheduleReconnect();
-      };
-    };
-
-    connect();
+      },
+    });
+    realtimeWsRef.current = client;
+    client.connect();
     return () => {
-      cancelled = true;
-      closeWs();
+      client.close();
+      if (realtimeWsRef.current === client) realtimeWsRef.current = null;
     };
   }, [applySnapshot, isActiveDex, token, walletAddr, walletMismatch]);
 
@@ -589,6 +549,26 @@ export function useGmtrade() {
               info: 'GMTrade trigger order submitted on Solana. It will appear after GMTrade indexes the order.',
             };
           }
+          const normalizedOrderType = String(options?.order_type || 'market').toLowerCase();
+          if (normalizedOrderType !== 'market') {
+            await gmtradeLog('order_submitted_no_report', {
+              signature: lastSig,
+              kind: build?.kind,
+              reason: 'pending_order_not_execution',
+              order_type: normalizedOrderType,
+            }, attempt, trace);
+            if (!requestRealtimeRefresh('order_submitted')) {
+              window.setTimeout(() => {
+                refresh().catch(() => null);
+              }, 250);
+            }
+            return {
+              ok: true,
+              signature: lastSig,
+              status: 'submitted',
+              info: 'GMTrade order submitted on Solana. Gold is credited after the order executes, not when a pending order is created.',
+            };
+          }
           await gmtradeLog('trade_report_start', { signature: lastSig }, attempt, trace);
           const imported = await reportTrade({
             signature: lastSig,
@@ -597,7 +577,7 @@ export function useGmtrade() {
             amount: margin,
             leverage,
             price: options?.price,
-            orderType: options?.order_type || 'market',
+            orderType: normalizedOrderType,
           });
           await gmtradeLog('trade_report_done', {
             signature: lastSig,
@@ -750,6 +730,83 @@ export function useGmtrade() {
     return { ok: true, results };
   }, [accountPositions, nativeOrder]);
 
+  const nativeCancelOrder = useCallback(async (symbolOrOrder, orderIdArg) => {
+    if (!token) return { error: 'Missing game session token' };
+    if (!walletAddr) return { error: 'Connect a Solana wallet first' };
+    if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered GMTrade wallet' };
+    const order = symbolOrOrder && typeof symbolOrOrder === 'object' ? symbolOrOrder : null;
+    const orderId = String(order?.order_id || order?.id || order?.i || orderIdArg || '').trim();
+    if (!orderId) return { error: 'GMTrade order id is missing' };
+    const trace = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+      ? crypto.randomUUID()
+      : `gmtrade-cancel-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    try {
+      let lastExpired = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const beforeHeight = await connection.getBlockHeight('confirmed').catch(() => null);
+        const latest = await connection.getLatestBlockhash('confirmed');
+        await gmtradeLog('cancel_attempt_start', {
+          order_id: orderId,
+          current_block_height: beforeHeight,
+          latest_blockhash: latest.blockhash,
+          latest_last_valid_block_height: latest.lastValidBlockHeight,
+        }, attempt, trace);
+        const build = await fetchJson(`${FUTURES_API}/gmtrade/cancel-order-tx`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'gmtrade' },
+          body: JSON.stringify({
+            wallet: walletAddr,
+            order_id: orderId,
+            recent_blockhash: latest.blockhash,
+            last_valid_block_height: latest.lastValidBlockHeight,
+          }),
+        });
+        await gmtradeLog('cancel_build_done', {
+          order_id: build?.order_id,
+          symbol: build?.symbol,
+          recent_blockhash: build?.recent_blockhash,
+          last_valid_block_height: build?.last_valid_block_height,
+          transaction_count: Array.isArray(build?.transactions) ? build.transactions.length : 0,
+          builder: build?.builder,
+        }, attempt, trace);
+        const txs = Array.isArray(build?.transactions) ? build.transactions : [];
+        if (!txs.length) throw new Error('GMTrade cancel builder returned no transactions');
+        let lastSig = '';
+        try {
+          for (let txIndex = 0; txIndex < txs.length; txIndex += 1) {
+            await gmtradeLog('cancel_tx_send_loop_start', { order_id: orderId, tx_index: txIndex, tx_count: txs.length }, attempt, trace);
+            lastSig = await sendBuiltTransaction(txs[txIndex], build, attempt, trace);
+            await confirmSignatureWithDiagnostics(lastSig, build, attempt, trace);
+          }
+          await gmtradeLog('cancel_submitted', { order_id: orderId, signature: lastSig }, attempt, trace);
+          if (!requestRealtimeRefresh('order_cancelled')) {
+            window.setTimeout(() => {
+              refresh().catch(() => null);
+            }, 250);
+          }
+          return { ok: true, signature: lastSig, status: 'submitted' };
+        } catch (sendError) {
+          await gmtradeLog('cancel_attempt_error', {
+            order_id: orderId,
+            error: errorInfo(sendError),
+            expired: isBlockhashExpiredError(sendError),
+          }, attempt, trace);
+          if (isBlockhashExpiredError(sendError) && attempt === 0) {
+            lastExpired = sendError;
+            continue;
+          }
+          throw sendError;
+        }
+      }
+      throw lastExpired || new Error('GMTrade cancel transaction expired before confirmation');
+    } catch (e) {
+      if (isBlockhashExpiredError(e)) {
+        return { error: 'GMTrade cancel transaction expired before Solana confirmed it. Try again.' };
+      }
+      return { error: e?.message || 'GMTrade cancel order failed' };
+    }
+  }, [confirmSignatureWithDiagnostics, connection, gmtradeLog, refresh, requestRealtimeRefresh, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+
   const unavailableOrder = useCallback(async () => {
     return {
       error: 'This GMTrade action is not exposed by the native transaction builder yet. Use market or limit Long/Short orders from Clash.',
@@ -802,7 +859,7 @@ export function useGmtrade() {
     placeMarketOrder: nativeOrder,
     placeLimitOrder: nativeLimitOrder,
     closePosition,
-    cancelOrder: unavailableOrder,
+    cancelOrder: nativeCancelOrder,
     setTpsl,
     setLeverage: async () => ({ success: true }),
     setMarginMode: async () => ({ success: true }),

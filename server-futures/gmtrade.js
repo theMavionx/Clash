@@ -330,6 +330,15 @@ function isSolanaAddress(value) {
   }
 }
 
+function isSolanaPubkey(value) {
+  try {
+    const key = new PublicKey(String(value || '').trim());
+    return key.toBytes().length === 32;
+  } catch {
+    return false;
+  }
+}
+
 function baseSymbol(value) {
   return String(value || '')
     .toUpperCase()
@@ -1511,6 +1520,19 @@ async function getOrderbook(symbol) {
   };
 }
 
+function serializeTransactionGroup(group) {
+  const serialized = group.serialize();
+  const transactions = [];
+  for (const batch of serialized || []) {
+    const txs = Array.isArray(batch?.[0]) ? batch : [batch];
+    for (const raw of txs) {
+      if (!Array.isArray(raw)) continue;
+      transactions.push(Buffer.from(raw).toString('base64'));
+    }
+  }
+  return transactions;
+}
+
 async function buildCreateOrderTx(body = {}, playerWallet = '') {
   const payer = String(body.wallet || body.address || playerWallet || '').trim();
   if (!isSolanaAddress(payer)) {
@@ -1670,6 +1692,88 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   };
 }
 
+async function buildCancelOrderTx(body = {}, playerWallet = '') {
+  const payer = String(body.wallet || body.address || playerWallet || '').trim();
+  const orderId = String(body.order_id || body.orderId || body.id || body.order || '').trim();
+  if (!isSolanaAddress(payer)) {
+    throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
+  }
+  if (!isSolanaPubkey(orderId)) {
+    throw Object.assign(new Error('GMTrade order address required'), { status: 400 });
+  }
+  if (!GMTRADE_ENABLE_NODE_SDK_BUILDER) {
+    throw Object.assign(new Error('GMTrade cancel builder requires GMTRADE_ENABLE_NODE_SDK_BUILDER=1'), { status: 501 });
+  }
+
+  const readableConfigs = await allReadableMarketConfigs();
+  const marketByToken = Object.fromEntries(readableConfigs.map(cfg => [cfg.market_token, cfg]));
+  const account = await rpcAccountInfo(orderId);
+  if (!account?.data?.[0]) {
+    throw Object.assign(new Error('GMTrade order account not found'), { status: 404 });
+  }
+  const decoded = decodeOrderAccount(account.data[0], orderId, {}, marketByToken);
+  if (!decoded) {
+    throw Object.assign(new Error('GMTrade order account could not be decoded'), { status: 400 });
+  }
+  if (String(decoded.owner) !== payer) {
+    throw Object.assign(new Error('GMTrade order is not owned by this wallet'), { status: 403 });
+  }
+  const cfg = marketByToken[decoded.market_token] || {};
+  const suppliedBlockhash = String(body.recent_blockhash || body.recentBlockhash || '').trim();
+  const suppliedLastValid = Number(body.last_valid_block_height || body.lastValidBlockHeight || 0);
+  let blockhash = suppliedBlockhash;
+  let lastValidBlockHeight = Number.isFinite(suppliedLastValid) && suppliedLastValid > 0 ? suppliedLastValid : null;
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,90}$/.test(blockhash)) {
+    const latest = await rpcLatestBlockhash();
+    blockhash = latest.blockhash;
+    lastValidBlockHeight = latest.lastValidBlockHeight;
+  }
+
+  const sdk = await gmsolSdk();
+  sdk.solana_program_init?.();
+  let group;
+  try {
+    group = sdk.close_orders({
+      recent_blockhash: blockhash,
+      payer,
+      orders: new Map([[orderId, {
+        owner: payer,
+        receiver: payer,
+        rent_receiver: payer,
+        referrer: undefined,
+        initial_collateral_token: decoded.collateral_token || cfg.collateral_token || undefined,
+        final_output_token: decoded.collateral_token || cfg.collateral_token || undefined,
+        long_token: cfg.long_token || undefined,
+        short_token: cfg.short_token || undefined,
+        should_unwrap_native_token: false,
+        callback: undefined,
+      }]]),
+      transaction_group: {
+        memo: 'Clash GMTrade',
+        max_instructions_per_tx: 24,
+      },
+      compute_unit_price_micro_lamports: Number(process.env.GMTRADE_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS || 0) || undefined,
+    });
+  } catch (e) {
+    throw Object.assign(new Error(`GMTrade SDK cancel builder failed: ${e.message}`, { cause: e }), { status: 501 });
+  }
+  const transactions = serializeTransactionGroup(group);
+  if (!transactions.length) {
+    throw Object.assign(new Error('GMTrade SDK did not produce any cancel transaction'), { status: 502 });
+  }
+  return {
+    ok: true,
+    dex: 'gmtrade',
+    kind: 'CloseOrder',
+    order_id: orderId,
+    symbol: decoded.symbol,
+    recent_blockhash: blockhash,
+    last_valid_block_height: lastValidBlockHeight,
+    transactions,
+    builder: 'node_wasm_gmsol_sdk',
+  };
+}
+
 async function verifySolanaSignature({ signature, wallet }) {
   if (!/^[1-9A-HJ-NP-Za-km-z]{43,90}$/.test(String(signature || ''))) {
     throw Object.assign(new Error('Bad Solana transaction signature'), { status: 400 });
@@ -1738,6 +1842,10 @@ async function getTransactionStatus(signature) {
   };
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function verifiedPositionForTradeReport({ wallet, tx, body }) {
   const wantedSymbol = baseSymbol(body.symbol || '');
   const wantedSide = normalizeSide(body.side);
@@ -1767,10 +1875,17 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
   const tradeEvent = tx.walletEvents
     .filter(ev => Number(ev?.size_delta_usd) > 0)
     .sort((a, b) => Number(b.size_delta_usd) - Number(a.size_delta_usd))[0] || null;
-  const verifiedPosition = tradeEvent ? null : await verifiedPositionForTradeReport({ wallet, tx, body }).catch((e) => {
-    console.warn('[gmtrade] position fallback verification failed:', e.message);
-    return null;
-  });
+  let verifiedPosition = null;
+  if (!tradeEvent) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      verifiedPosition = await verifiedPositionForTradeReport({ wallet, tx, body }).catch((e) => {
+        console.warn('[gmtrade] position fallback verification failed:', e.message);
+        return null;
+      });
+      if (verifiedPosition) break;
+      await sleep(1000);
+    }
+  }
   if (!tradeEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS) {
     throw Object.assign(new Error('GMTrade transaction did not include a decodable trade execution event for this wallet'), { status: 400 });
   }
@@ -1855,6 +1970,7 @@ module.exports = {
     rust_builder_bin: rustBuilderAvailable() ? GMTRADE_RUST_BUILDER_BIN : null,
     configured_markets: configuredMarketSymbols(),
   }),
+  buildCancelOrderTx,
   buildCreateOrderTx,
   discoverGmtradeMarkets,
   getAccountByAddress,

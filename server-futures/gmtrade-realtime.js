@@ -211,6 +211,10 @@ function setupGmtradeRealtime(server) {
     ws.on('message', async (raw) => {
       let msg = null;
       try { msg = JSON.parse(String(raw || '')); } catch { return; }
+      if (msg?.type === 'ping') {
+        sendJson(ws, { type: 'pong', at: Date.now(), client_at: msg.at || null });
+        return;
+      }
       if (msg?.type === 'refresh') {
         if (!authed) {
           sendJson(ws, { type: 'error', status: 401, message: 'GMTrade realtime is not authenticated yet', at: Date.now() });
