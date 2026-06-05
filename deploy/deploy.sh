@@ -27,6 +27,7 @@ BACKUP_KEEP="${CLASH_BACKUP_KEEP:-1}"
 BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-}"
 BACKUP_SQLITE_TIMEOUT_MIN_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MIN_SECONDS:-600}"
 BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND="${CLASH_BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND:-1}"
+BACKUP_SQLITE_TIMEOUT_MAX_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MAX_SECONDS:-180}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -568,7 +569,13 @@ sqlite_backup_timeout_seconds() {
     fi
     mib=$(( (bytes + 1048575) / 1048576 ))
     size_timeout=$(( (mib + mib_per_second - 1) / mib_per_second ))
-    echo $(( min_seconds + size_timeout ))
+    local computed=$(( min_seconds + size_timeout ))
+    local max_seconds="$BACKUP_SQLITE_TIMEOUT_MAX_SECONDS"
+    if [[ "$max_seconds" =~ ^[0-9]+$ ]] && [ "$max_seconds" -gt 0 ] && [ "$computed" -gt "$max_seconds" ]; then
+        echo "$max_seconds"
+        return 0
+    fi
+    echo "$computed"
 }
 
 checkpoint_sqlite_db() {
@@ -1533,11 +1540,11 @@ main() {
     install_release_dependencies
     build_frontend
     validate_release
-    backup_shared_databases
     sync_legacy_databases_before_switch
     switch_current_release
     write_nginx_config
     restart_services
+    backup_shared_databases
     cleanup_old_releases
 
     log "=== Deploy complete ==="
