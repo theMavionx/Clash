@@ -122,7 +122,7 @@ function demonKingDisplayIdFromText(value) {
   if (namedMatch) return namedMatch[1];
   const fieldMatch = text.match(/\b(?:token|id|index|serial|number)[\s:_-]*#?\s*(\d{1,10})\b/i);
   if (fieldMatch) return fieldMatch[1];
-  const uriMatch = text.match(/\/api\/nft\/(?:base|arbitrum|monad|aptos|solana)\/(?:token2022\/)?(\d{1,10})(?:[/?#]|$)/i);
+  const uriMatch = text.match(/\/api\/nft\/(?:base|arbitrum|monad|ink|aptos|solana)\/(?:token2022\/)?(\d{1,10})(?:[/?#]|$)/i);
   return uriMatch ? uriMatch[1] : '';
 }
 
@@ -511,6 +511,7 @@ const SUPPORTED_EVM_CHAINS = {
   base:     { chainId: 8453,  defaultRpc: 'https://mainnet.base.org',     domainName: 'DemonKingBase'     },
   arbitrum: { chainId: 42161, defaultRpc: 'https://arb1.arbitrum.io/rpc', domainName: 'DemonKingArbitrum' },
   monad:    { chainId: 143,   defaultRpc: 'https://rpc.monad.xyz',        domainName: 'DemonKingMonad'    },
+  ink:      { chainId: 57073, defaultRpc: 'https://rpc-gel.inkonchain.com', domainName: 'DemonKingInk'      },
 };
 
 const NFT_V3_ABI = [
@@ -538,7 +539,29 @@ function evmRpc(chainKey, env) {
     || spec.defaultRpc;
 }
 
-const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad'];
+function evmViemChain(chainKey, defineChain, viemChains) {
+  if (chainKey === 'base') return viemChains.base;
+  if (chainKey === 'arbitrum') return viemChains.arbitrum;
+  if (chainKey === 'ink') {
+    return defineChain({
+      id: 57073,
+      name: 'Ink',
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+      blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
+      contracts: { multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' } },
+    });
+  }
+  return defineChain({
+    id: 143,
+    name: 'Monad',
+    nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
+    rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
+    contracts: { multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' } },
+  });
+}
+
+const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad', 'ink'];
 const DEMON_KING_SYNC_CHAINS = [...DEMON_KING_EVM_CHAINS, 'solana', 'aptos'];
 const DEMON_KING_SYNC_DB_TTL_MS = Math.max(
   30_000,
@@ -643,14 +666,7 @@ async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
 
   const { createPublicClient, getAddress, http, defineChain } = await import('viem');
   const viemChains = await import('viem/chains');
-  const monad = defineChain({
-    id: 143,
-    name: 'Monad',
-    nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
-    rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
-    contracts: { multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' } },
-  });
-  const chainViem = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad }[chainKey];
+  const chainViem = evmViemChain(chainKey, defineChain, viemChains);
   const deployment = v3Deployment(chainKey);
   if (!deployment?.proxy) {
     const err = new Error(`${chainKey} V3 not deployed`);
@@ -672,6 +688,7 @@ async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
     base: ['https://mainnet.base.org', 'https://base.llamarpc.com', 'https://base-rpc.publicnode.com'],
     arbitrum: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum.llamarpc.com', 'https://arbitrum-one.publicnode.com'],
     monad: ['https://rpc.monad.xyz'],
+    ink: ['https://rpc-gel.inkonchain.com', 'https://rpc-qnd.inkonchain.com', 'https://ink.drpc.org'],
   }[chainKey] || [];
   const rpcs = [envRpc1, envRpc2, ...publicAlts].filter(Boolean);
 
@@ -781,14 +798,7 @@ async function listOwnedEvmCollectionNfts(collectionSlugRaw, chainKey, ownerRaw,
 
   const { createPublicClient, getAddress, http, defineChain } = await import('viem');
   const viemChains = await import('viem/chains');
-  const monad = defineChain({
-    id: 143,
-    name: 'Monad',
-    nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
-    rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
-    contracts: { multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' } },
-  });
-  const chainViem = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad }[chainKey];
+  const chainViem = evmViemChain(chainKey, defineChain, viemChains);
   const deployment = bridgeHelperDeploymentOf(chainKey, collectionSlug);
   if (!deployment?.proxy && !deployment?.contract) {
     const err = new Error(`${collectionDisplayName(collectionSlug)} ${chainKey} is not deployed`);
@@ -812,6 +822,7 @@ async function listOwnedEvmCollectionNfts(collectionSlugRaw, chainKey, ownerRaw,
     base: ['https://mainnet.base.org', 'https://base.llamarpc.com', 'https://base-rpc.publicnode.com'],
     arbitrum: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum.llamarpc.com', 'https://arbitrum-one.publicnode.com'],
     monad: ['https://rpc.monad.xyz'],
+    ink: ['https://rpc-gel.inkonchain.com', 'https://rpc-qnd.inkonchain.com', 'https://ink.drpc.org'],
   }[chainKey] || [];
   const rpcs = [envRpc1, envRpc2, envRpc3, deployment.rpcUrl, ...publicAlts].filter(Boolean);
 
@@ -1508,7 +1519,7 @@ function mountNftV3Endpoints(router, ctx) {
         });
       }
       const spec = SUPPORTED_EVM_CHAINS[chainKey];
-      if (!spec) return res.status(400).json({ error: 'Unsupported chain. Use base|arbitrum|monad.' });
+      if (!spec) return res.status(400).json({ error: 'Unsupported chain. Use base|arbitrum|monad|ink.' });
 
       const deployment = v3Deployment(chainKey);
       if (!deployment?.proxy) {
@@ -1810,8 +1821,7 @@ function mountNftV3Endpoints(router, ctx) {
       if (SUPPORTED_EVM_CHAINS[chainKey]) {
         const { createPublicClient, getAddress, http, defineChain } = await import('viem');
         const viemChains = await import('viem/chains');
-        const monad = defineChain({ id:143, name:'Monad', nativeCurrency:{name:'Monad',symbol:'MON',decimals:18}, rpcUrls:{default:{http:['https://rpc.monad.xyz']}}, contracts:{ multicall3:{ address:'0xcA11bde05977b3631167028862bE2a173976CA11' } } });
-        const chainViem = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad }[chainKey];
+        const chainViem = evmViemChain(chainKey, defineChain, viemChains);
         const deployment = v3Deployment(chainKey);
         if (!deployment?.proxy) return res.status(503).json({ error: `${chainKey} V3 not deployed` });
         if (!/^0x[0-9a-fA-F]{40}$/.test(ownerRaw)) return res.status(400).json({ error: 'EVM address malformed' });
@@ -1836,6 +1846,7 @@ function mountNftV3Endpoints(router, ctx) {
           base: ['https://mainnet.base.org', 'https://base.llamarpc.com', 'https://base-rpc.publicnode.com'],
           arbitrum: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum.llamarpc.com', 'https://arbitrum-one.publicnode.com'],
           monad: ['https://rpc.monad.xyz'],
+          ink: ['https://rpc-gel.inkonchain.com', 'https://rpc-qnd.inkonchain.com', 'https://ink.drpc.org'],
         }[chainKey] || [];
         const rpcs = [envRpc1, envRpc2, ...publicAlts].filter(Boolean);
 
@@ -2270,6 +2281,7 @@ function mountNftV3Endpoints(router, ctx) {
     base:     { chainId: 8453,  name: 'DemonKingBase'     },
     arbitrum: { chainId: 42161, name: 'DemonKingArbitrum' },
     monad:    { chainId: 143,   name: 'DemonKingMonad'    },
+    ink:      { chainId: 57073, name: 'DemonKingInk'      },
   };
 
   const BRIDGE_COLLECTIONS = {
@@ -2283,7 +2295,7 @@ function mountNftV3Endpoints(router, ctx) {
       slug: 'voidspore',
       label: 'Voidspore',
       evmEip712Version: '1',
-      chains: new Set(['base', 'arbitrum', 'monad', 'aptos', 'solana']),
+      chains: new Set(['base', 'arbitrum', 'monad', 'ink', 'aptos', 'solana']),
     },
   };
 
@@ -2323,7 +2335,7 @@ function mountNftV3Endpoints(router, ctx) {
   // with the actual on-chain shape and keeps bridge memo/receipt data stable.
   function normalizeDestAddressForChain(chainKey, addr) {
     const s = String(addr || '').trim();
-    if (chainKey === 'base' || chainKey === 'arbitrum' || chainKey === 'monad') {
+    if (SUPPORTED_EVM_CHAINS[chainKey]) {
       return /^0x[0-9a-fA-F]{40}$/.test(s) ? s : null;
     }
     if (chainKey === 'aptos') {
@@ -2370,6 +2382,7 @@ function mountNftV3Endpoints(router, ctx) {
     base:     { asset: 'eth', symbol: 'ETH', decimals: 18, explicitEnv: ['NFT_BRIDGE_BASE_FEE_WEI', 'NFT_BRIDGE_EVM_FEE_WEI'] },
     arbitrum: { asset: 'eth', symbol: 'ETH', decimals: 18, explicitEnv: ['NFT_BRIDGE_ARBITRUM_FEE_WEI', 'NFT_BRIDGE_EVM_FEE_WEI'] },
     monad:    { asset: 'mon', symbol: 'MON', decimals: 18, explicitEnv: ['NFT_BRIDGE_MONAD_FEE_WEI'] },
+    ink:      { asset: 'eth', symbol: 'ETH', decimals: 18, explicitEnv: ['NFT_BRIDGE_INK_FEE_WEI', 'NFT_BRIDGE_EVM_FEE_WEI'] },
     aptos:    { asset: 'apt', symbol: 'APT', decimals: 8,  explicitEnv: ['NFT_BRIDGE_APTOS_FEE_OCTAS'] },
     solana:   { asset: 'sol', symbol: 'SOL', decimals: 9,  explicitEnv: ['NFT_BRIDGE_SOLANA_FEE_LAMPORTS'] },
   };
@@ -2611,8 +2624,8 @@ function mountNftV3Endpoints(router, ctx) {
       const sourceOwner = String(req.body?.sourceOwner || '');
 
       if (sourceChain === destChain) return res.status(400).json({ error: 'sourceChain == destChain' });
-      if (!ALL_CHAINS.includes(destChain)) return res.status(400).json({ error: 'Unsupported destChain. Use base|arbitrum|monad|aptos|solana.' });
-      if (!ALL_CHAINS.includes(sourceChain)) return res.status(400).json({ error: 'Unsupported sourceChain. Use base|arbitrum|monad|aptos|solana.' });
+      if (!ALL_CHAINS.includes(destChain)) return res.status(400).json({ error: 'Unsupported destChain. Use base|arbitrum|monad|ink|aptos|solana.' });
+      if (!ALL_CHAINS.includes(sourceChain)) return res.status(400).json({ error: 'Unsupported sourceChain. Use base|arbitrum|monad|ink|aptos|solana.' });
       ensureBridgeChainSupported(collection, sourceChain, 'source');
       ensureBridgeChainSupported(collection, destChain, 'destination');
       const destSpec = evmDestSpec(destChain, collectionSlug);  // null for non-EVM
@@ -2748,7 +2761,7 @@ function mountNftV3Endpoints(router, ctx) {
       const destAddress = normalizeDestAddressForChain(destChain, req.body?.destAddress);
 
       if (!ALL_CHAINS.includes(sourceChain) || !ALL_CHAINS.includes(destChain)) {
-        return res.status(400).json({ error: 'Unsupported chain. Use base|arbitrum|monad|aptos|solana.' });
+        return res.status(400).json({ error: 'Unsupported chain. Use base|arbitrum|monad|ink|aptos|solana.' });
       }
       if (sourceChain === destChain) return res.status(400).json({ error: 'sourceChain == destChain' });
       ensureBridgeChainSupported(collection, sourceChain, 'source');
@@ -3361,8 +3374,7 @@ function mountNftV3Endpoints(router, ctx) {
           const { createPublicClient, createWalletClient, getAddress, http } = await import('viem');
           const viemChains = await import('viem/chains');
           const { defineChain } = await import('viem');
-          const monad = defineChain({ id:143, name:'Monad', nativeCurrency:{name:'Monad',symbol:'MON',decimals:18}, rpcUrls:{default:{http:['https://rpc.monad.xyz']}} });
-          const chainViem = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad }[destChain];
+          const chainViem = evmViemChain(destChain, defineChain, viemChains);
 
           const destDeployment = bridgeDeploymentOf(destChain, collectionSlug);
           if (!destDeployment?.proxy && !destDeployment?.contract) return res.status(503).json({ error: `${collection.label} ${destChain} contract not deployed` });

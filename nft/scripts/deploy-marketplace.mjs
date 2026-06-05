@@ -1,7 +1,8 @@
-// Deploy DemonKingMarketplace (UUPS proxy + V1 impl) on Base.
+// Deploy DemonKingMarketplace (UUPS proxy + V1 impl) on an EVM chain.
 //
 // Usage:
 //   node scripts/deploy-marketplace.mjs --chain=base
+//   node scripts/deploy-marketplace.mjs --chain=ink
 //
 // Prerequisites:
 //   - DemonKingBaseV3 already upgraded (base-v3-mainnet.json exists).
@@ -36,6 +37,13 @@ const monad = defineChain({
   nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
   rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
 });
+const ink = defineChain({
+  id: 57073,
+  name: 'Ink',
+  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+  blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
+});
 
 const TREASURY = '0xC024884ad9C5540996492Cc2DD080964941A3094';
 
@@ -49,13 +57,16 @@ const CHAINS = {
   monad:    { chain: monad,    defaultRpc: 'https://rpc.monad.xyz',        envRpc: ['NFT_MONAD_RPC_URL', 'MONAD_RPC_URL'],
               v3DeployFile: 'monad-v3-mainnet.json',    marketDeployFile: 'monad-marketplace-mainnet.json',
               usdcDefault: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603' },
+  ink:      { chain: ink,      defaultRpc: 'https://rpc-gel.inkonchain.com', envRpc: ['NFT_INK_RPC_URL', 'INK_RPC_URL', 'GAME_SHOP_INK_RPC_URL'],
+              v3DeployFile: 'ink-v3-mainnet.json',      marketDeployFile: 'ink-marketplace-mainnet.json',
+              usdcDefault: '0x2D270e6886d130D724215A266106e6832161EAEd' },
 };
 
 const cliArg = process.argv.slice(2).find((a) => a.startsWith('--chain=')) || '';
 const chainKey = (cliArg ? cliArg.split('=')[1] : process.env.CLASH_DEPLOY_CHAIN || 'base').toLowerCase();
 const spec = CHAINS[chainKey];
 if (!spec) {
-  console.error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad.`);
+  console.error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad|ink.`);
   process.exit(1);
 }
 
@@ -159,7 +170,7 @@ async function whitelist(token, label) {
     args: [token, true],
     maxPriorityFeePerGas,
   });
-  await publicClient.waitForTransactionReceipt({ hash: txHash, confirmations: 1 });
+  await publicClient.waitForTransactionReceipt({ hash: txHash, confirmations: 2 });
   console.log(`  ✓ ${label} accepted: ${token}`);
   return txHash;
 }
@@ -175,14 +186,22 @@ const MARKET_VIEW_ABI = [
   { name: 'platformFeeBps', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint16' }] },
   { name: 'acceptedPaymentToken', type: 'function', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'bool' }] },
 ];
-const [nftRead, treasuryRead, bpsRead, platformFeeRead, ethAccepted, usdcAccepted] = await Promise.all([
-  publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'demonKing' }),
-  publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'treasury' }),
-  publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'defaultRoyaltyBps' }),
-  publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'platformFeeBps' }),
-  publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'acceptedPaymentToken', args: ['0x0000000000000000000000000000000000000000'] }),
-  publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'acceptedPaymentToken', args: [usdcToken] }),
-]);
+async function readVerifiedState() {
+  return Promise.all([
+    publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'demonKing' }),
+    publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'treasury' }),
+    publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'defaultRoyaltyBps' }),
+    publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'platformFeeBps' }),
+    publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'acceptedPaymentToken', args: ['0x0000000000000000000000000000000000000000'] }),
+    publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'acceptedPaymentToken', args: [usdcToken] }),
+  ]);
+}
+
+let [nftRead, treasuryRead, bpsRead, platformFeeRead, ethAccepted, usdcAccepted] = await readVerifiedState();
+for (let attempt = 0; !usdcAccepted && attempt < 5; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  [nftRead, treasuryRead, bpsRead, platformFeeRead, ethAccepted, usdcAccepted] = await readVerifiedState();
+}
 if (getAddress(nftRead) !== nftAddress) throw new Error(`demonKing mismatch: ${nftRead}`);
 if (getAddress(treasuryRead) !== treasury) throw new Error(`treasury mismatch: ${treasuryRead}`);
 if (bpsRead !== fallbackRoyaltyBps) throw new Error(`bps mismatch: ${bpsRead}`);

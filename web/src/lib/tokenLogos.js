@@ -33,6 +33,11 @@ const FX_SYMBOLS = new Set([
   'USDSGD', 'USDTRY', 'USDCNH', 'USDINR', 'USDKRW', 'USDMXN', 'USDZAR', 'USDBRL',
   'USDIDR', 'USDTWD',
 ]);
+const FIAT_SYMBOLS = new Set([
+  'AUD', 'BRL', 'CAD', 'CHF', 'CNH', 'EUR', 'GBP', 'IDR', 'INR', 'JPY', 'KRW',
+  'MXN', 'NZD', 'SEK', 'SGD', 'TRY', 'TWD', 'USD', 'ZAR',
+]);
+const QUOTE_SUFFIXES = ['USDT', 'USDC', 'USD'];
 
 const LOCAL_ALIASES = {
   PAYP: ['PYPL'],
@@ -41,6 +46,12 @@ const LOCAL_ALIASES = {
   MATIC: ['POL'],
   RNDR: ['RENDER'],
   RENDER: ['RNDR'],
+  '1000BONK': ['BONK'],
+  '1000FLOKI': ['KFLOKI', 'FLOKI'],
+  '1000LUNC': ['KLUNC', 'LUNC'],
+  '1000PEPE': ['PEPE', 'KPEPE'],
+  '1000SHIB': ['SHIB', 'KSHIB'],
+  '1000SATS': ['MSATS', 'SATS'],
   WTI: ['CL'],
   WTIOIL: ['WTI', 'CL'],
   BRENT: ['CL'],
@@ -71,9 +82,31 @@ const COINGECKO_LOGOS = {
 };
 
 export function canonTokenSymbol(sym) {
-  const raw = String(sym || '').toUpperCase().trim();
+  const raw = String(sym || '')
+    .toUpperCase()
+    .trim()
+    .split(';')[0]
+    .split('[')[0]
+    .trim();
   if (!raw) return '';
-  return raw.replace(/[^A-Z0-9]/g, '');
+  let s = raw
+    .replace(/-PERP$/u, '')
+    .replace(/-P$/u, '')
+    .replace(/\/USDT-P$/u, '')
+    .replace(/[/_-]PERP$/u, '')
+    .replace(/[/_-]USD[TC]?$/u, '')
+    .replace(/[^A-Z0-9]/g, '');
+  if (FX_SYMBOLS.has(s)) return s;
+  for (const quote of QUOTE_SUFFIXES) {
+    if (s.length > quote.length && s.endsWith(quote)) {
+      const base = s.slice(0, -quote.length);
+      if (!FIAT_SYMBOLS.has(base)) {
+        s = base;
+        break;
+      }
+    }
+  }
+  return s;
 }
 
 function uniq(list) {

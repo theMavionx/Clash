@@ -15,6 +15,7 @@ server-futures/*.db
 server-futures/*.db-wal
 server-futures/*.db-shm
 server-futures/server.log
+server-futures/gmtrade-builder/target/
 
 # Local runtime logs
 *.log
@@ -32,6 +33,7 @@ relaunch/
 deploy/migration/
 clash-migration-portal.zip
 lv_*.mp4
+tmp/
 nft/artifacts/COPRELAUNCH.json
 nft/contracts/COPRELAUNCH.sol
 nft/deployments/cop-relaunch-base-mainnet.json

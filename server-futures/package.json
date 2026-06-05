@@ -5,12 +5,14 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "test:gmtrade": "node test-gmtrade.js"
   },
   "type": "commonjs",
   "dependencies": {
     "@aptos-labs/ts-sdk": "^5.2.1",
     "@decibeltrade/sdk": "^0.6.0",
+    "@gmsol-labs/gmsol-sdk": "^0.9.0",
     "@hotstuff-labs/ts-sdk": "^0.1.1-beta.10",
     "@katanaperps/katana-perps-sdk": "^2.0.0",
     "@nadohq/client": "0.15.0",

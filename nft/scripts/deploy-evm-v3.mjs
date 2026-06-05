@@ -1,4 +1,4 @@
-// Production V3 deploy + UUPS upgrade for Base / Arbitrum / Monad.
+// Production V3 deploy + UUPS upgrade for Base / Arbitrum / Monad / Ink.
 //
 // Performs all three steps atomically:
 //   1. Deploys a fresh DemonKingBaseV3 implementation on the target chain.
@@ -12,6 +12,7 @@
 //   node scripts/deploy-evm-v3.mjs --chain=base
 //   node scripts/deploy-evm-v3.mjs --chain=arbitrum
 //   node scripts/deploy-evm-v3.mjs --chain=monad
+//   node scripts/deploy-evm-v3.mjs --chain=ink
 //
 // Pre-flight: run the fork test first to validate storage compat:
 //   npx hardhat test nodejs --network hardhatMainnet test/v3-fork.test.js
@@ -49,6 +50,13 @@ const monad = defineChain({
   rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
   blockExplorers: { default: { name: 'Monad Explorer', url: 'https://monadexplorer.com' } },
 });
+const ink = defineChain({
+  id: 57073,
+  name: 'Ink',
+  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+  blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
+});
 
 const TREASURY = '0xC024884ad9C5540996492Cc2DD080964941A3094';
 
@@ -80,6 +88,15 @@ const CHAINS = {
     eip712Name: 'DemonKingMonad',
     usdcDefault: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603',
   },
+  ink: {
+    chain: ink,
+    defaultRpc: 'https://rpc-gel.inkonchain.com',
+    envRpc: ['NFT_INK_RPC_URL', 'INK_RPC_URL', 'GAME_SHOP_INK_RPC_URL'],
+    v2DeployFile: 'ink-mainnet.json',
+    v3DeployFile: 'ink-v3-mainnet.json',
+    eip712Name: 'DemonKingInk',
+    usdcDefault: '0x2D270e6886d130D724215A266106e6832161EAEd',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -89,7 +106,7 @@ const cliArg = process.argv.slice(2).find((a) => a.startsWith('--chain=')) || ''
 const chainKey = (cliArg ? cliArg.split('=')[1] : process.env.CLASH_DEPLOY_CHAIN || '').toLowerCase();
 const spec = CHAINS[chainKey];
 if (!spec) {
-  console.error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad.`);
+  console.error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad|ink.`);
   process.exit(1);
 }
 
@@ -291,6 +308,7 @@ const FALLBACK_RPCS = {
   base: ['https://base.publicnode.com', 'https://base.drpc.org', rpcUrl],
   arbitrum: [rpcUrl, 'https://arbitrum-one.publicnode.com'],
   monad: [rpcUrl],
+  ink: [rpcUrl, 'https://rpc-gel.inkonchain.com'],
 };
 async function readWithFallback(functionName, args = []) {
   let lastErr;

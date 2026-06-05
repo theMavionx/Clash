@@ -5,18 +5,18 @@ function forceReload() {
   const current = new URL(window.location.href);
   current.searchParams.set('_reload', String(Date.now()));
   try {
-    window.location.reload();
-  } catch {
     window.location.replace(current.toString());
     return;
+  } catch {
+    // Fall through to the simplest browser navigation APIs below.
   }
-  window.setTimeout(() => {
-    try {
-      window.location.replace(current.toString());
-    } catch {
-      window.location.href = current.toString();
-    }
-  }, 250);
+  try {
+    window.location.href = current.toString();
+    return;
+  } catch {
+    // Last resort for constrained embedded browsers.
+  }
+  try { window.location.reload(); } catch {}
 }
 
 export default class ChunkErrorBoundary extends Component {
@@ -37,18 +37,28 @@ export default class ChunkErrorBoundary extends Component {
 
   render() {
     if (!this.state.error) return this.props.children;
+    const handleReload = (event) => {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      if (this.reloading) return;
+      this.reloading = true;
+      const target = event?.currentTarget || event?.target;
+      if (target) {
+        target.disabled = true;
+        target.textContent = 'Reloading...';
+      }
+      forceReload();
+    };
     return this.props.fallback || (
       <div style={styles.box}>
         <div style={styles.title}>Error loading game UI</div>
         <button
           type="button"
           style={styles.button}
-          onClick={(event) => {
-            event.preventDefault();
-            event.currentTarget.disabled = true;
-            event.currentTarget.textContent = 'Reloading...';
-            forceReload();
-          }}
+          onClick={handleReload}
+          onPointerDown={handleReload}
+          onMouseDown={handleReload}
+          onTouchStart={handleReload}
         >
           Reload
         </button>
@@ -61,7 +71,9 @@ const styles = {
   box: {
     position: 'fixed',
     inset: 0,
-    zIndex: 99999,
+    zIndex: 2147483647,
+    pointerEvents: 'auto',
+    isolation: 'isolate',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -83,5 +95,9 @@ const styles = {
     color: '#2e1c10',
     fontWeight: 900,
     cursor: 'pointer',
+    pointerEvents: 'auto',
+    touchAction: 'manipulation',
+    position: 'relative',
+    zIndex: 1,
   },
 };

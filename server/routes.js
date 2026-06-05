@@ -9,6 +9,7 @@ const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
 const hermesClient = require('./hermes_client');
 const hermesJobs = require('./hermes_jobs');
+const logAiAnalyzer = require('./log_ai_analyzer');
 const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
@@ -36,6 +37,17 @@ const BATTLE_DEBUG_TRACE = process.env.CLASH_BATTLE_DEBUG_TRACE !== '0';
 const AI_CHAT_DETAILED_LOGS = process.env.CLASH_AI_CHAT_DETAILED_LOGS !== '0';
 
 // ---------- Validation Helpers ----------
+function normalizePlayerNameInput(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function validatePlayerNameInput(value) {
+  const name = normalizePlayerNameInput(value);
+  if (name.length < 2) return { error: 'Nickname must be at least 2 characters' };
+  if (name.length > 30) return { error: 'Nickname must be at most 30 characters' };
+  return { name };
+}
+
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
 const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;              // Base/Ethereum 20-byte hex
 const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;          // Aptos account, padded or not
@@ -123,6 +135,7 @@ async function readNftLevelCached(chainKey, tokenId) {
         base: process.env.NFT_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org',
         arbitrum: process.env.NFT_ARBITRUM_RPC_URL || process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc',
         monad: process.env.NFT_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz',
+        ink: process.env.NFT_INK_RPC_URL || process.env.INK_RPC_URL || 'https://rpc-gel.inkonchain.com',
       };
       const rpcUrl = rpcMap[chainKey];
       const client = createPublicClient({ transport: http(rpcUrl) });
@@ -146,6 +159,7 @@ function invalidateNftLevelCache(chainKey, tokenId) {
 }
 const ZERO_EVM_ADDRESS = '0x0000000000000000000000000000000000000000';
 const BASE_USDC_TOKEN = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const INK_USDC_TOKEN = '0x2D270e6886d130D724215A266106e6832161EAEd';
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
 let clashUsdPriceCache = null;
 const nftQuoteRateBuckets = new Map();
@@ -371,6 +385,7 @@ const NFT_COLLECTION_CHAIN_LABELS = {
   base: 'Base',
   arbitrum: 'Arbitrum',
   monad: 'Monad',
+  ink: 'Ink',
   aptos: 'Aptos',
   solana: 'Solana',
 };
@@ -472,7 +487,7 @@ function attachCollectionRoyaltyMetadata(metadata, collection, chainKey) {
 }
 
 async function readCollectionNftLevelCached(collection, chainKey, tokenId) {
-  if (!['base', 'arbitrum', 'monad'].includes(chainKey)) return 1;
+  if (!['base', 'arbitrum', 'monad', 'ink'].includes(chainKey)) return 1;
   const key = `${collection.slug}:${chainKey}:${tokenId}`;
   const hit = _nftLevelCache.get(key);
   const now = Date.now();
@@ -488,6 +503,7 @@ async function readCollectionNftLevelCached(collection, chainKey, tokenId) {
         base: process.env[`NFT_${collection.envKey}_BASE_RPC_URL`] || process.env.NFT_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org',
         arbitrum: process.env[`NFT_${collection.envKey}_ARBITRUM_RPC_URL`] || process.env.NFT_ARBITRUM_RPC_URL || process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc',
         monad: process.env[`NFT_${collection.envKey}_MONAD_RPC_URL`] || process.env.NFT_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz',
+        ink: process.env[`NFT_${collection.envKey}_INK_RPC_URL`] || process.env.NFT_INK_RPC_URL || process.env.INK_RPC_URL || 'https://rpc-gel.inkonchain.com',
       };
       const client = createPublicClient({ transport: http(rpcMap[chainKey]) });
       const raw = await client.readContract({
@@ -533,7 +549,14 @@ async function readCollectionEvmMintedCount(collection, chainKey) {
       nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 },
       rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
     };
-    const chain = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad: monadChain }[chainKey];
+    const inkChain = {
+      id: 57073,
+      name: 'Ink',
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+      blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
+    };
+    const chain = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad: monadChain, ink: inkChain }[chainKey];
     const rpcUrl = process.env[`NFT_${collection.envKey}_${String(chainKey).toUpperCase()}_RPC_URL`]
       || GAME_SHOP_EVM_CHAINS[chainKey]?.rpcUrl?.()
       || 'https://mainnet.base.org';
@@ -595,18 +618,20 @@ async function readCollectionAptosMintedCount(collection) {
 }
 
 async function readCollectionGlobalSupply(collection) {
-  const [base, arbitrum, monad, aptos, solana] = await Promise.all([
+  const [base, arbitrum, monad, ink, aptos, solana] = await Promise.all([
     readCollectionEvmMintedCount(collection, 'base'),
     readCollectionEvmMintedCount(collection, 'arbitrum'),
     readCollectionEvmMintedCount(collection, 'monad'),
+    readCollectionEvmMintedCount(collection, 'ink'),
     readCollectionAptosMintedCount(collection),
     readCollectionSolanaMintedCount(collection),
   ]);
-  const raw = { base, arbitrum, monad, aptos, solana };
+  const raw = { base, arbitrum, monad, ink, aptos, solana };
   const perChain = {
     base: Number.isFinite(Number(base)) ? Number(base) : 0,
     arbitrum: Number.isFinite(Number(arbitrum)) ? Number(arbitrum) : 0,
     monad: Number.isFinite(Number(monad)) ? Number(monad) : 0,
+    ink: Number.isFinite(Number(ink)) ? Number(ink) : 0,
     aptos: Number.isFinite(Number(aptos)) ? Number(aptos) : 0,
     solana: Number.isFinite(Number(solana)) ? Number(solana) : 0,
   };
@@ -812,7 +837,7 @@ async function sendNftMetadata(req, res, chain, rawTokenId) {
   const id = Number(tokenId);
   if (id < 1 || id > NFT_METADATA_MAX_TOKEN_ID) return res.status(404).json({ error: 'token metadata not found' });
   // Map UI chain labels to internal keys for the level read.
-  const chainKeyByLabel = { Base: 'base', Arbitrum: 'arbitrum', Monad: 'monad' };
+  const chainKeyByLabel = { Base: 'base', Arbitrum: 'arbitrum', Monad: 'monad', Ink: 'ink' };
   const chainKey = chainKeyByLabel[chain] || null;
   let level = 1;
   if (chainKey) {
@@ -1240,6 +1265,19 @@ const NFT_EVM_CHAIN_SPECS = {
     usdcDefault: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603',
     usdcDecimals: 18,
   },
+  ink: {
+    chainId: 57073,
+    label: 'Ink',
+    rpc: () => process.env.NFT_INK_RPC_URL || process.env.INK_RPC_URL || process.env.GAME_SHOP_INK_RPC_URL || 'https://rpc-gel.inkonchain.com',
+    deploymentFile: 'ink-shop-v2-mainnet.json',
+    nftDeploymentFile: 'ink-v3-mainnet.json',
+    explorer: 'https://explorer.inkonchain.com',
+    domainName: 'DemonKingInkShop',
+    nativeSymbol: 'ETH',
+    nativeOracleAsset: 'eth',
+    usdcDefault: INK_USDC_TOKEN,
+    usdcDecimals: 6,
+  },
 };
 
 function evmNftChainConfig(chainKey) {
@@ -1323,7 +1361,7 @@ async function verifyDemonKingNftUpgradeProof(player, proof, nextLevel) {
   const cfg = evmNftChainConfig(chainKey);
   const spec = NFT_EVM_CHAIN_SPECS[chainKey];
   if (!cfg || !spec || !cfg.nft) {
-    return { error: 'Demon King NFT upgrades are available on Base, Arbitrum, and Monad only.', status: 400 };
+    return { error: 'Demon King NFT upgrades are available on configured EVM, Aptos, and Solana chains only.', status: 400 };
   }
   const tokenIdRaw = proof?.tokenId ?? proof?.token_id;
   if (tokenIdRaw === undefined || tokenIdRaw === null || tokenIdRaw === '') {
@@ -1623,6 +1661,19 @@ const GAME_SHOP_EVM_CHAINS = {
     payments: {
       usdc: { kind: 'erc20', token: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603', decimals: 18, label: 'USDC', stable: true }, // non-standard 18 dec on Monad
       mon:  { kind: 'native', decimals: 18, label: 'MON', oracleAsset: 'mon' },
+    },
+  },
+  ink: {
+    chainId: 57073,
+    label: 'Ink',
+    rpcUrl: () => process.env.GAME_SHOP_INK_RPC_URL || process.env.INK_RPC_URL || process.env.NFT_INK_RPC_URL || 'https://rpc-gel.inkonchain.com',
+    treasuryEnv: 'GAME_SHOP_INK_TREASURY',
+    explorer: 'https://explorer.inkonchain.com',
+    nativeSymbol: 'ETH',
+    nativeDecimals: 18,
+    payments: {
+      usdc: { kind: 'erc20', token: INK_USDC_TOKEN, decimals: 6, label: 'USDC', stable: true },
+      eth:  { kind: 'native', decimals: 18, label: 'ETH', oracleAsset: 'eth' },
     },
   },
 };
@@ -2421,7 +2472,7 @@ function fallbackNftSupply(source = 'fallback') {
 // Set via env so we can lift it later without a code change.
 const NFT_GLOBAL_SUPPLY_CAP = Number(process.env.NFT_GLOBAL_SUPPLY_CAP || NFT_DEFAULT_GLOBAL_SUPPLY_CAP);
 const NFT_SUPPLY_CACHE_SETTING_KEY = 'nft.global_supply_snapshot.v1';
-const NFT_SUPPLY_CHAINS = ['base', 'solana', 'arbitrum', 'monad', 'aptos'];
+const NFT_SUPPLY_CHAINS = ['base', 'solana', 'arbitrum', 'monad', 'ink', 'aptos'];
 const NFT_SUPPLY_CACHE_TTL_MS = Math.max(1000, Number(process.env.NFT_SUPPLY_CACHE_TTL_MS || 10_000));
 const NFT_SUPPLY_REFRESH_INTERVAL_MS = Math.max(60_000, Number(process.env.NFT_SUPPLY_REFRESH_INTERVAL_MS || 5 * 60_000));
 
@@ -2768,7 +2819,8 @@ async function readEvmGenericNftMintedCount(chainKey) {
     const { createPublicClient, http } = await import('viem');
     const viemChains = await import('viem/chains');
     const monadChain = { id: 143, name: 'Monad', nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } } };
-    const chain = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad: monadChain }[chainKey];
+    const inkChain = { id: 57073, name: 'Ink', nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } } };
+    const chain = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad: monadChain, ink: inkChain }[chainKey];
     const rpcUrl = GAME_SHOP_EVM_CHAINS[chainKey]?.rpcUrl?.()
       || `https://${chainKey}.gateway.tenderly.co`; // last-ditch fallback
     const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
@@ -2833,12 +2885,14 @@ function nftBaselinePerChain() {
   const baseV3 = dep('base-v3-mainnet.json');
   const arbV3  = dep('arbitrum-v3-mainnet.json');
   const monV3  = dep('monad-v3-mainnet.json');
+  const inkV3  = dep('ink-v3-mainnet.json');
   const sol    = dep('solana-mainnet.json');
   const apt    = dep('aptos-mainnet.json');
   return {
     base:     numOr0(baseV3.totalMintedAtUpgrade),
     arbitrum: numOr0(arbV3.totalMintedAtUpgrade),
     monad:    numOr0(monV3.totalMintedAtUpgrade),
+    ink:      numOr0(inkV3.totalMintedAtUpgrade),
     solana:   numOr0(sol.totalMinted),
     aptos:    numOr0(apt.totalMinted),
   };
@@ -2855,14 +2909,15 @@ async function readGlobalNftSupply(options = {}) {
   const persisted = readPersistedNftSupplySnapshot();
   const baseConfig = baseNftConfig();
   const solanaDeployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json')) || {};
-  const [base, solana, arbitrum, monad, aptos] = await Promise.all([
+  const [base, solana, arbitrum, monad, ink, aptos] = await Promise.all([
     readBaseNftMintedCount(baseConfig),
     readSolanaNftMintedCount(solanaDeployment),
     readEvmGenericNftMintedCount('arbitrum'),
     readEvmGenericNftMintedCount('monad'),
+    readEvmGenericNftMintedCount('ink'),
     readAptosNftMintedCount(),
   ]);
-  const perChainRaw = { base, solana, arbitrum, monad, aptos };
+  const perChainRaw = { base, solana, arbitrum, monad, ink, aptos };
 
   // Fallback ladder for each chain:
   //   1) live RPC reading (preferred)
@@ -3275,7 +3330,7 @@ router.post('/nft/evm/quote', async (req, res) => {
 
     const chainKey = String(req.body?.chain || '').toLowerCase();
     const evmConfig = GAME_SHOP_EVM_CHAINS[chainKey];
-    if (!evmConfig) return res.status(400).json({ error: 'Unsupported chain. Use arbitrum or monad.' });
+    if (!evmConfig) return res.status(400).json({ error: 'Unsupported EVM NFT chain.' });
 
     const shopDeployment = evmNftShopDeployment(chainKey);
     if (!shopDeployment?.shop) {
@@ -3403,7 +3458,7 @@ router.get('/nft/:collectionSlug/mint/config', async (req, res) => {
     if (!collection) return res.status(404).json({ error: 'collection not found' });
     const supply = await readCollectionGlobalSupply(collection).catch(() => null);
     const evm = {};
-    for (const chainKey of ['base', 'arbitrum', 'monad']) {
+    for (const chainKey of ['base', 'arbitrum', 'monad', 'ink']) {
       const dep = nftCollectionDeployment(collection.slug, chainKey);
       const shop = nftCollectionShopDeployment(collection, chainKey);
       evm[chainKey] = {
@@ -3905,6 +3960,8 @@ router.get('/nft/arbitrum/:tokenId', async (req, res) => { await sendNftMetadata
 router.get('/nft/arbitrum/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Arbitrum', req.params.tokenId); });
 router.get('/nft/monad/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Monad', req.params.tokenId); });
 router.get('/nft/monad/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Monad', req.params.tokenId); });
+router.get('/nft/ink/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Ink', req.params.tokenId); });
+router.get('/nft/ink/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Ink', req.params.tokenId); });
 router.get('/nft/aptos/collection', sendAptosCollectionMetadata);
 router.get('/nft/aptos/collection.json', sendAptosCollectionMetadata);
 router.get('/nft/aptos/:tokenId', async (req, res) => { await sendAptosNftMetadata(req, res, req.params.tokenId); });
@@ -3975,6 +4032,7 @@ router.get('/shop/config', async (req, res) => {
   const baseEvm = gameShopEvmConfig('base');
   const arbitrum = gameShopEvmConfig('arbitrum');
   const monad = gameShopEvmConfig('monad');
+  const ink = gameShopEvmConfig('ink');
   const aptos = gameShopAptosConfig();
   const copDiscountBps = Math.max(0, Math.min(9000, Number(process.env.GAME_SHOP_COP_DISCOUNT_BPS || 2000)));
   const basePayments = baseEvm?.payments || [];
@@ -4031,6 +4089,18 @@ router.get('/shop/config', async (req, res) => {
       payments: monad.payments,
       saleActive: monad.saleActive,
       ready: monad.ready,
+    },
+    ink: {
+      chain: ink.chain,
+      chainId: ink.chainId,
+      treasury: ink.treasury,
+      usdcMint: ink.usdcMint,
+      usdcDecimals: ink.usdcDecimals,
+      nativeSymbol: ink.nativeSymbol,
+      nativeDecimals: ink.nativeDecimals,
+      payments: ink.payments,
+      saleActive: ink.saleActive,
+      ready: ink.ready,
     },
     aptos: {
       chain: aptos.chain,
@@ -5374,7 +5444,7 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
 
     const chainKey = String(req.body?.chain || '').toLowerCase();
     const config = gameShopEvmConfig(chainKey);
-    if (!config) return res.status(400).json({ error: 'Unsupported chain. Use base, arbitrum or monad.' });
+    if (!config) return res.status(400).json({ error: 'Unsupported EVM shop chain.' });
     if (!config.ready) return res.status(503).json({ error: `${config.label} shop treasury is not configured` });
     if (!config.saleActive && process.env.GAME_SHOP_REQUIRE_ACTIVE_QUOTE === '1') {
       return res.status(423).json({ error: `${config.label} shop sale is not active` });
@@ -6314,13 +6384,13 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
 // DEXes whose trade history is indexed by the futures rewards worker into
 // the trade_history table (server-futures/futures.db). GMX joined Phase 3
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -6340,7 +6410,7 @@ const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'pho
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
   if (!VALID_DEXES.has(dex)) {
-    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex", "nado", "hibachi", "hotstuff", "grvt" or "katana"' });
+    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex", "nado", "hibachi", "hotstuff", "grvt", "katana" or "gmtrade"' });
   }
   if (dex !== req.player.dex) {
     logAuth('set-dex no-op (DEX is now per-account; client should switch via login-wallet)', {
@@ -6416,20 +6486,15 @@ router.post('/players/register', (req, res) => {
 
     if (existing) {
       // Optional rename on re-login (same as before, scoped to this row).
-      const trimmed = typeof name === 'string' ? name.trim() : '';
+      const trimmed = normalizePlayerNameInput(name);
       const looksAutoDerived = /^player_[0-9a-f]{4,}$/i.test(trimmed);
       if (trimmed.length >= 2 && !looksAutoDerived && trimmed !== existing.name) {
-        let finalName = trimmed;
-        for (let suffix = 0; suffix <= 99; suffix++) {
-          const tryName = suffix === 0 ? finalName : finalName + suffix;
-          const clash = db.db.prepare('SELECT id FROM players WHERE name = ? AND id != ?').get(tryName, existing.id);
-          if (!clash) {
-            db.db.prepare('UPDATE players SET name = ? WHERE id = ?').run(tryName, existing.id);
-            existing.name = tryName;
-            finalName = tryName;
-            break;
-          }
-        }
+        const validation = validatePlayerNameInput(trimmed);
+        if (validation.error) return res.status(400).json({ error: validation.error });
+        const clash = db.db.prepare('SELECT id FROM players WHERE lower(name) = lower(?) AND id != ? LIMIT 1').get(validation.name, existing.id);
+        if (clash) return res.status(409).json({ error: 'Nickname is already taken' });
+        db.db.prepare('UPDATE players SET name = ? WHERE id = ?').run(validation.name, existing.id);
+        existing.name = validation.name;
       }
       // No more dex-switching on the existing row — DEX is now part of
       // identity. If the caller wanted a different DEX they fall through
@@ -6443,32 +6508,23 @@ router.post('/players/register', (req, res) => {
   }
 
   // ── New-row branch ──────────────────────────────────────────────────
-  const trimmed = name.trim();
-  if (trimmed.length < 2) {
-    return res.status(400).json({ error: 'Name must be at least 2 characters' });
+  const validation = validatePlayerNameInput(name);
+  if (validation.error) {
+    return res.status(400).json({ error: validation.error });
   }
-  if (trimmed.length > 30) {
-    return res.status(400).json({ error: 'Name must be at most 30 characters' });
+  const trimmed = validation.name;
+  const taken = db.db.prepare('SELECT id FROM players WHERE lower(name) = lower(?) LIMIT 1').get(trimmed);
+  if (taken) {
+    return res.status(409).json({ error: 'Nickname is already taken' });
   }
-  // Try the requested name; if taken, append 1, 2, 3… until unique. This
-  // is what gives a user a fresh nick when they create a second-DEX
-  // account on the same wallet (e.g. "Player1" on Avantis, "Player11" on
-  // GMX) — same suffix mechanism that handled inter-user name clashes.
-  let finalName = trimmed;
   let result = null;
-  for (let suffix = 0; suffix <= 99; suffix++) {
-    const tryName = suffix === 0 ? finalName : finalName + suffix;
-    try {
-      result = db.registerPlayer(tryName);
-      finalName = tryName;
-      break;
-    } catch (e) {
-      if (e.message.includes('UNIQUE') && suffix < 99) continue;
-      throw e;
+  try {
+    result = db.registerPlayer(trimmed);
+  } catch (e) {
+    if (String(e?.message || '').includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Nickname is already taken' });
     }
-  }
-  if (!result) {
-    return res.status(409).json({ error: 'Name collision — try a different name' });
+    throw e;
   }
   // New rows start as dex='pacifica'. If this wallet already has a Pacifica
   // account and the user creates Phoenix, wallet-first updates would collide
@@ -6482,8 +6538,29 @@ router.post('/players/register', (req, res) => {
     db.stmts.markPlayerSeeker.run(seekerCapability.seeker_id, seekerCapability.seeker_source, result.id);
   }
   const state = db.getFullPlayerState(result.id);
-  logAuth('Player registered', { name: finalName, wallet: wallet || null, dex: requestedDex });
+  logAuth('Player registered', { name: trimmed, wallet: wallet || null, dex: requestedDex });
   res.json({ ...state, token: result.token });
+});
+
+router.patch('/players/name', auth, (req, res) => {
+  const validation = validatePlayerNameInput(req.body?.name);
+  if (validation.error) return res.status(400).json({ error: validation.error });
+  const nextName = validation.name;
+  if (nextName === req.player.name) {
+    return res.json({ ok: true, name: req.player.name });
+  }
+  const clash = db.db.prepare('SELECT id FROM players WHERE lower(name) = lower(?) AND id != ? LIMIT 1').get(nextName, req.player.id);
+  if (clash) return res.status(409).json({ error: 'Nickname is already taken' });
+  try {
+    db.db.prepare('UPDATE players SET name = ? WHERE id = ?').run(nextName, req.player.id);
+  } catch (e) {
+    if (String(e?.message || '').includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Nickname is already taken' });
+    }
+    throw e;
+  }
+  logAuth('Player renamed', { player_id: req.player.id, from: req.player.name, to: nextName });
+  res.json({ ok: true, name: nextName });
 });
 
 router.post('/players/device-capability', auth, (req, res) => {
@@ -10195,7 +10272,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade') {
     if (dex === 'grvt') {
       await importGrvtFillsForClaim(req.player.id);
     } else if (dex === 'hotstuff') {
@@ -10244,6 +10321,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
             ? "AND verified_source = 'grvt_builder'"
           : dex === 'katana'
             ? "AND verified_source = 'katana_api'"
+          : dex === 'gmtrade'
+            ? "AND verified_source = 'gmtrade_tx'"
           : dex === 'phoenix'
             ? "AND verified_source IN ('worker', 'tx')"
         : "AND verified_source = 'worker'";
@@ -10391,7 +10470,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // a sensible micro-trade floor across all four DEXes.
     const SANE_MIN_NOTIONAL = dex === 'gmx'
       ? 0
-      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') ? 10 : 50;
+      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -10787,7 +10866,7 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade') {
     const fdb = futuresDbReadonly();
     if (fdb) {
       try {
@@ -10809,6 +10888,8 @@ router.get('/trading/stats', auth, async (req, res) => {
                 ? "AND verified_source = 'grvt_builder'"
               : dex === 'katana'
                 ? "AND verified_source = 'katana_api'"
+              : dex === 'gmtrade'
+                ? "AND verified_source = 'gmtrade_tx'"
               : dex === 'phoenix'
                 ? "AND verified_source IN ('worker', 'tx')"
             : "AND verified_source = 'worker'";
@@ -10853,7 +10934,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
 
 async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
@@ -11948,7 +12029,7 @@ router.get('/admin/nft-supply', adminAuth, async (req, res) => {
 router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
   try {
     const supply = await readGlobalNftSupply({ force: true });
-    const chainOrder = ['base', 'arbitrum', 'monad', 'aptos', 'solana'];
+    const chainOrder = ['base', 'arbitrum', 'monad', 'ink', 'aptos', 'solana'];
     const perChainSupply = chainOrder.map((chain) => ({
       chain,
       count: Number(supply.perChain?.[chain]) || 0,
@@ -12204,7 +12285,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
   let futuresTrades = [];
   try {
     const fdb = futuresDbReadonly();
-    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado' || player.dex === 'hibachi' || player.dex === 'hotstuff' || player.dex === 'grvt' || player.dex === 'katana')) {
+    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado' || player.dex === 'hibachi' || player.dex === 'hotstuff' || player.dex === 'grvt' || player.dex === 'katana' || player.dex === 'gmtrade')) {
       futuresTrades = fdb.prepare(
         `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
          FROM trade_history WHERE player_id = ? AND dex = ?
@@ -12595,6 +12676,44 @@ router.get('/admin/client-logs', adminAuth, (req, res) => {
   res.json({ rows, total: rows.length, retention_days: CLIENT_LOG_RETENTION_DAYS });
 });
 
+router.get('/admin/ai-log-reports', adminAuth, (req, res) => {
+  try {
+    res.json({
+      model: logAiAnalyzer.getModel(),
+      reports: logAiAnalyzer.listReports(req.query.limit || 20),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/admin/ai-log-reports/:id', adminAuth, (req, res) => {
+  try {
+    const report = logAiAnalyzer.getReport(req.params.id);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    res.json({ report });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/admin/ai-log-reports/run', adminAuth, async (req, res) => {
+  try {
+    const lookbackHours = Math.max(1, Math.min(168, Number(req.body?.lookback_hours || 24) || 24));
+    const report = await logAiAnalyzer.runLogAiAnalysis({
+      lookbackHours,
+      model: typeof req.body?.model === 'string' && req.body.model.trim() ? req.body.model.trim() : undefined,
+      limit: req.body?.limit,
+    });
+    res.json({ ok: true, report });
+  } catch (e) {
+    res.status(e.status || 500).json({
+      error: e.message,
+      report: e.report || null,
+    });
+  }
+});
+
 router.get('/admin/feedback', adminAuth, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
   const rawSinceMin = parseInt(req.query.since_min, 10);
@@ -12853,7 +12972,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   const futuresByPlayer = new Map();
@@ -12877,6 +12996,8 @@ router.get('/admin/stats', adminAuth, (req, res) => {
             ? "verified_source = 'grvt_builder'"
           : dex === 'katana'
             ? "verified_source = 'katana_api'"
+          : dex === 'gmtrade'
+            ? "verified_source = 'gmtrade_tx'"
           : dex === 'decibel'
           ? "verified_source = 'decibel_fill'"
         : dex === 'phoenix'
@@ -13570,7 +13691,7 @@ function parseBool(v) {
 const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
 const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
-const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana'];
+const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade'];
 const TOURNAMENT_DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -13585,6 +13706,7 @@ const TOURNAMENT_DEX_LABELS = {
   hotstuff: 'Hotstuff',
   grvt: 'GRVT',
   katana: 'Katana Perps',
+  gmtrade: 'GMTrade',
 };
 const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
 const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
@@ -13743,6 +13865,71 @@ function normalizeTournamentDailyPoolPoints(v, fallback = 1000) {
   const n = v === undefined || v === null || v === '' ? Number(fallback) : Number(v);
   if (!Number.isFinite(n) || n <= 0) return 1000;
   return Math.max(1, Math.min(1_000_000, Number(n.toFixed(4))));
+}
+
+function normalizeTournamentDailyPoolGrowthPct(v, fallback = 0) {
+  const n = v === undefined || v === null || v === '' ? Number(fallback) : Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-99, Math.min(500, Number(n.toFixed(4))));
+}
+
+function normalizeTournamentDailyPoolOverrides(input) {
+  let raw = input;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) raw = {};
+    else {
+      try { raw = JSON.parse(trimmed); }
+      catch { throw new Error('daily_pool_overrides must be JSON object keyed by YYYY-MM-DD'); }
+    }
+  }
+  if (raw === undefined || raw === null || raw === '') return {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('daily_pool_overrides must be an object keyed by YYYY-MM-DD');
+  }
+  const out = {};
+  for (const [day, points] of Object.entries(raw)) {
+    const key = String(day || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+      throw new Error('daily_pool_overrides keys must be YYYY-MM-DD');
+    }
+    if (points === undefined || points === null || points === '') continue;
+    const numeric = Number(points);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      throw new Error('daily_pool_overrides values must be positive point amounts');
+    }
+    out[key] = normalizeTournamentDailyPoolPoints(numeric, 1000);
+  }
+  return out;
+}
+
+function tournamentDailyPoolFirstDay(t) {
+  const startMs = Date.parse(`${cleanSqlDate(t?.start_at)?.slice(0, 10) || ''}T00:00:00Z`);
+  const enabledMs = Date.parse(`${cleanSqlDate(t?.daily_pool_enabled_at)?.slice(0, 10) || ''}T00:00:00Z`);
+  const ms = Math.max(Number.isFinite(startMs) ? startMs : 0, Number.isFinite(enabledMs) ? enabledMs : 0);
+  return new Date(ms || Date.now()).toISOString().slice(0, 10);
+}
+
+function tournamentDailyPoolDayIndex(t, dayInput) {
+  const firstMs = Date.parse(`${tournamentDailyPoolFirstDay(t)}T00:00:00Z`);
+  const dayMs = Date.parse(`${String(dayInput || '').slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(firstMs) || !Number.isFinite(dayMs) || dayMs <= firstMs) return 0;
+  return Math.max(0, Math.floor((dayMs - firstMs) / (24 * 60 * 60 * 1000)));
+}
+
+function tournamentDailyPoolPointsForDay(t, dayInput) {
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dayInput || '')) ? String(dayInput) : tournamentUtcDayString();
+  const base = normalizeTournamentDailyPoolPoints(t?.daily_pool_points, 1000);
+  const growthPct = normalizeTournamentDailyPoolGrowthPct(t?.daily_pool_growth_pct, 0);
+  let overrides = {};
+  try { overrides = normalizeTournamentDailyPoolOverrides(t?.daily_pool_overrides); }
+  catch { overrides = {}; }
+  const dayIndex = tournamentDailyPoolDayIndex(t, day);
+  if (overrides[day] !== undefined) {
+    return { points: overrides[day], base, growth_pct: growthPct, day_index: dayIndex, override: true };
+  }
+  const points = normalizeTournamentDailyPoolPoints(base * Math.pow(1 + growthPct / 100, dayIndex), base);
+  return { points, base, growth_pct: growthPct, day_index: dayIndex, override: false };
 }
 
 function normalizeTournamentShieldHours(v, fallback = null) {
@@ -14039,6 +14226,27 @@ function sanitizePrizeNumber(v, fallback = 0) {
   return Math.max(0, Math.min(1_000_000_000, Number(n.toFixed(2))));
 }
 
+function sanitizePrizeText(v, fallback = '') {
+  const s = String(v ?? '').trim();
+  return (s || fallback).replace(/[<>]/g, '').slice(0, 80);
+}
+
+function sanitizePrizeType(v) {
+  const s = String(v || '').trim().toLowerCase();
+  if (['money', 'points', 'amp', 'nft', 'custom'].includes(s)) return s;
+  return 'custom';
+}
+
+function defaultPrizeRewardLabel(type, label = '') {
+  const clean = sanitizePrizeText(label);
+  if (clean) return clean;
+  if (type === 'money') return 'Cash';
+  if (type === 'points') return 'Points';
+  if (type === 'amp') return 'AMP';
+  if (type === 'nft') return 'NFT';
+  return 'Custom reward';
+}
+
 function normalizeRewardEvmWallet(v) {
   const s = String(v || '').trim();
   if (!s) return null;
@@ -14072,6 +14280,66 @@ function normalizePrizePayouts(input) {
   return Array.from(byRank.values()).sort((a, b) => a.rank - b.rank);
 }
 
+function normalizePrizeRewardPayouts(input) {
+  const arr = Array.isArray(input)
+    ? input
+    : (input && typeof input === 'object'
+      ? Object.entries(input).map(([rank, amount]) => ({ rank, amount }))
+      : []);
+  const byRank = new Map();
+  for (const raw of arr) {
+    const rank = Math.floor(Number(raw?.rank ?? raw?.place ?? raw?.position));
+    const amount = sanitizePrizeNumber(raw?.amount ?? raw?.quantity ?? raw?.points ?? raw?.amount_usd ?? raw?.prize);
+    if (!Number.isFinite(rank) || rank <= 0 || rank > 100 || amount <= 0) continue;
+    byRank.set(rank, { rank, amount });
+  }
+  return Array.from(byRank.values()).sort((a, b) => a.rank - b.rank);
+}
+
+function normalizePrizeRewards(input, legacyTier = null, { strict = false } = {}) {
+  const arr = Array.isArray(input) ? input : [];
+  const rewards = [];
+  const legacyPayouts = legacyTier ? normalizePrizePayouts(legacyTier.payouts ?? legacyTier.prizes ?? legacyTier.rewards) : [];
+  const legacyPool = legacyTier ? sanitizePrizeNumber(legacyTier.pool_usd ?? legacyTier.prize_pool_usd ?? legacyTier.pool ?? legacyTier.amount_usd, 0) : 0;
+  if (!arr.length && (legacyPool > 0 || legacyPayouts.length > 0)) {
+    rewards.push({
+      type: 'money',
+      label: 'Cash',
+      currency: sanitizePrizeCurrency(legacyTier?.currency || legacyTier?.prize_currency),
+      unit: sanitizePrizeCurrency(legacyTier?.currency || legacyTier?.prize_currency),
+      pool_amount: legacyPool || Number(legacyPayouts.reduce((s, p) => s + Number(p.amount_usd || 0), 0).toFixed(2)),
+      quantity: legacyPool || Number(legacyPayouts.reduce((s, p) => s + Number(p.amount_usd || 0), 0).toFixed(2)),
+      payouts: legacyPayouts.map((p) => ({ rank: p.rank, amount: p.amount_usd })),
+    });
+  }
+  for (const raw of arr) {
+    const type = sanitizePrizeType(raw?.type || raw?.kind);
+    const label = defaultPrizeRewardLabel(type, raw?.label || raw?.name || raw?.title);
+    const currency = type === 'money' ? sanitizePrizeCurrency(raw?.currency) : null;
+    const unit = type === 'money'
+      ? currency
+      : sanitizePrizeText(raw?.unit || raw?.currency || (type === 'points' ? 'points' : type === 'amp' ? 'AMP' : type === 'nft' ? 'NFT' : 'reward'), 'reward');
+    const payouts = normalizePrizeRewardPayouts(raw?.payouts ?? raw?.rewards ?? raw?.tiers);
+    const payoutSum = Number(payouts.reduce((s, p) => s + Number(p.amount || 0), 0).toFixed(2));
+    const poolAmount = sanitizePrizeNumber(raw?.pool_amount ?? raw?.pool ?? raw?.amount ?? raw?.quantity ?? raw?.total, payoutSum);
+    if (strict && poolAmount > 0 && payoutSum > poolAmount + 0.01) {
+      throw new Error(`prize reward "${label}" payouts exceed pool`);
+    }
+    if (poolAmount <= 0 && payouts.length === 0) continue;
+    rewards.push({
+      type,
+      label,
+      currency,
+      unit,
+      pool_amount: poolAmount,
+      quantity: poolAmount,
+      payouts,
+      payout_sum: payoutSum,
+    });
+  }
+  return rewards;
+}
+
 function normalizeTournamentPrizeTiers(input, { strict = false } = {}) {
   let raw = input;
   if (typeof raw === 'string') {
@@ -14084,21 +14352,51 @@ function normalizeTournamentPrizeTiers(input, { strict = false } = {}) {
     const volume = sanitizePrizeNumber(
       tier.volume_usd ?? tier.total_volume_usd ?? tier.threshold_usd ?? tier.threshold ?? tier.volume,
     );
-    const payouts = normalizePrizePayouts(tier.payouts ?? tier.prizes ?? tier.rewards);
+    const rewardsInput = Array.isArray(tier.rewards) && tier.rewards.some((r) =>
+      r && typeof r === 'object' && (r.type || r.kind || r.pool_amount !== undefined || r.label || r.name)
+    ) ? tier.rewards : [];
+    const rewards = normalizePrizeRewards(rewardsInput, tier, { strict });
+    const moneyReward = rewards.find((r) => r.type === 'money') || null;
+    const payouts = moneyReward
+      ? moneyReward.payouts.map((p) => ({ rank: p.rank, amount_usd: p.amount }))
+      : normalizePrizePayouts(tier.payouts ?? tier.prizes ?? tier.rewards);
     const payoutSum = Number(payouts.reduce((s, p) => s + Number(p.amount_usd || 0), 0).toFixed(2));
-    const pool = sanitizePrizeNumber(tier.pool_usd ?? tier.prize_pool_usd ?? tier.pool ?? tier.amount_usd, payoutSum);
+    const pool = moneyReward
+      ? sanitizePrizeNumber(moneyReward.pool_amount, payoutSum)
+      : sanitizePrizeNumber(tier.pool_usd ?? tier.prize_pool_usd ?? tier.pool ?? tier.amount_usd, payoutSum);
     if (strict && payoutSum > pool + 0.01) {
       throw new Error(`prize tier #${i + 1} payouts exceed pool`);
     }
-    if (pool <= 0 && payouts.length === 0 && volume <= 0) continue;
+    if (pool <= 0 && payouts.length === 0 && rewards.length === 0 && volume <= 0) continue;
     tiers.push({
       volume_usd: volume,
       pool_usd: pool,
       payouts,
       payout_sum_usd: payoutSum,
+      rewards,
     });
   }
   return tiers.sort((a, b) => a.volume_usd - b.volume_usd);
+}
+
+function tournamentPrizeRewardsByRank(activeTier) {
+  const byRank = new Map();
+  for (const reward of activeTier?.rewards || []) {
+    for (const payout of reward.payouts || []) {
+      const rank = Number(payout.rank);
+      if (!Number.isFinite(rank) || rank <= 0) continue;
+      const list = byRank.get(rank) || [];
+      list.push({
+        type: reward.type,
+        label: reward.label,
+        unit: reward.unit,
+        currency: reward.currency,
+        amount: Number(payout.amount || 0),
+      });
+      byRank.set(rank, list);
+    }
+  }
+  return byRank;
 }
 
 function tournamentTotalVolumeUsd(tournamentId) {
@@ -14134,6 +14432,8 @@ function tournamentPrizeState(t, totalVolumeUsd = null) {
     next_tier: nextTier,
     pool_usd: activeTier?.pool_usd || 0,
     payouts: activeTier?.payouts || [],
+    rewards: activeTier?.rewards || [],
+    rewards_by_rank: Array.from(tournamentPrizeRewardsByRank(activeTier).entries()).map(([rank, rewards]) => ({ rank, rewards })),
   };
 }
 
@@ -14201,6 +14501,9 @@ function tournamentRowToPublic(t, options = {}) {
   const teamMemberRewardBy = normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd');
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(t.attack_match_policy, 'all');
   const scoringMode = normalizeTournamentScoringMode(t.scoring_mode, 'live');
+  let dailyPoolOverrides = {};
+  try { dailyPoolOverrides = normalizeTournamentDailyPoolOverrides(t.daily_pool_overrides); }
+  catch { dailyPoolOverrides = {}; }
   return {
     id: t.id,
     name: t.name,
@@ -14224,6 +14527,8 @@ function tournamentRowToPublic(t, options = {}) {
     scoring_mode: scoringMode,
     scoring_label: scoringMode === 'daily_pool' ? 'Daily points at 00:00 UTC' : 'Live scoring',
     daily_pool_points: normalizeTournamentDailyPoolPoints(t.daily_pool_points, 1000),
+    daily_pool_growth_pct: normalizeTournamentDailyPoolGrowthPct(t.daily_pool_growth_pct, 0),
+    daily_pool_overrides: dailyPoolOverrides,
     daily_pool_enabled_at: cleanSqlDate(t.daily_pool_enabled_at),
     start_at: cleanSqlDate(t.start_at),
     end_at: cleanSqlDate(t.end_at),
@@ -14246,6 +14551,8 @@ function tournamentRowToPublic(t, options = {}) {
     prize_active_tier: prize.active_tier,
     prize_next_tier: prize.next_tier,
     prize_payouts: prize.payouts,
+    prize_rewards: prize.rewards,
+    prize_rewards_by_rank: prize.rewards_by_rank,
     rewards_in_cop: !!Number(t.rewards_in_cop || 0),
     status: t.status,
     phase,
@@ -14267,6 +14574,7 @@ function tournamentTradeSourceWhere(dex) {
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
   if (dex === 'grvt') return "verified_source = 'grvt_builder'";
   if (dex === 'katana') return "verified_source = 'katana_api'";
+  if (dex === 'gmtrade') return "verified_source = 'gmtrade_tx'";
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'server')";
   return "verified_source = 'worker'";
@@ -14589,8 +14897,9 @@ function readTournamentDailyRunDetails(row) {
   catch { return {}; }
 }
 
-function buildTournamentDailyEstimate(activityRows, t) {
-  const pool = normalizeTournamentDailyPoolPoints(t?.daily_pool_points, 1000);
+function buildTournamentDailyEstimate(activityRows, t, dayUtc = tournamentUtcDayString()) {
+  const poolState = tournamentDailyPoolPointsForDay(t, dayUtc);
+  const pool = poolState.points;
   const weights = tournamentPointWeights(t);
   const categories = [
     { key: 'trophies', column: 'trophies', weight: weights.trophies },
@@ -14603,7 +14912,7 @@ function buildTournamentDailyEstimate(activityRows, t) {
     estimated_volume_points: 0,
     estimated_pnl_points: 0,
   }]));
-  const details = { pool, weights, categories: {} };
+  const details = { pool, pool_state: poolState, weights, categories: {} };
   let totalPoints = 0;
 
   for (const cat of categories) {
@@ -14773,7 +15082,7 @@ function buildTournamentDailyPointRows(t, options = {}) {
       });
     }
 
-    const estimate = buildTournamentDailyEstimate(Array.from(byPlayer.values()), t);
+    const estimate = buildTournamentDailyEstimate(Array.from(byPlayer.values()), t, day);
     const players = Array.from(byPlayer.values()).map((row) => {
       const estimated = estimate.byPlayer.get(row.player_id) || {};
       return {
@@ -14934,6 +15243,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       .slice(0, limit);
   }
   const prizeByRank = new Map((prize.payouts || []).map(p => [Number(p.rank), Number(p.amount_usd || 0)]));
+  const prizeRewardsByRank = new Map((prize.rewards_by_rank || []).map(p => [Number(p.rank), Array.isArray(p.rewards) ? p.rewards : []]));
   res.json({
     tournament: tournamentRowToPublic(t, { totalVolumeUsd }),
     sort_by: sortBy,
@@ -14965,6 +15275,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       pnl_score: r.pnl_score ?? null,
       prize_amount: mode === 'dex_vs_dex' ? (r.prize_amount || 0) : (prizeByRank.get(i + 1) || 0),
       prize_currency: prize.currency,
+      prize_rewards: mode === 'dex_vs_dex' ? [] : (prizeRewardsByRank.get(i + 1) || []),
       ...(includeRewardWallets ? { reward_wallet_evm: r.reward_wallet_evm || null } : {}),
     })),
   });
@@ -15002,7 +15313,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     name, description, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
-    scoring_mode, daily_pool_points,
+    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
     prize_currency, prize_tiers, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
@@ -15015,6 +15326,14 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy, 'all');
   const scoringMode = normalizeTournamentScoringMode(scoring_mode, 'live');
   const dailyPoolPoints = normalizeTournamentDailyPoolPoints(daily_pool_points, 1000);
+  let dailyPoolOverrides;
+  let dailyPoolGrowthPct;
+  try {
+    dailyPoolGrowthPct = normalizeTournamentDailyPoolGrowthPct(daily_pool_growth_pct, 0);
+    dailyPoolOverrides = normalizeTournamentDailyPoolOverrides(daily_pool_overrides);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
   if (tournamentMode === 'dex_vs_dex' && tournamentEligibleDexes(dexConfig).length < 2) {
     return res.status(400).json({ error: 'DEX vs DEX tournaments need at least two eligible DEXes' });
   }
@@ -15079,11 +15398,11 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     INSERT INTO tournaments (
       name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
-      scoring_mode, daily_pool_points, daily_pool_enabled_at,
+      scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
       prize_currency, prize_tiers, rewards_in_cop, seeker_only,
       shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim(),
     (description || '').toString().slice(0, 500),
@@ -15108,6 +15427,8 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     pointWeights.pnl,
     scoringMode,
     dailyPoolPoints,
+    dailyPoolGrowthPct,
+    JSON.stringify(dailyPoolOverrides),
     scoringMode === 'daily_pool' ? nowSql() : null,
     sanitizePrizeCurrency(prize_currency),
     JSON.stringify(prizeTiers),
@@ -15133,7 +15454,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     name, description, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
-    scoring_mode, daily_pool_points,
+    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
     prize_currency, prize_tiers, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
@@ -15145,6 +15466,14 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy !== undefined ? attack_match_policy : t.attack_match_policy, 'all');
   const nextScoringMode = normalizeTournamentScoringMode(scoring_mode !== undefined ? scoring_mode : t.scoring_mode, 'live');
   const nextDailyPoolPoints = normalizeTournamentDailyPoolPoints(daily_pool_points !== undefined ? daily_pool_points : t.daily_pool_points, 1000);
+  let nextDailyPoolGrowthPct;
+  let nextDailyPoolOverrides;
+  try {
+    nextDailyPoolGrowthPct = normalizeTournamentDailyPoolGrowthPct(daily_pool_growth_pct !== undefined ? daily_pool_growth_pct : t.daily_pool_growth_pct, 0);
+    nextDailyPoolOverrides = normalizeTournamentDailyPoolOverrides(daily_pool_overrides !== undefined ? daily_pool_overrides : t.daily_pool_overrides);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
   if (tournamentMode === 'dex_vs_dex' && tournamentEligibleDexes(dexConfig).length < 2) {
     return res.status(400).json({ error: 'DEX vs DEX tournaments need at least two eligible DEXes' });
   }
@@ -15226,6 +15555,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     points_pnl_weight: pointWeights.pnl,
     scoring_mode: nextScoringMode,
     daily_pool_points: nextDailyPoolPoints,
+    daily_pool_growth_pct: nextDailyPoolGrowthPct,
+    daily_pool_overrides: nextDailyPoolOverrides,
     daily_pool_enabled_at: nextScoringMode === 'daily_pool'
       ? (normalizeTournamentScoringMode(t.scoring_mode, 'live') === 'daily_pool' ? (cleanSqlDate(t.daily_pool_enabled_at) || nowSql()) : nowSql())
       : null,
@@ -15246,7 +15577,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             start_at = ?, end_at = ?,
                             gold_boost = ?, seeker_gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
-                            scoring_mode = ?, daily_pool_points = ?, daily_pool_enabled_at = ?,
+                            scoring_mode = ?, daily_pool_points = ?, daily_pool_growth_pct = ?, daily_pool_overrides = ?, daily_pool_enabled_at = ?,
                             prize_currency = ?, prize_tiers = ?, rewards_in_cop = ?, seeker_only = ?,
                             freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
@@ -15275,6 +15606,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.points_pnl_weight,
     next.scoring_mode,
     next.daily_pool_points,
+    next.daily_pool_growth_pct,
+    JSON.stringify(next.daily_pool_overrides),
     next.daily_pool_enabled_at,
     next.prize_currency,
     JSON.stringify(next.prize_tiers),

@@ -22,6 +22,7 @@ const {
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const BASE_USDC_TOKEN = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const INK_USDC_TOKEN = '0x2D270e6886d130D724215A266106e6832161EAEd';
 const SOLANA_USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const APTOS_USDC_METADATA = '0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b';
 const APTOS_TOKEN_TYPE = '0x4::token::Token';
@@ -34,6 +35,7 @@ const EVM_CHAIN_META = {
   base: { chainId: 8453, label: 'Base', rpcEnv: ['MARKETPLACE_BASE_RPC_URL', 'GAME_SHOP_BASE_RPC_URL', 'BASE_RPC_URL', 'NFT_BASE_RPC_URL'], rpcDefault: 'https://mainnet.base.org' },
   arbitrum: { chainId: 42161, label: 'Arbitrum', rpcEnv: ['MARKETPLACE_ARBITRUM_RPC_URL', 'GAME_SHOP_ARB_RPC_URL', 'ARBITRUM_RPC_URL', 'NFT_ARBITRUM_RPC_URL'], rpcDefault: 'https://arb1.arbitrum.io/rpc' },
   monad: { chainId: 143, label: 'Monad', rpcEnv: ['MARKETPLACE_MONAD_RPC_URL', 'GAME_SHOP_MONAD_RPC_URL', 'MONAD_RPC_URL', 'NFT_MONAD_RPC_URL'], rpcDefault: 'https://rpc.monad.xyz' },
+  ink: { chainId: 57073, label: 'Ink', rpcEnv: ['MARKETPLACE_INK_RPC_URL', 'GAME_SHOP_INK_RPC_URL', 'INK_RPC_URL', 'NFT_INK_RPC_URL'], rpcDefault: 'https://rpc-gel.inkonchain.com' },
 };
 
 const ERC721_ABI = [
@@ -833,6 +835,7 @@ async function vaultsConfig(ctx) {
     base: { chain: 'base', address: evm.address, autoDeliveryReady: evm.canAutoSign, externalVault: evm.externalVault, legacyTreasuryVault: evm.legacyTreasuryVault },
     arbitrum: { chain: 'arbitrum', address: evm.address, autoDeliveryReady: evm.canAutoSign, externalVault: evm.externalVault, legacyTreasuryVault: evm.legacyTreasuryVault },
     monad: { chain: 'monad', address: evm.address, autoDeliveryReady: evm.canAutoSign, externalVault: evm.externalVault, legacyTreasuryVault: evm.legacyTreasuryVault },
+    ink: { chain: 'ink', address: evm.address, autoDeliveryReady: evm.canAutoSign, externalVault: evm.externalVault, legacyTreasuryVault: evm.legacyTreasuryVault },
     solana: (() => {
       try {
         const v = solanaVault(ctx);
@@ -874,6 +877,7 @@ async function destinationDeliveryReadiness(ctx) {
     base: evmReady('base'),
     arbitrum: evmReady('arbitrum'),
     monad: evmReady('monad'),
+    ink: evmReady('ink'),
     aptos: !!aptosVault(ctx).canAutoSign && !!deploymentOf('aptos')?.module,
     solana: solanaBridgeMintReady(),
   };
@@ -897,10 +901,14 @@ function evmRpcUrl(chain) {
 
 function paymentConfigs(ctx) {
   const payments = {};
-  for (const chain of ['base', 'arbitrum', 'monad']) {
+  for (const chain of ['base', 'arbitrum', 'monad', 'ink']) {
     const shop = ctx.gameShopEvmConfig?.(chain) || {};
     const usdcSpec = (shop.payments || []).find((p) => p.id === 'usdc') || {};
-    const fallbackToken = chain === 'base' ? BASE_USDC_TOKEN : (usdcSpec.token || shop.usdcMint);
+    const fallbackToken = chain === 'base'
+      ? BASE_USDC_TOKEN
+      : chain === 'ink'
+        ? INK_USDC_TOKEN
+        : (usdcSpec.token || shop.usdcMint);
     const envChain = chain.toUpperCase();
     const shortChain = chain === 'arbitrum' ? 'ARB' : envChain;
     const treasury = firstEnv(
@@ -1030,7 +1038,14 @@ async function evmClients(chain, ctx) {
     nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
     rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
   });
-  const chainObj = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad }[chain];
+  const ink = defineChain({
+    id: 57073,
+    name: 'Ink',
+    nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+    rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+    blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
+  });
+  const chainObj = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad, ink }[chain];
   const rpc = evmRpcUrl(chain);
   const publicClient = createPublicClient({ chain: chainObj, transport: http(rpc) });
   const account = ctx?.parseNftEvmAccount ? await ctx.parseNftEvmAccount() : null;
@@ -1675,7 +1690,7 @@ function rememberBuyerDeliveryWallet(order) {
   const destAddress = String(order?.buyer_dest_address || '').trim();
   const destChain = String(order?.buyer_dest_chain || '').toLowerCase();
   if (!playerId || !destAddress) return;
-  if (!['base', 'arbitrum', 'monad', 'aptos'].includes(destChain)) return;
+  if (!['base', 'arbitrum', 'monad', 'ink', 'aptos'].includes(destChain)) return;
   try {
     gameDb.db.prepare(`
       UPDATE players

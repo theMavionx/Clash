@@ -18,12 +18,12 @@ const KATANA_REST_API =
 const KATANA_APP_URL =
   (process.env.KATANA_PERPS_APP_URL || 'https://perps.katana.network').replace(/\/+$/, '');
 const KATANA_ACCESS_CODE =
-  (process.env.KATANA_PERPS_REFERRAL_CODE || process.env.KATANA_PERPS_ACCESS_CODE || '914TO2TD').trim();
+  (process.env.KATANA_PERPS_REFERRAL_CODE || process.env.KATANA_PERPS_ACCESS_CODE || 'CLASHOFPERPS').trim();
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.KATANA_PERPS_TIMEOUT_MS || 5000)));
 const PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.KATANA_PERPS_PUBLIC_CACHE_TTL_MS || 10_000)));
 const PUBLIC_STALE_TTL_MS = Math.max(PUBLIC_CACHE_TTL_MS, Math.min(900_000, Number(process.env.KATANA_PERPS_PUBLIC_STALE_TTL_MS || 300_000)));
 const publicCache = new Map();
-const KATANA_DEBUG = process.env.KATANA_DEBUG !== '0';
+const KATANA_DEBUG = process.env.KATANA_DEBUG === '1';
 
 function redact(value) {
   const text = String(value || '');
@@ -401,6 +401,33 @@ function formatQuantity(value) {
   return floored.toFixed(8);
 }
 
+function decimalPlacesFromStep(value, fallback = 8) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (raw.includes('e-')) {
+    const exp = Number(raw.split('e-')[1]);
+    return Number.isFinite(exp) ? Math.max(0, Math.min(8, exp)) : fallback;
+  }
+  const [, frac = ''] = raw.split('.');
+  return Math.max(0, Math.min(8, frac.replace(/0+$/u, '').length));
+}
+
+function formatPrice(value, market = null, label = 'Katana price') {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw Object.assign(new Error(`${label} required`), { status: 400 });
+  }
+  const tick = Number(market?.tick_size || market?.tickSize || market?.tick_size_raw || 0);
+  const decimals = decimalPlacesFromStep(market?.tick_size || market?.tickSize || market?.tick_size_raw || '0.00000001', 8);
+  let rounded = n;
+  if (Number.isFinite(tick) && tick > 0) {
+    rounded = Math.round(n / tick) * tick;
+  }
+  const fixed = rounded.toFixed(decimals);
+  const [whole, frac = ''] = fixed.split('.');
+  return `${whole}.${frac.padEnd(8, '0').slice(0, 8)}`;
+}
+
 function normalizeTriggerType(value) {
   const { TriggerType } = sdk();
   const raw = String(value || '').trim();
@@ -415,6 +442,7 @@ function normalizeTriggerType(value) {
 function orderParams(input = {}, creds, options = {}) {
   const { OrderType } = sdk();
   const type = normalizeOrderType(input.type || input.orderType || input.order_type, options.market);
+  const marketMeta = options.marketMeta || null;
   const params = {
     type,
     side: normalizeSide(input.side),
@@ -423,6 +451,11 @@ function orderParams(input = {}, creds, options = {}) {
     market: marketName(input.market || input.symbol),
     quantity: formatQuantity(input.quantity || input.amount || ''),
   };
+  const delegatedKey = String(input.delegatedKey || input.delegated_key || '').trim();
+  if (delegatedKey) {
+    if (!isEvmAddress(delegatedKey)) throw Object.assign(new Error('Katana delegated key address is invalid'), { status: 400 });
+    params.delegatedKey = delegatedKey;
+  }
   if (!params.quantity || !(Number(params.quantity) > 0)) {
     throw Object.assign(new Error('Katana order quantity must be at least 0.0001 base units'), { status: 400 });
   }
@@ -434,17 +467,11 @@ function orderParams(input = {}, creds, options = {}) {
     || type === OrderType.stopLossLimit
     || type === OrderType.trailingStopMarket;
   if (type === OrderType.limit || type === OrderType.takeProfitLimit || type === OrderType.stopLossLimit) {
-    const price = String(input.price || '').trim();
-    if (!price || !(Number(price) > 0)) throw Object.assign(new Error('Katana limit order price required'), { status: 400 });
-    params.price = price;
+    params.price = formatPrice(input.price, marketMeta, 'Katana limit order price');
     Object.assign(params, normalizeTif(input.timeInForce || input.time_in_force || input.tif || 'gtc'));
   }
   if (isTriggerOrder || input.triggerPrice || input.trigger_price) {
-    const triggerPrice = String(input.triggerPrice || input.trigger_price || '').trim();
-    if (!triggerPrice || !(Number(triggerPrice) > 0)) {
-      throw Object.assign(new Error('Katana trigger order price required'), { status: 400 });
-    }
-    params.triggerPrice = triggerPrice;
+    params.triggerPrice = formatPrice(input.triggerPrice || input.trigger_price, marketMeta, 'Katana trigger order price');
     params.triggerType = normalizeTriggerType(input.triggerType || input.trigger_type || 'last');
     params.reduceOnly = input.reduceOnly !== undefined || input.reduce_only !== undefined
       ? !!(input.reduceOnly ?? input.reduce_only)
@@ -469,18 +496,29 @@ function orderParams(input = {}, creds, options = {}) {
 }
 
 function cancelParams(input = {}, creds) {
+  const ids = input.orderIds || input.order_ids || input.orderId || input.order_id || input.clientOrderId || input.client_order_id;
   const params = {
     nonce: nonce(),
     wallet: walletParam(input.wallet, creds),
   };
-  if (input.market || input.symbol) params.market = marketName(input.market || input.symbol);
-  const ids = input.orderIds || input.order_ids || input.orderId || input.order_id || input.clientOrderId || input.client_order_id;
+  const delegatedKey = String(input.delegatedKey || input.delegated_key || '').trim();
+  const orderDelegatedKey = String(input.orderDelegatedKey || input.order_delegated_key || '').trim();
+  if (delegatedKey) {
+    if (!isEvmAddress(delegatedKey)) throw Object.assign(new Error('Katana delegated key address is invalid'), { status: 400 });
+    params.delegatedKey = delegatedKey;
+  }
+  if (orderDelegatedKey && !ids && !(input.market || input.symbol)) {
+    if (!isEvmAddress(orderDelegatedKey)) throw Object.assign(new Error('Katana order delegated key address is invalid'), { status: 400 });
+    params.orderDelegatedKey = orderDelegatedKey;
+  }
   if (ids) {
     params.orderIds = (Array.isArray(ids) ? ids : [ids]).map(id => {
       const value = String(id);
       if (input.clientOrderId || input.client_order_id) return value.startsWith('client:') ? value : `client:${value}`;
       return value;
     });
+  } else if (input.market || input.symbol) {
+    params.market = marketName(input.market || input.symbol);
   }
   return params;
 }
@@ -512,6 +550,8 @@ async function typedDataFor(credsInput, kind, params) {
     let payload;
     if (kind === 'associateWallet') {
       payload = typedDataPayload(katana.getWalletAssociationSignatureTypedData(params, exchangeContractAddress, chainId, sandbox));
+    } else if (kind === 'delegatedKeyAuthorization') {
+      payload = typedDataPayload(katana.getDelegatedKeyAuthorizationSignatureTypedData(params, exchangeContractAddress, chainId, sandbox));
     } else if (kind === 'cancelOrders') {
       payload = typedDataPayload(katana.getOrderCancellationSignatureTypedData(params, exchangeContractAddress, chainId, sandbox));
     } else {
@@ -646,6 +686,16 @@ async function getFills(credsInput, wallet, params = {}) {
   return Array.isArray(rows) ? rows : [];
 }
 
+async function getDelegatedKeys(credsInput, wallet) {
+  const creds = credentials(credsInput);
+  const client = authenticatedClient(creds);
+  const rows = await client.getDelegatedKeys({
+    nonce: nonce(),
+    wallet: walletParam(wallet, creds),
+  });
+  return Array.isArray(rows) ? rows : [];
+}
+
 async function prepareAssociateWallet(credsInput, wallet, referralCode = KATANA_ACCESS_CODE) {
   const creds = credentials(credsInput);
   const parameters = {
@@ -673,8 +723,53 @@ async function submitAssociateWallet(credsInput, body = {}) {
   });
 }
 
+function delegatedKeyParams(input = {}, creds) {
+  const delegatedKey = String(input.delegatedKey || input.delegated_key || '').trim();
+  if (!isEvmAddress(delegatedKey)) {
+    throw Object.assign(new Error('Katana delegated key address required'), { status: 400 });
+  }
+  const params = {
+    nonce: nonce(),
+    wallet: walletParam(input.wallet, creds),
+    delegatedKey,
+  };
+  const name = String(input.name || input.delegatedName || input.delegated_name || '').trim();
+  if (name) params.name = name.slice(0, 64);
+  return params;
+}
+
+async function prepareDelegatedKey(credsInput, input = {}) {
+  const creds = credentials(credsInput);
+  const parameters = delegatedKeyParams(input, creds);
+  return {
+    endpoint: '/delegatedKeys',
+    method: 'POST',
+    parameters,
+    typedData: await typedDataFor(creds, 'delegatedKeyAuthorization', parameters),
+  };
+}
+
+async function submitDelegatedKey(credsInput, body = {}) {
+  const client = authenticatedClient(credsInput);
+  const parameters = body.parameters || body.params;
+  const signature = String(body.signature || '').trim();
+  if (!parameters || !signature) throw Object.assign(new Error('Katana delegated key parameters and signature required'), { status: 400 });
+  return client.post('/delegatedKeys', { parameters, signature });
+}
+
 async function prepareOrder(credsInput, input = {}) {
   const creds = credentials(credsInput);
+  const normalizedMarket = marketName(input.market || input.symbol);
+  let marketMeta = null;
+  try {
+    const markets = await getMarketInfo();
+    marketMeta = markets.find(m => String(m.market_name || m.market || '').toUpperCase() === normalizedMarket);
+  } catch (e) {
+    logKatana('market metadata unavailable for order normalization', {
+      market: normalizedMarket,
+      error: e?.message || String(e),
+    });
+  }
   logKatana('prepare order input', {
     wallet: redact(input.wallet || creds.wallet),
     has_api_key: !!creds.apiKey,
@@ -692,7 +787,10 @@ async function prepareOrder(credsInput, input = {}) {
       notional_usd: input.notional_usd,
     },
   });
-  const parameters = orderParams(input, creds, { market: String(input.type || input.orderType || '').toLowerCase() === 'market' });
+  const parameters = orderParams(input, creds, {
+    market: String(input.type || input.orderType || '').toLowerCase() === 'market',
+    marketMeta,
+  });
   return {
     endpoint: '/orders',
     method: 'POST',
@@ -753,6 +851,7 @@ module.exports = {
   credentialStatus,
   credentials,
   getAccount,
+  getDelegatedKeys,
   getExchange,
   getFills,
   getFundingRates,
@@ -769,9 +868,11 @@ module.exports = {
   orderParams,
   prepareAssociateWallet,
   prepareCancelOrders,
+  prepareDelegatedKey,
   prepareOrder,
   referralUrl,
   submitAssociateWallet,
   submitCancelOrders,
+  submitDelegatedKey,
   submitOrder,
 };

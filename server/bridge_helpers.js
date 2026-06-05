@@ -11,7 +11,7 @@
 //     (EVM) or trusts the signature (Aptos/Solana).
 //
 // Cross-chain chainId convention (synthetic IDs used in receipts):
-//   EVM chains: actual block.chainid (8453 Base, 42161 Arbitrum, 143 Monad)
+//   EVM chains: actual block.chainid (8453 Base, 42161 Arbitrum, 143 Monad, 57073 Ink)
 //   Aptos mainnet: 100001  (Aptos's native chain_id=1, prefixed to avoid EVM collision)
 //   Solana mainnet: 200001 (Solana has no native chain id; arbitrary unique)
 
@@ -32,11 +32,12 @@ const CHAIN_IDS = {
   base: 8453,
   arbitrum: 42161,
   monad: 143,
+  ink: 57073,
   aptos: 100001,
   solana: 200001,
 };
 
-const EVM_CHAINS = new Set(['base', 'arbitrum', 'monad']);
+const EVM_CHAINS = new Set(['base', 'arbitrum', 'monad', 'ink']);
 const NON_EVM_CHAINS = new Set(['aptos', 'solana']);
 const ALL_CHAINS = [...EVM_CHAINS, ...NON_EVM_CHAINS];
 
@@ -933,7 +934,7 @@ async function verifySolanaBurnTx(txSig, opts = {}) {
 // bridge memo. Returns the canonical string, or null if malformed.
 function normalizeDestAddrForChainId(raw, chainId) {
   const cid = BigInt(chainId);
-  if (cid === BigInt(CHAIN_IDS.base) || cid === BigInt(CHAIN_IDS.arbitrum) || cid === BigInt(CHAIN_IDS.monad)) {
+  if (EVM_CHAINS.has(Object.keys(CHAIN_IDS).find((key) => BigInt(CHAIN_IDS[key]) === cid))) {
     // EVM: 0x + 40 hex
     return /^0x[0-9a-fA-F]{40}$/.test(raw) ? raw.toLowerCase() : null;
   }

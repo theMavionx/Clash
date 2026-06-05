@@ -203,7 +203,7 @@ function BasicTradeFlow({
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'gmtrade';
       const sideForOpen = pickedDir === 'long'
         ? (isCollateralDex ? 'long' : 'bid')
         : (isCollateralDex ? 'short' : 'ask');

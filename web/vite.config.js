@@ -121,6 +121,7 @@ export default defineConfig({
       // does this rewrite; in dev the proxy does it here.
       '/api/futures': {
         target: FUTURES_PROXY_TARGET,
+        ws: true,
         changeOrigin: true,
         rewrite: (path) => FUTURES_PROXY_IS_DIRECT ? path.replace(/^\/api\/futures/, '/api') : path,
       },

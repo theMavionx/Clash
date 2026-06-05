@@ -13,6 +13,7 @@ import EvmWalletModal from './EvmWalletModal';
 import { BASE_CHAIN_ID, TRADING_ADDRESS, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig';
+import { INK_CHAIN_ID, ensureInkChain, inkChain } from '../lib/nadoConfig';
 import { fetchGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import {
   avantisPlaceOrderSignature,
@@ -606,26 +607,31 @@ function aiBrowserActionsSatisfiedFollowUp(followUp, results = []) {
 const aiShopBasePublicClient = createPublicClient({ chain: base, transport: http() });
 const aiShopArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport: http() });
 const aiShopMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
+const aiShopInkPublicClient = createPublicClient({ chain: inkChain, transport: http() });
 const AI_SHOP_EVM_PUBLIC_CLIENTS = {
   [BASE_CHAIN_ID]: aiShopBasePublicClient,
   [ARBITRUM_CHAIN_ID]: aiShopArbitrumPublicClient,
   [MONAD_CHAIN_ID]: aiShopMonadPublicClient,
+  [INK_CHAIN_ID]: aiShopInkPublicClient,
 };
 const AI_SHOP_EVM_CHAINS = {
   [BASE_CHAIN_ID]: base,
   [ARBITRUM_CHAIN_ID]: arbitrum,
   [MONAD_CHAIN_ID]: monadChain,
+  [INK_CHAIN_ID]: inkChain,
 };
 const AI_SHOP_CHAIN_IDS = {
   base: BASE_CHAIN_ID,
   arbitrum: ARBITRUM_CHAIN_ID,
   monad: MONAD_CHAIN_ID,
+  ink: INK_CHAIN_ID,
 };
 const AI_SHOP_CHAIN_OPTIONS = [
   { id: 'base', label: 'Base', sub: 'USDC / ETH' },
   { id: 'solana', label: 'Solana', sub: 'USDC / SOL / CLASH / SKR' },
   { id: 'arbitrum', label: 'Arbitrum', sub: 'USDC / ETH' },
   { id: 'monad', label: 'Monad', sub: 'USDC / MON' },
+  { id: 'ink', label: 'Ink', sub: 'USDC / ETH' },
   { id: 'aptos', label: 'Aptos', sub: 'USDC / APT' },
 ];
 const AI_SHOP_PAYMENTS_BY_CHAIN = {
@@ -647,6 +653,10 @@ const AI_SHOP_PAYMENTS_BY_CHAIN = {
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'mon', label: 'MON', sub: 'Native' },
   ],
+  ink: [
+    { id: 'usdc', label: 'USDC', sub: 'Stable' },
+    { id: 'eth', label: 'ETH', sub: 'Native' },
+  ],
   aptos: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'apt', label: 'APT', sub: 'Native' },
@@ -658,7 +668,7 @@ const DEX_TO_AI_SHOP_CHAIN = {
   phoenix: 'solana',
   gmx: 'arbitrum',
   hyperliquid: 'arbitrum',
-  nado: 'base',
+  nado: 'ink',
   monad: 'monad',
   decibel: 'aptos',
 };
@@ -674,6 +684,7 @@ function makeAiChatEvmWallet(provider, address) {
       const id = Number(targetChainId) || BASE_CHAIN_ID;
       if (id === ARBITRUM_CHAIN_ID) return ensureArbitrumChain(provider);
       if (id === MONAD_CHAIN_ID) return ensureMonadChain(provider);
+      if (id === INK_CHAIN_ID) return ensureInkChain(provider);
       return ensureBaseChain(provider);
     },
     getPublicClient: (targetChainId = BASE_CHAIN_ID) => (
@@ -2435,7 +2446,7 @@ function AiChatPanel({ onClose }) {
       setShopNotice(`${AI_SHOP_CHAIN_OPTIONS.find((c) => c.id === shopChain)?.label || shopChain} shop is not live yet.`);
       return;
     }
-    if (shopChain === 'base' || shopChain === 'arbitrum' || shopChain === 'monad') {
+    if (shopChain === 'base' || shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink') {
       if (!evmAddress || !evmWallet) {
         setEvmModalOpen(true);
         return;
@@ -2476,7 +2487,7 @@ function AiChatPanel({ onClose }) {
           payment: shopPayment,
           quantity: 1,
         });
-      } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
+      } else if (shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink') {
         result = await buyEvmShopItem({
           evmWallet,
           buyer: evmAddress,
@@ -2923,7 +2934,7 @@ function AiChatPanel({ onClose }) {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={shopChain === 'arbitrum' || shopChain === 'monad' ? shopChain : 'base'}
+        targetChain={shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink' ? shopChain : 'base'}
         onConnected={({ provider, address }) => {
           setLocalEvmWalletState({ provider, address });
           setEvmModalOpen(false);

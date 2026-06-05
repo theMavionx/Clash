@@ -86,6 +86,15 @@ function ProfileModal({ onClose }) {
   const [aiKeyError, setAiKeyError] = useState('');
   const [aiKeyCopied, setAiKeyCopied] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(() => readSoundEnabled());
+  const currentName = player?.player_name || '';
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(currentName);
+  const [nameBusy, setNameBusy] = useState(false);
+  const [nameError, setNameError] = useState('');
+
+  useEffect(() => {
+    if (!editingName) setNameDraft(currentName);
+  }, [currentName, editingName]);
 
   // Privy logout — hook only called when provider is mounted (build-time flag).
   let privyLogout = null, privyAuthed = false;
@@ -175,6 +184,58 @@ function ProfileModal({ onClose }) {
     writeSoundEnabled(next);
     sendToGodot('set_sound_enabled', { enabled: next });
   }, [sendToGodot, soundEnabled]);
+
+  const saveNickname = useCallback(async () => {
+    const nextName = nameDraft.trim().replace(/\s+/g, ' ');
+    if (nameBusy) return;
+    if (nextName === currentName) {
+      setEditingName(false);
+      setNameError('');
+      setNameDraft(currentName);
+      return;
+    }
+    if (nextName.length < 2) {
+      setNameError('Nickname must be at least 2 characters');
+      return;
+    }
+    if (nextName.length > 30) {
+      setNameError('Nickname must be at most 30 characters');
+      return;
+    }
+    const activeToken = player?.token || window._playerToken;
+    if (!activeToken) {
+      setNameError('Log in again to change nickname');
+      return;
+    }
+    setNameBusy(true);
+    setNameError('');
+    try {
+      const r = await fetch('/api/players/name', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-token': activeToken },
+        body: JSON.stringify({ name: nextName }),
+      });
+      let d = null;
+      try { d = await r.json(); } catch { /* non-json error */ }
+      if (!r.ok) {
+        const message = /nickname is already taken/i.test(String(d?.error || ''))
+          ? 'Nickname is already taken.'
+          : (d?.error || 'Failed to change nickname');
+        throw new Error(message);
+      }
+      const savedName = d?.name || nextName;
+      window.dispatchEvent(new CustomEvent('clash-player-patch', {
+        detail: { player_name: savedName, name: savedName },
+      }));
+      sendToGodot('set_player_name_client', { name: savedName });
+      setNameDraft(savedName);
+      setEditingName(false);
+    } catch (e) {
+      setNameError(e?.message || 'Failed to change nickname');
+    } finally {
+      setNameBusy(false);
+    }
+  }, [currentName, nameBusy, nameDraft, player?.token, sendToGodot]);
 
   const { buildingDefs } = useBuildingDefs();
   // Use same source as HUD (PlayerInfo) — buildingDefs.th_level is authoritative.
@@ -278,10 +339,66 @@ function ProfileModal({ onClose }) {
       <div style={S.backdrop} onClick={onClose} />
       <div style={S.modal}>
         <div style={S.header}>
-          <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
+          <div style={{display: 'flex', alignItems: 'center', gap: 12, minWidth: 0}}>
             <div style={S.levelBadge}><span style={S.levelNum}>{townHallLevel}</span></div>
-            <div style={{display: 'flex', flexDirection: 'column', gap: 2}}>
-              <span style={{color: '#5C3A21', fontSize: 20, fontWeight: 900}}>{player?.player_name}</span>
+            <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
+              {editingName ? (
+                <div style={S.nameEditWrap}>
+                  <input
+                    value={nameDraft}
+                    onChange={(e) => { setNameDraft(e.target.value); setNameError(''); }}
+                    maxLength={30}
+                    autoFocus
+                    style={S.nameInput}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') saveNickname();
+                      if (e.key === 'Escape') {
+                        setEditingName(false);
+                        setNameDraft(currentName);
+                        setNameError('');
+                      }
+                    }}
+                    aria-label="Nickname"
+                  />
+                  <button type="button" style={S.nameSaveBtn} disabled={nameBusy} onClick={saveNickname}>
+                    {nameBusy ? '...' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    style={S.nameCancelBtn}
+                    disabled={nameBusy}
+                    onClick={() => {
+                      setEditingName(false);
+                      setNameDraft(currentName);
+                      setNameError('');
+                    }}
+                    aria-label="Cancel nickname edit"
+                  >
+                    X
+                  </button>
+                </div>
+              ) : (
+                <div style={S.nameDisplayWrap}>
+                  <span style={{color: '#5C3A21', fontSize: 20, fontWeight: 900, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis'}}>{currentName}</span>
+                  <button
+                    type="button"
+                    style={S.nameEditBtn}
+                    onClick={() => {
+                      setEditingName(true);
+                      setNameDraft(currentName);
+                      setNameError('');
+                    }}
+                    aria-label="Edit nickname"
+                    title="Edit nickname"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.7" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+              {nameError && <div style={S.nameError}>{nameError}</div>}
               <div style={{display: 'flex', alignItems: 'center', gap: 4}}>
                 <img src={trophyIcon} alt="" style={{width: 16, height: 16, filter: 'invert(60%) sepia(90%) saturate(500%) hue-rotate(10deg)'}} />
                 <span style={{fontSize: 13, fontWeight: 800, color: '#a3906a'}}>{(player?.trophies || 0).toLocaleString()}</span>
@@ -798,6 +915,48 @@ const S = {
     overflow: 'hidden',
   },
   levelNum: { color: '#fff', fontSize: 22, fontWeight: 900, textShadow: '-1.5px -1.5px 0 #0a0a0a, 1.5px -1.5px 0 #0a0a0a, -1.5px 1.5px 0 #0a0a0a, 1.5px 1.5px 0 #0a0a0a, 0 2px 2px rgba(0,0,0,0.8)' },
+  nameDisplayWrap: {
+    display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, maxWidth: 190,
+  },
+  nameEditWrap: {
+    display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: 215,
+  },
+  nameInput: {
+    width: 110, minWidth: 0, height: 30, padding: '0 8px',
+    borderRadius: 8, border: '2px solid #bba882', background: '#fffaf0',
+    color: '#5C3A21', fontSize: 15, fontWeight: 900, outline: 'none',
+    boxShadow: 'inset 0 2px 0 rgba(0,0,0,0.08)',
+  },
+  nameEditBtn: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 25, height: 25, padding: 0, borderRadius: 7,
+    background: '#fdf8e7', border: '2px solid #bba882', color: '#5C3A21',
+    cursor: 'pointer', boxShadow: '0 2px 0 #a3906a',
+  },
+  nameSaveBtn: {
+    height: 30, padding: '0 9px', borderRadius: 8,
+    background: 'linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%)',
+    border: '2px solid #1b5e20', color: '#fff', fontSize: 11, fontWeight: 900,
+    cursor: 'pointer', textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+  },
+  nameCancelBtn: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 30, height: 30, padding: 0, borderRadius: 8,
+    background: '#fdf8e7', border: '2px solid #bba882', color: '#8b5a2b',
+    fontSize: 12, fontWeight: 900, cursor: 'pointer',
+  },
+  nameError: {
+    maxWidth: 240,
+    padding: '5px 8px',
+    borderRadius: 8,
+    border: '2px solid rgba(198,40,40,0.35)',
+    background: 'rgba(198,40,40,0.09)',
+    color: '#C62828',
+    fontSize: 11,
+    fontWeight: 900,
+    lineHeight: 1.2,
+    marginTop: 2,
+  },
   closeBtn: {
     width: 30, height: 30, borderRadius: '50%', background: '#E53935', border: '3px solid #fff',
     color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,

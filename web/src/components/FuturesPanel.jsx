@@ -16,6 +16,7 @@ import { useHibachi } from '../hooks/useHibachi';
 import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
 import { useKatana } from '../hooks/useKatana';
+import { useGmtrade } from '../hooks/useGmtrade';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -1559,6 +1560,8 @@ function FuturesPanel() {
     ? 'mainnet'
     : dex === 'grvt'
     ? 'baseConnect'
+    : dex === 'gmtrade'
+    ? 'solana'
     : dex === 'katana'
     ? 'katana'
     : dex === 'monad'
@@ -1601,6 +1604,7 @@ function FuturesPanel() {
   const hotstuffHook = useHotstuff();
   const grvtHook = useGrvt();
   const katanaHook = useKatana();
+  const gmtradeHook = useGmtrade();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -1629,6 +1633,8 @@ function FuturesPanel() {
     ? grvtHook
     : dex === 'katana'
     ? katanaHook
+    : dex === 'gmtrade'
+    ? gmtradeHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, spotUsdc, leverageSettings = {}, marginModes = {}, dataReady, accountReady,
@@ -1655,7 +1661,7 @@ function FuturesPanel() {
   // or a stored player wallet as "connected" unless the hook resolved the
   // address it will actually use for signing.
   const hasWallet = !!walletAddr;
-  const isSolanaDex = dex === 'pacifica' || dex === 'phoenix';
+  const isSolanaDex = dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade';
   const [solanaWalletGrace, setSolanaWalletGrace] = useState(true);
   useEffect(() => {
     if (!isSolanaDex || hasWallet) {
@@ -1823,8 +1829,8 @@ function FuturesPanel() {
     if (error && clearError) clearError();
   }, [clearError, error]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid' && dex !== 'nado') return;
-    const dexLabel = dex === 'nado' ? 'Nado' : 'Hyperliquid';
+    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana') return;
+    const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : 'Hyperliquid';
     if (oneTapTrading?.enabled) {
       const result = typeof setOneTapTradingEnabled === 'function'
         ? await setOneTapTradingEnabled(false)
@@ -1834,6 +1840,19 @@ function FuturesPanel() {
         return;
       }
       setSuccessMsg(`One tap trading disabled. Opening a ${dexLabel} order will ask to enable it again.`);
+      return;
+    }
+    if (dex === 'katana') {
+      setReferralLinking(true);
+      try {
+        const result = typeof setOneTapTradingEnabled === 'function'
+          ? await setOneTapTradingEnabled(true)
+          : null;
+        if (result?.error) setLocalAlert(result.error);
+        else setSuccessMsg('Katana one tap trading enabled.');
+      } finally {
+        setReferralLinking(false);
+      }
       return;
     }
     if (!linkOurReferrer || referralLinking) {
@@ -2063,7 +2082,11 @@ function FuturesPanel() {
       ?? account?.balance                         // last-resort
       ?? 0
   ));
-  const pacBalance = dex === 'hyperliquid' ? pacBalanceBase + (hlUnifiedAccount ? 0 : hlSpotAvailable) : pacBalanceBase;
+  const pacBalance = dex === 'gmtrade'
+    ? Math.max(0, Number(walletUsdc || 0))
+    : dex === 'hyperliquid'
+    ? pacBalanceBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
+    : pacBalanceBase;
   // Mark-to-market portfolio value. Used for the displayed "balance" number
   // and the no-funds deposit CTA gate so a losing trade doesn't make the UI
   // claim the account has $0 (and pop the deposit prompt) when the position
@@ -2076,7 +2099,11 @@ function FuturesPanel() {
       ?? account?.balance                  // last-resort
       ?? 0
   ));
-  const pacAccountValue = dex === 'hyperliquid' ? pacAccountValueBase + (hlUnifiedAccount ? 0 : hlSpotAvailable) : pacAccountValueBase;
+  const pacAccountValue = dex === 'gmtrade'
+    ? Math.max(0, Number(walletUsdc || 0))
+    : dex === 'hyperliquid'
+    ? pacAccountValueBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
+    : pacAccountValueBase;
   const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol), [markets, symbol]);
   const fr = currentMarket ? parseFloat(currentMarket.funding_rate || 0) : 0;
   // Avantis doesn't have a signed funding rate — the number here is the
@@ -2323,7 +2350,7 @@ function FuturesPanel() {
       // Guard against missing/NaN currentPrice (feed blip).
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -2566,8 +2593,13 @@ function FuturesPanel() {
         return;
       }
       if (result && !result.error) {
+        if (result.status === 'submitted' && result.info) {
+          setLocalAlert(result.info);
+        }
         setSuccessMsg(
-          orderType === 'market'
+          dex === 'gmtrade' && result.status === 'submitted'
+            ? `${side.toUpperCase()} ${symbol} submitted`
+            : orderType === 'market'
             ? `${side.toUpperCase()} ${symbol} opened`
             : `${side.toUpperCase()} ${symbol} limit placed`
         );
@@ -2647,7 +2679,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -2668,10 +2700,14 @@ function FuturesPanel() {
                 ? 'Nado uses cross margin in your Ink account'
                 : dex === 'hibachi'
                 ? 'Hibachi margin is managed in your Hibachi account'
+                : dex === 'katana'
+                ? 'Katana uses cross margin in this integration'
+                : dex === 'gmtrade'
+                ? 'GMTrade uses isolated collateral per Solana position account'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
-                {dex === 'phoenix' ? 'Auto' : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi') ? 'Cross' : 'Isolated'}
+              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
+                {dex === 'gmtrade' ? 'Isolated' : dex === 'phoenix' ? 'Auto' : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana') ? 'Cross' : 'Isolated'}
               </span>
             </div>
           ) : (
@@ -3088,7 +3124,7 @@ function FuturesPanel() {
   }
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
-  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') && walletMismatch) {
+  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -3113,14 +3149,14 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade') ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
             </div>
             <button
               style={{...cartoonBtn('#0EA5E9', '#0284C7'), padding: '14px 28px'}}
-              onClick={() => dex === 'phoenix' ? openWalletModal(true) : setEvmModalOpen(true)}
+              onClick={() => (dex === 'phoenix' || dex === 'gmtrade') ? openWalletModal(true) : setEvmModalOpen(true)}
             >
               SWITCH WALLET
             </button>
@@ -3154,7 +3190,42 @@ function FuturesPanel() {
             </button>
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
-            {dex === 'katana' ? (
+            {dex === 'gmtrade' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #14B8A6 0%, #0F766E 100%)',
+                  border: '4px solid #0D9488',
+                  boxShadow: '0 5px 0 #0F766E, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 24, fontWeight: 900, color: '#fff',
+                }}>GMT</div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Solana wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
+                }}>
+                  GMTrade runs on Solana. Connect the same wallet you use for this game account.
+                </div>
+                {renderPrivyEmailButton('#14B8A6', '#0F766E')}
+                <button
+                  style={{...cartoonBtn('#14B8A6', '#0F766E'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => openWalletModal(true)}
+                >
+                  <span>CONNECT SOLANA WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#0F766E', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>GMTRADE - SOLANA</span>
+                </div>
+              </>
+            ) : dex === 'katana' ? (
               <>
                 <div style={{
                   width: 80, height: 80, borderRadius: '50%',
@@ -4040,6 +4111,7 @@ function FuturesPanel() {
     const katanaReadsReady = !!inviteStatus?.account_configured;
     const katanaAccountExists = inviteStatus?.account_exists === true;
     const katanaAccountMissing = inviteStatus?.has_credentials === true && inviteStatus?.account_exists === false;
+    const katanaOneTapReady = oneTapTrading?.enabled === true && oneTapTrading?.approved === true;
     const katanaCanSave = katanaApiKeyInput.trim().length > 0 && katanaApiSecretInput.trim().length > 0 && !isRunning;
     return (
       <>
@@ -4065,7 +4137,7 @@ function FuturesPanel() {
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CHECKING' : 'ACTION REQUIRED'}</span>
                 <span style={hlGateStyles.title}>Katana Perps setup</span>
                 <span style={hlGateStyles.subtitle}>
-                  Add your Katana API key and secret. Clash stores them encrypted in this browser only, then checks that this wallet has an active Katana Perps account.
+                  Add your Katana API key and secret, then approve a local delegated key once for one tap trading. Clash stores keys encrypted in this browser only.
                 </span>
               </div>
 
@@ -4104,10 +4176,18 @@ function FuturesPanel() {
                   </span>
                 </li>
                 <li style={hlGateStyles.stepItem}>
-                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_pending }}>4</span>
+                  <span style={{ ...hlGateStyles.stepBubble, ...(katanaOneTapReady ? hlGateStyles.stepBubble_done : isRunning ? hlGateStyles.stepBubble_active : hlGateStyles.stepBubble_pending) }}>
+                    {katanaOneTapReady ? 4 : isRunning ? <span style={hlGateStyles.spinner} /> : 4}
+                  </span>
                   <span style={hlGateStyles.stepText}>
-                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_pending }}>Sign trades in wallet</span>
-                    <span style={hlGateStyles.stepHint}>{missingKatanaFields.length ? `Missing: ${missingKatanaFields.join(', ')}` : 'Each order opens a wallet signature request.'}</span>
+                    <span style={{ ...hlGateStyles.stepLabel, ...(katanaOneTapReady ? hlGateStyles.stepLabel_done : isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Enable one tap trading</span>
+                    <span style={hlGateStyles.stepHint}>
+                      {missingKatanaFields.length
+                        ? `Missing: ${missingKatanaFields.join(', ')}`
+                        : katanaOneTapReady
+                        ? `Delegated signer ${oneTapTrading?.signer?.slice?.(0, 6) || ''}...${oneTapTrading?.signer?.slice?.(-4) || ''} is authorized.`
+                        : 'One wallet signature authorizes a browser-only delegated key. Orders then skip wallet popups.'}
+                    </span>
                   </span>
                 </li>
               </ol>
@@ -4152,7 +4232,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
-                  Do not enter a wallet private key. Katana orders are signed by the connected wallet popup.
+                  Do not enter a wallet private key. Katana one tap creates a local delegated key and stores it encrypted in this browser only.
                 </div>
               </div>
 
@@ -4180,6 +4260,19 @@ function FuturesPanel() {
               >
                 {isRunning ? 'Connecting...' : 'Add Katana API credentials ->'}
               </button>
+
+              {katanaAccountExists && (
+                <button
+                  style={{
+                    ...(katanaOneTapReady ? hlGateStyles.secondaryBtn : hlGateStyles.primaryBtn),
+                    opacity: isRunning ? 0.65 : 1,
+                  }}
+                  disabled={isRunning}
+                  onClick={handleToggleOneTapTrading}
+                >
+                  {isRunning ? 'Please wait...' : katanaOneTapReady ? 'One tap enabled' : 'Enable one tap trading'}
+                </button>
+              )}
 
               <button
                 style={katanaAccountMissing ? hlGateStyles.primaryBtn : hlGateStyles.secondaryBtn}
@@ -5563,7 +5656,7 @@ function FuturesPanel() {
                 <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
                 <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
                   {(() => {
-                    const isIso = pos.is_isolated ?? marginModes?.[pos.symbol];
+                    const isIso = dex === 'gmtrade' ? true : (pos.is_isolated ?? marginModes?.[pos.symbol]);
                     return (
                       <span style={{fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? '#FF9800' : '#4CAF50', color: isIso ? '#FF9800' : '#4CAF50', background: 'rgba(255,255,255,0.4)'}}>
                         {isIso ? 'ISO' : 'CROSS'}
@@ -5917,6 +6010,8 @@ function FuturesPanel() {
       ? 'Arbitrum Wallet USDC'
       : dex === 'hotstuff'
       ? 'Ethereum Wallet USDC'
+      : dex === 'gmtrade'
+      ? 'GMTrade Wallet'
       : dex === 'katana'
       ? 'Katana Available USDC'
       : dex === 'risex'
@@ -6317,16 +6412,17 @@ function FuturesPanel() {
           </>
         )}
 
-        {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid') ? (() => {
+        {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'gmtrade') ? (() => {
           const isGmx = dex === 'gmx';
           const isHyperliquid = dex === 'hyperliquid';
+          const isGmtrade = dex === 'gmtrade';
           const isHibachi = dex === 'hibachi';
-          const accentLight = isHibachi ? '#EF4444' : isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
-          const accentDark = isHibachi ? '#991B1B' : isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
-          const accentBg = isHibachi ? 'rgba(239,68,68,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
-          const accentBorder = isHibachi ? 'rgba(239,68,68,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
-          const accentBtnBorder = isHibachi ? '#DC2626' : isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
-          const chainName = isHibachi ? 'Base / Arbitrum' : isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
+          const accentLight = isGmtrade ? '#14B8A6' : isHibachi ? '#EF4444' : isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
+          const accentDark = isGmtrade ? '#0F766E' : isHibachi ? '#991B1B' : isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
+          const accentBg = isGmtrade ? 'rgba(20,184,166,0.08)' : isHibachi ? 'rgba(239,68,68,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
+          const accentBorder = isGmtrade ? 'rgba(20,184,166,0.35)' : isHibachi ? 'rgba(239,68,68,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
+          const accentBtnBorder = isGmtrade ? '#0F766E' : isHibachi ? '#DC2626' : isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
+          const chainName = isGmtrade ? 'Solana' : isHibachi ? 'Base / Arbitrum' : isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
           const isDepositing = isHyperliquid && depositStatus?.status === 'depositing';
           const isMovingToPerp = isHyperliquid && depositStatus?.status === 'moving_to_perp';
           const isFundingBusy = isDepositing || isMovingToPerp;
@@ -6341,14 +6437,14 @@ function FuturesPanel() {
             Number.isFinite(hibachiArbitrumUsdc) ? `Arbitrum $${hibachiArbitrumUsdc.toFixed(2)}` : null,
           ].filter(Boolean).join(' / ');
           const walletUsdcText = walletUsdc !== null
-            ? (isHibachi ? `USDC: ${hibachiWalletText || `$${walletUsdc.toFixed(2)}`}` : `${isHyperliquid ? 'Arbitrum ' : ''}USDC: $${walletUsdc.toFixed(2)}`)
+            ? (isHibachi ? `USDC: ${hibachiWalletText || `$${walletUsdc.toFixed(2)}`}` : `${isGmtrade ? 'Solana ' : isHyperliquid ? 'Arbitrum ' : ''}USDC: $${walletUsdc.toFixed(2)}`)
             : isHibachi && walletUsdcStatus?.status === 'checking'
             ? 'Base / Arbitrum USDC: checking...'
             : null;
           return (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: accentLight}}>{isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
+              <span style={{...S.label, color: accentLight}}>{isGmtrade ? 'GMTrade native wallet' : isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
               {isFundingBusy
                 ? <span style={{...S.detail, color: '#15803D'}}>{isMovingToPerp ? 'Moving to trading' : 'Depositing'}{pendingDepositLabel ? ` ${pendingDepositLabel} USDC` : ''}...</span>
                 : walletUsdcText && <span style={S.detail}>{walletUsdcText}</span>}
@@ -6517,6 +6613,8 @@ function FuturesPanel() {
                   ? hyperliquidUnified
                     ? <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Unified account is active, so credited USDC is already available for trading. Minimum is <b>5 USDC</b>.</>
                     : <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Legacy accounts may need one extra move from Spot into the trading balance. Minimum is <b>5 USDC</b>.</>
+                  : isGmtrade
+                  ? <>Orders are built natively in Clash and signed by your connected <b>Solana wallet</b>. Use the normal Long/Short buttons in the Trade tab; keep <b>USDC</b> collateral and a small <b>SOL</b> gas float in this wallet.</>
                   : isHibachi
                   ? <>Hibachi deposit and withdrawal are not exposed through this Clash API flow. Use the official Hibachi app to manage funds on <b>{chainName}</b>.</>
                   : <>Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.</>}
@@ -6737,7 +6835,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
@@ -7149,6 +7247,13 @@ function FuturesPanel() {
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.katana.colorDark }}>
                 Katana
+              </span>
+            </>
+          ) : dex === 'gmtrade' ? (
+            <>
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.gmtrade.colorDark }}>
+                GMTrade
               </span>
             </>
           ) : dex === 'hibachi' ? (

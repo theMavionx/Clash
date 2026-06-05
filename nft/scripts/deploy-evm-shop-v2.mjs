@@ -1,6 +1,6 @@
 // Generalized DemonKingBaseShopV2 deploy for any EVM chain that already
 // has a DemonKingBaseV2 NFT deployed via deploy-evm-v2.mjs. Reads target
-// chain from --chain=arbitrum|monad|... and pairs with the matching
+// chain from --chain=arbitrum|monad|ink|... and pairs with the matching
 // `<chain>-mainnet.json` NFT deployment file.
 
 import fs from 'node:fs';
@@ -26,6 +26,13 @@ const monad = defineChain({
   nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
   rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
   blockExplorers: { default: { name: 'Monad Explorer', url: 'https://monadexplorer.com' } },
+});
+const ink = defineChain({
+  id: 57073,
+  name: 'Ink',
+  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+  blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
 });
 
 // Per-chain USDC mints. CoP is Base-only so other chains omit it (the
@@ -60,12 +67,21 @@ const CHAINS = {
     clashTokenEnv: [],
     envRpc: ['NFT_MONAD_RPC_URL', 'MONAD_RPC_URL', 'GAME_SHOP_MONAD_RPC_URL'],
   },
+  ink: {
+    chain: ink,
+    defaultRpc: 'https://rpc-gel.inkonchain.com',
+    nftDeployFile: 'ink-mainnet.json',
+    shopDeployFile: 'ink-shop-v2-mainnet.json',
+    usdcToken: '0x2D270e6886d130D724215A266106e6832161EAEd',
+    clashTokenEnv: [],
+    envRpc: ['NFT_INK_RPC_URL', 'INK_RPC_URL', 'GAME_SHOP_INK_RPC_URL'],
+  },
 };
 
 const cliArg = process.argv.slice(2).find((a) => a.startsWith('--chain=')) || '';
 const chainKey = (cliArg ? cliArg.split('=')[1] : process.env.CLASH_DEPLOY_CHAIN || '').toLowerCase();
 if (!CHAINS[chainKey]) {
-  console.error(`Unknown chain "${chainKey}". Pass --chain=arbitrum or --chain=monad.`);
+  console.error(`Unknown chain "${chainKey}". Pass --chain=base, --chain=arbitrum, --chain=monad, or --chain=ink.`);
   process.exit(1);
 }
 const target = CHAINS[chainKey];

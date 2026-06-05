@@ -1,5 +1,5 @@
 // Generalized DemonKingBaseV2 + DemonKingBaseShopV2 deploy for any EVM
-// chain we want NFTs on. Reads target chain from --chain=arbitrum|monad|...
+// chain we want NFTs on. Reads target chain from --chain=arbitrum|monad|ink|...
 // (or env CLASH_DEPLOY_CHAIN). Writes a per-chain deployment JSON so the
 // server can pick the contract addresses up from
 // `nft/deployments/<chain>-mainnet.json`.
@@ -29,18 +29,26 @@ const monad = defineChain({
   rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
   blockExplorers: { default: { name: 'Monad Explorer', url: 'https://monadexplorer.com' } },
 });
+const ink = defineChain({
+  id: 57073,
+  name: 'Ink',
+  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+  blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
+});
 
 const CHAINS = {
   base:     { chain: base,     defaultRpc: 'https://mainnet.base.org',     deployFile: 'base-v2-mainnet.json',     envRpc: ['NFT_BASE_RPC_URL', 'BASE_RPC_URL', 'VITE_BASE_RPC_URL'] },
   arbitrum: { chain: arbitrum, defaultRpc: 'https://arb1.arbitrum.io/rpc', deployFile: 'arbitrum-mainnet.json',    envRpc: ['NFT_ARBITRUM_RPC_URL', 'ARBITRUM_RPC_URL', 'GAME_SHOP_ARB_RPC_URL'] },
   monad:    { chain: monad,    defaultRpc: 'https://rpc.monad.xyz',        deployFile: 'monad-mainnet.json',       envRpc: ['NFT_MONAD_RPC_URL', 'MONAD_RPC_URL', 'GAME_SHOP_MONAD_RPC_URL'] },
+  ink:      { chain: ink,      defaultRpc: 'https://rpc-gel.inkonchain.com', deployFile: 'ink-mainnet.json',       envRpc: ['NFT_INK_RPC_URL', 'INK_RPC_URL', 'GAME_SHOP_INK_RPC_URL'] },
 };
 
 // CLI arg parsing — accept --chain=arbitrum or env CLASH_DEPLOY_CHAIN.
 const cliArg = process.argv.slice(2).find((a) => a.startsWith('--chain=')) || '';
 const chainKey = (cliArg ? cliArg.split('=')[1] : process.env.CLASH_DEPLOY_CHAIN || '').toLowerCase();
 if (!CHAINS[chainKey]) {
-  console.error(`Unknown chain "${chainKey}". Pass --chain=arbitrum or --chain=monad.`);
+  console.error(`Unknown chain "${chainKey}". Pass --chain=base, --chain=arbitrum, --chain=monad, or --chain=ink.`);
   process.exit(1);
 }
 const target = CHAINS[chainKey];

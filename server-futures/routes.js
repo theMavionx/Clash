@@ -19,6 +19,7 @@ const hotstuff = require('./hotstuff');
 const hotstuffRewards = require('./hotstuff-rewards-worker');
 const grvt = require('./grvt');
 const katana = require('./katana');
+const gmtrade = require('./gmtrade');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
 
@@ -595,7 +596,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -615,7 +616,7 @@ function auth(req, res, next) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -645,7 +646,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -719,6 +720,13 @@ router.get('/account', async (req, res) => {
         const account = await katana.getAccount(creds, req.query.address || req.query.wallet || req.playerWallet);
         res.json(account);
       });
+    }
+    if (dex === 'gmtrade') {
+      const address = String(req.query.address || '').trim();
+      if (!gmtrade.isSolanaAddress(address)) {
+        return res.status(400).json({ error: 'address query param required (Solana wallet)' });
+      }
+      return res.json(await gmtrade.getAccountByAddress(address));
     }
     // Pacifica (custodial) — keep legacy auth-gated flow.
     return authGate(req, res, async () => {
@@ -1246,6 +1254,16 @@ router.get('/katana/fills', auth, async (req, res) => {
   }
 });
 
+router.get('/katana/delegated-keys', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.getDelegatedKeys(creds, req.query.wallet || req.playerWallet));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to load Katana delegated keys');
+  }
+});
+
 router.post('/katana/associate-wallet', auth, async (req, res) => {
   try {
     const creds = requireKatanaOwner(req, res);
@@ -1266,26 +1284,31 @@ router.post('/katana/associate-wallet/submit', auth, async (req, res) => {
   }
 });
 
+router.post('/katana/delegated-key/prepare', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.prepareDelegatedKey(creds, { ...req.body, wallet: req.body?.wallet || req.playerWallet }));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to prepare Katana delegated key');
+  }
+});
+
+router.post('/katana/delegated-key/submit', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    res.json(await katana.submitDelegatedKey(creds, req.body || {}));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to authorize Katana delegated key');
+  }
+});
+
 router.post('/katana/orders/prepare', auth, async (req, res) => {
   try {
     const creds = requireKatanaOwner(req, res);
     if (!creds) return;
     const payload = { ...req.body, wallet: req.body?.wallet || req.playerWallet };
-    console.log('[katana route] orders/prepare', {
-      playerId: req.playerId,
-      wallet: String(payload.wallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
-      symbol: payload.symbol,
-      market: payload.market,
-      side: payload.side,
-      type: payload.type || payload.orderType,
-      quantity: payload.quantity,
-      amount: payload.amount,
-      price: payload.price,
-      reduceOnly: payload.reduceOnly,
-      notional_usd: payload.notional_usd,
-      has_api_key: !!creds.apiKey,
-      has_api_secret: !!creds.apiSecret,
-    });
     res.json(await katana.prepareOrder(creds, payload));
   } catch (e) {
     katanaRouteError(res, e, 'Failed to prepare Katana order');
@@ -1636,6 +1659,7 @@ router.get('/markets', async (req, res) => {
       : dex === 'hotstuff' ? await hotstuff.getMarketInfo()
       : dex === 'grvt' ? await grvt.getMarketInfo()
       : dex === 'katana' ? await katana.getMarketInfo()
+      : dex === 'gmtrade' ? await gmtrade.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -1658,6 +1682,7 @@ router.get('/prices', async (req, res) => {
       : dex === 'hotstuff' ? await hotstuff.getPrices()
       : dex === 'grvt' ? await grvt.getPrices()
       : dex === 'katana' ? await katana.getPrices()
+      : dex === 'gmtrade' ? await gmtrade.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -1673,7 +1698,9 @@ router.get('/orderbook', async (req, res) => {
   const { symbol, agg_level, limit, level } = req.query;
   if (!symbol) return res.status(400).json({ error: 'symbol required' });
   try {
-    const book = dex === 'katana'
+    const book = dex === 'gmtrade'
+      ? await gmtrade.getOrderbook(symbol, limit || 25)
+      : dex === 'katana'
       ? await katana.getOrderbook(symbol, limit || 25, level || agg_level || 2)
       : await pacifica.getOrderbook(symbol, agg_level);
     res.json(book);
@@ -1835,6 +1862,14 @@ router.get('/positions', async (req, res) => {
         res.json(positions);
       });
     }
+    if (dex === 'gmtrade') {
+      const address = String(req.query.address || req.query.wallet || '').trim();
+      if (!gmtrade.isSolanaAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const positions = await gmtrade.getPositionsByAddress(address);
+      return res.json(positions);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -1915,6 +1950,14 @@ router.get('/orders', async (req, res) => {
         res.json(orders);
       });
     }
+    if (dex === 'gmtrade') {
+      const address = String(req.query.address || req.query.wallet || '').trim();
+      if (!gmtrade.isSolanaAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const orders = await gmtrade.getOrdersByAddress(address);
+      return res.json(orders);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -1929,7 +1972,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -2236,7 +2279,7 @@ router.post('/monad/report-fill', auth, async (req, res) => {
 // payloads are not rewardable; market opens on Avantis are immediately
 // re-read from Core API and recorded as `verified_source='worker'`. Everything
 // else is picked up by the per-DEX rewards workers.
-const TRADE_REPORT_DEXES = new Set(['avantis', 'decibel']);
+const TRADE_REPORT_DEXES = new Set(['avantis', 'decibel', 'gmtrade']);
 
 function avantisCollateralUsd(row) {
   const raw = row?.collateral ?? row?.trade?.positionSizeUSDC ?? row?.positionSizeUSDC ?? row?.trade?.initialPosToken;
@@ -3552,6 +3595,197 @@ router.post('/grvt/import-fills', auth, async (req, res) => {
   }
 });
 
+router.get('/gmtrade/health', async (req, res) => {
+  res.json(gmtrade.configStatus());
+});
+
+router.get('/gmtrade/config', auth, (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  res.json(gmtrade.configStatus());
+});
+
+router.get('/gmtrade/markets/discover', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    const result = await gmtrade.discoverGmtradeMarkets({ force: req.query.force === '1' || req.query.force === 'true' });
+    res.json({
+      ok: !result.error,
+      error: result.error || null,
+      count: Array.isArray(result.rows) ? result.rows.length : 0,
+      markets: result.rows || [],
+    });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to discover GMTrade markets', detail: e.message });
+  }
+});
+
+router.get('/gmtrade/account', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    res.json(await gmtrade.getAccountByAddress(req.query.address || req.query.wallet || req.playerWallet));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load GMTrade account', detail: e.message });
+  }
+});
+
+router.get('/gmtrade/positions', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    res.json(await gmtrade.getPositionsByAddress(req.query.address || req.query.wallet || req.playerWallet));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load GMTrade positions', detail: e.message });
+  }
+});
+
+router.get('/gmtrade/orders', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    res.json(await gmtrade.getOrdersByAddress(req.query.address || req.query.wallet || req.playerWallet));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load GMTrade orders', detail: e.message });
+  }
+});
+
+router.post('/gmtrade/client-log', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const safe = {
+      ts: new Date().toISOString(),
+      playerId: req.playerId,
+      player: req.playerName,
+      wallet: String(body.wallet || req.playerWallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      trace: String(body.trace || '').slice(0, 80),
+      event: String(body.event || '').slice(0, 120),
+      attempt: Number(body.attempt || 0) || 0,
+      data: body.data && typeof body.data === 'object' ? body.data : {},
+    };
+    console.log('[gmtrade client]', JSON.stringify(safe));
+    res.json({ ok: true });
+  } catch (e) {
+    console.warn('[gmtrade client] log failed:', e.message);
+    res.json({ ok: false });
+  }
+});
+
+router.get('/gmtrade/tx-status', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    res.json(await gmtrade.getTransactionStatus(String(req.query.signature || req.query.tx || '').trim()));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load GMTrade transaction status', detail: e.message });
+  }
+});
+
+router.post('/gmtrade/order-tx', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    console.log('[gmtrade order-tx] request', JSON.stringify({
+      playerId: req.playerId,
+      wallet: String(req.body?.wallet || req.playerWallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      symbol: req.body?.symbol,
+      side: req.body?.side,
+      amount: req.body?.amount,
+      leverage: req.body?.leverage,
+      order_type: req.body?.order_type,
+      price: req.body?.price,
+      recent_blockhash: req.body?.recent_blockhash,
+      last_valid_block_height: req.body?.last_valid_block_height,
+    }));
+    const built = await gmtrade.buildCreateOrderTx(req.body || {}, req.playerWallet);
+    console.log('[gmtrade order-tx] built', JSON.stringify({
+      playerId: req.playerId,
+      symbol: built.symbol,
+      kind: built.kind,
+      side: built.side,
+      margin_usd: built.margin_usd,
+      notional_usd: built.notional_usd,
+      recent_blockhash: built.recent_blockhash,
+      last_valid_block_height: built.last_valid_block_height,
+      transaction_count: Array.isArray(built.transactions) ? built.transactions.length : 0,
+      builder: built.builder,
+    }));
+    res.json(built);
+  } catch (e) {
+    console.warn('[gmtrade] order-tx failed:', e.message);
+    res.status(e.status || 502).json({ error: 'Failed to build GMTrade order transaction', detail: e.message });
+  }
+});
+
+router.post('/gmtrade/trade-report', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, req.playerWallet);
+    res.json({
+      ok: true,
+      verified: result.changes > 0,
+      duplicate: result.changes === 0,
+      signature: result.signature,
+      notional_usd: result.notional_usd,
+      reason: result.changes > 0
+        ? 'GMTrade Solana transaction verified; rewards are ready to claim.'
+        : 'GMTrade transaction was already imported.',
+    });
+  } catch (e) {
+    console.warn('[gmtrade] trade-report failed:', e.message);
+    res.status(e.status || 502).json({ error: 'Failed to verify GMTrade trade', detail: e.message });
+  }
+});
+
 router.post('/trade-report', auth, async (req, res) => {
   try {
     if (!TRADE_REPORT_DEXES.has(req.dex)) {
@@ -3612,6 +3846,9 @@ router.post('/trade-report', auth, async (req, res) => {
       verified = tradeKind.includes('close')
         ? await recordVerifiedAvantisClose(req, req.body || {})
         : await recordVerifiedAvantisOpen(req, req.body || {});
+    } else if (req.dex === 'gmtrade') {
+      const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, req.playerWallet);
+      verified = result.changes > 0;
     }
     res.json({
       ok: true,
@@ -3638,7 +3875,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana') {
+  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

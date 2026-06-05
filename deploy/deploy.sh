@@ -281,6 +281,40 @@ prepare_shared_runtime() {
                 printf '%s\n' VITE_GRVT_BUILDER_ACCOUNT_ID=0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45
                 printf '%s\n' VITE_GRVT_BUILDER_FEE_BPS=5
                 printf '%s\n' VITE_GRVT_BUILDER_FEE_RATE=0.0005
+                printf '%s\n' HOTSTUFF_BROKER_ADDRESS=0xB36402e87a86206D3a114a98B53f31362291fe1B
+                printf '%s\n' HOTSTUFF_BROKER_FEE_RATE=0.0005
+                printf '%s\n' VITE_HOTSTUFF_BROKER_ADDRESS=0xB36402e87a86206D3a114a98B53f31362291fe1B
+                printf '%s\n' VITE_HOTSTUFF_BROKER_FEE_RATE=0.0005
+                printf '%s\n' VITE_HIBACHI_REFERRAL_URL=https://hibachi.xyz/r/M4S4XNAGP4
+                printf '%s\n' KATANA_PERPS_REFERRAL_CODE=CLASHOFPERPS
+                printf '%s\n' VITE_KATANA_PERPS_REFERRAL_CODE=CLASHOFPERPS
+                printf '%s\n' GMTRADE_APP_URL=https://gmtrade.xyz/trade
+                printf '%s\n' GMTRADE_SOLANA_RPC_URL=https://rpc-1.gmtrade.xyz/
+                printf '%s\n' GMTRADE_RPC_ORIGIN=https://gmtrade.xyz
+                printf '%s\n' GMTRADE_ENABLE_NODE_SDK_BUILDER=1
+                printf '%s\n' GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS=0
+                printf '%s\n' NFT_INK_RPC_URL=https://rpc-gel.inkonchain.com
+                printf '%s\n' INK_RPC_URL=https://rpc-gel.inkonchain.com
+                printf '%s\n' GAME_SHOP_INK_RPC_URL=https://rpc-gel.inkonchain.com
+                printf '%s\n' NFT_INK_USDC_TOKEN=0x2D270e6886d130D724215A266106e6832161EAEd
+                printf '%s\n' GAME_SHOP_INK_USDC_TOKEN=0x2D270e6886d130D724215A266106e6832161EAEd
+                printf '%s\n' MARKETPLACE_INK_USDC=0x2D270e6886d130D724215A266106e6832161EAEd
+                printf '%s\n' MARKETPLACE_INK_CONTRACT=0x8290ab5e90db8bbf46c900b536bb5fdd7500d5e2
+                printf '%s\n' NFT_INK_CONTRACT=0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F
+                printf '%s\n' NFT_INK_SHOP_CONTRACT=0x4500d3fe42ad88f541e9e382b21bda3535dfd96b
+                printf '%s\n' NFT_INK_TOKEN_URI=https://clashofperps.fun/api/nft/ink/
+                printf '%s\n' NFT_INK_BASE_TOKEN_URI=https://clashofperps.fun/api/nft/ink/
+                printf '%s\n' NFT_INK_USD_PRICE=8.9
+                printf '%s\n' NFT_INK_USD_PRICE_E6=8900000
+                printf '%s\n' NFT_INK_SHOP_SALE_ACTIVE=1
+                printf '%s\n' GAME_SHOP_INK_SALE_ACTIVE=1
+                printf '%s\n' NFT_INK_NATIVE_ALLOWED=1
+                printf '%s\n' NFT_INK_USDC_ALLOWED=1
+                printf '%s\n' VITE_INK_CHAIN_ID=57073
+                printf '%s\n' VITE_INK_RPC_URL=https://rpc-gel.inkonchain.com
+                printf '%s\n' VITE_INK_RPC_URLS=https://rpc-gel.inkonchain.com,https://rpc-qnd.inkonchain.com,https://ink.drpc.org
+                printf '%s\n' VITE_INK_EXPLORER_URL=https://explorer.inkonchain.com
+                printf '%s\n' VITE_NFT_INK_CONTRACT=0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F
                 printf '%s=%s\n' CLASH_WALLET_ENCRYPTION_KEY "$generated_wallet_enc"
             } > "$ENV_FILE"
             chmod 600 "$ENV_FILE"
@@ -313,6 +347,42 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
     ensure_env_default "VITE_GRVT_BUILDER_FEE_BPS" "5"
     ensure_env_default "VITE_GRVT_BUILDER_FEE_RATE" "0.0005"
+    ensure_env_default "HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    ensure_env_default "HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    ensure_env_default "VITE_HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    ensure_env_default "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    ensure_env_default "VITE_HIBACHI_REFERRAL_URL" "https://hibachi.xyz/r/M4S4XNAGP4"
+    ensure_env_default "KATANA_PERPS_API_URL" "https://api-perps.katana.network/v1"
+    ensure_env_default "KATANA_PERPS_APP_URL" "https://perps.katana.network"
+    ensure_env_default "KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
+    ensure_env_default "VITE_KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
+    ensure_env_default "GMTRADE_APP_URL" "https://gmtrade.xyz/trade"
+    ensure_env_default "GMTRADE_SOLANA_RPC_URL" "https://rpc-1.gmtrade.xyz/"
+    ensure_env_default "GMTRADE_RPC_ORIGIN" "https://gmtrade.xyz"
+    ensure_env_default "GMTRADE_ENABLE_NODE_SDK_BUILDER" "1"
+    ensure_env_default "GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS" "0"
+    ensure_env_default "NFT_INK_RPC_URL" "https://rpc-gel.inkonchain.com"
+    ensure_env_default "INK_RPC_URL" "https://rpc-gel.inkonchain.com"
+    ensure_env_default "GAME_SHOP_INK_RPC_URL" "https://rpc-gel.inkonchain.com"
+    ensure_env_default "NFT_INK_USDC_TOKEN" "0x2D270e6886d130D724215A266106e6832161EAEd"
+    ensure_env_default "GAME_SHOP_INK_USDC_TOKEN" "0x2D270e6886d130D724215A266106e6832161EAEd"
+    ensure_env_default "MARKETPLACE_INK_USDC" "0x2D270e6886d130D724215A266106e6832161EAEd"
+    ensure_env_default "MARKETPLACE_INK_CONTRACT" "0x8290ab5e90db8bbf46c900b536bb5fdd7500d5e2"
+    ensure_env_default "NFT_INK_CONTRACT" "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F"
+    ensure_env_default "NFT_INK_SHOP_CONTRACT" "0x4500d3fe42ad88f541e9e382b21bda3535dfd96b"
+    ensure_env_default "NFT_INK_TOKEN_URI" "https://clashofperps.fun/api/nft/ink/"
+    ensure_env_default "NFT_INK_BASE_TOKEN_URI" "https://clashofperps.fun/api/nft/ink/"
+    ensure_env_default "NFT_INK_USD_PRICE" "8.9"
+    ensure_env_default "NFT_INK_USD_PRICE_E6" "8900000"
+    ensure_env_default "NFT_INK_SHOP_SALE_ACTIVE" "1"
+    ensure_env_default "GAME_SHOP_INK_SALE_ACTIVE" "1"
+    ensure_env_default "NFT_INK_NATIVE_ALLOWED" "1"
+    ensure_env_default "NFT_INK_USDC_ALLOWED" "1"
+    ensure_env_default "VITE_INK_CHAIN_ID" "57073"
+    ensure_env_default "VITE_INK_RPC_URL" "https://rpc-gel.inkonchain.com"
+    ensure_env_default "VITE_INK_RPC_URLS" "https://rpc-gel.inkonchain.com,https://rpc-qnd.inkonchain.com,https://ink.drpc.org"
+    ensure_env_default "VITE_INK_EXPLORER_URL" "https://explorer.inkonchain.com"
+    ensure_env_default "VITE_NFT_INK_CONTRACT" "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F"
     ensure_env_default "CLASH_WALLET_ENCRYPTION_KEY" "$(openssl rand -hex 32)"
     ensure_env_default "VITE_PRIVY_APP_ID" ""
     ensure_env_default "VITE_APTOS_NODE_API_KEY" ""
@@ -375,6 +445,37 @@ prepare_shared_runtime() {
     set_env_value "VITE_GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
     set_env_value "VITE_GRVT_BUILDER_FEE_BPS" "5"
     set_env_value "VITE_GRVT_BUILDER_FEE_RATE" "0.0005"
+    set_env_value "HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    set_env_value "HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    set_env_value "VITE_HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    set_env_value "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    set_env_value "VITE_HIBACHI_REFERRAL_URL" "https://hibachi.xyz/r/M4S4XNAGP4"
+    set_env_value "KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
+    set_env_value "VITE_KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
+    set_env_value "GMTRADE_ENABLE_NODE_SDK_BUILDER" "1"
+    set_env_value "GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS" "0"
+    set_env_value "NFT_INK_RPC_URL" "https://rpc-gel.inkonchain.com"
+    set_env_value "INK_RPC_URL" "https://rpc-gel.inkonchain.com"
+    set_env_value "GAME_SHOP_INK_RPC_URL" "https://rpc-gel.inkonchain.com"
+    set_env_value "NFT_INK_USDC_TOKEN" "0x2D270e6886d130D724215A266106e6832161EAEd"
+    set_env_value "GAME_SHOP_INK_USDC_TOKEN" "0x2D270e6886d130D724215A266106e6832161EAEd"
+    set_env_value "MARKETPLACE_INK_USDC" "0x2D270e6886d130D724215A266106e6832161EAEd"
+    set_env_value "MARKETPLACE_INK_CONTRACT" "0x8290ab5e90db8bbf46c900b536bb5fdd7500d5e2"
+    set_env_value "NFT_INK_CONTRACT" "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F"
+    set_env_value "NFT_INK_SHOP_CONTRACT" "0x4500d3fe42ad88f541e9e382b21bda3535dfd96b"
+    set_env_value "NFT_INK_TOKEN_URI" "https://clashofperps.fun/api/nft/ink/"
+    set_env_value "NFT_INK_BASE_TOKEN_URI" "https://clashofperps.fun/api/nft/ink/"
+    set_env_value "NFT_INK_USD_PRICE" "8.9"
+    set_env_value "NFT_INK_USD_PRICE_E6" "8900000"
+    set_env_value "NFT_INK_SHOP_SALE_ACTIVE" "1"
+    set_env_value "GAME_SHOP_INK_SALE_ACTIVE" "1"
+    set_env_value "NFT_INK_NATIVE_ALLOWED" "1"
+    set_env_value "NFT_INK_USDC_ALLOWED" "1"
+    set_env_value "VITE_INK_CHAIN_ID" "57073"
+    set_env_value "VITE_INK_RPC_URL" "https://rpc-gel.inkonchain.com"
+    set_env_value "VITE_INK_RPC_URLS" "https://rpc-gel.inkonchain.com,https://rpc-qnd.inkonchain.com,https://ink.drpc.org"
+    set_env_value "VITE_INK_EXPLORER_URL" "https://explorer.inkonchain.com"
+    set_env_value "VITE_NFT_INK_CONTRACT" "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F"
     set_env_value "CLASH_MAIN_DB" "$SHARED_SERVER_DIR/clash.db"
     set_env_value "CLASH_FUTURES_DB" "$SHARED_FUTURES_DIR/futures.db"
     set_env_value "CLASH_MCP_PUBLIC_URL" "https://$MCP_DOMAIN"
@@ -545,9 +646,17 @@ copy_source_to_release() {
         --exclude='*.log' \
         --exclude='*.orig' \
         --exclude='aptos-test-wallet.txt' \
+        --exclude='relaunch' \
+        --exclude='deploy/migration' \
+        --exclude='clash-migration-portal.zip' \
+        --exclude='lv_*.mp4' \
+        --exclude='tmp' \
+        --exclude='.tmp' \
+        --exclude='.tmp-*' \
         --exclude='android-keystore' \
         --exclude='twa' \
         --exclude='backups' \
+        --exclude='server-futures/gmtrade-builder/target' \
         --exclude='current' \
         --exclude='releases' \
         --exclude='shared' \

@@ -1,4 +1,4 @@
-// Set the V3 NFT base token URI on Base / Arbitrum / Monad.
+// Set the V3 NFT base token URI on Base / Arbitrum / Monad / Ink.
 //
 // By default this is a dry-run. Pass --execute to submit the transaction.
 // Examples:
@@ -25,6 +25,13 @@ const monad = defineChain({
   rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
   blockExplorers: { default: { name: 'Monad Explorer', url: 'https://monadexplorer.com' } },
 });
+const ink = defineChain({
+  id: 57073,
+  name: 'Ink',
+  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+  blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
+});
 
 const CHAINS = {
   base: {
@@ -44,6 +51,12 @@ const CHAINS = {
     rpcEnv: ['NFT_MONAD_RPC_URL', 'MONAD_RPC_URL', 'GAME_SHOP_MONAD_RPC_URL'],
     defaultRpc: 'https://rpc.monad.xyz',
     deployFile: 'monad-v3-mainnet.json',
+  },
+  ink: {
+    chain: ink,
+    rpcEnv: ['NFT_INK_RPC_URL', 'INK_RPC_URL', 'GAME_SHOP_INK_RPC_URL'],
+    defaultRpc: 'https://rpc-gel.inkonchain.com',
+    deployFile: 'ink-v3-mainnet.json',
   },
 };
 
@@ -65,7 +78,7 @@ const { account, source } = parseEthAccount(env);
 
 for (const chainKey of targets) {
   const spec = CHAINS[chainKey];
-  if (!spec) throw new Error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad or --all.`);
+  if (!spec) throw new Error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad|ink or --all.`);
 
   const deployPath = path.join(NFT_DIR, 'deployments', spec.deployFile);
   if (!fs.existsSync(deployPath)) throw new Error(`Missing ${spec.deployFile}`);

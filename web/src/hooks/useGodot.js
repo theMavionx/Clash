@@ -102,6 +102,17 @@ export function GodotProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    const handlePlayerPatch = (event) => {
+      const patch = event?.detail || {};
+      setPlayerState(prev => {
+        if (!prev) return prev;
+        const next = { ...prev, ...patch };
+        if (shallowEqualObject(next, prev)) return prev;
+        return next;
+      });
+    };
+    window.addEventListener('clash-player-patch', handlePlayerPatch);
+
     const handleGodotMessage = (msg) => {
       const { action, data } = msg;
       switch (action) {
@@ -331,8 +342,22 @@ export function GodotProvider({ children }) {
           break;
         case 'error':
           setError(data.message);
+          if (/nickname is already taken|name must be at least 2 characters/i.test(String(data?.message || ''))) {
+            try {
+              window.dispatchEvent(new CustomEvent('clash-auth-error', { detail: data || {} }));
+            } catch {
+              // Global error UI still handles it.
+            }
+          }
           if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
           errorTimerRef.current = setTimeout(() => setError(null), 3000);
+          break;
+        case 'auth_error':
+          try {
+            window.dispatchEvent(new CustomEvent('clash-auth-error', { detail: data || {} }));
+          } catch {
+            // Event dispatch is best-effort; global error UI still handles it.
+          }
           break;
         case 'show_register':
           setShowRegister(true);
@@ -364,6 +389,7 @@ export function GodotProvider({ children }) {
     };
     window.onGodotMessage = handleGodotMessage;
     return () => {
+      window.removeEventListener('clash-player-patch', handlePlayerPatch);
       if (window.onGodotMessage === handleGodotMessage) window.onGodotMessage = null;
       if (window._playerToken === tutorialTokenRef.current) window._playerToken = null;
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);

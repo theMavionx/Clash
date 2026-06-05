@@ -42,6 +42,7 @@ import {
 import { addClientBreadcrumb } from '../lib/clientLogger';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
+const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
 // v2 cache: keyed by `${wallet}|${dex}` instead of just `wallet`. Per-DEX
 // account migration (server-side schema: UNIQUE(wallet, dex)) means a
 // wallet can have a different account on each DEX, so the probe answer
@@ -58,6 +59,13 @@ const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
 // Privy / FC SDK is still resolving.
 const AUTO_CONNECT_GRACE_MS = 3000;
 
+function authErrorMessage(message) {
+  const text = String(message || '').trim();
+  if (!text) return 'Registration failed. Try again.';
+  if (/nickname is already taken/i.test(text)) return 'Nickname is already taken.';
+  return text;
+}
+
 function readDexPicked() {
   try { return localStorage.getItem(DEX_PICKED_KEY) === '1'; } catch { return false; }
 }
@@ -66,6 +74,18 @@ function writeDexPicked(v) {
     if (v) localStorage.setItem(DEX_PICKED_KEY, '1');
     else localStorage.removeItem(DEX_PICKED_KEY);
   } catch { /* storage disabled */ }
+}
+
+function hasStoredGameAuth() {
+  try {
+    if (window._playerToken) return true;
+    const raw = localStorage.getItem(GAME_AUTH_STORAGE_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return !!parsed?.token;
+  } catch {
+    return false;
+  }
 }
 
 function walletCacheKey(wallet, dex) {
@@ -186,7 +206,7 @@ export function useAuthFlow() {
   // of silently locking the device to Pacifica.
   useEffect(() => {
     if (!smReady || !isSolanaMobile) return;
-    if (dex !== 'pacifica' && dex !== 'phoenix') setDex('pacifica');
+    if (dex !== 'pacifica' && dex !== 'phoenix' && dex !== 'gmtrade') setDex('pacifica');
   }, [smReady, isSolanaMobile, dex, setDex]);
 
   // Saga/Seeker auto-connect: once the page settles, programmatically select
@@ -249,10 +269,16 @@ export function useAuthFlow() {
   // picker with a clean slate. The initial false→true transition on page
   // load also fires, but the cleanup is idempotent (no-op on fresh state).
   const prevShowRegisterRef = useRef(false);
+  const showRegisterBootedRef = useRef(false);
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const prev = prevShowRegisterRef.current;
     prevShowRegisterRef.current = showRegister;
+    if (!showRegisterBootedRef.current) {
+      showRegisterBootedRef.current = true;
+      setReadyForRegister(true);
+      if (!showRegister || hasStoredGameAuth()) return;
+    }
     if (!showRegister || prev) return; // only on false→true
     // Skip the dexPicked-reset path when this show_register was triggered
     // by an intentional DEX switch (pickDex called Godot logout to flip
@@ -363,7 +389,7 @@ export function useAuthFlow() {
     // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') return evmContext || privyEvm || null;
     if (dex === 'decibel') return aptosCandidate || null;
-    if (dex === 'pacifica' || dex === 'phoenix') {
+    if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade') {
       const farcasterSol = solAdapter?.source === 'farcaster' ? solAdapter : null;
       return farcasterSol || privySol || solAdapter || null;
     }
@@ -411,6 +437,7 @@ export function useAuthFlow() {
   // It tracks the last wallet we fired register for; clears on session
   // reset or logout so a new candidate can re-fire register.
   const [registering, setRegistering] = useState(false);
+  const [registerError, setRegisterError] = useState('');
 
   // Silent return-probe: before showing the name form to non-FC users, ask
   // the server whether an account already exists for this wallet. If yes,
@@ -541,6 +568,7 @@ export function useAuthFlow() {
   const probeInFlight = candidate?.wallet && !isFarcasterCandidate &&
     existingAccountName === undefined;
   const state = useMemo(() => {
+    if (registerError && candidate) return 'need_name';
     if (registering) return 'registering';
     if (booting) return 'booting';
     if (!dexPicked) return 'pick_dex';
@@ -556,8 +584,24 @@ export function useAuthFlow() {
     if (candidate) return 'need_name';
     if (!graceExpired) return 'auto_connecting';
     return 'manual_connect';
-  }, [registering, booting, dexPicked, candidate, suggestedName, graceExpired,
+  }, [registerError, registering, booting, dexPicked, candidate, suggestedName, graceExpired,
       isFarcasterCandidate, probeInFlight, existingAccountName]);
+
+  useEffect(() => {
+    const onAuthError = (event) => {
+      const message = authErrorMessage(event?.detail?.message);
+      setRegistering(false);
+      setRegisterError(message);
+      lastRegisteredRef.current = null;
+      if (candidate?.wallet) {
+        const key = walletCacheKey(candidate.wallet, dex);
+        setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
+        writeAccountProbeCache(candidate.wallet, dex, null);
+      }
+    };
+    window.addEventListener('clash-auth-error', onAuthError);
+    return () => window.removeEventListener('clash-auth-error', onAuthError);
+  }, [candidate?.wallet, dex]);
 
   // Effect: when we have both a candidate AND a suggested name, fire the
   // register once per (wallet+dex) pair. This is the single register call
@@ -572,6 +616,7 @@ export function useAuthFlow() {
     // comment near the top.
     if (!readyForRegister) return;
     if (!candidate) return;
+    if (registerError) return;
     // Non-FC users gate on the return-probe:
     //   undefined → probe still in flight, bail and wait for it to settle
     //   null      → probe says no account → brand-new user; DO NOT auto-
@@ -604,6 +649,7 @@ export function useAuthFlow() {
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
+    setRegisterError('');
     const payload = { name: nameToUse, wallet: candidate.wallet, dex };
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
@@ -695,6 +741,7 @@ export function useAuthFlow() {
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
+    setRegisterError('');
     const payload = { name: name.trim(), wallet: candidate.wallet, dex };
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
       payload.chain = dex === 'gmx' ? 'arbitrum'
@@ -710,7 +757,6 @@ export function useAuthFlow() {
       payload.walletSource = candidate.source;
     }
     if (fcUser?.fid) payload.fid = fcUser.fid;
-    writeAccountProbeCache(candidate.wallet, dex, name.trim());
     addClientBreadcrumb('auth.register_start', {
       dex,
       source: candidate.source || null,
@@ -733,6 +779,7 @@ export function useAuthFlow() {
     lastRegisteredRef.current = null;
     fcEvmTriedRef.current = false;
     setRegistering(false);
+    setRegisterError('');
     writeDexPicked(false);
     setDexPickedState(false);
     // Clear the global token so DexContext polling / any in-flight fetch
@@ -759,8 +806,10 @@ export function useAuthFlow() {
       pickDex,
       unpickDex,
       submitName,
+      clearRegisterError: () => setRegisterError(''),
       loginWithPrivy,
       logout,
     },
+    registerError,
   };
 }

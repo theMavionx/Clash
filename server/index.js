@@ -27,6 +27,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { router } = require('./routes');
+const { startDailyLogAiScheduler } = require('./log_ai_analyzer');
 const { setupWebSocket, getOnlinePlayers } = require('./websocket');
 
 const PORT = process.env.PORT || 4000;
@@ -387,6 +388,10 @@ app.get('/api/admin/panel', (req, res) => {
   details.log-details { margin-top: 6px; }
   details.log-details summary { cursor: pointer; color: #fbbf24; font-size: 11px; }
   .log-pre { margin-top: 6px; max-height: 220px; overflow: auto; background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 8px; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }
+  .ai-report { background:#0f172a; border:1px solid #334155; border-radius:12px; padding:14px; margin-bottom:14px; }
+  .ai-report h3 { color:#fbbf24; font-size:15px; margin-bottom:8px; }
+  .ai-report-pre { max-height:560px; overflow:auto; white-space:pre-wrap; word-break:break-word; line-height:1.45; background:#111827; border:1px solid #374151; border-radius:10px; padding:12px; color:#dbeafe; }
+  .ai-report-json { max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:#020617; border:1px solid #1f2937; border-radius:8px; padding:10px; color:#bfdbfe; }
   .feedback-message { max-width: 520px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
   .feedback-contact { font-size: 12px; color: #fbbf24; word-break: break-word; }
   .local-tools-backdrop { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; background: rgba(2, 6, 23, 0.74); padding: 18px; }
@@ -435,6 +440,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="tab" onclick="switchTab('elfa')">Elfa</div>
     <div class="tab" onclick="switchTab('logs')">Logs</div>
     <div class="tab" onclick="switchTab('client')">Client Logs</div>
+    <div class="tab" onclick="switchTab('ai-reports')">AI Log Reports</div>
     <div class="tab" onclick="switchTab('feedback')">Feedback</div>
     <div class="tab" onclick="switchTab('stats')">Stats</div>
     <div class="tab" onclick="switchTab('earnings')">Earnings</div>
@@ -499,6 +505,20 @@ app.get('/api/admin/panel', (req, res) => {
     <table><thead><tr>
       <th>User group</th><th>Time</th><th>Level</th><th>Source</th><th>Message</th><th>URL / Details</th>
     </tr></thead><tbody id="clientLogsBody"></tbody></table>
+  </div>
+
+  <div class="panel" id="tab-ai-reports">
+    <div class="stats" id="aiLogReportStats"></div>
+    <div class="filter" style="flex-wrap:wrap">
+      <span style="color:#9ca3af;font-size:13px">Daily at 00:00 UTC. Manual run analyzes the last 24h.</span>
+      <button class="btn" onclick="loadAiLogReports()">Refresh</button>
+      <button class="btn" onclick="runAiLogReport()">Run now</button>
+      <span id="aiLogReportStatus" style="color:#6b7280;font-size:12px;margin-left:8px"></span>
+    </div>
+    <div id="aiLogReportLatest"></div>
+    <table><thead><tr>
+      <th>ID</th><th>Window</th><th>Status</th><th>Model</th><th>Counts</th><th>Duration</th><th>Created</th><th>Actions</th>
+    </tr></thead><tbody id="aiLogReportsBody"></tbody></table>
   </div>
 
   <div class="panel" id="tab-feedback">
@@ -735,8 +755,8 @@ app.get('/api/admin/panel', (req, res) => {
             <div id="tn_team_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Select at least two DEXes for a team tournament.</div>
           </div>
           <label style="font-size:11px;color:#9ca3af;grid-column:1/-1">Description<input id="tn_desc" placeholder="optional" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
-          <label style="font-size:11px;color:#9ca3af">Start (UTC, optional)<input id="tn_start" placeholder="2026-05-04 12:00:00" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
-          <label style="font-size:11px;color:#9ca3af">End (UTC, optional)<input id="tn_end" placeholder="2026-05-11 12:00:00" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">Start (UTC, optional)<input id="tn_start" placeholder="2026-05-04 12:00:00" oninput="updateTournamentDailyOverridesUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">End (UTC, optional)<input id="tn_end" placeholder="2026-05-11 12:00:00" oninput="updateTournamentDailyOverridesUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:8px;margin-top:4px">
             <input id="tn_prereg" type="checkbox" style="width:auto;margin:0"> Pre-registration
           </label>
@@ -762,14 +782,24 @@ app.get('/api/admin/panel', (req, res) => {
             </select>
           </label>
           <label style="font-size:11px;color:#9ca3af">Scoring mode
-            <select id="tn_scoring_mode" onchange="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+            <select id="tn_scoring_mode" onchange="updateTournamentPointsUi();updateTournamentDailyOverridesUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
               <option value="live">Live scoring</option>
               <option value="daily_pool">Daily pool at 00:00 UTC</option>
             </select>
           </label>
           <label style="font-size:11px;color:#9ca3af">Daily pool points
-            <input id="tn_daily_pool_points" type="number" min="1" step="1" value="1000" oninput="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+            <input id="tn_daily_pool_points" type="number" min="1" step="1" value="1000" oninput="updateTournamentPointsUi();updateTournamentDailyOverridesUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
           </label>
+          <label style="font-size:11px;color:#9ca3af">Daily pool growth %
+            <input id="tn_daily_pool_growth_pct" type="number" min="-99" max="500" step="0.1" value="0" oninput="updateTournamentPointsUi();updateTournamentDailyOverridesUi()" title="Example: 20 means each next UTC day auto pool is 20% larger unless that day has an override." style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+          </label>
+          <div id="tn_daily_overrides_box" style="grid-column:1/-1;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px">
+              <div style="font-size:11px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.4px">Daily pool overrides</div>
+              <span id="tn_daily_overrides_hint" style="font-size:11px;color:#9ca3af">Daily pool mode only.</span>
+            </div>
+            <div id="tn_daily_override_rows" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px"></div>
+          </div>
           <div id="tn_points_box" style="grid-column:1/-1;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px">
             <div style="font-size:11px;color:#fbbf24;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Point weights</div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
@@ -821,7 +851,7 @@ app.get('/api/admin/panel', (req, res) => {
       </div>
     </div>
     <table><thead><tr>
-      <th>ID</th><th>Name</th><th>DEX</th><th>Access</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Seeker Gold×</th><th>Trophy×</th><th>Shield</th><th>Freeze</th><th>Sort</th><th>Prize</th><th>Players</th><th>Actions</th>
+      <th>ID</th><th>Name</th><th>DEX</th><th>Access</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Seeker Gold×</th><th>Trophy×</th><th>Shield</th><th>Freeze</th><th>Sort</th><th>Prize</th><th>Volume</th><th>Players</th><th>Actions</th>
     </tr></thead><tbody id="tournamentsBody"></tbody></table>
   </div>
 
@@ -1324,8 +1354,11 @@ function renderPlayers() {
   const hplCount   = players.filter(p => p.dex === 'hyperliquid').length;
   const risCount   = players.filter(p => p.dex === 'risex').length;
   const ndoCount   = players.filter(p => p.dex === 'nado').length;
+  const hibCount   = players.filter(p => p.dex === 'hibachi').length;
   const grvtCount  = players.filter(p => p.dex === 'grvt').length;
   const hotCount    = players.filter(p => p.dex === 'hotstuff').length;
+  const gmtCount    = players.filter(p => p.dex === 'gmtrade').length;
+  const katCount   = players.filter(p => p.dex === 'katana').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
   // payload so the badges agree with the per-row "ONLINE" rendering.
@@ -1346,8 +1379,11 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#16a34a"><div class="v" style="color:#86efac;font-size:22px">' + hplCount + '</div><div class="l">Hyperliquid</div></div>' +
     '<div class="stat" style="border-color:#e11d48"><div class="v" style="color:#fb7185;font-size:22px">' + risCount + '</div><div class="l">RISEx</div></div>' +
     '<div class="stat" style="border-color:#00b8d9"><div class="v" style="color:#67e8f9;font-size:22px">' + ndoCount + '</div><div class="l">Nado</div></div>' +
+    '<div class="stat" style="border-color:#dc2626"><div class="v" style="color:#f87171;font-size:22px">' + hibCount + '</div><div class="l">Hibachi</div></div>' +
     '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24;font-size:22px">' + grvtCount + '</div><div class="l">GRVT</div></div>' +
     '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5;font-size:22px">' + hotCount + '</div><div class="l">Hotstuff</div></div>' +
+    '<div class="stat" style="border-color:#06b6d4"><div class="v" style="color:#67e8f9;font-size:22px">' + katCount + '</div><div class="l">Katana</div></div>' +
+    '<div class="stat" style="border-color:#0f766e"><div class="v" style="color:#5eead4;font-size:22px">' + gmtCount + '</div><div class="l">GMTrade</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
@@ -1364,8 +1400,11 @@ function renderPlayers() {
     if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
     if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
     if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
+    if (d === 'hibachi') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HIB</span>';
     if (d === 'grvt') return '<span class="badge" style="background:#78350f;color:#fde68a">GRVT</span>';
     if (d === 'hotstuff') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HOT</span>';
+    if (d === 'katana') return '<span class="badge" style="background:#164e63;color:#cffafe">KTN</span>';
+    if (d === 'gmtrade') return '<span class="badge" style="background:#0f766e;color:#ccfbf1">GMT</span>';
     return '<span class="badge badge-off">—</span>';
   }
   function statusBadge(p) {
@@ -1856,6 +1895,112 @@ async function loadClientLogs() {
   } catch(e) { console.error(e); }
 }
 
+function aiReportCountsHtml(counts) {
+  if (!counts || typeof counts !== 'object') return '<span class="log-meta">-</span>';
+  const labels = [
+    ['client_errors', 'client err'],
+    ['client_warnings', 'warn'],
+    ['hermes_failures', 'Hermes'],
+    ['mcp_failures', 'MCP'],
+    ['feedback_problems', 'feedback'],
+    ['file_logs', 'file lines'],
+  ];
+  return labels
+    .filter(([key]) => counts[key])
+    .map(([key, label]) => '<span class="badge" style="background:#334155;color:#cbd5e1;margin:1px">' + esc(label) + ': ' + esc(counts[key]) + '</span>')
+    .join(' ') || '<span class="log-meta">no error evidence</span>';
+}
+
+function aiReportHealthBadge(report) {
+  const health = report?.report_json?.health_score;
+  if (health == null) return '';
+  const n = Number(health);
+  const color = n >= 85 ? '#4ade80' : n >= 65 ? '#fbbf24' : '#fca5a5';
+  return '<span class="badge" style="background:' + color + '22;color:' + color + '">health ' + esc(String(health)) + '</span>';
+}
+
+function renderAiReportLatest(report) {
+  if (!report) {
+    document.getElementById('aiLogReportLatest').innerHTML =
+      '<div class="ai-report"><h3>No AI log report yet</h3><div class="log-meta">Use Run now or wait for 00:00 UTC.</div></div>';
+    return;
+  }
+  const markdown = report.report_markdown || report.error || '';
+  const json = report.report_json ? JSON.stringify(report.report_json, null, 2) : '';
+  document.getElementById('aiLogReportLatest').innerHTML =
+    '<div class="ai-report">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap">' +
+        '<div>' +
+          '<h3>Latest AI Log Report #' + esc(report.id) + ' ' + aiReportHealthBadge(report) + '</h3>' +
+          '<div class="log-meta mono">' + esc(fmtAdminTime(report.window_start)) + ' - ' + esc(fmtAdminTime(report.window_end)) + ' UTC В· ' + esc(report.model || '-') + '</div>' +
+        '</div>' +
+        '<button class="btn" onclick="viewAiLogReport(' + Number(report.id) + ')">Reload full</button>' +
+      '</div>' +
+      '<pre class="ai-report-pre mono">' + esc(markdown) + '</pre>' +
+      (json ? '<details class="log-details" open><summary>Structured JSON</summary><pre class="ai-report-json mono">' + esc(json) + '</pre></details>' : '') +
+    '</div>';
+}
+
+async function loadAiLogReports() {
+  try {
+    const data = await api('/admin/ai-log-reports?limit=20');
+    const reports = data.reports || [];
+    const latest = reports[0] || null;
+    const ok = reports.filter(r => r.status === 'ok').length;
+    const failed = reports.filter(r => r.status === 'error').length;
+    document.getElementById('aiLogReportStats').innerHTML =
+      '<div class="stat"><div class="v">' + reports.length + '</div><div class="l">Stored reports</div></div>' +
+      '<div class="stat"><div class="v" style="font-size:14px;color:#9ca3af">' + esc(data.model || '-') + '</div><div class="l">Configured model</div></div>' +
+      '<div class="stat" style="border-color:#4ade80"><div class="v" style="color:#4ade80">' + ok + '</div><div class="l">OK shown</div></div>' +
+      '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5">' + failed + '</div><div class="l">Failed shown</div></div>';
+    renderAiReportLatest(latest);
+    document.getElementById('aiLogReportStatus').textContent = reports.length + ' reports loaded';
+    document.getElementById('aiLogReportsBody').innerHTML = reports.map((r) => {
+      const statusColor = r.status === 'ok' ? '#4ade80' : r.status === 'error' ? '#fca5a5' : '#fbbf24';
+      const duration = r.duration_ms ? fmtDurationMs(r.duration_ms) : '-';
+      return '<tr>' +
+        '<td class="mono">' + esc(r.id) + '</td>' +
+        '<td class="mono" style="font-size:11px">' + esc(fmtAdminTime(r.window_start)) + '<br>' + esc(fmtAdminTime(r.window_end)) + '</td>' +
+        '<td><span class="badge" style="background:' + statusColor + '22;color:' + statusColor + '">' + esc(r.status || '-') + '</span></td>' +
+        '<td class="mono" style="font-size:11px">' + esc(r.model || '-') + '</td>' +
+        '<td>' + aiReportCountsHtml(r.source_counts) + '</td>' +
+        '<td class="mono">' + esc(duration) + '</td>' +
+        '<td class="mono" style="font-size:11px">' + esc(fmtAdminTime(r.created_at)) + '</td>' +
+        '<td><button class="btn" onclick="viewAiLogReport(' + Number(r.id) + ')">View</button></td>' +
+      '</tr>';
+    }).join('') || '<tr><td colspan="8" style="color:#6b7280;text-align:center;padding:24px">No reports yet</td></tr>';
+  } catch(e) {
+    document.getElementById('aiLogReportStatus').style.color = '#fca5a5';
+    document.getElementById('aiLogReportStatus').textContent = e.message || String(e);
+  }
+}
+
+async function viewAiLogReport(id) {
+  try {
+    const data = await api('/admin/ai-log-reports/' + encodeURIComponent(id));
+    renderAiReportLatest(data.report);
+  } catch(e) {
+    document.getElementById('aiLogReportStatus').style.color = '#fca5a5';
+    document.getElementById('aiLogReportStatus').textContent = e.message || String(e);
+  }
+}
+
+async function runAiLogReport() {
+  const status = document.getElementById('aiLogReportStatus');
+  status.style.color = '#fbbf24';
+  status.textContent = 'Running OpenRouter analysis...';
+  try {
+    const data = await apiPost('/admin/ai-log-reports/run', { lookback_hours: 24 });
+    status.style.color = '#4ade80';
+    status.textContent = 'Report #' + data.report.id + ' completed';
+    await loadAiLogReports();
+  } catch(e) {
+    status.style.color = '#fca5a5';
+    status.textContent = e.message || String(e);
+    await loadAiLogReports().catch(() => {});
+  }
+}
+
 async function loadFeedback() {
   try {
     const params = new URLSearchParams();
@@ -2100,8 +2245,11 @@ async function loadStats() {
     const hplCount = (byDex.find(x => x.dex === 'hyperliquid') || {}).n || 0;
     const risCount = (byDex.find(x => x.dex === 'risex') || {}).n || 0;
     const ndoCount = (byDex.find(x => x.dex === 'nado') || {}).n || 0;
+    const hibCount = (byDex.find(x => x.dex === 'hibachi') || {}).n || 0;
     const grvtCount = (byDex.find(x => x.dex === 'grvt') || {}).n || 0;
     const hotCount = (byDex.find(x => x.dex === 'hotstuff') || {}).n || 0;
+    const katCount = (byDex.find(x => x.dex === 'katana') || {}).n || 0;
+    const gmtCount = (byDex.find(x => x.dex === 'gmtrade') || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
@@ -2112,8 +2260,11 @@ async function loadStats() {
     const hplRew = rewardsMap.hyperliquid || {};
     const risRew = rewardsMap.risex || {};
     const ndoRew = rewardsMap.nado || {};
+    const hibRew = rewardsMap.hibachi || {};
     const grvtRew = rewardsMap.grvt || {};
     const hotRew = rewardsMap.hotstuff || {};
+    const katRew = rewardsMap.katana || {};
+    const gmtRew = rewardsMap.gmtrade || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
       dexCard('avantis',  'Avantis · Base',    '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, activityLines('avantis')) +
@@ -2124,8 +2275,11 @@ async function loadStats() {
       dexCard('hyperliquid', 'Hyperliquid',     '#16a34a', hplCount, hplRew.total_gold || 0, hplRew.total_volume || 0, activityLines('hyperliquid')) +
       dexCard('risex',    'RISEx',             '#e11d48', risCount, risRew.total_gold || 0, risRew.total_volume || 0, activityLines('risex')) +
       dexCard('nado',     'Nado · Ink',        '#00b8d9', ndoCount, ndoRew.total_gold || 0, ndoRew.total_volume || 0, activityLines('nado')) +
+      dexCard('hibachi',  'Hibachi',           '#dc2626', hibCount, hibRew.total_gold || 0, hibRew.total_volume || 0, activityLines('hibachi')) +
       dexCard('grvt',     'GRVT / GRVT Exchange', '#f59e0b', grvtCount, grvtRew.total_gold || 0, grvtRew.total_volume || 0, activityLines('grvt')) +
       dexCard('hotstuff', 'Hotstuff',          '#ef4444', hotCount, hotRew.total_gold || 0, hotRew.total_volume || 0, activityLines('hotstuff')) +
+      dexCard('katana',   'Katana Perps',      '#06b6d4', katCount, katRew.total_gold || 0, katRew.total_volume || 0, activityLines('katana')) +
+      dexCard('gmtrade',   'GMTrade',           '#0f766e', gmtCount, gmtRew.total_gold || 0, gmtRew.total_volume || 0, activityLines('gmtrade')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
     const grvtBuilder = dex.grvt_builder || {};
@@ -2271,13 +2425,20 @@ async function loadStats() {
       topTraderTable('hyperliquid', 'Hyperliquid', '#16a34a') +
       topTraderTable('risex',   'RISEx',           '#e11d48') +
       topTraderTable('phoenix', 'Phoenix · Solana', '#f97316') +
-      topTraderTable('nado',    'Nado · Ink',       '#00b8d9');
+      topTraderTable('nado',    'Nado · Ink',       '#00b8d9') +
+      topTraderTable('hibachi', 'Hibachi',          '#dc2626');
 
     document.getElementById('topTradersByDex').innerHTML +=
       topTraderTable('grvt', 'GRVT / GRVT Exchange', '#f59e0b');
 
     document.getElementById('topTradersByDex').innerHTML +=
       topTraderTable('hotstuff', 'Hotstuff', '#ef4444');
+
+    document.getElementById('topTradersByDex').innerHTML +=
+      topTraderTable('katana', 'Katana Perps', '#06b6d4');
+
+    document.getElementById('topTradersByDex').innerHTML +=
+      topTraderTable('gmtrade', 'GMTrade', '#0f766e');
 
     function dexBadge(d) {
       if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
@@ -2289,8 +2450,11 @@ async function loadStats() {
       if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
       if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
       if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
+      if (d === 'hibachi') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HIB</span>';
       if (d === 'grvt') return '<span class="badge" style="background:#78350f;color:#fde68a">GRVT</span>';
       if (d === 'hotstuff') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HOT</span>';
+      if (d === 'katana') return '<span class="badge" style="background:#164e63;color:#cffafe">KTN</span>';
+      if (d === 'gmtrade') return '<span class="badge" style="background:#0f766e;color:#ccfbf1">GMT</span>';
       return '<span class="badge badge-off">—</span>';
     }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>
@@ -2525,7 +2689,7 @@ async function deleteTask(id) {
 let TOURNAMENTS_CACHE = [];
 let TOURNAMENT_LB_ID = null;
 let TOURNAMENT_EDIT_ID = null;
-const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'grvt', 'hotstuff'];
+const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade'];
 const TOURNAMENT_DEX_LABELS_ADMIN = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -2536,8 +2700,11 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   hyperliquid: 'Hyperliquid',
   risex: 'RISEx',
   nado: 'Nado',
+  hibachi: 'Hibachi',
   grvt: 'GRVT',
   hotstuff: 'Hotstuff',
+  katana: 'Katana Perps',
+  gmtrade: 'GMTrade',
 };
 const TOURNAMENT_TEAM_METRIC_LABELS_ADMIN = {
   volume_usd: 'Volume',
@@ -2741,53 +2908,178 @@ function tournamentPointParts(weights) {
 function tournamentPrizeExample() {
   return [
     {
-      volume_usd: 500000,
-      pool_usd: 500,
-      payouts: [
-        { rank: 1, amount_usd: 300 },
-        { rank: 2, amount_usd: 150 },
-        { rank: 3, amount_usd: 50 },
+      volume_usd: 100000,
+      rewards: [
+        {
+          type: 'money',
+          label: 'Cash',
+          currency: 'USD',
+          pool_amount: 200,
+          winners: 5,
+          preset: 'top5_balanced',
+          payouts: buildTournamentPrizePayouts({ pool_amount: 200, winners: 5, preset: 'top5_balanced' }),
+        },
+        {
+          type: 'points',
+          label: 'Decibel points',
+          unit: 'points',
+          pool_amount: 1000,
+          winners: 10,
+          preset: 'top10_balanced',
+          payouts: buildTournamentPrizePayouts({ pool_amount: 1000, winners: 10, preset: 'top10_balanced' }),
+        },
       ],
     },
     {
       volume_usd: 1000000,
-      pool_usd: 1000,
-      payouts: [
-        { rank: 1, amount_usd: 600 },
-        { rank: 2, amount_usd: 300 },
-        { rank: 3, amount_usd: 100 },
+      rewards: [
+        {
+          type: 'money',
+          label: 'Cash',
+          currency: 'USD',
+          pool_amount: 1000,
+          winners: 5,
+          preset: 'top5_aggressive',
+          payouts: buildTournamentPrizePayouts({ pool_amount: 1000, winners: 5, preset: 'top5_aggressive' }),
+        },
+        {
+          type: 'nft',
+          label: 'Demon King NFT',
+          unit: 'NFT',
+          pool_amount: 3,
+          winners: 3,
+          preset: 'equal',
+          payouts: buildTournamentPrizePayouts({ pool_amount: 3, winners: 3, preset: 'equal' }),
+        },
       ],
     },
   ];
 }
 
+const TOURNAMENT_PRIZE_PRESETS = [
+  { id: 'winner_take_all', label: 'Winner takes all', weights: [100] },
+  { id: 'equal', label: 'Equal split', equal: true },
+  { id: 'top3_balanced', label: 'Top 3: 50/30/20', weights: [50, 30, 20] },
+  { id: 'top3_aggressive', label: 'Top 3: 60/25/15', weights: [60, 25, 15] },
+  { id: 'top5_balanced', label: 'Top 5: 40/25/15/12/8', weights: [40, 25, 15, 12, 8] },
+  { id: 'top5_aggressive', label: 'Top 5: 50/25/12/8/5', weights: [50, 25, 12, 8, 5] },
+  { id: 'top10_balanced', label: 'Top 10: balanced', weights: [30, 20, 15, 10, 8, 6, 5, 3, 2, 1] },
+  { id: 'top10_flatter', label: 'Top 10: flatter', weights: [25, 18, 14, 11, 9, 7, 6, 4, 3, 3] },
+  { id: 'top10_long_tail', label: 'Top 10: long tail', weights: [35, 18, 12, 9, 7, 6, 5, 4, 2, 2] },
+  { id: 'linear', label: 'Linear drop', linear: true },
+];
+
+function tournamentPrizePresetOptions(selected) {
+  return TOURNAMENT_PRIZE_PRESETS.map((preset) =>
+    '<option value="' + esc(preset.id) + '"' + (preset.id === selected ? ' selected' : '') + '>' + esc(preset.label) + '</option>'
+  ).join('');
+}
+
+function tournamentPrizeRewardDefaults(type) {
+  if (type === 'money') return { type: 'money', label: 'Cash', currency: 'USD', unit: 'USD', pool_amount: 200, winners: 5, preset: 'top5_balanced' };
+  if (type === 'points') return { type: 'points', label: 'Points', unit: 'points', pool_amount: 1000, winners: 10, preset: 'top10_balanced' };
+  if (type === 'amp') return { type: 'amp', label: 'AMP', unit: 'AMP', pool_amount: 1000, winners: 10, preset: 'top10_balanced' };
+  if (type === 'nft') return { type: 'nft', label: 'NFT reward', unit: 'NFT', pool_amount: 1, winners: 1, preset: 'winner_take_all' };
+  return { type: 'custom', label: 'Custom reward', unit: 'reward', pool_amount: 100, winners: 5, preset: 'equal' };
+}
+
+function normalizeTournamentPrizeRewardAdmin(raw) {
+  const type = ['money', 'points', 'amp', 'nft', 'custom'].includes(String(raw?.type || '').toLowerCase()) ? String(raw.type).toLowerCase() : 'custom';
+  const defaults = tournamentPrizeRewardDefaults(type);
+  const pool = Math.max(0, Number(raw?.pool_amount ?? raw?.pool ?? raw?.quantity ?? raw?.amount ?? defaults.pool_amount) || 0);
+  const payouts = Array.isArray(raw?.payouts) ? raw.payouts.map((p) => ({
+    rank: Math.max(1, Math.floor(Number(p?.rank) || 1)),
+    amount: Math.max(0, Number(p?.amount ?? p?.amount_usd ?? p?.quantity ?? p?.points) || 0),
+  })).filter((p) => p.amount > 0).sort((a, b) => a.rank - b.rank) : [];
+  const winners = Math.max(1, Math.min(100, Math.floor(Number(raw?.winners) || payouts.length || defaults.winners || 1)));
+  const reward = {
+    type,
+    label: String(raw?.label || raw?.name || defaults.label).trim().slice(0, 80),
+    unit: String(raw?.unit || raw?.currency || defaults.unit).trim().slice(0, 24),
+    pool_amount: pool,
+    winners,
+    preset: String(raw?.preset || defaults.preset),
+    payouts,
+  };
+  if (type === 'money') reward.currency = String(raw?.currency || raw?.unit || defaults.currency || 'USD').trim().toUpperCase().slice(0, 12) || 'USD';
+  if (!reward.payouts.length && reward.pool_amount > 0) reward.payouts = buildTournamentPrizePayouts(reward);
+  return reward;
+}
+
 function normalizeTournamentPrizeTiersAdmin(tiers) {
   const arr = Array.isArray(tiers) ? tiers : [];
   return arr.map((tier) => {
-    const payouts = Array.isArray(tier?.payouts) ? tier.payouts : [];
+    const legacyPayouts = Array.isArray(tier?.payouts) ? tier.payouts.map((p) => ({
+      rank: Math.max(1, Math.floor(Number(p?.rank) || 1)),
+      amount: Math.max(0, Number(p?.amount_usd ?? p?.amount) || 0),
+    })).filter((p) => p.amount > 0).sort((a, b) => a.rank - b.rank) : [];
+    const legacyPool = Math.max(0, Number(tier?.pool_usd) || 0);
+    const rewards = Array.isArray(tier?.rewards) && tier.rewards.length
+      ? tier.rewards.map(normalizeTournamentPrizeRewardAdmin)
+      : ((legacyPool > 0 || legacyPayouts.length) ? [normalizeTournamentPrizeRewardAdmin({
+        type: 'money',
+        label: 'Cash',
+        currency: tier?.currency || 'USD',
+        pool_amount: legacyPool || legacyPayouts.reduce((s, p) => s + Number(p.amount || 0), 0),
+        winners: legacyPayouts.length || 3,
+        preset: 'top3_balanced',
+        payouts: legacyPayouts,
+      })] : []);
     return {
       volume_usd: Math.max(0, Number(tier?.volume_usd) || 0),
-      pool_usd: Math.max(0, Number(tier?.pool_usd) || 0),
-      payouts: payouts.map((p) => ({
-        rank: Math.max(1, Math.floor(Number(p?.rank) || 1)),
-        amount_usd: Math.max(0, Number(p?.amount_usd) || 0),
-      })).filter((p) => p.amount_usd > 0).sort((a, b) => a.rank - b.rank),
+      rewards,
     };
-  }).filter((tier) => tier.volume_usd > 0 || tier.pool_usd > 0 || tier.payouts.length > 0)
+  }).filter((tier) => tier.volume_usd > 0 || tier.rewards.length > 0)
     .sort((a, b) => a.volume_usd - b.volume_usd);
+}
+
+function buildTournamentPrizePayouts(reward) {
+  const pool = Math.max(0, Number(reward?.pool_amount) || 0);
+  const winners = Math.max(1, Math.min(100, Math.floor(Number(reward?.winners) || 1)));
+  const preset = TOURNAMENT_PRIZE_PRESETS.find((p) => p.id === reward?.preset) || TOURNAMENT_PRIZE_PRESETS[1];
+  let weights = [];
+  if (preset.equal) weights = Array(winners).fill(1);
+  else if (preset.linear) weights = Array.from({ length: winners }, (_, i) => winners - i);
+  else weights = Array.from({ length: winners }, (_, i) => Number(preset.weights?.[i] || 0));
+  if (!weights.some((w) => w > 0)) weights = Array(winners).fill(1);
+  const sum = weights.reduce((s, w) => s + Math.max(0, Number(w) || 0), 0) || 1;
+  let remaining = pool;
+  return weights.slice(0, winners).map((weight, index) => {
+    const rank = index + 1;
+    const raw = index === winners - 1 ? remaining : pool * Math.max(0, Number(weight) || 0) / sum;
+    const amount = reward?.type === 'nft'
+      ? Math.max(0, Math.round(raw))
+      : Math.max(0, Number(raw.toFixed(2)));
+    remaining = Math.max(0, Number((remaining - amount).toFixed(2)));
+    return { rank, amount };
+  }).filter((p) => p.amount > 0);
+}
+
+function formatTournamentRewardPool(reward, currencyFallback) {
+  const amount = Number(reward?.pool_amount || 0);
+  if (reward?.type === 'money') return fmtTournamentUsd(amount, reward.currency || currencyFallback || 'USD');
+  return fmtTournamentWeight(amount) + ' ' + (reward?.unit || reward?.label || 'reward');
 }
 
 function readTournamentPrizeTiers() {
   const rows = Array.from(document.querySelectorAll('[data-prize-tier]'));
   return normalizeTournamentPrizeTiersAdmin(rows.map((row) => {
-    const payouts = Array.from(row.querySelectorAll('[data-prize-payout]')).map((pRow) => ({
-      rank: pRow.querySelector('[data-prize-rank]')?.value,
-      amount_usd: pRow.querySelector('[data-prize-amount]')?.value,
+    const rewards = Array.from(row.querySelectorAll('[data-prize-reward]')).map((rRow) => ({
+      type: rRow.querySelector('[data-reward-type]')?.value,
+      label: rRow.querySelector('[data-reward-label]')?.value,
+      unit: rRow.querySelector('[data-reward-unit]')?.value,
+      currency: rRow.querySelector('[data-reward-currency]')?.value,
+      pool_amount: rRow.querySelector('[data-reward-pool]')?.value,
+      winners: rRow.querySelector('[data-reward-winners]')?.value,
+      preset: rRow.querySelector('[data-reward-preset]')?.value,
+      payouts: Array.from(rRow.querySelectorAll('[data-prize-payout]')).map((pRow) => ({
+        rank: pRow.querySelector('[data-prize-rank]')?.value,
+        amount: pRow.querySelector('[data-prize-amount]')?.value,
+      })),
     }));
     return {
       volume_usd: row.querySelector('[data-prize-volume]')?.value,
-      pool_usd: row.querySelector('[data-prize-pool]')?.value,
-      payouts,
+      rewards,
     };
   }));
 }
@@ -2802,31 +3094,60 @@ function renderTournamentPrizeTiers(tiers) {
     return;
   }
   box.innerHTML = normalized.map((tier, idx) => {
-    const payouts = tier.payouts.length ? tier.payouts : [{ rank: 1, amount_usd: 0 }];
+    const rewards = tier.rewards.length ? tier.rewards : [normalizeTournamentPrizeRewardAdmin({ type: 'money' })];
     return '<div data-prize-tier="' + idx + '" style="border:1px solid #374151;border-radius:8px;padding:8px;background:#111827">'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">'
+      + '<div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end">'
       + '<label style="font-size:11px;color:#9ca3af">Total volume unlock ($)<input data-prize-volume type="number" min="0" step="1000" value="' + tier.volume_usd + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
-      + '<label style="font-size:11px;color:#9ca3af">Prize pool ($)<input data-prize-pool type="number" min="0" step="1" value="' + tier.pool_usd + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
       + '<button type="button" class="btn" onclick="removeTournamentPrizeTier(' + idx + ')" style="background:#7f1d1d">Remove</button>'
       + '</div>'
-      + '<div style="font-size:10px;color:#9ca3af;margin:8px 0 4px">Rank payouts</div>'
-      + payouts.map((p, payoutIdx) =>
-        '<div data-prize-payout style="display:grid;grid-template-columns:72px 1fr auto;gap:8px;align-items:end;margin-top:5px">'
-        + '<label style="font-size:11px;color:#9ca3af">Rank<input data-prize-rank type="number" min="1" step="1" value="' + p.rank + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
-        + '<label style="font-size:11px;color:#9ca3af">Amount ($)<input data-prize-amount type="number" min="0" step="1" value="' + p.amount_usd + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
-        + '<button type="button" class="btn" onclick="removeTournamentPrizePayout(' + idx + ',' + payoutIdx + ')" style="background:#4b5563">Remove</button>'
-        + '</div>'
-      ).join('')
-      + '<button type="button" class="btn" onclick="addTournamentPrizePayout(' + idx + ')" style="margin-top:8px;background:#374151">Add payout</button>'
+      + '<div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">'
+      + rewards.map((reward, rewardIdx) => renderTournamentPrizeReward(idx, rewardIdx, reward)).join('')
+      + '</div>'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
+      + '<button type="button" class="btn" onclick="addTournamentPrizeReward(' + idx + ',&quot;money&quot;)" style="background:#166534">+ Cash</button>'
+      + '<button type="button" class="btn" onclick="addTournamentPrizeReward(' + idx + ',&quot;points&quot;)" style="background:#1d4ed8">+ Points</button>'
+      + '<button type="button" class="btn" onclick="addTournamentPrizeReward(' + idx + ',&quot;amp&quot;)" style="background:#7c3aed">+ AMP</button>'
+      + '<button type="button" class="btn" onclick="addTournamentPrizeReward(' + idx + ',&quot;nft&quot;)" style="background:#92400e">+ NFT</button>'
+      + '<button type="button" class="btn" onclick="addTournamentPrizeReward(' + idx + ',&quot;custom&quot;)" style="background:#4b5563">+ Custom</button>'
+      + '</div>'
       + '</div>';
   }).join('');
   updateTournamentPrizeUi();
 }
 
+function renderTournamentPrizeReward(tierIdx, rewardIdx, reward) {
+  const currencyInput = reward.type === 'money'
+    ? '<label style="font-size:11px;color:#9ca3af">Currency<input data-reward-currency value="' + esc(reward.currency || 'USD') + '" maxlength="12" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb;text-transform:uppercase"></label>'
+    : '<label style="font-size:11px;color:#9ca3af">Unit<input data-reward-unit value="' + esc(reward.unit || '') + '" maxlength="24" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>';
+  const payouts = reward.payouts.length ? reward.payouts : buildTournamentPrizePayouts(reward);
+  return '<div data-prize-reward style="border:1px solid #334155;border-radius:8px;padding:8px;background:#0b1220">'
+    + '<div style="display:grid;grid-template-columns:90px 1fr 96px 90px 86px 160px auto;gap:7px;align-items:end">'
+    + '<label style="font-size:11px;color:#9ca3af">Type<select data-reward-type onchange="changeTournamentPrizeRewardType(' + tierIdx + ',' + rewardIdx + ',this.value)" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">'
+    + ['money', 'points', 'amp', 'nft', 'custom'].map((type) => '<option value="' + type + '"' + (reward.type === type ? ' selected' : '') + '>' + type.toUpperCase() + '</option>').join('')
+    + '</select></label>'
+    + '<label style="font-size:11px;color:#9ca3af">Prize name<input data-reward-label value="' + esc(reward.label || '') + '" maxlength="80" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
+    + currencyInput
+    + '<label style="font-size:11px;color:#9ca3af">Pool<input data-reward-pool type="number" min="0" step="' + (reward.type === 'nft' ? '1' : '1') + '" value="' + reward.pool_amount + '" oninput="regenerateTournamentPrizeReward(' + tierIdx + ',' + rewardIdx + ')" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
+    + '<label style="font-size:11px;color:#9ca3af">Winners<input data-reward-winners type="number" min="1" max="100" step="1" value="' + reward.winners + '" oninput="regenerateTournamentPrizeReward(' + tierIdx + ',' + rewardIdx + ')" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
+    + '<label style="font-size:11px;color:#9ca3af">Preset<select data-reward-preset onchange="regenerateTournamentPrizeReward(' + tierIdx + ',' + rewardIdx + ')" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">' + tournamentPrizePresetOptions(reward.preset) + '</select></label>'
+    + '<button type="button" class="btn" onclick="removeTournamentPrizeReward(' + tierIdx + ',' + rewardIdx + ')" style="background:#7f1d1d">Remove</button>'
+    + '</div>'
+    + '<div style="font-size:10px;color:#9ca3af;margin-top:7px">Rank rewards: ' + payouts.map((p) => '#' + p.rank + ' ' + fmtTournamentWeight(p.amount)).join(' / ') + '</div>'
+    + payouts.map((p, payoutIdx) =>
+      '<div data-prize-payout style="display:grid;grid-template-columns:72px 1fr auto;gap:8px;align-items:end;margin-top:5px">'
+      + '<label style="font-size:11px;color:#9ca3af">Rank<input data-prize-rank type="number" min="1" step="1" value="' + p.rank + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
+      + '<label style="font-size:11px;color:#9ca3af">Amount<input data-prize-amount type="number" min="0" step="' + (reward.type === 'nft' ? '1' : '1') + '" value="' + p.amount + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
+      + '<button type="button" class="btn" onclick="removeTournamentPrizePayout(' + tierIdx + ',' + rewardIdx + ',' + payoutIdx + ')" style="background:#4b5563">Remove</button>'
+      + '</div>'
+    ).join('')
+    + '<button type="button" class="btn" onclick="addTournamentPrizePayout(' + tierIdx + ',' + rewardIdx + ')" style="margin-top:8px;background:#374151">Add payout row</button>'
+    + '</div>';
+}
+
 function addTournamentPrizeTier() {
   const tiers = readTournamentPrizeTiers();
   const nextVolume = (tiers[tiers.length - 1]?.volume_usd || 0) + 500000;
-  tiers.push({ volume_usd: nextVolume, pool_usd: 500, payouts: [{ rank: 1, amount_usd: 300 }, { rank: 2, amount_usd: 150 }, { rank: 3, amount_usd: 50 }] });
+  tiers.push({ volume_usd: nextVolume, rewards: [normalizeTournamentPrizeRewardAdmin({ type: 'money', pool_amount: 500, winners: 3, preset: 'top3_balanced' })] });
   renderTournamentPrizeTiers(tiers);
 }
 
@@ -2836,18 +3157,50 @@ function removeTournamentPrizeTier(index) {
   renderTournamentPrizeTiers(tiers);
 }
 
-function addTournamentPrizePayout(index) {
+function addTournamentPrizeReward(index, type) {
   const tiers = readTournamentPrizeTiers();
-  const tier = tiers[index] || { volume_usd: 0, pool_usd: 0, payouts: [] };
-  const nextRank = tier.payouts.reduce((max, p) => Math.max(max, Number(p.rank) || 0), 0) + 1;
-  tier.payouts.push({ rank: nextRank, amount_usd: 1 });
+  const tier = tiers[index] || { volume_usd: 0, rewards: [] };
+  tier.rewards = Array.isArray(tier.rewards) ? tier.rewards : [];
+  tier.rewards.push(normalizeTournamentPrizeRewardAdmin(tournamentPrizeRewardDefaults(type)));
   tiers[index] = tier;
   renderTournamentPrizeTiers(tiers);
 }
 
-function removeTournamentPrizePayout(index, payoutIndex) {
+function removeTournamentPrizeReward(index, rewardIndex) {
   const tiers = readTournamentPrizeTiers();
-  if (tiers[index]) tiers[index].payouts.splice(payoutIndex, 1);
+  if (tiers[index]) tiers[index].rewards.splice(rewardIndex, 1);
+  renderTournamentPrizeTiers(tiers);
+}
+
+function changeTournamentPrizeRewardType(index, rewardIndex, type) {
+  const tiers = readTournamentPrizeTiers();
+  if (!tiers[index] || !tiers[index].rewards[rewardIndex]) return;
+  const next = tournamentPrizeRewardDefaults(type);
+  tiers[index].rewards[rewardIndex] = normalizeTournamentPrizeRewardAdmin({ ...next, pool_amount: tiers[index].rewards[rewardIndex].pool_amount });
+  renderTournamentPrizeTiers(tiers);
+}
+
+function regenerateTournamentPrizeReward(index, rewardIndex) {
+  const tiers = readTournamentPrizeTiers();
+  const reward = tiers[index]?.rewards?.[rewardIndex];
+  if (!reward) return;
+  reward.payouts = buildTournamentPrizePayouts(reward);
+  tiers[index].rewards[rewardIndex] = reward;
+  renderTournamentPrizeTiers(tiers);
+}
+
+function addTournamentPrizePayout(index, rewardIndex) {
+  const tiers = readTournamentPrizeTiers();
+  const reward = tiers[index]?.rewards?.[rewardIndex];
+  if (!reward) return;
+  const nextRank = reward.payouts.reduce((max, p) => Math.max(max, Number(p.rank) || 0), 0) + 1;
+  reward.payouts.push({ rank: nextRank, amount: 1 });
+  renderTournamentPrizeTiers(tiers);
+}
+
+function removeTournamentPrizePayout(index, rewardIndex, payoutIndex) {
+  const tiers = readTournamentPrizeTiers();
+  if (tiers[index]?.rewards?.[rewardIndex]) tiers[index].rewards[rewardIndex].payouts.splice(payoutIndex, 1);
   renderTournamentPrizeTiers(tiers);
 }
 
@@ -2867,15 +3220,18 @@ function updateTournamentPrizeUi() {
     hint.textContent = cop ? 'CLASH rewards enabled. Players must enter a Solana payout address when joining.' : 'No prize tiers configured.';
     return;
   }
-  const invalid = tiers.find((tier) => tier.payouts.reduce((s, p) => s + Number(p.amount_usd || 0), 0) > Number(tier.pool_usd || 0) + 0.01);
+  const invalid = tiers.find((tier) => (tier.rewards || []).find((reward) =>
+    reward.payouts.reduce((s, p) => s + Number(p.amount || 0), 0) > Number(reward.pool_amount || 0) + 0.01
+  ));
   if (invalid) {
     hint.style.color = '#fca5a5';
-    hint.textContent = 'Payouts cannot exceed their tier prize pool.';
+    hint.textContent = 'Reward payouts cannot exceed their configured pool.';
     return;
   }
   const top = tiers[tiers.length - 1];
+  const pools = (top.rewards || []).map((reward) => formatTournamentRewardPool(reward, document.getElementById('tn_prize_currency')?.value || 'USD')).join(' + ');
   hint.style.color = '#9ca3af';
-  hint.textContent = tiers.length + ' tier(s), top pool ' + fmtTournamentUsd(top.pool_usd, document.getElementById('tn_prize_currency')?.value || 'USD')
+  hint.textContent = tiers.length + ' tier(s), top pool ' + (pools || '0')
     + ' at ' + fmtTournamentUsd(top.volume_usd, '') + ' total volume.'
     + (cop ? ' CLASH Solana payout addresses required.' : '');
 }
@@ -2883,15 +3239,20 @@ function updateTournamentPrizeUi() {
 function tournamentPrizeLabel(t) {
   const currency = t?.prize_currency || 'USD';
   const pool = Number(t?.prize_pool_usd || 0);
+  const rewards = Array.isArray(t?.prize_rewards) ? t.prize_rewards : [];
+  const rewardText = rewards.length ? rewards.map((reward) => esc(reward.label || reward.type) + ': ' + esc(formatTournamentRewardPool(reward, currency))).join('<br>') : '';
   const active = t?.prize_active_tier;
   const next = t?.prize_next_tier;
   const totalVolume = Number(t?.prize_total_volume_usd || 0);
-  if (pool > 0 && active) {
-    return fmtTournamentUsd(pool, currency) + (t?.rewards_in_cop ? ' <span style="color:#fbbf24">CLASH</span>' : '')
+  if ((pool > 0 || rewards.length) && active) {
+    return (rewardText || fmtTournamentUsd(pool, currency)) + (t?.rewards_in_cop ? ' <span style="color:#fbbf24">CLASH</span>' : '')
       + '<div style="font-size:10px;color:#9ca3af">active at ' + fmtTournamentUsd(active.volume_usd || 0, '') + ' vol · current ' + fmtTournamentUsd(totalVolume, '') + '</div>';
   }
   if (next) {
-    return '<span style="color:#9ca3af">Next ' + fmtTournamentUsd(next.pool_usd || 0, currency)
+    const nextRewards = Array.isArray(next.rewards) && next.rewards.length
+      ? next.rewards.map((reward) => esc(formatTournamentRewardPool(reward, currency))).join(' + ')
+      : fmtTournamentUsd(next.pool_usd || 0, currency);
+    return '<span style="color:#9ca3af">Next ' + nextRewards
       + '</span><div style="font-size:10px;color:#9ca3af">needs ' + fmtTournamentUsd(next.volume_usd || 0, '') + ' vol</div>';
   }
   return '<span style="color:#6b7280">—</span>';
@@ -2993,10 +3354,17 @@ function updateTournamentPointsUi() {
   sort.disabled = isDailyPool;
   sort.style.opacity = isDailyPool ? '0.6' : '1';
   const poolInput = document.getElementById('tn_daily_pool_points');
+  const growthInput = document.getElementById('tn_daily_pool_growth_pct');
+  const overridesBox = document.getElementById('tn_daily_overrides_box');
   if (poolInput) {
     poolInput.disabled = !isDailyPool;
     poolInput.style.opacity = isDailyPool ? '1' : '0.55';
   }
+  if (growthInput) {
+    growthInput.disabled = !isDailyPool;
+    growthInput.style.opacity = isDailyPool ? '1' : '0.55';
+  }
+  if (overridesBox) overridesBox.style.opacity = isDailyPool ? '1' : '0.55';
   const isPoints = isDailyPool || sort.value === 'points' || teamUsesPoints;
   box.style.opacity = isPoints ? '1' : '0.45';
   ['tn_points_trophy', 'tn_points_volume', 'tn_points_pnl'].forEach((id) => {
@@ -3017,10 +3385,80 @@ function updateTournamentPointsUi() {
   const parts = tournamentPointParts(weights);
   hint.style.color = Math.abs(total - 100) < 0.001 ? '#9ca3af' : '#fca5a5';
   const poolPoints = Math.max(1, Number(poolInput?.value || 1000) || 1000);
+  const growthPct = Number(growthInput?.value || 0) || 0;
   hint.textContent = 'Total: ' + total + '%. '
     + (parts.length ? 'Points = ' + parts.join(' + ') + '.' : 'Enable at least one metric.')
-    + (isDailyPool ? ' Awards ' + poolPoints + ' points per closed UTC day using these weights.' : '')
+    + (isDailyPool ? ' Awards ' + poolPoints + ' base points per closed UTC day using these weights' + (growthPct ? ', growth ' + growthPct + '%/day.' : '.') : '')
     + (teamUsesPoints && sort.value !== 'points' ? ' Used by DEX vs DEX custom points.' : '');
+}
+
+function tournamentFormDayFromInput(id) {
+  const raw = document.getElementById(id)?.value || '';
+  const m = String(raw).match(/\d{4}-\d{2}-\d{2}/);
+  return m ? m[0] : null;
+}
+
+function addUtcDayString(day, count) {
+  const ms = Date.parse(day + 'T00:00:00Z');
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms + (Number(count) || 0) * 86400000).toISOString().slice(0, 10);
+}
+
+function tournamentDailyOverrideDays() {
+  const start = tournamentFormDayFromInput('tn_start') || new Date().toISOString().slice(0, 10);
+  const end = tournamentFormDayFromInput('tn_end');
+  let count = 7;
+  if (start && end) {
+    const startMs = Date.parse(start + 'T00:00:00Z');
+    const endMs = Date.parse(end + 'T00:00:00Z');
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+      count = Math.min(60, Math.max(1, Math.ceil((endMs - startMs) / 86400000)));
+    }
+  }
+  const days = [];
+  for (let i = 0; i < count; i += 1) {
+    const day = addUtcDayString(start, i);
+    if (day) days.push(day);
+  }
+  return days;
+}
+
+function readTournamentDailyOverrides() {
+  const out = {};
+  document.querySelectorAll('[data-tn-daily-override-day]').forEach((input) => {
+    const day = input.getAttribute('data-tn-daily-override-day');
+    const value = String(input.value || '').trim();
+    if (!day || !value) return;
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) out[day] = Math.max(1, Math.round(n * 10000) / 10000);
+  });
+  return out;
+}
+
+function updateTournamentDailyOverridesUi(seedOverrides) {
+  const rowsEl = document.getElementById('tn_daily_override_rows');
+  const hint = document.getElementById('tn_daily_overrides_hint');
+  if (!rowsEl || !hint) return;
+  const scoringMode = document.getElementById('tn_scoring_mode')?.value || 'live';
+  if (scoringMode !== 'daily_pool') {
+    rowsEl.innerHTML = '';
+    hint.textContent = 'Daily pool mode only.';
+    return;
+  }
+  const existing = seedOverrides && typeof seedOverrides === 'object' ? seedOverrides : readTournamentDailyOverrides();
+  const base = Math.max(1, Number(document.getElementById('tn_daily_pool_points')?.value || 1000) || 1000);
+  const growthPct = Math.max(-99, Math.min(500, Number(document.getElementById('tn_daily_pool_growth_pct')?.value || 0) || 0));
+  const days = tournamentDailyOverrideDays();
+  rowsEl.innerHTML = days.map((day, index) => {
+    const auto = Math.max(1, Math.round(base * Math.pow(1 + growthPct / 100, index) * 10000) / 10000);
+    const value = existing[day] != null ? existing[day] : '';
+    return '<label style="font-size:11px;color:#9ca3af;background:#111827;border:1px solid #374151;border-radius:6px;padding:7px">'
+      + '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:4px"><span>Day ' + (index + 1) + '</span><span class="mono">' + esc(day) + '</span></div>'
+      + '<input data-tn-daily-override-day="' + esc(day) + '" type="number" min="1" step="1" placeholder="auto ' + esc(String(auto)) + '" value="' + esc(String(value)) + '" style="width:100%;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">'
+      + '</label>';
+  }).join('');
+  const overrideCount = Object.keys(existing || {}).length;
+  hint.textContent = days.length + ' day' + (days.length === 1 ? '' : 's') + ' shown. Blank = auto growth. Overrides saved: ' + overrideCount + '.';
 }
 
 async function loadTournaments() {
@@ -3036,7 +3474,7 @@ function renderTournaments() {
   const body = document.getElementById('tournamentsBody');
   if (!body) return;
   if (TOURNAMENTS_CACHE.length === 0) {
-    body.innerHTML = '<tr><td colspan="18" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
+    body.innerHTML = '<tr><td colspan="19" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
     return;
   }
   body.innerHTML = TOURNAMENTS_CACHE.map(t => {
@@ -3066,9 +3504,11 @@ function renderTournaments() {
       + '<td>' + esc(t.shield_label || 'Default') + '</td>'
       + '<td>' + (t.freeze_trophies ? '<span style="color:#60a5fa">ON</span>' : '<span style="color:#fbbf24">OFF</span>') + '</td>'
       + '<td>' + esc(t.sort_label || tournamentSortLabel(t))
-        + (isTournamentDailyPool(t) ? '<div style="font-size:10px;color:#fbbf24">' + esc(Number(t.daily_pool_points || 1000) + ' pts/day @ 00:00 UTC') + '</div>' : '')
+        + (isTournamentDailyPool(t) ? '<div style="font-size:10px;color:#fbbf24">' + esc(Number(t.daily_pool_points || 1000) + ' base pts/day @ 00:00 UTC') + '</div>'
+          + '<div style="font-size:10px;color:#9ca3af">' + esc((Number(t.daily_pool_growth_pct || 0) || 0) + '% daily growth · ' + Object.keys(t.daily_pool_overrides || {}).length + ' override(s)') + '</div>' : '')
       + '</td>'
       + '<td style="font-size:11px">' + tournamentPrizeLabel(t) + '</td>'
+      + '<td style="font-size:11px;color:#38bdf8">' + fmtTournamentUsd(t.prize_total_volume_usd || 0, '') + '</td>'
       + '<td>' + (t.participants || 0) + '/' + (t.registered || 0) + '</td>'
       + '<td>'
       +   '<button class="btn" onclick="loadTournamentLeaderboard(' + t.id + ')">Leaderboard</button> '
@@ -3115,6 +3555,8 @@ function getTournamentFormBody() {
     sort_by: document.getElementById('tn_sort').value,
     scoring_mode: document.getElementById('tn_scoring_mode')?.value || 'live',
     daily_pool_points: Math.max(1, Number(document.getElementById('tn_daily_pool_points')?.value || 1000) || 1000),
+    daily_pool_growth_pct: Number(document.getElementById('tn_daily_pool_growth_pct')?.value || 0) || 0,
+    daily_pool_overrides: readTournamentDailyOverrides(),
     points_trophy_weight: pointWeights.trophies,
     points_volume_weight: pointWeights.volume,
     points_pnl_weight: pointWeights.pnl,
@@ -3154,6 +3596,7 @@ function resetTournamentForm() {
   document.getElementById('tn_sort').value = 'points';
   document.getElementById('tn_scoring_mode').value = 'live';
   document.getElementById('tn_daily_pool_points').value = '1000';
+  document.getElementById('tn_daily_pool_growth_pct').value = '0';
   document.getElementById('tn_points_trophy').value = '20';
   document.getElementById('tn_points_volume').value = '60';
   document.getElementById('tn_points_pnl').value = '20';
@@ -3168,6 +3611,7 @@ function resetTournamentForm() {
   updateTournamentDexScopeUi();
   updateTournamentTeamUi();
   updateTournamentPointsUi();
+  updateTournamentDailyOverridesUi({});
   updateTournamentPrizeUi();
 }
 
@@ -3202,6 +3646,7 @@ function editTournament(id) {
   document.getElementById('tn_sort').value = t.sort_by === 'volume_trophies_50_50' ? 'points' : (t.sort_by || 'points');
   document.getElementById('tn_scoring_mode').value = isTournamentDailyPool(t) ? 'daily_pool' : 'live';
   document.getElementById('tn_daily_pool_points').value = Math.max(1, Number(t.daily_pool_points || 1000) || 1000);
+  document.getElementById('tn_daily_pool_growth_pct').value = Number(t.daily_pool_growth_pct || 0) || 0;
   const weights = tournamentPointsWeights(t);
   document.getElementById('tn_points_trophy').value = weights.trophies;
   document.getElementById('tn_points_volume').value = weights.volume;
@@ -3217,6 +3662,7 @@ function editTournament(id) {
   updateTournamentDexScopeUi();
   updateTournamentTeamUi(t.team_prize_splits || []);
   updateTournamentPointsUi();
+  updateTournamentDailyOverridesUi(t.daily_pool_overrides || {});
   updateTournamentPrizeUi();
   document.getElementById('tn_form_title').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
@@ -3256,10 +3702,12 @@ async function saveTournament() {
     }
   }
   const badTier = (body.prize_tiers || []).find((tier) =>
-    tier.payouts.reduce((s, p) => s + Number(p.amount_usd || 0), 0) > Number(tier.pool_usd || 0) + 0.01
+    (tier.rewards || []).find((reward) =>
+      (reward.payouts || []).reduce((s, p) => s + Number(p.amount || 0), 0) > Number(reward.pool_amount || 0) + 0.01
+    )
   );
   if (badTier) {
-    alert('Prize payouts cannot exceed the tier prize pool.');
+    alert('Prize reward payouts cannot exceed their configured pool.');
     return;
   }
   const editingId = TOURNAMENT_EDIT_ID;
@@ -3313,10 +3761,9 @@ async function loadTournamentLeaderboard(id) {
     const prizeMeta = Number(prize.pool_usd || 0) > 0
       ? ' · prize: ' + fmtTournamentUsd(prize.pool_usd, prize.currency || t.prize_currency || 'USD')
       : (prize.next_tier ? ' · next prize: ' + fmtTournamentUsd(prize.next_tier.pool_usd || 0, prize.currency || t.prize_currency || 'USD') + ' @ ' + fmtTournamentUsd(prize.next_tier.volume_usd || 0, '') + ' vol' : '');
+    const totalVolumeMeta = ' · total volume: ' + fmtTournamentUsd(prize.total_volume_usd ?? t.prize_total_volume_usd ?? 0, '');
     document.getElementById('tn_lb_meta').textContent =
-      '#' + t.id + ' ' + t.name + ' · ' + t.dex + ' · ' + (t.phase || t.status) + ' · sort: ' + (j.sort_label || tournamentSortLabel(j.sort_by)) + prizeMeta + ' · ' + (j.leaderboard.length) + ' players';
-    document.getElementById('tn_lb_meta').textContent =
-      '#' + t.id + ' ' + t.name + ' · ' + (t.dex_label || t.dex) + ' · ' + (t.mode_label || 'Individual') + ' · ' + (t.phase || t.status) + ' · sort: ' + (j.sort_label || tournamentSortLabel(j.sort_by)) + prizeMeta + teamMeta + ' · ' + (j.leaderboard.length) + ' players';
+      '#' + t.id + ' ' + t.name + ' · ' + (t.dex_label || t.dex) + ' · ' + (t.mode_label || 'Individual') + ' · ' + (t.phase || t.status) + ' · sort: ' + (j.sort_label || tournamentSortLabel(j.sort_by)) + totalVolumeMeta + prizeMeta + teamMeta + ' · ' + (j.leaderboard.length) + ' players';
     document.getElementById('tn_lb_body').innerHTML = j.leaderboard.map(r => {
       const score = r.score == null ? '—' : Number(r.score || 0).toFixed(1);
       const prizeAmount = Number(r.prize_amount || 0);
@@ -3531,7 +3978,10 @@ function renderRevenueAnalytics(data) {
     { key: 'hyperliquid', label: 'Hyperliquid' },
     { key: 'risex', label: 'RISE' },
     { key: 'nado', label: 'Nado' },
+    { key: 'hibachi', label: 'Hibachi' },
     { key: 'hotstuff', label: 'Hotstuff' },
+    { key: 'katana', label: 'Katana Perps' },
+    { key: 'gmtrade', label: 'GMTrade' },
   ];
   const windowKeys = ['24h', '7d', '30d', 'all'];
   const revenueCell = (row) => {
@@ -3609,7 +4059,10 @@ async function loadEarnings(force) {
       ['hyperliquid', 'Hyperliquid', '#86efac', '#16a34a'],
       ['grvt',     'GRVT',     '#5eead4', '#14b8a6'],
       ['nado',     'Nado',     '#67e8f9', '#00b8d9'],
+      ['hibachi',  'Hibachi',  '#f87171', '#dc2626'],
       ['hotstuff', 'Hotstuff', '#fca5a5', '#ef4444'],
+      ['katana',   'Katana Perps', '#67e8f9', '#06b6d4'],
+      ['gmtrade',  'GMTrade',  '#5eead4', '#0f766e'],
     ];
     const total = Number(data.total_usd) || 0;
     document.getElementById('earningsTotals').innerHTML =
@@ -3739,6 +4192,7 @@ async function loadShop() {
         base: 'https://basescan.org/tx/',
         arbitrum: 'https://arbiscan.io/tx/',
         monad: 'https://testnet.monadexplorer.com/tx/',
+        ink: 'https://explorer.inkonchain.com/tx/',
         solana: 'https://solscan.io/tx/',
         aptos: 'https://explorer.aptoslabs.com/txn/',
       };
@@ -4000,6 +4454,7 @@ function marketChainLabel(chain) {
     base: 'Base',
     arbitrum: 'Arbitrum',
     monad: 'Monad',
+    ink: 'Ink',
     aptos: 'Aptos',
     solana: 'Solana',
     unknown: 'Unknown',
@@ -4012,6 +4467,7 @@ function marketChainBadge(chain) {
     base: '#2563eb',
     arbitrum: '#1d4ed8',
     monad: '#7c3aed',
+    ink: '#111827',
     aptos: '#374151',
     solana: '#059669',
     unknown: '#4b5563',
@@ -4041,6 +4497,7 @@ function marketExplorerUrl(chain, hash) {
   if (c === 'base') return 'https://basescan.org/tx/' + h;
   if (c === 'arbitrum') return 'https://arbiscan.io/tx/' + h;
   if (c === 'monad') return 'https://testnet.monadexplorer.com/tx/' + h;
+  if (c === 'ink') return 'https://explorer.inkonchain.com/tx/' + h;
   if (c === 'solana') return 'https://solscan.io/tx/' + h;
   if (c === 'aptos') return 'https://explorer.aptoslabs.com/txn/' + h + '?network=mainnet';
   return null;
@@ -4222,6 +4679,7 @@ async function loadNftAnalytics() {
       base: 'Base',
       arbitrum: 'Arbitrum',
       monad: 'Monad',
+      ink: 'Ink',
       aptos: 'Aptos',
       solana: 'Solana',
     }[chain] || chain || '-');
@@ -4237,6 +4695,7 @@ async function loadNftAnalytics() {
       if (!h) return null;
       if (chain === 'base') return 'https://basescan.org/tx/' + h;
       if (chain === 'arbitrum') return 'https://arbiscan.io/tx/' + h;
+      if (chain === 'ink') return 'https://explorer.inkonchain.com/tx/' + h;
       if (chain === 'aptos') return 'https://explorer.aptoslabs.com/txn/' + h + '?network=mainnet';
       if (chain === 'solana') return 'https://solscan.io/tx/' + h;
       return null;
@@ -4372,10 +4831,11 @@ switchTab = function(name) {
   origSwitch(name);
   if (name === 'logs') loadLogs();
   if (name === 'client') loadClientLogs();
+  if (name === 'ai-reports') loadAiLogReports();
   if (name === 'feedback') loadFeedback();
   if (name === 'stats') loadStats();
   if (name === 'tasks') loadTasks();
-  if (name === 'tournaments') { updateTournamentDexScopeUi(); updateTournamentTeamUi(); updateTournamentPointsUi(); updateTournamentPrizeUi(); loadTournaments(); }
+  if (name === 'tournaments') { updateTournamentDexScopeUi(); updateTournamentTeamUi(); updateTournamentPointsUi(); updateTournamentDailyOverridesUi(); updateTournamentPrizeUi(); loadTournaments(); }
   if (name === 'elfa') loadElfa();
   if (name === 'earnings') loadEarnings();
   if (name === 'shop') loadShop();
@@ -4394,6 +4854,7 @@ setInterval(() => { if (KEY) loadAll(); }, 15000);
 
 // All game API routes
 app.use('/api', router);
+startDailyLogAiScheduler();
 
 // Error handler
 // In production, log the compact message + first stack frame — full stacks

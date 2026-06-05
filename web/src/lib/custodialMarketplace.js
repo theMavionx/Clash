@@ -6,6 +6,7 @@ export const CUSTODIAL_EVM_CHAIN_IDS = {
   base: 8453,
   arbitrum: 42161,
   monad: 143,
+  ink: 57073,
 };
 
 const ERC20_TRANSFER_ABI = [

@@ -5,7 +5,7 @@ export const KATANA_CHAIN_ID_HEX = `0x${KATANA_CHAIN_ID.toString(16)}`;
 export const KATANA_CHAIN_NAME = 'Katana';
 export const KATANA_RPC_URLS = ['https://rpc.katana.network/'];
 export const KATANA_EXPLORER_URL = 'https://katanascan.com';
-export const KATANA_PERPS_REFERRAL_CODE = String(import.meta.env.VITE_KATANA_PERPS_REFERRAL_CODE || '914TO2TD').trim();
+export const KATANA_PERPS_REFERRAL_CODE = String(import.meta.env.VITE_KATANA_PERPS_REFERRAL_CODE || 'CLASHOFPERPS').trim();
 export const KATANA_PERPS_APP_URL = 'https://perps.katana.network';
 export const KATANA_PERPS_REFERRAL_URL = `${KATANA_PERPS_APP_URL}/r/${encodeURIComponent(KATANA_PERPS_REFERRAL_CODE)}`;
 

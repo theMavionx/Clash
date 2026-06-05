@@ -9,13 +9,14 @@ import { SOLANA_RPC_URLS, createSolanaConnection, solanaNonHeliusRpcUrls } from 
 //   executeUpgrade({ evmWallet, chainKey, quoteResponse })
 //
 // Chain switching: each function expects the caller to have already
-// connected the right wallet (Base / Arbitrum / Monad). `executeUpgrade`
+// connected the right wallet (Base / Arbitrum / Monad / Ink). `executeUpgrade`
 // does the final `ensureChain` flip just before sending the tx.
 
 const CHAIN_IDS = {
   base: 8453,
   arbitrum: 42161,
   monad: 143,
+  ink: 57073,
 };
 
 const NFT_IMAGE_BASE_URL = String(import.meta.env?.VITE_NFT_IMAGE_BASE_URL || '/cdn/nft').replace(/\/+$/, '');
@@ -33,14 +34,14 @@ const OWNED_EVM_SCAN_CHUNK_SIZE = 80;
 const OWNED_CACHE_PREFIX = 'nft-owned-v3:';
 const DEMON_KING_SYNC_CACHE_TTL_MS = 5 * 60_000;
 const DEMON_KING_SYNC_CACHE_PREFIX = 'demon-king-sync:';
-const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad'];
+const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad', 'ink'];
 const DEMON_KING_SUPPORTED_CHAINS = [...DEMON_KING_EVM_CHAINS, 'solana', 'aptos'];
 const DEMON_KING_CHAIN_BY_DEX = {
   avantis: 'base',
   gmx: 'arbitrum',
   hyperliquid: 'arbitrum',
   risex: 'arbitrum',
-  nado: 'base',
+  nado: 'ink',
   monad: 'monad',
   pacifica: 'solana',
   phoenix: 'solana',
@@ -50,6 +51,7 @@ const DEMON_KING_CHAIN_BY_EVM_CHAIN_ID = {
   8453: 'base',
   42161: 'arbitrum',
   143: 'monad',
+  57073: 'ink',
 };
 
 const ownedNftMemoryCache = new Map();
@@ -143,6 +145,17 @@ const EVM_OWNED_CONFIG = {
       'https://rpc2.monad.xyz',
       'https://rpc3.monad.xyz',
       'https://rpc-mainnet.monadinfra.com',
+    ],
+  },
+  ink: {
+    chainId: 57073,
+    contract: '0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F',
+    rpcEnv: ['VITE_INK_RPC_URL'],
+    rpcUrls: [
+      '/rpc/ink',
+      'https://rpc-gel.inkonchain.com',
+      'https://rpc-qnd.inkonchain.com',
+      'https://ink.drpc.org',
     ],
   },
 };
@@ -1097,6 +1110,14 @@ function evmOwnedToken(chain, id, level) {
   };
 }
 
+function evmOwnedContract(chain) {
+  const config = EVM_OWNED_CONFIG[chain];
+  if (!config) return '';
+  return envValue(`VITE_NFT_${String(chain || '').toUpperCase()}_CONTRACT`)
+    || config.contract
+    || '';
+}
+
 async function fetchNftStateBrowserEvm({ chain, tokenId, evmWallet, signal }) {
   const config = EVM_OWNED_CONFIG[chain];
   if (!config) throw new Error(`Unsupported EVM chain: ${chain}`);
@@ -1110,7 +1131,9 @@ async function fetchNftStateBrowserEvm({ chain, tokenId, evmWallet, signal }) {
 
   const tokenIdBig = BigInt(tokenIdText);
   const client = evmWallet?.getPublicClient?.(config.chainId) || await createOwnedEvmClient(chain);
-  const contract = getAddress(config.contract);
+  const contractRaw = evmOwnedContract(chain);
+  if (!contractRaw) throw new Error(`${chain} NFT contract is not configured`);
+  const contract = getAddress(contractRaw);
   const [owner, level, paused] = await Promise.all([
     withTimeout(client.readContract({
       address: contract,
@@ -1163,7 +1186,9 @@ async function fetchOwnedNftsBrowserEvm({ chain, address, signal }) {
   const { getAddress } = await import('viem');
   const owner = getAddress(address);
   const client = await createOwnedEvmClient(chain);
-  const contract = getAddress(config.contract);
+  const contractRaw = evmOwnedContract(chain);
+  if (!contractRaw) throw new Error(`${chain} NFT contract is not configured`);
+  const contract = getAddress(contractRaw);
   const totalMinted = await withTimeout(client.readContract({
     address: contract,
     abi: EVM_OWNED_ABI,

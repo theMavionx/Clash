@@ -23,7 +23,9 @@ loadEnvFile(path.join(REPO_ROOT, 'web', '.env'));
 
 const express = require('express');
 const cors = require('cors');
+const http = require('http');
 const routes = require('./routes');
+const { setupGmtradeRealtime } = require('./gmtrade-realtime');
 
 const PORT = process.env.FUTURES_PORT || 3999;
 
@@ -131,9 +133,12 @@ app.use((err, req, res, _next) => {
   res.status(status).json({ error: status === 500 ? 'Internal server error' : (err.message || 'Request failed') });
 });
 
-app.listen(PORT, '127.0.0.1', () => {
+const server = http.createServer(app);
+setupGmtradeRealtime(server);
+
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`Futures server running on http://127.0.0.1:${PORT}`);
-  console.log('Network: Pacifica Mainnet + Avantis (Base) + Decibel (Aptos) + GMX (Arbitrum) + Perpl (Monad) + Phoenix (Solana) + Hyperliquid + Nado (Ink) + Katana');
+  console.log('Network: Pacifica Mainnet + Avantis (Base) + Decibel (Aptos) + GMX (Arbitrum) + Perpl (Monad) + Phoenix (Solana) + Hyperliquid + Nado (Ink) + Katana + GMTrade realtime');
   console.log('Builder code: clashofperps');
   // Start gold-rewards indexers. Avantis still needs polling. Decibel orders
   // are submitted by this server signer, so the Decibel order route records

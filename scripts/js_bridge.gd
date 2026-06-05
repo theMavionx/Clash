@@ -160,7 +160,7 @@ func _get_local_guest_wallet() -> String:
 
 
 func _clear_local_web_auth(net: Node) -> void:
-	if not _is_local_web_host():
+	if not _is_local_web_host() or not _local_guest_mode_enabled():
 		return
 	if not net:
 		return
@@ -171,6 +171,8 @@ func _clear_local_web_auth(net: Node) -> void:
 	net.wallet = ""
 	var cfg = ConfigFile.new()
 	cfg.save("user://auth.cfg")
+	if net.has_method("_clear_web_auth_fallback"):
+		net._clear_web_auth_fallback()
 	JavaScriptBridge.eval("window.localStorage && window.localStorage.removeItem('clash.localGuest')", true)
 
 
@@ -322,6 +324,14 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				bs._upgrade_troop(tn)
 		"register":
 			_do_register(data.get("name", ""), data.get("wallet", ""), data.get("dex", ""), int(data.get("fid", 0)))
+		"set_player_name_client":
+			var net = get_node_or_null("/root/Net")
+			var next_name := String(data.get("name", "")).strip_edges()
+			if net and next_name != "":
+				net.display_name = next_name
+				if net.has_method("_save_token"):
+					net._save_token()
+				send_to_react("state", {"player_name": next_name})
 		"wallet_connected":
 			_try_wallet_login(data.get("wallet", ""), data.get("dex", ""))
 		"logout":
@@ -606,11 +616,14 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "", fi
 			})
 			return
 	if player_name.length() < 2:
+		send_to_react("auth_error", {"message": "Name must be at least 2 characters", "stage": "register"})
 		send_to_react("error", {"message": "Name must be at least 2 characters"})
 		return
 	var result = await net.register(player_name, wallet, dex, fid)
 	if result.has("error"):
-		send_to_react("error", {"message": str(result.error)})
+		var message := str(result.error)
+		send_to_react("auth_error", {"message": message, "stage": "register"})
+		send_to_react("error", {"message": message})
 		return
 	send_to_react("registered", {"success": true})
 	send_to_react("state", {
@@ -634,6 +647,8 @@ func _do_logout() -> void:
 	net.wallet = ""
 	var cfg = ConfigFile.new()
 	cfg.save("user://auth.cfg")  # overwrites any saved token
+	if net.has_method("_clear_web_auth_fallback"):
+		net._clear_web_auth_fallback()
 	# Destroy all placed buildings so next login starts from a clean scene.
 	for bsys in _bs_cache:
 		if is_instance_valid(bsys) and bsys.has_method("_destroy_all_buildings"):

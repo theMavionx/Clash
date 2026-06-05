@@ -16,6 +16,7 @@ import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { BASE_CHAIN_ID, BASE_PRIMARY_RPC_URL, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig';
+import { INK_CHAIN_ID, ensureInkChain, inkChain } from '../lib/nadoConfig';
 import { fetchGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
@@ -37,6 +38,7 @@ const SALE_NFT_MINT_LOCKED = !SALE_NFT_PUBLIC_REVEAL;
 const nftBasePublicClient = createPublicClient({ chain: base, transport: http(BASE_PRIMARY_RPC_URL) });
 const nftArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport: http() });
 const nftMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
+const nftInkPublicClient = createPublicClient({ chain: inkChain, transport: http() });
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const MAX_BATCH_QUANTITY = 10;
 
@@ -44,16 +46,19 @@ const EVM_CHAIN_ID_BY_NFT_CHAIN = {
   base: BASE_CHAIN_ID,
   arbitrum: ARBITRUM_CHAIN_ID,
   monad: MONAD_CHAIN_ID,
+  ink: INK_CHAIN_ID,
 };
 const EVM_VIEM_CHAIN_BY_ID = {
   [BASE_CHAIN_ID]: base,
   [ARBITRUM_CHAIN_ID]: arbitrum,
   [MONAD_CHAIN_ID]: monadChain,
+  [INK_CHAIN_ID]: inkChain,
 };
 const EVM_PUBLIC_CLIENT_BY_ID = {
   [BASE_CHAIN_ID]: nftBasePublicClient,
   [ARBITRUM_CHAIN_ID]: nftArbitrumPublicClient,
   [MONAD_CHAIN_ID]: nftMonadPublicClient,
+  [INK_CHAIN_ID]: nftInkPublicClient,
 };
 
 function sameEvmAddress(a, b) {
@@ -70,6 +75,7 @@ const TOKEN_LOGO_SRC = {
   SOL:  '/tokens/SOL.svg',
   ARB:  '/tokens/ARB.svg',
   MON:  '/tokens/MON.svg',
+  INK:  '/tokens/ETH.svg',
   CLASH: '/icons/icon-192.png',
   APT:  '/tokens/APT.png',
   SKR:  '/tokens/SKR.png',
@@ -80,6 +86,7 @@ const CHAIN_LOGO_SRC = {
   base: '/tokens/BASE.svg',
   arbitrum: '/tokens/ARB.svg',
   monad: '/tokens/MON.svg',
+  ink: '/tokens/ETH.svg',
   solana: '/tokens/SOL.svg',
   aptos: '/tokens/APT.png',
 };
@@ -110,6 +117,7 @@ const GAME_RESOURCE_PRODUCT_PRIORITY = {
 
 const CHAIN_OPTIONS = [
   { id: 'base', title: 'Base', subtitle: 'ETH / USDC', badge: 'EVM' },
+  { id: 'ink', title: 'Ink', subtitle: 'ETH / USDC', badge: 'EVM' },
   { id: 'solana', title: 'Solana', subtitle: 'SOL / USDC / SKR', badge: 'SOL' },
 ];
 
@@ -135,6 +143,10 @@ const PAYMENT_OPTIONS = {
   monad: [
     { id: 'monad-usdc', chain: 'monad', method: 'USDC', price: '$5.50', token: 'USDC' },
     { id: 'monad-mon',  chain: 'monad', method: 'MON',  price: '$5.50', token: 'MON' },
+  ],
+  ink: [
+    { id: 'ink-usdc', chain: 'ink', method: 'USDC', price: '$5.50', token: 'USDC' },
+    { id: 'ink-eth',  chain: 'ink', method: 'ETH',  price: '$5.50', token: 'ETH' },
   ],
   aptos: [
     { id: 'aptos-usdc', chain: 'aptos', method: 'USDC', price: '$5.50', token: 'USDC' },
@@ -184,6 +196,7 @@ function makeNftEvmWallet(provider, address) {
       const id = Number(targetChainId) || BASE_CHAIN_ID;
       if (id === ARBITRUM_CHAIN_ID) return ensureArbitrumChain(provider);
       if (id === MONAD_CHAIN_ID) return ensureMonadChain(provider);
+      if (id === INK_CHAIN_ID) return ensureInkChain(provider);
       return ensureBaseChain(provider);
     },
     getPublicClient: (targetChainId = BASE_CHAIN_ID) => (
@@ -237,16 +250,16 @@ const DEX_TO_NFT_CHAIN = {
   monad:    'monad',
   decibel:  'aptos',
   hyperliquid: 'arbitrum',
-  nado:     'base',
+  nado:     'ink',
   hotstuff: 'base',
   grvt:     'base',
 };
-// All five chains now have a direct NFT mint endpoint:
+// All supported chains now have a direct NFT mint endpoint:
 //   - base    /nft/base/quote   (ETH / USDC)
 //   - solana  candy machine     (USDC / SOL / SKR)
-//   - arbitrum/monad /nft/evm/quote   (USDC / native)
+//   - arbitrum/monad/ink /nft/evm/quote   (USDC / native)
 //   - aptos   /nft/aptos/quote  (USDC/APT, ed25519-signed)
-const NFT_MINT_SUPPORTED = new Set(['base', 'solana', 'arbitrum', 'monad', 'aptos']);
+const NFT_MINT_SUPPORTED = new Set(['base', 'solana', 'arbitrum', 'monad', 'ink', 'aptos']);
 
 function recommendedChain(dex) {
   return DEX_TO_NFT_CHAIN[dex] || 'base';
@@ -257,6 +270,7 @@ function defaultPaymentForChain(chain) {
     case 'solana':   return 'sol-usdc';
     case 'arbitrum': return 'arb-usdc';
     case 'monad':    return 'monad-usdc';
+    case 'ink':      return 'ink-usdc';
     case 'aptos':    return 'aptos-usdc';
     case 'base':
     default:         return 'base-eth';
@@ -338,7 +352,7 @@ function getSupplyInfo(config, chain) {
     : Math.min(100, Math.max(0, (totalMinted / maxSupply) * 100));
   return {
     chain,
-    title: `${chain === 'solana' ? 'Solana' : chain === 'arbitrum' ? 'Arbitrum' : chain === 'monad' ? 'Monad' : 'Base'} ${SALE_NFT_NAME}`,
+    title: `${SHOP_CHAIN_LABEL[chain] || (chain === 'solana' ? 'Solana' : 'Base')} ${SALE_NFT_NAME}`,
     totalMinted,
     maxSupply,
     remaining,
@@ -426,7 +440,7 @@ const DEX_TO_SHOP_CHAIN = {
   monad:    'monad',
   decibel:  'aptos',
   hyperliquid: 'arbitrum',
-  nado:     'base',
+  nado:     'ink',
   hotstuff: 'base',
 };
 
@@ -551,6 +565,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     solana:   !!gameShopConfig?.solana?.ready   && !!gameShopConfig?.solana?.saleActive,
     arbitrum: !!gameShopConfig?.arbitrum?.ready && !!gameShopConfig?.arbitrum?.saleActive,
     monad:    !!gameShopConfig?.monad?.ready    && !!gameShopConfig?.monad?.saleActive,
+    ink:      !!gameShopConfig?.ink?.ready      && !!gameShopConfig?.ink?.saleActive,
     aptos:    !!gameShopConfig?.aptos?.ready    && !!gameShopConfig?.aptos?.saleActive,
   };
   const shopChainReady = !!shopReadiness[shopChain];
@@ -601,6 +616,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
       aptos:    ['usdc', 'apt'],
       arbitrum: ['usdc', 'eth'],
       monad:    ['usdc', 'mon'],
+      ink:      ['usdc', 'eth'],
       base:     ['usdc', 'eth'],
     };
     const allowed = validPayments[shopChain] || ['usdc'];
@@ -905,7 +921,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     }
     // Arbitrum / Monad — same flow as Base but the wallet has to switch
     // chains first. handleEvmMint calls evmWallet.ensureChain internally.
-    if ((selected.chain === 'arbitrum' || selected.chain === 'monad') && evmAddress) {
+    if ((selected.chain === 'arbitrum' || selected.chain === 'monad' || selected.chain === 'ink') && evmAddress) {
       handleEvmMint({
         selected,
         chain: selected.chain,
@@ -940,7 +956,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     }
     if (selected.chain === 'base') {
       handleBaseReady();
-    } else if (selected.chain === 'arbitrum' || selected.chain === 'monad') {
+    } else if (selected.chain === 'arbitrum' || selected.chain === 'monad' || selected.chain === 'ink') {
       // No EVM wallet yet — surface the EVM connect modal.
       setEvmModalOpen(true);
     } else if (selected.chain === 'aptos') {
@@ -975,7 +991,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
       }
     } else if (shopChain === 'base') {
       if (!evmAddress || !evmOnShopChain) { await handleShopChainReady(); return; }
-    } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
+    } else if (shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink') {
       if (!evmAddress || !evmOnShopChain) { await handleShopChainReady(); return; }
     }
 
@@ -1011,7 +1027,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
           payment: shopPayment,
           quantity,
         });
-      } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
+      } else if (shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink') {
         result = await buyEvmShopItem({
           evmWallet,
           buyer: evmAddress,
@@ -1353,7 +1369,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   <div style={{ ...styles.topRow, ...styles.topRowResources }}>
                     <div style={styles.summary}>
                       <span style={styles.heroName}>Game Resources</span>
-                      <span style={styles.editionTag}>{SHOP_CHAIN_LABEL[shopChain] || 'Base'}: {shopChain === 'base' ? 'USDC / ETH' : 'USDC / native'}</span>
+                      <span style={styles.editionTag}>{SHOP_CHAIN_LABEL[shopChain] || 'Base'}: {shopChainChoice(shopChain)?.subtitle || 'USDC / native'}</span>
                     </div>
                   </div>
                   <GameResourcesTab
@@ -1631,6 +1647,10 @@ const SHOP_PAYMENTS_BY_CHAIN = {
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'mon',  label: 'MON',  sub: 'Native' },
   ],
+  ink: [
+    { id: 'usdc', label: 'USDC', sub: 'Stable' },
+    { id: 'eth',  label: 'ETH',  sub: 'Native' },
+  ],
   solana: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'sol',  label: 'SOL',  sub: 'Native' },
@@ -1657,6 +1677,7 @@ const SHOP_CHAIN_LABEL = {
   base:     'Base',
   arbitrum: 'Arbitrum',
   monad:    'Monad',
+  ink:      'Ink',
   solana:   'Solana',
   aptos:    'Aptos',
 };
@@ -1665,6 +1686,7 @@ const SHOP_CHAIN_CHOICES = [
   { id: 'base', title: 'Base', subtitle: 'USDC / ETH', badge: 'EVM' },
   { id: 'arbitrum', title: 'Arbitrum', subtitle: 'USDC / ETH', badge: 'EVM' },
   { id: 'monad', title: 'Monad', subtitle: 'USDC / MON', badge: 'EVM' },
+  { id: 'ink', title: 'Ink', subtitle: 'USDC / ETH', badge: 'EVM' },
   { id: 'solana', title: 'Solana', subtitle: 'USDC / SOL / CLASH / SKR', badge: 'SOL' },
   { id: 'aptos', title: 'Aptos', subtitle: 'USDC / APT', badge: 'APT' },
 ];
@@ -1683,6 +1705,7 @@ function getShopPurchaseExplorer(chain, tx) {
   if (chain === 'base') return `https://basescan.org/tx/${tx}`;
   if (chain === 'arbitrum') return `https://arbiscan.io/tx/${tx}`;
   if (chain === 'monad') return `https://explorer.monad.xyz/tx/${tx}`;
+  if (chain === 'ink') return `https://explorer.inkonchain.com/tx/${tx}`;
   if (chain === 'solana') return `https://solscan.io/tx/${tx}`;
   if (chain === 'aptos') return `https://explorer.aptoslabs.com/txn/${tx}`;
   return null;
@@ -1717,7 +1740,7 @@ function ShopChainSwitcher({ activeChain, readiness, onSelect }) {
   );
 }
 
-const DEMON_KING_EVM_UPGRADE_CHAINS = ['base', 'arbitrum', 'monad'];
+const DEMON_KING_EVM_UPGRADE_CHAINS = ['base', 'arbitrum', 'monad', 'ink'];
 const DEMON_KING_UPGRADE_CHAINS = new Set([...DEMON_KING_EVM_UPGRADE_CHAINS, 'solana', 'aptos']);
 const DEMON_KING_UPGRADE_PRICE_HINT = {
   usdc: '$8.90',
@@ -2408,7 +2431,7 @@ function GameResourcesTab({
   function connectForChain() {
     if (chain === 'solana')  return onConnectSolana?.();
     if (chain === 'aptos')   return onConnectAptos?.();
-    return onConnectBase?.(); // base + arbitrum + monad all funnel through the EVM connect
+    return onConnectBase?.(); // EVM chains all funnel through the shared wallet connect
   }
 
   // Skeleton while /api/shop/config is in flight.
@@ -2758,7 +2781,11 @@ async function handleEvmMint({ selected, chain, evmAddress, evmWallet, setBusy, 
       evmWallet, chain, buyer: evmAddress, payment, quantity: count,
     });
     addClientBreadcrumb('nft.evm_mint_submitted', { dex, chain, payment, quantity: count, tx: result.hash });
-    const explorerBase = chain === 'arbitrum' ? 'https://arbiscan.io/tx/' : `https://explorer.monad.xyz/tx/`;
+    const explorerBase = chain === 'arbitrum'
+      ? 'https://arbiscan.io/tx/'
+      : chain === 'ink'
+        ? 'https://explorer.inkonchain.com/tx/'
+        : 'https://explorer.monad.xyz/tx/';
     setMintResult?.({
       chain,
       tx: result.hash,
@@ -2903,9 +2930,11 @@ function getPrimaryState({ selected, soldOut = false, evmAddress, evmOnBase, sol
     if (!evmOnBase) return { label: 'Switch to Base', glyph: 'B', ready: false };
     return { label: `Mint with ${selected.token}`, glyph: 'B', ready: true };
   }
-  if (selected.chain === 'arbitrum' || selected.chain === 'monad') {
-    if (!evmAddress) return { label: `Connect ${selected.chain === 'arbitrum' ? 'Arbitrum' : 'Monad'} wallet`, glyph: selected.chain === 'arbitrum' ? 'A' : 'M', ready: false };
-    return { label: `Mint with ${selected.token}`, glyph: selected.chain === 'arbitrum' ? 'A' : 'M', ready: true };
+  if (selected.chain === 'arbitrum' || selected.chain === 'monad' || selected.chain === 'ink') {
+    const label = selected.chain === 'arbitrum' ? 'Arbitrum' : selected.chain === 'monad' ? 'Monad' : 'Ink';
+    const glyph = selected.chain === 'arbitrum' ? 'A' : selected.chain === 'monad' ? 'M' : 'I';
+    if (!evmAddress) return { label: `Connect ${label} wallet`, glyph, ready: false };
+    return { label: `Mint with ${selected.token}`, glyph, ready: true };
   }
   if (selected.chain === 'aptos') {
     if (!aptosAddress) return { label: 'Connect Aptos wallet', glyph: 'A', ready: false };

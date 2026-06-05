@@ -114,7 +114,7 @@ function shortTokenId(tokenId) {
 }
 
 function isEvmDemonKingChain(chain) {
-  return ['base', 'arbitrum', 'monad'].includes(String(chain || '').toLowerCase());
+  return ['base', 'arbitrum', 'monad', 'ink'].includes(String(chain || '').toLowerCase());
 }
 
 function demonKingTokenKey(token) {
@@ -137,7 +137,7 @@ function demonKingDisplayIdFromText(value) {
   if (namedMatch) return namedMatch[1];
   const fieldMatch = text.match(/\b(?:token|id|index|serial|number)[\s:_-]*#?\s*(\d{1,10})\b/i);
   if (fieldMatch) return fieldMatch[1];
-  const uriMatch = text.match(/\/api\/nft\/(?:base|arbitrum|monad|aptos|solana)\/(?:token2022\/)?(\d{1,10})(?:[/?#]|$)/i);
+  const uriMatch = text.match(/\/api\/nft\/(?:base|arbitrum|monad|ink|aptos|solana)\/(?:token2022\/)?(\d{1,10})(?:[/?#]|$)/i);
   if (uriMatch) return uriMatch[1];
   return '';
 }

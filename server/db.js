@@ -597,6 +597,32 @@ try {
   `);
 } catch (e) { console.warn('[db] client_logs migration:', e.message); }
 
+// Daily AI log-analysis reports. The scheduler reads the last 24h of stored
+// operational/client errors, asks the Hermes OpenRouter model for diagnosis,
+// and keeps the full prompt + model output for admin auditability.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_log_reports (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      window_start    TEXT NOT NULL,
+      window_end      TEXT NOT NULL,
+      status          TEXT NOT NULL DEFAULT 'pending',
+      model           TEXT,
+      prompt          TEXT,
+      report_markdown TEXT,
+      report_json     TEXT,
+      source_counts   TEXT,
+      error           TEXT,
+      duration_ms     INTEGER,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at    TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_log_reports_recent ON ai_log_reports(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_log_reports_window ON ai_log_reports(window_start, window_end);
+    CREATE INDEX IF NOT EXISTS idx_ai_log_reports_status ON ai_log_reports(status, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] ai_log_reports migration:', e.message); }
+
 // Phoenix builder earnings index. The Phoenix collateral-history endpoint is
 // paginated and rate-limited; keeping exact transfer events locally prevents
 // the admin earnings card from showing a newest-pages sliding window.
@@ -717,7 +743,7 @@ try {
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade')),
       dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
       eligible_dexes TEXT NOT NULL DEFAULT '[]',
       mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -739,6 +765,8 @@ try {
       points_pnl_weight    REAL NOT NULL DEFAULT 0,
       scoring_mode TEXT NOT NULL DEFAULT 'live' CHECK(scoring_mode IN ('live','daily_pool')),
       daily_pool_points REAL NOT NULL DEFAULT 1000,
+      daily_pool_growth_pct REAL NOT NULL DEFAULT 0,
+      daily_pool_overrides TEXT NOT NULL DEFAULT '{}',
       daily_pool_enabled_at TEXT,
       prize_currency TEXT NOT NULL DEFAULT 'USD',
       prize_tiers    TEXT NOT NULL DEFAULT '[]',
@@ -781,6 +809,8 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_pnl_weight REAL NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN scoring_mode TEXT NOT NULL DEFAULT 'live'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_points REAL NOT NULL DEFAULT 1000`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_growth_pct REAL NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_overrides TEXT NOT NULL DEFAULT '{}'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_enabled_at TEXT`); } catch {}
   try {
     db.exec(`
@@ -794,6 +824,20 @@ try {
       UPDATE tournaments
       SET daily_pool_points = 1000
       WHERE daily_pool_points IS NULL OR daily_pool_points <= 0
+    `);
+  } catch {}
+  try {
+    db.exec(`
+      UPDATE tournaments
+      SET daily_pool_growth_pct = 0
+      WHERE daily_pool_growth_pct IS NULL
+    `);
+  } catch {}
+  try {
+    db.exec(`
+      UPDATE tournaments
+      SET daily_pool_overrides = '{}'
+      WHERE daily_pool_overrides IS NULL OR daily_pool_overrides = ''
     `);
   } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_currency TEXT NOT NULL DEFAULT 'USD'`); } catch {}
@@ -819,7 +863,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -828,7 +872,7 @@ try {
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT NOT NULL,
             description  TEXT,
-            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana')),
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade')),
             dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
             eligible_dexes TEXT NOT NULL DEFAULT '[]',
             mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -850,6 +894,8 @@ try {
             points_pnl_weight    REAL NOT NULL DEFAULT 0,
             scoring_mode TEXT NOT NULL DEFAULT 'live',
             daily_pool_points REAL NOT NULL DEFAULT 1000,
+            daily_pool_growth_pct REAL NOT NULL DEFAULT 0,
+            daily_pool_overrides TEXT NOT NULL DEFAULT '{}',
             daily_pool_enabled_at TEXT,
             prize_currency TEXT NOT NULL DEFAULT 'USD',
             prize_tiers    TEXT NOT NULL DEFAULT '[]',
@@ -864,16 +910,16 @@ try {
           INSERT INTO tournaments_new (
             id, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost,
             shield_hours, freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
-            scoring_mode, daily_pool_points, daily_pool_enabled_at,
+            scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
             prize_currency, prize_tiers, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
             id, name, description,
-            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana') THEN dex ELSE 'pacifica' END,
+            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade') THEN dex ELSE 'pacifica' END,
             CASE WHEN dex_scope IN ('single','custom','all') THEN dex_scope ELSE 'single' END,
             CASE
               WHEN eligible_dexes IS NOT NULL AND eligible_dexes != '' AND eligible_dexes != '[]' THEN eligible_dexes
-              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana') THEN dex ELSE 'pacifica' END || '"]'
+              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade') THEN dex ELSE 'pacifica' END || '"]'
             END,
             CASE WHEN mode IN ('individual','dex_vs_dex') THEN mode ELSE 'individual' END,
             COALESCE(team_score_by, 'volume_usd'),
@@ -890,6 +936,8 @@ try {
             COALESCE(points_pnl_weight, 0),
             CASE WHEN scoring_mode IN ('live','daily_pool') THEN scoring_mode ELSE 'live' END,
             CASE WHEN COALESCE(daily_pool_points, 0) > 0 THEN daily_pool_points ELSE 1000 END,
+            COALESCE(daily_pool_growth_pct, 0),
+            COALESCE(daily_pool_overrides, '{}'),
             daily_pool_enabled_at,
             COALESCE(prize_currency, 'USD'),
             COALESCE(prize_tiers, '[]'),
@@ -931,6 +979,8 @@ try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_gold_boost REAL NOT NUL
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN shield_hours REAL`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN scoring_mode TEXT NOT NULL DEFAULT 'live'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_points REAL NOT NULL DEFAULT 1000`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_growth_pct REAL NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_overrides TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_enabled_at TEXT`); } catch {}
 try {
   db.exec(`
@@ -946,6 +996,8 @@ try {
     WHERE daily_pool_points IS NULL OR daily_pool_points <= 0
   `);
 } catch {}
+try { db.exec(`UPDATE tournaments SET daily_pool_growth_pct = 0 WHERE daily_pool_growth_pct IS NULL`); } catch {}
+try { db.exec(`UPDATE tournaments SET daily_pool_overrides = '{}' WHERE daily_pool_overrides IS NULL OR daily_pool_overrides = ''`); } catch {}
 try { db.exec(`UPDATE tournaments SET seeker_gold_boost = 1.0 WHERE seeker_gold_boost IS NULL OR seeker_gold_boost <= 0`); } catch {}
 try { db.exec(`UPDATE tournaments SET shield_hours = 0 WHERE shield_hours IS NOT NULL AND shield_hours < 0`); } catch {}
 try {
@@ -1138,7 +1190,7 @@ try {
             if (parts.length < 3 || parts[0] !== 'DemonKing') continue;
             const chain = String(parts[1] || '').trim().toLowerCase();
             const tokenId = String(parts[2] || '').trim();
-            const tokenOk = ['base', 'arbitrum', 'monad'].includes(chain)
+            const tokenOk = ['base', 'arbitrum', 'monad', 'ink'].includes(chain)
               ? /^\d+$/.test(tokenId)
               : chain === 'aptos'
                 ? /^0x[0-9a-fA-F]{1,64}$/.test(tokenId)
@@ -2215,6 +2267,50 @@ function tournamentFirstDailyPoolDay(t) {
   return utcDayFromMs(start || Date.now());
 }
 
+function parseDailyPoolOverrides(value) {
+  if (!value) return {};
+  let raw = value;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch { return {}; }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [day, points] of Object.entries(raw)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day))) continue;
+    const n = Number(points);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    out[day] = Math.max(1, Math.min(1_000_000, Number(n.toFixed(4))));
+  }
+  return out;
+}
+
+function dailyPoolDayIndex(t, dayInput) {
+  const firstMs = Date.parse(`${tournamentFirstDailyPoolDay(t)}T00:00:00Z`);
+  const dayMs = Date.parse(`${normalizeDailyPoolDay(dayInput)}T00:00:00Z`);
+  if (!Number.isFinite(firstMs) || !Number.isFinite(dayMs) || dayMs <= firstMs) return 0;
+  return Math.max(0, Math.floor((dayMs - firstMs) / (24 * 60 * 60 * 1000)));
+}
+
+function tournamentDailyPoolPointsForDay(t, dayInput) {
+  const day = normalizeDailyPoolDay(dayInput);
+  const base = Math.max(1, Math.min(1_000_000, Number(t?.daily_pool_points || 1000) || 1000));
+  const overrides = parseDailyPoolOverrides(t?.daily_pool_overrides);
+  if (overrides[day] !== undefined) {
+    return {
+      points: overrides[day],
+      base,
+      growth_pct: Math.max(-99, Math.min(500, Number(t?.daily_pool_growth_pct || 0) || 0)),
+      day_index: dailyPoolDayIndex(t, day),
+      override: true,
+    };
+  }
+  const growthPct = Math.max(-99, Math.min(500, Number(t?.daily_pool_growth_pct || 0) || 0));
+  const dayIndex = dailyPoolDayIndex(t, day);
+  const multiplier = Math.pow(1 + (growthPct / 100), dayIndex);
+  const points = Math.max(1, Math.min(1_000_000, Number((base * multiplier).toFixed(4))));
+  return { points, base, growth_pct: growthPct, day_index: dayIndex, override: false };
+}
+
 function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
   const yesterday = previousUtcDay(now);
   const endMs = sqlDateMs(t.end_at);
@@ -2269,14 +2365,15 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
        WHERE tournament_id = ? AND day_utc = ?
        GROUP BY player_id
     `).all(tid, day);
-    const pool = Math.max(0, Number(t.daily_pool_points || 1000) || 0);
+    const poolState = tournamentDailyPoolPointsForDay(t, day);
+    const pool = Math.max(0, Number(poolState.points || t.daily_pool_points || 1000) || 0);
     const weights = dailyPoolWeights(t);
     const categories = [
       { key: 'trophies', column: 'trophies', weight: weights.trophies },
       { key: 'volume', column: 'volume_usd', weight: weights.volume },
       { key: 'pnl', column: 'pnl_usd', weight: weights.pnl },
     ];
-    const details = { pool, weights, categories: {} };
+    const details = { pool, pool_state: poolState, weights, categories: {} };
     let awardedTotal = 0;
     for (const cat of categories) {
       const catPool = pool * (Math.max(0, Number(cat.weight) || 0) / 100);
@@ -2968,7 +3065,7 @@ function normalizeDemonKingBattleToken(token = {}) {
   const tokenId = String(
     token.tokenId ?? token.token_id ?? token.tokenIdRaw ?? token.nftTokenId ?? ''
   ).trim();
-  const tokenOk = ['base', 'arbitrum', 'monad'].includes(chain)
+  const tokenOk = ['base', 'arbitrum', 'monad', 'ink'].includes(chain)
     ? /^\d+$/.test(tokenId)
     : chain === 'aptos'
       ? /^0x[0-9a-fA-F]{1,64}$/.test(tokenId)

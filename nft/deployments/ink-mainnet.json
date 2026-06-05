@@ -1,0 +1,21 @@
+{
+  "chain": "ink",
+  "chainId": 57073,
+  "proxy": "0x5cc846b2ba0f030a5165a456ed903a5989e19f3f",
+  "implementation": "0x8fc6e18371ddd76654ab1f0859099c040aed255a",
+  "contract": "0x5cc846b2ba0f030a5165a456ed903a5989e19f3f",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "owner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "implementationTxHash": "0x00f5e5863f982d30a67ee4b7848b0d8e0880b2e6b3b910770ef531564384161e",
+  "proxyTxHash": "0xa4c1ed06bc8dcdea8b2047926d0f50cdbcf54711533e56bbb21cce334fa1d0d9",
+  "implementationBlockNumber": "47139034",
+  "proxyBlockNumber": "47139043",
+  "maxSupply": "333",
+  "maxPerTx": "10",
+  "totalMinted": "0",
+  "baseTokenUri": "https://clashofperps.fun/api/nft/ink/",
+  "contractUri": "https://clashofperps.fun/api/nft/base/contract",
+  "initialPriceWei": "0",
+  "upgradeable": true,
+  "deployedAt": "2026-06-05T05:31:01.269Z"
+}

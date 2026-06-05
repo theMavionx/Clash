@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import { KATANA_CHAIN_ID, KATANA_PERPS_REFERRAL_CODE, KATANA_PERPS_REFERRAL_URL } from '../lib/katanaConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
@@ -13,10 +14,10 @@ import {
 
 const FUTURES_API = '/api/futures';
 const STORAGE_KEY = 'clash_katana_credentials_v1';
-const DEBUG_KATANA = true;
+const ONE_TAP_SIGNER_STORAGE_KEY = 'clash_katana_one_tap_signer_v1';
 
 function logKatana(label, payload = undefined) {
-  if (!DEBUG_KATANA) return;
+  if (typeof window === 'undefined' || window.__CLASH_DEBUG_KATANA !== true) return;
   try {
     if (payload === undefined) console.log(`[Katana UI] ${label}`);
     else console.log(`[Katana UI] ${label}`, payload);
@@ -25,6 +26,10 @@ function logKatana(label, payload = undefined) {
 
 function normalizeAddress(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function oneTapSignerStorageKey(wallet) {
+  return `${ONE_TAP_SIGNER_STORAGE_KEY}:${normalizeAddress(wallet) || 'unknown'}`;
 }
 
 function playerToken(player) {
@@ -52,6 +57,59 @@ function normalizeKatanaCredentials(value) {
     apiSecret: String(value.apiSecret),
     wallet: String(value.wallet),
   };
+}
+
+function normalizePrivateKey(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const hex = raw.startsWith('0x') ? raw : `0x${raw}`;
+  if (!/^0x[a-fA-F0-9]{64}$/u.test(hex)) throw new Error('Enter a valid Katana delegated private key');
+  return hex;
+}
+
+function signerFromPrivateKey(value) {
+  const privateKey = normalizePrivateKey(value);
+  const account = privateKeyToAccount(privateKey);
+  return { privateKey, account, address: account.address };
+}
+
+function normalizeOneTapSigner(value) {
+  if (!value?.privateKey) return null;
+  const signer = signerFromPrivateKey(value.privateKey);
+  return {
+    privateKey: signer.privateKey,
+    address: signer.address,
+    savedAt: Number(value.savedAt || Date.now()),
+  };
+}
+
+async function loadOneTapSigner(wallet) {
+  const key = oneTapSignerStorageKey(wallet);
+  const migrated = await migratePlainLocalStorageCredential(key, key, normalizeOneTapSigner);
+  const stored = migrated || await readEncryptedCredential(key);
+  const normalized = normalizeOneTapSigner(stored);
+  return normalized ? signerFromPrivateKey(normalized.privateKey) : null;
+}
+
+async function writeOneTapSigner(wallet, signer) {
+  const key = oneTapSignerStorageKey(wallet);
+  await writeEncryptedCredential(key, {
+    privateKey: signer.privateKey,
+    address: signer.address,
+    savedAt: Date.now(),
+  });
+  try { window.localStorage.removeItem(key); } catch {}
+}
+
+async function clearOneTapSigner(wallet) {
+  const key = oneTapSignerStorageKey(wallet);
+  await removeEncryptedCredential(key);
+  try { window.localStorage.removeItem(key); } catch {}
+}
+
+function stripDomainTypes(types = {}) {
+  const { EIP712Domain: _domain, ...rest } = types || {};
+  return rest;
 }
 
 function credentialStatus(credentials) {
@@ -116,6 +174,24 @@ function disabled(message) {
   return { error: message || 'Katana Perps credentials are not saved in encrypted browser storage.' };
 }
 
+function orderSymbol(order) {
+  return String(order?.symbol || order?.market || '').split('-')[0].trim().toUpperCase();
+}
+
+function isTriggerOrder(order) {
+  const text = [
+    order?.order_type,
+    order?.type,
+    order?._raw?.type,
+    order?._raw?.orderType,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return !!(order?.is_trigger || order?.trigger_price || order?.stop_price || /take.?profit|stop.?loss|trailing.?stop/u.test(text));
+}
+
+function orderCancelId(order) {
+  return order?.order_id || order?.orderId || order?.i || order?.client_order_id || order?.clientOrderId || '';
+}
+
 export function useKatana() {
   const { dex } = useDex();
   const player = usePlayer();
@@ -131,9 +207,13 @@ export function useKatana() {
   const [orders, setOrders] = useState([]);
   const [credentials, setCredentials] = useState(null);
   const [credentialsLoaded, setCredentialsLoaded] = useState(false);
+  const [oneTapSigner, setOneTapSigner] = useState(null);
+  const oneTapSignerRef = useRef(null);
+  const [oneTapAuthorized, setOneTapAuthorized] = useState(false);
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const initialRefreshDoneRef = useRef(false);
 
   const walletMismatch = useMemo(() => {
     const registered = normalizeAddress(player?.wallet);
@@ -143,6 +223,12 @@ export function useKatana() {
 
   useEffect(() => {
     if (!isActiveDex) return;
+    if (!walletAddr) {
+      oneTapSignerRef.current = null;
+      setOneTapSigner(null);
+      setOneTapAuthorized(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -163,6 +249,27 @@ export function useKatana() {
     })();
     return () => { cancelled = true; };
   }, [isActiveDex]);
+
+  useEffect(() => {
+    if (!isActiveDex) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const signer = await loadOneTapSigner(walletAddr);
+        if (cancelled) return;
+        oneTapSignerRef.current = signer;
+        setOneTapSigner(signer);
+        setOneTapAuthorized(false);
+        logKatana('one tap signer loaded', {
+          has_signer: !!signer?.address,
+          signer: signer?.address || null,
+        });
+      } catch (e) {
+        console.warn('[useKatana] one tap signer load failed:', e?.message || e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isActiveDex, walletAddr]);
 
   const loadPrivate = useCallback(async (health, credentialOverride = null) => {
     if (!token || !walletAddr) {
@@ -249,10 +356,15 @@ export function useKatana() {
       setOrders([]);
       return;
     }
-    const [posResult, ordResult] = await Promise.allSettled([
+    const [posResult, ordResult, delegatedResult] = await Promise.allSettled([
       fetchJson(`${FUTURES_API}/katana/positions?${query}`, { headers }),
       fetchJson(`${FUTURES_API}/katana/orders?${query}&closed=false&limit=100`, { headers }),
+      fetchJson(`${FUTURES_API}/katana/delegated-keys?${query}`, { headers }),
     ]);
+    const delegatedRows = delegatedResult.status === 'fulfilled' ? rows(delegatedResult.value) : [];
+    const signerAddress = normalizeAddress(oneTapSignerRef.current?.address);
+    const signerAuthorized = !!signerAddress && delegatedRows.some(row => normalizeAddress(row?.delegatedKey) === signerAddress);
+    setOneTapAuthorized(signerAuthorized);
     setAccount(acct || null);
     setPositions(posResult.status === 'fulfilled' ? rows(posResult.value) : []);
     setOrders(ordResult.status === 'fulfilled' ? rows(ordResult.value) : []);
@@ -260,8 +372,11 @@ export function useKatana() {
       wallet: walletAddr,
       positions: posResult.status === 'fulfilled' ? rows(posResult.value).length : 'failed',
       orders: ordResult.status === 'fulfilled' ? rows(ordResult.value).length : 'failed',
+      delegated_keys: delegatedResult.status === 'fulfilled' ? delegatedRows.length : 'failed',
+      one_tap_authorized: signerAuthorized,
       pos_error: posResult.status === 'rejected' ? posResult.reason?.message : null,
       orders_error: ordResult.status === 'rejected' ? ordResult.reason?.message : null,
+      delegated_error: delegatedResult.status === 'rejected' ? delegatedResult.reason?.message : null,
     });
     setStatus({
       ...merged,
@@ -282,7 +397,8 @@ export function useKatana() {
       logKatana('refresh skipped', { isActiveDex, credentialsLoaded });
       return;
     }
-    setLoading(true);
+    const blockingLoad = !initialRefreshDoneRef.current;
+    if (blockingLoad) setLoading(true);
     try {
       logKatana('refresh start', {
         wallet: walletAddr,
@@ -326,7 +442,8 @@ export function useKatana() {
       logKatana('refresh failed', { status: e?.status, message: e?.message, data: e?.data });
       setError(e?.message || 'Katana Perps data unavailable');
     } finally {
-      setLoading(false);
+      initialRefreshDoneRef.current = true;
+      if (blockingLoad) setLoading(false);
     }
   }, [credentials, credentialsLoaded, isActiveDex, loadPrivate, status?.account_exists, walletAddr]);
 
@@ -363,6 +480,16 @@ export function useKatana() {
     });
   }, [evm, walletAddr]);
 
+  const signKatanaTypedDataWithAgent = useCallback(async (typedData, signer = oneTapSignerRef.current) => {
+    if (!signer?.account) throw new Error('Katana one tap delegated signer is missing');
+    return signer.account.signTypedData({
+      domain: typedData.domain,
+      types: stripDomainTypes(typedData.types),
+      primaryType: typedData.primaryType,
+      message: typedData.message,
+    });
+  }, []);
+
   const activate = useCallback(async ({ apiKey, apiSecret } = {}) => {
     if (!token) return disabled('Missing game session token.');
     if (!walletAddr) return disabled('Connect a Katana wallet first.');
@@ -387,6 +514,77 @@ export function useKatana() {
     }
   }, [evm, loadPrivate, status, token, walletAddr]);
 
+  const authorizeOneTapSigner = useCallback(async (signer) => {
+    if (!token) return disabled('Missing game session token.');
+    if (!walletAddr) return disabled('Connect a Katana wallet first.');
+    const localStatus = credentialStatus(credentials);
+    if (!localStatus.has_credentials) {
+      return disabled(`Missing Katana credentials: ${localStatus.missing_fields.join(', ') || 'api_key, api_secret'}`);
+    }
+    try {
+      const query = `wallet=${encodeURIComponent(walletAddr)}`;
+      const headers = authHeaders(token, credentials);
+      const existing = await fetchJson(`${FUTURES_API}/katana/delegated-keys?${query}`, { headers }).catch(() => []);
+      const existingRows = rows(existing);
+      if (existingRows.some(row => normalizeAddress(row?.delegatedKey) === normalizeAddress(signer.address))) {
+        setOneTapAuthorized(true);
+        return { ok: true, already_authorized: true, signer: signer.address };
+      }
+      logKatana('one tap authorize prepare start', { wallet: walletAddr, signer: signer.address });
+      const prepared = await fetchJson(`${FUTURES_API}/katana/delegated-key/prepare`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          wallet: walletAddr,
+          delegatedKey: signer.address,
+          name: 'Clash one tap',
+        }),
+      });
+      const signature = await signKatanaTypedData(prepared.typedData);
+      const result = await fetchJson(`${FUTURES_API}/katana/delegated-key/submit`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          parameters: prepared.parameters,
+          signature,
+        }),
+      });
+      logKatana('one tap authorize result', {
+        signer: signer.address,
+        result,
+      });
+      setOneTapAuthorized(true);
+      return { ok: true, signer: signer.address, result };
+    } catch (e) {
+      logKatana('one tap authorize failed', { status: e?.status, message: e?.message, data: e?.data });
+      return { error: e?.message || 'Failed to authorize Katana one tap signer' };
+    }
+  }, [credentials, signKatanaTypedData, token, walletAddr]);
+
+  const setKatanaOneTapTradingEnabled = useCallback(async (enabled, privateKey = '') => {
+    if (!enabled) {
+      await clearOneTapSigner(walletAddr);
+      oneTapSignerRef.current = null;
+      setOneTapSigner(null);
+      setOneTapAuthorized(false);
+      return { ok: true, enabled: false };
+    }
+    try {
+      const signer = privateKey
+        ? signerFromPrivateKey(privateKey)
+        : (oneTapSignerRef.current || signerFromPrivateKey(generatePrivateKey()));
+      const auth = await authorizeOneTapSigner(signer);
+      if (auth?.error) return auth;
+      await writeOneTapSigner(walletAddr, signer);
+      oneTapSignerRef.current = signer;
+      setOneTapSigner(signer);
+      setOneTapAuthorized(true);
+      return { ok: true, enabled: true, signer: signer.address };
+    } catch (e) {
+      return { error: e?.message || 'Failed to enable Katana one tap trading' };
+    }
+  }, [authorizeOneTapSigner]);
+
   const signedRequest = useCallback(async (preparePath, submitPath, payload) => {
     if (!token) return disabled('Missing game session token.');
     if (!walletAddr) return disabled('Connect a Katana wallet first.');
@@ -395,16 +593,24 @@ export function useKatana() {
       return disabled(`Missing Katana credentials: ${localStatus.missing_fields.join(', ') || 'api_key, api_secret'}`);
     }
     try {
+      const signer = oneTapAuthorized ? oneTapSignerRef.current : null;
+      const delegatedKey = signer?.address || '';
       logKatana('signed request prepare start', {
         preparePath,
         submitPath,
         wallet: walletAddr,
+        one_tap: !!delegatedKey,
+        delegatedKey,
         payload,
       });
       const prepared = await fetchJson(`${FUTURES_API}${preparePath}`, {
         method: 'POST',
         headers: authHeaders(token, credentials),
-        body: JSON.stringify({ ...payload, wallet: walletAddr }),
+        body: JSON.stringify({
+          ...payload,
+          wallet: walletAddr,
+          ...(delegatedKey ? { delegatedKey } : {}),
+        }),
       });
       logKatana('signed request prepared', {
         endpoint: prepared?.endpoint,
@@ -412,10 +618,13 @@ export function useKatana() {
         has_typed_data: !!prepared?.typedData,
         parameters: prepared?.parameters,
       });
-      const signature = await signKatanaTypedData(prepared.typedData);
+      const signature = delegatedKey
+        ? await signKatanaTypedDataWithAgent(prepared.typedData, signer)
+        : await signKatanaTypedData(prepared.typedData);
       logKatana('signed request signature received', {
         preparePath,
         signature_len: String(signature || '').length,
+        signer: delegatedKey || walletAddr,
       });
       const result = await fetchJson(`${FUTURES_API}${submitPath}`, {
         method: 'POST',
@@ -434,7 +643,7 @@ export function useKatana() {
       logKatana('signed request failed', { status: e?.status, message: e?.message, data: e?.data, payload });
       return { error: e?.message || 'Katana signed request failed' };
     }
-  }, [credentials, refresh, signKatanaTypedData, token, walletAddr]);
+  }, [credentials, oneTapAuthorized, refresh, signKatanaTypedData, signKatanaTypedDataWithAgent, token, walletAddr]);
 
   const placeOrder = useCallback((payload) => {
     return signedRequest('/katana/orders/prepare', '/katana/orders/submit', payload);
@@ -471,20 +680,49 @@ export function useKatana() {
     if (!localStatus.has_credentials) {
       return disabled(`Missing Katana credentials: ${localStatus.missing_fields.join(', ') || 'api_key, api_secret'}`);
     }
-    return signedRequest('/katana/orders/cancel/prepare', '/katana/orders/cancel/submit', { symbol, orderId });
+    const orderObject = symbol && typeof symbol === 'object' ? symbol : null;
+    const nextSymbol = orderObject ? orderSymbol(orderObject) : symbol;
+    const nextOrderId = orderObject ? orderCancelId(orderObject) : orderId;
+    if (!nextOrderId && !nextSymbol) return disabled('Katana order id or symbol is required.');
+    return signedRequest('/katana/orders/cancel/prepare', '/katana/orders/cancel/submit', {
+      ...(nextOrderId ? { orderId: nextOrderId } : { symbol: nextSymbol }),
+    });
   }, [credentials, signedRequest, token, walletAddr]);
 
-  const closePosition = useCallback((symbol, side, amount) => {
+  const cancelOpenTriggersForSymbol = useCallback(async (symbol) => {
+    const target = String(symbol || '').trim().toUpperCase();
+    if (!target) return { ok: true, cancelled: 0 };
+    const triggers = (Array.isArray(orders) ? orders : [])
+      .filter(order => orderSymbol(order) === target && isTriggerOrder(order) && orderCancelId(order));
+    let cancelled = 0;
+    for (const order of triggers) {
+      const result = await cancelOrder(order);
+      if (!result?.error) cancelled += 1;
+      else logKatana('auto cancel trigger failed', {
+        symbol: target,
+        order_id: orderCancelId(order),
+        error: result.error,
+      });
+    }
+    return { ok: true, cancelled };
+  }, [cancelOrder, orders]);
+
+  const closePosition = useCallback(async (symbol, side, amount, _pairIndex, _tradeIndex, fullClose = true) => {
     const rawSide = String(side || '').toLowerCase();
     const closeSide = rawSide === 'long' || rawSide === 'bid' || rawSide === 'buy' ? 'sell' : 'buy';
-    return placeOrder({
+    const result = await placeOrder({
       symbol,
       side: closeSide,
       quantity: amount,
       type: 'market',
       reduceOnly: true,
     });
-  }, [placeOrder]);
+    if (!result?.error && fullClose !== false) {
+      await cancelOpenTriggersForSymbol(symbol);
+      await refresh();
+    }
+    return result;
+  }, [cancelOpenTriggersForSymbol, placeOrder, refresh]);
 
   const setTpsl = useCallback(async (symbol, closeSideInput, tpPrice, slPrice, _pairIndex, _tradeIndex, amountBase) => {
     const quantity = String(amountBase || '').trim();
@@ -544,7 +782,7 @@ export function useKatana() {
   const available = Number(account?.availableCollateral ?? account?.available_to_spend ?? account?.usdc ?? 0) || 0;
   const equity = Number(account?.equity ?? account?.balance ?? 0) || 0;
   const accountReady = credentialStatus(credentials).has_credentials && status?.account_exists === true;
-  const tradeReady = accountReady;
+  const tradeReady = accountReady && !!oneTapSigner?.address && oneTapAuthorized;
 
   return {
     dex: 'katana',
@@ -577,14 +815,16 @@ export function useKatana() {
     referralUrl,
     hasReferrer: !!referralCode,
     oneTapTrading: {
-      enabled: tradeReady,
-      approved: tradeReady,
-      signer: tradeReady ? walletAddr : '',
+      enabled: !!oneTapSigner?.address,
+      approved: !!oneTapSigner?.address && oneTapAuthorized,
+      signer: oneTapSigner?.address || '',
       note: tradeReady
-        ? 'Katana orders use browser wallet EIP-712 signatures.'
+        ? (oneTapSigner?.address && oneTapAuthorized
+          ? 'Katana orders are signed by an authorized browser-only delegated key.'
+          : 'Enable one tap to authorize a local delegated key once; otherwise each order uses wallet EIP-712.')
         : 'Save Katana API credentials before trading.',
     },
-    setOneTapTradingEnabled: async () => disabled('Katana Perps signing is configured server-side through the official SDK.'),
+    setOneTapTradingEnabled: setKatanaOneTapTradingEnabled,
     connectPerpl: connectKatana,
     openReferralJoin: () => {
       try { window.open(referralUrl, '_blank', 'noopener,noreferrer'); } catch {}
@@ -599,6 +839,10 @@ export function useKatana() {
     withdraw: openKatanaApp,
     disconnect: async () => {
       await removeEncryptedCredential(STORAGE_KEY);
+      await clearOneTapSigner(walletAddr);
+      oneTapSignerRef.current = null;
+      setOneTapSigner(null);
+      setOneTapAuthorized(false);
       setCredentials(null);
       setAccount(null);
       setPositions([]);

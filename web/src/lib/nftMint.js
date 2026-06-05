@@ -110,9 +110,9 @@ export async function mintBaseNft({ evmWallet, buyer, payment, quantity = 1, col
   return { hash, receipt, quote: quoteResponse };
 }
 
-// Mint on Arbitrum or Monad. Collection quote endpoints return the same
+// Mint on Arbitrum, Monad, or Ink. Collection quote endpoints return the same
 // shape as Base, so this helper mirrors mintBaseNft but parametrises the chain.
-const EVM_NFT_CHAIN_IDS = { arbitrum: 42161, monad: 143 };
+const EVM_NFT_CHAIN_IDS = { arbitrum: 42161, monad: 143, ink: 57073 };
 
 export async function fetchEvmMintQuote({ chain, buyer, payment, quantity = 1, collection = NFT_SALE_COLLECTION }) {
   const response = await fetch(`${nftCollectionPath(collection)}/${encodeURIComponent(chain)}/quote`, {

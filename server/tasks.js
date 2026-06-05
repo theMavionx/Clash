@@ -296,7 +296,7 @@ async function fetchWalletTrades(player, opts = {}) {
   // returned [] because their wallet is EVM not base58. Net effect: zero
   // quest progress for every GMX trade despite the worker indexing them
   // correctly. Adding 'gmx' wires the verifier into the same path.
-  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix' || dexFilter === 'hyperliquid' || dexFilter === 'risex' || dexFilter === 'nado' || dexFilter === 'hibachi' || dexFilter === 'hotstuff' || dexFilter === 'grvt') {
+  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix' || dexFilter === 'hyperliquid' || dexFilter === 'risex' || dexFilter === 'nado' || dexFilter === 'hibachi' || dexFilter === 'hotstuff' || dexFilter === 'grvt' || dexFilter === 'katana' || dexFilter === 'gmtrade') {
     if (dexFilter === 'avantis' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'gmx'     && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'monad'   && !isEvmWallet(wallet)) return [];
@@ -305,8 +305,10 @@ async function fetchWalletTrades(player, opts = {}) {
     if (dexFilter === 'nado'    && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'hibachi' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'hotstuff' && !isEvmWallet(wallet)) return [];
+    if (dexFilter === 'katana' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'decibel' && !isAptosWallet(wallet)) return [];
     if (dexFilter === 'phoenix' && !isSolanaWallet(wallet)) return [];
+    if (dexFilter === 'gmtrade' && !isSolanaWallet(wallet)) return [];
     if (dexFilter === 'hotstuff') {
       await maybeImportHotstuffFills(player, wallet);
     }
@@ -335,6 +337,10 @@ async function fetchWalletTrades(player, opts = {}) {
             ? "AND verified_source = 'hotstuff_api'"
           : dexFilter === 'grvt'
             ? "AND verified_source = 'grvt_builder'"
+          : dexFilter === 'katana'
+            ? "AND verified_source = 'katana_api'"
+          : dexFilter === 'gmtrade'
+            ? "AND verified_source = 'gmtrade_tx'"
           : dexFilter === 'phoenix'
             ? "AND verified_source IN ('worker', 'tx')"
           : "AND verified_source = 'worker'";

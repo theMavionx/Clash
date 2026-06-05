@@ -7,7 +7,10 @@ const allowProxyFallback = envFlag(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC,
 const preferProxyRpc = allowProxyFallback
   && envFlag(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC, true);
 const includePublicRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_PUBLIC_RPC, true);
-const includeLeoRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_LEORPC, true);
+// LeoRPC's public "FREE" endpoint frequently fails browser CORS/fetch checks
+// in production client logs. Keep it opt-in only; Alchemy/proxy remains the
+// paid fallback after healthier browser-direct public RPCs.
+const includeLeoRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_LEORPC, false);
 const includeAlchemyRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_ALCHEMY_RPC, true);
 // Tatum is intentionally excluded from the browser fallback list. Expired or
 // quota-limited Tatum accounts return 402/429 and can break mobile payment

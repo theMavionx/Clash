@@ -25,6 +25,8 @@ var display_name: String = ""
 var trophies: int = 0
 var wallet: String = ""
 
+const WEB_AUTH_STORAGE_KEY = "clash_game_auth_v1"
+
 func _ready() -> void:
 	WebLoadLogger.report("autoload_net_ready_start")
 	process_mode = Node.PROCESS_MODE_ALWAYS  # keep network alive during tree pause
@@ -33,6 +35,10 @@ func _ready() -> void:
 	if cfg.load("user://auth.cfg") == OK:
 		token = cfg.get_value("auth", "token", "")
 		display_name = cfg.get_value("auth", "name", "")
+	if token == "":
+		_load_web_auth_fallback()
+	elif OS.has_feature("web"):
+		_save_web_auth_fallback()
 	WebLoadLogger.report("autoload_net_ready_done", {"has_token": token != ""})
 
 # Returns the API base URL appropriate for the current runtime.
@@ -59,6 +65,45 @@ func _save_token() -> void:
 	cfg.set_value("auth", "token", token)
 	cfg.set_value("auth", "name", display_name)
 	cfg.save("user://auth.cfg")
+	_save_web_auth_fallback()
+
+func _load_web_auth_fallback() -> void:
+	if not OS.has_feature("web"):
+		return
+	var raw_value = JavaScriptBridge.eval("(function(){try{return window.localStorage.getItem('%s')||'';}catch(e){return '';}})()" % WEB_AUTH_STORAGE_KEY, true)
+	var raw := String(raw_value).strip_edges()
+	if raw == "":
+		return
+	var parsed = JSON.parse_string(raw)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return
+	var saved_token := _safe_str(parsed.get("token", ""))
+	if saved_token == "":
+		return
+	token = saved_token
+	display_name = _safe_str(parsed.get("name", ""))
+	player_id = _safe_str(parsed.get("player_id", ""))
+	wallet = _safe_str(parsed.get("wallet", ""))
+
+func _save_web_auth_fallback() -> void:
+	if not OS.has_feature("web"):
+		return
+	if token == "":
+		_clear_web_auth_fallback()
+		return
+	var record := JSON.stringify({
+		"token": token,
+		"name": display_name,
+		"player_id": player_id,
+		"wallet": wallet,
+		"saved_at": Time.get_datetime_string_from_system(true),
+	})
+	JavaScriptBridge.eval("(function(){try{window.localStorage.setItem('%s', %s);}catch(e){}})()" % [WEB_AUTH_STORAGE_KEY, JSON.stringify(record)], true)
+
+func _clear_web_auth_fallback() -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("(function(){try{window.localStorage.removeItem('%s');}catch(e){}})()" % WEB_AUTH_STORAGE_KEY, true)
 
 func _response_matches_requested_dex(response: Dictionary, requested_dex: String) -> bool:
 	if requested_dex == "":
@@ -120,6 +165,7 @@ func login() -> Dictionary:
 		display_name = _safe_str(response.get("name"))
 		trophies = _safe_int(response.get("trophies"))
 		wallet = _safe_str(response.get("wallet"))
+		_save_token()
 		auth_ok.emit(response)
 	return response
 

@@ -29,6 +29,7 @@ const DEX_LABELS = {
   hotstuff: 'Hotstuff',
   grvt: 'GRVT',
   katana: 'Katana',
+  gmtrade: 'GMTrade',
 };
 
 function fmtUsd(n) {
@@ -48,6 +49,36 @@ function fmtPrize(amount) {
     return '$' + formatNumber(Math.round(rounded), { maximumFractionDigits: 0 });
   }
   return '$' + formatNumber(rounded, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtRewardAmount(reward, fallbackCurrency = 'USD') {
+  const amount = Number(reward?.amount ?? reward?.pool_amount ?? reward?.quantity ?? 0) || 0;
+  const type = String(reward?.type || '').toLowerCase();
+  if (type === 'money') {
+    const currency = String(reward?.currency || fallbackCurrency || 'USD').toUpperCase();
+    if (currency === 'USD') return fmtPrize(amount);
+    return `${formatNumber(amount, { maximumFractionDigits: 2 })} ${currency}`;
+  }
+  const unit = reward?.unit || (type === 'amp' ? 'AMP' : type === 'points' ? 'points' : type === 'nft' ? 'NFT' : 'reward');
+  const value = Number.isInteger(amount) ? fmt(amount) : formatNumber(amount, { maximumFractionDigits: 2 });
+  return `${value} ${unit}`;
+}
+
+function rewardLabel(reward, fallbackCurrency = 'USD') {
+  const label = reward?.label || reward?.type || 'Reward';
+  return `${label}: ${fmtRewardAmount(reward, fallbackCurrency)}`;
+}
+
+function rewardPoolSummary(rewards, fallbackCurrency = 'USD') {
+  const arr = Array.isArray(rewards) ? rewards : [];
+  return arr.filter((reward) => Number(reward?.pool_amount ?? reward?.quantity ?? 0) > 0)
+    .map((reward) => rewardLabel(reward, fallbackCurrency));
+}
+
+function rankRewardSummary(rewards, fallbackCurrency = 'USD') {
+  const arr = Array.isArray(rewards) ? rewards : [];
+  return arr.filter((reward) => Number(reward?.amount || 0) > 0)
+    .map((reward) => rewardLabel(reward, fallbackCurrency));
 }
 
 function fmtTeamMetric(metric, value) {
@@ -231,9 +262,12 @@ function TournamentPanel({ onClose }) {
       nextVolume,
       remainingVolume: Math.max(0, nextVolume - currentVolume),
       nextPoolUsd: Number(nextTier.pool_usd || 0) || 0,
+      nextRewards: rewardPoolSummary(nextTier.rewards || [], t.prize_currency || 'USD'),
       pct: Math.round(progress * 100),
     };
   }, [board?.prize, t]);
+  const activePrizeRewards = rewardPoolSummary(t?.prize_rewards || [], t?.prize_currency || 'USD');
+  const nextPrizeRewards = rewardPoolSummary(t?.prize_next_tier?.rewards || [], t?.prize_currency || 'USD');
 
   useEffect(() => {
     if (myStats?.reward_wallet_evm) setRewardWalletEvm(myStats.reward_wallet_evm);
@@ -433,8 +467,13 @@ function TournamentPanel({ onClose }) {
                   {Number(t.seeker_gold_boost || 1) !== 1 && <span style={S.boostTag}>Seeker ×{t.seeker_gold_boost} GOLD</span>}
                   {Number(t.trophy_boost) !== 1 && <span style={S.boostTag}>×{t.trophy_boost} TROPHY</span>}
                   <span style={S.tag}>{t.freeze_trophies === false ? 'Main trophies live' : 'Main trophies frozen'}</span>
-                  {Number(t.prize_pool_usd || 0) > 0 && <span style={S.prizeTag}>Prize {fmtPrize(t.prize_pool_usd)}</span>}
-                  {!prizeProgress && Number(t.prize_next_tier?.pool_usd || 0) > 0 && <span style={S.tag}>Next {fmtPrize(t.prize_next_tier.pool_usd)} @ {fmtUsd(t.prize_next_tier.volume_usd)} vol</span>}
+                  {activePrizeRewards.map((label) => <span key={label} style={S.prizeTag}>{label}</span>)}
+                  {!activePrizeRewards.length && Number(t.prize_pool_usd || 0) > 0 && <span style={S.prizeTag}>Prize {fmtPrize(t.prize_pool_usd)}</span>}
+                  {!prizeProgress && t.prize_next_tier && (
+                    <span style={S.tag}>
+                      Next {nextPrizeRewards[0] || fmtPrize(t.prize_next_tier.pool_usd)} @ {fmtUsd(t.prize_next_tier.volume_usd)} vol
+                    </span>
+                  )}
                   {t.rewards_in_cop && <span style={S.prizeTag}>CLASH rewards</span>}
                   {preregistration && t.start_at && <span style={S.tag}>Starts {fmtDate(t.start_at)}</span>}
                   {preregistration && t.registration_opens_at && <span style={S.tag}>Reg opens {fmtDate(t.registration_opens_at)}</span>}
@@ -446,7 +485,7 @@ function TournamentPanel({ onClose }) {
               {prizeProgress && (
                 <div style={S.prizeProgress}>
                   <div style={S.prizeProgressTop}>
-                    <span style={S.prizeProgressTitle}>Next pool {fmtPrize(prizeProgress.nextPoolUsd)}</span>
+                    <span style={S.prizeProgressTitle}>Next pool {prizeProgress.nextRewards?.[0] || fmtPrize(prizeProgress.nextPoolUsd)}</span>
                     <span style={S.prizeProgressNeed}>{fmtUsd(prizeProgress.remainingVolume)} vol left</span>
                   </div>
                   <div style={S.prizeProgressTrack}>
@@ -612,6 +651,7 @@ function TournamentPanel({ onClose }) {
                   const sortKey = board.sort_by;
                   const featuredDisplay = featuredMetric(sortKey, r);
                   const prizeAmount = Number(r.prize_amount || 0);
+                  const rankRewards = rankRewardSummary(r.prize_rewards || [], r.prize_currency || t.prize_currency || 'USD');
                   return (
                     <div
                       key={r.player_id}
@@ -637,7 +677,8 @@ function TournamentPanel({ onClose }) {
                         <span style={S.subRow}>
                           {r.team_label && <>{r.team_label} | </>}
                           {fmt(r.trophies)} 🏆 · {r.trades_count} trades · {fmtUsd(r.volume_usd)} vol
-                          {prizeAmount > 0 && <> · <strong style={S.prizeText}>{fmtPrize(prizeAmount)} prize</strong></>}
+                          {rankRewards.length > 0 && <> · <strong style={S.prizeText}>{rankRewards.join(' + ')}</strong></>}
+                          {!rankRewards.length && prizeAmount > 0 && <> · <strong style={S.prizeText}>{fmtPrize(prizeAmount)} prize</strong></>}
                         </span>
                       </div>
                       <span style={{ ...S.featured, color: featuredDisplay.color }}>{featuredDisplay.value}</span>

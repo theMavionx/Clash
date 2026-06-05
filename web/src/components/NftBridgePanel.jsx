@@ -31,6 +31,7 @@ import { addClientBreadcrumb } from '../lib/clientLogger';
 import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from '../lib/solanaRpc';
 import { sendSolanaTransactionWithRetry } from '../lib/solanaTx';
 import { buildSolanaWalletTxOptions } from '../lib/solanaSeekerTx';
+import { INK_CHAIN_ID, inkChain } from '../lib/nadoConfig';
 
 // Chain logos live in web/public/tokens — same dir we already use for
 // trading-pair token icons. Using real brand marks instead of emoji
@@ -39,11 +40,12 @@ const CHAINS = [
   { id: 'base',     label: 'Base',     kind: 'evm',    logo: '/tokens/BASE.svg' },
   { id: 'arbitrum', label: 'Arbitrum', kind: 'evm',    logo: '/tokens/ARB.svg' },
   { id: 'monad',    label: 'Monad',    kind: 'evm',    logo: '/tokens/MON.svg' },
+  { id: 'ink',      label: 'Ink',      kind: 'evm' },
   { id: 'aptos',    label: 'Aptos',    kind: 'aptos',  logo: '/tokens/APT.png' },
   { id: 'solana',   label: 'Solana',   kind: 'solana', logo: '/tokens/SOL.svg' },
 ];
 const BRIDGE_COLLECTIONS = [
-  { id: 'demonking', label: 'Demon King', chains: ['base', 'arbitrum', 'monad', 'aptos', 'solana'] },
+  { id: 'demonking', label: 'Demon King', chains: ['base', 'arbitrum', 'monad', 'ink', 'aptos', 'solana'] },
 ];
 const BRIDGE_COLLECTION_BY_ID = Object.fromEntries(BRIDGE_COLLECTIONS.map((c) => [c.id, c]));
 const MAX_BATCH_BRIDGE_NFTS = 10;
@@ -65,8 +67,8 @@ function ChainLogo({ chain, size = 18 }) {
 
 const CHAIN_BY_ID = Object.fromEntries(CHAINS.map((c) => [c.id, c]));
 
-const EVM_CHAIN_IDS = { base: 8453, arbitrum: 42161, monad: 143 };
-const EVM_VIEM_CHAINS = { base, arbitrum };
+const EVM_CHAIN_IDS = { base: 8453, arbitrum: 42161, monad: 143, ink: INK_CHAIN_ID };
+const EVM_VIEM_CHAINS = { base, arbitrum, ink: inkChain };
 // Monad is not in viem/chains; describe inline.
 const MONAD_VIEM_CHAIN = {
   id: 143, name: 'Monad',
@@ -88,6 +90,12 @@ function bridgeReadTransport(chainKey) {
     return fallback([
       http(`${siteOrigin()}/rpc/base-alchemy`),
       http(`${siteOrigin()}/rpc/base`),
+    ]);
+  }
+  if (chainKey === 'ink') {
+    return fallback([
+      http(`${siteOrigin()}/rpc/ink`),
+      http('https://rpc-gel.inkonchain.com'),
     ]);
   }
   return http();
@@ -646,7 +654,7 @@ export default function NftBridgePanel({
       return { hash: confirmRes.txSig, asset: confirmRes.assetAddress };
     }
     if (confirmRes.mode === 'evm-receipt') {
-      const destKey = destChain;  // base | arbitrum | monad
+      const destKey = destChain;
       await tradingEvmWallet.ensureChain(EVM_CHAIN_IDS[destKey]);
       const walletClient = createWalletClient({
         account: evmAddress, chain: viemChain(destKey), transport: custom(tradingEvmWallet.provider),

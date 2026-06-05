@@ -1416,7 +1416,10 @@ const ANALYTICS_DEXES = [
   { key: 'grvt', label: 'GRVT' },
   { key: 'risex', label: 'RISE' },
   { key: 'nado', label: 'Nado' },
+  { key: 'hibachi', label: 'Hibachi' },
   { key: 'hotstuff', label: 'Hotstuff' },
+  { key: 'katana', label: 'Katana Perps' },
+  { key: 'gmtrade', label: 'GMTrade' },
 ];
 
 const ANALYTICS_WINDOWS = [
@@ -1476,7 +1479,10 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'grvt') return "verified_source = 'grvt_builder'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
   if (dex === 'nado') return "verified_source = 'nado_api'";
+  if (dex === 'hibachi') return "verified_source = 'hibachi_api'";
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
+  if (dex === 'katana') return "verified_source = 'katana_api'";
+  if (dex === 'gmtrade') return "verified_source = 'gmtrade_tx'";
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
   if (dex === 'avantis') return "verified_source IN ('worker', 'client')";

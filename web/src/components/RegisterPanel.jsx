@@ -74,6 +74,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   cfg.id === 'hotstuff' ? 'SELF-CUSTODY · HOT' :
                   cfg.id === 'grvt' ? 'SELF-CUSTODY · GRVT' :
                   cfg.id === 'katana' ? 'SELF-CUSTODY · KATANA' :
+                  cfg.id === 'gmtrade' ? 'SELF-CUSTODY · SOLANA' :
                   cfg.id === 'monad' ? 'SELF-CUSTODY · MONAD' :
                   cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
                   'SELF-CUSTODY · SOLANA'
@@ -139,7 +140,7 @@ function DexBadge({ dex, onChange }) {
   );
 }
 
-function NameForm({ wallet, suggested, seekerHandle, onSubmit }) {
+function NameForm({ wallet, suggested, seekerHandle, error, onClearError, onSubmit }) {
   const [name, setName] = useState(suggested || '');
   // Track whether the user has manually typed in the field. We want the
   // input to track late-arriving `suggested` updates (the Seeker `.skr`
@@ -149,8 +150,9 @@ function NameForm({ wallet, suggested, seekerHandle, onSubmit }) {
   const editedRef = useRef(false);
   const onChangeName = useCallback(e => {
     editedRef.current = true;
+    onClearError?.();
     setName(e.target.value);
-  }, []);
+  }, [onClearError]);
   useEffect(() => {
     if (editedRef.current) return;
     if (!suggested) return;
@@ -160,6 +162,7 @@ function NameForm({ wallet, suggested, seekerHandle, onSubmit }) {
   const submit = e => {
     e.preventDefault();
     if (name.trim().length < 2) return;
+    onClearError?.();
     onSubmit(name);
   };
   const valid = name.trim().length >= 2;
@@ -190,6 +193,7 @@ function NameForm({ wallet, suggested, seekerHandle, onSubmit }) {
         maxLength={20}
         autoFocus
       />
+      {error && <div style={S.nameError}>{error}</div>}
       {showSkrChip && (
         <button
           type="button"
@@ -215,7 +219,7 @@ function NameForm({ wallet, suggested, seekerHandle, onSubmit }) {
 }
 
 function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
-  const venue = dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
+  const venue = dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
   return (
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CONNECT TO {venue}</h3>
@@ -249,6 +253,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hotstuff' ? 'HOTSTUFF'
     : dex === 'grvt' ? 'GRVT'
     : dex === 'katana' ? 'KATANA'
+    : dex === 'gmtrade' ? 'GMTRADE'
     : 'AVANTIS';
   const chainName = dex === 'gmx' ? 'Arbitrum'
     : dex === 'monad' ? 'Monad'
@@ -259,6 +264,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hotstuff' ? 'Hotstuff L1'
     : dex === 'grvt' ? 'GRVT Exchange'
     : dex === 'katana' ? 'Katana'
+    : dex === 'gmtrade' ? 'Solana'
     : 'Base';
   return (
     <div style={S.bodyStack}>
@@ -338,7 +344,7 @@ function EmailIcon() {
 function RegisterPanel() {
   const {
     state, dex, isInFrame, isSolanaMobile, fcUser, candidate, suggestedName, seekerHandle,
-    privyEnabled, privyAuthed, actions,
+    privyEnabled, privyAuthed, actions, registerError,
   } = useAuthFlow();
 
   const { select, wallets, connect } = useWallet();
@@ -378,6 +384,7 @@ function RegisterPanel() {
                   dex === 'hotstuff' ? 'Hotstuff' :
                   dex === 'grvt' ? 'GRVT' :
                   dex === 'katana' ? 'Katana' :
+                  dex === 'gmtrade' ? 'GMTrade' :
                   dex === 'phoenix' ? 'Phoenix' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
@@ -392,6 +399,8 @@ function RegisterPanel() {
             wallet={candidate.wallet}
             suggested={suggestedName || ''}
             seekerHandle={seekerHandle}
+            error={registerError}
+            onClearError={actions.clearRegisterError}
             onSubmit={actions.submitName}
           />
         );
@@ -450,6 +459,7 @@ function RegisterPanel() {
     if (dex === 'hotstuff') return 'HOTSTUFF LOGIN';
     if (dex === 'grvt') return 'GRVT LOGIN';
     if (dex === 'katana') return 'KATANA LOGIN';
+    if (dex === 'gmtrade') return 'GMTRADE LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
     return 'PACIFICA LOGIN';
   })();
@@ -630,6 +640,19 @@ const S = {
     textAlign: 'center', outline: 'none', boxSizing: 'border-box',
     boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)',
     fontFamily: 'inherit',
+  },
+  nameError: {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '9px 12px',
+    borderRadius: 12,
+    border: '2px solid #E53935',
+    background: 'rgba(229, 57, 53, 0.1)',
+    color: '#B71C1C',
+    fontSize: 13,
+    fontWeight: 900,
+    lineHeight: 1.3,
+    textAlign: 'center',
   },
   skrChip: {
     display: 'flex', alignItems: 'center', gap: 10,

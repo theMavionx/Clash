@@ -23,7 +23,7 @@ import {
 } from '../lib/solanaSeekerTx';
 
 const PAGE_SIZE = 50;
-const CHAIN_LABEL = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', solana: 'Solana', aptos: 'Aptos' };
+const CHAIN_LABEL = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', ink: 'Ink', solana: 'Solana', aptos: 'Aptos' };
 const CHAIN_LOGO_SRC = {
   base: '/tokens/BASE.svg',
   arbitrum: '/tokens/ARB.svg',
@@ -415,7 +415,7 @@ export default function CustodialMarketplacePanel({
   }, [sessionToken]);
 
   const loadOwned = useCallback(async () => {
-    const chains = (supportedAssets.length ? supportedAssets : ['base', 'arbitrum', 'monad', 'solana', 'aptos'])
+    const chains = (supportedAssets.length ? supportedAssets : ['base', 'arbitrum', 'monad', 'ink', 'solana', 'aptos'])
       .filter((chain) => walletForChain(chain, walletMap));
     if (!chains.length) { setOwned([]); return; }
     setOwnedLoading(true);
@@ -1276,7 +1276,7 @@ export default function CustodialMarketplacePanel({
 
       {sellWalletModalOpen && canUsePortal && createPortal((
         <SellWalletModal
-          chains={supportedAssets.length ? supportedAssets : ['base', 'arbitrum', 'monad', 'solana', 'aptos']}
+          chains={supportedAssets.length ? supportedAssets : ['base', 'arbitrum', 'monad', 'ink', 'solana', 'aptos']}
           walletMap={walletMap}
           onChoose={changeSellWalletForChain}
           onClose={() => setSellWalletModalOpen(false)}
