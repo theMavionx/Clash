@@ -1628,10 +1628,9 @@ function estimateRevenue(dex, volumeUsd, dateForRate = null) {
   const volume = safeNumber(volumeUsd);
   const model = revenueModelForDex(dex, dateForRate);
   const estimated = model.rate == null ? 0 : volume * safeNumber(model.rate);
-  const earned = model.configured ? estimated : 0;
   return {
     ...model,
-    earned_usd: roundUsd(earned),
+    earned_usd: 0,
     estimated_fee_usd: roundUsd(estimated),
   };
 }
@@ -1738,8 +1737,9 @@ function readWindowRevenueAnalytics(mainDb) {
             ...model,
             trades: stats.trades,
             volume_usd: stats.volume_usd,
-            earned_usd: stats.earned_usd,
+            earned_usd: 0,
             estimated_fee_usd: stats.earned_usd,
+            source_detail: 'local_pacifica_fee_sum_for_comparison',
           };
         } else {
           const stats = readFuturesWindowStats(fdb, key, windowDef);
@@ -1866,7 +1866,7 @@ function readTournamentRevenueAnalytics(mainDb, limit = 120) {
         estimate = {
           ...revenueModelForDex(dex),
           configured: pacificaEffectiveRate != null,
-          earned_usd: roundUsd(projected),
+          earned_usd: 0,
           estimated_fee_usd: roundUsd(projected),
           rate_label: pacificaEffectiveRate == null
             ? 'local fee rate unavailable'
@@ -1926,7 +1926,7 @@ async function fetchRevenueAnalytics({ mainDb = null, tournamentLimit = 120 } = 
     windows: readWindowRevenueAnalytics(mainDb),
     tournaments: readTournamentRevenueAnalytics(mainDb, tournamentLimit),
     last_updated: new Date().toISOString(),
-    note: 'Window stats use local credited/indexed trade volume. Decibel is app-only (verified_source=server). DEXes without configured builder/referrer fees show earned_usd=0 and keep hypothetical estimates separate.',
+    note: 'Window stats are local volume/trade analytics only. They do not represent exact commission earned. Exact provider earnings come from /admin/earnings; modelled fees are kept only in estimated_fee_usd for comparison.',
   };
 }
 

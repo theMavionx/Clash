@@ -9,12 +9,52 @@ import {
   fmtTime,
   fmtUsd,
   formToTournamentBody,
-  normalizePrizeTiers,
   normalizeReward,
   rewardDefaults,
   tournamentToForm,
   validateTournamentStep,
 } from './tournamentUtils';
+
+function utcTextToDatetimeLocal(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T');
+  return normalized.replace(/Z$/u, '').slice(0, 16);
+}
+
+function datetimeLocalToUtcText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const withSeconds = text.length === 16 ? `${text}:00` : text;
+  return withSeconds.replace('T', ' ');
+}
+
+function parseUtcDateMs(value) {
+  const text = String(value || '').trim();
+  if (!text) return NaN;
+  return Date.parse((text.includes('T') ? text : text.replace(' ', 'T')) + (/[zZ]$/u.test(text) ? '' : 'Z'));
+}
+
+function formatUtcDay(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function tournamentUtcDays(form, limit = 31) {
+  const startMs = parseUtcDateMs(form.start_at);
+  if (!Number.isFinite(startMs)) return [];
+  const endMsRaw = parseUtcDateMs(form.end_at);
+  const dayMs = 24 * 60 * 60 * 1000;
+  const first = Date.parse(`${formatUtcDay(startMs)}T00:00:00Z`);
+  const lastSource = Number.isFinite(endMsRaw) ? Math.max(startMs, endMsRaw - 1) : first + 6 * dayMs;
+  const last = Date.parse(`${formatUtcDay(lastSource)}T00:00:00Z`);
+  const count = Math.max(1, Math.min(limit, Math.floor((last - first) / dayMs) + 1));
+  return Array.from({ length: count }, (_, idx) => formatUtcDay(first + idx * dayMs));
+}
+
+function dailyPoolAutoPoints(base, pct, index) {
+  const points = Math.max(1, Number(base) || 1000) * Math.pow(1 + (Number(pct) || 0) / 100, Math.max(0, index));
+  return Math.max(1, Math.round(points));
+}
 
 const NAV = [
   { id: 'overview', label: 'Overview', hint: 'Live health and workload', icon: 'OV' },
@@ -134,6 +174,12 @@ export default function AdminApp() {
     }
   }
 
+  function stopNumberWheel(event) {
+    if (event.target?.matches?.('input[type="number"], input[data-number-input="true"]')) {
+      event.preventDefault();
+    }
+  }
+
   useEffect(() => {
     if (key) login(key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -155,7 +201,7 @@ export default function AdminApp() {
 
   if (!authed) {
     return (
-      <div className="admin-app">
+      <div className="admin-app" onWheelCapture={stopNumberWheel}>
         <div className="admin-login">
           <form className="admin-login-box" onSubmit={(event) => { event.preventDefault(); login(key); }}>
             <div className="admin-login-title">Clash Admin</div>
@@ -177,7 +223,7 @@ export default function AdminApp() {
   const current = NAV.find((item) => item.id === active) || NAV[0];
 
   return (
-    <div className="admin-app">
+    <div className="admin-app" onWheelCapture={stopNumberWheel}>
       <div className="admin-shell">
         <aside className="admin-sidebar">
           <div className="admin-brand">
@@ -613,6 +659,7 @@ function TournamentWizard({ initial, onClose, onSaved }) {
             <button className="admin-btn" onClick={() => setStep((value) => Math.max(0, value - 1))} disabled={step === 0}>Back</button>
             <div className="admin-filter-row">
               <button className="admin-btn ghost" onClick={onClose}>Cancel</button>
+              {step < steps.length - 1 && <button className="admin-btn" onClick={save} disabled={saving}>{saving ? 'Saving...' : (isEdit ? 'Save' : 'Create')}</button>}
               {step < steps.length - 1 ? (
                 <button className="admin-btn primary" onClick={next}>Next</button>
               ) : (
@@ -635,13 +682,13 @@ function TournamentScheduleStep({ form, update }) {
         <label className="admin-field"><span className="admin-label">Description</span><textarea className="admin-textarea" value={form.description || ''} onChange={(e) => update({ description: e.target.value })} /></label>
         <div className="admin-form-grid three">
           <label className="admin-field"><span className="admin-label">Status</span><select className="admin-select" value={form.status} onChange={(e) => update({ status: e.target.value })}><option value="draft">Draft</option><option value="active">Active</option><option value="ended">Ended</option></select></label>
-          <label className="admin-field"><span className="admin-label">Start at</span><input className="admin-input" value={form.start_at || ''} placeholder="YYYY-MM-DD HH:mm:ss" onChange={(e) => update({ start_at: e.target.value })} /></label>
-          <label className="admin-field"><span className="admin-label">End at</span><input className="admin-input" value={form.end_at || ''} placeholder="YYYY-MM-DD HH:mm:ss" onChange={(e) => update({ end_at: e.target.value })} /></label>
+          <DateTimeField label="Start at" value={form.start_at} onChange={(value) => update({ start_at: value })} />
+          <DateTimeField label="End at" value={form.end_at} onChange={(value) => update({ end_at: value })} />
         </div>
         <div className="admin-form-grid three">
           <label className="admin-field"><span className="admin-label">Pre-registration</span><select className="admin-select" value={form.preregistration_enabled ? '1' : '0'} onChange={(e) => update({ preregistration_enabled: e.target.value === '1' })}><option value="0">Disabled</option><option value="1">Enabled</option></select></label>
-          <label className="admin-field"><span className="admin-label">Registration opens</span><input className="admin-input" value={form.registration_opens_at || ''} onChange={(e) => update({ registration_opens_at: e.target.value })} /></label>
-          <label className="admin-field"><span className="admin-label">Registration closes</span><input className="admin-input" value={form.registration_closes_at || ''} onChange={(e) => update({ registration_closes_at: e.target.value })} /></label>
+          <DateTimeField label="Registration opens" value={form.registration_opens_at} onChange={(value) => update({ registration_opens_at: value })} />
+          <DateTimeField label="Registration closes" value={form.registration_closes_at} onChange={(value) => update({ registration_closes_at: value })} />
         </div>
       </div>
     </div>
@@ -701,8 +748,9 @@ function TournamentScoringStep({ form, update }) {
         <div className="admin-form-grid three">
           <label className="admin-field"><span className="admin-label">Sort by</span><MetricSelect value={form.sort_by} onChange={(value) => update({ sort_by: value })} /></label>
           <label className="admin-field"><span className="admin-label">Scoring mode</span><select className="admin-select" value={form.scoring_mode} onChange={(e) => update({ scoring_mode: e.target.value })}><option value="live">Live scoring</option><option value="daily_pool">Daily point pool</option></select></label>
-          <label className="admin-field"><span className="admin-label">Daily pool points</span><input className="admin-input" type="number" value={form.daily_pool_points} onChange={(e) => update({ daily_pool_points: Number(e.target.value) || 0 })} /></label>
+          <NumberField label="Daily pool points" value={form.daily_pool_points} onChange={(v) => update({ daily_pool_points: v })} />
         </div>
+        {form.scoring_mode === 'daily_pool' && <DailyPoolConfig form={form} update={update} />}
         <div className="admin-form-grid three">
           <NumberField label="Trophy weight %" value={form.points_trophy_weight} onChange={(v) => update({ points_trophy_weight: v })} />
           <NumberField label="Volume weight %" value={form.points_volume_weight} onChange={(v) => update({ points_volume_weight: v })} />
@@ -724,21 +772,132 @@ function TournamentScoringStep({ form, update }) {
   );
 }
 
+function DailyPoolConfig({ form, update }) {
+  const mode = form.daily_pool_growth_mode || 'pct';
+  const base = Math.max(1, Number(form.daily_pool_points) || 1000);
+  const pct = Number(form.daily_pool_growth_pct) || 0;
+  const multiplier = Number((1 + pct / 100).toFixed(6));
+  const overrides = form.daily_pool_overrides && typeof form.daily_pool_overrides === 'object' ? form.daily_pool_overrides : {};
+  const days = tournamentUtcDays(form, 60);
+
+  function setMode(nextMode) {
+    update({
+      daily_pool_growth_mode: nextMode,
+      daily_pool_growth_pct: nextMode === 'fixed' || nextMode === 'manual' ? 0 : pct,
+    });
+  }
+
+  function setOverride(day, value) {
+    const next = { ...overrides };
+    const text = String(value ?? '').trim();
+    if (!text) {
+      delete next[day];
+    } else {
+      const numeric = Number(text.replace(',', '.'));
+      if (Number.isFinite(numeric) && numeric > 0) next[day] = numeric;
+    }
+    update({ daily_pool_overrides: next });
+  }
+
+  function fillManualFromPreview() {
+    const next = {};
+    days.forEach((day, idx) => {
+      next[day] = Number(overrides[day] || dailyPoolAutoPoints(base, pct, idx));
+    });
+    update({ daily_pool_overrides: next, daily_pool_growth_mode: 'manual', daily_pool_growth_pct: 0 });
+  }
+
+  function clearOverrides() {
+    update({ daily_pool_overrides: {} });
+  }
+
+  return (
+    <div className="admin-card nested-card">
+      <div className="admin-card-head">
+        <div>
+          <div className="admin-card-title">Daily Point Pool</div>
+          <div className="admin-card-sub">Automatic growth is exponential by UTC day. Manual day values override the auto calculation.</div>
+        </div>
+        <div className="admin-filter-row">
+          <button className="admin-btn ghost" onClick={fillManualFromPreview} disabled={!days.length}>Fill manual</button>
+          <button className="admin-btn ghost" onClick={clearOverrides} disabled={!Object.keys(overrides).length}>Clear manual</button>
+        </div>
+      </div>
+      <div className="admin-card-body admin-grid">
+        <div className="admin-form-grid three">
+          <label className="admin-field">
+            <span className="admin-label">Pool mode</span>
+            <select className="admin-select" value={mode} onChange={(e) => setMode(e.target.value)}>
+              <option value="fixed">Fixed every day</option>
+              <option value="pct">Growth % per day</option>
+              <option value="multiplier">Multiplier per day</option>
+              <option value="manual">Manual per day</option>
+            </select>
+          </label>
+          {mode === 'pct' && <NumberField label="Daily growth %" value={pct} step="0.1" onChange={(v) => update({ daily_pool_growth_pct: v, daily_pool_growth_mode: 'pct' })} />}
+          {mode === 'multiplier' && <NumberField label="Daily multiplier" value={multiplier} step="0.01" onChange={(v) => update({ daily_pool_growth_pct: (Math.max(0.01, Number(v) || 1) - 1) * 100, daily_pool_growth_mode: 'multiplier' })} />}
+          {(mode === 'fixed' || mode === 'manual') && <div className="admin-help">Auto growth is disabled. Use manual values below when a day needs a custom pool.</div>}
+        </div>
+        <div className="daily-pool-preview">
+          {!days.length && <div className="admin-help">Set tournament start and end dates to edit daily pools by day.</div>}
+          {days.map((day, idx) => {
+            const auto = dailyPoolAutoPoints(base, mode === 'manual' || mode === 'fixed' ? 0 : pct, idx);
+            const manual = overrides[day];
+            return (
+              <div className="daily-pool-row" key={day}>
+                <div>
+                  <strong>{day}</strong>
+                  <span>{manual ? `manual, auto ${auto.toLocaleString()}` : `auto ${auto.toLocaleString()}`}</span>
+                </div>
+                <input
+                  className="admin-input"
+                  data-number-input="true"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder={String(auto)}
+                  value={manual ?? ''}
+                  onChange={(e) => setOverride(day, e.target.value)}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TournamentRewardsStep({ form, update }) {
+  const [activeTier, setActiveTier] = useState(0);
+  const tiers = form.prize_tiers || [];
+
+  function normalizeEditableTiers(next) {
+    return (Array.isArray(next) ? next : []).map((tier) => ({
+      volume_usd: Math.max(0, Number(tier.volume_usd) || 0),
+      rewards: (Array.isArray(tier.rewards) ? tier.rewards : []).map(normalizeReward),
+    })).filter((tier) => tier.volume_usd > 0 || tier.rewards.length > 0);
+  }
+
   function setTiers(next) {
-    update({ prize_tiers: normalizePrizeTiers(next) });
+    const normalized = normalizeEditableTiers(next);
+    update({ prize_tiers: normalized });
+    setActiveTier((value) => Math.max(0, Math.min(value, Math.max(0, normalized.length - 1))));
   }
   function addTier() {
-    setTiers([...(form.prize_tiers || []), { volume_usd: 100000, rewards: [normalizeReward(rewardDefaults('money'))] }]);
+    const next = [...tiers, { volume_usd: 100000, rewards: [normalizeReward(rewardDefaults('money'))] }];
+    setTiers(next);
+    setActiveTier(next.length - 1);
   }
   function updateTier(index, patch) {
-    const tiers = [...(form.prize_tiers || [])];
-    tiers[index] = { ...tiers[index], ...patch };
-    setTiers(tiers);
+    const next = [...tiers];
+    next[index] = { ...next[index], ...patch };
+    setTiers(next);
   }
   function removeTier(index) {
-    setTiers((form.prize_tiers || []).filter((_, i) => i !== index));
+    setTiers(tiers.filter((_, i) => i !== index));
+    setActiveTier((value) => Math.max(0, Math.min(value, tiers.length - 2)));
   }
+  const currentTier = tiers[activeTier] || null;
   return (
     <div className="admin-card">
       <div className="admin-card-head">
@@ -750,10 +909,31 @@ function TournamentRewardsStep({ form, update }) {
           <label className="admin-field"><span className="admin-label">Prize currency</span><input className="admin-input" value={form.prize_currency} onChange={(e) => update({ prize_currency: e.target.value.toUpperCase() })} /></label>
           <label className="admin-field"><span className="admin-label">Rewards in COP</span><select className="admin-select" value={form.rewards_in_cop ? '1' : '0'} onChange={(e) => update({ rewards_in_cop: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
         </div>
-        {!(form.prize_tiers || []).length && <div className="admin-help">No prize tiers configured. Tournament can still run without rewards.</div>}
-        {(form.prize_tiers || []).map((tier, index) => (
-          <PrizeTierEditor key={index} tier={tier} index={index} updateTier={updateTier} removeTier={removeTier} />
-        ))}
+        {!tiers.length && <div className="admin-help">No prize tiers configured. Tournament can still run without rewards.</div>}
+        {!!tiers.length && (
+          <>
+            <div className="tier-pager">
+              <button className="admin-btn" onClick={() => setActiveTier((value) => Math.max(0, value - 1))} disabled={activeTier === 0}>Previous tier</button>
+              <div className="tier-pager-center">
+                <strong>Tier {activeTier + 1} of {tiers.length}</strong>
+                <span className="admin-card-sub">Use Previous/Next to edit one tier at a time.</span>
+              </div>
+              <button className="admin-btn" onClick={() => setActiveTier((value) => Math.min(tiers.length - 1, value + 1))} disabled={activeTier >= tiers.length - 1}>Next tier</button>
+            </div>
+            <div className="tier-chip-row">
+              {tiers.map((tier, idx) => (
+                <button
+                  key={idx}
+                  className={'tier-chip' + (idx === activeTier ? ' active' : '')}
+                  onClick={() => setActiveTier(idx)}
+                >
+                  Tier {idx + 1}<span>${Number(tier.volume_usd || 0).toLocaleString()}</span>
+                </button>
+              ))}
+            </div>
+            {currentTier && <PrizeTierEditor tier={currentTier} index={activeTier} updateTier={updateTier} removeTier={removeTier} />}
+          </>
+        )}
       </div>
     </div>
   );
@@ -1243,23 +1423,26 @@ function EarningsPanel({ data, reload }) {
   const exactEarningsRows = Object.entries(earnings)
     .filter(([dex, value]) => value && typeof value === 'object' && 'earned_usd' in value)
     .map(([dex, value]) => ({ dex, ...value }));
+  const exactTotalUsd = Number.isFinite(Number(earnings.total_usd))
+    ? Number(earnings.total_usd)
+    : exactEarningsRows.reduce((sum, row) => sum + (Number(row.earned_usd) || 0), 0);
   const tournaments = revenue.tournaments || revenue.by_tournament || [];
   return (
     <div className="admin-grid">
       <StatsGrid stats={[
-        { label: '24h earned', value: fmtMaybeUsd(windowH24.total_earned_usd ?? earnings.total_24h_usd), tone: 'green' },
-        { label: '30d earned', value: fmtMaybeUsd(windowD30.total_earned_usd ?? earnings.total_30d_usd), tone: 'green' },
-        { label: 'All earned', value: fmtMaybeUsd(windowAll.total_earned_usd ?? earnings.total_usd), tone: 'gold' },
-        { label: '30d volume', value: fmtMaybeUsd(windowD30.total_volume_usd ?? earnings.volume_30d_usd), tone: 'blue' },
+        { label: 'Exact earned', value: fmtMaybeUsd(exactTotalUsd), tone: 'gold' },
+        { label: 'Exact sources', value: num(exactEarningsRows.length), tone: 'green' },
+        { label: '30d local volume', value: fmtMaybeUsd(windowD30.total_volume_usd ?? earnings.volume_30d_usd), tone: 'blue' },
+        { label: '30d local trades', value: num(windowD30.total_trades || 0), tone: 'blue' },
       ]} />
       <div className="earnings-card-grid">
         {exactEarningsRows.map((row) => <EarningsDexCard key={row.dex} row={row} />)}
       </div>
       <div className="admin-grid two">
-        <CompactTable title="DEX Revenue" subtitle={`All-time local revenue analytics. Updated ${fmtTime(revenue.last_updated)}.`} columns={['DEX', 'Earned', 'Volume', 'Trades', 'Model', 'Configured']} rows={normalizeDexRows(byDex).map((row) => [DEX_LABELS[row.dex] || row.dex || '-', fmtMaybeUsd(row.earned_usd ?? row.total_earned_usd ?? row.fee_usd), fmtMaybeUsd(row.volume_usd ?? row.total_volume_usd), row.trades || row.trades_count || 0, row.rate_label || row.model || row.source_detail || '-', row.configured === false ? <span className="admin-badge off">no</span> : <span className="admin-badge green">yes</span>])} />
-        <CompactTable title="Tournament Revenue" subtitle="Revenue attributed to configured tournaments." columns={['Tournament', 'DEX', 'Players', 'Volume', 'Earned']} rows={(tournaments || []).slice(0, 80).map((row) => [row.name || `#${row.tournament_id || row.id}`, DEX_LABELS[row.dex] || row.dex || '-', row.players || '-', fmtMaybeUsd(row.volume_usd), fmtMaybeUsd(row.earned_usd ?? row.total_earned_usd)])} />
+        <CompactTable title="DEX Local Model" subtitle={`Local volume x configured rate analytics for comparison only. Updated ${fmtTime(revenue.last_updated)}.`} columns={['DEX', 'Estimated fee', 'Volume', 'Trades', 'Model', 'Configured']} rows={normalizeDexRows(byDex).map((row) => [DEX_LABELS[row.dex] || row.dex || '-', fmtMaybeUsd(row.estimated_fee_usd ?? row.fee_usd), fmtMaybeUsd(row.volume_usd ?? row.total_volume_usd), row.trades || row.trades_count || 0, row.rate_label || row.model || row.source_detail || '-', row.configured === false ? <span className="admin-badge off">no</span> : <span className="admin-badge green">yes</span>])} />
+        <CompactTable title="Tournament Local Model" subtitle="Tournament volume attribution using configured fee models. Not exact provider earnings." columns={['Tournament', 'DEX', 'Players', 'Volume', 'Estimated fee']} rows={(tournaments || []).slice(0, 80).map((row) => [row.name || `#${row.tournament_id || row.id}`, DEX_LABELS[row.dex] || row.dex || '-', row.players || '-', fmtMaybeUsd(row.volume_usd), fmtMaybeUsd(row.estimated_fee_usd)])} />
       </div>
-      <CompactTable title="Exact Earnings Sources" subtitle={`Live/cached source reads. Total ${fmtMaybeUsd(earnings.total_usd)}.`} columns={['DEX', 'Earned', 'Volume', 'Trades', 'Currency', 'Source']} rows={exactEarningsRows.map((row) => [DEX_LABELS[row.dex] || row.dex, fmtMaybeUsd(row.earned_usd), fmtMaybeUsd(row.volume_usd), row.trades ?? row.local_trades ?? '-', row.currency || '-', row.source_detail || row.source || row.note || '-'])} />
+      <CompactTable title="Exact Earnings Sources" subtitle={`Live/cached source reads. Total ${fmtMaybeUsd(exactTotalUsd)}.`} columns={['DEX', 'Earned', 'Volume', 'Trades', 'Currency', 'Source']} rows={exactEarningsRows.map((row) => [DEX_LABELS[row.dex] || row.dex, fmtMaybeUsd(row.earned_usd), fmtMaybeUsd(row.volume_usd), row.trades ?? row.local_trades ?? '-', row.currency || '-', row.source_detail || row.source || row.note || '-'])} />
       <div className="admin-card">
         <div className="admin-card-head"><div><div className="admin-card-title">Earnings Audit</div><div className="admin-card-sub">Full source payload is available when finance needs to inspect a provider mismatch.</div></div><button className="admin-btn" onClick={reload}>Refresh</button></div>
         <div className="admin-card-body"><details><summary className="admin-help">Open raw provider payload</summary><pre className="admin-mono admin-scroll" style={{ overflow: 'auto', maxHeight: 420, whiteSpace: 'pre-wrap' }}>{JSON.stringify(data || {}, null, 2)}</pre></details></div>
@@ -1576,11 +1759,65 @@ function MetricSelect({ value, onChange }) {
   );
 }
 
-function NumberField({ label, value, onChange, step = '1' }) {
+function DateTimeField({ label, value, onChange }) {
   return (
     <label className="admin-field">
       <span className="admin-label">{label}</span>
-      <input className="admin-input" type="number" step={step} value={value} onChange={(e) => onChange(Number(e.target.value) || 0)} />
+      <input
+        className="admin-input"
+        type="datetime-local"
+        value={utcTextToDatetimeLocal(value)}
+        onChange={(e) => onChange(datetimeLocalToUtcText(e.target.value))}
+      />
+      <span className="admin-card-sub">UTC time</span>
+    </label>
+  );
+}
+
+function NumberField({ label, value, onChange, step = '1' }) {
+  const [draft, setDraft] = useState(String(value ?? ''));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setDraft(String(value ?? ''));
+  }, [focused, value]);
+
+  function commitDraft(nextDraft = draft) {
+    const text = String(nextDraft || '').trim();
+    if (!text || text === '-' || text === '.' || text === '-.') {
+      setDraft(String(value ?? ''));
+      return;
+    }
+    const numeric = Number(text.replace(',', '.'));
+    if (!Number.isFinite(numeric)) {
+      setDraft(String(value ?? ''));
+      return;
+    }
+    onChange(numeric);
+    setDraft(String(numeric));
+  }
+
+  function updateDraft(text) {
+    setDraft(text);
+    const normalized = String(text || '').trim().replace(',', '.');
+    if (!normalized || normalized === '-' || normalized === '.' || normalized === '-.') return;
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) onChange(numeric);
+  }
+
+  return (
+    <label className="admin-field">
+      <span className="admin-label">{label}</span>
+      <input
+        className="admin-input"
+        data-number-input="true"
+        type="text"
+        inputMode={step === '1' ? 'numeric' : 'decimal'}
+        value={draft}
+        onFocus={() => setFocused(true)}
+        onBlur={() => { setFocused(false); commitDraft(); }}
+        onChange={(e) => updateDraft(e.target.value)}
+      />
     </label>
   );
 }

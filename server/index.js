@@ -959,7 +959,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div id="revenueTournamentMeta" style="color:#6b7280;font-size:12px;margin-bottom:8px"></div>
     <div style="overflow:auto">
       <table style="font-size:12px;min-width:1080px"><thead><tr>
-        <th>ID</th><th>Tournament</th><th>DEX</th><th>Status</th><th>Period</th><th>Players</th><th>Trades</th><th>Volume</th><th>Earned</th><th>Estimate</th><th>Source</th>
+        <th>ID</th><th>Tournament</th><th>DEX</th><th>Status</th><th>Period</th><th>Players</th><th>Trades</th><th>Volume</th><th>Exact</th><th>Estimate</th><th>Source</th>
       </tr></thead><tbody id="revenueTournamentBody"></tbody></table>
     </div>
     <div style="margin-top:18px;padding:12px 14px;background:#0f172a;border:1px solid #1e293b;border-radius:8px;font-size:12px;color:#94a3b8;line-height:1.5">
@@ -4193,11 +4193,11 @@ function renderRevenueAnalytics(data) {
   const stat = (value, label, color = '#e8b830') =>
     '<div class="stat"><div class="v" style="color:' + color + '">' + value + '</div><div class="l">' + label + '</div></div>';
   totalsEl.innerHTML =
-    stat(fmtAdminUsd(w24.total_earned_usd), '24h earned', '#4ade80') +
-    stat(fmtAdminUsd(w30.total_earned_usd), '30d earned', '#4ade80') +
-    stat(fmtAdminUsd(wall.total_earned_usd), 'All earned', '#4ade80') +
-    stat(fmtAdminCompactUsd(w30.total_volume_usd), '30d volume', '#38bdf8') +
-    stat((Number(w30.total_trades) || 0).toLocaleString(), '30d trades', '#fbbf24');
+    stat(fmtAdminUsd(w24.total_estimated_fee_usd), '24h estimated fee', '#fbbf24') +
+    stat(fmtAdminUsd(w30.total_estimated_fee_usd), '30d estimated fee', '#fbbf24') +
+    stat(fmtAdminUsd(wall.total_estimated_fee_usd), 'All estimated fee', '#fbbf24') +
+    stat(fmtAdminCompactUsd(w30.total_volume_usd), '30d local volume', '#38bdf8') +
+    stat((Number(w30.total_trades) || 0).toLocaleString(), '30d local trades', '#fbbf24');
 
   const dexes = Array.isArray(data.dexes) && data.dexes.length ? data.dexes : [
     { key: 'pacifica', label: 'Pacifica' },
@@ -4217,14 +4217,13 @@ function renderRevenueAnalytics(data) {
   const windowKeys = ['24h', '7d', '30d', 'all'];
   const revenueCell = (row) => {
     if (!row) return '<td style="color:#6b7280">-</td>';
-    const earned = Number(row.earned_usd) || 0;
     const estimate = Number(row.estimated_fee_usd) || 0;
     const volume = Number(row.volume_usd) || 0;
     const trades = Number(row.trades) || 0;
-    const estimateLine = Math.abs(estimate - earned) > 0.0001 && estimate > 0
-      ? '<div style="font-size:10px;color:#fbbf24">hyp ' + fmtAdminUsd(estimate, 2) + '</div>'
+    const estimateLine = estimate > 0
+      ? '<div style="font-size:10px;color:#fbbf24">estimated only</div>'
       : '';
-    return '<td><strong style="color:#4ade80">' + fmtAdminUsd(earned, 2) + '</strong>' +
+    return '<td><strong style="color:#fbbf24">' + fmtAdminUsd(estimate, 2) + '</strong>' +
       '<div style="font-size:10px;color:#94a3b8">' + fmtAdminCompactUsd(volume) + ' vol / ' + trades.toLocaleString() + ' trades</div>' +
       estimateLine + '</td>';
   };
@@ -4251,10 +4250,9 @@ function renderRevenueAnalytics(data) {
       : esc(row.source_detail || '-');
     const period = fmtAdminTime(row.start_at) + ' - ' + (row.end_at ? fmtAdminTime(row.end_at) : 'open');
     const estimate = Number(row.estimated_fee_usd) || 0;
-    const earned = Number(row.earned_usd) || 0;
-    const estimateCell = Math.abs(estimate - earned) > 0.0001
+    const estimateCell = estimate > 0
       ? '<span style="color:#fbbf24">' + fmtAdminUsd(estimate, 2) + '</span>'
-      : '<span style="color:#94a3b8">same</span>';
+      : '<span style="color:#94a3b8">-</span>';
     return '<tr>' +
       '<td class="mono">' + row.id + '</td>' +
       '<td><strong>' + esc(row.name || '-') + '</strong><div style="font-size:10px;color:#64748b">' + esc(row.mode || '') + ' / ' + esc(row.dex_scope || '') + '</div></td>' +
@@ -4264,7 +4262,7 @@ function renderRevenueAnalytics(data) {
       '<td>' + (Number(row.players) || 0).toLocaleString() + '</td>' +
       '<td>' + (Number(row.trades) || 0).toLocaleString() + '</td>' +
       '<td style="color:#38bdf8;font-weight:800">' + fmtAdminCompactUsd(row.volume_usd) + '</td>' +
-      '<td style="color:#4ade80;font-weight:800">' + fmtAdminUsd(earned, 2) + '</td>' +
+      '<td style="color:#94a3b8;font-weight:800">exact in Earnings</td>' +
       '<td>' + estimateCell + '</td>' +
       '<td style="font-size:10px;color:#94a3b8">' + esc(row.source_detail || '-') + '<div>' + rateText + '</div></td>' +
       '</tr>';

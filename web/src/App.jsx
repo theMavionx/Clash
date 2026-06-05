@@ -34,7 +34,7 @@ import './index.css';
 const GodotCanvas = lazy(lazyWithClientReload(() => import('./components/GodotCanvas'), 'GodotCanvas'));
 const GameUI = lazy(lazyWithClientReload(() => import('./components/GameUI'), 'GameUI'));
 const CLASH_SOLANA_MINT = '9mM1Mc4Ta9UJJ32v5qsHef91PiXi7EWyiSsqF5WXpump';
-const CLASH_MIGRATION_NOTICE_KEY = 'clash_solana_migration_notice_v1';
+const CLASH_TOKEN_NOTICE_KEY = 'clash_solana_token_notice_v2';
 
 function FarcasterGate({ children }) {
   const { isInFrame, user, loading } = useFarcaster();
@@ -116,14 +116,14 @@ function ClashMigrationNotice() {
   useEffect(() => {
     if (!canShow) return;
     try {
-      setOpen(localStorage.getItem(CLASH_MIGRATION_NOTICE_KEY) !== '1');
+      setOpen(localStorage.getItem(CLASH_TOKEN_NOTICE_KEY) !== '1');
     } catch {
       setOpen(true);
     }
   }, [canShow]);
 
   function closeNotice() {
-    try { localStorage.setItem(CLASH_MIGRATION_NOTICE_KEY, '1'); } catch { /* storage disabled */ }
+    try { localStorage.setItem(CLASH_TOKEN_NOTICE_KEY, '1'); } catch { /* storage disabled */ }
     setOpen(false);
   }
 
@@ -142,21 +142,13 @@ function ClashMigrationNotice() {
         </div>
         <h2 id="clash-migration-title" style={styles.noticeTitle}>$CLASH Token Is Live On Solana</h2>
         <p style={styles.noticeText}>
-          We completed the migration from the old Base token. The live Clash of Perps token ticker is now $CLASH on Solana.
+          The official Clash of Perps token is live as $CLASH on Solana.
         </p>
         <div style={styles.noticeContractBox}>
           <span style={styles.noticeContractLabel}>Token contract</span>
           <button type="button" style={styles.noticeContractValue} onClick={copyMint} title="Copy token contract">
             {CLASH_SOLANA_MINT}
           </button>
-        </div>
-        <div style={styles.noticeActions}>
-          <a href="https://x.com/xaitoshi_/status/2061513559180493074" target="_blank" rel="noreferrer" style={styles.noticeSecondaryBtn}>
-            Read article
-          </a>
-          <a href="https://migration.clashofperps.fun/" target="_blank" rel="noreferrer" style={styles.noticePrimaryBtn}>
-            Open migration
-          </a>
         </div>
         <button type="button" style={styles.noticeDoneBtn} onClick={closeNotice}>Got it</button>
       </div>
