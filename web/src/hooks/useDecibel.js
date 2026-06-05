@@ -436,10 +436,8 @@ function normalizePosition(p, markets) {
   const tpLimit = normalizeMaybeChainPrice(p.tp_limit_price ?? p.tpLimitPrice, m);
   const slTrigger = normalizeMaybeChainPrice(p.sl_trigger_price ?? p.slTriggerPrice ?? p.stop_loss ?? p.stopLoss ?? p.sl, m);
   const slLimit = normalizeMaybeChainPrice(p.sl_limit_price ?? p.slLimitPrice, m);
-  // Mark-mark pnl will be filled by the consumer (FuturesPanel reads
-  // `prices` separately) — we leave 0 here so the UI doesn't lock to a
-  // stale figure derived from a missing field.
-  const pnl = 0;
+  // Mark-to-market PnL is derived by FuturesPanel from live prices. Keep this
+  // null so a synthetic zero does not override the live formula.
   return {
     symbol,
     side: isLong ? 'bid' : 'ask',
@@ -448,7 +446,7 @@ function normalizePosition(p, markets) {
     margin: String(margin),
     leverage: String(lev),
     liquidation_price: String(liq),
-    pnl: String(pnl),
+    pnl: null,
     market_addr: marketAddr || (m && m.market_addr) || null,
     is_isolated: !!p.is_isolated,
     tp_order_id: p.tp_order_id ?? p.tpOrderId ?? null,
