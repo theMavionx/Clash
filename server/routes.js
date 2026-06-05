@@ -11722,6 +11722,21 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
   const task = tasks.getTaskById(id);
+  const recordTaskTelemetry = (resultName, extra = {}) => {
+    db.recordTaskClaimEvent({
+      playerId: req.player.id,
+      taskId: id,
+      taskType: task?.type || null,
+      taskTitle: task?.title || null,
+      result: resultName,
+      rewardGold: extra.rewardGold ?? extra.reward_gold ?? task?.reward_gold ?? 0,
+      rewardWood: extra.rewardWood ?? extra.reward_wood ?? task?.reward_wood ?? 0,
+      rewardOre: extra.rewardOre ?? extra.reward_ore ?? task?.reward_ore ?? 0,
+      repeatable: Boolean(task?.repeatable),
+      cooldownHours: task?.cooldown_hours || 0,
+      ...extra,
+    });
+  };
   if (!task || !task.active) return res.status(404).json({ error: 'Task not active' });
 
   let pt = tasks.getPlayerTask(req.player.id, id);
