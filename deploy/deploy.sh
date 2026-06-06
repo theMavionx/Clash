@@ -27,7 +27,7 @@ BACKUP_KEEP="${CLASH_BACKUP_KEEP:-1}"
 BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-}"
 BACKUP_SQLITE_TIMEOUT_MIN_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MIN_SECONDS:-600}"
 BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND="${CLASH_BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND:-1}"
-BACKUP_SQLITE_TIMEOUT_MAX_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MAX_SECONDS:-180}"
+BACKUP_SQLITE_TIMEOUT_MAX_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MAX_SECONDS:-7200}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -239,7 +239,8 @@ install_system_dependencies() {
         npm install -g pm2
     fi
 
-    if ! nginx -V 2>&1 | grep -q brotli; then
+    if ! nginx -V 2>&1 | grep -qi brotli \
+        && [ ! -f /usr/lib/nginx/modules/ngx_http_brotli_static_module.so ]; then
         apt-get install -y -qq libnginx-mod-http-brotli-static libnginx-mod-http-brotli-filter 2>/dev/null \
             || log "brotli nginx module not available; gzip_static will still be used."
     fi
@@ -544,6 +545,13 @@ compress_backup_file() {
     fi
 }
 
+nginx_brotli_static_available() {
+    nginx -V 2>&1 | grep -qi brotli && return 0
+    [ -f /usr/lib/nginx/modules/ngx_http_brotli_static_module.so ] && return 0
+    [ -e /etc/nginx/modules-enabled/50-mod-http-brotli-static.conf ] && return 0
+    return 1
+}
+
 sqlite_backup_timeout_seconds() {
     local src="$1"
 
@@ -571,6 +579,13 @@ sqlite_backup_timeout_seconds() {
     size_timeout=$(( (mib + mib_per_second - 1) / mib_per_second ))
     local computed=$(( min_seconds + size_timeout ))
     local max_seconds="$BACKUP_SQLITE_TIMEOUT_MAX_SECONDS"
+    if ! [[ "$max_seconds" =~ ^[0-9]+$ ]] || [ "$max_seconds" -le 0 ]; then
+        echo "$computed"
+        return 0
+    fi
+    if [ "$max_seconds" -lt "$min_seconds" ]; then
+        max_seconds="$min_seconds"
+    fi
     if [[ "$max_seconds" =~ ^[0-9]+$ ]] && [ "$max_seconds" -gt 0 ] && [ "$computed" -gt "$max_seconds" ]; then
         echo "$max_seconds"
         return 0
@@ -1441,7 +1456,7 @@ MCPCONF
     ln -sf /etc/nginx/sites-available/$MCP_DOMAIN /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
 
-    if nginx -V 2>&1 | grep -q brotli; then
+    if nginx_brotli_static_available; then
         sed -i '/gzip_static on;/a\        brotli_static on;' /etc/nginx/sites-available/$DOMAIN
         log "brotli_static enabled in nginx"
     fi

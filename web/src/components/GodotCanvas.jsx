@@ -42,6 +42,8 @@ const VALIDATE_GODOT_FETCHES = false;
 const APP_TITLE = 'Clash of Perps';
 const GODOT_ASSET_LOG_SLOW_MS = 2500;
 const GODOT_ASSET_LOG_SLOW_BYTES = 8 * 1024 * 1024;
+const GODOT_CONSOLE_PHASE_MIN_MS = 1500;
+const SW_VERSION_STORAGE_KEY = 'clash_sw_version';
 const GODOT_PHASE_PROGRESS = {
   clear_runtime_caches: 2,
   load_engine_script: 6,
@@ -78,6 +80,14 @@ const GODOT_PHASE_PROGRESS = {
   home_ready: 97,
   ready: 100,
 };
+
+function getActiveServiceWorkerVersion() {
+  try {
+    return window.localStorage?.getItem(SW_VERSION_STORAGE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
 const GODOT_PHASE_LABELS = {
   clear_runtime_caches: 'Clearing old runtime cache',
   load_engine_script: 'Loading Godot engine script',
@@ -360,20 +370,34 @@ function loadGodotRuntimeManifest(force = false) {
       cache: 'no-store',
       credentials: 'same-origin',
     })
-      .then((response) => {
-        if (response.ok) return response.json();
+      .then(async (response) => {
+        if (response.ok) {
+          const manifest = await response.json();
+          logGodotConsole('manifest loaded', {
+            url: new URL(String(url), window.location.href).pathname + (new URL(String(url), window.location.href).search || ''),
+            manifest_build: manifest?.build || null,
+            generated_at: manifest?.generated_at || null,
+            files: manifest?.files || null,
+            status: response.status,
+            etag: response.headers?.get?.('etag') || null,
+            cache_control: response.headers?.get?.('cache-control') || null,
+          });
+          return manifest;
+        }
         reportGodotAssetEvent('godot.manifest_query_failed', url, response, {
           fallback_url: cleanUrl,
         });
         return fetch(cleanUrl, {
           cache: 'no-store',
           credentials: 'same-origin',
-        }).then((fallbackResponse) => {
+        }).then(async (fallbackResponse) => {
           if (fallbackResponse.ok) {
+            const manifest = await fallbackResponse.json();
             reportGodotAssetEvent('godot.manifest_fallback_ok', cleanUrl, fallbackResponse, {
               failed_url: url,
+              manifest_build: manifest?.build || null,
             });
-            return fallbackResponse.json();
+            return manifest;
           }
           reportGodotAssetEvent('godot.manifest_fallback_failed', cleanUrl, fallbackResponse, {
             failed_url: url,
@@ -463,16 +487,48 @@ function godotResponseHeaders(response) {
   };
 }
 
+function logGodotConsole(label, data = {}, level = 'info') {
+  try {
+    const payload = {
+      build: GODOT_BUILD_TOKEN,
+      sw: getActiveServiceWorkerVersion(),
+      t_ms: Math.round(performance.now()),
+      ...data,
+    };
+    const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info;
+    fn(`[godot] ${label}`, payload);
+  } catch {
+    // Console diagnostics only.
+  }
+}
+
 function reportGodotAssetEvent(type, url, response, extra = {}) {
   try {
     const clean = new URL(String(url), window.location.href);
-    reportClientEvent(type, {
+    const payload = {
       url: `${clean.pathname}${clean.search || ''}`,
       status: response?.status ?? null,
       ok: Boolean(response?.ok),
       build_token: GODOT_BUILD_TOKEN,
       headers: godotResponseHeaders(response),
       ...extra,
+    };
+    logGodotConsole(type, {
+      url: payload.url,
+      status: payload.status,
+      ok: payload.ok,
+      asset: payload.asset || godotAssetName(payload.url),
+      duration_ms: payload.duration_ms ?? null,
+      encoding: payload.headers?.content_encoding || null,
+      bytes: payload.headers?.content_length || null,
+      etag: payload.headers?.etag || null,
+      manifest_build: payload.manifest_build || null,
+      expected: payload.expected || null,
+      fallback_url: payload.fallback_url || null,
+      failed_url: payload.failed_url || null,
+    }, response?.ok ? 'info' : 'warn');
+    reportClientEvent(type, {
+      ...payload,
     }, {
       level: response?.ok ? 'info' : 'warn',
       source: 'godot.assets',
@@ -486,6 +542,11 @@ function reportGodotAssetEvent(type, url, response, extra = {}) {
 function reportGodotAssetError(type, url, err, extra = {}) {
   try {
     const clean = new URL(String(url), window.location.href);
+    logGodotConsole(type, {
+      url: `${clean.pathname}${clean.search || ''}`,
+      error: err?.message || String(err || ''),
+      ...extra,
+    }, 'error');
     reportClientEvent(type, {
       url: `${clean.pathname}${clean.search || ''}`,
       build_token: GODOT_BUILD_TOKEN,
@@ -545,11 +606,23 @@ async function fetchGodotRuntimeAsset(boundFetch, rawUrl, input, init) {
     response = fallbackResponse;
   }
 
-  const durationMs = Math.round(performance.now() - started);
-  const contentLength = Number(response?.headers?.get?.('content-length') || 0);
-  if (response?.ok && (durationMs >= GODOT_ASSET_LOG_SLOW_MS || contentLength >= GODOT_ASSET_LOG_SLOW_BYTES)) {
-    reportGodotAssetEvent('godot.asset_fetch_complete', response.url || cleanUrl, response, {
-      asset: godotAssetName(response.url || cleanUrl),
+    const durationMs = Math.round(performance.now() - started);
+    const contentLength = Number(response?.headers?.get?.('content-length') || 0);
+    if (response?.ok) {
+      logGodotConsole('asset fetched', {
+        asset: godotAssetName(response.url || cleanUrl),
+        url: new URL(String(response.url || cleanUrl), window.location.href).pathname,
+        query: new URL(String(response.url || cleanUrl), window.location.href).search || '',
+        duration_ms: durationMs,
+        encoding: response.headers?.get?.('content-encoding') || null,
+        bytes: response.headers?.get?.('content-length') || null,
+        cache_control: response.headers?.get?.('cache-control') || null,
+        etag: response.headers?.get?.('etag') || null,
+      });
+    }
+    if (response?.ok && (durationMs >= GODOT_ASSET_LOG_SLOW_MS || contentLength >= GODOT_ASSET_LOG_SLOW_BYTES)) {
+      reportGodotAssetEvent('godot.asset_fetch_complete', response.url || cleanUrl, response, {
+        asset: godotAssetName(response.url || cleanUrl),
       duration_ms: durationMs,
       slow: durationMs >= GODOT_ASSET_LOG_SLOW_MS,
     });
@@ -922,6 +995,8 @@ function GodotCanvas({ onEngineReady }) {
     let activeLoadingPhase = 'clear_runtime_caches';
     let activeLoadingMeta = {};
     let activeLoadingPhaseStartedAt = loaderStartedAt;
+    let lastConsoleLoadingPhase = '';
+    let lastConsoleLoadingAt = 0;
 
     const updateLoadingDetailWithSeconds = () => {
       if (disposed) return;
@@ -971,8 +1046,15 @@ function GodotCanvas({ onEngineReady }) {
       } catch {
         // Diagnostics only.
       }
-      if (isLocalDevHost()) {
-        console.info('[godot-load]', JSON.stringify(payload));
+      const shouldConsoleLog = eventPhase !== lastConsoleLoadingPhase
+        || payload.long_gap_ms
+        || payload.since_start_ms - lastConsoleLoadingAt >= GODOT_CONSOLE_PHASE_MIN_MS
+        || eventPhase === 'engine_ready'
+        || eventPhase === 'stage2_complete';
+      if (shouldConsoleLog) {
+        lastConsoleLoadingPhase = eventPhase;
+        lastConsoleLoadingAt = payload.since_start_ms;
+        logGodotConsole('load phase', payload, payload.long_gap_ms ? 'warn' : 'info');
       }
       return payload;
     };

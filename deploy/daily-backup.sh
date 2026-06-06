@@ -21,7 +21,10 @@ SHARED_DIR="${CLASH_SHARED_DIR:-/opt/clash/shared}"
 BACKUPS_DIR="$SHARED_DIR/backups"
 RETENTION_DAYS="${CLASH_BACKUP_RETENTION_DAYS:-3}"
 BACKUP_KEEP="${CLASH_BACKUP_KEEP:-1}"
-BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-120}"
+BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-}"
+BACKUP_SQLITE_TIMEOUT_MIN_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MIN_SECONDS:-600}"
+BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND="${CLASH_BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND:-1}"
+BACKUP_SQLITE_TIMEOUT_MAX_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MAX_SECONDS:-7200}"
 
 ts="$(date -u +%Y%m%d%H%M%S)"
 backup_dir="$BACKUPS_DIR/$ts"
@@ -37,17 +40,70 @@ compress_backup_file() {
     fi
 }
 
+sqlite_backup_timeout_seconds() {
+    local src="$1"
+
+    if [[ "$BACKUP_SQLITE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] && [ "$BACKUP_SQLITE_TIMEOUT_SECONDS" -gt 0 ]; then
+        echo "$BACKUP_SQLITE_TIMEOUT_SECONDS"
+        return 0
+    fi
+
+    local min_seconds="$BACKUP_SQLITE_TIMEOUT_MIN_SECONDS"
+    if ! [[ "$min_seconds" =~ ^[0-9]+$ ]] || [ "$min_seconds" -le 0 ]; then
+        min_seconds=600
+    fi
+
+    local mib_per_second="$BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND"
+    if ! [[ "$mib_per_second" =~ ^[0-9]+$ ]] || [ "$mib_per_second" -le 0 ]; then
+        mib_per_second=1
+    fi
+
+    local bytes mib size_timeout
+    bytes="$(stat -c '%s' "$src" 2>/dev/null || echo 0)"
+    if ! [[ "$bytes" =~ ^[0-9]+$ ]]; then
+        bytes=0
+    fi
+    mib=$(( (bytes + 1048575) / 1048576 ))
+    size_timeout=$(( (mib + mib_per_second - 1) / mib_per_second ))
+    local computed=$(( min_seconds + size_timeout ))
+    local max_seconds="$BACKUP_SQLITE_TIMEOUT_MAX_SECONDS"
+    if ! [[ "$max_seconds" =~ ^[0-9]+$ ]] || [ "$max_seconds" -le 0 ]; then
+        echo "$computed"
+        return 0
+    fi
+    if [ "$max_seconds" -lt "$min_seconds" ]; then
+        max_seconds="$min_seconds"
+    fi
+    if [ "$computed" -gt "$max_seconds" ]; then
+        echo "$max_seconds"
+        return 0
+    fi
+    echo "$computed"
+}
+
+checkpoint_sqlite_db() {
+    local src="$1"
+    timeout 30s sqlite3 "$src" "PRAGMA busy_timeout=5000; PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>&1 || \
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) WARNING: SQLite WAL checkpoint failed before backup for $src"
+}
+
 backup_sqlite_db() {
     local src="$1"
     local dst="$2"
     [ -f "$src" ] || return 0
 
     local tmp="${dst}.tmp"
+    local timeout_seconds size_label
+    timeout_seconds="$(sqlite_backup_timeout_seconds "$src")"
+    size_label="$(du -h "$src" 2>/dev/null | awk '{print $1}' || true)"
+    [ -n "$size_label" ] || size_label="unknown size"
     mkdir -p "$(dirname "$dst")"
     rm -f "$dst" "$dst.zst" "$dst.gz" "$tmp" "$tmp.zst" "$tmp.gz" "$tmp-journal"
-    if ! timeout "${BACKUP_SQLITE_TIMEOUT_SECONDS}s" sqlite3 "$src" ".backup '$tmp'"; then
+    checkpoint_sqlite_db "$src"
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) backing up SQLite DB $src (${size_label}) with ${timeout_seconds}s timeout"
+    if ! timeout "${timeout_seconds}s" sqlite3 "$src" ".backup '$tmp'"; then
         rm -f "$tmp" "$tmp.zst" "$tmp.gz" "$tmp-journal"
-        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) WARNING: SQLite backup timed out or failed for $src after ${BACKUP_SQLITE_TIMEOUT_SECONDS}s"
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) WARNING: SQLite backup timed out or failed for $src after ${timeout_seconds}s"
         return 1
     fi
     mv -f "$tmp" "$dst"
