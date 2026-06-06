@@ -1332,10 +1332,17 @@ server {
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
     }
 
-    location /godot/ {
+    location = /godot/godot-runtime-manifest.json {
         try_files $uri =404;
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
+        etag on;
+    }
+
+    location /godot/ {
+        try_files $uri =404;
+        add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
+        add_header Cache-Control "public, max-age=31536000, immutable";
         etag on;
         types { application/wasm wasm; application/javascript js; application/octet-stream pck; }
         gzip_static on;

@@ -29,6 +29,7 @@ const GODOT_CACHE_PREFIXES = [
 ];
 const GODOT_RUNTIME_RELOAD_KEY = `clash_godot_runtime_reloaded_${GODOT_BUILD_TOKEN}`;
 const GODOT_WEBGL_CONTEXT_RELOAD_KEY = `clash_godot_webgl_context_reloaded_at_${GODOT_BUILD_TOKEN}`;
+const GODOT_CACHE_BUILD_KEY = 'clash_godot_cache_build_v1';
 const GODOT_WEBGL_CONTEXT_RELOAD_COOLDOWN_MS = 15000;
 const GODOT_WEBGL_CONTEXT_RELOAD_DELAY_MS = 650;
 const GODOT_DOWNLOAD_PROGRESS_WEIGHT = 72;
@@ -89,7 +90,7 @@ function getActiveServiceWorkerVersion() {
   }
 }
 const GODOT_PHASE_LABELS = {
-  clear_runtime_caches: 'Clearing old runtime cache',
+  clear_runtime_caches: 'Checking runtime cache',
   load_engine_script: 'Loading Godot engine script',
   engine_script_ready: 'Godot engine script ready',
   engine_start_game: 'Starting Godot runtime',
@@ -566,7 +567,7 @@ function reportGodotAssetError(type, url, err, extra = {}) {
 async function fetchGodotRuntimeAsset(boundFetch, rawUrl, input, init) {
   const bustedUrl = withGodotCacheBust(rawUrl);
   const cleanUrl = new URL(String(rawUrl), window.location.href).href;
-  const nextInit = { ...(init || {}), cache: 'reload' };
+  const nextInit = { ...(init || {}), cache: 'force-cache' };
   const started = performance.now();
   let response = null;
 
@@ -670,14 +671,30 @@ function installGodotFetchCacheBust() {
 
 function clearGodotRuntimeCaches() {
   const tasks = [];
+  let shouldClearCaches = false;
 
   try {
-    navigator.serviceWorker?.controller?.postMessage?.({ type: 'CLASH_CLEAR_GODOT_CACHES' });
+    const previousBuild = window.localStorage?.getItem(GODOT_CACHE_BUILD_KEY) || '';
+    shouldClearCaches = Boolean(previousBuild && previousBuild !== GODOT_BUILD_TOKEN);
+    window.localStorage?.setItem(GODOT_CACHE_BUILD_KEY, GODOT_BUILD_TOKEN);
+    addClientBreadcrumb('godot.cache_policy', {
+      build: GODOT_BUILD_TOKEN,
+      previous_build: previousBuild || null,
+      clear: shouldClearCaches,
+    }, shouldClearCaches ? 'warn' : 'info');
+  } catch {
+    shouldClearCaches = false;
+  }
+
+  try {
+    if (shouldClearCaches) {
+      navigator.serviceWorker?.controller?.postMessage?.({ type: 'CLASH_CLEAR_GODOT_CACHES' });
+    }
   } catch {
     // Best-effort only.
   }
 
-  if (window.caches?.keys) {
+  if (shouldClearCaches && window.caches?.keys) {
     tasks.push(
       window.caches.keys()
         .then((names) => Promise.all(
