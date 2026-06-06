@@ -1346,6 +1346,13 @@ server {
         etag on;
         types { application/wasm wasm; application/javascript js; application/octet-stream pck; }
         gzip_static on;
+        tcp_nodelay on;
+        http2_chunk_size 256k;
+        sendfile_max_chunk 4m;
+        open_file_cache max=64 inactive=10m;
+        open_file_cache_valid 30m;
+        open_file_cache_min_uses 1;
+        open_file_cache_errors on;
     }
 
     location /assets/ {
