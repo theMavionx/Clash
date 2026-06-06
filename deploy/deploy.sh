@@ -789,6 +789,7 @@ compress_static_file() {
         && cmp -s "$file" "$previous_file"; then
         cp -a "$previous_file.br" "$file.br"
         cp -a "$previous_file.gz" "$file.gz"
+        touch -r "$file" "$file.br" "$file.gz" 2>/dev/null || true
         STATIC_REUSED=$((STATIC_REUSED + 1))
         case "$rel_path" in
             godot/*) GODOT_REUSED=$((GODOT_REUSED + 1)) ;;
