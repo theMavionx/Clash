@@ -148,23 +148,6 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (!GODOT_RUNTIME_ASSETS.includes(url.pathname)) return;
 
-  if (IS_LOCAL_DEV) {
-    event.respondWith(fetch(new Request(event.request, { cache: 'reload' })));
-    return;
-  }
-
-  event.respondWith(
-    caches.open(CACHE_NAME).then((cache) =>
-      cache.match(event.request).then((cached) => {
-        if (cached) return cached;
-
-        const freshRequest = new Request(event.request, { cache: 'reload' });
-        return fetch(freshRequest).then(async (response) => {
-          if (!response.ok) return response;
-          event.waitUntil(cacheGodotResponse(cache, event.request, url.pathname, response.clone()).catch(() => {}));
-          return response;
-        });
-      })
-    )
-  );
+  // Let the browser HTTP cache handle the large immutable Godot runtime files.
+  // Streaming Work.pck through Cache API makes first loads slower on weak links.
 });
