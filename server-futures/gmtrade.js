@@ -11,11 +11,11 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const bs58 = require('bs58');
-const { Connection, PublicKey } = require('@solana/web3.js');
+const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
 
 const GMTRADE_APP_URL = (process.env.GMTRADE_APP_URL || 'https://gmtrade.xyz/trade').replace(/\/+$/, '');
 const GMTRADE_DOCS_URL = 'https://docs.gmtrade.xyz/';
-const GMTRADE_REFERRAL_CODE = String(process.env.GMTRADE_REFERRAL_CODE || '').trim();
+const GMTRADE_REFERRAL_CODE = String(process.env.GMTRADE_REFERRAL_CODE || 'gamingperps').trim();
 const GMTRADE_RPC_URL =
   process.env.GMTRADE_SOLANA_RPC_URL
   || process.env.SOLANA_RPC_URL
@@ -179,6 +179,7 @@ const GMTRADE_PROGRAM_IDS = String(
   .map(s => s.trim())
   .filter(Boolean);
 const bs58Encode = bs58.encode || bs58.default?.encode;
+const bs58Decode = bs58.decode || bs58.default?.decode;
 const GMTRADE_MARKET_DECIMALS = 20;
 const GMTRADE_PRICE_DECIMALS = 20;
 const GMTRADE_TOKEN_AMOUNT_DECIMALS = Number(process.env.GMTRADE_TOKEN_AMOUNT_DECIMALS || 8);
@@ -316,7 +317,7 @@ function randomNonce() {
 
 function referralUrl(code = GMTRADE_REFERRAL_CODE) {
   if (!code) return GMTRADE_APP_URL;
-  const url = new URL(GMTRADE_APP_URL);
+  const url = new URL('/referrals/', GMTRADE_APP_URL);
   url.searchParams.set('ref', code);
   return url.toString();
 }
@@ -429,6 +430,54 @@ function findPositionAddress(owner, cfg, isLong, programId = cfg.program_id || G
     new PublicKey(programId)
   );
   return String(address);
+}
+
+function findUserAddress(owner, programId = GMTRADE_PROGRAM_IDS[0]) {
+  const [address] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from('user'),
+      new PublicKey(GMTRADE_STORE_ADDRESS).toBuffer(),
+      new PublicKey(owner).toBuffer(),
+    ],
+    new PublicKey(programId)
+  );
+  return String(address);
+}
+
+function referralCodeBytes(code = GMTRADE_REFERRAL_CODE) {
+  const raw = bs58Decode(String(code || '').trim());
+  if (!raw?.length || raw.length > 8) {
+    throw Object.assign(new Error('GMTrade referral code must decode to 1-8 bytes'), { status: 400 });
+  }
+  const out = Buffer.alloc(8);
+  Buffer.from(raw).copy(out, 8 - raw.length);
+  return out;
+}
+
+function findReferralCodeAddress(codeBytes, programId = GMTRADE_PROGRAM_IDS[0]) {
+  const [address] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from('referral_code'),
+      new PublicKey(GMTRADE_STORE_ADDRESS).toBuffer(),
+      Buffer.from(codeBytes),
+    ],
+    new PublicKey(programId)
+  );
+  return String(address);
+}
+
+function decodeReferralCodeAccount(encoded, pubkey = '') {
+  const buf = rawBase64ToBuffer(encoded);
+  const discriminator = Buffer.from([46, 159, 206, 18, 84, 48, 60, 0]);
+  if (buf.length < 82 || !buf.subarray(0, 8).equals(discriminator)) return null;
+  return {
+    address: pubkey,
+    version: buf.readUInt8(8),
+    bump: buf.readUInt8(9),
+    code_bytes: [...buf.subarray(10, 18)],
+    store: new PublicKey(buf.subarray(18, 50)).toBase58(),
+    owner: new PublicKey(buf.subarray(50, 82)).toBase58(),
+  };
 }
 
 function symbolForDiscoveredMarket({ market_token, index_token }) {
@@ -1469,11 +1518,51 @@ async function getOrdersByAddress(address) {
   return out;
 }
 
+async function getUserReferralByAddress(address) {
+  if (!isSolanaAddress(address)) {
+    throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
+  }
+  const sdk = await gmsolSdk();
+  sdk.solana_program_init?.();
+  for (const programId of GMTRADE_PROGRAM_IDS) {
+    const userAddress = findUserAddress(address, programId);
+    const account = await rpcAccountInfo(userAddress).catch(() => null);
+    const encoded = account?.data?.[0];
+    if (!encoded) continue;
+    try {
+      const user = sdk.User.decode_from_base64(encoded);
+      const referrer = user.referrer_address?.() || null;
+      const referralCodeAddress = user.referral_code_address?.() || null;
+      return {
+        exists: true,
+        user_address: userAddress,
+        owner: user.owner_address?.() || address,
+        store: user.store_address?.() || GMTRADE_STORE_ADDRESS,
+        referrer,
+        referral_code_address: referralCodeAddress,
+        has_referrer: !!referrer,
+        program_id: programId,
+      };
+    } catch (e) {
+      console.warn('[gmtrade] user referral decode failed:', e.message);
+    }
+  }
+  return {
+    exists: false,
+    user_address: findUserAddress(address),
+    owner: address,
+    store: GMTRADE_STORE_ADDRESS,
+    referrer: null,
+    referral_code_address: null,
+    has_referrer: false,
+  };
+}
+
 async function getAccountByAddress(address) {
   if (!isSolanaAddress(address)) {
     throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
   }
-  const [positions, orders, walletUsdc] = await Promise.all([
+  const [positions, orders, walletUsdc, referral] = await Promise.all([
     getPositionsByAddress(address).catch((e) => {
       console.warn('[gmtrade] positions read failed:', e.message);
       return [];
@@ -1485,6 +1574,10 @@ async function getAccountByAddress(address) {
     getWalletUsdcBalance(address).catch((e) => {
       console.warn('[gmtrade] wallet USDC read failed:', e.message);
       return 0;
+    }),
+    getUserReferralByAddress(address).catch((e) => {
+      console.warn('[gmtrade] user referral read failed:', e.message);
+      return { has_referrer: false, referrer: null, referral_code_address: null };
     }),
   ]);
   const totalMargin = positions.reduce((sum, pos) => sum + (Number(pos.margin) || 0), 0);
@@ -1503,6 +1596,8 @@ async function getAccountByAddress(address) {
     orders_count: orders.length,
     positions,
     orders,
+    referral,
+    has_referrer: referral?.has_referrer === true,
     note: 'GMTrade is self-custody on Solana. Clash reads positions and open order accounts directly from GMTrade program accounts.',
   };
 }
@@ -1774,6 +1869,104 @@ async function buildCancelOrderTx(body = {}, playerWallet = '') {
   };
 }
 
+async function buildSetReferrerTx(body = {}, playerWallet = '') {
+  const payer = String(body.wallet || body.address || playerWallet || '').trim();
+  const code = String(body.code || body.referral_code || body.referralCode || GMTRADE_REFERRAL_CODE || '').trim();
+  if (!isSolanaAddress(payer)) {
+    throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
+  }
+  const codeBytes = referralCodeBytes(code);
+  const existing = await getUserReferralByAddress(payer).catch(() => null);
+  if (existing?.has_referrer) {
+    return {
+      ok: true,
+      dex: 'gmtrade',
+      kind: 'SetReferrer',
+      already_linked: true,
+      referral: existing,
+      transactions: [],
+    };
+  }
+
+  const programId = GMTRADE_PROGRAM_IDS[0];
+  const program = new PublicKey(programId);
+  const owner = new PublicKey(payer);
+  const store = new PublicKey(GMTRADE_STORE_ADDRESS);
+  const user = new PublicKey(findUserAddress(payer, programId));
+  const referralCode = new PublicKey(findReferralCodeAddress(codeBytes, programId));
+  const referralCodeAccount = await rpcAccountInfo(String(referralCode)).catch(() => null);
+  const decodedCode = referralCodeAccount?.data?.[0]
+    ? decodeReferralCodeAccount(referralCodeAccount.data[0], String(referralCode))
+    : null;
+  if (!decodedCode?.owner) {
+    throw Object.assign(new Error(`GMTrade referral code '${code}' was not found on-chain`), { status: 404 });
+  }
+  if (decodedCode.store !== GMTRADE_STORE_ADDRESS) {
+    throw Object.assign(new Error('GMTrade referral code belongs to a different store'), { status: 400 });
+  }
+  if (decodedCode.owner === payer) {
+    throw Object.assign(new Error('GMTrade self-referral is not allowed'), { status: 400 });
+  }
+  const referrerUser = new PublicKey(findUserAddress(decodedCode.owner, programId));
+
+  const suppliedBlockhash = String(body.recent_blockhash || body.recentBlockhash || '').trim();
+  const suppliedLastValid = Number(body.last_valid_block_height || body.lastValidBlockHeight || 0);
+  let blockhash = suppliedBlockhash;
+  let lastValidBlockHeight = Number.isFinite(suppliedLastValid) && suppliedLastValid > 0 ? suppliedLastValid : null;
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,90}$/.test(blockhash)) {
+    const latest = await rpcLatestBlockhash();
+    blockhash = latest.blockhash;
+    lastValidBlockHeight = latest.lastValidBlockHeight;
+  }
+
+  const prepareUserIx = new TransactionInstruction({
+    programId: program,
+    keys: [
+      { pubkey: owner, isSigner: true, isWritable: true },
+      { pubkey: store, isSigner: false, isWritable: false },
+      { pubkey: user, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([190, 173, 143, 193, 139, 80, 231, 133]),
+  });
+  const setReferrerIx = new TransactionInstruction({
+    programId: program,
+    keys: [
+      { pubkey: owner, isSigner: true, isWritable: false },
+      { pubkey: store, isSigner: false, isWritable: false },
+      { pubkey: user, isSigner: false, isWritable: true },
+      { pubkey: referralCode, isSigner: false, isWritable: false },
+      { pubkey: referrerUser, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.concat([
+      Buffer.from([115, 251, 55, 0, 166, 189, 25, 74]),
+      Buffer.from(codeBytes),
+    ]),
+  });
+  const tx = new Transaction({
+    feePayer: owner,
+    recentBlockhash: blockhash,
+  }).add(prepareUserIx, setReferrerIx);
+  const serialized = tx.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  }).toString('base64');
+  return {
+    ok: true,
+    dex: 'gmtrade',
+    kind: 'SetReferrer',
+    code,
+    referral_code_address: String(referralCode),
+    referrer: decodedCode.owner,
+    referrer_user: String(referrerUser),
+    user_address: String(user),
+    recent_blockhash: blockhash,
+    last_valid_block_height: lastValidBlockHeight,
+    transactions: [serialized],
+    builder: 'anchor_idl_manual',
+  };
+}
+
 async function verifySolanaSignature({ signature, wallet }) {
   if (!/^[1-9A-HJ-NP-Za-km-z]{43,90}$/.test(String(signature || ''))) {
     throw Object.assign(new Error('Bad Solana transaction signature'), { status: 400 });
@@ -1972,6 +2165,7 @@ module.exports = {
   }),
   buildCancelOrderTx,
   buildCreateOrderTx,
+  buildSetReferrerTx,
   discoverGmtradeMarkets,
   getAccountByAddress,
   getMarketInfo,
@@ -1980,6 +2174,7 @@ module.exports = {
   getPositionsByAddress,
   getPrices,
   getTransactionStatus,
+  getUserReferralByAddress,
   isSolanaAddress,
   recordTradeReport,
   referralUrl,

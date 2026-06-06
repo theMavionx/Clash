@@ -9,6 +9,7 @@ const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_MS = 12_000;
 const REALTIME_RECONNECT_MAX_MS = 15_000;
+const GMTRADE_REFERRAL_URL = 'https://gmtrade.xyz/referrals/?ref=gamingperps';
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 
 function playerToken(player) {
@@ -281,7 +282,7 @@ export function useGmtrade() {
   }, [applySnapshot, isActiveDex, token, walletAddr, walletMismatch]);
 
   const openGmtrade = useCallback(async () => {
-    const url = config?.referral_url || 'https://gmtrade.xyz/trade';
+    const url = config?.referral_url || GMTRADE_REFERRAL_URL;
     try { window.open(url, '_blank', 'noopener,noreferrer'); } catch {}
     return { ok: true, url };
   }, [config?.referral_url]);
@@ -807,6 +808,91 @@ export function useGmtrade() {
     }
   }, [confirmSignatureWithDiagnostics, connection, gmtradeLog, refresh, requestRealtimeRefresh, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
+  const nativeLinkReferrer = useCallback(async () => {
+    if (!token) return { error: 'Missing game session token' };
+    if (!walletAddr) return { error: 'Connect a Solana wallet first' };
+    if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered GMTrade wallet' };
+    if (account?.has_referrer === true || account?.referral?.has_referrer === true) {
+      return { ok: true, already_linked: true };
+    }
+    const trace = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+      ? crypto.randomUUID()
+      : `gmtrade-referral-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    try {
+      let lastExpired = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const beforeHeight = await connection.getBlockHeight('confirmed').catch(() => null);
+        const latest = await connection.getLatestBlockhash('confirmed');
+        await gmtradeLog('referral_attempt_start', {
+          code: config?.referral_code || 'gamingperps',
+          current_block_height: beforeHeight,
+          latest_blockhash: latest.blockhash,
+          latest_last_valid_block_height: latest.lastValidBlockHeight,
+        }, attempt, trace);
+        const build = await fetchJson(`${FUTURES_API}/gmtrade/referral-tx`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'gmtrade' },
+          body: JSON.stringify({
+            wallet: walletAddr,
+            code: config?.referral_code || 'gamingperps',
+            recent_blockhash: latest.blockhash,
+            last_valid_block_height: latest.lastValidBlockHeight,
+          }),
+        });
+        if (build?.already_linked) {
+          await refresh().catch(() => null);
+          return { ok: true, already_linked: true };
+        }
+        await gmtradeLog('referral_build_done', {
+          code: build?.code,
+          user_address: build?.user_address,
+          referrer: build?.referrer,
+          referral_code_address: build?.referral_code_address,
+          transaction_count: Array.isArray(build?.transactions) ? build.transactions.length : 0,
+          builder: build?.builder,
+        }, attempt, trace);
+        const txs = Array.isArray(build?.transactions) ? build.transactions : [];
+        if (!txs.length) throw new Error('GMTrade referral builder returned no transactions');
+        let lastSig = '';
+        try {
+          for (let txIndex = 0; txIndex < txs.length; txIndex += 1) {
+            await gmtradeLog('referral_tx_send_loop_start', { tx_index: txIndex, tx_count: txs.length }, attempt, trace);
+            lastSig = await sendBuiltTransaction(txs[txIndex], build, attempt, trace);
+            await confirmSignatureWithDiagnostics(lastSig, build, attempt, trace);
+          }
+          await gmtradeLog('referral_submitted', { signature: lastSig }, attempt, trace);
+          await refresh().catch(() => null);
+          if (!requestRealtimeRefresh('referral_linked')) {
+            window.setTimeout(() => {
+              refresh().catch(() => null);
+            }, 1000);
+          }
+          return { ok: true, signature: lastSig, status: 'submitted' };
+        } catch (sendError) {
+          await gmtradeLog('referral_attempt_error', {
+            error: errorInfo(sendError),
+            expired: isBlockhashExpiredError(sendError),
+          }, attempt, trace);
+          if (isBlockhashExpiredError(sendError) && attempt === 0) {
+            lastExpired = sendError;
+            continue;
+          }
+          throw sendError;
+        }
+      }
+      throw lastExpired || new Error('GMTrade referral transaction expired before confirmation');
+    } catch (e) {
+      if (/referrer has been set|already have a referrer|already.*referrer/i.test(String(e?.message || ''))) {
+        await refresh().catch(() => null);
+        return { ok: true, already_linked: true };
+      }
+      if (isBlockhashExpiredError(e)) {
+        return { error: 'GMTrade referral transaction expired before Solana confirmed it. Try again.' };
+      }
+      return { error: e?.message || 'GMTrade referral approval failed' };
+    }
+  }, [account?.has_referrer, account?.referral?.has_referrer, config?.referral_code, confirmSignatureWithDiagnostics, connection, gmtradeLog, refresh, requestRealtimeRefresh, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+
   const unavailableOrder = useCallback(async () => {
     return {
       error: 'This GMTrade action is not exposed by the native transaction builder yet. Use market or limit Long/Short orders from Clash.',
@@ -842,18 +928,18 @@ export function useGmtrade() {
     setupVerified: !!walletAddr && !walletMismatch,
     inviteStatus: config,
     referralCode: config?.referral_code || '',
-    referralUrl: config?.referral_url || 'https://gmtrade.xyz/trade',
-    hasReferrer: !!config?.referral_code,
+    referralUrl: config?.referral_url || GMTRADE_REFERRAL_URL,
+    hasReferrer: account ? (account?.has_referrer === true || account?.referral?.has_referrer === true) : null,
     goldEarned,
     clearGoldEarned: () => setGoldEarned(null),
     refresh,
     fetchAccount: refresh,
     fetchPositions: refresh,
     fetchOrders: refresh,
-    activate: async () => ({ success: true }),
+    activate: nativeLinkReferrer,
     connectPerpl: openGmtrade,
     openReferralJoin: openGmtrade,
-    linkOurReferrer: openGmtrade,
+    linkOurReferrer: nativeLinkReferrer,
     depositToPacifica: openGmtrade,
     withdraw: openGmtrade,
     placeMarketOrder: nativeOrder,

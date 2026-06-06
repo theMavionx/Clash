@@ -220,11 +220,14 @@ function NameForm({ wallet, suggested, seekerHandle, error, onClearError, onSubm
 
 function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
   const venue = dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
+  const connectCopy = dex === 'gmtrade'
+    ? 'Connect your Solana wallet to start playing. Please accept our referral code in Clash to receive a GMTrade fee discount. Trades are signed by your own wallet - we never hold your keys.'
+    : 'Connect your Solana wallet to start playing. Trades are signed by your own wallet - we never hold your keys.';
   return (
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CONNECT TO {venue}</h3>
       <p style={S.subtle}>
-        Connect your Solana wallet to start playing. Trades are signed by your own wallet — we never hold your keys.
+        {connectCopy}
       </p>
       {privyEnabled && (
         <button style={S.primaryBtn} onClick={onPrivyLogin}>
@@ -270,7 +273,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CONNECT TO {venue}</h3>
       <p style={S.subtle}>
-        Sign in with email or connect a {chainName} wallet. Trades are signed by your own wallet — we never hold your keys.
+        Sign in with email or connect a {chainName} wallet. Trades are signed by your own wallet - we never hold your keys.
       </p>
       {privyEnabled && (
         <button style={S.primaryBtn} onClick={onPrivyLogin}>

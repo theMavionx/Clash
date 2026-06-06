@@ -291,7 +291,7 @@ async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef
     const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
     const { keypairIdentity, publicKey } = await import('@metaplex-foundation/umi');
     const { base58 } = await import('@metaplex-foundation/umi/serializers');
-    const { mplCore, fetchAsset, fetchCollection, update } = await import('@metaplex-foundation/mpl-core');
+    const { mplCore, fetchAsset, fetchCollection, update, updatePlugin } = await import('@metaplex-foundation/mpl-core');
     const umi = createUmi(rpc).use(mplCore());
     const authKeypair = umi.eddsa.createKeypairFromSecretKey(secretBytes);
     umi.use(keypairIdentity(authKeypair));
@@ -316,9 +316,35 @@ async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef
       send: { skipPreflight: true, commitment: 'processed', maxRetries: 5 },
       confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
     });
+    const currentAttrs = [
+      asset?.attributes?.attributeList,
+      asset?.plugins?.attributes?.attributeList,
+    ].find(Array.isArray) || [];
+    const attrMap = new Map();
+    for (const attr of currentAttrs) {
+      const key = String(attr?.key || attr?.trait_type || '').trim();
+      if (!key) continue;
+      attrMap.set(key.toLowerCase(), { key, value: String(attr?.value ?? '') });
+    }
+    attrMap.set('level', { key: 'Level', value: String(normalizeNftLevel(level)) });
+    if (sourceRef) attrMap.set('sourceref', { key: 'SourceRef', value: String(sourceRef).slice(0, 120) });
+    const attrSig = await updatePlugin(umi, {
+      asset: publicKey(assetId),
+      ...(collectionAddress ? { collection: publicKey(collectionAddress) } : {}),
+      authority: umi.identity,
+      plugin: {
+        type: 'Attributes',
+        attributeList: Array.from(attrMap.values()),
+      },
+    }).sendAndConfirm(umi, {
+      send: { skipPreflight: true, commitment: 'processed', maxRetries: 5 },
+      confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+    });
     return {
       standard: 'mpl-core',
-      updateTxSig: base58.deserialize(sig.signature)[0],
+      metadataUpdateTxSig: base58.deserialize(sig.signature)[0],
+      attributesUpdateTxSig: base58.deserialize(attrSig.signature)[0],
+      updateTxSig: base58.deserialize(attrSig.signature)[0],
       uri: metadataUri,
       name: metadataName,
     };
@@ -6547,6 +6573,35 @@ function normalizeStoredClientLog(row) {
   return row;
 }
 
+function shouldMirrorClientLogToServer(row) {
+  const source = String(row?.source || '');
+  const message = String(row?.message || '');
+  return source.startsWith('godot.')
+    || message.includes('godot.')
+    || message.includes('Godot runtime')
+    || message.includes('Godot Work.js')
+    || message.includes('RuntimeError: unreachable')
+    || message.includes('Index p_index');
+}
+
+function mirrorClientLogToServer(row) {
+  if (!shouldMirrorClientLogToServer(row)) return;
+  const payload = String(row.payload || '').replace(/\s+/g, ' ').slice(0, 900);
+  const line = [
+    '[client-log][godot]',
+    row.level || 'info',
+    row.source || '',
+    row.ip || '',
+    String(row.message || '').replace(/\s+/g, ' ').slice(0, 240),
+    payload ? `payload=${payload}` : '',
+  ].filter(Boolean).join(' | ');
+  if (String(row.level || '').toLowerCase().includes('error')) {
+    console.error(line);
+  } else {
+    console.warn(line);
+  }
+}
+
 function clientLogRateOk(ip, n) {
   const now = Date.now();
   const b = clientLogBuckets.get(ip);
@@ -6596,6 +6651,7 @@ router.post('/client-log', (req, res) => {
   if (rows.length === 0) return res.json({ ok: true, stored: 0 });
   try {
     insertClientLogBatch(rows);
+    for (const row of rows) mirrorClientLogToServer(row);
     res.json({ ok: true, stored: rows.length });
   } catch (e) {
     console.warn('[client-log] insert failed:', e.message);

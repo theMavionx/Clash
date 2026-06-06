@@ -951,6 +951,55 @@ async function recordDecibelActualFills(playerId, subaccount, orderPayload, txRe
   return { inserted, rows: grouped.size, volume_usd: volume };
 }
 
+function decibelTxHash(result) {
+  return result?.transactionHash || result?.hash || result?.tx_hash || null;
+}
+
+function recordDecibelBuilderProof(playerId, subaccount, orderPayload, txResult, orderType, side) {
+  const builderAddr = orderPayload?.builderAddr;
+  const builderFee = Number(orderPayload?.builderFee);
+  if (!builderAddr || !Number.isFinite(builderFee)) return { changes: 0 };
+  const orderIds = new Set();
+  if (txResult?.orderId || txResult?.order_id) orderIds.add(String(txResult.orderId || txResult.order_id));
+  for (const event of Array.isArray(txResult?.orderEvents) ? txResult.orderEvents : []) {
+    if (event?.orderId || event?.order_id) orderIds.add(String(event.orderId || event.order_id));
+  }
+  if (!orderIds.size && !orderPayload?.clientOrderId) return { changes: 0 };
+  const common = {
+    playerId,
+    subaccount,
+    clientOrderId: orderPayload?.clientOrderId || null,
+    symbol: orderPayload?.rewardSymbol || orderPayload?.symbol || decibelFillSymbol({}, orderPayload?.marketName || orderPayload?.market_name),
+    side,
+    orderType,
+    marketName: orderPayload?.marketName || orderPayload?.market_name || null,
+    marketAddr: orderPayload?.marketAddr || orderPayload?.market_addr || null,
+    builderAddr,
+    builderFeeBps: builderFee,
+    txHash: decibelTxHash(txResult),
+  };
+  const proofJson = JSON.stringify({
+    source: 'decibel_order_submit',
+    builder: builderAddr,
+    builder_fee_bps: builderFee,
+    subaccount,
+    market_name: common.marketName,
+    market_addr: common.marketAddr,
+    client_order_id: common.clientOrderId,
+    tx_hash: common.txHash,
+    order_events: Array.isArray(txResult?.orderEvents) ? txResult.orderEvents : [],
+  });
+  let changes = 0;
+  if (orderIds.size) {
+    for (const orderId of orderIds) {
+      changes += db.recordDecibelOrderProof({ ...common, orderId, proofJson }).changes || 0;
+    }
+  } else {
+    changes += db.recordDecibelOrderProof({ ...common, proofJson }).changes || 0;
+  }
+  return { changes };
+}
+
 function decibelRoundToTick(price, tickSize) {
   const p = Number(price);
   const t = Number(tickSize);
@@ -1455,6 +1504,7 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
         verification,
       });
     }
+    recordDecibelBuilderProof(req.playerId, verified.subaccount, orderPayload, result, orderType, side);
     console.log('[decibel] order placed', {
       player: req.playerId,
       market: orderPayload.marketName,
@@ -1544,6 +1594,8 @@ router.post('/decibel/tpsl', auth, async (req, res) => {
   try {
     const verified = await requireDecibelOwnerAndSubaccount(req, res);
     if (!verified) return;
+    const builder = requireDecibelBuilderFee(req, res);
+    if (!builder) return;
     const body = await sanitizeDecibelTpslBody(req.body || {}, verified.subaccount);
     const hasTp = body.tpTriggerPrice != null || body.tpLimitPrice != null || body.tpSize != null;
     const hasSl = body.slTriggerPrice != null || body.slLimitPrice != null || body.slSize != null;
@@ -1551,6 +1603,7 @@ router.post('/decibel/tpsl', auth, async (req, res) => {
     const slOrderId = body.slOrderId || body.sl_order_id;
     const base = {
       ...body,
+      ...builder,
       subaccountAddr: verified.subaccount,
     };
     const results = [];
@@ -1601,6 +1654,15 @@ router.post('/decibel/tpsl', auth, async (req, res) => {
     }
     const failed = results.find(r => r?.success === false);
     if (failed) return res.status(400).json({ success: false, results, error: failed.error || 'Decibel TP/SL failed' });
+    for (const result of results) {
+      if (result?.success === false) continue;
+      const leg = result.leg === 'tp_sl' ? 'tp_sl' : String(result.leg || '');
+      recordDecibelBuilderProof(req.playerId, verified.subaccount, {
+        ...base,
+        clientOrderId: result.clientOrderId || result.client_order_id || null,
+        rewardSymbol: body.rewardSymbol || body.symbol || null,
+      }, result, leg || 'tpsl', leg || 'tpsl');
+    }
     const hashes = results.map(r => r.transactionHash || r.hash).filter(Boolean);
     res.json({
       success: true,
@@ -3790,6 +3852,39 @@ router.post('/gmtrade/cancel-order-tx', auth, async (req, res) => {
   } catch (e) {
     console.warn('[gmtrade] cancel-order-tx failed:', e.message);
     res.status(e.status || 502).json({ error: 'Failed to build GMTrade cancel transaction', detail: e.message });
+  }
+});
+
+router.post('/gmtrade/referral-tx', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    console.log('[gmtrade referral-tx] request', JSON.stringify({
+      playerId: req.playerId,
+      wallet: String(req.body?.wallet || req.playerWallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      code: req.body?.code || req.body?.referral_code || req.body?.referralCode || undefined,
+      recent_blockhash: req.body?.recent_blockhash,
+      last_valid_block_height: req.body?.last_valid_block_height,
+    }));
+    const built = await gmtrade.buildSetReferrerTx(req.body || {}, req.playerWallet);
+    console.log('[gmtrade referral-tx] built', JSON.stringify({
+      playerId: req.playerId,
+      already_linked: built.already_linked === true,
+      code: built.code,
+      user_address: built.user_address,
+      referrer: built.referrer,
+      transaction_count: Array.isArray(built.transactions) ? built.transactions.length : 0,
+      builder: built.builder,
+    }));
+    res.json(built);
+  } catch (e) {
+    console.warn('[gmtrade] referral-tx failed:', e.message);
+    res.status(e.status || 502).json({ error: 'Failed to build GMTrade referral transaction', detail: e.message });
   }
 });
 

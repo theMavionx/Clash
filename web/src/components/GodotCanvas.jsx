@@ -40,6 +40,8 @@ const LOADING_CLOCK_INTERVAL_MS = 250;
 const MAIN_THREAD_BLOCK_LOG_THRESHOLD_MS = 900;
 const VALIDATE_GODOT_FETCHES = false;
 const APP_TITLE = 'Clash of Perps';
+const GODOT_ASSET_LOG_SLOW_MS = 2500;
+const GODOT_ASSET_LOG_SLOW_BYTES = 8 * 1024 * 1024;
 const GODOT_PHASE_PROGRESS = {
   clear_runtime_caches: 2,
   load_engine_script: 6,
@@ -353,12 +355,43 @@ function loadGodotRuntimeManifest(force = false) {
     const url = force
       ? `${GODOT_RUNTIME_MANIFEST}&manifest=${encodeURIComponent(Date.now())}`
       : GODOT_RUNTIME_MANIFEST;
+    const cleanUrl = `${GODOT_FILES}/godot-runtime-manifest.json`;
     godotRuntimeManifestPromise = fetch(url, {
       cache: 'no-store',
       credentials: 'same-origin',
     })
-      .then((response) => (response.ok ? response.json() : null))
-      .catch(() => null);
+      .then((response) => {
+        if (response.ok) return response.json();
+        reportGodotAssetEvent('godot.manifest_query_failed', url, response, {
+          fallback_url: cleanUrl,
+        });
+        return fetch(cleanUrl, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+        }).then((fallbackResponse) => {
+          if (fallbackResponse.ok) {
+            reportGodotAssetEvent('godot.manifest_fallback_ok', cleanUrl, fallbackResponse, {
+              failed_url: url,
+            });
+            return fallbackResponse.json();
+          }
+          reportGodotAssetEvent('godot.manifest_fallback_failed', cleanUrl, fallbackResponse, {
+            failed_url: url,
+          });
+          return null;
+        });
+      })
+      .catch((err) => {
+        reportGodotAssetError('godot.manifest_fetch_error', url, err, {
+          fallback_url: cleanUrl,
+        });
+        return fetch(cleanUrl, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+        })
+          .then((fallbackResponse) => (fallbackResponse.ok ? fallbackResponse.json() : null))
+          .catch(() => null);
+      });
   }
   return godotRuntimeManifestPromise;
 }
@@ -418,6 +451,115 @@ function withGodotCacheBust(rawUrl) {
   return url.href;
 }
 
+function godotResponseHeaders(response) {
+  if (!response?.headers?.get) return {};
+  return {
+    content_type: response.headers.get('content-type') || null,
+    content_encoding: response.headers.get('content-encoding') || null,
+    content_length: response.headers.get('content-length') || null,
+    cache_control: response.headers.get('cache-control') || null,
+    etag: response.headers.get('etag') || null,
+    last_modified: response.headers.get('last-modified') || null,
+  };
+}
+
+function reportGodotAssetEvent(type, url, response, extra = {}) {
+  try {
+    const clean = new URL(String(url), window.location.href);
+    reportClientEvent(type, {
+      url: `${clean.pathname}${clean.search || ''}`,
+      status: response?.status ?? null,
+      ok: Boolean(response?.ok),
+      build_token: GODOT_BUILD_TOKEN,
+      headers: godotResponseHeaders(response),
+      ...extra,
+    }, {
+      level: response?.ok ? 'info' : 'warn',
+      source: 'godot.assets',
+      message: `${type}: ${clean.pathname}${clean.search || ''} -> ${response?.status ?? 'unknown'}`,
+    });
+  } catch {
+    // Diagnostics only.
+  }
+}
+
+function reportGodotAssetError(type, url, err, extra = {}) {
+  try {
+    const clean = new URL(String(url), window.location.href);
+    reportClientEvent(type, {
+      url: `${clean.pathname}${clean.search || ''}`,
+      build_token: GODOT_BUILD_TOKEN,
+      error: err?.message || String(err || ''),
+      ...extra,
+    }, {
+      level: 'error',
+      source: 'godot.assets',
+      message: `${type}: ${clean.pathname}${clean.search || ''}: ${err?.message || String(err || '')}`,
+      stack: err?.stack || '',
+    });
+  } catch {
+    // Diagnostics only.
+  }
+}
+
+async function fetchGodotRuntimeAsset(boundFetch, rawUrl, input, init) {
+  const bustedUrl = withGodotCacheBust(rawUrl);
+  const cleanUrl = new URL(String(rawUrl), window.location.href).href;
+  const nextInit = { ...(init || {}), cache: 'reload' };
+  const started = performance.now();
+  let response = null;
+
+  try {
+    if (typeof Request !== 'undefined' && input instanceof Request) {
+      response = await boundFetch(new Request(bustedUrl, input), nextInit);
+    } else {
+      response = await boundFetch(bustedUrl, nextInit);
+    }
+  } catch (err) {
+    reportGodotAssetError('godot.asset_query_fetch_error', bustedUrl, err, {
+      asset: godotAssetName(cleanUrl),
+      fallback_url: cleanUrl,
+    });
+    response = null;
+  }
+
+  if (!response?.ok) {
+    if (response) {
+      reportGodotAssetEvent('godot.asset_query_failed', bustedUrl, response, {
+        asset: godotAssetName(cleanUrl),
+        fallback_url: cleanUrl,
+      });
+    }
+    const fallbackStarted = performance.now();
+    const fallbackResponse = await boundFetch(cleanUrl, { ...(init || {}), cache: 'reload' });
+    reportGodotAssetEvent(
+      fallbackResponse.ok ? 'godot.asset_fallback_ok' : 'godot.asset_fallback_failed',
+      cleanUrl,
+      fallbackResponse,
+      {
+        asset: godotAssetName(cleanUrl),
+        failed_url: bustedUrl,
+        duration_ms: Math.round(performance.now() - fallbackStarted),
+      }
+    );
+    response = fallbackResponse;
+  }
+
+  const durationMs = Math.round(performance.now() - started);
+  const contentLength = Number(response?.headers?.get?.('content-length') || 0);
+  if (response?.ok && (durationMs >= GODOT_ASSET_LOG_SLOW_MS || contentLength >= GODOT_ASSET_LOG_SLOW_BYTES)) {
+    reportGodotAssetEvent('godot.asset_fetch_complete', response.url || cleanUrl, response, {
+      asset: godotAssetName(response.url || cleanUrl),
+      duration_ms: durationMs,
+      slow: durationMs >= GODOT_ASSET_LOG_SLOW_MS,
+    });
+  }
+
+  return VALIDATE_GODOT_FETCHES
+    ? validateGodotAssetResponse(response.url || cleanUrl, response)
+    : response;
+}
+
 function installGodotFetchCacheBust() {
   if (typeof window.fetch !== 'function') return () => {};
 
@@ -432,21 +574,13 @@ function installGodotFetchCacheBust() {
     }
 
     if (rawUrl && isGodotRuntimeAsset(rawUrl)) {
-      const bustedUrl = withGodotCacheBust(rawUrl);
-      const nextInit = { ...(init || {}), cache: 'reload' };
       try {
-        if (typeof Request !== 'undefined' && input instanceof Request) {
-          const response = await boundFetch(new Request(bustedUrl, input), nextInit);
-          return VALIDATE_GODOT_FETCHES
-            ? validateGodotAssetResponse(bustedUrl, response)
-            : response;
-        }
-        const response = await boundFetch(bustedUrl, nextInit);
-        return VALIDATE_GODOT_FETCHES
-          ? validateGodotAssetResponse(bustedUrl, response)
-          : response;
+        return await fetchGodotRuntimeAsset(boundFetch, rawUrl, input, init);
       } catch (err) {
-        const wrapped = new Error(`Godot runtime fetch failed for ${godotAssetName(bustedUrl)}: ${err?.message || String(err)}`);
+        reportGodotAssetError('godot.asset_fetch_failed', rawUrl, err, {
+          asset: godotAssetName(rawUrl),
+        });
+        const wrapped = new Error(`Godot runtime fetch failed for ${godotAssetName(rawUrl)}: ${err?.message || String(err)}`);
         wrapped.cause = err;
         throw wrapped;
       }
@@ -525,9 +659,20 @@ function loadGodotEngineScript() {
 
     const script = document.createElement('script');
     script.dataset.clashGodotScript = 'true';
-    script.src = `${GODOT_FILES}/Work.js${CACHE_BUST}`;
+    const cleanSrc = `${GODOT_FILES}/Work.js`;
+    const bustedSrc = `${cleanSrc}${CACHE_BUST}`;
+    let triedFallback = false;
+    script.src = bustedSrc;
     script.onload = resolve;
     script.onerror = () => {
+      if (!triedFallback) {
+        triedFallback = true;
+        reportGodotAssetError('godot.script_query_failed', bustedSrc, new Error('script load error'), {
+          fallback_url: cleanSrc,
+        });
+        script.src = cleanSrc;
+        return;
+      }
       window.__clashGodotScriptPromise = null;
       reject(new Error('Godot Work.js failed to load'));
     };

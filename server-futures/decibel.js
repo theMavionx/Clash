@@ -624,6 +624,8 @@ async function placeTpSlOrderForPosition(args) {
       slSize: args.slSize == null ? undefined : parseChainInt(args.slSize, 'slSize'),
       tickSize: args.tickSize == null ? undefined : finiteNumber(args.tickSize, 'tickSize'),
       subaccountAddr: args.subaccountAddr ? normalizeAptosAddress(args.subaccountAddr) : undefined,
+      builderAddr: args.builderAddr ? normalizeAptosAddress(args.builderAddr) : undefined,
+      builderFee: args.builderFee == null ? undefined : finiteNumber(args.builderFee, 'builderFee'),
     });
     if (!payload.marketAddr) throw new Error('marketAddr required');
     const hasTp = assertTpslLeg(payload, 'tp', 'Take-profit');
@@ -641,11 +643,14 @@ async function placeTpSlOrderForPosition(args) {
         payload.slTriggerPrice == null ? undefined : roundToTickSize(payload.slTriggerPrice, payload.tickSize),
         payload.slLimitPrice == null ? undefined : roundToTickSize(payload.slLimitPrice, payload.tickSize),
         payload.slSize,
-        undefined,
-        undefined,
+        payload.builderAddr,
+        payload.builderFee == null ? undefined : bpsToChainUnits(payload.builderFee),
       ],
     });
-    return txResult(tx, 'TP/SL update');
+    return txResult(tx, 'TP/SL update', {
+      orderId: extractOrderIdFromTransaction(tx, payload.subaccountAddr) || undefined,
+      orderEvents: extractOrderEventsFromTransaction(tx, payload.subaccountAddr),
+    });
   });
 }
 

@@ -661,10 +661,16 @@ function isReadOnlyOrder(order) {
 function useOpenedSortedPositions(positions) {
   const orderRef = useRef({ map: new Map(), nextSeq: 1 });
   return useMemo(() => {
+    if (!orderRef.current?.map || typeof orderRef.current.map.get !== 'function') {
+      orderRef.current = { map: new Map(), nextSeq: 1 };
+    }
     const state = orderRef.current;
     const now = Date.now();
     const seen = new Set();
-    const rows = (positions || []).map((pos, index) => {
+    const list = Array.isArray(positions)
+      ? positions
+      : Object.values(positions || {}).filter(Boolean);
+    const rows = list.map((pos, index) => {
       const key = positionStableKey(pos) || `position:${index}`;
       seen.add(key);
       let rec = state.map.get(key);
@@ -3237,6 +3243,8 @@ function FuturesPanel() {
                   textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
                 }}>
                   GMTrade runs on Solana. Connect the same wallet you use for this game account.
+                  Please accept our referral code in Clash to receive a GMTrade fee discount.
+                  Clash confirms the code on-chain before trading rewards unlock.
                 </div>
                 {renderPrivyEmailButton('#14B8A6', '#0F766E')}
                 <button
@@ -4317,6 +4325,108 @@ function FuturesPanel() {
                   {referralUrl}
                 </div>
               )}
+
+              {successMsg && (
+                <div style={hlGateStyles.successBox || {fontSize: 12, fontWeight: 800, color: '#0F766E'}}>
+                  {successMsg}
+                </div>
+              )}
+
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== GMTRADE REFERRAL GATE ====================
+  if (dex === 'gmtrade' && hasWallet && hasReferrer !== true) {
+    const isRunning = referralLinking || loading;
+    const isChecking = hasReferrer === null && !referralLinking;
+    const stepState = isChecking || isRunning ? 'active' : 'pending';
+
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>GMTrade setup</span>
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{
+            ...S.body,
+            alignItems: 'stretch',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: 0,
+            background: '#fdf8e7',
+          }}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>{isChecking ? 'Checking GMTrade referral' : 'Claim GMTrade referral'}</span>
+                <span style={hlGateStyles.subtitle}>
+                  {isChecking
+                    ? 'Clash is reading your GMTrade user account on Solana before trading unlocks.'
+                    : 'Please accept our GMTrade referral code to receive a fee discount. Clash confirms it on-chain before unlocking trading rewards.'}
+                </span>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${stepState}`] }}>
+                    {stepState === 'active' ? <span style={hlGateStyles.spinner} /> : 1}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${stepState}`] }}>
+                      {isChecking ? 'Read on-chain referral' : 'Confirm referral code'}
+                    </span>
+                    <span style={hlGateStyles.stepHint}>
+                      {isChecking
+                        ? `Wallet: ${String(walletAddr || '').slice(0, 6)}...${String(walletAddr || '').slice(-4)}`
+                        : `Code: ${referralCode || 'gamingperps'}. If this wallet already has a GMTrade referrer, GMTrade keeps the existing one.`}
+                    </span>
+                  </span>
+                </li>
+              </ol>
+
+              <button
+                style={{ ...hlGateStyles.primaryBtn, ...((isRunning || isChecking) ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={isRunning || isChecking}
+                onClick={async () => {
+                  setReferralLinking(true);
+                  try {
+                    const res = typeof linkOurReferrer === 'function'
+                      ? await linkOurReferrer()
+                      : { error: 'GMTrade referral approval is not available yet.' };
+                    if (res?.error) setLocalAlert(res.error);
+                    else if (res?.already_linked) {
+                      setSuccessMsg('GMTrade referral is already set for this wallet.');
+                    } else {
+                      setSuccessMsg('GMTrade referral confirmed.');
+                    }
+                  } finally {
+                    setReferralLinking(false);
+                  }
+                }}
+              >
+                {isChecking ? 'Checking referral...' : isRunning ? 'Approve in wallet...' : 'Accept referral code ->'}
+              </button>
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>

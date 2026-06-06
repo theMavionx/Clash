@@ -104,6 +104,25 @@ db.exec(`
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS decibel_order_proofs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id       TEXT NOT NULL,
+    subaccount      TEXT NOT NULL,
+    order_id        TEXT,
+    client_order_id TEXT,
+    symbol          TEXT,
+    side            TEXT,
+    order_type      TEXT,
+    market_name     TEXT,
+    market_addr     TEXT,
+    builder_addr    TEXT NOT NULL,
+    builder_fee_bps REAL NOT NULL,
+    tx_hash         TEXT,
+    proof_json      TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
 `);
 
 // ---------- Pre-statement migrations ----------
@@ -137,6 +156,10 @@ try {
 }
 // Index for /claim-gold lookup — main server reads WHERE player_id=? AND dex=? AND id>? frequently.
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_player_dex ON trade_history(player_id, dex, id)"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_decibel_order_proofs_order ON decibel_order_proofs(order_id) WHERE order_id IS NOT NULL"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_decibel_order_proofs_client ON decibel_order_proofs(client_order_id) WHERE client_order_id IS NOT NULL"); } catch {}
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_decibel_order_proofs_order_unique ON decibel_order_proofs(order_id) WHERE order_id IS NOT NULL"); } catch {}
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_decibel_order_proofs_client_unique ON decibel_order_proofs(client_order_id) WHERE client_order_id IS NOT NULL"); } catch {}
 
 // FK-mismatch migration: old deposits/trade_history rows reference
 // wallets(player_id), but that column is no longer UNIQUE after we switched
@@ -189,6 +212,46 @@ const stmts = {
     INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source, pnl, fee, proof_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
+  recordDecibelOrderProof: db.prepare(`
+    INSERT OR IGNORE INTO decibel_order_proofs (
+      player_id, subaccount, order_id, client_order_id, symbol, side, order_type,
+      market_name, market_addr, builder_addr, builder_fee_bps, tx_hash, proof_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  updateDecibelOrderProofByOrder: db.prepare(`
+    UPDATE decibel_order_proofs SET
+      player_id=?, subaccount=?,
+      client_order_id=COALESCE(?, client_order_id),
+      symbol=COALESCE(?, symbol),
+      side=COALESCE(?, side),
+      order_type=COALESCE(?, order_type),
+      market_name=COALESCE(?, market_name),
+      market_addr=COALESCE(?, market_addr),
+      builder_addr=?,
+      builder_fee_bps=?,
+      tx_hash=COALESCE(?, tx_hash),
+      proof_json=COALESCE(?, proof_json),
+      updated_at=datetime('now')
+    WHERE order_id=?
+  `),
+  updateDecibelOrderProofByClient: db.prepare(`
+    UPDATE decibel_order_proofs SET
+      player_id=?, subaccount=?,
+      order_id=COALESCE(?, order_id),
+      symbol=COALESCE(?, symbol),
+      side=COALESCE(?, side),
+      order_type=COALESCE(?, order_type),
+      market_name=COALESCE(?, market_name),
+      market_addr=COALESCE(?, market_addr),
+      builder_addr=?,
+      builder_fee_bps=?,
+      tx_hash=COALESCE(?, tx_hash),
+      proof_json=COALESCE(?, proof_json),
+      updated_at=datetime('now')
+    WHERE client_order_id=?
+  `),
+  getDecibelOrderProofByOrder: db.prepare('SELECT * FROM decibel_order_proofs WHERE order_id = ? LIMIT 1'),
+  getDecibelOrderProofByClient: db.prepare('SELECT * FROM decibel_order_proofs WHERE client_order_id = ? LIMIT 1'),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
 };
@@ -251,6 +314,97 @@ function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, c
   return { id: info.changes ? info.lastInsertRowid : null, changes: info.changes };
 }
 
+function recordDecibelOrderProof({
+  playerId,
+  subaccount,
+  orderId = null,
+  clientOrderId = null,
+  symbol = null,
+  side = null,
+  orderType = null,
+  marketName = null,
+  marketAddr = null,
+  builderAddr,
+  builderFeeBps,
+  txHash = null,
+  proofJson = null,
+}) {
+  if (!playerId || !subaccount || !builderAddr || !Number.isFinite(Number(builderFeeBps))) return { changes: 0 };
+  const normalizedOrderId = orderId == null || orderId === '' ? null : String(orderId);
+  const normalizedClientOrderId = clientOrderId == null || clientOrderId === '' ? null : String(clientOrderId);
+  if (!normalizedOrderId && !normalizedClientOrderId) return { changes: 0 };
+  const info = stmts.recordDecibelOrderProof.run(
+    String(playerId),
+    String(subaccount).toLowerCase(),
+    normalizedOrderId,
+    normalizedClientOrderId,
+    symbol == null ? null : String(symbol),
+    side == null ? null : String(side),
+    orderType == null ? null : String(orderType),
+    marketName == null ? null : String(marketName),
+    marketAddr == null ? null : String(marketAddr).toLowerCase(),
+    String(builderAddr).toLowerCase(),
+    Number(builderFeeBps),
+    txHash == null ? null : String(txHash),
+    proofJson == null ? null : String(proofJson),
+  );
+  if (!info.changes) {
+    let changes = 0;
+    if (normalizedOrderId) {
+      const update = stmts.updateDecibelOrderProofByOrder.run(
+        String(playerId),
+        String(subaccount).toLowerCase(),
+        normalizedClientOrderId,
+        symbol == null ? null : String(symbol),
+        side == null ? null : String(side),
+        orderType == null ? null : String(orderType),
+        marketName == null ? null : String(marketName),
+        marketAddr == null ? null : String(marketAddr).toLowerCase(),
+        String(builderAddr).toLowerCase(),
+        Number(builderFeeBps),
+        txHash == null ? null : String(txHash),
+        proofJson == null ? null : String(proofJson),
+        normalizedOrderId,
+      );
+      changes += update.changes || 0;
+    }
+    if (normalizedClientOrderId) {
+      const update = stmts.updateDecibelOrderProofByClient.run(
+        String(playerId),
+        String(subaccount).toLowerCase(),
+        normalizedOrderId,
+        symbol == null ? null : String(symbol),
+        side == null ? null : String(side),
+        orderType == null ? null : String(orderType),
+        marketName == null ? null : String(marketName),
+        marketAddr == null ? null : String(marketAddr).toLowerCase(),
+        String(builderAddr).toLowerCase(),
+        Number(builderFeeBps),
+        txHash == null ? null : String(txHash),
+        proofJson == null ? null : String(proofJson),
+        normalizedClientOrderId,
+      );
+      changes += update.changes || 0;
+    }
+    return { changes };
+  }
+  return { changes: info.changes };
+}
+
+function getDecibelOrderProof({ orderId = null, clientOrderId = null } = {}) {
+  const normalizedOrderId = orderId == null || orderId === '' ? null : String(orderId);
+  const normalizedClientOrderId = clientOrderId == null || clientOrderId === '' ? null : String(clientOrderId);
+  if (normalizedOrderId) {
+    const row = stmts.getDecibelOrderProofByOrder.get(normalizedOrderId);
+    if (row) return row;
+  }
+  if (normalizedClientOrderId) {
+    const row = stmts.getDecibelOrderProofByClient.get(normalizedClientOrderId);
+    if (row) return row;
+  }
+  return null;
+}
+
 function getTrades(playerId) {
   return stmts.getTrades.all(playerId);
 }
@@ -266,6 +420,8 @@ module.exports = {
   getDeposits,
   addTrade,
   getTrades,
+  recordDecibelOrderProof,
+  getDecibelOrderProof,
 };
 
 // One-time encryption migration: any row where secret_key doesn't start with

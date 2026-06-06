@@ -74,6 +74,17 @@ function orderKeys(row) {
   return keys;
 }
 
+function proofForOrderKey(key) {
+  const raw = String(key || '');
+  if (raw.startsWith('order:')) {
+    return db.getDecibelOrderProof({ orderId: raw.slice('order:'.length) });
+  }
+  if (raw.startsWith('client:')) {
+    return db.getDecibelOrderProof({ clientOrderId: raw.slice('client:'.length) });
+  }
+  return null;
+}
+
 function isFilledLimitOrder(row) {
   const status = fieldString(row, ['status', 'order_status', 'orderStatus', 'state']).toLowerCase();
   if (status && !status.includes('fill')) return false;
@@ -150,11 +161,14 @@ function aggregateLimitFills(trades, limitOrderKeySet, marketMap) {
       notional: 0,
       weightedPrice: 0,
       pnl: 0,
+      fee: 0,
     };
     current.sizeAbs += sizeAbs;
     current.notional += notional;
     current.weightedPrice += price * sizeAbs;
     current.pnl += fillPnl(fill);
+    const fee = Number(fill?.fee_amount ?? fill?.fee ?? 0);
+    if (Number.isFinite(fee)) current.fee += fee;
     groups.set(key, current);
   }
   return Array.from(groups.values()).filter(g => g.notional >= MIN_RECORDED_NOTIONAL_USD);
@@ -177,6 +191,7 @@ async function recordRecentLimitFills(playerId, subAddr) {
   for (const fill of aggregateLimitFills(trades, limitOrderKeySet, marketMap)) {
     const avgPrice = fill.sizeAbs > 0 ? fill.weightedPrice / fill.sizeAbs : 0;
     const isClose = String(fill.side || '').startsWith('close_');
+    const proof = proofForOrderKey(fill.key);
     const r = db.addTrade(playerId, {
       symbol: fill.symbol,
       side: fill.side,
@@ -188,8 +203,21 @@ async function recordRecentLimitFills(playerId, subAddr) {
       status: 'filled',
       dex: 'decibel',
       notional_usd: fill.notional,
-      verifiedSource: 'worker',
+      verifiedSource: proof ? 'decibel_fill' : 'worker',
       pnl: isClose && Number.isFinite(fill.pnl) ? fill.pnl : null,
+      fee: fill.fee,
+      proofJson: proof ? JSON.stringify({
+        source: 'decibel_trade_history_reconciliation',
+        builder: proof.builder_addr,
+        builder_fee_bps: proof.builder_fee_bps,
+        subaccount: subAddr,
+        matched_key: fill.key,
+        proof_id: proof.id,
+        original_client_order_id: proof.client_order_id,
+        original_order_id: proof.order_id,
+        order_tx_hash: proof.tx_hash,
+        order_proof_json: proof.proof_json || null,
+      }) : null,
     });
     inserted += r.changes || 0;
   }

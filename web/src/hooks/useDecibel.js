@@ -2032,6 +2032,7 @@ export function useDecibel() {
 
       const tpTrigger = tp > 0 ? priceToChainUnits(tp, market) : null;
       const slTrigger = sl > 0 ? priceToChainUnits(sl, market) : null;
+      const builderArgs = await builderFields();
       const res = await tpslOnServer({
         marketAddr: market.market_addr,
         tpOrderId: position?.tp_order_id || undefined,
@@ -2052,6 +2053,7 @@ export function useDecibel() {
         minSize: market.min_size ?? market.minSize,
         fullPosition: true,
         ...(sub ? { subaccountAddr: sub } : {}),
+        ...builderArgs,
       });
       const txHash = assertWriteSuccess(res, 'TP/SL update');
       fetchPositions();
@@ -2064,7 +2066,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, ensureSubaccount, prices, fetchPositions, fetchOrders, tpslOnServer]);
+  }, [requireServerSigner, ensureSubaccount, builderFields, prices, fetchPositions, fetchOrders, tpslOnServer]);
 
   // Decibel `configureUserSettingsForMarket` stores leverage together with
   // the cross-margin flag. Isolated margin is not currently exposed as a

@@ -26,7 +26,7 @@ function normalizeBaseRpcUrl(rawUrl) {
     const origin = new URL(siteOrigin()).origin;
     if (url.origin === origin && url.pathname.startsWith('/rpc/base')) return url.href;
     if (host.startsWith('base-mainnet.') && host.includes('alchemy')) return sameOriginRpcUrl('/rpc/base-alchemy');
-    if (host === ['mainnet', 'base', 'org'].join('.')) return sameOriginRpcUrl('/rpc/base');
+    if (host === ['mainnet', 'base', 'org'].join('.')) return url.href;
     if (
       (host.includes('publicnode') && host.includes('base'))
       || (host.includes('blockpi') && host.includes('base'))
@@ -35,7 +35,7 @@ function normalizeBaseRpcUrl(rawUrl) {
       || (host === '1rpc.io' && url.pathname.includes('base'))
       || (host.includes('developer-access') && host.includes('base'))
     ) {
-      return '';
+      return url.href;
     }
     return url.href;
   } catch {
@@ -50,7 +50,12 @@ export const BASE_RPC_URLS = (() => {
   const includeFree = envFlag(import.meta.env.VITE_BASE_ENABLE_PUBLIC_RPC, true);
   const includeAlchemy = envFlag(import.meta.env.VITE_BASE_ENABLE_ALCHEMY_RPC, true);
   return buildRpcFallbackList({
-    publicUrls: ['https://mainnet.base.org'],
+    publicUrls: [
+      'https://mainnet.base.org',
+      'https://base-rpc.publicnode.com',
+      'https://1rpc.io/base',
+      'https://base.drpc.org',
+    ],
     privateUrls: [sameOriginRpcUrl('/rpc/base-alchemy')],
     includePublic: includeFree,
     includePrivate: includeAlchemy,
