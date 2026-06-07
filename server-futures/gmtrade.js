@@ -1554,10 +1554,8 @@ function decodeOrderAccount(encoded, pubkey, pricesBySymbol, marketByToken = {})
 }
 
 async function allReadableMarketConfigs() {
-  const [discovered, defaultRegistry] = await Promise.all([
-    discoverGmtradeMarkets().catch(() => ({ markets: {}, rows: [] })),
-    discoverDefaultMarketTokenConfigs().catch(() => ({ markets: {}, rows: [] })),
-  ]);
+  const defaultRegistry = await discoverDefaultMarketTokenConfigs().catch(() => ({ markets: {}, rows: [] }));
+  const discovered = marketDiscoveryCache || { markets: {}, rows: [] };
   const byMarketToken = new Map();
   const add = (row) => {
     const cfg = normalizeMarketConfig(row?.symbol, row);
@@ -1918,13 +1916,16 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   const requestedSymbol = baseSymbol(body.symbol || 'SOL') || 'SOL';
   const configuredMarketToken = marketTokenForSymbol(requestedSymbol);
   const hintedMarketToken = String(body.market_token || body.marketToken || '').trim();
-  const useHintedMarketToken = hintedMarketToken
-    && (!configuredMarketToken || hintedMarketToken === configuredMarketToken);
-  const ignoredHintedMarketToken = hintedMarketToken && !useHintedMarketToken ? hintedMarketToken : '';
-  const hintedCfg = useHintedMarketToken
-    ? (await configFromMarketToken(hintedMarketToken).catch(() => null))
+  const hintedCfg = hintedMarketToken
+    ? (await configFromMarketToken(hintedMarketToken).catch((e) => {
+      console.warn('[gmtrade] hinted market-token config failed:', hintedMarketToken, e?.message || e);
+      return null;
+    }))
     : null;
-  const resolvedCfg = hintedCfg || await resolveMarketConfig(requestedSymbol);
+  const useHintedMarketToken = !!hintedCfg
+    && (!requestedSymbol || baseSymbol(hintedCfg.symbol) === requestedSymbol || hintedMarketToken === configuredMarketToken);
+  const ignoredHintedMarketToken = hintedMarketToken && !useHintedMarketToken ? hintedMarketToken : '';
+  const resolvedCfg = (useHintedMarketToken ? hintedCfg : null) || await resolveMarketConfig(requestedSymbol);
   if (!resolvedCfg) {
     throw Object.assign(new Error('GMTrade market-token config is not available. Set GMTRADE_MARKETS_JSON or enable RPC market discovery with GMTRADE_MARKET_SYMBOLS_JSON for this index token.'), { status: 501 });
   }
