@@ -1657,10 +1657,15 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   if (!isSolanaAddress(payer)) {
     throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
   }
-  const cfg = await resolveMarketConfig(body.symbol || 'SOL');
-  if (!cfg) {
+  const hintedMarketToken = String(body.market_token || body.marketToken || '').trim();
+  const hintedCfg = hintedMarketToken
+    ? (await configFromMarketToken(hintedMarketToken).catch(() => null))
+    : null;
+  const resolvedCfg = hintedCfg || await resolveMarketConfig(body.symbol || 'SOL');
+  if (!resolvedCfg) {
     throw Object.assign(new Error('GMTrade market-token config is not available. Set GMTRADE_MARKETS_JSON or enable RPC market discovery with GMTRADE_MARKET_SYMBOLS_JSON for this index token.'), { status: 501 });
   }
+  const cfg = resolvedCfg;
   const marketToken = assertPubkey(cfg.market_token, `${cfg.symbol} market_token`);
   const longToken = assertPubkey(cfg.long_token, `${cfg.symbol} long_token`);
   const shortToken = assertPubkey(cfg.short_token, `${cfg.symbol} short_token`);

@@ -1257,6 +1257,22 @@ const HOTSTUFF_BROKER_FEE_RATE = Number(
 ) || 0;
 const HOTSTUFF_BROKER_FEE_BPS = HOTSTUFF_BROKER_FEE_RATE * 10000;
 
+const KATANA_BUILDER_FEE_BPS = Math.max(0, Number(
+  process.env.KATANA_BUILDER_FEE_BPS
+  || process.env.VITE_KATANA_BUILDER_FEE_BPS
+  || 1,
+)) || 1;
+const GMTRADE_BUILDER_FEE_BPS = Math.max(0, Number(
+  process.env.GMTRADE_BUILDER_FEE_BPS
+  || process.env.VITE_GMTRADE_BUILDER_FEE_BPS
+  || 1,
+)) || 1;
+const HIBACHI_BUILDER_FEE_BPS = Math.max(0, Number(
+  process.env.HIBACHI_BUILDER_FEE_BPS
+  || process.env.VITE_HIBACHI_BUILDER_FEE_BPS
+  || 0,
+)) || 0;
+
 function readHotstuffLocalStats() {
   const Db = loadSqlite();
   if (!Db || !FS.existsSync(FUTURES_DB)) {
@@ -1352,6 +1368,149 @@ function readHotstuffLocalStats() {
   }
 }
 
+function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = null } = {}) {
+  const Db = loadSqlite();
+  if (!Db || !FS.existsSync(FUTURES_DB)) {
+    return {
+      trades: 0,
+      trades_24h: 0,
+      traders: 0,
+      volume_usd: 0,
+      volume_24h_usd: 0,
+      earned_usd: 0,
+      earned_24h_usd: 0,
+      fee_usd: 0,
+      fee_24h_usd: 0,
+      latest_fill_at: null,
+      recent_proofs: [],
+    };
+  }
+  let fdb = null;
+  try {
+    fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    const volumeExpr = `
+      CASE
+        WHEN COALESCE(notional_usd, 0) > 0 THEN notional_usd
+        WHEN ABS(CAST(amount AS REAL) * CAST(price AS REAL)) > 0 THEN ABS(CAST(amount AS REAL) * CAST(price AS REAL))
+        WHEN json_valid(COALESCE(proof_json, '')) THEN COALESCE(
+          ABS(CAST(json_extract(proof_json, '$.order.cumulativeQuoteQuantity') AS REAL)),
+          ABS(CAST(json_extract(proof_json, '$.order.fills[0].quoteQuantity') AS REAL)),
+          ABS(CAST(json_extract(proof_json, '$.order.avgExecutionPrice') AS REAL) * CAST(json_extract(proof_json, '$.order.executedQuantity') AS REAL)),
+          0
+        )
+        ELSE 0
+      END
+    `;
+    const feeExpr = "ABS(CAST(COALESCE(NULLIF(fee, ''), '0') AS REAL))";
+    const earnedExpr = earnedFeeWhere
+      ? `CASE WHEN ${earnedFeeWhere} THEN ${feeExpr} ELSE 0 END`
+      : '0';
+    const summary = fdb.prepare(`
+      SELECT COUNT(*) AS trades,
+             COUNT(DISTINCT player_id) AS traders,
+             COALESCE(SUM(${volumeExpr}), 0) AS volume_usd,
+             COALESCE(SUM(${feeExpr}), 0) AS fee_usd,
+             COALESCE(SUM(${earnedExpr}), 0) AS earned_usd,
+             MAX(created_at) AS latest_fill_at
+      FROM trade_history
+      WHERE dex = ?
+        AND status = 'filled'
+        AND verified_source = ?
+    `).get(dex, verifiedSource) || {};
+    const recent = fdb.prepare(`
+      SELECT COUNT(*) AS trades,
+             COALESCE(SUM(${volumeExpr}), 0) AS volume_usd,
+             COALESCE(SUM(${feeExpr}), 0) AS fee_usd,
+             COALESCE(SUM(${earnedExpr}), 0) AS earned_usd
+      FROM trade_history
+      WHERE dex = ?
+        AND status = 'filled'
+        AND verified_source = ?
+        AND created_at > datetime('now', '-24 hours')
+    `).get(dex, verifiedSource) || {};
+    const proofs = fdb.prepare(`
+      SELECT player_id, symbol, side, amount, price, notional_usd, fee,
+             order_id, client_order_id, created_at, proof_json
+      FROM trade_history
+      WHERE dex = ?
+        AND status = 'filled'
+        AND verified_source = ?
+      ORDER BY created_at DESC
+      LIMIT 20
+    `).all(dex, verifiedSource).map(row => ({
+      player_id: row.player_id,
+      symbol: row.symbol,
+      side: row.side,
+      amount: row.amount,
+      price: row.price,
+      notional_usd: roundUsd(row.notional_usd),
+      fee_usd: roundUsd(row.fee),
+      order_id: row.order_id,
+      client_order_id: row.client_order_id,
+      created_at: row.created_at,
+      proof_json: row.proof_json || null,
+    }));
+    return {
+      trades: safeNumber(summary.trades),
+      trades_24h: safeNumber(recent.trades),
+      traders: safeNumber(summary.traders),
+      volume_usd: roundUsd(summary.volume_usd),
+      volume_24h_usd: roundUsd(recent.volume_usd),
+      earned_usd: roundUsd(summary.earned_usd),
+      earned_24h_usd: roundUsd(recent.earned_usd),
+      fee_usd: roundUsd(summary.fee_usd),
+      fee_24h_usd: roundUsd(recent.fee_usd),
+      latest_fill_at: summary.latest_fill_at || null,
+      recent_proofs: proofs,
+    };
+  } catch {
+    return {
+      trades: 0,
+      trades_24h: 0,
+      traders: 0,
+      volume_usd: 0,
+      volume_24h_usd: 0,
+      earned_usd: 0,
+      earned_24h_usd: 0,
+      fee_usd: 0,
+      fee_24h_usd: 0,
+      latest_fill_at: null,
+      recent_proofs: [],
+    };
+  } finally {
+    if (fdb) fdb.close();
+  }
+}
+
+function localVerifiedBuilderEarnings({ dex, verifiedSource, currency, feeBps, sourceDetail, proofSource = null, note }) {
+  const proofWhere = proofSource
+    ? `(proof_json LIKE '%"source":"${proofSource}"%' OR proof_json LIKE '%"source": "${proofSource}"%')`
+    : null;
+  const local = readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere: proofWhere });
+  const estimated = local.volume_usd * (Math.max(0, feeBps) / 10000);
+  return {
+    earned_usd: local.earned_usd,
+    currency,
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    earned_24h_usd: local.earned_24h_usd,
+    fee_usd: local.fee_usd,
+    fee_24h_usd: local.fee_24h_usd,
+    estimated_fee_usd: roundUsd(estimated),
+    builder_fee_bps: Math.max(0, feeBps),
+    builder_fee_pct: Math.max(0, feeBps) / 100,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    model: proofSource ? 'local_verified_builder_fee_exact' : 'local_verified_volume_estimate',
+    source_detail: sourceDetail,
+    note,
+  };
+}
+
 async function fetchHotstuffEarnings() {
   const local = readHotstuffLocalStats();
   const configured = /^0x[0-9a-fA-F]{40}$/.test(HOTSTUFF_BROKER_ADDRESS)
@@ -1399,6 +1558,54 @@ async function fetchHotstuffEarnings() {
     note: configured
       ? `Exact local Hotstuff broker_fee sum from imported fills with stored Hotstuff proof. ${local.legacy_unverified_fills || 0} legacy fill(s) need re-import to replace old trader-fee rows with broker_fee. Local ${HOTSTUFF_BROKER_FEE_BPS}bps volume estimate is $${roundUsd(estimated).toFixed(4)} only for comparison.${configError ? ` Config/account read issue: ${configError}.` : ''}`
       : 'Hotstuff broker address/rate are not configured yet. Orders can be wired now; reward credit stays disabled until the broker code/address is provided.',
+  };
+}
+
+async function fetchKatanaEarnings() {
+  return localVerifiedBuilderEarnings({
+    dex: 'katana',
+    verifiedSource: 'katana_api',
+    currency: 'USDC (Katana)',
+    feeBps: KATANA_BUILDER_FEE_BPS,
+    sourceDetail: 'katana_verified_fills_local_estimate',
+    note: `Katana stats use filled rows verified by the Katana API. Exact Clash commission is shown only if imported rows carry an exact fee proof; otherwise local ${KATANA_BUILDER_FEE_BPS}bps is an estimate for comparison.`,
+  });
+}
+
+async function fetchGmtradeEarnings() {
+  return localVerifiedBuilderEarnings({
+    dex: 'gmtrade',
+    verifiedSource: 'gmtrade_tx',
+    currency: 'USDC (GMTrade/Solana)',
+    feeBps: GMTRADE_BUILDER_FEE_BPS,
+    sourceDetail: 'gmtrade_verified_tx_local_estimate',
+    note: `GMTrade stats use confirmed Solana transaction/position proof rows. Exact commission is not indexed yet, so local ${GMTRADE_BUILDER_FEE_BPS}bps is an estimate for comparison.`,
+  });
+}
+
+async function fetchHibachiEarnings() {
+  const local = readVerifiedFuturesDexStats('hibachi', 'hibachi_api');
+  const estimated = local.volume_usd * (HIBACHI_BUILDER_FEE_BPS / 10000);
+  return {
+    earned_usd: 0,
+    currency: 'USDC (Hibachi)',
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    user_fee_usd: local.fee_usd,
+    user_fee_24h_usd: local.fee_24h_usd,
+    estimated_fee_usd: roundUsd(estimated),
+    builder_fee_bps: HIBACHI_BUILDER_FEE_BPS,
+    builder_fee_pct: HIBACHI_BUILDER_FEE_BPS / 100,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    model: HIBACHI_BUILDER_FEE_BPS > 0 ? 'hibachi_unverified_builder_estimate' : 'builder_fee_not_configured',
+    source_detail: HIBACHI_BUILDER_FEE_BPS > 0 ? 'hibachi_api_volume_unverified_builder_estimate' : 'hibachi_builder_fee_not_verified',
+    note: HIBACHI_BUILDER_FEE_BPS > 0
+      ? `Hibachi API fills prove player activity, but they do not prove Clash builder commission. The ${HIBACHI_BUILDER_FEE_BPS}bps value is only an estimate and is not added to exact earned total.`
+      : 'Hibachi API fills prove player activity, but no Clash builder commission proof/source is configured yet. User paid fees are shown separately and are not counted as earned.',
   };
 }
 
@@ -1615,6 +1822,42 @@ function revenueModelForDex(dex, dateForRate = null) {
       source_detail: bps > 0 ? 'local_volume_x_hotstuff_bps' : 'hotstuff_broker_pending',
     };
   }
+  if (dex === 'katana') {
+    const bps = Math.max(0, KATANA_BUILDER_FEE_BPS);
+    return {
+      configured: bps > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps builder fee estimate` : 'not configured',
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_katana_bps' : 'katana_builder_not_configured',
+    };
+  }
+  if (dex === 'gmtrade') {
+    const bps = Math.max(0, GMTRADE_BUILDER_FEE_BPS);
+    return {
+      configured: bps > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps builder fee estimate` : 'not configured',
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_gmtrade_bps' : 'gmtrade_builder_not_configured',
+    };
+  }
+  if (dex === 'hibachi') {
+    const bps = Math.max(0, HIBACHI_BUILDER_FEE_BPS);
+    return {
+      configured: bps > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps unverified estimate` : 'builder proof not configured',
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: bps > 0 ? 'builder_fee_not_verified' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'hibachi_api_volume_unverified_builder_estimate' : 'hibachi_builder_fee_not_verified',
+    };
+  }
   return {
     configured: false,
     rate: 0,
@@ -1696,7 +1939,14 @@ function readFuturesWindowStats(fdb, dex, windowDef) {
              COALESCE(SUM(
                CASE
                  WHEN COALESCE(notional_usd, 0) > 0 THEN notional_usd
-                 ELSE ABS(CAST(amount AS REAL) * CAST(price AS REAL))
+                 WHEN ABS(CAST(amount AS REAL) * CAST(price AS REAL)) > 0 THEN ABS(CAST(amount AS REAL) * CAST(price AS REAL))
+                 WHEN json_valid(COALESCE(proof_json, '')) THEN COALESCE(
+                   ABS(CAST(json_extract(proof_json, '$.order.cumulativeQuoteQuantity') AS REAL)),
+                   ABS(CAST(json_extract(proof_json, '$.order.fills[0].quoteQuantity') AS REAL)),
+                   ABS(CAST(json_extract(proof_json, '$.order.avgExecutionPrice') AS REAL) * CAST(json_extract(proof_json, '$.order.executedQuantity') AS REAL)),
+                   0
+                 )
+                 ELSE 0
                END
              ), 0) AS volume_usd
       FROM trade_history
@@ -1939,7 +2189,7 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, phx, mon, hl, grvt, nado, hotstuff] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, phx, mon, hl, grvt, nado, hotstuff, hibachi, katana, gmtrade] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
@@ -1950,6 +2200,9 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     fetchGrvtEarnings(),
     fetchNadoEarnings(),
     fetchHotstuffEarnings(),
+    fetchHibachiEarnings(),
+    fetchKatanaEarnings(),
+    fetchGmtradeEarnings(),
   ]);
   const wrap = (label, r) => r.status === 'fulfilled'
     ? { ok: true, ...r.value }
@@ -1966,9 +2219,12 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     grvt: { ...wrap('grvt', grvt), source: 'grvt_builder_fill_history' },
     nado: { ...wrap('nado', nado), source: 'nado_indexer_match_builder_fee' },
     hotstuff: { ...wrap('hotstuff', hotstuff), source: 'hotstuff_api_fills_broker_fee' },
+    hibachi: { ...wrap('hibachi', hibachi), source: 'hibachi_api_activity_builder_fee_unverified' },
+    katana: { ...wrap('katana', katana), source: 'katana_verified_fills_local_estimate' },
+    gmtrade: { ...wrap('gmtrade', gmtrade), source: 'gmtrade_verified_tx_local_estimate' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','grvt','nado','hotstuff'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','grvt','nado','hotstuff','hibachi','katana','gmtrade'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

@@ -197,7 +197,9 @@ function ClashMigrationNotice() {
     <div style={styles.noticeOverlay} role="dialog" aria-modal="true" aria-labelledby="clash-migration-title">
       <div style={styles.noticePanel}>
         <div style={styles.noticeHeader}>
-          <div style={styles.noticeBadge}>SOL</div>
+          <div style={styles.noticeBadge} aria-label="CLASH token">
+            <img src="/icons/icon-192.png" alt="" style={styles.noticeBadgeImg} />
+          </div>
           <button type="button" style={styles.noticeClose} onClick={closeNotice} aria-label="Close">x</button>
         </div>
         <h2 id="clash-migration-title" style={styles.noticeTitle}>$CLASH Token Is Live On Solana</h2>
@@ -493,18 +495,23 @@ const styles = {
     justifyContent: 'space-between',
   },
   noticeBadge: {
-    height: 30,
-    minWidth: 50,
-    borderRadius: 8,
-    background: '#111827',
-    color: '#8dfd9a',
+    width: 42,
+    height: 42,
+    borderRadius: '50%',
+    background: '#fff8e6',
+    border: '2px solid #d7c69e',
+    boxShadow: '0 3px 8px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: 12,
-    fontWeight: 900,
-    letterSpacing: 0.4,
-    border: '2px solid rgba(255,255,255,0.25)',
+  },
+  noticeBadgeImg: {
+    display: 'block',
+    width: 30,
+    height: 30,
+    borderRadius: 6,
+    objectFit: 'contain',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.22)',
   },
   noticeClose: {
     width: 30,

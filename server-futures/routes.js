@@ -1371,17 +1371,42 @@ router.post('/katana/orders/submit', auth, async (req, res) => {
     const result = await katana.submitOrder(creds, req.body || {});
     try {
       const params = req.body?.parameters || {};
+      const rawOrder = result?._raw || {};
+      const rawFills = Array.isArray(rawOrder.fills) ? rawOrder.fills : [];
+      const filledNotional = rawFills.reduce((sum, fill) => sum + Math.abs(Number(fill?.quoteQuantity || 0)), 0);
+      const orderNotional = Math.abs(Number(
+        req.body?.notional_usd
+        || rawOrder.cumulativeQuoteQuantity
+        || filledNotional
+        || 0,
+      ));
+      const amount = String(
+        params.quantity
+        || result.filled
+        || result.amount
+        || rawOrder.executedQuantity
+        || rawOrder.originalQuantity
+        || '',
+      );
+      const price = String(
+        params.price
+        || result.price
+        || rawOrder.avgExecutionPrice
+        || rawOrder.price
+        || '',
+      );
+      const computedNotional = orderNotional || Math.abs(Number(amount) * Number(price)) || 0;
       db.addTrade(req.playerId, {
         symbol: result.symbol || params.symbol || params.market,
         side: result.side || params.side,
         orderType: result.type || params.type || 'market',
-        amount: String(params.quantity || result.amount || ''),
-        price: String(params.price || result.price || ''),
+        amount,
+        price,
         orderId: result.order_id || null,
         clientOrderId: result.client_order_id || params.clientOrderId || null,
         status: result.status || 'submitted',
         dex: 'katana',
-        notional_usd: Number(req.body?.notional_usd || 0),
+        notional_usd: computedNotional,
         verifiedSource: 'katana_api',
         proofJson: JSON.stringify({ source: 'katana_perps_sdk', order: result._raw || result }),
       });

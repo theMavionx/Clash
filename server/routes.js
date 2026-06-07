@@ -14271,14 +14271,28 @@ function buildAdminGrowthFunnelStats({ playerCount, activeQ }) {
   ));
 
   const byDex = adminSafeAll(`
-    WITH trading AS (
+    WITH dex_links AS (
+      SELECT id AS player_id, COALESCE(NULLIF(dex, ''), 'unknown') AS dex
+      FROM players
+      WHERE dex IS NOT NULL AND dex <> ''
+      UNION
+      SELECT id AS player_id, 'unknown' AS dex
+      FROM players
+      WHERE dex IS NULL OR dex = ''
+      UNION
+      SELECT player_id, COALESCE(NULLIF(dex, ''), 'unknown') AS dex
+      FROM player_dex_accounts
+      WHERE status <> 'disconnected'
+    ),
+    trading AS (
       SELECT player_id,
+             COALESCE(NULLIF(dex, ''), 'unknown') AS dex,
              SUM(total_volume) AS total_volume,
              SUM(total_gold) AS total_gold,
              MAX(first_deposit) AS first_deposit,
              MAX(CASE WHEN first_trade > 0 OR total_volume > 0 THEN 1 ELSE 0 END) AS first_trade
       FROM trading_rewards
-      GROUP BY player_id
+      GROUP BY player_id, COALESCE(NULLIF(dex, ''), 'unknown')
     ),
     purchases AS (
       SELECT player_id,
@@ -14288,8 +14302,8 @@ function buildAdminGrowthFunnelStats({ playerCount, activeQ }) {
       GROUP BY player_id
     )
     SELECT
-      COALESCE(NULLIF(p.dex, ''), 'unknown') AS dex,
-      COUNT(*) AS players,
+      COALESCE(NULLIF(dl.dex, ''), 'unknown') AS dex,
+      COUNT(DISTINCT p.id) AS players,
       COALESCE(SUM(CASE WHEN p.last_seen_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS active_24h,
       COALESCE(SUM(CASE WHEN t.player_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS reward_profiles,
       COALESCE(SUM(CASE WHEN t.first_deposit > 0 THEN 1 ELSE 0 END), 0) AS first_deposit_players,
@@ -14298,10 +14312,11 @@ function buildAdminGrowthFunnelStats({ playerCount, activeQ }) {
       COALESCE(SUM(t.total_gold), 0) AS total_gold,
       COALESCE(SUM(CASE WHEN purchases.purchases > 0 THEN 1 ELSE 0 END), 0) AS shop_buyers,
       COALESCE(SUM(CASE WHEN purchases.project_token_purchase > 0 THEN 1 ELSE 0 END), 0) AS project_token_buyers
-    FROM players p
-    LEFT JOIN trading t ON t.player_id = p.id
+    FROM dex_links dl
+    LEFT JOIN players p ON p.id = dl.player_id
+    LEFT JOIN trading t ON t.player_id = p.id AND t.dex = dl.dex
     LEFT JOIN purchases ON purchases.player_id = p.id
-    GROUP BY dex
+    GROUP BY dl.dex
     ORDER BY players DESC, dex ASC
   `).map((row) => ({
     dex: row.dex,
@@ -14653,8 +14668,22 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Avantis adoption / volume / gold distribution side by side. Guarded
   // against an empty trading_rewards table on fresh DBs.
   const byDex = db.db.prepare(`
-    SELECT COALESCE(dex, 'unknown') AS dex, COUNT(*) AS n
-    FROM players GROUP BY dex
+    WITH dex_links AS (
+      SELECT id AS player_id, COALESCE(NULLIF(dex, ''), 'unknown') AS dex
+      FROM players
+      WHERE dex IS NOT NULL AND dex <> ''
+      UNION
+      SELECT id AS player_id, 'unknown' AS dex
+      FROM players
+      WHERE dex IS NULL OR dex = ''
+      UNION
+      SELECT player_id, COALESCE(NULLIF(dex, ''), 'unknown') AS dex
+      FROM player_dex_accounts
+      WHERE status <> 'disconnected'
+    )
+    SELECT dex, COUNT(DISTINCT player_id) AS n
+    FROM dex_links
+    GROUP BY dex
   `).all();
 
   // Futures UI mode breakdown — Pro vs Basic vs not-yet-picked. Mirrors
@@ -16301,7 +16330,7 @@ function tournamentTradeSourceWhere(dex) {
 
 function syncFuturesTournamentRows(playerId, dex) {
   const normalizedDex = String(dex || '').toLowerCase();
-  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hotstuff', 'grvt'].includes(normalizedDex)) {
+  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade'].includes(normalizedDex)) {
     return { ok: true, skipped: true };
   }
   const fdb = futuresDbReadonly();

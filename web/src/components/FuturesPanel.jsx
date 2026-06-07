@@ -2606,9 +2606,12 @@ function FuturesPanel() {
       }
       setTradePhase('signing');
       let result;
-      const tradeOptions = Number.isFinite(positionUsdc) && positionUsdc > 0
-        ? { notional_usd: positionUsdc }
-        : undefined;
+      const tradeOptions = {
+        ...(Number.isFinite(positionUsdc) && positionUsdc > 0 ? { notional_usd: positionUsdc } : {}),
+        ...(dex === 'gmtrade' && (currentMarket?.market_token || currentMarket?.marketToken)
+          ? { market_token: currentMarket.market_token || currentMarket.marketToken }
+          : {}),
+      };
       if (orderType === 'market') {
         // 5th arg (leverage) is only read by useAvantis; usePacifica ignores it.
         result = await placeMarketOrder(symbol, side, qty, '0.5', leverage, tradeOptions);

@@ -578,6 +578,7 @@ export function useGmtrade() {
         trigger_price: options?.trigger_price ?? options?.triggerPrice,
         notional_usd: options?.notional_usd,
         margin_usd: options?.margin_usd,
+        market_token: options?.market_token || options?.marketToken,
         reduce_only: options?.reduce_only === true,
         order_type: options?.order_type || 'market',
       };
