@@ -646,7 +646,9 @@ async function configFromMarketToken(symbol) {
           market_token: market.market_token_address(),
           long_token: market.long_token_address(),
           short_token: market.short_token_address(),
-          collateral_token: market.short_token_address() || GMTRADE_DEFAULT_COLLATERAL_MINT,
+          collateral_token: GMTRADE_DEFAULT_COLLATERAL_MINT,
+          pay_token: GMTRADE_DEFAULT_COLLATERAL_MINT,
+          receive_token: GMTRADE_DEFAULT_COLLATERAL_MINT,
           collateral_decimals: GMTRADE_DEFAULT_COLLATERAL_DECIMALS,
           index_token: market.index_token_address(),
           source: 'market_token_pda',
@@ -730,7 +732,9 @@ async function discoverDefaultMarketTokenConfigs({ force = false } = {}) {
                 market_token: marketToken,
                 long_token: longToken,
                 short_token: shortToken,
-                collateral_token: shortToken || GMTRADE_DEFAULT_COLLATERAL_MINT,
+                collateral_token: GMTRADE_DEFAULT_COLLATERAL_MINT,
+                pay_token: GMTRADE_DEFAULT_COLLATERAL_MINT,
+                receive_token: GMTRADE_DEFAULT_COLLATERAL_MINT,
                 collateral_decimals: GMTRADE_DEFAULT_COLLATERAL_DECIMALS,
                 index_token: indexToken,
                 source: 'official_app_market_token_registry',
@@ -796,7 +800,9 @@ async function discoverGmtradeMarkets({ force = false } = {}) {
             market_token: marketToken,
             long_token: longToken,
             short_token: shortToken,
-            collateral_token: shortToken || GMTRADE_DEFAULT_COLLATERAL_MINT,
+            collateral_token: GMTRADE_DEFAULT_COLLATERAL_MINT,
+            pay_token: GMTRADE_DEFAULT_COLLATERAL_MINT,
+            receive_token: GMTRADE_DEFAULT_COLLATERAL_MINT,
             collateral_decimals: GMTRADE_DEFAULT_COLLATERAL_DECIMALS,
             index_token: indexToken,
             source: 'onchain_discovery',
@@ -1294,11 +1300,11 @@ async function getMarketInfo() {
       source: px?.source || row.source,
       native_order_available: nativeSymbols.has(row.symbol),
       market_token:
-        discovered?.markets?.[row.symbol]?.market_token
-        || defaultRegistry?.markets?.[row.symbol]?.market_token
-        || marketTokenConfigCache.markets?.[row.symbol]?.market_token
+        marketTokenForSymbol(row.symbol)
         || envMarketConfig(row.symbol)?.market_token
-        || marketTokenForSymbol(row.symbol)
+        || marketTokenConfigCache.markets?.[row.symbol]?.market_token
+        || defaultRegistry?.markets?.[row.symbol]?.market_token
+        || discovered?.markets?.[row.symbol]?.market_token
         || null,
     };
   });
@@ -1688,11 +1694,16 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   if (!isSolanaAddress(payer)) {
     throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
   }
+  const requestedSymbol = baseSymbol(body.symbol || 'SOL') || 'SOL';
+  const configuredMarketToken = marketTokenForSymbol(requestedSymbol);
   const hintedMarketToken = String(body.market_token || body.marketToken || '').trim();
-  const hintedCfg = hintedMarketToken
+  const useHintedMarketToken = hintedMarketToken
+    && (!configuredMarketToken || hintedMarketToken === configuredMarketToken);
+  const ignoredHintedMarketToken = hintedMarketToken && !useHintedMarketToken ? hintedMarketToken : '';
+  const hintedCfg = useHintedMarketToken
     ? (await configFromMarketToken(hintedMarketToken).catch(() => null))
     : null;
-  const resolvedCfg = hintedCfg || await resolveMarketConfig(body.symbol || 'SOL');
+  const resolvedCfg = hintedCfg || await resolveMarketConfig(requestedSymbol);
   if (!resolvedCfg) {
     throw Object.assign(new Error('GMTrade market-token config is not available. Set GMTRADE_MARKETS_JSON or enable RPC market discovery with GMTRADE_MARKET_SYMBOLS_JSON for this index token.'), { status: 501 });
   }
@@ -1800,6 +1811,10 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
       symbol: cfg.symbol,
       kind,
       side,
+      market_token: marketToken,
+      collateral_token: collateralToken,
+      pay_token: payToken,
+      ignored_market_token: ignoredHintedMarketToken || undefined,
       margin_usd: margin,
       leverage,
       notional_usd: notional,
@@ -1851,6 +1866,10 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     symbol: cfg.symbol,
     kind,
     side,
+    market_token: marketToken,
+    collateral_token: collateralToken,
+    pay_token: payToken,
+    ignored_market_token: ignoredHintedMarketToken || undefined,
     margin_usd: margin,
     leverage,
     notional_usd: notional,
