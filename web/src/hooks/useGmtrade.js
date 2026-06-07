@@ -4,7 +4,7 @@ import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solan
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { createReconnectingJsonWebSocket } from '../lib/reconnectingWebSocket';
-import { createSolanaConnection, SOLANA_RPC_URLS, solanaRpcHost } from '../lib/solanaRpc';
+import { createSolanaConnection, selectFreshSolanaRpcUrl, SOLANA_RPC_URLS, solanaRpcHost } from '../lib/solanaRpc';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -196,6 +196,31 @@ function connectionRpcDiagnostics(connection) {
     rpc_host: endpoint ? solanaRpcHost(endpoint) : 'unknown',
     origin: typeof window !== 'undefined' ? window.location.origin : '',
     fallback_hosts: SOLANA_RPC_URLS.map(solanaRpcHost).filter(Boolean),
+  };
+}
+
+function rpcProbeDiagnostics(selection) {
+  return {
+    selected: selection?.selected
+      ? {
+        host: selection.selected.host || solanaRpcHost(selection.selected.url),
+        current_block_height: selection.selected.currentBlockHeight ?? null,
+        cluster_block_height: selection.selected.clusterBlockHeight ?? null,
+        remaining_cluster_blocks: selection.selected.remainingClusterBlocks ?? null,
+        lag_blocks: selection.selected.lagBlocks ?? null,
+      }
+      : null,
+    probes: (selection?.probes || []).map((probe) => ({
+      host: probe.host || solanaRpcHost(probe.url),
+      ok: !!probe.ok,
+      usable: !!probe.usable,
+      status: probe.status ?? null,
+      current_block_height: probe.currentBlockHeight ?? null,
+      cluster_block_height: probe.clusterBlockHeight ?? null,
+      remaining_cluster_blocks: probe.remainingClusterBlocks ?? null,
+      lag_blocks: probe.lagBlocks ?? null,
+      error: probe.error || null,
+    })).slice(0, 8),
   };
 }
 
@@ -590,11 +615,27 @@ export function useGmtrade() {
     throw lastError || new Error('GMTrade transaction was sent but not confirmed by GMTrade RPC yet');
   }, [gmtradeLog, token]);
 
-  const sendBuiltTransaction = useCallback(async (base64, meta = {}, attempt = 0, trace = '') => {
-    if (!connection) throw new Error('Solana RPC connection is unavailable');
+  const selectTxConnection = useCallback(async (attempt = 0, trace = '') => {
+    const selection = await selectFreshSolanaRpcUrl(SOLANA_RPC_URLS);
+    const selectedUrl = selection?.selected?.url || '';
+    if (!selectedUrl && !connection) throw new Error('Solana RPC connection is unavailable');
+    const txConnection = selectedUrl
+      ? createSolanaConnection(Connection, selectedUrl, 'confirmed')
+      : connection;
+    const payload = {
+      rpc: connectionRpcDiagnostics(txConnection),
+      selection: rpcProbeDiagnostics(selection),
+    };
+    console.info('[GMTrade tx] selected rpc', { trace, attempt, ...payload });
+    await gmtradeLog('tx_rpc_selected', payload, attempt, trace);
+    return txConnection;
+  }, [connection, gmtradeLog]);
+
+  const sendBuiltTransaction = useCallback(async (base64, meta = {}, attempt = 0, trace = '', txConnection = connection) => {
+    if (!txConnection) throw new Error('Solana RPC connection is unavailable');
     const tx = decodeTransaction(base64);
     const traceLabel = trace || `gmtrade-${Date.now()}`;
-    const rpc = connectionRpcDiagnostics(connection);
+    const rpc = connectionRpcDiagnostics(txConnection);
     const decodedSummary = {
       tx: txMessageSummary(tx),
       tx_programs: summarizeTransactionPrograms(tx),
@@ -616,7 +657,7 @@ export function useGmtrade() {
     }, attempt, trace);
     try {
       const preSignStartedAt = Date.now();
-      const preSignSimulation = await connection.simulateTransaction(tx, {
+      const preSignSimulation = await txConnection.simulateTransaction(tx, {
         sigVerify: false,
         replaceRecentBlockhash: false,
         commitment: 'confirmed',
@@ -652,7 +693,7 @@ export function useGmtrade() {
       }, attempt, trace);
       console.info('[GMTrade tx] wallet send start', { trace: traceLabel, attempt, rpc, tx_kind: txKind(tx) });
       try {
-        const signature = await solWallet.sendTransaction(tx, connection, {
+        const signature = await solWallet.sendTransaction(tx, txConnection, {
           skipPreflight: false,
           preflightCommitment: 'confirmed',
           maxRetries: 3,
@@ -693,7 +734,7 @@ export function useGmtrade() {
       let simulation = null;
       try {
         const simulationStartedAt = Date.now();
-        simulation = await connection.simulateTransaction(signed, {
+        simulation = await txConnection.simulateTransaction(signed, {
           sigVerify: false,
           replaceRecentBlockhash: false,
           commitment: 'confirmed',
@@ -724,7 +765,7 @@ export function useGmtrade() {
       console.info('[GMTrade tx] send raw start', { trace: traceLabel, attempt, rpc, raw_bytes: raw.length });
       await gmtradeLog('send_raw_start', { rpc, raw_bytes: raw.length }, attempt, trace);
       try {
-        const signature = await connection.sendRawTransaction(raw, {
+        const signature = await txConnection.sendRawTransaction(raw, {
           skipPreflight: false,
           preflightCommitment: 'confirmed',
           maxRetries: 3,
@@ -735,7 +776,7 @@ export function useGmtrade() {
       } catch (sendError) {
         let logs = [];
         try {
-          logs = typeof sendError?.getLogs === 'function' ? await sendError.getLogs(connection) : [];
+          logs = typeof sendError?.getLogs === 'function' ? await sendError.getLogs(txConnection) : [];
         } catch {}
         console.error('[GMTrade tx] send raw error', { trace: traceLabel, attempt, rpc, error: errorInfo(sendError), logs });
         await gmtradeLog('send_raw_error', { rpc, error: errorInfo(sendError), logs }, attempt, trace);
@@ -789,11 +830,13 @@ export function useGmtrade() {
         : `gmtrade-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       let lastExpired = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const beforeHeight = await connection.getBlockHeight('confirmed').catch(() => null);
-        const latest = await connection.getLatestBlockhash('confirmed');
+        const txConnection = await selectTxConnection(attempt, trace);
+        const rpc = connectionRpcDiagnostics(txConnection);
+        const beforeHeight = await txConnection.getBlockHeight('confirmed').catch(() => null);
+        const latest = await txConnection.getLatestBlockhash('confirmed');
         await gmtradeLog('order_attempt_start', {
           payload,
-          rpc: connectionRpcDiagnostics(connection),
+          rpc,
           current_block_height: beforeHeight,
           latest_blockhash: latest.blockhash,
           latest_last_valid_block_height: latest.lastValidBlockHeight,
@@ -805,7 +848,7 @@ export function useGmtrade() {
             ...payload,
             recent_blockhash: latest.blockhash,
             last_valid_block_height: latest.lastValidBlockHeight,
-            client_rpc: connectionRpcDiagnostics(connection),
+            client_rpc: rpc,
           }),
         });
         await gmtradeLog('order_build_done', {
@@ -829,7 +872,7 @@ export function useGmtrade() {
         try {
           for (let txIndex = 0; txIndex < txs.length; txIndex += 1) {
             await gmtradeLog('tx_send_loop_start', { tx_index: txIndex, tx_count: txs.length }, attempt, trace);
-            lastSig = await sendBuiltTransaction(txs[txIndex], build, attempt, trace);
+            lastSig = await sendBuiltTransaction(txs[txIndex], build, attempt, trace, txConnection);
             await confirmSignatureWithDiagnostics(lastSig, build, attempt, trace);
           }
           if (options?.skip_report === true || options?.tpsl) {
@@ -921,7 +964,7 @@ export function useGmtrade() {
       }
       return { error: gmtradeUserError(e) };
     }
-  }, [config?.min_position_usd, config?.native_order_builder, confirmSignatureWithDiagnostics, connection, gmtradeLog, refresh, reportTrade, requestRealtimeRefresh, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [config?.min_position_usd, config?.native_order_builder, confirmSignatureWithDiagnostics, gmtradeLog, refresh, reportTrade, requestRealtimeRefresh, selectTxConnection, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const nativeLimitOrder = useCallback(async (symbol, side, price, qty, _tif, lev = 1, options = {}) => (
     nativeOrder(symbol, side, qty, '0.5', lev, {
@@ -1044,11 +1087,13 @@ export function useGmtrade() {
     try {
       let lastExpired = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const beforeHeight = await connection.getBlockHeight('confirmed').catch(() => null);
-        const latest = await connection.getLatestBlockhash('confirmed');
+        const txConnection = await selectTxConnection(attempt, trace);
+        const rpc = connectionRpcDiagnostics(txConnection);
+        const beforeHeight = await txConnection.getBlockHeight('confirmed').catch(() => null);
+        const latest = await txConnection.getLatestBlockhash('confirmed');
         await gmtradeLog('cancel_attempt_start', {
           order_id: orderId,
-          rpc: connectionRpcDiagnostics(connection),
+          rpc,
           current_block_height: beforeHeight,
           latest_blockhash: latest.blockhash,
           latest_last_valid_block_height: latest.lastValidBlockHeight,
@@ -1061,7 +1106,7 @@ export function useGmtrade() {
             order_id: orderId,
             recent_blockhash: latest.blockhash,
             last_valid_block_height: latest.lastValidBlockHeight,
-            client_rpc: connectionRpcDiagnostics(connection),
+            client_rpc: rpc,
           }),
         });
         await gmtradeLog('cancel_build_done', {
@@ -1078,7 +1123,7 @@ export function useGmtrade() {
         try {
           for (let txIndex = 0; txIndex < txs.length; txIndex += 1) {
             await gmtradeLog('cancel_tx_send_loop_start', { order_id: orderId, tx_index: txIndex, tx_count: txs.length }, attempt, trace);
-            lastSig = await sendBuiltTransaction(txs[txIndex], build, attempt, trace);
+            lastSig = await sendBuiltTransaction(txs[txIndex], build, attempt, trace, txConnection);
             await confirmSignatureWithDiagnostics(lastSig, build, attempt, trace);
           }
           await gmtradeLog('cancel_submitted', { order_id: orderId, signature: lastSig }, attempt, trace);
@@ -1108,7 +1153,7 @@ export function useGmtrade() {
       }
       return { error: e?.message || 'GMTrade cancel order failed' };
     }
-  }, [confirmSignatureWithDiagnostics, connection, gmtradeLog, refresh, requestRealtimeRefresh, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [confirmSignatureWithDiagnostics, gmtradeLog, refresh, requestRealtimeRefresh, selectTxConnection, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const nativeLinkReferrer = useCallback(async () => {
     if (!token) return { error: 'Missing game session token' };
@@ -1135,11 +1180,13 @@ export function useGmtrade() {
       }
       let lastExpired = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const beforeHeight = await connection.getBlockHeight('confirmed').catch(() => null);
-        const latest = await connection.getLatestBlockhash('confirmed');
+        const txConnection = await selectTxConnection(attempt, trace);
+        const rpc = connectionRpcDiagnostics(txConnection);
+        const beforeHeight = await txConnection.getBlockHeight('confirmed').catch(() => null);
+        const latest = await txConnection.getLatestBlockhash('confirmed');
         await gmtradeLog('referral_attempt_start', {
           code: config?.referral_code || 'gamingperps',
-          rpc: connectionRpcDiagnostics(connection),
+          rpc,
           current_block_height: beforeHeight,
           latest_blockhash: latest.blockhash,
           latest_last_valid_block_height: latest.lastValidBlockHeight,
@@ -1152,7 +1199,7 @@ export function useGmtrade() {
             code: config?.referral_code || 'gamingperps',
             recent_blockhash: latest.blockhash,
             last_valid_block_height: latest.lastValidBlockHeight,
-            client_rpc: connectionRpcDiagnostics(connection),
+            client_rpc: rpc,
           }),
         });
         if (build?.already_linked) {
@@ -1174,7 +1221,7 @@ export function useGmtrade() {
         try {
           for (let txIndex = 0; txIndex < txs.length; txIndex += 1) {
             await gmtradeLog('referral_tx_send_loop_start', { tx_index: txIndex, tx_count: txs.length }, attempt, trace);
-            lastSig = await sendBuiltTransaction(txs[txIndex], build, attempt, trace);
+            lastSig = await sendBuiltTransaction(txs[txIndex], build, attempt, trace, txConnection);
             await confirmSignatureWithDiagnostics(lastSig, build, attempt, trace);
           }
           await gmtradeLog('referral_submitted', { signature: lastSig }, attempt, trace);
@@ -1209,7 +1256,7 @@ export function useGmtrade() {
       }
       return { error: e?.message || 'GMTrade referral approval failed' };
     }
-  }, [account?.has_referrer, account?.referral?.has_referrer, config?.referral_code, confirmSignatureWithDiagnostics, connection, gmtradeLog, refresh, rememberReferral, referralState?.has_referrer, requestRealtimeRefresh, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [account?.has_referrer, account?.referral?.has_referrer, config?.referral_code, confirmSignatureWithDiagnostics, gmtradeLog, refresh, rememberReferral, referralState?.has_referrer, requestRealtimeRefresh, selectTxConnection, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const unavailableOrder = useCallback(async () => {
     return {
