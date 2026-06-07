@@ -172,6 +172,11 @@ const DEFAULT_GMTRADE_MARKET_TOKENS = [
   'DHtPBDyjAW82GGUV244gZR3TfMtFuYewwQ4qwpPFAsCP',
   '94Mpdu745RWL2eBqu1SvuV2HnX9EfFQSGm3uxvfMBmv6',
 ];
+const BUILTIN_GMTRADE_MARKET_TOKENS = {
+  ETH: 'DAY6Qr1FKgJQFvjJAhFUZUWHzx8UbbbkRmt6G6AYswWG',
+  BTC: 'Dqq58gS1TgRMDouUbdvhhzc51XXTNHG921WLxH9X2eB8',
+  SOL: '6UU9sF5fryafHDYPcmVcV7ucfnYs6iMVcvb8p7SBQgTc',
+};
 const GMTRADE_RUST_BUILDER_BIN = String(
   process.env.GMTRADE_RUST_BUILDER_BIN
   || path.join(__dirname, 'gmtrade-builder', 'target', 'release', process.platform === 'win32' ? 'gmtrade-builder.exe' : 'gmtrade-builder')
@@ -399,13 +404,16 @@ function envMarketConfig(symbol) {
 }
 
 function configuredMarketTokenSymbols() {
-  return Object.keys(GMTRADE_MARKET_TOKENS || {}).map(baseSymbol).filter(Boolean);
+  return [
+    ...Object.keys(BUILTIN_GMTRADE_MARKET_TOKENS || {}),
+    ...Object.keys(GMTRADE_MARKET_TOKENS || {}),
+  ].map(baseSymbol).filter(Boolean);
 }
 
 function marketTokenForSymbol(symbol) {
   const sym = baseSymbol(symbol || 'SOL');
   const cfg = GMTRADE_MARKET_TOKENS?.[sym] || GMTRADE_MARKET_TOKENS?.[`${sym}/USD`] || null;
-  if (!cfg) return '';
+  if (!cfg) return BUILTIN_GMTRADE_MARKET_TOKENS[sym] || '';
   if (typeof cfg === 'string') return cfg.trim();
   return String(cfg.market_token || cfg.marketToken || cfg.market || '').trim();
 }
@@ -599,10 +607,15 @@ async function getWalletUsdcBalance(address) {
 }
 
 async function configFromMarketToken(symbol) {
-  const sym = baseSymbol(symbol || 'SOL');
-  const cached = marketTokenConfigCache.markets?.[sym];
+  const raw = String(symbol || 'SOL').trim();
+  const sym = baseSymbol(raw || 'SOL');
+  const directToken = isSolanaPubkey(raw) ? raw : '';
+  const cached =
+    marketTokenConfigCache.markets?.[raw]
+    || marketTokenConfigCache.markets?.[sym]
+    || (directToken ? marketTokenConfigCache.markets?.[directToken] : null);
   if (cached && Date.now() - marketTokenConfigCache.at < MARKET_DISCOVERY_TTL_MS) return cached;
-  const token = marketTokenForSymbol(sym);
+  const token = directToken || marketTokenForSymbol(sym);
   if (!token) return null;
   try {
     assertPubkey(GMTRADE_STORE_ADDRESS, 'store');
@@ -626,14 +639,18 @@ async function configFromMarketToken(symbol) {
         });
         const row = {
           ...decoded,
+          symbol: directToken ? (symbolForDiscoveredMarket({
+            market_token: market.market_token_address(),
+            index_token: market.index_token_address(),
+          }) || sym) : sym,
           index_token: market.index_token_address(),
           account: marketAccount,
           program_id: programId,
         };
         marketTokenConfigCache = {
           at: Date.now(),
-          markets: { ...marketTokenConfigCache.markets, [sym]: row, [token]: row },
-          rows: [...marketTokenConfigCache.rows.filter(r => r.symbol !== sym), row],
+          markets: { ...marketTokenConfigCache.markets, [row.symbol]: row, [sym]: row, [token]: row },
+          rows: [...marketTokenConfigCache.rows.filter(r => r.symbol !== row.symbol && r.market_token !== token), row],
           error: null,
         };
         return row;
