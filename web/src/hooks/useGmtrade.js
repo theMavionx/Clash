@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { createReconnectingJsonWebSocket } from '../lib/reconnectingWebSocket';
+import { createSolanaConnection, SOLANA_RPC_URLS, solanaRpcHost } from '../lib/solanaRpc';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_MS = 12_000;
 const REALTIME_RECONNECT_MAX_MS = 15_000;
+const WALLET_USDC_RPC_TIMEOUT_MS = 2_500;
 const GMTRADE_REFERRAL_URL = 'https://gmtrade.xyz/referrals/?ref=gamingperps';
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -29,6 +31,20 @@ async function fetchJson(url, options = {}) {
     throw err;
   }
   return data;
+}
+
+async function withTimeout(promise, ms, label) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label || 'request'} timed out`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function rows(payload) {
@@ -211,6 +227,41 @@ export function useGmtrade() {
     return client?.sendJson?.({ type: 'refresh', reason }) === true;
   }, []);
 
+  const refreshWalletUsdc = useCallback(async () => {
+    if (!walletAddr || walletMismatch) {
+      setWalletUsdc(null);
+      setWalletUsdcStatus({ status: walletAddr ? 'ready' : 'idle' });
+      return;
+    }
+    setWalletUsdcStatus({ status: 'checking' });
+    const owner = new PublicKey(walletAddr);
+    const errors = [];
+    for (const rpcUrl of SOLANA_RPC_URLS) {
+      try {
+        const conn = createSolanaConnection(Connection, rpcUrl, 'confirmed');
+        const tokenAccounts = await withTimeout(
+          conn.getParsedTokenAccountsByOwner(owner, { mint: USDC_MINT }, 'confirmed'),
+          WALLET_USDC_RPC_TIMEOUT_MS,
+          `GMTrade wallet USDC via ${solanaRpcHost(rpcUrl)}`
+        );
+        const total = tokenAccounts.value.reduce((sum, row) => {
+          const uiAmount = Number(row.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0);
+          return sum + (Number.isFinite(uiAmount) ? uiAmount : 0);
+        }, 0);
+        setWalletUsdc(total);
+        setWalletUsdcStatus({ status: 'ready', rpc: solanaRpcHost(rpcUrl) });
+        return;
+      } catch (balanceError) {
+        errors.push(`${solanaRpcHost(rpcUrl)}: ${balanceError?.message || balanceError}`);
+      }
+    }
+    setWalletUsdc(null);
+    setWalletUsdcStatus({
+      status: 'error',
+      message: errors[0] || 'Could not read Solana USDC balance',
+    });
+  }, [walletAddr, walletMismatch]);
+
   const refresh = useCallback(async () => {
     if (!isActiveDex) return;
     setLoading(prev => prev || markets.length === 0);
@@ -223,25 +274,6 @@ export function useGmtrade() {
       if (cfgResult.status === 'fulfilled') setConfig(cfgResult.value);
       if (marketResult.status === 'fulfilled') setMarkets(rows(marketResult.value));
       if (priceResult.status === 'fulfilled') setPrices(rows(priceResult.value));
-      if (walletAddr && !walletMismatch && connection) {
-        setWalletUsdcStatus({ status: 'checking' });
-        try {
-          const owner = new PublicKey(walletAddr);
-          const tokenAccounts = await connection.getParsedTokenAccountsByOwner(owner, { mint: USDC_MINT }, 'confirmed');
-          const total = tokenAccounts.value.reduce((sum, row) => {
-            const uiAmount = Number(row.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0);
-            return sum + (Number.isFinite(uiAmount) ? uiAmount : 0);
-          }, 0);
-          setWalletUsdc(total);
-          setWalletUsdcStatus({ status: 'ready' });
-        } catch (balanceError) {
-          setWalletUsdc(null);
-          setWalletUsdcStatus({ status: 'error', message: balanceError?.message || 'Could not read Solana USDC balance' });
-        }
-      } else {
-        setWalletUsdc(null);
-        setWalletUsdcStatus({ status: walletAddr ? 'ready' : 'idle' });
-      }
       if (token && walletAddr && !walletMismatch) {
         const headers = { 'x-token': token, 'x-dex': 'gmtrade' };
         const acct = await fetchJson(`${FUTURES_API}/gmtrade/account?address=${encodeURIComponent(walletAddr)}`, { headers });
@@ -254,13 +286,17 @@ export function useGmtrade() {
         setPositions([]);
         setOrders([]);
       }
+      refreshWalletUsdc().catch((balanceError) => {
+        setWalletUsdc(null);
+        setWalletUsdcStatus({ status: 'error', message: balanceError?.message || 'Could not read Solana USDC balance' });
+      });
       setError('');
     } catch (e) {
       setError(e?.message || 'GMTrade data unavailable');
     } finally {
       setLoading(false);
     }
-  }, [connection, isActiveDex, markets.length, rememberReferral, token, walletAddr, walletMismatch]);
+  }, [isActiveDex, markets.length, refreshWalletUsdc, rememberReferral, token, walletAddr, walletMismatch]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
