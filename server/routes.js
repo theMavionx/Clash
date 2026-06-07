@@ -8688,12 +8688,97 @@ router.get('/players/dex-accounts', auth, (req, res) => {
     FROM player_wallets
     WHERE player_id = ?
     ORDER BY is_primary DESC, updated_at DESC
-  `).all(req.player.id);
+  `).all(req.player.id).map((row) => {
+    const loginWallet = req.player.wallet && isValidWallet(req.player.wallet)
+      ? canonicalWalletIdentifier(req.player.wallet)
+      : '';
+    const isLoginWallet = !!loginWallet && row.address === loginWallet;
+    return {
+      ...row,
+      is_login_wallet: isLoginWallet ? 1 : 0,
+      is_primary: isLoginWallet ? 1 : 0,
+    };
+  }).sort((a, b) => {
+    if (Number(b.is_login_wallet) !== Number(a.is_login_wallet)) {
+      return Number(b.is_login_wallet) - Number(a.is_login_wallet);
+    }
+    return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+  });
   res.json({
     player_id: req.player.id,
     active_dex: req.player.dex || 'pacifica',
     wallets: walletRows,
     dex_accounts: dexRows,
+  });
+});
+
+router.delete('/players/wallets/:chainType/:address', auth, (req, res) => {
+  const chainType = String(req.params.chainType || '').toLowerCase();
+  const rawAddress = String(req.params.address || '').trim();
+  if (!['evm', 'solana', 'aptos'].includes(chainType) || !isValidWallet(rawAddress)) {
+    return res.status(400).json({ error: 'Valid wallet required' });
+  }
+  const actualChainType = walletChainType(rawAddress);
+  if (actualChainType !== chainType) {
+    return res.status(400).json({ error: 'Wallet chain mismatch' });
+  }
+  const address = canonicalWalletIdentifier(rawAddress);
+  const walletRow = db.db.prepare(`
+    SELECT chain_type, address
+    FROM player_wallets
+    WHERE player_id = ? AND chain_type = ? AND address = ?
+  `).get(req.player.id, chainType, address);
+  if (!walletRow) return res.status(404).json({ error: 'Wallet is not linked to this account' });
+
+  const loginWallet = req.player.wallet && isValidWallet(req.player.wallet)
+    ? canonicalWalletIdentifier(req.player.wallet)
+    : '';
+  const removedLoginWallet = !!loginWallet && loginWallet === address;
+
+  const unlinkWallet = db.db.transaction(() => {
+    db.db.prepare(`
+      DELETE FROM player_auth_identities
+      WHERE player_id = ? AND type = ? AND identifier = ?
+    `).run(req.player.id, `${chainType}_wallet`, address);
+    db.db.prepare(`
+      DELETE FROM player_wallets
+      WHERE player_id = ? AND chain_type = ? AND address = ?
+    `).run(req.player.id, chainType, address);
+    db.db.prepare(`
+      UPDATE player_dex_accounts
+      SET status = 'disconnected', updated_at = datetime('now')
+      WHERE player_id = ? AND chain_type = ? AND wallet_address = ?
+    `).run(req.player.id, chainType, address);
+
+    let nextLoginWallet = null;
+    if (removedLoginWallet) {
+      const next = db.db.prepare(`
+        SELECT address
+        FROM player_wallets
+        WHERE player_id = ?
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `).get(req.player.id);
+      nextLoginWallet = next?.address || null;
+      db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(nextLoginWallet, req.player.id);
+      if (nextLoginWallet) {
+        db.db.prepare(`
+          UPDATE player_wallets
+          SET is_primary = CASE WHEN address = ? THEN 1 ELSE 0 END,
+              updated_at = datetime('now')
+          WHERE player_id = ?
+        `).run(nextLoginWallet, req.player.id);
+      }
+    }
+    return nextLoginWallet;
+  });
+
+  const nextLoginWallet = unlinkWallet();
+  res.json({
+    ok: true,
+    removed_wallet: address,
+    removed_login_wallet: removedLoginWallet,
+    next_login_wallet: nextLoginWallet,
   });
 });
 

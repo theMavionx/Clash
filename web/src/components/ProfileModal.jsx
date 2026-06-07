@@ -28,6 +28,38 @@ import { readSoundEnabled, writeSoundEnabled } from '../lib/soundSettings';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
+const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
+const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;
+const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+function walletChainType(address) {
+  const raw = String(address || '').trim();
+  if (EVM_WALLET_RE.test(raw)) return 'evm';
+  if (APTOS_WALLET_RE.test(raw) && !EVM_WALLET_RE.test(raw)) return 'aptos';
+  if (SOLANA_WALLET_RE.test(raw)) return 'solana';
+  return 'unknown';
+}
+
+function canonicalWallet(address) {
+  const raw = String(address || '').trim();
+  if (EVM_WALLET_RE.test(raw)) return raw.toLowerCase();
+  if (APTOS_WALLET_RE.test(raw) && !EVM_WALLET_RE.test(raw)) {
+    return `0x${raw.replace(/^0x/i, '').padStart(64, '0').toLowerCase()}`;
+  }
+  return raw;
+}
+
+function shortWallet(address) {
+  const raw = String(address || '');
+  return raw ? `${raw.slice(0, 6)}...${raw.slice(-4)}` : '';
+}
+
+function chainLabel(chain) {
+  if (chain === 'evm') return 'EVM';
+  if (chain === 'solana') return 'Solana';
+  if (chain === 'aptos') return 'Aptos';
+  return 'Wallet';
+}
 
 function ProfileModal({ onClose }) {
   const player = usePlayer();
@@ -38,8 +70,8 @@ function ProfileModal({ onClose }) {
   const { isInFrame: inFrame } = useFarcaster();
   const { dex } = useDex();
   const { mode: futuresMode, setMode: setFuturesMode } = useFuturesMode();
-  const { disconnect: evmDisconnect, setExternalProvider: setEvmProvider } = useEvmWallet();
-  const { disconnect: aptosDisconnect, connect: aptosConnect } = useAptosWallet();
+  const { address: evmAddress, disconnect: evmDisconnect, setExternalProvider: setEvmProvider } = useEvmWallet();
+  const { address: aptosAddress, disconnect: aptosDisconnect, connect: aptosConnect } = useAptosWallet();
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const decibelHook = useDecibel();
@@ -91,6 +123,9 @@ function ProfileModal({ onClose }) {
   const [nameDraft, setNameDraft] = useState(currentName);
   const [nameBusy, setNameBusy] = useState(false);
   const [nameError, setNameError] = useState('');
+  const [accountLinks, setAccountLinks] = useState({ wallets: [], dex_accounts: [] });
+  const [walletActionError, setWalletActionError] = useState('');
+  const [walletActionBusy, setWalletActionBusy] = useState('');
 
   useEffect(() => {
     if (!editingName) setNameDraft(currentName);
@@ -138,6 +173,61 @@ function ProfileModal({ onClose }) {
     : null;
   const { handle: seekerHandle } = useSkrHandle(skrLookupWallet);
 
+  const refreshAccountLinks = useCallback(async () => {
+    const token = player?.token || window._playerToken;
+    if (!token) {
+      setAccountLinks({ wallets: [], dex_accounts: [] });
+      return;
+    }
+    try {
+      const r = await fetch('/api/players/dex-accounts', { headers: { 'x-token': token } });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error || 'Failed to load linked wallets');
+      setAccountLinks({
+        wallets: Array.isArray(data?.wallets) ? data.wallets : [],
+        dex_accounts: Array.isArray(data?.dex_accounts) ? data.dex_accounts : [],
+      });
+    } catch (e) {
+      setWalletActionError(e?.message || 'Failed to load linked wallets');
+    }
+  }, [player?.token]);
+
+  useEffect(() => {
+    refreshAccountLinks();
+  }, [refreshAccountLinks]);
+
+  const profileWallets = useMemo(() => {
+    const byKey = new Map();
+    const loginWallet = canonicalWallet(player?.wallet || '');
+    const add = (entry = {}) => {
+      const address = canonicalWallet(entry.address || entry.wallet_address || '');
+      const chain = entry.chain_type || walletChainType(address);
+      if (!address || chain === 'unknown') return;
+      const key = `${chain}:${address}`;
+      const prev = byKey.get(key) || {};
+      byKey.set(key, {
+        ...prev,
+        ...entry,
+        address,
+        chain_type: chain,
+        is_login_wallet: prev.is_login_wallet || entry.is_login_wallet || (loginWallet && address === loginWallet) ? 1 : 0,
+        linked: prev.linked || entry.linked || false,
+        connected: prev.connected || entry.connected || false,
+      });
+    };
+    (accountLinks.wallets || []).forEach((wallet) => add({ ...wallet, linked: true }));
+    if (player?.wallet) add({ address: player.wallet, chain_type: walletChainType(player.wallet), linked: true, is_login_wallet: 1 });
+    if (evmAddress) add({ address: evmAddress, chain_type: 'evm', connected: true, label: 'Connected EVM wallet' });
+    if (adapterAddr) add({ address: adapterAddr, chain_type: 'solana', connected: true, label: 'Connected Solana wallet' });
+    if (aptosAddress) add({ address: aptosAddress, chain_type: 'aptos', connected: true, label: 'Connected Aptos wallet' });
+    return Array.from(byKey.values()).sort((a, b) => {
+      if (Number(b.is_login_wallet) !== Number(a.is_login_wallet)) return Number(b.is_login_wallet) - Number(a.is_login_wallet);
+      if (Number(b.connected) !== Number(a.connected)) return Number(b.connected) - Number(a.connected);
+      if (Number(b.linked) !== Number(a.linked)) return Number(b.linked) - Number(a.linked);
+      return chainLabel(a.chain_type).localeCompare(chainLabel(b.chain_type));
+    });
+  }, [accountLinks.wallets, adapterAddr, aptosAddress, evmAddress, player?.wallet]);
+
   // Switch active DEX. In our model one wallet = one account, so "switching"
   // DEX really means "log out of this account and sign in with the other
   // DEX's wallet" — which may be an existing account on that DEX or a
@@ -171,6 +261,48 @@ function ProfileModal({ onClose }) {
     await logoutEverything();
     onClose();
   };
+
+  const disconnectWalletContext = useCallback(async (chain) => {
+    if (chain === 'evm') {
+      try { evmDisconnect(); } catch { /* noop */ }
+    } else if (chain === 'solana') {
+      try { await disconnect(); } catch { /* noop */ }
+    } else if (chain === 'aptos') {
+      try { await aptosDisconnect(); } catch { /* noop */ }
+    }
+  }, [aptosDisconnect, disconnect, evmDisconnect]);
+
+  const handleWalletDisconnect = useCallback(async (wallet) => {
+    if (!wallet?.address || walletActionBusy) return;
+    const chain = wallet.chain_type || walletChainType(wallet.address);
+    const key = `${chain}:${wallet.address}`;
+    setWalletActionBusy(key);
+    setWalletActionError('');
+    try {
+      if (wallet.linked) {
+        const token = player?.token || window._playerToken;
+        if (!token) throw new Error('Log in again to disconnect wallet');
+        const r = await fetch(`/api/players/wallets/${encodeURIComponent(chain)}/${encodeURIComponent(wallet.address)}`, {
+          method: 'DELETE',
+          headers: { 'x-token': token },
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data?.error || 'Failed to disconnect wallet');
+        if (data?.removed_login_wallet || wallet.is_login_wallet) {
+          await disconnectWalletContext(chain);
+          await logoutEverything();
+          onClose();
+          return;
+        }
+      }
+      await disconnectWalletContext(chain);
+      await refreshAccountLinks();
+    } catch (e) {
+      setWalletActionError(e?.message || 'Failed to disconnect wallet');
+    } finally {
+      setWalletActionBusy('');
+    }
+  }, [disconnectWalletContext, logoutEverything, onClose, player?.token, refreshAccountLinks, walletActionBusy]);
 
   const handleEvmConnected = ({ address, provider, rdns }) => {
     setEvmModalOpen(false);
@@ -573,66 +705,77 @@ function ProfileModal({ onClose }) {
             </button>
           </div>
 
-          {/* Wallet */}
-          {activeWallet ? (
-            <div style={S.connectedBox}>
-              <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
-                <div style={liveWallet ? S.dot : S.offlineDot} />
-                <span style={{fontSize: 13, fontWeight: 800, fontFamily: 'monospace', color: '#5C3A21'}}>
-                  {copied ? 'Copied' : `${activeWallet.slice(0, 6)}...${activeWallet.slice(-4)}`}
-                </span>
-                {!liveWallet && (
-                  <span style={S.offlineChip}>wallet offline</span>
-                )}
-                {seekerHandle?.full && (
-                  <span
-                    title={`Seeker .skr handle for ${activeWallet}`}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 5,
-                      padding: '2px 8px', borderRadius: 999,
-                      background: 'linear-gradient(180deg, #A78BFA 0%, #6D28D9 100%)',
-                      color: '#fff',
-                      fontSize: 10, fontWeight: 900, letterSpacing: '0.4px',
-                      textTransform: 'lowercase',
-                      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35), 0 1px 0 rgba(0,0,0,0.25)',
-                      textShadow: '0 1px 0 rgba(0,0,0,0.3)',
-                    }}
-                  >
-                    <span style={{ fontSize: 9, opacity: 0.85 }}>SEEKER</span>
-                    <strong>{seekerHandle.full}</strong>
-                  </span>
-                )}
-                <button
-                  title="Copy full address"
-                  onClick={async () => {
-                    try { await navigator.clipboard.writeText(activeWallet); } catch {}
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1500);
-                  }}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 22, height: 22, padding: 0, borderRadius: 6,
-                    background: copied ? 'rgba(67,160,71,0.18)' : 'rgba(0,0,0,0.08)',
-                    border: `1px solid ${copied ? 'rgba(46,125,50,0.5)' : 'rgba(92,58,33,0.3)'}`,
-                    cursor: 'pointer', color: copied ? '#2E7D32' : '#5C3A21',
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  {copied ? (
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12"/>
-                    </svg>
-                  ) : (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="9" y="9" width="13" height="13" rx="2"/>
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                    </svg>
-                  )}
-                </button>
-              </div>
-              {!inFrame && walletSource && (
-                <button style={S.disconnectBtn} onClick={handleDisconnect}>Disconnect</button>
-              )}
+          {/* Wallets */}
+          {profileWallets.length ? (
+            <div style={S.walletListBox}>
+              <div style={S.walletListTitle}>Wallets</div>
+              {walletActionError && <div style={S.walletError}>{walletActionError}</div>}
+              {profileWallets.map((wallet) => {
+                const isLogin = !!wallet.is_login_wallet;
+                const isConnected = !!wallet.connected;
+                const key = `${wallet.chain_type}:${wallet.address}`;
+                const isBusy = walletActionBusy === key;
+                return (
+                  <div key={key} style={S.walletRow}>
+                    <div style={S.walletRowMain}>
+                      <div style={isConnected ? S.dot : S.offlineDot} />
+                      <div style={S.walletRowText}>
+                        <div style={S.walletRowTop}>
+                          <span style={S.walletChain}>{chainLabel(wallet.chain_type)}</span>
+                          <span style={S.walletAddress}>{shortWallet(wallet.address)}</span>
+                          {isLogin && <span style={S.loginChip}>LOGIN</span>}
+                          {isConnected ? <span style={S.connectedChip}>CONNECTED</span> : <span style={S.offlineChip}>LINKED</span>}
+                          {seekerHandle?.full && wallet.chain_type === 'solana' && canonicalWallet(wallet.address) === canonicalWallet(activeWallet) && (
+                            <span title={`Seeker .skr handle for ${wallet.address}`} style={S.seekerChip}>
+                              <span style={{ fontSize: 9, opacity: 0.85 }}>SEEKER</span>
+                              <strong>{seekerHandle.full}</strong>
+                            </span>
+                          )}
+                        </div>
+                        <div style={S.walletRowSub}>
+                          {isLogin ? 'Primary login wallet' : (wallet.linked ? 'Linked to this game account' : 'Connected in browser')}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={S.walletRowActions}>
+                      <button
+                        title="Copy full address"
+                        onClick={async () => {
+                          try { await navigator.clipboard.writeText(wallet.address); } catch {}
+                          setCopied(wallet.address);
+                          setTimeout(() => setCopied(false), 1500);
+                        }}
+                        style={{
+                          ...S.copyBtn,
+                          background: copied === wallet.address ? 'rgba(67,160,71,0.18)' : 'rgba(0,0,0,0.08)',
+                          border: `1px solid ${copied === wallet.address ? 'rgba(46,125,50,0.5)' : 'rgba(92,58,33,0.3)'}`,
+                          color: copied === wallet.address ? '#2E7D32' : '#5C3A21',
+                        }}
+                      >
+                        {copied === wallet.address ? (
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12"/>
+                          </svg>
+                        ) : (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2"/>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                          </svg>
+                        )}
+                      </button>
+                      {!inFrame && (
+                        <button
+                          style={S.disconnectBtn}
+                          disabled={isBusy}
+                          onClick={() => handleWalletDisconnect(wallet)}
+                        >
+                          {isBusy ? '...' : 'Disconnect'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : inFrame ? (
             <div style={S.connectedBox}>
@@ -1001,12 +1144,62 @@ const S = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12, padding: '10px 14px',
   },
+  walletListBox: {
+    display: 'flex', flexDirection: 'column', gap: 8,
+    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12, padding: 10,
+  },
+  walletListTitle: {
+    color: '#77573d', fontSize: 10, fontWeight: 900,
+    textTransform: 'uppercase', letterSpacing: 0.7,
+  },
+  walletRow: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
+    alignItems: 'center', padding: '8px 9px', borderRadius: 10,
+    background: 'rgba(255,255,255,0.42)', border: '1px solid rgba(92,58,33,0.18)',
+  },
+  walletRowMain: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
+  walletRowText: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 },
+  walletRowTop: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexWrap: 'wrap' },
+  walletChain: { color: '#5C3A21', fontSize: 11, fontWeight: 900 },
+  walletAddress: { color: '#5C3A21', fontSize: 12, fontWeight: 900, fontFamily: 'monospace' },
+  walletRowSub: { color: '#a3906a', fontSize: 10, fontWeight: 800, lineHeight: 1.2 },
+  walletRowActions: { display: 'flex', alignItems: 'center', gap: 6 },
+  copyBtn: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 24, height: 24, padding: 0, borderRadius: 7,
+    cursor: 'pointer', transition: 'all 0.15s ease',
+  },
+  loginChip: {
+    padding: '2px 7px', borderRadius: 999,
+    background: 'rgba(14,165,233,0.14)', border: '1px solid rgba(2,132,199,0.45)',
+    color: '#0369A1', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  connectedChip: {
+    padding: '2px 7px', borderRadius: 999,
+    background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(46,125,50,0.45)',
+    color: '#2E7D32', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.4,
+  },
   dot: { width: 10, height: 10, borderRadius: '50%', background: '#4CAF50', boxShadow: '0 0 6px #4CAF50' },
   offlineDot: { width: 10, height: 10, borderRadius: '50%', background: '#a3906a', boxShadow: '0 0 6px rgba(163,144,106,0.5)' },
   offlineChip: {
     padding: '2px 7px', borderRadius: 999,
     background: 'rgba(163,144,106,0.16)', border: '1px solid rgba(163,144,106,0.45)',
     color: '#77573d', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  seekerChip: {
+    display: 'inline-flex', alignItems: 'center', gap: 5,
+    padding: '2px 8px', borderRadius: 999,
+    background: 'linear-gradient(180deg, #A78BFA 0%, #6D28D9 100%)',
+    color: '#fff', fontSize: 10, fontWeight: 900, letterSpacing: '0.4px',
+    textTransform: 'lowercase',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35), 0 1px 0 rgba(0,0,0,0.25)',
+    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+  },
+  walletError: {
+    padding: '6px 8px', borderRadius: 8,
+    border: '2px solid rgba(198,40,40,0.35)',
+    background: 'rgba(198,40,40,0.09)', color: '#C62828',
+    fontSize: 11, fontWeight: 900, lineHeight: 1.25,
   },
   walletRepair: {
     padding: '10px 12px', borderRadius: 12,

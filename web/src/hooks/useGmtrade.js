@@ -11,6 +11,7 @@ const POLL_MS = 12_000;
 const REALTIME_RECONNECT_MAX_MS = 15_000;
 const GMTRADE_REFERRAL_URL = 'https://gmtrade.xyz/referrals/?ref=gamingperps';
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 function playerToken(player) {
   return player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
@@ -143,7 +144,8 @@ export function useGmtrade() {
 
   const walletMismatch = useMemo(() => {
     const registered = String(player?.wallet || '').trim();
-    return !!registered && !!walletAddr && registered !== walletAddr;
+    const registeredSolana = SOLANA_WALLET_RE.test(registered) ? registered : '';
+    return !!registeredSolana && !!walletAddr && registeredSolana !== walletAddr;
   }, [player?.wallet, walletAddr]);
 
   const applySnapshot = useCallback((snapshot) => {

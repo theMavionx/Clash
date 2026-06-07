@@ -15,6 +15,7 @@ import {
 const FUTURES_API = '/api/futures';
 const STORAGE_KEY = 'clash_katana_credentials_v1';
 const ONE_TAP_SIGNER_STORAGE_KEY = 'clash_katana_one_tap_signer_v1';
+const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 
 function logKatana(label, payload = undefined) {
   if (typeof window === 'undefined' || window.__CLASH_DEBUG_KATANA !== true) return;
@@ -218,7 +219,8 @@ export function useKatana() {
   const walletMismatch = useMemo(() => {
     const registered = normalizeAddress(player?.wallet);
     const live = normalizeAddress(walletAddr);
-    return !!registered && !!live && registered !== live;
+    const registeredEvm = EVM_WALLET_RE.test(registered) ? registered : '';
+    return !!registeredEvm && !!live && registeredEvm !== live;
   }, [player?.wallet, walletAddr]);
 
   useEffect(() => {
