@@ -104,6 +104,7 @@ function txMessageSummary(tx) {
         kind: 'versioned',
         version: tx.version,
         signatures: tx.signatures?.length || 0,
+        required_signatures: tx.message?.header?.numRequiredSignatures || 0,
         static_accounts: tx.message?.staticAccountKeys?.length || 0,
         instructions: tx.message?.compiledInstructions?.length || 0,
       };
@@ -111,6 +112,7 @@ function txMessageSummary(tx) {
     return {
       kind: 'legacy',
       signatures: tx.signatures?.length || 0,
+      required_signatures: tx.signatures?.length || 0,
       instructions: tx.instructions?.length || 0,
       fee_payer: tx.feePayer?.toBase58?.() || '',
       recent_blockhash: tx.recentBlockhash || '',
@@ -638,6 +640,39 @@ export function useGmtrade() {
       console.error('[GMTrade tx] pre-sign simulation exception', { trace: traceLabel, attempt, error: errorInfo(preSignSimulationError) });
       await gmtradeLog('pre_sign_simulation_exception', { rpc, error: errorInfo(preSignSimulationError) }, attempt, trace);
     }
+    if (typeof solWallet.sendTransaction === 'function') {
+      const rawBytes = (() => {
+        try {
+          return tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length;
+        } catch {
+          return null;
+        }
+      })();
+      const sendPayload = {
+        tx_kind: txKind(tx),
+        rpc,
+        tx: txMessageSummary(tx),
+        raw_bytes: rawBytes,
+        wallet_path: 'adapter_send_transaction',
+        note: 'single-signer GMTrade path prefers wallet adapter sendTransaction like Phoenix',
+      };
+      console.info('[GMTrade tx] wallet send start', { trace: traceLabel, attempt, ...sendPayload });
+      await gmtradeLog('wallet_send_start', sendPayload, attempt, trace);
+      try {
+        const signature = await solWallet.sendTransaction(tx, connection, {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        });
+        console.info('[GMTrade tx] wallet send done', { trace: traceLabel, attempt, rpc, signature });
+        await gmtradeLog('wallet_send_done', { rpc, signature, wallet_path: 'adapter_send_transaction' }, attempt, trace);
+        return signature;
+      } catch (sendError) {
+        console.error('[GMTrade tx] wallet send error', { trace: traceLabel, attempt, rpc, error: errorInfo(sendError) });
+        await gmtradeLog('wallet_send_error', { rpc, error: errorInfo(sendError), wallet_path: 'adapter_send_transaction' }, attempt, trace);
+        if (typeof solWallet.signTransaction !== 'function') throw sendError;
+      }
+    }
     if (typeof solWallet.signTransaction === 'function') {
       const signStartedAt = Date.now();
       await gmtradeLog('wallet_sign_start', { tx_kind: txKind(tx), rpc }, attempt, trace);
@@ -702,19 +737,6 @@ export function useGmtrade() {
         await gmtradeLog('send_raw_error', { rpc, error: errorInfo(sendError), logs }, attempt, trace);
         throw sendError;
       }
-    }
-    if (typeof solWallet.sendTransaction === 'function') {
-      await gmtradeLog('wallet_send_start', {
-        rpc: connectionRpcDiagnostics(connection),
-        note: 'wallet has no signTransaction, cannot run client simulation before send',
-      }, attempt, trace);
-      const signature = await solWallet.sendTransaction(tx, connection, {
-        skipPreflight: false,
-        preflightCommitment: 'confirmed',
-        maxRetries: 3,
-      });
-      await gmtradeLog('wallet_send_done', { rpc: connectionRpcDiagnostics(connection), signature }, attempt, trace);
-      return signature;
     }
     throw new Error('This Solana wallet cannot sign GMTrade transactions');
   }, [connection, gmtradeLog, solWallet]);
