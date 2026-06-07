@@ -681,30 +681,6 @@ export function useGmtrade() {
         console.error('[GMTrade tx] simulation exception', { trace: traceLabel, attempt, error: errorInfo(simulationError) });
         await gmtradeLog('simulation_exception', { rpc, error: errorInfo(simulationError) }, attempt, trace);
       }
-      try {
-        const lastValidBlockHeight = Number(meta?.last_valid_block_height || 0);
-        if (Number.isFinite(lastValidBlockHeight) && lastValidBlockHeight > 0) {
-          const blockHeight = await connection.getBlockHeight('confirmed');
-          const remainingBlocks = lastValidBlockHeight - blockHeight;
-          const freshnessPayload = {
-            rpc,
-            current_block_height: blockHeight,
-            last_valid_block_height: lastValidBlockHeight,
-            remaining_blocks: remainingBlocks,
-          };
-          console.info('[GMTrade tx] blockhash freshness', { trace: traceLabel, attempt, ...freshnessPayload });
-          await gmtradeLog('blockhash_freshness', freshnessPayload, attempt, trace);
-          if (remainingBlocks <= 20) {
-            throw new Error('GMTrade transaction expired while waiting for wallet approval. Try again so Clash can rebuild it with a fresh Solana blockhash.');
-          }
-        }
-      } catch (freshnessError) {
-        console.error('[GMTrade tx] blockhash freshness error', { trace: traceLabel, attempt, error: errorInfo(freshnessError) });
-        await gmtradeLog('blockhash_freshness_error', { rpc, error: errorInfo(freshnessError) }, attempt, trace);
-        if (/expired while waiting for wallet approval/i.test(String(freshnessError?.message || ''))) {
-          throw freshnessError;
-        }
-      }
       const raw = signed.serialize();
       console.info('[GMTrade tx] send raw start', { trace: traceLabel, attempt, rpc, raw_bytes: raw.length });
       await gmtradeLog('send_raw_start', { rpc, raw_bytes: raw.length }, attempt, trace);
