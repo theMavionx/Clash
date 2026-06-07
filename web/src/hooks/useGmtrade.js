@@ -262,6 +262,20 @@ export function useGmtrade() {
     });
   }, [walletAddr, walletMismatch]);
 
+  const refreshReferral = useCallback(async () => {
+    if (!token || !walletAddr || walletMismatch) return null;
+    const referral = await fetchJson(`${FUTURES_API}/gmtrade/referral?address=${encodeURIComponent(walletAddr)}`, {
+      headers: { 'x-token': token, 'x-dex': 'gmtrade' },
+    });
+    rememberReferral(referral);
+    setAccount(prev => ({
+      ...(prev || {}),
+      referral,
+      has_referrer: referral?.has_referrer === true,
+    }));
+    return referral;
+  }, [rememberReferral, token, walletAddr, walletMismatch]);
+
   const refresh = useCallback(async () => {
     if (!isActiveDex) return;
     setLoading(prev => prev || markets.length === 0);
@@ -274,6 +288,11 @@ export function useGmtrade() {
       if (cfgResult.status === 'fulfilled') setConfig(cfgResult.value);
       if (marketResult.status === 'fulfilled') setMarkets(rows(marketResult.value));
       if (priceResult.status === 'fulfilled') setPrices(rows(priceResult.value));
+      if (token && walletAddr && !walletMismatch) {
+        await refreshReferral().catch((referralError) => {
+          console.warn('[GMTrade] referral read failed:', referralError?.message || referralError);
+        });
+      }
       if (token && walletAddr && !walletMismatch) {
         const headers = { 'x-token': token, 'x-dex': 'gmtrade' };
         const acct = await fetchJson(`${FUTURES_API}/gmtrade/account?address=${encodeURIComponent(walletAddr)}`, { headers });
@@ -296,7 +315,7 @@ export function useGmtrade() {
     } finally {
       setLoading(false);
     }
-  }, [isActiveDex, markets.length, refreshWalletUsdc, rememberReferral, token, walletAddr, walletMismatch]);
+  }, [isActiveDex, markets.length, refreshReferral, refreshWalletUsdc, rememberReferral, token, walletAddr, walletMismatch]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -891,12 +910,16 @@ export function useGmtrade() {
       ? crypto.randomUUID()
       : `gmtrade-referral-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     try {
-      const freshAccount = await fetchJson(`${FUTURES_API}/gmtrade/account?address=${encodeURIComponent(walletAddr)}`, {
+      const freshReferral = await fetchJson(`${FUTURES_API}/gmtrade/referral?address=${encodeURIComponent(walletAddr)}`, {
         headers: { 'x-token': token, 'x-dex': 'gmtrade' },
       }).catch(() => null);
-      if (freshAccount?.has_referrer === true || freshAccount?.referral?.has_referrer === true || freshAccount?.referral?.referrer) {
-        rememberReferral(freshAccount);
-        setAccount(freshAccount);
+      if (freshReferral?.has_referrer === true || freshReferral?.referrer) {
+        rememberReferral(freshReferral);
+        setAccount(prev => ({
+          ...(prev || {}),
+          referral: freshReferral,
+          has_referrer: true,
+        }));
         return { ok: true, already_linked: true };
       }
       let lastExpired = null;

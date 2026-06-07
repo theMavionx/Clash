@@ -3708,6 +3708,21 @@ router.get('/gmtrade/account', auth, async (req, res) => {
   }
 });
 
+router.get('/gmtrade/referral', auth, async (req, res) => {
+  if (req.dex !== 'gmtrade') {
+    return res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'gmtrade',
+    });
+  }
+  try {
+    res.json(await gmtrade.getUserReferralByAddress(req.query.address || req.query.wallet || req.playerWallet));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load GMTrade referral', detail: e.message });
+  }
+});
+
 router.get('/gmtrade/positions', auth, async (req, res) => {
   if (req.dex !== 'gmtrade') {
     return res.status(409).json({
