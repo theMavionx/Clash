@@ -29,7 +29,16 @@ const SOLANA_ALCHEMY_API_KEY = process.env.SOLANA_ALCHEMY_API_KEY
   || process.env.ALCHEMY_SOLANA_API_KEY
   || viteEnv.ALCHEMY_SOLANA_API_KEY
   || '';
-const SOLANA_RPC_PROXY_TARGET = 'https://mainnet.helius-rpc.com';
+const SOLANA_RPC_PROXY_TARGET = SOLANA_ALCHEMY_API_KEY
+  ? 'https://solana-mainnet.g.alchemy.com'
+  : 'https://mainnet.helius-rpc.com';
+const SOLANA_RPC_WS_PROXY_TARGET = SOLANA_ALCHEMY_API_KEY
+  ? 'wss://solana-mainnet.g.alchemy.com'
+  : 'wss://mainnet.helius-rpc.com';
+const solanaProxyRewrite = () => {
+  if (SOLANA_ALCHEMY_API_KEY) return `/v2/${SOLANA_ALCHEMY_API_KEY}`;
+  return SOLANA_HELIUS_API_KEY ? `/?api-key=${SOLANA_HELIUS_API_KEY}` : '/?api-key=';
+};
 const ARBITRUM_ALCHEMY_KEY = process.env.ARBITRUM_ALCHEMY_KEY
   || viteEnv.ARBITRUM_ALCHEMY_KEY
   || process.env.VITE_ARBITRUM_ALCHEMY_KEY
@@ -167,7 +176,7 @@ export default defineConfig({
         rewrite: () => SOLANA_ALCHEMY_API_KEY ? `/v2/${SOLANA_ALCHEMY_API_KEY}` : '/v2/',
       },
       '/rpc/solana-ws': {
-        target: 'wss://mainnet.helius-rpc.com',
+        target: SOLANA_RPC_WS_PROXY_TARGET,
         ws: true,
         changeOrigin: true,
         secure: true,
@@ -177,7 +186,7 @@ export default defineConfig({
             proxyReq.removeHeader('referer');
           });
         },
-        rewrite: () => SOLANA_HELIUS_API_KEY ? `/?api-key=${SOLANA_HELIUS_API_KEY}` : '/?api-key=',
+        rewrite: solanaProxyRewrite,
       },
       '/rpc/solana-alchemy': {
         target: 'https://solana-mainnet.g.alchemy.com',
@@ -226,7 +235,7 @@ export default defineConfig({
             proxyReq.removeHeader('referer');
           });
         },
-        rewrite: () => SOLANA_HELIUS_API_KEY ? `/?api-key=${SOLANA_HELIUS_API_KEY}` : '/?api-key=',
+        rewrite: solanaProxyRewrite,
       },
       '/rpc/arb-alchemy': {
         target: 'https://arb-mainnet.g.alchemy.com',

@@ -12,15 +12,20 @@ const fs = require('fs');
 const path = require('path');
 const bs58 = require('bs58');
 const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
+const { solanaRpcUrls } = require('../server/solana_rpc');
 
 const GMTRADE_APP_URL = (process.env.GMTRADE_APP_URL || 'https://gmtrade.xyz/trade').replace(/\/+$/, '');
 const GMTRADE_DOCS_URL = 'https://docs.gmtrade.xyz/';
 const GMTRADE_REFERRAL_CODE = String(process.env.GMTRADE_REFERRAL_CODE || 'gamingperps').trim();
-const GMTRADE_RPC_URL =
+const GMTRADE_RPC_URL = String(
   process.env.GMTRADE_SOLANA_RPC_URL
   || process.env.SOLANA_RPC_URL
   || process.env.HELIUS_RPC_URL
-  || 'https://rpc-1.gmtrade.xyz/';
+  || 'https://rpc-1.gmtrade.xyz/'
+).trim();
+const GMTRADE_RPC_URLS = Array.from(new Set(
+  solanaRpcUrls([GMTRADE_RPC_URL]).concat(GMTRADE_RPC_URL).filter(Boolean)
+));
 const GMTRADE_RPC_ORIGIN = String(process.env.GMTRADE_RPC_ORIGIN || 'https://gmtrade.xyz').trim();
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.GMTRADE_TIMEOUT_MS || 7000)));
 const PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.GMTRADE_PUBLIC_CACHE_TTL_MS || 12_000)));
@@ -496,31 +501,43 @@ function marketLookupKeys(value) {
 }
 
 async function rpcRequest(method, params) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch(GMTRADE_RPC_URL, {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json',
-        ...(GMTRADE_RPC_ORIGIN ? { origin: GMTRADE_RPC_ORIGIN } : {}),
-        'user-agent': 'ClashOfPerps/1.0 gmtrade',
-      },
-      body: JSON.stringify({ jsonrpc: '2.0', id: `gmtrade-${Date.now()}`, method, params }),
-    });
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch { data = null; }
-    if (!res.ok || data?.error || !data || !Object.prototype.hasOwnProperty.call(data, 'result')) {
-      const detail = data?.error?.message || text || `HTTP ${res.status}`;
-      throw new Error(`GMTrade RPC ${method} failed: ${detail}`);
+  const rpcUrls = GMTRADE_RPC_URLS.length ? GMTRADE_RPC_URLS : [GMTRADE_RPC_URL].filter(Boolean);
+  let lastError = null;
+  for (const rpcUrl of rpcUrls) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await fetch(rpcUrl, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json',
+          ...(GMTRADE_RPC_ORIGIN ? { origin: GMTRADE_RPC_ORIGIN } : {}),
+          'user-agent': 'ClashOfPerps/1.0 gmtrade',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: `gmtrade-${Date.now()}`, method, params }),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+      if (!res.ok || data?.error || !data || !Object.prototype.hasOwnProperty.call(data, 'result')) {
+        const detail = data?.error?.message || text || `HTTP ${res.status}`;
+        throw new Error(`GMTrade RPC ${method} failed on ${new URL(rpcUrl).host}: ${detail}`);
+      }
+      return data?.result;
+    } catch (e) {
+      lastError = e;
+      if (rpcUrls.length > 1) {
+        console.warn('[gmtrade] RPC fallback:', method, new URL(rpcUrl).host, e.message);
+      }
+    } finally {
+      clearTimeout(timer);
     }
-    return data?.result;
-  } finally {
-    clearTimeout(timer);
   }
+  throw lastError || new Error(`GMTrade RPC ${method} failed: no RPC endpoint configured`);
 }
 
 async function rpcAccountInfo(address) {
@@ -1290,6 +1307,30 @@ function readPubkeySafe(buf, offset) {
   return bs58Encode(buf.subarray(offset, offset + 32));
 }
 
+function nullIfSystemPubkey(value) {
+  const out = String(value || '').trim();
+  return out && out !== '11111111111111111111111111111111' ? out : null;
+}
+
+function decodeUserReferralAccount(encoded, address, userAddress, programId) {
+  const buf = rawBase64ToBuffer(encoded);
+  if (buf.length < 120) return null;
+  const owner = nullIfSystemPubkey(readPubkeySafe(buf, 24)) || address;
+  const store = nullIfSystemPubkey(readPubkeySafe(buf, 56)) || GMTRADE_STORE_ADDRESS;
+  const referrer = nullIfSystemPubkey(readPubkeySafe(buf, 88));
+  return {
+    exists: true,
+    user_address: userAddress,
+    owner,
+    store,
+    referrer,
+    referral_code_address: null,
+    has_referrer: !!referrer,
+    program_id: programId,
+    decoder: 'node_gmsol_user_layout',
+  };
+}
+
 function gmPriceWithDecimals(raw, decimals) {
   const value = BigInt(raw || 0);
   return value > 0n ? decimalNumber(value, decimals) : 0;
@@ -1522,30 +1563,13 @@ async function getUserReferralByAddress(address) {
   if (!isSolanaAddress(address)) {
     throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
   }
-  const sdk = await gmsolSdk();
-  sdk.solana_program_init?.();
   for (const programId of GMTRADE_PROGRAM_IDS) {
     const userAddress = findUserAddress(address, programId);
     const account = await rpcAccountInfo(userAddress).catch(() => null);
     const encoded = account?.data?.[0];
     if (!encoded) continue;
-    try {
-      const user = sdk.User.decode_from_base64(encoded);
-      const referrer = user.referrer_address?.() || null;
-      const referralCodeAddress = user.referral_code_address?.() || null;
-      return {
-        exists: true,
-        user_address: userAddress,
-        owner: user.owner_address?.() || address,
-        store: user.store_address?.() || GMTRADE_STORE_ADDRESS,
-        referrer,
-        referral_code_address: referralCodeAddress,
-        has_referrer: !!referrer,
-        program_id: programId,
-      };
-    } catch (e) {
-      console.warn('[gmtrade] user referral decode failed:', e.message);
-    }
+    const decoded = decodeUserReferralAccount(encoded, address, userAddress, programId);
+    if (decoded) return decoded;
   }
   return {
     exists: false,
@@ -1826,6 +1850,10 @@ async function buildCancelOrderTx(body = {}, playerWallet = '') {
 
   const sdk = await gmsolSdk();
   sdk.solana_program_init?.();
+  const kindName = String(decoded.type || decoded._raw?.kind_name || '');
+  const isIncreaseOrder = /Increase/i.test(kindName);
+  const isDecreaseOrder = /Decrease/i.test(kindName);
+  const collateralToken = decoded.collateral_token || cfg.collateral_token || undefined;
   let group;
   try {
     group = sdk.close_orders({
@@ -1836,8 +1864,8 @@ async function buildCancelOrderTx(body = {}, playerWallet = '') {
         receiver: payer,
         rent_receiver: payer,
         referrer: undefined,
-        initial_collateral_token: decoded.collateral_token || cfg.collateral_token || undefined,
-        final_output_token: decoded.collateral_token || cfg.collateral_token || undefined,
+        initial_collateral_token: isIncreaseOrder ? collateralToken : undefined,
+        final_output_token: isDecreaseOrder ? collateralToken : undefined,
         long_token: cfg.long_token || undefined,
         short_token: cfg.short_token || undefined,
         should_unwrap_native_token: false,

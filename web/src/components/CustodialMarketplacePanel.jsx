@@ -28,6 +28,7 @@ const CHAIN_LOGO_SRC = {
   base: '/tokens/BASE.svg',
   arbitrum: '/tokens/ARB.svg',
   monad: '/tokens/MON.svg',
+  ink: '/tokens/INK.png',
   solana: '/tokens/SOL.svg',
   aptos: '/tokens/APT.png',
 };

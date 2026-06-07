@@ -220,7 +220,7 @@ export function buildHotstuffOrder({ market, side, amountUsd, amountBase, levera
     : Number(amountUsd || 0) * lev;
   if (!Number.isFinite(notional) || notional <= 0) throw new Error('Enter a valid Hotstuff order amount');
   const minNotional = Number(market?._hotstuff?.raw?.min_notional_usd ?? market?.min_notional_usd ?? market?.min_order_size ?? 0);
-  if (Number.isFinite(minNotional) && minNotional > 0 && notional + 1e-9 < minNotional) {
+  if (!reduceOnly && Number.isFinite(minNotional) && minNotional > 0 && notional + 1e-9 < minNotional) {
     throw new Error(`Hotstuff minimum position size for ${market.symbol || market.market_name || 'this market'} is $${minNotional}.`);
   }
   const baseSize = Number(amountBase) > 0 ? Number(amountBase) : notional / mark;
@@ -228,7 +228,7 @@ export function buildHotstuffOrder({ market, side, amountUsd, amountBase, levera
   const size = formatHotstuffSize(baseSize, market);
   if (!(Number(size) > 0)) throw new Error('Hotstuff order size is too small for this market.');
   const roundedNotional = Number(size) * mark;
-  if (Number.isFinite(minNotional) && minNotional > 0 && roundedNotional + 1e-9 < minNotional) {
+  if (!reduceOnly && Number.isFinite(minNotional) && minNotional > 0 && roundedNotional + 1e-9 < minNotional) {
     throw new Error(
       `Hotstuff minimum position size for ${market.symbol || market.market_name || 'this market'} is $${minNotional}. Increase margin or leverage.`,
     );

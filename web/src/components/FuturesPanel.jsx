@@ -655,6 +655,7 @@ function orderSideLabel(order) {
 }
 
 function isReadOnlyOrder(order) {
+  if (order?._phoenixSyntheticTpsl && order?._phoenixCancelableTpsl) return false;
   return !!(order?._readOnly || order?._phoenixSyntheticTpsl);
 }
 

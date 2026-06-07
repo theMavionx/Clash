@@ -40,7 +40,7 @@ const CHAINS = [
   { id: 'base',     label: 'Base',     kind: 'evm',    logo: '/tokens/BASE.svg' },
   { id: 'arbitrum', label: 'Arbitrum', kind: 'evm',    logo: '/tokens/ARB.svg' },
   { id: 'monad',    label: 'Monad',    kind: 'evm',    logo: '/tokens/MON.svg' },
-  { id: 'ink',      label: 'Ink',      kind: 'evm' },
+  { id: 'ink',      label: 'Ink',      kind: 'evm',    logo: '/tokens/INK.png' },
   { id: 'aptos',    label: 'Aptos',    kind: 'aptos',  logo: '/tokens/APT.png' },
   { id: 'solana',   label: 'Solana',   kind: 'solana', logo: '/tokens/SOL.svg' },
 ];

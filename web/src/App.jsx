@@ -166,6 +166,7 @@ function ClashMigrationNotice() {
   const player = usePlayer();
   const ui = useUI();
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const canShow = !!(ui?.ready && !ui?.showRegister && (player?.token || (typeof window !== 'undefined' ? window._playerToken : null)));
 
   useEffect(() => {
@@ -183,7 +184,11 @@ function ClashMigrationNotice() {
   }
 
   async function copyMint() {
-    try { await navigator.clipboard?.writeText?.(CLASH_SOLANA_MINT); } catch { /* clipboard unavailable */ }
+    try {
+      await navigator.clipboard?.writeText?.(CLASH_SOLANA_MINT);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch { /* clipboard unavailable */ }
   }
 
   if (!canShow || !open) return null;
@@ -201,9 +206,14 @@ function ClashMigrationNotice() {
         </p>
         <div style={styles.noticeContractBox}>
           <span style={styles.noticeContractLabel}>Token contract</span>
-          <button type="button" style={styles.noticeContractValue} onClick={copyMint} title="Copy token contract">
-            {CLASH_SOLANA_MINT}
-          </button>
+          <div style={styles.noticeContractRow}>
+            <button type="button" style={styles.noticeContractValue} onClick={copyMint} title="Copy token contract">
+              {CLASH_SOLANA_MINT}
+            </button>
+            <button type="button" style={styles.noticeCopyBtn} onClick={copyMint} aria-label="Copy token contract">
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
         </div>
         <button type="button" style={styles.noticeDoneBtn} onClick={closeNotice}>Got it</button>
       </div>
@@ -540,6 +550,12 @@ const styles = {
     textTransform: 'uppercase',
     color: '#8a6b43',
   },
+  noticeContractRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    alignItems: 'center',
+    gap: 8,
+  },
   noticeContractValue: {
     width: '100%',
     border: 0,
@@ -552,6 +568,20 @@ const styles = {
     overflowWrap: 'anywhere',
     cursor: 'copy',
     fontFamily: '"JetBrains Mono", "Consolas", monospace',
+  },
+  noticeCopyBtn: {
+    minHeight: 30,
+    padding: '0 12px',
+    borderRadius: 8,
+    border: '2px solid #b79b63',
+    background: '#fffaf0',
+    color: '#5C3A21',
+    fontSize: 11,
+    fontWeight: 1000,
+    textTransform: 'uppercase',
+    cursor: 'pointer',
+    boxShadow: '0 2px 0 rgba(92,58,33,0.18)',
+    whiteSpace: 'nowrap',
   },
   noticeActions: {
     display: 'grid',

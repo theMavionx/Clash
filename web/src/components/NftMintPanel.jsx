@@ -75,7 +75,7 @@ const TOKEN_LOGO_SRC = {
   SOL:  '/tokens/SOL.svg',
   ARB:  '/tokens/ARB.svg',
   MON:  '/tokens/MON.svg',
-  INK:  '/tokens/ETH.svg',
+  INK:  '/tokens/INK.png',
   CLASH: '/icons/icon-192.png',
   APT:  '/tokens/APT.png',
   SKR:  '/tokens/SKR.png',
@@ -86,7 +86,7 @@ const CHAIN_LOGO_SRC = {
   base: '/tokens/BASE.svg',
   arbitrum: '/tokens/ARB.svg',
   monad: '/tokens/MON.svg',
-  ink: '/tokens/ETH.svg',
+  ink: '/tokens/INK.png',
   solana: '/tokens/SOL.svg',
   aptos: '/tokens/APT.png',
 };

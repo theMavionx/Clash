@@ -62,6 +62,15 @@ function normalizeRpcUrl(url) {
   return url;
 }
 
+function isBlockedBrowserSolanaRpcUrl(url) {
+  try {
+    const host = new URL(url, siteOrigin()).hostname;
+    return host === 'solana.leorpc.com';
+  } catch {
+    return /solana\.leorpc\.com/i.test(String(url || ''));
+  }
+}
+
 let envDirectSolanaRpc = '';
 let envProxySolanaRpc = '';
 try {
@@ -85,7 +94,7 @@ const DIRECT_SOLANA_RPC_URLS = [
   envDirectSolanaRpc,
   ...splitRpcUrls(rawBrowserSolanaRpcUrls).filter((url) => !isSameOriginRpcUrl(url)).map(normalizeRpcUrl),
   rawDirectSolanaRpc ? normalizeRpcUrl(rawDirectSolanaRpc) : '',
-];
+].filter((url) => url && !isBlockedBrowserSolanaRpcUrl(url));
 
 const PROXY_SOLANA_RPC_URLS = [
   envProxySolanaRpc,
@@ -97,7 +106,7 @@ const PROXY_SOLANA_RPC_URLS = [
 const PUBLIC_SOLANA_RPC_URLS = [
   ...(includePublicRpcProxy ? [DIRECT_SOLANA_PUBLICNODE_URL] : []),
   ...(includeLeoRpcProxy ? [DIRECT_SOLANA_LEORPC_URL] : []),
-];
+].filter((url) => url && !isBlockedBrowserSolanaRpcUrl(url));
 
 export const SOLANA_RPC_URLS = preferProxyRpc
   ? buildRpcFallbackList({

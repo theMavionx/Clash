@@ -433,6 +433,9 @@ export function useAuthFlow() {
   // reset or logout so a new candidate can re-fire register.
   const [registering, setRegistering] = useState(false);
   const [registerError, setRegisterError] = useState('');
+  useEffect(() => {
+    setRegisterError('');
+  }, [candidate?.wallet, dex]);
 
   // Silent return-probe: before showing the name form to non-FC users, ask
   // the server whether an account already exists for this wallet. If yes,
@@ -448,6 +451,11 @@ export function useAuthFlow() {
   const [probedNameByWallet, setProbedNameByWallet] = useState({});
   const probeInFlightRef = useRef({});
   const probeVerifiedRef = useRef({});
+  const probeRetryTimerRef = useRef({});
+  useEffect(() => () => {
+    Object.values(probeRetryTimerRef.current || {}).forEach((timer) => clearTimeout(timer));
+    probeRetryTimerRef.current = {};
+  }, []);
   useEffect(() => {
     if (!candidate?.wallet) return;
     if (fcUser) return; // FC users keep the existing fast-path
@@ -465,16 +473,18 @@ export function useAuthFlow() {
     }
     if (probeVerifiedRef.current[key]) return;
     if (probeInFlightRef.current[key]) return;
+    if (probeRetryTimerRef.current[key]) return;
     probeInFlightRef.current[key] = true;
     (async () => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), AUTO_CONNECT_GRACE_MS);
+      let verified = false;
       try {
         const r = await fetch('/api/players/login-wallet', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: ctrl.signal,
-          body: JSON.stringify({ wallet: candidate.wallet }),
+          body: JSON.stringify({ wallet: candidate.wallet, dex }),
         });
         if (r.ok) {
           const data = await r.json();
@@ -491,25 +501,36 @@ export function useAuthFlow() {
           const name = data?.name || null;
           writeAccountProbeCache(candidate.wallet, dex, name);
           setProbedNameByWallet(prev => ({ ...prev, [key]: name }));
-        } else {
+          verified = true;
+        } else if (r.status === 404 || r.status === 400) {
           // 404 (no account on THIS DEX) / 400 (invalid wallet) → treat
           // as new user for this DEX. They may have an account on a
           // different DEX with the same wallet — that's fine, switching
           // DEX in the picker will re-probe and find it.
           writeAccountProbeCache(candidate.wallet, dex, null);
           setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
+          verified = true;
+        } else {
+          throw new Error(`/api/players/login-wallet -> ${r.status}`);
         }
-      } catch {
-        // Network error — treat as new user so the UI doesn't hang on
-        // spinner forever. If they're actually returning, the name form
-        // with suggested auto-derived default still takes them through
-        // login_by_wallet on the Godot side.
-        if (cached === undefined) {
-          setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
-        }
+      } catch (e) {
+        // Network/5xx/timeout errors are not proof that the account is
+        // missing. Retry instead of showing the nickname form; otherwise
+        // returning users see "enter nickname" and then still log in under
+        // their existing server-side name.
+        addClientBreadcrumb('auth.probe_retry', {
+          dex,
+          wallet: candidate.wallet,
+          message: e?.message || String(e || ''),
+        }, 'warn');
+        probeRetryTimerRef.current[key] = setTimeout(() => {
+          delete probeRetryTimerRef.current[key];
+          probeVerifiedRef.current[key] = false;
+          setProbedNameByWallet(prev => ({ ...prev }));
+        }, 1200);
       } finally {
         clearTimeout(timer);
-        probeVerifiedRef.current[key] = true;
+        probeVerifiedRef.current[key] = verified;
         probeInFlightRef.current[key] = false;
       }
     })();
@@ -602,8 +623,9 @@ export function useAuthFlow() {
     if (!candidate && dexPicked && !graceExpired) return 'auto_connecting';
     // FC fast-path: auto-register with FC handle.
     if (candidate && suggestedName && isFarcasterCandidate) return 'registering';
-    // Non-FC: wait for probe, then branch.
-    if (candidate && probeInFlight && !graceExpired) return 'auto_connecting';
+    // Non-FC: wait for a definitive probe result, including retrying
+    // transient network/server failures.
+    if (candidate && probeInFlight) return 'auto_connecting';
     // Returning user — server already has an account for this wallet;
     // fire register with their stored name (which is auto-derived-safe so
     // Godot's login_by_wallet fast-path takes over and no rename happens).

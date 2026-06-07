@@ -712,6 +712,7 @@ function aiPaymentLabel(chain, payment) {
 const AI_TOKEN_LOGO = {
   usdc: '/tokens/USDC.svg',
   eth:  '/tokens/ETH.svg',
+  ink:  '/tokens/INK.png',
   clash: '/icons/icon-192.png',
   sol:  '/tokens/SOL.svg',
   skr:  '/tokens/SKR.png',

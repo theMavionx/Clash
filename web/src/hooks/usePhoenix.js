@@ -1546,7 +1546,8 @@ function tpslOrdersFromPositions(positions) {
       market_name: symbol,
       _phoenixSubaccountIndex: subaccountIndex,
       _phoenixSyntheticTpsl: true,
-      _readOnly: true,
+      _phoenixCancelableTpsl: true,
+      _readOnly: false,
     };
     const rows = [];
     const tp = Number(position.take_profit_price || position._phoenixOptimisticTakeProfitPrice || 0);
@@ -4639,6 +4640,123 @@ export function usePhoenix() {
             ? candidateOneTapSession
             : null;
           const orderAuthority = oneTapSession?.publicKey || walletAddr;
+          if (existing?._phoenixSyntheticTpsl) {
+            const tpslKind = String(existing?._phoenixTpslKind || '').toLowerCase();
+            const position = positions.find(p => (
+              phoenixSymbol(p?.symbol) === phx
+              && String(p?.side || '').toLowerCase() === String(existing?.side || '').toLowerCase()
+              && Number(p?._phoenixSubaccountIndex || 0) === subaccountIndex
+            )) || positions.find(p => (
+              phoenixSymbol(p?.symbol) === phx
+              && Number(p?._phoenixSubaccountIndex || 0) === subaccountIndex
+            ));
+            if (!position) throw new Error(`No open ${phx} position to cancel Phoenix TP/SL`);
+            const market = marketsBySymbolRef.current[phx];
+            if (!market) throw new Error(`No Phoenix market metadata for ${phx}`);
+            const isLong = position.side === 'bid';
+            const closeSide = isLong ? Side.Ask : Side.Bid;
+            const buildTriggerOrder = (price, triggerDirection) => {
+              const n = Number(price);
+              const executionPrice = closeSide === Side.Bid ? n * 1.02 : n * 0.98;
+              return {
+                triggerDirection,
+                tradeSide: closeSide,
+                orderKind: StopLossOrderKind.IOC,
+                triggerPrice: priceToTicks(n, market),
+                executionPrice: priceToTicks(executionPrice, market),
+              };
+            };
+            const currentTp = Number(position.take_profit_price || position._phoenixOptimisticTakeProfitPrice || 0);
+            const currentSl = Number(position.stop_loss_price || position._phoenixOptimisticStopLossPrice || 0);
+            const nextTp = tpslKind === 'take_profit' ? null : (Number.isFinite(currentTp) && currentTp > 0 ? currentTp : null);
+            const nextSl = tpslKind === 'stop_loss' ? null : (Number.isFinite(currentSl) && currentSl > 0 ? currentSl : null);
+            let greaterTriggerOrder = null;
+            let lessTriggerOrder = null;
+            if (nextTp != null) {
+              const direction = isLong ? Direction.GreaterThan : Direction.LessThan;
+              const trigger = buildTriggerOrder(nextTp, direction);
+              if (direction === Direction.GreaterThan) greaterTriggerOrder = trigger;
+              else lessTriggerOrder = trigger;
+            }
+            if (nextSl != null) {
+              const direction = isLong ? Direction.LessThan : Direction.GreaterThan;
+              const trigger = buildTriggerOrder(nextSl, direction);
+              if (direction === Direction.GreaterThan) greaterTriggerOrder = trigger;
+              else lessTriggerOrder = trigger;
+            }
+            const signature = await withFreshPhoenixMetadataRetry('phoenix.cancel_tpsl', phx, async (orderClient) => {
+              const oneTapParams = oneTapSession ? {
+                authority: orderAuthority,
+                payer: oneTapSession.publicKey,
+              } : {};
+              let ix = await orderClient.ixs.buildPlacePositionConditionalOrder({
+                authority: orderAuthority,
+                ...oneTapParams,
+                symbol: phx,
+                greaterTriggerOrder,
+                lessTriggerOrder,
+                sizePercent: 100,
+                traderPdaIndex: 0,
+                traderSubaccountIndex: subaccountIndex,
+              });
+              if (oneTapSession) {
+                ix = reportPhoenixOneTapFlightDiagnostics(ix, oneTapSession.publicKey, 'phoenix.cancel_tpsl', {
+                  symbol: phx,
+                  subaccount_index: subaccountIndex,
+                  path: 'cancel_tpsl',
+                });
+              }
+              assertPhoenixBuilderRouted(ix, 'phoenix.cancel_tpsl', {
+                symbol: phx,
+                one_tap: !!oneTapSession,
+                subaccount_index: subaccountIndex,
+              });
+              return sendOrderIxs(ix, 'phoenix.cancel_tpsl', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
+            });
+            const optimisticKey = phoenixPositionTpslKey(phx, position.side, subaccountIndex);
+            if (nextTp || nextSl) {
+              tpslOptimisticRef.current.set(optimisticKey, {
+                takeProfit: nextTp,
+                stopLoss: nextSl,
+                at: Date.now(),
+              });
+            } else {
+              tpslOptimisticRef.current.delete(optimisticKey);
+            }
+            setPhoenixPositions(prev => prev.map(p => {
+              const samePosition = phoenixSymbol(p?.symbol) === phx
+                && String(p?.side || '').toLowerCase() === String(position.side || '').toLowerCase()
+                && Number(p?._phoenixSubaccountIndex || 0) === subaccountIndex;
+              if (!samePosition) return p;
+              return {
+                ...p,
+                take_profit_price: nextTp,
+                stop_loss_price: nextSl,
+                _phoenixOptimisticTakeProfitPrice: nextTp,
+                _phoenixOptimisticStopLossPrice: nextSl,
+                _phoenixTpslPendingRefresh: true,
+              };
+            }));
+            const optimisticPosition = {
+              ...position,
+              take_profit_price: nextTp,
+              stop_loss_price: nextSl,
+              _phoenixOptimisticTakeProfitPrice: nextTp,
+              _phoenixOptimisticStopLossPrice: nextSl,
+              _phoenixTpslPendingRefresh: true,
+            };
+            setPhoenixOrders(prev => [
+              ...prev.filter(o => !(
+                o?._phoenixSyntheticTpsl
+                && phoenixSymbol(o?.symbol) === phx
+                && String(o?.side || '').toLowerCase() === String(position.side || '').toLowerCase()
+                && Number(o?._phoenixSubaccountIndex || 0) === subaccountIndex
+              )),
+              ...tpslOrdersFromPositions([optimisticPosition]),
+            ]);
+            refreshTraderStateSoon([1_000, 4_000, 10_000]);
+            return { success: true, signature };
+          }
           const signature = await withFreshPhoenixMetadataRetry('phoenix.cancel', phx, async (orderClient) => {
             const ix = existing?.price
               ? await orderClient.ixs.buildCancelOrdersById({
