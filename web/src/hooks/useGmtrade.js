@@ -139,8 +139,10 @@ export function useGmtrade() {
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
   const [realtimeStatus, setRealtimeStatus] = useState({ status: 'idle' });
+  const [referralState, setReferralState] = useState(null);
   const realtimeSeenRef = useRef(0);
   const realtimeWsRef = useRef(null);
+  const referralWalletRef = useRef('');
 
   const walletMismatch = useMemo(() => {
     const registered = String(player?.wallet || '').trim();
@@ -148,11 +150,42 @@ export function useGmtrade() {
     return !!registeredSolana && !!walletAddr && registeredSolana !== walletAddr;
   }, [player?.wallet, walletAddr]);
 
+  useEffect(() => {
+    if (referralWalletRef.current === walletAddr) return;
+    referralWalletRef.current = walletAddr || '';
+    setReferralState(null);
+  }, [walletAddr]);
+
+  const rememberReferral = useCallback((payload) => {
+    const next = payload?.referral || payload;
+    const hasReferrer = payload?.has_referrer === true || next?.has_referrer === true || !!next?.referrer;
+    if (!hasReferrer) return;
+    setReferralState(prev => ({
+      ...(prev || {}),
+      ...(next || {}),
+      has_referrer: true,
+      referrer: next?.referrer || payload?.referrer || prev?.referrer || null,
+      referral_code_address: next?.referral_code_address || payload?.referral_code_address || prev?.referral_code_address || null,
+    }));
+  }, []);
+
   const applySnapshot = useCallback((snapshot) => {
     if (!snapshot || typeof snapshot !== 'object') return;
     const accountPayload = snapshot.account || null;
     if (accountPayload) {
-      setAccount(accountPayload);
+      rememberReferral(accountPayload);
+      setAccount(prev => {
+        const stickyReferral = referralState?.has_referrer === true
+          ? { ...(accountPayload.referral || {}), ...referralState, has_referrer: true }
+          : accountPayload.referral;
+        const stickyHasReferrer = accountPayload.has_referrer === true || referralState?.has_referrer === true;
+        return {
+          ...(prev || {}),
+          ...accountPayload,
+          ...(stickyReferral ? { referral: stickyReferral } : {}),
+          ...(stickyHasReferrer ? { has_referrer: true } : {}),
+        };
+      });
       setPositions(rows(snapshot.positions || accountPayload.positions));
       setOrders(rows(snapshot.orders || accountPayload.orders));
       const usdc = Number(accountPayload.wallet_usdc ?? accountPayload.balance ?? NaN);
@@ -171,7 +204,7 @@ export function useGmtrade() {
       position_subscriptions: snapshot.realtime?.position_subscriptions || 0,
       order_subscriptions: snapshot.realtime?.order_subscriptions || 0,
     });
-  }, []);
+  }, [referralState, rememberReferral]);
 
   const requestRealtimeRefresh = useCallback((reason = 'client_refresh') => {
     const client = realtimeWsRef.current;
@@ -212,6 +245,7 @@ export function useGmtrade() {
       if (token && walletAddr && !walletMismatch) {
         const headers = { 'x-token': token, 'x-dex': 'gmtrade' };
         const acct = await fetchJson(`${FUTURES_API}/gmtrade/account?address=${encodeURIComponent(walletAddr)}`, { headers });
+        rememberReferral(acct);
         setAccount(acct);
         setPositions(rows(acct?.positions));
         setOrders(rows(acct?.orders));
@@ -226,7 +260,7 @@ export function useGmtrade() {
     } finally {
       setLoading(false);
     }
-  }, [connection, isActiveDex, markets.length, token, walletAddr, walletMismatch]);
+  }, [connection, isActiveDex, markets.length, rememberReferral, token, walletAddr, walletMismatch]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -814,13 +848,21 @@ export function useGmtrade() {
     if (!token) return { error: 'Missing game session token' };
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
     if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered GMTrade wallet' };
-    if (account?.has_referrer === true || account?.referral?.has_referrer === true) {
+    if (account?.has_referrer === true || account?.referral?.has_referrer === true || referralState?.has_referrer === true) {
       return { ok: true, already_linked: true };
     }
     const trace = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
       ? crypto.randomUUID()
       : `gmtrade-referral-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     try {
+      const freshAccount = await fetchJson(`${FUTURES_API}/gmtrade/account?address=${encodeURIComponent(walletAddr)}`, {
+        headers: { 'x-token': token, 'x-dex': 'gmtrade' },
+      }).catch(() => null);
+      if (freshAccount?.has_referrer === true || freshAccount?.referral?.has_referrer === true || freshAccount?.referral?.referrer) {
+        rememberReferral(freshAccount);
+        setAccount(freshAccount);
+        return { ok: true, already_linked: true };
+      }
       let lastExpired = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const beforeHeight = await connection.getBlockHeight('confirmed').catch(() => null);
@@ -842,6 +884,7 @@ export function useGmtrade() {
           }),
         });
         if (build?.already_linked) {
+          rememberReferral(build?.referral || { has_referrer: true });
           await refresh().catch(() => null);
           return { ok: true, already_linked: true };
         }
@@ -885,6 +928,7 @@ export function useGmtrade() {
       throw lastExpired || new Error('GMTrade referral transaction expired before confirmation');
     } catch (e) {
       if (/referrer has been set|already have a referrer|already.*referrer/i.test(String(e?.message || ''))) {
+        rememberReferral({ has_referrer: true });
         await refresh().catch(() => null);
         return { ok: true, already_linked: true };
       }
@@ -893,7 +937,7 @@ export function useGmtrade() {
       }
       return { error: e?.message || 'GMTrade referral approval failed' };
     }
-  }, [account?.has_referrer, account?.referral?.has_referrer, config?.referral_code, confirmSignatureWithDiagnostics, connection, gmtradeLog, refresh, requestRealtimeRefresh, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [account?.has_referrer, account?.referral?.has_referrer, config?.referral_code, confirmSignatureWithDiagnostics, connection, gmtradeLog, refresh, rememberReferral, referralState?.has_referrer, requestRealtimeRefresh, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const unavailableOrder = useCallback(async () => {
     return {
@@ -931,7 +975,9 @@ export function useGmtrade() {
     inviteStatus: config,
     referralCode: config?.referral_code || '',
     referralUrl: config?.referral_url || GMTRADE_REFERRAL_URL,
-    hasReferrer: account ? (account?.has_referrer === true || account?.referral?.has_referrer === true) : null,
+    hasReferrer: referralState?.has_referrer === true
+      ? true
+      : (account ? (account?.has_referrer === true || account?.referral?.has_referrer === true || !!account?.referral?.referrer) : null),
     goldEarned,
     clearGoldEarned: () => setGoldEarned(null),
     refresh,
