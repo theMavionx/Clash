@@ -50,6 +50,7 @@ export NPM_CONFIG_CACHE="$NPM_CACHE_DIR"
 BOOTSTRAPPED_LEGACY_DBS=0
 SWITCHED=0
 LOCK_DIR=""
+PM2_ROOT_HOME="/root/.pm2"
 
 log() {
     echo "[$(date -u +%H:%M:%S)] $*"
@@ -67,6 +68,43 @@ require_root() {
     if [ "$(id -u)" -ne 0 ]; then
         die "Run this script with sudo/root."
     fi
+    export HOME=/root
+    export PM2_HOME="$PM2_ROOT_HOME"
+    mkdir -p "$PM2_ROOT_HOME"
+}
+
+pm2_root() {
+    env HOME=/root PM2_HOME="$PM2_ROOT_HOME" pm2 "$@"
+}
+
+pm2_as_user() {
+    local owner="$1"
+    local owner_home="$2"
+    local pm2_home="$3"
+    shift 3
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u "$owner" -- env HOME="$owner_home" PM2_HOME="$pm2_home" pm2 "$@"
+    else
+        su -s /bin/bash "$owner" -c "HOME='$owner_home' PM2_HOME='$pm2_home' pm2 $*"
+    fi
+}
+
+cleanup_non_root_clash_pm2() {
+    # Prevent stale non-root PM2 daemons from keeping old Clash services alive
+    # or binding ports after a root deploy. Leave unrelated user processes alone.
+    local pm2_home owner owner_home
+    for pm2_home in /home/*/.pm2; do
+        [ -d "$pm2_home" ] || continue
+        owner_home="$(dirname "$pm2_home")"
+        owner="$(basename "$owner_home")"
+        [ "$owner" != "root" ] || continue
+        log "Cleaning stale Clash PM2 apps from $owner PM2_HOME=$pm2_home"
+        pm2_as_user "$owner" "$owner_home" "$pm2_home" delete clash-api 2>/dev/null || true
+        pm2_as_user "$owner" "$owner_home" "$pm2_home" delete clash-hermes-jobs 2>/dev/null || true
+        pm2_as_user "$owner" "$owner_home" "$pm2_home" delete clash-futures 2>/dev/null || true
+        pm2_as_user "$owner" "$owner_home" "$pm2_home" delete clash-mcp 2>/dev/null || true
+        pm2_as_user "$owner" "$owner_home" "$pm2_home" save 2>/dev/null || true
+    done
 }
 
 validate_source_dir() {
@@ -970,10 +1008,10 @@ stop_services_for_database_backup() {
     fi
 
     log "Stopping runtime services briefly for SQLite backup..."
-    pm2 stop clash-api 2>/dev/null || true
-    pm2 stop clash-hermes-jobs 2>/dev/null || true
-    pm2 stop clash-futures 2>/dev/null || true
-    pm2 stop clash-mcp 2>/dev/null || true
+    pm2_root stop clash-api 2>/dev/null || true
+    pm2_root stop clash-hermes-jobs 2>/dev/null || true
+    pm2_root stop clash-futures 2>/dev/null || true
+    pm2_root stop clash-mcp 2>/dev/null || true
 }
 
 resume_services_after_database_backup() {
@@ -982,10 +1020,10 @@ resume_services_after_database_backup() {
     fi
 
     log "Resuming current runtime services after SQLite backup..."
-    pm2 start clash-api 2>/dev/null || true
-    pm2 start clash-hermes-jobs 2>/dev/null || true
-    pm2 start clash-futures 2>/dev/null || true
-    pm2 start clash-mcp 2>/dev/null || true
+    pm2_root start clash-api 2>/dev/null || true
+    pm2_root start clash-hermes-jobs 2>/dev/null || true
+    pm2_root start clash-futures 2>/dev/null || true
+    pm2_root start clash-mcp 2>/dev/null || true
 }
 
 sync_legacy_databases_before_switch() {
@@ -994,10 +1032,10 @@ sync_legacy_databases_before_switch() {
     fi
 
     log "Stopping old services briefly for one-time DB migration..."
-    pm2 stop clash-api 2>/dev/null || true
-    pm2 stop clash-hermes-jobs 2>/dev/null || true
-    pm2 stop clash-futures 2>/dev/null || true
-    pm2 stop clash-mcp 2>/dev/null || true
+    pm2_root stop clash-api 2>/dev/null || true
+    pm2_root stop clash-hermes-jobs 2>/dev/null || true
+    pm2_root stop clash-futures 2>/dev/null || true
+    pm2_root stop clash-mcp 2>/dev/null || true
     copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db" || true
     copy_db_family "$DEPLOY_ROOT/server-futures" "$SHARED_FUTURES_DIR" "futures.db" || true
 }
@@ -1487,23 +1525,25 @@ MCPCONF
 restart_services() {
     log "[9/9] Restarting PM2 services..."
 
-    pm2 delete clash-api 2>/dev/null || true
-    pm2 start node \
+    cleanup_non_root_clash_pm2
+
+    pm2_root delete clash-api 2>/dev/null || true
+    pm2_root start node \
         --name clash-api \
         --cwd "$CURRENT_LINK/server" \
         --env production \
         -- --env-file="$ENV_FILE" "$CURRENT_LINK/server/index.js"
 
-    pm2 delete clash-hermes-jobs 2>/dev/null || true
-    pm2 start node \
+    pm2_root delete clash-hermes-jobs 2>/dev/null || true
+    pm2_root start node \
         --name clash-hermes-jobs \
         --cwd "$CURRENT_LINK/server" \
         --env production \
         -- --env-file="$ENV_FILE" "$CURRENT_LINK/server/hermes_jobs_worker.js"
 
     if [ -d "$CURRENT_LINK/server-futures" ]; then
-        pm2 delete clash-futures 2>/dev/null || true
-        pm2 start node \
+        pm2_root delete clash-futures 2>/dev/null || true
+        pm2_root start node \
             --name clash-futures \
             --cwd "$CURRENT_LINK/server-futures" \
             --env production \
@@ -1511,16 +1551,16 @@ restart_services() {
     fi
 
     if [ -f "$CURRENT_LINK/mcp/src/server.mjs" ]; then
-        pm2 delete clash-mcp 2>/dev/null || true
-        pm2 start node \
+        pm2_root delete clash-mcp 2>/dev/null || true
+        pm2_root start node \
             --name clash-mcp \
             --cwd "$CURRENT_LINK/mcp" \
             --env production \
             -- --env-file="$ENV_FILE" "$CURRENT_LINK/mcp/src/server.mjs"
     fi
 
-    pm2 save
-    pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
+    pm2_root save
+    pm2_root startup systemd -u root --hp /root >/dev/null 2>&1 || true
 }
 
 cleanup_old_releases() {

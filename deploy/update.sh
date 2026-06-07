@@ -21,6 +21,13 @@
 
 set -Eeuo pipefail
 
+if [ "$(id -u)" -ne 0 ]; then
+    exec sudo -n bash "$0" "$@"
+fi
+
+export HOME=/root
+export PM2_HOME=/root/.pm2
+
 BRANCH="${CLASH_BRANCH:-main}"
 SOURCE_DIR="${CLASH_SOURCE_DIR:-/opt/clash}"
 DEPLOY_ROOT="${CLASH_DEPLOY_ROOT:-/opt/clash}"
