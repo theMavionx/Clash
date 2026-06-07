@@ -89,6 +89,7 @@ const GMTRADE_MIN_POSITION_USD = Math.max(0, Number(process.env.GMTRADE_MIN_POSI
 const GMTRADE_POSITION_VERIFY_SLOT_WINDOW = Math.max(1, Number(process.env.GMTRADE_POSITION_VERIFY_SLOT_WINDOW || 500));
 const GMTRADE_ENABLE_NODE_SDK_BUILDER = String(process.env.GMTRADE_ENABLE_NODE_SDK_BUILDER || '1').trim() !== '0';
 const GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS = String(process.env.GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS || '').trim() === '1';
+const GMTRADE_TX_MEMO = String(process.env.GMTRADE_TX_MEMO || '').trim();
 const GMTRADE_DISCOVER_MARKETS = String(process.env.GMTRADE_DISCOVER_MARKETS || '1').trim() !== '0';
 const GMTRADE_MARKET_ACCOUNT_DATA_SIZE = Number(process.env.GMTRADE_MARKET_ACCOUNT_DATA_SIZE || 0);
 const GMTRADE_MARKET_SYMBOLS = parseJsonEnv('GMTRADE_MARKET_SYMBOLS_JSON', {});
@@ -1373,6 +1374,15 @@ function gmPriceWithDecimals(raw, decimals) {
   return value > 0n ? decimalNumber(value, decimals) : 0;
 }
 
+function saneGmOrderPrice(value, mark = 0) {
+  const price = Number(value);
+  if (!Number.isFinite(price) || price <= 0) return 0;
+  if (price > 1_000_000_000) return 0;
+  const ref = Number(mark);
+  if (Number.isFinite(ref) && ref > 0 && price > ref * 1000) return 0;
+  return price;
+}
+
 function orderKindName(kind) {
   return [
     'Liquidation',
@@ -1473,8 +1483,8 @@ function decodeOrderAccount(encoded, pubkey, pricesBySymbol, marketByToken = {})
   const symbol = baseSymbol(cfg.symbol || marketToken);
   const mark = normalizePriceRow(pricesBySymbol, symbol);
   const priceDecimals = gmUnitPriceDecimals(cfg);
-  const triggerPrice = gmPriceWithDecimals(triggerRaw, priceDecimals);
-  const acceptablePrice = gmPriceWithDecimals(acceptableRaw, priceDecimals);
+  const triggerPrice = saneGmOrderPrice(gmPriceWithDecimals(triggerRaw, priceDecimals), mark);
+  const acceptablePrice = saneGmOrderPrice(gmPriceWithDecimals(acceptableRaw, priceDecimals), mark);
   return {
     id: pubkey,
     order_id: pubkey,
@@ -1801,8 +1811,10 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     skip_wrap_native_on_pay: true,
     force_create_positions: !isDecrease,
     compute_unit_price_micro_lamports: Number(process.env.GMTRADE_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS || 0) || undefined,
-    memo: 'Clash GMTrade',
   };
+  if (GMTRADE_TX_MEMO) {
+    rustPayload.memo = GMTRADE_TX_MEMO;
+  }
   if (rustBuilderAvailable()) {
     const built = await runRustBuilder(rustPayload);
     return {
@@ -1822,6 +1834,7 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
       last_valid_block_height: lastValidBlockHeight,
       transactions: built.transactions || [],
       builder: 'rust_gmsol_sdk',
+      memo_enabled: Boolean(GMTRADE_TX_MEMO),
     };
   }
   if (!GMTRADE_ENABLE_NODE_SDK_BUILDER) {
@@ -1840,7 +1853,7 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
       receive_token: receiveToken,
       hints,
       transaction_group: {
-        memo: 'Clash GMTrade',
+        memo: GMTRADE_TX_MEMO || undefined,
         max_instructions_per_tx: 24,
       },
       compute_unit_price_micro_lamports: Number(process.env.GMTRADE_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS || 0) || undefined,
@@ -1877,6 +1890,7 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     last_valid_block_height: lastValidBlockHeight,
     transactions,
     builder: 'node_wasm_gmsol_sdk',
+    memo_enabled: Boolean(GMTRADE_TX_MEMO),
   };
 }
 
@@ -1941,7 +1955,7 @@ async function buildCancelOrderTx(body = {}, playerWallet = '') {
         callback: undefined,
       }]]),
       transaction_group: {
-        memo: 'Clash GMTrade',
+        memo: GMTRADE_TX_MEMO || undefined,
         max_instructions_per_tx: 24,
       },
       compute_unit_price_micro_lamports: Number(process.env.GMTRADE_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS || 0) || undefined,
@@ -1963,6 +1977,7 @@ async function buildCancelOrderTx(body = {}, playerWallet = '') {
     last_valid_block_height: lastValidBlockHeight,
     transactions,
     builder: 'node_wasm_gmsol_sdk',
+    memo_enabled: Boolean(GMTRADE_TX_MEMO),
   };
 }
 
@@ -1982,6 +1997,7 @@ async function buildSetReferrerTx(body = {}, playerWallet = '') {
       already_linked: true,
       referral: existing,
       transactions: [],
+      memo_enabled: false,
     };
   }
 
@@ -2061,6 +2077,7 @@ async function buildSetReferrerTx(body = {}, playerWallet = '') {
     last_valid_block_height: lastValidBlockHeight,
     transactions: [serialized],
     builder: 'anchor_idl_manual',
+    memo_enabled: false,
   };
 }
 
@@ -2177,7 +2194,22 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
     }
   }
   if (!tradeEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS) {
-    throw Object.assign(new Error('GMTrade transaction did not include a decodable trade execution event for this wallet'), { status: 400 });
+    return {
+      changes: 0,
+      signature,
+      notional_usd: null,
+      pending: true,
+      warning: 'GMTrade transaction confirmed, but no execution fill is indexed yet. Rewards are credited after GMTrade executes and exposes a verifiable fill.',
+      verification: {
+        signature,
+        wallet,
+        slot: tx.slot,
+        block_time: tx.blockTime,
+        encoded_events_count: tx.encodedEventsCount,
+        event_verified: false,
+        position_verified: false,
+      },
+    };
   }
   const amount = Number.isFinite(requestedAmount) && requestedAmount > 0 ? requestedAmount : 0;
   const leverage = Number.isFinite(requestedLeverage) && requestedLeverage > 0 ? requestedLeverage : 1;

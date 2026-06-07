@@ -5,7 +5,7 @@ const rawDirectSolanaRpc = (import.meta.env.VITE_DIRECT_SOLANA_RPC_URL || '').tr
 const rawBrowserSolanaRpcUrls = (import.meta.env.VITE_SOLANA_BROWSER_RPC_URLS || '').trim();
 const allowProxyFallback = envFlag(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC, true);
 const preferProxyRpc = allowProxyFallback
-  && envFlag(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC, true);
+  && envFlag(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC, false);
 const includePublicRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_PUBLIC_RPC, true);
 // LeoRPC's public "FREE" endpoint frequently fails browser CORS/fetch checks
 // in production client logs. Keep it opt-in only; Alchemy/proxy remains the
@@ -40,6 +40,18 @@ function isSameOriginRpcUrl(url) {
 
 function isSameOriginSerializedSolanaRpcUrl(url) {
   return sameOriginSolanaRpcPath(url) === '/rpc/solana';
+}
+
+function isBrowserDirectSolanaRpcUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw || raw.startsWith('/')) return false;
+  try {
+    const parsed = new URL(raw, siteOrigin());
+    const origin = new URL(siteOrigin());
+    return parsed.origin !== origin.origin;
+  } catch {
+    return /^https?:\/\//i.test(raw);
+  }
 }
 
 function sameOriginSolanaRpcPath(url) {
@@ -204,9 +216,23 @@ async function readJsonRpcResponse(response, request) {
   );
 }
 
-async function jsonRpcBatchSafeFetch(input, init = {}) {
+function stripSolanaClientHeaders(headers) {
+  const next = new Headers(headers || {});
+  next.delete('solana-client');
+  next.delete('Solana-Client');
+  return next;
+}
+
+function browserDirectSolanaFetch(input, init = {}) {
+  return fetch(input, {
+    ...init,
+    headers: stripSolanaClientHeaders(init?.headers),
+  });
+}
+
+async function jsonRpcBatchSafeFetch(input, init = {}, baseFetch = fetch) {
   const body = parseJsonRpcBody(init?.body);
-  if (!Array.isArray(body)) return fetch(input, init);
+  if (!Array.isArray(body)) return baseFetch(input, init);
   if (body.length === 0) {
     return new Response('[]', {
       status: 200,
@@ -214,7 +240,7 @@ async function jsonRpcBatchSafeFetch(input, init = {}) {
     });
   }
   const rows = await Promise.all(body.map(async (request) => {
-    const response = await fetch(input, {
+    const response = await baseFetch(input, {
       ...init,
       body: JSON.stringify(request),
     });
@@ -227,9 +253,13 @@ async function jsonRpcBatchSafeFetch(input, init = {}) {
 }
 
 export function solanaRpcFetchForUrl(url) {
-  return !solanaRpcSupportsBatch(url)
-    ? jsonRpcBatchSafeFetch
-    : undefined;
+  const baseFetch = isBrowserDirectSolanaRpcUrl(url)
+    ? browserDirectSolanaFetch
+    : fetch;
+  if (!solanaRpcSupportsBatch(url)) {
+    return (input, init) => jsonRpcBatchSafeFetch(input, init, baseFetch);
+  }
+  return baseFetch === fetch ? undefined : baseFetch;
 }
 
 export function solanaConnectionConfig(url, commitmentOrConfig = 'confirmed') {

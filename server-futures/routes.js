@@ -3806,6 +3806,26 @@ router.post('/gmtrade/client-log', auth, async (req, res) => {
   }
 });
 
+function safeGmtradeRpcDiag(value) {
+  if (!value || typeof value !== 'object') return null;
+  const host = (raw) => String(raw || '')
+    .replace(/([?&](?:api[_-]?key|key|apikey)=)[^&]+/ig, '$1***')
+    .slice(0, 140);
+  return {
+    rpc_host: host(value.rpc_host || value.host || ''),
+    origin: String(value.origin || '').slice(0, 120),
+    fallback_hosts: Array.isArray(value.fallback_hosts)
+      ? value.fallback_hosts.map(host).slice(0, 8)
+      : [],
+  };
+}
+
+function txSizeSummary(transactions) {
+  return Array.isArray(transactions)
+    ? transactions.map(tx => Buffer.byteLength(String(tx || ''), 'base64')).slice(0, 8)
+    : [];
+}
+
 router.get('/gmtrade/tx-status', auth, async (req, res) => {
   if (req.dex !== 'gmtrade') {
     return res.status(409).json({
@@ -3839,8 +3859,10 @@ router.post('/gmtrade/order-tx', auth, async (req, res) => {
       leverage: req.body?.leverage,
       order_type: req.body?.order_type,
       price: req.body?.price,
+      trigger_price: req.body?.trigger_price,
       recent_blockhash: req.body?.recent_blockhash,
       last_valid_block_height: req.body?.last_valid_block_height,
+      client_rpc: safeGmtradeRpcDiag(req.body?.client_rpc),
     }));
     const built = await gmtrade.buildCreateOrderTx(req.body || {}, req.playerWallet);
     console.log('[gmtrade order-tx] built', JSON.stringify({
@@ -3857,7 +3879,9 @@ router.post('/gmtrade/order-tx', auth, async (req, res) => {
       recent_blockhash: built.recent_blockhash,
       last_valid_block_height: built.last_valid_block_height,
       transaction_count: Array.isArray(built.transactions) ? built.transactions.length : 0,
+      transaction_bytes: txSizeSummary(built.transactions),
       builder: built.builder,
+      memo_enabled: built.memo_enabled === true,
     }));
     res.json(built);
   } catch (e) {
@@ -3881,6 +3905,7 @@ router.post('/gmtrade/cancel-order-tx', auth, async (req, res) => {
       order_id: req.body?.order_id || req.body?.orderId || req.body?.id,
       recent_blockhash: req.body?.recent_blockhash,
       last_valid_block_height: req.body?.last_valid_block_height,
+      client_rpc: safeGmtradeRpcDiag(req.body?.client_rpc),
     }));
     const built = await gmtrade.buildCancelOrderTx(req.body || {}, req.playerWallet);
     console.log('[gmtrade cancel-order-tx] built', JSON.stringify({
@@ -3890,7 +3915,9 @@ router.post('/gmtrade/cancel-order-tx', auth, async (req, res) => {
       recent_blockhash: built.recent_blockhash,
       last_valid_block_height: built.last_valid_block_height,
       transaction_count: Array.isArray(built.transactions) ? built.transactions.length : 0,
+      transaction_bytes: txSizeSummary(built.transactions),
       builder: built.builder,
+      memo_enabled: built.memo_enabled === true,
     }));
     res.json(built);
   } catch (e) {
@@ -3914,6 +3941,7 @@ router.post('/gmtrade/referral-tx', auth, async (req, res) => {
       code: req.body?.code || req.body?.referral_code || req.body?.referralCode || undefined,
       recent_blockhash: req.body?.recent_blockhash,
       last_valid_block_height: req.body?.last_valid_block_height,
+      client_rpc: safeGmtradeRpcDiag(req.body?.client_rpc),
     }));
     const built = await gmtrade.buildSetReferrerTx(req.body || {}, req.playerWallet);
     console.log('[gmtrade referral-tx] built', JSON.stringify({
@@ -3923,7 +3951,9 @@ router.post('/gmtrade/referral-tx', auth, async (req, res) => {
       user_address: built.user_address,
       referrer: built.referrer,
       transaction_count: Array.isArray(built.transactions) ? built.transactions.length : 0,
+      transaction_bytes: txSizeSummary(built.transactions),
       builder: built.builder,
+      memo_enabled: built.memo_enabled === true,
     }));
     res.json(built);
   } catch (e) {
@@ -3944,12 +3974,16 @@ router.post('/gmtrade/trade-report', auth, async (req, res) => {
     const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, req.playerWallet);
     res.json({
       ok: true,
+      pending: result.pending === true,
+      warning: result.warning || null,
       verified: result.changes > 0,
       duplicate: result.changes === 0,
       signature: result.signature,
       notional_usd: result.notional_usd,
       reason: result.changes > 0
         ? 'GMTrade Solana transaction verified; rewards are ready to claim.'
+        : result.pending
+        ? 'GMTrade transaction is confirmed, but the order has not produced a verifiable fill yet.'
         : 'GMTrade transaction was already imported.',
     });
   } catch (e) {

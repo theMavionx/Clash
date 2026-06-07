@@ -489,8 +489,22 @@ function orderDisplayType(order, positions = []) {
 
 function orderDisplayPrice(order) {
   const trigger = orderTriggerPrice(order);
-  if (trigger > 0) return trigger;
-  return numOrNull(order?.price ?? order?.ip ?? order?._raw?.limit_price ?? order?._raw?.limitPrice) || 0;
+  if (trigger > 0) return saneOrderDisplayPrice(trigger);
+  return saneOrderDisplayPrice(numOrNull(order?.price ?? order?.ip ?? order?._raw?.limit_price ?? order?._raw?.limitPrice) || 0);
+}
+
+function saneOrderDisplayPrice(value) {
+  const price = Number(value);
+  if (!Number.isFinite(price) || price <= 0) return 0;
+  // GMTrade can encode max/sentinel trigger prices for inactive legs. Never
+  // show those as real dollar prices in the orders UI.
+  if (price > 1_000_000_000) return 0;
+  return price;
+}
+
+function formatOrderPrice(price) {
+  const safe = saneOrderDisplayPrice(price);
+  return safe > 0 ? `$${fmtPrice(safe)}` : 'Market';
 }
 
 function orderMatchesPosition(order, pos) {
@@ -1265,7 +1279,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
               )}
             </div>
             <div style={S.row}>
-              <span style={S.detail}>Price: ${fmtPrice(parseFloat(price))}</span>
+              <span style={S.detail}>Price: {formatOrderPrice(price)}</span>
               <span style={S.detail}>Amount: {amt}</span>
             </div>
           </div>
@@ -6038,7 +6052,7 @@ function FuturesPanel() {
                 )}
               </div>
               <div style={S.row}>
-                <span style={S.detail}>Price: ${fmtPrice(parseFloat(price))}</span>
+                <span style={S.detail}>Price: {formatOrderPrice(price)}</span>
                 <span style={S.detail}>Amount: {amt}</span>
               </div>
             </div>

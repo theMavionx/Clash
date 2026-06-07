@@ -120,6 +120,15 @@ function txMessageSummary(tx) {
   }
 }
 
+function connectionRpcDiagnostics(connection) {
+  const endpoint = connection?.rpcEndpoint || connection?._rpcEndpoint || '';
+  return {
+    rpc_host: endpoint ? solanaRpcHost(endpoint) : 'unknown',
+    origin: typeof window !== 'undefined' ? window.location.origin : '',
+    fallback_hosts: SOLANA_RPC_URLS.map(solanaRpcHost).filter(Boolean),
+  };
+}
+
 function gmtradeRealtimeUrl() {
   if (typeof window === 'undefined') return '';
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -433,7 +442,9 @@ export function useGmtrade() {
           order_type: orderType,
         }),
       });
-      await claimGold();
+      if (data?.verified === true) {
+        await claimGold();
+      }
       return data;
     } catch (e) {
       return { error: e?.message || 'GMTrade trade verification failed' };
@@ -510,11 +521,18 @@ export function useGmtrade() {
     if (!connection) throw new Error('Solana RPC connection is unavailable');
     const tx = decodeTransaction(base64);
     const traceLabel = trace || `gmtrade-${Date.now()}`;
+    const rpc = connectionRpcDiagnostics(connection);
     const decodedSummary = {
       tx: txMessageSummary(tx),
+      rpc,
       build_recent_blockhash: meta?.recent_blockhash,
       build_last_valid_block_height: meta?.last_valid_block_height,
       build_transactions: Array.isArray(meta?.transactions) ? meta.transactions.length : null,
+      build_builder: meta?.builder || '',
+      build_market_token: meta?.market_token || '',
+      build_collateral_token: meta?.collateral_token || '',
+      build_pay_token: meta?.pay_token || '',
+      build_memo_enabled: meta?.memo_enabled === true,
     };
     console.info('[GMTrade tx] decoded', { trace: traceLabel, attempt, ...decodedSummary });
     await gmtradeLog('tx_decoded', {
@@ -522,7 +540,7 @@ export function useGmtrade() {
     }, attempt, trace);
     if (typeof solWallet.signTransaction === 'function') {
       const signStartedAt = Date.now();
-      await gmtradeLog('wallet_sign_start', { tx_kind: txKind(tx) }, attempt, trace);
+      await gmtradeLog('wallet_sign_start', { tx_kind: txKind(tx), rpc }, attempt, trace);
       const signed = await solWallet.signTransaction(tx);
       const signedSummary = {
         tx_kind: txKind(signed),
@@ -542,6 +560,7 @@ export function useGmtrade() {
           commitment: 'confirmed',
         });
         const simulationPayload = {
+          rpc,
           err: simulation?.value?.err || null,
           units_consumed: simulation?.value?.unitsConsumed || null,
           logs: simulationLogs(simulation?.value),
@@ -560,32 +579,33 @@ export function useGmtrade() {
       } catch (simulationError) {
         if (simulationError?.simulation) throw simulationError;
         console.error('[GMTrade tx] simulation exception', { trace: traceLabel, attempt, error: errorInfo(simulationError) });
-        await gmtradeLog('simulation_exception', { error: errorInfo(simulationError) }, attempt, trace);
+      await gmtradeLog('simulation_exception', { rpc, error: errorInfo(simulationError) }, attempt, trace);
       }
       const raw = signed.serialize();
-      console.info('[GMTrade tx] send raw start', { trace: traceLabel, attempt, raw_bytes: raw.length });
-      await gmtradeLog('send_raw_start', { raw_bytes: raw.length }, attempt, trace);
+      console.info('[GMTrade tx] send raw start', { trace: traceLabel, attempt, rpc, raw_bytes: raw.length });
+      await gmtradeLog('send_raw_start', { rpc, raw_bytes: raw.length }, attempt, trace);
       try {
         const signature = await connection.sendRawTransaction(raw, {
           skipPreflight: false,
           preflightCommitment: 'confirmed',
           maxRetries: 3,
         });
-        console.info('[GMTrade tx] send raw done', { trace: traceLabel, attempt, signature });
-        await gmtradeLog('send_raw_done', { signature }, attempt, trace);
+        console.info('[GMTrade tx] send raw done', { trace: traceLabel, attempt, rpc, signature });
+        await gmtradeLog('send_raw_done', { rpc, signature }, attempt, trace);
         return signature;
       } catch (sendError) {
         let logs = [];
         try {
           logs = typeof sendError?.getLogs === 'function' ? await sendError.getLogs(connection) : [];
         } catch {}
-        console.error('[GMTrade tx] send raw error', { trace: traceLabel, attempt, error: errorInfo(sendError), logs });
-        await gmtradeLog('send_raw_error', { error: errorInfo(sendError), logs }, attempt, trace);
+        console.error('[GMTrade tx] send raw error', { trace: traceLabel, attempt, rpc, error: errorInfo(sendError), logs });
+        await gmtradeLog('send_raw_error', { rpc, error: errorInfo(sendError), logs }, attempt, trace);
         throw sendError;
       }
     }
     if (typeof solWallet.sendTransaction === 'function') {
       await gmtradeLog('wallet_send_start', {
+        rpc: connectionRpcDiagnostics(connection),
         note: 'wallet has no signTransaction, cannot run client simulation before send',
       }, attempt, trace);
       const signature = await solWallet.sendTransaction(tx, connection, {
@@ -593,7 +613,7 @@ export function useGmtrade() {
         preflightCommitment: 'confirmed',
         maxRetries: 3,
       });
-      await gmtradeLog('wallet_send_done', { signature }, attempt, trace);
+      await gmtradeLog('wallet_send_done', { rpc: connectionRpcDiagnostics(connection), signature }, attempt, trace);
       return signature;
     }
     throw new Error('This Solana wallet cannot sign GMTrade transactions');
@@ -647,6 +667,7 @@ export function useGmtrade() {
         const latest = await connection.getLatestBlockhash('confirmed');
         await gmtradeLog('order_attempt_start', {
           payload,
+          rpc: connectionRpcDiagnostics(connection),
           current_block_height: beforeHeight,
           latest_blockhash: latest.blockhash,
           latest_last_valid_block_height: latest.lastValidBlockHeight,
@@ -658,6 +679,7 @@ export function useGmtrade() {
             ...payload,
             recent_blockhash: latest.blockhash,
             last_valid_block_height: latest.lastValidBlockHeight,
+            client_rpc: connectionRpcDiagnostics(connection),
           }),
         });
         await gmtradeLog('order_build_done', {
@@ -900,6 +922,7 @@ export function useGmtrade() {
         const latest = await connection.getLatestBlockhash('confirmed');
         await gmtradeLog('cancel_attempt_start', {
           order_id: orderId,
+          rpc: connectionRpcDiagnostics(connection),
           current_block_height: beforeHeight,
           latest_blockhash: latest.blockhash,
           latest_last_valid_block_height: latest.lastValidBlockHeight,
@@ -912,6 +935,7 @@ export function useGmtrade() {
             order_id: orderId,
             recent_blockhash: latest.blockhash,
             last_valid_block_height: latest.lastValidBlockHeight,
+            client_rpc: connectionRpcDiagnostics(connection),
           }),
         });
         await gmtradeLog('cancel_build_done', {
@@ -989,6 +1013,7 @@ export function useGmtrade() {
         const latest = await connection.getLatestBlockhash('confirmed');
         await gmtradeLog('referral_attempt_start', {
           code: config?.referral_code || 'gamingperps',
+          rpc: connectionRpcDiagnostics(connection),
           current_block_height: beforeHeight,
           latest_blockhash: latest.blockhash,
           latest_last_valid_block_height: latest.lastValidBlockHeight,
@@ -1001,6 +1026,7 @@ export function useGmtrade() {
             code: config?.referral_code || 'gamingperps',
             recent_blockhash: latest.blockhash,
             last_valid_block_height: latest.lastValidBlockHeight,
+            client_rpc: connectionRpcDiagnostics(connection),
           }),
         });
         if (build?.already_linked) {
