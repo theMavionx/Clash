@@ -134,6 +134,15 @@ function errorInfo(error) {
   };
 }
 
+function gmtradeUserError(error) {
+  const message = String(error?.message || error?.data?.detail || error?.data?.error || error || '');
+  if (/insufficient gmtrade wallet usdc/i.test(message)) return message;
+  if (/Tokenkeg|insufficient funds|custom program error:\s*0x1/i.test(message)) {
+    return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
+  }
+  return message || 'GMTrade order failed';
+}
+
 export function useGmtrade() {
   const { dex } = useDex();
   const player = usePlayer();
@@ -711,7 +720,7 @@ export function useGmtrade() {
           error: 'GMTrade transaction expired before Solana confirmed it. I added detailed server logs for this attempt; try once more so we can inspect the simulation and confirmation path.',
         };
       }
-      return { error: e?.message || 'GMTrade order failed' };
+      return { error: gmtradeUserError(e) };
     }
   }, [config?.min_position_usd, config?.native_order_builder, confirmSignatureWithDiagnostics, connection, gmtradeLog, refresh, reportTrade, requestRealtimeRefresh, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 

@@ -1708,6 +1708,20 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   if (!isDecrease && GMTRADE_MIN_POSITION_USD > 0 && notional < GMTRADE_MIN_POSITION_USD) {
     throw Object.assign(new Error(`GMTrade minimum position size is $${GMTRADE_MIN_POSITION_USD}. Yours: $${notional.toFixed(4)}. Increase margin or leverage.`), { status: 400 });
   }
+  if (!isDecrease && collateralToken === GMTRADE_DEFAULT_COLLATERAL_MINT) {
+    try {
+      const walletUsdc = await getWalletUsdcBalance(payer);
+      if (Number.isFinite(walletUsdc) && walletUsdc + 0.000001 < margin) {
+        throw Object.assign(
+          new Error(`Insufficient GMTrade wallet USDC. Wallet has $${walletUsdc.toFixed(2)}, order needs $${margin.toFixed(2)} margin.`),
+          { status: 400, wallet_usdc: walletUsdc, required_margin_usd: margin },
+        );
+      }
+    } catch (e) {
+      if (Number(e?.status) === 400) throw e;
+      console.warn('[gmtrade] wallet USDC preflight skipped:', e?.message || e);
+    }
+  }
   const params = {
     market_token: marketToken,
     is_long: side === 'long' || side === 'close_long',
