@@ -877,6 +877,37 @@ function decimalToBigInt(value, decimals) {
   return BigInt(whole || '0') * (10n ** BigInt(scale)) + BigInt(padded || '0');
 }
 
+function stableDecimalString(value, label, options = {}) {
+  const {
+    decimals = 6,
+    min = 0,
+    max = 1_000_000_000,
+    allowZero = false,
+  } = options;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < min || (!allowZero && n <= 0) || n > max) {
+    throw Object.assign(new Error(`GMTrade ${label} out of range`), { status: 400 });
+  }
+  const scale = Math.max(0, Math.min(12, Number(decimals) || 0));
+  const text = n.toFixed(scale).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
+  if (!/^\d+(\.\d+)?$/.test(text)) {
+    throw Object.assign(new Error(`GMTrade ${label} must be a plain decimal`), { status: 400 });
+  }
+  if (!allowZero && decimalToBigInt(text, scale) <= 0n) {
+    throw Object.assign(new Error(`GMTrade ${label} is too small`), { status: 400 });
+  }
+  return text;
+}
+
+function stableNumber(value, label, options = {}) {
+  const text = stableDecimalString(value, label, options);
+  const n = Number(text);
+  if (!Number.isFinite(n)) {
+    throw Object.assign(new Error(`GMTrade ${label} out of range`), { status: 400 });
+  }
+  return n;
+}
+
 function usdToGmUnits(value) {
   return decimalToBigInt(value, GMTRADE_MARKET_DECIMALS);
 }
@@ -1725,11 +1756,19 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   const payToken = assertPubkey(cfg.pay_token || collateralToken, 'pay_token');
   const receiveToken = cfg.receive_token ? assertPubkey(cfg.receive_token, 'receive_token') : collateralToken;
 
-  const margin = Number(body.amount || body.margin || body.margin_usd);
-  const leverage = Number(body.leverage || 1);
-  if (!Number.isFinite(margin) || margin <= 0 || !Number.isFinite(leverage) || leverage <= 0) {
-    throw Object.assign(new Error('GMTrade amount/leverage out of range'), { status: 400 });
-  }
+  const collateralDecimals = Math.max(0, Math.min(12, Number(cfg.collateral_decimals) || GMTRADE_DEFAULT_COLLATERAL_DECIMALS));
+  const marginText = stableDecimalString(body.amount || body.margin || body.margin_usd, 'margin', {
+    decimals: collateralDecimals,
+    min: 0,
+    max: 10_000_000,
+  });
+  const leverageText = stableDecimalString(body.leverage || 1, 'leverage', {
+    decimals: 6,
+    min: 0,
+    max: 500,
+  });
+  const margin = Number(marginText);
+  const leverage = Number(leverageText);
   const side = normalizeSide(body.side);
   const orderType = String(body.order_type || body.orderType || 'market').toLowerCase();
   const isDecrease = side === 'close_long' || side === 'close_short' || body.reduce_only === true || body.reduceOnly === true;
@@ -1739,7 +1778,12 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     : (orderType.includes('limit') || /^(take_profit|take-profit|tp)$/.test(orderType))
       ? (isDecrease ? 'LimitDecrease' : 'LimitIncrease')
       : (isDecrease ? 'MarketDecrease' : 'MarketIncrease');
-  const notional = margin * leverage;
+  const notionalText = stableDecimalString(margin * leverage, 'notional', {
+    decimals: Math.min(12, GMTRADE_MARKET_DECIMALS),
+    min: 0,
+    max: 1_000_000_000,
+  });
+  const notional = Number(notionalText);
   if (!isDecrease && GMTRADE_MIN_POSITION_USD > 0 && notional < GMTRADE_MIN_POSITION_USD) {
     throw Object.assign(new Error(`GMTrade minimum position size is $${GMTRADE_MIN_POSITION_USD}. Yours: $${notional.toFixed(4)}. Increase margin or leverage.`), { status: 400 });
   }
@@ -1760,23 +1804,39 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   const params = {
     market_token: marketToken,
     is_long: side === 'long' || side === 'close_long',
-    size: usdToGmUnits(String(notional)),
-    amount: decimalToBigInt(String(margin), cfg.collateral_decimals),
+    size: usdToGmUnits(notionalText),
+    amount: decimalToBigInt(marginText, collateralDecimals),
     min_output: 0n,
   };
-  const price = Number(body.price || body.trigger_price || body.triggerPrice || 0);
+  const rawPrice = body.price || body.trigger_price || body.triggerPrice || 0;
   if (kind === 'LimitIncrease' || kind === 'LimitDecrease' || kind === 'StopLossDecrease') {
+    const priceText = stableDecimalString(rawPrice, 'trigger price', {
+      decimals: Math.min(12, gmUnitPriceDecimals(cfg)),
+      min: 0,
+      max: 1_000_000_000,
+    });
+    const price = Number(priceText);
     if (!Number.isFinite(price) || price <= 0) {
       throw Object.assign(new Error('GMTrade trigger orders require trigger price'), { status: 400 });
     }
-    params.trigger_price = priceToGmUnitPrice(String(price), cfg);
+    params.trigger_price = priceToGmUnitPrice(priceText, cfg);
     if (kind === 'LimitIncrease' || kind === 'LimitDecrease') {
-      const slippageBps = Number(body.slippage_bps || body.slippageBps || GMTRADE_ORDER_SLIPPAGE_BPS);
+      const slippageBps = stableNumber(body.slippage_bps || body.slippageBps || GMTRADE_ORDER_SLIPPAGE_BPS, 'slippage bps', {
+        decimals: 2,
+        min: 0,
+        max: 5000,
+        allowZero: true,
+      });
       const slip = Math.max(0, slippageBps) / 10_000;
       const acceptable = kind === 'LimitDecrease'
         ? (params.is_long ? price * (1 - slip) : price * (1 + slip))
         : (params.is_long ? price * (1 + slip) : price * (1 - slip));
-      params.acceptable_price = priceToGmUnitPrice(String(Math.max(0, acceptable)), cfg);
+      const acceptableText = stableDecimalString(Math.max(0, acceptable), 'acceptable price', {
+        decimals: Math.min(12, gmUnitPriceDecimals(cfg)),
+        min: 0,
+        max: 1_000_000_000,
+      });
+      params.acceptable_price = priceToGmUnitPrice(acceptableText, cfg);
     }
   }
 
