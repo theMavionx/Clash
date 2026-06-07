@@ -120,6 +120,74 @@ function txMessageSummary(tx) {
   }
 }
 
+function readU32LE(bytes, offset = 0) {
+  if (!bytes || bytes.length < offset + 4) return null;
+  return bytes[offset]
+    + (bytes[offset + 1] << 8)
+    + (bytes[offset + 2] << 16)
+    + (bytes[offset + 3] << 24);
+}
+
+function readU64LE(bytes, offset = 0) {
+  if (!bytes || bytes.length < offset + 8) return null;
+  let out = 0n;
+  for (let i = 0; i < 8; i += 1) {
+    out += BigInt(bytes[offset + i]) << BigInt(i * 8);
+  }
+  return out;
+}
+
+function summarizeTransactionPrograms(tx) {
+  try {
+    const rows = [];
+    if (tx instanceof VersionedTransaction) {
+      const keys = tx.message?.staticAccountKeys || [];
+      for (const ix of tx.message?.compiledInstructions || []) {
+        const program = keys[ix.programIdIndex]?.toBase58?.() || '';
+        rows.push({ program, data: Uint8Array.from(ix.data || []) });
+      }
+    } else {
+      for (const ix of tx.instructions || []) {
+        rows.push({ program: ix.programId?.toBase58?.() || '', data: Uint8Array.from(ix.data || []) });
+      }
+    }
+    const counts = rows.reduce((acc, row) => {
+      const label = row.program === '11111111111111111111111111111111'
+        ? 'system'
+        : row.program === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'
+          ? 'associated_token'
+          : row.program === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+            ? 'spl_token'
+            : row.program === 'ComputeBudget111111111111111111111111111111'
+              ? 'compute_budget'
+              : row.program === 'Gmso1uvJnLbawvw7yezdfCDcPydwW2s2iqG3w6MDucLo'
+                ? 'gmtrade'
+                : row.program || 'unknown';
+      acc[label] = (acc[label] || 0) + 1;
+      return acc;
+    }, {});
+    let directSystemLamports = 0n;
+    const systemInstructions = [];
+    for (const row of rows) {
+      if (row.program !== '11111111111111111111111111111111') continue;
+      const ixType = readU32LE(row.data, 0);
+      const lamports = ixType === 0 || ixType === 2 ? readU64LE(row.data, 4) : null;
+      if (lamports != null) directSystemLamports += lamports;
+      systemInstructions.push({
+        type: ixType,
+        lamports: lamports == null ? null : Number(lamports) / 1e9,
+      });
+    }
+    return {
+      program_counts: counts,
+      direct_system_lamports: Number(directSystemLamports) / 1e9,
+      system_instructions: systemInstructions,
+    };
+  } catch (e) {
+    return { error: e?.message || String(e) };
+  }
+}
+
 function connectionRpcDiagnostics(connection) {
   const endpoint = connection?.rpcEndpoint || connection?._rpcEndpoint || '';
   return {
@@ -157,6 +225,9 @@ function simulationErrorMessage(value) {
 
 function gmtradeUserError(error) {
   const message = String(error?.message || error?.data?.detail || error?.data?.error || error || '');
+  if (/user rejected|rejected the request|request blocked|blocked/i.test(message)) {
+    return 'Phantom blocked or rejected the GMTrade transaction. The transaction pre-simulation can pass, but Phantom may still show a risk warning for GMTrade setup/rent accounts on this domain. Review the wallet prompt or try another Solana wallet if Phantom blocks it.';
+  }
   if (/insufficient gmtrade wallet usdc/i.test(message)) return message;
   if (/Tokenkeg|insufficient funds|custom program error:\s*0x1/i.test(message)) {
     return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
@@ -524,6 +595,7 @@ export function useGmtrade() {
     const rpc = connectionRpcDiagnostics(connection);
     const decodedSummary = {
       tx: txMessageSummary(tx),
+      tx_programs: summarizeTransactionPrograms(tx),
       rpc,
       build_recent_blockhash: meta?.recent_blockhash,
       build_last_valid_block_height: meta?.last_valid_block_height,
@@ -538,6 +610,34 @@ export function useGmtrade() {
     await gmtradeLog('tx_decoded', {
       ...decodedSummary,
     }, attempt, trace);
+    try {
+      const preSignStartedAt = Date.now();
+      const preSignSimulation = await connection.simulateTransaction(tx, {
+        sigVerify: false,
+        replaceRecentBlockhash: false,
+        commitment: 'confirmed',
+      });
+      const preSignPayload = {
+        rpc,
+        err: preSignSimulation?.value?.err || null,
+        units_consumed: preSignSimulation?.value?.unitsConsumed || null,
+        logs: simulationLogs(preSignSimulation?.value),
+        simulation_ms: Date.now() - preSignStartedAt,
+      };
+      console.info('[GMTrade tx] pre-sign simulation', { trace: traceLabel, attempt, ...preSignPayload });
+      await gmtradeLog('pre_sign_simulation_result', preSignPayload, attempt, trace);
+      if (preSignSimulation?.value?.err) {
+        const err = new Error(simulationErrorMessage(preSignSimulation.value));
+        err.simulation = preSignPayload;
+        console.error('[GMTrade tx] pre-sign simulation failed', { trace: traceLabel, attempt, ...preSignPayload });
+        await gmtradeLog('pre_sign_simulation_failed', preSignPayload, attempt, trace);
+        throw err;
+      }
+    } catch (preSignSimulationError) {
+      if (preSignSimulationError?.simulation) throw preSignSimulationError;
+      console.error('[GMTrade tx] pre-sign simulation exception', { trace: traceLabel, attempt, error: errorInfo(preSignSimulationError) });
+      await gmtradeLog('pre_sign_simulation_exception', { rpc, error: errorInfo(preSignSimulationError) }, attempt, trace);
+    }
     if (typeof solWallet.signTransaction === 'function') {
       const signStartedAt = Date.now();
       await gmtradeLog('wallet_sign_start', { tx_kind: txKind(tx), rpc }, attempt, trace);
