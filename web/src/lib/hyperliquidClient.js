@@ -4,7 +4,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 export const HYPERLIQUID_TESTNET = String(import.meta.env.VITE_HYPERLIQUID_TESTNET || '').trim() === '1';
 export const HYPERLIQUID_API_URL = String(import.meta.env.VITE_HYPERLIQUID_API_URL || '').trim();
 export const HYPERLIQUID_BUILDER_ADDRESS = String(import.meta.env.VITE_HYPERLIQUID_BUILDER_ADDRESS || '').trim();
-export const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(import.meta.env.VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 50);
+export const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(import.meta.env.VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 10);
 export const HYPERLIQUID_REFERRAL_CODE = String(import.meta.env.VITE_HYPERLIQUID_REFERRAL_CODE || 'CLASHOFPERPS').trim();
 export const HYPERLIQUID_ARBITRUM_CHAIN_ID = 42161;
 export const HYPERLIQUID_SIGNATURE_CHAIN_ID_HEX = `0x${HYPERLIQUID_ARBITRUM_CHAIN_ID.toString(16)}`;
@@ -23,7 +23,7 @@ export const HYPERLIQUID_USDC_ABI = [
 ];
 
 const DEFAULT_TIMEOUT_MS = 12_000;
-const PERP_MAX_BUILDER_FEE_TENTH_BPS = 50; // 0.05%.
+const PERP_MAX_BUILDER_FEE_TENTH_BPS = 10; // 0.01%.
 const AGENT_STORAGE_PREFIX = 'clash_hyperliquid_agent_v1';
 const AGENT_NAME = 'clashofperps';
 const AGENT_DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;

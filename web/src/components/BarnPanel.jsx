@@ -212,7 +212,7 @@ const TROOP_STATS = {
     display: "Mage",
     stats: {
       1: { hp: 150, damage: 58, atk_speed: 1.25 },
-      2: { hp: 200, damage: 78, atk_speed: 1.12 },
+      2: { hp: 200, damage: 74, atk_speed: 1.12 },
       3: { hp: 265, damage: 104, atk_speed: 1.0 },
       4: { hp: 345, damage: 138, atk_speed: 0.9 },
     },
@@ -232,7 +232,7 @@ const TROOP_STATS = {
     display: "Archer",
     stats: {
       1: { hp: 210, damage: 40, atk_speed: 1.05 },
-      2: { hp: 280, damage: 54, atk_speed: 0.95 },
+      2: { hp: 280, damage: 51, atk_speed: 0.95 },
       3: { hp: 310, damage: 58, atk_speed: 0.85 },
       4: { hp: 425, damage: 82, atk_speed: 0.78 },
     },
@@ -259,8 +259,8 @@ const TROOP_STATS = {
   }
 };
 
-const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Archer', 'DemonKing'];
-const NORMAL_TROOP_NAMES = ['Knight', 'Mage', 'Archer'];
+const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger', 'DemonKing'];
+const NORMAL_TROOP_NAMES = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
 const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
 const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL = { 1: 1.2, 2: 1.3, 3: 1.4 };
 const DEMON_KING_SLOT_COUNT = 2;
@@ -299,9 +299,20 @@ function computeDemonKingStats(level, troopLevels = {}) {
   const targetDps = bestDps * DEMON_KING_SLOT_COUNT * powerMult;
   return {
     hp: Math.ceil(targetHp),
-    damage: Math.ceil(targetDps * atk_speed),
+    damage: monotonicDemonKingHitDamage(bestDps, demonLevel),
     atk_speed,
   };
+}
+
+function monotonicDemonKingHitDamage(bestDps, demonLevel) {
+  let damage = 0;
+  for (let level = 1; level <= demonLevel; level += 1) {
+    const atk_speed = DEMON_KING_ATK_SPEED_BY_LEVEL[level] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
+    const powerMult = DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[level] || DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[1];
+    const targetDps = bestDps * DEMON_KING_SLOT_COUNT * powerMult;
+    damage = Math.max(damage, Math.ceil(targetDps * atk_speed));
+  }
+  return damage;
 }
 
 function getTroopStats(name, level, troopLevels = {}) {

@@ -241,6 +241,41 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
   );
 }
 
+function ConnectAccount({ onOpenWalletModal, onOpenEvmModal, onConnectAptos, aptosConnecting, aptosHasProvider, onPrivyLogin, privyEnabled, privyAuthed }) {
+  return (
+    <div style={S.bodyStack}>
+      <h3 style={S.sectionTitle}>CREATE YOUR ACCOUNT</h3>
+      <p style={S.subtle}>
+        Sign in once, then choose any supported perp venue. You can switch venues later without losing your village, quests, or tournament progress.
+      </p>
+      {privyEnabled && (
+        <button style={S.primaryBtn} onClick={onPrivyLogin}>
+          <EmailIcon /> {privyAuthed ? 'CONTINUE WITH EMAIL' : 'EMAIL / PASSWORD'}
+        </button>
+      )}
+      <button style={privyEnabled ? S.secondaryBtn : S.primaryBtn} onClick={onOpenEvmModal}>
+        <WalletIcon /> CONNECT EVM WALLET
+      </button>
+      <button style={S.secondaryBtn} onClick={onOpenWalletModal}>
+        <WalletIcon /> CONNECT SOLANA WALLET
+      </button>
+      <button
+        style={S.secondaryBtn}
+        onClick={() => {
+          if (!aptosHasProvider) {
+            try { window.open('https://petra.app/', '_blank', 'noopener,noreferrer'); } catch {}
+            return;
+          }
+          onConnectAptos();
+        }}
+        disabled={aptosConnecting}
+      >
+        <WalletIcon /> {aptosConnecting ? 'CONNECTING...' : (aptosHasProvider ? 'CONNECT APTOS WALLET' : 'INSTALL PETRA')}
+      </button>
+    </div>
+  );
+}
+
 function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'avantis' }) {
   // Avantis (Base), GMX (Arbitrum), Perpl (Monad), and Hyperliquid all flow through the
   // same EVM modal + Privy email path. Privy's embedded wallet is chain-
@@ -346,7 +381,7 @@ function EmailIcon() {
 
 function RegisterPanel() {
   const {
-    state, dex, isInFrame, isSolanaMobile, fcUser, candidate, suggestedName, seekerHandle,
+    state, dex, dexPicked, isInFrame, isSolanaMobile, fcUser, candidate, suggestedName, seekerHandle,
     privyEnabled, privyAuthed, actions, registerError,
   } = useAuthFlow();
 
@@ -409,6 +444,20 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
+        if (!dexPicked) {
+          return (
+            <ConnectAccount
+              onOpenWalletModal={openSolanaConnect}
+              onOpenEvmModal={() => setEvmModalOpen(true)}
+              onConnectAptos={aptos.connect}
+              aptosConnecting={aptos.isConnecting}
+              aptosHasProvider={aptos.hasProvider}
+              onPrivyLogin={actions.loginWithPrivy}
+              privyEnabled={privyEnabled}
+              privyAuthed={privyAuthed}
+            />
+          );
+        }
         if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
           return (
             <ConnectAvantis
@@ -443,12 +492,15 @@ function RegisterPanel() {
   })();
 
   const showDexBadge =
+    dexPicked && (
     state === 'manual_connect' ||
     state === 'need_name' ||
-    (state === 'auto_connecting' && !(isInFrame && fcUser));
+    (state === 'auto_connecting' && !(isInFrame && fcUser))
+    );
 
   const headerTitle = (() => {
     if (state === 'pick_dex') return 'WELCOME';
+    if (!dexPicked && state === 'manual_connect') return 'CLASH ACCOUNT';
     if (state === 'need_name') return 'YOUR NAME';
     if (state === 'registering' || state === 'auto_connecting' || state === 'booting') return 'LOADING';
     if (dex === 'avantis') return 'AVANTIS LOGIN';
@@ -481,7 +533,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : 'base'}
+        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

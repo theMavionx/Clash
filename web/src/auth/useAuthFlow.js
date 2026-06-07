@@ -39,18 +39,13 @@ import {
   useEvmContextResolver,
   usePrivyEvmCandidate,
 } from './resolvers';
-import { addClientBreadcrumb } from '../lib/clientLogger';
+import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
-// v2 cache: keyed by `${wallet}|${dex}` instead of just `wallet`. Per-DEX
-// account migration (server-side schema: UNIQUE(wallet, dex)) means a
-// wallet can have a different account on each DEX, so the probe answer
-// for "wallet=0xABC, dex='avantis'" is independent of "wallet=0xABC,
-// dex='gmx'". The old v1 cache (clash_wallet_account_cache_v1) gets a
-// new key here so stale wallet-only entries don't accidentally answer
-// per-DEX probes with the wrong account name.
-const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_dex_account_cache_v2';
+// Unified account cache: one wallet resolves to one Clash account, and the
+// chosen venue is a profile setting instead of a separate registration.
+const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_account_cache_v3';
 const ACCOUNT_PROBE_POSITIVE_TTL_MS = 24 * 60 * 60 * 1000;
 const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
 // How long to wait for an auto-resolver to produce a candidate before
@@ -96,7 +91,7 @@ function walletCacheKey(wallet, dex) {
   // is undefined (legacy callers, transitional code) we degrade to the
   // wallet-only key so the cache miss surfaces a fresh probe instead of
   // returning the wrong account.
-  return dex ? `${w}|${dex}` : w;
+  return w;
 }
 
 function readAccountProbeCache(wallet, dex) {
@@ -380,7 +375,7 @@ export function useAuthFlow() {
   // Priority (Pacifica): Solana adapter (covers FC Solana auto-connect
   //   and external-connected) → Privy Solana.
   const candidate = useMemo(() => {
-    if (!dexPicked) return null;
+    if (!dexPicked) return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
     // Avantis (Base), GMX (Arbitrum), Monad and Hyperliquid all source from the same EVM wallet
     // context. The wallet address is the same on every EVM chain — the chain
     // switch happens at tx time via ensureChain(). Privy embedded EVM works
@@ -472,11 +467,14 @@ export function useAuthFlow() {
     if (probeInFlightRef.current[key]) return;
     probeInFlightRef.current[key] = true;
     (async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), AUTO_CONNECT_GRACE_MS);
       try {
         const r = await fetch('/api/players/login-wallet', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wallet: candidate.wallet, dex }),
+          signal: ctrl.signal,
+          body: JSON.stringify({ wallet: candidate.wallet }),
         });
         if (r.ok) {
           const data = await r.json();
@@ -490,11 +488,7 @@ export function useAuthFlow() {
           // register effect then fired without showing the name form and
           // the server's name-collision suffix kicked in (ggkhg → ggkhg1).
           // Treat any cross-dex response as "no account on this dex".
-          const respondedDex = String(data?.dex || '').toLowerCase();
-          const wantedDex = String(dex || '').toLowerCase();
-          const name = (respondedDex && wantedDex && respondedDex !== wantedDex)
-            ? null
-            : (data?.name || null);
+          const name = data?.name || null;
           writeAccountProbeCache(candidate.wallet, dex, name);
           setProbedNameByWallet(prev => ({ ...prev, [key]: name }));
         } else {
@@ -514,6 +508,7 @@ export function useAuthFlow() {
           setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
         }
       } finally {
+        clearTimeout(timer);
         probeVerifiedRef.current[key] = true;
         probeInFlightRef.current[key] = false;
       }
@@ -542,11 +537,11 @@ export function useAuthFlow() {
   const [graceExpired, setGraceExpired] = useState(false);
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    if (!dexPicked) { setGraceExpired(false); return; }
+    if (!dexPicked && !candidate?.wallet) { setGraceExpired(true); return; }
     setGraceExpired(false);
     const t = setTimeout(() => setGraceExpired(true), AUTO_CONNECT_GRACE_MS);
     return () => clearTimeout(t);
-  }, [dexPicked, dex]);
+  }, [dexPicked, dex, candidate?.wallet]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Derive the rendering state.
@@ -567,15 +562,48 @@ export function useAuthFlow() {
   const isFarcasterCandidate = !!fcUser;
   const probeInFlight = candidate?.wallet && !isFarcasterCandidate &&
     existingAccountName === undefined;
+  const authDebug = useMemo(() => ({
+    dex,
+    dexPicked,
+    booting,
+    graceExpired,
+    registering,
+    hasCandidate: !!candidate,
+    candidateSource: candidate?.source || null,
+    candidateWallet: candidate?.wallet || null,
+    probeInFlight: !!probeInFlight,
+    existingAccountState: existingAccountName === undefined
+      ? 'unknown'
+      : existingAccountName === null
+        ? 'missing'
+        : 'found',
+    hasSuggestedName: !!suggestedName,
+    isFarcasterCandidate,
+    showRegister,
+    readyForRegister,
+    privyEnabled,
+    privyReady,
+    privyAuthed,
+    smReady,
+    isInFrame,
+    fcLoading,
+  }), [
+    dex, dexPicked, booting, graceExpired, registering, candidate,
+    probeInFlight, existingAccountName, suggestedName, isFarcasterCandidate,
+    showRegister, readyForRegister, privyEnabled, privyReady, privyAuthed,
+    smReady, isInFrame, fcLoading,
+  ]);
+
   const state = useMemo(() => {
     if (registerError && candidate) return 'need_name';
     if (registering) return 'registering';
     if (booting) return 'booting';
-    if (!dexPicked) return 'pick_dex';
+    if (!candidate && !dexPicked) return 'manual_connect';
+    if (!candidate && dexPicked && !graceExpired) return 'auto_connecting';
     // FC fast-path: auto-register with FC handle.
     if (candidate && suggestedName && isFarcasterCandidate) return 'registering';
     // Non-FC: wait for probe, then branch.
-    if (candidate && probeInFlight) return 'auto_connecting';
+    if (candidate && probeInFlight && !graceExpired) return 'auto_connecting';
     // Returning user — server already has an account for this wallet;
     // fire register with their stored name (which is auto-derived-safe so
     // Godot's login_by_wallet fast-path takes over and no rename happens).
@@ -586,6 +614,57 @@ export function useAuthFlow() {
     return 'manual_connect';
   }, [registerError, registering, booting, dexPicked, candidate, suggestedName, graceExpired,
       isFarcasterCandidate, probeInFlight, existingAccountName]);
+
+  const lastAuthStateLogRef = useRef('');
+  useEffect(() => {
+    const key = JSON.stringify({
+      state,
+      dex,
+      dexPicked,
+      booting,
+      graceExpired,
+      hasCandidate: !!candidate,
+      candidateSource: candidate?.source || null,
+      probeInFlight: !!probeInFlight,
+      existingAccountName: existingAccountName === undefined ? 'unknown' : existingAccountName === null ? 'missing' : 'found',
+      registering,
+      readyForRegister,
+    });
+    if (lastAuthStateLogRef.current === key) return;
+    lastAuthStateLogRef.current = key;
+    const level = state === 'auto_connecting' ? 'warn' : 'info';
+    const payload = { state, ...authDebug };
+    console[level === 'warn' ? 'warn' : 'log']('[authFlow] state', payload);
+    reportClientEvent('auth.state', payload, {
+      level,
+      source: 'auth.flow',
+      message: `auth.state ${state}`,
+      flush: state === 'auto_connecting',
+    });
+  }, [
+    state, dex, dexPicked, booting, graceExpired, candidate, probeInFlight,
+    existingAccountName, registering, readyForRegister, authDebug,
+  ]);
+
+  useEffect(() => {
+    if (state !== 'auto_connecting') return undefined;
+    const started = Date.now();
+    const t = setTimeout(() => {
+      const payload = {
+        state,
+        stuck_ms: Date.now() - started,
+        ...authDebug,
+      };
+      console.warn('[authFlow] auto_connecting still active', payload);
+      reportClientEvent('auth.auto_connecting_stuck', payload, {
+        level: 'warn',
+        source: 'auth.flow',
+        message: 'auth.auto_connecting_stuck',
+        flush: true,
+      });
+    }, AUTO_CONNECT_GRACE_MS + 2000);
+    return () => clearTimeout(t);
+  }, [state, authDebug]);
 
   useEffect(() => {
     const onAuthError = (event) => {
@@ -645,7 +724,7 @@ export function useAuthFlow() {
     // from Avantis to GMX would silently no-op the GMX register because
     // `lastRegisteredRef.current` still pointed at the wallet from the
     // Avantis register, and the user would never get a GMX row created.
-    const candidateKey = `${String(candidate.wallet).toLowerCase()}|${dex}`;
+    const candidateKey = String(candidate.wallet).toLowerCase();
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
@@ -704,12 +783,17 @@ export function useAuthFlow() {
       // current session token so the next render's register effect fires
       // against the new DEX. The wallet itself stays connected — we only
       // need a fresh player_row, not a fresh wallet.
-      lastRegisteredRef.current = null;
-      setRegistering(false);
-      try { window._playerToken = null; } catch { /* noop */ }
+      const token = typeof window !== 'undefined' ? window._playerToken : null;
+      if (token) {
+        fetch(`/api/players/dex-accounts/${encodeURIComponent(newDex)}/select`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-token': token },
+          body: JSON.stringify({ wallet: candidate?.wallet || '' }),
+        }).catch(() => {});
+      }
       // Tell the session-reset effect to NOT bounce us to the DEX picker
       // when Godot fires show_register=true in response to logout.
-      intentionalDexSwitchRef.current = true;
+      intentionalDexSwitchRef.current = false;
       // If we were on Decibel and we're leaving it, drop the Petra
       // connection — useDecibel keeps polling Aptos REST as long as
       // address is set, which wastes RPC quota and shows ghost balances
@@ -719,9 +803,8 @@ export function useAuthFlow() {
       if (dex === 'decibel' && newDex !== 'decibel') {
         try { aptosWallet.disconnect?.(); } catch { /* noop */ }
       }
-      sendToGodot('logout');
     }
-  }, [dex, dexPicked, isInFrame, isSolanaMobile, setDex, sendToGodot, aptosWallet]);
+  }, [dex, dexPicked, isInFrame, isSolanaMobile, setDex, aptosWallet, candidate?.wallet]);
 
   const unpickDex = useCallback(() => {
     writeDexPicked(false);
@@ -737,7 +820,7 @@ export function useAuthFlow() {
     // from Avantis to GMX would silently no-op the GMX register because
     // `lastRegisteredRef.current` still pointed at the wallet from the
     // Avantis register, and the user would never get a GMX row created.
-    const candidateKey = `${String(candidate.wallet).toLowerCase()}|${dex}`;
+    const candidateKey = String(candidate.wallet).toLowerCase();
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
@@ -794,6 +877,7 @@ export function useAuthFlow() {
   return {
     state,
     dex,
+    dexPicked,
     isInFrame,
     isSolanaMobile,
     fcUser,

@@ -12,7 +12,13 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
 
 async function pollOnce(mainDb) {
   const rows = mainDb.prepare(
-    `SELECT id, wallet FROM players WHERE dex='hotstuff' AND wallet IS NOT NULL AND wallet != ''`
+    `SELECT DISTINCT p.id, COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) AS wallet
+       FROM players p
+       LEFT JOIN player_dex_accounts pda
+         ON pda.player_id = p.id AND pda.dex = 'hotstuff'
+      WHERE (p.dex = 'hotstuff' OR pda.dex = 'hotstuff')
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) IS NOT NULL
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) != ''`
   ).all();
   if (!rows.length) return 0;
   let inserted = 0;

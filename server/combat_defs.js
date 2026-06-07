@@ -44,7 +44,7 @@ const TROOP_STATS = {
 
 // Demon King is a 2-slot NFT troop that scales from the player's best normal troops.
 // L1 is +20%, L2 +30%, L3 +40% over two best troop slots by HP and DPS.
-const NORMAL_TROOP_TYPES = ['knight', 'mage', 'archer'];
+const NORMAL_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger'];
 const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
 const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL = { 1: 1.2, 2: 1.3, 3: 1.4 };
 const DEMON_KING_SLOT_COUNT = 2;
@@ -95,13 +95,24 @@ function computeDemonKingStats(troopLevels = {}, demonLevel = 1) {
 
   return {
     hp: Math.ceil(targetHp),
-    damage: Math.ceil(targetDps * atkSpeed),
+    damage: monotonicDemonKingHitDamage(bestDps, clampedLevel),
     atkSpeed,
     moveSpeed: 0.38,
     range: 0.32,
     melee: true,
     hitDelay: 0.4,
   };
+}
+
+function monotonicDemonKingHitDamage(bestDps, demonLevel) {
+  let damage = 0;
+  for (let level = 1; level <= demonLevel; level += 1) {
+    const atkSpeed = DEMON_KING_ATK_SPEED_BY_LEVEL[level] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
+    const powerMult = DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[level] || DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[1];
+    const targetDps = bestDps * DEMON_KING_SLOT_COUNT * powerMult;
+    damage = Math.max(damage, Math.ceil(targetDps * atkSpeed));
+  }
+  return damage;
 }
 
 // Defense building stats: turrets fire bullets, archer towers fire arrows.

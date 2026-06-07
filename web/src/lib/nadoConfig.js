@@ -11,8 +11,8 @@ export const INK_EXPLORER_URL = String(import.meta.env.VITE_INK_EXPLORER_URL || 
 export const NADO_CHAIN_ENV = 'inkMainnet';
 export const NADO_SUBACCOUNT_NAME = String(import.meta.env.VITE_NADO_SUBACCOUNT_NAME || 'default').trim() || 'default';
 export const NADO_BUILDER_ID = Number(import.meta.env.VITE_NADO_BUILDER_ID || 3600);
-// Nado expects builder fee rate in 0.1 bps units: 50 = 5 bps = 0.05%.
-export const NADO_BUILDER_FEE_RATE = Number(import.meta.env.VITE_NADO_BUILDER_FEE_RATE || 50);
+// Nado expects builder fee rate in 0.1 bps units: 10 = 1 bps = 0.01%.
+export const NADO_BUILDER_FEE_RATE = Number(import.meta.env.VITE_NADO_BUILDER_FEE_RATE || 10);
 export const NADO_QUOTE_PRODUCT_ID = 0;
 export const NADO_QUOTE_TOKEN_ADDRESS = '0x0200C29006150606B650577BBE7B6248F58470c1';
 export const NADO_QUOTE_TOKEN_SYMBOL = 'USDt0';

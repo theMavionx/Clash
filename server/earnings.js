@@ -99,8 +99,8 @@ const DECIBEL_API_KEY = process.env.DECIBEL_API_KEY || process.env.APTOS_NODE_AP
 const DECIBEL_BUILDER_FEE_BPS = Number(
   process.env.DECIBEL_BUILDER_FEE_BPS
   || process.env.VITE_DECIBEL_BUILDER_FEE_BPS
-  || 5,
-) || 5;
+  || 1,
+) || 1;
 
 async function fetchDecibelEarnings() {
   if (!DECIBEL_API_KEY) {
@@ -322,7 +322,7 @@ async function fetchGmxEarnings() {
 // HTTPS call each, except Pacifica which paginates) but cumulatively
 // 4–10s if Pacifica has a lot of trades. Cache aggressively — a 60 s
 // staleness window is fine for an internal dashboard.
-// Fallback matches the deploy.sh default (5 bps = 0.05%). Production
+// Fallback matches the deploy.sh default (1 bps = 0.01%). Production
 // always has DECIBEL_BUILDER_FEE_BPS set via env so this fallback only
 // fires in fresh local checkouts.
 const PHOENIX_FLIGHT_BUILDER_AUTHORITY = (
@@ -338,8 +338,8 @@ const PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT = (
 const PHOENIX_FLIGHT_BUILDER_FEE_BPS = Number(
   process.env.PHOENIX_FLIGHT_BUILDER_FEE_BPS
   || process.env.VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS
-  || 5,
-) || 5;
+  || 1,
+) || 1;
 const PHOENIX_API = (process.env.PHOENIX_API_URL || 'https://perp-api.phoenix.trade').replace(/\/+$/, '');
 const PHOENIX_EARNINGS_STALE_MS = Math.max(
   60_000,
@@ -768,7 +768,7 @@ async function fetchPhoenixEarnings({ mainDb = null } = {}) {
   return result;
 }
 
-const PERPL_BUILDER_FEE_BPS = Number(process.env.PERPL_BUILDER_FEE_BPS || process.env.DECIBEL_BUILDER_FEE_BPS) || 5;
+const PERPL_BUILDER_FEE_BPS = Number(process.env.PERPL_BUILDER_FEE_BPS || process.env.DECIBEL_BUILDER_FEE_BPS) || 1;
 
 async function fetchPerplEarnings() {
   const Db = loadSqlite();
@@ -808,7 +808,7 @@ async function fetchPerplEarnings() {
 }
 
 const HYPERLIQUID_BUILDER_ADDRESS = (process.env.HYPERLIQUID_BUILDER_ADDRESS || '').trim();
-const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(process.env.HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 50) || 50;
+const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(process.env.HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 10) || 10;
 const HYPERLIQUID_API = (process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz').replace(/\/+$/, '');
 
 async function hyperliquidInfo(body) {
@@ -912,12 +912,12 @@ const NADO_BUILDER_ID = Number(
   || process.env.VITE_NADO_BUILDER_ID
   || 3600,
 ) || 3600;
-// Nado builder fee rate uses 0.1 bps units: 50 = 5 bps = 0.05%.
+// Nado builder fee rate uses 0.1 bps units: 10 = 1 bps = 0.01%.
 const NADO_BUILDER_FEE_RATE = Number(
   process.env.NADO_BUILDER_FEE_RATE
   || process.env.VITE_NADO_BUILDER_FEE_RATE
-  || 50,
-) || 50;
+  || 10,
+) || 10;
 const NADO_BUILDER_FEE_BPS = Number(process.env.NADO_BUILDER_FEE_BPS)
   || (NADO_BUILDER_FEE_RATE / 10);
 const NADO_MATCH_PAGE_LIMIT = Math.max(10, Math.min(250, Number(process.env.NADO_MATCH_PAGE_LIMIT || 100)));
@@ -1119,8 +1119,8 @@ async function fetchNadoEarnings() {
 const GRVT_BUILDER_FEE_BPS = Math.max(0, Number(
   process.env.GRVT_BUILDER_FEE_BPS
   || process.env.VITE_GRVT_BUILDER_FEE_BPS
-  || 5,
-)) || 5;
+  || 1,
+)) || 1;
 
 function payloadRows(payload) {
   if (Array.isArray(payload)) return payload;
@@ -1253,7 +1253,7 @@ const HOTSTUFF_BROKER_ADDRESS = String(
 const HOTSTUFF_BROKER_FEE_RATE = Number(
   process.env.HOTSTUFF_BROKER_FEE_RATE
   || process.env.VITE_HOTSTUFF_BROKER_FEE_RATE
-  || 0.0005,
+  || 0.0001,
 ) || 0;
 const HOTSTUFF_BROKER_FEE_BPS = HOTSTUFF_BROKER_FEE_RATE * 10000;
 

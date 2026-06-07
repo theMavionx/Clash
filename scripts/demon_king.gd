@@ -28,15 +28,27 @@ const NORMAL_TROOP_STATS: Dictionary = {
 	},
 	"mage": {
 		1: {"hp": 150, "damage": 58, "atk_speed": 1.25},
-		2: {"hp": 200, "damage": 78, "atk_speed": 1.12},
+		2: {"hp": 200, "damage": 74, "atk_speed": 1.12},
 		3: {"hp": 265, "damage": 104, "atk_speed": 1.0},
 		4: {"hp": 345, "damage": 138, "atk_speed": 0.90},
 	},
+	"barbarian": {
+		1: {"hp": 240, "damage": 24, "atk_speed": 0.60},
+		2: {"hp": 320, "damage": 32, "atk_speed": 0.55},
+		3: {"hp": 420, "damage": 43, "atk_speed": 0.50},
+		4: {"hp": 550, "damage": 57, "atk_speed": 0.46},
+	},
 	"archer": {
 		1: {"hp": 210, "damage": 40, "atk_speed": 1.05},
-		2: {"hp": 280, "damage": 54, "atk_speed": 0.95},
-		3: {"hp": 365, "damage": 71, "atk_speed": 0.85},
-		4: {"hp": 470, "damage": 94, "atk_speed": 0.78},
+		2: {"hp": 280, "damage": 51, "atk_speed": 0.95},
+		3: {"hp": 310, "damage": 58, "atk_speed": 0.85},
+		4: {"hp": 425, "damage": 82, "atk_speed": 0.78},
+	},
+	"ranger": {
+		1: {"hp": 250, "damage": 34, "atk_speed": 1.0},
+		2: {"hp": 330, "damage": 45, "atk_speed": 0.92},
+		3: {"hp": 430, "damage": 60, "atk_speed": 0.83},
+		4: {"hp": 560, "damage": 80, "atk_speed": 0.76},
 	},
 }
 
@@ -206,9 +218,19 @@ static func _compute_dynamic_stats(demon_level: int, levels: Dictionary) -> Dict
 	var target_dps: float = best_dps * DEMON_KING_SLOT_COUNT * power_mult
 	return {
 		"hp": int(ceil(target_hp)),
-		"damage": int(ceil(target_dps * atk)),
+		"damage": _monotonic_hit_damage(best_dps, clamped_level),
 		"atk_speed": atk,
 	}
+
+
+static func _monotonic_hit_damage(best_dps: float, demon_level: int) -> int:
+	var best_damage: int = 0
+	for lvl in range(1, demon_level + 1):
+		var atk: float = float(DEMON_KING_ATK_SPEED_BY_LEVEL[lvl])
+		var power_mult: float = float(DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL.get(lvl, 1.2))
+		var target_dps: float = best_dps * DEMON_KING_SLOT_COUNT * power_mult
+		best_damage = maxi(best_damage, int(ceil(target_dps * atk)))
+	return best_damage
 
 
 ## DemonKing fights bare-handed (no skeleton slot for a weapon).

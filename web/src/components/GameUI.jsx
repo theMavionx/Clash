@@ -18,6 +18,7 @@ import { useAgentActions } from '../hooks/useAgentActions';
 import { useLayout } from '../hooks/useIsMobile';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import { useSkrHandle } from '../hooks/useSkrHandle';
+import { getAvailableDexConfigs, useDex } from '../contexts/DexContext';
 import ChunkErrorBoundary from './ChunkErrorBoundary';
 import { addClientBreadcrumb, lazyWithClientReload } from '../lib/clientLogger';
 import { readSoundEnabled } from '../lib/soundSettings';
@@ -33,8 +34,48 @@ const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'
 const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
 const AiChatPanel = lazy(lazyWithClientReload(() => import('./AiChatPanel'), 'AiChatPanel'));
 
+function VenuePickerOverlay({ isSolanaMobile, onPick }) {
+  const dexOptions = getAvailableDexConfigs({ isInFrame: false, isSolanaMobile });
+  return (
+    <div style={venueStyles.overlay}>
+      <div style={venueStyles.panel}>
+        <div style={venueStyles.header}>CHOOSE TRADING VENUE</div>
+        <div style={venueStyles.body}>
+          <div style={venueStyles.copy}>
+            Your game account is ready. Pick where you want to trade now; you can switch venue later from Trade/Profile without creating a new account.
+          </div>
+          <div style={venueStyles.grid}>
+            {dexOptions.map((cfg) => (
+              <button
+                key={cfg.id}
+                type="button"
+                style={{
+                  ...venueStyles.card,
+                  borderColor: cfg.borderColor,
+                  background: `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)`,
+                }}
+                onClick={() => onPick(cfg.id)}
+              >
+                <span style={venueStyles.logoWrap}>
+                  <img src={cfg.logo} alt={cfg.label} style={venueStyles.logo} />
+                </span>
+                <span style={venueStyles.cardText}>
+                  <strong>{cfg.label}</strong>
+                  <small>{cfg.chain}</small>
+                </span>
+                <span style={venueStyles.chevron}>›</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
+  const { setDex } = useDex();
   const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
   const { tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useTutorial();
   const player = usePlayer();
@@ -52,7 +93,44 @@ export default function GameUI() {
   const [showBattleLog, setShowBattleLog] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showAiChat, setShowAiChat] = useState(false);
+  const [showVenuePicker, setShowVenuePicker] = useState(false);
   const canShowAiChatButton = !enemyMode?.active || !!enemyMode?.is_replay;
+
+  useEffect(() => {
+    const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
+    if (!token || showRegister) return;
+    try {
+      if (localStorage.getItem('clash_dex_picked') !== '1') setShowVenuePicker(true);
+    } catch {
+      setShowVenuePicker(true);
+    }
+  }, [player?.token, showRegister]);
+
+  const chooseVenue = useCallback((nextDex) => {
+    const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
+    setDex(nextDex);
+    try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
+    setShowVenuePicker(false);
+    if (token) {
+      fetch(`/api/players/dex-accounts/${encodeURIComponent(nextDex)}/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify({}),
+      }).catch(() => {});
+    }
+  }, [player?.token, setDex]);
+
+  useEffect(() => {
+    const openVenuePicker = (event) => {
+      addClientBreadcrumb('venue_picker.open', {
+        source: event?.detail?.source || 'unknown',
+        currentDex: event?.detail?.currentDex || null,
+      });
+      setShowVenuePicker(true);
+    };
+    window.addEventListener('clash-open-venue-picker', openVenuePicker);
+    return () => window.removeEventListener('clash-open-venue-picker', openVenuePicker);
+  }, []);
 
   useEffect(() => {
     if (!selectedBuilding) setShowTroops(false);
@@ -217,6 +295,12 @@ export default function GameUI() {
         <NftGoldBoostButton placement="side" />
       )}
       {showFloatingUtilities && <FeedbackButton />}
+      {showVenuePicker && (
+        <VenuePickerOverlay
+          isSolanaMobile={isSolanaMobile}
+          onPick={chooseVenue}
+        />
+      )}
       {canShowAiChatButton && (() => {
         // Mirror ActionButtons sizing so we land cleanly between the
         // SHOP / TRADE columns regardless of which phone the player has.
@@ -315,6 +399,102 @@ export default function GameUI() {
     </div>
   );
 }
+
+const venueStyles = {
+  overlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 50,
+    pointerEvents: 'auto',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(0,0,0,0.55)',
+    padding: 12,
+  },
+  panel: {
+    width: 'min(760px, 94vw)',
+    maxHeight: 'calc(100vh - 24px)',
+    background: '#ebdaba',
+    border: '4px solid #377d9f',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  header: {
+    height: 54,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: '#4ca5d2',
+    borderBottom: '4px solid #377d9f',
+    color: '#fff',
+    fontSize: 22,
+    fontStyle: 'italic',
+    fontWeight: 900,
+    textShadow: '0 2px 4px rgba(0,0,0,0.6)',
+  },
+  body: {
+    padding: 18,
+    overflowY: 'auto',
+  },
+  copy: {
+    color: '#5b432c',
+    fontSize: 14,
+    fontWeight: 800,
+    lineHeight: 1.35,
+    marginBottom: 14,
+    textAlign: 'center',
+  },
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+    gap: 12,
+  },
+  card: {
+    minHeight: 76,
+    border: '3px solid #5C3A21',
+    borderRadius: 8,
+    padding: '10px 12px',
+    color: '#fff',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    cursor: 'pointer',
+    boxShadow: '0 5px 0 rgba(0,0,0,0.25), 0 7px 14px rgba(0,0,0,0.25)',
+    textAlign: 'left',
+  },
+  logoWrap: {
+    width: 44,
+    height: 44,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: '0 0 auto',
+  },
+  logo: {
+    maxWidth: 44,
+    maxHeight: 32,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+  },
+  cardText: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+    fontWeight: 900,
+    textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+    flex: 1,
+  },
+  chevron: {
+    fontSize: 36,
+    fontWeight: 900,
+    lineHeight: 1,
+    textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+  },
+};
 
 const styles = {
   overlay: {

@@ -87,9 +87,17 @@ function coreBool(v) {
 }
 
 async function pollOnce(mainDb) {
-  // Fetch all registered Avantis players with a wallet address.
+  // Fetch all linked Avantis players with a wallet address. `players.dex`
+  // is only the active UI venue now, so keep old rows as fallback but use the
+  // venue-account link when present.
   const rows = mainDb.prepare(
-    `SELECT id, wallet FROM players WHERE dex='avantis' AND wallet IS NOT NULL AND wallet != ''`
+    `SELECT DISTINCT p.id, COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) AS wallet
+       FROM players p
+       LEFT JOIN player_dex_accounts pda
+         ON pda.player_id = p.id AND pda.dex = 'avantis'
+      WHERE (p.dex = 'avantis' OR pda.dex = 'avantis')
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) IS NOT NULL
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) != ''`
   ).all();
   if (!rows.length) return 0;
 

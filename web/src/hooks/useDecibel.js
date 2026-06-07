@@ -1344,7 +1344,7 @@ export function useDecibel() {
   // ───── Builder fee linkage ─────
   // We treat builder approvals as a one-shot on-chain cap, but require it to
   // exactly match the current fee. Otherwise old 10 bps approvals would keep
-  // passing after lowering Clash's Decibel fee to 5 bps.
+  // passing after lowering Clash's Decibel fee to 1 bps.
   const fetchBuilderApproval = useCallback(async () => {
     if (!isBuilderConfigured()) {
       setBuilderApproved(true);

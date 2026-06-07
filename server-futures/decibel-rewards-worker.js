@@ -226,7 +226,13 @@ async function recordRecentLimitFills(playerId, subAddr) {
 
 async function pollOnce(mainDb) {
   const rows = mainDb.prepare(
-    `SELECT id, wallet FROM players WHERE dex='decibel' AND wallet IS NOT NULL AND wallet != ''`
+    `SELECT DISTINCT p.id, COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) AS wallet
+       FROM players p
+       LEFT JOIN player_dex_accounts pda
+         ON pda.player_id = p.id AND pda.dex = 'decibel'
+      WHERE (p.dex = 'decibel' OR pda.dex = 'decibel')
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) IS NOT NULL
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) != ''`
   ).all();
   if (!rows.length) return 0;
 

@@ -104,6 +104,92 @@ function walletLookupCandidates(wallet) {
   return Array.from(set).filter(Boolean);
 }
 
+function walletChainType(wallet) {
+  const raw = String(wallet || '').trim();
+  if (EVM_WALLET_RE.test(raw)) return 'evm';
+  if (APTOS_WALLET_RE.test(raw) && !EVM_WALLET_RE.test(raw)) return 'aptos';
+  if (SOLANA_WALLET_RE.test(raw)) return 'solana';
+  if (isLocalGuestWallet(raw)) return 'local';
+  return 'unknown';
+}
+
+function canonicalWalletIdentifier(wallet) {
+  const raw = String(wallet || '').trim();
+  if (EVM_WALLET_RE.test(raw)) return raw.toLowerCase();
+  if (APTOS_WALLET_RE.test(raw) && !EVM_WALLET_RE.test(raw)) return normalizeAptosWallet(raw);
+  return raw;
+}
+
+function upsertUnifiedIdentity(playerId, wallet, opts = {}) {
+  if (!playerId || !wallet || !isValidWallet(wallet)) return;
+  const chainType = walletChainType(wallet);
+  const identifier = canonicalWalletIdentifier(wallet);
+  const label = String(opts.label || '').trim() || null;
+  try {
+    db.db.prepare(`
+      INSERT INTO player_auth_identities (player_id, type, identifier, verified_at)
+      VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(type, identifier) DO UPDATE SET
+        player_id = excluded.player_id,
+        verified_at = datetime('now')
+    `).run(playerId, `${chainType}_wallet`, identifier);
+  } catch (e) {
+    console.warn('[auth] identity upsert failed:', e.message);
+  }
+  try {
+    db.db.prepare(`
+      INSERT INTO player_wallets (player_id, chain_type, address, label, is_primary, updated_at)
+      VALUES (?, ?, ?, ?, 1, datetime('now'))
+      ON CONFLICT(chain_type, address) DO UPDATE SET
+        player_id = excluded.player_id,
+        label = COALESCE(excluded.label, player_wallets.label),
+        updated_at = datetime('now')
+    `).run(playerId, chainType, identifier, label);
+  } catch (e) {
+    console.warn('[auth] wallet upsert failed:', e.message);
+  }
+}
+
+function upsertPlayerDexAccount(playerId, dex, wallet, status = 'ready', metadata = {}) {
+  if (!playerId || !VALID_DEXES.has(dex)) return;
+  const chainType = wallet ? walletChainType(wallet) : null;
+  const address = wallet && isValidWallet(wallet) ? canonicalWalletIdentifier(wallet) : null;
+  try {
+    db.db.prepare(`
+      INSERT INTO player_dex_accounts
+        (player_id, dex, chain_type, wallet_address, status, metadata_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(player_id, dex) DO UPDATE SET
+        chain_type = COALESCE(excluded.chain_type, player_dex_accounts.chain_type),
+        wallet_address = COALESCE(excluded.wallet_address, player_dex_accounts.wallet_address),
+        status = excluded.status,
+        metadata_json = excluded.metadata_json,
+        updated_at = datetime('now')
+    `).run(playerId, dex, chainType, address, status, JSON.stringify(metadata || {}));
+  } catch (e) {
+    console.warn('[auth] dex account upsert failed:', e.message);
+  }
+}
+
+function getUnifiedPlayerByWalletAnyForm(wallet) {
+  const chainType = walletChainType(wallet);
+  const candidates = walletLookupCandidates(wallet).map(canonicalWalletIdentifier);
+  if (!candidates.length) return null;
+  const placeholders = candidates.map(() => '?').join(',');
+  const identity = db.db.prepare(`
+    SELECT p.*
+    FROM player_auth_identities i
+    JOIN players p ON p.id = i.player_id
+    WHERE i.type = ? AND i.identifier IN (${placeholders})
+    ORDER BY p.created_at ASC, p.id ASC
+    LIMIT 1
+  `).get(`${chainType}_wallet`, ...candidates);
+  if (identity) return identity;
+
+  // Compatibility with pre-identity rows.
+  return getPlayerByWalletAnyForm(wallet);
+}
+
 function getPlayerByWalletAnyForm(wallet, excludeId = null) {
   const candidates = walletLookupCandidates(wallet);
   const placeholders = candidates.map(() => '?').join(',');
@@ -6793,6 +6879,56 @@ router.post('/replay-telemetry', (req, res) => {
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
 const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
+
+function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown') {
+  if (!player?.id || !VALID_DEXES.has(dex)) return { ok: false, changed: false, conflictResolved: false };
+  const walletToBind = wallet && isValidWallet(wallet)
+    ? canonicalWalletIdentifier(wallet)
+    : (player.wallet && isValidWallet(player.wallet) ? canonicalWalletIdentifier(player.wallet) : null);
+  const runUpdate = () => {
+    if (walletToBind) {
+      db.db.prepare('UPDATE players SET dex = ?, wallet = ? WHERE id = ?').run(dex, walletToBind, player.id);
+      player.wallet = walletToBind;
+    } else {
+      db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, player.id);
+    }
+    player.dex = dex;
+  };
+
+  try {
+    runUpdate();
+    return { ok: true, changed: true, conflictResolved: false };
+  } catch (e) {
+    if (!String(e?.message || '').includes('UNIQUE') || !walletToBind) throw e;
+  }
+
+  const candidates = walletLookupCandidates(walletToBind).map(canonicalWalletIdentifier);
+  const placeholders = candidates.map(() => '?').join(',');
+  const conflicts = db.db.prepare(`
+    SELECT id, name, dex
+    FROM players
+    WHERE wallet IN (${placeholders}) AND dex = ? AND id != ?
+  `).all(...candidates, dex, player.id);
+
+  if (!conflicts.length) throw new Error(`Unable to resolve wallet/dex conflict for ${player.id} ${dex}`);
+
+  const tx = db.db.transaction(() => {
+    for (const row of conflicts) {
+      db.db.prepare('UPDATE players SET wallet = NULL WHERE id = ?').run(row.id);
+    }
+    runUpdate();
+  });
+  tx();
+  logAuth('resolved legacy wallet/dex duplicate while selecting active dex', {
+    player_id: player.id,
+    dex,
+    wallet: walletToBind,
+    source,
+    detached_player_ids: conflicts.map((r) => r.id),
+  });
+  return { ok: true, changed: true, conflictResolved: true, detached: conflicts.map((r) => r.id) };
+}
+
 // DEXes whose trade history is indexed by the futures rewards worker into
 // the trade_history table (server-futures/futures.db). GMX joined Phase 3
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
@@ -6821,11 +6957,11 @@ router.post('/players/set-dex', auth, (req, res) => {
     return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex", "nado", "hibachi", "hotstuff", "grvt", "katana" or "gmtrade"' });
   }
   if (dex !== req.player.dex) {
-    logAuth('set-dex no-op (DEX is now per-account; client should switch via login-wallet)', {
-      player_id: req.player.id, current_dex: req.player.dex, requested_dex: dex,
-    });
+    safelySetPlayerActiveDex(req.player, dex, req.player.wallet, 'set-dex');
+    upsertPlayerDexAccount(req.player.id, dex, req.player.wallet, req.player.wallet ? 'ready' : 'disconnected', { source: 'set-dex' });
+    logAuth('active dex changed', { player_id: req.player.id, from: req.player.dex, to: dex });
   }
-  res.json({ success: true, dex: req.player.dex, note: 'DEX is per-account; ignore field' });
+  res.json({ success: true, dex });
 });
 
 function normalizeSeekerText(value, max = 128) {
@@ -6874,7 +7010,7 @@ router.post('/players/register', (req, res) => {
   // when BOTH the wallet AND the requested DEX match.
   if (wallet) {
     const localGuestWallet = isLocalGuestWallet(wallet);
-    let existing = getPlayerByWalletAndDexAnyForm(wallet, requestedDex);
+    let existing = getUnifiedPlayerByWalletAnyForm(wallet);
 
     // Migration path for Farcaster placeholder rows (wallet = `fc_<fid>`).
     // Same dex must match — if the placeholder was created on Pacifica and
@@ -6883,8 +7019,8 @@ router.post('/players/register', (req, res) => {
     if (!existing && fid) {
       const placeholder = 'fc_' + String(fid);
       const placeholderRow = db.db.prepare(
-        'SELECT * FROM players WHERE wallet = ? AND dex = ? ORDER BY id DESC LIMIT 1'
-      ).get(placeholder, requestedDex);
+        'SELECT * FROM players WHERE wallet = ? ORDER BY id DESC LIMIT 1'
+      ).get(placeholder);
       if (placeholderRow) {
         db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, placeholderRow.id);
         placeholderRow.wallet = wallet;
@@ -6908,6 +7044,11 @@ router.post('/players/register', (req, res) => {
       // No more dex-switching on the existing row — DEX is now part of
       // identity. If the caller wanted a different DEX they fall through
       // to the new-row branch above.
+      safelySetPlayerActiveDex(existing, requestedDex, wallet, 'register');
+      upsertUnifiedIdentity(existing.id, wallet, { label: req.body?.walletSource || req.body?.source });
+      upsertPlayerDexAccount(existing.id, requestedDex, wallet, 'ready', {
+        source: req.body?.walletSource || req.body?.source || 'register',
+      });
       if (seekerCapability) {
         db.stmts.markPlayerSeeker.run(seekerCapability.seeker_id, seekerCapability.seeker_source, existing.id);
       }
@@ -6943,9 +7084,14 @@ router.post('/players/register', (req, res) => {
   // account and the user creates Phoenix, wallet-first updates would collide
   // with UNIQUE(wallet, dex), so set the requested dex in the wallet update.
   if (wallet) {
-    db.db.prepare('UPDATE players SET dex = ?, wallet = ? WHERE id = ?').run(requestedDex, wallet, result.id);
+    safelySetPlayerActiveDex(result, requestedDex, wallet, 'register-new');
+    upsertUnifiedIdentity(result.id, wallet, { label: req.body?.walletSource || req.body?.source });
+    upsertPlayerDexAccount(result.id, requestedDex, wallet, 'ready', {
+      source: req.body?.walletSource || req.body?.source || 'register',
+    });
   } else {
-    db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(requestedDex, result.id);
+    safelySetPlayerActiveDex(result, requestedDex, null, 'register-new');
+    upsertPlayerDexAccount(result.id, requestedDex, null, 'disconnected', { source: 'register' });
   }
   if (seekerCapability) {
     db.stmts.markPlayerSeeker.run(seekerCapability.seeker_id, seekerCapability.seeker_source, result.id);
@@ -8502,15 +8648,68 @@ router.post('/players/login-wallet', (req, res) => {
   const { wallet, dex } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
 
-  let player;
-  if (VALID_DEXES.has(dex)) {
+  let player = getUnifiedPlayerByWalletAnyForm(wallet);
+  if (!player && VALID_DEXES.has(dex)) {
     player = getPlayerByWalletAndDexAnyForm(wallet, dex);
-  } else {
-    player = getPlayerByWalletAnyForm(wallet);
   }
-  if (!player) return res.status(404).json({ error: 'No account found for this wallet on this DEX' });
+  if (!player) return res.status(404).json({ error: 'No Clash account found for this wallet' });
+  if (VALID_DEXES.has(dex) && dex !== player.dex) {
+    try {
+      safelySetPlayerActiveDex(player, dex, wallet, 'login-wallet');
+    } catch (e) {
+      console.warn('[auth] login-wallet dex update failed:', e.message);
+    }
+  }
+  upsertUnifiedIdentity(player.id, wallet, { label: req.body?.walletSource || req.body?.source });
+  if (VALID_DEXES.has(dex)) {
+    upsertPlayerDexAccount(player.id, dex, wallet, 'ready', {
+      source: req.body?.walletSource || req.body?.source || 'login-wallet',
+    });
+  }
   const state = db.getFullPlayerState(player.id);
   res.json({ ...state, token: player.token });
+});
+
+router.get('/players/dex-accounts', auth, (req, res) => {
+  const dexRows = db.db.prepare(`
+    SELECT dex, chain_type, wallet_address, account_id, status, metadata_json, updated_at
+    FROM player_dex_accounts
+    WHERE player_id = ?
+    ORDER BY updated_at DESC
+  `).all(req.player.id).map((row) => ({
+    ...row,
+    metadata: (() => {
+      try { return JSON.parse(row.metadata_json || '{}'); } catch { return {}; }
+    })(),
+    metadata_json: undefined,
+  }));
+  const walletRows = db.db.prepare(`
+    SELECT chain_type, address, label, is_primary, updated_at
+    FROM player_wallets
+    WHERE player_id = ?
+    ORDER BY is_primary DESC, updated_at DESC
+  `).all(req.player.id);
+  res.json({
+    player_id: req.player.id,
+    active_dex: req.player.dex || 'pacifica',
+    wallets: walletRows,
+    dex_accounts: dexRows,
+  });
+});
+
+router.post('/players/dex-accounts/:dex/select', auth, (req, res) => {
+  const dex = String(req.params.dex || req.body?.dex || '').toLowerCase();
+  if (!VALID_DEXES.has(dex)) return res.status(400).json({ error: 'Unsupported DEX' });
+  const wallet = String(req.body?.wallet || req.player.wallet || '').trim();
+  if (wallet && isValidWallet(wallet)) {
+    upsertUnifiedIdentity(req.player.id, wallet, { label: req.body?.walletSource || req.body?.source });
+  }
+  upsertPlayerDexAccount(req.player.id, dex, wallet && isValidWallet(wallet) ? wallet : req.player.wallet, wallet || req.player.wallet ? 'ready' : 'disconnected', {
+    source: req.body?.walletSource || req.body?.source || 'select-dex',
+  });
+  safelySetPlayerActiveDex(req.player, dex, wallet, 'select-dex');
+  const state = db.getFullPlayerState(req.player.id);
+  res.json({ ok: true, dex, player: state });
 });
 
 // ==================== RESOURCES ====================

@@ -7,7 +7,7 @@ const GRVT_BUILDER_ACCOUNT_ID = String(
 const GRVT_BUILDER_ACCOUNT_HEADER = String(process.env.GRVT_BUILDER_X_ACCOUNT_ID || GRVT_BUILDER_ACCOUNT_ID).trim();
 const GRVT_BUILDER_COOKIE = String(process.env.GRVT_BUILDER_COOKIE || '').trim();
 const GRVT_BUILDER_API_KEY = String(process.env.GRVT_BUILDER_API_KEY || '').trim();
-const GRVT_BUILDER_FEE_BPS = Math.max(0, Number(process.env.GRVT_BUILDER_FEE_BPS || process.env.VITE_GRVT_BUILDER_FEE_BPS || 5));
+const GRVT_BUILDER_FEE_BPS = Math.max(0, Number(process.env.GRVT_BUILDER_FEE_BPS || process.env.VITE_GRVT_BUILDER_FEE_BPS || 1));
 function normalizeBuilderFeePercent(raw, bps) {
   const text = String(raw || '').trim();
   const n = Number(text);

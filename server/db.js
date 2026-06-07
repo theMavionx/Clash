@@ -104,6 +104,69 @@ try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_verified_at TEXT`);
 // PvP win counter. Used by Demon King NFT-backed progression gates.
 try { db.exec(`ALTER TABLE players ADD COLUMN battle_wins INTEGER NOT NULL DEFAULT 0`); } catch {}
 
+// Unified account identity layer. The legacy `players.wallet` and
+// `players.dex` columns remain for compatibility, but new auth paths should
+// treat one player row as the canonical game account and attach wallets /
+// venue setup rows here.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS player_auth_identities (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id   TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      type        TEXT NOT NULL,
+      identifier  TEXT NOT NULL,
+      verified_at TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(type, identifier)
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_auth_identities_player
+      ON player_auth_identities(player_id);
+
+    CREATE TABLE IF NOT EXISTS player_wallets (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id   TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      chain_type  TEXT NOT NULL,
+      address     TEXT NOT NULL,
+      label       TEXT,
+      is_primary  INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(chain_type, address)
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_wallets_player
+      ON player_wallets(player_id, chain_type);
+
+    CREATE TABLE IF NOT EXISTS player_dex_accounts (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id      TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      dex            TEXT NOT NULL,
+      chain_type     TEXT,
+      wallet_address TEXT,
+      account_id     TEXT,
+      status         TEXT NOT NULL DEFAULT 'disconnected',
+      metadata_json  TEXT NOT NULL DEFAULT '{}',
+      created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(player_id, dex)
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_dex_accounts_dex
+      ON player_dex_accounts(dex, status);
+
+    CREATE TABLE IF NOT EXISTS player_dex_credentials (
+      player_id       TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      dex             TEXT NOT NULL,
+      credential_type TEXT NOT NULL,
+      storage_mode    TEXT NOT NULL DEFAULT 'browser_only',
+      public_hint     TEXT,
+      encrypted_secret TEXT,
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY(player_id, dex, credential_type)
+    );
+  `);
+} catch (e) {
+  console.warn('[db] unified identity migration warning:', e.message);
+}
+
 // Player-bound NFT cache. Demon King ownership is verified from chain once,
 // persisted here, then reused by load/upgrade flows so the UI does not scan
 // ownerOf repeatedly across every panel mount.
@@ -2769,7 +2832,7 @@ const TROOP_DEFS = {
   ranger:    { max_level: 4, cost: [{ gold: 125, wood: 125, ore: 0 }, { gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }] },
   demon_king: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
 };
-const DISABLED_TROOP_TYPES = new Set(['barbarian', 'ranger']);
+const DISABLED_TROOP_TYPES = new Set();
 const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_TROOP_TYPES.has(troop));
 
 function isTroopDisabled(troopType) {

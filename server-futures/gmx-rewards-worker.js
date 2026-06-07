@@ -291,7 +291,13 @@ async function importActionsForRow(row, marketsByAddr, { since, updateCursor = t
 
 async function pollOnce(mainDb) {
   const rows = mainDb.prepare(
-    `SELECT id, wallet FROM players WHERE dex='gmx' AND wallet IS NOT NULL AND wallet != ''`
+    `SELECT DISTINCT p.id, COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) AS wallet
+       FROM players p
+       LEFT JOIN player_dex_accounts pda
+         ON pda.player_id = p.id AND pda.dex = 'gmx'
+      WHERE (p.dex = 'gmx' OR pda.dex = 'gmx')
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) IS NOT NULL
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) != ''`
   ).all();
   if (!rows.length) return 0;
 

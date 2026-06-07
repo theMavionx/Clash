@@ -159,8 +159,11 @@ function ProfileModal({ onClose }) {
   };
 
   const switchDex = async () => {
-    try { localStorage.removeItem('clash_dex_picked'); } catch { /* storage disabled */ }
-    await logoutEverything();
+    try {
+      window.dispatchEvent(new CustomEvent('clash-open-venue-picker', {
+        detail: { source: 'profile', currentDex: dex },
+      }));
+    } catch { /* noop */ }
     onClose();
   };
 

@@ -872,14 +872,16 @@ async function pollOnce(mainDb) {
   let rows = [];
   if (activeTournamentScope) {
     rows = mainDb.prepare(`
-      SELECT DISTINCT p.id, p.wallet
+      SELECT DISTINCT p.id, COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) AS wallet
       FROM tournament_participants tp
       JOIN tournaments t ON t.id = tp.tournament_id
       JOIN players p ON p.id = tp.player_id
+      LEFT JOIN player_dex_accounts pda
+        ON pda.player_id = p.id AND pda.dex = 'phoenix'
       WHERE tp.left_at IS NULL
-        AND p.dex = 'phoenix'
-        AND p.wallet IS NOT NULL
-        AND p.wallet != ''
+        AND (p.dex = 'phoenix' OR pda.dex = 'phoenix')
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) IS NOT NULL
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) != ''
         AND t.status != 'ended'
         AND datetime(COALESCE(t.start_at, '1970-01-01 00:00:00')) <= datetime('now')
         AND (t.end_at IS NULL OR datetime(t.end_at) >= datetime('now'))
@@ -892,7 +894,13 @@ async function pollOnce(mainDb) {
     `).all();
   } else {
     rows = mainDb.prepare(
-      `SELECT id, wallet FROM players WHERE dex='phoenix' AND wallet IS NOT NULL AND wallet != ''`
+      `SELECT DISTINCT p.id, COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) AS wallet
+         FROM players p
+         LEFT JOIN player_dex_accounts pda
+           ON pda.player_id = p.id AND pda.dex = 'phoenix'
+        WHERE (p.dex = 'phoenix' OR pda.dex = 'phoenix')
+          AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) IS NOT NULL
+          AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) != ''`
     ).all();
   }
   if (!rows.length) return 0;

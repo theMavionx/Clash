@@ -269,24 +269,24 @@ prepare_shared_runtime() {
                 printf '%s\n' DECIBEL_API_KEY=
                 printf '%s\n' DECIBEL_API_WALLET_PRIVATE_KEY=
                 printf '%s\n' DECIBEL_ALLOWED_BUILDER_ADDRS=
-                printf '%s\n' DECIBEL_BUILDER_FEE_BPS=5
+                printf '%s\n' DECIBEL_BUILDER_FEE_BPS=1
                 printf '%s\n' NADO_SUBACCOUNT_NAME=default
                 printf '%s\n' NADO_FILL_LOOKBACK_LIMIT=100
                 printf '%s\n' VITE_NADO_SUBACCOUNT_NAME=default
                 printf '%s\n' VITE_NADO_BUILDER_ID=3600
-                printf '%s\n' VITE_NADO_BUILDER_FEE_RATE=50
+                printf '%s\n' VITE_NADO_BUILDER_FEE_RATE=10
                 printf '%s\n' GRVT_BUILDER_ACCOUNT_ID=0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45
                 printf '%s\n' GRVT_BUILDER_X_ACCOUNT_ID=3973781287105049
                 printf '%s\n' GRVT_BUILDER_API_KEY=
-                printf '%s\n' GRVT_BUILDER_FEE_BPS=5
-                printf '%s\n' GRVT_BUILDER_FEE_RATE=0.0005
+                printf '%s\n' GRVT_BUILDER_FEE_BPS=1
+                printf '%s\n' GRVT_BUILDER_FEE_RATE=0.01
                 printf '%s\n' VITE_GRVT_BUILDER_ACCOUNT_ID=0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45
-                printf '%s\n' VITE_GRVT_BUILDER_FEE_BPS=5
-                printf '%s\n' VITE_GRVT_BUILDER_FEE_RATE=0.0005
+                printf '%s\n' VITE_GRVT_BUILDER_FEE_BPS=1
+                printf '%s\n' VITE_GRVT_BUILDER_FEE_RATE=0.01
                 printf '%s\n' HOTSTUFF_BROKER_ADDRESS=0xB36402e87a86206D3a114a98B53f31362291fe1B
-                printf '%s\n' HOTSTUFF_BROKER_FEE_RATE=0.0005
+                printf '%s\n' HOTSTUFF_BROKER_FEE_RATE=0.0001
                 printf '%s\n' VITE_HOTSTUFF_BROKER_ADDRESS=0xB36402e87a86206D3a114a98B53f31362291fe1B
-                printf '%s\n' VITE_HOTSTUFF_BROKER_FEE_RATE=0.0005
+                printf '%s\n' VITE_HOTSTUFF_BROKER_FEE_RATE=0.0001
                 printf '%s\n' VITE_HIBACHI_REFERRAL_URL=https://hibachi.xyz/r/M4S4XNAGP4
                 printf '%s\n' KATANA_PERPS_REFERRAL_CODE=CLASHOFPERPS
                 printf '%s\n' VITE_KATANA_PERPS_REFERRAL_CODE=CLASHOFPERPS
@@ -331,28 +331,28 @@ prepare_shared_runtime() {
     ensure_env_default "DECIBEL_API_KEY" ""
     ensure_env_default "DECIBEL_API_WALLET_PRIVATE_KEY" ""
     ensure_env_default "DECIBEL_ALLOWED_BUILDER_ADDRS" ""
-    ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "5"
-    ensure_env_default "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "50"
-    ensure_env_default "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "50"
-    ensure_env_default "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "5"
-    ensure_env_default "VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS" "5"
+    ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "1"
+    ensure_env_default "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
+    ensure_env_default "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
+    ensure_env_default "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"
+    ensure_env_default "VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"
     ensure_env_default "NADO_SUBACCOUNT_NAME" "default"
     ensure_env_default "NADO_FILL_LOOKBACK_LIMIT" "100"
     ensure_env_default "VITE_NADO_SUBACCOUNT_NAME" "default"
     ensure_env_default "VITE_NADO_BUILDER_ID" "3600"
-    ensure_env_default "VITE_NADO_BUILDER_FEE_RATE" "50"
+    ensure_env_default "VITE_NADO_BUILDER_FEE_RATE" "10"
     ensure_env_default "GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
     ensure_env_default "GRVT_BUILDER_X_ACCOUNT_ID" "3973781287105049"
     ensure_env_default "GRVT_BUILDER_API_KEY" ""
-    ensure_env_default "GRVT_BUILDER_FEE_BPS" "5"
-    ensure_env_default "GRVT_BUILDER_FEE_RATE" "0.0005"
+    ensure_env_default "GRVT_BUILDER_FEE_BPS" "1"
+    ensure_env_default "GRVT_BUILDER_FEE_RATE" "0.01"
     ensure_env_default "VITE_GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
-    ensure_env_default "VITE_GRVT_BUILDER_FEE_BPS" "5"
-    ensure_env_default "VITE_GRVT_BUILDER_FEE_RATE" "0.0005"
+    ensure_env_default "VITE_GRVT_BUILDER_FEE_BPS" "1"
+    ensure_env_default "VITE_GRVT_BUILDER_FEE_RATE" "0.01"
     ensure_env_default "HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
-    ensure_env_default "HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    ensure_env_default "HOTSTUFF_BROKER_FEE_RATE" "0.0001"
     ensure_env_default "VITE_HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
-    ensure_env_default "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    ensure_env_default "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0001"
     ensure_env_default "VITE_HIBACHI_REFERRAL_URL" "https://hibachi.xyz/r/M4S4XNAGP4"
     ensure_env_default "KATANA_PERPS_API_URL" "https://api-perps.katana.network/v1"
     ensure_env_default "KATANA_PERPS_APP_URL" "https://perps.katana.network"
@@ -430,27 +430,27 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_HERMES_BACKEND_TIMEOUT_MS" "300000"
 
     set_env_value "NODE_ENV" "production"
-    set_env_value "DECIBEL_BUILDER_FEE_BPS" "5"
-    set_env_value "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "50"
-    set_env_value "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "50"
-    set_env_value "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "5"
-    set_env_value "VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS" "5"
+    set_env_value "DECIBEL_BUILDER_FEE_BPS" "1"
+    set_env_value "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
+    set_env_value "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
+    set_env_value "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"
+    set_env_value "VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"
     set_env_value "NADO_SUBACCOUNT_NAME" "default"
     set_env_value "NADO_FILL_LOOKBACK_LIMIT" "100"
     set_env_value "VITE_NADO_SUBACCOUNT_NAME" "default"
     set_env_value "VITE_NADO_BUILDER_ID" "3600"
-    set_env_value "VITE_NADO_BUILDER_FEE_RATE" "50"
+    set_env_value "VITE_NADO_BUILDER_FEE_RATE" "10"
     set_env_value "GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
     set_env_value "GRVT_BUILDER_X_ACCOUNT_ID" "3973781287105049"
-    set_env_value "GRVT_BUILDER_FEE_BPS" "5"
-    set_env_value "GRVT_BUILDER_FEE_RATE" "0.0005"
+    set_env_value "GRVT_BUILDER_FEE_BPS" "1"
+    set_env_value "GRVT_BUILDER_FEE_RATE" "0.01"
     set_env_value "VITE_GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
-    set_env_value "VITE_GRVT_BUILDER_FEE_BPS" "5"
-    set_env_value "VITE_GRVT_BUILDER_FEE_RATE" "0.0005"
+    set_env_value "VITE_GRVT_BUILDER_FEE_BPS" "1"
+    set_env_value "VITE_GRVT_BUILDER_FEE_RATE" "0.01"
     set_env_value "HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
-    set_env_value "HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    set_env_value "HOTSTUFF_BROKER_FEE_RATE" "0.0001"
     set_env_value "VITE_HOTSTUFF_BROKER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
-    set_env_value "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0005"
+    set_env_value "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0001"
     set_env_value "VITE_HIBACHI_REFERRAL_URL" "https://hibachi.xyz/r/M4S4XNAGP4"
     set_env_value "KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
     set_env_value "VITE_KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
