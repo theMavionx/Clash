@@ -27,6 +27,7 @@ const GMTRADE_RPC_URLS = Array.from(new Set(
   solanaRpcUrls().concat(GMTRADE_RPC_URL).filter(Boolean)
 ));
 const GMTRADE_DEDUPE_ATA_INSTRUCTIONS = String(process.env.GMTRADE_DEDUPE_ATA_INSTRUCTIONS || '1') !== '0';
+const GMTRADE_OMIT_EXISTING_SETUP_INSTRUCTIONS = String(process.env.GMTRADE_OMIT_EXISTING_SETUP_INSTRUCTIONS || '1') !== '0';
 const GMTRADE_RPC_ORIGIN = String(process.env.GMTRADE_RPC_ORIGIN || 'https://gmtrade.xyz').trim();
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.GMTRADE_TIMEOUT_MS || 7000)));
 const PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.GMTRADE_PUBLIC_CACHE_TTL_MS || 12_000)));
@@ -1765,10 +1766,51 @@ function gmtradeInstructionKey(ix) {
   ].join('|');
 }
 
-function sanitizeGmtradeTransaction(base64) {
-  if (!GMTRADE_DEDUPE_ATA_INSTRUCTIONS) {
-    return { base64, changed: false, removed_duplicate_ata_instructions: 0, before: gmtradeTxSummary(base64), after: gmtradeTxSummary(base64) };
+async function gmtradeAccountExists(address) {
+  if (!isSolanaPubkey(address)) return false;
+  const account = await rpcAccountInfo(address).catch(() => null);
+  return !!account;
+}
+
+async function gmtradeSetupInstructionHintsFromTransactions(transactions) {
+  const out = {
+    user_exists: false,
+    position_exists: false,
+    user_address: '',
+    position_address: '',
+    program_id: '',
+    source: 'transaction_accounts',
+  };
+  if (!GMTRADE_OMIT_EXISTING_SETUP_INSTRUCTIONS) return out;
+  try {
+    const first = Array.isArray(transactions) ? transactions[0] : '';
+    const tx = VersionedTransaction.deserialize(Buffer.from(String(first || ''), 'base64'));
+    const keys = tx.message?.staticAccountKeys || [];
+    for (const ix of tx.message?.compiledInstructions || []) {
+      const program = keys[ix.programIdIndex]?.toBase58?.() || '';
+      const dataHex = Buffer.from(ix.data || []).toString('hex');
+      if (!GMTRADE_PROGRAM_IDS.includes(program)) continue;
+      if (dataHex === 'bead8fc18b50e785') {
+        out.program_id ||= program;
+        out.user_address ||= keys[ix.accountKeyIndexes?.[2]]?.toBase58?.() || '';
+      } else if (dataHex.startsWith('b2d7375a890f6c0f')) {
+        out.program_id ||= program;
+        out.position_address ||= keys[ix.accountKeyIndexes?.[3]]?.toBase58?.() || '';
+      }
+    }
+    const [userExists, positionExists] = await Promise.all([
+      out.user_address ? gmtradeAccountExists(out.user_address) : Promise.resolve(false),
+      out.position_address ? gmtradeAccountExists(out.position_address) : Promise.resolve(false),
+    ]);
+    out.user_exists = !!userExists;
+    out.position_exists = !!positionExists;
+  } catch (e) {
+    console.warn('[gmtrade] setup transaction account probe skipped:', e?.message || e);
   }
+  return out;
+}
+
+function sanitizeGmtradeTransaction(base64, options = {}) {
   let tx;
   try {
     tx = VersionedTransaction.deserialize(Buffer.from(String(base64 || ''), 'base64'));
@@ -1778,51 +1820,86 @@ function sanitizeGmtradeTransaction(base64) {
   const before = gmtradeTxSummary(base64);
   const keys = tx.message?.staticAccountKeys || [];
   const seenAtaCreate = new Set();
-  let removed = 0;
+  let removedAta = 0;
+  let removedPrepareUser = 0;
+  let removedPreparePosition = 0;
   const filtered = [];
   for (const ix of tx.message?.compiledInstructions || []) {
     const program = keys[ix.programIdIndex]?.toBase58?.() || '';
+    const dataHex = Buffer.from(ix.data || []).toString('hex');
+    if (
+      options.omit_prepare_user === true
+      && GMTRADE_PROGRAM_IDS.includes(program)
+      && dataHex === 'bead8fc18b50e785'
+    ) {
+      removedPrepareUser += 1;
+      continue;
+    }
+    if (
+      options.omit_prepare_position === true
+      && GMTRADE_PROGRAM_IDS.includes(program)
+      && dataHex.startsWith('b2d7375a890f6c0f')
+    ) {
+      removedPreparePosition += 1;
+      continue;
+    }
     const isAtaCreateIdempotent = program === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'
-      && Buffer.from(ix.data || []).toString('hex') === '01';
+      && dataHex === '01';
     if (isAtaCreateIdempotent) {
       const key = gmtradeInstructionKey(ix);
-      if (seenAtaCreate.has(key)) {
-        removed += 1;
+      if (GMTRADE_DEDUPE_ATA_INSTRUCTIONS && seenAtaCreate.has(key)) {
+        removedAta += 1;
         continue;
       }
       seenAtaCreate.add(key);
     }
     filtered.push(ix);
   }
-  if (!removed) {
-    return { base64, changed: false, removed_duplicate_ata_instructions: 0, before, after: before };
+  if (!removedAta && !removedPrepareUser && !removedPreparePosition) {
+    return {
+      base64,
+      changed: false,
+      removed_duplicate_ata_instructions: 0,
+      removed_prepare_user_instructions: 0,
+      removed_prepare_position_instructions: 0,
+      before,
+      after: before,
+    };
   }
   tx.message.compiledInstructions = filtered;
   const next = Buffer.from(tx.serialize()).toString('base64');
   const after = gmtradeTxSummary(next);
-  console.info('[gmtrade] sanitized duplicate ATA create-idempotent instructions', {
-    removed,
+  console.info('[gmtrade] sanitized GMTrade setup instructions', {
+    removed_duplicate_ata_instructions: removedAta,
+    removed_prepare_user_instructions: removedPrepareUser,
+    removed_prepare_position_instructions: removedPreparePosition,
+    setup_hints: options.setup_hints || null,
     before,
     after,
   });
   return {
     base64: next,
     changed: true,
-    removed_duplicate_ata_instructions: removed,
+    removed_duplicate_ata_instructions: removedAta,
+    removed_prepare_user_instructions: removedPrepareUser,
+    removed_prepare_position_instructions: removedPreparePosition,
     before,
     after,
   };
 }
 
-function sanitizeGmtradeTransactions(transactions) {
+function sanitizeGmtradeTransactions(transactions, options = {}) {
   const rows = [];
   const sanitized = [];
   for (const tx of Array.isArray(transactions) ? transactions : []) {
-    const row = sanitizeGmtradeTransaction(tx);
+    const row = sanitizeGmtradeTransaction(tx, options);
     sanitized.push(row.base64);
     rows.push({
       changed: row.changed,
       removed_duplicate_ata_instructions: row.removed_duplicate_ata_instructions,
+      removed_prepare_user_instructions: row.removed_prepare_user_instructions,
+      removed_prepare_position_instructions: row.removed_prepare_position_instructions,
+      setup_hints: options.setup_hints || null,
       before: row.before,
       after: row.after,
     });
@@ -1980,7 +2057,13 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   }
   if (rustBuilderAvailable()) {
     const built = await runRustBuilder(rustPayload);
-    const sanitized = sanitizeGmtradeTransactions(built.transactions || []);
+    const setupHints = await gmtradeSetupInstructionHintsFromTransactions(built.transactions || []);
+    const sanitizerOptions = {
+      omit_prepare_user: setupHints.user_exists,
+      omit_prepare_position: setupHints.position_exists,
+      setup_hints: setupHints,
+    };
+    const sanitized = sanitizeGmtradeTransactions(built.transactions || [], sanitizerOptions);
     return {
       ok: true,
       dex: 'gmtrade',
@@ -1998,6 +2081,7 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
       last_valid_block_height: lastValidBlockHeight,
       transactions: sanitized.transactions,
       tx_sanitizer: sanitized.diagnostics,
+      setup_hints: setupHints,
       builder: 'rust_gmsol_sdk',
       memo_enabled: Boolean(GMTRADE_TX_MEMO),
     };
@@ -2038,7 +2122,13 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   if (!transactions.length) {
     throw Object.assign(new Error('GMTrade SDK did not produce any transaction'), { status: 502 });
   }
-  const sanitized = sanitizeGmtradeTransactions(transactions);
+  const setupHints = await gmtradeSetupInstructionHintsFromTransactions(transactions);
+  const sanitizerOptions = {
+    omit_prepare_user: setupHints.user_exists,
+    omit_prepare_position: setupHints.position_exists,
+    setup_hints: setupHints,
+  };
+  const sanitized = sanitizeGmtradeTransactions(transactions, sanitizerOptions);
   return {
     ok: true,
     dex: 'gmtrade',
@@ -2056,6 +2146,7 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     last_valid_block_height: lastValidBlockHeight,
     transactions: sanitized.transactions,
     tx_sanitizer: sanitized.diagnostics,
+    setup_hints: setupHints,
     builder: 'node_wasm_gmsol_sdk',
     memo_enabled: Boolean(GMTRADE_TX_MEMO),
   };

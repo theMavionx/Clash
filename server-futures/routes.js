@@ -3880,6 +3880,8 @@ router.post('/gmtrade/order-tx', auth, async (req, res) => {
       last_valid_block_height: built.last_valid_block_height,
       transaction_count: Array.isArray(built.transactions) ? built.transactions.length : 0,
       transaction_bytes: txSizeSummary(built.transactions),
+      tx_sanitizer: built.tx_sanitizer || null,
+      setup_hints: built.setup_hints || null,
       builder: built.builder,
       memo_enabled: built.memo_enabled === true,
     }));
