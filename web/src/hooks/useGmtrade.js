@@ -134,6 +134,18 @@ function errorInfo(error) {
   };
 }
 
+function simulationLogs(value) {
+  return Array.isArray(value?.logs) ? value.logs.slice(-120) : [];
+}
+
+function simulationErrorMessage(value) {
+  const logs = simulationLogs(value);
+  const logText = logs.join('\n');
+  const err = value?.err ? JSON.stringify(value.err) : '';
+  if (/insufficient funds/i.test(logText)) return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
+  return `GMTrade transaction simulation failed${err ? `: ${err}` : ''}`;
+}
+
 function gmtradeUserError(error) {
   const message = String(error?.message || error?.data?.detail || error?.data?.error || error || '');
   if (/insufficient gmtrade wallet usdc/i.test(message)) return message;
@@ -497,45 +509,80 @@ export function useGmtrade() {
   const sendBuiltTransaction = useCallback(async (base64, meta = {}, attempt = 0, trace = '') => {
     if (!connection) throw new Error('Solana RPC connection is unavailable');
     const tx = decodeTransaction(base64);
-    await gmtradeLog('tx_decoded', {
+    const traceLabel = trace || `gmtrade-${Date.now()}`;
+    const decodedSummary = {
       tx: txMessageSummary(tx),
       build_recent_blockhash: meta?.recent_blockhash,
       build_last_valid_block_height: meta?.last_valid_block_height,
       build_transactions: Array.isArray(meta?.transactions) ? meta.transactions.length : null,
+    };
+    console.info('[GMTrade tx] decoded', { trace: traceLabel, attempt, ...decodedSummary });
+    await gmtradeLog('tx_decoded', {
+      ...decodedSummary,
     }, attempt, trace);
     if (typeof solWallet.signTransaction === 'function') {
       const signStartedAt = Date.now();
       await gmtradeLog('wallet_sign_start', { tx_kind: txKind(tx) }, attempt, trace);
       const signed = await solWallet.signTransaction(tx);
-      await gmtradeLog('wallet_sign_done', {
+      const signedSummary = {
         tx_kind: txKind(signed),
         sign_ms: Date.now() - signStartedAt,
+        tx: txMessageSummary(signed),
+      };
+      console.info('[GMTrade tx] signed', { trace: traceLabel, attempt, ...signedSummary });
+      await gmtradeLog('wallet_sign_done', {
+        ...signedSummary,
       }, attempt, trace);
       let simulation = null;
       try {
+        const simulationStartedAt = Date.now();
         simulation = await connection.simulateTransaction(signed, {
           sigVerify: false,
           replaceRecentBlockhash: false,
           commitment: 'confirmed',
         });
-        await gmtradeLog('simulation_result', {
+        const simulationPayload = {
           err: simulation?.value?.err || null,
           units_consumed: simulation?.value?.unitsConsumed || null,
-          logs: (simulation?.value?.logs || []).slice(-80),
+          logs: simulationLogs(simulation?.value),
           accounts: simulation?.value?.accounts || null,
-        }, attempt, trace);
+          simulation_ms: Date.now() - simulationStartedAt,
+        };
+        console.info('[GMTrade tx] simulation', { trace: traceLabel, attempt, ...simulationPayload });
+        await gmtradeLog('simulation_result', simulationPayload, attempt, trace);
+        if (simulation?.value?.err) {
+          const err = new Error(simulationErrorMessage(simulation.value));
+          err.simulation = simulationPayload;
+          console.error('[GMTrade tx] simulation failed', { trace: traceLabel, attempt, ...simulationPayload });
+          await gmtradeLog('simulation_failed', simulationPayload, attempt, trace);
+          throw err;
+        }
       } catch (simulationError) {
+        if (simulationError?.simulation) throw simulationError;
+        console.error('[GMTrade tx] simulation exception', { trace: traceLabel, attempt, error: errorInfo(simulationError) });
         await gmtradeLog('simulation_exception', { error: errorInfo(simulationError) }, attempt, trace);
       }
       const raw = signed.serialize();
+      console.info('[GMTrade tx] send raw start', { trace: traceLabel, attempt, raw_bytes: raw.length });
       await gmtradeLog('send_raw_start', { raw_bytes: raw.length }, attempt, trace);
-      const signature = await connection.sendRawTransaction(raw, {
-        skipPreflight: false,
-        preflightCommitment: 'confirmed',
-        maxRetries: 3,
-      });
-      await gmtradeLog('send_raw_done', { signature }, attempt, trace);
-      return signature;
+      try {
+        const signature = await connection.sendRawTransaction(raw, {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        });
+        console.info('[GMTrade tx] send raw done', { trace: traceLabel, attempt, signature });
+        await gmtradeLog('send_raw_done', { signature }, attempt, trace);
+        return signature;
+      } catch (sendError) {
+        let logs = [];
+        try {
+          logs = typeof sendError?.getLogs === 'function' ? await sendError.getLogs(connection) : [];
+        } catch {}
+        console.error('[GMTrade tx] send raw error', { trace: traceLabel, attempt, error: errorInfo(sendError), logs });
+        await gmtradeLog('send_raw_error', { error: errorInfo(sendError), logs }, attempt, trace);
+        throw sendError;
+      }
     }
     if (typeof solWallet.sendTransaction === 'function') {
       await gmtradeLog('wallet_send_start', {

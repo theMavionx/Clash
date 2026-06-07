@@ -24,7 +24,7 @@ const GMTRADE_RPC_URL = String(
   || 'https://rpc-1.gmtrade.xyz/'
 ).trim();
 const GMTRADE_RPC_URLS = Array.from(new Set(
-  solanaRpcUrls([GMTRADE_RPC_URL]).concat(GMTRADE_RPC_URL).filter(Boolean)
+  solanaRpcUrls().concat(GMTRADE_RPC_URL).filter(Boolean)
 ));
 const GMTRADE_RPC_ORIGIN = String(process.env.GMTRADE_RPC_ORIGIN || 'https://gmtrade.xyz').trim();
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.GMTRADE_TIMEOUT_MS || 7000)));
@@ -52,6 +52,15 @@ const DEFAULT_MARKETS = [
 let priceCache = { at: 0, prices: {} };
 let marketInfoCache = { at: 0, markets: null, prices: null, error: null };
 let sdkPromise = null;
+
+function rpcHostLabel(rpcUrl) {
+  try {
+    const url = new URL(rpcUrl);
+    return `${url.hostname}${url.pathname.includes('/v2/') ? '/v2/***' : ''}`;
+  } catch {
+    return String(rpcUrl || '').replace(/(api[_-]?key=)[^&]+/ig, '$1***').slice(0, 80);
+  }
+}
 
 function parseJsonEnv(name, fallback = null) {
   const raw = String(process.env[name] || '').trim();
@@ -511,9 +520,11 @@ function marketLookupKeys(value) {
 async function rpcRequest(method, params) {
   const rpcUrls = GMTRADE_RPC_URLS.length ? GMTRADE_RPC_URLS : [GMTRADE_RPC_URL].filter(Boolean);
   let lastError = null;
+  const startedAt = Date.now();
   for (const rpcUrl of rpcUrls) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    const host = rpcHostLabel(rpcUrl);
     try {
       // eslint-disable-next-line no-await-in-loop
       const res = await fetch(rpcUrl, {
@@ -535,11 +546,14 @@ async function rpcRequest(method, params) {
         const detail = data?.error?.message || text || `HTTP ${res.status}`;
         throw new Error(`GMTrade RPC ${method} failed on ${new URL(rpcUrl).host}: ${detail}`);
       }
+      if (Date.now() - startedAt > 1000 || rpcUrls.indexOf(rpcUrl) > 0) {
+        console.info('[gmtrade] RPC success:', method, host, `${Date.now() - startedAt}ms`);
+      }
       return data?.result;
     } catch (e) {
       lastError = e;
       if (rpcUrls.length > 1) {
-        console.warn('[gmtrade] RPC fallback:', method, new URL(rpcUrl).host, e.message);
+        console.warn('[gmtrade] RPC fallback:', method, host, e.message);
       }
     } finally {
       clearTimeout(timer);
