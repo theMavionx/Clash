@@ -1488,35 +1488,35 @@ restart_services() {
     log "[9/9] Restarting PM2 services..."
 
     pm2 delete clash-api 2>/dev/null || true
-    pm2 start "$CURRENT_LINK/server/index.js" \
+    pm2 start node \
         --name clash-api \
         --cwd "$CURRENT_LINK/server" \
         --env production \
-        --node-args="--env-file=$ENV_FILE"
+        -- --env-file="$ENV_FILE" "$CURRENT_LINK/server/index.js"
 
     pm2 delete clash-hermes-jobs 2>/dev/null || true
-    pm2 start "$CURRENT_LINK/server/hermes_jobs_worker.js" \
+    pm2 start node \
         --name clash-hermes-jobs \
         --cwd "$CURRENT_LINK/server" \
         --env production \
-        --node-args="--env-file=$ENV_FILE"
+        -- --env-file="$ENV_FILE" "$CURRENT_LINK/server/hermes_jobs_worker.js"
 
     if [ -d "$CURRENT_LINK/server-futures" ]; then
         pm2 delete clash-futures 2>/dev/null || true
-        pm2 start "$CURRENT_LINK/server-futures/index.js" \
+        pm2 start node \
             --name clash-futures \
             --cwd "$CURRENT_LINK/server-futures" \
             --env production \
-            --node-args="--env-file=$ENV_FILE"
+            -- --experimental-wasm-modules --env-file="$ENV_FILE" "$CURRENT_LINK/server-futures/index.js"
     fi
 
     if [ -f "$CURRENT_LINK/mcp/src/server.mjs" ]; then
         pm2 delete clash-mcp 2>/dev/null || true
-        pm2 start "$CURRENT_LINK/mcp/src/server.mjs" \
+        pm2 start node \
             --name clash-mcp \
             --cwd "$CURRENT_LINK/mcp" \
             --env production \
-            --node-args="--env-file=$ENV_FILE"
+            -- --env-file="$ENV_FILE" "$CURRENT_LINK/mcp/src/server.mjs"
     fi
 
     pm2 save

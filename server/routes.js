@@ -200,7 +200,17 @@ function getPlayerByWalletAnyForm(wallet, excludeId = null) {
     params.push(excludeId);
   }
   return db.db.prepare(
-    `SELECT * FROM players WHERE ${where} ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1`
+    `SELECT p.*
+     FROM players p
+     WHERE ${where}
+     ORDER BY
+       CASE WHEN p.name GLOB 'player_[0-9a-fA-F]*' THEN 1 ELSE 0 END ASC,
+       (SELECT COUNT(*) FROM buildings b WHERE b.player_id = p.id) DESC,
+       COALESCE(p.last_seen_at, p.created_at) DESC,
+       COALESCE(p.trophies, 0) DESC,
+       p.created_at ASC,
+       p.id ASC
+     LIMIT 1`
   ).get(...params);
 }
 
