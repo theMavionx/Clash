@@ -642,6 +642,36 @@ export function useGmtrade() {
       console.error('[GMTrade tx] pre-sign simulation exception', { trace: traceLabel, attempt, error: errorInfo(preSignSimulationError) });
       await gmtradeLog('pre_sign_simulation_exception', { rpc, error: errorInfo(preSignSimulationError) }, attempt, trace);
     }
+    if (typeof solWallet.sendTransaction === 'function') {
+      const walletSendStartedAt = Date.now();
+      await gmtradeLog('wallet_send_start', {
+        tx_kind: txKind(tx),
+        rpc,
+        wallet_path: 'adapter_send_transaction',
+        note: 'GMTrade uses the wallet adapter sendTransaction path after sigVerify:false simulation',
+      }, attempt, trace);
+      console.info('[GMTrade tx] wallet send start', { trace: traceLabel, attempt, rpc, tx_kind: txKind(tx) });
+      try {
+        const signature = await solWallet.sendTransaction(tx, connection, {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        });
+        const payload = {
+          rpc,
+          signature,
+          send_ms: Date.now() - walletSendStartedAt,
+          wallet_path: 'adapter_send_transaction',
+        };
+        console.info('[GMTrade tx] wallet send done', { trace: traceLabel, attempt, ...payload });
+        await gmtradeLog('wallet_send_done', payload, attempt, trace);
+        return signature;
+      } catch (sendError) {
+        console.error('[GMTrade tx] wallet send error', { trace: traceLabel, attempt, rpc, error: errorInfo(sendError) });
+        await gmtradeLog('wallet_send_error', { rpc, error: errorInfo(sendError) }, attempt, trace);
+        throw sendError;
+      }
+    }
     if (typeof solWallet.signTransaction === 'function') {
       const signStartedAt = Date.now();
       await gmtradeLog('wallet_sign_start', {
