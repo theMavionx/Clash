@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const bs58 = require('bs58');
-const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
+const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction, VersionedTransaction } = require('@solana/web3.js');
 const { solanaRpcUrls } = require('../server/solana_rpc');
 
 const GMTRADE_APP_URL = (process.env.GMTRADE_APP_URL || 'https://gmtrade.xyz/trade').replace(/\/+$/, '');
@@ -26,6 +26,7 @@ const GMTRADE_RPC_URL = String(
 const GMTRADE_RPC_URLS = Array.from(new Set(
   solanaRpcUrls().concat(GMTRADE_RPC_URL).filter(Boolean)
 ));
+const GMTRADE_DEDUPE_ATA_INSTRUCTIONS = String(process.env.GMTRADE_DEDUPE_ATA_INSTRUCTIONS || '1') !== '0';
 const GMTRADE_RPC_ORIGIN = String(process.env.GMTRADE_RPC_ORIGIN || 'https://gmtrade.xyz').trim();
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.GMTRADE_TIMEOUT_MS || 7000)));
 const PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.GMTRADE_PUBLIC_CACHE_TTL_MS || 12_000)));
@@ -1730,6 +1731,108 @@ function serializeTransactionGroup(group) {
   return transactions;
 }
 
+function gmtradeTxSummary(base64) {
+  try {
+    const tx = VersionedTransaction.deserialize(Buffer.from(String(base64 || ''), 'base64'));
+    return {
+      kind: 'versioned',
+      bytes: tx.serialize().length,
+      required_signatures: tx.message?.header?.numRequiredSignatures ?? null,
+      static_accounts: tx.message?.staticAccountKeys?.length ?? null,
+      instructions: tx.message?.compiledInstructions?.length ?? null,
+    };
+  } catch {
+    try {
+      const tx = Transaction.from(Buffer.from(String(base64 || ''), 'base64'));
+      return {
+        kind: 'legacy',
+        bytes: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length,
+        required_signatures: tx.signatures?.length ?? null,
+        static_accounts: null,
+        instructions: tx.instructions?.length ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+}
+
+function gmtradeInstructionKey(ix) {
+  return [
+    ix?.programIdIndex,
+    Array.from(ix?.accountKeyIndexes || []).join(','),
+    Buffer.from(ix?.data || []).toString('hex'),
+  ].join('|');
+}
+
+function sanitizeGmtradeTransaction(base64) {
+  if (!GMTRADE_DEDUPE_ATA_INSTRUCTIONS) {
+    return { base64, changed: false, removed_duplicate_ata_instructions: 0, before: gmtradeTxSummary(base64), after: gmtradeTxSummary(base64) };
+  }
+  let tx;
+  try {
+    tx = VersionedTransaction.deserialize(Buffer.from(String(base64 || ''), 'base64'));
+  } catch {
+    return { base64, changed: false, removed_duplicate_ata_instructions: 0, before: gmtradeTxSummary(base64), after: gmtradeTxSummary(base64) };
+  }
+  const before = gmtradeTxSummary(base64);
+  const keys = tx.message?.staticAccountKeys || [];
+  const seenAtaCreate = new Set();
+  let removed = 0;
+  const filtered = [];
+  for (const ix of tx.message?.compiledInstructions || []) {
+    const program = keys[ix.programIdIndex]?.toBase58?.() || '';
+    const isAtaCreateIdempotent = program === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'
+      && Buffer.from(ix.data || []).toString('hex') === '01';
+    if (isAtaCreateIdempotent) {
+      const key = gmtradeInstructionKey(ix);
+      if (seenAtaCreate.has(key)) {
+        removed += 1;
+        continue;
+      }
+      seenAtaCreate.add(key);
+    }
+    filtered.push(ix);
+  }
+  if (!removed) {
+    return { base64, changed: false, removed_duplicate_ata_instructions: 0, before, after: before };
+  }
+  tx.message.compiledInstructions = filtered;
+  const next = Buffer.from(tx.serialize()).toString('base64');
+  const after = gmtradeTxSummary(next);
+  console.info('[gmtrade] sanitized duplicate ATA create-idempotent instructions', {
+    removed,
+    before,
+    after,
+  });
+  return {
+    base64: next,
+    changed: true,
+    removed_duplicate_ata_instructions: removed,
+    before,
+    after,
+  };
+}
+
+function sanitizeGmtradeTransactions(transactions) {
+  const rows = [];
+  const sanitized = [];
+  for (const tx of Array.isArray(transactions) ? transactions : []) {
+    const row = sanitizeGmtradeTransaction(tx);
+    sanitized.push(row.base64);
+    rows.push({
+      changed: row.changed,
+      removed_duplicate_ata_instructions: row.removed_duplicate_ata_instructions,
+      before: row.before,
+      after: row.after,
+    });
+  }
+  return {
+    transactions: sanitized,
+    diagnostics: rows,
+  };
+}
+
 async function buildCreateOrderTx(body = {}, playerWallet = '') {
   const payer = String(body.wallet || body.address || playerWallet || '').trim();
   if (!isSolanaAddress(payer)) {
@@ -1877,6 +1980,7 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   }
   if (rustBuilderAvailable()) {
     const built = await runRustBuilder(rustPayload);
+    const sanitized = sanitizeGmtradeTransactions(built.transactions || []);
     return {
       ok: true,
       dex: 'gmtrade',
@@ -1892,7 +1996,8 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
       notional_usd: notional,
       recent_blockhash: blockhash,
       last_valid_block_height: lastValidBlockHeight,
-      transactions: built.transactions || [],
+      transactions: sanitized.transactions,
+      tx_sanitizer: sanitized.diagnostics,
       builder: 'rust_gmsol_sdk',
       memo_enabled: Boolean(GMTRADE_TX_MEMO),
     };
@@ -1933,6 +2038,7 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   if (!transactions.length) {
     throw Object.assign(new Error('GMTrade SDK did not produce any transaction'), { status: 502 });
   }
+  const sanitized = sanitizeGmtradeTransactions(transactions);
   return {
     ok: true,
     dex: 'gmtrade',
@@ -1948,7 +2054,8 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     notional_usd: notional,
     recent_blockhash: blockhash,
     last_valid_block_height: lastValidBlockHeight,
-    transactions,
+    transactions: sanitized.transactions,
+    tx_sanitizer: sanitized.diagnostics,
     builder: 'node_wasm_gmsol_sdk',
     memo_enabled: Boolean(GMTRADE_TX_MEMO),
   };

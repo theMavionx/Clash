@@ -607,6 +607,7 @@ export function useGmtrade() {
       build_collateral_token: meta?.collateral_token || '',
       build_pay_token: meta?.pay_token || '',
       build_memo_enabled: meta?.memo_enabled === true,
+      build_tx_sanitizer: meta?.tx_sanitizer || null,
     };
     console.info('[GMTrade tx] decoded', { trace: traceLabel, attempt, ...decodedSummary });
     await gmtradeLog('tx_decoded', {
