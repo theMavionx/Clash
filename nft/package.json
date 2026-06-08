@@ -60,6 +60,7 @@
     "@metaplex-foundation/umi-bundle-defaults": "^1.5.1",
     "@openzeppelin/contracts": "^5.6.1",
     "@openzeppelin/contracts-upgradeable": "^5.6.1",
+    "@aptos-labs/ts-sdk": "^7.0.1",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "bs58": "^6.0.0",
@@ -67,7 +68,6 @@
     "viem": "^2.48.11"
   },
   "devDependencies": {
-    "@aptos-labs/ts-sdk": "^7.0.1",
     "@nomicfoundation/hardhat-toolbox-viem": "^5.0.5",
     "hardhat": "^3.4.5"
   }
