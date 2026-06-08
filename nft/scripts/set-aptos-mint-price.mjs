@@ -21,9 +21,9 @@ function envKeyPart(value) {
 
 function aptosAccount(env) {
   const explicit = String(env.GAME_SHOP_APTOS_KEY || env.NFT_APTOS_KEY || '').trim();
-  const mnemonic = String(env.GAME_SHOP_APTOS_MNEMONIC || env.NFT_BASE || '').trim();
+  const mnemonic = String(env.GAME_SHOP_APTOS_MNEMONIC || '').trim();
   if (explicit) return Account.fromPrivateKey({ privateKey: new Ed25519PrivateKey(explicit) });
-  if (!mnemonic) throw new Error('Missing GAME_SHOP_APTOS_KEY / NFT_APTOS_KEY / NFT_BASE mnemonic');
+  if (!mnemonic) throw new Error('Missing GAME_SHOP_APTOS_KEY / NFT_APTOS_KEY / GAME_SHOP_APTOS_MNEMONIC');
   return Account.fromDerivationPath({ path: "m/44'/637'/0'/0'/0'", mnemonic });
 }
 

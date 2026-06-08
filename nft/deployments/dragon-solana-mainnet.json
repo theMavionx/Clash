@@ -10,13 +10,13 @@
   "maxSupply": 333,
   "globalSupplyCap": 333,
   "usdPrice": "15",
-  "priceLamports": "131754257",
+  "priceLamports": "222090613",
   "treasury": "4dJVN3sQSCjeypkc8knCaRQmeT68upDQwZY7a9s8qjHA",
   "paymentGroups": {
     "sol": {
       "usdPrice": "15",
-      "solUsd": "67.55",
-      "lamports": "131754257",
+      "solUsd": "67.54",
+      "lamports": "222090613",
       "destination": "4dJVN3sQSCjeypkc8knCaRQmeT68upDQwZY7a9s8qjHA"
     },
     "usdc": {
@@ -29,9 +29,9 @@
     },
     "skr": {
       "usdPrice": "13",
-      "skrUsd": "0.009762",
-      "amount": "809260398",
-      "amountUi": "809.260398",
+      "skrUsd": "0.009862",
+      "amount": "1318191037",
+      "amountUi": "1318.191037",
       "decimals": 6,
       "symbol": "SKR",
       "mint": "SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3",
@@ -39,9 +39,9 @@
     },
     "clash": {
       "usdPrice": "10",
-      "clashUsd": "0.0003290",
-      "amount": "15197568390",
-      "amountUi": "15197.56839",
+      "clashUsd": "0.0003147",
+      "amount": "31776294885",
+      "amountUi": "31776.294885",
       "decimals": 6,
       "symbol": "CLASH",
       "tokenProgram": "token-2022",
