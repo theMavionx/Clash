@@ -7,7 +7,7 @@
 [ext_resource type="Script" uid="uid://df6gm7o36dvf7" path="res://scripts/attack_system.gd" id="5_vcsgt"]
 [ext_resource type="PackedScene" uid="uid://cl3mm08tunr88" path="res://Model/Ship/MainShip/MainShip.glb" id="16_cvmbd"]
 [ext_resource type="Script" uid="uid://q87h4tn8gjye" path="res://scripts/warmup.gd" id="17_warmup"]
-[ext_resource type="Script" path="res://scripts/test_scene_harness.gd" id="18_harness"]
+[ext_resource type="Script" uid="uid://glo5lshn6c7" path="res://scripts/test_scene_harness.gd" id="18_harness"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_r0du0"]
 
