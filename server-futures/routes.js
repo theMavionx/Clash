@@ -569,6 +569,7 @@ const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
 let mainDb = null;
 let playerByTokenStmt = null;
+let playerDexAccountStmt = null;
 function ensureMainDb() {
   if (mainDb) return;
   try {
@@ -576,6 +577,12 @@ function ensureMainDb() {
     try { mainDb.pragma('journal_mode = WAL'); } catch {}
     // Also pull the player's saved DEX — used to reject client-header spoof.
     playerByTokenStmt = mainDb.prepare('SELECT id, name, wallet, dex FROM players WHERE token = ?');
+    playerDexAccountStmt = mainDb.prepare(`
+      SELECT wallet_address, chain_type, status
+      FROM player_dex_accounts
+      WHERE player_id = ? AND dex = ?
+      LIMIT 1
+    `);
   } catch (e) {
     console.error('[futures] Failed to open main DB at', MAIN_DB_PATH, e.message);
   }
@@ -608,7 +615,34 @@ function auth(req, res, next) {
     });
   }
   req.dex = storedDex;
+  req.dexWallet = null;
+  if (storedDex === 'gmtrade' && playerDexAccountStmt) {
+    try {
+      const linked = playerDexAccountStmt.get(player.id, storedDex);
+      if (linked?.wallet_address) {
+        req.dexWallet = String(linked.wallet_address || '').trim();
+      }
+    } catch (e) {
+      console.warn('[futures] Failed to load linked dex wallet:', e.message);
+    }
+  }
   next();
+}
+
+function gmtradeLinkedWallet(req) {
+  return req.dexWallet || req.playerWallet;
+}
+
+function gmtradeRequestWallet(req) {
+  const linked = String(gmtradeLinkedWallet(req) || '').trim();
+  const requested = String(req.query?.address || req.query?.wallet || '').trim();
+  if (requested && linked && gmtrade.isSolanaAddress(linked) && requested !== linked) {
+    throw Object.assign(
+      new Error('GMTrade wallet mismatch. Switch to the Solana wallet linked to this game account.'),
+      { status: 403 },
+    );
+  }
+  return requested || linked;
 }
 
 // ==================== WALLET ====================
@@ -3727,7 +3761,7 @@ router.get('/gmtrade/account', auth, async (req, res) => {
     });
   }
   try {
-    res.json(await gmtrade.getAccountByAddress(req.query.address || req.query.wallet || req.playerWallet));
+    res.json(await gmtrade.getAccountByAddress(gmtradeRequestWallet(req)));
   } catch (e) {
     res.status(e.status || 502).json({ error: 'Failed to load GMTrade account', detail: e.message });
   }
@@ -3742,7 +3776,7 @@ router.get('/gmtrade/referral', auth, async (req, res) => {
     });
   }
   try {
-    res.json(await gmtrade.getUserReferralByAddress(req.query.address || req.query.wallet || req.playerWallet));
+    res.json(await gmtrade.getUserReferralByAddress(gmtradeRequestWallet(req)));
   } catch (e) {
     res.status(e.status || 502).json({ error: 'Failed to load GMTrade referral', detail: e.message });
   }
@@ -3757,7 +3791,7 @@ router.get('/gmtrade/positions', auth, async (req, res) => {
     });
   }
   try {
-    res.json(await gmtrade.getPositionsByAddress(req.query.address || req.query.wallet || req.playerWallet));
+    res.json(await gmtrade.getPositionsByAddress(gmtradeRequestWallet(req)));
   } catch (e) {
     res.status(e.status || 502).json({ error: 'Failed to load GMTrade positions', detail: e.message });
   }
@@ -3772,7 +3806,7 @@ router.get('/gmtrade/orders', auth, async (req, res) => {
     });
   }
   try {
-    res.json(await gmtrade.getOrdersByAddress(req.query.address || req.query.wallet || req.playerWallet));
+    res.json(await gmtrade.getOrdersByAddress(gmtradeRequestWallet(req)));
   } catch (e) {
     res.status(e.status || 502).json({ error: 'Failed to load GMTrade orders', detail: e.message });
   }
@@ -3792,7 +3826,7 @@ router.post('/gmtrade/client-log', auth, async (req, res) => {
       ts: new Date().toISOString(),
       playerId: req.playerId,
       player: req.playerName,
-      wallet: String(body.wallet || req.playerWallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      wallet: String(body.wallet || gmtradeLinkedWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
       trace: String(body.trace || '').slice(0, 80),
       event: String(body.event || '').slice(0, 120),
       attempt: Number(body.attempt || 0) || 0,
@@ -3852,7 +3886,7 @@ router.post('/gmtrade/order-tx', auth, async (req, res) => {
   try {
     console.log('[gmtrade order-tx] request', JSON.stringify({
       playerId: req.playerId,
-      wallet: String(req.body?.wallet || req.playerWallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      wallet: String(req.body?.wallet || gmtradeLinkedWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
       symbol: req.body?.symbol,
       side: req.body?.side,
       amount: req.body?.amount,
@@ -3864,7 +3898,7 @@ router.post('/gmtrade/order-tx', auth, async (req, res) => {
       last_valid_block_height: req.body?.last_valid_block_height,
       client_rpc: safeGmtradeRpcDiag(req.body?.client_rpc),
     }));
-    const built = await gmtrade.buildCreateOrderTx(req.body || {}, req.playerWallet);
+    const built = await gmtrade.buildCreateOrderTx(req.body || {}, gmtradeLinkedWallet(req));
     console.log('[gmtrade order-tx] built', JSON.stringify({
       playerId: req.playerId,
       symbol: built.symbol,
@@ -3903,13 +3937,13 @@ router.post('/gmtrade/cancel-order-tx', auth, async (req, res) => {
   try {
     console.log('[gmtrade cancel-order-tx] request', JSON.stringify({
       playerId: req.playerId,
-      wallet: String(req.body?.wallet || req.playerWallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      wallet: String(req.body?.wallet || gmtradeLinkedWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
       order_id: req.body?.order_id || req.body?.orderId || req.body?.id,
       recent_blockhash: req.body?.recent_blockhash,
       last_valid_block_height: req.body?.last_valid_block_height,
       client_rpc: safeGmtradeRpcDiag(req.body?.client_rpc),
     }));
-    const built = await gmtrade.buildCancelOrderTx(req.body || {}, req.playerWallet);
+    const built = await gmtrade.buildCancelOrderTx(req.body || {}, gmtradeLinkedWallet(req));
     console.log('[gmtrade cancel-order-tx] built', JSON.stringify({
       playerId: req.playerId,
       order_id: built.order_id,
@@ -3939,13 +3973,13 @@ router.post('/gmtrade/referral-tx', auth, async (req, res) => {
   try {
     console.log('[gmtrade referral-tx] request', JSON.stringify({
       playerId: req.playerId,
-      wallet: String(req.body?.wallet || req.playerWallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      wallet: String(req.body?.wallet || gmtradeLinkedWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
       code: req.body?.code || req.body?.referral_code || req.body?.referralCode || undefined,
       recent_blockhash: req.body?.recent_blockhash,
       last_valid_block_height: req.body?.last_valid_block_height,
       client_rpc: safeGmtradeRpcDiag(req.body?.client_rpc),
     }));
-    const built = await gmtrade.buildSetReferrerTx(req.body || {}, req.playerWallet);
+    const built = await gmtrade.buildSetReferrerTx(req.body || {}, gmtradeLinkedWallet(req));
     console.log('[gmtrade referral-tx] built', JSON.stringify({
       playerId: req.playerId,
       already_linked: built.already_linked === true,
@@ -3973,7 +4007,7 @@ router.post('/gmtrade/trade-report', auth, async (req, res) => {
     });
   }
   try {
-    const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, req.playerWallet);
+    const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, gmtradeLinkedWallet(req));
     res.json({
       ok: true,
       pending: result.pending === true,
@@ -4055,7 +4089,7 @@ router.post('/trade-report', auth, async (req, res) => {
         ? await recordVerifiedAvantisClose(req, req.body || {})
         : await recordVerifiedAvantisOpen(req, req.body || {});
     } else if (req.dex === 'gmtrade') {
-      const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, req.playerWallet);
+      const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, gmtradeLinkedWallet(req));
       verified = result.changes > 0;
     }
     res.json({

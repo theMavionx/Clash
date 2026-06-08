@@ -370,6 +370,34 @@ function baseSymbol(value) {
     .replace(/[^A-Z0-9]/g, '');
 }
 
+function officialBaseSymbol(value) {
+  const sym = baseSymbol(value);
+  return GMTRADE_OFFICIAL_SYMBOL_ALIASES[sym] || sym;
+}
+
+function tokenDecimalsForSymbol(value, fallback = GMTRADE_TOKEN_AMOUNT_DECIMALS) {
+  const sym = officialBaseSymbol(value);
+  const decimals = Number(GMTRADE_OFFICIAL_PRICE_DECIMALS[sym]);
+  return Number.isFinite(decimals) && decimals >= 0 ? decimals : fallback;
+}
+
+function resolveRequestWallet(body = {}, playerWallet = '') {
+  const bodyWallet = String(body.wallet || body.address || '').trim();
+  const linkedWallet = String(playerWallet || '').trim();
+  const linkedIsSolana = isSolanaAddress(linkedWallet);
+  const wallet = linkedIsSolana ? linkedWallet : (bodyWallet || linkedWallet);
+  if (!isSolanaAddress(wallet)) {
+    throw Object.assign(new Error('GMTrade linked Solana wallet address required'), { status: 400 });
+  }
+  if (bodyWallet && bodyWallet !== wallet) {
+    throw Object.assign(
+      new Error('GMTrade wallet mismatch. Connect the Solana wallet linked to this game account before trading.'),
+      { status: 403 },
+    );
+  }
+  return wallet;
+}
+
 function normalizeMarketConfig(symbol, cfg) {
   const sym = baseSymbol(symbol || 'SOL');
   if (!cfg) return null;
@@ -386,7 +414,7 @@ function normalizeMarketConfig(symbol, cfg) {
     pay_token: String(cfg.pay_token || cfg.payToken || collateralToken || ''),
     receive_token: String(cfg.receive_token || cfg.receiveToken || collateralToken || ''),
     collateral_decimals: Number(cfg.collateral_decimals || cfg.collateralDecimals || GMTRADE_DEFAULT_COLLATERAL_DECIMALS),
-    token_decimals: Number(cfg.token_decimals || cfg.tokenDecimals || GMTRADE_TOKEN_AMOUNT_DECIMALS),
+    token_decimals: Number(cfg.token_decimals || cfg.tokenDecimals || tokenDecimalsForSymbol(sym)),
     price_decimals: Number(cfg.price_decimals || cfg.priceDecimals || 0) || null,
     source: cfg.source || 'env',
   };
@@ -656,12 +684,14 @@ async function configFromMarketToken(symbol) {
           index_token: market.index_token_address(),
           source: 'market_token_pda',
         });
+        const resolvedSymbol = directToken ? (symbolForDiscoveredMarket({
+          market_token: market.market_token_address(),
+          index_token: market.index_token_address(),
+        }) || sym) : sym;
         const row = {
           ...decoded,
-          symbol: directToken ? (symbolForDiscoveredMarket({
-            market_token: market.market_token_address(),
-            index_token: market.index_token_address(),
-          }) || sym) : sym,
+          symbol: resolvedSymbol,
+          token_decimals: tokenDecimalsForSymbol(resolvedSymbol, decoded.token_decimals),
           index_token: market.index_token_address(),
           account: marketAccount,
           program_id: programId,
@@ -1909,10 +1939,7 @@ function sanitizeGmtradeTransactions(transactions, options = {}) {
 }
 
 async function buildCreateOrderTx(body = {}, playerWallet = '') {
-  const payer = String(body.wallet || body.address || playerWallet || '').trim();
-  if (!isSolanaAddress(payer)) {
-    throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
-  }
+  const payer = resolveRequestWallet(body, playerWallet);
   const requestedSymbol = baseSymbol(body.symbol || 'SOL') || 'SOL';
   const configuredMarketToken = marketTokenForSymbol(requestedSymbol);
   const hintedMarketToken = String(body.market_token || body.marketToken || '').trim();
@@ -2154,11 +2181,8 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
 }
 
 async function buildCancelOrderTx(body = {}, playerWallet = '') {
-  const payer = String(body.wallet || body.address || playerWallet || '').trim();
+  const payer = resolveRequestWallet(body, playerWallet);
   const orderId = String(body.order_id || body.orderId || body.id || body.order || '').trim();
-  if (!isSolanaAddress(payer)) {
-    throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
-  }
   if (!isSolanaPubkey(orderId)) {
     throw Object.assign(new Error('GMTrade order address required'), { status: 400 });
   }
@@ -2241,11 +2265,8 @@ async function buildCancelOrderTx(body = {}, playerWallet = '') {
 }
 
 async function buildSetReferrerTx(body = {}, playerWallet = '') {
-  const payer = String(body.wallet || body.address || playerWallet || '').trim();
+  const payer = resolveRequestWallet(body, playerWallet);
   const code = String(body.code || body.referral_code || body.referralCode || GMTRADE_REFERRAL_CODE || '').trim();
-  if (!isSolanaAddress(payer)) {
-    throw Object.assign(new Error('GMTrade Solana wallet address required'), { status: 400 });
-  }
   const codeBytes = referralCodeBytes(code);
   const existing = await getUserReferralByAddress(payer).catch(() => null);
   if (existing?.has_referrer) {
@@ -2433,7 +2454,7 @@ async function verifiedPositionForTradeReport({ wallet, tx, body }) {
 }
 
 async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
-  const wallet = String(body.wallet || body.address || playerWallet || '').trim();
+  const wallet = resolveRequestWallet(body, playerWallet);
   const signature = String(body.tx_hash || body.signature || '').trim();
   const requestedAmount = Number(body.amount);
   const requestedLeverage = Number(body.leverage || 1);

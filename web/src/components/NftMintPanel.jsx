@@ -3939,6 +3939,7 @@ const styles = {
     height: '82%',
     objectFit: 'contain',
     display: 'block',
+    borderRadius: '50%',
   },
   chainSwitchMain: {
     minWidth: 0,

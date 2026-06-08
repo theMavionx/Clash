@@ -1793,7 +1793,7 @@ const s = {
   walletChoiceList: { display: 'flex', flexDirection: 'column', gap: 7 },
   walletChoiceBtn: { width: '100%', minHeight: 54, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc', color: '#5C3A21', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' },
   walletChoiceBadge: { width: 38, height: 34, borderRadius: 9, background: '#fffaf0', border: '1px solid rgba(92,58,33,0.22)', color: '#5C3A21', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 900, letterSpacing: 0.4, flex: '0 0 auto', overflow: 'hidden', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.75)' },
-  walletChoiceLogo: { width: '82%', height: '82%', objectFit: 'contain', display: 'block' },
+  walletChoiceLogo: { width: '82%', height: '82%', objectFit: 'contain', display: 'block', borderRadius: '50%' },
   walletChoiceMain: { minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 },
   walletChoiceName: { fontSize: 13, fontWeight: 900, color: '#5C3A21' },
   walletChoiceStatus: { fontSize: 10, fontWeight: 800, color: '#7a5a30', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
