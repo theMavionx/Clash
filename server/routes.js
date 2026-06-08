@@ -11992,6 +11992,20 @@ async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!LIVE_TASK_PROGRESS_DEXES.has(dex)) return playerTask;
   try {
     const snap = tasks.parseParams(playerTask.snapshot);
+    if (task.repeatable && !snap.strict_after_start_id) {
+      const previousPaid = db.db.prepare(
+        `SELECT 1 FROM task_claim_events
+         WHERE player_id = ? AND task_id = ? AND result = 'paid'
+         LIMIT 1`
+      ).get(player.id, task.id);
+      if (previousPaid) {
+        snap.strict_after_start_id = true;
+        playerTask = { ...playerTask, snapshot: JSON.stringify(snap) };
+        db.db.prepare(
+          `UPDATE player_tasks SET snapshot = ? WHERE player_id = ? AND task_id = ?`
+        ).run(playerTask.snapshot, player.id, task.id);
+      }
+    }
     const result = await tasks.verifyTask(player, task, snap);
     const progress = result.target_value > 0
       ? Math.min(1, result.progress_value / result.target_value)
