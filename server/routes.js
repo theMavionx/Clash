@@ -176,18 +176,60 @@ function getUnifiedPlayerByWalletAnyForm(wallet) {
   const candidates = walletLookupCandidates(wallet).map(canonicalWalletIdentifier);
   if (!candidates.length) return null;
   const placeholders = candidates.map(() => '?').join(',');
-  const identity = db.db.prepare(`
-    SELECT p.*
-    FROM player_auth_identities i
-    JOIN players p ON p.id = i.player_id
-    WHERE i.type = ? AND i.identifier IN (${placeholders})
-    ORDER BY p.created_at ASC, p.id ASC
-    LIMIT 1
-  `).get(`${chainType}_wallet`, ...candidates);
-  if (identity) return identity;
+  const params = [
+    `${chainType}_wallet`, ...candidates,
+    chainType, ...candidates,
+    chainType, ...candidates,
+    ...candidates,
+  ];
 
-  // Compatibility with pre-identity rows.
-  return getPlayerByWalletAnyForm(wallet);
+  // Unified-account recovery must see both the post-migration auth tables and
+  // legacy DEX rows. During the registration refactor some accounts had the
+  // wallet only in player_dex_accounts, so identity-only lookup created fresh
+  // empty accounts after disconnect/re-login.
+  return db.db.prepare(`
+    WITH candidate_ids AS (
+      SELECT i.player_id AS id, 0 AS source_priority
+      FROM player_auth_identities i
+      WHERE i.type = ? AND i.identifier IN (${placeholders})
+      UNION ALL
+      SELECT w.player_id AS id, 1 AS source_priority
+      FROM player_wallets w
+      WHERE w.chain_type = ? AND w.address IN (${placeholders})
+      UNION ALL
+      SELECT a.player_id AS id, 2 AS source_priority
+      FROM player_dex_accounts a
+      WHERE a.chain_type = ? AND a.wallet_address IN (${placeholders})
+      UNION ALL
+      SELECT p.id AS id, 3 AS source_priority
+      FROM players p
+      WHERE p.wallet IN (${placeholders})
+    ),
+    ranked AS (
+      SELECT
+        p.*,
+        MIN(c.source_priority) AS source_priority,
+        (SELECT COUNT(*) FROM buildings b WHERE b.player_id = p.id) AS building_count,
+        (SELECT COUNT(*) FROM player_tasks pt WHERE pt.player_id = p.id) AS task_count,
+        COALESCE((SELECT MAX(total_volume) FROM trading_rewards tr WHERE tr.player_id = p.id), 0) AS reward_volume
+      FROM candidate_ids c
+      JOIN players p ON p.id = c.id
+      GROUP BY p.id
+    )
+    SELECT *
+    FROM ranked
+    ORDER BY
+      CASE WHEN name GLOB 'player_[0-9a-fA-F]*' THEN 1 ELSE 0 END ASC,
+      building_count DESC,
+      reward_volume DESC,
+      task_count DESC,
+      COALESCE(trophies, 0) DESC,
+      source_priority ASC,
+      COALESCE(last_seen_at, created_at) DESC,
+      created_at ASC,
+      id ASC
+    LIMIT 1
+  `).get(...params);
 }
 
 function getPlayerByWalletAnyForm(wallet, excludeId = null) {
@@ -6772,12 +6814,43 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
 // as the wallet-only variant so a user who entered an unpadded Aptos
 // address on one device still matches their padded record from another.
 function getPlayerByWalletAndDexAnyForm(wallet, dex) {
-  const candidates = walletLookupCandidates(wallet);
+  const chainType = walletChainType(wallet);
+  const candidates = walletLookupCandidates(wallet).map(canonicalWalletIdentifier);
   if (!candidates.length) return null;
   const placeholders = candidates.map(() => '?').join(',');
   return db.db.prepare(
-    `SELECT * FROM players WHERE wallet IN (${placeholders}) AND dex = ? LIMIT 1`
-  ).get(...candidates, dex);
+    `WITH candidate_ids AS (
+       SELECT p.id AS id, 0 AS source_priority
+       FROM players p
+       WHERE p.wallet IN (${placeholders}) AND p.dex = ?
+       UNION ALL
+       SELECT a.player_id AS id, 1 AS source_priority
+       FROM player_dex_accounts a
+       WHERE a.chain_type = ? AND a.wallet_address IN (${placeholders}) AND a.dex = ?
+     ),
+     ranked AS (
+       SELECT
+         p.*,
+         MIN(c.source_priority) AS source_priority,
+         (SELECT COUNT(*) FROM buildings b WHERE b.player_id = p.id) AS building_count,
+         COALESCE((SELECT MAX(total_volume) FROM trading_rewards tr WHERE tr.player_id = p.id AND tr.dex = ?), 0) AS reward_volume
+       FROM candidate_ids c
+       JOIN players p ON p.id = c.id
+       GROUP BY p.id
+     )
+     SELECT *
+     FROM ranked
+     ORDER BY
+       CASE WHEN name GLOB 'player_[0-9a-fA-F]*' THEN 1 ELSE 0 END ASC,
+       building_count DESC,
+       reward_volume DESC,
+       COALESCE(trophies, 0) DESC,
+       source_priority ASC,
+       COALESCE(last_seen_at, created_at) DESC,
+       created_at ASC,
+       id ASC
+     LIMIT 1`
+  ).get(...candidates, dex, chainType, ...candidates, dex, dex);
 }
 
 // Return ALL DEX-specific accounts a wallet owns. Used by the wallet-only
@@ -6786,12 +6859,34 @@ function getPlayerByWalletAndDexAnyForm(wallet, dex) {
 // user's most-played DEX appears first if the client decides to fall back
 // to "any account".
 function getAllPlayersByWalletAnyForm(wallet) {
-  const candidates = walletLookupCandidates(wallet);
+  const chainType = walletChainType(wallet);
+  const candidates = walletLookupCandidates(wallet).map(canonicalWalletIdentifier);
   if (!candidates.length) return [];
   const placeholders = candidates.map(() => '?').join(',');
   return db.db.prepare(
-    `SELECT * FROM players WHERE wallet IN (${placeholders}) ORDER BY COALESCE(trophies, 0) DESC, id DESC`
-  ).all(...candidates);
+    `WITH candidate_ids AS (
+       SELECT p.id AS id FROM players p WHERE p.wallet IN (${placeholders})
+       UNION
+       SELECT i.player_id AS id FROM player_auth_identities i WHERE i.type = ? AND i.identifier IN (${placeholders})
+       UNION
+       SELECT w.player_id AS id FROM player_wallets w WHERE w.chain_type = ? AND w.address IN (${placeholders})
+       UNION
+       SELECT a.player_id AS id FROM player_dex_accounts a WHERE a.chain_type = ? AND a.wallet_address IN (${placeholders})
+     )
+     SELECT p.*
+     FROM players p
+     WHERE p.id IN (SELECT id FROM candidate_ids)
+     ORDER BY
+       (SELECT COUNT(*) FROM buildings b WHERE b.player_id = p.id) DESC,
+       COALESCE((SELECT MAX(total_volume) FROM trading_rewards tr WHERE tr.player_id = p.id), 0) DESC,
+       COALESCE(trophies, 0) DESC,
+       p.id DESC`
+  ).all(
+    ...candidates,
+    `${chainType}_wallet`, ...candidates,
+    chainType, ...candidates,
+    chainType, ...candidates,
+  );
 }
 
 // ---------- Auth Middleware ----------
