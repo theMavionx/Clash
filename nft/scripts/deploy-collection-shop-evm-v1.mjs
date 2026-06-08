@@ -99,7 +99,7 @@ const env = loadEnv();
 const collection = normalizeSlug(argValue('collection', env.NFT_COLLECTION_SLUG || env.NEW_NFT_SLUG));
 const collectionKey = envKeyPart(collection);
 const collectionDefaults = collection === 'dragon'
-  ? { usdPrice: '8.9', clashUsdPrice: '5' }
+  ? { usdPrice: '15', clashUsdPrice: '10' }
   : { usdPrice: '5.5', clashUsdPrice: '4' };
 const chainKey = String(argValue('chain', env.CLASH_DEPLOY_CHAIN || env.NFT_COLLECTION_CHAIN || '')).toLowerCase();
 const spec = CHAINS[chainKey];

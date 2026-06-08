@@ -9,7 +9,7 @@
   "treasury": "0xd733ea87112a03b470922bf3bfc62e9948fe254926f1c1a11eef4e406b4627",
   "usdcMetadata": "0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b",
   "quoteSignerPubkey": "0xb7d726f4c0d3bf6ad099cc0e0afdd5c875ea90b361d15354bc4a184571acce8b",
-  "mintUsdPriceE6": "8900000",
+  "mintUsdPriceE6": "15000000",
   "upgradeUsdPriceE6": "8900000",
   "maxSupply": 333,
   "maxPerTx": 10,

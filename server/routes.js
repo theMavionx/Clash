@@ -560,9 +560,9 @@ const NFT_COLLECTION_PRESETS = {
     character: 'Dragon',
     description: 'Dragon from Clash of Perps.',
     maxSupply: 333,
-    usdPriceE6: '8900000',
-    clashUsdPriceE6: '5000000',
-    skrUsdPriceE6: '7900000',
+    usdPriceE6: '15000000',
+    clashUsdPriceE6: '10000000',
+    skrUsdPriceE6: '13000000',
     images: {
       1: 'L1.jpg',
       2: 'L2.jpg',

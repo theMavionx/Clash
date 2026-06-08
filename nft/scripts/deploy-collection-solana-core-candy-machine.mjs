@@ -66,9 +66,9 @@ function collectionDefaults(slug) {
       name: 'Dragon',
       symbol: 'DRGN',
       maxSupply: '333',
-      usdPrice: '8.9',
-      clashUsdPrice: '5',
-      skrUsdPrice: '7.9',
+      usdPrice: '15',
+      clashUsdPrice: '10',
+      skrUsdPrice: '13',
     };
   }
   return {

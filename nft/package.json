@@ -16,6 +16,8 @@
     "deploy:collection:evm": "node scripts/deploy-collection-evm-v1.mjs",
     "deploy:collection:shop": "node scripts/deploy-collection-shop-evm-v1.mjs",
     "deploy:collection:solana": "node scripts/deploy-collection-solana-core-candy-machine.mjs",
+    "config:collection:shop": "node scripts/set-collection-shop-evm-v1-config.mjs",
+    "config:aptos:mint-price": "node scripts/set-aptos-mint-price.mjs",
     "config:bridge-env": "node scripts/configure-bridge-env.mjs",
     "config:bridge-fee:evm": "node scripts/set-evm-bridge-fee.mjs",
     "config:bridge-fee:aptos": "node scripts/set-aptos-bridge-fee.mjs",
