@@ -277,6 +277,7 @@ export function useGmtrade() {
   const [account, setAccount] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   const [walletUsdc, setWalletUsdc] = useState(null);
   const [walletUsdcStatus, setWalletUsdcStatus] = useState({ status: 'idle' });
   const [goldEarned, setGoldEarned] = useState(null);
@@ -844,6 +845,7 @@ export function useGmtrade() {
         error: `GMTrade minimum position size is $${minPositionUsd}. Yours: $${positionUsd.toFixed(4)}. Increase margin or leverage.`,
       };
     }
+    setActionLoading(true);
     try {
       if (config?.native_order_builder === false) {
         return {
@@ -1005,6 +1007,8 @@ export function useGmtrade() {
         };
       }
       return { error: gmtradeUserError(e) };
+    } finally {
+      setActionLoading(false);
     }
   }, [config?.min_position_usd, config?.native_order_builder, confirmSignatureWithDiagnostics, gmtradeLog, refresh, reportTrade, requestRealtimeRefresh, selectTxConnection, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
@@ -1330,7 +1334,7 @@ export function useGmtrade() {
     leverageSettings: {},
     marginModes: {},
     error,
-    loading,
+    loading: loading || actionLoading,
     dataReady: markets.length > 0 || prices.length > 0,
     accountReady: !!walletAddr && !walletMismatch,
     isReady: !!walletAddr && !walletMismatch,
