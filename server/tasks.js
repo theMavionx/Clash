@@ -71,6 +71,7 @@ try {
 const VALID_TYPES = ['volume', 'positions', 'combo_volume_attack', 'daily_trade_gold'];
 const VALID_SIDES = ['any', 'long', 'short'];
 const TASK_TRADE_SETTLE_DELAY_SECONDS = 0;
+const TASK_START_TRADE_GRACE_MS = Math.max(0, Number(process.env.TASK_START_TRADE_GRACE_MS || 120_000));
 const HOTSTUFF_TASK_IMPORT_MS = Math.max(5_000, Number(process.env.HOTSTUFF_TASK_IMPORT_MS || 15_000));
 const hotstuffTaskImportCache = new Map();
 const GMTRADE_TASK_RECONCILE_MS = Math.max(5_000, Number(process.env.GMTRADE_TASK_RECONCILE_MS || 15_000));
@@ -156,6 +157,32 @@ function matchesSide(tradeSide, wantSide) {
   if (wantSide === 'long') return c.isLong && !c.isShort;
   if (wantSide === 'short') return c.isShort && !c.isLong;
   return true;
+}
+
+function parseTaskTimeMs(value) {
+  if (!value) return NaN;
+  const raw = String(value);
+  const isoish = raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z';
+  const ms = Date.parse(isoish);
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+function isTaskStartBoundaryTrade(snap, trade) {
+  if (!TASK_START_TRADE_GRACE_MS) return false;
+  const startId = Number(snap?.trade_id_start || 0);
+  const tradeId = Number(trade?.history_id || 0);
+  if (!startId || tradeId !== startId) return false;
+  const startedMs = parseTaskTimeMs(snap?.start_time);
+  const tradeMs = parseTaskTimeMs(trade?.created_at);
+  if (!Number.isFinite(startedMs) || !Number.isFinite(tradeMs)) return false;
+  return Math.abs(startedMs - tradeMs) <= TASK_START_TRADE_GRACE_MS;
+}
+
+function isAfterTaskSnapshot(snap, trade) {
+  const startId = Number(snap?.trade_id_start || 0);
+  const tradeId = Number(trade?.history_id || 0);
+  if (tradeId > startId) return true;
+  return isTaskStartBoundaryTrade(snap, trade);
 }
 
 // ---------- Snapshots ----------
@@ -447,6 +474,7 @@ async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
         order_id: r.order_id,
         client_order_id: r.client_order_id,
         verified_source: r.verified_source,
+        created_at: r.created_at,
       };
     });
   } catch (e) {
@@ -722,7 +750,7 @@ async function verifyVolume(player, task, snap) {
   let vol = 0;
   let matched = 0;
   for (const t of trades) {
-    if ((t.history_id || 0) <= startId) continue;
+    if (!isAfterTaskSnapshot(snap, t)) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
     // For Avantis rows we stashed notional_usd directly in _notional; for
@@ -748,7 +776,7 @@ async function verifyPositions(player, task, snap) {
   let n = 0;
   const seenOrders = new Set();
   for (const t of trades) {
-    if ((t.history_id || 0) <= startId) continue;
+    if (!isAfterTaskSnapshot(snap, t)) continue;
     const orderKey = `${t.dex || player.dex || 'dex'}:${String(t.order_id || t.client_order_id || t.history_id || '')}`;
     if (orderKey && seenOrders.has(orderKey)) continue;
     if (orderKey) seenOrders.add(orderKey);
@@ -773,7 +801,7 @@ async function verifyComboVolumeAttack(player, task, snap) {
   const trades = await fetchWalletTrades(player, { since: startId });
   let vol = 0;
   for (const t of trades) {
-    if ((t.history_id || 0) <= startId) continue;
+    if (!isAfterTaskSnapshot(snap, t)) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
     const notional = Number(t._notional) > 0
