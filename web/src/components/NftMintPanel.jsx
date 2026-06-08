@@ -126,34 +126,34 @@ const CHAIN_OPTIONS = [
 
 const PAYMENT_OPTIONS = {
   base: [
-    { id: 'base-eth', chain: 'base', method: 'ETH', price: '$8.90', token: 'ETH' },
-    { id: 'base-usdc', chain: 'base', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'base-eth', chain: 'base', method: 'ETH', price: '~$15.00', token: 'ETH' },
+    { id: 'base-usdc', chain: 'base', method: 'USDC', price: '$15.00', token: 'USDC' },
   ],
   solana: [
-    { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$8.90', token: 'USDC' },
-    { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '$8.90', token: 'SOL' },
-    { id: 'sol-clash', chain: 'solana', method: 'CLASH', price: '$5.00', token: 'CLASH', dealLabel: 'Best deal', dealText: 'Save $3.90', requiresClash: true },
-    { id: 'sol-skr', chain: 'solana', method: 'SKR', price: '$7.90', token: 'SKR', dealLabel: 'SKR discount', dealText: 'Save $1.00', requiresSkr: true },
+    { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$15.00', token: 'USDC' },
+    { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '~$15.00', token: 'SOL' },
+    { id: 'sol-clash', chain: 'solana', method: 'CLASH', price: '$10.00', token: 'CLASH', dealLabel: 'Best deal', dealText: 'Save $5.00', requiresClash: true },
+    { id: 'sol-skr', chain: 'solana', method: 'SKR', price: '$13.00', token: 'SKR', dealLabel: 'SKR discount', dealText: 'Save $2.00', requiresSkr: true },
   ],
   // Arbitrum + Monad shops are deployed and saleActive — direct mint with
   // USDC or the chain's native token works via the server's /nft/evm/quote
   // endpoint. Aptos mirrors that shape with USDC/APT quotes signed by the
   // server and submitted through the Aptos wallet adapter.
   arbitrum: [
-    { id: 'arb-usdc', chain: 'arbitrum', method: 'USDC', price: '$8.90', token: 'USDC' },
-    { id: 'arb-eth',  chain: 'arbitrum', method: 'ETH',  price: '$8.90', token: 'ETH' },
+    { id: 'arb-usdc', chain: 'arbitrum', method: 'USDC', price: '$15.00', token: 'USDC' },
+    { id: 'arb-eth',  chain: 'arbitrum', method: 'ETH',  price: '~$15.00', token: 'ETH' },
   ],
   monad: [
-    { id: 'monad-usdc', chain: 'monad', method: 'USDC', price: '$8.90', token: 'USDC' },
-    { id: 'monad-mon',  chain: 'monad', method: 'MON',  price: '$8.90', token: 'MON' },
+    { id: 'monad-usdc', chain: 'monad', method: 'USDC', price: '$15.00', token: 'USDC' },
+    { id: 'monad-mon',  chain: 'monad', method: 'MON',  price: '~$15.00', token: 'MON' },
   ],
   ink: [
-    { id: 'ink-usdc', chain: 'ink', method: 'USDC', price: '$8.90', token: 'USDC' },
-    { id: 'ink-eth',  chain: 'ink', method: 'ETH',  price: '$8.90', token: 'ETH' },
+    { id: 'ink-usdc', chain: 'ink', method: 'USDC', price: '$15.00', token: 'USDC' },
+    { id: 'ink-eth',  chain: 'ink', method: 'ETH',  price: '~$15.00', token: 'ETH' },
   ],
   aptos: [
-    { id: 'aptos-usdc', chain: 'aptos', method: 'USDC', price: '$8.90', token: 'USDC' },
-    { id: 'aptos-apt',  chain: 'aptos', method: 'APT',  price: '$8.90', token: 'APT' },
+    { id: 'aptos-usdc', chain: 'aptos', method: 'USDC', price: '$15.00', token: 'USDC' },
+    { id: 'aptos-apt',  chain: 'aptos', method: 'APT',  price: '~$15.00', token: 'APT' },
   ],
 };
 
@@ -311,6 +311,53 @@ function multiplyRewards(rewards, quantity) {
 function formatUsdAmount(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n.toFixed(2) : '0.00';
+}
+
+function formatSaleUsdLabel(value, { approx = false } = {}) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return `${approx ? '~' : ''}$${n.toFixed(2)}`;
+}
+
+function e6ToUsd(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n / 1_000_000 : null;
+}
+
+function salePaymentUsd(option, config) {
+  const chain = option?.chain;
+  const method = String(option?.method || '').toLowerCase();
+  if (!chain || !method || !config) return null;
+
+  if (chain === 'solana') {
+    const groups = config.solana?.paymentGroups || config.solana?.groups || {};
+    const group = groups[method];
+    return group?.usdPrice != null ? Number(group.usdPrice) : null;
+  }
+
+  if (chain === 'aptos') {
+    return e6ToUsd(config.aptos?.mintUsdPriceE6);
+  }
+
+  const evm = config.evm?.[chain];
+  if (!evm) return null;
+  if (method === 'clash') return e6ToUsd(evm.clashUsdPriceE6);
+  return e6ToUsd(evm.baseUsdPriceE6);
+}
+
+function salePaymentPriceLabel(option, config) {
+  const usd = salePaymentUsd(option, config);
+  const approx = ['eth', 'sol', 'apt', 'mon'].includes(String(option?.method || '').toLowerCase());
+  return formatSaleUsdLabel(usd, { approx }) || option?.price || '';
+}
+
+function salePaymentDealText(option, config) {
+  if (!option?.dealText) return '';
+  const base = salePaymentUsd({ chain: option.chain, method: 'USDC' }, config);
+  const discounted = salePaymentUsd(option, config);
+  if (!Number.isFinite(base) || !Number.isFinite(discounted) || discounted >= base) return option.dealText;
+  return `Save $${(base - discounted).toFixed(2)}`;
 }
 
 function shopUnitUsd(product, chain, payment) {
@@ -1448,6 +1495,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                       <div style={styles.options}>
                         {paymentOptions.map((option) => {
                           const active = option.id === selectedPayment;
+                          const displayPrice = salePaymentPriceLabel(option, mintConfig);
+                          const displayDealText = salePaymentDealText(option, mintConfig);
                           return (
                             <button
                               key={option.id}
@@ -1469,8 +1518,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                                 {option.method}
                                 {option.dealLabel && <span style={styles.optionDiscountChip}>{option.dealLabel}</span>}
                               </span>
-                              <span style={styles.optionPrice}>{option.price}</span>
-                              {option.dealText && <span style={styles.optionDealText}>{option.dealText}</span>}
+                              <span style={styles.optionPrice}>{displayPrice}</span>
+                              {displayDealText && <span style={styles.optionDealText}>{displayDealText}</span>}
                               {saleMintSoldOut && <span style={styles.soonBadge}>SOLD OUT</span>}
                             </button>
                           );
