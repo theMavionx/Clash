@@ -227,7 +227,7 @@ export const DEX_CONFIG = {
     label: 'GMTRADE',
     shortLabel: 'GMT',
     emoji: 'GMT',
-    logo: '/gmx.png',
+    logo: '/gmtrade.svg',
     logoIsWordmark: false,
     color: '#14B8A6',
     colorDark: '#0F766E',

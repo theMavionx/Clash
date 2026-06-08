@@ -7450,6 +7450,11 @@ function FuturesPanel() {
             </>
           ) : dex === 'gmtrade' ? (
             <>
+              <img
+                src={DEX_CONFIG.gmtrade.logo}
+                alt="GMTrade"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.gmtrade.colorDark }}>
                 GMTrade
