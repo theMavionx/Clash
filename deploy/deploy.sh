@@ -774,6 +774,15 @@ install_release_dependencies() {
         fi
     fi
 
+    if [ -d "$RELEASE_DIR/nft" ] && [ -f "$RELEASE_DIR/nft/package.json" ]; then
+        cd "$RELEASE_DIR/nft"
+        if [ -f package-lock.json ]; then
+            npm ci --omit=dev --legacy-peer-deps
+        else
+            npm install --omit=dev --legacy-peer-deps
+        fi
+    fi
+
     if ! grep -q '^DIAG_SERVER_SECRET_B58=' "$ENV_FILE"; then
         DIAG_SECRET="$(cd "$SERVER_DIR" && node -e "const n=require('tweetnacl');const b=require('bs58').default||require('bs58');console.log(b.encode(n.box.keyPair().secretKey))")"
         echo "DIAG_SERVER_SECRET_B58=$DIAG_SECRET" >> "$ENV_FILE"
