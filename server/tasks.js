@@ -287,6 +287,7 @@ async function maybeReconcileGmtrade(player, wallet) {
   try {
     const futuresDb = require('../server-futures/db');
     const gmtrade = require('../server-futures/gmtrade');
+    if (typeof gmtrade.reconcilePendingTradeReportsForPlayer !== 'function') return null;
     return await gmtrade.reconcilePendingTradeReportsForPlayer(futuresDb, player.id, { limit: 50 });
   } catch (e) {
     console.warn(`[tasks gmtrade] pending reconcile failed player=${player.name || player.id}:`, e.message);
