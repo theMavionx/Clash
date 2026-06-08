@@ -1,0 +1,9 @@
+[gd_scene format=3 uid="uid://cm6ljcqitg2br"]
+
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Beholder.glb" id="1_glb"]
+[ext_resource type="Script" path="res://Model/Characters/Model/beholder_texture_applier.gd" id="2_script"]
+
+[node name="Beholder" type="Node3D"]
+script = ExtResource("2_script")
+
+[node name="Model" parent="." instance=ExtResource("1_glb")]

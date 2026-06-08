@@ -4,6 +4,7 @@ extends EditorScenePostImport
 const MATERIAL_TEXTURES := {
 	"res://Model/Dragon/Fire Dragon.FBX": "res://Model/Dragon/Fire Dragon-Red.tga",
 	"res://Model/Witch/Succubus.FBX": "res://Model/Witch/Textures/Succubus-Purple.tga",
+	"res://Model/Characters/Model/Beholder.fbx": "res://Model/Characters/Model/Beholder_albedo.png",
 }
 
 
