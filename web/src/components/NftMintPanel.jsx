@@ -343,11 +343,12 @@ function getSupplyInfo(config, chain) {
   const supply = chainConfig.supply || {};
   const maxSupply = countOrNull(supply.maxSupply ?? chainConfig.maxSupply ?? globalSupply.cap) || SALE_NFT_DISPLAY_SUPPLY_CAP;
   const mintedFromRpc = countOrNull(supply.totalMinted ?? supply.total ?? globalSupply.perChain?.[chain]);
-  const remainingFromRpc = countOrNull(supply.remaining);
+  const availableRemainingFromRpc = countOrNull(supply.remaining);
+  const displayRemainingFromRpc = countOrNull(supply.confirmedRemaining) ?? availableRemainingFromRpc;
   const totalMinted = mintedFromRpc ?? (
-    remainingFromRpc == null ? null : Math.max(0, maxSupply - remainingFromRpc)
+    displayRemainingFromRpc == null ? null : Math.max(0, maxSupply - displayRemainingFromRpc)
   );
-  const remaining = remainingFromRpc ?? (
+  const remaining = displayRemainingFromRpc ?? (
     totalMinted == null ? null : Math.max(0, maxSupply - totalMinted)
   );
   const progress = totalMinted == null || maxSupply <= 0
@@ -359,6 +360,7 @@ function getSupplyInfo(config, chain) {
     totalMinted,
     maxSupply,
     remaining,
+    availableRemaining: availableRemainingFromRpc ?? remaining,
     progress,
     loaded: totalMinted != null || remaining != null,
   };
@@ -375,13 +377,14 @@ function getTotalSupplyInfo(globalSupply, baseSupply, solanaSupply) {
   if (globalSupply && Number.isFinite(globalSupply.cap)) {
     const maxSupply = Number(globalSupply.cap) || SALE_NFT_DISPLAY_SUPPLY_CAP;
     const totalMinted = countOrNull(globalSupply.totalMinted ?? globalSupply.total);
-    const remaining = countOrNull(globalSupply.remaining)
+    const availableRemaining = countOrNull(globalSupply.remaining);
+    const remaining = countOrNull(globalSupply.confirmedRemaining) ?? availableRemaining
       ?? (totalMinted == null ? null : Math.max(0, maxSupply - totalMinted));
     const progress = totalMinted == null || maxSupply <= 0 ? 0
       : Math.min(100, Math.max(0, (totalMinted / maxSupply) * 100));
     return {
       title: `${SALE_NFT_NAME} Supply`,
-      totalMinted, maxSupply, remaining, progress,
+      totalMinted, maxSupply, remaining, availableRemaining: availableRemaining ?? remaining, progress,
       loaded: totalMinted != null,
       perChain: globalSupply.perChain || null,
     };
