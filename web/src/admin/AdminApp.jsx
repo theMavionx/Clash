@@ -1600,6 +1600,8 @@ function NftPanel({ data }) {
   const bridges = data.bridges || {};
   const logs = data.bridge_logs || {};
   const payments = data.payments || {};
+  const demonKing = data.demon_king || {};
+  const demonLevels = demonKing.level_summary || {};
   return (
     <div className="admin-grid">
       <StatsGrid stats={[
@@ -1608,6 +1610,8 @@ function NftPanel({ data }) {
         { label: 'Bridge total', value: bridges.summary?.total || 0 },
         { label: 'Pending bridges', value: bridges.summary?.pending || 0, tone: bridges.summary?.pending ? 'gold' : 'green' },
         { label: 'Bridge 24h', value: bridges.summary?.h24 || 0, tone: 'blue' },
+        { label: 'Demon King L2+ players', value: num(demonLevels.lvl2plus_players || 0), tone: 'green' },
+        { label: 'Demon King L2+ NFTs', value: num(demonLevels.lvl2plus_tokens || 0), tone: 'blue' },
         { label: 'Log errors 24h', value: logs.summary?.errors_24h || 0, tone: logs.summary?.errors_24h ? 'red' : 'green' },
       ]} />
       <div className="admin-grid two">
@@ -1616,6 +1620,9 @@ function NftPanel({ data }) {
       </div>
       <div className="admin-grid two">
         <CompactTable title="Utility Payments" subtitle="NFT utility purchase revenue by chain and token." columns={['Chain', 'Token', 'Payments', 'Buyers', 'Revenue', 'Latest']} rows={(payments.utility_by_token || []).map((row) => [chainBadge(row.chain), row.token, row.payments, row.unique_buyers, fmtMaybeUsd(row.revenue_usd), fmtTime(row.latest_at)])} />
+        <CompactTable title="Demon King Levels" subtitle="Active Demon King NFT cache by level and unique game accounts." columns={['Level', 'NFTs', 'Players', 'Latest']} rows={(demonKing.by_level || []).map((row) => [`L${row.level || 1}`, num(row.tokens || 0), num(row.players || 0), fmtTime(row.latest_at)])} />
+      </div>
+      <div className="admin-grid two">
         <CompactTable title="Bridge Log Phases" subtitle="Recent health by bridge phase and status." columns={['Phase', 'Status', 'Count', 'Latest']} rows={(logs.by_phase || []).map((row) => [row.phase || '-', statusBadge(row.status), row.count, fmtTime(row.latest_at)])} />
       </div>
       <div className="admin-card">

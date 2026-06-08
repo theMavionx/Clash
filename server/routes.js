@@ -13305,6 +13305,31 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
       ORDER BY sales DESC, latest_at DESC
     `).all();
 
+    const demonKingLevelSummary = db.db.prepare(`
+      SELECT
+        COALESCE(COUNT(*), 0) AS total_tokens,
+        COALESCE(COUNT(DISTINCT player_id), 0) AS total_players,
+        COALESCE(SUM(CASE WHEN level >= 2 THEN 1 ELSE 0 END), 0) AS lvl2plus_tokens,
+        COALESCE(COUNT(DISTINCT CASE WHEN level >= 2 THEN player_id END), 0) AS lvl2plus_players,
+        COALESCE(SUM(CASE WHEN level >= 3 THEN 1 ELSE 0 END), 0) AS lvl3_tokens,
+        COALESCE(COUNT(DISTINCT CASE WHEN level >= 3 THEN player_id END), 0) AS lvl3_players
+      FROM player_nfts
+      WHERE collection = 'demon_king'
+        AND active = 1
+    `).get() || {};
+
+    const demonKingByLevel = db.db.prepare(`
+      SELECT level,
+             COUNT(*) AS tokens,
+             COUNT(DISTINCT player_id) AS players,
+             MAX(updated_at) AS latest_at
+      FROM player_nfts
+      WHERE collection = 'demon_king'
+        AND active = 1
+      GROUP BY level
+      ORDER BY level ASC
+    `).all();
+
     res.set('Cache-Control', 'no-store');
     res.json({
       fetched_at: new Date().toISOString(),
@@ -13347,6 +13372,10 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
         utility_by_token: paymentByToken,
         utility_by_chain: paymentByChain,
         marketplace_by_token: marketplacePaymentByToken,
+      },
+      demon_king: {
+        level_summary: demonKingLevelSummary,
+        by_level: demonKingByLevel,
       },
     });
   } catch (err) {
