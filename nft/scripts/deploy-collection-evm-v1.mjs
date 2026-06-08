@@ -32,6 +32,14 @@ const monad = defineChain({
   blockExplorers: { default: { name: 'Monad Explorer', url: 'https://monadexplorer.com' } },
 });
 
+const ink = defineChain({
+  id: 57073,
+  name: 'Ink',
+  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+  blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
+});
+
 const TREASURY = '0xC024884ad9C5540996492Cc2DD080964941A3094';
 
 const CHAINS = {
@@ -52,6 +60,12 @@ const CHAINS = {
     defaultRpc: 'https://rpc.monad.xyz',
     envRpc: ['NFT_MONAD_RPC_URL', 'MONAD_RPC_URL', 'GAME_SHOP_MONAD_RPC_URL'],
     usdcDefault: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603',
+  },
+  ink: {
+    chain: ink,
+    defaultRpc: 'https://rpc-gel.inkonchain.com',
+    envRpc: ['NFT_INK_RPC_URL', 'INK_RPC_URL', 'GAME_SHOP_INK_RPC_URL'],
+    usdcDefault: '0x2D270e6886d130D724215A266106e6832161EAEd',
   },
 };
 
@@ -81,7 +95,8 @@ function envOr(env, keys, fallback = '') {
 
 function collectionDefaults(slug) {
   if (slug === 'voidspore') return { name: 'Voidspore', symbol: 'VOID' };
-  return { name: 'Clash Collection', symbol: 'CLASH' };
+  if (slug === 'dragon') return { name: 'Dragon', symbol: 'DRGN', maxSupply: '333' };
+  return { name: 'Clash Collection', symbol: 'CLASH', maxSupply: '555' };
 }
 
 function optionalAddress(value) {
@@ -96,7 +111,7 @@ const collectionKey = envKeyPart(collection);
 const chainKey = String(argValue('chain', env.CLASH_DEPLOY_CHAIN || env.NFT_COLLECTION_CHAIN || '')).toLowerCase();
 const spec = CHAINS[chainKey];
 if (!spec) {
-  console.error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad.`);
+  console.error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad|ink.`);
   process.exit(1);
 }
 
@@ -152,7 +167,7 @@ const maxSupply = BigInt(envOr(env, [
   `${collectionEnvPrefix}_MAX_SUPPLY`,
   'NFT_COLLECTION_MAX_SUPPLY',
   'NFT_GLOBAL_SUPPLY_CAP',
-], '555'));
+], defaults.maxSupply));
 const maxPerTx = BigInt(envOr(env, [
   `${chainEnvPrefix}_MAX_PER_TX`,
   `${collectionEnvPrefix}_MAX_PER_TX`,

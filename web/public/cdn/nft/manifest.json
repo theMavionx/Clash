@@ -22,6 +22,28 @@
           "perTokenPathPattern": "/cdn/nft/3/<tokenId>.jpg"
         }
       ]
+    },
+    "dragon": {
+      "levels": [
+        {
+          "level": 1,
+          "stars": 1,
+          "defaultPath": "/cdn/nft/dragon/1/default.jpg",
+          "perTokenPathPattern": "/cdn/nft/dragon/1/<tokenId>.jpg"
+        },
+        {
+          "level": 2,
+          "stars": 2,
+          "defaultPath": "/cdn/nft/dragon/2/default.jpg",
+          "perTokenPathPattern": "/cdn/nft/dragon/2/<tokenId>.jpg"
+        },
+        {
+          "level": 3,
+          "stars": 3,
+          "defaultPath": "/cdn/nft/dragon/3/default.jpg",
+          "perTokenPathPattern": "/cdn/nft/dragon/3/<tokenId>.jpg"
+        }
+      ]
     }
   },
   "note": "Per-token unique art is optional. Collection metadata endpoints decide the final level image from the on-chain level when available."

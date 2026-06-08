@@ -552,6 +552,23 @@ const NFT_COLLECTION_PRESETS = {
       3: 'L3.jpg',
     },
   },
+  dragon: {
+    slug: 'dragon',
+    envKey: 'DRAGON',
+    name: 'Dragon',
+    symbol: 'DRGN',
+    character: 'Dragon',
+    description: 'Dragon from Clash of Perps.',
+    maxSupply: 333,
+    usdPriceE6: '8900000',
+    clashUsdPriceE6: '5000000',
+    skrUsdPriceE6: '7900000',
+    images: {
+      1: 'L1.jpg',
+      2: 'L2.jpg',
+      3: 'L3.jpg',
+    },
+  },
 };
 
 function normalizeCollectionSlug(value) {
@@ -579,6 +596,9 @@ function nftCollectionConfig(slugRaw) {
     description: collectionEnv(envKey, ['NFT_%s_DESCRIPTION', 'NFT_COLLECTION_DESCRIPTION'], preset.description),
     maxSupply: Number(collectionEnv(envKey, ['NFT_%s_GLOBAL_SUPPLY_CAP', 'NFT_%s_MAX_SUPPLY', 'NFT_COLLECTION_GLOBAL_SUPPLY_CAP'], preset.maxSupply)),
     externalUrl: collectionEnv(envKey, ['NFT_%s_EXTERNAL_URL', 'NFT_COLLECTION_EXTERNAL_URL'], ''),
+    usdPriceE6: String(collectionEnv(envKey, ['NFT_%s_USD_PRICE_E6', 'NFT_COLLECTION_USD_PRICE_E6'], preset.usdPriceE6 || '5500000')),
+    clashUsdPriceE6: String(collectionEnv(envKey, ['NFT_%s_CLASH_USD_PRICE_E6', 'NFT_COLLECTION_CLASH_USD_PRICE_E6'], preset.clashUsdPriceE6 || '4000000')),
+    skrUsdPriceE6: String(collectionEnv(envKey, ['NFT_%s_SKR_USD_PRICE_E6', 'NFT_COLLECTION_SKR_USD_PRICE_E6'], preset.skrUsdPriceE6 || '5000000')),
   };
 }
 
@@ -764,7 +784,181 @@ async function readCollectionAptosMintedCount(collection) {
   }
 }
 
+function collectionSupplySettingKey(collection) {
+  return `nft.collection.${collection.slug}.server_supply.v1`;
+}
+
+function normalizeCollectionServerSupplyState(collection, raw = null) {
+  const now = Date.now();
+  const base = raw && typeof raw === 'object' ? raw : {};
+  const perChain = {};
+  for (const chain of Object.keys(NFT_COLLECTION_CHAIN_LABELS)) {
+    const value = Number(base.perChain?.[chain] ?? 0);
+    perChain[chain] = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  }
+  let minted = Number(base.minted ?? base.totalMinted ?? Object.values(perChain).reduce((sum, value) => sum + value, 0));
+  minted = Number.isFinite(minted) && minted > 0 ? Math.floor(minted) : 0;
+  if (minted < Object.values(perChain).reduce((sum, value) => sum + value, 0)) {
+    minted = Object.values(perChain).reduce((sum, value) => sum + value, 0);
+  }
+  const reservations = Array.isArray(base.reservations)
+    ? base.reservations.filter((row) => {
+        const quantity = Number(row?.quantity);
+        return row?.id && Number.isFinite(quantity) && quantity > 0 && Date.parse(row.expiresAt || '') > now;
+      }).map((row) => ({
+        id: String(row.id),
+        chain: String(row.chain || 'unknown').toLowerCase(),
+        quantity: Math.max(1, Math.floor(Number(row.quantity))),
+        buyer: row.buyer ? String(row.buyer).slice(0, 96) : null,
+        payment: row.payment ? String(row.payment).slice(0, 32) : null,
+        createdAt: row.createdAt || new Date(now).toISOString(),
+        expiresAt: row.expiresAt,
+      }))
+    : [];
+  const confirmedTxs = Array.isArray(base.confirmedTxs)
+    ? base.confirmedTxs.slice(-200).map((row) => ({
+        tx: String(row.tx || '').slice(0, 140),
+        reservationId: row.reservationId ? String(row.reservationId) : null,
+        chain: row.chain ? String(row.chain).toLowerCase() : null,
+        quantity: Math.max(1, Math.floor(Number(row.quantity || 1))),
+        confirmedAt: row.confirmedAt || new Date(now).toISOString(),
+      })).filter((row) => row.tx)
+    : [];
+  return {
+    collection: collection.slug,
+    cap: collection.maxSupply,
+    minted,
+    perChain,
+    reservations,
+    confirmedTxs,
+    initializedAt: base.initializedAt || new Date(now).toISOString(),
+    updatedAt: base.updatedAt || new Date(now).toISOString(),
+  };
+}
+
+function collectionDeploymentBaselineSupply(collection) {
+  const perChain = {};
+  for (const chain of Object.keys(NFT_COLLECTION_CHAIN_LABELS)) {
+    const dep = nftCollectionDeployment(collection.slug, chain);
+    const value = Number(dep.currentSupply ?? dep.totalMinted ?? dep.minted ?? 0);
+    perChain[chain] = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  }
+  return normalizeCollectionServerSupplyState(collection, {
+    perChain,
+    minted: Object.values(perChain).reduce((sum, value) => sum + value, 0),
+    source: 'deployment_baseline',
+  });
+}
+
+function collectionSupplyResponse(collection, state, source = 'server') {
+  const reserved = state.reservations.reduce((sum, row) => sum + row.quantity, 0);
+  const minted = Math.max(0, Math.floor(Number(state.minted || 0)));
+  const availableRemaining = Math.max(0, collection.maxSupply - minted - reserved);
+  return {
+    collection: collection.slug,
+    total: minted,
+    totalMinted: minted,
+    minted,
+    reserved,
+    cap: collection.maxSupply,
+    remaining: availableRemaining,
+    confirmedRemaining: Math.max(0, collection.maxSupply - minted),
+    perChain: state.perChain,
+    reservations: state.reservations.length,
+    source,
+    syncedAt: state.updatedAt,
+    serverAuthoritative: true,
+    unknownChains: [],
+  };
+}
+
+function readCollectionServerSupply(collection) {
+  const state = normalizeCollectionServerSupplyState(
+    collection,
+    readAppSettingJson(collectionSupplySettingKey(collection), null) || collectionDeploymentBaselineSupply(collection),
+  );
+  writeAppSettingJson(collectionSupplySettingKey(collection), state);
+  return collectionSupplyResponse(collection, state);
+}
+
+const reserveCollectionServerSupplyTx = db.db.transaction((collection, options) => {
+  const key = collectionSupplySettingKey(collection);
+  const current = readAppSettingJson(key, null) || collectionDeploymentBaselineSupply(collection);
+  const state = normalizeCollectionServerSupplyState(collection, current);
+  const quantity = Math.max(1, Math.floor(Number(options.quantity || 1)));
+  const reserved = state.reservations.reduce((sum, row) => sum + row.quantity, 0);
+  if (state.minted + reserved + quantity > collection.maxSupply) {
+    const err = new Error(`Sold out: only ${Math.max(0, collection.maxSupply - state.minted - reserved)} of ${collection.maxSupply} ${collection.name} NFTs remain`);
+    err.status = 409;
+    throw err;
+  }
+  const ttlSeconds = Math.max(60, Math.min(1800, Number(options.ttlSeconds || process.env.NFT_COLLECTION_RESERVATION_TTL_SECONDS || 600)));
+  const now = new Date();
+  const reservation = {
+    id: crypto.randomUUID(),
+    chain: String(options.chain || 'unknown').toLowerCase(),
+    payment: options.payment ? String(options.payment).toLowerCase() : null,
+    buyer: options.buyer ? String(options.buyer) : null,
+    quantity,
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
+  };
+  state.reservations.push(reservation);
+  state.updatedAt = now.toISOString();
+  writeAppSettingJson(key, state);
+  return { reservation, supply: collectionSupplyResponse(collection, state) };
+});
+
+function reserveCollectionServerSupply(collection, optionsOrQuantity) {
+  const options = typeof optionsOrQuantity === 'object'
+    ? optionsOrQuantity
+    : { quantity: optionsOrQuantity };
+  return reserveCollectionServerSupplyTx(collection, options);
+}
+
+const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
+  const key = collectionSupplySettingKey(collection);
+  const state = normalizeCollectionServerSupplyState(
+    collection,
+    readAppSettingJson(key, null) || collectionDeploymentBaselineSupply(collection),
+  );
+  const tx = String(body.tx || body.hash || body.signature || '').trim();
+  if (tx && state.confirmedTxs.some((row) => row.tx === tx)) {
+    return { alreadyConfirmed: true, supply: collectionSupplyResponse(collection, state) };
+  }
+  const reservationId = String(body.reservationId || '').trim();
+  const idx = state.reservations.findIndex((row) => row.id === reservationId);
+  if (idx < 0) {
+    const err = new Error('Mint reservation expired or not found. Refresh NFT config.');
+    err.status = 409;
+    throw err;
+  }
+  const [reservation] = state.reservations.splice(idx, 1);
+  const quantity = Math.max(1, Math.floor(Number(body.quantity || reservation.quantity || 1)));
+  const chain = String(body.chain || reservation.chain || 'unknown').toLowerCase();
+  state.minted = Math.min(collection.maxSupply, state.minted + quantity);
+  if (NFT_COLLECTION_CHAIN_LABELS[chain]) {
+    state.perChain[chain] = Math.max(0, Math.floor(Number(state.perChain[chain] || 0))) + quantity;
+  }
+  if (tx) {
+    state.confirmedTxs.push({
+      tx: tx.slice(0, 140),
+      reservationId,
+      chain,
+      quantity,
+      confirmedAt: new Date().toISOString(),
+    });
+    state.confirmedTxs = state.confirmedTxs.slice(-200);
+  }
+  state.updatedAt = new Date().toISOString();
+  writeAppSettingJson(key, state);
+  return { alreadyConfirmed: false, supply: collectionSupplyResponse(collection, state) };
+});
+
 async function readCollectionGlobalSupply(collection) {
+  const authoritative = readCollectionServerSupply(collection);
+  if (authoritative) return authoritative;
+
   const [base, arbitrum, monad, ink, aptos, solana] = await Promise.all([
     readCollectionEvmMintedCount(collection, 'base'),
     readCollectionEvmMintedCount(collection, 'arbitrum'),
@@ -793,23 +987,12 @@ async function readCollectionGlobalSupply(collection) {
     remaining: Math.max(0, collection.maxSupply - total),
     perChain,
     unknownChains,
+    source: 'chain_scan',
   };
 }
 
 async function assertCollectionGlobalSupplyAvailable(collection, quantity) {
-  const supply = await readCollectionGlobalSupply(collection);
-  if (supply.unknownChains?.length) {
-    const err = new Error(`Supply temporarily unavailable for ${supply.unknownChains.join(', ')}. Try again shortly.`);
-    err.status = 503;
-    throw err;
-  }
-  const wanted = Number(quantity) || 1;
-  if (supply.total + wanted > collection.maxSupply) {
-    const err = new Error(`Sold out: only ${Math.max(0, collection.maxSupply - supply.total)} of ${collection.maxSupply} ${collection.name} NFTs remain across all chains`);
-    err.status = 409;
-    throw err;
-  }
-  return supply;
+  return reserveCollectionServerSupply(collection, quantity);
 }
 
 function nftCollectionTokenMetadata(req, collection, chainKey, tokenId, level) {
@@ -3627,8 +3810,8 @@ router.get('/nft/:collectionSlug/mint/config', async (req, res) => {
         usdcToken: shop.usdcToken || null,
         clashToken: shop.clashToken || null,
         clashReady: !!shop.clashToken && !/^0x0{40}$/i.test(String(shop.clashToken)),
-        baseUsdPriceE6: String(shop.baseUsdPriceE6 || '5500000'),
-        clashUsdPriceE6: String(shop.clashUsdPriceE6 || '4000000'),
+        baseUsdPriceE6: String(shop.baseUsdPriceE6 || collection.usdPriceE6 || '5500000'),
+        clashUsdPriceE6: String(shop.clashUsdPriceE6 || collection.clashUsdPriceE6 || '4000000'),
         supply: supply ? {
           totalMinted: Number(supply.perChain?.[chainKey] || 0),
           maxSupply: collection.maxSupply,
@@ -3661,7 +3844,7 @@ router.get('/nft/:collectionSlug/mint/config', async (req, res) => {
         saleActive: !!aptos.saleActive,
         usdcMetadata: aptos.usdcMetadata || null,
         aptMetadata: '0x000000000000000000000000000000000000000000000000000000000000000a',
-        mintUsdPriceE6: String(aptos.mintUsdPriceE6 || '5500000'),
+        mintUsdPriceE6: String(aptos.mintUsdPriceE6 || collection.usdPriceE6 || '5500000'),
         supply: supply ? {
           totalMinted: Number(supply.perChain?.aptos || 0),
           maxSupply: collection.maxSupply,
@@ -3684,6 +3867,58 @@ router.get('/nft/:collectionSlug/mint/config', async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ error: (err?.message || 'config failed').slice(0, 180) });
+  }
+});
+
+router.post('/nft/:collectionSlug/mint/reserve', async (req, res) => {
+  try {
+    const rate = checkNftQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many NFT mint requests. Try again shortly.' });
+    }
+    const collection = nftCollectionConfig(req.params.collectionSlug);
+    if (!collection) return res.status(404).json({ error: 'collection not found' });
+    const chain = String(req.body?.chain || '').toLowerCase();
+    if (!NFT_COLLECTION_CHAIN_LABELS[chain]) return res.status(400).json({ error: 'bad chain' });
+    const quantity = parsePositiveInteger(req.body?.quantity, 1, 10);
+    const reservation = reserveCollectionServerSupply(collection, {
+      quantity,
+      chain,
+      payment: req.body?.payment,
+      buyer: req.body?.buyer,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      ok: true,
+      reservationId: reservation.reservation.id,
+      expiresAt: reservation.reservation.expiresAt,
+      quantity: reservation.reservation.quantity,
+      supply: reservation.supply,
+    });
+  } catch (err) {
+    const status = err?.status || (/chain|quantity/i.test(err?.message || '') ? 400 : 500);
+    return res.status(status).json({ error: (err?.message || 'reservation failed').slice(0, 180) });
+  }
+});
+
+router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
+  try {
+    const collection = nftCollectionConfig(req.params.collectionSlug);
+    if (!collection) return res.status(404).json({ error: 'collection not found' });
+    const chain = String(req.body?.chain || '').toLowerCase();
+    if (!NFT_COLLECTION_CHAIN_LABELS[chain]) return res.status(400).json({ error: 'bad chain' });
+    const result = confirmCollectionServerMintTx(collection, {
+      reservationId: req.body?.reservationId,
+      tx: req.body?.tx || req.body?.hash || req.body?.signature,
+      chain,
+      quantity: req.body?.quantity,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    const status = err?.status || (/chain|reservation/i.test(err?.message || '') ? 400 : 500);
+    return res.status(status).json({ error: (err?.message || 'mint confirm failed').slice(0, 180) });
   }
 });
 
@@ -3723,13 +3958,19 @@ async function handleAptosNftQuote(req, res, collection = null) {
       return res.status(400).json({ error: 'Unsupported Aptos NFT payment (use usdc or apt)' });
     }
 
+    let supplyReservation = null;
     if (collection) {
-      await assertCollectionGlobalSupplyAvailable(collection, Number(quantity));
+      supplyReservation = await assertCollectionGlobalSupplyAvailable(collection, {
+        quantity: Number(quantity),
+        chain: 'aptos',
+        payment,
+        buyer,
+      });
     } else {
       await assertGlobalSupplyAvailable(Number(quantity));
     }
 
-    const usdPriceE6 = BigInt(aptosDeploy.mintUsdPriceE6 || (collection ? '5500000' : '8900000'));
+    const usdPriceE6 = BigInt(aptosDeploy.mintUsdPriceE6 || (collection ? collection.usdPriceE6 || '5500000' : '8900000'));
     const usdAmount = unitsToDecimalString(usdPriceE6 * quantity, 6);
     const aptMetadata = '0x000000000000000000000000000000000000000000000000000000000000000a';
     let decimals;
@@ -3795,6 +4036,9 @@ async function handleAptosNftQuote(req, res, collection = null) {
       signature,
       nonce,
       deadline: deadline.toString(),
+      reservationId: supplyReservation?.reservation?.id || null,
+      reservationExpiresAt: supplyReservation?.reservation?.expiresAt || null,
+      supply: supplyReservation?.supply || null,
     });
   } catch (err) {
     const message = err?.message || 'aptos quote failed';
@@ -3832,14 +4076,19 @@ router.post('/nft/:collectionSlug/:chain/quote', async (req, res) => {
     const buyer = getAddress(String(req.body?.buyer || ''));
     const payment = String(req.body?.payment || '').toLowerCase();
     const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, 10));
-    await assertCollectionGlobalSupplyAvailable(collection, Number(quantity));
+    const supplyReservation = await assertCollectionGlobalSupplyAvailable(collection, {
+      quantity: Number(quantity),
+      chain: chainKey,
+      payment,
+      buyer,
+    });
 
     const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.NFT_COLLECTION_QUOTE_TTL_SECONDS || process.env.NFT_EVM_QUOTE_TTL_SECONDS || 300)));
     const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
     const nonce = BigInt(`0x${crypto.randomBytes(16).toString('hex')}`);
 
-    const baseUsdPriceE6 = BigInt(shopDeployment.baseUsdPriceE6 || '5500000');
-    const clashUsdPriceE6 = BigInt(shopDeployment.clashUsdPriceE6 || '4000000');
+    const baseUsdPriceE6 = BigInt(shopDeployment.baseUsdPriceE6 || collection.usdPriceE6 || '5500000');
+    const clashUsdPriceE6 = BigInt(shopDeployment.clashUsdPriceE6 || collection.clashUsdPriceE6 || '4000000');
     let paymentToken = zeroAddress;
     let unitPrice = 0n;
     let decimals = 18;
@@ -3928,6 +4177,9 @@ router.post('/nft/:collectionSlug/:chain/quote', async (req, res) => {
         deadline: deadline.toString(),
       },
       signature,
+      reservationId: supplyReservation?.reservation?.id || null,
+      reservationExpiresAt: supplyReservation?.reservation?.expiresAt || null,
+      supply: supplyReservation?.supply || null,
     });
   } catch (err) {
     const message = err?.message || 'quote failed';

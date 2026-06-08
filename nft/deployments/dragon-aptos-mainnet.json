@@ -1,0 +1,32 @@
+{
+  "collectionSlug": "dragon",
+  "chain": "aptos",
+  "network": "mainnet",
+  "module": "0x00d733ea87112a03b470922bf3bfc62e9948fe254926f1c1a11eef4e406b4627::dragon",
+  "admin": "0x00d733ea87112a03b470922bf3bfc62e9948fe254926f1c1a11eef4e406b4627",
+  "collection": "0x44ce209782745f78bed8a82955a0209752a51ede7c4f0a1a5d6eb59c6f25d744",
+  "resourceAccount": "0xf1e190e178b44c62f83dd5f86137c47cd37f2af6b9f5de3583569c42b1ab595a",
+  "treasury": "0xd733ea87112a03b470922bf3bfc62e9948fe254926f1c1a11eef4e406b4627",
+  "usdcMetadata": "0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b",
+  "quoteSignerPubkey": "0xb7d726f4c0d3bf6ad099cc0e0afdd5c875ea90b361d15354bc4a184571acce8b",
+  "mintUsdPriceE6": "8900000",
+  "upgradeUsdPriceE6": "8900000",
+  "maxSupply": 333,
+  "maxPerTx": 10,
+  "totalMinted": "0",
+  "saleActive": false,
+  "bridgeFeeOctas": "21000000",
+  "publishTxHash": "0x528d3bdac86c960955dfcbda0af51b25106123cce2f1a564fad24c6319aab8b4",
+  "initializeTxHash": "0xe4c7c67b97fd8666118cff4df6a4ca6d6bfa77209fdcdc7e5200e1f3ef7881a5",
+  "initBurnStatsTxHash": "0x2f8f704694a86114ca73706afecb11778a698a02f298815180c2b219fafb16f4",
+  "bridgeFeeTxHash": "0x8ba3c6482920fa8451e7cbf87c51a362f42b3eba9b9017dc679c318a94d4470f",
+  "saleActivateTxHash": null,
+  "fullMeshBridge": true,
+  "aptosPaymentMint": true,
+  "aptosCliVersion": "9.4.0",
+  "metadata": {
+    "collectionUri": "https://clashofperps.fun/api/nft/dragon/aptos/collection",
+    "tokenUriBase": "https://clashofperps.fun/api/nft/dragon/aptos/"
+  },
+  "deployedAt": "2026-06-08T15:26:00.000Z"
+}

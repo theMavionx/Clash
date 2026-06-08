@@ -55,7 +55,15 @@ function normalizeBridgeCollectionSlug(value) {
     .replace(/^-+|-+$/g, '');
   if (!slug || slug === 'demonking' || slug === 'demon-king') return 'demonking';
   if (slug === 'voidspore') return 'voidspore';
+  if (slug === 'dragon') return 'dragon';
   return slug;
+}
+
+function bridgeCollectionLabel(collectionSlug) {
+  const slug = normalizeBridgeCollectionSlug(collectionSlug);
+  if (slug === 'voidspore') return 'Voidspore';
+  if (slug === 'dragon') return 'Dragon';
+  return 'Demon King';
 }
 
 function v3DeploymentPath(chainKey, collectionSlug = 'demonking') {
@@ -183,7 +191,7 @@ async function verifyAptosBurnTx(txHash, options = {}) {
   const dep = deploymentOf('aptos', collectionSlug) || {};
   const expectedModule = String(dep.module || '').split('::');
   const expectedPublisher = normalizeAptosAddress(expectedModule[0] || dep.admin);
-  const expectedModuleName = expectedModule[1] || (collectionSlug === 'voidspore' ? 'voidspore' : 'demon_king');
+  const expectedModuleName = expectedModule[1] || (collectionSlug === 'demonking' ? 'demon_king' : collectionSlug);
   const expectedType = expectedPublisher
     ? `${expectedPublisher}::${expectedModuleName}::BridgeBurnEvent`
     : null;
@@ -646,7 +654,7 @@ async function solanaAccountDescriptor(assetPubkey) {
 
 async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner, opts = {}) {
   const collectionSlug = normalizeBridgeCollectionSlug(opts.collection || opts.collectionSlug);
-  const collectionLabel = collectionSlug === 'voidspore' ? 'Voidspore' : 'Demon King';
+  const collectionLabel = bridgeCollectionLabel(collectionSlug);
   const dep = deploymentOf('solana', collectionSlug);
   if (!dep?.collection) throw new Error(`${collectionLabel} Solana collection not configured`);
   const sourceAsset = normalizeSolanaPubkey(assetPubkey, 'Solana source asset');

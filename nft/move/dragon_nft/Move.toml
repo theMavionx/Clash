@@ -1,0 +1,11 @@
+[package]
+name = "ClashDragon"
+version = "1.0.0"
+authors = ["clashofperps"]
+
+[addresses]
+clash_dragon = "_"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "mainnet" }
+AptosTokenObjects = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-token-objects", rev = "mainnet" }

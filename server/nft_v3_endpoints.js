@@ -774,16 +774,19 @@ async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
 
 function collectionLevelImageUrl(collectionSlug, level, id = null) {
   const slug = normalizeBridgeCollectionSlugValue(collectionSlug);
-  if (slug === 'voidspore') {
+  if (slug === 'voidspore' || slug === 'dragon') {
     const lvl = normalizeNftLevel(level);
     const ext = lvl === 3 ? 'jpg' : 'png';
-    return `/cdn/nft/voidspore/${lvl}/default.${ext}`;
+    return `/cdn/nft/${slug}/${lvl}/default.${ext}`;
   }
   return nftLevelImageUrl(level, id);
 }
 
 function collectionDisplayName(collectionSlug) {
-  return normalizeBridgeCollectionSlugValue(collectionSlug) === 'voidspore' ? 'Voidspore' : 'Demon King';
+  const slug = normalizeBridgeCollectionSlugValue(collectionSlug);
+  if (slug === 'voidspore') return 'Voidspore';
+  if (slug === 'dragon') return 'Dragon';
+  return 'Demon King';
 }
 
 async function listOwnedEvmCollectionNfts(collectionSlugRaw, chainKey, ownerRaw, options = {}) {
@@ -910,7 +913,7 @@ function solanaCoreAssetLooksLikeCollection(asset, collectionSlug, collectionAdd
   const slug = normalizeBridgeCollectionSlugValue(collectionSlug);
   const name = String(asset?.name || '').toLowerCase();
   const uri = String(asset?.uri || '').toLowerCase();
-  if (slug === 'voidspore') return name.includes('voidspore') || uri.includes('/api/nft/voidspore/solana/');
+  if (slug === 'voidspore' || slug === 'dragon') return name.includes(slug) || uri.includes(`/api/nft/${slug}/solana/`);
   return solanaCoreAssetLooksRelevant(asset, collectionAddress);
 }
 
@@ -2297,6 +2300,12 @@ function mountNftV3Endpoints(router, ctx) {
       evmEip712Version: '1',
       chains: new Set(['base', 'arbitrum', 'monad', 'ink', 'aptos', 'solana']),
     },
+    dragon: {
+      slug: 'dragon',
+      label: 'Dragon',
+      evmEip712Version: '1',
+      chains: new Set(['base', 'arbitrum', 'monad', 'ink', 'aptos', 'solana']),
+    },
   };
 
   function bridgeCollectionFromReq(req) {
@@ -2615,7 +2624,7 @@ function mountNftV3Endpoints(router, ctx) {
 
       const { getAddress, isAddress } = await import('viem');
       const collection = bridgeCollectionFromReq(req);
-      if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking or voidspore.' });
+      if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking, voidspore, or dragon.' });
       const collectionSlug = collection.slug;
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
@@ -2753,7 +2762,7 @@ function mountNftV3Endpoints(router, ctx) {
       }
 
       const collection = bridgeCollectionFromReq(req);
-      if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking or voidspore.' });
+      if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking, voidspore, or dragon.' });
       const collectionSlug = collection.slug;
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
@@ -3162,7 +3171,7 @@ function mountNftV3Endpoints(router, ctx) {
       }
 
       const collection = bridgeCollectionFromReq(req);
-      if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking or voidspore.' });
+      if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking, voidspore, or dragon.' });
       const collectionSlug = collection.slug;
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
@@ -3522,7 +3531,7 @@ function mountNftV3Endpoints(router, ctx) {
   // ── Solana mint helper for bridge-into-Solana. Server-mediated. ────
   async function mintSolanaAssetForBridge({ recipient, level, sourceRef, collection = 'demonking' }) {
     const collectionSlug = normalizeBridgeCollectionSlug(collection);
-    const collectionLabel = collectionSlug === 'voidspore' ? 'Voidspore' : 'Demon King';
+    const collectionLabel = collectionDisplayName(collectionSlug);
     const mintStandard = collectionSlug === 'demonking'
       ? String(process.env.NFT_SOLANA_MINT_STANDARD || 'mpl-core').toLowerCase()
       : 'mpl-core';
