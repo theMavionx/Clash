@@ -8807,6 +8807,55 @@ router.post('/players/dex-accounts/:dex/select', auth, (req, res) => {
   res.json({ ok: true, dex, player: state });
 });
 
+router.post('/players/dex-accounts/:dex/link', auth, (req, res) => {
+  const dex = String(req.params.dex || req.body?.dex || '').toLowerCase();
+  if (!VALID_DEXES.has(dex)) return res.status(400).json({ error: 'Unsupported DEX' });
+  const wallet = String(req.body?.wallet || '').trim();
+  if (!wallet || !isValidWallet(wallet)) {
+    return res.status(400).json({ error: 'Valid wallet required' });
+  }
+  const chainType = walletChainType(wallet);
+  if (dex === 'gmtrade' && chainType !== 'solana') {
+    return res.status(400).json({ error: 'GMTrade requires a linked Solana wallet' });
+  }
+  const existing = getUnifiedPlayerByWalletAnyForm(wallet);
+  if (existing && existing.id !== req.player.id) {
+    return res.status(409).json({
+      error: 'This wallet is already linked to another game account',
+      existing_player_id: existing.id,
+      existing_name: existing.name,
+    });
+  }
+  const canonicalWallet = canonicalWalletIdentifier(wallet);
+  const existingDexWallet = db.db.prepare(`
+    SELECT player_id, dex
+    FROM player_dex_accounts
+    WHERE chain_type = ?
+      AND wallet_address = ?
+      AND player_id != ?
+    LIMIT 1
+  `).get(chainType, canonicalWallet, req.player.id);
+  if (existingDexWallet) {
+    return res.status(409).json({
+      error: 'This wallet is already linked to another game account',
+      existing_player_id: existingDexWallet.player_id,
+      existing_dex: existingDexWallet.dex,
+    });
+  }
+  upsertUnifiedIdentity(req.player.id, wallet, {
+    label: req.body?.walletSource || req.body?.source || `${dex} trading wallet`,
+  });
+  upsertPlayerDexAccount(req.player.id, dex, wallet, 'ready', {
+    source: req.body?.walletSource || req.body?.source || 'link-dex-wallet',
+  });
+  res.json({
+    ok: true,
+    dex,
+    chain_type: chainType,
+    wallet_address: canonicalWallet,
+  });
+});
+
 // ==================== RESOURCES ====================
 
 // Get current resources

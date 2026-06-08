@@ -295,6 +295,22 @@ export function useGmtrade() {
   }, [player?.wallet, walletAddr]);
 
   useEffect(() => {
+    if (!isActiveDex || !token || !walletAddr || walletMismatch) return;
+    let cancelled = false;
+    fetchJson(`${GAME_API}/players/dex-accounts/gmtrade/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-token': token },
+      body: JSON.stringify({
+        wallet: walletAddr,
+        walletSource: solWallet?.wallet?.adapter?.name || 'solana-wallet',
+      }),
+    }).catch((e) => {
+      if (!cancelled) console.warn('[GMTrade] dex wallet link failed:', e?.message || e);
+    });
+    return () => { cancelled = true; };
+  }, [isActiveDex, token, walletAddr, walletMismatch, solWallet?.wallet?.adapter?.name]);
+
+  useEffect(() => {
     if (referralWalletRef.current === walletAddr) return;
     referralWalletRef.current = walletAddr || '';
     setReferralState(null);
@@ -514,7 +530,13 @@ export function useGmtrade() {
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({ dex: 'gmtrade' }),
       });
-      if (Number(data?.gold || 0) > 0) setGoldEarned(data);
+      if (Number(data?.gold || 0) > 0) {
+        setGoldEarned({
+          amount: data.gold,
+          reason: data.reason || 'Trading rewards',
+          ...data,
+        });
+      }
       return data;
     } catch (e) {
       return { error: e?.message || 'Could not claim GMTrade gold' };
@@ -792,6 +814,9 @@ export function useGmtrade() {
     if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered GMTrade wallet' };
     const leverage = Number(lev || 1);
     const notional = Number(options?.notional_usd || 0);
+    const isReduceOnly = options?.reduce_only === true
+      || /^close_/i.test(String(side || ''))
+      || /decrease/i.test(String(options?.order_type || ''));
     const margin = Number.isFinite(notional) && notional > 0 && leverage > 0
       ? notional / leverage
       : Number(qty || 0);
@@ -800,7 +825,7 @@ export function useGmtrade() {
     }
     const minPositionUsd = Number(config?.min_position_usd || 1);
     const positionUsd = margin * leverage;
-    if (Number.isFinite(minPositionUsd) && minPositionUsd > 0 && positionUsd < minPositionUsd) {
+    if (!isReduceOnly && Number.isFinite(minPositionUsd) && minPositionUsd > 0 && positionUsd < minPositionUsd) {
       return {
         error: `GMTrade minimum position size is $${minPositionUsd}. Yours: $${positionUsd.toFixed(4)}. Increase margin or leverage.`,
       };
@@ -815,7 +840,7 @@ export function useGmtrade() {
         wallet: walletAddr,
         symbol: normalizeSymbol(symbol),
         side,
-        amount: margin,
+        amount: options?.collateral_delta_usd ?? options?.collateralDeltaUsd ?? margin,
         leverage,
         price: options?.price,
         trigger_price: options?.trigger_price ?? options?.triggerPrice,
@@ -1003,10 +1028,12 @@ export function useGmtrade() {
     const lev = notionalUsd > 0 && marginUsd > 0
       ? notionalUsd / marginUsd
       : Number(options?.leverage || options?.lev || live?.leverage || 1);
-    return nativeOrder(symbol, closeSide, marginUsd, '0.5', Number.isFinite(lev) && lev > 0 ? lev : 1, {
+    const fullCloseCollateralDelta = _fullClose ? 0 : marginUsd;
+    return nativeOrder(symbol, closeSide, fullCloseCollateralDelta, '0.5', Number.isFinite(lev) && lev > 0 ? lev : 1, {
       ...options,
       notional_usd: Number.isFinite(notionalUsd) && notionalUsd > 0 ? notionalUsd : options?.notional_usd,
       margin_usd: Number.isFinite(marginUsd) && marginUsd > 0 ? marginUsd : options?.margin_usd,
+      collateral_delta_usd: fullCloseCollateralDelta,
       order_type: options?.order_type || 'market',
       reduce_only: true,
     });

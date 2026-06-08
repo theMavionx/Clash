@@ -1480,11 +1480,31 @@ function decodePositionAccount(encoded, meta = {}) {
   const amountTokensRaw = readU128LeSafe(buf, 184);
   const collateralRaw = readU128LeSafe(buf, 200);
   const collateralDecimals = Number(meta.collateral_decimals || GMTRADE_DEFAULT_COLLATERAL_DECIMALS);
-  const amount = decimalNumber(amountTokensRaw, Number(meta.token_decimals || GMTRADE_TOKEN_AMOUNT_DECIMALS));
+  let amount = decimalNumber(amountTokensRaw, Number(meta.token_decimals || GMTRADE_TOKEN_AMOUNT_DECIMALS));
   const margin = decimalNumber(collateralRaw, collateralDecimals);
   const leverage = margin > 0 ? sizeUsd / margin : null;
+  const markPriceHint = Number(meta.mark_price || 0);
+  if (amount > 0 && sizeUsd > 0 && markPriceHint > 0) {
+    const currentEntry = sizeUsd / amount;
+    let bestAmount = amount;
+    let bestDistance = Math.abs(currentEntry - markPriceHint) / markPriceHint;
+    for (let power = -6; power <= 6; power += 1) {
+      if (power === 0) continue;
+      const candidateAmount = amount * (10 ** power);
+      if (!(candidateAmount > 0)) continue;
+      const candidateEntry = sizeUsd / candidateAmount;
+      const distance = Math.abs(candidateEntry - markPriceHint) / markPriceHint;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestAmount = candidateAmount;
+      }
+    }
+    if (bestAmount !== amount && bestDistance < 0.5) {
+      amount = bestAmount;
+    }
+  }
   const entryPrice = amount > 0 ? sizeUsd / amount : 0;
-  const markPrice = Number(meta.mark_price || 0) || entryPrice;
+  const markPrice = markPriceHint || entryPrice;
   const pnlUsd = amount > 0 && markPrice > 0 && entryPrice > 0
     ? (isLong ? 1 : -1) * (markPrice - entryPrice) * amount
     : 0;
@@ -1964,29 +1984,34 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   const payToken = assertPubkey(cfg.pay_token || collateralToken, 'pay_token');
   const receiveToken = cfg.receive_token ? assertPubkey(cfg.receive_token, 'receive_token') : collateralToken;
 
-  const collateralDecimals = Math.max(0, Math.min(12, Number(cfg.collateral_decimals) || GMTRADE_DEFAULT_COLLATERAL_DECIMALS));
-  const marginText = stableDecimalString(body.amount || body.margin || body.margin_usd, 'margin', {
-    decimals: collateralDecimals,
-    min: 0,
-    max: 10_000_000,
-  });
   const leverageText = stableDecimalString(body.leverage || 1, 'leverage', {
     decimals: 6,
     min: 0,
     max: 500,
   });
-  const margin = Number(marginText);
   const leverage = Number(leverageText);
   const side = normalizeSide(body.side);
   const orderType = String(body.order_type || body.orderType || 'market').toLowerCase();
   const isDecrease = side === 'close_long' || side === 'close_short' || body.reduce_only === true || body.reduceOnly === true;
+  const collateralDecimals = Math.max(0, Math.min(12, Number(cfg.collateral_decimals) || GMTRADE_DEFAULT_COLLATERAL_DECIMALS));
+  const rawMarginValue = body.amount ?? body.margin ?? body.margin_usd;
+  const rawNotionalValue = body.notional_usd ?? body.notionalUsd ?? body.size_usd ?? body.sizeUsd;
+  const hasExplicitNotional = Number.isFinite(Number(rawNotionalValue)) && Number(rawNotionalValue) > 0;
+  const marginText = stableDecimalString(rawMarginValue, isDecrease ? 'collateral delta' : 'margin', {
+    decimals: collateralDecimals,
+    min: 0,
+    max: 10_000_000,
+    allowZero: isDecrease,
+  });
+  const margin = Number(marginText);
   const isStopLossOrder = isDecrease && /^(stop_loss|stop-loss|stop|sl)$/.test(orderType);
   const kind = isStopLossOrder
     ? 'StopLossDecrease'
     : (orderType.includes('limit') || /^(take_profit|take-profit|tp)$/.test(orderType))
       ? (isDecrease ? 'LimitDecrease' : 'LimitIncrease')
       : (isDecrease ? 'MarketDecrease' : 'MarketIncrease');
-  const notionalText = stableDecimalString(margin * leverage, 'notional', {
+  const notionalSource = isDecrease && hasExplicitNotional ? Number(rawNotionalValue) : margin * leverage;
+  const notionalText = stableDecimalString(notionalSource, 'notional', {
     decimals: Math.min(12, GMTRADE_MARKET_DECIMALS),
     min: 0,
     max: 1_000_000_000,

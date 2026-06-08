@@ -633,16 +633,27 @@ function gmtradeLinkedWallet(req) {
   return req.dexWallet || req.playerWallet;
 }
 
+function gmtradeLinkedSolanaWallet(req) {
+  const linked = String(req.dexWallet || '').trim();
+  if (gmtrade.isSolanaAddress(linked)) return linked;
+  const primary = String(req.playerWallet || '').trim();
+  if (gmtrade.isSolanaAddress(primary)) return primary;
+  throw Object.assign(
+    new Error('GMTrade Solana wallet is not linked to this game account. Reconnect your Solana wallet for GMTrade.'),
+    { status: 409 },
+  );
+}
+
 function gmtradeRequestWallet(req) {
-  const linked = String(gmtradeLinkedWallet(req) || '').trim();
+  const linked = gmtradeLinkedSolanaWallet(req);
   const requested = String(req.query?.address || req.query?.wallet || '').trim();
-  if (requested && linked && gmtrade.isSolanaAddress(linked) && requested !== linked) {
+  if (requested && requested !== linked) {
     throw Object.assign(
       new Error('GMTrade wallet mismatch. Switch to the Solana wallet linked to this game account.'),
       { status: 403 },
     );
   }
-  return requested || linked;
+  return linked;
 }
 
 // ==================== WALLET ====================
@@ -3886,7 +3897,7 @@ router.post('/gmtrade/order-tx', auth, async (req, res) => {
   try {
     console.log('[gmtrade order-tx] request', JSON.stringify({
       playerId: req.playerId,
-      wallet: String(req.body?.wallet || gmtradeLinkedWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      wallet: String(req.body?.wallet || gmtradeLinkedSolanaWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
       symbol: req.body?.symbol,
       side: req.body?.side,
       amount: req.body?.amount,
@@ -3898,7 +3909,7 @@ router.post('/gmtrade/order-tx', auth, async (req, res) => {
       last_valid_block_height: req.body?.last_valid_block_height,
       client_rpc: safeGmtradeRpcDiag(req.body?.client_rpc),
     }));
-    const built = await gmtrade.buildCreateOrderTx(req.body || {}, gmtradeLinkedWallet(req));
+    const built = await gmtrade.buildCreateOrderTx(req.body || {}, gmtradeLinkedSolanaWallet(req));
     console.log('[gmtrade order-tx] built', JSON.stringify({
       playerId: req.playerId,
       symbol: built.symbol,
@@ -3937,13 +3948,13 @@ router.post('/gmtrade/cancel-order-tx', auth, async (req, res) => {
   try {
     console.log('[gmtrade cancel-order-tx] request', JSON.stringify({
       playerId: req.playerId,
-      wallet: String(req.body?.wallet || gmtradeLinkedWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      wallet: String(req.body?.wallet || gmtradeLinkedSolanaWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
       order_id: req.body?.order_id || req.body?.orderId || req.body?.id,
       recent_blockhash: req.body?.recent_blockhash,
       last_valid_block_height: req.body?.last_valid_block_height,
       client_rpc: safeGmtradeRpcDiag(req.body?.client_rpc),
     }));
-    const built = await gmtrade.buildCancelOrderTx(req.body || {}, gmtradeLinkedWallet(req));
+    const built = await gmtrade.buildCancelOrderTx(req.body || {}, gmtradeLinkedSolanaWallet(req));
     console.log('[gmtrade cancel-order-tx] built', JSON.stringify({
       playerId: req.playerId,
       order_id: built.order_id,
@@ -3973,13 +3984,13 @@ router.post('/gmtrade/referral-tx', auth, async (req, res) => {
   try {
     console.log('[gmtrade referral-tx] request', JSON.stringify({
       playerId: req.playerId,
-      wallet: String(req.body?.wallet || gmtradeLinkedWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+      wallet: String(req.body?.wallet || gmtradeLinkedSolanaWallet(req) || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
       code: req.body?.code || req.body?.referral_code || req.body?.referralCode || undefined,
       recent_blockhash: req.body?.recent_blockhash,
       last_valid_block_height: req.body?.last_valid_block_height,
       client_rpc: safeGmtradeRpcDiag(req.body?.client_rpc),
     }));
-    const built = await gmtrade.buildSetReferrerTx(req.body || {}, gmtradeLinkedWallet(req));
+    const built = await gmtrade.buildSetReferrerTx(req.body || {}, gmtradeLinkedSolanaWallet(req));
     console.log('[gmtrade referral-tx] built', JSON.stringify({
       playerId: req.playerId,
       already_linked: built.already_linked === true,
@@ -4007,7 +4018,7 @@ router.post('/gmtrade/trade-report', auth, async (req, res) => {
     });
   }
   try {
-    const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, gmtradeLinkedWallet(req));
+    const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, gmtradeLinkedSolanaWallet(req));
     res.json({
       ok: true,
       pending: result.pending === true,
@@ -4089,7 +4100,7 @@ router.post('/trade-report', auth, async (req, res) => {
         ? await recordVerifiedAvantisClose(req, req.body || {})
         : await recordVerifiedAvantisOpen(req, req.body || {});
     } else if (req.dex === 'gmtrade') {
-      const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, gmtradeLinkedWallet(req));
+      const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, gmtradeLinkedSolanaWallet(req));
       verified = result.changes > 0;
     }
     res.json({
