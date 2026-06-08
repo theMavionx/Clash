@@ -5,7 +5,7 @@ import {
   signSolanaMobileProtocolTransaction,
 } from './solanaSeekerTx';
 
-export const NFT_SALE_COLLECTION = 'mystery';
+export const NFT_SALE_COLLECTION = 'dragon';
 
 function nftCollectionPath(collection = NFT_SALE_COLLECTION) {
   const slug = String(collection || NFT_SALE_COLLECTION).trim() || NFT_SALE_COLLECTION;
@@ -41,6 +41,29 @@ export async function fetchNftMintConfig({ collection = NFT_SALE_COLLECTION } = 
   const response = await fetch(`${nftCollectionPath(collection)}/mint/config`, { cache: 'no-store' });
   if (!response.ok) throw new Error(`NFT config failed (${response.status})`);
   return response.json();
+}
+
+export async function reserveNftMint({ collection = NFT_SALE_COLLECTION, chain, buyer, payment, quantity = 1 }) {
+  const response = await fetch(`${nftCollectionPath(collection)}/mint/reserve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chain, buyer, payment, quantity }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `NFT reserve failed (${response.status})`);
+  return json;
+}
+
+export async function confirmNftMint({ collection = NFT_SALE_COLLECTION, chain, reservationId, tx, quantity = 1 }) {
+  if (!reservationId) return null;
+  const response = await fetch(`${nftCollectionPath(collection)}/mint/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chain, reservationId, tx, quantity }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `NFT confirm failed (${response.status})`);
+  return json;
 }
 
 export async function fetchBaseMintQuote({ buyer, payment, quantity = 1, collection = NFT_SALE_COLLECTION }) {
@@ -107,6 +130,13 @@ export async function mintBaseNft({ evmWallet, buyer, payment, quantity = 1, col
     value: nativePayment ? total : 0n,
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  await confirmNftMint({
+    collection,
+    chain: 'base',
+    reservationId: quoteResponse.reservationId,
+    tx: hash,
+    quantity,
+  }).catch((err) => console.warn('[nft] mint confirm failed', err?.message || err));
   return { hash, receipt, quote: quoteResponse };
 }
 
@@ -161,6 +191,13 @@ export async function mintEvmNft({ evmWallet, chain, buyer, payment, quantity = 
     value: nativePayment ? total : 0n,
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  await confirmNftMint({
+    collection,
+    chain,
+    reservationId: quoteResponse.reservationId,
+    tx: hash,
+    quantity,
+  }).catch((err) => console.warn('[nft] mint confirm failed', err?.message || err));
   return { hash, receipt, quote: quoteResponse };
 }
 
@@ -203,6 +240,13 @@ export async function mintAptosNft({ aptosWallet, buyer, quantity = 1, payment =
   // Different wallets return slightly different shapes — Petra: { hash },
   // Pontem/Martian: { txnHash }. Normalize for the caller.
   const txHash = result?.hash || result?.txnHash || result;
+  await confirmNftMint({
+    collection,
+    chain: 'aptos',
+    reservationId: quote.reservationId,
+    tx: txHash,
+    quantity,
+  }).catch((err) => console.warn('[nft] mint confirm failed', err?.message || err));
   return { hash: txHash, quote };
 }
 
@@ -246,7 +290,7 @@ function aptosHexVectorArg(value, label, expectedLength = null) {
   return bytes;
 }
 
-export async function mintSolanaNft({ solWallet, config, payment }) {
+export async function mintSolanaNft({ solWallet, config, payment, collection = NFT_SALE_COLLECTION }) {
   const address = solWallet?.publicKey?.toBase58?.();
   if (!address) throw new Error('Solana wallet is not connected');
   const mobileWalletAdapter = isSolanaMobileWalletAdapter(solWallet);
@@ -259,6 +303,13 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
   const group = payment === 'sol' ? 'sol' : payment === 'skr' ? 'skr' : payment === 'clash' ? 'clash' : 'usdc';
   const groupConfig = config.paymentGroups?.[group] || config.groups?.[group] || null;
   if (!groupConfig) throw new Error(`Solana ${group.toUpperCase()} payment is not configured`);
+  const reservation = await reserveNftMint({
+    collection,
+    chain: 'solana',
+    buyer: address,
+    payment: group,
+    quantity: 1,
+  });
 
   const [
     { ComputeBudgetProgram, Connection, PublicKey: Web3PublicKey },
@@ -364,6 +415,13 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
     throw explainSolanaMintError(err, { group, groupConfig, config });
   }
   const tx = String(signature);
+  await confirmNftMint({
+    collection,
+    chain: 'solana',
+    reservationId: reservation.reservationId,
+    tx,
+    quantity: 1,
+  }).catch((err) => console.warn('[nft] mint confirm failed', err?.message || err));
   return {
     tx,
     signature: tx,
