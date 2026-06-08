@@ -133,6 +133,18 @@ export const SOLANA_RPC_URLS = preferProxyRpc
 
 export const DEFAULT_SOLANA_RPC_URL = SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_RPC_URL;
 
+export const NFT_SOLANA_RPC_URLS = buildRpcFallbackList({
+  publicUrls: [],
+  overrideUrls: [
+    ...(allowProxyFallback && includeAlchemyRpcProxy ? [SAME_ORIGIN_SOLANA_ALCHEMY_URL] : []),
+    envProxySolanaRpc,
+    ...DIRECT_SOLANA_RPC_URLS,
+  ],
+  privateUrls: PUBLIC_SOLANA_RPC_URLS,
+});
+
+export const DEFAULT_NFT_SOLANA_RPC_URL = NFT_SOLANA_RPC_URLS[0] || DEFAULT_SOLANA_RPC_URL;
+
 export function solanaRpcHost(url) {
   try {
     const parsed = new URL(url, siteOrigin());

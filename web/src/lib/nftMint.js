@@ -1,5 +1,11 @@
 import { BASE_CHAIN_ID, ERC20_ABI } from './avantisContract';
-import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from './solanaRpc';
+import {
+  DEFAULT_NFT_SOLANA_RPC_URL,
+  NFT_SOLANA_RPC_URLS,
+  createSolanaConnection,
+  selectFreshSolanaRpcUrl,
+  solanaBatchSafeRpcUrl,
+} from './solanaRpc';
 import {
   isSolanaMobileWalletAdapter,
   signSolanaMobileProtocolTransaction,
@@ -331,8 +337,8 @@ export async function mintSolanaNft({ solWallet, config, payment, collection = N
     import('./solanaTx'),
   ]);
   const bs58 = bs58Module.default || bs58Module;
-  const rpcSelection = await selectFreshSolanaRpcUrl(undefined, { timeoutMs: 2500 }).catch(() => null);
-  const rpcUrl = rpcSelection?.selected?.url || DEFAULT_SOLANA_RPC_URL;
+  const rpcSelection = await selectFreshSolanaRpcUrl(NFT_SOLANA_RPC_URLS, { timeoutMs: 2500 }).catch(() => null);
+  const rpcUrl = rpcSelection?.selected?.url || DEFAULT_NFT_SOLANA_RPC_URL;
   await assertSolanaMintBalances({
     Connection,
     Web3PublicKey,
@@ -374,7 +380,7 @@ export async function mintSolanaNft({ solWallet, config, payment, collection = N
       maxAttempts: 4,
       skipPreflight: false,
       buildSignedTransaction: async ({ connection: attemptConnection, blockhash, lastValidBlockHeight }) => {
-        const attemptUmi = createUmi(solanaBatchSafeRpcUrl(attemptConnection?.rpcEndpoint || rpcUrl))
+        const attemptUmi = createUmi(solanaBatchSafeRpcUrl(attemptConnection?.rpcEndpoint || rpcUrl, NFT_SOLANA_RPC_URLS))
           .use(mplCore())
           .use(mplCandyMachine())
           .use(signerIdentity(walletSigner, true));
