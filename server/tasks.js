@@ -73,6 +73,23 @@ const VALID_SIDES = ['any', 'long', 'short'];
 const TASK_TRADE_SETTLE_DELAY_SECONDS = 0;
 const HOTSTUFF_TASK_IMPORT_MS = Math.max(5_000, Number(process.env.HOTSTUFF_TASK_IMPORT_MS || 15_000));
 const hotstuffTaskImportCache = new Map();
+const GMTRADE_TASK_RECONCILE_MS = Math.max(5_000, Number(process.env.GMTRADE_TASK_RECONCILE_MS || 15_000));
+const gmtradeTaskReconcileCache = new Map();
+const FUTURES_TASK_DEXES = new Set([
+  'avantis',
+  'decibel',
+  'gmx',
+  'monad',
+  'phoenix',
+  'hyperliquid',
+  'risex',
+  'nado',
+  'hibachi',
+  'hotstuff',
+  'grvt',
+  'katana',
+  'gmtrade',
+]);
 
 function parseParams(p) {
   try { return typeof p === 'string' ? JSON.parse(p) : (p || {}); } catch { return {}; }
@@ -234,6 +251,22 @@ async function maybeImportHotstuffFills(player, wallet) {
   }
 }
 
+async function maybeReconcileGmtrade(player, wallet) {
+  if (!player || !isSolanaWallet(wallet)) return null;
+  const key = `${player.id}:${wallet}`;
+  const last = gmtradeTaskReconcileCache.get(key) || 0;
+  if (Date.now() - last < GMTRADE_TASK_RECONCILE_MS) return null;
+  gmtradeTaskReconcileCache.set(key, Date.now());
+  try {
+    const futuresDb = require('../server-futures/db');
+    const gmtrade = require('../server-futures/gmtrade');
+    return await gmtrade.reconcilePendingTradeReportsForPlayer(futuresDb, player.id, { limit: 50 });
+  } catch (e) {
+    console.warn(`[tasks gmtrade] pending reconcile failed player=${player.name || player.id}:`, e.message);
+    return null;
+  }
+}
+
 // Resolve which wallet to query upstream APIs with. Order:
 //   1. Pacifica AGENT wallet (if bound) — Pacifica's /v1/trades/history
 //      indexes by signer pubkey, and once a user binds an agent every
@@ -274,6 +307,154 @@ function resolveWallet(player) {
   return null;
 }
 
+function walletMatchesDex(dex, wallet) {
+  if (dex === 'decibel') return isAptosWallet(wallet);
+  if (dex === 'phoenix' || dex === 'gmtrade') return isSolanaWallet(wallet);
+  if (
+    dex === 'avantis' ||
+    dex === 'gmx' ||
+    dex === 'monad' ||
+    dex === 'hyperliquid' ||
+    dex === 'risex' ||
+    dex === 'nado' ||
+    dex === 'hibachi' ||
+    dex === 'hotstuff' ||
+    dex === 'katana'
+  ) return isEvmWallet(wallet);
+  return true;
+}
+
+function resolveWalletForDex(player, dex) {
+  if (!player) return null;
+  const normalizedDex = String(dex || '').toLowerCase();
+  if (normalizedDex === String(player.dex || '').toLowerCase()) {
+    const current = resolveWallet(player);
+    if (walletMatchesDex(normalizedDex, current)) return current;
+  }
+  try {
+    const dexRow = db.db.prepare(
+      `SELECT wallet_address FROM player_dex_accounts
+       WHERE player_id = ? AND dex = ?
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 1`
+    ).get(player.id, normalizedDex);
+    if (dexRow && walletMatchesDex(normalizedDex, dexRow.wallet_address)) return dexRow.wallet_address;
+  } catch {}
+  try {
+    const rewardRow = db.db.prepare(
+      'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+    ).get(player.id, normalizedDex);
+    if (rewardRow && walletMatchesDex(normalizedDex, rewardRow.wallet)) return rewardRow.wallet;
+  } catch {}
+  try {
+    const chainType = normalizedDex === 'decibel'
+      ? 'aptos'
+      : (normalizedDex === 'phoenix' || normalizedDex === 'gmtrade')
+        ? 'solana'
+        : 'evm';
+    const walletRow = db.db.prepare(
+      `SELECT address FROM player_wallets
+       WHERE player_id = ? AND chain_type = ?
+       ORDER BY is_primary DESC, updated_at DESC, id DESC
+       LIMIT 1`
+    ).get(player.id, chainType);
+    if (walletRow && walletMatchesDex(normalizedDex, walletRow.address)) return walletRow.address;
+  } catch {}
+  if (walletMatchesDex(normalizedDex, player.wallet)) return player.wallet;
+  return null;
+}
+
+function verifiedSourceWhereForDex(dex) {
+  if (dex === 'decibel') return "AND verified_source IN ('decibel_fill', 'server')";
+  if (dex === 'monad') return "AND verified_source IN ('perpl_api', 'perpl_ws')";
+  if (dex === 'hyperliquid') return "AND verified_source = 'hyperliquid_api'";
+  if (dex === 'risex') return "AND verified_source = 'risex_api'";
+  if (dex === 'nado') return "AND verified_source = 'nado_api'";
+  if (dex === 'hibachi') return "AND verified_source = 'hibachi_api'";
+  if (dex === 'hotstuff') return "AND verified_source = 'hotstuff_api'";
+  if (dex === 'grvt') return "AND verified_source = 'grvt_builder'";
+  if (dex === 'katana') return "AND verified_source = 'katana_api'";
+  if (dex === 'gmtrade') return "AND verified_source = 'gmtrade_tx'";
+  if (dex === 'phoenix') return "AND verified_source IN ('worker', 'tx')";
+  return "AND verified_source = 'worker'";
+}
+
+function getTaskFuturesDexes(player, requestedDex) {
+  const out = new Set();
+  const currentDex = String(player?.dex || '').toLowerCase();
+  const forcedDex = String(requestedDex || '').toLowerCase();
+  if (forcedDex) {
+    if (FUTURES_TASK_DEXES.has(forcedDex)) out.add(forcedDex);
+    return [...out];
+  }
+  if (FUTURES_TASK_DEXES.has(currentDex)) out.add(currentDex);
+  try {
+    const rows = db.db.prepare(
+      `SELECT dex FROM player_dex_accounts WHERE player_id = ?
+       UNION
+       SELECT dex FROM trading_rewards WHERE player_id = ?`
+    ).all(player.id, player.id);
+    for (const row of rows) {
+      const dex = String(row.dex || '').toLowerCase();
+      if (FUTURES_TASK_DEXES.has(dex)) out.add(dex);
+    }
+  } catch (e) {
+    console.warn(`[tasks] linked dex read failed player=${player?.name || player?.id}:`, e.message);
+  }
+  return [...out];
+}
+
+async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
+  const wallet = resolveWalletForDex(player, dexFilter);
+  if (!wallet && dexFilter !== 'grvt') return [];
+  if (wallet && !walletMatchesDex(dexFilter, wallet)) return [];
+  if (dexFilter === 'hotstuff') {
+    await maybeImportHotstuffFills(player, wallet);
+  } else if (dexFilter === 'gmtrade') {
+    await maybeReconcileGmtrade(player, wallet);
+  }
+  const fdb = futuresDbReadonly();
+  if (!fdb) return [];
+  try {
+    const sourceWhere = verifiedSourceWhereForDex(dexFilter);
+    const settleWhere = opts.includeUnsettled
+      ? ''
+      : "AND created_at <= datetime('now', ?)";
+    const settleParams = opts.includeUnsettled
+      ? []
+      : [`-${TASK_TRADE_SETTLE_DELAY_SECONDS} seconds`];
+    const rows = fdb.prepare(`
+      SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, verified_source, created_at
+      FROM trade_history
+      WHERE player_id = ? AND dex = ? AND status = 'filled'
+        ${sourceWhere}
+        ${settleWhere}
+      ORDER BY id ASC
+    `).all(player.id, dexFilter, ...settleParams);
+    return rows.map(r => {
+      const notional = Number(r.notional_usd) || 0;
+      const price = Number(r.price) > 0 ? Number(r.price) : (notional > 0 ? notional : 1);
+      const amount = price > 0 ? notional / price : 0;
+      return {
+        history_id: r.id,
+        dex: dexFilter,
+        symbol: String(r.symbol || '').toUpperCase(),
+        side: r.side,
+        price: String(price),
+        amount: String(amount),
+        _notional: notional,
+        _order_type: r.order_type,
+        order_id: r.order_id,
+        client_order_id: r.client_order_id,
+        verified_source: r.verified_source,
+      };
+    });
+  } catch (e) {
+    console.warn(`[tasks] ${dexFilter} trades read failed:`, e.message);
+    return [];
+  }
+}
+
 // Unified trade-fetch: routes on the player's selected DEX, not just wallet
 // shape. Aptos and EVM both use 0x-looking addresses, and stale wallets from
 // a previous DEX should never pull the wrong trade source. Returns a common shape:
@@ -281,9 +462,9 @@ function resolveWallet(player) {
 // so verifiers don't need to branch.
 async function fetchWalletTrades(player, opts = {}) {
   if (!player) return [];
-  const dexFilter = String(player.dex || 'pacifica').toLowerCase();
+  const dexFilter = String(opts.dex || player.dex || 'pacifica').toLowerCase();
   const wallet = resolveWallet(player);
-  if (!wallet && dexFilter !== 'grvt') return [];
+  if (!wallet && dexFilter !== 'grvt' && dexFilter !== 'account' && !FUTURES_TASK_DEXES.has(dexFilter)) return [];
 
   // Self-custody DEXes (Avantis/Base, Decibel/Aptos, GMX/Arbitrum) →
   // read verified trades from futures.db. The per-DEX rewards worker
@@ -296,89 +477,17 @@ async function fetchWalletTrades(player, opts = {}) {
   // returned [] because their wallet is EVM not base58. Net effect: zero
   // quest progress for every GMX trade despite the worker indexing them
   // correctly. Adding 'gmx' wires the verifier into the same path.
-  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix' || dexFilter === 'hyperliquid' || dexFilter === 'risex' || dexFilter === 'nado' || dexFilter === 'hibachi' || dexFilter === 'hotstuff' || dexFilter === 'grvt' || dexFilter === 'katana' || dexFilter === 'gmtrade') {
-    if (dexFilter === 'avantis' && !isEvmWallet(wallet)) return [];
-    if (dexFilter === 'gmx'     && !isEvmWallet(wallet)) return [];
-    if (dexFilter === 'monad'   && !isEvmWallet(wallet)) return [];
-    if (dexFilter === 'hyperliquid' && !isEvmWallet(wallet)) return [];
-    if (dexFilter === 'risex'   && !isEvmWallet(wallet)) return [];
-    if (dexFilter === 'nado'    && !isEvmWallet(wallet)) return [];
-    if (dexFilter === 'hibachi' && !isEvmWallet(wallet)) return [];
-    if (dexFilter === 'hotstuff' && !isEvmWallet(wallet)) return [];
-    if (dexFilter === 'katana' && !isEvmWallet(wallet)) return [];
-    if (dexFilter === 'decibel' && !isAptosWallet(wallet)) return [];
-    if (dexFilter === 'phoenix' && !isSolanaWallet(wallet)) return [];
-    if (dexFilter === 'gmtrade' && !isSolanaWallet(wallet)) return [];
-    if (dexFilter === 'hotstuff') {
-      await maybeImportHotstuffFills(player, wallet);
+  if (FUTURES_TASK_DEXES.has(dexFilter)) {
+    const dexes = opts.singleDex ? [dexFilter] : getTaskFuturesDexes(player, opts.dex);
+    const batches = [];
+    for (const dex of dexes) {
+      batches.push(await fetchFuturesDexTrades(player, dex, opts));
     }
-    const fdb = futuresDbReadonly();
-    if (!fdb) return [];
-    try {
-      // Filter by player_id AND dex so a legacy row from another DEX on the
-      // same player_id can't leak into a different verifier.
-      // Decibel quest progress counts only trades routed through Clash.
-      // Legacy app-routed rows used verified_source='server'; new actual
-      // fill imports use 'decibel_fill'. Worker rows can include external
-      // Decibel activity and must not drive quests.
-      const sourceWhere = dexFilter === 'decibel'
-        ? "AND verified_source IN ('decibel_fill', 'server')"
-        : dexFilter === 'monad'
-          ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
-          : dexFilter === 'hyperliquid'
-            ? "AND verified_source = 'hyperliquid_api'"
-          : dexFilter === 'risex'
-            ? "AND verified_source = 'risex_api'"
-          : dexFilter === 'nado'
-            ? "AND verified_source = 'nado_api'"
-          : dexFilter === 'hibachi'
-            ? "AND verified_source = 'hibachi_api'"
-          : dexFilter === 'hotstuff'
-            ? "AND verified_source = 'hotstuff_api'"
-          : dexFilter === 'grvt'
-            ? "AND verified_source = 'grvt_builder'"
-          : dexFilter === 'katana'
-            ? "AND verified_source = 'katana_api'"
-          : dexFilter === 'gmtrade'
-            ? "AND verified_source = 'gmtrade_tx'"
-          : dexFilter === 'phoenix'
-            ? "AND verified_source IN ('worker', 'tx')"
-          : "AND verified_source = 'worker'";
-      const settleWhere = opts.includeUnsettled
-        ? ''
-        : "AND created_at <= datetime('now', ?)";
-      const settleParams = opts.includeUnsettled
-        ? []
-        : [`-${TASK_TRADE_SETTLE_DELAY_SECONDS} seconds`];
-      let rows = fdb.prepare(`
-        SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, verified_source, created_at
-        FROM trade_history
-        WHERE player_id = ? AND dex = ? AND status = 'filled'
-          ${sourceWhere}
-          ${settleWhere}
-        ORDER BY id ASC
-      `).all(player.id, dexFilter, ...settleParams);
-      return rows.map(r => {
-        const notional = Number(r.notional_usd) || 0;
-        const price = Number(r.price) > 0 ? Number(r.price) : (notional > 0 ? notional : 1);
-        const amount = price > 0 ? notional / price : 0;
-        return {
-          history_id: r.id,
-          symbol: String(r.symbol || '').toUpperCase(),
-          side: r.side,
-          price: String(price),
-          amount: String(amount),
-          _notional: notional,
-          _order_type: r.order_type,
-          order_id: r.order_id,
-          client_order_id: r.client_order_id,
-          verified_source: r.verified_source,
-        };
-      });
-    } catch (e) {
-      console.warn(`[tasks] ${dexFilter} trades read failed:`, e.message);
-      return [];
+    const rows = batches.flat().sort((a, b) => Number(a.history_id || 0) - Number(b.history_id || 0));
+    if (dexes.length > 1) {
+      console.log(`[tasks] account futures fetch player=${player.name} current_dex=${player.dex || '?'} dexes=${dexes.join(',')} trades=${rows.length}`);
     }
+    return rows;
   }
 
   // Pacifica (Solana): public API. Pacifica indexes /v1/trades/history by
@@ -640,7 +749,7 @@ async function verifyPositions(player, task, snap) {
   const seenOrders = new Set();
   for (const t of trades) {
     if ((t.history_id || 0) <= startId) continue;
-    const orderKey = String(t.order_id || t.client_order_id || t.history_id || '');
+    const orderKey = `${t.dex || player.dex || 'dex'}:${String(t.order_id || t.client_order_id || t.history_id || '')}`;
     if (orderKey && seenOrders.has(orderKey)) continue;
     if (orderKey) seenOrders.add(orderKey);
     if (!matchesSymbol(t.symbol, symbol)) continue;
