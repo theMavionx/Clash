@@ -2483,6 +2483,10 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
   const signature = String(body.tx_hash || body.signature || '').trim();
   const requestedAmount = Number(body.amount);
   const requestedLeverage = Number(body.leverage || 1);
+  const requestedNotional = Number(body.notional_usd || body.notionalUsd);
+  const requestedMargin = Number(body.margin_usd || body.marginUsd);
+  const requestedSide = normalizeSide(body.side);
+  const isCloseReport = requestedSide === 'close_long' || requestedSide === 'close_short' || body.reduce_only === true || body.reduceOnly === true;
   const tx = await verifySolanaSignature({ signature, wallet });
   const tradeEvent = tx.walletEvents
     .filter(ev => Number(ev?.size_delta_usd) > 0)
@@ -2498,7 +2502,11 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
       await sleep(1000);
     }
   }
-  if (!tradeEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS) {
+  const canUseVerifiedCloseClientNotional = isCloseReport
+    && Number.isFinite(requestedNotional)
+    && requestedNotional > 0
+    && requestedNotional <= 10_000_000;
+  if (!tradeEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS && !canUseVerifiedCloseClientNotional) {
     return {
       changes: 0,
       signature,
@@ -2522,12 +2530,14 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
     ? Number(tradeEvent.size_delta_usd)
     : verifiedPosition
     ? Number(verifiedPosition.size_usd || verifiedPosition.notional_usd)
+    : canUseVerifiedCloseClientNotional
+    ? requestedNotional
     : (amount * leverage);
   if (!Number.isFinite(notional) || notional <= 0 || notional > 10_000_000) {
     throw Object.assign(new Error('GMTrade verified notional out of range'), { status: 400 });
   }
   const symbol = baseSymbol(body.symbol || 'SOL') || 'SOL';
-  const side = tradeEvent?.side || verifiedPosition?.side_label || normalizeSide(body.side);
+  const side = tradeEvent?.side || (isCloseReport ? requestedSide : verifiedPosition?.side_label) || requestedSide;
   const price = Number(body.price) > 0 ? String(body.price) : String(notional);
   const result = db.addTrade(playerId, {
     symbol,
@@ -2542,7 +2552,13 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
     notional_usd: notional,
     verifiedSource: 'gmtrade_tx',
     proofJson: JSON.stringify({
-      source: tradeEvent ? 'gmtrade_solana_tx' : verifiedPosition ? 'gmtrade_position_pda_after_tx' : 'gmtrade_client_notional',
+      source: tradeEvent
+        ? 'gmtrade_solana_tx'
+        : verifiedPosition
+        ? 'gmtrade_position_pda_after_tx'
+        : canUseVerifiedCloseClientNotional
+        ? 'gmtrade_confirmed_close_tx_client_notional'
+        : 'gmtrade_client_notional',
       signature,
       wallet,
       slot: tx.slot,
@@ -2553,6 +2569,9 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
       position: verifiedPosition,
       client_amount: Number.isFinite(requestedAmount) ? requestedAmount : null,
       client_leverage: Number.isFinite(requestedLeverage) ? requestedLeverage : null,
+      client_notional_usd: Number.isFinite(requestedNotional) ? requestedNotional : null,
+      client_margin_usd: Number.isFinite(requestedMargin) ? requestedMargin : null,
+      reduce_only: body.reduce_only === true || body.reduceOnly === true,
       account_keys: tx.accountKeys.slice(0, 32),
     }),
   });

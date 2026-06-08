@@ -543,7 +543,18 @@ export function useGmtrade() {
     }
   }, [token]);
 
-  const reportTrade = useCallback(async ({ signature, symbol, side, amount, leverage = 1, price, orderType = 'market' } = {}) => {
+  const reportTrade = useCallback(async ({
+    signature,
+    symbol,
+    side,
+    amount,
+    leverage = 1,
+    price,
+    orderType = 'market',
+    notionalUsd,
+    marginUsd,
+    reduceOnly = false,
+  } = {}) => {
     if (!token) return { error: 'Missing game session token' };
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
     try {
@@ -560,6 +571,9 @@ export function useGmtrade() {
           leverage,
           price,
           order_type: orderType,
+          notional_usd: notionalUsd,
+          margin_usd: marginUsd,
+          reduce_only: reduceOnly === true,
         }),
       });
       if (data?.verified === true) {
@@ -947,6 +961,9 @@ export function useGmtrade() {
             leverage,
             price: options?.price,
             orderType: normalizedOrderType,
+            notionalUsd: options?.notional_usd,
+            marginUsd: options?.margin_usd,
+            reduceOnly: options?.reduce_only === true,
           });
           await gmtradeLog('trade_report_done', {
             signature: lastSig,
