@@ -3779,19 +3779,13 @@ router.get('/gmtrade/orders', auth, async (req, res) => {
 });
 
 router.post('/gmtrade/client-log', auth, async (req, res) => {
-  if (req.dex !== 'gmtrade') {
-    return res.status(409).json({
-      error: `Account is registered for '${req.dex}'. Switch DEX to gmtrade before calling GMTrade endpoints.`,
-      stored_dex: req.dex,
-      requested_dex: 'gmtrade',
-    });
-  }
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const safe = {
       ts: new Date().toISOString(),
       playerId: req.playerId,
       player: req.playerName,
+      stored_dex: req.dex,
       wallet: String(body.wallet || req.playerWallet || '').replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
       trace: String(body.trace || '').slice(0, 80),
       event: String(body.event || '').slice(0, 120),
@@ -3799,6 +3793,20 @@ router.post('/gmtrade/client-log', auth, async (req, res) => {
       data: body.data && typeof body.data === 'object' ? body.data : {},
     };
     console.log('[gmtrade client]', JSON.stringify(safe));
+    try {
+      db.recordClientLog?.({
+        dex: 'gmtrade',
+        playerId: req.playerId,
+        playerName: req.playerName,
+        wallet: String(body.wallet || req.playerWallet || ''),
+        trace: safe.trace,
+        event: safe.event,
+        attempt: safe.attempt,
+        data: safe.data,
+      });
+    } catch (logDbError) {
+      console.warn('[gmtrade client] db log skipped:', logDbError.message);
+    }
     res.json({ ok: true });
   } catch (e) {
     console.warn('[gmtrade client] log failed:', e.message);
@@ -3882,6 +3890,10 @@ router.post('/gmtrade/order-tx', auth, async (req, res) => {
       transaction_bytes: txSizeSummary(built.transactions),
       tx_sanitizer: built.tx_sanitizer || null,
       setup_hints: built.setup_hints || null,
+      rent_diagnostics: built.rent_diagnostics || null,
+      setup_required: built.setup_required === true,
+      setup_transaction_count: Array.isArray(built.setup_transactions) ? built.setup_transactions.length : 0,
+      setup_tx_diagnostics: built.setup_tx_diagnostics || null,
       builder: built.builder,
       memo_enabled: built.memo_enabled === true,
     }));

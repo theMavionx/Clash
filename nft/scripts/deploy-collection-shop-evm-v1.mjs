@@ -31,6 +31,14 @@ const monad = defineChain({
   blockExplorers: { default: { name: 'Monad Explorer', url: 'https://monadexplorer.com' } },
 });
 
+const ink = defineChain({
+  id: 57073,
+  name: 'Ink',
+  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+  blockExplorers: { default: { name: 'Ink Explorer', url: 'https://explorer.inkonchain.com' } },
+});
+
 const CHAINS = {
   base: {
     chain: base,
@@ -49,6 +57,12 @@ const CHAINS = {
     defaultRpc: 'https://rpc.monad.xyz',
     envRpc: ['NFT_MONAD_RPC_URL', 'MONAD_RPC_URL', 'GAME_SHOP_MONAD_RPC_URL'],
     usdcDefault: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603',
+  },
+  ink: {
+    chain: ink,
+    defaultRpc: 'https://rpc-gel.inkonchain.com',
+    envRpc: ['NFT_INK_RPC_URL', 'INK_RPC_URL', 'GAME_SHOP_INK_RPC_URL'],
+    usdcDefault: '0x2D270e6886d130D724215A266106e6832161EAEd',
   },
 };
 
@@ -84,10 +98,13 @@ function optionalAddress(value) {
 const env = loadEnv();
 const collection = normalizeSlug(argValue('collection', env.NFT_COLLECTION_SLUG || env.NEW_NFT_SLUG));
 const collectionKey = envKeyPart(collection);
+const collectionDefaults = collection === 'succubus'
+  ? { usdPrice: '8.9', clashUsdPrice: '5' }
+  : { usdPrice: '5.5', clashUsdPrice: '4' };
 const chainKey = String(argValue('chain', env.CLASH_DEPLOY_CHAIN || env.NFT_COLLECTION_CHAIN || '')).toLowerCase();
 const spec = CHAINS[chainKey];
 if (!spec) {
-  console.error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad.`);
+  console.error(`Unknown chain "${chainKey}". Use --chain=base|arbitrum|monad|ink.`);
   process.exit(1);
 }
 
@@ -156,13 +173,13 @@ const baseUsdPriceE6 = decimalToUnits(envOr(env, [
   `${collectionEnvPrefix}_USD_PRICE`,
   'NFT_COLLECTION_USD_PRICE',
   'NFT_BASE_USD_PRICE',
-], '5.5'), 6);
+], collectionDefaults.usdPrice), 6);
 const clashUsdPriceE6 = decimalToUnits(envOr(env, [
   `${chainEnvPrefix}_CLASH_USD_PRICE`,
   `${collectionEnvPrefix}_CLASH_USD_PRICE`,
   'NFT_COLLECTION_CLASH_USD_PRICE',
   'NFT_BASE_CLASH_USD_PRICE',
-], '4'), 6);
+], collectionDefaults.clashUsdPrice), 6);
 const shopEip712Name = envOr(env, [
   `${chainEnvPrefix}_SHOP_EIP712_NAME`,
   `${collectionEnvPrefix}_SHOP_EIP712_NAME`,

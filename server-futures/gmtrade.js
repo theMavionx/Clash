@@ -27,6 +27,9 @@ const GMTRADE_RPC_URLS = Array.from(new Set(
   solanaRpcUrls().concat(GMTRADE_RPC_URL).filter(Boolean)
 ));
 const GMTRADE_DEDUPE_ATA_INSTRUCTIONS = String(process.env.GMTRADE_DEDUPE_ATA_INSTRUCTIONS || '1') !== '0';
+const GMTRADE_REMOVE_EXISTING_ATA_INSTRUCTIONS = String(process.env.GMTRADE_REMOVE_EXISTING_ATA_INSTRUCTIONS || '1') !== '0';
+const GMTRADE_REMOVE_COMPUTE_BUDGET_INSTRUCTIONS = String(process.env.GMTRADE_REMOVE_COMPUTE_BUDGET_INSTRUCTIONS || '1') !== '0';
+const GMTRADE_CONVERT_NO_LUT_V0_TO_LEGACY = String(process.env.GMTRADE_CONVERT_NO_LUT_V0_TO_LEGACY || '1') !== '0';
 const GMTRADE_OMIT_EXISTING_SETUP_INSTRUCTIONS = String(process.env.GMTRADE_OMIT_EXISTING_SETUP_INSTRUCTIONS || '1') !== '0';
 const GMTRADE_RPC_ORIGIN = String(process.env.GMTRADE_RPC_ORIGIN || 'https://gmtrade.xyz').trim();
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.GMTRADE_TIMEOUT_MS || 7000)));
@@ -91,6 +94,7 @@ const GMTRADE_MIN_POSITION_USD = Math.max(0, Number(process.env.GMTRADE_MIN_POSI
 const GMTRADE_POSITION_VERIFY_SLOT_WINDOW = Math.max(1, Number(process.env.GMTRADE_POSITION_VERIFY_SLOT_WINDOW || 500));
 const GMTRADE_ENABLE_NODE_SDK_BUILDER = String(process.env.GMTRADE_ENABLE_NODE_SDK_BUILDER || '1').trim() !== '0';
 const GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS = String(process.env.GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS || '').trim() === '1';
+const GMTRADE_SKIP_WALLET_USDC_PREFLIGHT = String(process.env.GMTRADE_SKIP_WALLET_USDC_PREFLIGHT || '').trim() === '1';
 const GMTRADE_TX_MEMO = String(process.env.GMTRADE_TX_MEMO || '').trim();
 const GMTRADE_DISCOVER_MARKETS = String(process.env.GMTRADE_DISCOVER_MARKETS || '1').trim() !== '0';
 const GMTRADE_MARKET_ACCOUNT_DATA_SIZE = Number(process.env.GMTRADE_MARKET_ACCOUNT_DATA_SIZE || 0);
@@ -335,6 +339,16 @@ function randomNonce() {
     throw Object.assign(new Error('GMTrade bs58 encoder is not available'), { status: 501 });
   }
   return bs58Encode(crypto.randomBytes(32));
+}
+
+function gmtradeOrderNonce(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return randomNonce();
+  try {
+    const decoded = bs58Decode(raw);
+    if (decoded && decoded.length === 32) return raw;
+  } catch {}
+  throw Object.assign(new Error('GMTrade order nonce must be a 32-byte base58 value'), { status: 400 });
 }
 
 function referralUrl(code = GMTRADE_REFERRAL_CODE) {
@@ -1732,23 +1746,23 @@ function serializeTransactionGroup(group) {
 
 function gmtradeTxSummary(base64) {
   try {
-    const tx = VersionedTransaction.deserialize(Buffer.from(String(base64 || ''), 'base64'));
+    const tx = Transaction.from(Buffer.from(String(base64 || ''), 'base64'));
     return {
-      kind: 'versioned',
-      bytes: tx.serialize().length,
-      required_signatures: tx.message?.header?.numRequiredSignatures ?? null,
-      static_accounts: tx.message?.staticAccountKeys?.length ?? null,
-      instructions: tx.message?.compiledInstructions?.length ?? null,
+      kind: 'legacy',
+      bytes: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length,
+      required_signatures: tx.signatures?.length ?? null,
+      static_accounts: null,
+      instructions: tx.instructions?.length ?? null,
     };
   } catch {
     try {
-      const tx = Transaction.from(Buffer.from(String(base64 || ''), 'base64'));
+      const tx = VersionedTransaction.deserialize(Buffer.from(String(base64 || ''), 'base64'));
       return {
-        kind: 'legacy',
-        bytes: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length,
-        required_signatures: tx.signatures?.length ?? null,
-        static_accounts: null,
-        instructions: tx.instructions?.length ?? null,
+        kind: 'versioned',
+        bytes: tx.serialize().length,
+        required_signatures: tx.message?.header?.numRequiredSignatures ?? null,
+        static_accounts: tx.message?.staticAccountKeys?.length ?? null,
+        instructions: tx.message?.compiledInstructions?.length ?? null,
       };
     } catch {
       return null;
@@ -1762,6 +1776,102 @@ function gmtradeInstructionKey(ix) {
     Array.from(ix?.accountKeyIndexes || []).join(','),
     Buffer.from(ix?.data || []).toString('hex'),
   ].join('|');
+}
+
+function gmtradeSetupAccountsFromTransaction(base64) {
+  const out = {
+    ata_create_accounts: [],
+    ata_create_details: [],
+    prepare_user_accounts: [],
+    prepare_position_accounts: [],
+    create_order_accounts: [],
+  };
+  try {
+    const tx = VersionedTransaction.deserialize(Buffer.from(String(base64 || ''), 'base64'));
+    const keys = tx.message?.staticAccountKeys || [];
+    for (const [instructionIndex, ix] of Array.from(tx.message?.compiledInstructions || []).entries()) {
+      const program = keys[ix.programIdIndex]?.toBase58?.() || '';
+      const indexes = Array.from(ix.accountKeyIndexes || []);
+      const dataHex = Buffer.from(ix.data || []).toString('hex');
+      if (program === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL' && dataHex === '01') {
+        const account = keys[indexes[1]]?.toBase58?.() || '';
+        if (account && !out.ata_create_accounts.includes(account)) out.ata_create_accounts.push(account);
+        if (account) {
+          out.ata_create_details.push({
+            instruction_index: instructionIndex,
+            ata: account,
+            payer: keys[indexes[0]]?.toBase58?.() || '',
+            owner: keys[indexes[2]]?.toBase58?.() || '',
+            mint: keys[indexes[3]]?.toBase58?.() || '',
+          });
+        }
+      } else if (GMTRADE_PROGRAM_IDS.includes(program) && dataHex === 'bead8fc18b50e785') {
+        const account = keys[indexes[2]]?.toBase58?.() || '';
+        if (account && !out.prepare_user_accounts.includes(account)) out.prepare_user_accounts.push(account);
+      } else if (GMTRADE_PROGRAM_IDS.includes(program) && dataHex.startsWith('b2d7375a890f6c0f')) {
+        const account = keys[indexes[3]]?.toBase58?.() || '';
+        if (account && !out.prepare_position_accounts.includes(account)) out.prepare_position_accounts.push(account);
+      } else if (GMTRADE_PROGRAM_IDS.includes(program) && dataHex.startsWith('c89d03b603a4a2f0')) {
+        out.create_order_accounts.push({
+          instruction_index: instructionIndex,
+          accounts: indexes.map(index => keys[index]?.toBase58?.() || '').filter(Boolean),
+        });
+      }
+    }
+  } catch {}
+  return out;
+}
+
+async function gmtradeRentDiagnosticsFromTransactions(transactions) {
+  const rows = [];
+  const seen = new Set();
+  for (const tx of Array.isArray(transactions) ? transactions : []) {
+    const setup = gmtradeSetupAccountsFromTransaction(tx);
+    const ataDetails = new Map((setup.ata_create_details || []).map(row => [row.ata, row]));
+    const createOrderAccounts = new Set((setup.create_order_accounts || [])
+      .flatMap(row => Array.isArray(row.accounts) ? row.accounts : []));
+    for (const [kind, addresses] of Object.entries({
+      ata: setup.ata_create_accounts,
+      user: setup.prepare_user_accounts,
+      position: setup.prepare_position_accounts,
+    })) {
+      for (const address of addresses) {
+        if (!address || seen.has(address)) continue;
+        seen.add(address);
+        const info = await rpcAccountInfo(address).catch(() => null);
+        rows.push({
+          kind,
+          address,
+          exists: !!info,
+          lamports: Number(info?.lamports || 0),
+          owner: info?.owner || null,
+          data_len: Array.isArray(info?.data) ? Number(Buffer.from(String(info.data[0] || ''), 'base64').length) : null,
+          details: kind === 'ata'
+            ? {
+                ...(ataDetails.get(address) || {}),
+                referenced_by_create_order: createOrderAccounts.has(address),
+                likely_per_order_collateral_escrow: createOrderAccounts.has(address) && !!ataDetails.get(address)?.owner,
+              }
+            : null,
+        });
+      }
+    }
+  }
+  const missingKinds = rows.filter(row => !row.exists).map(row => row.kind);
+  const hasMissingPerOrderEscrow = rows.some(row => (
+    !row.exists && row.kind === 'ata' && row.details?.likely_per_order_collateral_escrow
+  ));
+  const hasMissing = rows.some(row => !row.exists);
+  return {
+    setup_accounts: rows,
+    missing_setup_accounts: rows.filter(row => !row.exists).length,
+    missing_kinds: Array.from(new Set(missingKinds)),
+    note: hasMissingPerOrderEscrow
+      ? 'GMTrade order creates a per-order collateral escrow token account; Phantom may show a risk/rent preview even when sigVerify:false simulation succeeds.'
+      : hasMissing
+      ? 'Missing GMTrade setup accounts can make Phantom preview one-time refundable SOL rent in the order transaction.'
+      : 'GMTrade setup accounts already exist for this transaction.',
+  };
 }
 
 async function gmtradeAccountExists(address) {
@@ -1908,6 +2018,314 @@ function sanitizeGmtradeTransactions(transactions, options = {}) {
   };
 }
 
+async function removeExistingAtaCreateInstructions(transactions, existingDiagnostics = []) {
+  if (!GMTRADE_REMOVE_EXISTING_ATA_INSTRUCTIONS) {
+    return { transactions, diagnostics: existingDiagnostics };
+  }
+  const diagnostics = Array.isArray(existingDiagnostics) ? [...existingDiagnostics] : [];
+  const sanitized = [];
+  const accountCache = new Map();
+
+  for (const base64 of Array.isArray(transactions) ? transactions : []) {
+    let tx;
+    try {
+      tx = VersionedTransaction.deserialize(Buffer.from(String(base64 || ''), 'base64'));
+    } catch {
+      sanitized.push(base64);
+      continue;
+    }
+
+    const before = gmtradeTxSummary(base64);
+    const keys = tx.message?.staticAccountKeys || [];
+    const filtered = [];
+    const removed = [];
+
+    for (const ix of tx.message?.compiledInstructions || []) {
+      const program = keys[ix.programIdIndex]?.toBase58?.() || '';
+      const dataHex = Buffer.from(ix.data || []).toString('hex');
+      if (program === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL' && dataHex === '01') {
+        const indexes = Array.from(ix.accountKeyIndexes || []);
+        const ata = keys[indexes[1]]?.toBase58?.() || '';
+        if (ata) {
+          let exists = accountCache.get(ata);
+          if (exists == null) {
+            exists = !!(await rpcAccountInfo(ata).catch(() => null));
+            accountCache.set(ata, exists);
+          }
+          if (exists) {
+            removed.push(ata);
+            continue;
+          }
+        }
+      }
+      filtered.push(ix);
+    }
+
+    if (!removed.length) {
+      sanitized.push(base64);
+      continue;
+    }
+
+    tx.message.compiledInstructions = filtered;
+    const next = Buffer.from(tx.serialize()).toString('base64');
+    const after = gmtradeTxSummary(next);
+    diagnostics.push({
+      changed: true,
+      removed_existing_ata_create_instructions: removed.length,
+      removed_existing_ata_accounts: removed,
+      before,
+      after,
+    });
+    console.info('[gmtrade] removed existing ATA CreateIdempotent instructions', {
+      removed_existing_ata_create_instructions: removed.length,
+      before,
+      after,
+    });
+    sanitized.push(next);
+  }
+
+  return { transactions: sanitized, diagnostics };
+}
+
+function removeComputeBudgetInstructions(transactions, existingDiagnostics = []) {
+  if (!GMTRADE_REMOVE_COMPUTE_BUDGET_INSTRUCTIONS) {
+    return { transactions, diagnostics: existingDiagnostics };
+  }
+  const diagnostics = Array.isArray(existingDiagnostics) ? [...existingDiagnostics] : [];
+  const sanitized = [];
+
+  for (const base64 of Array.isArray(transactions) ? transactions : []) {
+    let tx;
+    try {
+      tx = VersionedTransaction.deserialize(Buffer.from(String(base64 || ''), 'base64'));
+    } catch {
+      sanitized.push(base64);
+      continue;
+    }
+
+    const before = gmtradeTxSummary(base64);
+    const keys = tx.message?.staticAccountKeys || [];
+    const filtered = [];
+    let removed = 0;
+
+    for (const ix of tx.message?.compiledInstructions || []) {
+      const program = keys[ix.programIdIndex]?.toBase58?.() || '';
+      if (program === 'ComputeBudget111111111111111111111111111111') {
+        removed += 1;
+        continue;
+      }
+      filtered.push(ix);
+    }
+
+    if (!removed) {
+      sanitized.push(base64);
+      continue;
+    }
+
+    tx.message.compiledInstructions = filtered;
+    const next = Buffer.from(tx.serialize()).toString('base64');
+    const after = gmtradeTxSummary(next);
+    diagnostics.push({
+      changed: true,
+      removed_compute_budget_instructions: removed,
+      note: 'Removed GMTrade SDK compute budget instructions so Phantom can apply its own wallet-side priority-fee preview.',
+      before,
+      after,
+    });
+    console.info('[gmtrade] removed ComputeBudget instructions', {
+      removed_compute_budget_instructions: removed,
+      before,
+      after,
+    });
+    sanitized.push(next);
+  }
+
+  return { transactions: sanitized, diagnostics };
+}
+
+function legacyAccountMeta(index, accountCount, header) {
+  const requiredSignatures = Number(header?.numRequiredSignatures || 0);
+  const readonlySigned = Number(header?.numReadonlySignedAccounts || 0);
+  const readonlyUnsigned = Number(header?.numReadonlyUnsignedAccounts || 0);
+  const isSigner = index < requiredSignatures;
+  const signedWritableCount = Math.max(0, requiredSignatures - readonlySigned);
+  const unsignedWritableEnd = Math.max(requiredSignatures, accountCount - readonlyUnsigned);
+  const isWritable = isSigner
+    ? index < signedWritableCount
+    : index >= requiredSignatures && index < unsignedWritableEnd;
+  return { isSigner, isWritable };
+}
+
+function convertVersionedNoLookupToLegacy(base64) {
+  const before = gmtradeTxSummary(base64);
+  let vtx;
+  try {
+    vtx = VersionedTransaction.deserialize(Buffer.from(String(base64 || ''), 'base64'));
+  } catch {
+    return {
+      base64,
+      changed: false,
+      reason: 'not_versioned',
+      before,
+      after: before,
+    };
+  }
+
+  const lookups = vtx.message?.addressTableLookups || [];
+  if (lookups.length) {
+    return {
+      base64,
+      changed: false,
+      reason: 'has_address_lookup_tables',
+      address_lookup_tables: lookups.length,
+      before,
+      after: before,
+    };
+  }
+
+  const keys = vtx.message?.staticAccountKeys || [];
+  const header = vtx.message?.header || {};
+  if (!keys.length || !vtx.message?.recentBlockhash) {
+    return {
+      base64,
+      changed: false,
+      reason: 'missing_message_fields',
+      before,
+      after: before,
+    };
+  }
+
+  const tx = new Transaction({
+    feePayer: keys[0],
+    recentBlockhash: vtx.message.recentBlockhash,
+  });
+  for (const ix of vtx.message?.compiledInstructions || []) {
+    const programId = keys[ix.programIdIndex];
+    if (!programId) {
+      return {
+        base64,
+        changed: false,
+        reason: 'invalid_program_index',
+        before,
+        after: before,
+      };
+    }
+    const accountIndexes = Array.from(ix.accountKeyIndexes || []);
+    tx.add(new TransactionInstruction({
+      programId,
+      keys: accountIndexes.map((index) => ({
+        pubkey: keys[index],
+        ...legacyAccountMeta(index, keys.length, header),
+      })),
+      data: Buffer.from(ix.data || []),
+    }));
+  }
+
+  const raw = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+  if (raw.length > 1232) {
+    return {
+      base64,
+      changed: false,
+      reason: 'legacy_would_exceed_solana_size_limit',
+      legacy_bytes: raw.length,
+      before,
+      after: before,
+    };
+  }
+  const next = Buffer.from(raw).toString('base64');
+  return {
+    base64: next,
+    changed: true,
+    reason: 'converted_no_lut_v0_to_legacy',
+    before,
+    after: gmtradeTxSummary(next),
+  };
+}
+
+function convertNoLookupVersionedTransactionsToLegacy(transactions, existingDiagnostics = []) {
+  if (!GMTRADE_CONVERT_NO_LUT_V0_TO_LEGACY) {
+    return { transactions, diagnostics: existingDiagnostics };
+  }
+  const diagnostics = Array.isArray(existingDiagnostics) ? [...existingDiagnostics] : [];
+  const converted = [];
+  for (const base64 of Array.isArray(transactions) ? transactions : []) {
+    const row = convertVersionedNoLookupToLegacy(base64);
+    converted.push(row.base64);
+    diagnostics.push({
+      changed: row.changed,
+      converted_no_lut_v0_to_legacy: row.changed,
+      reason: row.reason,
+      address_lookup_tables: row.address_lookup_tables || 0,
+      legacy_bytes: row.legacy_bytes || null,
+      before: row.before,
+      after: row.after,
+    });
+    if (row.changed) {
+      console.info('[gmtrade] converted no-LUT v0 transaction to legacy', {
+        before: row.before,
+        after: row.after,
+      });
+    }
+  }
+  return { transactions: converted, diagnostics };
+}
+
+function isGmtradeSetupInstruction(program, dataHex) {
+  return (
+    (program === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL' && dataHex === '01')
+    || (GMTRADE_PROGRAM_IDS.includes(program) && dataHex === 'bead8fc18b50e785')
+    || (GMTRADE_PROGRAM_IDS.includes(program) && dataHex.startsWith('b2d7375a890f6c0f'))
+  );
+}
+
+function extractGmtradeSetupTransactions(transactions) {
+  const setupTransactions = [];
+  const diagnostics = [];
+  for (const base64 of Array.isArray(transactions) ? transactions : []) {
+    try {
+      const tx = Transaction.from(Buffer.from(String(base64 || ''), 'base64'));
+      const setupTx = new Transaction({
+        feePayer: tx.feePayer,
+        recentBlockhash: tx.recentBlockhash,
+      });
+      const setupKinds = [];
+      for (const ix of tx.instructions || []) {
+        const program = ix?.programId?.toBase58?.() || '';
+        const dataHex = Buffer.from(ix?.data || []).toString('hex');
+        if (!isGmtradeSetupInstruction(program, dataHex)) continue;
+        setupTx.add(ix);
+        setupKinds.push(
+          program === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'
+            ? 'ata'
+            : dataHex === 'bead8fc18b50e785'
+              ? 'user'
+              : 'position',
+        );
+      }
+      if (!setupKinds.length) continue;
+      const serialized = setupTx.serialize({
+        requireAllSignatures: false,
+        verifySignatures: false,
+      });
+      setupTransactions.push(serialized.toString('base64'));
+      diagnostics.push({
+        kind: 'legacy_setup_extract',
+        setup_instruction_count: setupKinds.length,
+        setup_kinds: Array.from(new Set(setupKinds)),
+        original: gmtradeTxSummary(base64),
+        setup: gmtradeTxSummary(serialized.toString('base64')),
+      });
+    } catch (legacyError) {
+      diagnostics.push({
+        kind: 'setup_extract_skipped',
+        reason: legacyError?.message || String(legacyError),
+        original: gmtradeTxSummary(base64),
+      });
+    }
+  }
+  return { transactions: setupTransactions, diagnostics };
+}
+
 async function buildCreateOrderTx(body = {}, playerWallet = '') {
   const payer = String(body.wallet || body.address || playerWallet || '').trim();
   if (!isSolanaAddress(payer)) {
@@ -1968,7 +2386,7 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
   if (!isDecrease && GMTRADE_MIN_POSITION_USD > 0 && notional < GMTRADE_MIN_POSITION_USD) {
     throw Object.assign(new Error(`GMTrade minimum position size is $${GMTRADE_MIN_POSITION_USD}. Yours: $${notional.toFixed(4)}. Increase margin or leverage.`), { status: 400 });
   }
-  if (!isDecrease && collateralToken === GMTRADE_DEFAULT_COLLATERAL_MINT) {
+  if (!isDecrease && collateralToken === GMTRADE_DEFAULT_COLLATERAL_MINT && !GMTRADE_SKIP_WALLET_USDC_PREFLIGHT) {
     try {
       const walletUsdc = await getWalletUsdcBalance(payer);
       if (Number.isFinite(walletUsdc) && walletUsdc + 0.000001 < margin) {
@@ -2030,10 +2448,11 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     blockhash = latest.blockhash;
     lastValidBlockHeight = latest.lastValidBlockHeight;
   }
+  const orderNonce = gmtradeOrderNonce(body.order_nonce || body.orderNonce || body.nonce);
   const rustPayload = {
     payer,
     recent_blockhash: blockhash,
-    nonce: randomNonce(),
+    nonce: orderNonce,
     kind,
     market_token: marketToken,
     long_token: longToken,
@@ -2064,7 +2483,12 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
       omit_prepare_position: setupHints.position_exists,
       setup_hints: setupHints,
     };
-    const sanitized = sanitizeGmtradeTransactions(built.transactions || [], sanitizerOptions);
+    const baseSanitized = sanitizeGmtradeTransactions(built.transactions || [], sanitizerOptions);
+    const existingAtaSanitized = await removeExistingAtaCreateInstructions(baseSanitized.transactions, baseSanitized.diagnostics);
+    const computeBudgetSanitized = removeComputeBudgetInstructions(existingAtaSanitized.transactions, existingAtaSanitized.diagnostics);
+    const rentDiagnostics = await gmtradeRentDiagnosticsFromTransactions(computeBudgetSanitized.transactions);
+    const walletTransactions = convertNoLookupVersionedTransactionsToLegacy(computeBudgetSanitized.transactions, computeBudgetSanitized.diagnostics);
+    const setupTransactions = extractGmtradeSetupTransactions(walletTransactions.transactions);
     return {
       ok: true,
       dex: 'gmtrade',
@@ -2080,9 +2504,14 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
       notional_usd: notional,
       recent_blockhash: blockhash,
       last_valid_block_height: lastValidBlockHeight,
-      transactions: sanitized.transactions,
-      tx_sanitizer: sanitized.diagnostics,
+      order_nonce: orderNonce,
+      transactions: walletTransactions.transactions,
+      tx_sanitizer: walletTransactions.diagnostics,
       setup_hints: setupHints,
+      rent_diagnostics: rentDiagnostics,
+      setup_transactions: setupTransactions.transactions,
+      setup_tx_diagnostics: setupTransactions.diagnostics,
+      setup_required: Number(rentDiagnostics?.missing_setup_accounts || 0) > 0,
       builder: 'rust_gmsol_sdk',
       memo_enabled: Boolean(GMTRADE_TX_MEMO),
     };
@@ -2101,6 +2530,9 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
       collateral_or_swap_out_token: collateralToken,
       pay_token: payToken,
       receive_token: receiveToken,
+      skip_wrap_native_on_pay: true,
+      skip_unwrap_native_on_receive: false,
+      force_create_positions: !isDecrease,
       hints,
       transaction_group: {
         memo: GMTRADE_TX_MEMO || undefined,
@@ -2129,7 +2561,12 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     omit_prepare_position: setupHints.position_exists,
     setup_hints: setupHints,
   };
-  const sanitized = sanitizeGmtradeTransactions(transactions, sanitizerOptions);
+  const baseSanitized = sanitizeGmtradeTransactions(transactions, sanitizerOptions);
+  const existingAtaSanitized = await removeExistingAtaCreateInstructions(baseSanitized.transactions, baseSanitized.diagnostics);
+  const computeBudgetSanitized = removeComputeBudgetInstructions(existingAtaSanitized.transactions, existingAtaSanitized.diagnostics);
+  const rentDiagnostics = await gmtradeRentDiagnosticsFromTransactions(computeBudgetSanitized.transactions);
+  const walletTransactions = convertNoLookupVersionedTransactionsToLegacy(computeBudgetSanitized.transactions, computeBudgetSanitized.diagnostics);
+  const setupTransactions = extractGmtradeSetupTransactions(walletTransactions.transactions);
   return {
     ok: true,
     dex: 'gmtrade',
@@ -2145,9 +2582,14 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     notional_usd: notional,
     recent_blockhash: blockhash,
     last_valid_block_height: lastValidBlockHeight,
-    transactions: sanitized.transactions,
-    tx_sanitizer: sanitized.diagnostics,
+    order_nonce: orderNonce,
+    transactions: walletTransactions.transactions,
+    tx_sanitizer: walletTransactions.diagnostics,
     setup_hints: setupHints,
+    rent_diagnostics: rentDiagnostics,
+    setup_transactions: setupTransactions.transactions,
+    setup_tx_diagnostics: setupTransactions.diagnostics,
+    setup_required: Number(rentDiagnostics?.missing_setup_accounts || 0) > 0,
     builder: 'node_wasm_gmsol_sdk',
     memo_enabled: Boolean(GMTRADE_TX_MEMO),
   };
@@ -2437,10 +2879,27 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
   const signature = String(body.tx_hash || body.signature || '').trim();
   const requestedAmount = Number(body.amount);
   const requestedLeverage = Number(body.leverage || 1);
+  const requestedNotional = Number.isFinite(requestedAmount) && requestedAmount > 0
+    ? requestedAmount * (Number.isFinite(requestedLeverage) && requestedLeverage > 0 ? requestedLeverage : 1)
+    : null;
   const tx = await verifySolanaSignature({ signature, wallet });
-  const tradeEvent = tx.walletEvents
+  let tradeEvent = tx.walletEvents
     .filter(ev => Number(ev?.size_delta_usd) > 0)
     .sort((a, b) => Number(b.size_delta_usd) - Number(a.size_delta_usd))[0] || null;
+  if (tradeEvent && requestedNotional && requestedNotional > 0) {
+    const eventNotional = Number(tradeEvent.size_delta_usd);
+    const drift = Math.abs(eventNotional - requestedNotional) / Math.max(requestedNotional, 1);
+    if (!Number.isFinite(eventNotional) || eventNotional <= 0 || drift > 0.5) {
+      console.warn('[gmtrade] ignoring implausible decoded trade event:', JSON.stringify({
+        signature,
+        wallet: wallet.replace(/^(.{6}).+(.{4})$/u, '$1...$2'),
+        event_notional: eventNotional,
+        requested_notional: requestedNotional,
+        drift,
+      }));
+      tradeEvent = null;
+    }
+  }
   let verifiedPosition = null;
   if (!tradeEvent) {
     for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -2453,6 +2912,15 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
     }
   }
   if (!tradeEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS) {
+    if (typeof db?.upsertGmtradePendingReport === 'function') {
+      db.upsertGmtradePendingReport({
+        signature,
+        playerId,
+        wallet,
+        body: { ...body, wallet, signature, tx_hash: signature },
+        reason: 'confirmed_tx_without_indexed_fill',
+      });
+    }
     return {
       changes: 0,
       signature,
@@ -2510,7 +2978,71 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
       account_keys: tx.accountKeys.slice(0, 32),
     }),
   });
+  if (result?.changes > 0 && typeof db?.markGmtradePendingReport === 'function') {
+    db.markGmtradePendingReport(signature, 'imported', null);
+  } else if (!result?.changes && typeof db?.getTradeByClientOrderId === 'function') {
+    const existing = db.getTradeByClientOrderId(`gmtrade:${signature}`);
+    if (existing && typeof db?.markGmtradePendingReport === 'function') {
+      db.markGmtradePendingReport(signature, 'imported', 'already_imported');
+    }
+  }
   return { ...result, signature, notional_usd: notional };
+}
+
+async function reconcilePendingTradeReportsForPlayer(db, playerId, options = {}) {
+  if (!db || typeof db.getGmtradePendingReports !== 'function') {
+    return { ok: false, imported: 0, pending: 0, skipped: 0, reason: 'pending_store_unavailable' };
+  }
+  const limit = Math.max(1, Math.min(100, Number(options.limit) || 25));
+  const rows = db.getGmtradePendingReports(playerId, limit);
+  let imported = 0;
+  let pending = 0;
+  let skipped = 0;
+  for (const row of rows) {
+    let body = null;
+    try {
+      body = JSON.parse(row.body_json || '{}');
+    } catch {
+      body = null;
+    }
+    if (!body || typeof body !== 'object') {
+      skipped += 1;
+      if (typeof db.markGmtradePendingReport === 'function') {
+        db.markGmtradePendingReport(row.signature, 'failed', 'bad_pending_body');
+      }
+      continue;
+    }
+    const sig = String(body.signature || body.tx_hash || row.signature || '').trim();
+    if (typeof db.getTradeByClientOrderId === 'function') {
+      const existing = db.getTradeByClientOrderId(`gmtrade:${sig}`);
+      if (existing) {
+        imported += 1;
+        if (typeof db.markGmtradePendingReport === 'function') {
+          db.markGmtradePendingReport(sig, 'imported', 'already_imported');
+        }
+        continue;
+      }
+    }
+    try {
+      const result = await recordTradeReport(db, playerId, { ...body, tx_hash: sig, signature: sig }, row.wallet || body.wallet || '');
+      if (result?.changes > 0) {
+        imported += 1;
+      } else if (result?.pending) {
+        pending += 1;
+        if (typeof db.markGmtradePendingReport === 'function') {
+          db.markGmtradePendingReport(sig, 'pending', result.warning || 'still_pending');
+        }
+      } else {
+        skipped += 1;
+      }
+    } catch (e) {
+      pending += 1;
+      if (typeof db.markGmtradePendingReport === 'function') {
+        db.markGmtradePendingReport(sig, 'pending', e?.message || String(e));
+      }
+    }
+  }
+  return { ok: true, total: rows.length, imported, pending, skipped };
 }
 
 module.exports = {
@@ -2550,6 +3082,13 @@ module.exports = {
       && (configuredMarketSymbols().length > 0 || DEFAULT_GMTRADE_MARKET_TOKENS.length > 0),
     rust_builder_bin: rustBuilderAvailable() ? GMTRADE_RUST_BUILDER_BIN : null,
     configured_markets: configuredMarketSymbols(),
+    tx_sanitizer: {
+      dedupe_ata_instructions: GMTRADE_DEDUPE_ATA_INSTRUCTIONS,
+      remove_existing_ata_instructions: GMTRADE_REMOVE_EXISTING_ATA_INSTRUCTIONS,
+      remove_compute_budget_instructions: GMTRADE_REMOVE_COMPUTE_BUDGET_INSTRUCTIONS,
+      omit_existing_setup_instructions: GMTRADE_OMIT_EXISTING_SETUP_INSTRUCTIONS,
+      convert_no_lut_v0_to_legacy: GMTRADE_CONVERT_NO_LUT_V0_TO_LEGACY,
+    },
   }),
   buildCancelOrderTx,
   buildCreateOrderTx,
@@ -2565,6 +3104,7 @@ module.exports = {
   getUserReferralByAddress,
   isSolanaAddress,
   recordTradeReport,
+  reconcilePendingTradeReportsForPlayer,
   referralUrl,
   _internal: {
     decodeGmtradeTradeEvent,

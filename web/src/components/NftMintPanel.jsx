@@ -28,11 +28,11 @@ import NftMarketplacePanel from './CustodialMarketplacePanel';
 import altarImg from '../assets/units/altar.png';
 
 const demonKingImg = '/cdn/nft/1/default.jpg';
-const SHOW_NFT_MINT_TAB = false;
-const SALE_NFT_PUBLIC_REVEAL = false;
-const SALE_NFT_NAME = '???';
-const SALE_NFT_IMG = null;
-const SALE_NFT_DISPLAY_SUPPLY_CAP = 555;
+const SHOW_NFT_MINT_TAB = true;
+const SALE_NFT_PUBLIC_REVEAL = true;
+const SALE_NFT_NAME = 'Succubus';
+const SALE_NFT_IMG = '/cdn/nft/succubus/1/default.png';
+const SALE_NFT_DISPLAY_SUPPLY_CAP = 333;
 const SALE_NFT_MINT_SOLD_OUT = false;
 const SALE_NFT_MINT_LOCKED = !SALE_NFT_PUBLIC_REVEAL;
 const nftBasePublicClient = createPublicClient({ chain: base, transport: http(BASE_PRIMARY_RPC_URL) });
@@ -117,40 +117,43 @@ const GAME_RESOURCE_PRODUCT_PRIORITY = {
 
 const CHAIN_OPTIONS = [
   { id: 'base', title: 'Base', subtitle: 'ETH / USDC', badge: 'EVM' },
+  { id: 'arbitrum', title: 'Arbitrum', subtitle: 'ETH / USDC', badge: 'EVM' },
+  { id: 'monad', title: 'Monad', subtitle: 'MON / USDC', badge: 'EVM' },
   { id: 'ink', title: 'Ink', subtitle: 'ETH / USDC', badge: 'EVM' },
   { id: 'solana', title: 'Solana', subtitle: 'SOL / USDC / SKR', badge: 'SOL' },
+  { id: 'aptos', title: 'Aptos', subtitle: 'APT / USDC', badge: 'APT' },
 ];
 
 const PAYMENT_OPTIONS = {
   base: [
-    { id: 'base-eth', chain: 'base', method: 'ETH', price: '$5.50', token: 'ETH' },
-    { id: 'base-usdc', chain: 'base', method: 'USDC', price: '$5.50', token: 'USDC' },
+    { id: 'base-eth', chain: 'base', method: 'ETH', price: '$8.90', token: 'ETH' },
+    { id: 'base-usdc', chain: 'base', method: 'USDC', price: '$8.90', token: 'USDC' },
   ],
   solana: [
-    { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$5.50', token: 'USDC' },
-    { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '$5.50', token: 'SOL' },
-    { id: 'sol-clash', chain: 'solana', method: 'CLASH', price: '$4.00', token: 'CLASH', requiresClash: true },
-    { id: 'sol-skr', chain: 'solana', method: 'SKR', price: '$5.00', token: 'SKR', requiresSkr: true },
+    { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '$8.90', token: 'SOL' },
+    { id: 'sol-clash', chain: 'solana', method: 'CLASH', price: '$5.00', token: 'CLASH', requiresClash: true },
+    { id: 'sol-skr', chain: 'solana', method: 'SKR', price: '$7.90', token: 'SKR', requiresSkr: true },
   ],
   // Arbitrum + Monad shops are deployed and saleActive — direct mint with
   // USDC or the chain's native token works via the server's /nft/evm/quote
   // endpoint. Aptos mirrors that shape with USDC/APT quotes signed by the
   // server and submitted through the Aptos wallet adapter.
   arbitrum: [
-    { id: 'arb-usdc', chain: 'arbitrum', method: 'USDC', price: '$5.50', token: 'USDC' },
-    { id: 'arb-eth',  chain: 'arbitrum', method: 'ETH',  price: '$5.50', token: 'ETH' },
+    { id: 'arb-usdc', chain: 'arbitrum', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'arb-eth',  chain: 'arbitrum', method: 'ETH',  price: '$8.90', token: 'ETH' },
   ],
   monad: [
-    { id: 'monad-usdc', chain: 'monad', method: 'USDC', price: '$5.50', token: 'USDC' },
-    { id: 'monad-mon',  chain: 'monad', method: 'MON',  price: '$5.50', token: 'MON' },
+    { id: 'monad-usdc', chain: 'monad', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'monad-mon',  chain: 'monad', method: 'MON',  price: '$8.90', token: 'MON' },
   ],
   ink: [
-    { id: 'ink-usdc', chain: 'ink', method: 'USDC', price: '$5.50', token: 'USDC' },
-    { id: 'ink-eth',  chain: 'ink', method: 'ETH',  price: '$5.50', token: 'ETH' },
+    { id: 'ink-usdc', chain: 'ink', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'ink-eth',  chain: 'ink', method: 'ETH',  price: '$8.90', token: 'ETH' },
   ],
   aptos: [
-    { id: 'aptos-usdc', chain: 'aptos', method: 'USDC', price: '$5.50', token: 'USDC' },
-    { id: 'aptos-apt',  chain: 'aptos', method: 'APT',  price: '$5.50', token: 'APT' },
+    { id: 'aptos-usdc', chain: 'aptos', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'aptos-apt',  chain: 'aptos', method: 'APT',  price: '$8.90', token: 'APT' },
   ],
 };
 

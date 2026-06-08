@@ -7,6 +7,7 @@ process.env.GMTRADE_MARKETS_JSON = JSON.stringify({
     collateral_decimals: 6,
   },
 });
+process.env.GMTRADE_SKIP_WALLET_USDC_PREFLIGHT = '1';
 
 const assert = require('assert');
 const { Keypair, Transaction, VersionedTransaction } = require('@solana/web3.js');
@@ -63,7 +64,7 @@ async function main() {
   assert.equal(built.builder, 'node_wasm_gmsol_sdk');
   assert.equal(built.transactions.length > 0, true);
   const decoded = decodeBuiltTransaction(built.transactions[0]);
-  assert.equal(decoded.kind, 'versioned');
+  assert.equal(decoded.kind, 'legacy');
   assert.equal(decoded.tx.signatures.length > 0, true);
 
   console.log(JSON.stringify({

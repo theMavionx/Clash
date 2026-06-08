@@ -12,18 +12,26 @@ const { keypairFromSecret } = require('./pacifica');
 // ---------- Constants ----------
 
 function configuredSolanaRpcUrl() {
-  const alchemyKey = String(process.env.SOLANA_ALCHEMY_API_KEY || process.env.ALCHEMY_SOLANA_API_KEY || '').trim();
+  const alchemyKey = String(
+    process.env.SOLANA_ALCHEMY_API_KEY
+    || process.env.ALCHEMY_SOLANA_API_KEY
+    || process.env.VITE_SOLANA_ALCHEMY_API_KEY
+    || process.env.VITE_ALCHEMY_SOLANA_API_KEY
+    || '',
+  ).trim();
   if (alchemyKey) return `https://solana-mainnet.g.alchemy.com/v2/${encodeURIComponent(alchemyKey)}`;
 
   const heliusKey = String(
     process.env.SOLANA_HELIUS_API_KEY
     || process.env.HELIUS_API_KEY
     || process.env.NFT_SOLANA_HELIUS_API_KEY
+    || process.env.VITE_SOLANA_HELIUS_API_KEY
+    || process.env.VITE_HELIUS_API_KEY
     || '',
   ).trim();
   if (heliusKey) return `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusKey)}`;
 
-  const rpcUrl = String(process.env.SOLANA_RPC_URL || process.env.NFT_SOLANA_RPC_URL || '').trim();
+  const rpcUrl = String(process.env.SOLANA_RPC_URL || process.env.NFT_SOLANA_RPC_URL || process.env.VITE_SOLANA_RPC_URL || '').trim();
   if (/^https?:\/\//i.test(rpcUrl)) {
     try {
       const host = new URL(rpcUrl).hostname;

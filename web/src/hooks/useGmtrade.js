@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction, TransactionInstruction, VersionedTransaction } from '@solana/web3.js';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { createReconnectingJsonWebSocket } from '../lib/reconnectingWebSocket';
 import { createSolanaConnection, selectFreshSolanaRpcUrl, SOLANA_RPC_URLS, solanaRpcHost } from '../lib/solanaRpc';
+import { sendSolanaTransactionWithRetry } from '../lib/solanaTx';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -14,6 +15,8 @@ const WALLET_USDC_RPC_TIMEOUT_MS = 2_500;
 const GMTRADE_REFERRAL_URL = 'https://gmtrade.xyz/referrals/?ref=gamingperps';
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const HEX_CHARS = '0123456789abcdef';
+const GMTRADE_TX_MODE_KEY = 'clash:gmtrade:tx_mode';
 
 function playerToken(player) {
   return player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
@@ -67,12 +70,38 @@ function normalizeSymbol(value) {
     .trim();
 }
 
+function gmtradeTxMode() {
+  const envMode = String(import.meta.env.VITE_GMTRADE_TX_MODE || '').trim().toLowerCase();
+  let storedMode = '';
+  try {
+    storedMode = String(window?.localStorage?.getItem(GMTRADE_TX_MODE_KEY) || '').trim().toLowerCase();
+  } catch {}
+  const mode = storedMode || envMode;
+  if (mode === 'server' || mode === 'sdk' || mode === 'original') return 'server';
+  if (mode === 'raw' || mode === 'sign_raw' || mode === 'sign-raw') return 'raw';
+  if (mode === 'priority' || mode === 'phoenix_fee' || mode === 'phoenix-fee') return 'priority';
+  return 'rebuilt';
+}
+
 function base64ToBytes(value) {
   const text = String(value || '');
   if (typeof atob === 'function') {
     return Uint8Array.from(atob(text), c => c.charCodeAt(0));
   }
-  return Uint8Array.from(Buffer.from(text, 'base64'));
+  return Uint8Array.from([]);
+}
+
+function bytesToHex(value) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value || []);
+  let out = '';
+  for (const byte of bytes) {
+    out += HEX_CHARS[(byte >> 4) & 0xf] + HEX_CHARS[byte & 0xf];
+  }
+  return out;
+}
+
+function bytesLength(value) {
+  return value?.byteLength ?? value?.length ?? 0;
 }
 
 function decodeTransaction(base64) {
@@ -82,6 +111,63 @@ function decodeTransaction(base64) {
   } catch {
     return VersionedTransaction.deserialize(bytes);
   }
+}
+
+function decodedTransactionInstructions(tx) {
+  if (tx instanceof Transaction) {
+    return (tx.instructions || []).map(ix => new TransactionInstruction({
+      programId: ix.programId,
+      keys: (ix.keys || []).map(key => ({
+        pubkey: key.pubkey,
+        isSigner: !!key.isSigner,
+        isWritable: !!key.isWritable,
+      })),
+      data: new Uint8Array(ix.data || []),
+    }));
+  }
+  const keys = tx?.message?.staticAccountKeys || [];
+  const header = tx?.message?.header || {};
+  const signedEnd = Number(header.numRequiredSignatures || 0);
+  const signedWritableEnd = signedEnd - Number(header.numReadonlySignedAccounts || 0);
+  const unsignedWritableEnd = keys.length - Number(header.numReadonlyUnsignedAccounts || 0);
+  return (tx?.message?.compiledInstructions || []).map((ix) => {
+    const indexes = Array.from(ix.accountKeyIndexes || []);
+    return new TransactionInstruction({
+      programId: keys[ix.programIdIndex],
+      keys: indexes.map(index => ({
+        pubkey: keys[index],
+        isSigner: index < signedEnd,
+        isWritable: index < signedWritableEnd || (index >= signedEnd && index < unsignedWritableEnd),
+      })),
+      data: new Uint8Array(ix.data || []),
+    });
+  });
+}
+
+function demoteDuplicateSignerMetas(instructions) {
+  return (Array.isArray(instructions) ? instructions : []).map((ix) => {
+    const seenSigners = new Set();
+    let changed = false;
+    const keys = (ix.keys || []).map((key) => {
+      const pubkey = key?.pubkey?.toBase58?.() || String(key?.pubkey || '');
+      if (!key?.isSigner || !pubkey) return key;
+      if (!seenSigners.has(pubkey)) {
+        seenSigners.add(pubkey);
+        return key;
+      }
+      changed = true;
+      return {
+        ...key,
+        isSigner: false,
+      };
+    });
+    if (!changed) return ix;
+    return new TransactionInstruction({
+      programId: ix.programId,
+      keys,
+      data: new Uint8Array(ix.data || []),
+    });
+  });
 }
 
 function isBlockhashExpiredError(error) {
@@ -190,6 +276,184 @@ function summarizeTransactionPrograms(tx) {
   }
 }
 
+function txPreWalletAudit(tx, expectedWallet = '') {
+  const expected = String(expectedWallet || '').trim();
+  try {
+    if (tx instanceof VersionedTransaction) {
+      const rawBytes = bytesLength(tx.serialize());
+      const keys = tx.message?.staticAccountKeys || [];
+      const required = Number(tx.message?.header?.numRequiredSignatures || 0);
+      const feePayer = keys[0]?.toBase58?.() || '';
+      const signerKeys = keys.slice(0, required).map(key => key?.toBase58?.() || '').filter(Boolean);
+      const programs = [];
+      const gmtradeInstructions = [];
+      const associatedTokenCreates = [];
+      let ataCreateIdempotent = 0;
+      for (const ix of tx.message?.compiledInstructions || []) {
+        const program = keys[ix.programIdIndex]?.toBase58?.() || '';
+        const dataHex = bytesToHex(ix.data || []);
+        const indexes = Array.from(ix.accountKeyIndexes || []);
+        programs.push(program);
+        if (program === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL' && dataHex === '01') {
+          ataCreateIdempotent += 1;
+          associatedTokenCreates.push({
+            payer: keys[indexes[0]]?.toBase58?.() || '',
+            ata: keys[indexes[1]]?.toBase58?.() || '',
+            owner: keys[indexes[2]]?.toBase58?.() || '',
+            mint: keys[indexes[3]]?.toBase58?.() || '',
+          });
+        }
+        if (program === 'Gmso1uvJnLbawvw7yezdfCDcPydwW2s2iqG3w6MDucLo') {
+          gmtradeInstructions.push(
+            dataHex === 'bead8fc18b50e785'
+              ? 'prepare_user'
+              : dataHex.startsWith('b2d7375a890f6c0f')
+                ? 'prepare_position'
+                : dataHex.startsWith('c89d03b603a4a2f0')
+                  ? 'create_order_v2'
+                  : dataHex.slice(0, 16),
+          );
+        }
+      }
+      return {
+        ok: required === 1 && (!expected || feePayer === expected) && (!expected || signerKeys.every(key => key === expected)),
+        kind: 'versioned',
+        raw_bytes: rawBytes,
+        required_signatures: required,
+        fee_payer: feePayer,
+        expected_wallet: expected,
+        signer_keys: signerKeys,
+        fee_payer_matches_wallet: !expected || feePayer === expected,
+        signer_matches_wallet: !expected || signerKeys.every(key => key === expected),
+        account_key_count: keys.length,
+        instruction_count: tx.message?.compiledInstructions?.length || 0,
+        ata_create_idempotent_instructions: ataCreateIdempotent,
+        associated_token_creates: associatedTokenCreates,
+        gmtrade_instructions: gmtradeInstructions,
+        phantom_risk_shape: {
+          near_solana_size_limit: rawBytes > 1100,
+          one_signer: required === 1,
+          creates_associated_token_accounts: ataCreateIdempotent > 0,
+          includes_prepare_position: gmtradeInstructions.includes('prepare_position'),
+          includes_create_order: gmtradeInstructions.includes('create_order_v2'),
+        },
+        programs,
+      };
+    }
+    const rawBytes = bytesLength(tx.serialize({ requireAllSignatures: false, verifySignatures: false }));
+    const feePayer = tx.feePayer?.toBase58?.() || '';
+    const signerKeys = (tx.signatures || []).map(row => row?.publicKey?.toBase58?.() || '').filter(Boolean);
+    const legacyPrograms = (tx.instructions || []).map(ix => ix?.programId?.toBase58?.() || '');
+    const computeBudgetInstructions = legacyPrograms.filter(program => program === 'ComputeBudget111111111111111111111111111111').length;
+    const associatedTokenCreates = [];
+    const gmtradeInstructions = [];
+    const duplicateSignerMetas = [];
+    for (const ix of tx.instructions || []) {
+      const program = ix?.programId?.toBase58?.() || '';
+      const dataHex = bytesToHex(ix.data || []);
+      const seenSigners = new Set();
+      for (const [accountIndex, key] of (ix.keys || []).entries()) {
+        if (!key?.isSigner || !key?.pubkey) continue;
+        const pubkey = key.pubkey.toBase58();
+        if (seenSigners.has(pubkey)) {
+          duplicateSignerMetas.push({
+            instruction_index: (tx.instructions || []).indexOf(ix),
+            account_index: accountIndex,
+            pubkey,
+          });
+        } else {
+          seenSigners.add(pubkey);
+        }
+      }
+      if (program === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL' && dataHex === '01') {
+        associatedTokenCreates.push({
+          payer: ix.keys?.[0]?.pubkey?.toBase58?.() || '',
+          ata: ix.keys?.[1]?.pubkey?.toBase58?.() || '',
+          owner: ix.keys?.[2]?.pubkey?.toBase58?.() || '',
+          mint: ix.keys?.[3]?.pubkey?.toBase58?.() || '',
+        });
+      }
+      if (program !== 'Gmso1uvJnLbawvw7yezdfCDcPydwW2s2iqG3w6MDucLo') continue;
+      gmtradeInstructions.push(
+        dataHex === 'bead8fc18b50e785'
+          ? 'prepare_user'
+          : dataHex.startsWith('b2d7375a890f6c0f')
+            ? 'prepare_position'
+            : dataHex.startsWith('c89d03b603a4a2f0')
+              ? 'create_order_v2'
+              : dataHex.slice(0, 16),
+      );
+    }
+    return {
+      ok: signerKeys.length === 1 && (!expected || feePayer === expected) && (!expected || signerKeys.every(key => key === expected)),
+      kind: 'legacy',
+      raw_bytes: rawBytes,
+      required_signatures: signerKeys.length,
+      fee_payer: feePayer,
+      expected_wallet: expected,
+      signer_keys: signerKeys,
+      fee_payer_matches_wallet: !expected || feePayer === expected,
+      signer_matches_wallet: !expected || signerKeys.every(key => key === expected),
+      account_key_count: null,
+      instruction_count: tx.instructions?.length || 0,
+      ata_create_idempotent_instructions: tx.instructions?.filter(ix => (
+        ix?.programId?.toBase58?.() === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'
+        && bytesToHex(ix.data || []) === '01'
+      )).length || 0,
+      associated_token_creates: associatedTokenCreates,
+      gmtrade_instructions: gmtradeInstructions,
+      duplicate_signer_metas: duplicateSignerMetas,
+      phantom_risk_shape: {
+        near_solana_size_limit: rawBytes > 1100,
+        one_signer: signerKeys.length === 1,
+        duplicate_signer_metas: duplicateSignerMetas.length,
+        compute_budget_instructions: computeBudgetInstructions,
+        lets_wallet_apply_priority_fee_preview: computeBudgetInstructions === 0,
+        creates_associated_token_accounts: associatedTokenCreates.length > 0,
+        includes_prepare_position: gmtradeInstructions.includes('prepare_position'),
+        includes_create_order: gmtradeInstructions.includes('create_order_v2'),
+      },
+      programs: legacyPrograms,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e?.message || String(e),
+      expected_wallet: expected,
+    };
+  }
+}
+
+function randomGmtradeOrderNonce() {
+  const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const bytes = new Uint8Array(32);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  let digits = [0];
+  for (const byte of bytes) {
+    let carry = byte;
+    for (let i = 0; i < digits.length; i += 1) {
+      carry += digits[i] << 8;
+      digits[i] = carry % 58;
+      carry = Math.floor(carry / 58);
+    }
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = Math.floor(carry / 58);
+    }
+  }
+  let out = '';
+  for (const byte of bytes) {
+    if (byte === 0) out += '1';
+    else break;
+  }
+  for (let i = digits.length - 1; i >= 0; i -= 1) out += alphabet[digits[i]];
+  return out || '1';
+}
+
 function connectionRpcDiagnostics(connection) {
   const endpoint = connection?.rpcEndpoint || connection?._rpcEndpoint || '';
   return {
@@ -246,6 +510,9 @@ function simulationErrorMessage(value) {
   const logs = simulationLogs(value);
   const logText = logs.join('\n');
   const err = value?.err ? JSON.stringify(value.err) : '';
+  if (/market is closed/i.test(logText)) {
+    return 'GMTrade market is closed for this instrument. Try again when this market session is open, or trade a 24/7 crypto market.';
+  }
   if (/insufficient funds/i.test(logText)) return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
   return `GMTrade transaction simulation failed${err ? `: ${err}` : ''}`;
 }
@@ -258,6 +525,9 @@ function gmtradeUserError(error) {
   if (/insufficient gmtrade wallet usdc/i.test(message)) return message;
   if (/Tokenkeg|insufficient funds|custom program error:\s*0x1/i.test(message)) {
     return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
+  }
+  if (/market is closed|custom program error:\s*0x17ef|6127/i.test(message)) {
+    return 'GMTrade market is closed for this instrument. Try again when this market session is open, or trade a 24/7 crypto market.';
   }
   return message || 'GMTrade order failed';
 }
@@ -639,6 +909,7 @@ export function useGmtrade() {
     const decodedSummary = {
       tx: txMessageSummary(tx),
       tx_programs: summarizeTransactionPrograms(tx),
+      tx_audit: txPreWalletAudit(tx, walletAddr),
       rpc,
       build_recent_blockhash: meta?.recent_blockhash,
       build_last_valid_block_height: meta?.last_valid_block_height,
@@ -650,11 +921,20 @@ export function useGmtrade() {
       build_memo_enabled: meta?.memo_enabled === true,
       build_tx_sanitizer: meta?.tx_sanitizer || null,
       build_setup_hints: meta?.setup_hints || null,
+      build_rent_diagnostics: meta?.rent_diagnostics || null,
     };
     console.info('[GMTrade tx] decoded', { trace: traceLabel, attempt, ...decodedSummary });
     await gmtradeLog('tx_decoded', {
       ...decodedSummary,
     }, attempt, trace);
+    if (!decodedSummary.tx_audit?.ok) {
+      const auditError = new Error('GMTrade transaction signer audit failed before wallet signing');
+      auditError.audit = decodedSummary.tx_audit;
+      console.error('[GMTrade tx] signer audit failed', { trace: traceLabel, attempt, audit: decodedSummary.tx_audit });
+      await gmtradeLog('tx_audit_failed', { audit: decodedSummary.tx_audit }, attempt, trace);
+      throw auditError;
+    }
+    await gmtradeLog('tx_audit_ok', { audit: decodedSummary.tx_audit }, attempt, trace);
     try {
       const preSignStartedAt = Date.now();
       const preSignSimulation = await txConnection.simulateTransaction(tx, {
@@ -683,26 +963,192 @@ export function useGmtrade() {
       console.error('[GMTrade tx] pre-sign simulation exception', { trace: traceLabel, attempt, error: errorInfo(preSignSimulationError) });
       await gmtradeLog('pre_sign_simulation_exception', { rpc, error: errorInfo(preSignSimulationError) }, attempt, trace);
     }
-    if (typeof solWallet.sendTransaction === 'function') {
+    if (typeof solWallet.signTransaction === 'function' || typeof solWallet.sendTransaction === 'function') {
       const walletSendStartedAt = Date.now();
+      const txMode = gmtradeTxMode();
+      if (txMode === 'raw' && typeof solWallet.signTransaction === 'function') {
+        await gmtradeLog('wallet_sign_start', {
+          tx_kind: txKind(tx),
+          rpc,
+          wallet_path: 'adapter_sign_raw_server_tx',
+          tx_mode: txMode,
+          tx: txMessageSummary(tx),
+          tx_audit: txPreWalletAudit(tx, walletAddr),
+          note: 'A/B diagnostic path: Phantom signs the sanitized GMTrade SDK transaction with signTransaction, then Clash broadcasts the exact signed raw bytes.',
+        }, attempt, trace);
+        console.info('[GMTrade tx] wallet sign start', {
+          trace: traceLabel,
+          attempt,
+          rpc,
+          tx_kind: txKind(tx),
+          wallet_path: 'adapter_sign_raw_server_tx',
+          tx_mode: txMode,
+        });
+        try {
+          const signed = await solWallet.signTransaction(tx);
+          const raw = signed.serialize();
+          const signPayload = {
+            rpc,
+            tx_kind: txKind(signed),
+            sign_ms: Date.now() - walletSendStartedAt,
+            raw_bytes: raw.length,
+            wallet_path: 'adapter_sign_raw_server_tx',
+            tx_mode: txMode,
+            tx: txMessageSummary(signed),
+          };
+          console.info('[GMTrade tx] wallet sign done', { trace: traceLabel, attempt, ...signPayload });
+          await gmtradeLog('wallet_sign_done', signPayload, attempt, trace);
+
+          const simulationStartedAt = Date.now();
+          const simulation = await txConnection.simulateTransaction(signed, {
+            sigVerify: false,
+            replaceRecentBlockhash: false,
+            commitment: 'confirmed',
+          });
+          const simulationPayload = {
+            rpc,
+            err: simulation?.value?.err || null,
+            units_consumed: simulation?.value?.unitsConsumed || null,
+            logs: simulationLogs(simulation?.value),
+            simulation_ms: Date.now() - simulationStartedAt,
+            wallet_path: 'adapter_sign_raw_server_tx',
+            tx_mode: txMode,
+          };
+          console.info('[GMTrade tx] signed simulation', { trace: traceLabel, attempt, ...simulationPayload });
+          await gmtradeLog('signed_simulation_result', simulationPayload, attempt, trace);
+          if (simulation?.value?.err) {
+            const err = new Error(simulationErrorMessage(simulation.value));
+            err.simulation = simulationPayload;
+            throw err;
+          }
+
+          console.info('[GMTrade tx] send raw start', { trace: traceLabel, attempt, rpc, raw_bytes: raw.length, tx_mode: txMode });
+          await gmtradeLog('send_raw_start', {
+            rpc,
+            raw_bytes: raw.length,
+            wallet_path: 'adapter_sign_raw_server_tx',
+            tx_mode: txMode,
+          }, attempt, trace);
+          const signature = await txConnection.sendRawTransaction(raw, {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+            maxRetries: 3,
+          });
+          const donePayload = {
+            rpc,
+            signature,
+            send_ms: Date.now() - walletSendStartedAt,
+            wallet_path: 'adapter_sign_raw_server_tx',
+            tx_mode: txMode,
+          };
+          console.info('[GMTrade tx] send raw done', { trace: traceLabel, attempt, ...donePayload });
+          await gmtradeLog('send_raw_done', donePayload, attempt, trace);
+          return signature;
+        } catch (rawError) {
+          let logs = [];
+          try {
+            logs = typeof rawError?.getLogs === 'function' ? await rawError.getLogs(txConnection) : [];
+          } catch {}
+          console.error('[GMTrade tx] raw mode error', { trace: traceLabel, attempt, rpc, tx_mode: txMode, error: errorInfo(rawError), logs });
+          await gmtradeLog('raw_mode_error', { rpc, tx_mode: txMode, error: errorInfo(rawError), logs }, attempt, trace);
+          throw rawError;
+        }
+      }
+      if (txMode === 'server' && typeof solWallet.sendTransaction === 'function') {
+        await gmtradeLog('wallet_send_start', {
+          tx_kind: txKind(tx),
+          rpc,
+          wallet_path: 'adapter_send_transaction_server_tx',
+          tx_mode: txMode,
+          tx: txMessageSummary(tx),
+          tx_audit: txPreWalletAudit(tx, walletAddr),
+          note: 'A/B diagnostic path: send the sanitized GMTrade SDK transaction directly through the wallet adapter, without client instruction rebuild.',
+        }, attempt, trace);
+        console.info('[GMTrade tx] wallet send start', {
+          trace: traceLabel,
+          attempt,
+          rpc,
+          tx_kind: txKind(tx),
+          wallet_path: 'adapter_send_transaction_server_tx',
+          tx_mode: txMode,
+        });
+        try {
+          const signature = await solWallet.sendTransaction(tx, txConnection, {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+            maxRetries: 3,
+          });
+          const payload = {
+            rpc,
+            signature,
+            send_ms: Date.now() - walletSendStartedAt,
+            wallet_path: 'adapter_send_transaction_server_tx',
+            tx_mode: txMode,
+          };
+          console.info('[GMTrade tx] wallet send done', { trace: traceLabel, attempt, ...payload });
+          await gmtradeLog('wallet_send_done', payload, attempt, trace);
+          return signature;
+        } catch (sendError) {
+          console.error('[GMTrade tx] wallet send error', { trace: traceLabel, attempt, rpc, tx_mode: txMode, error: errorInfo(sendError) });
+          await gmtradeLog('wallet_send_error', { rpc, tx_mode: txMode, error: errorInfo(sendError) }, attempt, trace);
+          throw sendError;
+        }
+      }
+      const decodedInstructions = decodedTransactionInstructions(tx);
+      const instructions = demoteDuplicateSignerMetas(decodedInstructions);
+      const usePhoenixFeePreview = txMode === 'priority';
+      const demotedDuplicateSignerMetas = decodedInstructions.reduce((total, ix, ixIndex) => {
+        const before = ix?.keys || [];
+        const after = instructions[ixIndex]?.keys || [];
+        return total + before.reduce((count, key, keyIndex) => (
+          key?.isSigner && after[keyIndex] && !after[keyIndex].isSigner ? count + 1 : count
+        ), 0);
+      }, 0);
       await gmtradeLog('wallet_send_start', {
         tx_kind: txKind(tx),
+          rpc,
+          wallet_path: 'adapter_send_transaction',
+          tx_mode: txMode,
+          instruction_count: instructions.length,
+          demoted_duplicate_signer_metas: demotedDuplicateSignerMetas,
+          priority_fee_micro_lamports: usePhoenixFeePreview ? 25_000 : 0,
+          note: usePhoenixFeePreview
+            ? 'A/B diagnostic path: rebuilt GMTrade transaction uses the same priority-fee preview shape as Phoenix helper.'
+            : 'GMTrade reuses decoded GMTrade instructions as one transaction after sigVerify:false simulation. Prefer the wallet adapter sendTransaction path to match Phoenix/Phantom one-signer flow; signTransaction remains a fallback only.',
+        }, attempt, trace);
+      console.info('[GMTrade tx] wallet send start', {
+        trace: traceLabel,
+        attempt,
         rpc,
+        tx_kind: txKind(tx),
         wallet_path: 'adapter_send_transaction',
-        note: 'GMTrade uses the wallet adapter sendTransaction path after sigVerify:false simulation',
-      }, attempt, trace);
-      console.info('[GMTrade tx] wallet send start', { trace: traceLabel, attempt, rpc, tx_kind: txKind(tx) });
+        tx_mode: txMode,
+        instruction_count: instructions.length,
+        demoted_duplicate_signer_metas: demotedDuplicateSignerMetas,
+        priority_fee_micro_lamports: usePhoenixFeePreview ? 25_000 : 0,
+      });
       try {
-        const signature = await solWallet.sendTransaction(tx, txConnection, {
+        const signature = await sendSolanaTransactionWithRetry({
+          instructions,
+          ownerPk: new PublicKey(walletAddr),
+          connection: txConnection,
+          sendTransaction: (nextTx, nextConnection, options) => solWallet.sendTransaction(nextTx, nextConnection, options),
+          signTransaction: typeof solWallet.signTransaction === 'function'
+            ? nextTx => solWallet.signTransaction(nextTx)
+            : null,
+          maxAttempts: 2,
           skipPreflight: false,
-          preflightCommitment: 'confirmed',
-          maxRetries: 3,
+          computeUnitLimit: null,
+          priorityFeeMicroLamports: usePhoenixFeePreview ? 25_000 : 0,
+          preferWalletSendTransaction: typeof solWallet.sendTransaction === 'function',
+          label: 'gmtrade.order',
         });
         const payload = {
           rpc,
           signature,
           send_ms: Date.now() - walletSendStartedAt,
           wallet_path: 'adapter_send_transaction',
+          tx_mode: txMode,
         };
         console.info('[GMTrade tx] wallet send done', { trace: traceLabel, attempt, ...payload });
         await gmtradeLog('wallet_send_done', payload, attempt, trace);
@@ -784,7 +1230,7 @@ export function useGmtrade() {
       }
     }
     throw new Error('This Solana wallet cannot sign GMTrade transactions');
-  }, [connection, gmtradeLog, solWallet]);
+  }, [connection, gmtradeLog, solWallet, walletAddr]);
 
   const nativeOrder = useCallback(async (symbol, side, qty, _slippage = '0.5', lev = 1, options = {}) => {
     if (!token) return { error: 'Missing game session token' };
@@ -828,6 +1274,7 @@ export function useGmtrade() {
       const trace = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
         ? crypto.randomUUID()
         : `gmtrade-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const orderNonce = randomGmtradeOrderNonce();
       let lastExpired = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const txConnection = await selectTxConnection(attempt, trace);
@@ -835,7 +1282,7 @@ export function useGmtrade() {
         const beforeHeight = await txConnection.getBlockHeight('confirmed').catch(() => null);
         const latest = await txConnection.getLatestBlockhash('confirmed');
         await gmtradeLog('order_attempt_start', {
-          payload,
+          payload: { ...payload, order_nonce: orderNonce },
           rpc,
           current_block_height: beforeHeight,
           latest_blockhash: latest.blockhash,
@@ -846,6 +1293,7 @@ export function useGmtrade() {
           headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'gmtrade' },
           body: JSON.stringify({
             ...payload,
+            order_nonce: orderNonce,
             recent_blockhash: latest.blockhash,
             last_valid_block_height: latest.lastValidBlockHeight,
             client_rpc: rpc,
@@ -863,22 +1311,36 @@ export function useGmtrade() {
           notional_usd: build?.notional_usd,
           recent_blockhash: build?.recent_blockhash,
           last_valid_block_height: build?.last_valid_block_height,
+          order_nonce: build?.order_nonce || orderNonce,
           transaction_count: Array.isArray(build?.transactions) ? build.transactions.length : 0,
           builder: build?.builder,
+          rent_diagnostics: build?.rent_diagnostics || null,
+          setup_required: build?.setup_required === true,
+          setup_transaction_count: Array.isArray(build?.setup_transactions) ? build.setup_transactions.length : 0,
+          setup_tx_diagnostics: build?.setup_tx_diagnostics || null,
         }, attempt, trace);
-        const txs = Array.isArray(build?.transactions) ? build.transactions : [];
+        const activeBuild = build;
+        if (build?.setup_required === true) {
+          await gmtradeLog('single_tx_contains_setup_accounts', {
+            setup_transaction_count: Array.isArray(build?.setup_transactions) ? build.setup_transactions.length : 0,
+            rent_diagnostics: build?.rent_diagnostics || null,
+            setup_tx_diagnostics: build?.setup_tx_diagnostics || null,
+            note: 'Kept as one GMTrade order transaction; setup accounts are required by GMSOL CreateOrderV2 when they do not already exist.',
+          }, attempt, trace);
+        }
+        const txs = Array.isArray(activeBuild?.transactions) ? activeBuild.transactions : [];
         if (!txs.length) throw new Error('GMTrade builder returned no transactions');
         let lastSig = '';
         try {
           for (let txIndex = 0; txIndex < txs.length; txIndex += 1) {
             await gmtradeLog('tx_send_loop_start', { tx_index: txIndex, tx_count: txs.length }, attempt, trace);
-            lastSig = await sendBuiltTransaction(txs[txIndex], build, attempt, trace, txConnection);
-            await confirmSignatureWithDiagnostics(lastSig, build, attempt, trace);
+            lastSig = await sendBuiltTransaction(txs[txIndex], activeBuild, attempt, trace, txConnection);
+            await confirmSignatureWithDiagnostics(lastSig, activeBuild, attempt, trace);
           }
           if (options?.skip_report === true || options?.tpsl) {
             await gmtradeLog('order_submitted_no_report', {
               signature: lastSig,
-              kind: build?.kind,
+              kind: activeBuild?.kind,
               reason: options?.tpsl ? 'tpsl_order' : 'skip_report',
             }, attempt, trace);
             if (!requestRealtimeRefresh('order_submitted')) {
@@ -897,7 +1359,7 @@ export function useGmtrade() {
           if (normalizedOrderType !== 'market') {
             await gmtradeLog('order_submitted_no_report', {
               signature: lastSig,
-              kind: build?.kind,
+              kind: activeBuild?.kind,
               reason: 'pending_order_not_execution',
               order_type: normalizedOrderType,
             }, attempt, trace);
@@ -987,8 +1449,11 @@ export function useGmtrade() {
     )) || null;
     const requestedAmount = Number(amount);
     const positionTokenAmount = Number(live?.amount || 0);
+    // GMTrade market-decrease orders can fail to fully execute when we send
+    // the exact UI snapshot size. A slight haircut lets the venue close the
+    // whole remaining position after fees/rounding, matching the native UI.
     const fraction = _fullClose
-      ? 1
+      ? 0.95
       : (Number.isFinite(requestedAmount) && requestedAmount > 0 && positionTokenAmount > 0
         ? Math.min(1, Math.max(0, requestedAmount / positionTokenAmount))
         : 1);

@@ -1,5 +1,4 @@
 import { PublicKey, TransactionInstruction } from '@solana/web3.js';
-import { Buffer } from 'buffer';
 import { sendSolanaTransactionWithRetry } from './solanaTx';
 import {
   buildSolanaWalletTxOptions,
@@ -90,7 +89,7 @@ export function kitInstructionToWeb3(ix) {
         isSigner: flags.isSigner,
       };
     }),
-    data: Buffer.from(ix.data || []),
+    data: new Uint8Array(ix.data || []),
   });
 }
 

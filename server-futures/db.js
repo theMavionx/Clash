@@ -123,6 +123,31 @@ db.exec(`
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS client_logs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    dex         TEXT NOT NULL,
+    player_id   TEXT,
+    player_name TEXT,
+    wallet      TEXT,
+    trace       TEXT,
+    event       TEXT NOT NULL,
+    attempt     INTEGER NOT NULL DEFAULT 0,
+    data_json   TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS gmtrade_pending_reports (
+    signature   TEXT PRIMARY KEY,
+    player_id   TEXT NOT NULL,
+    wallet      TEXT,
+    body_json   TEXT NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    last_error  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
 `);
 
 // ---------- Pre-statement migrations ----------
@@ -160,6 +185,9 @@ try { db.exec("CREATE INDEX IF NOT EXISTS idx_decibel_order_proofs_order ON deci
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_decibel_order_proofs_client ON decibel_order_proofs(client_order_id) WHERE client_order_id IS NOT NULL"); } catch {}
 try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_decibel_order_proofs_order_unique ON decibel_order_proofs(order_id) WHERE order_id IS NOT NULL"); } catch {}
 try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_decibel_order_proofs_client_unique ON decibel_order_proofs(client_order_id) WHERE client_order_id IS NOT NULL"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_client_logs_dex_created ON client_logs(dex, created_at DESC, id DESC)"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_client_logs_trace ON client_logs(trace) WHERE trace IS NOT NULL"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_gmtrade_pending_reports_player ON gmtrade_pending_reports(player_id, status, updated_at)"); } catch {}
 
 // FK-mismatch migration: old deposits/trade_history rows reference
 // wallets(player_id), but that column is no longer UNIQUE after we switched
@@ -252,6 +280,41 @@ const stmts = {
   `),
   getDecibelOrderProofByOrder: db.prepare('SELECT * FROM decibel_order_proofs WHERE order_id = ? LIMIT 1'),
   getDecibelOrderProofByClient: db.prepare('SELECT * FROM decibel_order_proofs WHERE client_order_id = ? LIMIT 1'),
+  addClientLog: db.prepare(`
+    INSERT INTO client_logs (dex, player_id, player_name, wallet, trace, event, attempt, data_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  upsertGmtradePendingReport: db.prepare(`
+    INSERT INTO gmtrade_pending_reports (signature, player_id, wallet, body_json, attempts, status, last_error, updated_at)
+    VALUES (?, ?, ?, ?, 0, 'pending', ?, datetime('now'))
+    ON CONFLICT(signature) DO UPDATE SET
+      player_id=excluded.player_id,
+      wallet=excluded.wallet,
+      body_json=excluded.body_json,
+      status='pending',
+      last_error=excluded.last_error,
+      updated_at=datetime('now')
+  `),
+  markGmtradePendingReport: db.prepare(`
+    UPDATE gmtrade_pending_reports
+       SET attempts = attempts + 1,
+           status = ?,
+           last_error = ?,
+           updated_at = datetime('now')
+     WHERE signature = ?
+  `),
+  getGmtradePendingReports: db.prepare(`
+    SELECT * FROM gmtrade_pending_reports
+     WHERE player_id = ? AND status = 'pending'
+     ORDER BY updated_at ASC
+     LIMIT ?
+  `),
+  getTradeByClientOrderId: db.prepare(`
+    SELECT id, player_id, dex, notional_usd, verified_source
+      FROM trade_history
+     WHERE client_order_id = ?
+     LIMIT 1
+  `),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
 };
@@ -409,6 +472,68 @@ function getTrades(playerId) {
   return stmts.getTrades.all(playerId);
 }
 
+function recordClientLog({ dex, playerId, playerName, wallet, trace, event, attempt, data }) {
+  const safeDex = String(dex || '').toLowerCase().slice(0, 40) || 'unknown';
+  const safeEvent = String(event || '').slice(0, 120) || 'unknown';
+  let dataJson = null;
+  try {
+    dataJson = JSON.stringify(data && typeof data === 'object' ? data : {});
+    if (dataJson.length > 20_000) dataJson = `${dataJson.slice(0, 20_000)}...`;
+  } catch {
+    dataJson = '{}';
+  }
+  const info = stmts.addClientLog.run(
+    safeDex,
+    playerId == null ? null : String(playerId),
+    playerName == null ? null : String(playerName).slice(0, 120),
+    wallet == null ? null : String(wallet).slice(0, 120),
+    trace == null ? null : String(trace).slice(0, 120),
+    safeEvent,
+    Number(attempt || 0) || 0,
+    dataJson,
+  );
+  return { changes: info.changes || 0, id: info.lastInsertRowid };
+}
+
+function upsertGmtradePendingReport({ signature, playerId, wallet, body, reason }) {
+  const sig = String(signature || '').trim();
+  if (!sig || !playerId) return { changes: 0 };
+  let bodyJson = '{}';
+  try {
+    bodyJson = JSON.stringify(body && typeof body === 'object' ? body : {});
+    if (bodyJson.length > 20_000) bodyJson = bodyJson.slice(0, 20_000);
+  } catch {
+    bodyJson = '{}';
+  }
+  const info = stmts.upsertGmtradePendingReport.run(
+    sig,
+    String(playerId),
+    wallet == null ? null : String(wallet),
+    bodyJson,
+    reason == null ? null : String(reason).slice(0, 500),
+  );
+  return { changes: info.changes || 0 };
+}
+
+function markGmtradePendingReport(signature, status, error = null) {
+  const sig = String(signature || '').trim();
+  if (!sig) return { changes: 0 };
+  const info = stmts.markGmtradePendingReport.run(
+    String(status || 'pending'),
+    error == null ? null : String(error).slice(0, 500),
+    sig,
+  );
+  return { changes: info.changes || 0 };
+}
+
+function getGmtradePendingReports(playerId, limit = 25) {
+  return stmts.getGmtradePendingReports.all(String(playerId), Math.max(1, Math.min(100, Number(limit) || 25)));
+}
+
+function getTradeByClientOrderId(clientOrderId) {
+  return stmts.getTradeByClientOrderId.get(String(clientOrderId || ''));
+}
+
 // ---------- Exports ----------
 
 module.exports = {
@@ -422,6 +547,11 @@ module.exports = {
   getTrades,
   recordDecibelOrderProof,
   getDecibelOrderProof,
+  recordClientLog,
+  upsertGmtradePendingReport,
+  markGmtradePendingReport,
+  getGmtradePendingReports,
+  getTradeByClientOrderId,
 };
 
 // One-time encryption migration: any row where secret_key doesn't start with

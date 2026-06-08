@@ -61,7 +61,24 @@ function envOr(env, keys, fallback = '') {
 
 function collectionDefaults(slug) {
   if (slug === 'voidspore') return { name: 'Voidspore', symbol: 'VOID' };
-  return { name: 'Clash Collection', symbol: 'CLASH' };
+  if (slug === 'succubus') {
+    return {
+      name: 'Succubus',
+      symbol: 'SCBS',
+      maxSupply: '333',
+      usdPrice: '8.9',
+      clashUsdPrice: '5',
+      skrUsdPrice: '7.9',
+    };
+  }
+  return {
+    name: 'Clash Collection',
+    symbol: 'CLASH',
+    maxSupply: '555',
+    usdPrice: '5.5',
+    clashUsdPrice: '4',
+    skrUsdPrice: '5',
+  };
 }
 
 function solToLamports(solValue) {
@@ -197,7 +214,7 @@ const maxSupply = Number(envOr(env, [
   `${collectionPrefix}_MAX_SUPPLY`,
   'NFT_COLLECTION_MAX_SUPPLY',
   'NFT_GLOBAL_SUPPLY_CAP',
-], '555'));
+], defaults.maxSupply));
 if (!Number.isInteger(maxSupply) || maxSupply <= 0) throw new Error(`Bad Solana maxSupply: ${maxSupply}`);
 
 const useConfigLines = env[`${prefix}_USE_CONFIG_LINES`] === '1'
@@ -255,7 +272,7 @@ const usdAmount = envOr(env, [
   `${collectionPrefix}_USD_PRICE`,
   'NFT_COLLECTION_SOLANA_USD_PRICE',
   'NFT_COLLECTION_USD_PRICE',
-], '5.5');
+], defaults.usdPrice);
 const quote = await buildUsdPriceQuote(env, usdAmount);
 const price = priceLamports(env, prefix, collectionPrefix) || quote.solLamports;
 const usdcAmount = decimalToUnits(usdAmount, 6);
@@ -265,7 +282,7 @@ const skrUsdAmount = envOr(env, [
   `${collectionPrefix}_SKR_USD_PRICE`,
   'NFT_COLLECTION_SOLANA_SKR_USD_PRICE',
   'NFT_COLLECTION_SKR_USD_PRICE',
-], '5');
+], defaults.skrUsdPrice);
 const saleActive = ['1', 'true'].includes(String(envOr(env, [
   `${prefix}_SALE_ACTIVE`,
   'NFT_COLLECTION_SOLANA_SALE_ACTIVE',
@@ -310,6 +327,38 @@ const usdcDestinationAta = await ensureAta(
 );
 
 let skrPaymentGroup = null;
+async function buildSplPaymentGroup({ label, mintRaw, usdAmountForGroup, envTokenPrefix, defaultDecimals = 6 }) {
+  if (!mintRaw) return null;
+  const mint = new PublicKey(mintRaw);
+  const fallbackDecimals = Number(envOr(env, [
+    `${prefix}_${envTokenPrefix}_DECIMALS`,
+    `${collectionPrefix}_SOLANA_${envTokenPrefix}_DECIMALS`,
+    `NFT_COLLECTION_SOLANA_${envTokenPrefix}_DECIMALS`,
+    `GAME_SHOP_SOLANA_${envTokenPrefix}_DECIMALS`,
+  ], String(defaultDecimals)));
+  const { tokenProgram, decimals } = await solanaTokenProgramAndDecimals(connection, mint, fallbackDecimals);
+  const destinationAta = await ensureAta(
+    connection,
+    solanaKeypair,
+    treasuryPk,
+    mint,
+    tokenProgram,
+    envOr(env, [`${prefix}_SKIP_${envTokenPrefix}_ATA`, `NFT_COLLECTION_SOLANA_SKIP_${envTokenPrefix}_ATA`], '0'),
+  );
+  const tokenUsd = await fetchSolanaTokenUsdPrice(env, mint.toBase58(), envTokenPrefix, prefix, collectionPrefix);
+  const amount = usdToNativeUnits(usdAmountForGroup, tokenUsd, decimals);
+  return {
+    usdPrice: usdAmountForGroup,
+    tokenUsd,
+    amount: amount.toString(),
+    amountUi: unitsToDecimalString(amount, decimals),
+    decimals,
+    symbol: label,
+    mint: mint.toBase58(),
+    destinationAta: destinationAta.toBase58(),
+  };
+}
+
 const skrMintRaw = envOr(env, [
   `${prefix}_SKR_MINT`,
   `${collectionPrefix}_SOLANA_SKR_MINT`,
@@ -318,34 +367,36 @@ const skrMintRaw = envOr(env, [
   'GAME_SHOP_SOLANA_SKR_MINT',
 ], '');
 if (skrMintRaw) {
-  const skrMint = new PublicKey(skrMintRaw);
-  const fallbackDecimals = Number(envOr(env, [
-    `${prefix}_SKR_DECIMALS`,
-    `${collectionPrefix}_SOLANA_SKR_DECIMALS`,
-    'NFT_COLLECTION_SOLANA_SKR_DECIMALS',
-    'GAME_SHOP_SOLANA_SKR_DECIMALS',
-  ], '6'));
-  const { tokenProgram, decimals } = await solanaTokenProgramAndDecimals(connection, skrMint, fallbackDecimals);
-  const destinationAta = await ensureAta(
-    connection,
-    solanaKeypair,
-    treasuryPk,
-    skrMint,
-    tokenProgram,
-    envOr(env, [`${prefix}_SKIP_SKR_ATA`, 'NFT_COLLECTION_SOLANA_SKIP_SKR_ATA'], '0'),
-  );
-  const skrUsd = await fetchSolanaTokenUsdPrice(env, skrMint.toBase58(), 'SKR', prefix, collectionPrefix);
-  const amount = usdToNativeUnits(skrUsdAmount, skrUsd, decimals);
-  skrPaymentGroup = {
-    usdPrice: skrUsdAmount,
-    skrUsd,
-    amount: amount.toString(),
-    amountUi: unitsToDecimalString(amount, decimals),
-    decimals,
-    symbol: 'SKR',
-    mint: skrMint.toBase58(),
-    destinationAta: destinationAta.toBase58(),
-  };
+  skrPaymentGroup = await buildSplPaymentGroup({
+    label: 'SKR',
+    mintRaw: skrMintRaw,
+    usdAmountForGroup: skrUsdAmount,
+    envTokenPrefix: 'SKR',
+  });
+}
+
+let clashPaymentGroup = null;
+const clashUsdAmount = envOr(env, [
+  `${prefix}_CLASH_USD_PRICE`,
+  `${collectionPrefix}_SOLANA_CLASH_USD_PRICE`,
+  `${collectionPrefix}_CLASH_USD_PRICE`,
+  'NFT_COLLECTION_SOLANA_CLASH_USD_PRICE',
+  'NFT_COLLECTION_CLASH_USD_PRICE',
+], defaults.clashUsdPrice);
+const clashMintRaw = envOr(env, [
+  `${prefix}_CLASH_MINT`,
+  `${collectionPrefix}_SOLANA_CLASH_MINT`,
+  'NFT_COLLECTION_SOLANA_CLASH_MINT',
+  'NFT_SOLANA_CLASH_MINT',
+  'GAME_SHOP_SOLANA_CLASH_MINT',
+], '');
+if (clashMintRaw) {
+  clashPaymentGroup = await buildSplPaymentGroup({
+    label: 'CLASH',
+    mintRaw: clashMintRaw,
+    usdAmountForGroup: clashUsdAmount,
+    envTokenPrefix: 'CLASH',
+  });
 }
 
 const collection = generateSigner(umi);
@@ -410,6 +461,7 @@ const paymentGroups = {
   },
 };
 if (skrPaymentGroup) paymentGroups.skr = skrPaymentGroup;
+if (clashPaymentGroup) paymentGroups.clash = clashPaymentGroup;
 
 const groups = [
   {
@@ -442,6 +494,19 @@ if (skrPaymentGroup) {
         amount: BigInt(skrPaymentGroup.amount),
         mint: publicKey(skrPaymentGroup.mint),
         destinationAta: publicKey(skrPaymentGroup.destinationAta),
+      }),
+      startDate: startDateGuard,
+    },
+  });
+}
+if (clashPaymentGroup) {
+  groups.push({
+    label: 'clash',
+    guards: {
+      tokenPayment: some({
+        amount: BigInt(clashPaymentGroup.amount),
+        mint: publicKey(clashPaymentGroup.mint),
+        destinationAta: publicKey(clashPaymentGroup.destinationAta),
       }),
       startDate: startDateGuard,
     },

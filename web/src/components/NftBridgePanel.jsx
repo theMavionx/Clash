@@ -46,6 +46,7 @@ const CHAINS = [
 ];
 const BRIDGE_COLLECTIONS = [
   { id: 'demonking', label: 'Demon King', chains: ['base', 'arbitrum', 'monad', 'ink', 'aptos', 'solana'] },
+  { id: 'succubus', label: 'Succubus', chains: ['base', 'arbitrum', 'monad', 'ink', 'aptos', 'solana'] },
 ];
 const BRIDGE_COLLECTION_BY_ID = Object.fromEntries(BRIDGE_COLLECTIONS.map((c) => [c.id, c]));
 const MAX_BATCH_BRIDGE_NFTS = 10;

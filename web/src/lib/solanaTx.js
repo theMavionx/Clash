@@ -1,5 +1,4 @@
 import { ComputeBudgetProgram, Connection, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { Buffer } from 'buffer';
 import bs58 from 'bs58';
 import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
 import {
@@ -20,6 +19,19 @@ const SEND_OPTIONS = {
   preflightCommitment: 'confirmed',
   maxRetries: 20,
 };
+
+function bytesToBase64(bytes) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  if (typeof btoa === 'function') {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < data.length; i += chunkSize) {
+      binary += String.fromCharCode(...data.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+  throw new Error('Base64 encoding is not available in this browser');
+}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -132,6 +144,15 @@ function isSeekerNftDiagnostic(label, type) {
     && /^(attempt_start|attempt_error|signed|confirmed|status_ok|rebroadcast|late_status_check)$/i.test(String(type || ''));
 }
 
+function gmtradeDiagnosticNamespace(label) {
+  return /^gmtrade\./i.test(String(label || '')) ? 'gmtrade.tx' : '';
+}
+
+function isGmtradeDiagnostic(label, type) {
+  return !!gmtradeDiagnosticNamespace(label)
+    && /^(attempt_start|simulate_start|simulate_ok|simulate_error|simulate_failed|attempt_error|signed|confirmed|status_ok|status_poll|rebroadcast|late_status_check)$/i.test(String(type || ''));
+}
+
 function logTx(label, type, data = {}, level = 'info') {
   if (
     level === 'info'
@@ -139,6 +160,7 @@ function logTx(label, type, data = {}, level = 'info') {
     && !isPhoenixIsolatedDiagnostic(label, type)
     && !isPhoenixOneTapDiagnostic(label, type, data)
     && !isSeekerNftDiagnostic(label, type)
+    && !isGmtradeDiagnostic(label, type)
   ) return;
   const payload = { label, ...data };
   if (/^phoenix\.tpsl(?:\.setup)?$/i.test(String(label || '')) && payload.signature_short && !payload.txid_short) {
@@ -147,12 +169,15 @@ function logTx(label, type, data = {}, level = 'info') {
   const seekerNftNamespace = seekerNftDiagnosticNamespace(label);
   const phoenixIsolatedNamespace = phoenixIsolatedDiagnosticNamespace(label);
   const phoenixOneTapNamespace = phoenixOneTapDiagnosticNamespace(label, payload);
+  const gmtradeNamespace = gmtradeDiagnosticNamespace(label);
   const reportSeekerNft = seekerNftNamespace
     && /^(attempt_start|attempt_error|signed|confirmed)$/i.test(String(type || ''));
   const reportPhoenixIsolated = phoenixIsolatedNamespace
     && /^(attempt_start|simulate_start|simulate_ok|simulate_error|simulate_failed|attempt_error|raw_send_error|signed|confirmed)$/i.test(String(type || ''));
   const reportPhoenixOneTap = phoenixOneTapNamespace
     && /^(attempt_start|simulate_start|simulate_ok|simulate_error|simulate_failed|wallet_signed_tx|raw_sent|raw_send_error|confirmed_after_send_error|attempt_error|signed|confirmed)$/i.test(String(type || ''));
+  const reportGmtrade = gmtradeNamespace
+    && /^(attempt_start|simulate_start|simulate_ok|simulate_error|simulate_failed|attempt_error|signed|confirmed)$/i.test(String(type || ''));
   try { addClientBreadcrumb(`solana_tx.${type}`, payload, level); } catch {}
   if (reportSeekerNft) {
     try {
@@ -180,6 +205,16 @@ function logTx(label, type, data = {}, level = 'info') {
         level,
         source: phoenixOneTapNamespace,
         message: `${phoenixOneTapNamespace}.${type}`,
+        flush: true,
+      });
+    } catch {}
+  }
+  if (reportGmtrade) {
+    try {
+      reportClientEvent(`${gmtradeNamespace}.${type}`, payload, {
+        level,
+        source: gmtradeNamespace,
+        message: `${gmtradeNamespace}.${type}`,
         flush: true,
       });
     } catch {}
@@ -249,6 +284,63 @@ function transactionAccountKeyCount(tx) {
   return null;
 }
 
+function transactionSignerMetaSummary(tx) {
+  try {
+    if (Array.isArray(tx?.instructions)) {
+      let signerMetas = 0;
+      let duplicateSignerMetas = 0;
+      for (const ix of tx.instructions) {
+        const seen = new Set();
+        for (const key of ix?.keys || []) {
+          if (!key?.isSigner) continue;
+          signerMetas += 1;
+          const pubkey = String(key.pubkey || '');
+          if (seen.has(pubkey)) duplicateSignerMetas += 1;
+          seen.add(pubkey);
+        }
+      }
+      return {
+        tx_required_signatures: Array.isArray(tx.signatures) ? tx.signatures.length : null,
+        tx_signer_metas: signerMetas,
+        tx_duplicate_signer_metas: duplicateSignerMetas,
+      };
+    }
+    return {
+      tx_required_signatures: Array.isArray(tx?.signatures) ? tx.signatures.length : null,
+      tx_signer_metas: null,
+      tx_duplicate_signer_metas: null,
+    };
+  } catch {
+    return {
+      tx_required_signatures: null,
+      tx_signer_metas: null,
+      tx_duplicate_signer_metas: null,
+    };
+  }
+}
+
+function transactionDuplicateAccountRefCount(tx) {
+  try {
+    if (Array.isArray(tx?.message?.compiledInstructions)) {
+      let count = 0;
+      for (const ix of tx.message.compiledInstructions) {
+        const accounts = Array.from(ix?.accountKeyIndexes || ix?.accounts || []);
+        const seen = new Set();
+        for (const accountIndex of accounts) {
+          const key = Number(accountIndex);
+          if (seen.has(key)) count += 1;
+          seen.add(key);
+        }
+      }
+      return count;
+    }
+    if (Array.isArray(tx?.instructions) && typeof tx.compileMessage === 'function') {
+      return transactionDuplicateAccountRefCount({ message: tx.compileMessage() });
+    }
+  } catch {}
+  return null;
+}
+
 function transactionSummary(tx) {
   const programs = transactionProgramSummary(tx);
   const raw = serializeUnsignedTransaction(tx);
@@ -259,6 +351,8 @@ function transactionSummary(tx) {
     tx_account_key_count: transactionAccountKeyCount(tx),
     tx_has_lighthouse_assertion: programs.includes(LIGHTHOUSE_PROGRAM_ID),
     tx_unsigned_bytes: raw?.length || null,
+    tx_duplicate_account_refs: transactionDuplicateAccountRefCount(tx),
+    ...transactionSignerMetaSummary(tx),
   };
 }
 
@@ -289,7 +383,7 @@ async function simulateLegacyTransactionRaw(connection, tx, config = {}) {
       id: `simulate-${Date.now()}`,
       method: 'simulateTransaction',
       params: [
-        Buffer.from(raw).toString('base64'),
+        bytesToBase64(raw),
         {
           encoding: 'base64',
           commitment: 'confirmed',
@@ -314,7 +408,7 @@ async function simulateLegacyTransactionRaw(connection, tx, config = {}) {
 }
 
 async function simulateBeforeWalletIfNeeded({ connection, tx, label, attempt, walletPath }) {
-  if (!phoenixIsolatedDiagnosticNamespace(label) && walletPath !== 'phoenix_one_tap_keypair') return null;
+  if (!phoenixIsolatedDiagnosticNamespace(label) && !gmtradeDiagnosticNamespace(label) && walletPath !== 'phoenix_one_tap_keypair') return null;
   logTx(label, 'simulate_start', {
     attempt,
     rpc_host: rpcHost(connection),

@@ -77,6 +77,10 @@ export function normalizeNftCollectionSlug(value) {
 export function nftLevelImageUrl(level, id = null, collection = 'demonking') {
   const lvl = normalizeNftLevel(level);
   const collectionSlug = normalizeNftCollectionSlug(collection);
+  if (collectionSlug !== 'demonking') {
+    const ext = lvl === 3 ? 'jpg' : 'png';
+    return `/cdn/nft/${collectionSlug}/${lvl}/default.${ext}`;
+  }
   if (NFT_USE_TOKEN_IMAGE_PATHS && id != null && id !== '') {
     return `${NFT_IMAGE_BASE_URL}/${lvl}/${encodeURIComponent(String(id))}.jpg`;
   }

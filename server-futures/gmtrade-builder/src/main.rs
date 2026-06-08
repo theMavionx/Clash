@@ -261,7 +261,7 @@ fn create_order(
         )
         .unwrap_native_on_receive(!request.skip_unwrap_native_on_receive)
         .skip_position_creation(false)
-        .force_position_creation(request.force_create_positions_in_parallel)
+        .force_position_creation(request.force_create_positions || request.force_create_positions_in_parallel)
         .build()
         .into_atomic_group(&hint)?)
 }

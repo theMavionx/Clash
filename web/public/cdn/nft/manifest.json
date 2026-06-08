@@ -22,6 +22,25 @@
           "perTokenPathPattern": "/cdn/nft/3/<tokenId>.jpg"
         }
       ]
+    },
+    "succubus": {
+      "levels": [
+        {
+          "level": 1,
+          "stars": 1,
+          "defaultPath": "/cdn/nft/succubus/1/default.png"
+        },
+        {
+          "level": 2,
+          "stars": 2,
+          "defaultPath": "/cdn/nft/succubus/2/default.png"
+        },
+        {
+          "level": 3,
+          "stars": 3,
+          "defaultPath": "/cdn/nft/succubus/3/default.jpg"
+        }
+      ]
     }
   },
   "note": "Per-token unique art is optional. Collection metadata endpoints decide the final level image from the on-chain level when available."

@@ -1,5 +1,4 @@
 import { PublicKey } from '@solana/web3.js';
-import { Buffer } from 'buffer';
 import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
 
 export function shortSolanaAddress(address) {
@@ -56,10 +55,8 @@ function solanaMobileAppIdentity() {
 function base64AddressToBase58(address) {
   if (!address) return null;
   try {
-    const decode = typeof atob === 'function'
-      ? (value) => Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
-      : (value) => Uint8Array.from(Buffer.from(value, 'base64'));
-    return new PublicKey(decode(address)).toBase58();
+    if (typeof atob !== 'function') return null;
+    return new PublicKey(Uint8Array.from(atob(address), (char) => char.charCodeAt(0))).toBase58();
   } catch {
     return null;
   }
@@ -171,10 +168,8 @@ function decodeBase64Bytes(value) {
   const text = String(value || '');
   if (!text) return null;
   try {
-    const decode = typeof atob === 'function'
-      ? (raw) => Uint8Array.from(atob(raw), (char) => char.charCodeAt(0))
-      : (raw) => Uint8Array.from(Buffer.from(raw, 'base64'));
-    return decode(text);
+    if (typeof atob !== 'function') return null;
+    return Uint8Array.from(atob(text), (char) => char.charCodeAt(0));
   } catch {
     return null;
   }

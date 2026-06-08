@@ -5,7 +5,7 @@ import {
   signSolanaMobileProtocolTransaction,
 } from './solanaSeekerTx';
 
-export const NFT_SALE_COLLECTION = 'mystery';
+export const NFT_SALE_COLLECTION = 'succubus';
 
 function nftCollectionPath(collection = NFT_SALE_COLLECTION) {
   const slug = String(collection || NFT_SALE_COLLECTION).trim() || NFT_SALE_COLLECTION;

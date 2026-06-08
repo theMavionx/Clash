@@ -546,6 +546,26 @@ const NFT_COLLECTION_PRESETS = {
     character: 'Voidspore',
     description: 'Voidspore from Clash of Perps.',
     maxSupply: 555,
+    usdPriceE6: '5500000',
+    clashUsdPriceE6: '4000000',
+    skrUsdPriceE6: '5000000',
+    images: {
+      1: 'L1.png',
+      2: 'L2.png',
+      3: 'L3.jpg',
+    },
+  },
+  succubus: {
+    slug: 'succubus',
+    envKey: 'SUCCUBUS',
+    name: 'Succubus',
+    symbol: 'SCBS',
+    character: 'Succubus',
+    description: 'Succubus from Clash of Perps.',
+    maxSupply: 333,
+    usdPriceE6: '8900000',
+    clashUsdPriceE6: '5000000',
+    skrUsdPriceE6: '7900000',
     images: {
       1: 'L1.png',
       2: 'L2.png',
@@ -579,6 +599,9 @@ function nftCollectionConfig(slugRaw) {
     description: collectionEnv(envKey, ['NFT_%s_DESCRIPTION', 'NFT_COLLECTION_DESCRIPTION'], preset.description),
     maxSupply: Number(collectionEnv(envKey, ['NFT_%s_GLOBAL_SUPPLY_CAP', 'NFT_%s_MAX_SUPPLY', 'NFT_COLLECTION_GLOBAL_SUPPLY_CAP'], preset.maxSupply)),
     externalUrl: collectionEnv(envKey, ['NFT_%s_EXTERNAL_URL', 'NFT_COLLECTION_EXTERNAL_URL'], ''),
+    usdPriceE6: String(collectionEnv(envKey, ['NFT_%s_USD_PRICE_E6', 'NFT_COLLECTION_USD_PRICE_E6'], preset.usdPriceE6 || '5500000')),
+    clashUsdPriceE6: String(collectionEnv(envKey, ['NFT_%s_CLASH_USD_PRICE_E6', 'NFT_COLLECTION_CLASH_USD_PRICE_E6'], preset.clashUsdPriceE6 || '4000000')),
+    skrUsdPriceE6: String(collectionEnv(envKey, ['NFT_%s_SKR_USD_PRICE_E6', 'NFT_COLLECTION_SKR_USD_PRICE_E6'], preset.skrUsdPriceE6 || '5000000')),
   };
 }
 
@@ -3627,8 +3650,8 @@ router.get('/nft/:collectionSlug/mint/config', async (req, res) => {
         usdcToken: shop.usdcToken || null,
         clashToken: shop.clashToken || null,
         clashReady: !!shop.clashToken && !/^0x0{40}$/i.test(String(shop.clashToken)),
-        baseUsdPriceE6: String(shop.baseUsdPriceE6 || '5500000'),
-        clashUsdPriceE6: String(shop.clashUsdPriceE6 || '4000000'),
+        baseUsdPriceE6: String(shop.baseUsdPriceE6 || collection.usdPriceE6 || '5500000'),
+        clashUsdPriceE6: String(shop.clashUsdPriceE6 || collection.clashUsdPriceE6 || '4000000'),
         supply: supply ? {
           totalMinted: Number(supply.perChain?.[chainKey] || 0),
           maxSupply: collection.maxSupply,
@@ -3661,7 +3684,7 @@ router.get('/nft/:collectionSlug/mint/config', async (req, res) => {
         saleActive: !!aptos.saleActive,
         usdcMetadata: aptos.usdcMetadata || null,
         aptMetadata: '0x000000000000000000000000000000000000000000000000000000000000000a',
-        mintUsdPriceE6: String(aptos.mintUsdPriceE6 || '5500000'),
+        mintUsdPriceE6: String(aptos.mintUsdPriceE6 || collection.usdPriceE6 || '5500000'),
         supply: supply ? {
           totalMinted: Number(supply.perChain?.aptos || 0),
           maxSupply: collection.maxSupply,
@@ -3729,7 +3752,7 @@ async function handleAptosNftQuote(req, res, collection = null) {
       await assertGlobalSupplyAvailable(Number(quantity));
     }
 
-    const usdPriceE6 = BigInt(aptosDeploy.mintUsdPriceE6 || (collection ? '5500000' : '8900000'));
+    const usdPriceE6 = BigInt(aptosDeploy.mintUsdPriceE6 || (collection ? collection.usdPriceE6 || '5500000' : '8900000'));
     const usdAmount = unitsToDecimalString(usdPriceE6 * quantity, 6);
     const aptMetadata = '0x000000000000000000000000000000000000000000000000000000000000000a';
     let decimals;
@@ -3838,8 +3861,8 @@ router.post('/nft/:collectionSlug/:chain/quote', async (req, res) => {
     const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
     const nonce = BigInt(`0x${crypto.randomBytes(16).toString('hex')}`);
 
-    const baseUsdPriceE6 = BigInt(shopDeployment.baseUsdPriceE6 || '5500000');
-    const clashUsdPriceE6 = BigInt(shopDeployment.clashUsdPriceE6 || '4000000');
+    const baseUsdPriceE6 = BigInt(shopDeployment.baseUsdPriceE6 || collection.usdPriceE6 || '5500000');
+    const clashUsdPriceE6 = BigInt(shopDeployment.clashUsdPriceE6 || collection.clashUsdPriceE6 || '4000000');
     let paymentToken = zeroAddress;
     let unitPrice = 0n;
     let decimals = 18;
@@ -10989,6 +11012,17 @@ async function importHotstuffFillsForClaim(playerId, wallet) {
   }
 }
 
+async function reconcileGmtradeForClaim(playerId) {
+  try {
+    const futuresDb = require('../server-futures/db');
+    const gmtrade = require('../server-futures/gmtrade');
+    return await gmtrade.reconcilePendingTradeReportsForPlayer(futuresDb, playerId, { limit: 50 });
+  } catch (e) {
+    console.warn('[claim-gold gmtrade] pending reconcile failed:', e.message);
+    return null;
+  }
+}
+
 router.post('/trading/claim-gold', auth, async (req, res) => {
   const claimStartedAt = Date.now();
   // Rate limit
@@ -11078,6 +11112,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       await importGrvtFillsForClaim(req.player.id);
     } else if (dex === 'hotstuff') {
       await importHotstuffFillsForClaim(req.player.id, wallet);
+    } else if (dex === 'gmtrade') {
+      await reconcileGmtradeForClaim(req.player.id);
     }
     const fdb = futuresDbReadonly();
     if (!fdb) {
