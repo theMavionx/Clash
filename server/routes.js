@@ -12154,6 +12154,20 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   }
 
   const snap = tasks.parseParams(pt.snapshot);
+  if (task.repeatable && !snap.strict_after_start_id) {
+    const previousPaid = db.db.prepare(
+      `SELECT 1 FROM task_claim_events
+       WHERE player_id = ? AND task_id = ? AND result = 'paid'
+       LIMIT 1`
+    ).get(req.player.id, id);
+    if (previousPaid) {
+      snap.strict_after_start_id = true;
+      pt = { ...pt, snapshot: JSON.stringify(snap) };
+      db.db.prepare(
+        `UPDATE player_tasks SET snapshot = ? WHERE player_id = ? AND task_id = ?`
+      ).run(pt.snapshot, req.player.id, id);
+    }
+  }
   const result = await tasks.verifyTask(req.player, task, snap);
 
   // Always update cached progress (progress update is an independent fact,
@@ -12173,6 +12187,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     return res.json({ ok: false, completed: false, progress_value: result.progress_value, target_value: result.target_value, breakdown: result.breakdown });
   }
   const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task) : null;
+  if (nextRepeatableSnapshot) nextRepeatableSnapshot.strict_after_start_id = true;
 
   // Atomic payout: re-check the snapshot inside the transaction so two
   // concurrent /tasks/:id/claim calls can't both pay the same completed

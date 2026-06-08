@@ -168,6 +168,7 @@ function parseTaskTimeMs(value) {
 }
 
 function isTaskStartBoundaryTrade(snap, trade) {
+  if (snap?.strict_after_start_id) return false;
   if (!TASK_START_TRADE_GRACE_MS) return false;
   const startId = Number(snap?.trade_id_start || 0);
   const tradeId = Number(trade?.history_id || 0);
