@@ -3147,7 +3147,7 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
                 {result?.progressText || `Waiting for ${mintLabel} confirmation`}
                 <span className="nft-mint-dots" />
               </span>
-              <span style={overlayStyles.hint}>Keep this window open вЂ” the tx is propagating.</span>
+              <span style={overlayStyles.hint}>Keep this window open - the tx is propagating.</span>
             </>
           ) : (
             <>
@@ -3156,7 +3156,7 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
                 {mintLabel} now {quantity > 1 ? 'live' : 'lives'} on {chainLabel}.
               </span>
               {result?.tx && (
-                <span style={overlayStyles.txChip}>tx В· {shortAddress(result.tx)}</span>
+                <span style={overlayStyles.txChip}>tx - {shortAddress(result.tx)}</span>
               )}
               <div style={overlayStyles.actionRow}>
                 {result?.explorer && (

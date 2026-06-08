@@ -20,6 +20,17 @@ import { buildSolanaGuardConfig } from './lib-solana-guards.mjs';
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function argValue(name, fallback = '') {
+  const row = process.argv.slice(2).find((a) => a === `--${name}` || a.startsWith(`--${name}=`));
+  if (!row) return fallback;
+  if (row === `--${name}`) return '1';
+  return row.split('=').slice(1).join('=');
+}
+
+function normalizeSlug(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
 async function fetchSolanaTokenUsdPrice(env, mint, label) {
   const override = env[`NFT_${label}_USD`]
     || env[`NFT_SOLANA_${label}_USD`]
@@ -73,8 +84,13 @@ async function finalizedSignatureStatus(connection, signature) {
 }
 
 const env = loadEnv();
-const deploymentPath = path.join(NFT_DIR, 'deployments', 'solana-mainnet.json');
-if (!fs.existsSync(deploymentPath)) throw new Error('Missing deployments/solana-mainnet.json');
+const collectionSlug = normalizeSlug(argValue('collection', env.NFT_COLLECTION_SLUG || env.NEW_NFT_SLUG || ''));
+const collectionKey = collectionSlug.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+const collectionPrefix = collectionSlug ? `NFT_${collectionKey}` : '';
+const solanaPrefix = collectionSlug ? `${collectionPrefix}_SOLANA` : 'NFT_SOLANA';
+const deploymentFile = collectionSlug ? `${collectionSlug}-solana-mainnet.json` : 'solana-mainnet.json';
+const deploymentPath = path.join(NFT_DIR, 'deployments', deploymentFile);
+if (!fs.existsSync(deploymentPath)) throw new Error(`Missing deployments/${deploymentFile}`);
 
 async function sendAndConfirmOrFinalized(connection, transaction, signers) {
   try {
@@ -111,12 +127,18 @@ const connection = new Connection(rpcUrl, 'confirmed');
 const umi = createUmi(rpcUrl).use(mplCore()).use(mplCandyMachine());
 umi.use(keypairIdentity(umi.eddsa.createKeypairFromSecretKey(keypair.secretKey)));
 
-const usdAmount = env.NFT_SOLANA_USD_PRICE || env.NFT_USD_PRICE || '8.9';
+const usdAmount = env[`${solanaPrefix}_USD_PRICE`] || env[`${collectionPrefix}_USD_PRICE`] || env.NFT_SOLANA_USD_PRICE || env.NFT_USD_PRICE || '8.9';
+const skrUsdAmount = env[`${solanaPrefix}_SKR_USD_PRICE`]
+  || env[`${collectionPrefix}_SKR_USD_PRICE`]
+  || env.NFT_SOLANA_SKR_USD_PRICE
+  || deployment.paymentGroups?.skr?.usdPrice
+  || usdAmount;
 const quote = await buildUsdPriceQuote(env, usdAmount);
-const treasury = env.NFT_SOLANA_TREASURY
-  ? requirePublicKey(env.NFT_SOLANA_TREASURY, 'NFT_SOLANA_TREASURY')
+const treasuryRaw = env[`${solanaPrefix}_TREASURY`] || env.NFT_SOLANA_TREASURY;
+const treasury = treasuryRaw
+  ? requirePublicKey(treasuryRaw, `${solanaPrefix}_TREASURY`)
   : new PublicKey(deployment.treasury || keypair.publicKey.toBase58());
-const usdcMint = new PublicKey(env.NFT_SOLANA_USDC_MINT || USDC_MINT);
+const usdcMint = new PublicKey(env[`${solanaPrefix}_USDC_MINT`] || env.NFT_SOLANA_USDC_MINT || USDC_MINT);
 const usdcDestinationAta = getAssociatedTokenAddressSync(
   usdcMint,
   treasury,
@@ -125,7 +147,7 @@ const usdcDestinationAta = getAssociatedTokenAddressSync(
   ASSOCIATED_TOKEN_PROGRAM_ID
 );
 
-if (env.NFT_SOLANA_SKIP_USDC_ATA !== '1') {
+if ((env[`${solanaPrefix}_SKIP_USDC_ATA`] || env.NFT_SOLANA_SKIP_USDC_ATA) !== '1') {
   const ataInfo = await connection.getAccountInfo(usdcDestinationAta);
   if (!ataInfo) {
     const tx = new Transaction().add(createAssociatedTokenAccountIdempotentInstruction(
@@ -142,15 +164,18 @@ if (env.NFT_SOLANA_SKIP_USDC_ATA !== '1') {
 }
 
 let skrPaymentGroup = deployment.paymentGroups?.skr || null;
-const skrMintRaw = env.NFT_SOLANA_SKR_MINT
+const skrMintRaw = env[`${solanaPrefix}_SKR_MINT`]
+  || env[`${collectionPrefix}_SOLANA_SKR_MINT`]
+  || env.NFT_SOLANA_SKR_MINT
   || env.GAME_SHOP_SOLANA_SKR_MINT
   || deployment.paymentGroups?.skr?.mint
   || '';
 if (skrMintRaw) {
   const skrMint = new PublicKey(skrMintRaw);
-  const envSkrDecimals = env.NFT_SOLANA_SKR_DECIMALS || env.GAME_SHOP_SOLANA_SKR_DECIMALS;
+  const envSkrDecimals = env[`${solanaPrefix}_SKR_DECIMALS`] || env[`${collectionPrefix}_SOLANA_SKR_DECIMALS`] || env.NFT_SOLANA_SKR_DECIMALS || env.GAME_SHOP_SOLANA_SKR_DECIMALS;
   const fallbackSkrDecimals = envSkrDecimals ? Number(envSkrDecimals) : 6;
   const { tokenProgram, decimals: skrDecimals } = await solanaTokenProgramAndDecimals(connection, skrMint, fallbackSkrDecimals);
+  const skrTokenProgram = tokenProgram.equals(TOKEN_2022_PROGRAM_ID) ? 'token-2022' : 'spl-token';
   const skrDestinationAta = getAssociatedTokenAddressSync(
     skrMint,
     treasury,
@@ -158,7 +183,7 @@ if (skrMintRaw) {
     tokenProgram,
     ASSOCIATED_TOKEN_PROGRAM_ID
   );
-  if (env.NFT_SOLANA_SKIP_SKR_ATA !== '1') {
+  if ((env[`${solanaPrefix}_SKIP_SKR_ATA`] || env.NFT_SOLANA_SKIP_SKR_ATA) !== '1') {
     const ataInfo = await connection.getAccountInfo(skrDestinationAta);
     if (!ataInfo) {
       const tx = new Transaction().add(createAssociatedTokenAccountIdempotentInstruction(
@@ -174,16 +199,68 @@ if (skrMintRaw) {
     }
   }
   const skrUsd = await fetchSolanaTokenUsdPrice(env, skrMint.toBase58(), 'SKR');
-  const skrUnits = usdToNativeUnits(usdAmount, skrUsd, skrDecimals);
+  const skrUnits = usdToNativeUnits(skrUsdAmount, skrUsd, skrDecimals);
   skrPaymentGroup = {
-    usdPrice: usdAmount,
+    usdPrice: skrUsdAmount,
     skrUsd,
     amount: skrUnits.toString(),
     amountUi: unitsToDecimalString(skrUnits, skrDecimals),
     decimals: skrDecimals,
     symbol: 'SKR',
+    tokenProgram: skrTokenProgram,
     mint: skrMint.toBase58(),
     destinationAta: skrDestinationAta.toBase58(),
+  };
+}
+
+let clashPaymentGroup = deployment.paymentGroups?.clash || null;
+const clashMintRaw = env[`${solanaPrefix}_CLASH_MINT`]
+  || env[`${collectionPrefix}_SOLANA_CLASH_MINT`]
+  || env.NFT_SOLANA_CLASH_MINT
+  || env.GAME_SHOP_SOLANA_CLASH_MINT
+  || deployment.paymentGroups?.clash?.mint
+  || '';
+if (clashMintRaw) {
+  const clashMint = new PublicKey(clashMintRaw);
+  const envClashDecimals = env[`${solanaPrefix}_CLASH_DECIMALS`] || env[`${collectionPrefix}_SOLANA_CLASH_DECIMALS`] || env.NFT_SOLANA_CLASH_DECIMALS || env.GAME_SHOP_SOLANA_CLASH_DECIMALS;
+  const fallbackClashDecimals = envClashDecimals ? Number(envClashDecimals) : 6;
+  const { tokenProgram, decimals: clashDecimals } = await solanaTokenProgramAndDecimals(connection, clashMint, fallbackClashDecimals);
+  const clashTokenProgram = tokenProgram.equals(TOKEN_2022_PROGRAM_ID) ? 'token-2022' : 'spl-token';
+  const clashDestinationAta = getAssociatedTokenAddressSync(
+    clashMint,
+    treasury,
+    false,
+    tokenProgram,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  if ((env[`${solanaPrefix}_SKIP_CLASH_ATA`] || env.NFT_SOLANA_SKIP_CLASH_ATA) !== '1') {
+    const ataInfo = await connection.getAccountInfo(clashDestinationAta);
+    if (!ataInfo) {
+      const tx = new Transaction().add(createAssociatedTokenAccountIdempotentInstruction(
+        keypair.publicKey,
+        clashDestinationAta,
+        treasury,
+        clashMint,
+        tokenProgram,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      ));
+      const ataSig = await sendAndConfirmOrFinalized(connection, tx, [keypair]);
+      console.log(`Created/confirmed Solana CLASH destination ATA: ${clashDestinationAta.toBase58()} tx=${ataSig}`);
+    }
+  }
+  const clashUsdAmount = env[`${solanaPrefix}_CLASH_USD_PRICE`] || env[`${collectionPrefix}_CLASH_USD_PRICE`] || env.NFT_SOLANA_CLASH_USD_PRICE || deployment.paymentGroups?.clash?.usdPrice || '5';
+  const clashUsd = await fetchSolanaTokenUsdPrice(env, clashMint.toBase58(), 'CLASH');
+  const clashUnits = usdToNativeUnits(clashUsdAmount, clashUsd, clashDecimals);
+  clashPaymentGroup = {
+    usdPrice: clashUsdAmount,
+    clashUsd,
+    amount: clashUnits.toString(),
+    amountUi: unitsToDecimalString(clashUnits, clashDecimals),
+    decimals: clashDecimals,
+    symbol: 'CLASH',
+    tokenProgram: clashTokenProgram,
+    mint: clashMint.toBase58(),
+    destinationAta: clashDestinationAta.toBase58(),
   };
 }
 
@@ -209,6 +286,7 @@ deployment.paymentGroups = {
   },
 };
 if (skrPaymentGroup) deployment.paymentGroups.skr = skrPaymentGroup;
+if (clashPaymentGroup) deployment.paymentGroups.clash = clashPaymentGroup;
 
 const guardConfig = buildSolanaGuardConfig(deployment, { dateTime, lamports, none, publicKey, some });
 const sig = await sendUmiOrFinalized(connection, updateCandyGuard(umi, {

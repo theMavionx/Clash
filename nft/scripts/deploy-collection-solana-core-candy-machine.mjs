@@ -336,6 +336,7 @@ async function buildSplPaymentGroup({ label, mintRaw, usdAmountForGroup, envToke
     `GAME_SHOP_SOLANA_${envTokenPrefix}_DECIMALS`,
   ], String(defaultDecimals)));
   const { tokenProgram, decimals } = await solanaTokenProgramAndDecimals(connection, mint, fallbackDecimals);
+  const tokenProgramLabel = tokenProgram.equals(TOKEN_2022_PROGRAM_ID) ? 'token-2022' : 'spl-token';
   const destinationAta = await ensureAta(
     connection,
     solanaKeypair,
@@ -353,6 +354,7 @@ async function buildSplPaymentGroup({ label, mintRaw, usdAmountForGroup, envToke
     amountUi: unitsToDecimalString(amount, decimals),
     decimals,
     symbol: label,
+    tokenProgram: tokenProgramLabel,
     mint: mint.toBase58(),
     destinationAta: destinationAta.toBase58(),
   };
@@ -500,10 +502,13 @@ if (skrPaymentGroup) {
   });
 }
 if (clashPaymentGroup) {
+  const paymentGuard = String(clashPaymentGroup.tokenProgram || clashPaymentGroup.program || '').toLowerCase().includes('2022')
+    ? 'token2022Payment'
+    : 'tokenPayment';
   groups.push({
     label: 'clash',
     guards: {
-      tokenPayment: some({
+      [paymentGuard]: some({
         amount: BigInt(clashPaymentGroup.amount),
         mint: publicKey(clashPaymentGroup.mint),
         destinationAta: publicKey(clashPaymentGroup.destinationAta),

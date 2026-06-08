@@ -351,10 +351,13 @@ export async function mintSolanaNft({ solWallet, config, payment, collection = N
     mobileWalletAdapter,
   });
 
+  const tokenPaymentKey = String(groupConfig.tokenProgram || groupConfig.program || '').toLowerCase().includes('2022')
+    ? 'token2022Payment'
+    : 'tokenPayment';
   const mintArgs = group === 'sol'
     ? { solPayment: some({ destination: publicKey(groupConfig.destination || config.treasury) }) }
     : {
-        tokenPayment: some({
+        [tokenPaymentKey]: some({
           mint: publicKey(groupConfig.mint),
           destinationAta: publicKey(groupConfig.destinationAta),
         }),

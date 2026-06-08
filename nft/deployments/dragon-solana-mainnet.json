@@ -44,6 +44,7 @@
       "amountUi": "15197.56839",
       "decimals": 6,
       "symbol": "CLASH",
+      "tokenProgram": "token-2022",
       "mint": "9mM1Mc4Ta9UJJ32v5qsHef91PiXi7EWyiSsqF5WXpump",
       "destinationAta": "2gb81cdjDVWeFXva6taJTneekP9orgwzKFpkyMuvmR45"
     }
