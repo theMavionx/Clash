@@ -1,3 +1,4 @@
+@tool
 extends Node3D
 
 enum DragonSkin { RED, BLACK, PURPLE }
@@ -42,6 +43,9 @@ var animation_player: AnimationPlayer = null
 
 func _ready() -> void:
 	_apply_skin()
+	if Engine.is_editor_hint():
+		animation_player = _find_animation_player(self)
+		return
 	if default_animation != "":
 		play_dragon_animation(default_animation)
 	else:
