@@ -30,6 +30,30 @@ const MIN_RECORDED_NOTIONAL_USD = 0.000001;
 
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
+const APTOS_FULLNODE = process.env.APTOS_FULLNODE_URL
+  || 'https://fullnode.mainnet.aptoslabs.com/v1';
+const DECIBEL_PACKAGE_MAINNET =
+  '0x50ead22afd6ffd9769e3b3d6e0e64a2a350d68e8b102c4e72e33d0b8cfdfdb06';
+const DEFAULT_DECIBEL_BUILDER_SUBACCOUNT =
+  '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
+const LEGACY_DECIBEL_BUILDER_SUBACCOUNTS = [
+  // Used by older Decibel delegated orders before the builder subaccount was rotated.
+  '0xf375ba6776dd44960e460d58e3f5d0ca645bf5d27210a3f16c6adc6abae78c03',
+];
+const DECIBEL_BUILDER_CHAIN_UNITS_PER_BPS = 100;
+const DECIBEL_ALLOWED_BUILDER_ADDRS = new Set(
+  [
+    DEFAULT_DECIBEL_BUILDER_SUBACCOUNT,
+    process.env.DECIBEL_BUILDER_SUBACCOUNT,
+    process.env.DECIBEL_ALLOWED_BUILDER_ADDRS,
+    process.env.DECIBEL_LEGACY_BUILDER_SUBACCOUNTS,
+    ...LEGACY_DECIBEL_BUILDER_SUBACCOUNTS,
+  ]
+    .flatMap(v => String(v || '').split(','))
+    .map(s => decibel.normalizeAptosAddress(s))
+    .filter(Boolean)
+);
+const aptosTxCache = new Map();
 
 // Per-wallet cache of open trade keys we've already recorded (avoid the
 // "same OPEN treated as new every poll" bug). Keyed by lowercase OWNER
@@ -65,6 +89,29 @@ function fieldString(row, keys) {
   return '';
 }
 
+function vectorValue(value) {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value === 'object') {
+    if (Array.isArray(value.vec) && value.vec.length) return vectorValue(value.vec[0]);
+    if (value.order_id !== undefined && value.order_id !== null) return String(value.order_id);
+    if (value.builder !== undefined && value.builder !== null) return String(value.builder);
+    if (value.fees !== undefined && value.fees !== null) return String(value.fees);
+    if (value.inner !== undefined && value.inner !== null) return String(value.inner);
+    if (value.value !== undefined && value.value !== null) return String(value.value);
+  }
+  return String(value);
+}
+
+function txVersionFromOrder(row) {
+  return fieldString(row, [
+    'transaction_version',
+    'transactionVersion',
+    'transaction_version_open',
+    'open_transaction_version',
+    'version',
+  ]);
+}
+
 function orderKeys(row) {
   const keys = new Set();
   const orderId = fieldString(row, ['order_id', 'orderId', 'orderID']);
@@ -83,6 +130,139 @@ function proofForOrderKey(key) {
     return db.getDecibelOrderProof({ clientOrderId: raw.slice('client:'.length) });
   }
   return null;
+}
+
+async function fetchAptosTxByVersion(version) {
+  const raw = String(version || '').trim();
+  if (!/^\d+$/.test(raw)) return null;
+  if (aptosTxCache.has(raw)) return aptosTxCache.get(raw);
+  const url = `${APTOS_FULLNODE.replace(/\/$/, '')}/transactions/by_version/${raw}`;
+  const headers = process.env.DECIBEL_API_KEY
+    ? { accept: 'application/json', Authorization: `Bearer ${process.env.DECIBEL_API_KEY}` }
+    : { accept: 'application/json' };
+  const r = await fetch(url, { headers });
+  if (!r.ok) throw new Error(`Aptos tx ${raw} failed: ${r.status}`);
+  const tx = await r.json();
+  if (aptosTxCache.size > 500) aptosTxCache.clear();
+  aptosTxCache.set(raw, tx);
+  return tx;
+}
+
+function eventMatchesOrder(tx, order) {
+  return Boolean(findMatchingOrderEvent(tx, order) || findMatchingTradeEvent(tx, order, ''));
+}
+
+function findMatchingOrderEvent(tx, order) {
+  const orderId = fieldString(order, ['order_id', 'orderId', 'orderID']);
+  const clientOrderId = fieldString(order, ['client_order_id', 'clientOrderId', 'clientOrderID']);
+  for (const event of Array.isArray(tx?.events) ? tx.events : []) {
+    const data = event?.data || {};
+    const eventOrderId = vectorValue(data.order_id ?? data.orderId ?? data.orderID);
+    const eventClientOrderId = vectorValue(data.client_order_id ?? data.clientOrderId ?? data.clientOrderID);
+    if (orderId && eventOrderId && String(eventOrderId) === String(orderId)) return event;
+    if (clientOrderId && eventClientOrderId && String(eventClientOrderId) === String(clientOrderId)) return event;
+  }
+  return null;
+}
+
+function findMatchingTradeEvent(tx, order, subAddr) {
+  const orderId = fieldString(order, ['order_id', 'orderId', 'orderID']);
+  const clientOrderId = fieldString(order, ['client_order_id', 'clientOrderId', 'clientOrderID']);
+  const wantedSub = decibel.normalizeAptosAddress(subAddr);
+  for (const event of Array.isArray(tx?.events) ? tx.events : []) {
+    const type = String(event?.type || '');
+    if (!type.includes('::perp_positions::TradeEvent')) continue;
+    const data = event?.data || {};
+    if (wantedSub && decibel.normalizeAptosAddress(data.account || '') !== wantedSub) continue;
+    const eventOrderId = vectorValue(data.order_id ?? data.orderId ?? data.orderID);
+    const eventClientOrderId = vectorValue(data.client_order_id ?? data.clientOrderId ?? data.clientOrderID);
+    if (orderId && eventOrderId && String(eventOrderId) === String(orderId)) return event;
+    if (clientOrderId && eventClientOrderId && String(eventClientOrderId) === String(clientOrderId)) return event;
+  }
+  return null;
+}
+
+function builderProofFromTradeEvent(event) {
+  const entry = event?.data?.builder_code?.vec?.[0]
+    || event?.data?.fee_distribution?.builder_or_referrer_fees?.vec?.[0]
+    || null;
+  if (!entry) return null;
+  const builderAddr = decibel.normalizeAptosAddress(entry.builder || entry.address || '');
+  const chainFee = Number(entry.fees);
+  if (!builderAddr || !DECIBEL_ALLOWED_BUILDER_ADDRS.has(builderAddr)) return null;
+  return {
+    builderAddr,
+    chainFee: Number.isFinite(chainFee) ? chainFee : null,
+    builderFeeBps: Number.isFinite(chainFee) ? chainFee / DECIBEL_BUILDER_CHAIN_UNITS_PER_BPS : 0,
+  };
+}
+
+async function proofFromOrderTx(playerId, subAddr, order, marketMap) {
+  const version = txVersionFromOrder(order);
+  if (!version) return null;
+  const tx = await fetchAptosTxByVersion(version);
+  const payload = tx?.payload || {};
+  const args = Array.isArray(payload.arguments) ? payload.arguments : [];
+  const tradeEvent = findMatchingTradeEvent(tx, order, subAddr);
+  const tradeEventBuilder = builderProofFromTradeEvent(tradeEvent);
+  const isSinglePlace = payload.function === `${DECIBEL_PACKAGE_MAINNET}::dex_accounts_entry::place_order_to_subaccount`;
+  const txSubaccount = isSinglePlace
+    ? decibel.normalizeAptosAddress(vectorValue(args[0]))
+    : decibel.normalizeAptosAddress(tradeEvent?.data?.account || subAddr);
+  if (txSubaccount !== decibel.normalizeAptosAddress(subAddr)) return null;
+  const txMarket = isSinglePlace
+    ? decibel.normalizeAptosAddress(vectorValue(args[1]))
+    : decibel.normalizeAptosAddress(vectorValue(tradeEvent?.data?.market));
+  const orderMarket = marketAddress(order);
+  if (orderMarket && txMarket && orderMarket !== txMarket) return null;
+  const orderClientId = fieldString(order, ['client_order_id', 'clientOrderId', 'clientOrderID']);
+  const txClientId = isSinglePlace ? vectorValue(args[7]) : vectorValue(tradeEvent?.data?.client_order_id);
+  if (orderClientId && txClientId && String(orderClientId) !== String(txClientId)) return null;
+  if (!eventMatchesOrder(tx, order)) return null;
+  const builderAddr = tradeEventBuilder?.builderAddr
+    || decibel.normalizeAptosAddress(vectorValue(args[13]));
+  if (!builderAddr || !DECIBEL_ALLOWED_BUILDER_ADDRS.has(builderAddr)) return null;
+  const chainFee = tradeEventBuilder?.chainFee ?? Number(vectorValue(args[14]));
+  const builderFeeBps = tradeEventBuilder?.builderFeeBps
+    ?? (Number.isFinite(chainFee) ? chainFee / DECIBEL_BUILDER_CHAIN_UNITS_PER_BPS : 0);
+  const market = txMarket ? marketMap?.get(txMarket.toLowerCase()) : null;
+  const orderId = fieldString(order, ['order_id', 'orderId', 'orderID']);
+  const proofJson = JSON.stringify({
+    source: 'decibel_aptos_order_payload',
+    tx_version: version,
+    sender: tx?.sender || null,
+    builder: builderAddr,
+    builder_fee_chain_units: Number.isFinite(chainFee) ? chainFee : null,
+    builder_fee_bps: builderFeeBps,
+    subaccount: txSubaccount,
+    market: txMarket || null,
+    order_id: orderId || null,
+    client_order_id: orderClientId || null,
+  });
+  db.recordDecibelOrderProof({
+    playerId,
+    subaccount: subAddr,
+    orderId: orderId || null,
+    clientOrderId: orderClientId || null,
+    symbol: symbolFromFill(order, marketMap),
+    side: sideFromFill(order),
+    orderType: 'limit',
+    marketName: fieldString(market || order, ['market_name', 'marketName', 'symbol']) || null,
+    marketAddr: txMarket || orderMarket || null,
+    builderAddr,
+    builderFeeBps,
+    txHash: tx?.hash || null,
+    proofJson,
+  });
+  return db.getDecibelOrderProof({ orderId, clientOrderId: orderClientId }) || {
+    id: null,
+    builder_addr: builderAddr,
+    builder_fee_bps: builderFeeBps,
+    tx_hash: tx?.hash || null,
+    proof_json: proofJson,
+    order_id: orderId || null,
+    client_order_id: orderClientId || null,
+  };
 }
 
 function isFilledLimitOrder(row) {
@@ -137,7 +317,7 @@ function fillPnl(row) {
   return Number.isFinite(raw) ? raw : 0;
 }
 
-function aggregateLimitFills(trades, limitOrderKeySet, marketMap) {
+function aggregateLimitFills(trades, limitOrderKeySet, limitOrderByKey, marketMap) {
   const groups = new Map();
   for (const fill of Array.isArray(trades) ? trades : []) {
     const keys = orderKeys(fill);
@@ -153,6 +333,8 @@ function aggregateLimitFills(trades, limitOrderKeySet, marketMap) {
     const key = `${matchingKey}:${side}`;
     const current = groups.get(key) || {
       key,
+      proofKey: matchingKey,
+      order: limitOrderByKey?.get(matchingKey) || null,
       symbol: symbolFromFill(fill, marketMap),
       side,
       orderId: fieldString(fill, ['order_id', 'orderId', 'orderID']) || matchingKey,
@@ -181,17 +363,40 @@ async function recordRecentLimitFills(playerId, subAddr) {
     marketsByAddress(),
   ]);
   const limitOrderKeySet = new Set();
+  const limitOrderByKey = new Map();
   for (const order of orders) {
     if (!isFilledLimitOrder(order)) continue;
-    for (const key of orderKeys(order)) limitOrderKeySet.add(key);
+    for (const key of orderKeys(order)) {
+      limitOrderKeySet.add(key);
+      if (!limitOrderByKey.has(key)) limitOrderByKey.set(key, order);
+    }
   }
   if (!limitOrderKeySet.size) return 0;
 
   let inserted = 0;
-  for (const fill of aggregateLimitFills(trades, limitOrderKeySet, marketMap)) {
+  for (const fill of aggregateLimitFills(trades, limitOrderKeySet, limitOrderByKey, marketMap)) {
     const avgPrice = fill.sizeAbs > 0 ? fill.weightedPrice / fill.sizeAbs : 0;
     const isClose = String(fill.side || '').startsWith('close_');
-    const proof = proofForOrderKey(fill.key);
+    let proof = proofForOrderKey(fill.proofKey);
+    if (!proof && fill.order) {
+      try {
+        proof = await proofFromOrderTx(playerId, subAddr, fill.order, marketMap);
+      } catch (e) {
+        console.warn(`[decibel-rewards-worker] on-chain proof failed for ${fill.proofKey}:`, e.message);
+      }
+    }
+    const proofJson = proof ? JSON.stringify({
+      source: 'decibel_trade_history_reconciliation',
+      builder: proof.builder_addr,
+      builder_fee_bps: proof.builder_fee_bps,
+      subaccount: subAddr,
+      matched_key: fill.proofKey,
+      proof_id: proof.id || null,
+      original_client_order_id: proof.client_order_id,
+      original_order_id: proof.order_id,
+      order_tx_hash: proof.tx_hash,
+      order_proof_json: proof.proof_json || null,
+    }) : null;
     const r = db.addTrade(playerId, {
       symbol: fill.symbol,
       side: fill.side,
@@ -206,19 +411,15 @@ async function recordRecentLimitFills(playerId, subAddr) {
       verifiedSource: proof ? 'decibel_fill' : 'worker',
       pnl: isClose && Number.isFinite(fill.pnl) ? fill.pnl : null,
       fee: fill.fee,
-      proofJson: proof ? JSON.stringify({
-        source: 'decibel_trade_history_reconciliation',
-        builder: proof.builder_addr,
-        builder_fee_bps: proof.builder_fee_bps,
-        subaccount: subAddr,
-        matched_key: fill.key,
-        proof_id: proof.id,
-        original_client_order_id: proof.client_order_id,
-        original_order_id: proof.order_id,
-        order_tx_hash: proof.tx_hash,
-        order_proof_json: proof.proof_json || null,
-      }) : null,
+      proofJson,
     });
+    if (proof) {
+      db.upgradeDecibelWorkerTradeByClient({
+        clientOrderId: fill.clientOrderId,
+        proofJson,
+        fee: fill.fee,
+      });
+    }
     inserted += r.changes || 0;
   }
   return inserted;

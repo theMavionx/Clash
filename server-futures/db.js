@@ -252,6 +252,15 @@ const stmts = {
   `),
   getDecibelOrderProofByOrder: db.prepare('SELECT * FROM decibel_order_proofs WHERE order_id = ? LIMIT 1'),
   getDecibelOrderProofByClient: db.prepare('SELECT * FROM decibel_order_proofs WHERE client_order_id = ? LIMIT 1'),
+  upgradeDecibelWorkerTradeByClient: db.prepare(`
+    UPDATE trade_history
+       SET verified_source='decibel_fill',
+           proof_json=COALESCE(?, proof_json),
+           fee=COALESCE(?, fee)
+     WHERE dex='decibel'
+       AND verified_source='worker'
+       AND client_order_id=?
+  `),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
 };
@@ -405,6 +414,16 @@ function getDecibelOrderProof({ orderId = null, clientOrderId = null } = {}) {
   return null;
 }
 
+function upgradeDecibelWorkerTradeByClient({ clientOrderId, proofJson = null, fee = null } = {}) {
+  if (!clientOrderId) return { changes: 0 };
+  const info = stmts.upgradeDecibelWorkerTradeByClient.run(
+    proofJson == null ? null : String(proofJson),
+    fee == null ? null : String(fee),
+    String(clientOrderId),
+  );
+  return { changes: info.changes || 0 };
+}
+
 function getTrades(playerId) {
   return stmts.getTrades.all(playerId);
 }
@@ -422,6 +441,7 @@ module.exports = {
   getTrades,
   recordDecibelOrderProof,
   getDecibelOrderProof,
+  upgradeDecibelWorkerTradeByClient,
 };
 
 // One-time encryption migration: any row where secret_key doesn't start with
