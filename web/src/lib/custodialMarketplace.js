@@ -782,7 +782,7 @@ export async function depositCoreNftToCustody({
     { mplCore, fetchAsset, fetchCollection, transfer },
     { toWeb3JsInstruction },
     { Connection, PublicKey },
-    { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl, createSolanaConnection },
+    { DEFAULT_NFT_SOLANA_RPC_URL, NFT_SOLANA_RPC_URLS, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl, createSolanaConnection },
     { sendSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@metaplex-foundation/umi-bundle-defaults'),
@@ -794,8 +794,8 @@ export async function depositCoreNftToCustody({
     import('./solanaTx'),
   ]);
 
-  const rpcProbe = await selectFreshSolanaRpcUrl(undefined, { timeoutMs: 2500 }).catch(() => ({ selected: null }));
-  const rpcUrl = solanaBatchSafeRpcUrl(rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL);
+  const rpcProbe = await selectFreshSolanaRpcUrl(NFT_SOLANA_RPC_URLS, { timeoutMs: 2500 }).catch(() => ({ selected: null }));
+  const rpcUrl = solanaBatchSafeRpcUrl(rpcProbe.selected?.url || DEFAULT_NFT_SOLANA_RPC_URL, NFT_SOLANA_RPC_URLS);
   const umi = createUmi(rpcUrl).use(mplCore());
   const ownerPk = new PublicKey(owner);
   const ownerSigner = createNoopSigner(publicKey(owner));

@@ -118,6 +118,37 @@ function sameChainAddress(chain, a, b) {
   return !!left && !!right && left === right;
 }
 
+function cachedPlayerNft(playerId, collection, chain, tokenId) {
+  const normalizedChain = String(chain || '').toLowerCase();
+  const normalizedCollection = String(collection || 'demon_king').toLowerCase();
+  const normalizedTokenId = String(tokenId || '').trim();
+  if (!playerId || !normalizedChain || !normalizedTokenId) return null;
+  return gameDb.db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url, active, source, updated_at
+      FROM player_nfts
+     WHERE player_id = ?
+       AND lower(collection) = ?
+       AND lower(chain) = ?
+       AND token_id = ?
+       AND active = 1
+     ORDER BY updated_at DESC
+     LIMIT 1
+  `).get(String(playerId), normalizedCollection, normalizedChain, normalizedTokenId) || null;
+}
+
+function mergeCachedNftLevel(assetInfo, cached) {
+  if (!cached) return assetInfo;
+  const cachedLevel = Number(cached.level || 0);
+  if (![1, 2, 3].includes(cachedLevel)) return assetInfo;
+  const currentLevel = Number(assetInfo?.level || 1);
+  if (cachedLevel <= currentLevel) return assetInfo;
+  return {
+    ...assetInfo,
+    level: cachedLevel,
+    cachedLevelSource: 'player_nfts',
+  };
+}
+
 function normalizeAssetIdForChain(chain, value, label = 'assetId') {
   const raw = String(value || '').trim();
   if (!raw) throw httpError(400, `${label} required`);
@@ -2343,6 +2374,10 @@ function mountCustodialMarketplace(router, ctx = {}) {
           throw err;
         }
       }
+      assetInfo = mergeCachedNftLevel(
+        assetInfo,
+        cachedPlayerNft(req.player.id, 'demon_king', assetChain, assetInfo?.asset || assetId),
+      );
       const id = crypto.randomUUID();
       const metadata = { assetInfo, createdIp: req.ip || null, note: String(req.body?.note || '').slice(0, 200) };
       gameDb.db.transaction(() => {
