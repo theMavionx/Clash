@@ -27,6 +27,10 @@ const POLL_MS = 2 * 60 * 1000; // 2 minutes
 // below $10. Keeping this floor low lets position quests count tiny but real
 // meme-market fills such as CHIP without paying gold for them.
 const MIN_RECORDED_NOTIONAL_USD = 0.000001;
+const DECIBEL_LIMIT_FILL_LOOKBACK = Math.max(
+  50,
+  Math.min(500, Number(process.env.DECIBEL_LIMIT_FILL_LOOKBACK || 250))
+);
 
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
@@ -358,8 +362,8 @@ function aggregateLimitFills(trades, limitOrderKeySet, limitOrderByKey, marketMa
 
 async function recordRecentLimitFills(playerId, subAddr) {
   const [orders, trades, marketMap] = await Promise.all([
-    decibel.fetchOrderHistory(subAddr, { limit: 100, sortDir: 'DESC' }),
-    decibel.fetchTradeHistory(subAddr, { limit: 100, sortDir: 'DESC' }),
+    decibel.fetchOrderHistory(subAddr, { limit: DECIBEL_LIMIT_FILL_LOOKBACK, sortDir: 'DESC' }),
+    decibel.fetchTradeHistory(subAddr, { limit: DECIBEL_LIMIT_FILL_LOOKBACK, sortDir: 'DESC' }),
     marketsByAddress(),
   ]);
   const limitOrderKeySet = new Set();
