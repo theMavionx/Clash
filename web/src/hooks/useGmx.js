@@ -20,6 +20,7 @@ import { formatUnits, parseUnits, stringToHex, zeroHash } from 'viem';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import { getGmxApiSdk } from '../lib/gmxClient';
 import {
   ARBITRUM_CHAIN_ID,
@@ -374,10 +375,7 @@ export function useGmx() {
   // EVM wallet (from server) must match the currently connected wallet,
   // otherwise a fresh wallet shouldn't be able to operate on the registered
   // user's balances. Returns true ONLY when both are present and differ.
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
-  const registeredEvmWallet = /^0x[0-9a-fA-F]{40}$/.test(registeredWallet)
-    ? registeredWallet.toLowerCase()
-    : null;
+  const registeredEvmWallet = registeredDexWallet(player, 'gmx', 'evm') || null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
   const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
 

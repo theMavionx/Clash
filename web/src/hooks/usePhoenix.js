@@ -5,6 +5,7 @@ import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as
 import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MAX_SUBACCOUNTS, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, buildDepositIxsResolved, buildNormalizedMarketParamsBySymbol, buildWithdrawIxsResolved, computeTraderMarginFromInputs, createPhoenixTraderStateManager, flight, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   asPhoenixArray,
   createPhoenixPublicWsClient,
@@ -1603,8 +1604,7 @@ export function usePhoenix() {
   const privyActive = walletSource === 'privy';
   const walletAddr = adapterAddr || privyAddr || null;
   const ownerPk = useMemo(() => walletAddr ? new PublicKey(walletAddr) : null, [walletAddr]);
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
-  const registeredSolanaWallet = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(registeredWallet) ? registeredWallet : null;
+  const registeredSolanaWallet = registeredDexWallet(player, 'phoenix', 'solana') || null;
   const walletMismatch = !!(registeredSolanaWallet && walletAddr && registeredSolanaWallet !== walletAddr);
   const walletMismatchMessage = useMemo(() => {
     if (!walletMismatch) return '';

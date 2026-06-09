@@ -11,6 +11,7 @@ import { encodeFunctionData, formatUnits, formatEther, parseEther } from 'viem';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   TRADING_ADDRESS, TRADING_STORAGE_ADDRESS, USDC_ADDRESS,
   ERC20_ABI, TRADING_ABI, ORDER_TYPE,
@@ -446,10 +447,7 @@ export function useAvantis() {
   useEffect(() => {
     tokenRef.current = player?.token || null;
   }, [player?.token]);
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
-  const registeredEvmWallet = /^0x[0-9a-fA-F]{40}$/.test(registeredWallet)
-    ? registeredWallet.toLowerCase()
-    : null;
+  const registeredEvmWallet = registeredDexWallet(player, 'avantis', 'evm') || null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
   const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
   const scheduleClaim = useCallback((delayMs = 2500) => {

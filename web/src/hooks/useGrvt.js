@@ -4,6 +4,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { GRVT_CHAIN_ID, ensureGrvtChain } from '../lib/grvtConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   migratePlainLocalStorageCredential,
@@ -334,7 +335,7 @@ export function useGrvt() {
   ), [player?.token]);
   const oneTapSignerAddress = oneTapSigner?.address || null;
   const walletAddr = evmWallet?.address || player?.wallet || oneTapSignerAddress || null;
-  const registeredEvmWallet = player?.wallet || null;
+  const registeredEvmWallet = registeredDexWallet(player, 'grvt', 'evm') || null;
   const walletMismatch = !!walletAddr
     && /^0x[a-fA-F0-9]{40}$/.test(String(registeredEvmWallet || ''))
     && String(registeredEvmWallet).toLowerCase() !== String(walletAddr).toLowerCase();

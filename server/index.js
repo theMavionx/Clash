@@ -1447,6 +1447,7 @@ function renderPlayers() {
   const grvtCount  = players.filter(p => p.dex === 'grvt').length;
   const hotCount    = players.filter(p => p.dex === 'hotstuff').length;
   const gmtCount    = players.filter(p => p.dex === 'gmtrade').length;
+  const flsCount    = players.filter(p => p.dex === 'flash').length;
   const katCount   = players.filter(p => p.dex === 'katana').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
@@ -1473,6 +1474,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5;font-size:22px">' + hotCount + '</div><div class="l">Hotstuff</div></div>' +
     '<div class="stat" style="border-color:#06b6d4"><div class="v" style="color:#67e8f9;font-size:22px">' + katCount + '</div><div class="l">Katana</div></div>' +
     '<div class="stat" style="border-color:#0f766e"><div class="v" style="color:#5eead4;font-size:22px">' + gmtCount + '</div><div class="l">GMTrade</div></div>' +
+    '<div class="stat" style="border-color:#eab308"><div class="v" style="color:#fde047;font-size:22px">' + flsCount + '</div><div class="l">Flash</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
@@ -1494,6 +1496,7 @@ function renderPlayers() {
     if (d === 'hotstuff') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HOT</span>';
     if (d === 'katana') return '<span class="badge" style="background:#164e63;color:#cffafe">KTN</span>';
     if (d === 'gmtrade') return '<span class="badge" style="background:#0f766e;color:#ccfbf1">GMT</span>';
+    if (d === 'flash') return '<span class="badge" style="background:#713f12;color:#fef3c7">FLS</span>';
     return '<span class="badge badge-off">—</span>';
   }
   function statusBadge(p) {
@@ -2485,6 +2488,7 @@ async function loadStats() {
     const hotCount = (byDex.find(x => x.dex === 'hotstuff') || {}).n || 0;
     const katCount = (byDex.find(x => x.dex === 'katana') || {}).n || 0;
     const gmtCount = (byDex.find(x => x.dex === 'gmtrade') || {}).n || 0;
+    const flsCount = (byDex.find(x => x.dex === 'flash') || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
@@ -2500,6 +2504,7 @@ async function loadStats() {
     const hotRew = rewardsMap.hotstuff || {};
     const katRew = rewardsMap.katana || {};
     const gmtRew = rewardsMap.gmtrade || {};
+    const flsRew = rewardsMap.flash || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
       dexCard('avantis',  'Avantis · Base',    '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, activityLines('avantis')) +
@@ -2515,6 +2520,7 @@ async function loadStats() {
       dexCard('hotstuff', 'Hotstuff',          '#ef4444', hotCount, hotRew.total_gold || 0, hotRew.total_volume || 0, activityLines('hotstuff')) +
       dexCard('katana',   'Katana Perps',      '#06b6d4', katCount, katRew.total_gold || 0, katRew.total_volume || 0, activityLines('katana')) +
       dexCard('gmtrade',   'GMTrade',           '#0f766e', gmtCount, gmtRew.total_gold || 0, gmtRew.total_volume || 0, activityLines('gmtrade')) +
+      dexCard('flash',     'Flash Trade',       '#eab308', flsCount, flsRew.total_gold || 0, flsRew.total_volume || 0, activityLines('flash')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
     const grvtBuilder = dex.grvt_builder || {};
@@ -2675,6 +2681,9 @@ async function loadStats() {
     document.getElementById('topTradersByDex').innerHTML +=
       topTraderTable('gmtrade', 'GMTrade', '#0f766e');
 
+    document.getElementById('topTradersByDex').innerHTML +=
+      topTraderTable('flash', 'Flash Trade', '#16a34a');
+
     function dexBadge(d) {
       if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
       if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
@@ -2690,6 +2699,7 @@ async function loadStats() {
       if (d === 'hotstuff') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HOT</span>';
       if (d === 'katana') return '<span class="badge" style="background:#164e63;color:#cffafe">KTN</span>';
       if (d === 'gmtrade') return '<span class="badge" style="background:#0f766e;color:#ccfbf1">GMT</span>';
+      if (d === 'flash') return '<span class="badge" style="background:#713f12;color:#fef3c7">FLS</span>';
       return '<span class="badge badge-off">—</span>';
     }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>
@@ -2924,7 +2934,7 @@ async function deleteTask(id) {
 let TOURNAMENTS_CACHE = [];
 let TOURNAMENT_LB_ID = null;
 let TOURNAMENT_EDIT_ID = null;
-const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade'];
+const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'];
 const TOURNAMENT_DEX_LABELS_ADMIN = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -2940,6 +2950,7 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   hotstuff: 'Hotstuff',
   katana: 'Katana Perps',
   gmtrade: 'GMTrade',
+  flash: 'Flash Trade',
 };
 const TOURNAMENT_TEAM_METRIC_LABELS_ADMIN = {
   volume_usd: 'Volume',
@@ -4217,6 +4228,7 @@ function renderRevenueAnalytics(data) {
     { key: 'hotstuff', label: 'Hotstuff' },
     { key: 'katana', label: 'Katana Perps' },
     { key: 'gmtrade', label: 'GMTrade' },
+    { key: 'flash', label: 'Flash Trade' },
   ];
   const windowKeys = ['24h', '7d', '30d', 'all'];
   const revenueCell = (row) => {
@@ -4296,6 +4308,7 @@ async function loadEarnings(force) {
       ['hotstuff', 'Hotstuff', '#fca5a5', '#ef4444'],
       ['katana',   'Katana Perps', '#67e8f9', '#06b6d4'],
       ['gmtrade',  'GMTrade',  '#5eead4', '#0f766e'],
+      ['flash',    'Flash Trade', '#fde047', '#eab308'],
     ];
     const total = Number(data.total_usd) || 0;
     document.getElementById('earningsTotals').innerHTML =

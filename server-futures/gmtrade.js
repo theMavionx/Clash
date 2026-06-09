@@ -1752,12 +1752,21 @@ async function getAccountByAddress(address) {
   ]);
   const totalMargin = positions.reduce((sum, pos) => sum + (Number(pos.margin) || 0), 0);
   const totalSize = positions.reduce((sum, pos) => sum + (Number(pos.size_usd) || 0), 0);
-  const available = Math.max(0, Number(walletUsdc) - totalMargin);
+  const positionEquity = positions.reduce((sum, pos) => {
+    const net = Number(pos.net_value_usd);
+    if (Number.isFinite(net)) return sum + net;
+    const margin = Number(pos.margin) || 0;
+    const pnl = Number(pos.pnl_usd) || 0;
+    return sum + Math.max(0, margin + pnl);
+  }, 0);
+  const available = Math.max(0, Number(walletUsdc));
+  const accountEquity = Math.max(0, Number(walletUsdc) + positionEquity);
   return {
     authority: address,
-    balance: String(walletUsdc),
+    balance: String(accountEquity),
     wallet_usdc: String(walletUsdc),
-    account_equity: String(walletUsdc),
+    position_equity: String(positionEquity),
+    account_equity: String(accountEquity),
     available_to_spend: String(available),
     available_to_withdraw: String(walletUsdc),
     total_margin_used: String(totalMargin),

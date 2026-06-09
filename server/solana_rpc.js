@@ -11,6 +11,19 @@ function splitSolanaRpcUrls(raw) {
     .filter(Boolean);
 }
 
+function alchemyKeyFromRpcUrl(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/\/v2\/([^/?#]+)/i);
+    return match?.[1] ? decodeURIComponent(match[1]) : '';
+  } catch {
+    const match = value.match(/\/v2\/([^/?#]+)/i);
+    return match?.[1] ? decodeURIComponent(match[1]) : '';
+  }
+}
+
 function heliusSolanaRpcUrl(env = process.env) {
   const key = String(
     env.SOLANA_HELIUS_API_KEY
@@ -27,6 +40,14 @@ function alchemySolanaRpcUrl(env = process.env) {
   const key = String(
     env.SOLANA_ALCHEMY_API_KEY
     || env.ALCHEMY_SOLANA_API_KEY
+    || env.VITE_SOLANA_ALCHEMY_API_KEY
+    || env.VITE_ALCHEMY_SOLANA_API_KEY
+    || env.BASE_ALCHEMY_KEY
+    || env.ALCHEMY_BASE_API_KEY
+    || env.VITE_BASE_ALCHEMY_KEY
+    || alchemyKeyFromRpcUrl(env.BASE_RPC_URL)
+    || alchemyKeyFromRpcUrl(env.NFT_BASE_RPC_URL)
+    || alchemyKeyFromRpcUrl(env.COPRELAUNCH_BASE_RPC_URL)
     || '',
   ).trim();
   return key ? `https://solana-mainnet.g.alchemy.com/v2/${encodeURIComponent(key)}` : '';
@@ -211,6 +232,7 @@ async function withSolanaRpcFallback(task, {
 module.exports = {
   DEFAULT_SOLANA_RPC_URLS,
   alchemySolanaRpcUrl,
+  alchemyKeyFromRpcUrl,
   createSolanaConnection,
   heliusSolanaRpcUrl,
   isPublicSolanaRpcUrl,

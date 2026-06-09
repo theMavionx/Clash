@@ -90,6 +90,7 @@ const FUTURES_TASK_DEXES = new Set([
   'grvt',
   'katana',
   'gmtrade',
+  'flash',
 ]);
 
 function parseParams(p) {
@@ -338,7 +339,7 @@ function resolveWallet(player) {
 
 function walletMatchesDex(dex, wallet) {
   if (dex === 'decibel') return isAptosWallet(wallet);
-  if (dex === 'phoenix' || dex === 'gmtrade') return isSolanaWallet(wallet);
+  if (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') return isSolanaWallet(wallet);
   if (
     dex === 'avantis' ||
     dex === 'gmx' ||
@@ -378,7 +379,7 @@ function resolveWalletForDex(player, dex) {
   try {
     const chainType = normalizedDex === 'decibel'
       ? 'aptos'
-      : (normalizedDex === 'phoenix' || normalizedDex === 'gmtrade')
+      : (normalizedDex === 'phoenix' || normalizedDex === 'gmtrade' || normalizedDex === 'flash')
         ? 'solana'
         : 'evm';
     const walletRow = db.db.prepare(
@@ -404,6 +405,7 @@ function verifiedSourceWhereForDex(dex) {
   if (dex === 'grvt') return "AND verified_source = 'grvt_builder'";
   if (dex === 'katana') return "AND verified_source = 'katana_api'";
   if (dex === 'gmtrade') return "AND verified_source = 'gmtrade_tx'";
+  if (dex === 'flash') return "AND verified_source = 'flash_tx'";
   if (dex === 'phoenix') return "AND verified_source IN ('worker', 'tx')";
   return "AND verified_source = 'worker'";
 }

@@ -238,9 +238,25 @@ export const DEX_CONFIG = {
     chainShort: 'SOL',
     description: 'GMX-style perps on Solana',
   },
+  flash: {
+    id: 'flash',
+    label: 'FLASH',
+    shortLabel: 'FLS',
+    emoji: 'FLS',
+    logo: '/flash-trade.png',
+    logoIsWordmark: false,
+    color: '#FACC15',
+    colorDark: '#A16207',
+    colorLight: 'rgba(250,204,21,0.16)',
+    borderColor: '#EAB308',
+    chain: 'Solana',
+    chainShort: 'SOL',
+    description: 'Flash Trade perps on Solana',
+  },
 };
 
 export const DEX_ORDER = [
+  'flash',
   'gmtrade',
   'katana',
   'grvt',
@@ -263,7 +279,7 @@ export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobi
   // Vault holds a Solana keypair, and Mobile Wallet Adapter is Solana-native.
   // Base/Arbitrum/Aptos/Monad signing would either dead-end or fall through
   // to a non-native wallet flow.
-  if (isSolanaMobile && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade') return false;
+  if (isSolanaMobile && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade' && dexId !== 'flash') return false;
   // Farcaster mini apps expose Solana and, on some clients, EVM providers.
   // Aptos wallet-standard providers such as Petra are not available there, so
   // Decibel would leave users stuck on an impossible connect step.
@@ -354,7 +370,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -391,7 +407,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash') {
           writeLastPlayerDexPreference({ ...player, token }, j.dex);
           setDex(j.dex);
         }

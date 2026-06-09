@@ -6,6 +6,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   INK_CHAIN_ID,
   INK_RPC_URLS,
@@ -329,7 +330,7 @@ export function useNado() {
   const claimGoldRef = useRef(null);
   const importFillsRef = useRef(null);
 
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
+  const registeredWallet = registeredDexWallet(player, 'nado', 'evm');
   const registeredEvmWallet = isNadoAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
   const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);

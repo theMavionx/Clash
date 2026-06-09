@@ -20,6 +20,7 @@ const hotstuffRewards = require('./hotstuff-rewards-worker');
 const grvt = require('./grvt');
 const katana = require('./katana');
 const gmtrade = require('./gmtrade');
+const flash = require('./flash');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
 
@@ -603,22 +604,34 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
-  if (normalizedAsked !== storedDex) {
-    return res.status(409).json({
-      error: `Account is registered for '${storedDex}'. Switch DEX in your profile before calling ${normalizedAsked} endpoints.`,
-      stored_dex: storedDex,
-      requested_dex: normalizedAsked,
-    });
-  }
-  req.dex = storedDex;
-  req.dexWallet = null;
-  if (storedDex === 'gmtrade' && playerDexAccountStmt) {
+  let linkedForAsked = null;
+  if (playerDexAccountStmt && normalizedAsked !== storedDex) {
     try {
-      const linked = playerDexAccountStmt.get(player.id, storedDex);
+      linkedForAsked = playerDexAccountStmt.get(player.id, normalizedAsked) || null;
+    } catch (e) {
+      console.warn('[futures] Failed to load requested dex wallet:', e.message);
+    }
+  }
+  if (normalizedAsked !== storedDex) {
+    if (linkedForAsked?.status !== 'ready') {
+      return res.status(409).json({
+        error: `Account is registered for '${storedDex}'. Switch DEX in your profile before calling ${normalizedAsked} endpoints.`,
+        stored_dex: storedDex,
+        requested_dex: normalizedAsked,
+      });
+    }
+  }
+  req.dex = normalizedAsked;
+  req.dexWallet = null;
+  if (linkedForAsked?.wallet_address) {
+    req.dexWallet = String(linkedForAsked.wallet_address || '').trim();
+  } else if ((req.dex === 'gmtrade' || req.dex === 'flash') && playerDexAccountStmt) {
+    try {
+      const linked = playerDexAccountStmt.get(player.id, req.dex);
       if (linked?.wallet_address) {
         req.dexWallet = String(linked.wallet_address || '').trim();
       }
@@ -656,12 +669,46 @@ function gmtradeRequestWallet(req) {
   return linked;
 }
 
+function flashLinkedSolanaWallet(req) {
+  const linked = String(req.dexWallet || '').trim();
+  if (flash.isSolanaAddress(linked)) return linked;
+  const primary = String(req.playerWallet || '').trim();
+  if (flash.isSolanaAddress(primary)) return primary;
+  throw Object.assign(
+    new Error('Flash Solana wallet is not linked to this game account. Reconnect your Solana wallet for Flash.'),
+    { status: 409 },
+  );
+}
+
+function flashRequestWallet(req) {
+  const linked = flashLinkedSolanaWallet(req);
+  const requested = String(req.query?.address || req.query?.wallet || '').trim();
+  if (requested && requested !== linked) {
+    throw Object.assign(
+      new Error('Flash wallet mismatch. Switch to the Solana wallet linked to this game account.'),
+      { status: 403 },
+    );
+  }
+  return linked;
+}
+
+function flashBodyWallet(req) {
+  const requested = String(req.body?.wallet || req.body?.address || req.body?.owner || '').trim();
+  if (requested) {
+    if (!flash.isSolanaAddress(requested)) {
+      throw Object.assign(new Error('Flash request wallet must be a valid Solana address.'), { status: 400 });
+    }
+    return requested;
+  }
+  return flashLinkedSolanaWallet(req);
+}
+
 // ==================== WALLET ====================
 
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -691,7 +738,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -772,6 +819,13 @@ router.get('/account', async (req, res) => {
         return res.status(400).json({ error: 'address query param required (Solana wallet)' });
       }
       return res.json(await gmtrade.getAccountByAddress(address));
+    }
+    if (dex === 'flash') {
+      const address = String(req.query.address || req.query.wallet || '').trim();
+      if (!flash.isSolanaAddress(address)) {
+        return res.status(400).json({ error: 'address query param required (Solana wallet)' });
+      }
+      return res.json(await flash.getOwnerSnapshot(address));
     }
     // Pacifica (custodial) — keep legacy auth-gated flow.
     return authGate(req, res, async () => {
@@ -1792,6 +1846,7 @@ router.get('/markets', async (req, res) => {
       : dex === 'grvt' ? await grvt.getMarketInfo()
       : dex === 'katana' ? await katana.getMarketInfo()
       : dex === 'gmtrade' ? await gmtrade.getMarketInfo()
+      : dex === 'flash' ? await flash.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -1815,6 +1870,7 @@ router.get('/prices', async (req, res) => {
       : dex === 'grvt' ? await grvt.getPrices()
       : dex === 'katana' ? await katana.getPrices()
       : dex === 'gmtrade' ? await gmtrade.getPrices()
+      : dex === 'flash' ? await flash.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -2002,6 +2058,14 @@ router.get('/positions', async (req, res) => {
       const positions = await gmtrade.getPositionsByAddress(address);
       return res.json(positions);
     }
+    if (dex === 'flash') {
+      const address = String(req.query.address || req.query.wallet || '').trim();
+      if (!flash.isSolanaAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const positions = await flash.getPositionsByAddress(address);
+      return res.json(positions);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -2090,6 +2154,14 @@ router.get('/orders', async (req, res) => {
       const orders = await gmtrade.getOrdersByAddress(address);
       return res.json(orders);
     }
+    if (dex === 'flash') {
+      const address = String(req.query.address || req.query.wallet || '').trim();
+      if (!flash.isSolanaAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const orders = await flash.getOrdersByAddress(address);
+      return res.json(orders);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -2104,7 +2176,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -2411,7 +2483,7 @@ router.post('/monad/report-fill', auth, async (req, res) => {
 // payloads are not rewardable; market opens on Avantis are immediately
 // re-read from Core API and recorded as `verified_source='worker'`. Everything
 // else is picked up by the per-DEX rewards workers.
-const TRADE_REPORT_DEXES = new Set(['avantis', 'decibel', 'gmtrade']);
+const TRADE_REPORT_DEXES = new Set(['avantis', 'decibel', 'gmtrade', 'flash']);
 
 function avantisCollateralUsd(row) {
   const raw = row?.collateral ?? row?.trade?.positionSizeUSDC ?? row?.positionSizeUSDC ?? row?.trade?.initialPosToken;
@@ -3727,6 +3799,191 @@ router.post('/grvt/import-fills', auth, async (req, res) => {
   }
 });
 
+function requireFlashDex(req, res) {
+  if (req.dex === 'flash') return true;
+  res.status(409).json({
+    error: `Account is registered for '${req.dex}'. Switch DEX to flash before calling Flash endpoints.`,
+    stored_dex: req.dex,
+    requested_dex: 'flash',
+  });
+  return false;
+}
+
+router.get('/flash/health', async (req, res) => {
+  try {
+    const upstream = await flash.getHealth().catch(e => ({ error: e.message }));
+    res.json({ ...flash.configStatus(), upstream });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Flash health', detail: e.message });
+  }
+});
+
+router.get('/flash/config', auth, (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  res.json(flash.configStatus());
+});
+
+router.get('/flash/account', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    const owner = flashRequestWallet(req);
+    res.json(await flash.getOwnerSnapshot(owner));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Flash account', detail: e.message });
+  }
+});
+
+router.get('/flash/positions', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.getPositionsByAddress(flashRequestWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Flash positions', detail: e.message });
+  }
+});
+
+router.get('/flash/orders', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.getOrdersByAddress(flashRequestWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Flash orders', detail: e.message });
+  }
+});
+
+router.get('/flash/tx-status', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.getTransactionStatus(String(req.query.signature || req.query.tx || '').trim()));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Flash transaction status', detail: e.message });
+  }
+});
+
+router.post('/flash/open-position-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildOpenPositionTx(req.body || {}, flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 open-position transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/close-position-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildClosePositionTx(req.body || {}, flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 close-position transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/tpsl-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildPlaceTpSlTx(req.body || {}, flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 TP/SL transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/init-deposit-ledger-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildInitDepositLedgerTx(flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 init-deposit-ledger transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/init-basket-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildInitBasketTx(flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 init-basket transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/delegate-basket-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    const owner = flashBodyWallet(req);
+    const payer = String(req.body?.payer || req.body?.agent || req.body?.agent_wallet || owner).trim();
+    res.json(await flash.buildDelegateBasketTx(owner, payer));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 delegate-basket transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/deposit-direct-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildDepositDirectTx(req.body || {}, flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 deposit transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/request-withdrawal-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildRequestWithdrawalTx(req.body || {}, flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 withdrawal transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/execute-withdrawal-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildExecuteWithdrawalTx(req.body || {}, flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 execute-withdrawal transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/submit-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    const skipPreflight = req.body?.skipPreflight ?? req.body?.skip_preflight;
+    const result = await flash.submitSignedTransaction(req.body?.rawTransactionBase64 || req.body?.raw_transaction_base64, {
+      skipPreflight: skipPreflight == null ? true : skipPreflight === true,
+      preflightCommitment: req.body?.preflightCommitment || req.body?.preflight_commitment || 'confirmed',
+      maxRetries: req.body?.maxRetries ?? req.body?.max_retries ?? 3,
+    });
+    console.log('[flash submit-tx] sent', JSON.stringify({
+      signature: result.signature,
+      endpoint: result.endpoint,
+      submitted_ms: result.submitted_ms,
+      tx: result.tx,
+    }));
+    res.json(result);
+  } catch (e) {
+    console.warn('[flash submit-tx] failed:', e.message, e.data ? JSON.stringify(e.data).slice(0, 500) : '');
+    res.status(e.status || 502).json({ error: 'Failed to submit Flash v2 transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/trade-report', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    const result = await flash.recordTradeReport(db, req.playerId, req.body || {}, flashLinkedSolanaWallet(req));
+    res.json({
+      ok: true,
+      verified: result.changes > 0,
+      duplicate: result.changes === 0,
+      signature: result.signature,
+      notional_usd: result.notional_usd,
+      reason: result.changes > 0
+        ? 'Flash v2 Solana transaction verified; rewards are ready to claim.'
+        : 'Flash v2 transaction was already imported.',
+    });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to verify Flash trade', detail: e.message });
+  }
+});
+
 router.get('/gmtrade/health', async (req, res) => {
   res.json(gmtrade.configStatus());
 });
@@ -4102,13 +4359,21 @@ router.post('/trade-report', auth, async (req, res) => {
     } else if (req.dex === 'gmtrade') {
       const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, gmtradeLinkedSolanaWallet(req));
       verified = result.changes > 0;
+    } else if (req.dex === 'flash') {
+      const result = await flash.recordTradeReport(db, req.playerId, req.body || {}, flashLinkedSolanaWallet(req));
+      verified = result.changes > 0;
     }
+    const verifiedReason = req.dex === 'gmtrade'
+      ? 'GMTrade Solana transaction verified; rewards are ready to claim.'
+      : req.dex === 'flash'
+      ? 'Flash v2 Solana transaction verified; rewards are ready to claim.'
+      : 'Trade verified from Avantis Core API; rewards are ready to claim.';
     res.json({
       ok: true,
       verified,
       credited: false,
       reason: verified
-        ? 'Trade verified from Avantis Core API; rewards are ready to claim.'
+        ? verifiedReason
         : 'Trade report accepted; rewards are credited after worker verification.',
     });
   } catch (e) {
@@ -4128,7 +4393,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade') {
+  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

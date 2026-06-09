@@ -806,7 +806,7 @@ try {
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
       dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
       eligible_dexes TEXT NOT NULL DEFAULT '[]',
       mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -926,7 +926,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -935,7 +935,7 @@ try {
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT NOT NULL,
             description  TEXT,
-            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade')),
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
             dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
             eligible_dexes TEXT NOT NULL DEFAULT '[]',
             mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -978,11 +978,11 @@ try {
           )
           SELECT
             id, name, description,
-            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade') THEN dex ELSE 'pacifica' END,
+            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END,
             CASE WHEN dex_scope IN ('single','custom','all') THEN dex_scope ELSE 'single' END,
             CASE
               WHEN eligible_dexes IS NOT NULL AND eligible_dexes != '' AND eligible_dexes != '[]' THEN eligible_dexes
-              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade') THEN dex ELSE 'pacifica' END || '"]'
+              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END || '"]'
             END,
             CASE WHEN mode IN ('individual','dex_vs_dex') THEN mode ELSE 'individual' END,
             COALESCE(team_score_by, 'volume_usd'),
@@ -1884,6 +1884,120 @@ const stmts = {
       FROM player_nft_battle_win_events
      WHERE player_id = ?
        AND collection = 'demon_king'
+       AND chain = ?
+       AND token_id = ?
+  `),
+  listPlayerCollectionNfts: db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url,
+           active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = player_nfts.player_id
+                AND e.collection = player_nfts.collection
+                AND e.chain = player_nfts.chain
+                AND e.token_id = player_nfts.token_id
+           ), 0) AS battle_wins
+      FROM player_nfts
+     WHERE player_id = ? AND collection = ? AND active = 1
+     ORDER BY level DESC, chain ASC, CAST(token_id AS INTEGER) ASC
+  `),
+  listPlayerCollectionNftsByWallet: db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url,
+           active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = player_nfts.player_id
+                AND e.collection = player_nfts.collection
+                AND e.chain = player_nfts.chain
+                AND e.token_id = player_nfts.token_id
+           ), 0) AS battle_wins
+      FROM player_nfts
+     WHERE player_id = ?
+       AND collection = ?
+       AND lower(wallet) = lower(?)
+       AND active = 1
+     ORDER BY level DESC, chain ASC, CAST(token_id AS INTEGER) ASC
+  `),
+  getPlayerCollectionNft: db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url,
+           active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = player_nfts.player_id
+                AND e.collection = player_nfts.collection
+                AND e.chain = player_nfts.chain
+                AND e.token_id = player_nfts.token_id
+           ), 0) AS battle_wins
+      FROM player_nfts
+     WHERE player_id = ?
+       AND collection = ?
+       AND chain = ?
+       AND token_id = ?
+       AND active = 1
+     LIMIT 1
+  `),
+  deactivatePlayerCollectionWalletChain: db.prepare(`
+    UPDATE player_nfts
+       SET active = 0, updated_at = datetime('now')
+     WHERE player_id = ?
+       AND collection = ?
+       AND lower(wallet) = lower(?)
+       AND chain = ?
+       AND active = 1
+  `),
+  deactivateCollectionTokenEverywhere: db.prepare(`
+    UPDATE player_nfts
+       SET active = 0, updated_at = datetime('now')
+     WHERE collection = ?
+       AND chain = ?
+       AND token_id = ?
+       AND active = 1
+       AND (player_id != ? OR lower(wallet) != lower(?))
+  `),
+  upsertPlayerCollectionNft: db.prepare(`
+    INSERT INTO player_nfts
+      (player_id, collection, chain, token_id, wallet, level, image_url,
+       active, source, tx_hash, verified_at, last_seen_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now'), datetime('now'))
+    ON CONFLICT(player_id, collection, chain, token_id) DO UPDATE SET
+      wallet = excluded.wallet,
+      level = excluded.level,
+      image_url = COALESCE(excluded.image_url, player_nfts.image_url),
+      active = 1,
+      source = COALESCE(excluded.source, player_nfts.source),
+      tx_hash = COALESCE(excluded.tx_hash, player_nfts.tx_hash),
+      verified_at = datetime('now'),
+      last_seen_at = datetime('now'),
+      updated_at = datetime('now')
+  `),
+  getCollectionNftWalletCheck: db.prepare(`
+    SELECT player_id, collection, wallet, chains, result_count, checked_at
+      FROM player_nft_wallet_checks
+     WHERE player_id = ? AND collection = ? AND lower(wallet) = lower(?)
+     LIMIT 1
+  `),
+  upsertCollectionNftWalletCheck: db.prepare(`
+    INSERT INTO player_nft_wallet_checks
+      (player_id, collection, wallet, chains, result_count, checked_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(player_id, collection, wallet) DO UPDATE SET
+      chains = excluded.chains,
+      result_count = excluded.result_count,
+      checked_at = datetime('now')
+  `),
+  insertCollectionBattleWinEvent: db.prepare(`
+    INSERT OR IGNORE INTO player_nft_battle_win_events
+      (replay_id, player_id, collection, chain, token_id)
+    VALUES (?, ?, ?, ?, ?)
+  `),
+  getCollectionBattleWins: db.prepare(`
+    SELECT COUNT(*) AS wins
+      FROM player_nft_battle_win_events
+     WHERE player_id = ?
+       AND collection = ?
        AND chain = ?
        AND token_id = ?
   `),
@@ -3284,6 +3398,37 @@ function normalizeDemonKingNftInput(token = {}) {
   };
 }
 
+function normalizePlayerNftCollection(collection) {
+  const key = String(collection || 'demon_king')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_');
+  if (!key || key === 'demonking' || key === 'demon_king') return 'demon_king';
+  if (key === 'fire_dragon') return 'dragon';
+  return key;
+}
+
+function normalizeCollectionNftRow(row) {
+  if (!row) return null;
+  return {
+    playerId: row.player_id,
+    collection: normalizePlayerNftCollection(row.collection),
+    chain: String(row.chain || '').toLowerCase(),
+    tokenId: String(row.token_id || ''),
+    wallet: row.wallet || '',
+    level: normalizeDemonKingNftLevel(row.level),
+    imageUrl: row.image_url || null,
+    active: !!row.active,
+    source: row.source || null,
+    txHash: row.tx_hash || null,
+    verifiedAt: row.verified_at || null,
+    lastSeenAt: row.last_seen_at || null,
+    updatedAt: row.updated_at || null,
+    wins: Math.max(0, Number(row.battle_wins || row.wins || 0) || 0),
+    battleWins: Math.max(0, Number(row.battle_wins || row.wins || 0) || 0),
+  };
+}
+
 function normalizeDemonKingBattleToken(token = {}) {
   const chain = String(token.chain ?? token.chainKey ?? token.nftChain ?? '').trim().toLowerCase();
   const tokenId = String(
@@ -3334,10 +3479,30 @@ function listPlayerDemonKingNfts(playerId, wallet = null) {
   return rows.map(normalizeDemonKingNftRow).filter(Boolean);
 }
 
+function listPlayerCollectionNfts(playerId, collection = 'demon_king', wallet = null) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  if (!playerId || !collectionKey) return [];
+  const rows = wallet
+    ? stmts.listPlayerCollectionNftsByWallet.all(playerId, collectionKey, String(wallet).trim())
+    : stmts.listPlayerCollectionNfts.all(playerId, collectionKey);
+  return rows.map(normalizeCollectionNftRow).filter(Boolean);
+}
+
 function getPlayerDemonKingNft(playerId, chain, tokenId) {
   if (!playerId || !chain || tokenId == null) return null;
   return normalizeDemonKingNftRow(stmts.getPlayerDemonKingNft.get(
     playerId,
+    String(chain).trim().toLowerCase(),
+    String(tokenId).trim()
+  ));
+}
+
+function getPlayerCollectionNft(playerId, collection = 'demon_king', chain, tokenId) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  if (!playerId || !collectionKey || !chain || tokenId == null) return null;
+  return normalizeCollectionNftRow(stmts.getPlayerCollectionNft.get(
+    playerId,
+    collectionKey,
     String(chain).trim().toLowerCase(),
     String(tokenId).trim()
   ));
@@ -3374,6 +3539,40 @@ const _replacePlayerDemonKingNftsTxn = db.transaction((playerId, wallet, tokens,
   );
 });
 
+const _replacePlayerCollectionNftsTxn = db.transaction((playerId, collection, wallet, tokens, options = {}) => {
+  const owner = String(wallet || '').trim();
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const chains = normalizeDemonKingChains(options.chains, tokens);
+  for (const chain of chains) {
+    stmts.deactivatePlayerCollectionWalletChain.run(playerId, collectionKey, owner, chain);
+  }
+
+  for (const rawToken of tokens) {
+    const token = normalizeDemonKingNftInput(rawToken);
+    if (!token) continue;
+    stmts.deactivateCollectionTokenEverywhere.run(collectionKey, token.chain, token.tokenId, playerId, owner);
+    stmts.upsertPlayerCollectionNft.run(
+      playerId,
+      collectionKey,
+      token.chain,
+      token.tokenId,
+      owner,
+      token.level,
+      token.imageUrl,
+      options.source || rawToken.source || 'sync',
+      options.txHash || rawToken.txHash || rawToken.tx_hash || null
+    );
+  }
+
+  stmts.upsertCollectionNftWalletCheck.run(
+    playerId,
+    collectionKey,
+    owner,
+    JSON.stringify(chains),
+    tokens.length
+  );
+});
+
 function replacePlayerDemonKingNfts(playerId, wallet, tokens = [], options = {}) {
   const owner = String(wallet || '').trim();
   if (!playerId || !owner) return [];
@@ -3382,6 +3581,17 @@ function replacePlayerDemonKingNfts(playerId, wallet, tokens = [], options = {})
     : [];
   _replacePlayerDemonKingNftsTxn(playerId, owner, normalized, options);
   return listPlayerDemonKingNfts(playerId, owner);
+}
+
+function replacePlayerCollectionNfts(playerId, collection = 'demon_king', wallet, tokens = [], options = {}) {
+  const owner = String(wallet || '').trim();
+  const collectionKey = normalizePlayerNftCollection(collection);
+  if (!playerId || !collectionKey || !owner) return [];
+  const normalized = Array.isArray(tokens)
+    ? tokens.map(normalizeDemonKingNftInput).filter(Boolean)
+    : [];
+  _replacePlayerCollectionNftsTxn(playerId, collectionKey, owner, normalized, options);
+  return listPlayerCollectionNfts(playerId, collectionKey, owner);
 }
 
 function bindPlayerDemonKingNft(playerId, wallet, token = {}, options = {}) {
@@ -3402,6 +3612,26 @@ function bindPlayerDemonKingNft(playerId, wallet, token = {}, options = {}) {
   return getPlayerDemonKingNft(playerId, normalized.chain, normalized.tokenId);
 }
 
+function bindPlayerCollectionNft(playerId, collection = 'demon_king', wallet, token = {}, options = {}) {
+  const owner = String(wallet || '').trim();
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const normalized = normalizeDemonKingNftInput(token);
+  if (!playerId || !collectionKey || !owner || !normalized) return null;
+  stmts.deactivateCollectionTokenEverywhere.run(collectionKey, normalized.chain, normalized.tokenId, playerId, owner);
+  stmts.upsertPlayerCollectionNft.run(
+    playerId,
+    collectionKey,
+    normalized.chain,
+    normalized.tokenId,
+    owner,
+    normalized.level,
+    normalized.imageUrl,
+    options.source || token.source || 'verified',
+    options.txHash || token.txHash || token.tx_hash || null
+  );
+  return getPlayerCollectionNft(playerId, collectionKey, normalized.chain, normalized.tokenId);
+}
+
 function getDemonKingNftWalletCheck(playerId, wallet) {
   if (!playerId || !wallet) return null;
   const row = stmts.getDemonKingNftWalletCheck.get(playerId, String(wallet).trim());
@@ -3411,6 +3641,23 @@ function getDemonKingNftWalletCheck(playerId, wallet) {
   return {
     playerId: row.player_id,
     collection: row.collection || 'demon_king',
+    wallet: row.wallet,
+    chains: Array.isArray(chains) ? chains.map((c) => String(c).toLowerCase()) : [],
+    resultCount: Number(row.result_count) || 0,
+    checkedAt: row.checked_at || null,
+  };
+}
+
+function getCollectionNftWalletCheck(playerId, collection = 'demon_king', wallet) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  if (!playerId || !collectionKey || !wallet) return null;
+  const row = stmts.getCollectionNftWalletCheck.get(playerId, collectionKey, String(wallet).trim());
+  if (!row) return null;
+  let chains = [];
+  try { chains = JSON.parse(row.chains || '[]'); } catch { chains = []; }
+  return {
+    playerId: row.player_id,
+    collection: row.collection || collectionKey,
     wallet: row.wallet,
     chains: Array.isArray(chains) ? chains.map((c) => String(c).toLowerCase()) : [],
     resultCount: Number(row.result_count) || 0,
@@ -3901,6 +4148,13 @@ function getDemonKingBattleWins(playerId, chain, tokenId) {
   return Math.max(0, Number(stmts.getDemonKingBattleWins.get(playerId, token.chain, token.tokenId)?.wins || 0) || 0);
 }
 
+function getCollectionBattleWins(playerId, collection = 'demon_king', chain, tokenId) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const token = normalizeDemonKingBattleToken({ chain, tokenId });
+  if (!playerId || !collectionKey || !token) return 0;
+  return Math.max(0, Number(stmts.getCollectionBattleWins.get(playerId, collectionKey, token.chain, token.tokenId)?.wins || 0) || 0);
+}
+
 function recordDemonKingBattleWinEvents(replayId, playerId, tokens = []) {
   const id = Number(replayId);
   const normalized = normalizeDemonKingBattleTokens(tokens);
@@ -3917,7 +4171,63 @@ function recordDemonKingBattleWinEvents(replayId, playerId, tokens = []) {
   return tx();
 }
 
+function recordCollectionBattleWinEvents(replayId, playerId, collection = 'demon_king', tokens = []) {
+  const id = Number(replayId);
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const normalized = normalizeDemonKingBattleTokens(tokens);
+  if (!Number.isFinite(id) || id <= 0 || !playerId || !collectionKey || !normalized.length) return [];
+  const tx = db.transaction(() => {
+    for (const token of normalized) {
+      stmts.insertCollectionBattleWinEvent.run(id, playerId, collectionKey, token.chain, token.tokenId);
+    }
+    return normalized.map((token) => ({
+      ...token,
+      collection: collectionKey,
+      wins: getCollectionBattleWins(playerId, collectionKey, token.chain, token.tokenId),
+    }));
+  });
+  return tx();
+}
+
+const NFT_BACKED_TROOP_COLLECTIONS = {
+  demon_king: { collection: 'demon_king', label: 'Demon King' },
+  fire_dragon: { collection: 'dragon', label: 'Dragon' },
+};
+
+function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
+  const troopKey = String(troopType || '').trim().toLowerCase();
+  const cfg = NFT_BACKED_TROOP_COLLECTIONS[troopKey];
+  const def = TROOP_DEFS[troopKey];
+  if (!cfg || !def) return null;
+  const levels = stmts.getTroopLevels.all(playerId);
+  const current = levels.find(t => t.troop_type === troopKey);
+  const currentLevel = current ? current.level : 1;
+  const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
+  const requiredWins = nextLevel ? demonKingRequiredWins(nextLevel) : null;
+  const token = normalizeDemonKingBattleToken(options);
+  const battleWins = token ? getCollectionBattleWins(playerId, cfg.collection, token.chain, token.tokenId) : 0;
+  return {
+    troop_type: troopKey,
+    collection: cfg.collection,
+    label: cfg.label,
+    current_level: currentLevel,
+    max_level: def.max_level,
+    next_level: nextLevel,
+    battle_wins: battleWins,
+    wins: battleWins,
+    account_battle_wins: getBattleWins(playerId),
+    required_wins: requiredWins,
+    wins_ready: requiredWins == null || battleWins >= requiredWins,
+    requires_nft_upgrade: nextLevel != null,
+    nft_upgrade_price: 'same_as_purchase',
+    win_scope: token ? `${cfg.collection}_nft` : 'none',
+    nft: token ? { chain: token.chain, token_id: token.tokenId } : null,
+  };
+}
+
 function getDemonKingUpgradeStatus(playerId, options = {}) {
+  const generic = getNftBackedTroopUpgradeStatus(playerId, 'demon_king', options);
+  if (generic) return generic;
   const def = TROOP_DEFS.demon_king;
   const levels = stmts.getTroopLevels.all(playerId);
   const current = levels.find(t => t.troop_type === 'demon_king');
@@ -4670,8 +4980,28 @@ function getFullPlayerState(playerId) {
   // Auto-repair buildings on login (like Clash of Clans)
   repairAllBuildings(playerId);
   const { token, ...safe } = player;
+  const wallets = db.prepare(`
+    SELECT chain_type, address, label, is_primary, updated_at
+    FROM player_wallets
+    WHERE player_id = ?
+    ORDER BY is_primary DESC, updated_at DESC
+  `).all(playerId);
+  const dexAccounts = db.prepare(`
+    SELECT dex, chain_type, wallet_address, account_id, status, metadata_json, updated_at
+    FROM player_dex_accounts
+    WHERE player_id = ?
+    ORDER BY updated_at DESC
+  `).all(playerId).map((row) => ({
+    ...row,
+    metadata: (() => {
+      try { return JSON.parse(row.metadata_json || '{}'); } catch { return {}; }
+    })(),
+    metadata_json: undefined,
+  }));
   return {
     ...safe,
+    wallets,
+    dex_accounts: dexAccounts,
     buildings: getPlayerBuildings(playerId),
     troop_levels: getTroopLevels(playerId),
     altar_skills: getAltarSkillLevels(playerId),
@@ -4986,6 +5316,11 @@ module.exports = {
   replacePlayerDemonKingNfts,
   bindPlayerDemonKingNft,
   getDemonKingNftWalletCheck,
+  listPlayerCollectionNfts,
+  getPlayerCollectionNft,
+  replacePlayerCollectionNfts,
+  bindPlayerCollectionNft,
+  getCollectionNftWalletCheck,
   markDemonKingNftWalletChecked,
   getResources,
   addResources,
@@ -5022,7 +5357,10 @@ module.exports = {
   getBattleWins,
   getDemonKingBattleWins,
   recordDemonKingBattleWinEvents,
+  getCollectionBattleWins,
+  recordCollectionBattleWinEvents,
   getDemonKingUpgradeStatus,
+  getNftBackedTroopUpgradeStatus,
   demonKingRequiredWins,
   getFullPlayerState,
   buyShip,

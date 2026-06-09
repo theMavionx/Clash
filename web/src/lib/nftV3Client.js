@@ -89,6 +89,7 @@ export function nftLevelImageUrl(level, id = null, collection = 'demonking') {
 
 function normalizeNftImageUrl(url, level = 1, id = null, collection = 'demonking') {
   const lvl = normalizeNftLevel(level);
+  const collectionSlug = normalizeNftCollectionSlug(collection);
   const fallback = nftLevelImageUrl(lvl, id, collection);
   const text = String(url || '').trim();
   if (!text) return fallback;
@@ -805,8 +806,8 @@ function demonKingPlayerCacheScope(token) {
   return (hash >>> 0).toString(36);
 }
 
-function demonKingSyncCacheKey(wallet, chains, token = null) {
-  return `${DEMON_KING_SYNC_CACHE_PREFIX}${demonKingPlayerCacheScope(token)}:${String(wallet || '').toLowerCase()}:${normalizeDemonKingChains(chains).join(',')}`;
+function demonKingSyncCacheKey(wallet, chains, token = null, collection = 'demonking') {
+  return `${DEMON_KING_SYNC_CACHE_PREFIX}${normalizeNftCollectionSlug(collection)}:${demonKingPlayerCacheScope(token)}:${String(wallet || '').toLowerCase()}:${normalizeDemonKingChains(chains).join(',')}`;
 }
 
 function readDemonKingSyncCache(key) {
@@ -957,14 +958,15 @@ function normalizeDemonKingSyncJobs({ wallet, wallets, chains }) {
   return jobs;
 }
 
-async function syncDemonKingNftWallet({ wallet, chains, force, signal, token }) {
+async function syncDemonKingNftWallet({ wallet, chains, force, signal, token, collection = 'demonking' }) {
   const walletText = String(wallet || '').trim();
   const chainList = normalizeDemonKingChains(chains);
+  const collectionSlug = normalizeNftCollectionSlug(collection);
   if (!walletText || !chainList.length) {
-    return { ok: true, wallet: walletText, chains: chainList, total: 0, tokens: [] };
+    return { ok: true, collection: collectionSlug, wallet: walletText, chains: chainList, total: 0, tokens: [] };
   }
 
-  const cacheKey = demonKingSyncCacheKey(walletText, chainList, token);
+  const cacheKey = demonKingSyncCacheKey(walletText, chainList, token, collectionSlug);
   if (!force) {
     const cached = readDemonKingSyncCache(cacheKey);
     if (cached) return cached;
@@ -972,22 +974,24 @@ async function syncDemonKingNftWallet({ wallet, chains, force, signal, token }) 
     clearDemonKingNftCache(walletText);
   }
 
-  const inflightKey = `${demonKingPlayerCacheScope(token)}:${String(walletText).toLowerCase()}:${chainList.join(',')}:${force ? 'force' : 'normal'}`;
+  const inflightKey = `${collectionSlug}:${demonKingPlayerCacheScope(token)}:${String(walletText).toLowerCase()}:${chainList.join(',')}:${force ? 'force' : 'normal'}`;
   if (demonKingSyncInflight.has(inflightKey)) return demonKingSyncInflight.get(inflightKey);
 
   const job = (async () => {
-    const res = await fetchWithTimeout('/api/nft/demon-king/sync', {
+    const syncPath = collectionSlug === 'demonking' ? '/api/nft/demon-king/sync' : `/api/nft/${collectionSlug}/sync`;
+    const syncLabel = collectionSlug === 'demonking' ? 'Demon King NFT sync' : `${collectionSlug} NFT sync`;
+    const res = await fetchWithTimeout(syncPath, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-token': token },
       body: JSON.stringify({ wallet: walletText, chains: chainList, force }),
       cache: 'no-store',
-    }, 20_000, 'Demon King NFT sync', signal);
+    }, 20_000, syncLabel, signal);
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json?.error || `Demon King NFT sync failed (${res.status})`);
+    if (!res.ok) throw new Error(json?.error || `${syncLabel} failed (${res.status})`);
     const value = normalizeNftPayloadImages({
       ...json,
       tokens: Array.isArray(json?.tokens) ? json.tokens : [],
-    });
+    }, collectionSlug);
     writeDemonKingSyncCache(cacheKey, value);
     try {
       window?.dispatchEvent?.(new CustomEvent('demon-king-nfts:updated', {
@@ -1005,11 +1009,12 @@ async function syncDemonKingNftWallet({ wallet, chains, force, signal, token }) 
   }
 }
 
-export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON_KING_SUPPORTED_CHAINS, force = false, signal } = {}) {
+export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON_KING_SUPPORTED_CHAINS, force = false, signal, collection = 'demonking' } = {}) {
   const jobs = normalizeDemonKingSyncJobs({ wallet, wallets, chains });
   const requestedChains = normalizeDemonKingChains(chains);
+  const collectionSlug = normalizeNftCollectionSlug(collection);
   if (!jobs.length) {
-    return { ok: true, wallet: String(wallet || ''), chains: requestedChains, total: 0, tokens: [] };
+    return { ok: true, collection: collectionSlug, wallet: String(wallet || ''), chains: requestedChains, total: 0, tokens: [] };
   }
 
   const token = typeof window !== 'undefined' ? window._playerToken : null;
@@ -1020,6 +1025,7 @@ export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON
     force,
     signal,
     token,
+    collection: collectionSlug,
   })));
 
   const tokensByKey = new Map();
@@ -1053,13 +1059,14 @@ export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON
 
   const value = normalizeNftPayloadImages({
     ok: true,
+    collection: collectionSlug,
     partial: errors.length > 0,
     wallets: walletsSynced,
     chains: [...chainsSynced],
     total: tokensByKey.size,
     tokens: [...tokensByKey.values()],
     errors,
-  });
+  }, collectionSlug);
   try {
     window?.dispatchEvent?.(new CustomEvent('demon-king-nfts:updated', {
       detail: { wallets: walletsSynced, chains: value.chains, tokens: value.tokens, force },
@@ -1067,6 +1074,8 @@ export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON
   } catch {}
   return value;
 }
+
+export const syncCollectionNfts = syncDemonKingNfts;
 
 function evmRpcUrls(chain) {
   const config = EVM_OWNED_CONFIG[chain];

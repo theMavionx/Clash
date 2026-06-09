@@ -11,6 +11,7 @@ import {
   writeEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 
 const STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const LEVERAGE_STORAGE_KEY = 'clash_hibachi_leverage_v1';
@@ -204,7 +205,7 @@ export function useHibachi() {
 
   const token = (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null;
   const walletAddr = evmWallet?.address || null;
-  const registeredEvmWallet = player?.wallet || null;
+  const registeredEvmWallet = registeredDexWallet(player, 'hibachi', 'evm') || null;
   const walletMismatch = !!walletAddr
     && /^0x[a-fA-F0-9]{40}$/.test(String(registeredEvmWallet || ''))
     && String(registeredEvmWallet).toLowerCase() !== String(walletAddr).toLowerCase();

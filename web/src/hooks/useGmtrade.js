@@ -4,7 +4,15 @@ import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solan
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { createReconnectingJsonWebSocket } from '../lib/reconnectingWebSocket';
-import { createSolanaConnection, selectFreshSolanaRpcUrl, SOLANA_RPC_URLS, solanaRpcHost } from '../lib/solanaRpc';
+import {
+  createSolanaConnection,
+  SAME_ORIGIN_SOLANA_ALCHEMY_URL,
+  SAME_ORIGIN_SOLANA_RPC_URL,
+  selectFreshSolanaRpcUrl,
+  SOLANA_RPC_URLS,
+  solanaRpcHost,
+} from '../lib/solanaRpc';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -14,6 +22,19 @@ const WALLET_USDC_RPC_TIMEOUT_MS = 2_500;
 const GMTRADE_REFERRAL_URL = 'https://gmtrade.xyz/referrals/?ref=gamingperps';
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const GMTRADE_WALLET_BALANCE_RPC_URLS = [
+  SAME_ORIGIN_SOLANA_ALCHEMY_URL,
+  SAME_ORIGIN_SOLANA_RPC_URL,
+  ...SOLANA_RPC_URLS.filter((url) => {
+    try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'https://clashofperps.fun';
+      const host = new URL(url, origin).hostname;
+      return host !== 'solana-rpc.publicnode.com' && host !== 'solana.leorpc.com';
+    } catch {
+      return true;
+    }
+  }),
+].filter((url, index, list) => url && list.indexOf(url) === index);
 
 function playerToken(player) {
   return player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
@@ -294,10 +315,9 @@ export function useGmtrade() {
   const referralWalletRef = useRef('');
 
   const walletMismatch = useMemo(() => {
-    const registered = String(player?.wallet || '').trim();
-    const registeredSolana = SOLANA_WALLET_RE.test(registered) ? registered : '';
+    const registeredSolana = registeredDexWallet(player, 'gmtrade', 'solana');
     return !!registeredSolana && !!walletAddr && registeredSolana !== walletAddr;
-  }, [player?.wallet, walletAddr]);
+  }, [player, walletAddr]);
 
   useEffect(() => {
     if (!isActiveDex || !token || !walletAddr || walletMismatch) return;
@@ -385,7 +405,7 @@ export function useGmtrade() {
     setWalletUsdcStatus({ status: 'checking' });
     const owner = new PublicKey(walletAddr);
     const errors = [];
-    for (const rpcUrl of SOLANA_RPC_URLS) {
+    for (const rpcUrl of GMTRADE_WALLET_BALANCE_RPC_URLS) {
       try {
         const conn = createSolanaConnection(Connection, rpcUrl, 'confirmed');
         const tokenAccounts = await withTimeout(
@@ -442,9 +462,14 @@ export function useGmtrade() {
           console.warn('[GMTrade] referral read failed:', referralError?.message || referralError);
         });
       }
-      if (token && walletAddr && !walletMismatch) {
+      if (walletAddr && !walletMismatch) {
         const headers = { 'x-token': token, 'x-dex': 'gmtrade' };
-        const acct = await fetchJson(`${FUTURES_API}/gmtrade/account?address=${encodeURIComponent(walletAddr)}`, { headers });
+        const acct = token
+          ? await fetchJson(`${FUTURES_API}/gmtrade/account?address=${encodeURIComponent(walletAddr)}`, { headers }).catch(async (e) => {
+            if (e?.status !== 401 && e?.status !== 409) throw e;
+            return fetchJson(`${FUTURES_API}/account?dex=gmtrade&address=${encodeURIComponent(walletAddr)}`);
+          })
+          : await fetchJson(`${FUTURES_API}/account?dex=gmtrade&address=${encodeURIComponent(walletAddr)}`);
         rememberReferral(acct);
         setAccount(acct);
         setPositions(rows(acct?.positions));
@@ -1321,7 +1346,7 @@ export function useGmtrade() {
     connected: !!walletAddr,
     hasWallet: !!walletAddr,
     walletAddr,
-    registeredEvmWallet: player?.wallet || '',
+    registeredEvmWallet: registeredDexWallet(player, 'gmtrade', 'solana') || '',
     walletMismatch,
     markets,
     prices,

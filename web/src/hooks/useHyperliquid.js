@@ -3,6 +3,7 @@ import { formatUnits, parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   createHyperliquidExchangeClient,
   createHyperliquidInfoClient,
@@ -415,7 +416,7 @@ export function useHyperliquid() {
   const tradeInFlightRef = useRef(false);
   const activationInFlightRef = useRef(false);
 
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
+  const registeredWallet = registeredDexWallet(player, 'hyperliquid', 'evm');
   const registeredEvmWallet = isHyperliquidAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
   const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);

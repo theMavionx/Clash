@@ -52,6 +52,7 @@ const ACCOUNT_PROBE_POSITIVE_TTL_MS = 24 * 60 * 60 * 1000;
 const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
 const ACCOUNT_PROBE_TIMEOUT_MS = 10000;
 const ACCOUNT_PROBE_MAX_RETRIES = 3;
+const ACCOUNT_PROBE_UI_WAIT_MS = 4500;
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
 // user isn't authenticated anywhere; keeps the "Joining…" UX intact when
@@ -232,7 +233,7 @@ export function useAuthFlow() {
   // of silently locking the device to Pacifica.
   useEffect(() => {
     if (!smReady || !isSolanaMobile) return;
-    if (dex !== 'pacifica' && dex !== 'phoenix' && dex !== 'gmtrade') setDex('pacifica');
+    if (dex !== 'pacifica' && dex !== 'phoenix' && dex !== 'gmtrade' && dex !== 'flash') setDex('pacifica');
   }, [smReady, isSolanaMobile, dex, setDex]);
 
   // Saga/Seeker auto-connect: once the page settles, programmatically select
@@ -415,7 +416,7 @@ export function useAuthFlow() {
     // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') return evmContext || privyEvm || null;
     if (dex === 'decibel') return aptosCandidate || null;
-    if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade') {
+    if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') {
       const farcasterSol = solAdapter?.source === 'farcaster' ? solAdapter : null;
       return farcasterSol || privySol || solAdapter || null;
     }
@@ -585,6 +586,14 @@ export function useAuthFlow() {
   const existingAccountName = candidateWalletKey
     ? probedNameByWallet[candidateWalletKey]
     : undefined;
+  const isFarcasterCandidate = !!fcUser;
+  const [probeWaitExpired, setProbeWaitExpired] = useState(false);
+  useEffect(() => {
+    setProbeWaitExpired(false);
+    if (!candidateWalletKey || existingAccountName !== undefined || isFarcasterCandidate) return undefined;
+    const timer = setTimeout(() => setProbeWaitExpired(true), ACCOUNT_PROBE_UI_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [candidateWalletKey, existingAccountName, isFarcasterCandidate]);
 
   // Boot grace — if FC SDK or Privy is still resolving, don't show the
   // manual-connect screen yet. Also a short timer after dex-pick so we
@@ -624,9 +633,9 @@ export function useAuthFlow() {
   // While the probe is in flight we stay in `auto_connecting` so the UI
   // shows the existing "Joining…" spinner rather than flickering into the
   // name form and then straight back out.
-  const isFarcasterCandidate = !!fcUser;
   const probeInFlight = candidate?.wallet && !isFarcasterCandidate &&
     existingAccountName === undefined;
+  const probeBlockingUi = probeInFlight && !probeWaitExpired;
   const authDebug = useMemo(() => ({
     dex,
     dexPicked,
@@ -637,6 +646,8 @@ export function useAuthFlow() {
     candidateSource: candidate?.source || null,
     candidateWallet: candidate?.wallet || null,
     probeInFlight: !!probeInFlight,
+    probeBlockingUi: !!probeBlockingUi,
+    probeWaitExpired,
     existingAccountState: existingAccountName === undefined
       ? 'unknown'
       : existingAccountName === null
@@ -655,7 +666,7 @@ export function useAuthFlow() {
     fcLoading,
   }), [
     dex, dexPicked, booting, graceExpired, registering, candidate,
-    probeInFlight, existingAccountName, suggestedName, isFarcasterCandidate,
+    probeInFlight, probeBlockingUi, probeWaitExpired, existingAccountName, suggestedName, isFarcasterCandidate,
     showRegister, readyForRegister, privyEnabled, privyReady, privyAuthed,
     manualReconnectRequired, smReady, isInFrame, fcLoading,
   ]);
@@ -671,7 +682,7 @@ export function useAuthFlow() {
     if (candidate && suggestedName && isFarcasterCandidate) return 'registering';
     // Non-FC: wait for a definitive probe result, including retrying
     // transient network/server failures.
-    if (candidate && probeInFlight) return 'auto_connecting';
+    if (candidate && probeBlockingUi) return 'auto_connecting';
     // Returning user — server already has an account for this wallet;
     // fire register with their stored name (which is auto-derived-safe so
     // Godot's login_by_wallet fast-path takes over and no rename happens).
@@ -681,7 +692,7 @@ export function useAuthFlow() {
     if (!graceExpired) return 'auto_connecting';
     return 'manual_connect';
   }, [registerError, registering, booting, dexPicked, candidate, suggestedName, graceExpired,
-      isFarcasterCandidate, probeInFlight, existingAccountName, manualReconnectRequired]);
+      isFarcasterCandidate, probeBlockingUi, existingAccountName, manualReconnectRequired]);
 
   const lastAuthStateLogRef = useRef('');
   useEffect(() => {

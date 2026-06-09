@@ -3,6 +3,7 @@ import { formatUnits, parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   RISE_CHAIN_ID,
   RISEX_BRIDGE_CHAIN_BY_ID,
@@ -109,7 +110,7 @@ export function useRisex() {
   const claimGoldRef = useRef(null);
   const importFillsRef = useRef(null);
 
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
+  const registeredWallet = registeredDexWallet(player, 'risex', 'evm');
   const registeredEvmWallet = isRisexAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
   const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);

@@ -7,9 +7,32 @@ function setPerplProxyOrigin(proxyReq) {
   proxyReq.setHeader('referer', 'https://app.perpl.xyz/');
 }
 
+function alchemyKeyFromRpcUrl(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/\/v2\/([^/?#]+)/i);
+    return match?.[1] ? decodeURIComponent(match[1]) : '';
+  } catch {
+    const match = value.match(/\/v2\/([^/?#]+)/i);
+    return match?.[1] ? decodeURIComponent(match[1]) : '';
+  }
+}
+
 const viteEnv = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '');
 const API_PROXY_TARGET = process.env.VITE_API_PROXY || viteEnv.VITE_API_PROXY || '';
 const WS_PROXY_TARGET = process.env.VITE_WS_PROXY || viteEnv.VITE_WS_PROXY || '';
+const BASE_ALCHEMY_KEY = process.env.BASE_ALCHEMY_KEY
+  || viteEnv.BASE_ALCHEMY_KEY
+  || process.env.ALCHEMY_BASE_API_KEY
+  || viteEnv.ALCHEMY_BASE_API_KEY
+  || process.env.VITE_BASE_ALCHEMY_KEY
+  || viteEnv.VITE_BASE_ALCHEMY_KEY
+  || alchemyKeyFromRpcUrl(process.env.BASE_RPC_URL || viteEnv.BASE_RPC_URL)
+  || alchemyKeyFromRpcUrl(process.env.NFT_BASE_RPC_URL || viteEnv.NFT_BASE_RPC_URL)
+  || alchemyKeyFromRpcUrl(process.env.COPRELAUNCH_BASE_RPC_URL || viteEnv.COPRELAUNCH_BASE_RPC_URL)
+  || '';
 const SOLANA_HELIUS_API_KEY = process.env.SOLANA_HELIUS_API_KEY
   || viteEnv.SOLANA_HELIUS_API_KEY
   || process.env.HELIUS_API_KEY
@@ -28,6 +51,11 @@ const SOLANA_ALCHEMY_API_KEY = process.env.SOLANA_ALCHEMY_API_KEY
   || viteEnv.SOLANA_ALCHEMY_API_KEY
   || process.env.ALCHEMY_SOLANA_API_KEY
   || viteEnv.ALCHEMY_SOLANA_API_KEY
+  || process.env.VITE_SOLANA_ALCHEMY_API_KEY
+  || viteEnv.VITE_SOLANA_ALCHEMY_API_KEY
+  || process.env.VITE_ALCHEMY_SOLANA_API_KEY
+  || viteEnv.VITE_ALCHEMY_SOLANA_API_KEY
+  || BASE_ALCHEMY_KEY
   || '';
 const SOLANA_RPC_PROXY_TARGET = SOLANA_ALCHEMY_API_KEY
   ? 'https://solana-mainnet.g.alchemy.com'
@@ -43,13 +71,6 @@ const ARBITRUM_ALCHEMY_KEY = process.env.ARBITRUM_ALCHEMY_KEY
   || viteEnv.ARBITRUM_ALCHEMY_KEY
   || process.env.VITE_ARBITRUM_ALCHEMY_KEY
   || viteEnv.VITE_ARBITRUM_ALCHEMY_KEY
-  || '';
-const BASE_ALCHEMY_KEY = process.env.BASE_ALCHEMY_KEY
-  || viteEnv.BASE_ALCHEMY_KEY
-  || process.env.ALCHEMY_BASE_API_KEY
-  || viteEnv.ALCHEMY_BASE_API_KEY
-  || process.env.VITE_BASE_ALCHEMY_KEY
-  || viteEnv.VITE_BASE_ALCHEMY_KEY
   || '';
 const ETHEREUM_ALCHEMY_KEY = process.env.ETHEREUM_ALCHEMY_KEY
   || viteEnv.ETHEREUM_ALCHEMY_KEY
@@ -112,8 +133,12 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      buffer: 'buffer',
+      buffer: resolve(__dirname, 'node_modules/buffer/index.js'),
+      'node:buffer': resolve(__dirname, 'node_modules/buffer/index.js'),
     },
+  },
+  optimizeDeps: {
+    include: ['buffer'],
   },
   build: {
     rollupOptions: {

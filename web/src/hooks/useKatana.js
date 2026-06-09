@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import { KATANA_CHAIN_ID, KATANA_PERPS_REFERRAL_CODE, KATANA_PERPS_REFERRAL_URL } from '../lib/katanaConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
@@ -217,11 +218,11 @@ export function useKatana() {
   const initialRefreshDoneRef = useRef(false);
 
   const walletMismatch = useMemo(() => {
-    const registered = normalizeAddress(player?.wallet);
+    const registered = normalizeAddress(registeredDexWallet(player, 'katana', 'evm'));
     const live = normalizeAddress(walletAddr);
     const registeredEvm = EVM_WALLET_RE.test(registered) ? registered : '';
     return !!registeredEvm && !!live && registeredEvm !== live;
-  }, [player?.wallet, walletAddr]);
+  }, [player, walletAddr]);
 
   useEffect(() => {
     if (!isActiveDex) return;

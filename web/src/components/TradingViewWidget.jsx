@@ -396,7 +396,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
             candles = await loadPythCandles(tf, now, start);
           }
           if (cancelled) return;
-        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade') {
+        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash') {
           // These DEXes use Pyth benchmarks for chart candles. The helper
           // keeps retries bounded so rate limits do not cascade.
           candles = await loadPythCandles(tf, now, start);

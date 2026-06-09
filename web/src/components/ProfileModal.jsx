@@ -296,7 +296,12 @@ function ProfileModal({ onClose }) {
     if (!wallet?.address || walletActionBusy) return;
     const chain = wallet.chain_type || walletChainType(wallet.address);
     const key = `${chain}:${wallet.address}`;
-    const isLoginWallet = !!wallet.is_login_wallet;
+    const walletAddress = canonicalWallet(wallet.address);
+    const loginAddress = canonicalWallet(player?.wallet || '');
+    const currentActiveAddress = canonicalWallet(activeWallet || '');
+    const isLoginWallet = !!wallet.is_login_wallet
+      || (!!loginAddress && walletAddress === loginAddress)
+      || (!!currentActiveAddress && walletAddress === currentActiveAddress);
     setWalletActionBusy(key);
     setWalletActionError('');
     try {
@@ -310,7 +315,11 @@ function ProfileModal({ onClose }) {
             });
             if (!r.ok) {
               const data = await r.json().catch(() => ({}));
-              console.warn('[profile] wallet unlink failed before logout:', data?.error || r.status);
+              if (r.status === 401 || r.status === 404) {
+                console.warn('[profile] wallet unlink skipped before local disconnect:', data?.error || r.status);
+              } else {
+                console.warn('[profile] wallet unlink failed before logout:', data?.error || r.status);
+              }
             }
           } catch (e) {
             console.warn('[profile] wallet unlink request failed before logout:', e?.message || e);
@@ -329,7 +338,7 @@ function ProfileModal({ onClose }) {
     } finally {
       setWalletActionBusy('');
     }
-  }, [disconnectWalletContext, logoutEverything, onClose, player?.token, refreshAccountLinks, walletActionBusy]);
+  }, [activeWallet, disconnectWalletContext, logoutEverything, onClose, player?.token, player?.wallet, refreshAccountLinks, walletActionBusy]);
 
   const handleEvmConnected = ({ address, provider, rdns }) => {
     setEvmModalOpen(false);

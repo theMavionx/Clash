@@ -101,6 +101,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   cfg.id === 'grvt' ? 'SELF-CUSTODY · GRVT' :
                   cfg.id === 'katana' ? 'SELF-CUSTODY · KATANA' :
                   cfg.id === 'gmtrade' ? 'SELF-CUSTODY · SOLANA' :
+                  cfg.id === 'flash' ? 'SELF-CUSTODY · SOLANA' :
                   cfg.id === 'monad' ? 'SELF-CUSTODY · MONAD' :
                   cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
                   'SELF-CUSTODY · SOLANA'
@@ -248,9 +249,11 @@ function NameForm({ wallet, suggested, seekerHandle, error, onBack, onClearError
 }
 
 function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
-  const venue = dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
+  const venue = dex === 'flash' ? 'FLASH TRADE' : dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
   const connectCopy = dex === 'gmtrade'
     ? 'Connect your Solana wallet to start playing. Please accept our referral code in Clash to receive a GMTrade fee discount. Trades are signed by your own wallet - we never hold your keys.'
+    : dex === 'flash'
+      ? 'Connect your Solana wallet to start playing. Flash Trade transactions are built by the Flash v2 transaction builder and signed by your own wallet - we never hold your keys.'
     : 'Connect your Solana wallet to start playing. Trades are signed by your own wallet - we never hold your keys.';
   return (
     <div style={S.bodyStack}>
@@ -337,6 +340,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'grvt' ? 'GRVT'
     : dex === 'katana' ? 'KATANA'
     : dex === 'gmtrade' ? 'GMTRADE'
+    : dex === 'flash' ? 'FLASH TRADE'
     : 'AVANTIS';
   const chainName = dex === 'gmx' ? 'Arbitrum'
     : dex === 'monad' ? 'Monad'
@@ -348,6 +352,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'grvt' ? 'GRVT Exchange'
     : dex === 'katana' ? 'Katana'
     : dex === 'gmtrade' ? 'Solana'
+    : dex === 'flash' ? 'Solana'
     : 'Base';
   return (
     <div style={S.bodyStack}>
@@ -496,6 +501,7 @@ function RegisterPanel() {
                   dex === 'grvt' ? 'GRVT' :
                   dex === 'katana' ? 'Katana' :
                   dex === 'gmtrade' ? 'GMTrade' :
+                  dex === 'flash' ? 'Flash Trade' :
                   dex === 'phoenix' ? 'Phoenix' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
@@ -589,6 +595,7 @@ function RegisterPanel() {
     if (dex === 'grvt') return 'GRVT LOGIN';
     if (dex === 'katana') return 'KATANA LOGIN';
     if (dex === 'gmtrade') return 'GMTRADE LOGIN';
+    if (dex === 'flash') return 'FLASH TRADE LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
     return 'PACIFICA LOGIN';
   })();

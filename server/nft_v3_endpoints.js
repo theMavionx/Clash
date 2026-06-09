@@ -1411,6 +1411,164 @@ function mountNftV3Endpoints(router, ctx) {
     }
   });
 
+  router.post('/nft/:collectionSlug/sync', async (req, res, next) => {
+    const collectionSlug = normalizeBridgeCollectionSlugValue(req.params.collectionSlug);
+    if (collectionSlug === 'demonking') return next();
+    if (!['dragon', 'voidspore'].includes(collectionSlug)) return res.status(400).json({ error: 'Unsupported NFT collection sync' });
+
+    try {
+      const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+      const rl = readLimit(ip);
+      if (!rl.ok) return res.status(429).json({ error: 'rate limited' });
+
+      const player = playerFromUpgradeRequest(req);
+      if (!player?.id) return res.status(401).json({ error: 'Game account token required' });
+
+      const { getAddress } = await import('viem');
+      const walletRaw = String(req.body?.wallet || req.query?.wallet || '').trim();
+      const requestedChains = normalizeDemonKingSyncChains(req.body?.chains ?? req.query?.chains);
+      const walletByChain = new Map();
+      for (const chain of requestedChains) {
+        try {
+          if (DEMON_KING_EVM_CHAINS.includes(chain)) {
+            if (/^0x[0-9a-fA-F]{40}$/.test(walletRaw)) walletByChain.set(chain, getAddress(walletRaw));
+          } else if (chain === 'aptos') {
+            const { normalizeAptosAddress } = require('./bridge_helpers');
+            const owner = normalizeAptosAddress(walletRaw);
+            if (owner) walletByChain.set(chain, owner);
+          } else if (chain === 'solana' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(walletRaw)) {
+            walletByChain.set(chain, walletRaw);
+          }
+        } catch {}
+      }
+      const syncChains = requestedChains.filter((chain) => walletByChain.has(chain));
+      if (!syncChains.length) return res.status(400).json({ error: 'Wallet does not match requested NFT chain(s)' });
+
+      for (const chain of syncChains) {
+        if (!playerLinkedDemonKingWallet(player, chain, walletByChain.get(chain), getAddress)) {
+          const label = chain === 'aptos' ? 'Aptos' : chain === 'solana' ? 'Solana' : 'EVM';
+          return res.status(403).json({ error: `Connect or verify this ${label} wallet on the game account first` });
+        }
+      }
+
+      const wallet = walletByChain.get(syncChains[0]);
+      const force = req.body?.force === true || String(req.body?.force || req.query?.force || '') === '1';
+      const cachedTokens = gameDb.listPlayerCollectionNfts(player.id, collectionSlug, wallet)
+        .filter((token) => syncChains.includes(token.chain));
+      const check = gameDb.getCollectionNftWalletCheck(player.id, collectionSlug, wallet);
+
+      if (!force && walletCheckCovers(check, syncChains)) {
+        res.set('Cache-Control', 'private, no-store');
+        return res.json({
+          ok: true,
+          cached: true,
+          stale: false,
+          collection: collectionSlug,
+          wallet,
+          chains: syncChains,
+          checkedAt: check.checkedAt,
+          total: cachedTokens.length,
+          tokens: cachedTokens,
+        });
+      }
+
+      const tokens = [];
+      const errors = [];
+      const successfulChains = [];
+      for (const chain of syncChains) {
+        try {
+          const owner = walletByChain.get(chain);
+          const body = DEMON_KING_EVM_CHAINS.includes(chain)
+            ? await listOwnedEvmCollectionNfts(collectionSlug, chain, owner, { force })
+            : chain === 'solana'
+              ? await listOwnedSolanaCollectionNfts(collectionSlug, owner, { force })
+              : await listOwnedAptosCollectionNfts(collectionSlug, owner, { force });
+          successfulChains.push(chain);
+          for (const token of body.tokens || []) {
+            const tokenId = String(token.tokenId || token.tokenAddress || token.asset || token.mint || token.id || '');
+            if (!tokenId) continue;
+            const level = normalizeNftLevel(token.level);
+            tokens.push({
+              ...token,
+              collection: collectionSlug,
+              chain,
+              tokenId,
+              level,
+              imageUrl: token.imageUrl || collectionLevelImageUrl(collectionSlug, level, tokenId),
+            });
+          }
+        } catch (err) {
+          errors.push({ chain, error: (err?.message || String(err)).slice(0, 180) });
+        }
+      }
+
+      if (!successfulChains.length) {
+        if (cachedTokens.length) {
+          res.set('Cache-Control', 'private, no-store');
+          return res.json({
+            ok: true,
+            cached: true,
+            stale: true,
+            collection: collectionSlug,
+            wallet,
+            chains: syncChains,
+            checkedAt: check?.checkedAt || null,
+            total: cachedTokens.length,
+            tokens: cachedTokens,
+            errors,
+          });
+        }
+        return res.status(502).json({
+          error: (errors[0]?.error || `${collectionDisplayName(collectionSlug)} ownership sync failed`).slice(0, 200),
+          errors,
+        });
+      }
+
+      const scannedTokenByKey = new Map(tokens.map((token) => [
+        `${String(token.chain || '').toLowerCase()}:${String(token.tokenId || token.tokenAddress || token.asset || token.mint || token.id || '')}`,
+        token,
+      ]));
+      const boundTokens = gameDb.replacePlayerCollectionNfts(player.id, collectionSlug, wallet, tokens, {
+        chains: successfulChains,
+        source: force ? 'force-sync' : 'sync',
+      }).filter((token) => syncChains.includes(token.chain));
+      const responseTokens = boundTokens.map((token) => {
+        const scanned = scannedTokenByKey.get(`${String(token.chain || '').toLowerCase()}:${String(token.tokenId || '')}`) || {};
+        return {
+          ...scanned,
+          ...token,
+          collection: collectionSlug,
+          displayId: scanned.displayId || scanned.display_id || scanned.tokenIndex || scanned.token_index || undefined,
+          tokenIndex: scanned.tokenIndex || scanned.token_index || scanned.displayId || scanned.display_id || undefined,
+          name: scanned.name || token.name,
+          uri: scanned.uri || scanned.tokenUri || token.uri,
+          standard: scanned.standard || token.standard,
+        };
+      });
+      const nextCheck = gameDb.getCollectionNftWalletCheck(player.id, collectionSlug, wallet);
+      res.set('Cache-Control', 'private, no-store');
+      return res.json({
+        ok: true,
+        cached: false,
+        stale: false,
+        partial: errors.length > 0,
+        collection: collectionSlug,
+        wallet,
+        chains: syncChains,
+        checkedAt: nextCheck?.checkedAt || null,
+        total: responseTokens.length,
+        tokens: responseTokens,
+        errors,
+      });
+    } catch (err) {
+      ctx.logError?.('nft-collection-sync', err);
+      return res.status(err?.status || 500).json({
+        error: (err?.message || 'NFT ownership sync failed').slice(0, 200),
+        errors: Array.isArray(err?.errors) ? err.errors : undefined,
+      });
+    }
+  });
+
   // ─── POST /nft/upgrade/quote ──────────────────────────────────
   router.post('/nft/upgrade/quote', async (req, res) => {
     try {

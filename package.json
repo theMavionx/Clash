@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "test:mcp-sim": "node tools/ai-agent-mcp-simulation.mjs"
+    "test:mcp-sim": "node tools/ai-agent-mcp-simulation.mjs",
+    "watch:backends": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/watch-backends.ps1"
   },
   "repository": {
     "type": "git",

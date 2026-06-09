@@ -30,6 +30,7 @@ const DEX_LABELS = {
   grvt: 'GRVT',
   katana: 'Katana',
   gmtrade: 'GMTrade',
+  flash: 'Flash Trade',
 };
 
 function fmtUsd(n) {

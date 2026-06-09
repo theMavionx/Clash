@@ -290,6 +290,111 @@ export function createSolanaConnection(ConnectionCtor, url, commitmentOrConfig =
   return new ConnectionCtor(url, solanaConnectionConfig(url, commitmentOrConfig));
 }
 
+function isRetryableSolanaRpcStatus(status) {
+  return status === 408
+    || status === 425
+    || status === 429
+    || status === 500
+    || status === 502
+    || status === 503
+    || status === 504;
+}
+
+function isRetryableSolanaRpcPayload(payload) {
+  const rows = Array.isArray(payload) ? payload : [payload];
+  return rows.some((row) => {
+    const error = row?.error;
+    const code = Number(error?.code);
+    const message = String(error?.message || error?.data || '').toLowerCase();
+    return code === 429
+      || code === -32005
+      || /\b429\b|too many requests|rate limit|rate-limit|over rate/i.test(message);
+  });
+}
+
+function jsonRpcMethodNames(body) {
+  const payload = parseJsonRpcBody(body);
+  const rows = Array.isArray(payload) ? payload : [payload];
+  return rows
+    .map(row => String(row?.method || '').trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(',');
+}
+
+function logSolanaRpcFallback(fromUrl, toUrl, detail = {}) {
+  if (!toUrl || typeof console === 'undefined') return;
+  console.warn('[Solana RPC fallback] retrying', {
+    from: solanaRpcHost(fromUrl),
+    to: solanaRpcHost(toUrl),
+    ...detail,
+  });
+}
+
+function logSolanaRpcFallbackSuccess(url, detail = {}) {
+  if (typeof console === 'undefined') return;
+  console.info('[Solana RPC fallback] success', {
+    endpoint: solanaRpcHost(url),
+    ...detail,
+  });
+}
+
+async function solanaRpcFallbackFetch(urls, _input, init = {}) {
+  const candidates = (urls || []).filter((url, index, list) => url && list.indexOf(url) === index);
+  if (candidates.length === 0) return fetch(_input, init);
+  let lastError = null;
+  const method = jsonRpcMethodNames(init?.body);
+  for (let index = 0; index < candidates.length; index += 1) {
+    const url = candidates[index];
+    const isLast = index === candidates.length - 1;
+    const nextUrl = candidates[index + 1];
+    const rpcFetch = solanaRpcFetchForUrl(url) || fetch;
+    try {
+      const response = await rpcFetch(url, init);
+      if (isRetryableSolanaRpcStatus(response.status) && !isLast) {
+        logSolanaRpcFallback(url, nextUrl, { status: response.status, method });
+        continue;
+      }
+      if (response.ok && !isLast) {
+        const payload = await response.clone().json().catch(() => null);
+        if (payload && isRetryableSolanaRpcPayload(payload)) {
+          logSolanaRpcFallback(url, nextUrl, { status: response.status, method, rpc_error: true });
+          continue;
+        }
+      }
+      if (index > 0) logSolanaRpcFallbackSuccess(url, { status: response.status, method });
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (init?.signal?.aborted || isLast) throw error;
+      logSolanaRpcFallback(url, nextUrl, { error: error?.message || String(error), method });
+    }
+  }
+  if (lastError) throw lastError;
+  return fetch(candidates[0], init);
+}
+
+export function solanaRpcFallbackUrls(preferredUrl = '', urls = SOLANA_RPC_URLS) {
+  return [
+    preferredUrl,
+    SAME_ORIGIN_SOLANA_ALCHEMY_URL,
+    SAME_ORIGIN_SOLANA_RPC_URL,
+    ...(urls || []),
+  ].filter((url, index, list) => url && list.indexOf(url) === index);
+}
+
+export function createSolanaFallbackConnection(ConnectionCtor, urls = SOLANA_RPC_URLS, commitmentOrConfig = 'confirmed') {
+  const candidates = solanaRpcFallbackUrls(urls?.[0] || '', urls);
+  const endpoint = candidates[0] || DEFAULT_SOLANA_RPC_URL;
+  const config = (!commitmentOrConfig || typeof commitmentOrConfig === 'string')
+    ? { commitment: commitmentOrConfig || 'confirmed' }
+    : { ...commitmentOrConfig };
+  return new ConnectionCtor(endpoint, {
+    ...config,
+    fetch: config.fetch || ((input, init) => solanaRpcFallbackFetch(candidates, input, init)),
+  });
+}
+
 function probeErrorMessage(error) {
   if (error?.name === 'AbortError') return 'probe timeout';
   return error?.message || String(error || 'probe failed');

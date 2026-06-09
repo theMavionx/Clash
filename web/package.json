@@ -16,6 +16,7 @@
   "dependencies": {
     "@aptos-labs/ts-sdk": "^5.2.1",
     "@aptos-labs/wallet-adapter-react": "^8.3.3",
+    "@coral-xyz/anchor": "^0.30.1",
     "@decibeltrade/sdk": "^0.6.0",
     "@ellipsis-labs/rise": "^0.4.9",
     "@farcaster/mini-app-solana": "^2.0.0",
@@ -23,6 +24,7 @@
     "@gmx-io/sdk": "^1.5.0-alpha-13",
     "@hotstuff-labs/ts-sdk": "^0.1.1-beta.10",
     "@lottiefiles/dotlottie-react": "^0.18.8",
+    "@magicblock-labs/gum-sdk": "^3.0.10",
     "@metaplex-foundation/mpl-core": "^1.10.0",
     "@metaplex-foundation/mpl-core-candy-machine": "^0.3.0",
     "@metaplex-foundation/umi": "^1.5.1",
