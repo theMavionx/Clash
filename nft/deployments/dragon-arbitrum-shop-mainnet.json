@@ -15,7 +15,7 @@
   "clashUsdPriceE6": "10000000",
   "eip712Name": "ClashCollectionShop:dragon:arbitrum",
   "eip712Version": "1",
-  "saleActive": false,
+  "saleActive": true,
   "implementationTxHash": "0xe9ad8416307215ef7163a9d4939e0eac64fe8328405bf62c3eeef2a56a463824",
   "proxyTxHash": "0xe4a9fe1439faa0abf58a80999e37dd7faec3c955f01c42d48d53db713a1ad445",
   "authorizeMinterTxHash": "0x43a3143dd6a872ca96a51edbb3941950593b856d5410c8bc1ff788df5c7f685c",

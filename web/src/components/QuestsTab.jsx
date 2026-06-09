@@ -279,14 +279,16 @@ function QuestsTab({ markets = [] }) {
             .then(rr => rr.ok ? rr.json() : null)
             .then(resources => {
               if (!resources) return;
+              const nextResources = {
+                gold: Number(resources.gold || 0),
+                wood: Number(resources.wood || 0),
+                ore: Number(resources.ore || 0),
+              };
               window.onGodotMessage?.({
                 action: 'resources',
-                data: {
-                  gold: Number(resources.gold || 0),
-                  wood: Number(resources.wood || 0),
-                  ore: Number(resources.ore || 0),
-                },
+                data: nextResources,
               });
+              window.godotBridge?.(JSON.stringify({ action: 'set_resources', data: nextResources }));
             })
             .catch(() => {});
         }

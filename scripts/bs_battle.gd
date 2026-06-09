@@ -596,6 +596,9 @@ func _on_find_pressed() -> void:
 	if not net or not net.has_token():
 		print("Not logged in")
 		return
+	var latest_resources = await net.get_resources()
+	if latest_resources is Dictionary and not latest_resources.has("error"):
+		bs._apply_resources_from_server(latest_resources)
 	var attack_cost: int = _get_attack_cost_gold()
 	if int(bs.resources.get("gold", 0)) < attack_cost:
 		var bridge0 = bs._bridge

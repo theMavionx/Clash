@@ -273,6 +273,14 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"add_resources":
 			if bs:
 				bs._on_add_resource(data.get("resource", "gold"))
+		"resources_add":
+			if bs and data is Dictionary:
+				var next: Dictionary = {
+					"gold": int(bs.resources.get("gold", 0)) + int(data.get("gold", 0)),
+					"wood": int(bs.resources.get("wood", 0)) + int(data.get("wood", 0)),
+					"ore": int(bs.resources.get("ore", 0)) + int(data.get("ore", 0)),
+				}
+				bs._apply_resources_from_server(next)
 		"set_resources":
 			# Server-of-truth totals (after a shop purchase, attack reward, etc.)
 			# pushed in from React. Without this, Godot's local resource counters

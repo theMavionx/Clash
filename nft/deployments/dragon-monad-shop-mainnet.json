@@ -15,7 +15,7 @@
   "clashUsdPriceE6": "10000000",
   "eip712Name": "ClashCollectionShop:dragon:monad",
   "eip712Version": "1",
-  "saleActive": false,
+  "saleActive": true,
   "implementationTxHash": "0xa113fdf7eb035c860a745fc7d3a7b5829f00cb786d48bb92e6655d1a5507d7f4",
   "proxyTxHash": "0x57e3e5db798d5c27bd49653ac7e47f64d1313f0832769092675c52fd2fb8e240",
   "authorizeMinterTxHash": "0x33d0ae46d0ddb77787669c96442ba60ad6104ced2b24edcc03ab438c30441a6a",

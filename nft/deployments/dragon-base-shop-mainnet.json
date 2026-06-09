@@ -15,7 +15,7 @@
   "clashUsdPriceE6": "10000000",
   "eip712Name": "ClashCollectionShop:dragon:base",
   "eip712Version": "1",
-  "saleActive": false,
+  "saleActive": true,
   "implementationTxHash": "0xed8edfa314349c2882ce9ce97068119d5da6d5c204b2e4d152843c622c2d4a99",
   "proxyTxHash": "0x5ea7c27f00aaec9590a0245fbbd4d232e95db03a7fade4b225dc9cae5d422235",
   "authorizeMinterTxHash": "0x2bb41df38440e30e850bea0dcf5ef8f95e679d13dbc49eb3844b5af20ab7a53b",

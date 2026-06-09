@@ -431,6 +431,7 @@ prepare_shared_runtime() {
     ensure_env_default "ETHEREUM_ALCHEMY_KEY" ""
     ensure_env_default "BASE_ALCHEMY_KEY" ""
     ensure_env_default "SOLANA_ALCHEMY_API_KEY" ""
+    ensure_env_default "ALCHEMY_SOLANA_API_KEY" ""
     ensure_env_default "SOLANA_HELIUS_API_KEY" ""
     ensure_env_default "SOLANA_TATUM_API_KEY" ""
     ensure_env_default "VITE_ETHEREUM_ENABLE_PUBLIC_RPC" "1"
