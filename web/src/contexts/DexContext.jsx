@@ -7,6 +7,7 @@ const decibelLogo = '/favicon.png';
 import { usePlayer } from '../hooks/useGodot';
 import { isFarcasterFrame } from '../hooks/useFarcaster';
 import { isSolanaMobileSync, useSolanaMobile } from '../hooks/useSolanaMobile';
+import { writeLastPlayerDexPreference } from '../lib/lastPlayerDex';
 
 const DexContext = createContext(null);
 
@@ -358,12 +359,13 @@ export function DexProvider({ children }) {
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
           // cached in storage.
+          writeLastPlayerDexPreference({ ...player, token }, j.dex);
           setDex(j.dex);
         }
       } catch { /* network error — keep local dex */ }
     })();
     return () => { cancelled = true; };
-  }, [token, setDex]);
+  }, [player, token, setDex]);
 
   return (
     <DexContext.Provider value={{ dex, setDex, config: DEX_CONFIG[dex] }}>
@@ -390,12 +392,13 @@ export function DexServerSync() {
         const j = await r.json();
         if (cancelled) return;
         if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade') {
+          writeLastPlayerDexPreference({ ...player, token }, j.dex);
           setDex(j.dex);
         }
       } catch { /* network error - keep local dex */ }
     })();
     return () => { cancelled = true; };
-  }, [token, setDex]);
+  }, [player, token, setDex]);
 
   return null;
 }

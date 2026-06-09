@@ -33,6 +33,7 @@ import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import { useSkrHandle } from '../hooks/useSkrHandle';
 import { useOptionalPrivy } from '../components/PrivyAuthProvider';
+import { writeLastPlayerDexPreference } from '../lib/lastPlayerDex';
 import {
   useSolanaAdapterResolver,
   usePrivySolanaResolver,
@@ -842,6 +843,7 @@ export function useAuthFlow() {
     const switching = isLoggedIn && dexPicked && newDex !== dex;
     addClientBreadcrumb('dex.pick', { from: dex, to: newDex, switching });
     setDex(newDex);
+    writeLastPlayerDexPreference({ wallet: candidate?.wallet, token: typeof window !== 'undefined' ? window._playerToken : '' }, newDex);
     writeDexPicked(true);
     setDexPickedState(true);
     if (switching) {

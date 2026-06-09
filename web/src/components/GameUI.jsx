@@ -18,10 +18,15 @@ import { useAgentActions } from '../hooks/useAgentActions';
 import { useLayout } from '../hooks/useIsMobile';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import { useSkrHandle } from '../hooks/useSkrHandle';
-import { getAvailableDexConfigs, useDex } from '../contexts/DexContext';
+import { getAvailableDexConfigs, isDexAvailableInContext, useDex } from '../contexts/DexContext';
 import ChunkErrorBoundary from './ChunkErrorBoundary';
 import { addClientBreadcrumb, lazyWithClientReload } from '../lib/clientLogger';
 import { readSoundEnabled } from '../lib/soundSettings';
+import {
+  readLastPlayerDexPreference,
+  readLastPlayerDexPreferenceAsync,
+  writeLastPlayerDexPreference,
+} from '../lib/lastPlayerDex';
 
 // Heavy components are lazy-loaded — their JS only ships to the user
 // when they actually open the relevant UI. Saves ~600KB from the
@@ -99,16 +104,34 @@ export default function GameUI() {
   useEffect(() => {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
     if (!token || showRegister) return;
+    if (!solanaMobileReady) return;
+    const preferenceOwner = { ...player, token };
+    const applySavedDex = (savedDex) => {
+      if (!savedDex || !isDexAvailableInContext(savedDex, { isInFrame: false, isSolanaMobile })) return false;
+      setDex(savedDex);
+      try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
+      setShowVenuePicker(false);
+      addClientBreadcrumb('venue_picker.skip_saved', { dex: savedDex });
+      return true;
+    };
     try {
-      if (localStorage.getItem('clash_dex_picked') !== '1') setShowVenuePicker(true);
+      if (localStorage.getItem('clash_dex_picked') === '1') return;
     } catch {
-      setShowVenuePicker(true);
+      // Continue to the saved preference path when storage reads fail.
     }
-  }, [player?.token, showRegister]);
+    if (applySavedDex(readLastPlayerDexPreference(preferenceOwner))) return;
+    let cancelled = false;
+    readLastPlayerDexPreferenceAsync(preferenceOwner).then((savedDex) => {
+      if (cancelled) return;
+      if (!applySavedDex(savedDex)) setShowVenuePicker(true);
+    });
+    return () => { cancelled = true; };
+  }, [isSolanaMobile, player, setDex, showRegister, solanaMobileReady]);
 
   const chooseVenue = useCallback((nextDex) => {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
     setDex(nextDex);
+    writeLastPlayerDexPreference({ ...player, token }, nextDex);
     try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
     setShowVenuePicker(false);
     if (token) {
@@ -118,7 +141,7 @@ export default function GameUI() {
         body: JSON.stringify({}),
       }).catch(() => {});
     }
-  }, [player?.token, setDex]);
+  }, [player, setDex]);
 
   useEffect(() => {
     const openVenuePicker = (event) => {

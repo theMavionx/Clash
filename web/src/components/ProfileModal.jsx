@@ -296,6 +296,7 @@ function ProfileModal({ onClose }) {
     if (!wallet?.address || walletActionBusy) return;
     const chain = wallet.chain_type || walletChainType(wallet.address);
     const key = `${chain}:${wallet.address}`;
+    const isLoginWallet = !!wallet.is_login_wallet;
     setWalletActionBusy(key);
     setWalletActionError('');
     try {
@@ -317,14 +318,18 @@ function ProfileModal({ onClose }) {
         }
       }
       await disconnectWalletContext(chain);
-      await logoutEverything();
-      onClose();
+      if (isLoginWallet) {
+        await logoutEverything();
+        onClose();
+      } else {
+        await refreshAccountLinks();
+      }
     } catch (e) {
       setWalletActionError(e?.message || 'Failed to disconnect wallet');
     } finally {
       setWalletActionBusy('');
     }
-  }, [disconnectWalletContext, logoutEverything, onClose, player?.token, walletActionBusy]);
+  }, [disconnectWalletContext, logoutEverything, onClose, player?.token, refreshAccountLinks, walletActionBusy]);
 
   const handleEvmConnected = ({ address, provider, rdns }) => {
     setEvmModalOpen(false);
