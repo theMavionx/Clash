@@ -2729,7 +2729,7 @@ function mountNftV3Endpoints(router, ctx) {
             program: assetInfo.standard === 'token2022' ? 'spl-token-2022' : 'mpl-core',
             instruction: 'burn',
             asset: req.body.sourceAsset,
-            mint: assetInfo.mint || assetInfo.asset,
+            mint: assetInfo.standard === 'token2022' ? (assetInfo.mint || assetInfo.asset) : null,
             tokenAccount: assetInfo.tokenAccount || null,
             collection: assetInfo.collection,
             owner: assetInfo.owner,

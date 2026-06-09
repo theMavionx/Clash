@@ -232,8 +232,7 @@ function isToken2022SolanaBurn(burn) {
   const program = String(burn?.program || burn?.standard || '').toLowerCase();
   return program.includes('token-2022')
     || program.includes('token2022')
-    || !!burn?.tokenAccount
-    || (burn?.mint && burn?.mint === burn?.asset);
+    || !!burn?.tokenAccount;
 }
 
 export default function NftBridgePanel({
@@ -482,7 +481,7 @@ export default function NftBridgePanel({
       // InputTransactionData shape `{ data: { function, typeArguments,
       // functionArguments } }`. The legacy entry_function_payload shape
       // isn't accepted by the latest @aptos-labs/wallet-adapter-react.
-      const fn = `${initRes.sourceModule.replace(/::.*$/, '')}::demon_king::${initRes.burn.functionName}`;
+      const fn = `${initRes.sourceModule}::${initRes.burn.functionName}`;
       const submitted = await aptosWallet.loginSignAndSubmit({
         data: { function: fn, typeArguments: [], functionArguments: initRes.burn.args },
       });
