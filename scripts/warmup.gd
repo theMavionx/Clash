@@ -122,6 +122,7 @@ func _spawn_combat_warmup_nodes() -> void:
 	_warmup_magic_orb()
 	_warmup_one_troop_glb()
 	_warmup_demon_king()
+	_warmup_fire_dragon_attack()
 	_warmup_mage_tower()
 	_warmup_flag_glb()
 	_warmup_ship_glbs()
@@ -511,6 +512,69 @@ func _warmup_demon_king() -> void:
 			loaded_anims += 1
 
 
+## FireDragon swaps FBX scenes at runtime for each animation and creates
+## additive fire-breath materials on first attack. Warm the attack clip and
+## those exact material flags before the first Dragon reaches a target.
+func _warmup_fire_dragon_attack() -> void:
+	if AttackSystem._troop_res_cache.is_empty():
+		AttackSystem._preload_combat_resources()
+	var entry: Dictionary = AttackSystem._troop_res_cache.get("FireDragon", {})
+	var model_res: Resource = entry.get("model", null)
+	var script_res: Script = entry.get("script", null)
+	if model_res == null:
+		model_res = ResourceLoader.load("res://Model/Characters/FireDragon/FireDragon.tscn", "PackedScene")
+	if script_res == null:
+		script_res = ResourceLoader.load("res://scripts/fire_dragon.gd", "Script")
+	if model_res == null:
+		print("[WARMUP] FireDragon scene missing - skipped")
+		return
+
+	var inst: Node3D = (model_res as PackedScene).instantiate()
+	inst.name = "WarmupFireDragon"
+	if script_res != null:
+		inst.set_script(script_res)
+	var fire_dragon_scale := AttackSystem._scale_for_troop("FireDragon", 0.1)
+	inst.set("_spawn_scale", fire_dragon_scale)
+	inst.scale = Vector3(fire_dragon_scale, fire_dragon_scale, fire_dragon_scale)
+	_force_shadow_casting(inst)
+	add_child(inst)
+	if inst.has_method("_play_dragon_animation"):
+		inst.call("_play_dragon_animation", "fly_fire_breath_attack_low", true)
+	_warmup_fire_dragon_breath_materials()
+
+
+func _warmup_fire_dragon_breath_materials() -> void:
+	var breath: Texture2D = ResourceLoader.load("res://Model/Characters/FireDragon/Textures/fx_fire_breath.tga", "Texture2D")
+	var sparks: Texture2D = ResourceLoader.load("res://Model/Characters/FireDragon/Textures/fx_sparks.tga", "Texture2D")
+	if breath == null or sparks == null:
+		print("[WARMUP] FireDragon breath textures incomplete - skipped")
+		return
+
+	var ribbon := MeshInstance3D.new()
+	var ribbon_mesh := QuadMesh.new()
+	ribbon_mesh.size = Vector2(0.20, 0.08)
+	ribbon.mesh = ribbon_mesh
+	ribbon.material_override = _make_additive_material(breath, Color(1.95, 0.9, 0.24, 0.82), false)
+	ribbon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(ribbon)
+
+	var puff := MeshInstance3D.new()
+	var puff_mesh := QuadMesh.new()
+	puff_mesh.size = Vector2(0.14, 0.14)
+	puff.mesh = puff_mesh
+	puff.material_override = _make_additive_material(breath, Color(1.7, 0.72, 0.18, 0.50), true)
+	puff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(puff)
+
+	var ember := MeshInstance3D.new()
+	var ember_mesh := QuadMesh.new()
+	ember_mesh.size = Vector2(0.08, 0.08)
+	ember.mesh = ember_mesh
+	ember.material_override = _make_additive_material(sparks, Color(1.6, 0.9, 0.35, 0.58), true)
+	ember.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(ember)
+
+
 ## Mage Tower is an FBX with runtime-applied albedo/emission textures and a
 ## distinct solid-blue orb material. Warm both the building model pipeline and
 ## the projectile material before the first tower is placed or fires.
@@ -717,9 +781,13 @@ func _clear_runtime_warmup_nodes() -> void:
 ## bs_cannon flash/explosion, turret muzzle flash and fire-bomb explosion.
 ## Kept as one helper so the warmup variants match runtime flag-for-flag.
 static func _make_additive_billboard(tex: Texture2D, color: Color) -> StandardMaterial3D:
+	return _make_additive_material(tex, color, true)
+
+
+static func _make_additive_material(tex: Texture2D, color: Color, billboard: bool) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED if billboard else BaseMaterial3D.BILLBOARD_DISABLED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	mat.no_depth_test = true

@@ -46,6 +46,9 @@ const SHIP_MODELS: Array[String] = [
 	"res://Model/Ship/Ships/ship-pirate-large_3.glb",
 ]
 const SHIP_SCALES: Array[float] = [0.05, 0.05, 0.05]
+const TROOP_SCALE_MULTIPLIERS: Dictionary = {
+	"FireDragon": 0.8,
+}
 
 ## Troop name → {model, script} for spawning combat troops
 const TROOP_DEFS: Dictionary = {
@@ -847,8 +850,9 @@ func _spawn_troop_after_delay(
 		var player_levels: Dictionary = bs_ref.troop_levels if bs_ref and "troop_levels" in bs_ref else {}
 		troop.set_player_troop_levels(player_levels)
 	get_tree().current_scene.add_child(troop)
-	troop._spawn_scale = troop_scale
-	troop.scale = Vector3(troop_scale, troop_scale, troop_scale)
+	var final_troop_scale := _scale_for_troop(troop_node_name, troop_scale)
+	troop._spawn_scale = final_troop_scale
+	troop.scale = Vector3(final_troop_scale, final_troop_scale, final_troop_scale)
 	troop.global_position = BaseTroop._clamp_to_island(troop_spawn_pos + offset)
 	troop.global_position.y = building_y
 	if offset == Vector3.ZERO:
@@ -865,6 +869,10 @@ func _spawn_troop_after_delay(
 			troop._play_victory()
 	elif troop.has_method("activate"):
 		troop.activate()
+
+
+static func _scale_for_troop(troop_name: String, base_scale: float) -> float:
+	return base_scale * float(TROOP_SCALE_MULTIPLIERS.get(troop_name, 1.0))
 
 
 ## Returns the deterministic troop spawn position derived from a ship's

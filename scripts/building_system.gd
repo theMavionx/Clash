@@ -5536,7 +5536,9 @@ func _buy_troop(troop_name: String) -> void:
 	troop.set_script(script_res)
 	troop.name = "RecruitTroop_%d" % (randi() % 99999)
 	get_tree().current_scene.add_child(troop)
-	troop.scale = Vector3(0.1, 0.1, 0.1)
+	var recruit_scale := AttackSystem._scale_for_troop(troop_key, 0.1)
+	troop.set("_spawn_scale", recruit_scale)
+	troop.scale = Vector3(recruit_scale, recruit_scale, recruit_scale)
 	troop.global_position = spawn_pos
 	troop.global_position.y = grid_y
 	# Don't activate for combat — just walk to the ship
@@ -5548,6 +5550,7 @@ func _buy_troop(troop_name: String) -> void:
 ## buildings along the way. When it arrives, it disappears (boards the ship).
 func _walk_troop_to_ship(troop: Node3D, target_pos: Vector3) -> void:
 	target_pos.y = grid_y
+	var walk_scale: float = troop.scale.x
 	# Play run animation
 	if troop.has_method("activate"):
 		# BaseTroop — set to RUNNING manually without combat targeting
@@ -5593,7 +5596,7 @@ func _walk_troop_to_ship(troop: Node3D, target_pos: Vector3) -> void:
 			face_target.y = troop.global_position.y
 			troop.look_at(face_target, Vector3.UP)
 			troop.rotate_y(PI)
-		troop.scale = Vector3(0.1, 0.1, 0.1)
+		troop.scale = Vector3(walk_scale, walk_scale, walk_scale)
 		await get_tree().process_frame
 	# Troop was freed externally (e.g. scene change)
 	return
