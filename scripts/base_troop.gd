@@ -1046,6 +1046,7 @@ func _get_troop_name() -> String:
 		"archer": return "Archer"
 		"ranger": return "Ranger"
 		"demon_king": return "DemonKing"
+		"fire_dragon": return "FireDragon"
 	return ""
 
 

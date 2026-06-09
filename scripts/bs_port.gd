@@ -26,6 +26,8 @@ func _troop_entry_base_name(troop_name: String) -> String:
 	match base.to_lower():
 		"demonking", "demon_king":
 			return "DemonKing"
+		"firedragon", "fire_dragon":
+			return "FireDragon"
 		"knight":
 			return "Knight"
 		"mage":
@@ -70,18 +72,20 @@ func _swap_span_for_replacement(ship_troops: Array, slot: int, replacement_name:
 	var end: int = int(selected.end)
 	var replacement_base: String = _troop_entry_base_name(replacement_name)
 	var replacement_slots: int = int(bs.troop_defs.get(replacement_base, {}).get("slot_cost", 1))
-	var avoid_implicit_demon_king_removal: bool = replacement_base == "DemonKing"
+	var avoid_implicit_heavy_removal: bool = replacement_slots > 1
 	while ship_troops.size() - (end - start) + replacement_slots > capacity:
 		var right: Dictionary = _troop_unit_span_at(ship_troops, end)
 		if not right.is_empty() and int(right.start) == end:
 			var right_base: String = _troop_entry_base_name(str(ship_troops[int(right.start)]))
-			if not (avoid_implicit_demon_king_removal and right_base == "DemonKing"):
+			var right_slots: int = int(bs.troop_defs.get(right_base, {}).get("slot_cost", 1))
+			if not (avoid_implicit_heavy_removal and right_slots > 1):
 				end = int(right.end)
 				continue
 		var left: Dictionary = _troop_unit_span_at(ship_troops, start - 1)
 		if not left.is_empty() and int(left.end) == start:
 			var left_base: String = _troop_entry_base_name(str(ship_troops[int(left.start)]))
-			if not (avoid_implicit_demon_king_removal and left_base == "DemonKing"):
+			var left_slots: int = int(bs.troop_defs.get(left_base, {}).get("slot_cost", 1))
+			if not (avoid_implicit_heavy_removal and left_slots > 1):
 				start = int(left.start)
 				continue
 		return {}

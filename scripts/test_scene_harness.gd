@@ -39,12 +39,13 @@ const TEST_TH_MAX_COUNT: Dictionary = {
 	"town_hall": [1, 1, 1, 1],
 }
 
-const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "DemonKing"]
+const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "DemonKing", "FireDragon"]
 const TEST_ATTACK_MAX_LEVEL: Dictionary = {
 	"Knight": 4,
 	"Mage": 4,
 	"Archer": 4,
 	"DemonKing": 3,
+	"FireDragon": 3,
 }
 const TEST_ATTACK_SHIP_LEVEL: int = 3
 const TEST_SPEED_PRESETS: Array[float] = [0.5, 1.0, 2.0, 4.0]
@@ -652,7 +653,7 @@ func _attack_troop_entry(troop_name: String, level: int) -> String:
 
 
 func _attack_troop_slot_cost(troop_name: String) -> int:
-	return 2 if troop_name == "DemonKing" else 1
+	return 2 if troop_name == "DemonKing" or troop_name == "FireDragon" else 1
 
 
 func _apply_test_troop_levels() -> void:
@@ -880,7 +881,7 @@ func _configure_test_ship(bs: Node, b: Dictionary, ship_level: int) -> void:
 	var node: Node = b.get("node", null)
 	if not is_instance_valid(node):
 		return
-	var troops: Array = ["Knight", "Mage", "Archer", "DemonKing", "_SLOT_FILLER_"]
+	var troops: Array = ["Knight", "Mage", "Archer", "DemonKing", "_SLOT_FILLER_", "FireDragon", "_SLOT_FILLER_"]
 	var capacity: int = ship_level * 3
 	node.set_meta("has_ship", true)
 	node.set_meta("ship_level", ship_level)

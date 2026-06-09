@@ -417,6 +417,8 @@ func _server_troop_type(troop_type: String) -> String:
 	match troop_type:
 		"DemonKing":
 			return "demon_king"
+		"FireDragon":
+			return "fire_dragon"
 	return troop_type.to_lower()
 
 func upgrade_troop(troop_type: String) -> Dictionary:

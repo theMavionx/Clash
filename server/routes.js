@@ -8623,6 +8623,8 @@ const TROOP_NAME_MAP = {
   ranger: 'Ranger',
   demonking: 'DemonKing',
   demon_king: 'DemonKing',
+  firedragon: 'FireDragon',
+  fire_dragon: 'FireDragon',
 };
 function _troopBaseKey(name) {
   return String(name || '').split(':')[0].toLowerCase();
@@ -8635,6 +8637,16 @@ function _isSlotFiller(name) {
 }
 function _isDemonKing(name) {
   return _normalizeTroopName(name) === 'DemonKing';
+}
+function _serverTroopKey(name) {
+  const normalized = _normalizeTroopName(name);
+  if (normalized === 'DemonKing') return 'demon_king';
+  if (normalized === 'FireDragon') return 'fire_dragon';
+  return String(normalized || '').toLowerCase();
+}
+function _isHeavyTroop(name) {
+  const normalized = _normalizeTroopName(name);
+  return normalized === 'DemonKing' || normalized === 'FireDragon';
 }
 function _isDisabledTroopName(name) {
   return db.isTroopDisabled(_normalizeTroopName(name));
@@ -8762,7 +8774,7 @@ function _demonKingWinTokensFromActions(actions, playerId) {
   return [...tokens.values()];
 }
 function _troopSlotCost(name) {
-  return _isDemonKing(name) ? 2 : 1;
+  return _isHeavyTroop(name) ? 2 : 1;
 }
 function _appendTroopSlots(shipTroops, troopName) {
   const normalized = _normalizeTroopName(troopName);
@@ -8789,10 +8801,10 @@ function _swapSpanForReplacement(shipTroops, slot, replacementName, capacity) {
   let start = selected.start;
   let end = selected.end;
   const replacementSlots = _troopSlotCost(replacementName);
-  const avoidImplicitDemonKingRemoval = _normalizeTroopName(replacementName) === 'DemonKing';
+  const avoidImplicitHeavyRemoval = replacementSlots > 1;
   const canAutoRemove = (span) => {
     if (!span) return false;
-    return !(avoidImplicitDemonKingRemoval && _isDemonKing(shipTroops[span.start]));
+    return !(avoidImplicitHeavyRemoval && _troopSlotCost(shipTroops[span.start]) > 1);
   };
   const nextLength = () => shipTroops.length - (end - start) + replacementSlots;
 
@@ -8841,7 +8853,7 @@ function _filterDisabledTroopEntries(troops) {
   const out = [];
   for (const troop of troops) {
     if (_isSlotFiller(troop)) {
-      if (out.length > 0 && _isDemonKing(out[out.length - 1])) out.push(troop);
+      if (out.length > 0 && _troopSlotCost(out[out.length - 1]) > 1) out.push(troop);
       continue;
     }
     if (_isDisabledTroopName(troop)) continue;
@@ -9067,7 +9079,7 @@ router.post('/attack/result', auth, (req, res) => {
   for (const act of gameActions) {
     if (act.type === 'place_ship' && act.troopType && act.troopLevel) {
       const normalizedTroop = _normalizeTroopName(act.troopType);
-      const serverKey = normalizedTroop === 'DemonKing' ? 'demon_king' : String(normalizedTroop || '').toLowerCase();
+      const serverKey = _serverTroopKey(normalizedTroop);
       const serverLvl = serverTroopLevels[serverKey] || 1;
       act.troopLevel = Math.min(act.troopLevel, serverLvl);
     }
@@ -9197,7 +9209,7 @@ router.get('/troops/demon_king/upgrade-status', auth, (req, res) => {
 
 // Upgrade a troop
 router.post('/troops/:type/upgrade', auth, async (req, res) => {
-  const { type } = req.params;
+  const type = _serverTroopKey(req.params.type);
   let upgradeOptions = {};
   if (type === 'demon_king') {
     const proof = {
@@ -9373,6 +9385,7 @@ const TROOP_BUY_COSTS = {
   Mage: 100,
   Archer: 100,
   DemonKing: 0,
+  FireDragon: 0,
 };
 const VALID_TROOPS = Object.keys(TROOP_BUY_COSTS);
 const KNOWN_TROOPS = new Set(Object.values(TROOP_NAME_MAP));
@@ -9667,9 +9680,10 @@ router.get('/casualties', auth, (req, res) => {
       if (currentCounts[normalized] && currentCounts[normalized] > 0) {
         currentCounts[normalized]--;
       } else {
+        const slotCost = _troopSlotCost(normalized);
         casualties[normalized] = (casualties[normalized] || 0) + 1;
         totalMissing++;
-        portMissing++;
+        portMissing += slotCost;
       }
     }
   }

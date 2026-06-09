@@ -55,6 +55,7 @@ const TROOP_DEFS: Dictionary = {
 	"Archer":    {"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
 	"Ranger":    {"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
 	"DemonKing": {"model": "res://Model/Characters/Model/DemonKing_Body.fbx",   "script": "res://scripts/demon_king.gd"},
+	"FireDragon": {"model": "res://Model/Characters/FireDragon/FireDragon.tscn", "script": "res://scripts/fire_dragon.gd"},
 }
 
 ## Legacy constant kept for replay compatibility
@@ -1018,6 +1019,7 @@ static func _script_to_troop_key(script_path: String) -> String:
 		"archer":     return "Archer"
 		"ranger":     return "Ranger"
 		"demon_king": return "DemonKing"
+		"fire_dragon": return "FireDragon"
 	return file.capitalize()
 
 
@@ -1036,6 +1038,8 @@ static func _normalize_troop_entry(troop_name: String) -> String:
 			return "Ranger"
 		"demonking", "demon_king":
 			return "DemonKing"
+		"firedragon", "fire_dragon":
+			return "FireDragon"
 	return base
 
 

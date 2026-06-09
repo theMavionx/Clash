@@ -52,11 +52,14 @@ const TROOP_NAMES = {
   archer: 'Archer',
   ranger: 'Ranger',
   demon_king: 'DemonKing',
+  fire_dragon: 'FireDragon',
 };
 
 const TROOP_TYPE_ALIASES = {
   demonking: 'demon_king',
   demon_king: 'demon_king',
+  firedragon: 'fire_dragon',
+  fire_dragon: 'fire_dragon',
 };
 
 function normalizeTroopTypeName(name) {
