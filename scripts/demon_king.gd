@@ -165,7 +165,7 @@ const TINT_PURPLE: Array[Color] = [
 	Color(0.52, 0.47, 0.75),
 ]
 
-const ACTIVE_PALETTE: Array[Color] = TINT_PINK  # default skin — change to TINT_ORANGE/BLUE/PURPLE to swap
+const ACTIVE_PALETTE: Array[Color] = TINT_PURPLE  # default skin — change to TINT_ORANGE/BLUE/PURPLE to swap
 
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files

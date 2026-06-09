@@ -681,7 +681,7 @@ const SHIP_DISPLAY_SCALE: float = 0.05
 var barn_panel: PanelContainer
 var barn_vbox: VBoxContainer
 var troop_levels: Dictionary = {
-	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1, "DemonKing": 1,
+	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1, "DemonKing": 1, "FireDragon": 1,
 }
 var troop_defs: Dictionary = {
 	"Knight": {
@@ -745,6 +745,18 @@ var troop_defs: Dictionary = {
 		"script": "res://scripts/demon_king.gd",
 		"slot_cost": 2,                # eats two ship slots; trade-off for raw power
 		"buy_cost": 0,                 # NFT-backed; loading is free and reusable
+		"costs": {
+			1: {"gold": 0, "wood": 0, "ore": 0},
+			2: {"gold": 0, "wood": 0, "ore": 0},
+			3: {"gold": 0, "wood": 0, "ore": 0},
+		}
+	},
+	"FireDragon": {
+		"display": "Fire Dragon (Flying Boss)",
+		"model": "res://Model/Characters/FireDragon/FireDragon.tscn",
+		"script": "res://scripts/fire_dragon.gd",
+		"slot_cost": 2,
+		"buy_cost": 0,
 		"costs": {
 			1: {"gold": 0, "wood": 0, "ore": 0},
 			2: {"gold": 0, "wood": 0, "ore": 0},
@@ -2357,6 +2369,8 @@ func _local_troop_name_from_server(troop_type: String) -> String:
 	match troop_type:
 		"demon_king", "demonking":
 			return "DemonKing"
+		"fire_dragon", "firedragon":
+			return "FireDragon"
 	return troop_type.capitalize()
 
 
@@ -2365,6 +2379,8 @@ func _troop_entry_base_name(troop_name: String) -> String:
 	match base.to_lower():
 		"demon_king", "demonking":
 			return "DemonKing"
+		"fire_dragon", "firedragon":
+			return "FireDragon"
 		"knight":
 			return "Knight"
 		"mage":
@@ -5536,7 +5552,9 @@ func _walk_troop_to_ship(troop: Node3D, target_pos: Vector3) -> void:
 	if troop.has_method("activate"):
 		# BaseTroop — set to RUNNING manually without combat targeting
 		troop.visible = true
-		if troop.anim_player and troop.anim_player.has_animation("Running_A"):
+		if troop.has_method("play_boarding_animation"):
+			troop.play_boarding_animation()
+		elif troop.anim_player and troop.anim_player.has_animation("Running_A"):
 			troop.anim_player.play("Running_A")
 	var move_speed: float = 0.5
 	var avoid_radius: float = 0.2
@@ -5566,6 +5584,8 @@ func _walk_troop_to_ship(troop: Node3D, target_pos: Vector3) -> void:
 		velocity.y = 0
 		troop.global_position += velocity * delta
 		troop.global_position.y = grid_y
+		if troop.has_method("apply_boarding_flight"):
+			troop.apply_boarding_flight(delta)
 		# Face movement direction (model faces -Z)
 		var face_dir: Vector3 = velocity.normalized()
 		if face_dir.length_squared() > 0.001:
@@ -5661,11 +5681,10 @@ func _build_fleet() -> Array:
 					"port_number": int(pnode.get_meta("port_number", _port_display_number_for_building(b))),
 					"port_server_id": int(b.get("server_id", -1)),
 				})
-	# Sandbox guarantee: every attack on TestMain ships a DemonKing + Knight so
-	# the player can iterate on demon combat without setting up a port/ship.
-	# "_SLOT_FILLER_" pads DemonKing's 2-slot footprint and is ignored at deploy.
+	# Sandbox guarantee: TestMain can exercise boss units without setting up
+	# a port/ship. "_SLOT_FILLER_" pads each 2-slot footprint.
 	if test_mode:
-		fleet.append({"level": 1, "troops": ["DemonKing", "_SLOT_FILLER_"]})
+		fleet.append({"level": 2, "troops": ["DemonKing", "_SLOT_FILLER_", "FireDragon", "_SLOT_FILLER_"]})
 	return fleet
 
 

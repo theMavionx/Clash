@@ -1117,6 +1117,8 @@ func _on_town_hall_destroyed() -> void:
 		if not ship.get("_placed", false):
 			continue
 		for t_name in ship.get("troops", []):
+			if str(t_name) == "_SLOT_FILLER_":
+				continue
 			deployed_troops[t_name] = deployed_troops.get(t_name, 0) + 1
 	var surviving_troops: Dictionary = {}
 	for troop in bs.get_tree().get_nodes_in_group("troops"):
@@ -1862,6 +1864,8 @@ func check_defeat(delta: float) -> void:
 		if not ship.get("_placed", false):
 			continue  # skip ships that were never deployed
 		for t_name in ship.get("troops", []):
+			if str(t_name) == "_SLOT_FILLER_":
+				continue
 			defeat_casualties[t_name] = defeat_casualties.get(t_name, 0) + 1
 	if net_def and net_def.has_token() and def_id != "" and not _victory_declared:
 		_victory_declared = true  # prevent double-submission
@@ -1900,6 +1904,8 @@ func _force_defeat(reason: String) -> void:
 		if not ship.get("_placed", false):
 			continue
 		for t_name in ship.get("troops", []):
+			if str(t_name) == "_SLOT_FILLER_":
+				continue
 			deployed_troops[t_name] = deployed_troops.get(t_name, 0) + 1
 	var surviving_troops: Dictionary = {}
 	for troop in bs.get_tree().get_nodes_in_group("troops"):
@@ -1958,4 +1964,5 @@ static func _troop_script_to_name(troop: Node3D) -> String:
 		"barbarian": return "Barbarian"
 		"archer": return "Archer"
 		"ranger": return "Ranger"
+		"fire_dragon": return "FireDragon"
 	return ""

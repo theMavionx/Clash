@@ -1,0 +1,10 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://Model/Characters/FireDragon/Model/fire_dragon.fbx" id="1_model"]
+[ext_resource type="Script" path="res://scripts/fire_dragon_model.gd" id="2_script"]
+
+[node name="FireDragon" type="Node3D"]
+script = ExtResource("2_script")
+default_animation = "idle"
+
+[node name="Model" parent="." instance=ExtResource("1_model")]

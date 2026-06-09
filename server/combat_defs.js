@@ -40,6 +40,11 @@ const TROOP_STATS = {
     2: { hp: 1170, damage: 139, atkSpeed: 1.15, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
     3: { hp: 1260, damage: 137, atkSpeed: 1.05, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
   },
+  fire_dragon: {
+    1: { hp: 1080, damage: 140, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4, flying: true },
+    2: { hp: 1170, damage: 139, atkSpeed: 1.15, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4, flying: true },
+    3: { hp: 1260, damage: 137, atkSpeed: 1.05, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4, flying: true },
+  },
 };
 
 // Demon King is a 2-slot NFT troop that scales from the player's best normal troops.
@@ -55,6 +60,7 @@ const TROOP_TYPE_DISPLAY_KEYS = {
   barbarian: 'Barbarian',
   archer: 'Archer',
   ranger: 'Ranger',
+  fire_dragon: 'FireDragon',
 };
 
 function clampInt(value, min, max) {
@@ -207,7 +213,7 @@ const CANNON_TARGET_Y = 0.05;
 function cannonShotCost(shotNumber) { return shotNumber; }
 
 // Valid troop types (order matches attack_system.gd SHIP_TROOPS)
-const VALID_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger', 'demon_king'];
+const VALID_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger', 'demon_king', 'fire_dragon'];
 
 // Canonical world-space grid config from scenes/Main.tscn. Browser clients
 // submit their live scene values, but headless agents need deterministic

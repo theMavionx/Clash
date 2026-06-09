@@ -44,6 +44,8 @@ const TARGET_SWITCH_MIN_ADVANTAGE = 0.08;
 const GUARD_TARGET_TIE_DIST = 0.02;
 const ATTACK_SLOT_OFFSETS = [-0.0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2];
 const SLOT_EVAL_INTERVAL_SEC = 6 / 60;
+const UNIT_TARGET_GROUND = 'ground';
+const UNIT_TARGET_AIR = 'air';
 const TRACE_MAX_EVENTS = Math.max(100, Number(process.env.CLASH_SIM_TRACE_MAX || 20000));
 const TROOP_NAMES = {
   knight: 'Knight',
@@ -52,11 +54,14 @@ const TROOP_NAMES = {
   archer: 'Archer',
   ranger: 'Ranger',
   demon_king: 'DemonKing',
+  fire_dragon: 'FireDragon',
 };
 
 const TROOP_TYPE_ALIASES = {
   demonking: 'demon_king',
   demon_king: 'demon_king',
+  firedragon: 'fire_dragon',
+  fire_dragon: 'fire_dragon',
 };
 
 function normalizeTroopTypeName(name) {
@@ -86,6 +91,21 @@ function dist3d(ax, ay, az, bx, by, bz) {
   const dy = ay - by;
   const dz = az - bz;
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+function troopTargetType(troop) {
+  return troop?.flying ? UNIT_TARGET_AIR : UNIT_TARGET_GROUND;
+}
+
+function canDefenseTargetTroop(defense, troop) {
+  if (!troop || troop.hp <= 0) return false;
+  return troopTargetType(troop) === UNIT_TARGET_AIR
+    ? defense.targetAir !== false
+    : defense.targetGround !== false;
+}
+
+function canGuardTargetTroop(troop) {
+  return !!(troop && troop.hp > 0 && troopTargetType(troop) === UNIT_TARGET_GROUND);
 }
 
 function cannonFlightTime(target) {
@@ -308,6 +328,7 @@ function findNearestAlive(x, z, targets, options = {}) {
   let bestDistSq = Infinity;
   for (const t of targets) {
     if (t.hp <= 0) continue;
+    if (options.filter && !options.filter(t)) continue;
     const dsq = distSq2d(x, z, t.x, t.z);
     if (dsq < bestDistSq) {
       bestDistSq = dsq;
@@ -743,6 +764,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         buildingId: b.id, type: 'turret',
         damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
         projSpeed: s.projSpeed,
+        targetGround: true, targetAir: false,
         x: b.x, z: b.z,
         timer: 0, isAttacking: false, targetId: null,
         _searchTimer: 0,  // throttle target search to DEFENSE_SEARCH_SEC
@@ -754,6 +776,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         buildingId: b.id, type: 'archer_tower',
         damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
         projSpeed: s.projSpeed,
+        targetGround: true, targetAir: true,
         x: b.x, z: b.z,
         timer: 0, isAttacking: false, targetId: null,
         _searchTimer: 0,
@@ -771,6 +794,8 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         maxDamage: wardDamage(s.maxDamage ?? s.damage),
         tickRate: s.tickRate ?? s.fireRate,
         rampTime: s.rampTime ?? 1,
+        targetGround: true,
+        targetAir: true,
         beamCharge: 0,
         beamTick: 0,
         x: b.x, z: b.z,
@@ -970,6 +995,8 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           hp: stats.hp, damage: stats.damage,
           atkSpeed: stats.atkSpeed, moveSpeed: stats.moveSpeed, range: stats.range,
           melee: stats.melee, projSpeed: stats.projSpeed || 0,
+          flying: !!stats.flying,
+          targetType: stats.flying ? UNIT_TARGET_AIR : UNIT_TARGET_GROUND,
           hitDelay: stats.hitDelay || 0, shootDelay: stats.shootDelay || 0,
           x: spawnPos.x, z: spawnPos.z,
           atkTimer: 0, hitPending: false, hitTimer: 0,
@@ -991,6 +1018,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           troopId,
           replayOrder: sp.replayOrder,
           troop: sp.troopType,
+          targetType: stats.flying ? UNIT_TARGET_AIR : UNIT_TARGET_GROUND,
           level: sp.troopLevel,
           hp: stats.hp,
           x: Math.round(spawnPos.x * 1000) / 1000,
@@ -1130,7 +1158,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       let currentTarget = null;
 
       if (d.targetId != null) {
-        currentTarget = aliveTroops.find(t => t.id === d.targetId);
+        currentTarget = aliveTroops.find(t => t.id === d.targetId && canDefenseTargetTroop(d, t));
         if (!currentTarget && d.isAttacking) {
           // Godot defenses drop back to idle when their current target dies.
           // The next acquired target starts a fresh attack cycle instead of
@@ -1154,7 +1182,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
 
       if (!currentTarget && d._searchTimer >= DEFENSE_SEARCH_SEC) {
         d._searchTimer = 0;
-        const near = findNearestAlive(d.x, d.z, aliveTroops);
+        const near = findNearestAlive(d.x, d.z, aliveTroops, { filter: t => canDefenseTargetTroop(d, t) });
         traceEvent('defense_scan', {
           defenseType: d.type,
           buildingId: d.buildingId,
@@ -1166,6 +1194,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
             id: troop.id,
             replayOrder: troop.replayOrder ?? null,
             type: troop.type,
+            targetType: troop.targetType,
             hp: troop.hp,
             x: Math.round(troop.x * 1000) / 1000,
             z: Math.round(troop.z * 1000) / 1000,
@@ -1274,6 +1303,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
             id: troop.id,
             replayOrder: troop.replayOrder ?? null,
             type: troop.type,
+            targetType: troop.targetType,
             hp: troop.hp,
             x: Math.round(troop.x * 1000) / 1000,
             z: Math.round(troop.z * 1000) / 1000,
@@ -1289,7 +1319,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     // their _physics_process runs before BaseTroop._physics_process in Godot.
     // Keep this before troop movement/projectiles to avoid guard/troop slot
     // drift that changes turret target selection on range boundaries.
-    const guardSearchTroops = [...aliveTroops].sort((a, b) => (a.replayOrder ?? a.id) - (b.replayOrder ?? b.id));
+    const guardSearchTroops = aliveTroops
+      .filter(canGuardTargetTroop)
+      .sort((a, b) => (a.replayOrder ?? a.id) - (b.replayOrder ?? b.id));
     for (const g of aliveGuards) {
       // Find target — detection relative to tombstone
       if (g.targetId == null) {
@@ -1314,7 +1346,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
 
       if (g.targetId == null) continue;
 
-      const target = aliveTroops.find(t => t.id === g.targetId);
+      const target = aliveTroops.find(t => t.id === g.targetId && canGuardTargetTroop(t));
       if (!target) {
         traceEvent('guard_target_lost', { guardId: g.id, reason: 'target_dead_or_missing' });
         g.targetId = null; g.isAttacking = false; continue;
