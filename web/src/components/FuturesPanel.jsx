@@ -1917,8 +1917,8 @@ function FuturesPanel() {
     if (error && clearError) clearError();
   }, [clearError, error]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana') return;
-    const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : 'Hyperliquid';
+    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash') return;
+    const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : dex === 'flash' ? 'Flash' : 'Hyperliquid';
     if (oneTapTrading?.enabled) {
       const result = typeof setOneTapTradingEnabled === 'function'
         ? await setOneTapTradingEnabled(false)
@@ -1930,7 +1930,7 @@ function FuturesPanel() {
       setSuccessMsg(`One tap trading disabled. Opening a ${dexLabel} order will ask to enable it again.`);
       return;
     }
-    if (dex === 'katana') {
+    if (dex === 'katana' || dex === 'flash') {
       setReferralLinking(true);
       try {
         const result = typeof setOneTapTradingEnabled === 'function'
@@ -2918,7 +2918,7 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {dex === 'nado' && (
+        {(dex === 'nado' || dex === 'flash') && (
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -2934,13 +2934,13 @@ function FuturesPanel() {
               fontWeight: 900,
               color: oneTapTrading?.enabled ? '#166534' : '#5C3A21',
             }}>
-              One tap{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
+              {dex === 'flash' ? 'Flash one tap' : 'One tap'}{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
             </span>
             <button
               type="button"
               onClick={handleToggleOneTapTrading}
               disabled={referralLinking || loading}
-              title="Nado linked signer"
+              title={dex === 'flash' ? 'Flash delegated session signer' : 'Nado linked signer'}
               style={{
                 ...S.btnSmall,
                 flex: '0 0 auto',
@@ -2952,7 +2952,7 @@ function FuturesPanel() {
                 opacity: (referralLinking || loading) ? 0.7 : 1,
               }}
             >
-              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'OFF'}
+              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : (dex === 'flash' ? 'ENABLE' : 'OFF')}
             </button>
           </div>
         )}

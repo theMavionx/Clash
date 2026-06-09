@@ -32,6 +32,8 @@ const FLASH_V2_PROGRAM_ID = 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV';
 const FLASH_ONE_TAP_EXPIRY_MINUTES = Math.max(10, Math.min(24 * 60, Number(import.meta.env.VITE_FLASH_ONE_TAP_EXPIRY_MINUTES || 24 * 60)));
 const FLASH_ONE_TAP_TOPUP_LAMPORTS = Math.max(0, Math.min(20_000_000, Number(import.meta.env.VITE_FLASH_ONE_TAP_TOPUP_LAMPORTS || 1_000_000)));
 const FLASH_ONE_TAP_MIN_VALID_SECONDS = 60;
+const FLASH_REQUIRE_ONE_TAP_TRADING = import.meta.env.VITE_FLASH_REQUIRE_ONE_TAP_TRADING !== 'false';
+const FLASH_CONFIRM_ATTEMPTS = Math.max(30, Math.min(120, Number(import.meta.env.VITE_FLASH_CONFIRM_ATTEMPTS || 75)));
 const FLASH_DUST_POSITION_USD = Math.max(0.01, Math.min(1, Number(import.meta.env.VITE_FLASH_DUST_POSITION_USD || 0.10)));
 const FLASH_DUST_COLLATERAL_USD = Math.max(0, Math.min(0.05, Number(import.meta.env.VITE_FLASH_DUST_COLLATERAL_USD || 0.01)));
 const FLASH_SOLANA_RPC_URLS = [
@@ -48,6 +50,7 @@ const FLASH_ONE_TAP_DISABLED = {
   sessionToken: '',
   setupSignature: '',
   validUntil: 0,
+  required: FLASH_REQUIRE_ONE_TAP_TRADING,
 };
 
 function playerToken(player) {
@@ -106,8 +109,31 @@ function flashOneTapState(agent, patch = {}) {
     sessionToken: publicKeyText(agent?.sessionToken),
     setupSignature: agent?.setupSignature || '',
     validUntil: Number(agent?.validUntil || 0),
+    required: FLASH_REQUIRE_ONE_TAP_TRADING,
     ...patch,
   };
+}
+
+function flashOneTapRequiredError() {
+  return 'Flash one tap trading is required for Flash v2 trades. Press ENABLE on Flash one tap, sign the one-time session setup, then try the trade again.';
+}
+
+function extractSolanaSignatureFromError(error) {
+  const candidates = [
+    error?.signature,
+    error?.txid,
+    error?.transactionSignature,
+    error?.data?.signature,
+    error?.data?.txid,
+    error?.message,
+    String(error || ''),
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate || '');
+    const match = text.match(/\b[1-9A-HJ-NP-Za-km-z]{64,100}\b/u);
+    if (match?.[0]) return match[0];
+  }
+  return '';
 }
 
 function flashOneTapIsUsable(agent, owner) {
@@ -115,6 +141,11 @@ function flashOneTapIsUsable(agent, owner) {
   if (publicKeyText(agent.owner) !== publicKeyText(owner)) return false;
   if (!publicKeyText(agent.publicKey) || !publicKeyText(agent.sessionToken)) return false;
   if (agent.targetProgram && publicKeyText(agent.targetProgram) !== FLASH_V2_PROGRAM_ID) return false;
+  try {
+    if (publicKeyText(agent.sessionToken) !== flashSessionTokenPda(agent.publicKey, owner).toBase58()) return false;
+  } catch {
+    return false;
+  }
   const validUntil = Number(agent.validUntil || 0);
   return validUntil > Math.ceil(Date.now() / 1000) + FLASH_ONE_TAP_MIN_VALID_SECONDS;
 }
@@ -122,7 +153,7 @@ function flashOneTapIsUsable(agent, owner) {
 function flashSessionTokenPda(sessionSigner, owner) {
   const sessionProgram = GPLSESSION_PROGRAMS['mainnet-beta'];
   const [sessionToken] = PublicKey.findProgramAddressSync([
-    Buffer.from('session_token'),
+    Buffer.from('session_token_v2'),
     new PublicKey(FLASH_V2_PROGRAM_ID).toBuffer(),
     new PublicKey(sessionSigner).toBuffer(),
     new PublicKey(owner).toBuffer(),
@@ -231,6 +262,10 @@ function normalizeFlashPosition(pos = {}) {
   );
   const entry = Number(pos.entry_price ?? pos.entryPrice ?? pos.avgEntryPrice ?? pos.averageEntryPrice ?? pos.price ?? 0);
   const amount = Number(pos.amount ?? pos.size ?? pos.tokenAmount ?? (entry > 0 && notional > 0 ? notional / entry : collateral || notional || 0));
+  const isDust = !!pos?._flashDust
+    || isFlashDustMetric(pos?.metric || {})
+    || isFlashDustValues(notional, collateral, amount);
+  const dustUsd = Number(pos._flashDustUsd ?? pos.sizeUsdUi ?? pos.inputUsdUi ?? notional);
   return {
     ...pos,
     symbol: symbol || pos.symbol,
@@ -240,8 +275,13 @@ function normalizeFlashPosition(pos = {}) {
     size_usd: Number.isFinite(notional) && notional > 0 ? notional : undefined,
     notional_usd: Number.isFinite(notional) && notional > 0 ? notional : Number(pos.notional_usd || 0),
     entry_price: entry || pos.entry_price,
-    leverage: collateral > 0 && notional > 0 ? Math.round((notional / collateral) * 10) / 10 : (Number(pos.leverage) || 1),
+    leverage: isDust ? undefined : (collateral > 0 && notional > 0 ? Math.round((notional / collateral) * 10) / 10 : (Number(pos.leverage) || 1)),
+    liquidation_price: isDust ? undefined : pos.liquidation_price,
+    pnl_usd: isDust ? 0 : pos.pnl_usd,
+    pnl_pct: isDust ? 0 : pos.pnl_pct,
     positionKey: flashPositionKey(pos),
+    _flashDust: isDust,
+    _flashDustUsd: isDust && Number.isFinite(dustUsd) ? dustUsd : pos._flashDustUsd,
     _flash: pos,
   };
 }
@@ -255,6 +295,13 @@ function isFlashDustMetric(metric = {}) {
   const sizeUsd = numberFromUi(metric.sizeUsdUi ?? metric.size_usd_ui ?? metric.sizeUsd ?? metric.size_usd);
   const collateralUsd = numberFromUi(metric.collateralUsdUi ?? metric.collateral_usd_ui ?? metric.collateralUsd ?? metric.collateral_usd);
   const amount = numberFromUi(metric.sizeAmountUi ?? metric.size_amount_ui ?? metric.amount);
+  return isFlashDustValues(sizeUsd, collateralUsd, amount);
+}
+
+function isFlashDustValues(sizeUsdRaw, collateralUsdRaw, amountRaw) {
+  const sizeUsd = numberFromUi(sizeUsdRaw);
+  const collateralUsd = numberFromUi(collateralUsdRaw);
+  const amount = numberFromUi(amountRaw);
   return sizeUsd > 0
     && sizeUsd < FLASH_DUST_POSITION_USD
     && collateralUsd <= FLASH_DUST_COLLATERAL_USD
@@ -547,7 +594,8 @@ function shouldSkipFlashLocalSimulation(meta = {}) {
   const kind = String(meta?.txKind || meta?.tx_kind || '').toLowerCase();
   const endpoint = String(meta?.endpoint || meta?.route || meta?.builderEndpoint || '').toLowerCase();
   const builder = String(meta?.builder || '').toLowerCase();
-  return kind === 'setup'
+  return kind === 'trading'
+    || kind === 'setup'
     || /init-|deposit-direct|delegate-basket|request-withdrawal|execute-withdrawal/.test(endpoint)
     || /init-|deposit-direct|delegate-basket|request-withdrawal|execute-withdrawal/.test(builder);
 }
@@ -752,36 +800,25 @@ export function useFlash() {
           setError('');
           setLoading(false);
         } else if (msg?.type === 'metrics' && msg.data && typeof msg.data === 'object') {
-          setPositions(prev => {
-            const metrics = msg.data;
-            const next = prev.map(pos => {
-              const key = pos.marketPubkey || pos.positionKey || pos.symbol;
-              const metric = metrics[key];
-              return metric ? flashPositionFromMetric(key, metric, pricesRef.current) : pos;
-            });
-            const known = new Set(next.map(pos => pos.marketPubkey || pos.positionKey || pos.symbol));
-            for (const [marketPubkey, metric] of Object.entries(metrics)) {
-              if (!known.has(marketPubkey)) next.push(flashPositionFromMetric(marketPubkey, metric, pricesRef.current));
-            }
-            const normalized = normalizeFlashSnapshot(
-              {
-                ...(accountRef.current || {}),
-                owner: walletAddr,
-                basketPubkey: accountRef.current?.basketPubkey,
-                positionMetrics: Object.fromEntries(next.map(pos => [pos.marketPubkey || pos.positionKey || pos.symbol, pos.metric]).filter(([, metric]) => metric)),
-                orderMetrics: accountRef.current?.orderMetrics || {},
-                source: 'flash_v2_ws_metrics',
-              },
-              pricesRef.current,
-              accountRef.current || {},
-              { preserveBalance: true },
-            );
-            setAccount(prevAccount => ({
-              ...normalized,
-              wallet_usdc: walletUsdcRef.current ?? prevAccount?.wallet_usdc ?? normalized.wallet_usdc ?? null,
-            }));
-            return normalized.positions;
-          });
+          const normalized = normalizeFlashSnapshot(
+            {
+              ...(accountRef.current || {}),
+              owner: walletAddr,
+              basketPubkey: accountRef.current?.basketPubkey,
+              basketData: accountRef.current?.basketData,
+              positionMetrics: msg.data,
+              orderMetrics: accountRef.current?.orderMetrics || {},
+              source: 'flash_v2_ws_metrics',
+            },
+            pricesRef.current,
+            accountRef.current || {},
+            { preserveBalance: true },
+          );
+          setAccount(prevAccount => ({
+            ...normalized,
+            wallet_usdc: walletUsdcRef.current ?? prevAccount?.wallet_usdc ?? normalized.wallet_usdc ?? null,
+          }));
+          setPositions(normalized.positions);
           setError('');
           setLoading(false);
         }
@@ -815,29 +852,45 @@ export function useFlash() {
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({ dex: 'flash' }),
       });
-      if (Number(data?.gold || 0) > 0) setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards', ...data });
+      if (Number(data?.gold || 0) > 0) {
+        setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards', ...data });
+        window.onGodotMessage?.({ action: 'resources_add', data: { gold: Number(data.gold || 0), wood: 0, ore: 0 } });
+      }
       return data;
     } catch (e) {
       return { error: e?.message || 'Could not claim Flash gold' };
     }
   }, [token]);
 
-  const confirmSignature = useCallback(async (signature, txConnection = null) => {
-    for (let i = 0; i < 30; i += 1) {
-      if (txConnection?.getSignatureStatuses) {
-        const rpcStatus = await txConnection.getSignatureStatuses([signature]).catch(() => null);
-        const value = rpcStatus?.value?.[0];
-        if (value?.err) throw new Error(`Flash transaction failed: ${JSON.stringify(value.err)}`);
-        if (value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized') return true;
-      }
+  const confirmSignature = useCallback(async (signature, txConnection = null, options = {}) => {
+    const preferBackend = options?.preferBackend === true;
+    const acceptProcessed = options?.acceptProcessed === true;
+    const checkBackendStatus = async () => {
       const status = await fetchJson(`${FUTURES_API}/flash/tx-status?signature=${encodeURIComponent(signature)}`, {
         headers: { 'x-token': token, 'x-dex': 'flash' },
       }).catch(() => null);
-      if (status?.found && !status?.err) return true;
       if (status?.err) throw new Error(`Flash transaction failed: ${JSON.stringify(status.err)}`);
+      return status?.found && !status?.err;
+    };
+    const checkRpcStatus = async () => {
+      if (!txConnection?.getSignatureStatuses) return false;
+      const rpcStatus = await txConnection.getSignatureStatuses([signature], { searchTransactionHistory: true }).catch(() => null);
+      const value = rpcStatus?.value?.[0];
+      if (value?.err) throw new Error(`Flash transaction failed: ${JSON.stringify(value.err)}`);
+      if (acceptProcessed && value) return true;
+      return value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized';
+    };
+    for (let i = 0; i < FLASH_CONFIRM_ATTEMPTS; i += 1) {
+      if (preferBackend) {
+        if (await checkBackendStatus()) return true;
+        if (await checkRpcStatus()) return true;
+      } else {
+        if (await checkRpcStatus()) return true;
+        if (await checkBackendStatus()) return true;
+      }
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
-    throw new Error('Flash transaction was sent but not confirmed yet');
+    throw new Error(`Flash transaction was sent but not confirmed yet. Check signature ${signature}.`);
   }, [token]);
 
   const selectTxConnection = useCallback(async (meta = {}) => {
@@ -874,9 +927,12 @@ export function useFlash() {
     return null;
   }, [walletAddr]);
 
-  const oneTapTradeParams = useCallback(async () => {
+  const oneTapTradeParams = useCallback(async ({ requireReady = FLASH_REQUIRE_ONE_TAP_TRADING } = {}) => {
     const session = await getActiveOneTapSession();
-    if (!session) return { params: {}, session: null };
+    if (!session) {
+      if (requireReady) throw new Error(flashOneTapRequiredError());
+      return { params: {}, session: null };
+    }
     return {
       session,
       params: {
@@ -893,6 +949,12 @@ export function useFlash() {
     const rpc = connectionRpcDiagnostics(txConnection);
     const requiredSigners = txRequiredSignerKeys(tx);
     const oneTapSession = meta?.oneTap ? await getActiveOneTapSession() : null;
+    if (meta?.oneTap && !oneTapSession) {
+      throw new Error('Flash one tap session expired or was removed. Enable Flash one tap again before trading.');
+    }
+    if (isFlashTradingTx(meta) && FLASH_REQUIRE_ONE_TAP_TRADING && !oneTapSession) {
+      throw new Error(flashOneTapRequiredError());
+    }
     console.info('[Flash tx] decoded', {
       tx: txMessageSummary(tx),
       builder: meta?.builder || 'flash_trade_v2',
@@ -902,16 +964,7 @@ export function useFlash() {
       required_signers: requiredSigners,
       one_tap: !!oneTapSession,
     });
-    if (!magicRouter && !shouldSkipFlashLocalSimulation(meta)) {
-      const simulation = await txConnection.simulateTransaction(tx, {
-        sigVerify: false,
-        replaceRecentBlockhash: false,
-        commitment: 'confirmed',
-      }).catch(e => ({ value: { err: e?.message || String(e) } }));
-      if (simulation?.value?.err) {
-        throw new Error(`Flash transaction simulation failed: ${JSON.stringify(simulation.value.err)}`);
-      }
-    }
+    const skipPreflight = magicRouter || shouldSkipFlashLocalSimulation(meta);
     let signed = tx;
     if (oneTapSession) {
       const sessionSigner = publicKeyText(oneTapSession.publicKey);
@@ -972,8 +1025,22 @@ export function useFlash() {
       magic_router: magicRouter,
       one_tap: !!oneTapSession,
     });
-    const signature = magicRouter
-      ? await (async () => {
+    let signature = '';
+    if (magicRouter) {
+      try {
+        console.info('[Flash tx] browser submit start', { rpc, raw_bytes: raw.length, magic_router: magicRouter });
+        signature = await flashTimeout(txConnection.sendRawTransaction(raw, {
+          skipPreflight: true,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        }), 12_000, 'Flash direct broadcast timed out.');
+        console.info('[Flash tx] browser submit done', { signature, rpc, magic_router: magicRouter });
+      } catch (directError) {
+        console.warn('[Flash tx] browser submit failed, using backend fallback', {
+          rpc,
+          message: directError?.message || String(directError || ''),
+          magic_router: magicRouter,
+        });
         console.info('[Flash tx] backend submit start', { rpc, raw_bytes: raw.length, magic_router: magicRouter });
         const submitted = await fetchJson(`${FUTURES_API}/flash/submit-tx`, {
           method: 'POST',
@@ -992,15 +1059,17 @@ export function useFlash() {
           tx: submitted?.tx,
         });
         if (!submitted?.signature) throw new Error('Flash backend returned no transaction signature');
-        return submitted.signature;
-      })()
-      : await flashTimeout(txConnection.sendRawTransaction(raw, {
-        skipPreflight: magicRouter || shouldSkipFlashLocalSimulation(meta),
+        signature = submitted.signature;
+      }
+    } else {
+      signature = await flashTimeout(txConnection.sendRawTransaction(raw, {
+        skipPreflight,
         preflightCommitment: 'confirmed',
         maxRetries: 3,
       }), 20_000, 'Flash transaction broadcast timed out. Check Phantom activity before retrying.');
+    }
     console.info('[Flash tx] raw sent', { signature, rpc, magic_router: magicRouter });
-    await confirmSignature(signature, txConnection);
+    await confirmSignature(signature, txConnection, { preferBackend: false, acceptProcessed: magicRouter || isFlashTradingTx(meta) });
     return signature;
   }, [confirmSignature, getActiveOneTapSession, selectTxConnection, solWallet, token]);
 
@@ -1053,7 +1122,7 @@ export function useFlash() {
       const validUntil = Math.ceil((Date.now() + FLASH_ONE_TAP_EXPIRY_MINUTES * 60_000) / 1000);
       const topUpLamports = FLASH_ONE_TAP_TOPUP_LAMPORTS;
       const builder = manager.program.methods
-        .createSession(
+        .createSessionV2(
           topUpLamports > 0,
           new anchor.BN(validUntil),
           topUpLamports > 0 ? new anchor.BN(topUpLamports) : null,
@@ -1061,6 +1130,7 @@ export function useFlash() {
         .accounts({
           targetProgram,
           sessionSigner: agent.keypair.publicKey,
+          feePayer: solWallet.publicKey,
           authority: solWallet.publicKey,
         });
       const pubKeys = await builder.pubkeys();
@@ -1073,12 +1143,59 @@ export function useFlash() {
         owner: walletAddr,
         signer: agent.publicKey,
         session_token: sessionToken,
+        session_token_version: 2,
         target_program: FLASH_V2_PROGRAM_ID,
         valid_until: validUntil,
         top_up_lamports: topUpLamports,
       });
-      const setupSignature = await builder.signers([agent.keypair]).rpc();
-      await setupConnection.confirmTransaction(setupSignature, 'confirmed').catch(() => null);
+      let setupSignature = '';
+      try {
+        const setupTx = await builder.transaction();
+        if (!setupTx?.partialSign || !setupTx?.serialize) {
+          throw new Error('Flash one tap setup returned an unsupported transaction type.');
+        }
+        const latest = await setupConnection.getLatestBlockhash('confirmed');
+        setupTx.feePayer = solWallet.publicKey;
+        setupTx.recentBlockhash = latest.blockhash;
+        setupTx.partialSign(agent.keypair);
+        const signedSetupTx = await flashTimeout(
+          solWallet.signTransaction(setupTx),
+          45_000,
+          'Flash one tap wallet signature timed out. Reopen Phantom and try again.',
+        );
+        const agentSignature = signedSetupTx.signatures?.find(sig => sig.publicKey?.equals?.(agent.keypair.publicKey));
+        if (!agentSignature?.signature) {
+          throw new Error('Flash one tap setup lost the local session signer signature.');
+        }
+        const raw = signedSetupTx.serialize();
+        console.info('[Flash one tap] setup signed, sending raw', {
+          owner: walletAddr,
+          signer: agent.publicKey,
+          rpc: connectionRpcDiagnostics(setupConnection),
+          raw_bytes: raw.length,
+        });
+        setupSignature = await flashTimeout(
+          setupConnection.sendRawTransaction(raw, {
+            skipPreflight: true,
+            preflightCommitment: 'confirmed',
+            maxRetries: 3,
+          }),
+          20_000,
+          'Flash one tap setup broadcast timed out. Check Phantom activity before retrying.',
+        );
+      } catch (setupError) {
+        const landedSignature = extractSolanaSignatureFromError(setupError);
+        if (!landedSignature) throw setupError;
+        console.warn('[Flash one tap] setup broadcast timed out, checking signature status', {
+          owner: walletAddr,
+          signer: agent.publicKey,
+          signature: landedSignature,
+          message: setupError?.message || String(setupError || ''),
+        });
+        await confirmSignature(landedSignature, setupConnection);
+        setupSignature = landedSignature;
+      }
+      await confirmSignature(setupSignature, setupConnection);
       const stored = await markFlashOneTapAgent(walletAddr, {
         enabled: true,
         delegated: true,
@@ -1086,6 +1203,7 @@ export function useFlash() {
         setupSignature,
         sessionToken,
         targetProgram: FLASH_V2_PROGRAM_ID,
+        sessionTokenVersion: 2,
         cluster: 'mainnet-beta',
         validUntil,
       });
@@ -1101,6 +1219,8 @@ export function useFlash() {
     } catch (e) {
       const msg = e?.message || 'Flash one tap setup failed';
       console.warn('[Flash one tap] setup failed:', msg, e?.data || '');
+      await clearFlashOneTapAgent(walletAddr).catch(() => null);
+      oneTapAgentRef.current = null;
       setOneTapTrading(disabledFlashOneTapState({ enabled: false, approved: false }));
       return { error: msg };
     } finally {
@@ -1151,7 +1271,10 @@ export function useFlash() {
           await new Promise(resolve => setTimeout(resolve, 1200));
         }
       }
-      if (data?.verified === true) await claimGold();
+      if (data?.verified === true || data?.duplicate === true) {
+        await claimGold();
+        window.setTimeout(() => claimGold().catch(() => null), 5000);
+      }
       return data;
     } catch (e) {
       return { error: e?.message || 'Flash trade verification failed' };

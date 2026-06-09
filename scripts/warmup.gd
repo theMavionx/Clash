@@ -574,6 +574,49 @@ func _warmup_fire_dragon_breath_materials() -> void:
 	ember.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(ember)
 
+	var flame_particles := GPUParticles3D.new()
+	flame_particles.name = "WarmupFireDragonFlameParticles"
+	flame_particles.amount = 8
+	flame_particles.lifetime = 0.24
+	flame_particles.one_shot = true
+	flame_particles.explosiveness = 0.8
+	flame_particles.randomness = 0.6
+	flame_particles.local_coords = true
+	var flame_mesh := QuadMesh.new()
+	flame_mesh.size = Vector2(0.12, 0.14)
+	flame_mesh.material = _make_particle_billboard_material(breath, Color(2.0, 0.72, 0.18, 0.74), true)
+	flame_particles.draw_passes = 1
+	flame_particles.set_draw_pass_mesh(0, flame_mesh)
+	var flame_process := ParticleProcessMaterial.new()
+	flame_process.direction = Vector3(0.0, 1.0, 0.0)
+	flame_process.spread = 12.0
+	flame_process.initial_velocity_min = 0.35
+	flame_process.initial_velocity_max = 0.8
+	flame_process.scale_min = 0.42
+	flame_process.scale_max = 1.25
+	flame_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	flame_process.emission_sphere_radius = 0.03
+	flame_particles.process_material = flame_process
+	add_child(flame_particles)
+	flame_particles.restart()
+
+	var smoke := MeshInstance3D.new()
+	var smoke_mesh := QuadMesh.new()
+	smoke_mesh.size = Vector2(0.16, 0.18)
+	smoke.mesh = smoke_mesh
+	var smoke_mat := _make_additive_material(breath, Color(0.16, 0.12, 0.10, 0.24), true)
+	smoke_mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	smoke_mat.no_depth_test = false
+	smoke.material_override = smoke_mat
+	smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(smoke)
+
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.35, 0.08)
+	light.light_energy = 0.4
+	light.omni_range = 0.5
+	add_child(light)
+
 
 ## Mage Tower is an FBX with runtime-applied albedo/emission textures and a
 ## distinct solid-blue orb material. Warm both the building model pipeline and
@@ -795,6 +838,14 @@ static func _make_additive_material(tex: Texture2D, color: Color, billboard: boo
 	if tex:
 		mat.albedo_texture = tex
 	mat.albedo_color = color
+	return mat
+
+
+static func _make_particle_billboard_material(tex: Texture2D, color: Color, additive: bool) -> StandardMaterial3D:
+	var mat := _make_additive_material(tex, color, true)
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD if additive else BaseMaterial3D.BLEND_MODE_MIX
+	mat.vertex_color_use_as_albedo = true
 	return mat
 
 

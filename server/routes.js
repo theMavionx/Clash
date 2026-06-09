@@ -10871,6 +10871,7 @@ const GOLD_FIRST_DEPOSIT = 500;
 const GOLD_FIRST_TRADE = 300;
 const GOLD_DAILY_TRADE = 450;
 const GOLD_PER_10_USD_PROFIT = 150; // +150 gold per $10 positive PnL
+const FLASH_REWARD_MIN_NOTIONAL_USD = Math.max(0.01, Math.min(10, Number(process.env.FLASH_REWARD_MIN_NOTIONAL_USD || 1)));
 
 function volumeGoldForDex(dex, usdVolume) {
   const volume = Number(usdVolume);
@@ -11980,6 +11981,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // a sensible micro-trade floor across all four DEXes.
     const SANE_MIN_NOTIONAL = dex === 'gmx'
       ? 0
+      : dex === 'flash'
+        ? FLASH_REWARD_MIN_NOTIONAL_USD
       : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 

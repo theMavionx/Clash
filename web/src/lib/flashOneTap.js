@@ -50,6 +50,7 @@ function normalizeRecord(value) {
     delegatedAt: value.delegatedAt ? Number(value.delegatedAt) : null,
     setupSignature: value.setupSignature ? String(value.setupSignature) : '',
     sessionToken: value.sessionToken ? String(value.sessionToken) : '',
+    sessionTokenVersion: Number(value.sessionTokenVersion || 0),
     targetProgram: value.targetProgram ? String(value.targetProgram) : '',
     cluster: value.cluster ? String(value.cluster) : 'mainnet-beta',
     validUntil: Number(value.validUntil || 0),

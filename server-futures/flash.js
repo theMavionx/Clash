@@ -21,7 +21,7 @@ const FLASH_PROGRAM_IDS = String(
 ).split(',').map(s => s.trim()).filter(Boolean);
 const FLASH_V2_PROGRAM_ID = FLASH_PROGRAM_IDS[0] || 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV';
 const GPL_SESSION_PROGRAM_ID = String(process.env.GPL_SESSION_PROGRAM_ID || 'KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5');
-const GPL_SESSION_TOKEN_DISCRIMINATOR = Buffer.from([233, 4, 115, 14, 46, 21, 1, 15]);
+const GPL_SESSION_TOKEN_V2_DISCRIMINATOR = Buffer.from([178, 3, 85, 254, 13, 116, 128, 41]);
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.FLASH_TIMEOUT_MS || 7000)));
 const SOLANA_RPC_TIMEOUT_MS = Math.max(1000, Math.min(20_000, Number(process.env.FLASH_SOLANA_RPC_TIMEOUT_MS || 8000)));
 const PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.FLASH_PUBLIC_CACHE_TTL_MS || 12_000)));
@@ -95,6 +95,42 @@ async function flashSolanaRpcRequest(label, method, params) {
     }
     return data?.result;
   });
+}
+
+async function flashV2RpcRequest(label, method, params) {
+  const endpoint = String(FLASH_V2_RPC_URL || '').trim();
+  if (!endpoint) throw Object.assign(new Error('Flash v2 RPC endpoint is not configured'), { status: 503 });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SOLANA_RPC_TIMEOUT_MS);
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'user-agent': 'ClashOfPerps/1.0 flash-v2-rpc-read',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: `flash-v2-${Date.now()}`,
+        method,
+        params,
+      }),
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+    if (!res.ok || data?.error) {
+      const err = new Error(data?.error?.message || (text ? text.slice(0, 400) : `HTTP ${res.status}`));
+      err.status = res.ok ? 502 : res.status;
+      err.data = data || text;
+      throw err;
+    }
+    return data?.result;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function getWalletUsdcBalance(owner) {
@@ -401,7 +437,7 @@ function decodeUserDepositLedger(data, expectedOwner = '') {
 
 function deriveGplSessionToken(sessionSigner, authority) {
   return PublicKey.findProgramAddressSync([
-    Buffer.from('session_token'),
+    Buffer.from('session_token_v2'),
     new PublicKey(FLASH_V2_PROGRAM_ID).toBuffer(),
     new PublicKey(sessionSigner).toBuffer(),
     new PublicKey(authority).toBuffer(),
@@ -410,14 +446,15 @@ function deriveGplSessionToken(sessionSigner, authority) {
 
 function decodeGplSessionToken(data) {
   const bytes = Buffer.from(data || []);
-  if (bytes.length < 112 || !bytes.subarray(0, 8).equals(GPL_SESSION_TOKEN_DISCRIMINATOR)) {
-    throw new Error('Flash session token account has invalid layout');
+  if (bytes.length < 144 || !bytes.subarray(0, 8).equals(GPL_SESSION_TOKEN_V2_DISCRIMINATOR)) {
+    throw new Error('Flash session token v2 account has invalid layout');
   }
   return {
     authority: new PublicKey(bytes.subarray(8, 40)).toBase58(),
     targetProgram: new PublicKey(bytes.subarray(40, 72)).toBase58(),
     sessionSigner: new PublicKey(bytes.subarray(72, 104)).toBase58(),
-    validUntil: Number(bytes.readBigInt64LE(104)),
+    feePayer: new PublicKey(bytes.subarray(104, 136)).toBase58(),
+    validUntil: Number(bytes.readBigInt64LE(136)),
   };
 }
 
@@ -487,15 +524,21 @@ async function getFlashFundingState(owner, snapshot = {}) {
   };
 }
 
-async function getParsedSolanaTransaction(signature) {
-  return flashSolanaRpcRequest('Flash transaction lookup', 'getTransaction', [
+async function getParsedFlashTransaction(signature) {
+  const params = [
     signature,
     {
       encoding: 'jsonParsed',
       maxSupportedTransactionVersion: 0,
       commitment: 'confirmed',
     },
-  ]);
+  ];
+  const v2 = await flashV2RpcRequest('Flash v2 transaction lookup', 'getTransaction', params).catch((e) => {
+    console.warn('[flash] v2 transaction lookup failed:', e?.message || e);
+    return null;
+  });
+  if (v2) return v2;
+  return flashSolanaRpcRequest('Flash mainnet transaction lookup', 'getTransaction', params).catch(() => null);
 }
 
 function displayLiquidationPrice({ side, entry, sizeUsd, collateralUsd, apiLiq }) {
@@ -852,7 +895,7 @@ function txSignedByWallet(parsedTx, wallet) {
 
 async function getTransactionStatus(signature) {
   if (!signature) throw Object.assign(new Error('signature required'), { status: 400 });
-  const parsed = await getParsedSolanaTransaction(signature);
+  const parsed = await getParsedFlashTransaction(signature);
   return {
     found: !!parsed,
     err: parsed?.meta?.err || null,
@@ -872,7 +915,7 @@ async function recordTradeReport(db, playerId, body, owner) {
     decoded = mod(signature);
   } catch {}
   if (!decoded || decoded.length !== 64) throw Object.assign(new Error('invalid Solana signature'), { status: 400 });
-  const parsed = await getParsedSolanaTransaction(signature);
+  const parsed = await getParsedFlashTransaction(signature);
   if (!parsed) throw Object.assign(new Error('Flash transaction not found yet'), { status: 404 });
   if (parsed.meta?.err) throw Object.assign(new Error('Flash transaction failed on-chain'), { status: 400, data: parsed.meta.err });
   const sessionSigner = String(body.signer || body.sessionSigner || body.session_signer || '').trim();

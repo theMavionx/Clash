@@ -391,6 +391,7 @@ export function createSolanaFallbackConnection(ConnectionCtor, urls = SOLANA_RPC
     : { ...commitmentOrConfig };
   return new ConnectionCtor(endpoint, {
     ...config,
+    wsEndpoint: config.wsEndpoint || solanaWsUrl(endpoint),
     fetch: config.fetch || ((input, init) => solanaRpcFallbackFetch(candidates, input, init)),
   });
 }
