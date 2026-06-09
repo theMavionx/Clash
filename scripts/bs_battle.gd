@@ -103,7 +103,7 @@ const REPLAY_SYNC_MAX_PHYSICS_STEPS: int = 16
 
 var _had_troops: bool = false
 var _skeleton_respawn_timer: float = 0.0
-var _victory_declared: booПроаналізуй зміни які є на мейн гілці l = false
+var _victory_declared: bool = false
 var _find_in_progress: bool = false
 
 const RAID_ATTACK_COST_GOLD: int = 150
