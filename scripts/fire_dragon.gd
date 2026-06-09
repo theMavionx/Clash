@@ -27,6 +27,13 @@ const ANIMATION_PATHS: Dictionary = {
 const RED_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_red.tga")
 const BLACK_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_black.tga")
 const PURPLE_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_purple.tga")
+const FIRE_BREATH_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fx_fire_breath.tga")
+const FIRE_SPARKS_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fx_sparks.tga")
+const FIRE_BREATH_DURATION: float = 0.34
+const FIRE_BREATH_WIDTH: float = 0.17
+const FIRE_BREATH_MOUTH_FORWARD_OFFSET: float = 0.08
+const FIRE_BREATH_TARGET_Y_OFFSET: float = 0.13
+const FIRE_BREATH_MIN_LENGTH: float = 0.12
 
 @export var skin: DragonSkin = DragonSkin.RED
 @export var flight_height: float = 0.34
@@ -127,6 +134,7 @@ func _do_attack(delta: float) -> void:
 
 	if not _hit_this_swing and attack_timer >= atk_speed * hit_anim_threshold:
 		_hit_this_swing = true
+		_spawn_fire_breath_vfx()
 		_play_attack_sfx()
 		_deal_target_damage()
 
@@ -170,6 +178,136 @@ func _apply_attack_separation(delta: float) -> void:
 	var flat_new := Vector3(new_pos.x, 0.0, new_pos.z)
 	if flat_target.distance_to(flat_new) < attack_range * 1.2:
 		global_position = _clamp_to_island(new_pos)
+
+
+func _spawn_fire_breath_vfx() -> void:
+	if not is_inside_tree():
+		return
+	var root_parent: Node = get_tree().current_scene
+	if root_parent == null:
+		root_parent = get_tree().root
+	var target_pos: Vector3 = _get_fire_breath_target_position()
+	var target_dir: Vector3 = target_pos - global_position
+	target_dir.y = 0.0
+	if target_dir.length_squared() < 0.0001:
+		target_dir = -global_transform.basis.z
+	target_dir = target_dir.normalized()
+	var mouth_pos: Vector3 = _get_mouth_position(target_dir)
+	var to_target: Vector3 = target_pos - mouth_pos
+	if to_target.length_squared() < FIRE_BREATH_MIN_LENGTH * FIRE_BREATH_MIN_LENGTH:
+		to_target = target_dir * FIRE_BREATH_MIN_LENGTH
+		target_pos = mouth_pos + to_target
+	var dir: Vector3 = to_target.normalized()
+	var length: float = to_target.length()
+	var side: Vector3 = Vector3.UP.cross(dir)
+	if side.length_squared() < 0.0001:
+		side = global_transform.basis.x
+	side = side.normalized()
+	var normal: Vector3 = side.cross(dir).normalized()
+
+	var holder := Node3D.new()
+	holder.name = "FireDragonBreathVFX"
+	root_parent.add_child(holder)
+
+	var beam := _make_fire_billboard(FIRE_BREATH_TEXTURE, Color(1.65, 0.78, 0.25, 0.88))
+	var beam_mesh := QuadMesh.new()
+	beam_mesh.size = Vector2(FIRE_BREATH_WIDTH, length)
+	beam.mesh = beam_mesh
+	holder.add_child(beam)
+	beam.global_transform = Transform3D(Basis(side, dir, normal).orthonormalized(), mouth_pos + dir * (length * 0.5))
+	var beam_mat := beam.material_override as StandardMaterial3D
+	var beam_tw := beam.create_tween()
+	beam_tw.set_parallel(true)
+	beam_tw.tween_property(beam, "scale:x", 1.45, FIRE_BREATH_DURATION * 0.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	beam_tw.tween_property(beam, "scale:y", 0.72, FIRE_BREATH_DURATION).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	beam_tw.tween_property(beam_mat, "albedo_color:a", 0.0, FIRE_BREATH_DURATION).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+
+	var mouth_flare := _make_fire_billboard(FIRE_BREATH_TEXTURE, Color(1.9, 1.05, 0.45, 0.9))
+	var mouth_mesh := QuadMesh.new()
+	mouth_mesh.size = Vector2(0.16, 0.16)
+	mouth_flare.mesh = mouth_mesh
+	holder.add_child(mouth_flare)
+	mouth_flare.global_position = mouth_pos
+	var mouth_mat := mouth_flare.material_override as StandardMaterial3D
+	var mouth_tw := mouth_flare.create_tween()
+	mouth_tw.set_parallel(true)
+	mouth_tw.tween_property(mouth_flare, "scale", Vector3.ONE * 1.35, FIRE_BREATH_DURATION * 0.5)
+	mouth_tw.tween_property(mouth_mat, "albedo_color:a", 0.0, FIRE_BREATH_DURATION * 0.7)
+
+	var spark := _make_fire_billboard(FIRE_SPARKS_TEXTURE, Color(1.4, 1.05, 0.55, 0.85))
+	var spark_mesh := QuadMesh.new()
+	spark_mesh.size = Vector2(0.34, 0.24)
+	spark.mesh = spark_mesh
+	holder.add_child(spark)
+	spark.global_position = target_pos
+	var spark_mat := spark.material_override as StandardMaterial3D
+	var spark_tw := spark.create_tween()
+	spark_tw.set_parallel(true)
+	spark_tw.tween_property(spark, "scale", Vector3.ONE * 1.3, FIRE_BREATH_DURATION)
+	spark_tw.tween_property(spark_mat, "albedo_color:a", 0.0, FIRE_BREATH_DURATION)
+
+	var cleanup := holder.create_tween()
+	cleanup.tween_interval(FIRE_BREATH_DURATION + 0.04)
+	cleanup.tween_callback(func():
+		if is_instance_valid(holder):
+			holder.queue_free()
+	)
+
+
+func _make_fire_billboard(texture: Texture2D, color: Color) -> MeshInstance3D:
+	var node := MeshInstance3D.new()
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.no_depth_test = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_texture = texture
+	mat.albedo_color = color
+	node.material_override = mat
+	return node
+
+
+func _get_fire_breath_target_position() -> Vector3:
+	if target_guard != null and is_instance_valid(target_guard):
+		return target_guard.global_position + Vector3(0.0, 0.08, 0.0)
+	if target_building.size() > 0:
+		var node: Node3D = target_building.get("node", null)
+		if is_instance_valid(node):
+			return node.global_position + Vector3(0.0, FIRE_BREATH_TARGET_Y_OFFSET, 0.0)
+	return _get_target_position() + Vector3(0.0, FIRE_BREATH_TARGET_Y_OFFSET, 0.0)
+
+
+func _get_mouth_position(fallback_dir: Vector3) -> Vector3:
+	var skeleton: Skeleton3D = _find_skeleton(self)
+	if skeleton != null:
+		var head_idx: int = _find_head_bone_index(skeleton)
+		if head_idx >= 0:
+			var head_pose: Transform3D = skeleton.get_bone_global_pose(head_idx)
+			return skeleton.global_transform * head_pose.origin + fallback_dir.normalized() * FIRE_BREATH_MOUTH_FORWARD_OFFSET
+	return global_position + Vector3(0.0, 0.08, 0.0) + fallback_dir.normalized() * 0.18
+
+
+func _find_head_bone_index(skeleton: Skeleton3D) -> int:
+	var direct_idx: int = skeleton.find_bone("RigHead")
+	if direct_idx >= 0:
+		return direct_idx
+	for i in skeleton.get_bone_count():
+		if skeleton.get_bone_name(i).to_lower().find("head") != -1:
+			return i
+	return -1
+
+
+func _find_skeleton(node: Node) -> Skeleton3D:
+	if node is Skeleton3D:
+		return node as Skeleton3D
+	for child in node.get_children():
+		var found := _find_skeleton(child)
+		if found:
+			return found
+	return null
 
 
 func _sync_visual_state() -> void:
