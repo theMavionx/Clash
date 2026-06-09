@@ -31,7 +31,7 @@ const OWNED_SOLANA_TOKEN2022_TIMEOUT_MS = 9_000;
 const OWNED_SOLANA_CORE_TIMEOUT_MS = 14_000;
 const OWNED_SERVER_FALLBACK_TIMEOUT_MS = 12_000;
 const OWNED_EVM_SCAN_CHUNK_SIZE = 80;
-const OWNED_CACHE_PREFIX = 'nft-owned-v3:';
+const OWNED_CACHE_PREFIX = 'nft-owned-v4:';
 const DEMON_KING_SYNC_CACHE_TTL_MS = 5 * 60_000;
 const DEMON_KING_SYNC_CACHE_PREFIX = 'demon-king-sync:';
 const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad', 'ink'];
@@ -78,7 +78,7 @@ export function nftLevelImageUrl(level, id = null, collection = 'demonking') {
   const lvl = normalizeNftLevel(level);
   const collectionSlug = normalizeNftCollectionSlug(collection);
   if (collectionSlug !== 'demonking') {
-    const ext = lvl === 3 ? 'jpg' : 'png';
+    const ext = collectionSlug === 'dragon' ? 'jpg' : (lvl === 3 ? 'jpg' : 'png');
     return `/cdn/nft/${collectionSlug}/${lvl}/default.${ext}`;
   }
   if (NFT_USE_TOKEN_IMAGE_PATHS && id != null && id !== '') {
@@ -95,6 +95,9 @@ function normalizeNftImageUrl(url, level = 1, id = null, collection = 'demonking
   try {
     const parsed = new URL(text, globalThis?.location?.origin || 'http://localhost');
     const legacyHost = LEGACY_NFT_IMAGE_HOSTS.has(parsed.hostname.toLowerCase());
+    if (collectionSlug === 'dragon' && /\/cdn\/nft\/dragon\/[12]\/default\.png$/i.test(parsed.pathname)) {
+      return fallback;
+    }
     if (!legacyHost) return text;
     const match = parsed.pathname.match(/\/nft\/(.+)$/i);
     return match ? `${LOCAL_NFT_IMAGE_BASE_URL}/${match[1]}` : fallback;

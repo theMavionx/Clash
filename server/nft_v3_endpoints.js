@@ -776,7 +776,7 @@ function collectionLevelImageUrl(collectionSlug, level, id = null) {
   const slug = normalizeBridgeCollectionSlugValue(collectionSlug);
   if (slug === 'voidspore' || slug === 'dragon') {
     const lvl = normalizeNftLevel(level);
-    const ext = lvl === 3 ? 'jpg' : 'png';
+    const ext = slug === 'dragon' ? 'jpg' : (lvl === 3 ? 'jpg' : 'png');
     return `/cdn/nft/${slug}/${lvl}/default.${ext}`;
   }
   return nftLevelImageUrl(level, id);
