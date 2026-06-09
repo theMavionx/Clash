@@ -435,11 +435,12 @@ function getTaskFuturesDexes(player, requestedDex) {
 
 async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
   const wallet = resolveWalletForDex(player, dexFilter);
-  if (!wallet && dexFilter !== 'grvt') return [];
   if (wallet && !walletMatchesDex(dexFilter, wallet)) return [];
   if (dexFilter === 'hotstuff') {
+    if (!wallet) return [];
     await maybeImportHotstuffFills(player, wallet);
   } else if (dexFilter === 'gmtrade') {
+    if (!wallet) return [];
     await maybeReconcileGmtrade(player, wallet);
   }
   const fdb = futuresDbReadonly();
