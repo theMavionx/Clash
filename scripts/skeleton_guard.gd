@@ -9,6 +9,8 @@ signal died(guard: Node3D)
 const BLADE_SCENE = "res://Model/Characters/Skelet/assets/gltf/Skeleton_Blade.gltf"
 const HIT_DELAY_RATIO = 0.4
 const ATTACK_ANIM = "Melee_1H_Attack_Chop"
+const CAN_TARGET_GROUND: bool = true
+const CAN_TARGET_AIR: bool = false
 
 const ANIM_FILES = [
 	"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_General.glb",
@@ -294,7 +296,7 @@ func _do_patrol(delta: float) -> void:
 # ── Chase: run toward enemy troop ─────────────────────────────
 
 func _do_chase(delta: float) -> void:
-	if not is_instance_valid(_target_troop) or not _target_troop.is_inside_tree():
+	if not BaseTroop.can_target_troop(_target_troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		_target_troop = null
 		if _are_all_troops_dead():
 			_trigger_victory_all()
@@ -335,7 +337,7 @@ func _do_chase(delta: float) -> void:
 # ── Attack: melee hit enemy troop ─────────────────────────────
 
 func _do_attack(delta: float) -> void:
-	if not is_instance_valid(_target_troop) or not _target_troop.is_inside_tree():
+	if not BaseTroop.can_target_troop(_target_troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		_target_troop = null
 		if _are_all_troops_dead():
 			_trigger_victory_all()
@@ -446,7 +448,7 @@ func _find_nearest_enemy() -> Node3D:
 	var nearest: Node3D = null
 	var nearest_dist: float = detection_radius
 	for troop in BaseTroop._get_troops_cached():
-		if not BaseTroop.is_live_troop(troop):
+		if not BaseTroop.can_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
 		var d = _flat_distance(troop.global_position, tombstone_pos)
 		if d < nearest_dist:

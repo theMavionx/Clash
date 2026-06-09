@@ -55,6 +55,7 @@ var _hit_this_swing: bool = false
 func _init_stats() -> void:
 	level = clampi(level, 1, LEVEL_STATS.size())
 	var stats: Dictionary = LEVEL_STATS[level]
+	unit_target_type = BaseTroop.UNIT_TARGET_AIR
 	move_speed = 0.38
 	attack_range = 0.32
 	separation_radius = 0.18

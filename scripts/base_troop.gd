@@ -8,6 +8,10 @@ extends Node3D
 @export var separation_radius: float = 0.14
 @export var separation_force: float = 0.6
 @export var attack_sfx_path: String = ""
+@export_enum("ground", "air") var unit_target_type: String = "ground"
+
+const UNIT_TARGET_GROUND: String = "ground"
+const UNIT_TARGET_AIR: String = "air"
 
 var level: int = 1
 var hp: int = 100
@@ -321,6 +325,23 @@ static func is_live_troop(troop: Variant) -> bool:
 	if dead_value != null and bool(dead_value):
 		return false
 	return true
+
+
+static func is_air_troop(troop: Variant) -> bool:
+	if not is_instance_valid(troop):
+		return false
+	var troop_target_type: Variant = troop.get("unit_target_type")
+	return str(troop_target_type) == UNIT_TARGET_AIR
+
+
+static func can_target_troop(troop: Variant, can_target_ground: bool, can_target_air: bool) -> bool:
+	if not is_live_troop(troop):
+		return false
+	return can_target_air if is_air_troop(troop) else can_target_ground
+
+
+func is_air_unit() -> bool:
+	return unit_target_type == UNIT_TARGET_AIR
 
 
 static func _troop_order_key(troop: Node) -> int:
