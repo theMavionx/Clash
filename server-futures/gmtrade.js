@@ -86,6 +86,10 @@ const GMTRADE_DEFAULT_COLLATERAL_MINT =
   || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const GMTRADE_DEFAULT_COLLATERAL_DECIMALS = Number(process.env.GMTRADE_COLLATERAL_DECIMALS || 6);
 const GMTRADE_EXECUTION_LAMPORTS = Number(process.env.GMTRADE_EXECUTION_LAMPORTS || 50_000);
+const GMTRADE_ORDER_SOL_BUFFER_LAMPORTS = Math.max(
+  0,
+  Number(process.env.GMTRADE_ORDER_SOL_BUFFER_LAMPORTS || 10_000_000)
+);
 const GMTRADE_ORDER_SLIPPAGE_BPS = Number(process.env.GMTRADE_ORDER_SLIPPAGE_BPS || 50);
 const GMTRADE_MIN_POSITION_USD = Math.max(0, Number(process.env.GMTRADE_MIN_POSITION_USD || 1));
 const GMTRADE_POSITION_VERIFY_SLOT_WINDOW = Math.max(1, Number(process.env.GMTRADE_POSITION_VERIFY_SLOT_WINDOW || 500));
@@ -626,6 +630,14 @@ async function rpcLatestBlockhash() {
   return result?.value || {};
 }
 
+async function rpcBalanceLamports(address) {
+  const result = await rpcRequest('getBalance', [
+    address,
+    { commitment: 'confirmed' },
+  ]);
+  return Number(result?.value || 0);
+}
+
 async function rpcTransaction(signature) {
   return rpcRequest('getTransaction', [
     signature,
@@ -649,6 +661,12 @@ async function getWalletUsdcBalance(address) {
     const uiAmount = Number(row?.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0);
     return sum + (Number.isFinite(uiAmount) ? uiAmount : 0);
   }, 0);
+}
+
+async function getWalletSolBalance(address) {
+  if (!isSolanaAddress(address)) return 0;
+  const lamports = await rpcBalanceLamports(address);
+  return Number.isFinite(lamports) && lamports > 0 ? lamports / 1e9 : 0;
 }
 
 async function configFromMarketToken(symbol) {
@@ -2032,6 +2050,24 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     } catch (e) {
       if (Number(e?.status) === 400) throw e;
       console.warn('[gmtrade] wallet USDC preflight skipped:', e?.message || e);
+    }
+  }
+  if (!isDecrease) {
+    try {
+      const walletSol = await getWalletSolBalance(payer);
+      const requiredLamports = GMTRADE_EXECUTION_LAMPORTS + GMTRADE_ORDER_SOL_BUFFER_LAMPORTS;
+      const requiredSol = requiredLamports / 1e9;
+      if (Number.isFinite(walletSol) && walletSol + 0.000005 < requiredSol) {
+        throw Object.assign(
+          new Error(
+            `Insufficient Solana SOL for GMTrade order setup. Wallet has ${walletSol.toFixed(4)} SOL; keep at least ${requiredSol.toFixed(4)} SOL for GMTrade execution/rent.`
+          ),
+          { status: 400, wallet_sol: walletSol, required_sol: requiredSol },
+        );
+      }
+    } catch (e) {
+      if (Number(e?.status) === 400) throw e;
+      console.warn('[gmtrade] wallet SOL preflight skipped:', e?.message || e);
     }
   }
   const params = {

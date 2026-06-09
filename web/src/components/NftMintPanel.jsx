@@ -116,11 +116,11 @@ const GAME_RESOURCE_PRODUCT_PRIORITY = {
 };
 
 const CHAIN_OPTIONS = [
+  { id: 'solana', title: 'Solana', subtitle: 'SOL / USDC / SKR', badge: 'SOL' },
   { id: 'base', title: 'Base', subtitle: 'ETH / USDC', badge: 'EVM' },
   { id: 'arbitrum', title: 'Arbitrum', subtitle: 'ETH / USDC', badge: 'EVM' },
   { id: 'monad', title: 'Monad', subtitle: 'MON / USDC', badge: 'EVM' },
   { id: 'ink', title: 'Ink', subtitle: 'ETH / USDC', badge: 'EVM' },
-  { id: 'solana', title: 'Solana', subtitle: 'SOL / USDC / SKR', badge: 'SOL' },
   { id: 'aptos', title: 'Aptos', subtitle: 'APT / USDC', badge: 'APT' },
 ];
 
@@ -263,10 +263,7 @@ const DEX_TO_NFT_CHAIN = {
 //   - arbitrum/monad/ink /nft/evm/quote   (USDC / native)
 //   - aptos   /nft/aptos/quote  (USDC/APT, ed25519-signed)
 const NFT_MINT_SUPPORTED = new Set(['base', 'solana', 'arbitrum', 'monad', 'ink', 'aptos']);
-
-function recommendedChain(dex) {
-  return DEX_TO_NFT_CHAIN[dex] || 'base';
-}
+const DEFAULT_NFT_MINT_CHAIN = 'solana';
 
 function defaultPaymentForChain(chain) {
   switch (chain) {
@@ -551,8 +548,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   // from their chosen DEX (see [[shop-auto-chain]]). They can still re-pick
   // a chain via the top-right chip which calls handleBackToChains.
   const [step, setStep] = useState('payment');
-  const [selectedChain, setSelectedChain] = useState(() => recommendedChain(dex));
-  const [selectedPayment, setSelectedPayment] = useState(() => defaultPaymentForChain(recommendedChain(dex)));
+  const [selectedChain, setSelectedChain] = useState(DEFAULT_NFT_MINT_CHAIN);
+  const [selectedPayment, setSelectedPayment] = useState(() => defaultPaymentForChain(DEFAULT_NFT_MINT_CHAIN));
   const [shopChain, setShopChain] = useState(() => readStoredShopChain(shopChainForDex(dex)));
   const [chainPickerOpen, setChainPickerOpen] = useState(false);
   // Top-level view inside the shop modal. 'shop' shows the NFT/Resources
@@ -753,19 +750,15 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     return () => { cancelled = true; };
   }, [refreshGameShopConfig]);
 
-  // Re-sync NFT chain to the player's DEX whenever it changes, but only
-  // when they're sitting on the chain picker. We don't want to clobber
-  // a manual override (e.g. user is on Avantis/Base but switched to
-  // Solana to mint cheaper) while they're mid-flow on the payment step.
-  // The exception: on initial open (step==='payment' from skip-chain),
-  // also seed the chain once so the payment options match the DEX.
-  const dexInitialised = useMemo(() => recommendedChain(dex), [dex]);
+  // Dragon mint defaults to Solana regardless of the trading DEX. The player
+  // can still switch chains from the picker, but first open should always show
+  // the Solana mint route.
   useEffect(() => {
     if (step === 'chain') {
-      setSelectedChain(dexInitialised);
-      setSelectedPayment(defaultPaymentForChain(dexInitialised));
+      setSelectedChain(DEFAULT_NFT_MINT_CHAIN);
+      setSelectedPayment(defaultPaymentForChain(DEFAULT_NFT_MINT_CHAIN));
     }
-  }, [dexInitialised, step]);
+  }, [step]);
 
   useEffect(() => {
     const provider = evmWallet?.provider;

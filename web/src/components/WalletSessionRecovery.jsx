@@ -12,7 +12,7 @@ import { addClientBreadcrumb } from '../lib/clientLogger';
 import EvmWalletModal from './EvmWalletModal';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
-const SHOW_AFTER_MS = 6500;
+const SHOW_AFTER_MS = 1200;
 
 const DEX_WALLET = {
   avantis: { kind: 'evm', chain: 'Base', label: 'Avantis', cta: 'Reconnect Base wallet', targetChain: 'base' },
@@ -47,7 +47,6 @@ export default function WalletSessionRecovery() {
   const { isInFrame } = useFarcaster();
 
   const [visible, setVisible] = useState(false);
-  const [dismissedKey, setDismissedKey] = useState(null);
   const [evmModalOpen, setEvmModalOpen] = useState(false);
   const loggedRef = useRef(null);
 
@@ -66,12 +65,12 @@ export default function WalletSessionRecovery() {
     : (evmWallet?.address || aptosWallet?.address || null);
   const sessionToken = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
   const playerId = player?.player_id || player?.id || player?.player_name || 'player';
+  const linkedWallet = player?.wallet || null;
   const repairKey = `${playerId}:${dex}`;
   const needsRepair = !!sessionToken
     && !ui?.showRegister
     && dexPicked()
-    && !liveWallet
-    && dismissedKey !== repairKey;
+    && !liveWallet;
 
   const openSolanaConnect = useCallback(() => {
     openSolanaWallet({
@@ -144,10 +143,24 @@ export default function WalletSessionRecovery() {
     if (liveWallet || !sessionToken) setVisible(false);
   }, [liveWallet, sessionToken]);
 
+  useEffect(() => {
+    if (!needsRepair) return undefined;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') setVisible(true);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [needsRepair]);
+
   const shortOther = useMemo(() => {
     if (!otherWallet) return null;
     return `${String(otherWallet).slice(0, 6)}...${String(otherWallet).slice(-4)}`;
   }, [otherWallet]);
+
+  const shortLinked = useMemo(() => {
+    if (!linkedWallet) return null;
+    return `${String(linkedWallet).slice(0, 6)}...${String(linkedWallet).slice(-4)}`;
+  }, [linkedWallet]);
 
   if (!visible || !needsRepair) {
     return (
@@ -166,16 +179,10 @@ export default function WalletSessionRecovery() {
   return (
     <>
       <div style={S.card}>
-        <button
-          aria-label="Dismiss wallet recovery"
-          onClick={() => { setDismissedKey(repairKey); setVisible(false); }}
-          style={S.close}
-        >
-          ×
-        </button>
         <div style={S.title}>Wallet session needs repair</div>
         <div style={S.text}>
           You are still signed in to the game, but {meta.label} needs a live {meta.chain} wallet to trade.
+          {shortLinked ? ` Linked wallet: ${shortLinked}.` : ''}
           {shortOther ? ` A different wallet is active (${shortOther}).` : ''}
         </div>
         <div style={S.actions}>

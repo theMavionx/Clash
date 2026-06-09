@@ -220,6 +220,7 @@ const EvmWalletContext = createContext({
 });
 
 const LAST_WALLET_KEY = 'clash_last_evm_wallet_rdns';
+const MANUAL_DISCONNECT_KEY = 'clash_evm_manual_disconnect';
 
 export function EvmWalletProvider({ children }) {
   const [externalProvider, setExternalProvider] = useState(null); // set by EvmWalletModal
@@ -230,10 +231,15 @@ export function EvmWalletProvider({ children }) {
   const [externalSource, setExternalSource] = useState(null);
   const [error, setError] = useState(null);
   const [chainId, setChainId] = useState(null);
+  const [manualDisconnectBlocked, setManualDisconnectBlocked] = useState(() => {
+    try { return localStorage.getItem(MANUAL_DISCONNECT_KEY) === '1'; } catch { return false; }
+  });
 
   const { isInFrame, loading: fcLoading } = useFarcaster();
 
   const setPersistedExternalProvider = useCallback((prov, addr, rdns = null, src = 'external') => {
+    setManualDisconnectBlocked(false);
+    try { localStorage.removeItem(MANUAL_DISCONNECT_KEY); } catch { /* storage disabled */ }
     setExternalProvider(prov);
     setExternalAddress(addr);
     setExternalSource(src);
@@ -254,6 +260,7 @@ export function EvmWalletProvider({ children }) {
   useEffect(() => {
     if (fcLoading) return;
     if (!isInFrame) return;
+    if (manualDisconnectBlocked) return;
     if (externalProvider) return; // already have one (possibly set by auth flow)
     let cancelled = false;
     (async () => {
@@ -282,7 +289,7 @@ export function EvmWalletProvider({ children }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [isInFrame, fcLoading, externalProvider]);
+  }, [isInFrame, fcLoading, manualDisconnectBlocked, externalProvider]);
 
   // Silent reconnect: on mount, if we remember the rdns of the last-connected
   // wallet, listen for its EIP-6963 announcement and check if the user is
@@ -291,13 +298,14 @@ export function EvmWalletProvider({ children }) {
   // doesn't see the "Connect Wallet" screen on every refresh when their
   // wallet extension has already granted permission.
   useEffect(() => {
+    if (manualDisconnectBlocked) return;
     let storedRdns = null;
     try { storedRdns = localStorage.getItem(LAST_WALLET_KEY); } catch { /* storage disabled */ }
     if (!storedRdns) return;
 
     let cancelled = false;
     const tryReconnect = async (provider) => {
-      if (cancelled || externalAddress) return;
+      if (cancelled || manualDisconnectBlocked || externalAddress) return;
       try {
         const accounts = await provider.request({ method: 'eth_accounts' });
         const addr = accounts && accounts[0];
@@ -321,7 +329,7 @@ export function EvmWalletProvider({ children }) {
 
     // Legacy fallback: window.ethereum with matching name hint.
     const legacyTimer = setTimeout(() => {
-      if (cancelled || externalAddress) return;
+      if (cancelled || manualDisconnectBlocked || externalAddress) return;
       const eth = typeof window !== 'undefined' ? window.ethereum : null;
       if (!eth) return;
       const legacy = Array.isArray(eth.providers) ? eth.providers : [eth];
@@ -340,12 +348,13 @@ export function EvmWalletProvider({ children }) {
       window.removeEventListener('eip6963:announceProvider', onAnnounce);
       clearTimeout(legacyTimer);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [manualDisconnectBlocked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Manual/retry entrypoint used by the session repair UI. Some EVM wallets
   // announce late on cold page loads, so this asks EIP-6963 again and falls
   // back to legacy window.ethereum without opening a popup.
   const reconnectStoredProvider = useCallback(async () => {
+    if (manualDisconnectBlocked) return false;
     let storedRdns = null;
     try { storedRdns = localStorage.getItem(LAST_WALLET_KEY); } catch { /* storage disabled */ }
     if (!storedRdns || externalAddress) return false;
@@ -358,7 +367,7 @@ export function EvmWalletProvider({ children }) {
     };
 
     const tryProvider = async (provider) => {
-      if (!provider || externalAddress) return false;
+      if (!provider || manualDisconnectBlocked || externalAddress) return false;
       try {
         const accounts = await provider.request({ method: 'eth_accounts' });
         const addr = accounts && accounts[0];
@@ -396,9 +405,10 @@ export function EvmWalletProvider({ children }) {
       if (await tryProvider(p)) return true;
     }
     return false;
-  }, [externalAddress, setPersistedExternalProvider]);
+  }, [externalAddress, manualDisconnectBlocked, setPersistedExternalProvider]);
 
   useEffect(() => {
+    if (manualDisconnectBlocked) return undefined;
     let stopped = false;
     const timers = [];
     const run = async () => {
@@ -413,7 +423,7 @@ export function EvmWalletProvider({ children }) {
       stopped = true;
       timers.forEach(clearTimeout);
     };
-  }, [externalAddress, reconnectStoredProvider]);
+  }, [externalAddress, manualDisconnectBlocked, reconnectStoredProvider]);
 
   // Privy embedded wallet is auto-picked when the user logs in via email.
   const { authenticated, evmWallets: privyWallets, evmSendTransaction } = useOptionalPrivy();
@@ -580,11 +590,15 @@ export function EvmWalletProvider({ children }) {
   // Disconnect for the custom modal path. Privy disconnect is managed by
   // Privy itself (logout button in RegisterPanel).
   const disconnect = useCallback(() => {
+    setManualDisconnectBlocked(true);
     setExternalProvider(null);
     setExternalAddress(null);
     setExternalSource(null);
     setError(null);
-    try { localStorage.removeItem(LAST_WALLET_KEY); } catch { /* storage disabled */ }
+    try {
+      localStorage.removeItem(LAST_WALLET_KEY);
+      localStorage.setItem(MANUAL_DISCONNECT_KEY, '1');
+    } catch { /* storage disabled */ }
   }, []);
 
   // Listen for account / chain changes on the active provider so UI reacts

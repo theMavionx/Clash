@@ -50,6 +50,7 @@
     "set-price:solana": "node scripts/set-solana-price.mjs",
     "set-payments:solana": "node scripts/set-solana-payments.mjs",
     "sale:solana": "node scripts/set-solana-sale.mjs",
+    "sale:aptos": "node scripts/set-aptos-sale.mjs",
     "quote:prices": "node scripts/price-quote.mjs",
     "doctor": "node scripts/doctor.mjs"
   },

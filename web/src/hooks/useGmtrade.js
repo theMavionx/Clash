@@ -256,6 +256,10 @@ function gmtradeUserError(error) {
     return 'Phantom blocked or rejected the GMTrade transaction. The transaction pre-simulation can pass, but Phantom may still show a risk warning for GMTrade setup/rent accounts on this domain. Review the wallet prompt or try another Solana wallet if Phantom blocks it.';
   }
   if (/insufficient gmtrade wallet usdc/i.test(message)) return message;
+  if (/insufficient solana sol for gmtrade order setup/i.test(message)) return message;
+  if (/insufficient lamports/i.test(message)) {
+    return 'Insufficient Solana SOL for GMTrade order setup. Add more SOL to the connected wallet or reduce setup-heavy pending orders.';
+  }
   if (/Tokenkeg|insufficient funds|custom program error:\s*0x1/i.test(message)) {
     return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
   }

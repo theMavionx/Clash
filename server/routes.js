@@ -209,7 +209,9 @@ function getUnifiedPlayerByWalletAnyForm(wallet) {
       SELECT
         p.*,
         MIN(c.source_priority) AS source_priority,
+        COALESCE((SELECT MAX(level) FROM buildings b WHERE b.player_id = p.id AND b.type = 'town_hall'), 0) AS town_hall_level,
         (SELECT COUNT(*) FROM buildings b WHERE b.player_id = p.id) AS building_count,
+        COALESCE((SELECT SUM(level) FROM buildings b WHERE b.player_id = p.id), 0) AS building_level_sum,
         (SELECT COUNT(*) FROM player_tasks pt WHERE pt.player_id = p.id) AS task_count,
         COALESCE((SELECT MAX(total_volume) FROM trading_rewards tr WHERE tr.player_id = p.id), 0) AS reward_volume
       FROM candidate_ids c
@@ -220,9 +222,12 @@ function getUnifiedPlayerByWalletAnyForm(wallet) {
     FROM ranked
     ORDER BY
       CASE WHEN name GLOB 'player_[0-9a-fA-F]*' THEN 1 ELSE 0 END ASC,
+      town_hall_level DESC,
+      building_level_sum DESC,
       building_count DESC,
       reward_volume DESC,
       task_count DESC,
+      (COALESCE(gold, 0) + COALESCE(wood, 0) + COALESCE(ore, 0)) DESC,
       COALESCE(trophies, 0) DESC,
       source_priority ASC,
       COALESCE(last_seen_at, created_at) DESC,
@@ -6832,7 +6837,9 @@ function getPlayerByWalletAndDexAnyForm(wallet, dex) {
        SELECT
          p.*,
          MIN(c.source_priority) AS source_priority,
+         COALESCE((SELECT MAX(level) FROM buildings b WHERE b.player_id = p.id AND b.type = 'town_hall'), 0) AS town_hall_level,
          (SELECT COUNT(*) FROM buildings b WHERE b.player_id = p.id) AS building_count,
+         COALESCE((SELECT SUM(level) FROM buildings b WHERE b.player_id = p.id), 0) AS building_level_sum,
          COALESCE((SELECT MAX(total_volume) FROM trading_rewards tr WHERE tr.player_id = p.id AND tr.dex = ?), 0) AS reward_volume
        FROM candidate_ids c
        JOIN players p ON p.id = c.id
@@ -6842,8 +6849,11 @@ function getPlayerByWalletAndDexAnyForm(wallet, dex) {
      FROM ranked
      ORDER BY
        CASE WHEN name GLOB 'player_[0-9a-fA-F]*' THEN 1 ELSE 0 END ASC,
+       town_hall_level DESC,
+       building_level_sum DESC,
        building_count DESC,
        reward_volume DESC,
+       (COALESCE(gold, 0) + COALESCE(wood, 0) + COALESCE(ore, 0)) DESC,
        COALESCE(trophies, 0) DESC,
        source_priority ASC,
        COALESCE(last_seen_at, created_at) DESC,
@@ -6877,8 +6887,11 @@ function getAllPlayersByWalletAnyForm(wallet) {
      FROM players p
      WHERE p.id IN (SELECT id FROM candidate_ids)
      ORDER BY
+       COALESCE((SELECT MAX(level) FROM buildings b WHERE b.player_id = p.id AND b.type = 'town_hall'), 0) DESC,
+       COALESCE((SELECT SUM(level) FROM buildings b WHERE b.player_id = p.id), 0) DESC,
        (SELECT COUNT(*) FROM buildings b WHERE b.player_id = p.id) DESC,
        COALESCE((SELECT MAX(total_volume) FROM trading_rewards tr WHERE tr.player_id = p.id), 0) DESC,
+       (COALESCE(p.gold, 0) + COALESCE(p.wood, 0) + COALESCE(p.ore, 0)) DESC,
        COALESCE(trophies, 0) DESC,
        p.id DESC`
   ).all(
@@ -7367,7 +7380,8 @@ router.post('/players/register', (req, res) => {
   // when BOTH the wallet AND the requested DEX match.
   if (wallet) {
     const localGuestWallet = isLocalGuestWallet(wallet);
-    let existing = getUnifiedPlayerByWalletAnyForm(wallet);
+    let existing = getPlayerByWalletAndDexAnyForm(wallet, requestedDex)
+      || getUnifiedPlayerByWalletAnyForm(wallet);
 
     // Migration path for Farcaster placeholder rows (wallet = `fc_<fid>`).
     // Same dex must match — if the placeholder was created on Pacifica and
@@ -9005,10 +9019,10 @@ router.post('/players/login-wallet', (req, res) => {
   const { wallet, dex } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
 
-  let player = getUnifiedPlayerByWalletAnyForm(wallet);
-  if (!player && VALID_DEXES.has(dex)) {
-    player = getPlayerByWalletAndDexAnyForm(wallet, dex);
-  }
+  let player = VALID_DEXES.has(dex)
+    ? getPlayerByWalletAndDexAnyForm(wallet, dex)
+    : null;
+  if (!player) player = getUnifiedPlayerByWalletAnyForm(wallet);
   if (!player) return res.status(404).json({ error: 'No Clash account found for this wallet' });
   if (VALID_DEXES.has(dex) && dex !== player.dex) {
     try {

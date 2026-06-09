@@ -26,6 +26,7 @@ var trophies: int = 0
 var wallet: String = ""
 
 const WEB_AUTH_STORAGE_KEY = "clash_game_auth_v1"
+const WEB_MANUAL_RECONNECT_KEY = "clash_manual_reconnect_required"
 
 func _ready() -> void:
 	WebLoadLogger.report("autoload_net_ready_start")
@@ -38,6 +39,10 @@ func _ready() -> void:
 		player_id = cfg.get_value("auth", "player_id", "")
 		wallet = cfg.get_value("auth", "wallet", "")
 		trophies = int(cfg.get_value("auth", "trophies", 0))
+	if token != "" and _web_saved_auth_requires_live_wallet(wallet, display_name):
+		_clear_native_auth_preserving_web()
+		_mark_web_manual_reconnect_required()
+		WebLoadLogger.report("autoload_net_wallet_session_requires_reconnect")
 	if token == "":
 		_load_web_auth_fallback()
 	if _should_clear_local_guest_for_dex_entry():
@@ -86,6 +91,15 @@ func _clear_saved_auth() -> void:
 	cfg.save("user://auth.cfg")
 	_clear_web_auth_fallback()
 
+func _clear_native_auth_preserving_web() -> void:
+	token = ""
+	player_id = ""
+	display_name = ""
+	trophies = 0
+	wallet = ""
+	var cfg = ConfigFile.new()
+	cfg.save("user://auth.cfg")
+
 func _is_local_web_host() -> bool:
 	if not OS.has_feature("web"):
 		return false
@@ -113,6 +127,22 @@ func _should_clear_local_guest_for_dex_entry() -> bool:
 	var marker := _web_local_guest_auth_marker()
 	return marker == "guest-wallet" or marker == "guest-name" or (marker == "guest-id" and wallet == "" and display_name == "")
 
+func _web_saved_auth_requires_live_wallet(saved_wallet: String, saved_name: String = "") -> bool:
+	if not OS.has_feature("web"):
+		return false
+	var w := String(saved_wallet).strip_edges()
+	var n := String(saved_name).strip_edges()
+	if w == "":
+		return false
+	if w.begins_with("local_guest_") or n.begins_with("Guest_"):
+		return false
+	return true
+
+func _mark_web_manual_reconnect_required() -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("(function(){try{window.localStorage.setItem('%s','1');}catch(e){}})()" % WEB_MANUAL_RECONNECT_KEY, true)
+
 func _load_web_auth_fallback() -> void:
 	if not OS.has_feature("web"):
 		return
@@ -126,10 +156,16 @@ func _load_web_auth_fallback() -> void:
 	var saved_token := _safe_str(parsed.get("token", ""))
 	if saved_token == "":
 		return
+	var saved_wallet := _safe_str(parsed.get("wallet", ""))
+	var saved_name := _safe_str(parsed.get("name", ""))
+	if _web_saved_auth_requires_live_wallet(saved_wallet, saved_name):
+		_mark_web_manual_reconnect_required()
+		WebLoadLogger.report("autoload_net_web_auth_skipped_until_wallet_reconnect", {"wallet": saved_wallet != ""})
+		return
 	token = saved_token
-	display_name = _safe_str(parsed.get("name", ""))
+	display_name = saved_name
 	player_id = _safe_str(parsed.get("player_id", ""))
-	wallet = _safe_str(parsed.get("wallet", ""))
+	wallet = saved_wallet
 
 func _save_web_auth_fallback() -> void:
 	if not OS.has_feature("web"):

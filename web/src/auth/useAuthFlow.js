@@ -43,11 +43,14 @@ import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
+const MANUAL_RECONNECT_KEY = 'clash_manual_reconnect_required';
 // Unified account cache: one wallet resolves to one Clash account, and the
 // chosen venue is a profile setting instead of a separate registration.
 const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_account_cache_v3';
 const ACCOUNT_PROBE_POSITIVE_TTL_MS = 24 * 60 * 60 * 1000;
 const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
+const ACCOUNT_PROBE_TIMEOUT_MS = 10000;
+const ACCOUNT_PROBE_MAX_RETRIES = 3;
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
 // user isn't authenticated anywhere; keeps the "Joining…" UX intact when
@@ -71,6 +74,17 @@ function writeDexPicked(v) {
   } catch { /* storage disabled */ }
 }
 
+function readManualReconnectRequired() {
+  try { return localStorage.getItem(MANUAL_RECONNECT_KEY) === '1'; } catch { return false; }
+}
+
+function writeManualReconnectRequired(v) {
+  try {
+    if (v) localStorage.setItem(MANUAL_RECONNECT_KEY, '1');
+    else localStorage.removeItem(MANUAL_RECONNECT_KEY);
+  } catch { /* storage disabled */ }
+}
+
 function hasStoredGameAuth() {
   try {
     if (window._playerToken) return true;
@@ -86,12 +100,11 @@ function hasStoredGameAuth() {
 function walletCacheKey(wallet, dex) {
   const raw = String(wallet || '').trim();
   const w = raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
-  // Always include DEX in the key — the same wallet can hold a different
-  // account per DEX after the migration to UNIQUE(wallet, dex). When dex
-  // is undefined (legacy callers, transitional code) we degrade to the
-  // wallet-only key so the cache miss surfaces a fresh probe instead of
-  // returning the wrong account.
-  return w;
+  if (!w) return '';
+  // The same EVM wallet can have separate rows per venue. A wallet-only
+  // cache key leaks "missing" or "found" probe results across DEXes and can
+  // send the user into new-account registration while their old DEX row exists.
+  return dex ? `${String(dex).toLowerCase()}:${w}` : w;
 }
 
 function readAccountProbeCache(wallet, dex) {
@@ -155,6 +168,7 @@ export function useAuthFlow() {
   const { setExternalProvider: setEvmProvider, disconnect: evmDisconnect } = useEvmWallet();
 
   const [dexPicked, setDexPickedState] = useState(readDexPicked);
+  const [manualReconnectRequired, setManualReconnectRequired] = useState(readManualReconnectRequired);
 
   // Refs shared across effects below — declared up-front so the
   // session-reset effect can clear them before the resolver machinery
@@ -179,6 +193,22 @@ export function useAuthFlow() {
   // is batched with the state clears, so the NEXT render has both the
   // cleared state AND the gate lifted).
   const [readyForRegister, setReadyForRegister] = useState(false);
+
+  const clearManualReconnectRequired = useCallback(() => {
+    writeManualReconnectRequired(false);
+    setManualReconnectRequired(false);
+  }, []);
+
+  useEffect(() => {
+    const onManualReconnectRequired = () => {
+      writeManualReconnectRequired(true);
+      setManualReconnectRequired(true);
+      lastRegisteredRef.current = null;
+      fcEvmTriedRef.current = false;
+    };
+    window.addEventListener('clash-auth-manual-reconnect-required', onManualReconnectRequired);
+    return () => window.removeEventListener('clash-auth-manual-reconnect-required', onManualReconnectRequired);
+  }, []);
 
   // A DEX can be valid globally but unavailable in the current host. Decibel
   // needs an Aptos wallet-standard provider (Petra/etc.), which Farcaster
@@ -374,7 +404,7 @@ export function useAuthFlow() {
   // Priority (Decibel): Petra (only source — no FC/Privy alternative yet).
   // Priority (Pacifica): Solana adapter (covers FC Solana auto-connect
   //   and external-connected) → Privy Solana.
-  const candidate = useMemo(() => {
+  const rawCandidate = useMemo(() => {
     if (!dexPicked) return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
     // Avantis (Base), GMX (Arbitrum), Monad and Hyperliquid all source from the same EVM wallet
     // context. The wallet address is the same on every EVM chain — the chain
@@ -390,6 +420,7 @@ export function useAuthFlow() {
     }
     return privySol || solAdapter || null;
   }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
+  const candidate = manualReconnectRequired ? null : rawCandidate;
 
   // Seeker `.skr` handle — only resolves on Saga/Seeker hardware (the hook
   // gates internally), so on every other host this is a free no-op. We feed
@@ -452,9 +483,11 @@ export function useAuthFlow() {
   const probeInFlightRef = useRef({});
   const probeVerifiedRef = useRef({});
   const probeRetryTimerRef = useRef({});
+  const probeRetryCountRef = useRef({});
   useEffect(() => () => {
     Object.values(probeRetryTimerRef.current || {}).forEach((timer) => clearTimeout(timer));
     probeRetryTimerRef.current = {};
+    probeRetryCountRef.current = {};
   }, []);
   useEffect(() => {
     if (!candidate?.wallet) return;
@@ -477,7 +510,7 @@ export function useAuthFlow() {
     probeInFlightRef.current[key] = true;
     (async () => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), AUTO_CONNECT_GRACE_MS);
+      const timer = setTimeout(() => ctrl.abort(), ACCOUNT_PROBE_TIMEOUT_MS);
       let verified = false;
       try {
         const r = await fetch('/api/players/login-wallet', {
@@ -500,6 +533,7 @@ export function useAuthFlow() {
           // Treat any cross-dex response as "no account on this dex".
           const name = data?.name || null;
           writeAccountProbeCache(candidate.wallet, dex, name);
+          probeRetryCountRef.current[key] = 0;
           setProbedNameByWallet(prev => ({ ...prev, [key]: name }));
           verified = true;
         } else if (r.status === 404 || r.status === 400) {
@@ -508,6 +542,7 @@ export function useAuthFlow() {
           // different DEX with the same wallet — that's fine, switching
           // DEX in the picker will re-probe and find it.
           writeAccountProbeCache(candidate.wallet, dex, null);
+          probeRetryCountRef.current[key] = 0;
           setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
           verified = true;
         } else {
@@ -523,6 +558,14 @@ export function useAuthFlow() {
           wallet: candidate.wallet,
           message: e?.message || String(e || ''),
         }, 'warn');
+        const retryCount = (probeRetryCountRef.current[key] || 0) + 1;
+        probeRetryCountRef.current[key] = retryCount;
+        if (retryCount >= ACCOUNT_PROBE_MAX_RETRIES) {
+          setRegisterError('Could not verify this wallet account. Go back and reconnect, or try again after the server responds.');
+          setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
+          verified = true;
+          return;
+        }
         probeRetryTimerRef.current[key] = setTimeout(() => {
           delete probeRetryTimerRef.current[key];
           probeVerifiedRef.current[key] = false;
@@ -605,6 +648,7 @@ export function useAuthFlow() {
     privyEnabled,
     privyReady,
     privyAuthed,
+    manualReconnectRequired,
     smReady,
     isInFrame,
     fcLoading,
@@ -612,13 +656,14 @@ export function useAuthFlow() {
     dex, dexPicked, booting, graceExpired, registering, candidate,
     probeInFlight, existingAccountName, suggestedName, isFarcasterCandidate,
     showRegister, readyForRegister, privyEnabled, privyReady, privyAuthed,
-    smReady, isInFrame, fcLoading,
+    manualReconnectRequired, smReady, isInFrame, fcLoading,
   ]);
 
   const state = useMemo(() => {
     if (registerError && candidate) return 'need_name';
     if (registering) return 'registering';
     if (booting) return 'booting';
+    if (manualReconnectRequired) return 'manual_connect';
     if (!candidate && !dexPicked) return 'manual_connect';
     if (!candidate && dexPicked && !graceExpired) return 'auto_connecting';
     // FC fast-path: auto-register with FC handle.
@@ -635,7 +680,7 @@ export function useAuthFlow() {
     if (!graceExpired) return 'auto_connecting';
     return 'manual_connect';
   }, [registerError, registering, booting, dexPicked, candidate, suggestedName, graceExpired,
-      isFarcasterCandidate, probeInFlight, existingAccountName]);
+      isFarcasterCandidate, probeInFlight, existingAccountName, manualReconnectRequired]);
 
   const lastAuthStateLogRef = useRef('');
   useEffect(() => {
@@ -746,7 +791,7 @@ export function useAuthFlow() {
     // from Avantis to GMX would silently no-op the GMX register because
     // `lastRegisteredRef.current` still pointed at the wallet from the
     // Avantis register, and the user would never get a GMX row created.
-    const candidateKey = String(candidate.wallet).toLowerCase();
+    const candidateKey = `${String(dex).toLowerCase()}:${String(candidate.wallet).toLowerCase()}`;
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
@@ -842,7 +887,7 @@ export function useAuthFlow() {
     // from Avantis to GMX would silently no-op the GMX register because
     // `lastRegisteredRef.current` still pointed at the wallet from the
     // Avantis register, and the user would never get a GMX row created.
-    const candidateKey = String(candidate.wallet).toLowerCase();
+    const candidateKey = `${String(dex).toLowerCase()}:${String(candidate.wallet).toLowerCase()}`;
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
@@ -875,10 +920,15 @@ export function useAuthFlow() {
   // Trigger manual Privy login (email) — Privy renders its own modal.
   const loginWithPrivy = useCallback(() => {
     if (!privyEnabled) return;
+    clearManualReconnectRequired();
     addClientBreadcrumb('wallet.connect_start', { source: 'privy_email', dex });
     try { privyLogin({ loginMethods: ['email'] }); }
     catch { privyLogin(); }
-  }, [privyEnabled, privyLogin, dex]);
+  }, [clearManualReconnectRequired, privyEnabled, privyLogin, dex]);
+
+  const beginManualWalletConnect = useCallback(() => {
+    clearManualReconnectRequired();
+  }, [clearManualReconnectRequired]);
 
   const logout = useCallback(() => {
     lastRegisteredRef.current = null;
@@ -887,6 +937,8 @@ export function useAuthFlow() {
     setRegisterError('');
     writeDexPicked(false);
     setDexPickedState(false);
+    writeManualReconnectRequired(true);
+    setManualReconnectRequired(true);
     // Clear the global token so DexContext polling / any in-flight fetch
     // stops using a stale identity after logout. Previously only
     // ProfileModal.logoutEverything() cleared it, so useAuthFlow.logout()
@@ -914,6 +966,7 @@ export function useAuthFlow() {
       submitName,
       clearRegisterError: () => setRegisterError(''),
       loginWithPrivy,
+      beginManualWalletConnect,
       logout,
     },
     registerError,

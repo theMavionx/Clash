@@ -8,6 +8,32 @@ import { DEX_CONFIG, getAvailableDexConfigs } from '../contexts/DexContext';
 import { useAuthFlow } from '../auth/useAuthFlow';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 
+const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
+const DEX_PICKED_KEY = 'clash_dex_picked';
+const MANUAL_RECONNECT_KEY = 'clash_manual_reconnect_required';
+
+function readStoredAuthRecord() {
+  try {
+    const raw = localStorage.getItem(GAME_AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const wallet = String(parsed?.wallet || '').trim();
+    if (!wallet || wallet.startsWith('local_guest_')) return null;
+    return {
+      wallet,
+      name: String(parsed?.name || '').trim(),
+      playerId: String(parsed?.player_id || '').trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function shortWallet(address) {
+  const raw = String(address || '');
+  return raw ? `${raw.slice(0, 6)}...${raw.slice(-4)}` : '';
+}
+
 // Styled to match the project's dominant Clash-of-Clans modal look (parchment
 // body + blue header + yellow action button — see BuildingInfoPanel LT styles
 // for the reference). Previously used the older dark "cartoonPanel" look that
@@ -140,7 +166,7 @@ function DexBadge({ dex, onChange }) {
   );
 }
 
-function NameForm({ wallet, suggested, seekerHandle, error, onClearError, onSubmit }) {
+function NameForm({ wallet, suggested, seekerHandle, error, onBack, onClearError, onSubmit }) {
   const [name, setName] = useState(suggested || '');
   // Track whether the user has manually typed in the field. We want the
   // input to track late-arriving `suggested` updates (the Seeker `.skr`
@@ -180,6 +206,9 @@ function NameForm({ wallet, suggested, seekerHandle, error, onClearError, onSubm
 
   return (
     <form onSubmit={submit} style={S.bodyStack}>
+      <button type="button" style={S.backBtn} onClick={onBack}>
+        &larr; BACK
+      </button>
       <h3 style={S.sectionTitle}>PICK A NAME</h3>
       <div style={S.walletPill}>
         <span style={S.walletDot} />
@@ -271,6 +300,22 @@ function ConnectAccount({ onOpenWalletModal, onOpenEvmModal, onConnectAptos, apt
         disabled={aptosConnecting}
       >
         <WalletIcon /> {aptosConnecting ? 'CONNECTING...' : (aptosHasProvider ? 'CONNECT APTOS WALLET' : 'INSTALL PETRA')}
+      </button>
+    </div>
+  );
+}
+
+function StoredWalletNotice({ record, onDisconnect }) {
+  if (!record?.wallet) return null;
+  return (
+    <div style={S.storedWalletBox}>
+      <div style={S.storedWalletText}>
+        <span style={S.storedWalletLabel}>LINKED WALLET</span>
+        <span style={S.storedWalletAddress}>{shortWallet(record.wallet)}</span>
+        {record.name && <span style={S.storedWalletName}>{record.name}</span>}
+      </div>
+      <button type="button" style={S.storedWalletDisconnect} onClick={onDisconnect}>
+        DISCONNECT
       </button>
     </div>
   );
@@ -391,14 +436,42 @@ function RegisterPanel() {
   const aptos = useAptosWallet();
 
   const [evmModalOpen, setEvmModalOpen] = useState(false);
+  const [storedAuthRecord, setStoredAuthRecord] = useState(readStoredAuthRecord);
   const handleEvmConnected = useCallback(({ address, provider, rdns }) => {
     setEvmModalOpen(false);
     if (provider && address) setEvmProvider(provider, address, rdns, 'external');
   }, [setEvmProvider]);
 
   const openSolanaConnect = useCallback(() => {
+    actions.beginManualWalletConnect?.();
     openSolanaWallet({ wallets, select, connect, openWalletModal, inFrame: isInFrame });
-  }, [isInFrame, wallets, select, connect, openWalletModal]);
+  }, [actions, isInFrame, wallets, select, connect, openWalletModal]);
+
+  const openEvmConnect = useCallback(() => {
+    actions.beginManualWalletConnect?.();
+    setEvmModalOpen(true);
+  }, [actions]);
+
+  const connectAptos = useCallback(() => {
+    actions.beginManualWalletConnect?.();
+    return aptos.connect?.();
+  }, [actions, aptos]);
+
+  const disconnectStoredWallet = useCallback(() => {
+    try {
+      localStorage.removeItem(GAME_AUTH_STORAGE_KEY);
+      localStorage.removeItem(DEX_PICKED_KEY);
+      localStorage.removeItem(MANUAL_RECONNECT_KEY);
+      window._playerToken = null;
+    } catch { /* storage disabled */ }
+    setStoredAuthRecord(null);
+    actions.unpickDex?.();
+  }, [actions]);
+
+  const backFromName = useCallback(() => {
+    actions.clearRegisterError?.();
+    actions.unpickDex?.();
+  }, [actions]);
 
   const body = (() => {
     switch (state) {
@@ -438,6 +511,7 @@ function RegisterPanel() {
             suggested={suggestedName || ''}
             seekerHandle={seekerHandle}
             error={registerError}
+            onBack={backFromName}
             onClearError={actions.clearRegisterError}
             onSubmit={actions.submitName}
           />
@@ -448,8 +522,8 @@ function RegisterPanel() {
           return (
             <ConnectAccount
               onOpenWalletModal={openSolanaConnect}
-              onOpenEvmModal={() => setEvmModalOpen(true)}
-              onConnectAptos={aptos.connect}
+              onOpenEvmModal={openEvmConnect}
+              onConnectAptos={connectAptos}
               aptosConnecting={aptos.isConnecting}
               aptosHasProvider={aptos.hasProvider}
               onPrivyLogin={actions.loginWithPrivy}
@@ -462,7 +536,7 @@ function RegisterPanel() {
           return (
             <ConnectAvantis
               dex={dex}
-              onOpenEvmModal={() => setEvmModalOpen(true)}
+              onOpenEvmModal={openEvmConnect}
               onPrivyLogin={actions.loginWithPrivy}
               privyEnabled={privyEnabled}
               privyAuthed={privyAuthed}
@@ -472,7 +546,7 @@ function RegisterPanel() {
         if (dex === 'decibel') {
           return (
             <ConnectDecibel
-              onConnectAptos={aptos.connect}
+              onConnectAptos={connectAptos}
               isConnecting={aptos.isConnecting}
               hasProvider={aptos.hasProvider}
               error={aptos.error}
@@ -527,6 +601,9 @@ function RegisterPanel() {
         </div>
         <div className="shop-scroll" style={S.content}>
           {showDexBadge && <DexBadge dex={dex} onChange={actions.unpickDex} />}
+          {state === 'manual_connect' && (
+            <StoredWalletNotice record={storedAuthRecord} onDisconnect={disconnectStoredWallet} />
+          )}
           {body}
         </div>
       </div>
@@ -668,6 +745,70 @@ const S = {
     color: '#377d9f',
     fontSize: 10, fontWeight: 900, letterSpacing: '0.5px',
     cursor: 'pointer', padding: '5px 10px', borderRadius: 8,
+  },
+  backBtn: {
+    alignSelf: 'flex-start',
+    background: 'rgba(26, 60, 79, 0.08)',
+    border: '1.5px solid #377d9f',
+    color: '#377d9f',
+    fontSize: 11,
+    fontWeight: 900,
+    letterSpacing: '0.5px',
+    cursor: 'pointer',
+    padding: '6px 11px',
+    borderRadius: 9,
+    fontFamily: 'inherit',
+  },
+
+  storedWalletBox: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    alignItems: 'center',
+    gap: 10,
+    padding: '10px 12px',
+    background: 'rgba(26, 60, 79, 0.08)',
+    border: '2px solid #377d9f',
+    borderRadius: 12,
+  },
+  storedWalletText: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+  },
+  storedWalletLabel: {
+    color: '#377d9f',
+    fontSize: 10,
+    fontWeight: 900,
+    letterSpacing: '0.7px',
+  },
+  storedWalletAddress: {
+    color: '#1a3c4f',
+    fontSize: 14,
+    fontWeight: 900,
+    fontFamily: 'monospace',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  storedWalletName: {
+    color: '#5d6d75',
+    fontSize: 11,
+    fontWeight: 800,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  storedWalletDisconnect: {
+    border: '2px solid #8b2a2a',
+    borderRadius: 9,
+    background: 'linear-gradient(180deg, #ef5350 0%, #d32f2f 100%)',
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 900,
+    padding: '8px 9px',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
   },
 
   // Wallet pill shown before name form.

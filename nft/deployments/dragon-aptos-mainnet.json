@@ -14,13 +14,13 @@
   "maxSupply": 333,
   "maxPerTx": 10,
   "totalMinted": "0",
-  "saleActive": false,
+  "saleActive": true,
   "bridgeFeeOctas": "21000000",
   "publishTxHash": "0x528d3bdac86c960955dfcbda0af51b25106123cce2f1a564fad24c6319aab8b4",
   "initializeTxHash": "0xe4c7c67b97fd8666118cff4df6a4ca6d6bfa77209fdcdc7e5200e1f3ef7881a5",
   "initBurnStatsTxHash": "0x2f8f704694a86114ca73706afecb11778a698a02f298815180c2b219fafb16f4",
   "bridgeFeeTxHash": "0x8ba3c6482920fa8451e7cbf87c51a362f42b3eba9b9017dc679c318a94d4470f",
-  "saleActivateTxHash": null,
+  "saleActivateTxHash": "0x3b0fdf9fd9210e65bb42556b4147b937ec539b2a862e07a0063e1340bf4c0b05",
   "fullMeshBridge": true,
   "aptosPaymentMint": true,
   "aptosCliVersion": "9.4.0",
@@ -28,5 +28,7 @@
     "collectionUri": "https://clashofperps.fun/api/nft/dragon/aptos/collection",
     "tokenUriBase": "https://clashofperps.fun/api/nft/dragon/aptos/"
   },
-  "deployedAt": "2026-06-08T15:26:00.000Z"
+  "deployedAt": "2026-06-08T15:26:00.000Z",
+  "saleCloseTxHash": null,
+  "saleUpdatedAt": "2026-06-09T05:03:23.131Z"
 }

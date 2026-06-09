@@ -123,7 +123,7 @@ function ProfileModal({ onClose }) {
   const [nameDraft, setNameDraft] = useState(currentName);
   const [nameBusy, setNameBusy] = useState(false);
   const [nameError, setNameError] = useState('');
-  const [accountLinks, setAccountLinks] = useState({ wallets: [], dex_accounts: [] });
+  const [accountLinks, setAccountLinks] = useState({ wallets: [], dex_accounts: [], active_dex: '' });
   const [walletActionError, setWalletActionError] = useState('');
   const [walletActionBusy, setWalletActionBusy] = useState('');
 
@@ -176,7 +176,7 @@ function ProfileModal({ onClose }) {
   const refreshAccountLinks = useCallback(async () => {
     const token = player?.token || window._playerToken;
     if (!token) {
-      setAccountLinks({ wallets: [], dex_accounts: [] });
+      setAccountLinks({ wallets: [], dex_accounts: [], active_dex: '' });
       return;
     }
     try {
@@ -186,6 +186,7 @@ function ProfileModal({ onClose }) {
       setAccountLinks({
         wallets: Array.isArray(data?.wallets) ? data.wallets : [],
         dex_accounts: Array.isArray(data?.dex_accounts) ? data.dex_accounts : [],
+        active_dex: data?.active_dex || '',
       });
     } catch (e) {
       setWalletActionError(e?.message || 'Failed to load linked wallets');
@@ -210,12 +211,23 @@ function ProfileModal({ onClose }) {
         ...entry,
         address,
         chain_type: chain,
-        is_login_wallet: prev.is_login_wallet || entry.is_login_wallet || (loginWallet && address === loginWallet) ? 1 : 0,
+        is_login_wallet: (prev.is_login_wallet || entry.is_login_wallet || (loginWallet && address === loginWallet)) ? 1 : 0,
         linked: prev.linked || entry.linked || false,
         connected: prev.connected || entry.connected || false,
       });
     };
     (accountLinks.wallets || []).forEach((wallet) => add({ ...wallet, linked: true }));
+    (accountLinks.dex_accounts || []).forEach((account) => {
+      if (!account?.wallet_address) return;
+      const isLinkedDexWallet = account.status !== 'disconnected';
+      add({
+        address: account.wallet_address,
+        chain_type: account.chain_type,
+        linked: isLinkedDexWallet,
+        is_login_wallet: isLinkedDexWallet && account.dex === (accountLinks.active_dex || dex) ? 1 : 0,
+        label: `${String(account.dex || '').toUpperCase()} login wallet`,
+      });
+    });
     if (player?.wallet) add({ address: player.wallet, chain_type: walletChainType(player.wallet), linked: true, is_login_wallet: 1 });
     if (evmAddress) add({ address: evmAddress, chain_type: 'evm', connected: true, label: 'Connected EVM wallet' });
     if (adapterAddr) add({ address: adapterAddr, chain_type: 'solana', connected: true, label: 'Connected Solana wallet' });
@@ -226,7 +238,7 @@ function ProfileModal({ onClose }) {
       if (Number(b.linked) !== Number(a.linked)) return Number(b.linked) - Number(a.linked);
       return chainLabel(a.chain_type).localeCompare(chainLabel(b.chain_type));
     });
-  }, [accountLinks.wallets, adapterAddr, aptosAddress, evmAddress, player?.wallet]);
+  }, [accountLinks.active_dex, accountLinks.dex_accounts, accountLinks.wallets, adapterAddr, aptosAddress, dex, evmAddress, player?.wallet]);
 
   // Switch active DEX. In our model one wallet = one account, so "switching"
   // DEX really means "log out of this account and sign in with the other
@@ -238,6 +250,10 @@ function ProfileModal({ onClose }) {
   // because branches silently miss hybrid cases (e.g. user is on Avantis
   // but Privy is also authenticated from a prior Pacifica session).
   const logoutEverything = async () => {
+    try {
+      localStorage.setItem('clash_manual_reconnect_required', '1');
+      window.dispatchEvent(new CustomEvent('clash-auth-manual-reconnect-required'));
+    } catch { /* noop */ }
     sendToGodot('logout');
     try { evmDisconnect(); } catch { /* noop */ }
     try { aptosDisconnect(); } catch { /* noop */ }
@@ -246,6 +262,10 @@ function ProfileModal({ onClose }) {
       try { await privyLogout(); } catch { /* noop */ }
     }
     window._playerToken = null;
+    try {
+      window.onGodotMessage?.({ action: 'state', data: { token: '' } });
+      window.onGodotMessage?.({ action: 'show_register', data: {} });
+    } catch { /* noop */ }
   };
 
   const switchDex = async () => {
@@ -281,28 +301,30 @@ function ProfileModal({ onClose }) {
     try {
       if (wallet.linked) {
         const token = player?.token || window._playerToken;
-        if (!token) throw new Error('Log in again to disconnect wallet');
-        const r = await fetch(`/api/players/wallets/${encodeURIComponent(chain)}/${encodeURIComponent(wallet.address)}`, {
-          method: 'DELETE',
-          headers: { 'x-token': token },
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(data?.error || 'Failed to disconnect wallet');
-        if (data?.removed_login_wallet || wallet.is_login_wallet) {
-          await disconnectWalletContext(chain);
-          await logoutEverything();
-          onClose();
-          return;
+        if (token) {
+          try {
+            const r = await fetch(`/api/players/wallets/${encodeURIComponent(chain)}/${encodeURIComponent(wallet.address)}`, {
+              method: 'DELETE',
+              headers: { 'x-token': token },
+            });
+            if (!r.ok) {
+              const data = await r.json().catch(() => ({}));
+              console.warn('[profile] wallet unlink failed before logout:', data?.error || r.status);
+            }
+          } catch (e) {
+            console.warn('[profile] wallet unlink request failed before logout:', e?.message || e);
+          }
         }
       }
       await disconnectWalletContext(chain);
-      await refreshAccountLinks();
+      await logoutEverything();
+      onClose();
     } catch (e) {
       setWalletActionError(e?.message || 'Failed to disconnect wallet');
     } finally {
       setWalletActionBusy('');
     }
-  }, [disconnectWalletContext, logoutEverything, onClose, player?.token, refreshAccountLinks, walletActionBusy]);
+  }, [disconnectWalletContext, logoutEverything, onClose, player?.token, walletActionBusy]);
 
   const handleEvmConnected = ({ address, provider, rdns }) => {
     setEvmModalOpen(false);
