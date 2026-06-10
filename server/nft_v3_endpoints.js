@@ -206,6 +206,27 @@ function aptosMintedEventFromTx(tx) {
   )) || null;
 }
 
+function evmMintedTokenIdFromReceipt(receipt, contractAddress, recipientAddress) {
+  const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+  const zeroTopic = `0x${'0'.repeat(64)}`;
+  const contract = String(contractAddress || '').toLowerCase();
+  const recipient = String(recipientAddress || '').toLowerCase().replace(/^0x/, '');
+  if (!contract || !/^[0-9a-f]{40}$/.test(recipient)) return null;
+  const recipientTopic = `0x${recipient.padStart(64, '0')}`;
+  const logs = Array.isArray(receipt?.logs) ? receipt.logs : [];
+  const mintLog = logs.find((log) => (
+    String(log?.address || '').toLowerCase() === contract
+    && String(log?.topics?.[0] || '').toLowerCase() === transferTopic
+    && String(log?.topics?.[1] || '').toLowerCase() === zeroTopic
+    && String(log?.topics?.[2] || '').toLowerCase() === recipientTopic
+  ));
+  try {
+    return mintLog?.topics?.[3] ? BigInt(mintLog.topics[3]).toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function solanaRoyaltyPlugin(publicKey, deployment = {}) {
   const treasury = process.env.NFT_SOLANA_FEE_RECIPIENT
     || process.env.NFT_SOLANA_ROYALTY_TREASURY
@@ -3735,6 +3756,18 @@ function mountNftV3Endpoints(router, ctx) {
             args: [getAddress(destAddress), burned.level, sourceRef, deadline, signature],
           });
           const rcp = await publicClient.waitForTransactionReceipt({ hash, confirmations: 2 });
+          const evmDestTokenId = evmMintedTokenIdFromReceipt(rcp, destProxyAddress, destAddress);
+          const rarityRows = preserveDemonKingBridgeRarity({
+            collectionSlug,
+            sourceChain,
+            destChain,
+            burned,
+            destTokenIds: [evmDestTokenId],
+            destOwner: getAddress(destAddress),
+            sourceRef,
+            destTx: hash,
+          });
+          const rarityRow = rarityRows[0] || null;
           try {
             bridgeDb?.prepare(`UPDATE used_bridge_refs SET dest_tx_or_asset = ?
               WHERE source_ref = ? AND dest_chain = ?`).run(hash, sourceRef, destChain);
@@ -3745,6 +3778,9 @@ function mountNftV3Endpoints(router, ctx) {
             burned: jsonable(burned), sourceRef,
             destChainId: destSpec.chainId, destContract: getAddress(destProxyAddress),
             destAddress: getAddress(destAddress), level: burned.level,
+            tokenId: evmDestTokenId,
+            rarity: rarityRow?.rarity || null,
+            rarityLabel: rarityRow?.rarityLabel || null,
             destTxHash: hash, gasUsed: rcp.gasUsed?.toString?.() || null,
           });
         }
