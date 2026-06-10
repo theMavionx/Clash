@@ -173,6 +173,34 @@ function makeAnchorWallet(solWallet) {
   };
 }
 
+function solWalletAdapterName(solWallet) {
+  return String(
+    solWallet?.wallet?.adapter?.name
+    || solWallet?.wallet?.adapter?.constructor?.name
+    || solWallet?.adapter?.name
+    || '',
+  );
+}
+
+function isPhantomSolWallet(solWallet) {
+  const adapter = solWallet?.wallet?.adapter || solWallet?.adapter || {};
+  const text = [
+    solWalletAdapterName(solWallet),
+    adapter?.url,
+    adapter?.icon,
+    adapter?.standardAdapter?.name,
+  ].map(value => String(value || '').toLowerCase()).join(' ');
+  if (text.includes('phantom')) return true;
+  try {
+    const provider = typeof window !== 'undefined' ? window?.phantom?.solana : null;
+    if (!provider?.isPhantom || !solWallet?.publicKey) return false;
+    const providerKey = publicKeyText(provider.publicKey);
+    return !providerKey || providerKey === publicKeyText(solWallet.publicKey);
+  } catch {
+    return false;
+  }
+}
+
 function txRequiredSignerKeys(tx) {
   try {
     if (tx instanceof VersionedTransaction) {
@@ -854,6 +882,17 @@ function flashUserError(error) {
   return message || 'Flash order failed';
 }
 
+function flashOneTapSetupUserError(error, solWallet) {
+  const message = String(error?.message || error?.data?.detail || error?.data?.error || error || '');
+  if (isWalletBlockedOrRejected(error) && isPhantomSolWallet(solWallet)) {
+    return 'Phantom blocked Flash one tap setup after the transaction passed local simulation. Flash now uses Phantom-first signTransaction for this multi-signer setup; if Phantom still shows "This dApp could be malicious", the connected domain must be reviewed by Phantom/Blowfish or allowed manually in Phantom.';
+  }
+  if (isWalletBlockedOrRejected(error)) {
+    return 'Wallet rejected or blocked Flash one tap setup. Review the wallet prompt and try again.';
+  }
+  return message || 'Flash one tap setup failed';
+}
+
 function flashTxBase64(build = {}) {
   return build.transactionBase64 || build.transaction || build.transactions?.[0] || '';
 }
@@ -1495,17 +1534,21 @@ export function useFlash() {
           throw new Error('Flash one tap setup transaction does not require the local session signer.');
         }
         await simulateUnsignedLegacyTransaction(setupConnection, setupTx, 'Flash one tap setup');
+        const phantomWallet = isPhantomSolWallet(solWallet);
+        const walletAdapterName = solWalletAdapterName(solWallet);
         if (!setupSignature) {
-          if (typeof solWallet.sendTransaction === 'function') {
+          if (!phantomWallet && typeof solWallet.sendTransaction === 'function') {
             console.info('[Flash one tap] setup wallet send start', {
               owner: walletAddr,
               signer: agent.publicKey,
               wallet_path: 'adapter_send_transaction_with_session_signer',
+              wallet_adapter: walletAdapterName,
+              phantom_wallet: phantomWallet,
               rpc: connectionRpcDiagnostics(setupConnection),
               required_signers: requiredSetupSigners,
               top_up_lamports: topUpLamports,
               demoted_duplicate_signer_metas: demotedDuplicateSignerMetas,
-              note: 'Primary path matches GMTrade: wallet adapter partial-signs the local session signer, then lets Phantom sign and submit.',
+              note: 'Non-Phantom path: wallet adapter partial-signs the local session signer, then wallet signs and submits.',
             });
             try {
               setupSignature = await flashTimeout(
@@ -1523,6 +1566,8 @@ export function useFlash() {
                 signer: agent.publicKey,
                 setup_signature: setupSignature,
                 wallet_path: 'adapter_send_transaction_with_session_signer',
+                wallet_adapter: walletAdapterName,
+                phantom_wallet: phantomWallet,
               });
             } catch (sendError) {
               if (isWalletBlockedOrRejected(sendError)) throw sendError;
@@ -1538,12 +1583,14 @@ export function useFlash() {
             console.info('[Flash one tap] setup wallet sign start', {
               owner: walletAddr,
               signer: agent.publicKey,
-              wallet_path: 'adapter_sign_owner_first_multi_signer',
+              wallet_path: phantomWallet ? 'adapter_sign_owner_first_multi_signer_phantom' : 'adapter_sign_owner_first_multi_signer',
+              wallet_adapter: walletAdapterName,
+              phantom_wallet: phantomWallet,
               rpc: connectionRpcDiagnostics(setupConnection),
               required_signers: requiredSetupSigners,
               top_up_lamports: topUpLamports,
               demoted_duplicate_signer_metas: demotedDuplicateSignerMetas,
-              note: 'Fallback only: Phantom signs first, then Clash adds the local session signer and broadcasts raw.',
+              note: 'Owner wallet signs first, then Clash adds the local session signer and broadcasts raw.',
             });
             signedSetupTx = await flashTimeout(
               solWallet.signTransaction(setupTx),
@@ -1612,8 +1659,13 @@ export function useFlash() {
       });
       return { ok: true, enabled: true, signer: stored?.publicKey, sessionToken: stored?.sessionToken, setupSignature };
     } catch (e) {
-      const msg = e?.message || 'Flash one tap setup failed';
-      console.warn('[Flash one tap] setup failed:', msg, e?.data || '');
+      const msg = flashOneTapSetupUserError(e, solWallet);
+      console.warn('[Flash one tap] setup failed:', msg, {
+        wallet_adapter: solWalletAdapterName(solWallet),
+        phantom_wallet: isPhantomSolWallet(solWallet),
+        raw_message: e?.message || String(e || ''),
+        data: e?.data || '',
+      });
       await clearFlashOneTapAgent(walletAddr).catch(() => null);
       oneTapAgentRef.current = null;
       setOneTapTrading(disabledFlashOneTapState({ enabled: false, approved: false }));
