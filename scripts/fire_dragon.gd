@@ -31,6 +31,7 @@ const FIRE_BREATH_TEXTURE: Texture2D = preload("res://Model/Characters/FireDrago
 const FIRE_SPARKS_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fx_sparks.tga")
 const FIRE_BREATH_DURATION: float = 0.58
 const FIRE_BREATH_WIDTH: float = 0.28
+const FIRE_BREATH_VISUAL_WIDTH_SCALE: float = 0.65
 const FIRE_BREATH_MOUTH_FORWARD_OFFSET: float = 0.08
 const FIRE_BREATH_TARGET_Y_OFFSET: float = 0.13
 const FIRE_BREATH_MIN_LENGTH: float = 0.12
@@ -39,6 +40,9 @@ const FIRE_BREATH_GLOW_LAYERS: int = 2
 const FIRE_BREATH_PUFF_COUNT: int = 20
 const FIRE_BREATH_EMBER_COUNT: int = 16
 const FIRE_BREATH_FLAME_PARTICLES: int = 56
+const FIRE_BREATH_MOBILE_PUFF_COUNT: int = 10
+const FIRE_BREATH_MOBILE_EMBER_COUNT: int = 8
+const FIRE_BREATH_MOBILE_FLAME_PARTICLES: int = 32
 const FIRE_BREATH_LIGHT_ENERGY: float = 1.7
 const FIRE_BREATH_ATTACK_RANGE: float = 0.72
 const FIRE_BREATH_MIN_STANDOFF: float = 0.54
@@ -57,6 +61,12 @@ var _current_animation_length: float = 0.0
 var _ground_y: float = 0.0
 var _flight_time: float = 0.0
 var _hit_this_swing: bool = false
+var _mobile_vfx_checked: bool = false
+var _mobile_vfx: bool = false
+
+static var _shared_flame_particle_material: StandardMaterial3D = null
+static var _shared_puff_particle_material: StandardMaterial3D = null
+static var _shared_ember_particle_material: StandardMaterial3D = null
 
 
 func _init_stats() -> void:
@@ -280,12 +290,14 @@ func _spawn_fire_breath_vfx_between(root_parent: Node, mouth_pos: Vector3, targe
 	holder.top_level = true
 	root_parent.add_child(holder)
 
-	var beam_width: float = clampf(length * 0.42, FIRE_BREATH_WIDTH * 0.72, FIRE_BREATH_WIDTH * 1.55)
-	_spawn_fire_particle_cone(holder, mouth_pos, dir, side, normal, length, beam_width)
-	_spawn_breath_lights(holder, mouth_pos, target_pos, length)
+	var mobile_vfx := _is_mobile_fire_vfx()
+	var beam_width: float = clampf(length * 0.42, FIRE_BREATH_WIDTH * 0.72, FIRE_BREATH_WIDTH * 1.55) * FIRE_BREATH_VISUAL_WIDTH_SCALE
+	_spawn_fire_particle_cone(holder, mouth_pos, dir, side, normal, length, beam_width, mobile_vfx)
+	if not mobile_vfx:
+		_spawn_breath_lights(holder, mouth_pos, target_pos, length)
 
-	_spawn_fire_puffs(holder, mouth_pos, dir, side, normal, length, beam_width)
-	_spawn_fire_embers(holder, mouth_pos, dir, side, normal, length)
+	_spawn_fire_puffs(holder, mouth_pos, dir, side, normal, length, beam_width, mobile_vfx)
+	_spawn_fire_embers(holder, mouth_pos, dir, side, normal, length, mobile_vfx)
 
 	var cleanup := holder.create_tween()
 	cleanup.tween_interval(FIRE_BREATH_DURATION + 0.04)
@@ -318,28 +330,30 @@ func _spawn_fire_ribbon_layers(holder: Node3D, mouth_pos: Vector3, dir: Vector3,
 		_animate_fire_node(ribbon, FIRE_BREATH_DURATION * randf_range(0.86, 1.08), randf_range(1.12, 1.38))
 
 
-func _spawn_fire_particle_cone(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float, width: float) -> void:
+func _spawn_fire_particle_cone(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float, width: float, mobile_vfx: bool) -> void:
 	var particles := GPUParticles3D.new()
 	particles.name = "FireDragonFlameParticles"
-	particles.amount = FIRE_BREATH_FLAME_PARTICLES
+	particles.amount = FIRE_BREATH_MOBILE_FLAME_PARTICLES if mobile_vfx else FIRE_BREATH_FLAME_PARTICLES
 	particles.lifetime = FIRE_BREATH_DURATION * 0.96
 	particles.one_shot = true
 	particles.explosiveness = 0.82
 	particles.randomness = 0.72
-	particles.fixed_fps = 30
-	particles.interpolate = true
+	particles.fixed_fps = 24 if mobile_vfx else 30
+	particles.interpolate = not mobile_vfx
 	particles.local_coords = true
 	particles.draw_order = GPUParticles3D.DRAW_ORDER_REVERSE_LIFETIME
 	particles.visibility_aabb = AABB(Vector3(-length, -length, -length), Vector3(length * 2.0, length * 2.0, length * 2.0))
 
 	var mesh := QuadMesh.new()
-	mesh.size = Vector2(width * 0.70, width * 0.86)
-	mesh.material = _make_fire_particle_material(FIRE_BREATH_TEXTURE, Color(1.18, 0.82, 0.12, 0.76), true)
+	var mobile_scale := 0.82 if mobile_vfx else 1.0
+	mesh.size = Vector2(width * 0.70 * mobile_scale, width * 0.86 * mobile_scale)
+	mesh.material = _get_shared_flame_particle_material()
 	particles.draw_passes = 1
 	particles.set_draw_pass_mesh(0, mesh)
 
 	var process := ParticleProcessMaterial.new()
 	process.direction = Vector3(0.0, 1.0, 0.0)
+	process.color = Color(1.0, 0.94, 0.28, 0.88)
 	process.spread = 9.0
 	process.gravity = Vector3.ZERO
 	process.initial_velocity_min = maxf(0.65, length / maxf(FIRE_BREATH_DURATION, 0.1) * 0.92)
@@ -441,10 +455,28 @@ func _make_fire_particle_material(texture: Texture2D, color: Color, additive: bo
 	return mat
 
 
+func _get_shared_flame_particle_material() -> StandardMaterial3D:
+	if _shared_flame_particle_material == null:
+		_shared_flame_particle_material = _make_fire_particle_material(FIRE_BREATH_TEXTURE, Color(1.0, 0.94, 0.24, 0.70), true)
+	return _shared_flame_particle_material
+
+
+func _get_shared_puff_particle_material() -> StandardMaterial3D:
+	if _shared_puff_particle_material == null:
+		_shared_puff_particle_material = _make_fire_particle_material(FIRE_BREATH_TEXTURE, Color(1.0, 0.88, 0.16, 0.48), true)
+	return _shared_puff_particle_material
+
+
+func _get_shared_ember_particle_material() -> StandardMaterial3D:
+	if _shared_ember_particle_material == null:
+		_shared_ember_particle_material = _make_fire_particle_material(FIRE_SPARKS_TEXTURE, Color(1.0, 0.82, 0.14, 0.42), true)
+	return _shared_ember_particle_material
+
+
 func _spawn_breath_lights(holder: Node3D, mouth_pos: Vector3, target_pos: Vector3, length: float) -> void:
 	var mouth_light := OmniLight3D.new()
 	mouth_light.name = "FireDragonMouthLight"
-	mouth_light.light_color = Color(1.0, 0.76, 0.12)
+	mouth_light.light_color = Color(1.0, 0.84, 0.18)
 	mouth_light.light_energy = FIRE_BREATH_LIGHT_ENERGY
 	mouth_light.omni_range = clampf(length * 1.15, 0.35, 0.95)
 	holder.add_child(mouth_light)
@@ -452,7 +484,7 @@ func _spawn_breath_lights(holder: Node3D, mouth_pos: Vector3, target_pos: Vector
 
 	var impact_light := OmniLight3D.new()
 	impact_light.name = "FireDragonImpactLight"
-	impact_light.light_color = Color(1.0, 0.68, 0.08)
+	impact_light.light_color = Color(1.0, 0.78, 0.12)
 	impact_light.light_energy = FIRE_BREATH_LIGHT_ENERGY * 0.72
 	impact_light.omni_range = clampf(length * 0.78, 0.25, 0.7)
 	holder.add_child(impact_light)
@@ -464,47 +496,115 @@ func _spawn_breath_lights(holder: Node3D, mouth_pos: Vector3, target_pos: Vector
 	tw.tween_property(impact_light, "light_energy", 0.0, FIRE_BREATH_DURATION * 0.9).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 
-func _spawn_fire_puffs(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float, width: float) -> void:
-	for i in range(FIRE_BREATH_PUFF_COUNT):
-		var puff := _make_fire_billboard(FIRE_BREATH_TEXTURE, Color(randf_range(1.02, 1.18), randf_range(0.68, 0.88), randf_range(0.08, 0.18), randf_range(0.36, 0.60)))
-		var mesh := QuadMesh.new()
-		var t: float = (float(i) + randf_range(-0.18, 0.18)) / maxf(1.0, float(FIRE_BREATH_PUFF_COUNT - 1))
-		t = clampf(t, 0.02, 1.0)
-		var flame_shape: float = sin(t * PI)
-		var size: float = lerpf(width * 0.34, width * 1.18, flame_shape) * randf_range(0.86, 1.24)
-		mesh.size = Vector2(size * randf_range(0.88, 1.20), size * randf_range(0.78, 1.16))
-		puff.mesh = mesh
-		holder.add_child(puff)
-		var radius: float = lerpf(width * 0.05, width * 0.31, flame_shape)
-		var angle: float = randf_range(0.0, TAU)
-		var offset: Vector3 = side * cos(angle) * radius + normal * sin(angle) * radius
-		var start_pos: Vector3 = mouth_pos + dir * (length * t) + offset
-		puff.global_position = start_pos
-		var mat := puff.material_override as StandardMaterial3D
-		var tw := puff.create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(puff, "global_position", start_pos + dir * randf_range(0.06, 0.13) + offset * 0.28, FIRE_BREATH_DURATION)
-		tw.tween_property(puff, "scale", Vector3.ONE * randf_range(1.22, 1.78), FIRE_BREATH_DURATION * 0.82)
-		tw.tween_property(mat, "albedo_color:a", 0.0, FIRE_BREATH_DURATION * randf_range(0.82, 1.06))
+func _is_mobile_fire_vfx() -> bool:
+	if _mobile_vfx_checked:
+		return _mobile_vfx
+	_mobile_vfx_checked = true
+	_mobile_vfx = OS.has_feature("mobile") \
+		or OS.has_feature("android") \
+		or OS.has_feature("ios") \
+		or OS.has_feature("web_android") \
+		or OS.has_feature("web_ios")
+	if not _mobile_vfx and OS.has_feature("web"):
+		var user_agent := str(JavaScriptBridge.eval("navigator.userAgent || ''", true)).to_lower()
+		_mobile_vfx = user_agent.find("android") != -1 \
+			or user_agent.find("iphone") != -1 \
+			or user_agent.find("ipad") != -1 \
+			or user_agent.find("mobile") != -1
+	return _mobile_vfx
 
 
-func _spawn_fire_embers(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float) -> void:
-	for i in range(FIRE_BREATH_EMBER_COUNT):
-		var ember := _make_fire_billboard(FIRE_SPARKS_TEXTURE, Color(1.20, 0.86, 0.16, 0.52))
-		var mesh := QuadMesh.new()
-		mesh.size = Vector2(randf_range(0.035, 0.085), randf_range(0.035, 0.085))
-		ember.mesh = mesh
-		holder.add_child(ember)
-		var t: float = randf_range(0.12, 0.88)
-		var offset: Vector3 = side * randf_range(-0.075, 0.075) + normal * randf_range(-0.055, 0.055)
-		var start_pos: Vector3 = mouth_pos + dir * (length * t) + offset
-		ember.global_position = start_pos
-		var ember_mat := ember.material_override as StandardMaterial3D
-		var tw := ember.create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(ember, "global_position", start_pos + dir * randf_range(0.035, 0.08) + offset * 0.4, FIRE_BREATH_DURATION)
-		tw.tween_property(ember, "scale", Vector3.ONE * randf_range(0.55, 0.9), FIRE_BREATH_DURATION)
-		tw.tween_property(ember_mat, "albedo_color:a", 0.0, FIRE_BREATH_DURATION * randf_range(0.7, 1.0))
+func _spawn_fire_puffs(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float, width: float, mobile_vfx: bool) -> void:
+	var particles := GPUParticles3D.new()
+	particles.name = "FireDragonPuffParticles"
+	particles.amount = FIRE_BREATH_MOBILE_PUFF_COUNT if mobile_vfx else FIRE_BREATH_PUFF_COUNT
+	particles.lifetime = FIRE_BREATH_DURATION * 0.98
+	particles.one_shot = true
+	particles.explosiveness = 0.88
+	particles.randomness = 0.78
+	particles.fixed_fps = 20 if mobile_vfx else 24
+	particles.interpolate = not mobile_vfx
+	particles.local_coords = true
+	particles.draw_order = GPUParticles3D.DRAW_ORDER_REVERSE_LIFETIME
+	particles.visibility_aabb = AABB(Vector3(-length, -length, -length), Vector3(length * 2.0, length * 2.0, length * 2.0))
+
+	var mesh := QuadMesh.new()
+	var mobile_scale := 0.78 if mobile_vfx else 1.0
+	mesh.size = Vector2(width * 0.92 * mobile_scale, width * 0.82 * mobile_scale)
+	mesh.material = _get_shared_puff_particle_material()
+	particles.draw_passes = 1
+	particles.set_draw_pass_mesh(0, mesh)
+
+	var process := ParticleProcessMaterial.new()
+	process.direction = Vector3(0.0, 1.0, 0.0)
+	process.color = Color(1.0, 0.88, 0.18, 0.62)
+	process.spread = 10.0
+	process.gravity = Vector3.ZERO
+	process.initial_velocity_min = 0.05
+	process.initial_velocity_max = 0.16
+	process.lifetime_randomness = 0.32
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = Vector3(width * 0.22, length * 0.46, width * 0.18)
+	process.scale_min = 0.58
+	process.scale_max = 1.72 if not mobile_vfx else 1.28
+	process.angle_min = -90.0
+	process.angle_max = 90.0
+	process.angular_velocity_min = -80.0
+	process.angular_velocity_max = 80.0
+	process.damping_min = 0.04
+	process.damping_max = 0.12
+	particles.process_material = process
+
+	holder.add_child(particles)
+	var origin := mouth_pos + dir * (length * 0.48)
+	particles.global_transform = Transform3D(Basis(side, dir, normal).orthonormalized(), origin)
+	particles.restart()
+
+
+func _spawn_fire_embers(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float, mobile_vfx: bool) -> void:
+	var particles := GPUParticles3D.new()
+	particles.name = "FireDragonEmberParticles"
+	particles.amount = FIRE_BREATH_MOBILE_EMBER_COUNT if mobile_vfx else FIRE_BREATH_EMBER_COUNT
+	particles.lifetime = FIRE_BREATH_DURATION * 0.82
+	particles.one_shot = true
+	particles.explosiveness = 0.9
+	particles.randomness = 0.82
+	particles.fixed_fps = 20 if mobile_vfx else 24
+	particles.interpolate = false
+	particles.local_coords = true
+	particles.draw_order = GPUParticles3D.DRAW_ORDER_REVERSE_LIFETIME
+	particles.visibility_aabb = AABB(Vector3(-length, -length, -length), Vector3(length * 2.0, length * 2.0, length * 2.0))
+
+	var mesh := QuadMesh.new()
+	mesh.size = Vector2(0.055, 0.055)
+	mesh.material = _get_shared_ember_particle_material()
+	particles.draw_passes = 1
+	particles.set_draw_pass_mesh(0, mesh)
+
+	var process := ParticleProcessMaterial.new()
+	process.direction = Vector3(0.0, 1.0, 0.0)
+	process.color = Color(1.0, 0.82, 0.16, 0.62)
+	process.spread = 20.0
+	process.gravity = Vector3.ZERO
+	process.initial_velocity_min = 0.06
+	process.initial_velocity_max = 0.20
+	process.lifetime_randomness = 0.36
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = Vector3(0.075, length * 0.40, 0.055)
+	process.scale_min = 0.36
+	process.scale_max = 0.86 if not mobile_vfx else 0.62
+	process.angle_min = -180.0
+	process.angle_max = 180.0
+	process.angular_velocity_min = -180.0
+	process.angular_velocity_max = 180.0
+	process.damping_min = 0.05
+	process.damping_max = 0.18
+	particles.process_material = process
+
+	holder.add_child(particles)
+	var origin := mouth_pos + dir * (length * 0.50)
+	particles.global_transform = Transform3D(Basis(side, dir, normal).orthonormalized(), origin)
+	particles.restart()
 
 
 func _spawn_impact_flame_burst(holder: Node3D, target_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, width: float) -> void:
