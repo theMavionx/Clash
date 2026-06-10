@@ -64,6 +64,7 @@ const NAV = [
   { id: 'tasks', label: 'Tasks', hint: 'Quest config and progress', icon: 'TS' },
   { id: 'stats', label: 'Stats', hint: 'Activity and devices', icon: 'ST' },
   { id: 'earnings', label: 'Earnings', hint: 'Revenue analytics', icon: 'ER' },
+  { id: 'referrals', label: 'Referrals', hint: 'Invites, commissions, payouts', icon: 'RF' },
   { id: 'shop', label: 'Shop', hint: 'Billing and AI chat', icon: 'SH' },
   { id: 'marketplace', label: 'Marketplace', hint: 'Custodial orders', icon: 'MP' },
   { id: 'nft', label: 'NFT / Bridge', hint: 'Supply and bridge state', icon: 'NF' },
@@ -82,6 +83,7 @@ const SIMPLE_LOADERS = {
     adminGet('/admin/earnings'),
     adminGet('/admin/revenue-analytics').catch((error) => ({ error: error.message })),
   ]).then(([earnings, revenue]) => ({ earnings, revenue })),
+  referrals: () => adminGet('/admin/referrals'),
   shop: () => Promise.all([
     adminGet('/admin/shop'),
     adminGet('/admin/ai-chat/billing').catch((error) => ({ error: error.message })),
@@ -264,13 +266,14 @@ export default function AdminApp() {
             {active === 'client' && <ClientLogsPanel data={simpleData.client} reload={refreshActive} />}
             {active === 'logs' && <ServerLogsPanel data={simpleData.logs} reload={refreshActive} />}
             {active === 'earnings' && <EarningsPanel data={simpleData.earnings} reload={refreshActive} />}
+            {active === 'referrals' && <ReferralsPanel data={simpleData.referrals} reload={refreshActive} />}
             {active === 'shop' && <ShopPanel data={simpleData.shop} />}
             {active === 'marketplace' && <MarketplacePanel data={simpleData.marketplace} reload={refreshActive} />}
             {active === 'nft' && <NftPanel data={simpleData.nft} />}
             {active === 'feedback' && <FeedbackPanel data={simpleData.feedback} />}
             {active === 'ai-reports' && <AiReportsPanel data={simpleData['ai-reports']} reload={refreshActive} />}
             {active === 'elfa' && <ElfaPanel data={simpleData.elfa} />}
-            {!['overview', 'players', 'tournaments', 'replays', 'stats', 'tasks', 'client', 'logs', 'earnings', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'elfa'].includes(active) && (
+            {!['overview', 'players', 'tournaments', 'replays', 'stats', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'elfa'].includes(active) && (
               <GenericDataPanel id={active} data={simpleData[active]} reload={refreshActive} />
             )}
           </section>
@@ -1479,6 +1482,152 @@ function EarningsDexCard({ row }) {
         {extra.map((item) => <span key={item}>{item}</span>)}
       </div>
       {note && <div className="earnings-note">{note}</div>}
+    </div>
+  );
+}
+
+function ReferralsPanel({ data, reload }) {
+  const rows = data?.rows || [];
+  const recent = data?.recent || [];
+  const payouts = data?.payouts || [];
+  const rate = Number(data?.rate_bps || 0) / 100;
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+
+  const filteredRows = rows.filter((row) => {
+    const hay = `${row.player_name || ''} ${row.player_id || ''} ${row.code || ''}`.toLowerCase();
+    return !query || hay.includes(query.toLowerCase());
+  });
+  const totals = rows.reduce((acc, row) => {
+    acc.invited += Number(row.invited_count || 0);
+    acc.confirmed += Number(row.confirmed_usd || 0);
+    acc.pending += Number(row.pending_usd || 0);
+    acc.paid += Number(row.paid_usd || 0);
+    acc.events += Number(row.events_count || 0);
+    return acc;
+  }, { invited: 0, confirmed: 0, pending: 0, paid: 0, events: 0 });
+
+  async function runAction(label, fn) {
+    if (busy) return;
+    setBusy(label);
+    setMessage('');
+    try {
+      const result = await fn();
+      setMessage(result?.message || `${label} complete.`);
+      await reload();
+    } catch (err) {
+      setMessage(err.message || `${label} failed.`);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function syncFutures() {
+    await runAction('Sync futures', async () => {
+      const result = await adminPost('/admin/referrals/sync-futures', {});
+      return { message: `Synced futures: ${result.inserted || 0} inserted, ${result.skipped || 0} skipped, ${result.scanned || 0} scanned.` };
+    });
+  }
+
+  async function createPayout(row) {
+    const destination = window.prompt(`Destination for ${row.player_name || row.player_id}`, '') || '';
+    const note = window.prompt('Payout note', 'Referral commission payout') || '';
+    await runAction('Create payout', async () => {
+      const result = await adminPost(`/admin/referrals/${encodeURIComponent(row.player_id)}/payouts`, { destination, note });
+      return { message: `Payout ${result.payout?.id || ''} requested for ${fmtMaybeUsd(result.payout?.amount_usd)}.` };
+    });
+  }
+
+  async function markPaid(payout) {
+    const txHash = window.prompt(`Tx hash for payout ${payout.id}`, payout.tx_hash || '') || '';
+    if (!window.confirm(`Mark payout ${payout.id} as paid?`)) return;
+    await runAction('Mark paid', async () => {
+      const result = await adminPost(`/admin/referrals/payouts/${encodeURIComponent(payout.id)}/paid`, { txHash });
+      return { message: `Payout ${result.payout?.id || payout.id} marked paid.` };
+    });
+  }
+
+  if (!data) return <LoadingCard title="Referrals" />;
+
+  return (
+    <div className="admin-grid">
+      <StatsGrid stats={[
+        { label: 'Referrers', value: num(rows.length), tone: 'blue' },
+        { label: 'Invited players', value: num(totals.invited), tone: 'green' },
+        { label: 'Confirmed', value: fmtMaybeUsd(totals.confirmed), tone: 'gold' },
+        { label: 'Pending', value: fmtMaybeUsd(totals.pending), tone: totals.pending ? 'blue' : 'green' },
+        { label: 'Paid', value: fmtMaybeUsd(totals.paid), tone: 'green' },
+        { label: 'Events', value: num(totals.events) },
+      ]} />
+
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Referral Commissions</div>
+            <div className="admin-card-sub">{rate || 10}% commission ledger across shop, NFT, marketplace, and exact builder-fee sources.</div>
+          </div>
+          <div className="admin-filter-row">
+            {message ? <span className={'admin-badge ' + (message.toLowerCase().includes('failed') ? 'red' : 'green')}>{message}</span> : null}
+            <button className="admin-btn" onClick={syncFutures} disabled={!!busy}>{busy === 'Sync futures' ? 'Syncing...' : 'Sync futures'}</button>
+            <button className="admin-btn" onClick={reload} disabled={!!busy}>Reload</button>
+          </div>
+        </div>
+        <div className="admin-card-body">
+          <div className="admin-toolbar">
+            <input className="admin-input" placeholder="Search referrer, id, or code" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <span className="admin-help">{filteredRows.length} shown</span>
+          </div>
+          <div className="admin-table-wrap admin-scroll">
+            <table className="admin-table">
+              <thead><tr><th>Referrer</th><th>Code</th><th>Invited</th><th>Confirmed</th><th>Pending</th><th>Paid</th><th>Events</th><th>Actions</th></tr></thead>
+              <tbody>
+                {filteredRows.map((row) => (
+                  <tr key={row.player_id}>
+                    <td><strong>{row.player_name || '-'}</strong><div className="admin-card-sub admin-mono">{row.player_id}</div></td>
+                    <td><span className="admin-badge gold">{row.code}</span><div className="admin-card-sub admin-mono">/r/{row.code}</div></td>
+                    <td>{num(row.invited_count)}</td>
+                    <td style={{ color: 'var(--admin-gold)' }}>{fmtMaybeUsd(row.confirmed_usd)}</td>
+                    <td>{fmtMaybeUsd(row.pending_usd)}</td>
+                    <td style={{ color: 'var(--admin-green)' }}>{fmtMaybeUsd(row.paid_usd)}</td>
+                    <td>{num(row.events_count)}</td>
+                    <td><button className="admin-btn primary" onClick={() => createPayout(row)} disabled={!!busy || Number(row.confirmed_usd || 0) <= 0}>Create payout</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div className="admin-grid two">
+        <CompactTable title="Recent Referral Events" subtitle="Newest immutable commission events after exact-source attribution." columns={['Time', 'Referrer', 'Referred', 'Kind', 'Source', 'Gross', 'Commission', 'Status']} rows={recent.slice(0, 120).map((row) => [fmtTime(row.created_at), row.referrer_name || row.referrer_player_id, row.referred_name || row.referred_player_id, row.revenue_kind, row.source_type, fmtMaybeUsd(row.gross_usd), fmtMaybeUsd(row.commission_usd), statusBadge(row.status)])} />
+        <div className="admin-card">
+          <div className="admin-card-head">
+            <div><div className="admin-card-title">Referral Payouts</div><div className="admin-card-sub">Requested payouts reserve event rows; paid payouts close the ledger.</div></div>
+          </div>
+          <div className="admin-card-body">
+            <div className="admin-table-wrap compact admin-scroll">
+              <table className="admin-table">
+                <thead><tr><th>Created</th><th>Referrer</th><th>Amount</th><th>Destination</th><th>Status</th><th>Tx</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {payouts.length ? payouts.map((payout) => (
+                    <tr key={payout.id}>
+                      <td>{fmtTime(payout.created_at)}<div className="admin-card-sub admin-mono">{short(payout.id, 12, 6)}</div></td>
+                      <td>{payout.referrer_name || payout.referrer_player_id}</td>
+                      <td>{fmtMaybeUsd(payout.amount_usd)}</td>
+                      <td className="admin-mono">{short(payout.destination, 14, 8)}</td>
+                      <td>{statusBadge(payout.status)}</td>
+                      <td className="admin-mono">{short(payout.tx_hash, 12, 8)}</td>
+                      <td>{payout.status === 'paid' ? <span className="admin-badge green">closed</span> : <button className="admin-btn green" onClick={() => markPaid(payout)} disabled={!!busy}>Mark paid</button>}</td>
+                    </tr>
+                  )) : <tr><td colSpan={7}><span className="admin-help">No payouts yet.</span></td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
