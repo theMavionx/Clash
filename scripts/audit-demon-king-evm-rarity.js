@@ -195,7 +195,7 @@ async function auditChain(chainKey) {
       const stars = attrValue(attrs, 'Stars') || attrValue(attrs, 'stars');
       const uriText = String(uri);
       const uriChainOk = uriText.includes(`/api/nft/${chainKey}/`)
-        || uriText.includes(`/api/nft/revealed/${chainKey}/`);
+        || new RegExp(`/api/nft/revealed/${chainKey}(?:-v\\d+)?/`).test(uriText);
       const hasRarity = LABELS.has(rarity);
       const row = { tokenId, owner, uri, rarity, level, stars, uriChainOk };
       active.push(row);
