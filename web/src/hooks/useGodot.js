@@ -238,7 +238,7 @@ export function GodotProvider({ children }) {
           break;
         case 'demon_king_upgrade_required':
           window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {
-            detail: { view: 'upgrade', request: data || {} },
+            detail: { view: 'shop', request: data || {} },
           }));
           break;
         case 'building_selected':

@@ -554,7 +554,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const [chainPickerOpen, setChainPickerOpen] = useState(false);
   // Top-level view inside the shop modal. 'shop' shows the NFT/Resources
   // tabs; 'bridge' replaces the body with the cross-chain bridge UI.
-  const [view, setView] = useState(initialView === 'upgrade' ? 'upgrade' : 'shop');
+  const [view, setView] = useState(initialView === 'bridge' ? 'bridge' : 'shop');
   const [evmModalOpen, setEvmModalOpen] = useState(false);
   const [evmModalTargetOverride, setEvmModalTargetOverride] = useState(null);
   const [nftEvmWallet, setNftEvmWallet] = useState(null);
@@ -1271,7 +1271,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               </button>
             ) : <span style={styles.headerSpacer} />}
             <span style={styles.title}>
-              {view === 'bridge' ? 'Bridge NFT' : view === 'upgrade' ? 'Upgrade Demon King' : 'Battle Shop'}
+              {view === 'bridge' ? 'Bridge NFT' : 'Battle Shop'}
             </span>
             <button style={styles.closeBtn} onClick={onClose} aria-label="Close">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
@@ -1288,28 +1288,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               ...(marketplaceFullScroll ? styles.bodyMarketplaceScroll : null),
             }}
           >
-            {view === 'upgrade' ? (
-              <DemonKingUpgradePanel
-                initialRequest={initialUpgradeRequest}
-                dex={dex}
-                evmWallet={evmWallet}
-                evmAddress={evmAddress}
-                solWallet={solWallet}
-                solAddress={solAddress}
-                aptosWallet={aptosWallet}
-                aptosAddress={aptosAddress}
-                evmChainId={evmChainId}
-                onOpenEvmModal={() => setEvmModalOpen(true)}
-                onConnectSolana={handleSolanaReady}
-                onConnectAptos={() => {
-                  try { aptosWallet?.connect?.(); } catch { /* user-cancel */ }
-                }}
-                setNotice={setNotice}
-                setBusy={setBusy}
-                busy={busy}
-                onClose={onClose}
-              />
-            ) : view === 'bridge' ? (
+            {view === 'bridge' ? (
               <NftBridgePanel
                 styles={styles}
                 evmWallet={evmWallet}
@@ -1372,14 +1351,6 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   <path d="M17 17H5l3 3" />
                 </svg>
                 <span>Bridge</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => { setView('upgrade'); setNotice(null); }}
-                style={styles.bridgeMiniBtn}
-                title="Upgrade Demon King NFT"
-              >
-                <span>Upgrade</span>
               </button>
             </div>
             {chainPickerOpen && (

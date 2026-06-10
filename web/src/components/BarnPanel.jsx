@@ -5,7 +5,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -547,6 +547,7 @@ function BarnPanel({ building, onClose }) {
       .filter((value) => Number.isFinite(value)),
   );
   const isNftBackedTroop = !!currentNftTroop;
+  const isDemonKingNftTroop = currentNftTroop?.collection === 'demonking' || currentNftTroop?.collection === 'demon_king';
   const selectedDemonNft = isNftBackedTroop
     ? demonKingNfts.find((token) => nftBackedShipEntry(currentTroopName, token) === selectedDemonKey) || demonKingNfts[0] || null
     : null;
@@ -567,7 +568,9 @@ function BarnPanel({ building, onClose }) {
 
   // Formatting cost string:
   let costStr = "Lvl Up & Get improved stats";
-  if (isNftBackedTroop && !isMax) {
+  if (isDemonKingNftTroop && !isMax) {
+    costStr = `NFT owned + ${requiredDemonWins.toLocaleString()} battle wins`;
+  } else if (isNftBackedTroop && !isMax) {
     const requiredWins = requiredDemonWins;
     costStr = `NFT upgrade + ${requiredWins.toLocaleString()} battle wins`;
   } else if (nextCost) {
@@ -592,7 +595,7 @@ function BarnPanel({ building, onClose }) {
     }
     window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {
       detail: {
-        view: selectedDemonNft ? 'upgrade' : 'shop',
+        view: isDemonKingNftTroop ? 'shop' : (selectedDemonNft ? 'upgrade' : 'shop'),
         request: {
           ...(demonKingStatus || {}),
           collection: currentNftTroop.collection,
@@ -709,7 +712,7 @@ function BarnPanel({ building, onClose }) {
                           onClick={() => setSelectedDemonKey(key)}
                           style={{...styles.demonTokenBtn, ...(active ? styles.demonTokenBtnActive : null)}}
                         >
-                          <span>Lv {token.level || 1}</span>
+                          <span>{isDemonKingNftTroop ? nftRarityLabel(token.rarity, token.level || 1) : `Lv ${token.level || 1}`}</span>
                           <span>{tokenLabel}</span>
                         </button>
                       );
@@ -751,7 +754,11 @@ function BarnPanel({ building, onClose }) {
         {!isMax && !building.is_enemy && (
           <div style={{ padding: mobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
             <button style={{...styles.actionBtn, width: '100%', maxWidth: mobile ? '100%' : 240, padding: mobile ? '12px 16px' : '14px 20px', fontSize: mobile ? 14 : 14}} onClick={handleMainUpgrade}>
-              {isNftBackedTroop ? (selectedDemonNft ? `Upgrade NFT ${demonKingDisplayLabel(selectedDemonNft, demonKingNfts)} to Lv` : `Get ${currentNftTroop.label} NFT`) : 'Upgrade to Lv'} {isNftBackedTroop && !selectedDemonNft ? '' : displayLvl + 1}
+              {isDemonKingNftTroop
+                ? (selectedDemonNft ? `Upgrade ${currentNftTroop.label} to Lv` : `Get ${currentNftTroop.label} NFT`)
+                : isNftBackedTroop
+                  ? (selectedDemonNft ? `Upgrade NFT ${demonKingDisplayLabel(selectedDemonNft, demonKingNfts)} to Lv` : `Get ${currentNftTroop.label} NFT`)
+                  : 'Upgrade to Lv'} {isNftBackedTroop && !selectedDemonNft ? '' : displayLvl + 1}
             </button>
           </div>
         )}

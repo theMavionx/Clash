@@ -21,7 +21,7 @@ import {
   buyMarketplaceListing,
   cancelMarketplaceListing,
   fetchMarketplaceListings,
-  fetchTokenLevels,
+  fetchTokenRarities,
   formatPriceWei,
   isLegacyCopPaymentToken,
   isEthPayment,
@@ -30,6 +30,7 @@ import {
   marketplacePaymentOptions,
   normalizeMarketplaceChain,
   nftImageUrl,
+  nftRarityLabel,
   parsePriceToWei,
   paymentAddressFromId,
   paymentTokenMeta,
@@ -73,7 +74,7 @@ export default function NftMarketplacePanel({
   const [page, setPage] = useState(0);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState(null);
-  const [levelByTokenId, setLevelByTokenId] = useState({});
+  const [rarityByTokenId, setRarityByTokenId] = useState({});
 
   // ── My listings ────────────────────────────────────────────────────
   const [mine, setMine] = useState([]);
@@ -125,12 +126,13 @@ export default function NftMarketplacePanel({
         .filter((row) => !isLegacyCopPaymentToken(row.paymentToken, chainKey));
       setListings(rows);
       setListingsTotal(rows.length);
-      // Enrich with current levels for proper image URLs.
+      // Enrich with revealed rarity. Legacy L2/L3 tokens fall back to Legendary.
       const tokenIds = rows.map((r) => r.tokenId).filter(Boolean);
       if (tokenIds.length) {
         try {
-          const lv = await fetchTokenLevels(tokenIds, chainKey);
-          setLevelByTokenId((prev) => ({ ...prev, ...lv }));
+          const legacyLevels = Object.fromEntries(rows.map((row) => [String(row.tokenId), Number(row.level || 1)]));
+          const rarities = await fetchTokenRarities(tokenIds, chainKey, legacyLevels);
+          setRarityByTokenId((prev) => ({ ...prev, ...rarities }));
         } catch { /* image will fall back to L1 */ }
       }
     } catch (err) {
@@ -156,8 +158,9 @@ export default function NftMarketplacePanel({
       const tokenIds = rows.map((r) => r.tokenId).filter(Boolean);
       if (tokenIds.length) {
         try {
-          const lv = await fetchTokenLevels(tokenIds, chainKey);
-          setLevelByTokenId((prev) => ({ ...prev, ...lv }));
+          const legacyLevels = Object.fromEntries(rows.map((row) => [String(row.tokenId), Number(row.level || 1)]));
+          const rarities = await fetchTokenRarities(tokenIds, chainKey, legacyLevels);
+          setRarityByTokenId((prev) => ({ ...prev, ...rarities }));
         } catch {}
       }
     } catch (err) {
@@ -355,7 +358,7 @@ export default function NftMarketplacePanel({
           error={browseError}
           page={page}
           setPage={setPage}
-          levelByTokenId={levelByTokenId}
+          rarityByTokenId={rarityByTokenId}
           onBuy={(listing) => setBuyTarget(listing)}
           ownAddress={evmAddress?.toLowerCase()}
         />
@@ -365,7 +368,7 @@ export default function NftMarketplacePanel({
           listings={mine}
           loading={mineLoading}
           error={mineError}
-          levelByTokenId={levelByTokenId}
+          rarityByTokenId={rarityByTokenId}
           baseReady={baseReady}
           chainLabel={chainLabel}
           busy={busy}
@@ -398,7 +401,8 @@ export default function NftMarketplacePanel({
       {buyTarget && (
         <BuyConfirmModal
           listing={buyTarget}
-          level={levelByTokenId[buyTarget.tokenId] || 1}
+          rarity={rarityByTokenId[buyTarget.tokenId] || buyTarget.rarity || null}
+          legacyLevel={buyTarget.level || 1}
           baseReady={baseReady}
           busy={busy === 'buy'}
           onCancel={() => { if (busy !== 'buy') setBuyTarget(null); }}
@@ -434,7 +438,7 @@ function SubTab({ label, active, onClick }) {
   );
 }
 
-function BrowseView({ listings, total, loading, error, page, setPage, levelByTokenId, onBuy, ownAddress }) {
+function BrowseView({ listings, total, loading, error, page, setPage, rarityByTokenId, onBuy, ownAddress }) {
   const showPager = total > LISTINGS_PAGE_SIZE;
   const pages = Math.ceil(total / LISTINGS_PAGE_SIZE);
   return (
@@ -454,7 +458,7 @@ function BrowseView({ listings, total, loading, error, page, setPage, levelByTok
           <ListingCard
             key={l.tokenId}
             listing={l}
-            level={levelByTokenId[l.tokenId] || 1}
+            rarity={rarityByTokenId[l.tokenId] || l.rarity || null}
             onBuy={() => onBuy(l)}
             isOwn={l.seller?.toLowerCase() === ownAddress}
           />
@@ -471,18 +475,18 @@ function BrowseView({ listings, total, loading, error, page, setPage, levelByTok
   );
 }
 
-function ListingCard({ listing, level, onBuy, isOwn }) {
+function ListingCard({ listing, rarity, onBuy, isOwn }) {
   const expiry = timeUntil(listing.expiresAt);
   return (
     <div style={s.card}>
       <div style={s.cardImgWrap}>
         <img
-          src={nftImageUrl(level, listing.tokenId)}
+          src={nftImageUrl(1, listing.tokenId)}
           alt={`Demon King #${listing.tokenId}`}
           style={s.cardImg}
           onError={(e) => { e.currentTarget.style.display = 'none'; }}
         />
-        <div style={s.cardLevelBadge}>L{level} {'★'.repeat(level)}</div>
+        <div style={s.cardLevelBadge}>{nftRarityLabel(rarity, listing.level || 1)}</div>
       </div>
       <div style={s.cardMeta}>
         <span style={s.cardTitle}>#{listing.tokenId}</span>
@@ -504,7 +508,7 @@ function ListingCard({ listing, level, onBuy, isOwn }) {
   );
 }
 
-function MyListingsView({ listings, loading, error, levelByTokenId, baseReady, chainLabel, busy, onCancel }) {
+function MyListingsView({ listings, loading, error, rarityByTokenId, baseReady, chainLabel, busy, onCancel }) {
   if (!baseReady) {
     return (
       <div style={s.emptyState}>
@@ -525,16 +529,16 @@ function MyListingsView({ listings, loading, error, levelByTokenId, baseReady, c
   return (
     <div style={s.grid}>
       {listings.map((l) => {
-        const level = levelByTokenId[l.tokenId] || 1;
+        const rarity = rarityByTokenId[l.tokenId] || l.rarity || null;
         return (
           <div key={l.tokenId} style={s.card}>
             <div style={s.cardImgWrap}>
               <img
-                src={nftImageUrl(level, l.tokenId)} alt={`#${l.tokenId}`}
+                src={nftImageUrl(1, l.tokenId)} alt={`#${l.tokenId}`}
                 style={s.cardImg}
                 onError={(e) => { e.currentTarget.style.display = 'none'; }}
               />
-              <div style={s.cardLevelBadge}>L{level} {'★'.repeat(level)}</div>
+              <div style={s.cardLevelBadge}>{nftRarityLabel(rarity, l.level || 1)}</div>
             </div>
             <div style={s.cardMeta}>
               <span style={s.cardTitle}>#{l.tokenId}</span>
@@ -605,7 +609,7 @@ function ListNewView({
                       )}
                       <div style={s.miniMeta}>
                         <span style={s.miniId}>#{id}</span>
-                        <span style={s.miniLevel}>L{t.level || 1}</span>
+                        <span style={s.miniLevel}>{nftRarityLabel(t.rarity, t.level || 1)}</span>
                       </div>
                     </button>
                   );
@@ -676,7 +680,7 @@ function ListNewView({
   );
 }
 
-function BuyConfirmModal({ listing, level, baseReady, busy, onCancel, onConfirm, onConnectBase, baseLabel }) {
+function BuyConfirmModal({ listing, rarity, legacyLevel = 1, baseReady, busy, onCancel, onConfirm, onConnectBase, baseLabel }) {
   const meta = paymentTokenMeta(listing.paymentToken);
   const tokenAddr = listing.paymentToken;
   return (
@@ -689,11 +693,11 @@ function BuyConfirmModal({ listing, level, baseReady, busy, onCancel, onConfirm,
         <div style={s.modalBody}>
           <div style={s.modalImgWrap}>
             <img
-              src={nftImageUrl(level, listing.tokenId)} alt=""
+              src={nftImageUrl(1, listing.tokenId)} alt=""
               style={s.modalImg}
               onError={(e) => { e.currentTarget.style.display = 'none'; }}
             />
-            <div style={s.cardLevelBadge}>L{level} {'★'.repeat(level)}</div>
+            <div style={s.cardLevelBadge}>{nftRarityLabel(rarity, legacyLevel)}</div>
           </div>
           <div style={s.modalBreakdown}>
             <span>Price</span><span style={{ fontWeight: 800 }}>{formatPriceWei(listing.priceWei, tokenAddr)}</span>

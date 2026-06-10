@@ -659,6 +659,7 @@ function publicOrder(row, { includePrivate = false } = {}) {
   const paymentDecimals = Number(row.payment_decimals || meta.paymentDecimals || 6);
   const buyerPlayerName = includePrivate ? playerNameById(row.buyer_player_id) : null;
   const deliveryAsset = deliveryAssetFromBridge(row);
+  const rarityRow = gameDb.getNftRarity?.('demon_king', row.asset_chain, row.asset_id, { legacyLevel: row.level });
   const out = {
     id: row.id,
     status: row.status,
@@ -671,6 +672,9 @@ function publicOrder(row, { includePrivate = false } = {}) {
     assetStandard: row.asset_standard,
     assetCollection: row.asset_collection,
     level: Number(row.level || 1),
+    legacyLevel: Number(row.level || 1),
+    rarity: rarityRow?.rarity || meta.rarity || (Number(row.level || 1) > 1 ? 'legendary' : null),
+    rarityLabel: rarityRow?.rarityLabel || meta.rarityLabel || (Number(row.level || 1) > 1 ? 'Legendary' : 'Unrevealed'),
     priceUsdcUnits: row.price_usdc_units,
     priceUsdc: formatUnits(row.price_usdc_units, 6),
     feeBps: Number(row.fee_bps || 0),

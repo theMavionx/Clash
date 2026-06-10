@@ -207,6 +207,25 @@ try {
     CREATE INDEX IF NOT EXISTS idx_player_nft_wallet_checks_recent
       ON player_nft_wallet_checks(collection, wallet, checked_at DESC);
 
+    CREATE TABLE IF NOT EXISTS nft_rarities (
+      collection    TEXT NOT NULL DEFAULT 'demon_king',
+      chain         TEXT NOT NULL,
+      token_id      TEXT NOT NULL,
+      rarity        TEXT NOT NULL CHECK (rarity IN ('common', 'epic', 'legendary')),
+      legacy_level  INTEGER NOT NULL DEFAULT 1,
+      owner_wallet  TEXT,
+      player_id     TEXT,
+      rarity_source TEXT NOT NULL DEFAULT 'reveal',
+      reveal_seed   TEXT,
+      snapshot_hash TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      revealed_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (collection, chain, token_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_nft_rarities_collection_rarity
+      ON nft_rarities(collection, rarity, updated_at DESC);
+
   `);
 } catch (e) { console.warn('[db] player_nfts migration:', e.message); }
 
@@ -1915,6 +1934,18 @@ const stmts = {
   listPlayerDemonKingNfts: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
            COALESCE((
              SELECT COUNT(*)
                FROM player_nft_battle_win_events e
@@ -1930,6 +1961,18 @@ const stmts = {
   listPlayerDemonKingNftsByWallet: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
            COALESCE((
              SELECT COUNT(*)
                FROM player_nft_battle_win_events e
@@ -1948,6 +1991,18 @@ const stmts = {
   getPlayerDemonKingNft: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
            COALESCE((
              SELECT COUNT(*)
                FROM player_nft_battle_win_events e
@@ -2029,6 +2084,18 @@ const stmts = {
   listPlayerCollectionNfts: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
            COALESCE((
              SELECT COUNT(*)
                FROM player_nft_battle_win_events e
@@ -2044,6 +2111,18 @@ const stmts = {
   listPlayerCollectionNftsByWallet: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
            COALESCE((
              SELECT COUNT(*)
                FROM player_nft_battle_win_events e
@@ -2062,6 +2141,18 @@ const stmts = {
   getPlayerCollectionNft: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
            COALESCE((
              SELECT COUNT(*)
                FROM player_nft_battle_win_events e
@@ -2139,6 +2230,31 @@ const stmts = {
        AND collection = ?
        AND chain = ?
        AND token_id = ?
+  `),
+  getNftRarity: db.prepare(`
+    SELECT collection, chain, token_id, rarity, legacy_level, owner_wallet,
+           player_id, rarity_source, reveal_seed, snapshot_hash,
+           metadata_json, revealed_at, updated_at
+      FROM nft_rarities
+     WHERE collection = ? AND chain = ? AND token_id = ?
+     LIMIT 1
+  `),
+  upsertNftRarity: db.prepare(`
+    INSERT INTO nft_rarities
+      (collection, chain, token_id, rarity, legacy_level, owner_wallet,
+       player_id, rarity_source, reveal_seed, snapshot_hash, metadata_json,
+       revealed_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(collection, chain, token_id) DO UPDATE SET
+      rarity = excluded.rarity,
+      legacy_level = excluded.legacy_level,
+      owner_wallet = COALESCE(excluded.owner_wallet, nft_rarities.owner_wallet),
+      player_id = COALESCE(excluded.player_id, nft_rarities.player_id),
+      rarity_source = excluded.rarity_source,
+      reveal_seed = COALESCE(excluded.reveal_seed, nft_rarities.reveal_seed),
+      snapshot_hash = COALESCE(excluded.snapshot_hash, nft_rarities.snapshot_hash),
+      metadata_json = COALESCE(excluded.metadata_json, nft_rarities.metadata_json),
+      updated_at = datetime('now')
   `),
 
   // Production
@@ -3709,15 +3825,54 @@ function normalizeDemonKingNftLevel(level) {
   return [1, 2, 3].includes(n) ? n : 1;
 }
 
+const NFT_RARITY_LABELS = {
+  common: 'Common',
+  epic: 'Epic',
+  legendary: 'Legendary',
+};
+
+function normalizeNftRarity(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(NFT_RARITY_LABELS, text) ? text : null;
+}
+
+function demonKingLegacyRarityFallback(level) {
+  return normalizeDemonKingNftLevel(level) > 1 ? 'legendary' : null;
+}
+
+function normalizeRarityRow(row, fallbackLevel = 1) {
+  const rarity = normalizeNftRarity(row?.rarity) || demonKingLegacyRarityFallback(fallbackLevel);
+  if (!rarity) return null;
+  return {
+    collection: normalizePlayerNftCollection(row?.collection || 'demon_king'),
+    chain: String(row?.chain || '').toLowerCase(),
+    tokenId: String(row?.token_id ?? row?.tokenId ?? ''),
+    rarity,
+    rarityLabel: NFT_RARITY_LABELS[rarity],
+    legacyLevel: normalizeDemonKingNftLevel(row?.legacy_level ?? fallbackLevel),
+    ownerWallet: row?.owner_wallet || null,
+    playerId: row?.player_id || null,
+    source: row?.rarity_source || null,
+    revealedAt: row?.revealed_at || null,
+    updatedAt: row?.updated_at || null,
+  };
+}
+
 function normalizeDemonKingNftRow(row) {
   if (!row) return null;
+  const level = normalizeDemonKingNftLevel(row.level);
+  const rarity = normalizeNftRarity(row.rarity) || demonKingLegacyRarityFallback(level);
   return {
     playerId: row.player_id,
     collection: row.collection || 'demon_king',
     chain: String(row.chain || '').toLowerCase(),
     tokenId: String(row.token_id || ''),
     wallet: row.wallet || '',
-    level: normalizeDemonKingNftLevel(row.level),
+    level,
+    legacyLevel: level,
+    rarity,
+    rarityLabel: rarity ? NFT_RARITY_LABELS[rarity] : 'Unrevealed',
+    rarityRevealedAt: row.rarity_revealed_at || null,
     imageUrl: row.image_url || null,
     active: !!row.active,
     source: row.source || null,
@@ -3754,13 +3909,24 @@ function normalizePlayerNftCollection(collection) {
 
 function normalizeCollectionNftRow(row) {
   if (!row) return null;
+  const collection = normalizePlayerNftCollection(row.collection);
+  const level = normalizeDemonKingNftLevel(row.level);
+  const rarity = collection === 'demon_king'
+    ? (normalizeNftRarity(row.rarity) || demonKingLegacyRarityFallback(level))
+    : null;
   return {
     playerId: row.player_id,
-    collection: normalizePlayerNftCollection(row.collection),
+    collection,
     chain: String(row.chain || '').toLowerCase(),
     tokenId: String(row.token_id || ''),
     wallet: row.wallet || '',
-    level: normalizeDemonKingNftLevel(row.level),
+    level,
+    legacyLevel: level,
+    ...(collection === 'demon_king' ? {
+      rarity,
+      rarityLabel: rarity ? NFT_RARITY_LABELS[rarity] : 'Unrevealed',
+      rarityRevealedAt: row.rarity_revealed_at || null,
+    } : {}),
     imageUrl: row.image_url || null,
     active: !!row.active,
     source: row.source || null,
@@ -3974,6 +4140,88 @@ function bindPlayerCollectionNft(playerId, collection = 'demon_king', wallet, to
     options.txHash || token.txHash || token.tx_hash || null
   );
   return getPlayerCollectionNft(playerId, collectionKey, normalized.chain, normalized.tokenId);
+}
+
+function getNftRarity(collection = 'demon_king', chain, tokenId, options = {}) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const chainKey = String(chain || '').trim().toLowerCase();
+  const tokenText = String(tokenId ?? '').trim();
+  if (!collectionKey || !chainKey || !tokenText) return null;
+  const row = stmts.getNftRarity.get(collectionKey, chainKey, tokenText);
+  return normalizeRarityRow(row, options.legacyLevel);
+}
+
+function listNftRarities(collection = 'demon_king', chain, tokenIds = [], options = {}) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const chainKey = String(chain || '').trim().toLowerCase();
+  const ids = (Array.isArray(tokenIds) ? tokenIds : String(tokenIds || '').split(','))
+    .map((id) => String(id ?? '').trim())
+    .filter(Boolean);
+  if (!collectionKey || !chainKey || !ids.length) return {};
+  const uniqueIds = [...new Set(ids)].slice(0, 500);
+  const placeholders = uniqueIds.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT collection, chain, token_id, rarity, legacy_level, owner_wallet,
+           player_id, rarity_source, reveal_seed, snapshot_hash,
+           metadata_json, revealed_at, updated_at
+      FROM nft_rarities
+     WHERE collection = ? AND chain = ? AND token_id IN (${placeholders})
+  `).all(collectionKey, chainKey, ...uniqueIds);
+  const byId = {};
+  for (const row of rows) {
+    const normalized = normalizeRarityRow(row);
+    if (normalized?.tokenId) byId[normalized.tokenId] = normalized;
+  }
+  if (collectionKey === 'demon_king' && options.legacyLevels && typeof options.legacyLevels === 'object') {
+    for (const id of uniqueIds) {
+      if (byId[id]) continue;
+      const fallback = normalizeRarityRow({
+        collection: collectionKey,
+        chain: chainKey,
+        token_id: id,
+        legacy_level: options.legacyLevels[id],
+      }, options.legacyLevels[id]);
+      if (fallback) byId[id] = fallback;
+    }
+  }
+  return byId;
+}
+
+function upsertNftRarity({
+  collection = 'demon_king',
+  chain,
+  tokenId,
+  rarity,
+  legacyLevel = 1,
+  ownerWallet = null,
+  playerId = null,
+  source = 'reveal',
+  revealSeed = null,
+  snapshotHash = null,
+  metadata = {},
+} = {}) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const chainKey = String(chain || '').trim().toLowerCase();
+  const tokenText = String(tokenId ?? '').trim();
+  const rarityKey = normalizeNftRarity(rarity);
+  if (!collectionKey || !chainKey || !tokenText || !rarityKey) return null;
+  const metadataJson = (() => {
+    try { return JSON.stringify(metadata || {}); } catch { return '{}'; }
+  })();
+  stmts.upsertNftRarity.run(
+    collectionKey,
+    chainKey,
+    tokenText,
+    rarityKey,
+    normalizeDemonKingNftLevel(legacyLevel),
+    ownerWallet ? String(ownerWallet) : null,
+    playerId ? String(playerId) : null,
+    String(source || 'reveal').slice(0, 80),
+    revealSeed ? String(revealSeed) : null,
+    snapshotHash ? String(snapshotHash) : null,
+    metadataJson,
+  );
+  return getNftRarity(collectionKey, chainKey, tokenText, { legacyLevel });
 }
 
 function getDemonKingNftWalletCheck(playerId, wallet) {
@@ -4562,8 +4810,8 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
     account_battle_wins: getBattleWins(playerId),
     required_wins: requiredWins,
     wins_ready: requiredWins == null || battleWins >= requiredWins,
-    requires_nft_upgrade: nextLevel != null,
-    nft_upgrade_price: 'same_as_purchase',
+    requires_nft_upgrade: false,
+    nft_upgrade_price: null,
     win_scope: token ? `${cfg.collection}_nft` : 'none',
     nft: token ? { chain: token.chain, token_id: token.tokenId } : null,
   };
@@ -4590,8 +4838,8 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
     account_battle_wins: getBattleWins(playerId),
     required_wins: requiredWins,
     wins_ready: requiredWins == null || battleWins >= requiredWins,
-    requires_nft_upgrade: nextLevel != null,
-    nft_upgrade_price: 'same_as_purchase',
+    requires_nft_upgrade: false,
+    nft_upgrade_price: null,
     win_scope: token ? 'demon_king_nft' : 'none',
     nft: token ? { chain: token.chain, token_id: token.tokenId } : null,
   };
@@ -4641,12 +4889,12 @@ function upgradeTroop(playerId, troopType, options = {}) {
         code: 'DEMON_KING_WINS_REQUIRED',
       };
     }
-    if (!options.nftVerified || Number(options.nftLevel || 0) < newLevel) {
+    if (!options.nftVerified) {
       return {
         ...status,
-        error: `Upgrade your Demon King NFT to level ${newLevel} first`,
-        code: 'DEMON_KING_NFT_UPGRADE_REQUIRED',
-        requires_nft_upgrade: true,
+        error: 'Verify ownership of this Demon King NFT first',
+        code: 'DEMON_KING_NFT_REQUIRED',
+        requires_nft_upgrade: false,
       };
     }
     stmts.upsertTroopLevel.run(playerId, troopType, newLevel);
@@ -5671,6 +5919,11 @@ module.exports = {
   bindPlayerCollectionNft,
   getCollectionNftWalletCheck,
   markDemonKingNftWalletChecked,
+  NFT_RARITY_LABELS,
+  normalizeNftRarity,
+  getNftRarity,
+  listNftRarities,
+  upsertNftRarity,
   getResources,
   addResources,
   recordTradeClaimResult,

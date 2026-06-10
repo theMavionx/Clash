@@ -411,12 +411,25 @@ function normalizeNftLevel(level) {
   return [1, 2, 3].includes(n) ? n : 1;
 }
 
-function nftImageUrl(req, level) {
-  const lvl = normalizeNftLevel(level);
-  if (level && [1, 2, 3].includes(Number(level))) {
-    return `${nftPublicBase(req)}/api/nft/image/${lvl}`;
-  }
+function nftImageUrl(req) {
   return process.env.NFT_IMAGE_URL || `${nftPublicBase(req)}/api/nft/image`;
+}
+
+function demonKingRarityForMetadata(chainKey, tokenId, legacyLevel = 1) {
+  const rarity = db.getNftRarity?.('demon_king', chainKey, String(tokenId), { legacyLevel });
+  return rarity?.rarity || null;
+}
+
+function demonKingLegacyRarityFallback(level) {
+  return normalizeNftLevel(level) > 1 ? 'legendary' : null;
+}
+
+function demonKingRarityLabel(rarity) {
+  return db.NFT_RARITY_LABELS?.[rarity] || 'Unrevealed';
+}
+
+function demonKingRarityAttributes(rarity) {
+  return [{ trait_type: 'Rarity', value: demonKingRarityLabel(rarity) }];
 }
 
 function solanaCoreUpgradeMetadataUrl(req, level, sourceRef) {
@@ -533,7 +546,10 @@ function nftTokenMetadata(req, chain, tokenId, level) {
   const description = process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.';
   const id = Number(tokenId);
   const lvl = normalizeNftLevel(level);
-  const imageUrl = nftImageUrl(req, lvl);
+  const chainKeyByLabel = { Base: 'base', Arbitrum: 'arbitrum', Monad: 'monad', Ink: 'ink', Aptos: 'aptos', Solana: 'solana' };
+  const chainKey = chainKeyByLabel[chain] || String(chain || '').toLowerCase();
+  const rarity = demonKingRarityForMetadata(chainKey, id, lvl);
+  const imageUrl = nftImageUrl(req);
   return attachRoyaltyMetadata({
     name: `${name} #${id}`,
     symbol: process.env.NFT_SYMBOL || 'DMNK',
@@ -545,8 +561,7 @@ function nftTokenMetadata(req, chain, tokenId, level) {
       { trait_type: 'Character', value: 'Demon King' },
       { trait_type: 'Chain', value: chain },
       { trait_type: 'Edition', value: id },
-      { trait_type: 'Level', value: lvl, display_type: 'number' },
-      { trait_type: 'Stars', value: lvl, display_type: 'number' },
+      ...demonKingRarityAttributes(rarity),
       { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
     properties: {
@@ -1157,8 +1172,9 @@ function sendSolanaToken2022Metadata(req, res) {
   const mint = String(req.params.mint || '').trim();
   if (!SOLANA_WALLET_RE.test(mint)) return res.status(400).json({ error: 'bad mint' });
   const level = normalizeNftLevel(req.query.level || 1);
-  const imageUrl = nftImageUrl(req, level, mint);
-  const name = `${process.env.NFT_NAME || 'Demon King'} L${level}`;
+  const rarity = demonKingRarityForMetadata('solana', mint, level);
+  const imageUrl = nftImageUrl(req);
+  const name = process.env.NFT_NAME || 'Demon King';
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
   res.json(attachRoyaltyMetadata({
     name,
@@ -1172,8 +1188,7 @@ function sendSolanaToken2022Metadata(req, res) {
       { trait_type: 'Chain', value: 'Solana' },
       { trait_type: 'Standard', value: 'Token-2022' },
       { trait_type: 'Collection', value: solanaToken2022CollectionId() },
-      { trait_type: 'Level', value: level, display_type: 'number' },
-      { trait_type: 'Stars', value: level, display_type: 'number' },
+      ...demonKingRarityAttributes(rarity),
       { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
     properties: {
@@ -1185,11 +1200,13 @@ function sendSolanaToken2022Metadata(req, res) {
 
 function sendSolanaBridgedCoreMetadata(req, res) {
   const level = normalizeNftLevel(req.query.level || 1);
-  const imageUrl = nftImageUrl(req, level);
   const sourceRef = String(req.query.src || '').slice(0, 80);
+  const mint = String(req.query.mint || req.query.asset || '').trim();
+  const rarity = mint ? demonKingRarityForMetadata('solana', mint, level) : demonKingLegacyRarityFallback(level);
+  const imageUrl = nftImageUrl(req);
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
   res.json(attachRoyaltyMetadata({
-    name: `${process.env.NFT_NAME || 'Demon King'} L${level}`,
+    name: process.env.NFT_NAME || 'Demon King',
     symbol: process.env.NFT_SYMBOL || 'DMNK',
     description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
     image: imageUrl,
@@ -1199,8 +1216,7 @@ function sendSolanaBridgedCoreMetadata(req, res) {
       { trait_type: 'Character', value: 'Demon King' },
       { trait_type: 'Chain', value: 'Solana' },
       { trait_type: 'Standard', value: 'Metaplex Core' },
-      { trait_type: 'Level', value: level, display_type: 'number' },
-      { trait_type: 'Stars', value: level, display_type: 'number' },
+      ...demonKingRarityAttributes(rarity),
       ...(sourceRef ? [{ trait_type: 'Bridge Source', value: sourceRef }] : []),
       { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
@@ -1720,14 +1736,6 @@ async function verifyDemonKingNftUpgradeProof(player, proof, nextLevel) {
       return { error: 'Demon King NFT owner mismatch', status: 403 };
     }
     const level = normalizeNftLevel(cached.level);
-    if (level < Number(nextLevel)) {
-      return {
-        error: `Demon King NFT must be upgraded to level ${nextLevel}`,
-        status: 403,
-        nft_level: level,
-        next_level: nextLevel,
-      };
-    }
     return {
       nftVerified: true,
       nftLevel: level,
@@ -1776,15 +1784,7 @@ async function verifyDemonKingNftUpgradeProof(player, proof, nextLevel) {
     if (!linkedMatch) {
       return { error: 'Connect or verify the EVM wallet that owns this Demon King NFT first', status: 403 };
     }
-    const level = Number(tokenLevel || 1);
-    if (level < Number(nextLevel)) {
-      return {
-        error: `Demon King NFT must be upgraded to level ${nextLevel}`,
-        status: 403,
-        nft_level: level,
-        next_level: nextLevel,
-      };
-    }
+    const level = normalizeNftLevel(tokenLevel);
     db.bindPlayerDemonKingNft(player.id, onchainOwner, {
       chain: chainKey,
       tokenId: String(tokenIdRaw),
@@ -2372,6 +2372,7 @@ const GAME_SHOP_PRODUCTS = {
     usdPriceE6: '8900000',
     maxQuantity: 1,
     hidden: true,
+    retired: true,
   },
 };
 
@@ -2396,7 +2397,7 @@ function gameShopUsdPriceE6ForPayment(product, { chain = '', payment = '' } = {}
 }
 
 function gameShopProductsForClient() {
-  return Object.values(GAME_SHOP_PRODUCTS).filter((product) => !product.hidden).map((product) => {
+  return Object.values(GAME_SHOP_PRODUCTS).filter((product) => !product.hidden && !product.retired).map((product) => {
     const copDiscountBps = getGameShopCopDiscountBps(product);
     const copUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'base', payment: 'cop' });
     const clashUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'solana', payment: 'clash' });
@@ -2424,6 +2425,10 @@ function gameShopProductsForClient() {
       maxQuantity: product.maxQuantity,
     };
   });
+}
+
+function isRetiredGameShopProduct(product) {
+  return !!(product && (product.retired || product.kind === 'nft_upgrade'));
 }
 
 function skuToBytes32(sku) {
@@ -4432,6 +4437,25 @@ router.post('/nft/aptos/quote', async (req, res) => {
   }
 });
 
+router.get('/nft/rarities', (req, res) => {
+  const collection = String(req.query.collection || 'demon_king');
+  const chain = String(req.query.chain || '').trim().toLowerCase();
+  const ids = String(req.query.ids || req.query.tokenIds || req.query.token_ids || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .slice(0, 500);
+  if (!chain || !ids.length) return res.status(400).json({ error: 'chain and ids are required' });
+  const rarities = db.listNftRarities?.(collection, chain, ids) || {};
+  res.set('Cache-Control', 'public, max-age=30');
+  res.json({
+    ok: true,
+    collection: String(collection || '').replace(/[-\s]+/g, '_').toLowerCase(),
+    chain,
+    rarities,
+  });
+});
+
 router.get('/nft/image', (req, res) => {
   // Default L1 image when no level is specified (back-compat).
   const lvl1 = NFT_LEVEL_IMAGE_PATHS[1];
@@ -4659,6 +4683,7 @@ router.post('/shop/base/quote', auth, async (req, res) => {
     const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
@@ -4851,6 +4876,7 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
     const sku = bytes32ToSku(purchase.sku);
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     const quantity = Number(purchase.quantity);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
       return res.status(400).json({ error: 'Bad purchase quantity' });
@@ -5186,6 +5212,11 @@ async function verifySolanaShopPurchaseFromTx({
     err.status = 400;
     throw err;
   }
+  if (isRetiredGameShopProduct(product)) {
+    const err = new Error('This shop item is retired');
+    err.status = 410;
+    throw err;
+  }
   const quantity = Number(memoData.qty);
   if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
     const err = new Error('Bad purchase quantity');
@@ -5483,6 +5514,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
     const sku = String(memoData.sku || '');
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
 
     const quantity = Number(memoData.qty);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
@@ -5580,6 +5612,10 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
 });
 
 router.post('/nft/solana/upgrade/redeem', auth, async (req, res) => {
+  return res.status(410).json({
+    error: 'Demon King NFT upgrades are retired. Rarity reveal replaces NFT levels.',
+    code: 'NFT_UPGRADES_RETIRED',
+  });
   try {
     const paymentInfo = await verifySolanaShopPaymentForPlayer(req, { expectedSku: 'demon_king_upgrade' });
     const signature = paymentInfo.signature;
@@ -5749,6 +5785,7 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
@@ -5946,7 +5983,7 @@ async function runSolanaShopReconcileSweep(options = {}) {
       return;
     }
     const product = GAME_SHOP_PRODUCTS[String(quoteIntent.sku || '')];
-    if (!product || product.kind === 'nft_upgrade') {
+    if (!product || isRetiredGameShopProduct(product)) {
       // NFT upgrades need a separate on-chain metadata update after payment.
       // Do not mark those payments consumed from the generic resource worker.
       summary.skipped += 1;
@@ -6146,6 +6183,7 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
     const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
@@ -6323,6 +6361,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     const sku = String(memoData.sku || '');
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     const quantity = Number(memoData.qty);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
       return res.status(400).json({ error: 'Bad purchase quantity' });
@@ -6533,6 +6572,7 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
     const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
@@ -6711,6 +6751,7 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
     const sku = String(memoData.sku || '');
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     const quantity = Number(memoData.qty);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
       return res.status(400).json({ error: 'Bad purchase quantity' });

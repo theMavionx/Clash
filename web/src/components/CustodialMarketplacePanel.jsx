@@ -13,7 +13,7 @@ import {
   payCustodialOrder,
   releaseCustodialReservation,
 } from '../lib/custodialMarketplace';
-import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
+import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl, nftRarityLabel } from '../lib/nftV3Client';
 import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 import {
   isSolanaMobileWalletAdapter,
@@ -153,7 +153,11 @@ function listingErrorMessage(err, solWallet) {
 }
 
 function orderImage(order) {
-  return nftLevelImageUrl(order?.level || 1, order?.assetId || order?.asset_id || order?.assetChain || 'base');
+  return nftLevelImageUrl(1, order?.assetId || order?.asset_id || order?.assetChain || 'base');
+}
+
+function itemRarityLabel(item) {
+  return nftRarityLabel(item?.rarity, item?.legacyLevel || item?.level || 1);
 }
 
 function orderPrice(order) {
@@ -1508,7 +1512,6 @@ function BrowseFilters({ sort, setSort, level, setLevel, loading }) {
   return (
     <div style={s.filterPanel}>
       <FilterSelect label="Sort" value={sort} setValue={setSort} options={SORT_OPTIONS} disabled={loading} />
-      <FilterSelect label="Level" value={level} setValue={setLevel} options={LEVEL_OPTIONS} disabled={loading} />
     </div>
   );
 }
@@ -1526,7 +1529,7 @@ function BrowseView({ listings, loading, walletMap, compact, sort, setSort, leve
               <div key={order.id} style={compact ? s.cardMobile : s.card}>
                 <div style={compact ? s.imgWrapMobile : s.imgWrap}>
                   <img src={orderImage(order)} alt="" style={s.img} onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
-                  <span style={s.level}>L{order.level || 1}</span>
+                  <span style={s.level}>{itemRarityLabel(order)}</span>
                 </div>
                 <div style={s.cardBody}>
                   <div style={s.cardLine}>
@@ -1571,8 +1574,8 @@ function SellView({ ready, config, owned, loading, supportedAssets, walletMap, s
             const active = selectedAsset === key;
             return (
               <button key={key} type="button" onClick={() => setSelectedAsset(key)} style={{ ...s.nftPick, ...(active ? s.nftPickActive : null) }}>
-                <img src={nft.imageUrl || nftLevelImageUrl(nft.level || 1, id)} alt="" style={s.nftPickImg} />
-                <span style={s.nftPickChain}>Level {nft.level || 1}</span>
+                <img src={nft.imageUrl || nftLevelImageUrl(1, id)} alt="" style={s.nftPickImg} />
+                <span style={s.nftPickChain}>{itemRarityLabel(nft)}</span>
                 <span>{shortAddr(id, 4, 4)}</span>
               </button>
             );

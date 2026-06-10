@@ -20,6 +20,7 @@
 import { createPublicClient, getAddress, http } from 'viem';
 import { arbitrum, base } from 'viem/chains';
 import { BASE_PRIMARY_RPC_URL } from './avantisContract';
+import { fetchNftRarities, nftRarityLabel as formatNftRarityLabel, normalizeNftRarity } from './nftV3Client';
 
 export const BASE_CHAIN_ID = 8453;
 export const ARBITRUM_CHAIN_ID = 42161;
@@ -128,11 +129,25 @@ export function isLegacyCopPaymentToken(address, chain = 'base') {
 }
 
 export function nftImageUrl(level, tokenId) {
-  const lvl = [1, 2, 3].includes(Number(level)) ? Number(level) : 1;
   if (NFT_USE_TOKEN_IMAGE_PATHS && tokenId != null && tokenId !== '') {
-    return `${NFT_IMAGE_BASE_URL}/${lvl}/${encodeURIComponent(String(tokenId))}.jpg`;
+    return `${NFT_IMAGE_BASE_URL}/1/${encodeURIComponent(String(tokenId))}.jpg`;
   }
-  return `${NFT_IMAGE_BASE_URL}/${lvl}/default.jpg`;
+  return `${NFT_IMAGE_BASE_URL}/1/default.jpg`;
+}
+
+export function nftRarityLabel(rarity, legacyLevel = 1) {
+  return formatNftRarityLabel(rarity, legacyLevel);
+}
+
+export async function fetchTokenRarities(tokenIds, chain = 'base', legacyLevels = {}) {
+  const ids = (tokenIds || []).map((id) => String(id)).filter(Boolean);
+  if (!ids.length) return {};
+  const rows = await fetchNftRarities({ collection: 'demonking', chain, tokenIds: ids });
+  const out = {};
+  ids.forEach((id) => {
+    out[id] = normalizeNftRarity(rows[id]?.rarity) || (Number(legacyLevels[id] || 1) > 1 ? 'legendary' : null);
+  });
+  return out;
 }
 
 // ───────────────── Display helpers ────────────────────────────────────

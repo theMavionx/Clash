@@ -106,11 +106,50 @@ function playerFromUpgradeRequest(req) {
 
 function nftLevelImageUrl(level, id = null) {
   const base = String(process.env.NFT_IMAGE_BASE_URL || '/cdn/nft').replace(/\/+$/, '');
-  const lvl = normalizeNftLevel(level);
+  const lvl = 1;
   if (process.env.NFT_USE_TOKEN_IMAGE_PATHS === '1' && id != null && id !== '') {
     return `${base}/${lvl}/${encodeURIComponent(String(id))}.jpg`;
   }
   return `${base}/${lvl}/default.jpg`;
+}
+
+function demonKingTokenId(token) {
+  return String(token?.tokenId || token?.tokenAddress || token?.assetId || token?.asset || token?.mint || token?.id || '').trim();
+}
+
+function demonKingRarityForToken(chainKey, token) {
+  const tokenId = demonKingTokenId(token);
+  const legacyLevel = normalizeNftLevel(token?.level || token?.legacyLevel || 1);
+  const row = tokenId
+    ? gameDb.getNftRarity?.('demon_king', chainKey, tokenId, { legacyLevel })
+    : null;
+  const fallback = legacyLevel > 1 ? 'legendary' : null;
+  const rarity = gameDb.normalizeNftRarity?.(row?.rarity || token?.rarity) || fallback;
+  return {
+    rarity,
+    rarityLabel: rarity ? gameDb.NFT_RARITY_LABELS?.[rarity] || rarity : 'Unrevealed',
+    legacyLevel,
+    rarityRevealedAt: row?.revealedAt || null,
+  };
+}
+
+function decorateDemonKingOwnedBody(body, chainKey) {
+  if (!body || !Array.isArray(body.tokens)) return body;
+  return {
+    ...body,
+    tokens: body.tokens.map((token) => {
+      const rarity = demonKingRarityForToken(chainKey || token?.chain || body.chain, token);
+      return {
+        ...token,
+        level: rarity.legacyLevel,
+        legacyLevel: rarity.legacyLevel,
+        rarity: rarity.rarity,
+        rarityLabel: rarity.rarityLabel,
+        rarityRevealedAt: rarity.rarityRevealedAt,
+        imageUrl: nftLevelImageUrl(1, demonKingTokenId(token) || token?.imageUrl || 'demon-king'),
+      };
+    }),
+  };
 }
 
 function demonKingDisplayIdFromText(value) {
@@ -1571,6 +1610,10 @@ function mountNftV3Endpoints(router, ctx) {
 
   // ─── POST /nft/upgrade/quote ──────────────────────────────────
   router.post('/nft/upgrade/quote', async (req, res) => {
+    return res.status(410).json({
+      error: 'Demon King NFT upgrades are retired. Rarity reveal replaces NFT levels.',
+      code: 'NFT_UPGRADES_RETIRED',
+    });
     try {
       const ip = req.ip || req.connection?.remoteAddress || 'unknown';
       const rl = upgradeLimit(ip);
@@ -1885,6 +1928,7 @@ function mountNftV3Endpoints(router, ctx) {
       const requiredWins = nextLevel ? gameDb.demonKingRequiredWins(nextLevel) : null;
       const player = playerFromUpgradeRequest(req);
       const battleWins = player ? gameDb.getDemonKingBattleWins(player.id, chainKey, tokenId.toString()) : null;
+      const rarity = demonKingRarityForToken(chainKey, { tokenId: tokenId.toString(), level });
 
       res.set('Cache-Control', player ? 'private, no-store' : 'public, max-age=15');
       res.json({
@@ -1894,16 +1938,20 @@ function mountNftV3Endpoints(router, ctx) {
         tokenId: tokenId.toString(),
         owner: chainOwner,
         level: Number(level),
+        legacyLevel: Number(level),
+        rarity: rarity.rarity,
+        rarityLabel: rarity.rarityLabel,
         levelLabel: `Level ${Number(level)}`,
         starCount: Number(level),
         maxLevel: 3,
-        upgradeable,
-        nextLevel,
+        upgradeable: false,
+        nextLevel: null,
+        upgradesRetired: true,
         upgradePriceUsdE6: upgradeUsdPriceE6(chainKey, 'usdc', deployment).toString(),
         usdc: deployment.usdcToken,
         cop: deployment.copToken || null,
         paused,
-        imageUrl: nftLevelImageUrl(level, tokenId.toString()),
+        imageUrl: nftLevelImageUrl(1, tokenId.toString()),
         wins: battleWins,
         nextLevelRequiredWins: requiredWins,
       });
@@ -1947,6 +1995,7 @@ function mountNftV3Endpoints(router, ctx) {
       } else {
         return res.status(400).json({ error: `${collection.label} is not configured on ${chainKey}` });
       }
+      if (collectionSlug === 'demonking') body = decorateDemonKingOwnedBody(body, chainKey);
       res.set('Cache-Control', 'public, max-age=10');
       return res.json(body);
     } catch (err) {
@@ -2063,7 +2112,7 @@ function mountNftV3Endpoints(router, ctx) {
           level: normalizeNftLevel(levels[i]),
           imageUrl: nftLevelImageUrl(levels[i], id.toString()),
         }));
-        const body = { chain: chainKey, owner, contract: proxy, total: tokens.length, tokens };
+        const body = decorateDemonKingOwnedBody({ chain: chainKey, owner, contract: proxy, total: tokens.length, tokens }, chainKey);
         _ownedNftCache.set(cacheKey, { at: Date.now(), body });
         res.set('Cache-Control', 'public, max-age=10');
         return res.json(body);
@@ -2071,7 +2120,7 @@ function mountNftV3Endpoints(router, ctx) {
 
       // Aptos path
       if (chainKey === 'aptos') {
-        const ownedBody = await listOwnedAptosDemonKingNfts(ownerRaw);
+        const ownedBody = decorateDemonKingOwnedBody(await listOwnedAptosDemonKingNfts(ownerRaw), chainKey);
         res.set('Cache-Control', 'public, max-age=10');
         return res.json(ownedBody);
         const { deploymentOf, aptosFullnodeBase } = require('./bridge_helpers');
@@ -2116,7 +2165,7 @@ function mountNftV3Endpoints(router, ctx) {
 
       // Solana path
       if (chainKey === 'solana') {
-        const ownedBody = await listOwnedSolanaDemonKingNfts(ownerRaw);
+        const ownedBody = decorateDemonKingOwnedBody(await listOwnedSolanaDemonKingNfts(ownerRaw), chainKey);
         res.set('Cache-Control', 'public, max-age=10');
         return res.json(ownedBody);
         const { deploymentOf } = require('./bridge_helpers');

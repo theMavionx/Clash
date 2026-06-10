@@ -5290,7 +5290,7 @@ func _refresh_barn_panel() -> void:
 			var cost_text = ""
 			if troop_name == "DemonKing":
 				var required_wins := 1000 if next_lvl == 2 else 10000
-				cost_text = "NFT upgrade + %s battle wins" % str(required_wins)
+				cost_text = "NFT owned + %s battle wins" % str(required_wins)
 			else:
 				for res_name in costs:
 					var res_display = res_name.capitalize()
@@ -5457,7 +5457,7 @@ func _upgrade_troop(troop_name: String) -> void:
 			if troop_name == "DemonKing" and bool(result.get("requires_nft_upgrade", false)):
 				if _bridge:
 					_bridge.send_to_react("demon_king_upgrade_required", result)
-				_show_error("Upgrade Demon King NFT in Battle Shop first.")
+				_show_error("Connect a Demon King NFT in Battle Shop first.")
 				return
 			if troop_name == "DemonKing" and str(result.get("code", "")) == "DEMON_KING_WINS_REQUIRED":
 				var wins = int(result.get("battle_wins", 0))

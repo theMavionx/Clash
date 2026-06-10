@@ -5,7 +5,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftLevelImageUrl, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftLevelImageUrl, nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -1120,7 +1120,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const openNftShop = (collection = 'demonking') => {
       const safeCollection = typeof collection === 'string' ? collection : 'demonking';
       const hasTokens = safeCollection === 'dragon' ? dragonNfts.length : demonKingNfts.length;
-      window.dispatchEvent(new CustomEvent('clash-open-nft-shop', { detail: { view: hasTokens ? 'upgrade' : 'shop', collection: safeCollection } }));
+      window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {
+        detail: {
+          view: safeCollection === 'demonking' ? 'shop' : (hasTokens ? 'upgrade' : 'shop'),
+          collection: safeCollection,
+        },
+      }));
     };
 
     const handleLoadTroop = (name) => {
@@ -1200,7 +1205,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 <div style={{...LT.demonUseBadge, fontSize: isMobile ? 9 : 10}}>
                   {useRatio}
                 </div>
-                <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>Lvl {token.level || 1}</div>
+                <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>
+                  {base === 'DemonKing' ? nftRarityLabel(token.rarity, token.level || 1) : `Lvl ${token.level || 1}`}
+                </div>
                 <div style={LT.troopImgWrap}>
                   <img src={image} alt={cfg.label} style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP[base]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[base]?.offsetY || '0%'})` }} />
                 </div>
@@ -1413,7 +1420,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   <div style={{...LT.demonUseBadge, fontSize: isMobile ? 9 : 10}}>
                     {demonKingUseRatio}
                   </div>
-                  <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>Lvl {token.level || 1}</div>
+                  <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>{nftRarityLabel(token.rarity, token.level || 1)}</div>
                   <div style={LT.troopImgWrap}>
                     <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
                   </div>
