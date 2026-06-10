@@ -84,6 +84,10 @@ function metadataUrl(assetId) {
   return url.toString();
 }
 
+function rarityLabel(rarity) {
+  return LABELS[String(rarity || '').toLowerCase()] || '';
+}
+
 function rarityScore(assetId) {
   const seed = process.env.DEMON_KING_RARITY_REVEAL_SEED || DEFAULT_SEED;
   return crypto.createHash('sha256').update(`${seed}|solana|${assetId}`).digest('hex');
@@ -201,6 +205,58 @@ function attributeValue(attrs, name) {
   return row ? String(row.value ?? '') : '';
 }
 
+function dasAttributes(asset) {
+  return [
+    asset?.content?.metadata?.attributes,
+    asset?.content?.json?.attributes,
+    asset?.attributes?.attributeList,
+    asset?.plugins?.attributes?.attributeList,
+  ].find(Array.isArray) || [];
+}
+
+function coreAttributeList(asset) {
+  return [
+    asset?.attributes?.attributeList,
+    asset?.plugins?.attributes?.attributeList,
+  ].find(Array.isArray) || [];
+}
+
+function normalizedDemonKingAttributes({ existing = [], rarity }) {
+  const protectedKeys = new Set(['game', 'character', 'chain', 'standard', 'rarity', 'level', 'stars', 'max supply']);
+  const output = [
+    { key: 'Game', value: 'Clash of Perps' },
+    { key: 'Character', value: 'Demon King' },
+    { key: 'Chain', value: 'Solana' },
+    { key: 'Standard', value: 'Metaplex Core' },
+    { key: 'Rarity', value: rarityLabel(rarity) },
+    { key: 'Max Supply', value: '333' },
+  ];
+  const seen = new Set(output.map((row) => row.key.toLowerCase()));
+  for (const attr of existing || []) {
+    const rawKey = String(attr?.key || attr?.trait_type || '').trim();
+    if (!rawKey) continue;
+    const key = rawKey.toLowerCase();
+    if (protectedKeys.has(key) || seen.has(key)) continue;
+    output.push({ key: rawKey, value: String(attr?.value ?? '') });
+    seen.add(key);
+  }
+  return output.filter((row) => row.key !== 'Rarity' || row.value);
+}
+
+function assetNeedsAttributeSync(asset, rarity) {
+  const attrs = dasAttributes(asset);
+  const currentRarity = attributeValue(attrs, 'Rarity');
+  const level = attributeValue(attrs, 'Level');
+  const stars = attributeValue(attrs, 'Stars');
+  return {
+    currentRarity,
+    hasLevel: !!level,
+    hasStars: !!stars,
+    wrongRarity: !!rarity && currentRarity !== rarityLabel(rarity),
+    needsSync: !!level || !!stars || (!!rarity && currentRarity !== rarityLabel(rarity)),
+  };
+}
+
 async function fetchEndpointMetadata(assetId) {
   const url = metadataUrl(assetId);
   const response = await fetch(`${url}&_audit=${Date.now()}`, { headers: { accept: 'application/json' } });
@@ -214,7 +270,7 @@ async function fetchEndpointMetadata(assetId) {
   };
 }
 
-async function syncUris(rpc, assets, rowsByAsset) {
+async function syncSolanaAssets(rpc, assets, rowsByAsset) {
   if (!APPLY) return [];
   const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
   if (!rawKey) throw new Error('SOLANA_NFT_KEY/NFT_SOLANA_KEY/NFT_KEY is required for --apply.');
@@ -223,7 +279,7 @@ async function syncUris(rpc, assets, rowsByAsset) {
   const { createUmi } = await importServerPackage('@metaplex-foundation/umi-bundle-defaults');
   const { keypairIdentity, publicKey } = await importServerPackage('@metaplex-foundation/umi');
   const { base58 } = await importServerPackage('@metaplex-foundation/umi/serializers');
-  const { mplCore, fetchAsset, fetchCollection, update } = await importServerPackage('@metaplex-foundation/mpl-core');
+  const { mplCore, fetchAsset, fetchCollection, update, updatePlugin } = await importServerPackage('@metaplex-foundation/mpl-core');
   const umi = createUmi(rpc).use(mplCore());
   umi.use(keypairIdentity(umi.eddsa.createKeypairFromSecretKey(secretBytes)));
 
@@ -235,10 +291,13 @@ async function syncUris(rpc, assets, rowsByAsset) {
     if (dasAsset?.burnt) continue;
     const targetUri = metadataUrl(assetId);
     const currentUri = String(dasAsset?.content?.json_uri || '');
+    const rarityRow = rowsByAsset.get(assetId);
+    const rarity = rarityRow?.rarity || '';
+    const attrStatus = assetNeedsAttributeSync(dasAsset, rarity);
     if (ASSET_FILTER && assetId !== ASSET_FILTER) continue;
     if (LIMIT > 0 && results.length >= LIMIT) break;
-    if (currentUri === targetUri) continue;
-    if (!rowsByAsset.has(assetId)) continue;
+    if (currentUri === targetUri && !attrStatus.needsSync) continue;
+    if (!rarityRow) continue;
 
     let lastErr = null;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -250,21 +309,56 @@ async function syncUris(rpc, assets, rowsByAsset) {
           : '';
         // eslint-disable-next-line no-await-in-loop
         const collection = collectionAddress ? await fetchCollection(umi, publicKey(collectionAddress)) : undefined;
-        // eslint-disable-next-line no-await-in-loop
-        const sig = await update(umi, {
-          asset,
-          ...(collection ? { collection } : {}),
-          authority: umi.identity,
-          name: String(asset?.name || process.env.NFT_NAME || 'Demon King'),
-          uri: targetUri,
-        }).sendAndConfirm(umi, {
-          send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
-          confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
-        });
-        const txSig = base58.deserialize(sig.signature)[0];
-        const row = { asset: assetId, index, txSig, from: currentUri, to: targetUri, attempt };
+        let uriTxSig = null;
+        let attributesTxSig = null;
+        if (currentUri !== targetUri) {
+          // eslint-disable-next-line no-await-in-loop
+          const sig = await update(umi, {
+            asset,
+            ...(collection ? { collection } : {}),
+            authority: umi.identity,
+            name: process.env.NFT_NAME || 'Demon King',
+            uri: targetUri,
+          }).sendAndConfirm(umi, {
+            send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+            confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+          });
+          uriTxSig = base58.deserialize(sig.signature)[0];
+        }
+        if (attrStatus.needsSync) {
+          // eslint-disable-next-line no-await-in-loop
+          const sig = await updatePlugin(umi, {
+            asset: publicKey(assetId),
+            ...(collectionAddress ? { collection: publicKey(collectionAddress) } : {}),
+            authority: umi.identity,
+            plugin: {
+              type: 'Attributes',
+              attributeList: normalizedDemonKingAttributes({
+                existing: coreAttributeList(asset),
+                rarity,
+              }),
+            },
+          }).sendAndConfirm(umi, {
+            send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+            confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+          });
+          attributesTxSig = base58.deserialize(sig.signature)[0];
+        }
+        const row = {
+          asset: assetId,
+          index,
+          uriTxSig,
+          attributesTxSig,
+          from: currentUri,
+          to: targetUri,
+          rarity,
+          hadLevel: attrStatus.hasLevel,
+          hadStars: attrStatus.hasStars,
+          previousRarity: attrStatus.currentRarity,
+          attempt,
+        };
         results.push(row);
-        log('updated_uri', row);
+        log('updated_asset', row);
         lastErr = null;
         break;
       } catch (err) {
@@ -305,8 +399,20 @@ async function main() {
     const wrongUriBurnt = wrongUri.filter((asset) => asset?.burnt);
     const hiddenUri = assets.filter((asset) => /\/hidden(?:\.json)?(?:$|\?)/i.test(String(asset?.content?.json_uri || '')));
     const hiddenUriActive = hiddenUri.filter((asset) => !asset?.burnt);
-    const targetAssets = filteredAssets.filter((asset) => String(asset?.content?.json_uri || '') !== metadataUrl(asset.id));
-    const updates = await syncUris(rpc, targetAssets, afterRowsByAsset);
+    const attributeStatuses = assets.map((asset) => ({
+      asset,
+      status: assetNeedsAttributeSync(asset, afterRowsByAsset.get(String(asset.id))?.rarity || ''),
+    }));
+    const needsAttributeSync = attributeStatuses.filter((row) => row.status.needsSync);
+    const needsAttributeSyncActive = needsAttributeSync.filter((row) => !row.asset?.burnt);
+    const missingDasRarity = attributeStatuses.filter((row) => !row.status.currentRarity);
+    const levelAttribute = attributeStatuses.filter((row) => row.status.hasLevel || row.status.hasStars);
+    const wrongDasRarity = attributeStatuses.filter((row) => row.status.wrongRarity);
+    const targetAssets = filteredAssets.filter((asset) => (
+      String(asset?.content?.json_uri || '') !== metadataUrl(asset.id)
+      || assetNeedsAttributeSync(asset, afterRowsByAsset.get(String(asset.id))?.rarity || '').needsSync
+    ));
+    const updates = await syncSolanaAssets(rpc, targetAssets, afterRowsByAsset);
     const samples = await Promise.all(['9BX81uoR9t46dWqjwkiDByLxMScXYiiVgN7NacjKDoHk', 'Aj1ARUPGzKK1ycyGDcNfcVKTmtHTXWJprS54eWWbnHpJ']
       .filter((id) => assets.some((asset) => asset.id === id))
       .map(async (id) => ({
@@ -314,7 +420,8 @@ async function main() {
         db: afterRowsByAsset.get(id)?.rarity || null,
         endpoint: await fetchEndpointMetadata(id),
         das_uri: assets.find((asset) => asset.id === id)?.content?.json_uri || '',
-        das_rarity: attributeValue(assets.find((asset) => asset.id === id)?.content?.metadata?.attributes, 'Rarity') || null,
+        das_rarity: attributeValue(dasAttributes(assets.find((asset) => asset.id === id)), 'Rarity') || null,
+        das_level: attributeValue(dasAttributes(assets.find((asset) => asset.id === id)), 'Level') || null,
       })));
 
     return {
@@ -333,8 +440,13 @@ async function main() {
       wrong_uri_burnt_before: wrongUriBurnt.length,
       hidden_uri_before: hiddenUri.length,
       hidden_uri_active_before: hiddenUriActive.length,
-      uri_updates_attempted: updates.length,
-      uri_update_errors: updates.filter((row) => row.error).length,
+      missing_das_rarity_before: missingDasRarity.length,
+      level_attribute_before: levelAttribute.length,
+      wrong_das_rarity_before: wrongDasRarity.length,
+      attribute_sync_needed_before: needsAttributeSync.length,
+      attribute_sync_needed_active_before: needsAttributeSyncActive.length,
+      asset_updates_attempted: updates.length,
+      asset_update_errors: updates.filter((row) => row.error).length,
       samples,
     };
   }, { urls: rpcUrls, label: 'Solana Demon King DAS rarity sync' });

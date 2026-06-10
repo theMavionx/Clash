@@ -432,9 +432,9 @@ function demonKingRarityAttributes(rarity) {
   return [{ trait_type: 'Rarity', value: demonKingRarityLabel(rarity) }];
 }
 
-function solanaCoreUpgradeMetadataUrl(req, level, sourceRef) {
+function solanaCoreUpgradeMetadataUrl(req, assetId, sourceRef) {
   const url = new URL('/api/nft/solana/bridged', `${nftPublicBase(req)}/`);
-  url.searchParams.set('level', String(normalizeNftLevel(level)));
+  if (assetId) url.searchParams.set('asset', String(assetId));
   if (sourceRef) url.searchParams.set('src', String(sourceRef).slice(0, 80));
   return url.toString();
 }
@@ -444,8 +444,10 @@ async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef
   if (!rawKey) throw Object.assign(new Error('Solana NFT authority key is not configured'), { status: 503 });
   const { parseSolanaSecretKey } = require('./bridge_helpers');
   const secretBytes = parseSolanaSecretKey(rawKey);
-  const metadataUri = solanaCoreUpgradeMetadataUrl(req, level, sourceRef);
-  const metadataName = `${process.env.NFT_NAME || 'Demon King'} L${normalizeNftLevel(level)}`;
+  const metadataUri = solanaCoreUpgradeMetadataUrl(req, assetId, sourceRef);
+  const metadataName = process.env.NFT_NAME || 'Demon King';
+  const rarity = demonKingRarityForMetadata('solana', assetId, normalizeNftLevel(level))
+    || demonKingLegacyRarityFallback(level);
   return withSolanaRpcFallback(async (rpc) => {
     const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
     const { keypairIdentity, publicKey } = await import('@metaplex-foundation/umi');
@@ -483,9 +485,10 @@ async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef
     for (const attr of currentAttrs) {
       const key = String(attr?.key || attr?.trait_type || '').trim();
       if (!key) continue;
+      if (['level', 'stars', 'rarity'].includes(key.toLowerCase())) continue;
       attrMap.set(key.toLowerCase(), { key, value: String(attr?.value ?? '') });
     }
-    attrMap.set('level', { key: 'Level', value: String(normalizeNftLevel(level)) });
+    attrMap.set('rarity', { key: 'Rarity', value: demonKingRarityLabel(rarity) });
     if (sourceRef) attrMap.set('sourceref', { key: 'SourceRef', value: String(sourceRef).slice(0, 120) });
     const attrSig = await updatePlugin(umi, {
       asset: publicKey(assetId),

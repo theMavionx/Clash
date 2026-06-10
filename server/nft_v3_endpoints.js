@@ -3840,6 +3840,25 @@ function mountNftV3Endpoints(router, ctx) {
             destTx: submitted.hash,
           });
           const rarityRow = rarityRows[0] || null;
+          let rarityOnchainTxHash = null;
+          if (collectionSlug === 'demonking' && aptosDestTokenAddress && rarityRow?.rarityLabel) {
+            try {
+              const rarityTx = await aptos.transaction.build.simple({
+                sender: aptosAccount().accountAddress,
+                data: {
+                  function: `${aptosDeploy.module}::admin_set_rarity`,
+                  functionArguments: [aptosDestTokenAddress, rarityRow.rarityLabel],
+                },
+              });
+              const raritySubmitted = await aptos.signAndSubmitTransaction({
+                signer: aptosAccount(), transaction: rarityTx,
+              });
+              await aptos.waitForTransaction({ transactionHash: raritySubmitted.hash });
+              rarityOnchainTxHash = raritySubmitted.hash;
+            } catch (err) {
+              console.warn('[nft-bridge] Aptos Demon King rarity property sync failed:', err?.message || err);
+            }
+          }
           try {
             bridgeDb?.prepare(`UPDATE used_bridge_refs SET dest_tx_or_asset = ?
               WHERE source_ref = ? AND dest_chain = ?`).run(submitted.hash, sourceRef, destChain);
@@ -3854,6 +3873,7 @@ function mountNftV3Endpoints(router, ctx) {
             rarity: rarityRow?.rarity || null,
             rarityLabel: rarityRow?.rarityLabel || null,
             destTxHash: submitted.hash,
+            rarityOnchainTxHash,
           });
         }
 
