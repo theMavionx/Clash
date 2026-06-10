@@ -4496,7 +4496,8 @@ router.get('/nft/base/contract', (req, res) => {
 });
 
 async function sendRevealedDemonKingMetadata(req, res) {
-  const chainKey = String(req.params.chain || '').toLowerCase();
+  const rawChainKey = String(req.params.chain || '').toLowerCase();
+  const chainKey = rawChainKey.replace(/-v\d+$/, '');
   const labels = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', ink: 'Ink', solana: 'Solana' };
   if (chainKey === 'aptos') return sendAptosNftMetadata(req, res, req.params.tokenId);
   const label = labels[chainKey];
