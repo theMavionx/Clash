@@ -7453,6 +7453,7 @@ router.post('/players/register', (req, res) => {
   const { name, wallet, dex, fid } = req.body;
   const requestedDex = VALID_DEXES.has(dex) ? dex : 'pacifica';
   const seekerCapability = normalizeSeekerCapability(req.body || {});
+  const referralCode = String(req.body?.referralCode || req.body?.ref || req.body?.invite || '').trim();
 
   // ── Per-DEX canonical lookup ────────────────────────────────────────
   // Each (wallet, dex) is now its own player row. The user's Avantis
@@ -7504,6 +7505,14 @@ router.post('/players/register', (req, res) => {
       if (seekerCapability) {
         db.stmts.markPlayerSeeker.run(seekerCapability.seeker_id, seekerCapability.seeker_source, existing.id);
       }
+      if (referralCode) {
+        db.bindPlayerReferral(existing.id, referralCode, 'register-existing', {
+          wallet: wallet || null,
+          dex: requestedDex,
+        });
+      } else {
+        db.ensureReferralCode(existing);
+      }
       const state = db.getFullPlayerState(existing.id);
       return res.json({ ...state, token: existing.token });
     }
@@ -7525,7 +7534,11 @@ router.post('/players/register', (req, res) => {
   }
   let result = null;
   try {
-    result = db.registerPlayer(trimmed);
+    result = db.registerPlayer(trimmed, {
+      referralCode,
+      referralSource: 'register-new',
+      referralMetadata: { wallet: wallet || null, dex: requestedDex },
+    });
   } catch (e) {
     if (String(e?.message || '').includes('UNIQUE')) {
       return res.status(409).json({ error: 'Nickname is already taken' });
@@ -7551,6 +7564,33 @@ router.post('/players/register', (req, res) => {
   const state = db.getFullPlayerState(result.id);
   logAuth('Player registered', { name: trimmed, wallet: wallet || null, dex: requestedDex });
   res.json({ ...state, token: result.token });
+});
+
+router.get('/players/referral', auth, (req, res) => {
+  try {
+    res.json({ ok: true, referral: db.getReferralSummary(req.player.id) });
+  } catch (e) {
+    console.warn('[referrals] summary failed:', e.message);
+    res.status(500).json({ error: 'Failed to load referral summary' });
+  }
+});
+
+router.post('/players/referral/bind', auth, (req, res) => {
+  try {
+    const result = db.bindPlayerReferral(req.player.id, req.body?.code || req.body?.ref, 'manual-bind', {
+      ip: req.ip || null,
+    });
+    if (!result.bound && result.reason === 'self_referral') {
+      return res.status(400).json({ error: 'You cannot use your own referral code' });
+    }
+    if (!result.bound && result.reason === 'code_not_found') {
+      return res.status(404).json({ error: 'Referral code not found' });
+    }
+    res.json({ ok: true, ...result, referral: db.getReferralSummary(req.player.id) });
+  } catch (e) {
+    console.warn('[referrals] bind failed:', e.message);
+    res.status(500).json({ error: 'Failed to bind referral code' });
+  }
 });
 
 router.patch('/players/name', auth, (req, res) => {
@@ -12517,6 +12557,33 @@ try {
     );
     CREATE INDEX IF NOT EXISTS idx_gold_history_player ON gold_history(player_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_player_trades_player ON player_trades(player_id, created_at);
+    DROP TRIGGER IF EXISTS trg_referral_pacifica_builder_fee;
+    CREATE TRIGGER IF NOT EXISTS trg_referral_pacifica_builder_fee
+    AFTER INSERT ON player_trades
+    WHEN NEW.fee IS NOT NULL
+    BEGIN
+      INSERT OR IGNORE INTO referral_events (
+        referrer_player_id, referred_player_id, source_type, source_id,
+        revenue_kind, currency, gross_usd_e6, commission_usd_e6,
+        status, metadata_json, confirmed_at
+      )
+      SELECT
+        pr.referrer_player_id,
+        NEW.player_id,
+        'pacifica_builder_fee',
+        COALESCE(CAST(NEW.history_id AS TEXT), CAST(NEW.id AS TEXT)),
+        'builder_fee',
+        'USD',
+        CAST(ABS(CAST(COALESCE(NULLIF(NEW.fee, ''), '0') AS REAL)) * 1000000 AS INTEGER),
+        CAST(ABS(CAST(COALESCE(NULLIF(NEW.fee, ''), '0') AS REAL)) * 1000000 * 1000 / 10000 AS INTEGER),
+        'confirmed',
+        json_object('symbol', NEW.symbol, 'price', NEW.price, 'amount', NEW.amount),
+        datetime('now')
+      FROM player_referrals pr
+      WHERE pr.referred_player_id = NEW.player_id
+        AND pr.referrer_player_id <> NEW.player_id
+        AND ABS(CAST(COALESCE(NULLIF(NEW.fee, ''), '0') AS REAL)) > 0;
+    END;
   `);
 } catch { /* non-fatal on first boot */ }
 
@@ -18556,6 +18623,235 @@ router.get('/admin/diag/pacifica/summary', adminAuth, (req, res) => {
     ORDER BY n DESC LIMIT 200
   `).all(`-${sinceMin} minutes`);
   res.json({ window_min: sinceMin, rows });
+});
+
+function exactReferralFuturesRows(limit = 5000) {
+  const futuresPath = process.env.CLASH_FUTURES_DB || path.join(__dirname, '..', 'server-futures', 'futures.db');
+  if (!fs.existsSync(futuresPath)) return [];
+  let Sqlite = null;
+  try { Sqlite = require('better-sqlite3'); } catch { return []; }
+  const fdb = new Sqlite(futuresPath, { readonly: true, fileMustExist: true });
+  try {
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    const capped = Math.max(1, Math.min(50_000, Number(limit) || 5000));
+    return fdb.prepare(`
+      SELECT id, player_id, dex, symbol, side, amount, price, notional_usd,
+             fee, order_id, client_order_id, verified_source, proof_json, created_at
+      FROM trade_history
+      WHERE status = 'filled'
+        AND ABS(CAST(COALESCE(NULLIF(fee, ''), '0') AS REAL)) > 0
+        AND (
+          verified_source = 'grvt_builder'
+          OR verified_source = 'nado_api'
+          OR (
+            verified_source = 'hotstuff_api'
+            AND (
+              proof_json LIKE '%"source":"hotstuff_fill_api"%'
+              OR proof_json LIKE '%"source": "hotstuff_fill_api"%'
+            )
+          )
+        )
+      ORDER BY id ASC
+      LIMIT ?
+    `).all(capped);
+  } finally {
+    fdb.close();
+  }
+}
+
+function syncExactReferralFuturesEarnings({ limit = 5000 } = {}) {
+  const rows = exactReferralFuturesRows(limit);
+  let inserted = 0;
+  let skipped = 0;
+  for (const row of rows) {
+    const feeUsd = Math.abs(Number(row.fee || 0));
+    if (!Number.isFinite(feeUsd) || feeUsd <= 0) {
+      skipped += 1;
+      continue;
+    }
+    const result = db.recordReferralRevenue({
+      referredPlayerId: row.player_id,
+      sourceType: 'futures_builder_fee',
+      sourceId: `${row.dex}:${row.id}`,
+      revenueKind: 'builder_fee',
+      grossUsdE6: Math.round(feeUsd * 1_000_000),
+      status: 'confirmed',
+      currency: 'USD',
+      txHash: row.order_id == null ? null : String(row.order_id),
+      metadata: {
+        dex: row.dex,
+        symbol: row.symbol,
+        side: row.side,
+        verified_source: row.verified_source,
+        client_order_id: row.client_order_id,
+        created_at: row.created_at,
+      },
+    });
+    if (result.changes) inserted += 1;
+    else skipped += 1;
+  }
+  return { scanned: rows.length, inserted, skipped };
+}
+
+router.get('/admin/referrals', adminAuth, (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+    const rows = db.db.prepare(`
+      WITH invite_counts AS (
+        SELECT referrer_player_id, COUNT(DISTINCT referred_player_id) AS invited_count
+        FROM player_referrals
+        GROUP BY referrer_player_id
+      ),
+      event_totals AS (
+        SELECT
+          referrer_player_id,
+          COALESCE(SUM(CASE WHEN status IN ('confirmed', 'claimable') THEN commission_usd_e6 ELSE 0 END), 0) AS confirmed_usd_e6,
+          COALESCE(SUM(CASE WHEN status = 'pending' THEN commission_usd_e6 ELSE 0 END), 0) AS pending_usd_e6,
+          COALESCE(SUM(CASE WHEN status = 'paid' THEN commission_usd_e6 ELSE 0 END), 0) AS paid_usd_e6,
+          COUNT(id) AS events_count
+        FROM referral_events
+        GROUP BY referrer_player_id
+      )
+      SELECT
+        rc.player_id,
+        p.name AS player_name,
+        rc.code,
+        rc.slug,
+        COALESCE(ic.invited_count, 0) AS invited_count,
+        COALESCE(et.confirmed_usd_e6, 0) AS confirmed_usd_e6,
+        COALESCE(et.pending_usd_e6, 0) AS pending_usd_e6,
+        COALESCE(et.paid_usd_e6, 0) AS paid_usd_e6,
+        COALESCE(et.events_count, 0) AS events_count
+      FROM referral_codes rc
+      JOIN players p ON p.id = rc.player_id
+      LEFT JOIN invite_counts ic ON ic.referrer_player_id = rc.player_id
+      LEFT JOIN event_totals et ON et.referrer_player_id = rc.player_id
+      ORDER BY confirmed_usd_e6 DESC, invited_count DESC, rc.created_at DESC
+      LIMIT ?
+    `).all(limit).map((row) => ({
+      ...row,
+      confirmed_usd: Number(row.confirmed_usd_e6 || 0) / 1_000_000,
+      pending_usd: Number(row.pending_usd_e6 || 0) / 1_000_000,
+      paid_usd: Number(row.paid_usd_e6 || 0) / 1_000_000,
+    }));
+    const recent = db.db.prepare(`
+      SELECT e.*, rp.name AS referrer_name, up.name AS referred_name
+      FROM referral_events e
+      JOIN players rp ON rp.id = e.referrer_player_id
+      JOIN players up ON up.id = e.referred_player_id
+      ORDER BY e.created_at DESC
+      LIMIT 200
+    `).all().map((row) => ({
+      ...row,
+      gross_usd: Number(row.gross_usd_e6 || 0) / 1_000_000,
+      commission_usd: Number(row.commission_usd_e6 || 0) / 1_000_000,
+    }));
+    const payouts = db.db.prepare(`
+      SELECT rp.*, p.name AS referrer_name
+      FROM referral_payouts rp
+      JOIN players p ON p.id = rp.referrer_player_id
+      ORDER BY rp.created_at DESC
+      LIMIT 100
+    `).all().map((row) => ({
+      ...row,
+      amount_usd: Number(row.amount_usd_e6 || 0) / 1_000_000,
+    }));
+    res.json({ rows, recent, payouts, rate_bps: 1000 });
+  } catch (e) {
+    console.warn('[referrals] admin list failed:', e.message);
+    res.status(500).json({ error: 'Failed to load referrals' });
+  }
+});
+
+router.post('/admin/referrals/sync-futures', adminAuth, (req, res) => {
+  try {
+    res.json({ ok: true, ...syncExactReferralFuturesEarnings({ limit: req.body?.limit || req.query.limit }) });
+  } catch (e) {
+    console.warn('[referrals] futures sync failed:', e.message);
+    res.status(500).json({ error: 'Failed to sync exact futures referral fees' });
+  }
+});
+
+router.post('/admin/referrals/:playerId/payouts', adminAuth, (req, res) => {
+  try {
+    const playerId = String(req.params.playerId || '').trim();
+    const player = db.db.prepare('SELECT id, name FROM players WHERE id = ?').get(playerId);
+    if (!player) return res.status(404).json({ error: 'Player not found' });
+
+    const destination = req.body?.destination == null ? null : String(req.body.destination).slice(0, 200);
+    const note = req.body?.note == null ? null : String(req.body.note).slice(0, 500);
+    const payout = db.db.transaction(() => {
+      const totals = db.db.prepare(`
+        SELECT COUNT(*) AS events_count, COALESCE(SUM(commission_usd_e6), 0) AS amount_usd_e6
+        FROM referral_events
+        WHERE referrer_player_id = ?
+          AND status IN ('confirmed', 'claimable')
+          AND payout_id IS NULL
+      `).get(playerId);
+      const amount = Number(totals?.amount_usd_e6 || 0);
+      if (amount <= 0) return null;
+
+      const payoutId = `refpay_${crypto.randomUUID()}`;
+      db.db.prepare(`
+        INSERT INTO referral_payouts (id, referrer_player_id, status, amount_usd_e6, destination, note)
+        VALUES (?, ?, 'requested', ?, ?, ?)
+      `).run(payoutId, playerId, amount, destination, note);
+      db.db.prepare(`
+        UPDATE referral_events
+        SET status = 'claimable', payout_id = ?
+        WHERE referrer_player_id = ?
+          AND status IN ('confirmed', 'claimable')
+          AND payout_id IS NULL
+      `).run(payoutId, playerId);
+      return {
+        id: payoutId,
+        referrer_player_id: playerId,
+        referrer_name: player.name,
+        status: 'requested',
+        amount_usd_e6: amount,
+        amount_usd: amount / 1_000_000,
+        events_count: Number(totals?.events_count || 0),
+        destination,
+        note,
+      };
+    })();
+
+    if (!payout) return res.status(400).json({ error: 'No confirmed referral commission to payout' });
+    res.json({ ok: true, payout });
+  } catch (e) {
+    console.warn('[referrals] create payout failed:', e.message);
+    res.status(500).json({ error: 'Failed to create referral payout' });
+  }
+});
+
+router.post('/admin/referrals/payouts/:payoutId/paid', adminAuth, (req, res) => {
+  try {
+    const payoutId = String(req.params.payoutId || '').trim();
+    const txHash = req.body?.txHash == null ? null : String(req.body.txHash).slice(0, 200);
+    const payout = db.db.prepare('SELECT * FROM referral_payouts WHERE id = ?').get(payoutId);
+    if (!payout) return res.status(404).json({ error: 'Payout not found' });
+    if (payout.status === 'paid') {
+      return res.json({ ok: true, payout: { ...payout, amount_usd: Number(payout.amount_usd_e6 || 0) / 1_000_000 } });
+    }
+
+    const updated = db.db.transaction(() => {
+      db.db.prepare(`
+        UPDATE referral_payouts
+        SET status = 'paid', tx_hash = ?, paid_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ?
+      `).run(txHash, payoutId);
+      db.db.prepare(`
+        UPDATE referral_events
+        SET status = 'paid', paid_at = datetime('now')
+        WHERE payout_id = ?
+      `).run(payoutId);
+      return db.db.prepare('SELECT * FROM referral_payouts WHERE id = ?').get(payoutId);
+    })();
+    res.json({ ok: true, payout: { ...updated, amount_usd: Number(updated.amount_usd_e6 || 0) / 1_000_000 } });
+  } catch (e) {
+    console.warn('[referrals] mark payout paid failed:', e.message);
+    res.status(500).json({ error: 'Failed to mark referral payout paid' });
+  }
 });
 
 // Admin: net commission earned per DEX. Reads on-chain balances + Pacifica

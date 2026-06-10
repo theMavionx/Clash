@@ -1322,6 +1322,145 @@ try {
   `);
 } catch (e) { console.warn('[db] utility_purchases migration:', e.message); }
 
+// Referral attribution and commission ledger. Revenue events are immutable and
+// idempotent by source_type/source_id so retrying payment redemption, delivery,
+// or trade sync cannot double-credit a referrer.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS referral_codes (
+      player_id  TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      code       TEXT NOT NULL UNIQUE,
+      slug       TEXT NOT NULL UNIQUE,
+      active     INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_referral_codes_code
+      ON referral_codes(code, active);
+
+    CREATE TABLE IF NOT EXISTS player_referrals (
+      referred_player_id TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      referrer_player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      code               TEXT NOT NULL,
+      source             TEXT,
+      bound_at           TEXT NOT NULL DEFAULT (datetime('now')),
+      metadata_json      TEXT NOT NULL DEFAULT '{}',
+      CHECK (referred_player_id <> referrer_player_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_referrals_referrer
+      ON player_referrals(referrer_player_id, bound_at DESC);
+
+    CREATE TABLE IF NOT EXISTS referral_events (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      referrer_player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      referred_player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      source_type        TEXT NOT NULL,
+      source_id          TEXT NOT NULL,
+      revenue_kind       TEXT NOT NULL,
+      currency           TEXT NOT NULL DEFAULT 'USD',
+      gross_usd_e6       INTEGER NOT NULL DEFAULT 0,
+      commission_usd_e6  INTEGER NOT NULL DEFAULT 0,
+      status             TEXT NOT NULL DEFAULT 'confirmed',
+      tx_hash            TEXT,
+      metadata_json      TEXT NOT NULL DEFAULT '{}',
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      confirmed_at       TEXT,
+      paid_at            TEXT,
+      payout_id          TEXT,
+      UNIQUE(source_type, source_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_referral_events_referrer
+      ON referral_events(referrer_player_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_referral_events_referred
+      ON referral_events(referred_player_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS referral_payouts (
+      id                 TEXT PRIMARY KEY,
+      referrer_player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      status             TEXT NOT NULL DEFAULT 'requested',
+      currency           TEXT NOT NULL DEFAULT 'USD',
+      amount_usd_e6      INTEGER NOT NULL DEFAULT 0,
+      destination        TEXT,
+      tx_hash            TEXT,
+      note               TEXT,
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      paid_at            TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_referral_payouts_referrer
+      ON referral_payouts(referrer_player_id, status, created_at DESC);
+
+    CREATE TRIGGER IF NOT EXISTS trg_referral_utility_purchase
+    AFTER INSERT ON utility_purchases
+    WHEN NEW.usd_price_e6 IS NOT NULL
+    BEGIN
+      INSERT OR IGNORE INTO referral_events (
+        referrer_player_id, referred_player_id, source_type, source_id,
+        revenue_kind, currency, gross_usd_e6, commission_usd_e6,
+        status, tx_hash, metadata_json, confirmed_at
+      )
+      SELECT
+        pr.referrer_player_id,
+        NEW.player_id,
+        'utility_purchase',
+        CAST(NEW.id AS TEXT),
+        CASE WHEN NEW.utility LIKE '%nft%' OR NEW.utility LIKE '%demon_king%' THEN 'nft_shop' ELSE 'game_shop' END,
+        'USD',
+        CAST(COALESCE(NULLIF(NEW.usd_price_e6, ''), '0') AS INTEGER),
+        CAST((CAST(COALESCE(NULLIF(NEW.usd_price_e6, ''), '0') AS INTEGER) * 1000) / 10000 AS INTEGER),
+        'confirmed',
+        NEW.tx_hash,
+        json_object('utility', NEW.utility, 'chain', NEW.chain, 'token', NEW.token, 'payer', NEW.payer),
+        datetime('now')
+      FROM player_referrals pr
+      WHERE pr.referred_player_id = NEW.player_id
+        AND pr.referrer_player_id <> NEW.player_id
+        AND CAST(COALESCE(NULLIF(NEW.usd_price_e6, ''), '0') AS INTEGER) > 0;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_referral_custodial_marketplace_delivered
+    AFTER UPDATE OF status ON custodial_marketplace_orders
+    WHEN NEW.status = 'delivered' AND OLD.status <> 'delivered'
+    BEGIN
+      INSERT OR IGNORE INTO referral_events (
+        referrer_player_id, referred_player_id, source_type, source_id,
+        revenue_kind, currency, gross_usd_e6, commission_usd_e6,
+        status, tx_hash, metadata_json, confirmed_at
+      )
+      SELECT
+        pr.referrer_player_id,
+        NEW.buyer_player_id,
+        'custodial_marketplace',
+        NEW.id,
+        'marketplace_fee_royalty',
+        'USD',
+        CAST(COALESCE(NULLIF(NEW.fee_usdc_units, ''), '0') AS INTEGER)
+          + CAST(COALESCE(NULLIF(NEW.royalty_usdc_units, ''), '0') AS INTEGER),
+        CAST((
+          CAST(COALESCE(NULLIF(NEW.fee_usdc_units, ''), '0') AS INTEGER)
+          + CAST(COALESCE(NULLIF(NEW.royalty_usdc_units, ''), '0') AS INTEGER)
+        ) * 1000 / 10000 AS INTEGER),
+        'confirmed',
+        NEW.payment_tx_hash,
+        json_object(
+          'asset_chain', NEW.asset_chain,
+          'asset_id', NEW.asset_id,
+          'fee_usdc_units', NEW.fee_usdc_units,
+          'royalty_usdc_units', NEW.royalty_usdc_units,
+          'seller_player_id', NEW.seller_player_id
+        ),
+        datetime('now')
+      FROM player_referrals pr
+      WHERE pr.referred_player_id = NEW.buyer_player_id
+        AND pr.referrer_player_id <> NEW.buyer_player_id
+        AND (
+          CAST(COALESCE(NULLIF(NEW.fee_usdc_units, ''), '0') AS INTEGER)
+          + CAST(COALESCE(NULLIF(NEW.royalty_usdc_units, ''), '0') AS INTEGER)
+        ) > 0;
+    END;
+  `);
+} catch (e) { console.warn('[db] referral migration:', e.message); }
+
 // Server-side recovery for Solana shop purchases. Mobile wallets can submit
 // the transfer successfully and fail to return to the browser before
 // /shop/solana/redeem runs. Store every signed quote so the backend can later
@@ -3345,7 +3484,203 @@ function normalizeLegacyBarracksRows() {
 
 normalizeLegacyBarracksRows();
 
-function registerPlayer(name) {
+function referralSlugBase(name) {
+  const base = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_ -]+/g, '')
+    .replace(/[\s_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 32);
+  return base || 'player';
+}
+
+function normalizeReferralCode(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/[^/]+\/r\//i, '')
+    .replace(/^\/?r\//i, '')
+    .split(/[?#]/)[0]
+    .replace(/[^a-z0-9-]/g, '')
+    .slice(0, 48);
+}
+
+function ensureReferralCode(playerOrId) {
+  const player = typeof playerOrId === 'object'
+    ? playerOrId
+    : stmts.getPlayerById.get(String(playerOrId || ''));
+  if (!player?.id) return null;
+  const existing = db.prepare('SELECT * FROM referral_codes WHERE player_id = ?').get(player.id);
+  if (existing) return existing;
+
+  const base = referralSlugBase(player.name);
+  const shortId = crypto.createHash('sha1').update(String(player.id)).digest('hex').slice(0, 6);
+  for (let i = 0; i < 32; i += 1) {
+    const suffix = i === 0 ? '' : `-${i + 1}`;
+    const room = Math.max(1, 40 - suffix.length);
+    const slug = `${base.slice(0, room)}${suffix}`;
+    const code = i === 0 ? slug : `${slug}-${shortId}`;
+    try {
+      db.prepare(`
+        INSERT INTO referral_codes (player_id, code, slug)
+        VALUES (?, ?, ?)
+      `).run(player.id, code, slug);
+      return db.prepare('SELECT * FROM referral_codes WHERE player_id = ?').get(player.id);
+    } catch (e) {
+      if (!/UNIQUE/i.test(String(e?.message || ''))) throw e;
+    }
+  }
+  const fallback = `${base.slice(0, 24)}-${shortId}`;
+  db.prepare(`
+    INSERT OR IGNORE INTO referral_codes (player_id, code, slug)
+    VALUES (?, ?, ?)
+  `).run(player.id, fallback, fallback);
+  return db.prepare('SELECT * FROM referral_codes WHERE player_id = ?').get(player.id);
+}
+
+function bindPlayerReferral(referredPlayerId, rawCode, source = 'unknown', metadata = {}) {
+  const code = normalizeReferralCode(rawCode);
+  if (!referredPlayerId || !code) return { bound: false, reason: 'missing_code' };
+  const referred = stmts.getPlayerById.get(String(referredPlayerId));
+  if (!referred) return { bound: false, reason: 'referred_not_found' };
+  const existing = db.prepare('SELECT * FROM player_referrals WHERE referred_player_id = ?').get(referred.id);
+  if (existing) return { bound: false, existing, reason: 'already_bound' };
+  const refCode = db.prepare(`
+    SELECT rc.*, p.name AS referrer_name
+    FROM referral_codes rc
+    JOIN players p ON p.id = rc.player_id
+    WHERE rc.active = 1 AND (lower(rc.code) = lower(?) OR lower(rc.slug) = lower(?))
+    LIMIT 1
+  `).get(code, code);
+  if (!refCode) return { bound: false, reason: 'code_not_found' };
+  if (refCode.player_id === referred.id) return { bound: false, reason: 'self_referral' };
+  db.prepare(`
+    INSERT OR IGNORE INTO player_referrals
+      (referred_player_id, referrer_player_id, code, source, metadata_json)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    referred.id,
+    refCode.player_id,
+    refCode.code,
+    String(source || 'unknown').slice(0, 80),
+    JSON.stringify(metadata || {}),
+  );
+  const row = db.prepare('SELECT * FROM player_referrals WHERE referred_player_id = ?').get(referred.id);
+  return { bound: !!row, referral: row, code: refCode };
+}
+
+function usdE6ToNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n / 1_000_000 : 0;
+}
+
+function getReferralSummary(playerId) {
+  const player = stmts.getPlayerById.get(String(playerId || ''));
+  if (!player) return null;
+  const code = ensureReferralCode(player);
+  const bound = db.prepare(`
+    SELECT pr.*, p.name AS referrer_name
+    FROM player_referrals pr
+    JOIN players p ON p.id = pr.referrer_player_id
+    WHERE pr.referred_player_id = ?
+  `).get(player.id) || null;
+  const totals = db.prepare(`
+    SELECT
+      COUNT(*) AS events,
+      COALESCE(SUM(CASE WHEN status IN ('confirmed', 'claimable') THEN commission_usd_e6 ELSE 0 END), 0) AS confirmed_usd_e6,
+      COALESCE(SUM(CASE WHEN status = 'pending' THEN commission_usd_e6 ELSE 0 END), 0) AS pending_usd_e6,
+      COALESCE(SUM(CASE WHEN status = 'paid' THEN commission_usd_e6 ELSE 0 END), 0) AS paid_usd_e6
+    FROM referral_events
+    WHERE referrer_player_id = ?
+  `).get(player.id) || {};
+  const invited = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM player_referrals
+    WHERE referrer_player_id = ?
+  `).get(player.id) || {};
+  const recent = db.prepare(`
+    SELECT e.*, p.name AS referred_name
+    FROM referral_events e
+    JOIN players p ON p.id = e.referred_player_id
+    WHERE e.referrer_player_id = ?
+    ORDER BY e.created_at DESC
+    LIMIT 25
+  `).all(player.id).map((row) => ({
+    id: row.id,
+    referredPlayerId: row.referred_player_id,
+    referredName: row.referred_name,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    revenueKind: row.revenue_kind,
+    status: row.status,
+    grossUsd: usdE6ToNumber(row.gross_usd_e6),
+    commissionUsd: usdE6ToNumber(row.commission_usd_e6),
+    txHash: row.tx_hash || null,
+    createdAt: row.created_at,
+  }));
+  return {
+    code: code?.code || null,
+    slug: code?.slug || null,
+    active: code ? !!code.active : false,
+    rate_bps: 1000,
+    invited_count: Number(invited.count || 0),
+    confirmed_usd: usdE6ToNumber(totals.confirmed_usd_e6),
+    pending_usd: usdE6ToNumber(totals.pending_usd_e6),
+    paid_usd: usdE6ToNumber(totals.paid_usd_e6),
+    events_count: Number(totals.events || 0),
+    referred_by: bound ? {
+      player_id: bound.referrer_player_id,
+      name: bound.referrer_name,
+      code: bound.code,
+      bound_at: bound.bound_at,
+    } : null,
+    recent,
+  };
+}
+
+function recordReferralRevenue({
+  referredPlayerId,
+  sourceType,
+  sourceId,
+  revenueKind,
+  grossUsdE6,
+  status = 'confirmed',
+  currency = 'USD',
+  txHash = null,
+  metadata = {},
+} = {}) {
+  const gross = Math.max(0, Math.trunc(Number(grossUsdE6) || 0));
+  if (!referredPlayerId || !sourceType || !sourceId || gross <= 0) return { changes: 0, reason: 'invalid_input' };
+  const referral = db.prepare('SELECT * FROM player_referrals WHERE referred_player_id = ?').get(String(referredPlayerId));
+  if (!referral || referral.referrer_player_id === referredPlayerId) return { changes: 0, reason: 'no_referrer' };
+  const commission = Math.trunc((gross * 1000) / 10000);
+  if (commission <= 0) return { changes: 0, reason: 'dust' };
+  const info = db.prepare(`
+    INSERT OR IGNORE INTO referral_events (
+      referrer_player_id, referred_player_id, source_type, source_id,
+      revenue_kind, currency, gross_usd_e6, commission_usd_e6,
+      status, tx_hash, metadata_json, confirmed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IN ('confirmed', 'claimable') THEN datetime('now') ELSE NULL END)
+  `).run(
+    referral.referrer_player_id,
+    String(referredPlayerId),
+    String(sourceType),
+    String(sourceId),
+    String(revenueKind || sourceType),
+    String(currency || 'USD').slice(0, 20),
+    gross,
+    commission,
+    String(status || 'confirmed'),
+    txHash == null ? null : String(txHash),
+    JSON.stringify(metadata || {}),
+    String(status || 'confirmed'),
+  );
+  return { changes: info.changes || 0, commission_usd_e6: commission };
+}
+
+function registerPlayer(name, options = {}) {
   const id = uuidv4();
   const token = uuidv4();
   stmts.createPlayer.run(id, name, token);
@@ -3353,7 +3688,16 @@ function registerPlayer(name) {
   for (const troop of ACTIVE_TROOP_TYPES) {
     stmts.upsertTroopLevel.run(id, troop, 1);
   }
-  return { id, name, token };
+  const player = { id, name, token };
+  ensureReferralCode(player);
+  if (options.referralCode) {
+    try {
+      bindPlayerReferral(id, options.referralCode, options.referralSource || 'register', options.referralMetadata || {});
+    } catch (e) {
+      console.warn('[referrals] bind on register failed:', e.message);
+    }
+  }
+  return player;
 }
 
 function authenticatePlayer(token) {
@@ -5008,6 +5352,7 @@ function getFullPlayerState(playerId) {
     resource_caps: getResourceCaps(playerId),
     shop_entitlements: getShopEntitlements(playerId),
     building_unlocks: getBuildingUnlocks(playerId),
+    referral: getReferralSummary(playerId),
   };
 }
 
@@ -5303,6 +5648,10 @@ module.exports = {
   ALTAR_SKILL_DEFS,
   registerPlayer,
   authenticatePlayer,
+  ensureReferralCode,
+  bindPlayerReferral,
+  getReferralSummary,
+  recordReferralRevenue,
   createAiAgentKey,
   listAiAgentKeys,
   revokeAiAgentKey,

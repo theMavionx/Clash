@@ -5100,6 +5100,16 @@ setInterval(() => { if (KEY) loadAll(); }, 15000);
 
 // All game API routes
 app.use('/api', router);
+
+app.get('/r/:code', (req, res) => {
+  const code = String(req.params.code || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 48);
+  if (!code) return res.redirect('/');
+  if (fs.existsSync(path.join(WEB_DIST_DIR, 'index.html'))) {
+    res.cookie?.('clash_ref', code, { sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000 });
+    return res.redirect(`/?ref=${encodeURIComponent(code)}`);
+  }
+  return res.redirect(`/?ref=${encodeURIComponent(code)}`);
+});
 startDailyLogAiScheduler();
 
 // Error handler

@@ -45,6 +45,7 @@ import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 const DEX_PICKED_KEY = 'clash_dex_picked';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
 const MANUAL_RECONNECT_KEY = 'clash_manual_reconnect_required';
+const REFERRAL_STORAGE_KEY = 'clash_referral_code_v1';
 // Unified account cache: one wallet resolves to one Clash account, and the
 // chosen venue is a profile setting instead of a separate registration.
 const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_account_cache_v3';
@@ -85,6 +86,42 @@ function writeManualReconnectRequired(v) {
     if (v) localStorage.setItem(MANUAL_RECONNECT_KEY, '1');
     else localStorage.removeItem(MANUAL_RECONNECT_KEY);
   } catch { /* storage disabled */ }
+}
+
+function normalizeReferralCode(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\/?r\//, '')
+    .split(/[?#]/)[0]
+    .replace(/[^a-z0-9-]/g, '')
+    .slice(0, 48);
+}
+
+function readReferralCodeFromLocation() {
+  if (typeof window === 'undefined') return '';
+  try {
+    const url = new URL(window.location.href);
+    const queryCode = url.searchParams.get('ref') || url.searchParams.get('invite') || '';
+    if (queryCode) return normalizeReferralCode(queryCode);
+    const match = url.pathname.match(/\/r\/([^/]+)/i);
+    return normalizeReferralCode(match?.[1] || '');
+  } catch {
+    return '';
+  }
+}
+
+function readStoredReferralCode() {
+  try {
+    const fromUrl = readReferralCodeFromLocation();
+    if (fromUrl) {
+      localStorage.setItem(REFERRAL_STORAGE_KEY, fromUrl);
+      return fromUrl;
+    }
+    return normalizeReferralCode(localStorage.getItem(REFERRAL_STORAGE_KEY) || '');
+  } catch {
+    return readReferralCodeFromLocation();
+  }
 }
 
 function hasStoredGameAuth() {
@@ -171,6 +208,7 @@ export function useAuthFlow() {
 
   const [dexPicked, setDexPickedState] = useState(readDexPicked);
   const [manualReconnectRequired, setManualReconnectRequired] = useState(readManualReconnectRequired);
+  const referralCodeRef = useRef(readStoredReferralCode());
 
   // Refs shared across effects below — declared up-front so the
   // session-reset effect can clear them before the resolver machinery
@@ -809,6 +847,7 @@ export function useAuthFlow() {
     setRegistering(true);
     setRegisterError('');
     const payload = { name: nameToUse, wallet: candidate.wallet, dex };
+    if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
       // resolver hard-codes 'base' regardless of which DEX is active, so
@@ -906,6 +945,7 @@ export function useAuthFlow() {
     setRegistering(true);
     setRegisterError('');
     const payload = { name: name.trim(), wallet: candidate.wallet, dex };
+    if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
       payload.chain = dex === 'gmx' ? 'arbitrum'
         : dex === 'monad' ? 'monad'
