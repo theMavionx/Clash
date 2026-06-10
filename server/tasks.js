@@ -113,6 +113,11 @@ const TASK_SYMBOL_ALIASES = {
   UKOIL: 'BRENT',
 };
 
+const TASK_QUOTE_TICKERS = new Set([
+  'USD', 'USDC', 'USDT', 'USDE', 'DAI', 'AUSD',
+  'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD',
+]);
+
 function canonicalTaskSymbol(value) {
   const base = String(value || '')
     .toUpperCase()
@@ -133,6 +138,11 @@ function taskSymbolVariants(value) {
   const out = new Set([canonicalTaskSymbol(base)]);
   const scaled = base.match(/^(?:1000|10000|1000000|1K|1M)([A-Z][A-Z0-9]{1,})$/);
   if (scaled) out.add(canonicalTaskSymbol(scaled[1]));
+  for (const quote of TASK_QUOTE_TICKERS) {
+    if (base.length > quote.length + 1 && base.endsWith(quote)) {
+      out.add(canonicalTaskSymbol(base.slice(0, -quote.length)));
+    }
+  }
   return [...out].filter(Boolean);
 }
 

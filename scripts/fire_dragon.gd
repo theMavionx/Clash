@@ -38,6 +38,8 @@ const FIRE_BREATH_FLAME_PARTICLES: int = 40
 const FIRE_BREATH_TRAIL_PARTICLES: int = 16
 const FIRE_BREATH_POOL_SIZE: int = 4
 const FIRE_BREATH_LIGHT_ENERGY: float = 1.7
+const FIRE_BREATH_FLAME_LIFETIME_SCALE: float = 0.68
+const FIRE_BREATH_TRAIL_LIFETIME_SCALE: float = 0.56
 const FIRE_BREATH_ATTACK_RANGE: float = 0.72
 const FIRE_BREATH_MIN_STANDOFF: float = 0.54
 const FIRE_BREATH_BUILDING_STANDOFF_PADDING: float = 0.18
@@ -448,9 +450,9 @@ func _configure_flame_particle_entry(entry: Dictionary, mouth_pos: Vector3, dir:
 	var transform := Transform3D(Basis(side, dir, normal).orthonormalized(), mouth_pos)
 	if str(entry.get("backend", "")) == "cpu":
 		var cpu := entry.get("node") as CPUParticles3D
-		_configure_cpu_fire_particles(cpu, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * 0.96, transform, Color(1.0, 0.94, 0.28, 0.88), 9.0, velocity_min, velocity_max, width * 0.12, Vector3.ZERO, 0.50, 1.55)
+		_configure_cpu_fire_particles(cpu, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_FLAME_LIFETIME_SCALE, transform, Color(1.0, 0.94, 0.28, 0.82), 7.0, velocity_min * 1.12, velocity_max * 1.18, width * 0.055, Vector3.ZERO, 0.36, 1.05)
 		return
-	_configure_gpu_fire_particles(entry, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * 0.96, transform, length, Color(1.0, 0.94, 0.28, 0.88), 9.0, velocity_min, velocity_max, width * 0.12, Vector3.ZERO, 0.50, 1.55)
+	_configure_gpu_fire_particles(entry, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_FLAME_LIFETIME_SCALE, transform, length, Color(1.0, 0.94, 0.28, 0.82), 7.0, velocity_min * 1.12, velocity_max * 1.18, width * 0.055, Vector3.ZERO, 0.36, 1.05)
 
 
 func _configure_trail_particle_entry(entry: Dictionary, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float, width: float) -> void:
@@ -460,14 +462,14 @@ func _configure_trail_particle_entry(entry: Dictionary, mouth_pos: Vector3, dir:
 	if mesh == null:
 		return
 	mesh.size = Vector2(width * 0.58, width * 0.54)
-	var origin := mouth_pos + dir * (length * 0.50)
+	var origin := mouth_pos + dir * (length * 0.64)
 	var transform := Transform3D(Basis(side, dir, normal).orthonormalized(), origin)
-	var box_extents := Vector3(width * 0.22, length * 0.42, width * 0.16)
+	var box_extents := Vector3(width * 0.14, length * 0.34, width * 0.10)
 	if str(entry.get("backend", "")) == "cpu":
 		var cpu := entry.get("node") as CPUParticles3D
-		_configure_cpu_fire_particles(cpu, FIRE_BREATH_TRAIL_PARTICLES, FIRE_BREATH_DURATION * 0.90, transform, Color(1.0, 0.84, 0.14, 0.58), 14.0, 0.05, 0.18, 0.0, box_extents, 0.38, 1.10)
+		_configure_cpu_fire_particles(cpu, FIRE_BREATH_TRAIL_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_TRAIL_LIFETIME_SCALE, transform, Color(1.0, 0.84, 0.14, 0.40), 10.0, 0.26, 0.50, 0.0, box_extents, 0.24, 0.70)
 		return
-	_configure_gpu_fire_particles(entry, FIRE_BREATH_TRAIL_PARTICLES, FIRE_BREATH_DURATION * 0.90, transform, length, Color(1.0, 0.84, 0.14, 0.58), 14.0, 0.05, 0.18, 0.0, box_extents, 0.38, 1.10)
+	_configure_gpu_fire_particles(entry, FIRE_BREATH_TRAIL_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_TRAIL_LIFETIME_SCALE, transform, length, Color(1.0, 0.84, 0.14, 0.40), 10.0, 0.26, 0.50, 0.0, box_extents, 0.24, 0.70)
 
 
 func _configure_gpu_fire_particles(entry: Dictionary, amount: int, lifetime: float, transform: Transform3D, length: float, color: Color, spread: float, velocity_min: float, velocity_max: float, sphere_radius: float, box_extents: Vector3, scale_min: float, scale_max: float) -> void:
@@ -475,10 +477,12 @@ func _configure_gpu_fire_particles(entry: Dictionary, amount: int, lifetime: flo
 	var process := entry.get("process") as ParticleProcessMaterial
 	if particles == null or process == null:
 		return
+	particles.visible = true
+	particles.emitting = false
 	particles.amount = amount
 	particles.lifetime = lifetime
 	particles.one_shot = true
-	particles.explosiveness = 0.86
+	particles.explosiveness = 1.0
 	particles.randomness = 0.76
 	particles.fixed_fps = 20
 	particles.interpolate = true
@@ -517,10 +521,12 @@ func _configure_gpu_fire_particles(entry: Dictionary, amount: int, lifetime: flo
 func _configure_cpu_fire_particles(particles: CPUParticles3D, amount: int, lifetime: float, transform: Transform3D, color: Color, spread: float, velocity_min: float, velocity_max: float, sphere_radius: float, box_extents: Vector3, scale_min: float, scale_max: float) -> void:
 	if particles == null:
 		return
+	particles.visible = true
+	particles.emitting = false
 	particles.amount = amount
 	particles.lifetime = lifetime
 	particles.one_shot = true
-	particles.explosiveness = 0.86
+	particles.explosiveness = 1.0
 	particles.randomness = 0.76
 	particles.local_coords = true
 	particles.direction = Vector3(0.0, 1.0, 0.0)
@@ -584,6 +590,7 @@ func _return_fire_breath_vfx_slot(slot: Dictionary) -> void:
 		var particles := entry.get("node") as Node3D
 		if is_instance_valid(particles):
 			particles.set("emitting", false)
+			particles.visible = false
 	for key in ["mouth_light", "impact_light"]:
 		var light := slot.get(key) as Light3D
 		if is_instance_valid(light):

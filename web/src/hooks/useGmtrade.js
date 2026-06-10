@@ -46,7 +46,7 @@ async function fetchJson(url, options = {}) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text || null; }
   if (!res.ok) {
-    const err = new Error(data?.error || data?.detail || data?.message || `GMTrade request failed (${res.status})`);
+    const err = new Error(data?.detail || data?.message || data?.error || `GMTrade request failed (${res.status})`);
     err.status = res.status;
     err.data = data;
     throw err;

@@ -27,6 +27,7 @@ for (const envPath of [
   path.resolve(process.cwd(), '.env'),
   path.resolve(__dirname, '..', '.env'),
   path.resolve(__dirname, '..', 'server', '.env'),
+  '/opt/clash/.env',
   '/opt/clash/shared/.env',
   '/opt/clash/shared/server/.env',
 ]) {

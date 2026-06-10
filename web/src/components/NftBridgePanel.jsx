@@ -1375,6 +1375,7 @@ export default function NftBridgePanel({
           container. */}
       {status !== 'idle' && (
         <BridgeStatusModal
+          collection={collection}
           status={status}
           notice={notice}
           result={result}
@@ -1399,13 +1400,14 @@ export default function NftBridgePanel({
 // state with tx hashes. Replaces the inline status blocks that used to
 // pile up under the confirm cards and force the user to scroll.
 function BridgeStatusModal({
-  status, notice, result, pendingRelay, busy,
+  collection, status, notice, result, pendingRelay, busy,
   sourceChain, destChain, batchItems = [],
   onRetry, onAnother, onBackToShop, onClose,
 }) {
   const isFinished = status === 'success' || status === 'error';
   const isWorking  = !isFinished;
   const isBatch = batchItems.length > 1 || result?.batch;
+  const isDemonKingCollection = collection === 'demonking' || result?.collection === 'demonking';
   // Map each pipeline step to its current visual state. The "confirming"
   // status covers both server verification AND server-side relay (one
   // network step from the user's point of view), so we collapse steps
