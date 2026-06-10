@@ -332,12 +332,12 @@ func _set_shop_unlocks(data: Dictionary) -> void:
 	if building_unlock_data is Dictionary:
 		var building_unlocks: Dictionary = building_unlock_data
 		for key in building_unlocks.keys():
-			next_unlocks[String(key)] = bool(building_unlocks.get(key, false))
+			next_unlocks[str(key)] = bool(building_unlocks.get(key, false))
 	var shop_entitlement_data: Variant = data.get("shop_entitlements", {})
 	if shop_entitlement_data is Dictionary:
 		var shop_entitlements: Dictionary = shop_entitlement_data
 		for key in shop_entitlements.keys():
-			next_unlocks[String(key)] = bool(shop_entitlements.get(key, false))
+			next_unlocks[str(key)] = bool(shop_entitlements.get(key, false))
 	var altar_data: Variant = data.get("altar", null)
 	if altar_data is Dictionary:
 		var altar_unlock: Dictionary = altar_data
@@ -354,7 +354,7 @@ func _has_required_purchase(building_id: String) -> bool:
 	var def: Dictionary = building_defs.get(building_id, {})
 	if not bool(def.get("requires_purchase", false)):
 		return true
-	var sku: String = String(def.get("shop_sku", building_id))
+	var sku: String = str(def.get("shop_sku", building_id))
 	return bool(shop_unlocks.get(building_id, false)) or bool(shop_unlocks.get(sku, false))
 
 func _can_upgrade_th() -> Dictionary:
@@ -652,6 +652,23 @@ func record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
 		if battle_helper and battle_helper._replay_active:
 			battle_helper.record_replay_telemetry(kind, data)
 			return
+
+
+func record_troop_death_once(troop_name: String, troop_instance: int = 0, replay_order: int = -1) -> bool:
+	if _battle and _battle.has_method("record_troop_death_once"):
+		if _battle.record_troop_death_once(troop_name, troop_instance, replay_order):
+			return true
+	var systems: Array = _building_systems
+	if systems.is_empty() and is_inside_tree():
+		systems = get_tree().get_nodes_in_group("building_systems")
+	for bs_node in systems:
+		if not is_instance_valid(bs_node) or bs_node == self:
+			continue
+		var battle_helper: BSBattle = bs_node.get("_battle")
+		if battle_helper and battle_helper.has_method("record_troop_death_once"):
+			if battle_helper.record_troop_death_once(troop_name, troop_instance, replay_order):
+				return true
+	return false
 
 # ── Ship cannon (proxied to _cannon helper) ──────────────────
 var _ship_cannon_mode: bool:
@@ -965,9 +982,9 @@ func _collect_building_resource(server_id: int) -> void:
 		return
 	var icon: Control = b.get("_collect_icon")
 	if is_instance_valid(icon):
-		_production._click_collect_icon(icon, b, String(def.get("produces", "gold")))
+		_production._click_collect_icon(icon, b, str(def.get("produces", "gold")))
 	else:
-		_production._collect_and_animate(b, String(def.get("produces", "gold")))
+		_production._collect_and_animate(b, str(def.get("produces", "gold")))
 
 
 func _apply_agent_place_building(payload: Dictionary) -> void:
@@ -979,7 +996,7 @@ func _apply_agent_place_building(payload: Dictionary) -> void:
 		if payload.has("resources"):
 			_apply_resources_from_server(payload.resources)
 		return
-	var building_id: String = String(building.get("type", ""))
+	var building_id: String = str(building.get("type", ""))
 	if not building_defs.has(building_id):
 		return
 	var gp := Vector2i(int(building.get("grid_x", 0)), int(building.get("grid_z", 0)))
@@ -1090,13 +1107,13 @@ func _apply_agent_reinforce_ships(payload: Dictionary) -> void:
 
 
 func _apply_agent_upgrade_troop(payload: Dictionary) -> void:
-	var raw_type: String = String(payload.get("troop_type", ""))
+	var raw_type: String = str(payload.get("troop_type", ""))
 	if raw_type == "":
 		return
 	var local_name: String = raw_type.capitalize()
 	for name in troop_levels.keys():
-		if String(name).to_lower() == raw_type.to_lower():
-			local_name = String(name)
+		if str(name).to_lower() == raw_type.to_lower():
+			local_name = str(name)
 			break
 	troop_levels[local_name] = int(payload.get("level", troop_levels.get(local_name, 1)))
 	if payload.has("resources"):
@@ -2018,24 +2035,24 @@ func _server_buildings_signature(server_buildings: Array) -> String:
 	var net = _net
 	var player_key := ""
 	if net:
-		player_key = "%s:%s" % [String(net.player_id), String(net.wallet)]
+		player_key = "%s:%s" % [str(net.player_id), str(net.wallet)]
 	var my_grid_index = _get_grid_index()
 	var parts: Array = []
 	for b in server_buildings:
 		if int(b.get("grid_index", 0)) != my_grid_index:
 			continue
 		parts.append("%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
-			String(b.get("id", "")),
-			String(b.get("type", "")),
-			String(b.get("level", 1)),
-			String(b.get("grid_x", 0)),
-			String(b.get("grid_z", 0)),
-			String(b.get("hp", "")),
-			String(b.get("max_hp", "")),
-			String(b.get("stored", "")),
-			String(b.get("has_ship", "")),
-			String(b.get("ship_troops", "")),
-			String(b.get("grid_index", 0)),
+			str(b.get("id", "")),
+			str(b.get("type", "")),
+			str(b.get("level", 1)),
+			str(b.get("grid_x", 0)),
+			str(b.get("grid_z", 0)),
+			str(b.get("hp", "")),
+			str(b.get("max_hp", "")),
+			str(b.get("stored", "")),
+			str(b.get("has_ship", "")),
+			str(b.get("ship_troops", "")),
+			str(b.get("grid_index", 0)),
 		])
 	parts.sort()
 	return "%s|%s" % [player_key, "|".join(PackedStringArray(parts))]
@@ -4328,7 +4345,7 @@ func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> v
 	if not test_mode:
 		return
 	var lvl: int = int(b.get("level", 1))
-	var building_id := String(b.get("id", ""))
+	var building_id := str(b.get("id", ""))
 	var node: Node3D = b.get("node", null)
 	if not is_instance_valid(node):
 		return

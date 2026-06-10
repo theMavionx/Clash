@@ -18,6 +18,9 @@ class_name BSBattle extends RefCounted
 ## The bool flag + polled process_frame loop avoids that race entirely.
 var _submit_result: Dictionary = {}
 var _submit_complete: bool = false
+var _pending_troop_death_keys: Dictionary = {}
+var _pending_troop_death_counts: Dictionary = {}
+var _troop_deaths_flushed: bool = false
 
 # ---------------------------------------------------------------------------
 # Back-reference to the owning BuildingSystem node (set via init).
@@ -152,12 +155,65 @@ func reset() -> void:
 	_find_in_progress = false
 	_submit_result = {}
 	_submit_complete = false
+	_reset_troop_death_reports()
 
 
 func _battle_elapsed_sec() -> float:
 	if _battle_start_time <= 0.0:
 		return maxf(0.0, _battle_timer)
 	return maxf(0.0, (Time.get_ticks_msec() / 1000.0) - _battle_start_time)
+
+
+func _reset_troop_death_reports() -> void:
+	_pending_troop_death_keys.clear()
+	_pending_troop_death_counts.clear()
+	_troop_deaths_flushed = false
+
+
+func record_troop_death_once(troop_name: String, troop_instance: int = 0, replay_order: int = -1) -> bool:
+	if _replay_active or not is_viewing_enemy or _troop_deaths_flushed:
+		return false
+	var clean_name: String = str(troop_name).strip_edges()
+	if clean_name == "":
+		return false
+	var identity: String = str(troop_instance)
+	if replay_order >= 0:
+		identity = "replay:%d" % replay_order
+	var key: String = "%s:%s" % [clean_name, identity]
+	if _pending_troop_death_keys.has(key):
+		return true
+	_pending_troop_death_keys[key] = true
+	_pending_troop_death_counts[clean_name] = int(_pending_troop_death_counts.get(clean_name, 0)) + 1
+	return true
+
+
+func _paid_casualty_counts(casualties: Dictionary = {}, use_pending_if_empty: bool = false) -> Dictionary:
+	var source: Dictionary = casualties
+	if use_pending_if_empty and source.is_empty():
+		source = _pending_troop_death_counts
+	var counts: Dictionary = {}
+	for raw_name in source:
+		var name: String = str(raw_name).split(":")[0]
+		if name == "" or name == "DemonKing" or name == "FireDragon":
+			continue
+		var count: int = int(source.get(raw_name, 0))
+		if count <= 0:
+			continue
+		counts[name] = int(counts.get(name, 0)) + count
+	return counts
+
+
+func _flush_troop_deaths_once(casualties: Dictionary = {}, use_pending_if_empty: bool = false) -> void:
+	if _troop_deaths_flushed:
+		return
+	_troop_deaths_flushed = true
+	var bridge: Node = bs._bridge if bs else null
+	if not bridge or not bridge.has_method("send_to_react"):
+		return
+	var counts: Dictionary = _paid_casualty_counts(casualties, use_pending_if_empty)
+	for troop_name in counts:
+		for _i in range(int(counts[troop_name])):
+			bridge.send_to_react("troop_died", {"troop_name": str(troop_name)})
 
 
 func _replay_wall_elapsed_sec() -> float:
@@ -745,6 +801,7 @@ func _restore_ships_and_troops() -> void:
 ## attack from the main menu).
 func _switch_to_enemy_island() -> void:
 	_victory_declared = false
+	_reset_troop_death_reports()
 	if _saved_fleet.is_empty():
 		_saved_fleet = await bs._build_fleet()
 	_battle_replay.clear()
@@ -865,6 +922,7 @@ func _switch_to_enemy_island() -> void:
 ## cloud before calling this function.
 func _switch_to_enemy_island_after_sail() -> void:
 	_victory_declared = false
+	_reset_troop_death_reports()
 	_battle_replay.clear()
 	_battle_start_time = Time.get_ticks_msec() / 1000.0
 	_battle_timer = 0.0
@@ -1097,6 +1155,8 @@ const VICTORY_ADMIRE_DELAY: float = 2.5  ## seconds to hold on the ruined island
 const REPLAY_OUTCOME_POLL_INTERVAL: float = 0.1
 
 func _on_town_hall_destroyed() -> void:
+	if _victory_declared:
+		return
 	_battle_timer_active = false
 	_victory_declared = true
 	var audio = bs.get_node_or_null("/root/AudioManager") if bs else null
@@ -1265,6 +1325,7 @@ func _on_town_hall_destroyed() -> void:
 		var loot: Dictionary = result.get("loot", {})
 		var server_casualties: Dictionary = result.get("casualties", casualties_early)
 		if bridge:
+			_flush_troop_deaths_once(server_casualties)
 			if loot.get("gold", 0) > 0 or loot.get("wood", 0) > 0 or loot.get("ore", 0) > 0:
 				bridge.send_to_react("resources_add", {
 					"gold": loot.get("gold", 0),
@@ -1284,6 +1345,7 @@ func _on_town_hall_destroyed() -> void:
 			})
 		return
 	if bridge:
+		_flush_troop_deaths_once(casualties_early)
 		bridge.send_to_react("battle_result", {"type": "victory", "loot": {}, "casualties": casualties_early})
 
 
@@ -1884,6 +1946,7 @@ func check_defeat(delta: float) -> void:
 		audio.play_result()
 	var bridge_def: Node = bs._bridge
 	if bridge_def:
+		_flush_troop_deaths_once(defeat_casualties)
 		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": "All troops lost", "casualties": defeat_casualties})
 
 
@@ -1926,6 +1989,7 @@ func _force_defeat(reason: String) -> void:
 		net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties, defeat_session_id)
 	var bridge_def: Node = bs._bridge
 	if bridge_def:
+		_flush_troop_deaths_once(defeat_casualties)
 		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": reason, "casualties": defeat_casualties})
 
 

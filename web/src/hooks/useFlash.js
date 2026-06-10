@@ -30,7 +30,7 @@ const FLASH_WS_INTERVAL_MS = 1000;
 const FLASH_DEFAULT_V2_RPC = 'https://flashtrade.magicblock.app';
 const FLASH_V2_PROGRAM_ID = 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV';
 const FLASH_ONE_TAP_EXPIRY_MINUTES = Math.max(10, Math.min(24 * 60, Number(import.meta.env.VITE_FLASH_ONE_TAP_EXPIRY_MINUTES || 24 * 60)));
-const FLASH_ONE_TAP_TOPUP_LAMPORTS = Math.max(0, Math.min(20_000_000, Number(import.meta.env.VITE_FLASH_ONE_TAP_TOPUP_LAMPORTS || 1_000_000)));
+const FLASH_ONE_TAP_TOPUP_LAMPORTS = Math.max(0, Math.min(20_000_000, Number(import.meta.env.VITE_FLASH_ONE_TAP_TOPUP_LAMPORTS || 0)));
 const FLASH_ONE_TAP_MIN_VALID_SECONDS = 60;
 const FLASH_REQUIRE_ONE_TAP_TRADING = import.meta.env.VITE_FLASH_REQUIRE_ONE_TAP_TRADING !== 'false';
 const FLASH_CONFIRM_ATTEMPTS = Math.max(30, Math.min(120, Number(import.meta.env.VITE_FLASH_CONFIRM_ATTEMPTS || 75)));
@@ -179,14 +179,44 @@ function txRequiredSignerKeys(tx) {
       const count = tx.message?.header?.numRequiredSignatures || 0;
       return tx.message.staticAccountKeys.slice(0, count).map(key => key.toBase58());
     }
+    if (typeof tx?.compileMessage === 'function') {
+      const message = tx.compileMessage();
+      const count = message?.header?.numRequiredSignatures || 0;
+      return rows(message?.accountKeys).slice(0, count).map(key => key.toBase58()).filter(Boolean);
+    }
     return (tx.signatures || []).map(row => row.publicKey?.toBase58?.()).filter(Boolean);
   } catch {
     return [];
   }
 }
 
+function demoteDuplicateSignerMetas(tx, signer) {
+  const signerText = publicKeyText(signer);
+  if (!signerText || !(tx instanceof Transaction)) return 0;
+  let changed = 0;
+  for (const ix of tx.instructions || []) {
+    let seenSigner = false;
+    for (const meta of ix.keys || []) {
+      if (publicKeyText(meta?.pubkey) !== signerText) continue;
+      if (!seenSigner) {
+        seenSigner = true;
+        continue;
+      }
+      if (meta.isSigner || meta.isWritable) changed += 1;
+      meta.isSigner = false;
+      meta.isWritable = false;
+    }
+  }
+  return changed;
+}
+
 function normalizeSymbol(value) {
   return String(value || 'SOL').toUpperCase().replace(/[-/](PERP|USD|USDC)$/i, '').trim();
+}
+
+function normalizeOptionalSymbol(value) {
+  const raw = String(value || '').trim();
+  return raw ? normalizeSymbol(raw) : '';
 }
 
 function normalizeTradeType(side) {
@@ -196,24 +226,61 @@ function normalizeTradeType(side) {
   return 'LONG';
 }
 
+function flashPositionIdentity(pos = {}) {
+  const symbol = normalizeOptionalSymbol(
+    pos.marketSymbol
+    || pos.market_symbol
+    || pos.outputTokenSymbol
+    || pos.output_token_symbol
+    || pos.token
+    || pos.symbol
+    || pos.metric?.marketSymbol
+    || pos.metric?.symbol
+  );
+  const tradeType = normalizeTradeType(
+    pos.tradeType
+    || pos.trade_type
+    || pos.sideUi
+    || pos.side
+    || pos.direction
+    || pos.metric?.sideUi
+    || pos.metric?.side
+  );
+  return symbol ? `${symbol}:${tradeType}` : '';
+}
+
 function flashPositionKey(pos = {}) {
   return String(
     pos.positionKey
     || pos.position_key
+    || pos.marketPubkey
+    || pos.market_pubkey
     || pos.publicKey
     || pos.pubkey
     || pos.key
     || pos.address
+    || flashPositionIdentity(pos)
     || ''
   ).trim();
 }
 
 function flashPositionSymbol(pos = {}) {
-  return normalizeSymbol(pos.outputTokenSymbol || pos.output_token_symbol || pos.token || pos.symbol || pos.market || '');
+  return normalizeSymbol(
+    pos.marketSymbol
+    || pos.market_symbol
+    || pos.outputTokenSymbol
+    || pos.output_token_symbol
+    || pos.token
+    || pos.symbol
+    || pos.metric?.marketSymbol
+    || pos.metric?.symbol
+    || pos.market
+    || ''
+  );
 }
 
 function flashPositionTradeType(pos = {}) {
-  return normalizeTradeType(pos.tradeType || pos.trade_type || pos.side || pos.direction || '');
+  return normalizeTradeType(pos.tradeType || pos.trade_type || pos.sideUi || pos.side || pos.direction || pos.metric?.sideUi || pos.metric?.side || '');
 }
 
 function flashPositionCloseUsd(pos = {}, fallbackAmount) {
@@ -242,6 +309,7 @@ function flashPositionCloseUsd(pos = {}, fallbackAmount) {
 function normalizeFlashPosition(pos = {}) {
   const tradeType = flashPositionTradeType(pos);
   const symbol = flashPositionSymbol(pos);
+  const positionKey = flashPositionIdentity({ ...pos, symbol, tradeType }) || flashPositionKey(pos);
   const notional = Number(
     pos.notional_usd
     ?? pos.notionalUsd
@@ -253,11 +321,13 @@ function normalizeFlashPosition(pos = {}) {
     ?? 0
   );
   const collateral = Number(
-    pos.collateral_usd
+    pos.collateralUsdUi
+    ?? pos.collateral_usd_ui
+    ?? pos.collateral_usd
     ?? pos.collateralUsd
+    ?? pos.margin
     ?? pos.input_usd_ui
     ?? pos.inputUsdUi
-    ?? pos.margin
     ?? 0
   );
   const entry = Number(pos.entry_price ?? pos.entryPrice ?? pos.avgEntryPrice ?? pos.averageEntryPrice ?? pos.price ?? 0);
@@ -266,20 +336,24 @@ function normalizeFlashPosition(pos = {}) {
     || isFlashDustMetric(pos?.metric || {})
     || isFlashDustValues(notional, collateral, amount);
   const dustUsd = Number(pos._flashDustUsd ?? pos.sizeUsdUi ?? pos.inputUsdUi ?? notional);
+  const providedLeverage = numberFromUi(pos.leverage);
   return {
     ...pos,
     symbol: symbol || pos.symbol,
     side: tradeType === 'SHORT' ? 'ask' : 'bid',
+    tradeType,
     amount: String(Number.isFinite(amount) && amount > 0 ? amount : collateral || notional || 0),
-    margin: String(Number.isFinite(collateral) && collateral > 0 ? collateral : notional || amount || 0),
+    margin: String(Number.isFinite(collateral) && collateral > 0 ? collateral : 0),
     size_usd: Number.isFinite(notional) && notional > 0 ? notional : undefined,
     notional_usd: Number.isFinite(notional) && notional > 0 ? notional : Number(pos.notional_usd || 0),
     entry_price: entry || pos.entry_price,
-    leverage: isDust ? undefined : (collateral > 0 && notional > 0 ? Math.round((notional / collateral) * 10) / 10 : (Number(pos.leverage) || 1)),
+    leverage: isDust ? undefined : (collateral > 0 && notional > 0 ? Math.round((notional / collateral) * 10) / 10 : (providedLeverage > 0 ? providedLeverage : undefined)),
     liquidation_price: isDust ? undefined : pos.liquidation_price,
     pnl_usd: isDust ? 0 : pos.pnl_usd,
     pnl_pct: isDust ? 0 : pos.pnl_pct,
-    positionKey: flashPositionKey(pos),
+    marketPubkey: pos.marketPubkey || pos.market_pubkey || '',
+    positionKey,
+    source: pos.source || 'flash_v2_basket',
     _flashDust: isDust,
     _flashDustUsd: isDust && Number.isFinite(dustUsd) ? dustUsd : pos._flashDustUsd,
     _flash: pos,
@@ -355,54 +429,152 @@ function flashMetricPnl({ metric, side, entry, mark, amount }) {
   return apiHasOppositeSign || apiIsFarFromMarkPnl ? derived : apiPnl;
 }
 
-function flashPositionFromMetric(marketPubkey, metric = {}, priceRows = []) {
+const FLASH_METRIC_POSITIVE_FIELDS = new Set([
+  'entryPriceUi',
+  'sizeAmountUi',
+  'sizeUsdUi',
+  'collateralAmountUi',
+  'collateralUsdUi',
+  'liquidationPriceUi',
+]);
+
+function mergeFlashMetric(previous = {}, next = {}) {
+  const merged = { ...(previous || {}) };
+  for (const [key, value] of Object.entries(next || {})) {
+    if (value === undefined || value === null || value === '') continue;
+    if (FLASH_METRIC_POSITIVE_FIELDS.has(key)) {
+      const prev = numberFromUi(merged[key]);
+      const incoming = numberFromUi(value);
+      if (prev > 0 && !(incoming > 0)) continue;
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
+
+function flashPositionLookupKeys(pos = {}) {
+  const keys = new Set();
+  const marketPubkey = String(pos.marketPubkey || pos.market_pubkey || '').trim();
+  const positionKey = String(pos.positionKey || pos.position_key || '').trim();
+  const identity = flashPositionIdentity(pos);
+  const symbol = normalizeOptionalSymbol(pos.marketSymbol || pos.symbol || pos.metric?.marketSymbol || pos.metric?.symbol || '');
+  const tradeType = normalizeTradeType(pos.tradeType || pos.side || pos.metric?.side || pos.metric?.sideUi || '');
+  if (marketPubkey) keys.add(marketPubkey);
+  if (positionKey) keys.add(positionKey);
+  if (identity) keys.add(identity);
+  if (symbol) {
+    keys.add(symbol);
+    keys.add(`${symbol}:${tradeType}`);
+  }
+  return [...keys].filter(Boolean);
+}
+
+function flashExistingPositionMap(existing = {}) {
+  const map = new Map();
+  for (const pos of rows(existing.positions)) {
+    for (const key of flashPositionLookupKeys(pos)) {
+      if (!map.has(key)) map.set(key, pos);
+    }
+  }
+  return map;
+}
+
+function flashExistingPositionForMetric(existingMap, marketPubkey, metric = {}) {
+  const symbol = normalizeOptionalSymbol(metric.marketSymbol || metric.symbol);
   const tradeType = normalizeTradeType(metric.side || metric.sideUi);
+  return existingMap.get(marketPubkey)
+    || existingMap.get(`${symbol}:${tradeType}`)
+    || existingMap.get(symbol)
+    || null;
+}
+
+function flashPositionMetricStorageKey(pos = {}) {
+  return String(pos.marketPubkey || pos.market_pubkey || '').trim()
+    || String(pos.positionKey || pos.position_key || '').trim()
+    || flashPositionIdentity(pos)
+    || flashPositionKey(pos);
+}
+
+function flashMetricMatchesPosition(metric = {}, marketPubkey = '', pos = {}) {
+  const posKeys = new Set(flashPositionLookupKeys(pos));
+  if (marketPubkey && posKeys.has(marketPubkey)) return true;
   const symbol = normalizeSymbol(metric.marketSymbol || metric.symbol || marketPubkey);
+  const tradeType = normalizeTradeType(metric.side || metric.sideUi);
+  return (symbol && tradeType && posKeys.has(`${symbol}:${tradeType}`))
+    || (symbol && posKeys.has(symbol));
+}
+
+function flashMetricsWithExistingPositions(metrics = {}, existing = {}) {
+  const combined = {};
+  for (const pos of rows(existing.positions)) {
+    const key = flashPositionMetricStorageKey(pos);
+    if (key && pos?.metric && typeof pos.metric === 'object') {
+      combined[key] = { ...pos.metric };
+    }
+  }
+  for (const [marketPubkey, metric] of Object.entries(metrics || {})) {
+    const existingPosition = rows(existing.positions).find(pos => flashMetricMatchesPosition(metric, marketPubkey, pos));
+    const key = flashPositionMetricStorageKey(existingPosition || {}) || marketPubkey;
+    combined[key] = mergeFlashMetric(combined[key], metric);
+  }
+  return combined;
+}
+
+function flashPositionFromMetric(marketPubkey, metric = {}, priceRows = [], existingPosition = null) {
+  const mergedMetric = mergeFlashMetric(existingPosition?.metric || {}, metric);
+  metric = mergedMetric;
+  const tradeType = normalizeTradeType(metric.side || metric.sideUi || existingPosition?.tradeType || existingPosition?.side);
+  const symbol = normalizeSymbol(metric.marketSymbol || metric.symbol || existingPosition?.marketSymbol || existingPosition?.symbol || marketPubkey);
   const priceMap = flashPriceMap(priceRows);
-  const collateralUsd = numberFromUi(metric.collateralUsdUi);
-  const sizeUsd = numberFromUi(metric.sizeUsdUi);
-  const entry = numberFromUi(metric.entryPriceUi);
-  const amount = numberFromUi(metric.sizeAmountUi);
-  const mark = numberFromUi(priceMap.get(symbol));
+  const collateralUsd = numberFromUi(metric.collateralUsdUi ?? existingPosition?.collateralUsdUi ?? existingPosition?.margin);
+  const sizeUsd = numberFromUi(metric.sizeUsdUi ?? existingPosition?.sizeUsdUi ?? existingPosition?.size_usd);
+  const entry = numberFromUi(metric.entryPriceUi ?? existingPosition?.entryPriceUi ?? existingPosition?.entry_price);
+  const amount = numberFromUi(metric.sizeAmountUi ?? existingPosition?.sizeAmountUi ?? existingPosition?.amount);
+  const mark = numberFromUi(priceMap.get(symbol) ?? existingPosition?.mark_price);
+  const sizeAmountUi = metric.sizeAmountUi ?? existingPosition?.sizeAmountUi ?? existingPosition?.amount;
+  const sizeUsdUi = metric.sizeUsdUi ?? existingPosition?.sizeUsdUi ?? existingPosition?.size_usd;
+  const collateralUsdUi = metric.collateralUsdUi ?? existingPosition?.collateralUsdUi ?? existingPosition?.margin;
+  const entryPriceUi = metric.entryPriceUi ?? existingPosition?.entryPriceUi ?? existingPosition?.entry_price;
+  const liquidationPriceUi = metric.liquidationPriceUi ?? existingPosition?.liquidationPriceUi ?? existingPosition?.liquidation_price;
   const pnl = flashMetricPnl({ metric, side: tradeType, entry, mark, amount });
   const apiLiq = numberFromUi(metric.liquidationPriceUi);
   const leverage = numberFromUi(metric.leverageUi);
   const isDust = isFlashDustMetric(metric);
-  const positionEquity = collateralUsd + pnl;
-  const equityLeverage = positionEquity > 0 && sizeUsd > 0 ? sizeUsd / positionEquity : 0;
   const collateralLeverage = collateralUsd > 0 && sizeUsd > 0 ? sizeUsd / collateralUsd : 0;
-  const displayLev = equityLeverage > 0 ? equityLeverage : collateralLeverage;
+  const existingLeverage = numberFromUi(existingPosition?.leverage);
+  const displayLev = collateralLeverage > 0 ? collateralLeverage : existingLeverage;
   return {
+    ...(existingPosition || {}),
     marketPubkey,
     marketSymbol: symbol,
     symbol,
     side: tradeType === 'SHORT' ? 'ask' : 'bid',
     side_label: tradeType.toLowerCase(),
     tradeType,
-    collateralSymbol: metric.collateralSymbol || 'USDC',
-    entryPriceUi: metric.entryPriceUi,
-    entry_price: entry || metric.entryPriceUi,
+    collateralSymbol: metric.collateralSymbol || existingPosition?.collateralSymbol || 'USDC',
+    entryPriceUi,
+    entry_price: entry || entryPriceUi,
     mark_price: mark || undefined,
-    sizeAmountUi: metric.sizeAmountUi,
-    amount: metric.sizeAmountUi,
-    sizeUsdUi: metric.sizeUsdUi,
+    sizeAmountUi,
+    amount: sizeAmountUi,
+    sizeUsdUi,
     size_usd: sizeUsd,
     notional_usd: sizeUsd,
-    collateralUsdUi: metric.collateralUsdUi,
-    margin: metric.collateralUsdUi,
+    collateralUsdUi,
+    margin: collateralUsdUi,
     pnlWithFeeUsdUi: metric.pnlWithFeeUsdUi,
     pnlWithoutFeeUsdUi: metric.pnlWithoutFeeUsdUi,
     pnl_usd: isDust ? 0 : pnl,
     pnl_pct: isDust ? 0 : (collateralUsd > 0 ? (pnl / collateralUsd) * 100 : undefined),
-    liquidationPriceUi: metric.liquidationPriceUi,
-    liquidation_price: isDust ? undefined : (displayLiquidationPrice({ side: tradeType, entry, sizeUsd, collateralUsd, apiLiq }) || metric.liquidationPriceUi),
-    leverage: isDust ? undefined : (displayLev > 0 ? Math.round(displayLev * 10) / 10 : (Number.isFinite(leverage) && leverage > 0 ? leverage : 1)),
+    liquidationPriceUi,
+    liquidation_price: isDust ? undefined : (displayLiquidationPrice({ side: tradeType, entry, sizeUsd, collateralUsd, apiLiq }) || liquidationPriceUi),
+    leverage: isDust ? undefined : (displayLev > 0 ? Math.round(displayLev * 10) / 10 : undefined),
     effective_leverage: Number.isFinite(leverage) && leverage > 0 ? leverage : undefined,
-    inputUsdUi: metric.sizeUsdUi,
+    inputUsdUi: sizeUsdUi,
     _flashDust: isDust,
     _flashDustUsd: isDust ? sizeUsd : undefined,
     positionKey: `${symbol}:${tradeType}`,
-    source: 'flash_v2_ws',
+    source: existingPosition?.source || 'flash_v2_ws',
     metric,
   };
 }
@@ -452,8 +624,9 @@ function flashOrdersFromMetricBundle(marketPubkey, metric = {}) {
 function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, options = {}) {
   const positionMetrics = snapshot.positionMetrics || {};
   const orderMetrics = snapshot.orderMetrics || {};
+  const existingMap = flashExistingPositionMap(existing);
   const positions = Object.entries(positionMetrics).map(([marketPubkey, metric]) => (
-    flashPositionFromMetric(marketPubkey, metric, priceRows)
+    flashPositionFromMetric(marketPubkey, metric, priceRows, flashExistingPositionForMetric(existingMap, marketPubkey, metric))
   ));
   const activePositions = positions.filter(pos => !isFlashDustPosition(pos));
   const orders = Object.entries(orderMetrics).flatMap(([marketPubkey, metric]) => flashOrdersFromMetricBundle(marketPubkey, metric));
@@ -575,6 +748,65 @@ function txMessageSummary(tx) {
   }
 }
 
+function flashSimulationLogs(value) {
+  return Array.isArray(value?.logs) ? value.logs.slice(-12) : [];
+}
+
+function flashSimulationErrorMessage(value, fallback = 'Flash transaction simulation failed') {
+  const err = value?.err;
+  const logs = flashSimulationLogs(value);
+  const programError = logs.find(line => /custom program error|error|failed/i.test(String(line || '')));
+  return `${fallback}${err ? `: ${JSON.stringify(err)}` : ''}${programError ? ` (${programError})` : ''}`;
+}
+
+async function simulateUnsignedLegacyTransaction(connection, tx, label = 'Flash transaction') {
+  if (!(tx instanceof Transaction)) return null;
+  const encoded = bytesToBase64(tx.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  }));
+  const config = {
+    encoding: 'base64',
+    sigVerify: false,
+    replaceRecentBlockhash: false,
+    commitment: 'confirmed',
+  };
+  const args = [encoded, config];
+  const payload = typeof connection?._rpcRequest === 'function'
+    ? await connection._rpcRequest('simulateTransaction', args)
+    : await fetch(connection?.rpcEndpoint || '', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'simulateTransaction',
+        params: args,
+      }),
+    }).then(async (res) => {
+      const data = await res.json().catch(() => null);
+      if (!res.ok) return { error: { message: `HTTP ${res.status}`, data } };
+      return data;
+    });
+  if (payload?.error) {
+    const error = new Error(`${label} simulation RPC failed: ${payload.error.message || 'unknown error'}`);
+    error.data = payload.error;
+    throw error;
+  }
+  const value = payload?.result?.value;
+  console.info('[Flash one tap] setup pre-simulation', {
+    err: value?.err || null,
+    units_consumed: value?.unitsConsumed || null,
+    logs: flashSimulationLogs(value),
+  });
+  if (value?.err) {
+    const error = new Error(flashSimulationErrorMessage(value, `${label} simulation failed`));
+    error.simulation = value;
+    throw error;
+  }
+  return value;
+}
+
 function connectionRpcDiagnostics(connection) {
   try {
     return {
@@ -600,9 +832,20 @@ function shouldSkipFlashLocalSimulation(meta = {}) {
     || /init-|deposit-direct|delegate-basket|request-withdrawal|execute-withdrawal/.test(builder);
 }
 
+function isWalletBlockedOrRejected(error) {
+  const message = String(
+    error?.message
+    || error?.data?.message
+    || error?.cause?.message
+    || error
+    || ''
+  );
+  return /user rejected|rejected the request|request blocked|blocked|denied|cancelled|canceled|danger|risk/i.test(message);
+}
+
 function flashUserError(error) {
   const message = String(error?.message || error?.data?.detail || error?.data?.error || error || '');
-  if (/user rejected|rejected the request|request blocked|blocked/i.test(message)) {
+  if (isWalletBlockedOrRejected(error)) {
     return 'Wallet rejected or blocked the Flash transaction. Review the wallet prompt and try again.';
   }
   if (/insufficient|custom program error:\s*0x1/i.test(message)) {
@@ -649,14 +892,20 @@ export function useFlash() {
   const [goldEarned, setGoldEarned] = useState(null);
   const pricesRef = useRef([]);
   const accountRef = useRef(null);
+  const positionsRef = useRef([]);
   const walletUsdcRef = useRef(null);
   const flashApiUrlRef = useRef('https://flashapi.trade');
   const wsReconnectRef = useRef(null);
+  const refreshRef = useRef(null);
+  const flashEmptyBasketRefreshRef = useRef(null);
+  const lastNonEmptyPositionAtRef = useRef(0);
+  const allowEmptyPositionsUntilRef = useRef(0);
   const oneTapAgentRef = useRef(null);
   const [oneTapTrading, setOneTapTrading] = useState(() => disabledFlashOneTapState());
 
   useEffect(() => { pricesRef.current = prices; }, [prices]);
   useEffect(() => { accountRef.current = account; }, [account]);
+  useEffect(() => { positionsRef.current = positions; }, [positions]);
   useEffect(() => { walletUsdcRef.current = walletUsdc; }, [walletUsdc]);
   useEffect(() => { flashApiUrlRef.current = config?.api || 'https://flashapi.trade'; }, [config?.api]);
   const flashV2RpcUrl = config?.v2_rpc_url || config?.v2RpcUrl || FLASH_DEFAULT_V2_RPC;
@@ -726,18 +975,44 @@ export function useFlash() {
         const acct = await accountPromise;
         const serverUsdc = Number(acct?.wallet_usdc);
         const initialUsdc = Number.isFinite(serverUsdc) ? serverUsdc : null;
-        setAccount({
+        const nextPositions = rows(acct?.positions).map(normalizeFlashPosition);
+        const nextActiveCount = nextPositions.filter(pos => !isFlashDustPosition(pos)).length;
+        const previousActivePositions = rows(positionsRef.current).filter(pos => !isFlashDustPosition(pos));
+        const ignoreTransientEmptyHttp = nextActiveCount === 0
+          && previousActivePositions.length > 0
+          && Date.now() - lastNonEmptyPositionAtRef.current < 10_000
+          && Date.now() > allowEmptyPositionsUntilRef.current;
+        const committedPositions = ignoreTransientEmptyHttp ? previousActivePositions : nextPositions;
+        if (committedPositions.some(pos => !isFlashDustPosition(pos))) {
+          lastNonEmptyPositionAtRef.current = Date.now();
+        }
+        if (ignoreTransientEmptyHttp) {
+          console.info('[Flash] ignored transient empty HTTP owner snapshot; keeping live basket position', {
+            existing_positions: previousActivePositions.length,
+            source: acct?.source || 'flash_v2_owner',
+          });
+        }
+        const nextOrders = rows(acct?.orders);
+        const nextAccount = {
           ...acct,
+          positions: committedPositions,
+          orders: nextOrders,
           balance: acct?.balance ?? acct?.equity ?? 0,
           equity: acct?.equity ?? acct?.balance ?? 0,
           usdc: acct?.usdc ?? acct?.balance ?? 0,
           available_to_spend: acct?.available_to_spend ?? acct?.free_margin ?? 0,
           wallet_usdc: initialUsdc,
-        });
-        setPositions(rows(acct?.positions).map(normalizeFlashPosition));
-        setOrders(rows(acct?.orders));
+          positions_count: ignoreTransientEmptyHttp ? previousActivePositions.length : acct?.positions_count,
+        };
+        accountRef.current = nextAccount;
+        positionsRef.current = committedPositions;
+        setAccount(nextAccount);
+        setPositions(committedPositions);
+        setOrders(nextOrders);
         setWalletUsdc(initialUsdc);
       } else {
+        accountRef.current = null;
+        positionsRef.current = [];
         setAccount(null);
         setPositions([]);
         setOrders([]);
@@ -750,9 +1025,14 @@ export function useFlash() {
         const nextPrices = rows(priceResult.value);
         pricesRef.current = nextPrices;
         setPrices(nextPrices);
-        setPositions(prev => prev.map(pos => (
-          pos?.metric ? flashPositionFromMetric(pos.marketPubkey || pos.positionKey || pos.symbol, pos.metric, nextPrices) : pos
-        )));
+        setPositions(prev => {
+          const nextPositions = prev.map(pos => (
+            pos?.metric ? flashPositionFromMetric(pos.marketPubkey || pos.positionKey || pos.symbol, pos.metric, nextPrices, pos) : pos
+          ));
+          positionsRef.current = nextPositions;
+          accountRef.current = accountRef.current ? { ...accountRef.current, positions: nextPositions } : accountRef.current;
+          return nextPositions;
+        });
       }
       const publicError = [cfgResult, marketResult, priceResult].find(result => result.status === 'rejected')?.reason;
       if (publicError && !account && positions.length === 0) {
@@ -765,6 +1045,8 @@ export function useFlash() {
       setLoading(false);
     }
   }, [account, isActiveDex, markets.length, positions.length, token, walletAddr, walletMismatch]);
+
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -790,34 +1072,77 @@ export function useFlash() {
         let msg = null;
         try { msg = JSON.parse(event.data); } catch { return; }
         if (msg?.type === 'basket') {
-          const normalized = normalizeFlashSnapshot(msg.data || {}, pricesRef.current, accountRef.current || {});
-          setAccount(prev => ({
+          const positionMetricCount = Object.keys(msg.data?.positionMetrics || {}).length;
+          const existingActivePositionCount = rows(positionsRef.current).filter(pos => !isFlashDustPosition(pos)).length;
+          const hasLoadedOwnerSnapshot = !!(accountRef.current?.owner || accountRef.current?.basketPubkey || accountRef.current?.source);
+          const allowEmptyPositions = Date.now() <= allowEmptyPositionsUntilRef.current;
+          if (positionMetricCount === 0 && !allowEmptyPositions && (existingActivePositionCount > 0 || !hasLoadedOwnerSnapshot)) {
+            if (!flashEmptyBasketRefreshRef.current) {
+              flashEmptyBasketRefreshRef.current = window.setTimeout(() => {
+                flashEmptyBasketRefreshRef.current = null;
+                refreshRef.current?.();
+              }, 1200);
+            }
+            console.info('[Flash] ignored transient empty basket snapshot; confirming with HTTP owner snapshot', {
+              existing_positions: existingActivePositionCount,
+              loaded_owner_snapshot: hasLoadedOwnerSnapshot,
+            });
+            return;
+          }
+          if (positionMetricCount > 0 && flashEmptyBasketRefreshRef.current) {
+            window.clearTimeout(flashEmptyBasketRefreshRef.current);
+            flashEmptyBasketRefreshRef.current = null;
+          }
+          const existingAccount = {
+            ...(accountRef.current || {}),
+            positions: positionsRef.current,
+          };
+          const normalized = normalizeFlashSnapshot(msg.data || {}, pricesRef.current, existingAccount);
+          const nextAccount = {
             ...normalized,
-            wallet_usdc: normalized.wallet_usdc ?? walletUsdcRef.current ?? prev?.wallet_usdc ?? null,
-          }));
+            wallet_usdc: normalized.wallet_usdc ?? walletUsdcRef.current ?? accountRef.current?.wallet_usdc ?? null,
+          };
+          accountRef.current = nextAccount;
+          positionsRef.current = normalized.positions;
+          if (normalized.positions.some(pos => !isFlashDustPosition(pos))) {
+            lastNonEmptyPositionAtRef.current = Date.now();
+          }
+          setAccount(nextAccount);
           setPositions(normalized.positions);
           setOrders(normalized.orders);
           setError('');
           setLoading(false);
         } else if (msg?.type === 'metrics' && msg.data && typeof msg.data === 'object') {
+          if (Object.keys(msg.data).length === 0) return;
+          const existingAccount = {
+            ...(accountRef.current || {}),
+            positions: positionsRef.current,
+          };
+          const combinedPositionMetrics = flashMetricsWithExistingPositions(msg.data, existingAccount);
           const normalized = normalizeFlashSnapshot(
             {
-              ...(accountRef.current || {}),
+              ...existingAccount,
               owner: walletAddr,
-              basketPubkey: accountRef.current?.basketPubkey,
-              basketData: accountRef.current?.basketData,
-              positionMetrics: msg.data,
-              orderMetrics: accountRef.current?.orderMetrics || {},
+              basketPubkey: existingAccount.basketPubkey,
+              basketData: existingAccount.basketData,
+              positionMetrics: combinedPositionMetrics,
+              orderMetrics: existingAccount.orderMetrics || {},
               source: 'flash_v2_ws_metrics',
             },
             pricesRef.current,
-            accountRef.current || {},
+            existingAccount,
             { preserveBalance: true },
           );
-          setAccount(prevAccount => ({
+          const nextAccount = {
             ...normalized,
-            wallet_usdc: walletUsdcRef.current ?? prevAccount?.wallet_usdc ?? normalized.wallet_usdc ?? null,
-          }));
+            wallet_usdc: walletUsdcRef.current ?? accountRef.current?.wallet_usdc ?? normalized.wallet_usdc ?? null,
+          };
+          accountRef.current = nextAccount;
+          positionsRef.current = normalized.positions;
+          if (normalized.positions.some(pos => !isFlashDustPosition(pos))) {
+            lastNonEmptyPositionAtRef.current = Date.now();
+          }
+          setAccount(nextAccount);
           setPositions(normalized.positions);
           setError('');
           setLoading(false);
@@ -839,6 +1164,10 @@ export function useFlash() {
       if (wsReconnectRef.current) {
         window.clearTimeout(wsReconnectRef.current);
         wsReconnectRef.current = null;
+      }
+      if (flashEmptyBasketRefreshRef.current) {
+        window.clearTimeout(flashEmptyBasketRefreshRef.current);
+        flashEmptyBasketRefreshRef.current = null;
       }
       try { ws?.close(); } catch {}
     };
@@ -1157,32 +1486,98 @@ export function useFlash() {
         const latest = await setupConnection.getLatestBlockhash('confirmed');
         setupTx.feePayer = solWallet.publicKey;
         setupTx.recentBlockhash = latest.blockhash;
-        setupTx.partialSign(agent.keypair);
-        const signedSetupTx = await flashTimeout(
-          solWallet.signTransaction(setupTx),
-          45_000,
-          'Flash one tap wallet signature timed out. Reopen Phantom and try again.',
-        );
-        const agentSignature = signedSetupTx.signatures?.find(sig => sig.publicKey?.equals?.(agent.keypair.publicKey));
-        if (!agentSignature?.signature) {
-          throw new Error('Flash one tap setup lost the local session signer signature.');
+        const demotedDuplicateSignerMetas = demoteDuplicateSignerMetas(setupTx, solWallet.publicKey);
+        const requiredSetupSigners = txRequiredSignerKeys(setupTx);
+        if (!requiredSetupSigners.includes(solWallet.publicKey.toBase58())) {
+          throw new Error('Flash one tap setup transaction does not require the connected wallet signature.');
         }
-        const raw = signedSetupTx.serialize();
-        console.info('[Flash one tap] setup signed, sending raw', {
-          owner: walletAddr,
-          signer: agent.publicKey,
-          rpc: connectionRpcDiagnostics(setupConnection),
-          raw_bytes: raw.length,
-        });
-        setupSignature = await flashTimeout(
-          setupConnection.sendRawTransaction(raw, {
-            skipPreflight: true,
-            preflightCommitment: 'confirmed',
-            maxRetries: 3,
-          }),
-          20_000,
-          'Flash one tap setup broadcast timed out. Check Phantom activity before retrying.',
-        );
+        if (!requiredSetupSigners.includes(agent.keypair.publicKey.toBase58())) {
+          throw new Error('Flash one tap setup transaction does not require the local session signer.');
+        }
+        await simulateUnsignedLegacyTransaction(setupConnection, setupTx, 'Flash one tap setup');
+        if (!setupSignature) {
+          if (typeof solWallet.sendTransaction === 'function') {
+            console.info('[Flash one tap] setup wallet send start', {
+              owner: walletAddr,
+              signer: agent.publicKey,
+              wallet_path: 'adapter_send_transaction_with_session_signer',
+              rpc: connectionRpcDiagnostics(setupConnection),
+              required_signers: requiredSetupSigners,
+              top_up_lamports: topUpLamports,
+              demoted_duplicate_signer_metas: demotedDuplicateSignerMetas,
+              note: 'Primary path matches GMTrade: wallet adapter partial-signs the local session signer, then lets Phantom sign and submit.',
+            });
+            try {
+              setupSignature = await flashTimeout(
+                solWallet.sendTransaction(setupTx, setupConnection, {
+                  signers: [agent.keypair],
+                  skipPreflight: false,
+                  preflightCommitment: 'confirmed',
+                  maxRetries: 3,
+                }),
+                45_000,
+                'Flash one tap wallet send timed out. Reopen Phantom and try again.',
+              );
+              console.info('[Flash one tap] setup wallet send done', {
+                owner: walletAddr,
+                signer: agent.publicKey,
+                setup_signature: setupSignature,
+                wallet_path: 'adapter_send_transaction_with_session_signer',
+              });
+            } catch (sendError) {
+              if (isWalletBlockedOrRejected(sendError)) throw sendError;
+              console.warn('[Flash one tap] setup wallet send failed, falling back to raw sign path', {
+                owner: walletAddr,
+                signer: agent.publicKey,
+                message: sendError?.message || String(sendError || ''),
+              });
+            }
+          }
+          if (!setupSignature) {
+            let signedSetupTx = null;
+            console.info('[Flash one tap] setup wallet sign start', {
+              owner: walletAddr,
+              signer: agent.publicKey,
+              wallet_path: 'adapter_sign_owner_first_multi_signer',
+              rpc: connectionRpcDiagnostics(setupConnection),
+              required_signers: requiredSetupSigners,
+              top_up_lamports: topUpLamports,
+              demoted_duplicate_signer_metas: demotedDuplicateSignerMetas,
+              note: 'Fallback only: Phantom signs first, then Clash adds the local session signer and broadcasts raw.',
+            });
+            signedSetupTx = await flashTimeout(
+              solWallet.signTransaction(setupTx),
+              45_000,
+              'Flash one tap wallet signature timed out. Reopen Phantom and try again.',
+            );
+            const ownerSignature = signedSetupTx.signatures?.find(sig => sig.publicKey?.equals?.(solWallet.publicKey));
+            if (!ownerSignature?.signature) {
+              throw new Error('Flash one tap setup was not signed by the connected wallet.');
+            }
+            signedSetupTx.partialSign(agent.keypair);
+            const agentSignature = signedSetupTx.signatures?.find(sig => sig.publicKey?.equals?.(agent.keypair.publicKey));
+            if (!agentSignature?.signature) {
+              throw new Error('Flash one tap setup lost the local session signer signature.');
+            }
+            const raw = signedSetupTx.serialize({ requireAllSignatures: true, verifySignatures: true });
+            console.info('[Flash one tap] setup signed, sending raw', {
+              owner: walletAddr,
+              signer: agent.publicKey,
+              wallet_path: 'adapter_sign_owner_first_then_session_raw',
+              rpc: connectionRpcDiagnostics(setupConnection),
+              raw_bytes: raw.length,
+            });
+            setupSignature = await flashTimeout(
+              setupConnection.sendRawTransaction(raw, {
+                skipPreflight: false,
+                preflightCommitment: 'confirmed',
+                maxRetries: 3,
+              }),
+              20_000,
+              'Flash one tap setup broadcast timed out. Check Phantom activity before retrying.',
+            );
+          }
+        }
       } catch (setupError) {
         const landedSignature = extractSolanaSignatureFromError(setupError);
         if (!landedSignature) throw setupError;
@@ -1240,9 +1635,24 @@ export function useFlash() {
     }
   }, [buildAndSend]);
 
-  const reportTrade = useCallback(async ({ signature, symbol, side, amount, leverage = 1, price, orderType = 'market', notionalUsd, signer = '', sessionToken = '' } = {}) => {
+  const reportTrade = useCallback(async ({ signature, symbol, side, amount, leverage = 1, price, orderType = 'market', notionalUsd, signer = '', sessionToken = '', deferred = false } = {}) => {
     if (!token) return { error: 'Missing game session token' };
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
+    const retryArgs = { signature, symbol, side, amount, leverage, price, orderType, notionalUsd, signer, sessionToken };
+    const reportPayload = {
+      signature,
+      tx_hash: signature,
+      wallet: walletAddr,
+      symbol: normalizeSymbol(symbol),
+      side,
+      amount,
+      leverage,
+      price,
+      order_type: orderType,
+      notional_usd: notionalUsd,
+      signer,
+      sessionToken,
+    };
     try {
       let data = null;
       for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -1250,20 +1660,7 @@ export function useFlash() {
           data = await fetchJson(`${FUTURES_API}/flash/trade-report`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'flash' },
-            body: JSON.stringify({
-              signature,
-              tx_hash: signature,
-              wallet: walletAddr,
-              symbol: normalizeSymbol(symbol),
-              side,
-              amount,
-              leverage,
-              price,
-              order_type: orderType,
-              notional_usd: notionalUsd,
-              signer,
-              sessionToken,
-            }),
+            body: JSON.stringify(reportPayload),
           });
           break;
         } catch (e) {
@@ -1277,6 +1674,13 @@ export function useFlash() {
       }
       return data;
     } catch (e) {
+      if (!deferred && (e?.status === 404 || /not found/i.test(String(e?.message || '')))) {
+        for (const delayMs of [8_000, 25_000]) {
+          window.setTimeout(() => {
+            reportTrade({ ...retryArgs, deferred: true }).catch(() => null);
+          }, delayMs);
+        }
+      }
       return { error: e?.message || 'Flash trade verification failed' };
     }
   }, [claimGold, token, walletAddr]);
@@ -1389,6 +1793,9 @@ export function useFlash() {
         oneTapSigner: oneTapSession?.publicKey || '',
         sessionToken: oneTapSession?.sessionToken || '',
       });
+      if (fullClose) {
+        allowEmptyPositionsUntilRef.current = Date.now() + 15_000;
+      }
       const imported = await reportTrade({
         signature,
         symbol,

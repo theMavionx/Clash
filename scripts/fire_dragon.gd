@@ -29,7 +29,7 @@ const BLACK_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Text
 const PURPLE_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_purple.tga")
 const FIRE_BREATH_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fx_fire_breath.tga")
 const FIRE_SPARKS_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fx_sparks.tga")
-const FIRE_BREATH_DURATION: float = 0.42
+const FIRE_BREATH_DURATION: float = 0.58
 const FIRE_BREATH_WIDTH: float = 0.28
 const FIRE_BREATH_MOUTH_FORWARD_OFFSET: float = 0.08
 const FIRE_BREATH_TARGET_Y_OFFSET: float = 0.13
@@ -39,8 +39,11 @@ const FIRE_BREATH_GLOW_LAYERS: int = 2
 const FIRE_BREATH_PUFF_COUNT: int = 8
 const FIRE_BREATH_EMBER_COUNT: int = 14
 const FIRE_BREATH_FLAME_PARTICLES: int = 32
-const FIRE_BREATH_SMOKE_COUNT: int = 9
 const FIRE_BREATH_LIGHT_ENERGY: float = 1.7
+const FIRE_BREATH_ATTACK_RANGE: float = 0.72
+const FIRE_BREATH_MIN_STANDOFF: float = 0.54
+const FIRE_BREATH_BUILDING_STANDOFF_PADDING: float = 0.18
+const FIRE_BREATH_STANDOFF_CORRECTION_SPEED: float = 0.52
 
 @export var skin: DragonSkin = DragonSkin.RED
 @export var flight_height: float = 0.34
@@ -60,7 +63,7 @@ func _init_stats() -> void:
 	var stats: Dictionary = LEVEL_STATS[level]
 	unit_target_type = BaseTroop.UNIT_TARGET_AIR
 	move_speed = 0.38
-	attack_range = 0.32
+	attack_range = FIRE_BREATH_ATTACK_RANGE
 	separation_radius = 0.18
 	separation_force = 0.6
 	hp = int(stats.hp)
@@ -133,7 +136,9 @@ func _do_attack(delta: float) -> void:
 		return
 
 	_face_current_target()
-	_apply_attack_separation(delta)
+	var repositioning := _maintain_fire_breath_standoff(delta)
+	if not repositioning:
+		_apply_attack_separation(delta)
 	attack_timer += delta
 	if attack_timer >= atk_speed:
 		attack_timer -= atk_speed
@@ -141,6 +146,8 @@ func _do_attack(delta: float) -> void:
 		_play_dragon_animation("fly_fire_breath_attack_low", true)
 
 	if not _hit_this_swing and attack_timer >= atk_speed * hit_anim_threshold:
+		if repositioning and _target_flat_distance() < _desired_fire_breath_standoff() * 0.88:
+			return
 		_hit_this_swing = true
 		_spawn_fire_breath_vfx()
 		_play_attack_sfx()
@@ -188,6 +195,48 @@ func _apply_attack_separation(delta: float) -> void:
 		global_position = _clamp_to_island(new_pos)
 
 
+func _desired_fire_breath_standoff() -> float:
+	var desired := FIRE_BREATH_MIN_STANDOFF
+	if target_building.size() > 0 and is_instance_valid(target_building.get("node")):
+		desired = maxf(
+			desired,
+			_building_avoid_radius(target_building, target_bs, 0.10) + FIRE_BREATH_BUILDING_STANDOFF_PADDING
+		)
+	return minf(desired, attack_range * 0.94)
+
+
+func _maintain_fire_breath_standoff(delta: float) -> bool:
+	if not _has_valid_target():
+		return false
+	var target_pos := _get_target_position()
+	var away := global_position - target_pos
+	away.y = 0.0
+	var dist := away.length()
+	var desired := _desired_fire_breath_standoff()
+	if dist >= desired:
+		return false
+	if away.length_squared() < 0.0001:
+		away = global_transform.basis.z
+		away.y = 0.0
+		if away.length_squared() < 0.0001:
+			away = Vector3.BACK
+	away = away.normalized()
+	var step := minf(desired - dist, FIRE_BREATH_STANDOFF_CORRECTION_SPEED * delta)
+	global_position = _clamp_to_island(global_position + away * step)
+	return true
+
+
+func prewarm_fire_breath_vfx() -> void:
+	if not is_inside_tree():
+		return
+	var root_parent: Node = get_tree().current_scene
+	if root_parent == null:
+		root_parent = get_tree().root
+	var mouth_pos: Vector3 = global_position + Vector3(0.0, 0.12, 0.0)
+	var target_pos: Vector3 = mouth_pos + Vector3(0.64, 0.0, -0.06)
+	_spawn_fire_breath_vfx_between(root_parent, mouth_pos, target_pos, "FireDragonBreathVFXWarmup")
+
+
 func _spawn_fire_breath_vfx() -> void:
 	if not is_inside_tree():
 		return
@@ -201,9 +250,19 @@ func _spawn_fire_breath_vfx() -> void:
 		target_dir = -global_transform.basis.z
 	target_dir = target_dir.normalized()
 	var mouth_pos: Vector3 = _get_mouth_position(target_dir)
+	_spawn_fire_breath_vfx_between(root_parent, mouth_pos, target_pos, "FireDragonBreathVFX")
+
+
+func _spawn_fire_breath_vfx_between(root_parent: Node, mouth_pos: Vector3, target_pos: Vector3, holder_name: String) -> void:
+	if root_parent == null:
+		return
 	var to_target: Vector3 = target_pos - mouth_pos
 	if to_target.length_squared() < FIRE_BREATH_MIN_LENGTH * FIRE_BREATH_MIN_LENGTH:
-		to_target = target_dir * FIRE_BREATH_MIN_LENGTH
+		var fallback_dir := -global_transform.basis.z
+		fallback_dir.y = 0.0
+		if fallback_dir.length_squared() < 0.0001:
+			fallback_dir = Vector3.FORWARD
+		to_target = fallback_dir.normalized() * FIRE_BREATH_MIN_LENGTH
 		target_pos = mouth_pos + to_target
 	var dir: Vector3 = to_target.normalized()
 	var length: float = to_target.length()
@@ -214,7 +273,7 @@ func _spawn_fire_breath_vfx() -> void:
 	var normal: Vector3 = side.cross(dir).normalized()
 
 	var holder := Node3D.new()
-	holder.name = "FireDragonBreathVFX"
+	holder.name = holder_name
 	holder.top_level = true
 	root_parent.add_child(holder)
 
@@ -223,7 +282,7 @@ func _spawn_fire_breath_vfx() -> void:
 	_spawn_fire_particle_cone(holder, mouth_pos, dir, side, normal, length, beam_width)
 	_spawn_breath_lights(holder, mouth_pos, target_pos, length)
 
-	var mouth_flare := _make_fire_billboard(FIRE_BREATH_TEXTURE, Color(1.9, 1.05, 0.45, 0.9))
+	var mouth_flare := _make_fire_billboard(FIRE_BREATH_TEXTURE, Color(1.18, 0.58, 0.18, 0.82))
 	var mouth_mesh := QuadMesh.new()
 	mouth_mesh.size = Vector2(0.22, 0.22)
 	mouth_flare.mesh = mouth_mesh
@@ -236,11 +295,10 @@ func _spawn_fire_breath_vfx() -> void:
 	mouth_tw.tween_property(mouth_mat, "albedo_color:a", 0.0, FIRE_BREATH_DURATION * 0.7)
 
 	_spawn_fire_puffs(holder, mouth_pos, dir, side, normal, length, beam_width)
-	_spawn_smoke_wisps(holder, mouth_pos, dir, side, normal, length, beam_width)
 	_spawn_fire_embers(holder, mouth_pos, dir, side, normal, length)
 	_spawn_impact_flame_burst(holder, target_pos, dir, side, normal, beam_width)
 
-	var spark := _make_fire_billboard(FIRE_SPARKS_TEXTURE, Color(1.4, 1.05, 0.55, 0.85))
+	var spark := _make_fire_billboard(FIRE_SPARKS_TEXTURE, Color(1.08, 0.68, 0.28, 0.72))
 	var spark_mesh := QuadMesh.new()
 	spark_mesh.size = Vector2(0.42, 0.3)
 	spark.mesh = spark_mesh
@@ -266,7 +324,7 @@ func _spawn_fire_ribbon_layers(holder: Node3D, mouth_pos: Vector3, dir: Vector3,
 		var layer_side: Vector3 = side.rotated(dir, angle).normalized()
 		var layer_normal: Vector3 = normal.rotated(dir, angle).normalized()
 		var layer_basis := Basis(layer_side, dir, layer_normal).orthonormalized()
-		var glow := _make_fire_ribbon(FIRE_BREATH_TEXTURE, length, width * 1.8, Color(1.35, 0.42, 0.08, 0.36), angle)
+		var glow := _make_fire_ribbon(FIRE_BREATH_TEXTURE, length, width * 1.8, Color(0.95, 0.29, 0.07, 0.26), angle)
 		holder.add_child(glow)
 		glow.global_transform = Transform3D(layer_basis, mouth_pos)
 		_animate_fire_node(glow, FIRE_BREATH_DURATION, 1.32)
@@ -277,7 +335,7 @@ func _spawn_fire_ribbon_layers(holder: Node3D, mouth_pos: Vector3, dir: Vector3,
 		var layer_normal: Vector3 = normal.rotated(dir, angle).normalized()
 		var layer_basis := Basis(layer_side, dir, layer_normal).orthonormalized()
 		var alpha: float = 0.84 if i % 2 == 0 else 0.66
-		var ribbon := _make_fire_ribbon(FIRE_BREATH_TEXTURE, length, width * randf_range(0.82, 1.08), Color(1.95, 0.9, 0.24, alpha), angle + randf_range(-0.4, 0.4))
+		var ribbon := _make_fire_ribbon(FIRE_BREATH_TEXTURE, length, width * randf_range(0.82, 1.08), Color(1.12, 0.48, 0.12, alpha * 0.82), angle + randf_range(-0.4, 0.4))
 		holder.add_child(ribbon)
 		ribbon.global_transform = Transform3D(layer_basis, mouth_pos)
 		_animate_fire_node(ribbon, FIRE_BREATH_DURATION * randf_range(0.86, 1.08), randf_range(1.12, 1.38))
@@ -299,7 +357,7 @@ func _spawn_fire_particle_cone(holder: Node3D, mouth_pos: Vector3, dir: Vector3,
 
 	var mesh := QuadMesh.new()
 	mesh.size = Vector2(width * 0.54, width * 0.66)
-	mesh.material = _make_fire_particle_material(FIRE_BREATH_TEXTURE, Color(2.0, 0.72, 0.18, 0.74), true)
+	mesh.material = _make_fire_particle_material(FIRE_BREATH_TEXTURE, Color(1.15, 0.43, 0.10, 0.66), true)
 	particles.draw_passes = 1
 	particles.set_draw_pass_mesh(0, mesh)
 
@@ -409,7 +467,7 @@ func _make_fire_particle_material(texture: Texture2D, color: Color, additive: bo
 func _spawn_breath_lights(holder: Node3D, mouth_pos: Vector3, target_pos: Vector3, length: float) -> void:
 	var mouth_light := OmniLight3D.new()
 	mouth_light.name = "FireDragonMouthLight"
-	mouth_light.light_color = Color(1.0, 0.42, 0.12)
+	mouth_light.light_color = Color(1.0, 0.36, 0.10)
 	mouth_light.light_energy = FIRE_BREATH_LIGHT_ENERGY
 	mouth_light.omni_range = clampf(length * 1.15, 0.35, 0.95)
 	holder.add_child(mouth_light)
@@ -417,7 +475,7 @@ func _spawn_breath_lights(holder: Node3D, mouth_pos: Vector3, target_pos: Vector
 
 	var impact_light := OmniLight3D.new()
 	impact_light.name = "FireDragonImpactLight"
-	impact_light.light_color = Color(1.0, 0.25, 0.06)
+	impact_light.light_color = Color(1.0, 0.30, 0.07)
 	impact_light.light_energy = FIRE_BREATH_LIGHT_ENERGY * 0.72
 	impact_light.omni_range = clampf(length * 0.78, 0.25, 0.7)
 	holder.add_child(impact_light)
@@ -431,7 +489,7 @@ func _spawn_breath_lights(holder: Node3D, mouth_pos: Vector3, target_pos: Vector
 
 func _spawn_fire_puffs(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float, width: float) -> void:
 	for i in range(FIRE_BREATH_PUFF_COUNT):
-		var puff := _make_fire_billboard(FIRE_BREATH_TEXTURE, Color(1.7, 0.72, 0.18, randf_range(0.34, 0.56)))
+		var puff := _make_fire_billboard(FIRE_BREATH_TEXTURE, Color(1.05, 0.40, 0.09, randf_range(0.28, 0.46)))
 		var mesh := QuadMesh.new()
 		var t: float = (float(i) + randf_range(-0.18, 0.18)) / maxf(1.0, float(FIRE_BREATH_PUFF_COUNT - 1))
 		t = clampf(t, 0.04, 0.96)
@@ -452,46 +510,9 @@ func _spawn_fire_puffs(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: V
 		tw.tween_property(mat, "albedo_color:a", 0.0, FIRE_BREATH_DURATION * randf_range(0.72, 1.0))
 
 
-func _spawn_smoke_wisps(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float, width: float) -> void:
-	for i in range(FIRE_BREATH_SMOKE_COUNT):
-		var smoke := _make_smoke_billboard(FIRE_BREATH_TEXTURE, Color(0.16, 0.12, 0.10, randf_range(0.18, 0.32)))
-		var mesh := QuadMesh.new()
-		var t: float = randf_range(0.38, 0.98)
-		var size: float = lerpf(width * 0.48, width * 1.22, t) * randf_range(0.85, 1.35)
-		mesh.size = Vector2(size, size * randf_range(0.82, 1.28))
-		smoke.mesh = mesh
-		holder.add_child(smoke)
-
-		var swirl_angle: float = randf_range(0.0, TAU)
-		var drift_radius: float = lerpf(width * 0.12, width * 0.42, t)
-		var offset: Vector3 = side * cos(swirl_angle) * drift_radius + normal * sin(swirl_angle) * drift_radius
-		var start_pos: Vector3 = mouth_pos + dir * (length * t) + offset
-		smoke.global_position = start_pos
-		smoke.rotate_object_local(Vector3.FORWARD, randf_range(-PI, PI))
-
-		var mat := smoke.material_override as StandardMaterial3D
-		var drift: Vector3 = dir * randf_range(0.02, 0.07) + Vector3.UP * randf_range(0.07, 0.16) + offset * randf_range(0.3, 0.65)
-		var duration: float = FIRE_BREATH_DURATION * randf_range(1.35, 1.85)
-		var tw := smoke.create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(smoke, "global_position", start_pos + drift, duration).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw.tween_property(smoke, "scale", Vector3.ONE * randf_range(1.45, 2.35), duration).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw.tween_property(mat, "albedo_color:a", 0.0, duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-
-
-func _make_smoke_billboard(texture: Texture2D, color: Color) -> MeshInstance3D:
-	var node := MeshInstance3D.new()
-	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var mat := _make_fire_material(texture, color, true)
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	mat.no_depth_test = false
-	node.material_override = mat
-	return node
-
-
 func _spawn_fire_embers(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float) -> void:
 	for i in range(FIRE_BREATH_EMBER_COUNT):
-		var ember := _make_fire_billboard(FIRE_SPARKS_TEXTURE, Color(1.6, 0.9, 0.35, 0.58))
+		var ember := _make_fire_billboard(FIRE_SPARKS_TEXTURE, Color(1.15, 0.57, 0.18, 0.50))
 		var mesh := QuadMesh.new()
 		mesh.size = Vector2(randf_range(0.035, 0.085), randf_range(0.035, 0.085))
 		ember.mesh = mesh
@@ -509,7 +530,7 @@ func _spawn_fire_embers(holder: Node3D, mouth_pos: Vector3, dir: Vector3, side: 
 
 
 func _spawn_impact_flame_burst(holder: Node3D, target_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, width: float) -> void:
-	var burst := _make_fire_billboard(FIRE_BREATH_TEXTURE, Color(2.0, 0.68, 0.16, 0.68))
+	var burst := _make_fire_billboard(FIRE_BREATH_TEXTURE, Color(1.14, 0.38, 0.08, 0.60))
 	var burst_mesh := QuadMesh.new()
 	burst_mesh.size = Vector2(width * 1.35, width * 1.08)
 	burst.mesh = burst_mesh
@@ -524,7 +545,7 @@ func _spawn_impact_flame_burst(holder: Node3D, target_pos: Vector3, dir: Vector3
 	burst_tw.tween_property(burst_mat, "albedo_color:a", 0.0, FIRE_BREATH_DURATION * 0.74).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 
 	for i in range(6):
-		var spark := _make_fire_billboard(FIRE_SPARKS_TEXTURE, Color(1.8, 0.92, 0.35, 0.62))
+		var spark := _make_fire_billboard(FIRE_SPARKS_TEXTURE, Color(1.18, 0.58, 0.18, 0.54))
 		var mesh := QuadMesh.new()
 		mesh.size = Vector2(randf_range(0.035, 0.065), randf_range(0.035, 0.075))
 		spark.mesh = mesh

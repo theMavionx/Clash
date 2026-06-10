@@ -540,6 +540,8 @@ func _warmup_fire_dragon_attack() -> void:
 	add_child(inst)
 	if inst.has_method("_play_dragon_animation"):
 		inst.call("_play_dragon_animation", "fly_fire_breath_attack_low", true)
+	if inst.has_method("prewarm_fire_breath_vfx"):
+		inst.call("prewarm_fire_breath_vfx")
 	_warmup_fire_dragon_breath_materials()
 
 
@@ -554,7 +556,7 @@ func _warmup_fire_dragon_breath_materials() -> void:
 	var ribbon_mesh := QuadMesh.new()
 	ribbon_mesh.size = Vector2(0.20, 0.08)
 	ribbon.mesh = ribbon_mesh
-	ribbon.material_override = _make_additive_material(breath, Color(1.95, 0.9, 0.24, 0.82), false)
+	ribbon.material_override = _make_additive_material(breath, Color(1.12, 0.48, 0.12, 0.68), false)
 	ribbon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(ribbon)
 
@@ -562,7 +564,7 @@ func _warmup_fire_dragon_breath_materials() -> void:
 	var puff_mesh := QuadMesh.new()
 	puff_mesh.size = Vector2(0.14, 0.14)
 	puff.mesh = puff_mesh
-	puff.material_override = _make_additive_material(breath, Color(1.7, 0.72, 0.18, 0.50), true)
+	puff.material_override = _make_additive_material(breath, Color(1.05, 0.40, 0.09, 0.42), true)
 	puff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(puff)
 
@@ -570,7 +572,7 @@ func _warmup_fire_dragon_breath_materials() -> void:
 	var ember_mesh := QuadMesh.new()
 	ember_mesh.size = Vector2(0.08, 0.08)
 	ember.mesh = ember_mesh
-	ember.material_override = _make_additive_material(sparks, Color(1.6, 0.9, 0.35, 0.58), true)
+	ember.material_override = _make_additive_material(sparks, Color(1.15, 0.57, 0.18, 0.50), true)
 	ember.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(ember)
 
@@ -584,7 +586,7 @@ func _warmup_fire_dragon_breath_materials() -> void:
 	flame_particles.local_coords = true
 	var flame_mesh := QuadMesh.new()
 	flame_mesh.size = Vector2(0.12, 0.14)
-	flame_mesh.material = _make_particle_billboard_material(breath, Color(2.0, 0.72, 0.18, 0.74), true)
+	flame_mesh.material = _make_particle_billboard_material(breath, Color(1.15, 0.43, 0.10, 0.66), true)
 	flame_particles.draw_passes = 1
 	flame_particles.set_draw_pass_mesh(0, flame_mesh)
 	var flame_process := ParticleProcessMaterial.new()
@@ -600,19 +602,8 @@ func _warmup_fire_dragon_breath_materials() -> void:
 	add_child(flame_particles)
 	flame_particles.restart()
 
-	var smoke := MeshInstance3D.new()
-	var smoke_mesh := QuadMesh.new()
-	smoke_mesh.size = Vector2(0.16, 0.18)
-	smoke.mesh = smoke_mesh
-	var smoke_mat := _make_additive_material(breath, Color(0.16, 0.12, 0.10, 0.24), true)
-	smoke_mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	smoke_mat.no_depth_test = false
-	smoke.material_override = smoke_mat
-	smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(smoke)
-
 	var light := OmniLight3D.new()
-	light.light_color = Color(1.0, 0.35, 0.08)
+	light.light_color = Color(1.0, 0.32, 0.08)
 	light.light_energy = 0.4
 	light.omni_range = 0.5
 	add_child(light)

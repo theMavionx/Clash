@@ -25,9 +25,12 @@ function shallowEqualObject(a, b) {
 
 const REPLAY_TELEMETRY_ENABLED = false;
 
-function isDemonKingTroopName(name) {
-  return String(name || '').trim().toLowerCase().replace(/[_\s-]/g, '') === 'demonking'
-    || String(name || '').trim().startsWith('DemonKing:');
+function isNftBackedTroopName(name) {
+  const normalized = String(name || '').trim().toLowerCase().replace(/[_\s-]/g, '');
+  return normalized === 'demonking'
+    || normalized === 'firedragon'
+    || String(name || '').trim().startsWith('DemonKing:')
+    || String(name || '').trim().startsWith('FireDragon:');
 }
 
 function postReplayTelemetry(data, tokenOverride = null) {
@@ -282,9 +285,9 @@ export function GodotProvider({ children }) {
           }
           if (data.casualties) {
             const paidCasualties = Object.fromEntries(
-              Object.entries(data.casualties).filter(([name, count]) => !isDemonKingTroopName(name) && count > 0),
+              Object.entries(data.casualties).filter(([name, count]) => !isNftBackedTroopName(name) && count > 0),
             );
-            if (Object.values(paidCasualties).some(c => c > 0)) setPendingCasualties(paidCasualties);
+            setPendingCasualties(Object.values(paidCasualties).some(c => c > 0) ? paidCasualties : null);
           }
           break;
         case 'replay_telemetry':
@@ -302,7 +305,7 @@ export function GodotProvider({ children }) {
           });
           break;
         case 'troop_died':
-          if (data.troop_name === 'DemonKing') break;
+          if (isNftBackedTroopName(data.troop_name)) break;
           setPendingCasualties(prev => {
             const c = { ...(prev || {}) };
             c[data.troop_name] = (c[data.troop_name] || 0) + 1;

@@ -406,10 +406,58 @@ function formatFeeRate(value) {
   return `${(n * 100).toFixed(3)}%`;
 }
 
+function formatPositionLeverageBadge(value) {
+  const n = numOrNull(value);
+  return n && n > 0 ? `${n}x` : '-';
+}
+
+function isFlashPositionLike(pos) {
+  const source = String(pos?.source || '').toLowerCase();
+  return source.includes('flash') || !!pos?._flash || !!pos?.metric?.sizeUsdUi || !!pos?.metric?.collateralUsdUi;
+}
+
+function flashPositionDisplayLeverageStable(pos, posValueUsd, margin) {
+  const sizeUsd = numOrNull(
+    pos?.metric?.sizeUsdUi
+      ?? pos?.metric?.size_usd_ui
+      ?? pos?.sizeUsdUi
+      ?? pos?.size_usd
+      ?? pos?.sizeUsd
+      ?? pos?.notional_usd
+      ?? pos?.notionalUsd
+      ?? pos?.inputUsdUi
+      ?? pos?._flash?.sizeUsdUi
+      ?? pos?._flash?.size_usd_ui
+      ?? pos?._flash?.size_usd
+      ?? pos?._flash?.sizeUsd
+      ?? pos?._flash?.notional_usd
+      ?? pos?._flash?.notionalUsd
+  ) ?? posValueUsd;
+  const collateralUsd = numOrNull(
+    pos?.metric?.collateralUsdUi
+      ?? pos?.metric?.collateral_usd_ui
+      ?? pos?.collateralUsdUi
+      ?? pos?.collateral_usd
+      ?? pos?.collateralUsd
+      ?? pos?.margin
+      ?? pos?._flash?.collateralUsdUi
+      ?? pos?._flash?.collateral_usd_ui
+      ?? pos?._flash?.collateral_usd
+      ?? pos?._flash?.collateralUsd
+      ?? pos?._flash?.margin
+  ) ?? margin;
+  if (collateralUsd > 0 && sizeUsd > 0) {
+    return Math.round((sizeUsd / collateralUsd) * 10) / 10;
+  }
+  const rawLev = displayLeverage(pos?.leverage);
+  return rawLev && rawLev > 0 ? rawLev : null;
+}
+
 function getPositionMetrics(pos, prices, leverageSettings = {}) {
   const priceRow = prices.find(p => p.symbol === pos.symbol);
   const priceRowMark = numOrNull(priceRow?.mark ?? priceRow?.mark_price ?? priceRow?.price);
   const isDust = !!pos?._flashDust;
+  const isFlashPosition = isFlashPositionLike(pos);
   const entryP = numOrNull(pos.entry_price) || 0;
   const markP = numOrNull(pos.mark_price) || priceRowMark || 0;
   const amt = numOrNull(pos.amount) || 0;
@@ -430,9 +478,11 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   const derivedPnl = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
   const pnlVal = isDust ? 0 : cleanSignedZero(providedPnl ?? derivedPnl);
   const rawLev = displayLeverage(pos.leverage);
-  const setLev = isDust ? null : (rawLev && rawLev > 0
-    ? rawLev
-    : ((margin > 0 && posValueUsd > 0) ? Math.round((posValueUsd / margin) * 10) / 10 : (leverageSettings[pos.symbol] || 1)));
+  const collateralLev = margin > 0 && posValueUsd > 0 ? Math.round((posValueUsd / margin) * 10) / 10 : null;
+  const flashLev = isFlashPosition ? flashPositionDisplayLeverageStable(pos, posValueUsd, margin) : null;
+  const setLev = isDust ? null : (isFlashPosition
+    ? (flashLev ?? rawLev ?? collateralLev)
+    : (rawLev && rawLev > 0 ? rawLev : (collateralLev || (leverageSettings[pos.symbol] || 1))));
   const rawProvidedPct = numOrNull(pos.pnl_pct);
   const providedPct = rawProvidedPct === 0 && Math.abs(pnlVal) >= 0.005 ? null : rawProvidedPct;
   const pnlPct = isDust ? 0 : (providedPct ?? (margin > 0
@@ -652,11 +702,11 @@ function positionOpenTimeMs(pos) {
 function positionStableKey(pos) {
   const symbol = String(pos?.symbol || pos?.s || '').toUpperCase();
   const side = String(pos?.side || pos?.d || '').toLowerCase();
-  const market = String(pos?.market_addr || pos?.marketAddress || pos?.market || pos?._raw?.marketAddress || '');
+  const market = String(pos?.marketPubkey || pos?.market_pubkey || pos?.market_addr || pos?.marketAddress || pos?.market || pos?._raw?.marketAddress || '');
   const subaccount = pos?._phoenixSubaccountIndex ?? pos?.subaccount_index ?? pos?.subaccountIndex ?? '';
   const pair = pos?.pair_index ?? pos?.pairIndex ?? '';
   const trade = pos?.trade_index ?? pos?.tradeIndex ?? '';
-  const id = pos?.position_id ?? pos?.positionId ?? pos?.id ?? pos?._raw?.key ?? pos?._raw?.positionKey ?? '';
+  const id = pos?.positionKey ?? pos?.position_key ?? pos?.position_id ?? pos?.positionId ?? pos?.id ?? pos?._raw?.key ?? pos?._raw?.positionKey ?? '';
   const parts = [symbol, side, market, subaccount, pair, trade, id];
   return parts.some(Boolean) ? parts.join('|') : '';
 }
@@ -1353,7 +1403,7 @@ const PositionsList = memo(function PositionsList({
                     </span>
                   );
                 })()}
-                <span style={{fontSize: 11, fontWeight: 800, color: isDust ? '#8a6d2f' : '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{isDust ? 'DUST' : `${setLev}x`}</span>
+                <span style={{fontSize: 11, fontWeight: 800, color: isDust ? '#8a6d2f' : '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                 <span style={{fontSize: 13, fontWeight: 900, color: pos.side === 'bid' ? '#4CAF50' : '#E53935'}}>
                   {pos.side === 'bid' ? 'LONG' : 'SHORT'}
                 </span>
@@ -1530,7 +1580,7 @@ const BottomPanel = memo(function BottomPanel({
                       <span style={{color: '#a3906a'}}> / </span>
                       <span style={{color: sl ? '#E53935' : '#a3906a', fontWeight: 800}}>SL {sl ? `$${fmtPrice(sl)}` : '-'}</span>
                     </td>
-                    <td style={S.td}>{isDust ? 'Dust' : `${lev}x`}</td>
+                    <td style={S.td}>{isDust ? 'Dust' : formatPositionLeverageBadge(lev)}</td>
                     <td style={S.td}>
                       <button
                         style={{...S.tblCloseBtn, opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer'}}
@@ -5816,7 +5866,7 @@ function FuturesPanel() {
                       fontSize: 11, fontWeight: 800, color: '#a3906a',
                       background: '#fdf8e7', padding: '2px 6px',
                       borderRadius: 5, border: '1px solid #d4c8b0',
-                    }}>{isDust ? 'DUST' : `${setLev}x`}</span>
+                    }}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                   </div>
                   <span style={{
                     fontSize: 18, fontWeight: 900, color: pnlColor,
@@ -5911,7 +5961,7 @@ function FuturesPanel() {
                       </span>
                     );
                   })()}
-                  <span style={{fontSize: 11, fontWeight: 800, color: isDust ? '#8a6d2f' : '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{isDust ? 'DUST' : `${setLev}x`}</span>
+                  <span style={{fontSize: 11, fontWeight: 800, color: isDust ? '#8a6d2f' : '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                   <span style={{fontSize: 13, fontWeight: 900, color: pos.side === 'bid' ? '#4CAF50' : '#E53935'}}>
                     {pos.side === 'bid' ? 'LONG' : 'SHORT'}
                   </span>

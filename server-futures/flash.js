@@ -571,6 +571,7 @@ function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map()) {
   const leverage = numberFromUi(metric.leverageUi);
   const apiLiq = numberFromUi(metric.liquidationPriceUi);
   const liq = displayLiquidationPrice({ side, entry, sizeUsd, collateralUsd, apiLiq });
+  const collateralLeverage = collateralUsd > 0 && sizeUsd > 0 ? sizeUsd / collateralUsd : 0;
   return {
     marketPubkey,
     marketSymbol: symbol,
@@ -594,7 +595,8 @@ function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map()) {
     pnl_pct: isDust ? 0 : (collateralUsd > 0 ? (pnl / collateralUsd) * 100 : undefined),
     liquidationPriceUi: metric.liquidationPriceUi,
     liquidation_price: isDust ? undefined : (liq || metric.liquidationPriceUi),
-    leverage: isDust ? undefined : (Number.isFinite(leverage) && leverage > 0 ? leverage : (collateralUsd > 0 && sizeUsd > 0 ? sizeUsd / collateralUsd : 1)),
+    leverage: isDust ? undefined : (collateralLeverage > 0 ? Math.round(collateralLeverage * 10) / 10 : undefined),
+    effective_leverage: Number.isFinite(leverage) && leverage > 0 ? leverage : undefined,
     inputUsdUi: metric.sizeUsdUi,
     _flashDust: isDust,
     _flashDustUsd: isDust ? sizeUsd : undefined,

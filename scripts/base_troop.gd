@@ -1039,7 +1039,7 @@ func take_damage(dmg: int) -> void:
 		queue_free()
 
 
-## Reports this troop's death to React for immediate UI feedback. Persistent
+## Records this troop's death for a single end-of-battle UI report. Persistent
 ## casualties are applied once from the final battle result so troops are not
 ## removed twice by live death telemetry and replay verification.
 func _report_death() -> void:
@@ -1049,9 +1049,14 @@ func _report_death() -> void:
 	for bs_node in _get_building_systems_cached():
 		if is_instance_valid(bs_node) and "_replay_active" in bs_node and bs_node._replay_active:
 			return
-	var bridge: Node = get_node_or_null("/root/Bridge")
-	if bridge and bridge.has_method("send_to_react"):
-		bridge.send_to_react("troop_died", {"troop_name": troop_name})
+	var replay_order: int = -1
+	if has_meta("replay_order"):
+		replay_order = int(get_meta("replay_order"))
+	var troop_instance: int = int(get_instance_id())
+	for bs_node in _get_building_systems_cached():
+		if is_instance_valid(bs_node) and bs_node.has_method("record_troop_death_once"):
+			if bs_node.record_troop_death_once(troop_name, troop_instance, replay_order):
+				return
 
 
 ## Returns the canonical troop name from this script's path.
