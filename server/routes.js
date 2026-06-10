@@ -1242,7 +1242,7 @@ async function sendNftMetadata(req, res, chain, rawTokenId) {
   if (chainKey) {
     try { level = await readNftLevelCached(chainKey, id); } catch { level = 1; }
   }
-  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'no-cache, max-age=0, must-revalidate');
   res.json(nftTokenMetadata(req, chain, id, level));
 }
 
@@ -1316,7 +1316,7 @@ async function sendAptosNftMetadata(req, res, rawTokenId) {
   const id = Number(tokenId);
   if (id < 1 || id > NFT_METADATA_MAX_TOKEN_ID) return res.status(404).json({ error: 'token metadata not found' });
   const level = await readAptosNftLevelCached(id);
-  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'no-cache, max-age=0, must-revalidate');
   res.json(nftTokenMetadata(req, 'Aptos', id, level));
 }
 
@@ -4484,7 +4484,7 @@ router.get('/nft/image/:level', (req, res) => {
 
 router.get('/nft/base/contract', (req, res) => {
   const name = process.env.NFT_NAME || 'Demon King';
-  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'no-cache, max-age=0, must-revalidate');
   res.json({
     name,
     description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
@@ -4495,6 +4495,17 @@ router.get('/nft/base/contract', (req, res) => {
   });
 });
 
+async function sendRevealedDemonKingMetadata(req, res) {
+  const chainKey = String(req.params.chain || '').toLowerCase();
+  const labels = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', ink: 'Ink', solana: 'Solana' };
+  if (chainKey === 'aptos') return sendAptosNftMetadata(req, res, req.params.tokenId);
+  const label = labels[chainKey];
+  if (!label) return res.status(404).json({ error: 'token metadata not found' });
+  return sendNftMetadata(req, res, label, req.params.tokenId);
+}
+
+router.get('/nft/revealed/:chain/:tokenId', sendRevealedDemonKingMetadata);
+router.get('/nft/revealed/:chain/:tokenId.json', sendRevealedDemonKingMetadata);
 router.get('/nft/base/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Base', req.params.tokenId); });
 router.get('/nft/base/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Base', req.params.tokenId); });
 router.get('/nft/arbitrum/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Arbitrum', req.params.tokenId); });

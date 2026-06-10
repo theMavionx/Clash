@@ -39,12 +39,11 @@ export function baseTokenUri(env) {
 }
 
 export function evmTokenUri(env, chainKey = 'base') {
-  const normalized = String(chainKey || 'base').toUpperCase();
+  const chain = String(chainKey || 'base').toLowerCase();
+  const normalized = chain.toUpperCase();
   return env[`NFT_${normalized}_TOKEN_URI`]
     || env[`NFT_${normalized}_BASE_TOKEN_URI`]
-    || (String(chainKey || 'base').toLowerCase() === 'base'
-      ? baseTokenUri(env)
-      : `${publicBaseUrl(env)}/api/nft/${String(chainKey).toLowerCase()}/`);
+    || `${publicBaseUrl(env)}/api/nft/revealed/${chain}/`;
 }
 
 export function baseContractUri(env) {

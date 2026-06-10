@@ -32,6 +32,7 @@ const GMTRADE_RPC_ORIGIN = String(process.env.GMTRADE_RPC_ORIGIN || 'https://gmt
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.GMTRADE_TIMEOUT_MS || 7000)));
 const PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.GMTRADE_PUBLIC_CACHE_TTL_MS || 12_000)));
 const PRICE_CACHE_TTL_MS = Math.max(500, Math.min(30_000, Number(process.env.GMTRADE_PRICE_CACHE_TTL_MS || 2500)));
+const OFFICIAL_PRICE_MAX_AGE_MS = Math.max(15_000, Math.min(10 * 60_000, Number(process.env.GMTRADE_OFFICIAL_PRICE_MAX_AGE_MS || 90_000)));
 const MARKET_DISCOVERY_TTL_MS = Math.max(30_000, Math.min(30 * 60_000, Number(process.env.GMTRADE_MARKET_DISCOVERY_TTL_MS || 10 * 60_000)));
 
 const PYTH_HISTORY_API = 'https://benchmarks.pyth.network/v1/shims/tradingview';
@@ -1208,7 +1209,11 @@ async function getOfficialPriceSnapshot() {
     const mid = min > 0 && max > 0 ? (min + max) / 2 : (max || min || 0);
     if (!(mid > 0)) continue;
     const prev = prices[symbol];
-    const updatedAt = Number(row.updatedAt || row.timestamp || 0);
+    const rawUpdatedAt = Number(row.updatedAt || row.timestamp || 0);
+    const updatedAt = rawUpdatedAt > 0 && rawUpdatedAt < 1_000_000_000_000
+      ? rawUpdatedAt * 1000
+      : rawUpdatedAt;
+    if (updatedAt > 0 && Date.now() - updatedAt > OFFICIAL_PRICE_MAX_AGE_MS) continue;
     if (prev && Number(prev.updated_at || 0) > updatedAt) continue;
     prices[symbol] = {
       symbol,
@@ -1309,26 +1314,16 @@ async function getPrices() {
   if (Date.now() - priceCache.at < PRICE_CACHE_TTL_MS && priceCache.prices && Object.keys(priceCache.prices).length) {
     return priceCache.prices;
   }
-  const cg = await getCoingeckoMarketSnapshot();
-  const prices = { ...(cg.prices || {}) };
+  const prices = {};
   try {
     const official = await getOfficialPriceSnapshot();
     for (const [symbol, row] of Object.entries(official)) {
-      const prev = prices[symbol] || {};
       prices[symbol] = {
-        ...prev,
         ...row,
-        volume_24h: prev.volume_24h || row.volume_24h || '0',
-        open_interest: prev.open_interest || row.open_interest || '0',
-        funding_rate: prev.funding_rate || row.funding_rate || '0',
       };
     }
   } catch (e) {
     console.warn('[gmtrade] official price cache failed:', e.message);
-  }
-  if (Object.keys(prices).length) {
-    priceCache = { at: Date.now(), prices };
-    return prices;
   }
   const entries = await Promise.all(DEFAULT_MARKETS.map(async (m) => {
     try {
@@ -1339,7 +1334,21 @@ async function getPrices() {
     }
   }));
   for (const entry of entries) {
-    if (entry) prices[entry[0]] = entry[1];
+    if (entry && !prices[entry[0]]) {
+      prices[entry[0]] = entry[1];
+      console.log(`[gmtrade] price fallback pyth symbol=${entry[0]} mark=${entry[1].mark}`);
+    }
+  }
+  const cg = await getCoingeckoMarketSnapshot();
+  for (const [symbol, row] of Object.entries(cg.prices || {})) {
+    const prev = prices[symbol] || {};
+    prices[symbol] = {
+      ...row,
+      ...prev,
+      volume_24h: row.volume_24h || prev.volume_24h || '0',
+      open_interest: row.open_interest || prev.open_interest || '0',
+      funding_rate: row.funding_rate || prev.funding_rate || '0',
+    };
   }
   priceCache = { at: Date.now(), prices };
   return prices;

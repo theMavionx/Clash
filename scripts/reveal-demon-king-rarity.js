@@ -4,6 +4,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { createRequire } = require('module');
 
 function loadEnvFile(filePath) {
   try {
@@ -37,6 +38,35 @@ for (const envPath of [
 const gameDb = require(path.resolve(__dirname, '..', 'server', 'db'));
 const { deploymentOf, normalizeAptosAddress } = require(path.resolve(__dirname, '..', 'server', 'bridge_helpers'));
 const { solanaRpcUrls } = require(path.resolve(__dirname, '..', 'server', 'solana_rpc'));
+
+function packageRequire(name) {
+  const roots = [
+    path.resolve(__dirname, '..', 'web', 'package.json'),
+    path.resolve(__dirname, '..', 'server-futures', 'package.json'),
+    path.resolve(__dirname, '..', 'server', 'package.json'),
+    path.resolve(__dirname, '..', 'package.json'),
+  ];
+  let lastErr = null;
+  for (const root of roots) {
+    try {
+      return createRequire(root)(name);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) throw lastErr;
+  return require(name);
+}
+
+async function importPackage(name) {
+  try {
+    return await import(name);
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (!/Cannot find package|ERR_MODULE_NOT_FOUND|Cannot find module/i.test(msg)) throw err;
+    return packageRequire(name);
+  }
+}
 
 const args = new Set(process.argv.slice(2));
 const APPLY = args.has('--apply');
@@ -278,7 +308,7 @@ function parseEvmAddressList(value) {
 }
 
 async function evmExcludedOwners({ chainKey, deployment, publicClient, contract }) {
-  const { getAddress } = await import('viem');
+  const { getAddress } = await importPackage('viem');
   const upper = chainKey.toUpperCase();
   const set = new Set([
     ...parseEvmAddressList(process.env.NFT_EVM_SUPPLY_EXCLUDED_OWNERS),
@@ -303,8 +333,8 @@ async function readEvmOnchainCandidates(chainKey, dbMeta) {
   const contractRaw = process.env[`NFT_${chainKey.toUpperCase()}_CONTRACT`] || deployment.proxy || deployment.contract;
   if (!contractRaw) return { chain: chainKey, ok: true, rows: [], source: 'not_deployed' };
 
-  const { createPublicClient, defineChain, getAddress, http } = await import('viem');
-  const viemChains = await import('viem/chains');
+  const { createPublicClient, defineChain, getAddress, http } = await importPackage('viem');
+  const viemChains = await importPackage('viem/chains');
   const chain = evmChainSpec(chainKey, defineChain, viemChains);
   const rpcs = evmRpcUrls(chainKey, deployment);
   const contract = getAddress(contractRaw);
@@ -422,9 +452,9 @@ async function readSolanaOnchainCandidates(dbMeta) {
   const deployment = deploymentOf('solana', 'demonking') || {};
   const collection = process.env.NFT_SOLANA_COLLECTION || deployment.collection;
   if (!collection) return { chain: 'solana', ok: true, rows: [], source: 'not_deployed' };
-  const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
-  const { mplCore, fetchAssetsByCollection } = await import('@metaplex-foundation/mpl-core');
-  const { publicKey } = await import('@metaplex-foundation/umi');
+  const { createUmi } = await importPackage('@metaplex-foundation/umi-bundle-defaults');
+  const { mplCore, fetchAssetsByCollection } = await importPackage('@metaplex-foundation/mpl-core');
+  const { publicKey } = await importPackage('@metaplex-foundation/umi');
   const urls = solanaRpcUrls([deployment.rpcUrl]);
   return withRpcFallback(urls, async (rpc) => {
     const umi = createUmi(rpc).use(mplCore());
