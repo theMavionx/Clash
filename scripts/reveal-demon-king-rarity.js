@@ -43,6 +43,7 @@ const APPLY = args.has('--apply');
 const RESET = args.has('--reset');
 const DB_ONLY = args.has('--db-only');
 const KEEP_STALE = args.has('--keep-stale');
+const INCLUDE_APTOS_EXCLUDED = args.has('--include-aptos-excluded') || args.has('--include-aptos-reserve');
 const SEED = String(process.env.DEMON_KING_RARITY_REVEAL_SEED || '').trim()
   || process.argv.find((arg) => arg.startsWith('--seed='))?.slice('--seed='.length)
   || 'clash-demon-king-rarity-v1';
@@ -493,7 +494,7 @@ async function readAptosOnchainCandidates(dbMeta) {
       const tokenId = String(row.token_data_id || '').trim();
       const dbRow = dbMeta.get(`aptos:${tokenId}`);
       const owner = normalizeAptosAddress(row.owner_address);
-      if (owner && excludedOwners.has(owner)) continue;
+      if (!INCLUDE_APTOS_EXCLUDED && owner && excludedOwners.has(owner)) continue;
       rows.push(normalizeCandidate({
         chain: 'aptos',
         token_id: tokenId,
