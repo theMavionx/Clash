@@ -22,8 +22,8 @@ extends Node3D
 ## must keep the real effect alive long enough for particles/material variants
 ## to compile before the first attack starts.
 const HOME_WARMUP_FRAMES: int = 4
-const COMBAT_WARMUP_FRAMES: int = 60
-const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [8, 18]
+const COMBAT_WARMUP_FRAMES: int = 160
+const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [8, 48, 88, 128]
 ## Sub-pixel scales (< ~0.005) are frustum-culled by both renderers — the draw
 ## call never reaches the GPU and the pipeline isn't compiled. 0.02 is small
 ## enough to be invisible against the water/sky but big enough to rasterize.
@@ -569,35 +569,18 @@ func _process_fire_dragon_prewarm_frames() -> void:
 
 func _warmup_fire_dragon_breath_materials() -> void:
 	var breath: Texture2D = ResourceLoader.load("res://Model/Characters/FireDragon/Textures/fx_fire_breath.tga", "Texture2D")
-	var sparks: Texture2D = ResourceLoader.load("res://Model/Characters/FireDragon/Textures/fx_sparks.tga", "Texture2D")
-	if breath == null or sparks == null:
+	if breath == null:
 		print("[WARMUP] FireDragon breath textures incomplete - skipped")
 		return
 
-	var puff := MeshInstance3D.new()
-	var puff_mesh := QuadMesh.new()
-	puff_mesh.size = Vector2(0.14, 0.14)
-	puff.mesh = puff_mesh
-	puff.material_override = _make_additive_material(breath, Color(1.14, 0.78, 0.12, 0.46), true)
-	puff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(puff)
-
-	var ember := MeshInstance3D.new()
-	var ember_mesh := QuadMesh.new()
-	ember_mesh.size = Vector2(0.08, 0.08)
-	ember.mesh = ember_mesh
-	ember.material_override = _make_additive_material(sparks, Color(1.20, 0.86, 0.16, 0.52), true)
-	ember.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(ember)
-
 	var flame_particles := GPUParticles3D.new()
 	flame_particles.name = "WarmupFireDragonFlameParticles"
-	flame_particles.amount = 56
+	flame_particles.amount = 40
 	flame_particles.lifetime = 0.56
 	flame_particles.one_shot = true
 	flame_particles.explosiveness = 0.82
 	flame_particles.randomness = 0.72
-	flame_particles.fixed_fps = 30
+	flame_particles.fixed_fps = 24
 	flame_particles.interpolate = true
 	flame_particles.local_coords = true
 	flame_particles.draw_order = GPUParticles3D.DRAW_ORDER_REVERSE_LIFETIME
@@ -624,6 +607,66 @@ func _warmup_fire_dragon_breath_materials() -> void:
 	flame_particles.process_material = flame_process
 	add_child(flame_particles)
 	flame_particles.restart()
+
+	var trail_particles := GPUParticles3D.new()
+	trail_particles.name = "WarmupFireDragonTrailParticles"
+	trail_particles.amount = 16
+	trail_particles.lifetime = 0.52
+	trail_particles.one_shot = true
+	trail_particles.explosiveness = 0.86
+	trail_particles.randomness = 0.76
+	trail_particles.fixed_fps = 20
+	trail_particles.interpolate = true
+	trail_particles.local_coords = true
+	trail_particles.draw_order = GPUParticles3D.DRAW_ORDER_REVERSE_LIFETIME
+	var trail_mesh := QuadMesh.new()
+	trail_mesh.size = Vector2(0.10, 0.09)
+	trail_mesh.material = _make_particle_billboard_material(breath, Color(1.0, 0.82, 0.14, 0.46), true)
+	trail_particles.draw_passes = 1
+	trail_particles.set_draw_pass_mesh(0, trail_mesh)
+	var trail_process := ParticleProcessMaterial.new()
+	trail_process.direction = Vector3(0.0, 1.0, 0.0)
+	trail_process.spread = 14.0
+	trail_process.gravity = Vector3.ZERO
+	trail_process.initial_velocity_min = 0.05
+	trail_process.initial_velocity_max = 0.18
+	trail_process.lifetime_randomness = 0.28
+	trail_process.scale_min = 0.38
+	trail_process.scale_max = 1.10
+	trail_process.angle_min = -100.0
+	trail_process.angle_max = 100.0
+	trail_process.angular_velocity_min = -110.0
+	trail_process.angular_velocity_max = 110.0
+	trail_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	trail_process.emission_box_extents = Vector3(0.04, 0.18, 0.03)
+	trail_particles.process_material = trail_process
+	add_child(trail_particles)
+	trail_particles.restart()
+
+	var cpu_particles := CPUParticles3D.new()
+	cpu_particles.name = "WarmupFireDragonCpuParticles"
+	cpu_particles.amount = 16
+	cpu_particles.lifetime = 0.52
+	cpu_particles.one_shot = true
+	cpu_particles.explosiveness = 0.86
+	cpu_particles.randomness = 0.76
+	cpu_particles.local_coords = true
+	cpu_particles.direction = Vector3(0.0, 1.0, 0.0)
+	cpu_particles.spread = 14.0
+	cpu_particles.gravity = Vector3.ZERO
+	cpu_particles.initial_velocity_min = 0.05
+	cpu_particles.initial_velocity_max = 0.18
+	cpu_particles.color = Color(1.0, 0.82, 0.14, 0.46)
+	cpu_particles.scale_amount_min = 0.38
+	cpu_particles.scale_amount_max = 1.10
+	cpu_particles.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	cpu_particles.emission_box_extents = Vector3(0.04, 0.18, 0.03)
+	var cpu_mesh := QuadMesh.new()
+	cpu_mesh.size = Vector2(0.10, 0.09)
+	cpu_mesh.material = _make_particle_billboard_material(breath, Color(1.0, 0.82, 0.14, 0.46), true)
+	cpu_particles.mesh = cpu_mesh
+	add_child(cpu_particles)
+	cpu_particles.restart()
 
 	var light := OmniLight3D.new()
 	light.light_color = Color(1.0, 0.76, 0.12)

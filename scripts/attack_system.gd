@@ -47,7 +47,7 @@ const SHIP_MODELS: Array[String] = [
 ]
 const SHIP_SCALES: Array[float] = [0.05, 0.05, 0.05]
 const TROOP_SCALE_MULTIPLIERS: Dictionary = {
-	"FireDragon": 0.6,
+	"FireDragon": 0.15,
 }
 
 ## Troop name → {model, script} for spawning combat troops
