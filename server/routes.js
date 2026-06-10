@@ -18746,6 +18746,50 @@ router.get('/admin/referrals', adminAuth, (req, res) => {
       gross_usd: Number(row.gross_usd_e6 || 0) / 1_000_000,
       commission_usd: Number(row.commission_usd_e6 || 0) / 1_000_000,
     }));
+    const referrals = db.db.prepare(`
+      WITH referred_event_totals AS (
+        SELECT
+          referrer_player_id,
+          referred_player_id,
+          COALESCE(SUM(CASE WHEN status IN ('confirmed', 'claimable') THEN commission_usd_e6 ELSE 0 END), 0) AS confirmed_usd_e6,
+          COALESCE(SUM(CASE WHEN status = 'pending' THEN commission_usd_e6 ELSE 0 END), 0) AS pending_usd_e6,
+          COALESCE(SUM(CASE WHEN status = 'paid' THEN commission_usd_e6 ELSE 0 END), 0) AS paid_usd_e6,
+          COUNT(id) AS events_count,
+          MAX(created_at) AS latest_event_at
+        FROM referral_events
+        GROUP BY referrer_player_id, referred_player_id
+      )
+      SELECT
+        pr.referrer_player_id,
+        rp.name AS referrer_name,
+        pr.referred_player_id,
+        up.name AS referred_name,
+        pr.code,
+        pr.source,
+        pr.bound_at,
+        pr.metadata_json,
+        COALESCE(ret.confirmed_usd_e6, 0) AS confirmed_usd_e6,
+        COALESCE(ret.pending_usd_e6, 0) AS pending_usd_e6,
+        COALESCE(ret.paid_usd_e6, 0) AS paid_usd_e6,
+        COALESCE(ret.events_count, 0) AS events_count,
+        ret.latest_event_at
+      FROM player_referrals pr
+      JOIN players rp ON rp.id = pr.referrer_player_id
+      JOIN players up ON up.id = pr.referred_player_id
+      LEFT JOIN referred_event_totals ret
+        ON ret.referrer_player_id = pr.referrer_player_id
+       AND ret.referred_player_id = pr.referred_player_id
+      ORDER BY pr.bound_at DESC
+      LIMIT 1000
+    `).all().map((row) => ({
+      ...row,
+      confirmed_usd: Number(row.confirmed_usd_e6 || 0) / 1_000_000,
+      pending_usd: Number(row.pending_usd_e6 || 0) / 1_000_000,
+      paid_usd: Number(row.paid_usd_e6 || 0) / 1_000_000,
+      metadata: (() => {
+        try { return JSON.parse(row.metadata_json || '{}'); } catch { return {}; }
+      })(),
+    }));
     const payouts = db.db.prepare(`
       SELECT rp.*, p.name AS referrer_name
       FROM referral_payouts rp
@@ -18756,7 +18800,7 @@ router.get('/admin/referrals', adminAuth, (req, res) => {
       ...row,
       amount_usd: Number(row.amount_usd_e6 || 0) / 1_000_000,
     }));
-    res.json({ rows, recent, payouts, rate_bps: 1000 });
+    res.json({ rows, referrals, recent, payouts, rate_bps: 1000 });
   } catch (e) {
     console.warn('[referrals] admin list failed:', e.message);
     res.status(500).json({ error: 'Failed to load referrals' });

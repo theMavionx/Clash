@@ -1488,10 +1488,12 @@ function EarningsDexCard({ row }) {
 
 function ReferralsPanel({ data, reload }) {
   const rows = data?.rows || [];
+  const referrals = data?.referrals || [];
   const recent = data?.recent || [];
   const payouts = data?.payouts || [];
   const rate = Number(data?.rate_bps || 0) / 100;
   const [query, setQuery] = useState('');
+  const [selectedReferrer, setSelectedReferrer] = useState(null);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
 
@@ -1507,6 +1509,16 @@ function ReferralsPanel({ data, reload }) {
     acc.events += Number(row.events_count || 0);
     return acc;
   }, { invited: 0, confirmed: 0, pending: 0, paid: 0, events: 0 });
+  const referralsByReferrer = referrals.reduce((acc, referral) => {
+    const key = referral.referrer_player_id || '';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(referral);
+    return acc;
+  }, {});
+  const filteredReferrals = referrals.filter((referral) => {
+    const hay = `${referral.referrer_name || ''} ${referral.referred_name || ''} ${referral.referrer_player_id || ''} ${referral.referred_player_id || ''} ${referral.code || ''}`.toLowerCase();
+    return !query || hay.includes(query.toLowerCase());
+  });
 
   async function runAction(label, fn) {
     if (busy) return;
@@ -1554,7 +1566,7 @@ function ReferralsPanel({ data, reload }) {
     <div className="admin-grid">
       <StatsGrid stats={[
         { label: 'Referrers', value: num(rows.length), tone: 'blue' },
-        { label: 'Invited players', value: num(totals.invited), tone: 'green' },
+        { label: 'Invited players', value: num(referrals.length || totals.invited), tone: 'green' },
         { label: 'Confirmed', value: fmtMaybeUsd(totals.confirmed), tone: 'gold' },
         { label: 'Pending', value: fmtMaybeUsd(totals.pending), tone: totals.pending ? 'blue' : 'green' },
         { label: 'Paid', value: fmtMaybeUsd(totals.paid), tone: 'green' },
@@ -1586,12 +1598,12 @@ function ReferralsPanel({ data, reload }) {
                   <tr key={row.player_id}>
                     <td><strong>{row.player_name || '-'}</strong><div className="admin-card-sub admin-mono">{row.player_id}</div></td>
                     <td><span className="admin-badge gold">{row.code}</span><div className="admin-card-sub admin-mono">/r/{row.code}</div></td>
-                    <td>{num(row.invited_count)}</td>
+                    <td><button className="admin-btn" onClick={() => setSelectedReferrer(row)}>{num(referralsByReferrer[row.player_id]?.length || row.invited_count)} referrals</button></td>
                     <td style={{ color: 'var(--admin-gold)' }}>{fmtMaybeUsd(row.confirmed_usd)}</td>
                     <td>{fmtMaybeUsd(row.pending_usd)}</td>
                     <td style={{ color: 'var(--admin-green)' }}>{fmtMaybeUsd(row.paid_usd)}</td>
                     <td>{num(row.events_count)}</td>
-                    <td><button className="admin-btn primary" onClick={() => createPayout(row)} disabled={!!busy || Number(row.confirmed_usd || 0) <= 0}>Create payout</button></td>
+                    <td><div className="admin-filter-row"><button className="admin-btn" onClick={() => setSelectedReferrer(row)}>Open</button><button className="admin-btn primary" onClick={() => createPayout(row)} disabled={!!busy || Number(row.confirmed_usd || 0) <= 0}>Create payout</button></div></td>
                   </tr>
                 ))}
               </tbody>
@@ -1599,6 +1611,8 @@ function ReferralsPanel({ data, reload }) {
           </div>
         </div>
       </div>
+
+      <CompactTable title="All Referral Links" subtitle="Every bound referred player, grouped in the row by referrer and searchable from the same filter." columns={['Bound', 'Referrer', 'Referred Player', 'Code', 'Source', 'Confirmed', 'Pending', 'Paid', 'Events', 'Latest Event']} rows={filteredReferrals.slice(0, 500).map((row) => [fmtTime(row.bound_at), row.referrer_name || row.referrer_player_id, <span><strong>{row.referred_name || '-'}</strong><div className="admin-card-sub admin-mono">{row.referred_player_id}</div></span>, <span className="admin-badge gold">{row.code}</span>, row.source || '-', fmtMaybeUsd(row.confirmed_usd), fmtMaybeUsd(row.pending_usd), fmtMaybeUsd(row.paid_usd), num(row.events_count), fmtTime(row.latest_event_at)])} />
 
       <div className="admin-grid two">
         <CompactTable title="Recent Referral Events" subtitle="Newest immutable commission events after exact-source attribution." columns={['Time', 'Referrer', 'Referred', 'Kind', 'Source', 'Gross', 'Commission', 'Status']} rows={recent.slice(0, 120).map((row) => [fmtTime(row.created_at), row.referrer_name || row.referrer_player_id, row.referred_name || row.referred_player_id, row.revenue_kind, row.source_type, fmtMaybeUsd(row.gross_usd), fmtMaybeUsd(row.commission_usd), statusBadge(row.status)])} />
@@ -1628,7 +1642,58 @@ function ReferralsPanel({ data, reload }) {
           </div>
         </div>
       </div>
+      {selectedReferrer && (
+        <ReferralDetailsDrawer
+          referrer={selectedReferrer}
+          referrals={referralsByReferrer[selectedReferrer.player_id] || []}
+          events={recent.filter((row) => row.referrer_player_id === selectedReferrer.player_id)}
+          onClose={() => setSelectedReferrer(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function ReferralDetailsDrawer({ referrer, referrals, events, onClose }) {
+  const totals = referrals.reduce((acc, row) => {
+    acc.confirmed += Number(row.confirmed_usd || 0);
+    acc.pending += Number(row.pending_usd || 0);
+    acc.paid += Number(row.paid_usd || 0);
+    acc.events += Number(row.events_count || 0);
+    return acc;
+  }, { confirmed: 0, pending: 0, paid: 0, events: 0 });
+  return (
+    <Drawer title={`Referrals В· ${referrer.player_name || referrer.player_id}`} subtitle={`${referrals.length} invited players via /r/${referrer.code || '-'}`} onClose={onClose}>
+      <div className="admin-grid">
+        <StatsGrid stats={[
+          { label: 'Invited', value: num(referrals.length), tone: 'green' },
+          { label: 'Confirmed', value: fmtMaybeUsd(totals.confirmed), tone: 'gold' },
+          { label: 'Pending', value: fmtMaybeUsd(totals.pending), tone: totals.pending ? 'blue' : 'green' },
+          { label: 'Paid', value: fmtMaybeUsd(totals.paid), tone: 'green' },
+          { label: 'Events', value: num(totals.events) },
+        ]} />
+        <div className="admin-table-wrap admin-scroll">
+          <table className="admin-table">
+            <thead><tr><th>Bound</th><th>Referred Player</th><th>Source</th><th>Confirmed</th><th>Pending</th><th>Paid</th><th>Events</th><th>Latest Event</th></tr></thead>
+            <tbody>
+              {referrals.length ? referrals.map((row) => (
+                <tr key={row.referred_player_id}>
+                  <td>{fmtTime(row.bound_at)}</td>
+                  <td><strong>{row.referred_name || '-'}</strong><div className="admin-card-sub admin-mono">{row.referred_player_id}</div></td>
+                  <td>{row.source || '-'}</td>
+                  <td style={{ color: 'var(--admin-gold)' }}>{fmtMaybeUsd(row.confirmed_usd)}</td>
+                  <td>{fmtMaybeUsd(row.pending_usd)}</td>
+                  <td style={{ color: 'var(--admin-green)' }}>{fmtMaybeUsd(row.paid_usd)}</td>
+                  <td>{num(row.events_count)}</td>
+                  <td>{fmtTime(row.latest_event_at)}</td>
+                </tr>
+              )) : <tr><td colSpan={8}><span className="admin-help">This referrer has no bound referred players yet.</span></td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <CompactTable title="Recent Events For This Referrer" subtitle="Limited to the recent events included in the admin referral payload." columns={['Time', 'Referred', 'Kind', 'Source', 'Gross', 'Commission', 'Status']} rows={events.slice(0, 80).map((row) => [fmtTime(row.created_at), row.referred_name || row.referred_player_id, row.revenue_kind, row.source_type, fmtMaybeUsd(row.gross_usd), fmtMaybeUsd(row.commission_usd), statusBadge(row.status)])} />
+      </div>
+    </Drawer>
   );
 }
 
