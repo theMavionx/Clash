@@ -22,5 +22,8 @@
   "upgradeBlockNumber": "47139070",
   "upgradedAt": "2026-06-05T05:31:29.059Z",
   "unpauseTxHash": "0x4a0a12c6f31a6d9f7ba1db9b0ff592cc5d8d5f1e32f6c24d57077a06b88bed28",
-  "unpausedAt": "2026-06-05T05:34:05.396Z"
+  "unpausedAt": "2026-06-05T05:34:05.396Z",
+  "baseTokenUri": "https://clashofperps.fun/api/nft/revealed/ink/",
+  "baseUriTxHash": "0x481d57a487be306a1c1ddee2cd7d883849529868571f19b46f2442a97d93249d",
+  "baseUriUpdatedAt": "2026-06-10T20:46:50.536Z"
 }
