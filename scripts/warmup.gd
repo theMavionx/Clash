@@ -18,7 +18,7 @@ extends Node3D
 ## attack starts.
 
 ## WebGL2 shader compile is async and can take several rendered frames per
-## variant. FireDragon's full breath VFX lives for ~0.6s, so combat warmup
+## variant. FireDragon's full breath VFX lives for ~0.8s, so combat warmup
 ## must keep the real effect alive long enough for particles/material variants
 ## to compile before the first attack starts.
 const HOME_WARMUP_FRAMES: int = 4
@@ -575,29 +575,29 @@ func _warmup_fire_dragon_breath_materials() -> void:
 
 	var flame_particles := GPUParticles3D.new()
 	flame_particles.name = "WarmupFireDragonFlameParticles"
-	flame_particles.amount = 40
-	flame_particles.lifetime = 0.56
+	flame_particles.amount = 46
+	flame_particles.lifetime = 0.74
 	flame_particles.one_shot = true
-	flame_particles.explosiveness = 0.82
-	flame_particles.randomness = 0.72
+	flame_particles.explosiveness = 0.48
+	flame_particles.randomness = 0.62
 	flame_particles.fixed_fps = 24
 	flame_particles.interpolate = true
 	flame_particles.local_coords = true
 	flame_particles.draw_order = GPUParticles3D.DRAW_ORDER_REVERSE_LIFETIME
 	var flame_mesh := QuadMesh.new()
-	flame_mesh.size = Vector2(0.12, 0.14)
-	flame_mesh.material = _make_particle_billboard_material(breath, Color(1.18, 0.82, 0.12, 0.76), true)
+	flame_mesh.size = Vector2(0.13, 0.16)
+	flame_mesh.material = _make_particle_billboard_material(breath, Color(1.0, 0.92, 0.22, 0.84), true)
 	flame_particles.draw_passes = 1
 	flame_particles.set_draw_pass_mesh(0, flame_mesh)
 	var flame_process := ParticleProcessMaterial.new()
 	flame_process.direction = Vector3(0.0, 1.0, 0.0)
-	flame_process.spread = 9.0
+	flame_process.spread = 5.2
 	flame_process.gravity = Vector3.ZERO
-	flame_process.initial_velocity_min = 0.75
-	flame_process.initial_velocity_max = 1.05
+	flame_process.initial_velocity_min = 0.72
+	flame_process.initial_velocity_max = 1.16
 	flame_process.lifetime_randomness = 0.22
-	flame_process.scale_min = 0.50
-	flame_process.scale_max = 1.55
+	flame_process.scale_min = 0.32
+	flame_process.scale_max = 1.00
 	flame_process.angle_min = -90.0
 	flame_process.angle_max = 90.0
 	flame_process.angular_velocity_min = -130.0

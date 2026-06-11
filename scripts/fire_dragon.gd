@@ -38,23 +38,23 @@ const RED_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textur
 const BLACK_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_black.tga")
 const PURPLE_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_purple.tga")
 const FIRE_BREATH_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fx_fire_breath.tga")
-const FIRE_BREATH_DURATION: float = 0.58
+const FIRE_BREATH_DURATION: float = 0.74
 const FIRE_BREATH_WIDTH: float = 0.28
 const FIRE_BREATH_VISUAL_WIDTH_SCALE: float = 0.65
 const FIRE_BREATH_MOUTH_FORWARD_OFFSET: float = 0.08
 const FIRE_BREATH_TARGET_Y_OFFSET: float = 0.13
 const FIRE_BREATH_MIN_LENGTH: float = 0.12
-const FIRE_BREATH_FLAME_PARTICLES: int = 40
+const FIRE_BREATH_FLAME_PARTICLES: int = 46
 const FIRE_BREATH_TRAIL_PARTICLES: int = 16
 const FIRE_BREATH_POOL_SIZE: int = 4
 const FIRE_BREATH_LIGHT_ENERGY: float = 1.7
-const FIRE_BREATH_FLAME_LIFETIME_SCALE: float = 0.68
+const FIRE_BREATH_FLAME_LIFETIME_SCALE: float = 0.96
 const FIRE_BREATH_TRAIL_LIFETIME_SCALE: float = 0.56
 const FIRE_BREATH_ATTACK_RANGE: float = 0.72
 const FIRE_BREATH_MIN_STANDOFF: float = 0.54
 const FIRE_BREATH_BUILDING_STANDOFF_PADDING: float = 0.18
 const FIRE_BREATH_STANDOFF_CORRECTION_SPEED: float = 0.52
-const FIRE_BREATH_VISUAL_OVERSHOOT: float = 0.09
+const FIRE_BREATH_VISUAL_OVERSHOOT: float = 0.18
 const DRAGON_SPAWN_SCALE: float = 0.015
 
 @export var skin: DragonSkin = DragonSkin.RED
@@ -152,6 +152,12 @@ func _ready() -> void:
 	_apply_skin()
 	_play_dragon_animation("fly_idle")
 	_apply_flight_height()
+	BaseTroop.report_render_diagnostic(self, "troop.fire_dragon.ready_after_fly_idle", {
+		"skin": int(skin),
+		"rarity": nft_rarity,
+		"level": level,
+		"spawn_scale": DRAGON_SPAWN_SCALE,
+	})
 	call_deferred("_build_fire_breath_vfx_pool")
 
 
@@ -438,11 +444,11 @@ func _activate_fire_breath_vfx_slot(slot: Dictionary, holder_name: String, mouth
 	holder.name = holder_name
 	holder.visible = true
 	_configure_flame_particle_entry(slot.get("flame") as Dictionary, mouth_pos, dir, side, normal, length, beam_width)
-	_configure_trail_particle_entry(slot.get("trail") as Dictionary, mouth_pos, dir, side, normal, length, beam_width)
+	_hide_fire_particle_entry(slot.get("trail") as Dictionary)
 	_configure_breath_lights_for_slot(slot, mouth_pos, target_pos, length)
 
 	var cleanup := holder.create_tween()
-	cleanup.tween_interval(FIRE_BREATH_DURATION + 0.04)
+	cleanup.tween_interval(FIRE_BREATH_DURATION + 0.08)
 	cleanup.tween_callback(func():
 		_return_fire_breath_vfx_slot(slot)
 	)
@@ -497,15 +503,24 @@ func _configure_flame_particle_entry(entry: Dictionary, mouth_pos: Vector3, dir:
 	var mesh := entry.get("mesh") as QuadMesh
 	if mesh == null:
 		return
-	mesh.size = Vector2(width * 0.70, width * 0.86)
-	var velocity_min: float = maxf(0.65, length / maxf(FIRE_BREATH_DURATION, 0.1) * 0.92)
-	var velocity_max: float = maxf(0.9, length / maxf(FIRE_BREATH_DURATION, 0.1) * 1.24)
+	mesh.size = Vector2(width * 0.76, width * 0.96)
+	var velocity_min: float = maxf(0.62, length / maxf(FIRE_BREATH_DURATION, 0.1) * 0.82)
+	var velocity_max: float = maxf(0.95, length / maxf(FIRE_BREATH_DURATION, 0.1) * 1.12)
 	var transform := Transform3D(Basis(side, dir, normal).orthonormalized(), mouth_pos)
 	if str(entry.get("backend", "")) == "cpu":
 		var cpu := entry.get("node") as CPUParticles3D
-		_configure_cpu_fire_particles(cpu, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_FLAME_LIFETIME_SCALE, transform, Color(1.0, 0.94, 0.28, 0.82), 7.0, velocity_min * 1.12, velocity_max * 1.18, width * 0.055, Vector3.ZERO, 0.36, 1.05)
+		_configure_cpu_fire_particles(cpu, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_FLAME_LIFETIME_SCALE, transform, Color(1.0, 0.92, 0.22, 0.84), 5.2, velocity_min, velocity_max, width * 0.045, Vector3.ZERO, 0.32, 1.00)
 		return
-	_configure_gpu_fire_particles(entry, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_FLAME_LIFETIME_SCALE, transform, length, Color(1.0, 0.94, 0.28, 0.82), 7.0, velocity_min * 1.12, velocity_max * 1.18, width * 0.055, Vector3.ZERO, 0.36, 1.05)
+	_configure_gpu_fire_particles(entry, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_FLAME_LIFETIME_SCALE, transform, length, Color(1.0, 0.92, 0.22, 0.84), 5.2, velocity_min, velocity_max, width * 0.045, Vector3.ZERO, 0.32, 1.00)
+
+
+func _hide_fire_particle_entry(entry: Dictionary) -> void:
+	if entry.is_empty():
+		return
+	var particles := entry.get("node") as Node3D
+	if is_instance_valid(particles):
+		particles.set("emitting", false)
+		particles.visible = false
 
 
 func _configure_trail_particle_entry(entry: Dictionary, mouth_pos: Vector3, dir: Vector3, side: Vector3, normal: Vector3, length: float, width: float) -> void:
@@ -535,9 +550,9 @@ func _configure_gpu_fire_particles(entry: Dictionary, amount: int, lifetime: flo
 	particles.amount = amount
 	particles.lifetime = lifetime
 	particles.one_shot = true
-	particles.explosiveness = 1.0
-	particles.randomness = 0.76
-	particles.fixed_fps = 20
+	particles.explosiveness = 0.48
+	particles.randomness = 0.62
+	particles.fixed_fps = 24
 	particles.interpolate = true
 	particles.local_coords = true
 	particles.draw_order = GPUParticles3D.DRAW_ORDER_REVERSE_LIFETIME
@@ -579,8 +594,8 @@ func _configure_cpu_fire_particles(particles: CPUParticles3D, amount: int, lifet
 	particles.amount = amount
 	particles.lifetime = lifetime
 	particles.one_shot = true
-	particles.explosiveness = 1.0
-	particles.randomness = 0.76
+	particles.explosiveness = 0.48
+	particles.randomness = 0.62
 	particles.local_coords = true
 	particles.direction = Vector3(0.0, 1.0, 0.0)
 	particles.color = color
@@ -782,7 +797,19 @@ func _play_dragon_animation(animation_name: String, force_restart: bool = false)
 	anim_player = _find_animation_player(animated_model)
 	if anim_player:
 		_current_animation_length = _play_first_imported_clip(anim_player, animation_name, true)
+		BaseTroop.report_render_diagnostic(self, "troop.fire_dragon.animation.%s" % animation_name, {
+			"animation": animation_name,
+			"force_restart": force_restart,
+			"length": snappedf(_current_animation_length, 0.001),
+			"skin": int(skin),
+			"rarity": nft_rarity,
+		})
 		return _current_animation_length
+	BaseTroop.report_render_diagnostic(self, "troop.fire_dragon.animation_missing_player.%s" % animation_name, {
+		"animation": animation_name,
+		"skin": int(skin),
+		"rarity": nft_rarity,
+	})
 	return 0.0
 
 

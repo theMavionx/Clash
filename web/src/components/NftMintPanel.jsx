@@ -295,6 +295,10 @@ function clampQuantity(value, max = MAX_BATCH_QUANTITY) {
   return Math.max(1, Math.min(hardMax, count));
 }
 
+function pause(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function multiplyRewards(rewards, quantity) {
   if (!rewards) return null;
   const count = clampQuantity(quantity);
@@ -2906,6 +2910,15 @@ async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotic
         tx: result.signature,
         asset: result.asset,
       });
+      void refreshMintConfig?.({ log: false });
+      if (i < count - 1) {
+        setMintResult?.({
+          quantity: count,
+          progressText: `Minted ${i + 1} of ${count}. Preparing next wallet approval...`,
+          minted: i + 1,
+        });
+        await pause(1200);
+      }
     }
     const result = minted[minted.length - 1] || {};
     setMintResult?.({

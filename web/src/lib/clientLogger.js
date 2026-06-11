@@ -835,6 +835,7 @@ export function installClientLogger() {
   installServiceWorkerFreshnessGuard();
 
   window.__clashLogBreadcrumb = addClientBreadcrumb;
+  window.__clashReportClientEvent = reportClientEvent;
   window.__clashSetLogContext = setClientLogContext;
   window.__clashReportLazyChunkError = reportLazyChunkError;
 

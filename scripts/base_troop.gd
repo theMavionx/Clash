@@ -42,6 +42,10 @@ static var _cached_troops: Array = []
 static var _troops_cache_frame: int = -1
 static var _attack_sfx_cache: Dictionary = {}
 static var _attack_sfx_missing: Dictionary = {}
+static var _render_diag_emitted: Dictionary = {}
+const RENDER_DIAG_MAX_EVENTS: int = 24
+const RENDER_DIAG_MAX_MESHES: int = 10
+const RENDER_DIAG_MAX_PARTICLES: int = 8
 
 ## Rally pointer — set by BSRally when the player drops a marker. The visual
 ## marker expires quickly, but the command target stays sticky until that
@@ -482,6 +486,7 @@ func _ready() -> void:
 	_setup_animations()
 	_setup_weapons()
 	_stabilize_render_meshes()
+	_report_troop_render_diagnostic("ready")
 	# Keep combat replay deterministic and aligned with the server simulator.
 	_sep_counter = 0
 	_slot_eval_timer = 0.0
@@ -545,6 +550,7 @@ func activate() -> void:
 		return
 	visible = true
 	_stabilize_render_meshes()
+	_report_troop_render_diagnostic("activate")
 	state = State.IDLE
 	add_to_group("troops")
 	_create_hp_bar()
@@ -1691,6 +1697,192 @@ func _stabilize_render_meshes_recursive(node: Node) -> void:
 		mesh_instance.lod_bias = maxf(mesh_instance.lod_bias, TROOP_MESH_LOD_BIAS)
 	for child in node.get_children():
 		_stabilize_render_meshes_recursive(child)
+
+
+func _report_troop_render_diagnostic(stage: String) -> void:
+	var script_path: String = ""
+	var script_ref := get_script()
+	if script_ref != null and script_ref.resource_path != "":
+		script_path = script_ref.resource_path
+	var troop_key: String = name
+	if script_path != "":
+		troop_key = script_path.get_file().get_basename()
+	report_render_diagnostic(self, "troop.%s.%s" % [troop_key, stage], {
+		"troop_name": name,
+		"script": script_path,
+		"level": level,
+		"state": int(state),
+	})
+
+
+static func report_render_diagnostic(root: Node, tag: String, extra: Dictionary = {}) -> void:
+	if not OS.has_feature("web"):
+		return
+	if root == null or not is_instance_valid(root):
+		return
+	var key: String = str(tag)
+	if _render_diag_emitted.has(key):
+		return
+	if _render_diag_emitted.size() >= RENDER_DIAG_MAX_EVENTS:
+		return
+	_render_diag_emitted[key] = true
+	var payload: Dictionary = _render_diag_payload(root, key, extra)
+	_emit_web_render_diagnostic(payload)
+
+
+static func _render_diag_payload(root: Node, tag: String, extra: Dictionary) -> Dictionary:
+	var payload: Dictionary = {
+		"tag": tag,
+		"root_name": str(root.name),
+		"root_class": root.get_class(),
+		"root_path": str(root.get_path()) if root.is_inside_tree() else "",
+		"root_visible": bool(root.get("visible")) if _object_has_property(root, "visible") else null,
+		"child_count": root.get_child_count(),
+		"mesh_count": 0,
+		"visible_mesh_count": 0,
+		"particle_count": 0,
+		"visible_particle_count": 0,
+		"meshes": [],
+		"particles": [],
+		"extra": extra,
+	}
+	_collect_render_diag_recursive(root, payload)
+	return payload
+
+
+static func _collect_render_diag_recursive(node: Node, payload: Dictionary) -> void:
+	if node is MeshInstance3D:
+		payload["mesh_count"] = int(payload.get("mesh_count", 0)) + 1
+		var mesh_instance := node as MeshInstance3D
+		if mesh_instance.visible:
+			payload["visible_mesh_count"] = int(payload.get("visible_mesh_count", 0)) + 1
+		var meshes: Array = payload.get("meshes", [])
+		if meshes.size() < RENDER_DIAG_MAX_MESHES:
+			meshes.append(_mesh_render_diag(mesh_instance))
+			payload["meshes"] = meshes
+	elif node is GPUParticles3D or node is CPUParticles3D:
+		payload["particle_count"] = int(payload.get("particle_count", 0)) + 1
+		if _object_has_property(node, "visible") and bool(node.get("visible")):
+			payload["visible_particle_count"] = int(payload.get("visible_particle_count", 0)) + 1
+		var particles: Array = payload.get("particles", [])
+		if particles.size() < RENDER_DIAG_MAX_PARTICLES:
+			particles.append({
+				"name": str(node.name),
+				"path": str(node.get_path()) if node.is_inside_tree() else "",
+				"class": node.get_class(),
+				"visible": bool(node.get("visible")) if _object_has_property(node, "visible") else null,
+				"emitting": bool(node.get("emitting")) if _object_has_property(node, "emitting") else null,
+				"amount": int(node.get("amount")) if _object_has_property(node, "amount") else null,
+			})
+			payload["particles"] = particles
+	for child in node.get_children():
+		_collect_render_diag_recursive(child, payload)
+
+
+static func _mesh_render_diag(mesh_instance: MeshInstance3D) -> Dictionary:
+	var mesh: Mesh = mesh_instance.mesh
+	var surface_count: int = mesh.get_surface_count() if mesh != null else 0
+	var aabb := mesh_instance.get_aabb()
+	var out: Dictionary = {
+		"name": str(mesh_instance.name),
+		"path": str(mesh_instance.get_path()) if mesh_instance.is_inside_tree() else "",
+		"visible": mesh_instance.visible,
+		"mesh_class": mesh.get_class() if mesh != null else "",
+		"surface_count": surface_count,
+		"aabb_size": _vector3_diag(aabb.size),
+		"extra_cull_margin": snappedf(mesh_instance.extra_cull_margin, 0.001),
+		"lod_bias": snappedf(mesh_instance.lod_bias, 0.001),
+		"ignore_occlusion_culling": mesh_instance.ignore_occlusion_culling,
+		"materials": [],
+	}
+	var materials: Array = []
+	if mesh_instance.material_override != null:
+		materials.append(_material_render_diag(mesh_instance.material_override, "material_override"))
+	for surface_index in range(mini(surface_count, 4)):
+		var mat: Material = mesh_instance.get_surface_override_material(surface_index)
+		var source := "surface_override_%d" % surface_index
+		if mat == null and mesh != null:
+			mat = mesh.surface_get_material(surface_index)
+			source = "mesh_surface_%d" % surface_index
+		if mat != null:
+			materials.append(_material_render_diag(mat, source))
+	out["materials"] = materials
+	return out
+
+
+static func _material_render_diag(material: Material, source: String) -> Dictionary:
+	var out: Dictionary = {
+		"source": source,
+		"class": material.get_class(),
+		"path": material.resource_path,
+	}
+	if material is StandardMaterial3D:
+		var std := material as StandardMaterial3D
+		out["transparency"] = int(std.transparency)
+		out["cull_mode"] = int(std.cull_mode)
+		out["shading_mode"] = int(std.shading_mode)
+		out["albedo_texture"] = _texture_render_diag(std.albedo_texture)
+		out["emission_texture"] = _texture_render_diag(std.emission_texture)
+	elif material is ShaderMaterial:
+		var shader_mat := material as ShaderMaterial
+		out["shader"] = shader_mat.shader.resource_path if shader_mat.shader else ""
+	return out
+
+
+static func _texture_render_diag(texture: Texture2D) -> Dictionary:
+	if texture == null:
+		return {}
+	return {
+		"class": texture.get_class(),
+		"path": texture.resource_path,
+		"width": texture.get_width(),
+		"height": texture.get_height(),
+	}
+
+
+static func _vector3_diag(value: Vector3) -> Dictionary:
+	return {
+		"x": snappedf(value.x, 0.001),
+		"y": snappedf(value.y, 0.001),
+		"z": snappedf(value.z, 0.001),
+	}
+
+
+static func _object_has_property(obj: Object, property_name: String) -> bool:
+	if obj == null:
+		return false
+	for property_info in obj.get_property_list():
+		if str(property_info.get("name", "")) == property_name:
+			return true
+	return false
+
+
+static func _emit_web_render_diagnostic(payload: Dictionary) -> void:
+	if not ClassDB.class_exists("JavaScriptBridge"):
+		return
+	var json: String = JSON.stringify(payload)
+	var js := """
+(function(){
+  try {
+    var payload = %s;
+    if (window.__clashReportClientEvent) {
+	  window.__clashReportClientEvent('godot.render_diagnostic', payload, {
+		source: 'godot.render',
+		level: 'warn',
+        flush: true
+      });
+    } else {
+	  console.warn('[godot.render_diagnostic]', payload);
+      if (window.__clashLogBreadcrumb) {
+		window.__clashLogBreadcrumb('godot.render_diagnostic', payload, 'warn');
+      }
+    }
+  } catch (e) {
+	console.warn('[godot.render_diagnostic.failed]', String(e && e.message || e));
+  }
+})()
+""" % json
+	JavaScriptBridge.eval(js, true)
 
 
 func _find_anim_player(node: Node) -> AnimationPlayer:

@@ -164,6 +164,28 @@ const TINT_PURPLE: Array[Color] = [
 const ACTIVE_PALETTE: Array[Color] = TINT_PURPLE  # default skin — change to TINT_ORANGE/BLUE/PURPLE to swap
 
 
+const TINT_GOLD: Array[Color] = [
+	Color(1.00, 0.96, 0.06),
+	Color(1.00, 0.88, 0.02),
+	Color(1.00, 0.76, 0.00),
+	Color(1.00, 1.00, 0.20),
+	Color(1.00, 0.82, 0.04),
+	Color(1.00, 0.92, 0.10),
+	Color(1.00, 1.00, 0.32),
+	Color(0.98, 0.78, 0.08),
+	Color(1.00, 0.96, 0.42),
+]
+
+const TINT_PALETTES: Dictionary = {
+	"pink": TINT_PINK,
+	"orange": TINT_ORANGE,
+	"blue": TINT_BLUE,
+	"purple": TINT_PURPLE,
+	"gold": TINT_GOLD,
+}
+
+@export_enum("purple", "blue", "gold", "orange", "pink") var tint_variant: String = "purple"
+
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
 ## from the player's current troop levels. Called by BaseTroop._ready().
 func _init_stats() -> void:
@@ -189,9 +211,28 @@ func set_nft_rarity(value: String) -> void:
 	nft_rarity = _normalize_rarity(value)
 
 
+func set_tint_variant(value: String) -> void:
+	tint_variant = _normalize_tint_variant(value)
+	if is_inside_tree():
+		_apply_demon_albedo(self)
+
+
 static func _normalize_rarity(value: String) -> String:
 	var key: String = str(value).strip_edges().to_lower()
 	return key if NFT_RARITY_MULTIPLIERS.has(key) else "common"
+
+
+static func _normalize_tint_variant(value: String) -> String:
+	var key: String = str(value).strip_edges().to_lower()
+	return key if TINT_PALETTES.has(key) else "purple"
+
+
+static func _palette_for_tint_variant(value: String) -> Array:
+	return TINT_PALETTES.get(_normalize_tint_variant(value), TINT_PURPLE)
+
+
+static func _color_power_for_tint_variant(value: String) -> float:
+	return 2.35 if _normalize_tint_variant(value) == "gold" else 1.0
 
 
 static func _troop_level_from_map(levels: Dictionary, troop_type: String) -> int:
@@ -430,8 +471,10 @@ func _apply_demon_albedo(root: Node) -> void:
 	mat.set_shader_parameter("mask01", DEMON_MASK_01)
 	mat.set_shader_parameter("mask02", DEMON_MASK_02)
 	mat.set_shader_parameter("mask03", DEMON_MASK_03)
+	var palette: Array = _palette_for_tint_variant(tint_variant)
+	mat.set_shader_parameter("color_power", _color_power_for_tint_variant(tint_variant))
 	for i in 9:
-		mat.set_shader_parameter("color%02d" % (i + 1), ACTIVE_PALETTE[i])
+		mat.set_shader_parameter("color%02d" % (i + 1), palette[i])
 	_assign_material_recursive(root, mat)
 
 

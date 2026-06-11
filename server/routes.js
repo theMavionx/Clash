@@ -10397,9 +10397,18 @@ router.post('/attack/result', auth, (req, res) => {
   const storedAcceptReason = replayStatus === 'ACCEPTED'
     ? verification.reason
     : `${replayStatus}: ${replayReason}`;
-  const serverResolvedResult = verification.resolvedResult || (
+  const verificationResolvedResult = verification.resolvedResult || (
     (verification.townHallDestroyed || (verification.townHallHpPct ?? 1) <= 0.02) ? 'victory' : 'defeat'
   );
+  const serverResolvedResult = STRICT_BATTLE_REPLAY_VERIFICATION
+    ? verificationResolvedResult
+    : (claimedResult === 'victory' ? 'victory' : verificationResolvedResult);
+  const clientCasualties = (req.body?.casualties && typeof req.body.casualties === 'object')
+    ? req.body.casualties
+    : null;
+  const resolvedCasualties = STRICT_BATTLE_REPLAY_VERIFICATION
+    ? verification.casualties
+    : (clientCasualties || verification.casualties);
 
   logBattle(`${claimedResult}->${serverResolvedResult} ${replayStatus}`, {
     attacker: req.player.id, defender: defender_id,
@@ -10463,7 +10472,7 @@ router.post('/attack/result', auth, (req, res) => {
     // Apply casualties exactly once from the authoritative replay result.
     // /troop-died is now telemetry-only; mutating ships there caused double
     // removal when the final replay result was submitted.
-    const appliedCasualties = _applyCasualties(req.player.id, verification.casualties);
+    const appliedCasualties = _applyCasualties(req.player.id, resolvedCasualties);
     // Return authoritative post-casualty ship state so client can sync immediately
     return res.json({
       ...battleResult,
@@ -10479,7 +10488,7 @@ router.post('/attack/result', auth, (req, res) => {
   db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, verification);
 
   // Remove server-simulated casualties from attacker's ships.
-  const appliedCasualties = _applyCasualties(req.player.id, verification.casualties);
+  const appliedCasualties = _applyCasualties(req.player.id, resolvedCasualties);
 
   res.json({
     success: true,

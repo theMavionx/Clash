@@ -88,6 +88,27 @@ function writeManualReconnectRequired(v) {
   } catch { /* storage disabled */ }
 }
 
+function canonicalWalletAddress(address) {
+  const raw = String(address || '').trim();
+  if (!raw) return '';
+  if (/^0x[0-9a-fA-F]{40}$/.test(raw)) return raw.toLowerCase();
+  if (/^0x[0-9a-fA-F]{1,64}$/.test(raw)) {
+    return `0x${raw.replace(/^0x/i, '').padStart(64, '0').toLowerCase()}`;
+  }
+  return raw;
+}
+
+function readStoredAuthWallet() {
+  try {
+    const raw = localStorage.getItem(GAME_AUTH_STORAGE_KEY);
+    if (!raw) return '';
+    const parsed = JSON.parse(raw);
+    return canonicalWalletAddress(parsed?.wallet || '');
+  } catch {
+    return '';
+  }
+}
+
 function normalizeReferralCode(value) {
   return String(value || '')
     .trim()
@@ -460,7 +481,25 @@ export function useAuthFlow() {
     }
     return privySol || solAdapter || null;
   }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
-  const candidate = manualReconnectRequired ? null : rawCandidate;
+  const storedAuthWallet = useMemo(() => readStoredAuthWallet(), [showRegister, manualReconnectRequired]);
+  const rawCandidateWallet = rawCandidate?.wallet ? canonicalWalletAddress(rawCandidate.wallet) : '';
+  const manualReconnectSatisfied = !!(
+    manualReconnectRequired &&
+    storedAuthWallet &&
+    rawCandidateWallet &&
+    storedAuthWallet === rawCandidateWallet
+  );
+  const candidate = manualReconnectRequired && !manualReconnectSatisfied ? null : rawCandidate;
+
+  useEffect(() => {
+    if (!manualReconnectSatisfied) return;
+    writeManualReconnectRequired(false);
+    setManualReconnectRequired(false);
+    addClientBreadcrumb('auth.manual_reconnect_satisfied', {
+      dex,
+      source: rawCandidate?.source || null,
+    });
+  }, [manualReconnectSatisfied, dex, rawCandidate?.source]);
 
   // Seeker `.skr` handle — only resolves on Saga/Seeker hardware (the hook
   // gates internally), so on every other host this is a free no-op. We feed
@@ -699,6 +738,8 @@ export function useAuthFlow() {
     privyReady,
     privyAuthed,
     manualReconnectRequired,
+    manualReconnectSatisfied,
+    storedAuthWalletPresent: !!storedAuthWallet,
     smReady,
     isInFrame,
     fcLoading,
@@ -706,14 +747,14 @@ export function useAuthFlow() {
     dex, dexPicked, booting, graceExpired, registering, candidate,
     probeInFlight, probeBlockingUi, probeWaitExpired, existingAccountName, suggestedName, isFarcasterCandidate,
     showRegister, readyForRegister, privyEnabled, privyReady, privyAuthed,
-    manualReconnectRequired, smReady, isInFrame, fcLoading,
+    manualReconnectRequired, manualReconnectSatisfied, storedAuthWallet, smReady, isInFrame, fcLoading,
   ]);
 
   const state = useMemo(() => {
     if (registerError && candidate) return 'need_name';
     if (registering) return 'registering';
     if (booting) return 'booting';
-    if (manualReconnectRequired) return 'manual_connect';
+    if (manualReconnectRequired && !manualReconnectSatisfied) return 'manual_connect';
     if (!candidate && !dexPicked) return 'manual_connect';
     if (!candidate && dexPicked && !graceExpired) return 'auto_connecting';
     // FC fast-path: auto-register with FC handle.
@@ -730,7 +771,7 @@ export function useAuthFlow() {
     if (!graceExpired) return 'auto_connecting';
     return 'manual_connect';
   }, [registerError, registering, booting, dexPicked, candidate, suggestedName, graceExpired,
-      isFarcasterCandidate, probeBlockingUi, existingAccountName, manualReconnectRequired]);
+      isFarcasterCandidate, probeBlockingUi, existingAccountName, manualReconnectRequired, manualReconnectSatisfied]);
 
   const lastAuthStateLogRef = useRef('');
   useEffect(() => {

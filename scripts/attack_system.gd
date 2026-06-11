@@ -590,6 +590,11 @@ func _create_x_marker(pos: Vector3) -> Node3D:
 		anim_player.speed_scale = 0.4
 		anim_player.play("flag|Action")
 
+	BaseTroop.report_render_diagnostic(flag, "asset.pirate_flag_marker", {
+		"asset": "res://Model/flag/pirate_flag_animated.glb",
+		"scale": FLAG_SCALE,
+		"animation": "flag|Action" if anim_player else "",
+	})
 	return flag
 
 

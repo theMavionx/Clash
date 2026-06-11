@@ -902,6 +902,46 @@ function flashTxBase64(build = {}) {
   return build.transactionBase64 || build.transaction || build.transactions?.[0] || '';
 }
 
+function isFlashInitEndpoint(endpoint = '') {
+  return /init-(deposit-ledger|basket)/i.test(String(endpoint || ''));
+}
+
+function flashInitAccountPubkey(tx, endpoint = '') {
+  if (!isFlashInitEndpoint(endpoint)) return null;
+  try {
+    if (tx instanceof VersionedTransaction) {
+      const keys = tx.message?.staticAccountKeys || [];
+      const ix = (tx.message?.compiledInstructions || []).find(item => (
+        keys[item.programIdIndex]?.toBase58?.() === FLASH_V2_PROGRAM_ID
+      ));
+      const initAccountIndex = ix?.accountKeyIndexes?.[2];
+      return typeof initAccountIndex === 'number' ? keys[initAccountIndex] || null : null;
+    }
+    const ix = (tx.instructions || []).find(item => item.programId?.toBase58?.() === FLASH_V2_PROGRAM_ID);
+    return ix?.keys?.[2]?.pubkey || null;
+  } catch {
+    return null;
+  }
+}
+
+function isFlashAlreadyInitializedError(error) {
+  if (error?.flashAlreadyInitialized) return true;
+  let dataText = '';
+  try {
+    dataText = error?.data ? JSON.stringify(error.data) : '';
+  } catch {
+    dataText = '';
+  }
+  const text = [
+    error?.message,
+    error?.data?.detail,
+    error?.data?.error,
+    error?.data?.message,
+    dataText,
+  ].map(value => String(value || '')).join(' ');
+  return /already|exists|initialized|account.*in use|custom program error:\s*0x0|InstructionError.*Custom["']?\s*:?\s*0/i.test(text);
+}
+
 function flashTimeout(promise, timeoutMs, message) {
   let timer = null;
   return Promise.race([
@@ -1340,6 +1380,21 @@ export function useFlash() {
       mobile_wallet_adapter: !!mobileWalletAdapter,
       wallet_adapter: mobileWalletAdapter ? mobileSolanaWalletAdapterName(solWallet) : solWalletAdapterName(solWallet),
     });
+    const initAccount = flashInitAccountPubkey(tx, meta?.endpoint || meta?.builder || '');
+    if (initAccount) {
+      const existingInitAccount = await txConnection.getAccountInfo(initAccount).catch(() => null);
+      if (existingInitAccount) {
+        const endpoint = String(meta?.endpoint || meta?.builder || 'init');
+        console.info('[Flash tx] init account already exists; skipping setup tx', {
+          endpoint,
+          account: initAccount.toBase58(),
+          owner: solWallet.publicKey.toBase58(),
+        });
+        const err = new Error(`Flash ${endpoint} account already exists: ${initAccount.toBase58()}`);
+        err.flashAlreadyInitialized = true;
+        throw err;
+      }
+    }
     const skipPreflight = magicRouter || shouldSkipFlashLocalSimulation(meta);
     if (mobileWalletAdapter) {
       const ownerSigner = solWallet.publicKey.toBase58();
@@ -1731,9 +1786,8 @@ export function useFlash() {
     try {
       return await buildAndSend(endpoint, body);
     } catch (e) {
-      const msg = String(e?.message || e?.data?.detail || e?.data?.error || '');
-      if (/already|exists|initialized|custom program error:\s*0x0/i.test(msg)) {
-        return { skipped: true, reason: msg };
+      if (isFlashInitEndpoint(endpoint) && isFlashAlreadyInitializedError(e)) {
+        return { skipped: true, reason: e?.message || e?.data?.detail || e?.data?.error || 'already initialized' };
       }
       throw e;
     }
