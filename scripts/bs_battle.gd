@@ -207,13 +207,9 @@ func _flush_troop_deaths_once(casualties: Dictionary = {}, use_pending_if_empty:
 	if _troop_deaths_flushed:
 		return
 	_troop_deaths_flushed = true
-	var bridge: Node = bs._bridge if bs else null
-	if not bridge or not bridge.has_method("send_to_react"):
-		return
-	var counts: Dictionary = _paid_casualty_counts(casualties, use_pending_if_empty)
-	for troop_name in counts:
-		for _i in range(int(counts[troop_name])):
-			bridge.send_to_react("troop_died", {"troop_name": str(troop_name)})
+	# Casualties are reported once through battle_result.casualties after the
+	# server verifies the replay. Emitting per-troop UI events here made the
+	# React casualty counter vulnerable to duplicate visual counts.
 
 
 func _replay_wall_elapsed_sec() -> float:

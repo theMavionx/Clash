@@ -305,12 +305,9 @@ export function GodotProvider({ children }) {
           });
           break;
         case 'troop_died':
-          if (isNftBackedTroopName(data.troop_name)) break;
-          setPendingCasualties(prev => {
-            const c = { ...(prev || {}) };
-            c[data.troop_name] = (c[data.troop_name] || 0) + 1;
-            return c;
-          });
+          // Casualties are authoritative only in battle_result.casualties.
+          // Older Godot builds may still emit troop_died events; ignore them
+          // so the reinforcement counter cannot double-count the same match.
           break;
         case 'reinforced':
           setPendingCasualties(null);
