@@ -3199,8 +3199,8 @@ const TROOP_DEFS = {
   barbarian: { max_level: 4, cost: [{ gold: 175, wood: 0, ore: 175 }, { gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }] },
   archer:    { max_level: 4, cost: [{ gold: 175, wood: 175, ore: 0 }, { gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }] },
   ranger:    { max_level: 4, cost: [{ gold: 125, wood: 125, ore: 0 }, { gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }] },
-  demon_king: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
-  fire_dragon: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
+  demon_king: { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 }, { gold: 300, wood: 0, ore: 250 }, { gold: 600, wood: 0, ore: 500 }] },
+  fire_dragon: { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
 };
 const DISABLED_TROOP_TYPES = new Set();
 const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_TROOP_TYPES.has(troop));
@@ -4811,9 +4811,9 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
   const current = levels.find(t => t.troop_type === troopKey);
   const currentLevel = current ? current.level : 1;
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
-  const requiredWins = nextLevel ? demonKingRequiredWins(nextLevel) : null;
   const token = normalizeDemonKingBattleToken(options);
   const battleWins = token ? getCollectionBattleWins(playerId, cfg.collection, token.chain, token.tokenId) : 0;
+  const ownedCount = listPlayerCollectionNfts(playerId, cfg.collection).length;
   return {
     troop_type: troopKey,
     collection: cfg.collection,
@@ -4821,11 +4821,14 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
     current_level: currentLevel,
     max_level: def.max_level,
     next_level: nextLevel,
+    owns_nft: ownedCount > 0,
+    owned_nfts: ownedCount,
+    cost: nextLevel ? def.cost[currentLevel - 1] : null,
     battle_wins: battleWins,
     wins: battleWins,
     account_battle_wins: getBattleWins(playerId),
-    required_wins: requiredWins,
-    wins_ready: requiredWins == null || battleWins >= requiredWins,
+    required_wins: null,
+    wins_ready: true,
     requires_nft_upgrade: false,
     nft_upgrade_price: null,
     win_scope: token ? `${cfg.collection}_nft` : 'none',
@@ -4882,52 +4885,13 @@ function upgradeTroop(playerId, troopType, options = {}) {
     return { error: 'Already at max level' };
   }
 
-  if (troopType === 'demon_king') {
-    const newLevel = currentLevel + 1;
-    const requiredWins = demonKingRequiredWins(newLevel);
-    const token = normalizeDemonKingBattleToken({
-      chain: options.nftChain || options.chain,
-      tokenId: options.nftTokenId || options.tokenId || options.token_id,
-    });
-    const battleWins = token ? getDemonKingBattleWins(playerId, token.chain, token.tokenId) : 0;
-    const status = {
-      ...getDemonKingUpgradeStatus(playerId, token || {}),
-      next_level: newLevel,
-      required_wins: requiredWins,
-      battle_wins: battleWins,
-      wins: battleWins,
-      wins_ready: requiredWins == null || battleWins >= requiredWins,
-    };
-    if (requiredWins != null && battleWins < requiredWins) {
-      return {
-        ...status,
-        error: `Demon King level ${newLevel} requires ${requiredWins} battle wins`,
-        code: 'DEMON_KING_WINS_REQUIRED',
-      };
-    }
-    if (!options.nftVerified) {
-      return {
-        ...status,
-        error: 'Verify ownership of this Demon King NFT first',
-        code: 'DEMON_KING_NFT_REQUIRED',
-        requires_nft_upgrade: false,
-      };
-    }
-    stmts.upsertTroopLevel.run(playerId, troopType, newLevel);
+  const nftCfg = NFT_BACKED_TROOP_COLLECTIONS[troopType];
+  if (nftCfg && listPlayerCollectionNfts(playerId, nftCfg.collection).length === 0) {
     return {
-      troop_type: troopType,
-      level: newLevel,
-      current_level: newLevel,
-      cost: { gold: 0, wood: 0, ore: 0 },
-      battle_wins: battleWins,
-      required_wins: requiredWins,
-      nft: {
-        chain: options.nftChain || null,
-        token_id: options.nftTokenId || null,
-        owner: options.nftOwner || null,
-        level: Number(options.nftLevel || newLevel),
-      },
-      resources: getResources(playerId),
+      ...getNftBackedTroopUpgradeStatus(playerId, troopType),
+      error: `${nftCfg.label} NFT required`,
+      code: 'NFT_TROOP_REQUIRED',
+      status: 403,
     };
   }
 

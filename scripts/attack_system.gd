@@ -837,7 +837,8 @@ func _spawn_troop_after_delay(
 	troop_spawn_pos: Vector3,
 	offset: Vector3,
 	building_y: float,
-	bs_ref: Node
+	bs_ref: Node,
+	troop_entry: String = ""
 ) -> void:
 	var ok: bool = await _wait_combat_delay(delay, spawn_generation)
 	if not ok:
@@ -849,6 +850,8 @@ func _spawn_troop_after_delay(
 	if troop.has_method("set_player_troop_levels"):
 		var player_levels: Dictionary = bs_ref.troop_levels if bs_ref and "troop_levels" in bs_ref else {}
 		troop.set_player_troop_levels(player_levels)
+	if troop.has_method("set_nft_rarity"):
+		troop.set_nft_rarity(_troop_entry_rarity(troop_entry))
 	get_tree().current_scene.add_child(troop)
 	var final_troop_scale := _scale_for_troop(troop_node_name, troop_scale)
 	troop._spawn_scale = final_troop_scale
@@ -970,7 +973,7 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 				offset = precomputed_offsets[i]
 			else:
 				offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
-		_spawn_troop_after_delay(troop_spawn_delay * i, spawn_generation, m_res, s_res, troop_node_name, ship_idx * 100 + i, lvl, troop_spawn_pos, offset, building_y, bs_ref)
+		_spawn_troop_after_delay(troop_spawn_delay * i, spawn_generation, m_res, s_res, troop_node_name, ship_idx * 100 + i, lvl, troop_spawn_pos, offset, building_y, bs_ref, troop_name)
 
 
 func _spawn_troops_at_pos(troop_names: Array, recorded_levels: Dictionary, spawn_pos: Vector3) -> void:
@@ -1014,7 +1017,7 @@ func _spawn_troops_at_pos(troop_names: Array, recorded_levels: Dictionary, spawn
 		var spawn_generation: int = _combat_generation
 		var troop_node_name: String = "Troop_%d" % (randi() % 99999)
 		var offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
-		_spawn_troop_after_delay(troop_spawn_delay * i, spawn_generation, m_res, s_res, troop_node_name, i, lvl, spawn_pos, offset, building_y, bs_ref)
+		_spawn_troop_after_delay(troop_spawn_delay * i, spawn_generation, m_res, s_res, troop_node_name, i, lvl, spawn_pos, offset, building_y, bs_ref, troop_name)
 
 
 ## Map script path to troop_levels dictionary key
@@ -1052,6 +1055,9 @@ static func _normalize_troop_entry(troop_name: String) -> String:
 
 
 static func _troop_entry_level(troop_name: String, fallback_level: int = 1) -> int:
+	var base: String = _normalize_troop_entry(troop_name)
+	if _is_nft_backed_troop_key(base):
+		return fallback_level
 	var parts: PackedStringArray = str(troop_name).split(":")
 	for part in parts:
 		var text: String = String(part).strip_edges()
@@ -1060,3 +1066,18 @@ static func _troop_entry_level(troop_name: String, fallback_level: int = 1) -> i
 			if parsed >= 1 and parsed <= 4:
 				return parsed
 	return fallback_level
+
+
+static func _is_nft_backed_troop_key(troop_key: String) -> bool:
+	return troop_key == "DemonKing" or troop_key == "FireDragon"
+
+
+static func _troop_entry_rarity(troop_name: String) -> String:
+	var parts: PackedStringArray = str(troop_name).split(":")
+	for part in parts:
+		var text: String = String(part).strip_edges()
+		if text.length() >= 2 and text.substr(0, 1).to_lower() == "r":
+			var rarity: String = text.substr(1).to_lower()
+			if rarity in ["common", "epic", "legendary", "unrevealed"]:
+				return rarity
+	return "common"

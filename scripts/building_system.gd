@@ -763,9 +763,10 @@ var troop_defs: Dictionary = {
 		"slot_cost": 2,                # eats two ship slots; trade-off for raw power
 		"buy_cost": 0,                 # NFT-backed; loading is free and reusable
 		"costs": {
-			1: {"gold": 0, "wood": 0, "ore": 0},
-			2: {"gold": 0, "wood": 0, "ore": 0},
-			3: {"gold": 0, "wood": 0, "ore": 0},
+			1: {"gold": 150, "ore": 125},
+			2: {"gold": 300, "ore": 250},
+			3: {"gold": 600, "ore": 500},
+			4: {"gold": 0, "wood": 0, "ore": 0},
 		}
 	},
 	"FireDragon": {
@@ -775,9 +776,10 @@ var troop_defs: Dictionary = {
 		"slot_cost": 2,
 		"buy_cost": 0,
 		"costs": {
-			1: {"gold": 0, "wood": 0, "ore": 0},
-			2: {"gold": 0, "wood": 0, "ore": 0},
-			3: {"gold": 0, "wood": 0, "ore": 0},
+			1: {"gold": 250, "ore": 250},
+			2: {"gold": 500, "ore": 500},
+			3: {"gold": 1000, "ore": 1000},
+			4: {"gold": 0, "wood": 0, "ore": 0},
 		}
 	},
 }
@@ -4891,7 +4893,7 @@ func _refresh_port_panel() -> void:
 			port_vbox.add_child(load_title)
 			var ship_free: int = ship_capacity - ship_troops.size()
 			for troop_name in troop_defs.keys():
-				if troop_name == "DemonKing":
+				if troop_name == "DemonKing" or troop_name == "FireDragon":
 					continue
 				var tlvl = troop_levels.get(troop_name, 0)
 				if tlvl < 1:
@@ -5286,17 +5288,15 @@ func _refresh_barn_panel() -> void:
 			vb.add_child(max_label)
 		else:
 			var next_lvl = lvl + 1
-			var costs = tdef.costs[next_lvl]
+			var costs = tdef.costs.get(lvl, tdef.costs.get(next_lvl, {}))
 			var cost_text = ""
-			if troop_name == "DemonKing":
-				var required_wins := 1000 if next_lvl == 2 else 10000
-				cost_text = "NFT owned + %s battle wins" % str(required_wins)
-			else:
-				for res_name in costs:
-					var res_display = res_name.capitalize()
-					if res_name == "ore":
-						res_display = "Ore"
-					cost_text += "%s: %d  " % [res_display, costs[res_name]]
+			for res_name in costs:
+				if int(costs[res_name]) <= 0:
+					continue
+				var res_display = res_name.capitalize()
+				if res_name == "ore":
+					res_display = "Ore"
+				cost_text += "%s: %d  " % [res_display, costs[res_name]]
 
 			var cost_label = Label.new()
 			cost_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
@@ -5306,7 +5306,7 @@ func _refresh_barn_panel() -> void:
 				cost_label.text = "Upgrade to LVL %d: %s" % [next_lvl, cost_text]
 			vb.add_child(cost_label)
 
-			var can_afford = true if troop_name == "DemonKing" else _can_afford(costs)
+			var can_afford = _can_afford(costs)
 			var btn = Button.new()
 			if lvl == 0:
 				btn.text = "Train"
@@ -5344,7 +5344,7 @@ func _refresh_barn_panel() -> void:
 		barn_vbox.add_child(no_ship_lbl)
 	else:
 		for troop_name in troop_defs.keys():
-			if troop_name == "DemonKing":
+			if troop_name == "DemonKing" or troop_name == "FireDragon":
 				continue
 			var lvl2 = troop_levels[troop_name]
 			if lvl2 < 1:
@@ -5454,15 +5454,10 @@ func _upgrade_troop(troop_name: String) -> void:
 		var result = await net.upgrade_troop(troop_name)
 		_server_busy = false
 		if result.has("error"):
-			if troop_name == "DemonKing" and bool(result.get("requires_nft_upgrade", false)):
+			if str(result.get("code", "")) == "NFT_TROOP_REQUIRED":
 				if _bridge:
-					_bridge.send_to_react("demon_king_upgrade_required", result)
-				_show_error("Connect a Demon King NFT in Battle Shop first.")
-				return
-			if troop_name == "DemonKing" and str(result.get("code", "")) == "DEMON_KING_WINS_REQUIRED":
-				var wins = int(result.get("battle_wins", 0))
-				var required = int(result.get("required_wins", 0))
-				_show_error("Demon King needs %s / %s battle wins." % [str(wins), str(required)])
+					_bridge.send_to_react("nft_troop_required", result)
+				_show_error("Connect the required NFT before upgrading this troop.")
 				return
 			_show_error(str(result.error))
 			return

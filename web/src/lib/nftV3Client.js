@@ -1093,8 +1093,12 @@ export function resolveDemonKingConnectedSyncTarget({
   const evmChain = DEMON_KING_CHAIN_BY_EVM_CHAIN_ID[Number(evmChainId)];
   const evmTarget = evmChain ? targetForChain(evmChain) : null;
   if (evmTarget) return evmTarget;
+  if (isEvmWalletAddress(evm)) {
+    return { wallet: evm, chains: DEMON_KING_EVM_CHAINS };
+  }
 
-  return targetForChain('solana') || targetForChain('aptos') || targetForChain('base');
+  return targetForChain('solana')
+    || targetForChain('aptos');
 }
 
 export function resolveDemonKingInventorySyncTarget({
@@ -1111,12 +1115,10 @@ export function resolveDemonKingInventorySyncTarget({
   if (isEvmWalletAddress(evm)) {
     wallets.evm = evm;
     chains.push(...DEMON_KING_EVM_CHAINS);
-  }
-  if (isSolanaWalletAddress(sol)) {
+  } else if (isSolanaWalletAddress(sol)) {
     wallets.solana = sol;
     chains.push('solana');
-  }
-  if (isAptosWalletAddress(apt) && !isEvmWalletAddress(apt)) {
+  } else if (isAptosWalletAddress(apt) && !isEvmWalletAddress(apt)) {
     wallets.aptos = apt;
     chains.push('aptos');
   }

@@ -1,15 +1,25 @@
 extends BaseTroop
-## FireDragon - temporary flying heavy unit.
-## Uses DemonKing-like test stats while keeping the normal troop pipeline.
+## FireDragon - NFT-backed flying 2-slot troop.
+## The player upgrades one shared Dragon troop level; each owned NFT then
+## applies its rarity multiplier over two Mages at the same troop level.
 
 
 enum DragonSkin { RED, BLACK, PURPLE }
 
-const LEVEL_STATS: Dictionary = {
-	1: {"hp": 1080, "damage": 140, "atk_speed": 1.25},
-	2: {"hp": 1170, "damage": 139, "atk_speed": 1.15},
-	3: {"hp": 1260, "damage": 137, "atk_speed": 1.05},
+const MAGE_LEVEL_STATS: Dictionary = {
+	1: {"hp": 150, "damage": 58, "atk_speed": 1.25},
+	2: {"hp": 200, "damage": 74, "atk_speed": 1.12},
+	3: {"hp": 265, "damage": 104, "atk_speed": 1.0},
+	4: {"hp": 345, "damage": 138, "atk_speed": 0.90},
 }
+
+const NFT_RARITY_MULTIPLIERS: Dictionary = {
+	"common": 1.2,
+	"epic": 1.3,
+	"legendary": 1.5,
+	"unrevealed": 1.2,
+}
+const DRAGON_SLOT_COUNT: float = 2.0
 
 const ANIMATION_PATHS: Dictionary = {
 	"bite_attack": "res://Model/Characters/FireDragon/Animations/fire_dragon_bite_attack.fbx",
@@ -61,12 +71,14 @@ var _hit_this_swing: bool = false
 var _breath_vfx_pool: Array = []
 var _breath_vfx_pool_ready: bool = false
 var _breath_vfx_pool_exhausted_warned: bool = false
+var player_troop_levels: Dictionary = {}
+var nft_rarity: String = "common"
 static var _shared_fire_particle_materials: Dictionary = {}
 
 
 func _init_stats() -> void:
-	level = clampi(level, 1, LEVEL_STATS.size())
-	var stats: Dictionary = LEVEL_STATS[level]
+	level = clampi(level, 1, 4)
+	var stats: Dictionary = _compute_dynamic_stats(level, player_troop_levels, nft_rarity)
 	unit_target_type = BaseTroop.UNIT_TARGET_AIR
 	move_speed = 0.38
 	attack_range = FIRE_BREATH_ATTACK_RANGE
@@ -78,6 +90,47 @@ func _init_stats() -> void:
 	attack_anim = "fly_fire_breath_attack_low"
 	attack_sfx_path = "res://Musik/sound_effects/DemonKingAttack.mp3"
 	anim_files = []
+
+
+func set_player_troop_levels(levels: Dictionary) -> void:
+	player_troop_levels = levels.duplicate(true) if levels != null else {}
+
+
+func set_nft_rarity(value: String) -> void:
+	nft_rarity = _normalize_rarity(value)
+
+
+static func _normalize_rarity(value: String) -> String:
+	var key: String = str(value).strip_edges().to_lower()
+	return key if NFT_RARITY_MULTIPLIERS.has(key) else "common"
+
+
+static func _troop_level_from_map(levels: Dictionary, troop_type: String) -> int:
+	var aliases: Array[String] = [
+		troop_type,
+		troop_type.capitalize(),
+		troop_type.replace("_", ""),
+	]
+	if troop_type == "fire_dragon":
+		aliases.append("FireDragon")
+	for key in aliases:
+		if levels.has(key):
+			return clampi(int(levels[key]), 1, 4)
+	return 1
+
+
+static func _compute_dynamic_stats(dragon_level: int, levels: Dictionary, rarity: String = "common") -> Dictionary:
+	var clamped_level: int = clampi(dragon_level, 1, 4)
+	var troop_level: int = _troop_level_from_map(levels, "fire_dragon")
+	if not levels.has("fire_dragon") and not levels.has("FireDragon"):
+		troop_level = clamped_level
+	var stat: Dictionary = MAGE_LEVEL_STATS.get(troop_level, MAGE_LEVEL_STATS[1])
+	var power_mult: float = float(NFT_RARITY_MULTIPLIERS.get(_normalize_rarity(rarity), 1.2))
+	return {
+		"hp": int(ceil(float(stat.hp) * DRAGON_SLOT_COUNT * power_mult)),
+		"damage": int(ceil(float(stat.damage) * DRAGON_SLOT_COUNT * power_mult)),
+		"atk_speed": float(stat.atk_speed),
+	}
 
 
 func _setup_animations() -> void:

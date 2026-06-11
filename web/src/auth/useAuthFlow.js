@@ -136,6 +136,23 @@ function hasStoredGameAuth() {
   }
 }
 
+function readStoredGameAuthWallet() {
+  try {
+    const raw = localStorage.getItem(GAME_AUTH_STORAGE_KEY);
+    if (!raw) return '';
+    const parsed = JSON.parse(raw);
+    return String(parsed?.wallet || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function normalizeComparableWallet(wallet) {
+  const raw = String(wallet || '').trim();
+  if (!raw) return '';
+  return raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
+}
+
 function walletCacheKey(wallet, dex) {
   const raw = String(wallet || '').trim();
   const w = raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
@@ -460,7 +477,19 @@ export function useAuthFlow() {
     }
     return privySol || solAdapter || null;
   }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
-  const candidate = manualReconnectRequired ? null : rawCandidate;
+  const storedAuthWallet = useMemo(readStoredGameAuthWallet, [showRegister]);
+  const manualReconnectSatisfied = manualReconnectRequired
+    && rawCandidate?.wallet
+    && normalizeComparableWallet(rawCandidate.wallet) === normalizeComparableWallet(storedAuthWallet);
+  useEffect(() => {
+    if (!manualReconnectSatisfied) return;
+    clearManualReconnectRequired();
+    addClientBreadcrumb('auth.manual_reconnect_satisfied', {
+      dex,
+      source: rawCandidate?.source || null,
+    });
+  }, [clearManualReconnectRequired, dex, manualReconnectSatisfied, rawCandidate?.source]);
+  const candidate = manualReconnectRequired && !manualReconnectSatisfied ? null : rawCandidate;
 
   // Seeker `.skr` handle — only resolves on Saga/Seeker hardware (the hook
   // gates internally), so on every other host this is a free no-op. We feed

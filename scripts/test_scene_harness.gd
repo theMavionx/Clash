@@ -44,8 +44,8 @@ const TEST_ATTACK_MAX_LEVEL: Dictionary = {
 	"Knight": 4,
 	"Mage": 4,
 	"Archer": 4,
-	"DemonKing": 3,
-	"FireDragon": 3,
+	"DemonKing": 4,
+	"FireDragon": 4,
 }
 const TEST_ATTACK_SHIP_LEVEL: int = 3
 const TEST_SPEED_PRESETS: Array[float] = [0.5, 1.0, 2.0, 4.0]

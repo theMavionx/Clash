@@ -2022,10 +2022,15 @@ function parseDemonKingTroopEntry(entry) {
     return { error: 'Demon King NFT tokenId is invalid' };
   }
   let encodedLevel = 1;
-  const levelPart = String(parts[3] || '').trim();
-  const levelMatch = /^L([1-3])$/i.exec(levelPart);
-  if (levelMatch) encodedLevel = Number(levelMatch[1]);
-  return { chainKey, tokenIdRaw, encodedLevel };
+  let rarity = null;
+  for (const rawPart of parts.slice(3)) {
+    const part = String(rawPart || '').trim();
+    const levelMatch = /^L([1-4])$/i.exec(part);
+    if (levelMatch) encodedLevel = Number(levelMatch[1]);
+    const rarityMatch = /^R(common|epic|legendary|unrevealed)$/i.exec(part);
+    if (rarityMatch) rarity = rarityMatch[1].toLowerCase();
+  }
+  return { chainKey, tokenIdRaw, encodedLevel, rarity };
 }
 
 function parseNftBackedTroopEntry(entry, expectedTroop = null) {
@@ -2064,13 +2069,15 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       return { error: 'Demon King NFT owner mismatch', status: 403 };
     }
     const level = normalizeNftLevel(cached.level);
+    const rarity = String(cached.rarity || 'common').toLowerCase();
     return {
       nftVerified: true,
       nftLevel: level,
+      nftRarity: rarity,
       nftChain: chainKey,
       nftTokenId: String(tokenIdRaw),
       nftOwner: cachedOwner,
-      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:L${level}`,
+      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:R${rarity}`,
       cached: true,
     };
   }
@@ -2087,13 +2094,15 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       const cachedLinked = linkedWallets.some((wallet) => getAddress(wallet) === cachedOwner);
       if (cachedLinked && (!ownerHint || ownerHint === cachedOwner)) {
         const level = normalizeNftLevel(cached.level);
+        const rarity = String(cached.rarity || 'common').toLowerCase();
         return {
           nftVerified: true,
           nftLevel: level,
+          nftRarity: rarity,
           nftChain: chainKey,
           nftTokenId: String(tokenIdRaw),
           nftOwner: cachedOwner,
-          troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:L${level}`,
+          troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:R${rarity}`,
           cached: true,
         };
       }
@@ -2130,13 +2139,15 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       tokenId: String(tokenIdRaw),
       level,
     }, { source: 'load' });
+    const rarity = String(db.getNftRarity?.('demon_king', chainKey, String(tokenIdRaw), { legacyLevel: level })?.rarity || 'common').toLowerCase();
     return {
       nftVerified: true,
       nftLevel: level,
+      nftRarity: rarity,
       nftChain: chainKey,
       nftTokenId: String(tokenIdRaw),
       nftOwner: onchainOwner,
-      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:L${level}`,
+      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:R${rarity}`,
     };
   } catch (err) {
     return {
@@ -2176,13 +2187,15 @@ async function verifyNftBackedTroopLoadToken(player, entry, ownerHintRaw) {
     return { error: `${cfg.label} NFT owner mismatch`, status: 403 };
   }
   const level = normalizeNftLevel(cached.level);
+  const rarity = String(cached.rarity || 'common').toLowerCase();
   return {
     nftVerified: true,
     nftLevel: level,
+    nftRarity: rarity,
     nftChain: chainKey,
     nftTokenId: String(tokenIdRaw),
     nftOwner: cachedOwner,
-    troopEntry: `${cfg.troopName}:${chainKey}:${tokenIdRaw}:L${level}`,
+    troopEntry: `${cfg.troopName}:${chainKey}:${tokenIdRaw}:R${rarity}`,
     cached: true,
   };
 }
@@ -10340,6 +10353,19 @@ router.post('/attack/result', auth, (req, res) => {
   const troopLevelRows = db.getTroopLevels(req.player.id);
   const serverTroopLevels = {};
   for (const row of troopLevelRows) serverTroopLevels[row.troop_type] = row.level;
+  const serverNftRarities = {};
+  for (const act of gameActions) {
+    if (act?.type !== 'place_ship') continue;
+    const troops = Array.isArray(act.troops) ? act.troops : (act.troopType ? [act.troopType] : []);
+    for (const troop of troops) {
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseNftBackedTroopEntry(troop);
+      if (parsed.error) continue;
+      const row = db.getPlayerCollectionNft(req.player.id, parsed.collection, parsed.chainKey, parsed.tokenIdRaw);
+      const rarity = String(row?.rarity || parsed.rarity || 'common').toLowerCase();
+      serverNftRarities[`${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase()] = rarity;
+    }
+  }
   for (const act of gameActions) {
     if (act.type === 'place_ship' && act.troopType && act.troopLevel) {
       const normalizedTroop = _normalizeTroopName(act.troopType);
@@ -10358,6 +10384,7 @@ router.post('/attack/result', auth, (req, res) => {
     gridConfig,
     gridConfigs,
     serverTroopLevels,
+    serverNftRarities,
     defenderAltarLevels: db.getAltarSkillLevels(defender_id),
     debugTrace: BATTLE_DEBUG_TRACE,
   });
@@ -10388,6 +10415,7 @@ router.post('/attack/result', auth, (req, res) => {
   console.log(`[BATTLE] Grid:`, JSON.stringify(gridConfig));
   if (gridConfigs) console.log(`[BATTLE] Grids:`, JSON.stringify(gridConfigs));
   console.log(`[BATTLE] TroopLevels:`, JSON.stringify(serverTroopLevels));
+  if (Object.keys(serverNftRarities).length) console.log(`[BATTLE] NftRarities:`, JSON.stringify(serverNftRarities));
   console.log(`[BATTLE] Defender buildings:`, defenderBuildings.length, defenderBuildings.map(b => `${b.type}:lv${b.level}:hp${b.hp}`).join(', '));
   if (BATTLE_DEBUG_TRACE) {
     console.log(`[BATTLE TRACE] events=${verification._traceEvents || 0} dropped=${verification._traceDropped || 0} aliveTroops=${verification._troopsAlive || 0} simDebug=stored`);
@@ -10489,30 +10517,7 @@ router.get('/troops/:type/upgrade-status', auth, (req, res) => {
 // Upgrade a troop
 router.post('/troops/:type/upgrade', auth, async (req, res) => {
   const type = _serverTroopKey(req.params.type);
-  let upgradeOptions = {};
-  if (type === 'demon_king') {
-    const proof = {
-      ...(req.body?.nft || {}),
-      ...req.body,
-    };
-    upgradeOptions = {
-      chain: proof.chain,
-      tokenId: proof.tokenId ?? proof.token_id,
-      nftChain: proof.chain,
-      nftTokenId: proof.tokenId ?? proof.token_id,
-    };
-    const status = db.getDemonKingUpgradeStatus(req.player.id, {
-      chain: proof.chain,
-      tokenId: proof.tokenId ?? proof.token_id,
-    });
-    const nextLevel = status.next_level;
-    if (nextLevel && status.wins_ready && proof.chain) {
-      const verified = await verifyDemonKingNftUpgradeProof(req.player, proof, nextLevel);
-      if (verified.error) return res.status(verified.status || 400).json({ ...status, ...verified });
-      upgradeOptions = verified;
-    }
-  }
-  const result = db.upgradeTroop(req.player.id, type, upgradeOptions);
+  const result = db.upgradeTroop(req.player.id, type);
   if (result.error) return res.status(result.status || 400).json(result);
   logEconomy('troop_upgrade', { player: req.player.id, troop: type, level: result.level });
   res.json(result);

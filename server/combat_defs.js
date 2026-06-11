@@ -36,23 +36,32 @@ const TROOP_STATS = {
     4: { hp: 560, damage: 80, atkSpeed: 0.76, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
   },
   demon_king: {
-    1: { hp: 1080, damage: 140, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-    2: { hp: 1170, damage: 139, atkSpeed: 1.15, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-    3: { hp: 1260, damage: 137, atkSpeed: 1.05, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    1: { hp: 1080, damage: 92,  atkSpeed: 1.40, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    2: { hp: 1440, damage: 120, atkSpeed: 1.30, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    3: { hp: 1872, damage: 159, atkSpeed: 1.20, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    4: { hp: 2400, damage: 207, atkSpeed: 1.10, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
   },
   fire_dragon: {
-    1: { hp: 1080, damage: 140, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4, flying: true },
-    2: { hp: 1170, damage: 139, atkSpeed: 1.15, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4, flying: true },
-    3: { hp: 1260, damage: 137, atkSpeed: 1.05, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4, flying: true },
+    1: { hp: 360, damage: 140, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
+    2: { hp: 480, damage: 178, atkSpeed: 1.12, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
+    3: { hp: 636, damage: 250, atkSpeed: 1.00, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
+    4: { hp: 828, damage: 332, atkSpeed: 0.90, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
   },
 };
 
-// Demon King is a 2-slot NFT troop that scales from the player's best normal troops.
-// L1 is +20%, L2 +30%, L3 +40% over two best troop slots by HP and DPS.
-const NORMAL_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger'];
-const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
-const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL = { 1: 1.2, 2: 1.3, 3: 1.4 };
-const DEMON_KING_SLOT_COUNT = 2;
+// NFT-backed troops are upgraded like normal troop types. Rarity only changes
+// their power relative to two reference troops at the same troop level.
+const NFT_TROOP_REFERENCE = {
+  demon_king: { troopType: 'knight', moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+  fire_dragon: { troopType: 'mage', moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
+};
+const NFT_RARITY_MULTIPLIERS = {
+  common: 1.2,
+  epic: 1.3,
+  legendary: 1.5,
+  unrevealed: 1.2,
+};
+const NFT_TROOP_SLOT_COUNT = 2;
 
 const TROOP_TYPE_DISPLAY_KEYS = {
   knight: 'Knight',
@@ -60,6 +69,7 @@ const TROOP_TYPE_DISPLAY_KEYS = {
   barbarian: 'Barbarian',
   archer: 'Archer',
   ranger: 'Ranger',
+  demon_king: 'DemonKing',
   fire_dragon: 'FireDragon',
 };
 
@@ -81,44 +91,33 @@ function troopLevelFromMap(levels = {}, troopType) {
   return 1;
 }
 
-function computeDemonKingStats(troopLevels = {}, demonLevel = 1) {
-  const clampedLevel = clampInt(demonLevel, 1, 3);
-  let bestHp = 0;
-  let bestDps = 0;
+function normalizeNftRarity(rarity) {
+  const key = String(rarity || 'common').trim().toLowerCase();
+  return NFT_RARITY_MULTIPLIERS[key] ? key : 'common';
+}
 
-  for (const troopType of NORMAL_TROOP_TYPES) {
-    const troopLevel = troopLevelFromMap(troopLevels, troopType);
-    const stats = TROOP_STATS[troopType]?.[troopLevel] || TROOP_STATS[troopType]?.[1];
-    if (!stats) continue;
-    bestHp = Math.max(bestHp, Number(stats.hp) || 0);
-    bestDps = Math.max(bestDps, (Number(stats.damage) || 0) / Math.max(0.01, Number(stats.atkSpeed) || 1));
-  }
-
-  const atkSpeed = DEMON_KING_ATK_SPEED_BY_LEVEL[clampedLevel] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
-  const powerMult = DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[clampedLevel] || DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[1];
-  const targetHp = bestHp * DEMON_KING_SLOT_COUNT * powerMult;
-  const targetDps = bestDps * DEMON_KING_SLOT_COUNT * powerMult;
-
+function computeNftTroopStats(troopLevels = {}, troopType = 'demon_king', rarity = 'common') {
+  const cfg = NFT_TROOP_REFERENCE[troopType] || NFT_TROOP_REFERENCE.demon_king;
+  const troopLevel = troopLevelFromMap(troopLevels, troopType);
+  const reference = TROOP_STATS[cfg.troopType]?.[troopLevel] || TROOP_STATS[cfg.troopType]?.[1];
+  const multiplier = NFT_RARITY_MULTIPLIERS[normalizeNftRarity(rarity)];
+  const atkSpeed = Number(reference.atkSpeed) || 1;
   return {
-    hp: Math.ceil(targetHp),
-    damage: monotonicDemonKingHitDamage(bestDps, clampedLevel),
+    hp: Math.ceil((Number(reference.hp) || 0) * NFT_TROOP_SLOT_COUNT * multiplier),
+    damage: Math.ceil((Number(reference.damage) || 0) * NFT_TROOP_SLOT_COUNT * multiplier),
     atkSpeed,
-    moveSpeed: 0.38,
-    range: 0.32,
-    melee: true,
-    hitDelay: 0.4,
+    moveSpeed: cfg.moveSpeed,
+    range: cfg.range,
+    melee: !!cfg.melee,
+    hitDelay: cfg.hitDelay || 0,
+    projSpeed: reference.projSpeed || 0,
+    shootDelay: reference.shootDelay || 0,
+    flying: !!cfg.flying,
   };
 }
 
-function monotonicDemonKingHitDamage(bestDps, demonLevel) {
-  let damage = 0;
-  for (let level = 1; level <= demonLevel; level += 1) {
-    const atkSpeed = DEMON_KING_ATK_SPEED_BY_LEVEL[level] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
-    const powerMult = DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[level] || DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[1];
-    const targetDps = bestDps * DEMON_KING_SLOT_COUNT * powerMult;
-    damage = Math.max(damage, Math.ceil(targetDps * atkSpeed));
-  }
-  return damage;
+function computeDemonKingStats(troopLevels = {}, rarity = 'common') {
+  return computeNftTroopStats(troopLevels, 'demon_king', rarity);
 }
 
 // Defense building stats: turrets fire bullets, archer towers fire arrows.
@@ -255,7 +254,10 @@ const CANONICAL_GRID_CONFIG = CANONICAL_GRID_CONFIGS[0];
 
 module.exports = {
   TROOP_STATS,
+  computeNftTroopStats,
   computeDemonKingStats,
+  normalizeNftRarity,
+  NFT_RARITY_MULTIPLIERS,
   DEFENSE_STATS,
   SKELETON_GUARD,
   MAX_SHIPS,
