@@ -1363,6 +1363,24 @@ function GodotCanvas({ onEngineReady }) {
 
       // Godot's stage-2 signals are noisy and fire BEFORE startGame resolves,
       // so we don't use them to drive progress — only log for diagnostics.
+      const completeStage2FromGodot = (reason = 'godot_ready_signal') => {
+        if (disposed) return;
+        if (stage2BuildingsDone) return;
+        addClientBreadcrumb('godot.stage2_complete', { reason });
+        stage2BuildingsDone = true;
+        if (engineReadyFallbackId) {
+          clearTimeout(engineReadyFallbackId);
+          engineReadyFallbackId = null;
+        }
+        if (uiReadyFallbackId) {
+          clearTimeout(uiReadyFallbackId);
+          uiReadyFallbackId = null;
+        }
+        setStage(2);
+        if (!engineReadyDone) return;
+        animateStageProgress(100, 520, finishLoadingOverlay);
+      };
+
       const godotLoadingProgress = (rawPct, phase = 'godot', meta = {}) => {
         const pct = mapGodotLoadingProgress(rawPct, phase);
         if (!Number.isFinite(pct)) return;
@@ -1385,26 +1403,15 @@ function GodotCanvas({ onEngineReady }) {
           progressTarget >= 100 && engineReadyDone ? finishLoadingOverlay : null
         );
         addClientBreadcrumb('godot.loading_phase', payload);
+        if (phase === 'home_ready' || phase === 'ready') {
+          completeStage2FromGodot(phase);
+        }
       };
       window.godotLoadingProgress = godotLoadingProgress;
 
       // Godot signals all buildings placed — mark done; ramp will finish to 100.
       const godotBuildingsLoaded = () => {
-        if (disposed) return;
-        if (stage2BuildingsDone) return;
-        addClientBreadcrumb('godot.stage2_complete');
-        stage2BuildingsDone = true;
-        if (engineReadyFallbackId) {
-          clearTimeout(engineReadyFallbackId);
-          engineReadyFallbackId = null;
-        }
-        if (uiReadyFallbackId) {
-          clearTimeout(uiReadyFallbackId);
-          uiReadyFallbackId = null;
-        }
-        setStage(2);
-        if (!engineReadyDone) return;
-        animateStageProgress(100, 520, finishLoadingOverlay);
+        completeStage2FromGodot('godotBuildingsLoaded');
       };
       window.godotBuildingsLoaded = godotBuildingsLoaded;
 
