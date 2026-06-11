@@ -98,6 +98,7 @@ static var _merged_anim_cache_by_skeleton: Dictionary = {}
 
 var player_troop_levels: Dictionary = {}
 var nft_rarity: String = "common"
+var _manual_tint_variant: bool = false
 
 # Note: DemonKing_albedo.png is the un-masked base; the MaskTint shader uses
 # DemonKing_mask_albedo.png instead, so the plain albedo isn't preloaded here.
@@ -184,7 +185,14 @@ const TINT_PALETTES: Dictionary = {
 	"gold": TINT_GOLD,
 }
 
-@export_enum("purple", "blue", "gold", "orange", "pink") var tint_variant: String = "purple"
+const RARITY_TINT_VARIANTS: Dictionary = {
+	"common": "blue",
+	"unrevealed": "blue",
+	"epic": "purple",
+	"legendary": "gold",
+}
+
+@export_enum("purple", "blue", "gold", "orange", "pink") var tint_variant: String = "blue"
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
 ## from the player's current troop levels. Called by BaseTroop._ready().
@@ -209,9 +217,14 @@ func set_player_troop_levels(levels: Dictionary) -> void:
 
 func set_nft_rarity(value: String) -> void:
 	nft_rarity = _normalize_rarity(value)
+	if not _manual_tint_variant:
+		tint_variant = _tint_variant_for_rarity(nft_rarity)
+		if is_inside_tree():
+			_apply_demon_albedo(self)
 
 
 func set_tint_variant(value: String) -> void:
+	_manual_tint_variant = true
 	tint_variant = _normalize_tint_variant(value)
 	if is_inside_tree():
 		_apply_demon_albedo(self)
@@ -225,6 +238,10 @@ static func _normalize_rarity(value: String) -> String:
 static func _normalize_tint_variant(value: String) -> String:
 	var key: String = str(value).strip_edges().to_lower()
 	return key if TINT_PALETTES.has(key) else "purple"
+
+
+static func _tint_variant_for_rarity(value: String) -> String:
+	return RARITY_TINT_VARIANTS.get(_normalize_rarity(value), "blue")
 
 
 static func _palette_for_tint_variant(value: String) -> Array:

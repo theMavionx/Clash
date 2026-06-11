@@ -50,6 +50,7 @@ const FIRE_BREATH_POOL_SIZE: int = 4
 const FIRE_BREATH_LIGHT_ENERGY: float = 1.7
 const FIRE_BREATH_FLAME_LIFETIME_SCALE: float = 0.96
 const FIRE_BREATH_TRAIL_LIFETIME_SCALE: float = 0.56
+const FIRE_BREATH_SLOT_RELEASE_SCALE: float = 0.84
 const FIRE_BREATH_ATTACK_RANGE: float = 0.72
 const FIRE_BREATH_MIN_STANDOFF: float = 0.54
 const FIRE_BREATH_BUILDING_STANDOFF_PADDING: float = 0.18
@@ -448,7 +449,7 @@ func _activate_fire_breath_vfx_slot(slot: Dictionary, holder_name: String, mouth
 	_configure_breath_lights_for_slot(slot, mouth_pos, target_pos, length)
 
 	var cleanup := holder.create_tween()
-	cleanup.tween_interval(FIRE_BREATH_DURATION + 0.08)
+	cleanup.tween_interval(FIRE_BREATH_DURATION * FIRE_BREATH_SLOT_RELEASE_SCALE)
 	cleanup.tween_callback(func():
 		_return_fire_breath_vfx_slot(slot)
 	)
@@ -559,6 +560,7 @@ func _configure_gpu_fire_particles(entry: Dictionary, amount: int, lifetime: flo
 	particles.visibility_aabb = AABB(Vector3(-length, -length, -length), Vector3(length * 2.0, length * 2.0, length * 2.0))
 	process.direction = Vector3(0.0, 1.0, 0.0)
 	process.color = color
+	process.color_ramp = _make_fire_color_ramp_texture(color)
 	process.spread = spread
 	process.gravity = Vector3.ZERO
 	process.initial_velocity_min = velocity_min
@@ -599,6 +601,7 @@ func _configure_cpu_fire_particles(particles: CPUParticles3D, amount: int, lifet
 	particles.local_coords = true
 	particles.direction = Vector3(0.0, 1.0, 0.0)
 	particles.color = color
+	particles.color_ramp = _make_fire_color_ramp(color)
 	particles.spread = spread
 	particles.gravity = Vector3.ZERO
 	particles.initial_velocity_min = velocity_min
@@ -696,6 +699,21 @@ func _make_fire_particle_material(texture: Texture2D, color: Color, additive: bo
 	mat.albedo_texture = texture
 	mat.albedo_color = color
 	return mat
+
+
+func _make_fire_color_ramp(color: Color) -> Gradient:
+	var gradient := Gradient.new()
+	gradient.set_offset(0, 0.0)
+	gradient.set_color(0, color)
+	gradient.set_offset(1, 1.0)
+	gradient.set_color(1, Color(color.r, color.g, color.b, 0.0))
+	return gradient
+
+
+func _make_fire_color_ramp_texture(color: Color) -> GradientTexture1D:
+	var texture := GradientTexture1D.new()
+	texture.gradient = _make_fire_color_ramp(color)
+	return texture
 
 
 func _get_fire_particle_material(texture: Texture2D, color: Color) -> StandardMaterial3D:

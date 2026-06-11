@@ -82,6 +82,8 @@ func _ready() -> void:
 	_create_panel()
 	call_deferred("_populate_spawn_list")
 	call_deferred("_set_status", "Scene ready. F1 panel, 1 build random village.")
+	if OS.get_cmdline_args().has("--capture-demon-colors"):
+		call_deferred("_capture_demon_king_color_test")
 
 
 func _exit_tree() -> void:
@@ -372,6 +374,99 @@ func _spawn_demon_king_color_preview(scene_res: PackedScene, script_res: Script,
 	label.outline_size = 8
 	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.8)
 	_demon_color_preview_root.add_child(label)
+
+
+func _capture_demon_king_color_test() -> void:
+	_hide_capture_scene_chrome()
+	spawn_demon_king_color_test()
+	_layout_demon_king_color_capture()
+	_frame_demon_king_color_camera()
+	await get_tree().create_timer(1.0).timeout
+	await RenderingServer.frame_post_draw
+	var output_path: String = "user://demon_king_color_preview.png"
+	for arg in OS.get_cmdline_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out="):
+			output_path = text.get_slice("=", 1)
+	var image: Image = get_viewport().get_texture().get_image()
+	var err: Error = image.save_png(output_path)
+	if err == OK:
+		print("[TestHarness] Demon King color capture saved: ", output_path)
+	else:
+		push_error("Demon King color capture failed: %s" % error_string(err))
+	get_tree().quit()
+
+
+func _hide_capture_scene_chrome() -> void:
+	for node in get_tree().get_nodes_in_group("building_systems"):
+		if node is Node3D:
+			(node as Node3D).visible = false
+	for node_name in ["Island", "Water", "MainShipAttack", "MainShipBase"]:
+		var node := get_tree().current_scene.get_node_or_null(node_name) if get_tree().current_scene else null
+		if node is Node3D:
+			(node as Node3D).visible = false
+	for canvas in get_tree().get_nodes_in_group("capture_hide_canvas"):
+		if canvas is CanvasItem:
+			(canvas as CanvasItem).visible = false
+	for node in get_tree().get_nodes_in_group("ui"):
+		if node is CanvasItem:
+			(node as CanvasItem).visible = false
+	var scene := get_tree().current_scene
+	if scene:
+		for child in scene.get_children():
+			if child is CanvasLayer:
+				(child as CanvasLayer).visible = false
+		_hide_capture_canvas_items(scene)
+	if _panel:
+		_panel.visible = false
+		var layer := _panel.get_parent()
+		if layer is CanvasLayer:
+			(layer as CanvasLayer).visible = false
+		elif layer is CanvasItem:
+			(layer as CanvasItem).visible = false
+
+
+func _hide_capture_canvas_items(node: Node) -> void:
+	if node is CanvasItem:
+		(node as CanvasItem).visible = false
+	for child in node.get_children():
+		if child is Node:
+			_hide_capture_canvas_items(child as Node)
+
+
+func _layout_demon_king_color_capture() -> void:
+	if not is_instance_valid(_demon_color_preview_root):
+		return
+	var positions: Dictionary = {
+		"DemonKingPreview_Blue": Vector3(-1.05, 0.0, 0.0),
+		"DemonKingPreview_Purple": Vector3(0.0, 0.0, 0.0),
+		"DemonKingPreview_Gold": Vector3(1.05, 0.0, 0.0),
+		"Label_Blue": Vector3(-1.05, 1.65, 0.0),
+		"Label_Purple": Vector3(0.0, 1.65, 0.0),
+		"Label_Gold": Vector3(1.05, 1.65, 0.0),
+	}
+	for child in _demon_color_preview_root.get_children():
+		if positions.has(child.name):
+			child.position = positions[child.name]
+		if child is Node3D:
+			var node_3d := child as Node3D
+			if child.name.begins_with("DemonKingPreview_"):
+				node_3d.rotation_degrees = Vector3(0.0, 0.0, 0.0)
+				node_3d.scale = Vector3.ONE * 0.24
+			elif child is Label3D:
+				node_3d.rotation_degrees = Vector3(0.0, 0.0, 0.0)
+
+
+func _frame_demon_king_color_camera() -> void:
+	var camera := Camera3D.new()
+	camera.name = "DemonKingCaptureCamera"
+	var parent: Node = get_tree().current_scene if get_tree().current_scene else self
+	parent.add_child(camera)
+	var center := Vector3(0.0, 0.76, 0.0)
+	camera.global_position = Vector3(0.0, 0.9, 4.0)
+	camera.look_at(center, Vector3.UP)
+	camera.fov = 35.0
+	camera.current = true
 
 
 func _populate_spawn_list() -> void:
