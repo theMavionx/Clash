@@ -219,10 +219,10 @@ async function fetchRarityFromUri(uri) {
 }
 
 async function rarityForToken(token) {
-  const objectRow = gameDb.getNftRarity(COLLECTION, 'aptos', token.tokenDataId, { legacyLevel: 1 });
   const editionRow = gameDb.getNftRarity(COLLECTION, 'aptos', token.edition, { legacyLevel: 1 });
-  if (objectRow?.rarity) return objectRow;
   if (editionRow?.rarity) return editionRow;
+  const objectRow = gameDb.getNftRarity(COLLECTION, 'aptos', token.tokenDataId, { legacyLevel: 1 });
+  if (objectRow?.rarity) return objectRow;
   return fetchRarityFromUri(token.uri);
 }
 

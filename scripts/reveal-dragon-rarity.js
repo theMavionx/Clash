@@ -89,9 +89,13 @@ function normalizeCandidate(row) {
   const chain = String(row.chain || '').toLowerCase().trim();
   const tokenId = String(row.token_id || row.tokenId || row.asset || row.mint || row.tokenAddress || '').trim();
   if (!chain || !tokenId) return null;
+  const aliases = Array.isArray(row.aliases)
+    ? row.aliases.map((id) => String(id || '').trim()).filter((id) => id && id !== tokenId)
+    : [];
   return {
     chain,
     token_id: tokenId,
+    aliases: [...new Set(aliases)],
     owner_wallet: row.owner_wallet || row.wallet || row.owner || null,
     source: row.source || 'unknown',
   };
@@ -256,8 +260,16 @@ async function readAptosCandidates() {
     for (const row of pageRows) {
       const tokenDataId = normalizeAptosAddress(row.token_data_id) || String(row.token_data_id || '').trim();
       const edition = tokenEditionFromName(row.token_name);
-      if (tokenDataId) rows.push({ chain: 'aptos', token_id: tokenDataId, source: 'aptos-indexer' });
-      if (edition) rows.push({ chain: 'aptos', token_id: edition, source: 'aptos-indexer-edition' });
+      if (edition) {
+        rows.push({
+          chain: 'aptos',
+          token_id: edition,
+          aliases: tokenDataId ? [tokenDataId] : [],
+          source: 'aptos-indexer',
+        });
+      } else if (tokenDataId) {
+        rows.push({ chain: 'aptos', token_id: tokenDataId, source: 'aptos-indexer' });
+      }
     }
     if (pageRows.length < limit) break;
   }
@@ -346,10 +358,16 @@ async function collectCandidates() {
       const row = normalizeCandidate(raw);
       if (!row) continue;
       const key = `${row.chain}:${row.token_id}`;
-      const prev = byKey.get(key);
+      let prev = byKey.get(key);
+      for (const alias of row.aliases || []) {
+        const aliasKey = `${row.chain}:${alias}`;
+        if (!prev && byKey.has(aliasKey)) prev = byKey.get(aliasKey);
+        if (aliasKey !== key) byKey.delete(aliasKey);
+      }
       byKey.set(key, {
         ...prev,
         ...row,
+        aliases: [...new Set([...(prev?.aliases || []), ...(row.aliases || [])])],
         owner_wallet: row.owner_wallet || prev?.owner_wallet || null,
         source: prev?.source && prev.source !== row.source ? `${prev.source}+${row.source}` : row.source,
       });
@@ -360,28 +378,59 @@ async function collectCandidates() {
     .sort(compareCandidate);
 }
 
+function rarityForCandidate(row, existing) {
+  const direct = existing.get(`${row.chain}:${row.token_id}`);
+  if (direct) return direct;
+  for (const alias of row.aliases || []) {
+    const aliasRarity = existing.get(`${row.chain}:${alias}`);
+    if (aliasRarity) return aliasRarity;
+  }
+  return null;
+}
+
+function upsertRarityRow(row, rarity, sourceSuffix = '') {
+  const score = row.score || scoreFor(row);
+  return gameDb.upsertNftRarity({
+    collection: COLLECTION,
+    chain: row.chain,
+    tokenId: row.token_id,
+    rarity,
+    legacyLevel: 1,
+    ownerWallet: row.owner_wallet || null,
+    source: `${row.source || 'dragon-reveal'}${sourceSuffix}`.slice(0, 80),
+    revealSeed: SEED,
+    snapshotHash: score,
+    metadata: { score, source: row.source || null },
+  });
+}
+
+function syncCandidateAliases(row, rarity) {
+  const aliases = [...new Set(row.aliases || [])];
+  for (const alias of aliases) {
+    upsertRarityRow({ ...row, token_id: alias }, rarity, '-alias');
+  }
+}
+
 async function main() {
   const candidates = await collectCandidates();
   const existing = readExisting();
-  const missing = candidates.filter((row) => !existing.has(`${row.chain}:${row.token_id}`));
+  const missing = candidates.filter((row) => !rarityForCandidate(row, existing));
   const assigned = assignMissingRarities(missing, existing);
+  const assignedByKey = new Map(assigned.map((row) => [`${row.chain}:${row.token_id}`, row.rarity]));
   if (APPLY) {
     for (const row of assigned) {
-      gameDb.upsertNftRarity({
-        collection: COLLECTION,
-        chain: row.chain,
-        tokenId: row.token_id,
-        rarity: row.rarity,
-        legacyLevel: 1,
-        ownerWallet: row.owner_wallet || null,
-        source: row.source || 'dragon-reveal',
-        revealSeed: SEED,
-        snapshotHash: row.score,
-        metadata: { score: row.score, source: row.source || null },
-      });
+      upsertRarityRow(row, row.rarity);
+      syncCandidateAliases(row, row.rarity);
+    }
+    for (const row of candidates) {
+      const rarity = assignedByKey.get(`${row.chain}:${row.token_id}`) || rarityForCandidate(row, existing);
+      if (rarity) {
+        upsertRarityRow(row, rarity);
+        syncCandidateAliases(row, rarity);
+      }
     }
   }
-  const finalRows = [...existing.values(), ...assigned.map((row) => row.rarity)];
+  const finalRows = candidates.map((row) => assignedByKey.get(`${row.chain}:${row.token_id}`) || rarityForCandidate(row, existing)).filter(Boolean);
   const counts = { common: 0, epic: 0, legendary: 0 };
   for (const rarity of finalRows) {
     if (counts[rarity] != null) counts[rarity] += 1;
@@ -399,6 +448,7 @@ async function main() {
     sample: assigned.slice(0, 20).map((row) => ({
       chain: row.chain,
       tokenId: row.token_id,
+      aliases: row.aliases || [],
       rarity: LABELS[row.rarity],
       source: row.source,
       owner: row.owner_wallet || null,
