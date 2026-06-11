@@ -46,6 +46,23 @@ static var _render_diag_emitted: Dictionary = {}
 const RENDER_DIAG_MAX_EVENTS: int = 24
 const RENDER_DIAG_MAX_MESHES: int = 10
 const RENDER_DIAG_MAX_PARTICLES: int = 8
+const TROOP_BODY_TEXTURES: Dictionary = {
+	"archer": "res://Model/Characters/Model/Ranger_ranger_texture.png",
+	"barbarian": "res://Model/Characters/Model/Barbarian_barbarian_texture.png",
+	"knight": "res://Model/Characters/Model/Knight_knight_texture.png",
+	"mage": "res://Model/Characters/Model/Mage_mage_texture.png",
+	"ranger": "res://Model/Characters/Model/Ranger_ranger_texture.png",
+	"rogue": "res://Model/Characters/Model/Rogue_rogue_texture.png",
+}
+const TROOP_BODY_MESH_PREFIXES: Dictionary = {
+	"archer": ["Ranger_"],
+	"barbarian": ["Barbarian_"],
+	"knight": ["Knight_"],
+	"mage": ["Mage_"],
+	"ranger": ["Ranger_"],
+	"rogue": ["Rogue_"],
+}
+static var _troop_body_material_cache: Dictionary = {}
 
 ## Rally pointer — set by BSRally when the player drops a marker. The visual
 ## marker expires quickly, but the command target stays sticky until that
@@ -485,6 +502,7 @@ func _ready() -> void:
 	_setup_attack_sfx()
 	_setup_animations()
 	_setup_weapons()
+	_apply_web_body_material_fallback()
 	_stabilize_render_meshes()
 	_report_troop_render_diagnostic("ready")
 	# Keep combat replay deterministic and aligned with the server simulator.
@@ -549,6 +567,7 @@ func activate() -> void:
 	if state != State.INACTIVE:
 		return
 	visible = true
+	_apply_web_body_material_fallback()
 	_stabilize_render_meshes()
 	_report_troop_render_diagnostic("activate")
 	state = State.IDLE
@@ -1688,6 +1707,85 @@ func _stabilize_render_meshes() -> void:
 	_stabilize_render_meshes_recursive(self)
 
 
+func _apply_web_body_material_fallback() -> void:
+	if not OS.has_feature("web"):
+		return
+	var troop_key: String = _troop_script_key()
+	if not TROOP_BODY_TEXTURES.has(troop_key):
+		return
+	var texture_path: String = str(TROOP_BODY_TEXTURES.get(troop_key, ""))
+	var mat: StandardMaterial3D = _get_web_body_material(troop_key, texture_path)
+	if mat == null:
+		return
+	var prefixes: Array = TROOP_BODY_MESH_PREFIXES.get(troop_key, [])
+	var applied_count: int = _apply_web_body_material_recursive(self, prefixes, mat)
+	if applied_count > 0 and not _render_diag_emitted.has("troop.%s.web_body_material" % troop_key):
+		report_render_diagnostic(self, "troop.%s.web_body_material" % troop_key, {
+			"troop_name": name,
+			"script": _troop_script_path(),
+			"texture": texture_path,
+			"applied_meshes": applied_count,
+		})
+
+
+func _troop_script_key() -> String:
+	var script_path: String = _troop_script_path()
+	if script_path == "":
+		return ""
+	return script_path.get_file().get_basename().to_lower()
+
+
+func _troop_script_path() -> String:
+	var script_ref: Script = get_script() as Script
+	if script_ref != null and script_ref.resource_path != "":
+		return script_ref.resource_path
+	return ""
+
+
+static func _get_web_body_material(troop_key: String, texture_path: String) -> StandardMaterial3D:
+	if _troop_body_material_cache.has(troop_key):
+		return _troop_body_material_cache[troop_key] as StandardMaterial3D
+	var texture: Texture2D = ResourceLoader.load(texture_path, "Texture2D") as Texture2D
+	if texture == null:
+		push_warning("BaseTroop: missing web body texture '%s' for %s" % [texture_path, troop_key])
+		return null
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "WebBody_%s" % troop_key
+	mat.albedo_texture = texture
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	_troop_body_material_cache[troop_key] = mat
+	return mat
+
+
+static func _apply_web_body_material_recursive(node: Node, prefixes: Array, mat: StandardMaterial3D) -> int:
+	var applied_count: int = 0
+	if node is MeshInstance3D:
+		var mesh_instance: MeshInstance3D = node as MeshInstance3D
+		if _mesh_name_matches_prefix(str(mesh_instance.name), prefixes):
+			var mesh: Mesh = mesh_instance.mesh
+			var surface_count: int = mesh.get_surface_count() if mesh != null else 0
+			if surface_count == 0:
+				mesh_instance.material_override = mat
+				applied_count += 1
+			else:
+				for surface_index in range(surface_count):
+					mesh_instance.set_surface_override_material(surface_index, mat)
+				applied_count += 1
+	for child in node.get_children():
+		applied_count += _apply_web_body_material_recursive(child, prefixes, mat)
+	return applied_count
+
+
+static func _mesh_name_matches_prefix(mesh_name: String, prefixes: Array) -> bool:
+	for prefix_value in prefixes:
+		var prefix: String = str(prefix_value)
+		if prefix != "" and mesh_name.begins_with(prefix):
+			return true
+	return false
+
+
 func _stabilize_render_meshes_recursive(node: Node) -> void:
 	if node is MeshInstance3D:
 		var mesh_instance: MeshInstance3D = node as MeshInstance3D
@@ -1700,10 +1798,7 @@ func _stabilize_render_meshes_recursive(node: Node) -> void:
 
 
 func _report_troop_render_diagnostic(stage: String) -> void:
-	var script_path: String = ""
-	var script_ref: Script = get_script() as Script
-	if script_ref != null and script_ref.resource_path != "":
-		script_path = script_ref.resource_path
+	var script_path: String = _troop_script_path()
 	var troop_key: String = name
 	if script_path != "":
 		troop_key = script_path.get_file().get_basename()

@@ -291,8 +291,8 @@ function compactClientEventData(type, data = {}, opts = {}) {
           transparency: mat?.transparency ?? null,
           cull_mode: mat?.cull_mode ?? null,
           shading_mode: mat?.shading_mode ?? null,
-          albedo_texture: mat?.albedo_texture?.path || null,
-          emission_texture: mat?.emission_texture?.path || null,
+          albedo_texture: compactTextureDiagnostic(mat?.albedo_texture),
+          emission_texture: compactTextureDiagnostic(mat?.emission_texture),
         }))
         : [],
     })),
@@ -303,6 +303,16 @@ function compactClientEventData(type, data = {}, opts = {}) {
       emitting: p?.emitting ?? null,
       amount: p?.amount ?? null,
     })),
+  };
+}
+
+function compactTextureDiagnostic(texture) {
+  if (!texture || typeof texture !== 'object') return null;
+  return {
+    class: texture.class || null,
+    path: texture.path || null,
+    width: texture.width ?? null,
+    height: texture.height ?? null,
   };
 }
 
