@@ -26,7 +26,7 @@ import { createPublicClient, createWalletClient, custom, fallback, http, encodeF
 import { base, arbitrum } from 'viem/chains';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
-import { bridgeInit, bridgeRelay, fetchOwnedNfts, nftLevelImageUrl, nftRarityCardStyle, nftRarityLabel } from '../lib/nftV3Client';
+import { bridgeInit, bridgeRelay, fetchOwnedNfts, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from '../lib/solanaRpc';
 import { sendSolanaTransactionWithRetry } from '../lib/solanaTx';
@@ -744,6 +744,8 @@ export default function NftBridgePanel({
         ? { hash: relayRes.destTxHash, asset: relayRes.assetAddress }
         : { hash: relayRes.txSig, asset: relayRes.assetAddress },
       level: relayRes.level || relayRes.burned?.level || null,
+      rarity: relayRes.rarity || relayRes.burned?.rarity || null,
+      rarityLabel: relayRes.rarityLabel || null,
     };
   }
 
@@ -779,6 +781,8 @@ export default function NftBridgePanel({
           destTxHash: retryResult.destResult?.hash || null,
           assetAddress: retryResult.destResult?.asset || null,
           level: retryResult.level,
+          rarity: retryResult.rarity,
+          rarityLabel: retryResult.rarityLabel,
         });
       }
       setResult(retryResult);
@@ -889,6 +893,8 @@ export default function NftBridgePanel({
           destTxHash: itemResult.destResult?.hash || null,
           assetAddress: itemResult.destResult?.asset || null,
           level: itemResult.level,
+          rarity: itemResult.rarity,
+          rarityLabel: itemResult.rarityLabel,
         });
         setPendingRelay(null);
         setNotice(null);
@@ -1005,7 +1011,7 @@ export default function NftBridgePanel({
             <ChainLogo chain={chainKey} size={14} />
             <span style={localStyles.nftCardLargeSubText}>{chain?.label} - {idShort}</span>
           </span>
-          <span style={localStyles.nftCardLargeLevel}>
+          <span style={{ ...localStyles.nftCardLargeLevel, ...(isRarityCollection ? nftRarityBadgeStyle(nft?.rarity, isDemonKingCollection ? level : 1, { compact: true }) : null) }}>
             {isRarityCollection ? nftRarityLabel(nft?.rarity, isDemonKingCollection ? level : 1) : `Level ${level} ${'★'.repeat(level)}`}
           </span>
         </div>
@@ -1179,7 +1185,7 @@ export default function NftBridgePanel({
                         )}
                         <div style={localStyles.nftMeta}>
                           <span style={localStyles.nftId} title={id}>{idShort}</span>
-                          <span style={localStyles.nftLevel}>
+                          <span style={{ ...localStyles.nftLevel, ...(isRarityCollection ? nftRarityBadgeStyle(t.rarity, isDemonKingCollection ? (t.level ?? 1) : 1, { compact: true }) : null) }}>
                             {isRarityCollection ? nftRarityLabel(t.rarity, isDemonKingCollection ? (t.level ?? 1) : 1) : `L${t.level ?? 1}`}
                           </span>
                         </div>

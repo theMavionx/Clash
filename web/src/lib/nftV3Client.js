@@ -67,16 +67,25 @@ export const NFT_RARITY_LABELS = {
 const NFT_RARITY_CARD_COLORS = {
   common: {
     border: '#2F80ED',
+    badgeBg: 'linear-gradient(180deg, #62B0FF 0%, #1769D1 100%)',
+    badgeBorder: '#B9DEFF',
+    badgeColor: '#FFFFFF',
     glow: 'rgba(47, 128, 237, 0.28)',
     shadow: 'rgba(47, 128, 237, 0.18)',
   },
   epic: {
     border: '#8B5CF6',
+    badgeBg: 'linear-gradient(180deg, #B56BFF 0%, #6D28D9 100%)',
+    badgeBorder: '#E6D1FF',
+    badgeColor: '#FFFFFF',
     glow: 'rgba(139, 92, 246, 0.3)',
     shadow: 'rgba(139, 92, 246, 0.2)',
   },
   legendary: {
     border: '#F2BE37',
+    badgeBg: 'linear-gradient(180deg, #FFE66A 0%, #F4A51C 100%)',
+    badgeBorder: '#FFF2A8',
+    badgeColor: '#4A2A00',
     glow: 'rgba(242, 190, 55, 0.38)',
     shadow: 'rgba(168, 107, 26, 0.24)',
   },
@@ -120,6 +129,31 @@ export function nftRarityCardStyle(rarity, legacyLevel = 1, options = {}) {
     boxShadow: active
       ? `0 0 0 2px ${colors.glow}, 0 3px 10px ${colors.shadow}, inset 0 0 0 1px rgba(255,255,255,0.45)`
       : `0 0 0 2px ${colors.glow}, 0 2px 7px ${colors.shadow}`,
+  };
+}
+
+export function nftRarityBadgeStyle(rarity, legacyLevel = 1, options = {}) {
+  const key = normalizeNftRarity(rarity) || demonKingLegacyRarityFallback(legacyLevel);
+  const colors = key ? NFT_RARITY_CARD_COLORS[key] : null;
+  if (!colors) return {};
+  const compact = !!options.compact;
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    padding: compact ? '1px 5px' : '2px 7px',
+    borderRadius: compact ? 5 : 7,
+    background: colors.badgeBg,
+    border: `1px solid ${colors.badgeBorder}`,
+    color: colors.badgeColor,
+    boxShadow: `0 2px 6px ${colors.shadow}, inset 0 1px 0 rgba(255,255,255,0.45)`,
+    textShadow: key === 'legendary'
+      ? '0 1px 0 rgba(255,255,255,0.45)'
+      : '0 1px 1px rgba(0,0,0,0.4)',
+    fontWeight: 900,
+    lineHeight: 1,
+    whiteSpace: 'nowrap',
   };
 }
 

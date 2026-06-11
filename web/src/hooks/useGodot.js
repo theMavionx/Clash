@@ -118,11 +118,22 @@ export function GodotProvider({ children }) {
 
     const handleGodotMessage = (msg) => {
       const { action, data } = msg;
+      const notifyGodotUiReady = (reason) => {
+        try {
+          window.dispatchEvent(new CustomEvent('clash-godot-ui-ready', {
+            detail: { reason, action, data: data || {} },
+          }));
+        } catch {
+          // Loader recovery is best-effort.
+        }
+      };
       switch (action) {
         case 'godot_ready':
+          notifyGodotUiReady('godot_ready');
           setReady(true);
           break;
         case 'state':
+          notifyGodotUiReady('state');
           setPlayerState(prev => {
             const next = { ...(prev || {}), ...data };
             if (shallowEqualObject(next, prev)) return prev;
@@ -360,9 +371,11 @@ export function GodotProvider({ children }) {
           }
           break;
         case 'show_register':
+          notifyGodotUiReady('show_register');
           setShowRegister(true);
           break;
         case 'registered':
+          notifyGodotUiReady('registered');
           if (data.success) setShowRegister(false);
           break;
         case 'placement_started':

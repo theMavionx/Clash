@@ -13,7 +13,7 @@ import {
   payCustodialOrder,
   releaseCustodialReservation,
 } from '../lib/custodialMarketplace';
-import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl, nftRarityCardStyle, nftRarityLabel } from '../lib/nftV3Client';
+import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel } from '../lib/nftV3Client';
 import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 import {
   isSolanaMobileWalletAdapter,
@@ -1543,7 +1543,7 @@ function BrowseView({ listings, loading, walletMap, compact, sort, setSort, leve
               >
                 <div style={compact ? s.imgWrapMobile : s.imgWrap}>
                   <img src={orderImage(order)} alt="" style={s.img} onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
-                  <span style={s.level}>{itemRarityLabel(order)}</span>
+                  <span style={{ ...s.level, ...nftRarityBadgeStyle(order.rarity, order.legacyLevel || order.level || 1, { compact: true }) }}>{itemRarityLabel(order)}</span>
                 </div>
                 <div style={s.cardBody}>
                   <div style={s.cardLine}>
@@ -1598,7 +1598,7 @@ function SellView({ ready, config, owned, loading, supportedAssets, walletMap, s
                 }}
               >
                 <img src={nft.imageUrl || nftLevelImageUrl(1, id)} alt="" style={s.nftPickImg} />
-                <span style={s.nftPickChain}>{itemRarityLabel(nft)}</span>
+                <span style={{ ...s.nftPickChain, ...nftRarityBadgeStyle(nft.rarity, nft.legacyLevel || nft.level || 1, { compact: true }) }}>{itemRarityLabel(nft)}</span>
                 <span>{shortAddr(id, 4, 4)}</span>
               </button>
             );

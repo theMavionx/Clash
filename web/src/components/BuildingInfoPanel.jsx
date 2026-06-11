@@ -5,7 +5,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftLevelImageUrl, nftRarityCardStyle, nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -1190,6 +1190,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
             const rarityStyle = usesRarity
               ? nftRarityCardStyle(token.rarity, base === 'DemonKing' ? (token.level || 1) : 1)
               : {};
+            const rarityBadgeStyle = usesRarity
+              ? nftRarityBadgeStyle(token.rarity, base === 'DemonKing' ? (token.level || 1) : 1, { compact: true })
+              : {};
             const disabled = swapSlot === null
               ? shipTroops.length + 2 > capacity
               : !troopSwapPlacement(shipTroops, swapSlot, entry, capacity);
@@ -1209,7 +1212,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 <div style={{...LT.demonUseBadge, fontSize: isMobile ? 9 : 10}}>
                   {useRatio}
                 </div>
-                <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>
+                <div style={{...LT.troopLvlBadge, ...rarityBadgeStyle, fontSize: isMobile ? 12 : 16}}>
                   {usesRarity ? nftRarityLabel(token.rarity, base === 'DemonKing' ? (token.level || 1) : 1) : `Lvl ${token.level || 1}`}
                 </div>
                 <div style={LT.troopImgWrap}>
@@ -1404,6 +1407,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
               const entry = demonKingShipEntry(token);
               const demonTokenLabel = demonKingDisplayLabel(token, demonKingNfts);
               const rarityStyle = nftRarityCardStyle(token.rarity, token.level || 1);
+              const rarityBadgeStyle = nftRarityBadgeStyle(token.rarity, token.level || 1, { compact: true });
               const disabled = swapSlot === null
                 ? shipTroops.length + 2 > capacity
                 : (() => {
@@ -1425,7 +1429,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   <div style={{...LT.demonUseBadge, fontSize: isMobile ? 9 : 10}}>
                     {demonKingUseRatio}
                   </div>
-                  <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>{nftRarityLabel(token.rarity, token.level || 1)}</div>
+                  <div style={{...LT.troopLvlBadge, ...rarityBadgeStyle, fontSize: isMobile ? 12 : 16}}>{nftRarityLabel(token.rarity, token.level || 1)}</div>
                   <div style={LT.troopImgWrap}>
                     <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
                   </div>

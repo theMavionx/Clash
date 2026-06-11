@@ -35,7 +35,7 @@ import {
   paymentAddressFromId,
   paymentTokenMeta,
 } from '../lib/marketplace';
-import { fetchOwnedNfts, nftRarityCardStyle, syncDemonKingNfts } from '../lib/nftV3Client';
+import { fetchOwnedNfts, nftRarityBadgeStyle, nftRarityCardStyle, syncDemonKingNfts } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 
 const LISTINGS_PAGE_SIZE = 50;
@@ -486,7 +486,7 @@ function ListingCard({ listing, rarity, onBuy, isOwn }) {
           style={s.cardImg}
           onError={(e) => { e.currentTarget.style.display = 'none'; }}
         />
-        <div style={s.cardLevelBadge}>{nftRarityLabel(rarity, listing.level || 1)}</div>
+        <div style={{ ...s.cardLevelBadge, ...nftRarityBadgeStyle(rarity, listing.level || 1) }}>{nftRarityLabel(rarity, listing.level || 1)}</div>
       </div>
       <div style={s.cardMeta}>
         <span style={s.cardTitle}>#{listing.tokenId}</span>
@@ -538,7 +538,7 @@ function MyListingsView({ listings, loading, error, rarityByTokenId, baseReady, 
                 style={s.cardImg}
                 onError={(e) => { e.currentTarget.style.display = 'none'; }}
               />
-              <div style={s.cardLevelBadge}>{nftRarityLabel(rarity, l.level || 1)}</div>
+              <div style={{ ...s.cardLevelBadge, ...nftRarityBadgeStyle(rarity, l.level || 1) }}>{nftRarityLabel(rarity, l.level || 1)}</div>
             </div>
             <div style={s.cardMeta}>
               <span style={s.cardTitle}>#{l.tokenId}</span>
@@ -613,7 +613,7 @@ function ListNewView({
                       )}
                       <div style={s.miniMeta}>
                         <span style={s.miniId}>#{id}</span>
-                        <span style={s.miniLevel}>{nftRarityLabel(t.rarity, t.level || 1)}</span>
+                        <span style={{ ...s.miniLevel, ...nftRarityBadgeStyle(t.rarity, t.level || 1, { compact: true }) }}>{nftRarityLabel(t.rarity, t.level || 1)}</span>
                       </div>
                     </button>
                   );
@@ -701,7 +701,7 @@ function BuyConfirmModal({ listing, rarity, legacyLevel = 1, baseReady, busy, on
               style={s.modalImg}
               onError={(e) => { e.currentTarget.style.display = 'none'; }}
             />
-            <div style={s.cardLevelBadge}>{nftRarityLabel(rarity, legacyLevel)}</div>
+            <div style={{ ...s.cardLevelBadge, ...nftRarityBadgeStyle(rarity, legacyLevel) }}>{nftRarityLabel(rarity, legacyLevel)}</div>
           </div>
           <div style={s.modalBreakdown}>
             <span>Price</span><span style={{ fontWeight: 800 }}>{formatPriceWei(listing.priceWei, tokenAddr)}</span>

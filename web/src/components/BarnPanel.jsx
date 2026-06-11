@@ -5,7 +5,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftRarityCardStyle, nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -716,7 +716,9 @@ function BarnPanel({ building, onClose }) {
                           onClick={() => setSelectedDemonKey(key)}
                           style={{...styles.demonTokenBtn, ...(active ? styles.demonTokenBtnActive : null), ...rarityCardStyle}}
                         >
-                          <span>{isRarityNftTroop ? nftRarityLabel(token.rarity, isDemonKingNftTroop ? (token.level || 1) : 1) : `Lv ${token.level || 1}`}</span>
+                          <span style={isRarityNftTroop ? nftRarityBadgeStyle(token.rarity, isDemonKingNftTroop ? (token.level || 1) : 1, { compact: true }) : null}>
+                            {isRarityNftTroop ? nftRarityLabel(token.rarity, isDemonKingNftTroop ? (token.level || 1) : 1) : `Lv ${token.level || 1}`}
+                          </span>
                           <span>{tokenLabel}</span>
                         </button>
                       );
