@@ -301,7 +301,14 @@ async function syncSolanaAssets(rpc, assets, rowsByAsset) {
   const { createUmi } = await importServerPackage('@metaplex-foundation/umi-bundle-defaults');
   const { keypairIdentity, publicKey } = await importServerPackage('@metaplex-foundation/umi');
   const { base58 } = await importServerPackage('@metaplex-foundation/umi/serializers');
-  const { mplCore, fetchAsset, fetchCollection, update, updatePlugin } = await importServerPackage('@metaplex-foundation/mpl-core');
+  const {
+    mplCore,
+    fetchAsset,
+    fetchCollection,
+    update,
+    updatePlugin,
+    addPlugin,
+  } = await importServerPackage('@metaplex-foundation/mpl-core');
   const umi = createUmi(rpc).use(mplCore());
   umi.use(keypairIdentity(umi.eddsa.createKeypairFromSecretKey(secretBytes)));
 
@@ -348,22 +355,38 @@ async function syncSolanaAssets(rpc, assets, rowsByAsset) {
           uriTxSig = base58.deserialize(sig.signature)[0];
         }
         if (attrStatus.needsSync) {
+          const pluginPayload = {
+            type: 'Attributes',
+            attributeList: normalizedDemonKingAttributes({
+              existing: coreAttributeList(asset),
+              rarity,
+            }),
+          };
           // eslint-disable-next-line no-await-in-loop
-          const sig = await updatePlugin(umi, {
-            asset: publicKey(assetId),
-            ...(collectionAddress ? { collection: publicKey(collectionAddress) } : {}),
-            authority: umi.identity,
-            plugin: {
-              type: 'Attributes',
-              attributeList: normalizedDemonKingAttributes({
-                existing: coreAttributeList(asset),
-                rarity,
-              }),
-            },
-          }).sendAndConfirm(umi, {
-            send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
-            confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
-          });
+          const sig = await (async () => {
+            try {
+              return await updatePlugin(umi, {
+                asset: publicKey(assetId),
+                ...(collectionAddress ? { collection: publicKey(collectionAddress) } : {}),
+                authority: umi.identity,
+                plugin: pluginPayload,
+              }).sendAndConfirm(umi, {
+                send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+                confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+              });
+            } catch (err) {
+              if (!/Plugin not found/i.test(String(err?.message || err))) throw err;
+              return addPlugin(umi, {
+                asset: publicKey(assetId),
+                ...(collectionAddress ? { collection: publicKey(collectionAddress) } : {}),
+                authority: umi.identity,
+                plugin: pluginPayload,
+              }).sendAndConfirm(umi, {
+                send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+                confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+              });
+            }
+          })();
           attributesTxSig = base58.deserialize(sig.signature)[0];
         }
         const row = {
