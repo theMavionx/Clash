@@ -203,7 +203,7 @@ function addBreadcrumbInternal(type, data = {}, level = 'info') {
     level,
     type: truncate(type, 80),
     route: getRoute(),
-    data: sanitize(data),
+    data: sanitize(compactClientEventData(type, data, { forBreadcrumb: true })),
   };
   breadcrumbs.push(crumb);
   if (breadcrumbs.length > MAX_BREADCRUMBS) {
@@ -227,7 +227,7 @@ export function reportClientEvent(type, data = {}, opts = {}) {
     const level = opts.level || 'info';
     const source = opts.source || 'client.event';
     const message = opts.message || type || 'client.event';
-    const eventData = sanitizeDeep(data);
+    const eventData = sanitizeDeep(compactClientEventData(type, data));
     addBreadcrumbInternal(type, data, level);
     enqueue(makeEvent(level, [message], source, opts.stack || '', {
       rawPayload: {
@@ -240,6 +240,56 @@ export function reportClientEvent(type, data = {}, opts = {}) {
     }));
     if (opts.flush || opts.immediate) flushClientLogs();
   } catch { /* noop */ }
+}
+
+function compactClientEventData(type, data = {}, opts = {}) {
+  if (type !== 'godot.render_diagnostic' || !data || typeof data !== 'object') return data;
+  const meshes = Array.isArray(data.meshes) ? data.meshes : [];
+  const particles = Array.isArray(data.particles) ? data.particles : [];
+  const sampleLimit = opts.forBreadcrumb ? 2 : 6;
+  return {
+    tag: data.tag || null,
+    root_name: data.root_name || null,
+    root_class: data.root_class || null,
+    root_visible: data.root_visible ?? null,
+    child_count: data.child_count ?? null,
+    mesh_count: data.mesh_count ?? null,
+    visible_mesh_count: data.visible_mesh_count ?? null,
+    particle_count: data.particle_count ?? null,
+    visible_particle_count: data.visible_particle_count ?? null,
+    zero_visible_meshes: Number(data.mesh_count || 0) > 0 && Number(data.visible_mesh_count || 0) === 0,
+    extra: data.extra || null,
+    mesh_samples: meshes.slice(0, sampleLimit).map((m) => ({
+      name: m?.name || null,
+      visible: m?.visible ?? null,
+      mesh_class: m?.mesh_class || null,
+      surface_count: m?.surface_count ?? null,
+      aabb_size: m?.aabb_size || null,
+      extra_cull_margin: m?.extra_cull_margin ?? null,
+      lod_bias: m?.lod_bias ?? null,
+      ignore_occlusion_culling: m?.ignore_occlusion_culling ?? null,
+      materials: Array.isArray(m?.materials)
+        ? m.materials.slice(0, 3).map((mat) => ({
+          source: mat?.source || null,
+          class: mat?.class || null,
+          path: mat?.path || null,
+          shader: mat?.shader || null,
+          transparency: mat?.transparency ?? null,
+          cull_mode: mat?.cull_mode ?? null,
+          shading_mode: mat?.shading_mode ?? null,
+          albedo_texture: mat?.albedo_texture?.path || null,
+          emission_texture: mat?.emission_texture?.path || null,
+        }))
+        : [],
+    })),
+    particle_samples: particles.slice(0, sampleLimit).map((p) => ({
+      name: p?.name || null,
+      class: p?.class || null,
+      visible: p?.visible ?? null,
+      emitting: p?.emitting ?? null,
+      amount: p?.amount ?? null,
+    })),
+  };
 }
 
 export function flushClientLogs() {
