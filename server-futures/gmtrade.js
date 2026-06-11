@@ -210,6 +210,8 @@ const bs58Decode = bs58.decode || bs58.default?.decode;
 const GMTRADE_MARKET_DECIMALS = 20;
 const GMTRADE_PRICE_DECIMALS = 20;
 const GMTRADE_TOKEN_AMOUNT_DECIMALS = Number(process.env.GMTRADE_TOKEN_AMOUNT_DECIMALS || 8);
+const GMTRADE_CREATE_ORDER_V2_DISCRIMINATOR = Buffer.from([200, 157, 3, 182, 3, 164, 162, 240]);
+const GMTRADE_CREATE_ORDER_V2_MIN_SIZE = 99;
 const GMTRADE_OFFICIAL_PRICE_DECIMALS = {
   SOL: 9,
   WSOL: 9,
@@ -650,6 +652,16 @@ async function rpcTransaction(signature) {
   ]);
 }
 
+async function rpcSignaturesForAddress(address, options = {}) {
+  const config = {
+    limit: Math.max(1, Math.min(100, Number(options.limit || 40))),
+    commitment: 'confirmed',
+  };
+  if (options.before) config.before = String(options.before);
+  if (options.until) config.until = String(options.until);
+  return rpcRequest('getSignaturesForAddress', [address, config]);
+}
+
 async function getWalletUsdcBalance(address) {
   if (!isSolanaAddress(address)) return 0;
   const result = await rpcRequest('getTokenAccountsByOwner', [
@@ -1049,6 +1061,57 @@ function decodeGmtradeTradeEvent(encoded) {
     }
   }
   throw lastError || new Error('GMTrade trade event decode failed');
+}
+
+function decodeGmtradeCreateOrderV2Instruction(ix, accountKeys = []) {
+  if (!ix || typeof bs58Decode !== 'function') return null;
+  let buf;
+  try {
+    buf = Buffer.from(bs58Decode(String(ix.data || '').trim()));
+  } catch {
+    return null;
+  }
+  if (buf.length < GMTRADE_CREATE_ORDER_V2_MIN_SIZE) return null;
+  if (!buf.subarray(0, 8).equals(GMTRADE_CREATE_ORDER_V2_DISCRIMINATOR)) return null;
+  const kind = buf.readUInt8(40);
+  const sizeRaw = readU128Le(buf, 59);
+  const sizeUsd = gmRawUsdToNumber(sizeRaw);
+  if (!Number.isFinite(sizeUsd) || sizeUsd <= 0 || sizeUsd > 10_000_000) return null;
+  const accounts = Array.isArray(ix.accounts) ? ix.accounts : [];
+  const accountAt = (idx) => {
+    const keyIdx = Number(accounts[idx]);
+    return Number.isInteger(keyIdx) ? String(accountKeys[keyIdx] || '') : '';
+  };
+  const marginRaw = readU64Le(buf, 51);
+  const isLong = buf.readUInt8(75) === 1;
+  return {
+    user: accountAt(4),
+    order: accountAt(5),
+    position: accountAt(6),
+    market_token: accountAt(3),
+    collateral_token: accountAt(7),
+    side: isLong ? 'long' : 'short',
+    is_increase: /Increase/i.test(orderKindName(kind)),
+    kind,
+    kind_name: orderKindName(kind),
+    margin_raw: String(marginRaw),
+    margin_usd: decimalNumber(marginRaw, GMTRADE_DEFAULT_COLLATERAL_DECIMALS),
+    size_delta_raw: String(sizeRaw),
+    size_delta_usd: sizeUsd,
+    decoder: 'node_layout_gmsol_create_order_v2',
+  };
+}
+
+function decodeGmtradeCreateOrderV2Instructions(tx, accountKeys = []) {
+  const out = [];
+  const instructions = tx?.transaction?.message?.instructions || [];
+  for (const ix of instructions) {
+    const programId = String(accountKeys[Number(ix?.programIdIndex)] || '');
+    if (!GMTRADE_PROGRAM_IDS.includes(programId)) continue;
+    const decoded = decodeGmtradeCreateOrderV2Instruction(ix, accountKeys);
+    if (decoded) out.push(decoded);
+  }
+  return out;
 }
 
 function decodeTradeEventsLocally(events) {
@@ -2464,6 +2527,8 @@ async function verifySolanaSignature({ signature, wallet }) {
   if (!hasGmtradeProgram) {
     throw Object.assign(new Error('Solana transaction does not include a known GMTrade/GMSOL program'), { status: 400 });
   }
+  const createOrderEvents = decodeGmtradeCreateOrderV2Instructions(tx, accountKeys)
+    .filter(ev => Number(ev?.size_delta_usd) > 0);
   let tradeEvents = [];
   const encodedEvents = extractProgramDataLogs(tx.meta?.logMessages || []);
   if (encodedEvents.length) {
@@ -2484,6 +2549,7 @@ async function verifySolanaSignature({ signature, wallet }) {
     encodedEventsCount: encodedEvents.length,
     tradeEvents,
     walletEvents,
+    createOrderEvents,
   };
 }
 
@@ -2554,8 +2620,13 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
   const tradeEvent = tx.walletEvents
     .filter(ev => Number(ev?.size_delta_usd) > 0)
     .sort((a, b) => Number(b.size_delta_usd) - Number(a.size_delta_usd))[0] || null;
+  const createOrderEvent = Array.isArray(tx.createOrderEvents)
+    ? tx.createOrderEvents
+      .filter(ev => Number(ev?.size_delta_usd) > 0)
+      .sort((a, b) => Number(b.size_delta_usd) - Number(a.size_delta_usd))[0] || null
+    : null;
   let verifiedPosition = null;
-  if (!tradeEvent) {
+  if (!tradeEvent && !createOrderEvent) {
     for (let attempt = 0; attempt < 6; attempt += 1) {
       verifiedPosition = await verifiedPositionForTradeReport({ wallet, tx, body }).catch((e) => {
         console.warn('[gmtrade] position fallback verification failed:', e.message);
@@ -2569,7 +2640,7 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
     && Number.isFinite(requestedNotional)
     && requestedNotional > 0
     && requestedNotional <= 10_000_000;
-  if (!tradeEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS && !canUseVerifiedCloseClientNotional) {
+  if (!tradeEvent && !createOrderEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS && !canUseVerifiedCloseClientNotional) {
     if (options.storePending !== false) {
       persistPendingTradeReport(db, playerId, wallet, signature, body);
     }
@@ -2586,6 +2657,7 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
         block_time: tx.blockTime,
         encoded_events_count: tx.encodedEventsCount,
         event_verified: false,
+        create_order_verified: false,
         position_verified: false,
       },
     };
@@ -2594,6 +2666,8 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
   const leverage = Number.isFinite(requestedLeverage) && requestedLeverage > 0 ? requestedLeverage : 1;
   const notional = tradeEvent
     ? Number(tradeEvent.size_delta_usd)
+    : createOrderEvent
+    ? Number(createOrderEvent.size_delta_usd)
     : verifiedPosition
     ? Number(verifiedPosition.size_usd || verifiedPosition.notional_usd)
     : canUseVerifiedCloseClientNotional
@@ -2602,8 +2676,8 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
   if (!Number.isFinite(notional) || notional <= 0 || notional > 10_000_000) {
     throw Object.assign(new Error('GMTrade verified notional out of range'), { status: 400 });
   }
-  const symbol = baseSymbol(body.symbol || 'SOL') || 'SOL';
-  const side = tradeEvent?.side || (isCloseReport ? requestedSide : verifiedPosition?.side_label) || requestedSide;
+  const symbol = baseSymbol(body.symbol || createOrderEvent?.symbol || 'GM') || 'GM';
+  const side = tradeEvent?.side || createOrderEvent?.side || (isCloseReport ? requestedSide : verifiedPosition?.side_label) || requestedSide;
   const price = Number(body.price) > 0 ? String(body.price) : String(notional);
   const result = db.addTrade(playerId, {
     symbol,
@@ -2620,6 +2694,8 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
     proofJson: JSON.stringify({
       source: tradeEvent
         ? 'gmtrade_solana_tx'
+        : createOrderEvent
+        ? 'gmtrade_create_order_v2_tx'
         : verifiedPosition
         ? 'gmtrade_position_pda_after_tx'
         : canUseVerifiedCloseClientNotional
@@ -2630,8 +2706,10 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
       slot: tx.slot,
       block_time: tx.blockTime,
       event_verified: !!tradeEvent,
+      create_order_verified: !!createOrderEvent,
       position_verified: !!verifiedPosition,
       event: tradeEvent,
+      create_order: createOrderEvent,
       position: verifiedPosition,
       client_amount: Number.isFinite(requestedAmount) ? requestedAmount : null,
       client_leverage: Number.isFinite(requestedLeverage) ? requestedLeverage : null,
@@ -2691,6 +2769,64 @@ async function reconcilePendingTradeReportsForPlayer(db, playerId, options = {})
   return { checked: rows.length, imported, pending, errors };
 }
 
+async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, options = {}) {
+  if (!playerId || !isSolanaAddress(wallet)) {
+    return { checked: 0, candidates: 0, imported: 0, pending: 0, skipped: 0, errors: 0 };
+  }
+  const limit = Math.max(1, Math.min(100, Number(options.limit || 60)));
+  const minSlot = Math.max(0, Number(options.minSlot || 0));
+  const rows = await rpcSignaturesForAddress(wallet, { limit }).catch((e) => {
+    console.warn('[gmtrade] on-chain signature scan failed:', e.message);
+    return [];
+  });
+  let checked = 0;
+  let candidates = 0;
+  let imported = 0;
+  let pending = 0;
+  let skipped = 0;
+  let errors = 0;
+  for (const row of (Array.isArray(rows) ? rows : []).reverse()) {
+    checked += 1;
+    if (row?.err) {
+      skipped += 1;
+      continue;
+    }
+    const signature = String(row?.signature || '').trim();
+    if (!signature || (minSlot > 0 && Number(row?.slot || 0) <= minSlot)) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const tx = await verifySolanaSignature({ signature, wallet });
+      const hasWalletEvent = Array.isArray(tx.walletEvents) && tx.walletEvents.some(ev => Number(ev?.size_delta_usd) > 0);
+      const createOrderEvent = Array.isArray(tx.createOrderEvents)
+        ? tx.createOrderEvents.find(ev => Number(ev?.size_delta_usd) > 0)
+        : null;
+      if (!hasWalletEvent && !createOrderEvent) {
+        skipped += 1;
+        continue;
+      }
+      candidates += 1;
+      const result = await recordTradeReport(db, playerId, {
+        signature,
+        tx_hash: signature,
+        wallet,
+        symbol: options.symbol || createOrderEvent?.symbol || 'GM',
+        side: options.side || createOrderEvent?.side || 'long',
+        amount: 0,
+        leverage: 1,
+      }, wallet, { storePending: true });
+      if (result?.changes > 0) imported += 1;
+      else if (result?.pending) pending += 1;
+      else skipped += 1;
+    } catch (e) {
+      errors += 1;
+      console.warn('[gmtrade] on-chain backfill tx failed:', signature, e.message);
+    }
+  }
+  return { checked, candidates, imported, pending, skipped, errors };
+}
+
 module.exports = {
   GMTRADE_APP_URL,
   GMTRADE_DOCS_URL,
@@ -2711,7 +2847,7 @@ module.exports = {
     node_sdk_builder_enabled: GMTRADE_ENABLE_NODE_SDK_BUILDER,
     market_data: 'coingecko_gmtrade_derivatives_with_pyth_fallback',
     market_data_last_error: marketInfoCache.error,
-    reward_verification: 'confirmed_solana_signature_and_trade_event',
+    reward_verification: 'confirmed_solana_signature_trade_event_or_create_order_v2',
     min_position_usd: GMTRADE_MIN_POSITION_USD,
     trade_event_decoder: rustBuilderAvailable() ? 'node_layout_and_rust_gmsol_sdk' : 'node_layout_gmsol_trade_event',
     allow_client_notional_reports: GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS,
@@ -2742,10 +2878,12 @@ module.exports = {
   getTransactionStatus,
   getUserReferralByAddress,
   isSolanaAddress,
+  backfillRecentOnchainTradesForPlayer,
   recordTradeReport,
   reconcilePendingTradeReportsForPlayer,
   referralUrl,
   _internal: {
+    decodeGmtradeCreateOrderV2Instruction,
     decodeGmtradeTradeEvent,
     decodeGmtradeTradeEventBuffer,
     decodeTradeEventsLocally,

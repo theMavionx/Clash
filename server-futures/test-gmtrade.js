@@ -7,6 +7,9 @@ process.env.GMTRADE_MARKETS_JSON = JSON.stringify({
     collateral_decimals: 6,
   },
 });
+process.env.GMTRADE_COLLATERAL_MINT = 'So11111111111111111111111111111111111111112';
+process.env.GMTRADE_EXECUTION_LAMPORTS = '0';
+process.env.GMTRADE_ORDER_SOL_BUFFER_LAMPORTS = '0';
 
 const assert = require('assert');
 const { Keypair, Transaction, VersionedTransaction } = require('@solana/web3.js');
@@ -50,6 +53,38 @@ async function main() {
   assert.equal(event.is_increase, true);
   assert.equal(event.size_delta_usd, 25);
 
+  const orderIx = {
+    accounts: [
+      0, 0, 13, 2, 6, 4, 1, 14,
+      14, 14, 14, 3, 15, 3, 3, 5,
+      7, 10, 12, 15, 15, 15, 15, 11, 15,
+    ],
+    data: 'XSE8t7hu2S3vH2CvoMyiCqZdNpDvkdYjXE1N8sqvhZYx4ZSiJ7iowxbW78FjDMgddCDjNnZGJTmU34knADJFbQPLX7SnjihtBtXJxmaqnhLZ595LzqkJViFjRU3k2bKbvkF9AbBjpQsYQN7KQccWACmYTSo9DGTKaEHVfHCRAjyYeWzHDZZ',
+  };
+  const orderKeys = [
+    '9HqCqKxVa8BiZeqZJRadCMizue3DBctmEjUjqA1veTKs',
+    '4CuGQq5CHJbvYa3uAMfq1icjAGyKEherPNYZjmiWnpm4',
+    '4tM9cPqNpEYmstNdJMCc6rwdq42939w1SRFYoqMsqPQF',
+    '75XM3zZsyeobxccnknAGkzmaPUEfqXMTZWcFuAC155Uj',
+    '8Bxc8eDrapdMtyZ5EQ5UtCTFETUaMRGkvWwr38nNjUFu',
+    '93vqzT38NaFLkGtxT6JMSZfqMR8CHihWdAm94c6pijcE',
+    'BbVuy9HKX4Hof2aFWuba5XeQA74HC1bKosPN6M2Fb2Uy',
+    '11111111111111111111111111111111',
+    'ComputeBudget111111111111111111111111111111',
+    'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95',
+    'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    '8a4wJ2bMiH6XWDZ7biTnejkss8VG7GMwd9Mg6F5fDfHF',
+    'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
+    'CTDLvGGXnoxvqLyTpGzdGLg9pD6JexKxKXSV8tqqo8bN',
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    'Gmso1uvJnLbawvw7yezdfCDcPydwW2s2iqG3w6MDucLo',
+  ];
+  const order = gmtrade._internal.decodeGmtradeCreateOrderV2Instruction(orderIx, orderKeys);
+  assert.equal(order.kind_name, 'LimitIncrease');
+  assert.equal(order.side, 'long');
+  assert.equal(order.margin_usd, 90);
+  assert.equal(order.size_delta_usd, 1800);
+
   const built = await gmtrade.buildCreateOrderTx({
     wallet: '1111111QLbz7JHiBTspS962RLKV8GndWFwiEaqKM',
     symbol: 'SOL',
@@ -70,6 +105,7 @@ async function main() {
     ok: true,
     decoder: event.decoder,
     event_delta_usd: event.size_delta_usd,
+    create_order_delta_usd: order.size_delta_usd,
     builder: built.builder,
     tx_kind: decoded.kind,
     tx_count: built.transactions.length,

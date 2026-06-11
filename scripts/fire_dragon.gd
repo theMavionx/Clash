@@ -42,6 +42,7 @@ const FIRE_BREATH_DURATION: float = 0.74
 const FIRE_BREATH_WIDTH: float = 0.28
 const FIRE_BREATH_VISUAL_WIDTH_SCALE: float = 0.65
 const FIRE_BREATH_MOUTH_FORWARD_OFFSET: float = 0.08
+const FIRE_BREATH_MOUTH_Y_OFFSET: float = -0.055
 const FIRE_BREATH_TARGET_Y_OFFSET: float = 0.13
 const FIRE_BREATH_MIN_LENGTH: float = 0.12
 const FIRE_BREATH_FLAME_PARTICLES: int = 46
@@ -740,8 +741,8 @@ func _get_mouth_position(fallback_dir: Vector3) -> Vector3:
 		var head_idx: int = _find_head_bone_index(skeleton)
 		if head_idx >= 0:
 			var head_pose: Transform3D = skeleton.get_bone_global_pose(head_idx)
-			return skeleton.global_transform * head_pose.origin + fallback_dir.normalized() * FIRE_BREATH_MOUTH_FORWARD_OFFSET
-	return global_position + Vector3(0.0, 0.08, 0.0) + fallback_dir.normalized() * 0.18
+			return skeleton.global_transform * head_pose.origin + Vector3(0.0, FIRE_BREATH_MOUTH_Y_OFFSET, 0.0) + fallback_dir.normalized() * FIRE_BREATH_MOUTH_FORWARD_OFFSET
+	return global_position + Vector3(0.0, 0.08 + FIRE_BREATH_MOUTH_Y_OFFSET, 0.0) + fallback_dir.normalized() * 0.18
 
 
 func _find_head_bone_index(skeleton: Skeleton3D) -> int:

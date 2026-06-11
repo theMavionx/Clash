@@ -12053,8 +12053,14 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
             console.log(`[claim-gold gmtrade] pending reconcile player=${req.player.name} checked=${reconciled.checked} imported=${reconciled.imported} pending=${reconciled.pending} errors=${reconciled.errors}`);
           }
         }
+        if (typeof gmtrade.backfillRecentOnchainTradesForPlayer === 'function' && gmtrade.isSolanaAddress(wallet)) {
+          const backfilled = await gmtrade.backfillRecentOnchainTradesForPlayer(fdb, req.player.id, wallet, { limit: 60 });
+          if (backfilled.imported || backfilled.pending || backfilled.errors) {
+            console.log(`[claim-gold gmtrade] on-chain backfill player=${req.player.name} checked=${backfilled.checked} candidates=${backfilled.candidates} imported=${backfilled.imported} pending=${backfilled.pending} skipped=${backfilled.skipped} errors=${backfilled.errors}`);
+          }
+        }
       } catch (e) {
-        console.warn(`[claim-gold gmtrade] pending reconcile failed player=${req.player.name}:`, e.message);
+        console.warn(`[claim-gold gmtrade] reconcile/backfill failed player=${req.player.name}:`, e.message);
       }
     }
     let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
