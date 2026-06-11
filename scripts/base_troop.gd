@@ -1701,7 +1701,7 @@ func _stabilize_render_meshes_recursive(node: Node) -> void:
 
 func _report_troop_render_diagnostic(stage: String) -> void:
 	var script_path: String = ""
-	var script_ref := get_script()
+	var script_ref: Script = get_script() as Script
 	if script_ref != null and script_ref.resource_path != "":
 		script_path = script_ref.resource_path
 	var troop_key: String = name
