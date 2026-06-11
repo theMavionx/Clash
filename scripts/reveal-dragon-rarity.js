@@ -287,12 +287,34 @@ async function rpcCall(rpc, method, params) {
   return json?.result;
 }
 
+async function filterExistingDasAssets(rpc, assets) {
+  const existing = [];
+  const stale = [];
+  for (let offset = 0; offset < assets.length; offset += 100) {
+    const chunk = assets.slice(offset, offset + 100);
+    // eslint-disable-next-line no-await-in-loop
+    const result = await rpcCall(rpc, 'getMultipleAccounts', [
+      chunk.map((asset) => String(asset.id)),
+      { encoding: 'base64', commitment: 'confirmed' },
+    ]);
+    const values = Array.isArray(result?.value) ? result.value : [];
+    chunk.forEach((asset, index) => {
+      const account = values[index];
+      const data = account?.data;
+      const dataLength = Array.isArray(data) && typeof data[0] === 'string' ? data[0].length : 0;
+      if (dataLength > 4) existing.push(asset);
+      else stale.push(asset);
+    });
+  }
+  return { existing, stale };
+}
+
 async function readSolanaCandidates() {
   const deployment = deploymentOf('solana', BRIDGE_COLLECTION) || {};
   const collection = process.env.NFT_DRAGON_SOLANA_COLLECTION || deployment.collection;
   if (!collection) return [];
   return withSolanaRpcFallback(async (rpc) => {
-    const out = [];
+    const assets = [];
     const limit = 1000;
     for (let page = 1; page < 100; page += 1) {
       // eslint-disable-next-line no-await-in-loop
@@ -303,11 +325,21 @@ async function readSolanaCandidates() {
         limit,
       });
       const items = Array.isArray(result?.items) ? result.items : [];
-      for (const item of items) {
-        const owner = String(item?.ownership?.owner || item?.ownership?.delegate || item?.owner || '').trim();
-        out.push({ chain: 'solana', token_id: String(item.id), owner_wallet: owner || null, source: 'solana-das' });
-      }
-      if (items.length < limit || out.length >= Number(result?.total || 0)) break;
+      assets.push(...items);
+      if (items.length < limit || assets.length >= Number(result?.total || 0)) break;
+    }
+    const { existing, stale } = await filterExistingDasAssets(rpc, assets);
+    if (stale.length) {
+      console.warn(JSON.stringify({
+        warn: 'solana_stale_das_assets_ignored',
+        count: stale.length,
+        sample: stale.slice(0, 10).map((item) => String(item.id)),
+      }));
+    }
+    const out = [];
+    for (const item of existing) {
+      const owner = String(item?.ownership?.owner || item?.ownership?.delegate || item?.owner || '').trim();
+      out.push({ chain: 'solana', token_id: String(item.id), owner_wallet: owner || null, source: 'solana-das' });
     }
     return out;
   }, {
