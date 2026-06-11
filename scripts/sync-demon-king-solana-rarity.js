@@ -160,7 +160,10 @@ async function filterExistingDasAssets(rpc, assets) {
     ]);
     const values = Array.isArray(result?.value) ? result.value : [];
     chunk.forEach((asset, index) => {
-      if (values[index]?.data) existing.push(asset);
+      const account = values[index];
+      const data = account?.data;
+      const dataLength = Array.isArray(data) && typeof data[0] === 'string' ? data[0].length : 0;
+      if (dataLength > 4) existing.push(asset);
       else stale.push(asset);
     });
   }
