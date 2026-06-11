@@ -4508,6 +4508,8 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_exi
 		skel.global_position = tomb_pos + _tombstone_skeleton_offset(spawn_index, target_count)
 		skel.global_rotation = Vector3.ZERO
 		_apply_cel_shader(skel)
+		if skel.has_method("refresh_web_body_material_fallback"):
+			skel.refresh_web_body_material_fallback()
 		alive.append(skel)
 	# Reposition every guard to the current target_count layout so that an
 	# upgrade (e.g. L3 circle → L4 diamond) re-anchors existing skeletons
