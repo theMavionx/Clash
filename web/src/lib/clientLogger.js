@@ -227,9 +227,13 @@ export function reportClientEvent(type, data = {}, opts = {}) {
     const level = opts.level || 'info';
     const source = opts.source || 'client.event';
     const message = opts.message || type || 'client.event';
+    const isRenderDiagnostic = type === 'godot.render_diagnostic';
     const eventData = sanitizeDeep(compactClientEventData(type, data));
-    addBreadcrumbInternal(type, data, level);
-    enqueue(makeEvent(level, [message], source, opts.stack || '', {
+    addBreadcrumbInternal(type, eventData, level);
+    const eventMessage = isRenderDiagnostic
+      ? renderDiagnosticMessage(message, eventData)
+      : message;
+    enqueue(makeEvent(level, [eventMessage], source, opts.stack || '', {
       rawPayload: {
         event: {
           type,
@@ -237,9 +241,19 @@ export function reportClientEvent(type, data = {}, opts = {}) {
         },
       },
       context: opts.context || {},
+      minimal: isRenderDiagnostic,
+      breadcrumbLimit: isRenderDiagnostic ? 4 : undefined,
     }));
     if (opts.flush || opts.immediate) flushClientLogs();
   } catch { /* noop */ }
+}
+
+function renderDiagnosticMessage(message, data = {}) {
+  const tag = data?.tag ? ` ${data.tag}` : '';
+  const visible = data?.visible_mesh_count ?? '?';
+  const total = data?.mesh_count ?? '?';
+  const zero = data?.zero_visible_meshes ? ' zero_visible' : '';
+  return `${message || 'godot.render_diagnostic'}${tag} meshes ${visible}/${total}${zero}`;
 }
 
 function compactClientEventData(type, data = {}, opts = {}) {
@@ -462,6 +476,27 @@ function payloadString(payload) {
     const full = JSON.stringify(payload);
     if (full.length <= PAYLOAD_JSON_MAX) return full;
 
+    if (payload?.event?.type === 'godot.render_diagnostic') {
+      const renderPayload = {
+        args: Array.isArray(payload?.args) ? payload.args.slice(0, 2) : payload?.args,
+        context: payload?.context || null,
+        event: payload.event,
+        breadcrumbs: compactBreadcrumbsForPayload(payload?.breadcrumbs || [], 4),
+        payload_compacted: true,
+        original_payload_bytes: full.length,
+      };
+      const renderText = JSON.stringify(renderPayload);
+      if (renderText.length <= PAYLOAD_JSON_MAX) return renderText;
+
+      return JSON.stringify({
+        context: payload?.context || null,
+        event: payload.event,
+        payload_compacted: true,
+        dropped_breadcrumbs: true,
+        original_payload_bytes: full.length,
+      });
+    }
+
     const breadcrumbsList = Array.isArray(payload?.breadcrumbs) ? payload.breadcrumbs : [];
     const breadcrumbsCompact = compactBreadcrumbsForPayload(breadcrumbsList, 40);
     const compact = {
@@ -523,13 +558,25 @@ function enqueue(event) {
 
 function makeEvent(level, args, source, stack, extra = {}) {
   const safeArgs = args.map((arg) => sanitize(arg));
-  const payload = {
-    args: safeArgs,
-    context: currentContext(extra.context || {}),
-    actions: actionsForPayload(),
-    breadcrumbs: breadcrumbs.slice(-MAX_BREADCRUMBS),
-    ...(extra.rawPayload || sanitize(extra.payload || {})),
-  };
+  const context = currentContext(extra.context || {});
+  const extraPayload = extra.rawPayload || sanitize(extra.payload || {});
+  const payload = extra.minimal
+    ? {
+      args: safeArgs,
+      context,
+      breadcrumbs: compactBreadcrumbsForPayload(
+        breadcrumbs,
+        Number.isFinite(extra.breadcrumbLimit) ? extra.breadcrumbLimit : 6,
+      ),
+      ...extraPayload,
+    }
+    : {
+      args: safeArgs,
+      context,
+      actions: actionsForPayload(),
+      breadcrumbs: breadcrumbs.slice(-MAX_BREADCRUMBS),
+      ...extraPayload,
+    };
   return {
     level,
     source,
