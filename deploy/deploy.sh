@@ -28,6 +28,7 @@ BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-}"
 BACKUP_SQLITE_TIMEOUT_MIN_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MIN_SECONDS:-600}"
 BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND="${CLASH_BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND:-1}"
 BACKUP_SQLITE_TIMEOUT_MAX_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MAX_SECONDS:-7200}"
+CLOUDFLARE_CACHE_PURGE_ENABLED="${CLOUDFLARE_CACHE_PURGE_ENABLED:-1}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -1058,6 +1059,52 @@ switch_current_release() {
     SWITCHED=1
 }
 
+purge_cloudflare_godot_cache() {
+    if [ "$CLOUDFLARE_CACHE_PURGE_ENABLED" != "1" ]; then
+        log "Cloudflare cache purge skipped by CLOUDFLARE_CACHE_PURGE_ENABLED=$CLOUDFLARE_CACHE_PURGE_ENABLED"
+        return
+    fi
+
+    local cf_token cf_zone_id response success error_message
+    cf_token="${CLOUDFLARE_API_TOKEN:-${CF_API_TOKEN:-${CLASH_CLOUDFLARE_API_TOKEN:-}}}"
+    cf_zone_id="${CLOUDFLARE_ZONE_ID:-${CF_ZONE_ID:-${CLASH_CLOUDFLARE_ZONE_ID:-}}}"
+    if [ -z "$cf_token" ]; then
+        cf_token="$(first_env_file_value CLOUDFLARE_API_TOKEN CF_API_TOKEN CLASH_CLOUDFLARE_API_TOKEN)"
+    fi
+    if [ -z "$cf_zone_id" ]; then
+        cf_zone_id="$(first_env_file_value CLOUDFLARE_ZONE_ID CF_ZONE_ID CLASH_CLOUDFLARE_ZONE_ID)"
+    fi
+
+    if [ -z "$cf_token" ] || [ -z "$cf_zone_id" ]; then
+        log "Cloudflare cache purge skipped: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ZONE_ID in $ENV_FILE."
+        return
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        log "Cloudflare cache purge skipped: curl is not installed."
+        return
+    fi
+
+    log "Purging Cloudflare cache for Godot runtime assets..."
+    response="$(curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/$cf_zone_id/purge_cache" \
+        -H "Authorization: Bearer $cf_token" \
+        -H "Content-Type: application/json" \
+        --data "{\"files\":[\"https://$DOMAIN/godot/Work.pck\",\"https://$DOMAIN/godot/Work.wasm\",\"https://$DOMAIN/godot/Work.js\",\"https://$DOMAIN/godot/godot-runtime-manifest.json\"]}" \
+        2>&1)" || {
+            log "WARNING: Cloudflare cache purge request failed: $response"
+            return
+        }
+
+    success="$(printf '%s' "$response" | node -e "let s=''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => { try { const j = JSON.parse(s); console.log(j.success ? '1' : '0'); } catch { console.log('0'); } });" 2>/dev/null || echo 0)"
+    if [ "$success" = "1" ]; then
+        log "Cloudflare Godot cache purge accepted."
+        return
+    fi
+
+    error_message="$(printf '%s' "$response" | node -e "let s=''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => { try { const j = JSON.parse(s); console.log((j.errors || []).map(e => e.message || e.code).join('; ') || 'unknown error'); } catch { console.log('invalid response'); } });" 2>/dev/null || echo "invalid response")"
+    log "WARNING: Cloudflare cache purge was not accepted: $error_message"
+}
+
 write_nginx_config() {
     log "[8/9] Configuring nginx..."
     if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
@@ -1640,6 +1687,7 @@ main() {
     switch_current_release
     write_nginx_config
     restart_services
+    purge_cloudflare_godot_cache
     backup_shared_databases
     cleanup_old_releases
 
