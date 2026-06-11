@@ -148,6 +148,25 @@ async function fetchDasCollectionAssets(rpc) {
   return out;
 }
 
+async function filterExistingDasAssets(rpc, assets) {
+  const existing = [];
+  const stale = [];
+  for (let offset = 0; offset < assets.length; offset += 100) {
+    const chunk = assets.slice(offset, offset + 100);
+    // eslint-disable-next-line no-await-in-loop
+    const result = await rpcCall(rpc, 'getMultipleAccounts', [
+      chunk.map((asset) => String(asset.id)),
+      { encoding: 'base64', commitment: 'confirmed' },
+    ]);
+    const values = Array.isArray(result?.value) ? result.value : [];
+    chunk.forEach((asset, index) => {
+      if (values[index]?.data) existing.push(asset);
+      else stale.push(asset);
+    });
+  }
+  return { existing, stale };
+}
+
 function readRarityRows() {
   return gameDb.db.prepare(`
     SELECT collection, chain, token_id, rarity, legacy_level, owner_wallet, metadata_json, updated_at
@@ -424,7 +443,8 @@ async function main() {
 
   const result = await withSolanaRpcFallback(async (rpc) => {
     log('audit_start', { apply: APPLY, rpc_host: new URL(rpc).hostname, collection: SOLANA_COLLECTION });
-    const assets = await fetchDasCollectionAssets(rpc);
+    const dasAssets = await fetchDasCollectionAssets(rpc);
+    const { existing: assets, stale: staleDasAssets } = await filterExistingDasAssets(rpc, dasAssets);
     const filteredAssets = ASSET_FILTER ? assets.filter((asset) => String(asset.id) === ASSET_FILTER) : assets;
     const beforeRows = readRarityRows();
     const rowsByAsset = new Map(beforeRows.map((row) => [String(row.token_id), row]));
@@ -475,6 +495,9 @@ async function main() {
       rpc_host: new URL(rpc).hostname,
       collection: SOLANA_COLLECTION,
       solana_assets: assets.length,
+      solana_das_assets: dasAssets.length,
+      stale_das_assets: staleDasAssets.length,
+      stale_das_asset_ids: staleDasAssets.slice(0, 20).map((asset) => String(asset.id)),
       db_solana_before: beforeRows.length,
       db_solana_after: afterRows.length,
       missing_before: missing.length,

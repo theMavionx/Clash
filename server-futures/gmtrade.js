@@ -2532,7 +2532,16 @@ async function verifiedPositionForTradeReport({ wallet, tx, body }) {
     .sort((a, b) => Number(b.size_usd || b.notional_usd || 0) - Number(a.size_usd || a.notional_usd || 0))[0] || null;
 }
 
-async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
+function persistPendingTradeReport(db, playerId, wallet, signature, body) {
+  if (typeof db?.upsertPendingGmtradeTradeReport !== 'function') return;
+  try {
+    db.upsertPendingGmtradeTradeReport({ playerId, wallet, signature, body });
+  } catch (e) {
+    console.warn('[gmtrade] pending trade-report store failed:', e.message);
+  }
+}
+
+async function recordTradeReport(db, playerId, body = {}, playerWallet = '', options = {}) {
   const wallet = resolveRequestWallet(body, playerWallet);
   const signature = String(body.tx_hash || body.signature || '').trim();
   const requestedAmount = Number(body.amount);
@@ -2561,6 +2570,9 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
     && requestedNotional > 0
     && requestedNotional <= 10_000_000;
   if (!tradeEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS && !canUseVerifiedCloseClientNotional) {
+    if (options.storePending !== false) {
+      persistPendingTradeReport(db, playerId, wallet, signature, body);
+    }
     return {
       changes: 0,
       signature,
@@ -2629,7 +2641,54 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '') {
       account_keys: tx.accountKeys.slice(0, 32),
     }),
   });
+  if (result.changes > 0 && typeof db?.deletePendingGmtradeTradeReport === 'function') {
+    try { db.deletePendingGmtradeTradeReport(signature); } catch {}
+  }
   return { ...result, signature, notional_usd: notional };
+}
+
+async function reconcilePendingTradeReportsForPlayer(db, playerId, options = {}) {
+  if (!playerId || typeof db?.listPendingGmtradeTradeReports !== 'function') {
+    return { checked: 0, imported: 0, pending: 0, errors: 0 };
+  }
+  const rows = db.listPendingGmtradeTradeReports(playerId, options.limit || 25);
+  let imported = 0;
+  let pending = 0;
+  let errors = 0;
+  for (const row of rows) {
+    let body = {};
+    try {
+      body = row.body_json ? JSON.parse(row.body_json) : {};
+    } catch {
+      body = {};
+    }
+    body.signature = body.signature || row.signature;
+    body.tx_hash = body.tx_hash || row.signature;
+    try {
+      const result = await recordTradeReport(db, playerId, body, row.wallet, { storePending: false });
+      if (result?.changes > 0) {
+        imported += 1;
+        if (typeof db.deletePendingGmtradeTradeReport === 'function') {
+          db.deletePendingGmtradeTradeReport(row.signature);
+        }
+      } else if (result?.pending) {
+        pending += 1;
+        if (typeof db.markPendingGmtradeTradeReportAttempt === 'function') {
+          db.markPendingGmtradeTradeReportAttempt(row.signature, result.warning || 'still pending');
+        }
+      } else {
+        if (typeof db.deletePendingGmtradeTradeReport === 'function') {
+          db.deletePendingGmtradeTradeReport(row.signature);
+        }
+      }
+    } catch (e) {
+      errors += 1;
+      if (typeof db.markPendingGmtradeTradeReportAttempt === 'function') {
+        db.markPendingGmtradeTradeReportAttempt(row.signature, e.message || String(e));
+      }
+    }
+  }
+  return { checked: rows.length, imported, pending, errors };
 }
 
 module.exports = {
@@ -2684,6 +2743,7 @@ module.exports = {
   getUserReferralByAddress,
   isSolanaAddress,
   recordTradeReport,
+  reconcilePendingTradeReportsForPlayer,
   referralUrl,
   _internal: {
     decodeGmtradeTradeEvent,

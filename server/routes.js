@@ -11995,6 +11995,19 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       recordClaimTelemetry({ result: 'service_unavailable', reason: 'Futures service unavailable' });
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
     }
+    if (dex === 'gmtrade') {
+      try {
+        const gmtrade = require('../server-futures/gmtrade');
+        if (typeof gmtrade.reconcilePendingTradeReportsForPlayer === 'function') {
+          const reconciled = await gmtrade.reconcilePendingTradeReportsForPlayer(fdb, req.player.id, { limit: 50 });
+          if (reconciled.imported || reconciled.errors) {
+            console.log(`[claim-gold gmtrade] pending reconcile player=${req.player.name} checked=${reconciled.checked} imported=${reconciled.imported} pending=${reconciled.pending} errors=${reconciled.errors}`);
+          }
+        }
+      } catch (e) {
+        console.warn(`[claim-gold gmtrade] pending reconcile failed player=${req.player.name}:`, e.message);
+      }
+    }
     let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     if (!reward) {
       db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet || '');
