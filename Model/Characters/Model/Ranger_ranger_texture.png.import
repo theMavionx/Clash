@@ -3,24 +3,19 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://ci4yjphba8akp"
-path.s3tc="res://.godot/imported/Ranger_ranger_texture.png-7281c7f36f36e06a1ba579d35f16783f.s3tc.ctex"
-path.etc2="res://.godot/imported/Ranger_ranger_texture.png-7281c7f36f36e06a1ba579d35f16783f.etc2.ctex"
+path="res://.godot/imported/Ranger_ranger_texture.png-7281c7f36f36e06a1ba579d35f16783f.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc", "etc2_astc"],
-"vram_texture": true
-}
-generator_parameters={
-"md5": "cce0a8fd41d7db9bef78ccb560e9500d"
+"vram_texture": false
 }
 
 [deps]
 
 source_file="res://Model/Characters/Model/Ranger_ranger_texture.png"
-dest_files=["res://.godot/imported/Ranger_ranger_texture.png-7281c7f36f36e06a1ba579d35f16783f.s3tc.ctex", "res://.godot/imported/Ranger_ranger_texture.png-7281c7f36f36e06a1ba579d35f16783f.etc2.ctex"]
+dest_files=["res://.godot/imported/Ranger_ranger_texture.png-7281c7f36f36e06a1ba579d35f16783f.ctex"]
 
 [params]
 
-compress/mode=2
+compress/mode=0
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

@@ -3,24 +3,19 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bgoxikxcxqu8m"
-path.s3tc="res://.godot/imported/Rogue_rogue_texture.png-f2e3a09d6339cec379ab16207ecf3f46.s3tc.ctex"
-path.etc2="res://.godot/imported/Rogue_rogue_texture.png-f2e3a09d6339cec379ab16207ecf3f46.etc2.ctex"
+path="res://.godot/imported/Rogue_rogue_texture.png-f2e3a09d6339cec379ab16207ecf3f46.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc", "etc2_astc"],
-"vram_texture": true
-}
-generator_parameters={
-"md5": "e24a3d2f6e39f79ab8c3dab2f3ab950f"
+"vram_texture": false
 }
 
 [deps]
 
 source_file="res://Model/Characters/Model/Rogue_rogue_texture.png"
-dest_files=["res://.godot/imported/Rogue_rogue_texture.png-f2e3a09d6339cec379ab16207ecf3f46.s3tc.ctex", "res://.godot/imported/Rogue_rogue_texture.png-f2e3a09d6339cec379ab16207ecf3f46.etc2.ctex"]
+dest_files=["res://.godot/imported/Rogue_rogue_texture.png-f2e3a09d6339cec379ab16207ecf3f46.ctex"]
 
 [params]
 
-compress/mode=2
+compress/mode=0
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
