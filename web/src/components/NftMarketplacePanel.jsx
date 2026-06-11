@@ -35,9 +35,8 @@ import {
   paymentAddressFromId,
   paymentTokenMeta,
 } from '../lib/marketplace';
-import { nftRarityCardStyle } from '../lib/nftV3Client';
+import { fetchOwnedNfts, nftRarityCardStyle, syncDemonKingNfts } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
-import { syncDemonKingNfts } from '../lib/nftV3Client';
 
 const LISTINGS_PAGE_SIZE = 50;
 
@@ -179,7 +178,7 @@ export default function NftMarketplacePanel({
     setOwnedLoading(true);
     setOwnedError(null);
     try {
-      const ownedJson = await syncDemonKingNfts({ wallet: evmAddress, chains: [chainKey] });
+      const ownedJson = await fetchOwnedNfts({ chain: chainKey, address: evmAddress });
       const tokens = Array.isArray(ownedJson?.tokens) ? ownedJson.tokens : [];
       setOwnedNfts(tokens);
       if (tokens.length === 1 && !pickTokenId) setPickTokenId(tokens[0].tokenId);

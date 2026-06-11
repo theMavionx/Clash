@@ -1334,6 +1334,18 @@ server {
         proxy_ssl_server_name on;
         gzip off;
     }
+    location = /rpc/ink {
+        proxy_pass https://rpc-gel.inkonchain.com/;
+        proxy_http_version 1.1;
+        proxy_set_header Host rpc-gel.inkonchain.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
+    }
 
     location /api/ {
         proxy_pass http://127.0.0.1:4000/api/;
