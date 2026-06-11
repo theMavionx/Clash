@@ -289,15 +289,18 @@ function normalizedDemonKingAttributes({ existing = [], rarity }) {
 
 function assetNeedsAttributeSync(asset, rarity) {
   const attrs = dasAttributes(asset);
+  const currentName = String(asset?.content?.metadata?.name || '').trim();
   const currentRarity = attributeValue(attrs, 'Rarity');
   const level = attributeValue(attrs, 'Level');
   const stars = attributeValue(attrs, 'Stars');
   return {
+    currentName,
     currentRarity,
     hasLevel: !!level,
     hasStars: !!stars,
+    wrongName: currentName !== COLLECTION_LABEL,
     wrongRarity: !!rarity && currentRarity !== rarityLabel(rarity),
-    needsSync: !!level || !!stars || (!!rarity && currentRarity !== rarityLabel(rarity)),
+    needsSync: currentName !== COLLECTION_LABEL || !!level || !!stars || (!!rarity && currentRarity !== rarityLabel(rarity)),
   };
 }
 
@@ -362,13 +365,13 @@ async function syncSolanaAssets(rpc, assets, rowsByAsset) {
         const collection = collectionAddress ? await fetchCollection(umi, publicKey(collectionAddress)) : undefined;
         let uriTxSig = null;
         let attributesTxSig = null;
-        if (currentUri !== targetUri) {
+        if (currentUri !== targetUri || attrStatus.wrongName) {
           // eslint-disable-next-line no-await-in-loop
           const sig = await update(umi, {
             asset,
             ...(collection ? { collection } : {}),
             authority: umi.identity,
-            name: process.env.NFT_NAME || 'Demon King',
+            name: COLLECTION_LABEL,
             uri: targetUri,
           }).sendAndConfirm(umi, {
             send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
@@ -419,6 +422,8 @@ async function syncSolanaAssets(rpc, assets, rowsByAsset) {
           from: currentUri,
           to: targetUri,
           rarity,
+          previousName: attrStatus.currentName,
+          renamed: attrStatus.wrongName,
           hadLevel: attrStatus.hasLevel,
           hadStars: attrStatus.hasStars,
           previousRarity: attrStatus.currentRarity,
@@ -471,6 +476,8 @@ async function main() {
       asset,
       status: assetNeedsAttributeSync(asset, afterRowsByAsset.get(String(asset.id))?.rarity || ''),
     }));
+    const wrongName = attributeStatuses.filter((row) => row.status.wrongName);
+    const wrongNameActive = wrongName.filter((row) => !row.asset?.burnt);
     const needsAttributeSync = attributeStatuses.filter((row) => row.status.needsSync);
     const needsAttributeSyncActive = needsAttributeSync.filter((row) => !row.asset?.burnt);
     const missingDasRarity = attributeStatuses.filter((row) => !row.status.currentRarity);
@@ -511,6 +518,8 @@ async function main() {
       wrong_uri_burnt_before: wrongUriBurnt.length,
       hidden_uri_before: hiddenUri.length,
       hidden_uri_active_before: hiddenUriActive.length,
+      wrong_name_before: wrongName.length,
+      wrong_name_active_before: wrongNameActive.length,
       missing_das_rarity_before: missingDasRarity.length,
       level_attribute_before: levelAttribute.length,
       wrong_das_rarity_before: wrongDasRarity.length,
