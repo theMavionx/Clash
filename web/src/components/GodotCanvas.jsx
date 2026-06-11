@@ -591,14 +591,15 @@ async function fetchGodotRuntimeAsset(boundFetch, rawUrl, input, init) {
     if (response) {
       reportGodotAssetEvent('godot.asset_query_failed', bustedUrl, response, {
         asset: godotAssetName(cleanUrl),
-        fallback_url: cleanUrl,
       });
     }
+    const retryUrl = new URL(bustedUrl);
+    retryUrl.searchParams.set('retry', String(Date.now()));
     const fallbackStarted = performance.now();
-    const fallbackResponse = await boundFetch(cleanUrl, { ...(init || {}), cache: 'reload' });
+    const fallbackResponse = await boundFetch(retryUrl.href, { ...(init || {}), cache: 'reload' });
     reportGodotAssetEvent(
-      fallbackResponse.ok ? 'godot.asset_fallback_ok' : 'godot.asset_fallback_failed',
-      cleanUrl,
+      fallbackResponse.ok ? 'godot.asset_retry_ok' : 'godot.asset_retry_failed',
+      retryUrl.href,
       fallbackResponse,
       {
         asset: godotAssetName(cleanUrl),
@@ -753,16 +754,17 @@ function loadGodotEngineScript() {
     script.dataset.clashGodotScript = 'true';
     const cleanSrc = `${GODOT_FILES}/Work.js`;
     const bustedSrc = `${cleanSrc}${CACHE_BUST}`;
-    let triedFallback = false;
+    let triedRetry = false;
     script.src = bustedSrc;
     script.onload = resolve;
     script.onerror = () => {
-      if (!triedFallback) {
-        triedFallback = true;
+      if (!triedRetry) {
+        triedRetry = true;
+        const retrySrc = `${bustedSrc}&retry=${encodeURIComponent(Date.now())}`;
         reportGodotAssetError('godot.script_query_failed', bustedSrc, new Error('script load error'), {
-          fallback_url: cleanSrc,
+          retry_url: retrySrc,
         });
-        script.src = cleanSrc;
+        script.src = retrySrc;
         return;
       }
       window.__clashGodotScriptPromise = null;
