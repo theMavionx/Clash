@@ -34,6 +34,7 @@ const POLL_MS = 12_000;
 const FLASH_WS_INTERVAL_MS = 1000;
 const FLASH_DEFAULT_V2_RPC = 'https://flashtrade.magicblock.app';
 const FLASH_V2_PROGRAM_ID = 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV';
+const FLASH_DELEGATION_PROGRAM_ID = 'DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh';
 const FLASH_ONE_TAP_EXPIRY_MINUTES = Math.max(10, Math.min(24 * 60, Number(import.meta.env.VITE_FLASH_ONE_TAP_EXPIRY_MINUTES || 24 * 60)));
 const FLASH_ONE_TAP_TOPUP_LAMPORTS = Math.max(0, Math.min(20_000_000, Number(import.meta.env.VITE_FLASH_ONE_TAP_TOPUP_LAMPORTS || 0)));
 const FLASH_ONE_TAP_MIN_VALID_SECONDS = 60;
@@ -876,10 +877,31 @@ function isWalletBlockedOrRejected(error) {
   return /user rejected|rejected the request|request blocked|blocked|denied|cancelled|canceled|danger|risk/i.test(message);
 }
 
+function isFlashMissingDelegationError(error) {
+  let dataText = '';
+  try {
+    dataText = error?.data ? JSON.stringify(error.data) : '';
+  } catch {
+    dataText = '';
+  }
+  const message = [
+    error?.message,
+    error?.data?.detail,
+    error?.data?.error,
+    error?.data?.message,
+    dataText,
+    error,
+  ].map(value => String(value || '')).join(' ');
+  return /InvalidWritableAccount|illegally used as writable/i.test(message);
+}
+
 function flashUserError(error) {
   const message = String(error?.message || error?.data?.detail || error?.data?.error || error || '');
   if (isWalletBlockedOrRejected(error)) {
     return 'Wallet rejected or blocked the Flash transaction. Review the wallet prompt and try again.';
+  }
+  if (isFlashMissingDelegationError(error)) {
+    return 'Flash basket is not delegated for trading yet. Confirm the one-time Flash delegation and retry the trade.';
   }
   if (/insufficient|custom program error:\s*0x1/i.test(message)) {
     return 'Insufficient USDC/SOL for the Flash trade or transaction fees.';
@@ -904,6 +926,10 @@ function flashTxBase64(build = {}) {
 
 function isFlashInitEndpoint(endpoint = '') {
   return /init-(deposit-ledger|basket)/i.test(String(endpoint || ''));
+}
+
+function isFlashIdempotentSetupEndpoint(endpoint = '') {
+  return isFlashInitEndpoint(endpoint) || /delegate-basket/i.test(String(endpoint || ''));
 }
 
 function flashInitAccountPubkey(tx, endpoint = '') {
@@ -956,6 +982,32 @@ function flashTimeout(promise, timeoutMs, message) {
 
 function flashDelay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function flashDelegationStorageKey(owner) {
+  const key = publicKeyText(owner);
+  return key ? `clash_flash_v2_delegated:${key}` : '';
+}
+
+function readFlashDelegationReady(owner) {
+  if (typeof window === 'undefined') return false;
+  const key = flashDelegationStorageKey(owner);
+  if (!key) return false;
+  try { return window.localStorage.getItem(key) === '1'; } catch { return false; }
+}
+
+function markFlashDelegationReady(owner) {
+  if (typeof window === 'undefined') return;
+  const key = flashDelegationStorageKey(owner);
+  if (!key) return;
+  try { window.localStorage.setItem(key, '1'); } catch {}
+}
+
+function clearFlashDelegationReady(owner) {
+  if (typeof window === 'undefined') return;
+  const key = flashDelegationStorageKey(owner);
+  if (!key) return;
+  try { window.localStorage.removeItem(key); } catch {}
 }
 
 export function useFlash() {
@@ -1821,12 +1873,53 @@ export function useFlash() {
     try {
       return await buildAndSend(endpoint, body);
     } catch (e) {
-      if (isFlashInitEndpoint(endpoint) && isFlashAlreadyInitializedError(e)) {
+      if (isFlashIdempotentSetupEndpoint(endpoint) && isFlashAlreadyInitializedError(e)) {
         return { skipped: true, reason: e?.message || e?.data?.detail || e?.data?.error || 'already initialized' };
       }
       throw e;
     }
   }, [buildAndSend]);
+
+  const isBasketDelegatedOnChain = useCallback(async (basketPubkey) => {
+    const basket = publicKeyText(basketPubkey);
+    if (!basket) return false;
+    try {
+      const { connection: solanaConnection } = await selectTxConnection({ txKind: 'account', endpoint: '/flash/delegate-basket-tx' });
+      const info = await solanaConnection.getAccountInfo(new PublicKey(basket), 'confirmed');
+      const owner = info?.owner?.toBase58?.() || '';
+      const delegated = owner === FLASH_DELEGATION_PROGRAM_ID;
+      console.info('[Flash delegation] basket owner check', {
+        basket,
+        owner,
+        delegated,
+      });
+      return delegated;
+    } catch (e) {
+      console.warn('[Flash delegation] basket owner check failed:', e?.message || String(e || ''), { basket });
+      return false;
+    }
+  }, [selectTxConnection]);
+
+  const ensureFlashBasketDelegated = useCallback(async ({ force = false } = {}) => {
+    if (!walletAddr) throw new Error('Connect a Solana wallet first');
+    let snapshot = account?.basketPubkey ? account : null;
+    if (!snapshot?.basketPubkey) {
+      snapshot = await waitForFlashBasket().catch(() => null);
+    }
+    if (!snapshot?.basketPubkey) {
+      throw new Error('Flash basket is not ready yet. Deposit USDC once so Flash can initialize the basket, then trade again.');
+    }
+    if (!force && readFlashDelegationReady(walletAddr)) {
+      return { ok: true, skipped: true, reason: 'delegation cached' };
+    }
+    if (!force && await isBasketDelegatedOnChain(snapshot.basketPubkey)) {
+      markFlashDelegationReady(walletAddr);
+      return { ok: true, skipped: true, reason: 'delegation on-chain' };
+    }
+    const delegated = await tryBuildAndSend('/flash/delegate-basket-tx', { payer: walletAddr });
+    markFlashDelegationReady(walletAddr);
+    return { ok: true, ...delegated };
+  }, [account, isBasketDelegatedOnChain, tryBuildAndSend, waitForFlashBasket, walletAddr]);
 
   const reportTrade = useCallback(async ({ signature, symbol, side, amount, leverage = 1, price, orderType = 'market', notionalUsd, signer = '', sessionToken = '', deferred = false } = {}) => {
     if (!token) return { error: 'Missing game session token' };
@@ -1888,6 +1981,7 @@ export function useFlash() {
     setActionLoading(true);
     try {
       const { params: sessionParams, session: oneTapSession } = await oneTapTradeParams();
+      await ensureFlashBasketDelegated();
       const request = {
         wallet: walletAddr,
         inputTokenSymbol: options?.inputTokenSymbol || 'USDC',
@@ -1933,11 +2027,12 @@ export function useFlash() {
         ? { ok: true, signature, status: 'submitted', warning: imported.error }
         : { ok: true, signature, ...imported };
     } catch (e) {
+      if (isFlashMissingDelegationError(e)) clearFlashDelegationReady(walletAddr);
       return { error: flashUserError(e) };
     } finally {
       setActionLoading(false);
     }
-  }, [oneTapTradeParams, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [ensureFlashBasketDelegated, oneTapTradeParams, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, qty, _tif, lev = 1, options = {}) => (
     placeMarketOrder(symbol, side, qty, '0.5', lev, {
@@ -1965,6 +2060,7 @@ export function useFlash() {
     setActionLoading(true);
     try {
       const { params: sessionParams, session: oneTapSession } = await oneTapTradeParams();
+      await ensureFlashBasketDelegated();
       const build = await fetchJson(`${FUTURES_API}/flash/close-position-tx`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'flash' },
@@ -2006,11 +2102,12 @@ export function useFlash() {
         ? { ok: true, signature, status: 'submitted', warning: imported.error }
         : { ok: true, signature, ...imported };
     } catch (e) {
+      if (isFlashMissingDelegationError(e)) clearFlashDelegationReady(walletAddr);
       return { error: flashUserError(e) };
     } finally {
       setActionLoading(false);
     }
-  }, [oneTapTradeParams, positions, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [ensureFlashBasketDelegated, oneTapTradeParams, positions, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const depositToPacifica = useCallback(async (amount, options = {}) => {
     if (!token) return { error: 'Missing game session token' };
@@ -2034,6 +2131,8 @@ export function useFlash() {
     setActionLoading(true);
     try {
       const hadBasket = !!account?.basketPubkey;
+      const delegationKnown = readFlashDelegationReady(walletAddr);
+      const shouldDelegate = !delegationKnown || !hadBasket;
       emit({
         step: 'prepare',
         status: 'active',
@@ -2080,6 +2179,28 @@ export function useFlash() {
           label: 'Flash account indexed',
           hint: 'Flash owner snapshot now sees the basket.',
         });
+      } else {
+        emit({
+          step: 'ledger',
+          status: 'done',
+          skipped: true,
+          label: 'Deposit ledger ready',
+          hint: 'Existing Flash account detected.',
+        });
+        emit({
+          step: 'basket',
+          status: 'done',
+          skipped: true,
+          label: 'Flash account ready',
+          hint: 'Basket already exists for this wallet.',
+        });
+        emit({
+          step: 'basket_wait',
+          status: 'done',
+          skipped: true,
+          label: 'Flash account indexed',
+          hint: 'Basket is already visible in Flash.',
+        });
       }
       emit({
         step: 'deposit',
@@ -2095,20 +2216,30 @@ export function useFlash() {
         label: 'Deposit confirmed',
         hint: 'USDC deposit transaction was confirmed.',
       });
-      if (!hadBasket) {
+      if (shouldDelegate) {
         emit({
           step: 'delegate',
           status: 'active',
           label: 'Confirm delegation',
           hint: 'Approve the one-time Flash basket delegation so trading works after funding.',
         });
-        const delegated = await buildAndSend('/flash/delegate-basket-tx', { payer: walletAddr });
+        const delegated = await tryBuildAndSend('/flash/delegate-basket-tx', { payer: walletAddr });
+        markFlashDelegationReady(walletAddr);
         emit({
           step: 'delegate',
           status: 'done',
           signature: delegated?.signature || '',
+          skipped: !!delegated?.skipped,
           label: 'Delegation confirmed',
-          hint: 'Flash basket is delegated for trading.',
+          hint: delegated?.skipped ? 'Flash basket was already delegated.' : 'Flash basket is delegated for trading.',
+        });
+      } else {
+        emit({
+          step: 'delegate',
+          status: 'done',
+          skipped: true,
+          label: 'Delegation ready',
+          hint: 'Delegation was already confirmed for this browser wallet.',
         });
       }
       emit({
@@ -2194,6 +2325,7 @@ export function useFlash() {
     setActionLoading(true);
     try {
       const { params: sessionParams, session: oneTapSession } = await oneTapTradeParams();
+      await ensureFlashBasketDelegated();
       const build = await buildAndSend('/flash/tpsl-tx', {
         marketSymbol: wantedSymbol,
         side: flashPositionTradeType(live),
@@ -2210,11 +2342,12 @@ export function useFlash() {
         info: 'Flash TP/SL transaction sent.',
       };
     } catch (e) {
+      if (isFlashMissingDelegationError(e)) clearFlashDelegationReady(walletAddr);
       return { error: flashUserError(e) };
     } finally {
       setActionLoading(false);
     }
-  }, [buildAndSend, oneTapTradeParams, positions, refresh, token, walletAddr, walletMismatch]);
+  }, [buildAndSend, ensureFlashBasketDelegated, oneTapTradeParams, positions, refresh, token, walletAddr, walletMismatch]);
 
   const clearError = useCallback(() => setError(''), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);

@@ -1281,7 +1281,40 @@ function GodotCanvas({ onEngineReady }) {
       // buildings loaded — we hold at 99% until the signal.
       let stage2StartTime = null;
       let stage2BuildingsDone = false;
+      let stage2ReadyReason = null;
       let engineReadyDone = false;
+      const finishStage2Now = (reason = 'stage2_complete') => {
+        if (disposed || isLoadedStateRef.current) return;
+        stage2BuildingsDone = true;
+        stage2ReadyReason = reason;
+        if (stage2RafId) {
+          cancelAnimationFrame(stage2RafId);
+          stage2RafId = null;
+        }
+        if (progressRafId) {
+          cancelAnimationFrame(progressRafId);
+          progressRafId = null;
+        }
+        if (easeRafId) {
+          cancelAnimationFrame(easeRafId);
+          easeRafId = null;
+        }
+        if (engineReadyFallbackId) {
+          clearTimeout(engineReadyFallbackId);
+          engineReadyFallbackId = null;
+        }
+        if (uiReadyFallbackId) {
+          clearTimeout(uiReadyFallbackId);
+          uiReadyFallbackId = null;
+        }
+        recordLoadingEvent('stage2_complete', {
+          reason,
+          progress_before: lastProgressRef.current.value || 0,
+        });
+        setStage(2);
+        setProgressValue(100);
+        finishLoadingOverlay();
+      };
       const tickStage2 = () => {
         if (disposed || stage2StartTime == null) return;
         const elapsed = Date.now() - stage2StartTime;
@@ -1290,7 +1323,7 @@ function GodotCanvas({ onEngineReady }) {
         const value = GODOT_DOWNLOAD_PROGRESS_WEIGHT + ((target - GODOT_DOWNLOAD_PROGRESS_WEIGHT) * t);
         setProgressValue(value);
         if (stage2BuildingsDone && value >= 100) {
-          finishLoadingOverlay();
+          finishStage2Now(stage2ReadyReason || 'stage2_ramp_complete');
           stage2RafId = null;
           return;
         }
@@ -1332,7 +1365,7 @@ function GodotCanvas({ onEngineReady }) {
           ...meta,
         });
         addClientBreadcrumb('godot.stage2_complete_without_home_ready', payload, 'warning');
-        animateStageProgress(100, 260, finishLoadingOverlay);
+        finishStage2Now(reason || 'runtime_ready');
       };
 
       const handleProgress = (current, total) => {
@@ -1365,9 +1398,10 @@ function GodotCanvas({ onEngineReady }) {
       // so we don't use them to drive progress — only log for diagnostics.
       const completeStage2FromGodot = (reason = 'godot_ready_signal') => {
         if (disposed) return;
-        if (stage2BuildingsDone) return;
+        if (stage2BuildingsDone && isLoadedStateRef.current) return;
         addClientBreadcrumb('godot.stage2_complete', { reason });
         stage2BuildingsDone = true;
+        stage2ReadyReason = reason;
         if (engineReadyFallbackId) {
           clearTimeout(engineReadyFallbackId);
           engineReadyFallbackId = null;
@@ -1378,7 +1412,7 @@ function GodotCanvas({ onEngineReady }) {
         }
         setStage(2);
         if (!engineReadyDone) return;
-        animateStageProgress(100, 520, finishLoadingOverlay);
+        finishStage2Now(reason);
       };
 
       const godotLoadingProgress = (rawPct, phase = 'godot', meta = {}) => {
@@ -1472,7 +1506,7 @@ function GodotCanvas({ onEngineReady }) {
             setStage(2);
             setProgressValue(GODOT_DOWNLOAD_PROGRESS_WEIGHT);
             if (stage2BuildingsDone) {
-              animateStageProgress(100, 520, finishLoadingOverlay);
+              finishStage2Now(stage2ReadyReason || 'engine_ready_after_home_ready');
             } else {
               stage2DelayId = setTimeout(() => startStage2(), 120);
             }

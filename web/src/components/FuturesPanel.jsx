@@ -2125,6 +2125,9 @@ function FuturesPanel() {
   const closeFlashFundingProgress = useCallback(() => {
     setFlashFundingProgress(null);
   }, []);
+  useEffect(() => {
+    if (dex !== 'flash') setFlashFundingProgress(null);
+  }, [dex]);
   // Success toast after a trade completes. Small green banner that auto-hides.
   const [successMsg, setSuccessMsg] = useState(null);
   useEffect(() => {
