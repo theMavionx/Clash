@@ -954,6 +954,10 @@ function flashTimeout(promise, timeoutMs, message) {
   });
 }
 
+function flashDelay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export function useFlash() {
   const { dex } = useDex();
   const player = usePlayer();
@@ -1567,6 +1571,37 @@ export function useFlash() {
     return { ...build, signature };
   }, [sendBuiltTransaction, token, walletAddr]);
 
+  const readFlashAccountSnapshot = useCallback(async () => {
+    if (!walletAddr) return null;
+    const primary = token
+      ? fetchJson(`${FUTURES_API}/flash/account?address=${encodeURIComponent(walletAddr)}`, {
+        headers: { 'x-token': token, 'x-dex': 'flash' },
+      }).catch(async (e) => {
+        if (e?.status !== 401 && e?.status !== 409) throw e;
+        return fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(walletAddr)}`);
+      })
+      : fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(walletAddr)}`);
+    return primary;
+  }, [token, walletAddr]);
+
+  const waitForFlashBasket = useCallback(async (onProgress = null) => {
+    for (let attempt = 0; attempt < 18; attempt += 1) {
+      const snapshot = await readFlashAccountSnapshot().catch(() => null);
+      if (snapshot?.basketPubkey) return snapshot;
+      if (typeof onProgress === 'function') {
+        onProgress({
+          step: 'basket_wait',
+          status: 'active',
+          label: 'Waiting for Flash account',
+          hint: 'Flash is indexing the new basket before the deposit transaction is built.',
+          attempt: attempt + 1,
+        });
+      }
+      await flashDelay(attempt < 4 ? 750 : 1000);
+    }
+    throw new Error('Flash account setup landed, but the basket is not visible yet. Wait a few seconds and retry deposit.');
+  }, [readFlashAccountSnapshot]);
+
   const setOneTapTradingEnabled = useCallback(async (nextEnabled = true) => {
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
     if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered Flash wallet' };
@@ -1977,35 +2012,138 @@ export function useFlash() {
     }
   }, [oneTapTradeParams, positions, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
-  const depositToPacifica = useCallback(async (amount) => {
+  const depositToPacifica = useCallback(async (amount, options = {}) => {
     if (!token) return { error: 'Missing game session token' };
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
     if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered Flash wallet' };
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) return { error: 'Enter a positive Flash deposit amount' };
+    const onProgress = typeof options?.onProgress === 'function' ? options.onProgress : null;
+    const emit = (patch) => {
+      if (!onProgress) return;
+      try {
+        onProgress({
+          dex: 'flash',
+          amount: String(value),
+          ...patch,
+        });
+      } catch {
+        // UI progress is best-effort; never break the wallet flow.
+      }
+    };
     setActionLoading(true);
     try {
       const hadBasket = !!account?.basketPubkey;
+      emit({
+        step: 'prepare',
+        status: 'active',
+        label: 'Preparing Flash funding',
+        hint: hadBasket
+          ? 'Flash account is ready. Next signature sends USDC into Flash.'
+          : 'Checking one-time Flash account setup before the deposit.',
+      });
       if (!hadBasket) {
-        await tryBuildAndSend('/flash/init-deposit-ledger-tx');
-        await tryBuildAndSend('/flash/init-basket-tx');
+        emit({
+          step: 'ledger',
+          status: 'active',
+          label: 'Checking deposit ledger',
+          hint: 'Approve only if Flash needs to create the ledger for this wallet.',
+        });
+        const ledger = await tryBuildAndSend('/flash/init-deposit-ledger-tx');
+        emit({
+          step: 'ledger',
+          status: 'done',
+          signature: ledger?.signature || '',
+          skipped: !!ledger?.skipped,
+          label: ledger?.skipped ? 'Deposit ledger ready' : 'Deposit ledger confirmed',
+          hint: ledger?.skipped ? 'The ledger already exists, so no wallet signature was needed.' : 'Ledger transaction confirmed on Solana.',
+        });
+        emit({
+          step: 'basket',
+          status: 'active',
+          label: 'Confirm Flash account',
+          hint: 'Approve the one-time basket setup. This is required before Flash can credit the deposit.',
+        });
+        const basket = await tryBuildAndSend('/flash/init-basket-tx');
+        emit({
+          step: 'basket',
+          status: 'done',
+          signature: basket?.signature || '',
+          skipped: !!basket?.skipped,
+          label: basket?.skipped ? 'Flash account ready' : 'Flash account confirmed',
+          hint: basket?.skipped ? 'The basket already exists.' : 'Basket setup confirmed. Waiting until Flash sees it.',
+        });
+        await waitForFlashBasket(emit);
+        emit({
+          step: 'basket_wait',
+          status: 'done',
+          label: 'Flash account indexed',
+          hint: 'Flash owner snapshot now sees the basket.',
+        });
       }
+      emit({
+        step: 'deposit',
+        status: 'active',
+        label: 'Confirm deposit',
+        hint: 'Approve the USDC deposit from your connected Solana wallet to Flash.',
+      });
       const deposit = await buildAndSend('/flash/deposit-direct-tx', { amount: String(value) });
+      emit({
+        step: 'deposit',
+        status: 'done',
+        signature: deposit?.signature || '',
+        label: 'Deposit confirmed',
+        hint: 'USDC deposit transaction was confirmed.',
+      });
       if (!hadBasket) {
-        await buildAndSend('/flash/delegate-basket-tx', { payer: walletAddr });
+        emit({
+          step: 'delegate',
+          status: 'active',
+          label: 'Confirm delegation',
+          hint: 'Approve the one-time Flash basket delegation so trading works after funding.',
+        });
+        const delegated = await buildAndSend('/flash/delegate-basket-tx', { payer: walletAddr });
+        emit({
+          step: 'delegate',
+          status: 'done',
+          signature: delegated?.signature || '',
+          label: 'Delegation confirmed',
+          hint: 'Flash basket is delegated for trading.',
+        });
       }
+      emit({
+        step: 'refresh',
+        status: 'active',
+        label: 'Waiting for balance',
+        hint: 'Refreshing Flash balance after the confirmed transactions.',
+      });
       window.setTimeout(() => refresh().catch(() => null), 800);
+      emit({
+        step: 'complete',
+        status: 'done',
+        label: 'Flash deposit complete',
+        hint: 'Balance will finish updating as Flash streams the latest account state.',
+        signature: deposit.signature,
+      });
       return {
         ok: true,
         signature: deposit.signature,
         info: 'Flash v2 deposit sent. Basket balance updates after confirmation.',
       };
     } catch (e) {
-      return { error: flashUserError(e) };
+      const msg = flashUserError(e);
+      emit({
+        step: 'error',
+        status: 'error',
+        label: 'Flash deposit stopped',
+        hint: msg,
+        error: msg,
+      });
+      return { error: msg };
     } finally {
       setActionLoading(false);
     }
-  }, [account?.basketPubkey, buildAndSend, refresh, token, tryBuildAndSend, walletAddr, walletMismatch]);
+  }, [account?.basketPubkey, buildAndSend, refresh, token, tryBuildAndSend, waitForFlashBasket, walletAddr, walletMismatch]);
 
   const withdraw = useCallback(async (amount, options = {}) => {
     if (!token) return { error: 'Missing game session token' };

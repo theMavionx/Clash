@@ -999,6 +999,145 @@ const hlGateStyles = {
   },
 };
 
+const FLASH_FUNDING_STEPS = [
+  {
+    id: 'ledger',
+    label: 'Deposit ledger',
+    hint: 'One-time collateral ledger check. Existing wallets skip this without a signature.',
+  },
+  {
+    id: 'basket',
+    label: 'Flash account',
+    hint: 'One-time basket setup. This creates the Flash account that receives deposits.',
+  },
+  {
+    id: 'basket_wait',
+    label: 'Account indexing',
+    hint: 'Waiting until Flash sees the new basket before building the deposit.',
+  },
+  {
+    id: 'deposit',
+    label: 'Deposit USDC',
+    hint: 'Confirm the USDC transfer from your connected Solana wallet.',
+  },
+  {
+    id: 'delegate',
+    label: 'Delegation',
+    hint: 'One-time basket delegation so trading works after funding.',
+  },
+  {
+    id: 'refresh',
+    label: 'Balance update',
+    hint: 'Refreshing Flash account state after the confirmed transactions.',
+  },
+];
+
+function FlashFundingStatusModal({ progress, onClose }) {
+  if (!progress?.open) return null;
+  const steps = progress.steps || {};
+  const completed = !!progress.completed;
+  const errored = progress.status === 'error';
+  const currentStep = progress.currentStep || 'prepare';
+  const currentIndex = FLASH_FUNDING_STEPS.findIndex(step => step.id === currentStep);
+  const statusFor = (step, index) => {
+    const explicit = steps[step.id]?.status;
+    if (explicit) return explicit;
+    if (completed) return 'done';
+    if (errored && (currentStep === step.id || currentStep === 'error')) return 'error';
+    if (currentStep === step.id) return 'active';
+    if (currentIndex > index) return 'done';
+    return 'pending';
+  };
+  const title = errored ? 'Flash deposit needs attention' : completed ? 'Flash deposit sent' : 'Flash deposit in progress';
+  const subtitle = progress.hint || 'Approve wallet prompts in order and keep this window open.';
+  return (
+    <div style={flashFundingModalStyles.overlay} data-nodrag>
+      <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.78}50%{opacity:1}}`}</style>
+      <div style={flashFundingModalStyles.panel}>
+        <div style={hlGateStyles.titleBlock}>
+          <div style={hlGateStyles.kicker}>Flash Trade</div>
+          <div style={hlGateStyles.title}>{title}</div>
+          <div style={hlGateStyles.subtitle}>{subtitle}</div>
+        </div>
+        <ol style={hlGateStyles.stepList}>
+          {FLASH_FUNDING_STEPS.map((step, index) => {
+            const row = steps[step.id] || {};
+            const status = statusFor(step, index);
+            const bubbleStyle = {
+              ...hlGateStyles.stepBubble,
+              ...(hlGateStyles[`stepBubble_${status}`] || null),
+            };
+            const labelStyle = {
+              ...hlGateStyles.stepLabel,
+              ...(hlGateStyles[`stepLabel_${status}`] || null),
+            };
+            return (
+              <li key={step.id} style={hlGateStyles.stepItem}>
+                <span style={bubbleStyle}>
+                  {status === 'active'
+                    ? <span style={hlGateStyles.spinner} />
+                    : status === 'done'
+                      ? 'OK'
+                      : status === 'error'
+                        ? '!'
+                        : index + 1}
+                </span>
+                <span style={hlGateStyles.stepText}>
+                  <span style={labelStyle}>{row.label || step.label}</span>
+                  <span style={hlGateStyles.stepHint}>
+                    {row.hint || step.hint}
+                    {row.skipped ? ' Skipped.' : ''}
+                    {row.signature ? ` Tx ${shortAddr(row.signature)}` : ''}
+                  </span>
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+        {errored && <div style={hlGateStyles.errorBox}>{progress.error || progress.hint || 'Flash deposit failed.'}</div>}
+        {!errored && !completed && <div style={hlGateStyles.workingHint}>Waiting for the current Flash step to finish</div>}
+        <div style={flashFundingModalStyles.footer}>
+          <button type="button" onClick={onClose} style={completed || errored ? hlGateStyles.primaryBtn : hlGateStyles.secondaryBtn}>
+            {completed || errored ? 'Close' : 'Hide'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const flashFundingModalStyles = {
+  overlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 12000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    background: 'rgba(12, 8, 4, 0.45)',
+    fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  panel: {
+    width: 'min(440px, 100%)',
+    maxHeight: 'min(680px, calc(100vh - 28px))',
+    overflowY: 'auto',
+    background: '#fdf8e7',
+    border: '5px solid #d4c8b0',
+    borderRadius: 16,
+    boxShadow: '0 18px 44px rgba(0,0,0,0.36)',
+    padding: 16,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+  footer: {
+    display: 'flex',
+    justifyContent: 'center',
+    gap: 8,
+  },
+};
+
 // Decibel deposit gate. Shown after the user has activated trading but
 // before they've moved any USDC onto the subaccount. The whole panel
 // turns into a deposit prompt — there's nothing else to do here, since
@@ -1954,6 +2093,38 @@ function FuturesPanel() {
     const t = setTimeout(() => setLocalAlert(null), 6000);
     return () => clearTimeout(t);
   }, [localAlert]);
+  const [flashFundingProgress, setFlashFundingProgress] = useState(null);
+  const updateFlashFundingProgress = useCallback((event = {}) => {
+    setFlashFundingProgress(prev => {
+      const stepId = event.step || prev?.currentStep || 'prepare';
+      const steps = { ...(prev?.steps || {}) };
+      if (FLASH_FUNDING_STEPS.some(step => step.id === stepId)) {
+        steps[stepId] = {
+          ...(steps[stepId] || {}),
+          status: event.status || steps[stepId]?.status || 'active',
+          label: event.label || steps[stepId]?.label,
+          hint: event.hint || steps[stepId]?.hint,
+          signature: event.signature || steps[stepId]?.signature || '',
+          skipped: event.skipped ?? steps[stepId]?.skipped ?? false,
+        };
+      }
+      return {
+        ...(prev || {}),
+        open: true,
+        amount: event.amount || prev?.amount || '',
+        currentStep: stepId,
+        status: event.status || prev?.status || 'active',
+        label: event.label || prev?.label || '',
+        hint: event.hint || prev?.hint || '',
+        error: event.error || prev?.error || '',
+        completed: event.step === 'complete' || prev?.completed || false,
+        steps,
+      };
+    });
+  }, []);
+  const closeFlashFundingProgress = useCallback(() => {
+    setFlashFundingProgress(null);
+  }, []);
   // Success toast after a trade completes. Small green banner that auto-hides.
   const [successMsg, setSuccessMsg] = useState(null);
   useEffect(() => {
@@ -6891,7 +7062,18 @@ function FuturesPanel() {
                         setLocalAlert(`Solana wallet has ${walletUsdc.toFixed(2)} USDC`);
                         return;
                       }
-                      const r = await depositToPacifica(depositAmt);
+                      setFlashFundingProgress({
+                        open: true,
+                        amount: String(v),
+                        currentStep: 'prepare',
+                        status: 'active',
+                        label: 'Preparing Flash funding',
+                        hint: 'Approve the wallet prompts in order. Clash will continue automatically after each signature.',
+                        error: '',
+                        completed: false,
+                        steps: {},
+                      });
+                      const r = await depositToPacifica(depositAmt, { onProgress: updateFlashFundingProgress });
                       if (!r?.error) {
                         setDepositAmt('');
                         setLocalAlert(r?.info || 'Flash v2 deposit sent.');
@@ -7708,6 +7890,10 @@ function FuturesPanel() {
           />
         )}
       </div>
+      <FlashFundingStatusModal
+        progress={dex === 'flash' ? flashFundingProgress : null}
+        onClose={closeFlashFundingProgress}
+      />
       <ShareTradeModal
         open={!!shareTrade}
         trade={shareTrade}
