@@ -13,7 +13,7 @@ import {
   payCustodialOrder,
   releaseCustodialReservation,
 } from '../lib/custodialMarketplace';
-import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel } from '../lib/nftV3Client';
+import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity } from '../lib/nftV3Client';
 import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 import {
   isSolanaMobileWalletAdapter,
@@ -38,11 +38,12 @@ const SORT_OPTIONS = [
   { value: 'price_asc', label: 'Lowest', sub: 'Floor first' },
   { value: 'price_desc', label: 'Highest', sub: 'Top price' },
 ];
-const LEVEL_OPTIONS = [
-  { value: 'all', label: 'All', sub: 'Any level' },
-  { value: '1', label: 'L1', sub: 'Level 1' },
-  { value: '2', label: 'L2', sub: 'Level 2' },
-  { value: '3', label: 'L3', sub: 'Level 3' },
+const RARITY_FILTER_OPTIONS = [
+  { value: 'all', label: 'All', sub: 'Any rarity' },
+  { value: 'common', label: 'Common', sub: 'Blue border' },
+  { value: 'epic', label: 'Epic', sub: 'Purple border' },
+  { value: 'legendary', label: 'Legendary', sub: 'Gold border' },
+  { value: 'unrevealed', label: 'Unrevealed', sub: 'Pending reveal' },
 ];
 function shortAddr(value, head = 5, tail = 4) {
   const s = String(value || '');
@@ -158,6 +159,12 @@ function orderImage(order) {
 
 function itemRarityLabel(item) {
   return nftRarityLabel(item?.rarity, item?.legacyLevel || item?.level || 1);
+}
+
+function itemRarityKey(item) {
+  const rarity = normalizeNftRarity(item?.rarity);
+  if (rarity) return rarity;
+  return Number(item?.legacyLevel || item?.level || 1) > 1 ? 'legendary' : 'unrevealed';
 }
 
 function orderPrice(order) {
@@ -330,7 +337,7 @@ export default function CustodialMarketplacePanel({
   const [purchaseFlow, setPurchaseFlow] = useState(null);
   const [listingFlow, setListingFlow] = useState(null);
   const [browseSort, setBrowseSort] = useState('newest');
-  const [browseLevel, setBrowseLevel] = useState('all');
+  const [browseRarity, setBrowseRarity] = useState('all');
   const [sellWalletModalOpen, setSellWalletModalOpen] = useState(false);
 
   const ready = !!config?.ready;
@@ -392,7 +399,6 @@ export default function CustodialMarketplacePanel({
     try {
       const json = await fetchCustodialListings({
         status: 'active',
-        level: browseLevel,
         sort: browseSort,
         limit: PAGE_SIZE,
       });
@@ -404,7 +410,7 @@ export default function CustodialMarketplacePanel({
     } finally {
       setLoading(false);
     }
-  }, [browseLevel, browseSort]);
+  }, [browseSort]);
 
   const loadOrders = useCallback(async () => {
     if (!sessionToken) { setOrders([]); return; }
@@ -1161,8 +1167,8 @@ export default function CustodialMarketplacePanel({
           compact={compact}
           sort={browseSort}
           setSort={setBrowseSort}
-          level={browseLevel}
-          setLevel={setBrowseLevel}
+          rarity={browseRarity}
+          setRarity={setBrowseRarity}
           onBuy={(order) => {
             addClientBreadcrumb('marketplace.custodial.buy.open', { orderId: order?.id });
             openBuyModal(order);
@@ -1516,21 +1522,26 @@ function FilterSelect({ label, value, setValue, options, disabled }) {
   );
 }
 
-function BrowseFilters({ sort, setSort, level, setLevel, loading }) {
+function BrowseFilters({ sort, setSort, rarity, setRarity, loading }) {
   return (
     <div style={s.filterPanel}>
       <FilterSelect label="Sort" value={sort} setValue={setSort} options={SORT_OPTIONS} disabled={loading} />
+      <FilterSelect label="Rarity" value={rarity} setValue={setRarity} options={RARITY_FILTER_OPTIONS} disabled={loading} />
     </div>
   );
 }
 
-function BrowseView({ listings, loading, walletMap, compact, sort, setSort, level, setLevel, onBuy, onOwnListing }) {
+function BrowseView({ listings, loading, walletMap, compact, sort, setSort, rarity, setRarity, onBuy, onOwnListing }) {
+  const visibleListings = useMemo(
+    () => rarity === 'all' ? listings : listings.filter((order) => itemRarityKey(order) === rarity),
+    [listings, rarity],
+  );
   return (
     <div style={s.stack}>
-      <BrowseFilters sort={sort} setSort={setSort} level={level} setLevel={setLevel} loading={loading} />
-      {loading ? <div style={s.meta}>Loading listings...</div> : !listings.length ? <div style={s.empty}>No active listings yet.</div> : (
+      <BrowseFilters sort={sort} setSort={setSort} rarity={rarity} setRarity={setRarity} loading={loading} />
+      {loading ? <div style={s.meta}>Loading listings...</div> : !listings.length ? <div style={s.empty}>No active listings yet.</div> : !visibleListings.length ? <div style={s.empty}>No listings match this rarity.</div> : (
         <div style={compact ? s.gridMobile : s.grid}>
-          {listings.map((order) => {
+          {visibleListings.map((order) => {
             const ownWallet = walletForChain(order.assetChain, walletMap);
             const isOwn = ownWallet && String(order.sellerWallet || '').toLowerCase() === String(ownWallet || '').toLowerCase();
             return (

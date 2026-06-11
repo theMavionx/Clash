@@ -35,10 +35,17 @@ import {
   paymentAddressFromId,
   paymentTokenMeta,
 } from '../lib/marketplace';
-import { fetchOwnedNfts, nftRarityBadgeStyle, nftRarityCardStyle, syncDemonKingNfts } from '../lib/nftV3Client';
+import { fetchOwnedNfts, nftRarityBadgeStyle, nftRarityCardStyle, normalizeNftRarity, syncDemonKingNfts } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 
 const LISTINGS_PAGE_SIZE = 50;
+const RARITY_FILTER_OPTIONS = [
+  { value: 'all', label: 'All' },
+  { value: 'common', label: 'Common' },
+  { value: 'epic', label: 'Epic' },
+  { value: 'legendary', label: 'Legendary' },
+  { value: 'unrevealed', label: 'Unrevealed' },
+];
 
 function shortAddr(s, head = 6, tail = 4) {
   if (!s) return '';
@@ -54,6 +61,12 @@ function timeUntil(expiresAt) {
   const hrs = Math.floor(sec / 3600);
   if (hrs >= 1) return `${hrs}h`;
   return `${Math.max(1, Math.floor(sec / 60))}m`;
+}
+
+function listingRarityKey(listing, rarity) {
+  const key = normalizeNftRarity(rarity || listing?.rarity);
+  if (key) return key;
+  return Number(listing?.level || 1) > 1 ? 'legendary' : 'unrevealed';
 }
 
 export default function NftMarketplacePanel({
@@ -75,6 +88,7 @@ export default function NftMarketplacePanel({
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState(null);
   const [rarityByTokenId, setRarityByTokenId] = useState({});
+  const [rarityFilter, setRarityFilter] = useState('all');
 
   // ── My listings ────────────────────────────────────────────────────
   const [mine, setMine] = useState([]);
@@ -359,6 +373,8 @@ export default function NftMarketplacePanel({
           page={page}
           setPage={setPage}
           rarityByTokenId={rarityByTokenId}
+          rarityFilter={rarityFilter}
+          setRarityFilter={setRarityFilter}
           onBuy={(listing) => setBuyTarget(listing)}
           ownAddress={evmAddress?.toLowerCase()}
         />
@@ -438,13 +454,47 @@ function SubTab({ label, active, onClick }) {
   );
 }
 
-function BrowseView({ listings, total, loading, error, page, setPage, rarityByTokenId, onBuy, ownAddress }) {
+function RarityFilter({ value, setValue, disabled }) {
+  return (
+    <div style={s.rarityFilterRow}>
+      {RARITY_FILTER_OPTIONS.map((option) => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            disabled={disabled}
+            onClick={() => setValue(option.value)}
+            style={{
+              ...s.rarityFilterChip,
+              ...(active ? s.rarityFilterChipActive : null),
+              ...(option.value !== 'all' && option.value !== 'unrevealed' ? nftRarityBadgeStyle(option.value, 1, { compact: true }) : null),
+              ...(option.value === 'unrevealed' ? s.rarityFilterChipUnrevealed : null),
+              ...(disabled ? s.rarityFilterChipDisabled : null),
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function BrowseView({ listings, total, loading, error, page, setPage, rarityByTokenId, rarityFilter, setRarityFilter, onBuy, ownAddress }) {
   const showPager = total > LISTINGS_PAGE_SIZE;
   const pages = Math.ceil(total / LISTINGS_PAGE_SIZE);
+  const filteredListings = useMemo(
+    () => rarityFilter === 'all'
+      ? listings
+      : listings.filter((listing) => listingRarityKey(listing, rarityByTokenId[listing.tokenId]) === rarityFilter),
+    [listings, rarityByTokenId, rarityFilter],
+  );
   return (
     <>
+      <RarityFilter value={rarityFilter} setValue={setRarityFilter} disabled={loading} />
       <div style={s.gridMeta}>
-        {loading ? 'Loading listings…' : error ? `Error: ${error}` : `${total} active listing${total === 1 ? '' : 's'}`}
+        {loading ? 'Loading listings…' : error ? `Error: ${error}` : `${filteredListings.length} of ${total} listing${total === 1 ? '' : 's'}`}
       </div>
       {!loading && !error && listings.length === 0 && (
         <div style={s.emptyState}>
@@ -453,8 +503,13 @@ function BrowseView({ listings, total, loading, error, page, setPage, rarityByTo
           <span style={s.emptyStateSub}>Be the first — list one of your Demon Kings.</span>
         </div>
       )}
+      {!loading && !error && listings.length > 0 && filteredListings.length === 0 && (
+        <div style={s.emptyState}>
+          <span>No listings match this rarity.</span>
+        </div>
+      )}
       <div style={s.grid}>
-        {listings.map((l) => (
+        {filteredListings.map((l) => (
           <ListingCard
             key={l.tokenId}
             listing={l}
@@ -763,6 +818,19 @@ const s = {
     background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
     cursor: 'pointer', whiteSpace: 'nowrap',
   },
+
+  rarityFilterRow: {
+    display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+    padding: 6, borderRadius: 12, background: '#fff8e6', border: '2px solid #d4c8b0',
+  },
+  rarityFilterChip: {
+    minHeight: 28, padding: '5px 10px', borderRadius: 9, fontSize: 11, fontWeight: 900,
+    background: '#fff6dc', border: '2px solid #d4c8b0', color: '#5C3A21',
+    cursor: 'pointer', fontFamily: 'inherit',
+  },
+  rarityFilterChipActive: { background: '#ffd97a', border: '2px solid #9f8759' },
+  rarityFilterChipUnrevealed: { background: '#f3ead6', color: '#7a5a30', border: '2px solid #c8b99a' },
+  rarityFilterChipDisabled: { opacity: 0.55, cursor: 'not-allowed' },
 
   gridMeta: { fontSize: 12, fontWeight: 700, color: '#7a5a30', letterSpacing: 0.2 },
   emptyState: {

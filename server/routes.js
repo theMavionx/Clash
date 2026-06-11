@@ -447,6 +447,14 @@ function nftCollectionRarityAttributes(collection, rarity) {
   return [{ trait_type: 'Rarity', value: demonKingRarityLabel(rarity) }];
 }
 
+function nftCollectionTokenName(collection, chainKey, tokenId) {
+  const idText = `#${tokenId}`;
+  if (String(collection?.slug || '').toLowerCase() === 'dragon' && ['base', 'arbitrum', 'monad', 'ink'].includes(String(chainKey || '').toLowerCase())) {
+    return idText;
+  }
+  return `${collection.name} ${idText}`;
+}
+
 function solanaCoreUpgradeMetadataUrl(req, assetId, sourceRef) {
   const url = new URL('/api/nft/solana/bridged', `${nftPublicBase(req)}/`);
   if (assetId) url.searchParams.set('asset', String(assetId));
@@ -1062,10 +1070,21 @@ function collectionMintRaritySeed(collection) {
     || `clash-${String(collection?.slug || 'collection')}-rarity-v1`;
 }
 
-function collectionMintRarity(collection, chain, tokenId) {
+function collectionMintRarity(collection, chain, tokenId, entropy = {}) {
   const seed = collectionMintRaritySeed(collection);
+  const tx = String(entropy.tx || '').trim().toLowerCase();
+  const reservationId = String(entropy.reservationId || '').trim().toLowerCase();
+  const buyer = String(entropy.buyer || '').trim().toLowerCase();
   const hash = crypto.createHash('sha256')
-    .update(`${seed}|${collection?.slug || 'collection'}|${String(chain || '').toLowerCase()}|${String(tokenId)}`)
+    .update([
+      seed,
+      collection?.slug || 'collection',
+      String(chain || '').toLowerCase(),
+      String(tokenId),
+      tx,
+      reservationId,
+      buyer,
+    ].join('|'))
     .digest('hex');
   const bucket = Number.parseInt(hash.slice(0, 8), 16) / 0x100000000;
   if (bucket < 0.10) return 'legendary';
@@ -1083,7 +1102,19 @@ function recordCollectionMintRarities(collection, confirmResult) {
   for (const tokenId of tokenIds) {
     const cleanId = String(tokenId || '').trim();
     if (!cleanId) continue;
-    const rarity = collectionMintRarity(collection, chain, cleanId);
+    const rarity = collectionMintRarity(collection, chain, cleanId, {
+      tx: confirmResult.tx,
+      reservationId: confirmResult.reservationId,
+      buyer: confirmResult.buyer,
+    });
+    const entropyHash = crypto.createHash('sha256').update([
+      collection.slug,
+      chain,
+      cleanId,
+      confirmResult.tx || '',
+      confirmResult.reservationId || '',
+      confirmResult.buyer || '',
+    ].join('|')).digest('hex');
     const row = db.upsertNftRarity?.({
       collection: collection.slug,
       chain,
@@ -1093,7 +1124,7 @@ function recordCollectionMintRarities(collection, confirmResult) {
       ownerWallet: confirmResult.buyer || null,
       source: 'mint-confirm',
       revealSeed: seed,
-      snapshotHash: crypto.createHash('sha256').update(`${collection.slug}|${chain}|${cleanId}`).digest('hex'),
+      snapshotHash: entropyHash,
       metadata: {
         tx: confirmResult.tx || null,
         reservationId: confirmResult.reservationId || null,
@@ -1158,7 +1189,7 @@ function nftCollectionTokenMetadata(req, collection, chainKey, tokenId, level) {
     { trait_type: 'Stars', value: lvl, display_type: 'number' },
   ];
   return attachCollectionRoyaltyMetadata({
-    name: `${collection.name} #${tokenId}`,
+    name: nftCollectionTokenName(collection, chainKey, tokenId),
     symbol: collection.symbol,
     description: collection.description,
     image: imageUrl,
@@ -4171,9 +4202,13 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
       ...(!Array.isArray(req.body?.assets) && req.body?.assets ? [req.body.assets] : []),
       ...(req.body?.asset ? [req.body.asset] : []),
     ].map((id) => String(id || '').trim()).filter(Boolean);
+    const txHash = String(req.body?.tx || req.body?.hash || req.body?.signature || '').trim();
+    if (nftCollectionUsesRarity(collection) && !txHash) {
+      return res.status(400).json({ error: 'tx hash is required to reveal NFT rarity' });
+    }
     const result = confirmCollectionServerMintTx(collection, {
       reservationId: req.body?.reservationId,
-      tx: req.body?.tx || req.body?.hash || req.body?.signature,
+      tx: txHash,
       chain,
       quantity: req.body?.quantity,
       tokenIds,
