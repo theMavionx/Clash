@@ -9,14 +9,18 @@ const { pathToFileURL } = require('url');
 
 const ROOT = path.resolve(process.env.CLASH_ROOT || path.join(__dirname, '..'));
 const SERVER_ROOT = path.join(ROOT, 'server');
-const COLLECTION = 'demon_king';
-const SOLANA_COLLECTION = process.env.NFT_SOLANA_CORE_COLLECTION
-  || process.env.NFT_SOLANA_COLLECTION
-  || 'FaNGuNf3rQjrWZaUeaGvwj63oAGuh5J3mc8wPUtHas4m';
-const DEFAULT_SEED = 'clash-demon-king-rarity-v1';
 const LABELS = { common: 'Common', epic: 'Epic', legendary: 'Legendary' };
 
 const args = process.argv.slice(2);
+const COLLECTION_ARG = String(args.find((arg) => arg.startsWith('--collection='))?.slice('--collection='.length) || 'demonking')
+  .trim()
+  .toLowerCase()
+  .replace(/[-\s]+/g, '_');
+const COLLECTION = COLLECTION_ARG === 'dragon' ? 'dragon' : 'demon_king';
+const BRIDGE_COLLECTION = COLLECTION === 'dragon' ? 'dragon' : 'demonking';
+const COLLECTION_LABEL = COLLECTION === 'dragon' ? 'Dragon' : 'Demon King';
+const COLLECTION_MAX_SUPPLY = COLLECTION === 'dragon' ? '333' : '333';
+const DEFAULT_SEED = COLLECTION === 'dragon' ? 'clash-dragon-rarity-v1' : 'clash-demon-king-rarity-v1';
 const APPLY = args.includes('--apply');
 const JSON_ONLY = args.includes('--json');
 const ASSET_FILTER = args.find((arg) => arg.startsWith('--asset='))?.slice('--asset='.length) || '';
@@ -49,9 +53,15 @@ for (const envPath of [
 }
 
 const gameDb = require(path.join(SERVER_ROOT, 'db'));
-const { parseSolanaSecretKey } = require(path.join(SERVER_ROOT, 'bridge_helpers'));
+const { deploymentOf, parseSolanaSecretKey } = require(path.join(SERVER_ROOT, 'bridge_helpers'));
 const { solanaRpcUrls, withSolanaRpcFallback } = require(path.join(SERVER_ROOT, 'solana_rpc'));
 const serverRequire = createRequire(path.join(SERVER_ROOT, 'index.js'));
+const SOLANA_DEPLOYMENT = deploymentOf('solana', BRIDGE_COLLECTION) || {};
+const SOLANA_COLLECTION = (
+  COLLECTION === 'dragon'
+    ? (process.env.NFT_DRAGON_SOLANA_COLLECTION || SOLANA_DEPLOYMENT.collection)
+    : (process.env.NFT_SOLANA_CORE_COLLECTION || process.env.NFT_SOLANA_COLLECTION || SOLANA_DEPLOYMENT.collection)
+) || 'FaNGuNf3rQjrWZaUeaGvwj63oAGuh5J3mc8wPUtHas4m';
 
 async function importServerPackage(name) {
   try {
@@ -79,7 +89,10 @@ function publicBase() {
 }
 
 function metadataUrl(assetId) {
-  const url = new URL('/api/nft/solana/bridged', `${publicBase()}/`);
+  const url = new URL(
+    COLLECTION === 'dragon' ? '/api/nft/dragon/solana/bridged' : '/api/nft/solana/bridged',
+    `${publicBase()}/`,
+  );
   url.searchParams.set('asset', assetId);
   return url.toString();
 }
@@ -89,7 +102,11 @@ function rarityLabel(rarity) {
 }
 
 function rarityScore(assetId) {
-  const seed = process.env.DEMON_KING_RARITY_REVEAL_SEED || DEFAULT_SEED;
+  const seed = (COLLECTION === 'dragon'
+    ? process.env.NFT_DRAGON_RARITY_REVEAL_SEED
+    : process.env.DEMON_KING_RARITY_REVEAL_SEED)
+    || process.env.NFT_RARITY_REVEAL_SEED
+    || DEFAULT_SEED;
   return crypto.createHash('sha256').update(`${seed}|solana|${assetId}`).digest('hex');
 }
 
@@ -174,9 +191,13 @@ function assignMissingRarities(missingAssets, existingCounts) {
 }
 
 function upsertMissingRarity(asset, rarity, score) {
-  const seed = process.env.DEMON_KING_RARITY_REVEAL_SEED || DEFAULT_SEED;
+  const seed = (COLLECTION === 'dragon'
+    ? process.env.NFT_DRAGON_RARITY_REVEAL_SEED
+    : process.env.DEMON_KING_RARITY_REVEAL_SEED)
+    || process.env.NFT_RARITY_REVEAL_SEED
+    || DEFAULT_SEED;
   const metadata = {
-    source: 'solana-das-backfill',
+    source: `${COLLECTION}-solana-das-backfill`,
     score,
     collection: SOLANA_COLLECTION,
     owner: ownerOfDasAsset(asset),
@@ -186,13 +207,14 @@ function upsertMissingRarity(asset, rarity, score) {
     INSERT INTO nft_rarities
       (collection, chain, token_id, rarity, legacy_level, owner_wallet, player_id,
        rarity_source, reveal_seed, snapshot_hash, metadata_json, revealed_at, updated_at)
-    VALUES (?, 'solana', ?, ?, 1, ?, NULL, 'solana-das-backfill', ?, ?, ?, datetime('now'), datetime('now'))
+    VALUES (?, 'solana', ?, ?, 1, ?, NULL, ?, ?, ?, ?, datetime('now'), datetime('now'))
     ON CONFLICT(collection, chain, token_id) DO NOTHING
   `).run(
     COLLECTION,
     String(asset.id),
     rarity,
     ownerOfDasAsset(asset) || null,
+    `${COLLECTION}-solana-das-backfill`,
     seed,
     `solana-das-${SOLANA_COLLECTION}`,
     JSON.stringify(metadata),
@@ -225,11 +247,11 @@ function normalizedDemonKingAttributes({ existing = [], rarity }) {
   const protectedKeys = new Set(['game', 'character', 'chain', 'standard', 'rarity', 'level', 'stars', 'max supply']);
   const output = [
     { key: 'Game', value: 'Clash of Perps' },
-    { key: 'Character', value: 'Demon King' },
+    { key: 'Character', value: COLLECTION_LABEL },
     { key: 'Chain', value: 'Solana' },
     { key: 'Standard', value: 'Metaplex Core' },
     { key: 'Rarity', value: rarityLabel(rarity) },
-    { key: 'Max Supply', value: '333' },
+    { key: 'Max Supply', value: COLLECTION_MAX_SUPPLY },
   ];
   const seen = new Set(output.map((row) => row.key.toLowerCase()));
   for (const attr of existing || []) {

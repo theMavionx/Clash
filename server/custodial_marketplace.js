@@ -364,6 +364,101 @@ function getRecoverableCustodiedOrderByAsset(assetChain, assetId, sellerPlayerId
   `).get(assetChain, assetId, sellerPlayerId, sellerWallet) || null;
 }
 
+function playerMarketplaceWallets(player) {
+  const out = { evm: new Set(), solana: new Set(), aptos: new Set() };
+  const add = (chainType, value) => {
+    const type = String(chainType || '').toLowerCase();
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    if (type === 'evm') {
+      const normalized = normalizeAddressForChainSafe('base', raw);
+      if (normalized) out.evm.add(normalized);
+      return;
+    }
+    if (type === 'solana') {
+      const normalized = normalizeAddressForChainSafe('solana', raw);
+      if (normalized) out.solana.add(normalized);
+      return;
+    }
+    if (type === 'aptos') {
+      const normalized = normalizeAddressForChainSafe('aptos', raw);
+      if (normalized) out.aptos.add(normalized);
+    }
+  };
+  const legacyWallet = String(player?.wallet || '').trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(legacyWallet)) add('evm', legacyWallet);
+  else if (/^0x[0-9a-fA-F]{1,64}$/.test(legacyWallet)) add('aptos', legacyWallet);
+  else add('solana', legacyWallet);
+  if (player?.id) {
+    const walletRows = gameDb.db.prepare(`
+      SELECT chain_type, address FROM player_wallets WHERE player_id = ?
+    `).all(String(player.id));
+    for (const row of walletRows) add(row.chain_type, row.address);
+    const dexRows = gameDb.db.prepare(`
+      SELECT chain_type, wallet_address FROM player_dex_accounts
+      WHERE player_id = ? AND wallet_address IS NOT NULL AND LENGTH(wallet_address) > 0
+    `).all(String(player.id));
+    for (const row of dexRows) add(row.chain_type, row.wallet_address);
+  }
+  return out;
+}
+
+function walletSetForChain(wallets, chain) {
+  const key = isEvmChain(chain) ? 'evm' : String(chain || '').toLowerCase();
+  return wallets?.[key] || new Set();
+}
+
+function orderSellerMatchesPlayer(order, player) {
+  if (!order) return false;
+  if (String(order.seller_player_id || '') === String(player?.id || '')) return true;
+  const wallets = walletSetForChain(playerMarketplaceWallets(player), order.asset_chain);
+  for (const wallet of wallets) {
+    if (sameChainAddress(order.asset_chain, order.seller_wallet, wallet)) return true;
+  }
+  return false;
+}
+
+function orderBuyerMatchesPlayer(order, player) {
+  if (!order) return false;
+  if (String(order.buyer_player_id || '') === String(player?.id || '')) return true;
+  const wallets = walletSetForChain(playerMarketplaceWallets(player), order.payment_chain);
+  for (const wallet of wallets) {
+    if (sameChainAddress(order.payment_chain, order.buyer_wallet, wallet)) return true;
+  }
+  return false;
+}
+
+function mineOrdersWhere(player) {
+  const wallets = playerMarketplaceWallets(player);
+  const clauses = ['seller_player_id = ?', 'buyer_player_id = ?'];
+  const params = [player.id, player.id];
+  const evmWallets = Array.from(wallets.evm);
+  if (evmWallets.length) {
+    const placeholders = evmWallets.map(() => '?').join(',');
+    clauses.push(`(asset_chain IN (${Array.from(EVM_CHAINS).map(() => '?').join(',')}) AND lower(seller_wallet) IN (${placeholders}))`);
+    params.push(...Array.from(EVM_CHAINS), ...evmWallets);
+    clauses.push(`(payment_chain IN (${Array.from(EVM_CHAINS).map(() => '?').join(',')}) AND lower(buyer_wallet) IN (${placeholders}))`);
+    params.push(...Array.from(EVM_CHAINS), ...evmWallets);
+  }
+  const solWallets = Array.from(wallets.solana);
+  if (solWallets.length) {
+    const placeholders = solWallets.map(() => '?').join(',');
+    clauses.push(`(asset_chain = 'solana' AND seller_wallet IN (${placeholders}))`);
+    params.push(...solWallets);
+    clauses.push(`(payment_chain = 'solana' AND buyer_wallet IN (${placeholders}))`);
+    params.push(...solWallets);
+  }
+  const aptosWallets = Array.from(wallets.aptos);
+  if (aptosWallets.length) {
+    const placeholders = aptosWallets.map(() => '?').join(',');
+    clauses.push(`(asset_chain = 'aptos' AND lower(seller_wallet) IN (${placeholders}))`);
+    params.push(...aptosWallets);
+    clauses.push(`(payment_chain = 'aptos' AND lower(buyer_wallet) IN (${placeholders}))`);
+    params.push(...aptosWallets);
+  }
+  return { where: clauses.join(' OR '), params };
+}
+
 function cancelAwaitingDepositOrder(order, { actorPlayerId = null, eventType = 'cancelled_before_deposit', data = {} } = {}) {
   gameDb.db.transaction(() => {
     gameDb.db.prepare(`
@@ -1954,6 +2049,16 @@ function requireOrderBuyer(order, playerId) {
   if (String(order.buyer_player_id || '') !== String(playerId || '')) throw httpError(403, 'This order belongs to another player');
 }
 
+function requireOrderSellerForPlayer(order, player) {
+  if (!order) throw httpError(404, 'Listing not found');
+  if (!orderSellerMatchesPlayer(order, player)) throw httpError(403, 'This listing belongs to another player');
+}
+
+function requireOrderBuyerForPlayer(order, player) {
+  if (!order) throw httpError(404, 'Order not found');
+  if (!orderBuyerMatchesPlayer(order, player)) throw httpError(403, 'This order belongs to another player');
+}
+
 function canCancelStatus(order) {
   if (order.status === 'awaiting_deposit' || order.status === 'active') return true;
   if (order.status === 'reserved') return Number(order.payment_deadline || 0) < nowSec();
@@ -2207,12 +2312,13 @@ function mountCustodialMarketplace(router, ctx = {}) {
   router.get('/marketplace/custodial/orders/mine', auth, (req, res) => {
     try {
       releaseExpiredReservations();
+      const mine = mineOrdersWhere(req.player);
       const rows = gameDb.db.prepare(`
         SELECT * FROM custodial_marketplace_orders
-        WHERE seller_player_id = ? OR buyer_player_id = ?
+        WHERE ${mine.where}
         ORDER BY updated_at DESC
         LIMIT 200
-      `).all(req.player.id, req.player.id);
+      `).all(...mine.params);
       res.set('Cache-Control', 'no-store');
       res.json({ orders: rows.map((r) => publicOrder(r, { includePrivate: true })) });
     } catch (err) {
@@ -2225,8 +2331,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
       releaseExpiredReservations();
       const order = getOrder(req.params.id);
       if (!order) throw httpError(404, 'Order not found');
-      const isParty = String(order.seller_player_id || '') === String(req.player.id || '')
-        || String(order.buyer_player_id || '') === String(req.player.id || '');
+      const isParty = orderSellerMatchesPlayer(order, req.player) || orderBuyerMatchesPlayer(order, req.player);
       if (!isParty) throw httpError(403, 'This order belongs to another player');
       res.set('Cache-Control', 'no-store');
       res.json({ success: true, order: publicOrder(order, { includePrivate: true }) });
@@ -2433,7 +2538,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
   router.post('/marketplace/custodial/listings/:id/deposit', auth, async (req, res) => {
     try {
       const order = getOrder(req.params.id);
-      requireOrderSeller(order, req.player.id);
+      requireOrderSellerForPlayer(order, req.player);
       if (order.status === 'active') return res.json({ success: true, alreadyVerified: true, order: publicOrder(order, { includePrivate: true }) });
       if (order.status !== 'awaiting_deposit') throw httpError(409, `Listing is ${order.status}`);
       const txHash = String(req.body?.txHash || req.body?.txSignature || '').trim() || null;
@@ -2448,7 +2553,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
   router.post('/marketplace/custodial/listings/:id/cancel', auth, async (req, res) => {
     try {
       let order = getOrder(req.params.id);
-      requireOrderSeller(order, req.player.id);
+      requireOrderSellerForPlayer(order, req.player);
       if (!canCancelStatus(order)) throw httpError(409, `Listing is ${order.status}`);
       if (order.status === 'awaiting_deposit') {
         try {
@@ -2505,7 +2610,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
       const result = gameDb.db.transaction(() => {
         const order = getOrder(req.params.id);
         if (!order) throw httpError(404, 'Listing not found');
-        if (order.seller_player_id === req.player.id) throw httpError(400, 'You cannot buy your own listing');
+        if (orderSellerMatchesPlayer(order, req.player)) throw httpError(400, 'You cannot buy your own listing');
         const deadline = Number(order.payment_deadline || 0);
         const expiredReservation = order.status === 'reserved' && deadline < nowSec();
         const sameBuyer = order.status === 'reserved'
@@ -2580,7 +2685,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
   router.post('/marketplace/custodial/orders/:id/release-reservation', auth, (req, res) => {
     try {
       const order = getOrder(req.params.id);
-      requireOrderBuyer(order, req.player.id);
+      requireOrderBuyerForPlayer(order, req.player);
       if (order.status !== 'reserved') {
         return res.json({ success: true, alreadyReleased: true, order: publicOrder(order, { includePrivate: true }) });
       }
@@ -2622,7 +2727,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
     try {
       const config = await marketplaceRuntimeConfig(ctx);
       const order = getOrder(req.params.id);
-      requireOrderBuyer(order, req.player.id);
+      requireOrderBuyerForPlayer(order, req.player);
       if (order.status === 'delivered') {
         let finalOrder = order;
         let payoutError = null;

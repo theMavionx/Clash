@@ -8,6 +8,13 @@ const { createRequire } = require('module');
 const ROOT = path.resolve(process.env.CLASH_ROOT || path.join(__dirname, '..'));
 const NFT_ROOT = path.join(ROOT, 'nft');
 const LABELS = new Set(['Common', 'Epic', 'Legendary']);
+const args = process.argv.slice(2);
+const COLLECTION_ARG = String(args.find((arg) => arg.startsWith('--collection='))?.slice('--collection='.length) || 'demonking')
+  .trim()
+  .toLowerCase()
+  .replace(/[-\s_]+/g, '');
+const COLLECTION = COLLECTION_ARG === 'dragon' ? 'dragon' : 'demonking';
+const COLLECTION_LABEL = COLLECTION === 'dragon' ? 'Dragon' : 'Demon King';
 
 function loadEnvFile(filePath) {
   try {
@@ -68,12 +75,12 @@ const ABI = parseAbi([
 const CHAINS = {
   base: {
     chain: viemChains.base,
-    env: ['NFT_BASE_RPC_URL', 'BASE_RPC_URL', 'VITE_BASE_RPC_URL'],
+    env: ['NFT_BASE_RPC_URL', 'NFT_DRAGON_BASE_RPC_URL', 'BASE_RPC_URL', 'VITE_BASE_RPC_URL'],
     fallbacks: ['https://base-rpc.publicnode.com', 'https://mainnet.base.org'],
   },
   arbitrum: {
     chain: viemChains.arbitrum,
-    env: ['NFT_ARBITRUM_RPC_URL', 'ARBITRUM_RPC_URL', 'VITE_ARBITRUM_RPC_URL'],
+    env: ['NFT_ARBITRUM_RPC_URL', 'NFT_DRAGON_ARBITRUM_RPC_URL', 'ARBITRUM_RPC_URL', 'VITE_ARBITRUM_RPC_URL'],
     fallbacks: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum-one.publicnode.com', 'https://arbitrum.llamarpc.com'],
   },
   monad: {
@@ -83,7 +90,7 @@ const CHAINS = {
       nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
       rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
     }),
-    env: ['NFT_MONAD_RPC_URL', 'MONAD_RPC_URL', 'VITE_MONAD_RPC_URL'],
+    env: ['NFT_MONAD_RPC_URL', 'NFT_DRAGON_MONAD_RPC_URL', 'MONAD_RPC_URL', 'VITE_MONAD_RPC_URL'],
     fallbacks: ['https://rpc.monad.xyz', 'https://rpc1.monad.xyz', 'https://rpc2.monad.xyz', 'https://rpc3.monad.xyz', 'https://rpc-mainnet.monadinfra.com'],
   },
   ink: {
@@ -93,7 +100,7 @@ const CHAINS = {
       nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
       rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
     }),
-    env: ['NFT_INK_RPC_URL', 'INK_RPC_URL', 'VITE_INK_RPC_URL'],
+    env: ['NFT_INK_RPC_URL', 'NFT_DRAGON_INK_RPC_URL', 'INK_RPC_URL', 'VITE_INK_RPC_URL'],
     fallbacks: ['https://rpc-gel.inkonchain.com', 'https://rpc-qnd.inkonchain.com', 'https://ink.drpc.org'],
   },
 };
@@ -107,6 +114,9 @@ function readJsonIfExists(filePath) {
 }
 
 function deployment(chainKey) {
+  if (COLLECTION === 'dragon') {
+    return readJsonIfExists(path.join(NFT_ROOT, 'deployments', `dragon-${chainKey}-mainnet.json`));
+  }
   return readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${chainKey}-v3-mainnet.json`));
 }
 
@@ -194,8 +204,10 @@ async function auditChain(chainKey) {
       const level = attrValue(attrs, 'Level') || attrValue(attrs, 'level');
       const stars = attrValue(attrs, 'Stars') || attrValue(attrs, 'stars');
       const uriText = String(uri);
-      const uriChainOk = uriText.includes(`/api/nft/${chainKey}/`)
-        || new RegExp(`/api/nft/revealed/${chainKey}(?:-v\\d+)?/`).test(uriText);
+      const uriChainOk = COLLECTION === 'dragon'
+        ? uriText.includes(`/api/nft/dragon/${chainKey}/`)
+        : (uriText.includes(`/api/nft/${chainKey}/`)
+          || new RegExp(`/api/nft/revealed/${chainKey}(?:-v\\d+)?/`).test(uriText));
       const hasRarity = LABELS.has(rarity);
       const row = { tokenId, owner, uri, rarity, level, stars, uriChainOk };
       active.push(row);
@@ -233,7 +245,7 @@ async function auditChain(chainKey) {
 }
 
 async function main() {
-  const requested = process.argv.find((arg) => arg.startsWith('--chains='))?.slice('--chains='.length);
+  const requested = args.find((arg) => arg.startsWith('--chains='))?.slice('--chains='.length);
   const chains = requested ? requested.split(',').map((c) => c.trim()).filter(Boolean) : Object.keys(CHAINS);
   const results = [];
   for (const chainKey of chains) {
@@ -244,6 +256,8 @@ async function main() {
   const problems = results.flatMap((row) => row.problems || []);
   console.log(JSON.stringify({
     ok: results.every((row) => row.ok),
+    collection: COLLECTION,
+    collectionLabel: COLLECTION_LABEL,
     chains: results,
     totalProblems: problems.length,
   }, null, 2));

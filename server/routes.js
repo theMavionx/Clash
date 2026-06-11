@@ -432,6 +432,21 @@ function demonKingRarityAttributes(rarity) {
   return [{ trait_type: 'Rarity', value: demonKingRarityLabel(rarity) }];
 }
 
+function nftCollectionUsesRarity(collection) {
+  return ['dragon'].includes(String(collection?.slug || '').toLowerCase());
+}
+
+function nftCollectionRarityForMetadata(collection, chainKey, tokenId) {
+  if (!nftCollectionUsesRarity(collection)) return null;
+  const row = db.getNftRarity?.(collection.slug, chainKey, String(tokenId), { legacyLevel: 1 });
+  return db.normalizeNftRarity?.(row?.rarity) || null;
+}
+
+function nftCollectionRarityAttributes(collection, rarity) {
+  if (!nftCollectionUsesRarity(collection)) return [];
+  return [{ trait_type: 'Rarity', value: demonKingRarityLabel(rarity) }];
+}
+
 function solanaCoreUpgradeMetadataUrl(req, assetId, sourceRef) {
   const url = new URL('/api/nft/solana/bridged', `${nftPublicBase(req)}/`);
   if (assetId) url.searchParams.set('asset', String(assetId));
@@ -544,14 +559,14 @@ function attachRoyaltyMetadata(metadata, chain) {
   return metadata;
 }
 
-function nftTokenMetadata(req, chain, tokenId, level) {
+function nftTokenMetadata(req, chain, tokenId, level, rarityOverride = null) {
   const name = process.env.NFT_NAME || 'Demon King';
   const description = process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.';
   const id = Number(tokenId);
   const lvl = normalizeNftLevel(level);
   const chainKeyByLabel = { Base: 'base', Arbitrum: 'arbitrum', Monad: 'monad', Ink: 'ink', Aptos: 'aptos', Solana: 'solana' };
   const chainKey = chainKeyByLabel[chain] || String(chain || '').toLowerCase();
-  const rarity = demonKingRarityForMetadata(chainKey, id, lvl);
+  const rarity = db.normalizeNftRarity?.(rarityOverride) || demonKingRarityForMetadata(chainKey, id, lvl);
   const imageUrl = nftImageUrl(req);
   return attachRoyaltyMetadata({
     name: `${name} #${id}`,
@@ -722,6 +737,7 @@ function attachCollectionRoyaltyMetadata(metadata, collection, chainKey) {
 }
 
 async function readCollectionNftLevelCached(collection, chainKey, tokenId) {
+  if (nftCollectionUsesRarity(collection)) return 1;
   if (!['base', 'arbitrum', 'monad', 'ink'].includes(chainKey)) return 1;
   const key = `${collection.slug}:${chainKey}:${tokenId}`;
   const hit = _nftLevelCache.get(key);
@@ -1004,6 +1020,13 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
   const [reservation] = state.reservations.splice(idx, 1);
   const quantity = Math.max(1, Math.floor(Number(body.quantity || reservation.quantity || 1)));
   const chain = String(body.chain || reservation.chain || 'unknown').toLowerCase();
+  const previousChainMinted = Math.max(0, Math.floor(Number(state.perChain?.[chain] || 0)));
+  const bodyTokenIds = Array.isArray(body.tokenIds)
+    ? body.tokenIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
+  const mintedTokenIds = bodyTokenIds.length
+    ? bodyTokenIds.slice(0, quantity)
+    : Array.from({ length: quantity }, (_, i) => String(previousChainMinted + i + 1));
   state.minted = Math.min(collection.maxSupply, state.minted + quantity);
   if (NFT_COLLECTION_CHAIN_LABELS[chain]) {
     state.perChain[chain] = Math.max(0, Math.floor(Number(state.perChain[chain] || 0))) + quantity;
@@ -1020,8 +1043,67 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
   }
   state.updatedAt = new Date().toISOString();
   writeAppSettingJson(key, state);
-  return { alreadyConfirmed: false, supply: collectionSupplyResponse(collection, state) };
+  return {
+    alreadyConfirmed: false,
+    supply: collectionSupplyResponse(collection, state),
+    chain,
+    quantity,
+    tokenIds: mintedTokenIds,
+    buyer: reservation.buyer || null,
+    payment: reservation.payment || null,
+    reservationId,
+    tx,
+  };
 });
+
+function collectionMintRaritySeed(collection) {
+  const envKey = `NFT_${String(collection?.slug || '').toUpperCase()}_RARITY_REVEAL_SEED`;
+  return String(process.env[envKey] || process.env.NFT_RARITY_REVEAL_SEED || '').trim()
+    || `clash-${String(collection?.slug || 'collection')}-rarity-v1`;
+}
+
+function collectionMintRarity(collection, chain, tokenId) {
+  const seed = collectionMintRaritySeed(collection);
+  const hash = crypto.createHash('sha256')
+    .update(`${seed}|${collection?.slug || 'collection'}|${String(chain || '').toLowerCase()}|${String(tokenId)}`)
+    .digest('hex');
+  const bucket = Number.parseInt(hash.slice(0, 8), 16) / 0x100000000;
+  if (bucket < 0.10) return 'legendary';
+  if (bucket < 0.40) return 'epic';
+  return 'common';
+}
+
+function recordCollectionMintRarities(collection, confirmResult) {
+  if (!nftCollectionUsesRarity(collection)) return [];
+  const chain = String(confirmResult?.chain || '').toLowerCase();
+  const tokenIds = Array.isArray(confirmResult?.tokenIds) ? confirmResult.tokenIds : [];
+  if (!chain || !tokenIds.length) return [];
+  const rows = [];
+  const seed = collectionMintRaritySeed(collection);
+  for (const tokenId of tokenIds) {
+    const cleanId = String(tokenId || '').trim();
+    if (!cleanId) continue;
+    const rarity = collectionMintRarity(collection, chain, cleanId);
+    const row = db.upsertNftRarity?.({
+      collection: collection.slug,
+      chain,
+      tokenId: cleanId,
+      rarity,
+      legacyLevel: 1,
+      ownerWallet: confirmResult.buyer || null,
+      source: 'mint-confirm',
+      revealSeed: seed,
+      snapshotHash: crypto.createHash('sha256').update(`${collection.slug}|${chain}|${cleanId}`).digest('hex'),
+      metadata: {
+        tx: confirmResult.tx || null,
+        reservationId: confirmResult.reservationId || null,
+        payment: confirmResult.payment || null,
+      },
+    });
+    if (row) rows.push(row);
+  }
+  return rows;
+}
 
 async function readCollectionGlobalSupply(collection) {
   const authoritative = readCollectionServerSupply(collection);
@@ -1066,8 +1148,15 @@ async function assertCollectionGlobalSupplyAvailable(collection, quantity) {
 function nftCollectionTokenMetadata(req, collection, chainKey, tokenId, level) {
   const lvl = normalizeNftLevel(level);
   const chain = NFT_COLLECTION_CHAIN_LABELS[chainKey] || chainKey;
-  const imageUrl = nftCollectionImageUrl(req, collection, lvl);
+  const usesRarity = nftCollectionUsesRarity(collection);
+  const imageUrl = nftCollectionImageUrl(req, collection, usesRarity ? 1 : lvl);
   const idValue = /^\d+$/.test(String(tokenId)) ? Number(tokenId) : String(tokenId);
+  const rarity = nftCollectionRarityForMetadata(collection, chainKey, tokenId);
+  const rarityAttrs = nftCollectionRarityAttributes(collection, rarity);
+  const levelAttrs = usesRarity ? [] : [
+    { trait_type: 'Level', value: lvl, display_type: 'number' },
+    { trait_type: 'Stars', value: lvl, display_type: 'number' },
+  ];
   return attachCollectionRoyaltyMetadata({
     name: `${collection.name} #${tokenId}`,
     symbol: collection.symbol,
@@ -1080,13 +1169,13 @@ function nftCollectionTokenMetadata(req, collection, chainKey, tokenId, level) {
       { trait_type: 'Character', value: collection.character },
       { trait_type: 'Chain', value: chain },
       { trait_type: 'Edition', value: idValue },
-      { trait_type: 'Level', value: lvl, display_type: 'number' },
-      { trait_type: 'Stars', value: lvl, display_type: 'number' },
+      ...rarityAttrs,
+      ...levelAttrs,
       { trait_type: 'Max Supply', value: collection.maxSupply },
     ],
     properties: {
       category: 'image',
-      files: [{ uri: imageUrl, type: nftCollectionImageMime(nftCollectionImagePath(collection, lvl)) }],
+      files: [{ uri: imageUrl, type: nftCollectionImageMime(nftCollectionImagePath(collection, usesRarity ? 1 : lvl)) }],
     },
   }, collection, chainKey);
 }
@@ -1164,7 +1253,7 @@ async function sendNftCollectionTokenMetadata(req, res, rawTokenId) {
   }
 
   let level = normalizeNftLevel(req.query.level || 1);
-  if (/^\d+$/.test(tokenId)) {
+  if (!nftCollectionUsesRarity(collection) && /^\d+$/.test(tokenId)) {
     level = await readCollectionNftLevelCached(collection, chainKey, tokenId);
   }
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
@@ -1256,6 +1345,7 @@ function readJsonIfExists(file) {
 }
 
 const _aptosNftLevelCache = new Map();
+const _aptosNftRarityCache = new Map();
 
 function nftAptosDeployment() {
   return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'aptos-mainnet.json')) || {};
@@ -1268,6 +1358,16 @@ function parseAptosTokenLevel(tokenProperties) {
     return normalizeNftLevel(raw);
   } catch {
     return 1;
+  }
+}
+
+function parseAptosTokenRarity(tokenProperties) {
+  try {
+    const parsed = typeof tokenProperties === 'string' ? JSON.parse(tokenProperties) : tokenProperties;
+    const raw = parsed?.Rarity?.value ?? parsed?.Rarity ?? parsed?.rarity?.value ?? parsed?.rarity;
+    return db.normalizeNftRarity?.(raw) || null;
+  } catch {
+    return null;
   }
 }
 
@@ -1310,14 +1410,56 @@ async function readAptosNftLevelCached(tokenId) {
   return level;
 }
 
+async function readAptosNftRarityCached(tokenId) {
+  const id = Number(tokenId);
+  const key = `aptos-rarity:${id}`;
+  const hit = _aptosNftRarityCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < 60_000) return hit.rarity;
+
+  let rarity = null;
+  const dep = nftAptosDeployment();
+  if (dep?.collection && id >= 1 && id <= NFT_METADATA_MAX_TOKEN_ID) {
+    try {
+      const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
+      const tokenName = `${process.env.NFT_NAME || 'Demon King'} #${id}`;
+      const query = `query Q($collection:String!, $tokenName:String!) {
+        current_token_datas_v2(
+          where: {collection_id:{_eq:$collection}, token_name:{_eq:$tokenName}},
+          limit: 1
+        ) {
+          token_properties
+        }
+      }`;
+      const headers = { 'content-type': 'application/json' };
+      if (process.env.APTOS_NODE_API_KEY) headers.Authorization = `Bearer ${process.env.APTOS_NODE_API_KEY}`;
+      const r = await fetch(indexerUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ query, variables: { collection: dep.collection, tokenName } }),
+      });
+      const j = await r.json().catch(() => null);
+      const row = j?.data?.current_token_datas_v2?.[0] || null;
+      if (row) rarity = parseAptosTokenRarity(row.token_properties);
+    } catch {
+      rarity = null;
+    }
+  }
+  _aptosNftRarityCache.set(key, { rarity, at: now });
+  return rarity;
+}
+
 async function sendAptosNftMetadata(req, res, rawTokenId) {
   const tokenId = String(rawTokenId || '').replace(/\.json$/i, '');
   if (!/^\d+$/.test(tokenId)) return res.status(400).json({ error: 'bad token id' });
   const id = Number(tokenId);
   if (id < 1 || id > NFT_METADATA_MAX_TOKEN_ID) return res.status(404).json({ error: 'token metadata not found' });
-  const level = await readAptosNftLevelCached(id);
+  const [level, rarity] = await Promise.all([
+    readAptosNftLevelCached(id),
+    readAptosNftRarityCached(id),
+  ]);
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'no-cache, max-age=0, must-revalidate');
-  res.json(nftTokenMetadata(req, 'Aptos', id, level));
+  res.json(nftTokenMetadata(req, 'Aptos', id, level, rarity));
 }
 
 function sendAptosCollectionMetadata(req, res) {
@@ -4020,14 +4162,25 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
     if (!collection) return res.status(404).json({ error: 'collection not found' });
     const chain = String(req.body?.chain || '').toLowerCase();
     if (!NFT_COLLECTION_CHAIN_LABELS[chain]) return res.status(400).json({ error: 'bad chain' });
+    const tokenIds = [
+      ...(Array.isArray(req.body?.tokenIds) ? req.body.tokenIds : []),
+      ...(Array.isArray(req.body?.token_ids) ? req.body.token_ids : []),
+      ...(Array.isArray(req.body?.assets) ? req.body.assets : []),
+      ...(!Array.isArray(req.body?.tokenIds) && req.body?.tokenIds ? [req.body.tokenIds] : []),
+      ...(!Array.isArray(req.body?.token_ids) && req.body?.token_ids ? [req.body.token_ids] : []),
+      ...(!Array.isArray(req.body?.assets) && req.body?.assets ? [req.body.assets] : []),
+      ...(req.body?.asset ? [req.body.asset] : []),
+    ].map((id) => String(id || '').trim()).filter(Boolean);
     const result = confirmCollectionServerMintTx(collection, {
       reservationId: req.body?.reservationId,
       tx: req.body?.tx || req.body?.hash || req.body?.signature,
       chain,
       quantity: req.body?.quantity,
+      tokenIds,
     });
+    const rarities = recordCollectionMintRarities(collection, result);
     res.set('Cache-Control', 'no-store');
-    return res.json({ ok: true, ...result });
+    return res.json({ ok: true, ...result, rarities });
   } catch (err) {
     const status = err?.status || (/chain|reservation/i.test(err?.message || '') ? 400 : 500);
     return res.status(status).json({ error: (err?.message || 'mint confirm failed').slice(0, 180) });

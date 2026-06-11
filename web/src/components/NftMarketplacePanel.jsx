@@ -35,6 +35,7 @@ import {
   paymentAddressFromId,
   paymentTokenMeta,
 } from '../lib/marketplace';
+import { nftRarityCardStyle } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import { syncDemonKingNfts } from '../lib/nftV3Client';
 
@@ -478,7 +479,7 @@ function BrowseView({ listings, total, loading, error, page, setPage, rarityByTo
 function ListingCard({ listing, rarity, onBuy, isOwn }) {
   const expiry = timeUntil(listing.expiresAt);
   return (
-    <div style={s.card}>
+    <div style={{ ...s.card, ...nftRarityCardStyle(rarity, listing.level || 1) }}>
       <div style={s.cardImgWrap}>
         <img
           src={nftImageUrl(1, listing.tokenId)}
@@ -531,7 +532,7 @@ function MyListingsView({ listings, loading, error, rarityByTokenId, baseReady, 
       {listings.map((l) => {
         const rarity = rarityByTokenId[l.tokenId] || l.rarity || null;
         return (
-          <div key={l.tokenId} style={s.card}>
+          <div key={l.tokenId} style={{ ...s.card, ...nftRarityCardStyle(rarity, l.level || 1) }}>
             <div style={s.cardImgWrap}>
               <img
                 src={nftImageUrl(1, l.tokenId)} alt={`#${l.tokenId}`}
@@ -600,7 +601,11 @@ function ListNewView({
                       key={id}
                       type="button"
                       onClick={() => setPickTokenId(id)}
-                      style={{ ...s.miniCard, ...(active ? s.miniCardActive : null) }}
+                      style={{
+                        ...s.miniCard,
+                        ...(active ? s.miniCardActive : null),
+                        ...nftRarityCardStyle(t.rarity, t.level || 1, { active }),
+                      }}
                       title={id}
                     >
                       {t.imageUrl && (
@@ -691,7 +696,7 @@ function BuyConfirmModal({ listing, rarity, legacyLevel = 1, baseReady, busy, on
           <button type="button" onClick={busy ? undefined : onCancel} style={s.modalCloseBtn}>×</button>
         </div>
         <div style={s.modalBody}>
-          <div style={s.modalImgWrap}>
+          <div style={{ ...s.modalImgWrap, ...nftRarityCardStyle(rarity, legacyLevel) }}>
             <img
               src={nftImageUrl(1, listing.tokenId)} alt=""
               style={s.modalImg}
@@ -894,11 +899,12 @@ const s = {
   modalOverlay: {
     position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
     display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50,
+    padding: 10, overflowY: 'auto', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch',
   },
   modalPanel: {
-    width: 360, maxWidth: '94vw', borderRadius: 14, overflow: 'hidden',
+    width: 360, maxWidth: 'calc(100vw - 20px)', maxHeight: 'calc(100dvh - 20px)', borderRadius: 14, overflowY: 'auto',
     background: '#fdf8e7', border: '4px solid #d4c8b0',
-    boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
+    boxShadow: '0 18px 50px rgba(0,0,0,0.45)', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch',
   },
   modalHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -913,7 +919,7 @@ const s = {
   modalBody: { padding: 14, display: 'flex', flexDirection: 'column', gap: 10 },
   modalImgWrap: {
     position: 'relative',
-    width: '100%', aspectRatio: '1 / 1',
+    width: 'min(100%, 310px)', aspectRatio: '1 / 1', maxHeight: '42dvh', alignSelf: 'center',
     borderRadius: 12, overflow: 'hidden',
     background: '#fff', border: '2px solid #d4c8b0',
   },

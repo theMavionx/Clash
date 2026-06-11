@@ -7,10 +7,17 @@ const { createRequire } = require('module');
 
 const ROOT = path.resolve(process.env.CLASH_ROOT || path.join(__dirname, '..'));
 const SERVER_ROOT = path.join(ROOT, 'server');
-const COLLECTION = 'demon_king';
 const LABELS = { common: 'Common', epic: 'Epic', legendary: 'Legendary' };
 
 const args = process.argv.slice(2);
+const COLLECTION_ARG = String(args.find((arg) => arg.startsWith('--collection='))?.slice('--collection='.length) || 'demonking')
+  .trim()
+  .toLowerCase()
+  .replace(/[-\s]+/g, '_');
+const COLLECTION = COLLECTION_ARG === 'dragon' ? 'dragon' : 'demon_king';
+const BRIDGE_COLLECTION = COLLECTION === 'dragon' ? 'dragon' : 'demonking';
+const COLLECTION_LABEL = COLLECTION === 'dragon' ? 'Dragon' : 'Demon King';
+const COLLECTION_ENV = COLLECTION === 'dragon' ? 'DRAGON' : 'DEMON_KING';
 const APPLY = args.includes('--apply');
 const TOKEN_FILTER = args.find((arg) => arg.startsWith('--token='))?.slice('--token='.length).toLowerCase() || '';
 const LIMIT = Math.max(0, Number(args.find((arg) => arg.startsWith('--limit='))?.slice('--limit='.length) || 0) || 0);
@@ -63,7 +70,9 @@ function loadAptosSdk() {
 }
 
 function readAptosProfileKey() {
+  const packageDir = COLLECTION === 'dragon' ? 'dragon_nft' : 'clash_nft';
   for (const filePath of [
+    path.join(ROOT, 'nft', 'move', packageDir, '.aptos', 'config.yaml'),
     path.join(ROOT, 'nft', 'move', 'clash_nft', '.aptos', 'config.yaml'),
     path.join(ROOT, '.aptos', 'config.yaml'),
   ]) {
@@ -139,9 +148,11 @@ function needsOnchainSync(token, rarity) {
 }
 
 async function fetchAptosTokens() {
-  const deployment = deploymentOf('aptos', 'demonking') || {};
-  const collection = process.env.NFT_APTOS_COLLECTION || deployment.collection;
-  if (!collection) throw new Error('Aptos Demon King collection is not configured');
+  const deployment = deploymentOf('aptos', BRIDGE_COLLECTION) || {};
+  const collection = process.env[`NFT_${COLLECTION_ENV}_APTOS_COLLECTION`]
+    || (COLLECTION === 'demon_king' ? process.env.NFT_APTOS_COLLECTION : null)
+    || deployment.collection;
+  if (!collection) throw new Error(`Aptos ${COLLECTION_LABEL} collection is not configured`);
 
   const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
   const headers = { 'content-type': 'application/json' };
@@ -236,9 +247,9 @@ async function submitBatch({ aptos, account, moduleId, batch, gasUnitPrice, maxG
 }
 
 async function main() {
-  const deployment = deploymentOf('aptos', 'demonking') || {};
+  const deployment = deploymentOf('aptos', BRIDGE_COLLECTION) || {};
   const moduleId = deployment.module;
-  if (!moduleId) throw new Error('Missing Aptos Demon King module deployment');
+  if (!moduleId) throw new Error(`Missing Aptos ${COLLECTION_LABEL} module deployment`);
 
   const tokens = await fetchAptosTokens();
   const unique = new Map(tokens.map((token) => [token.tokenDataId, token]));
@@ -292,6 +303,8 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     applied: APPLY,
+    collection: COLLECTION,
+    bridgeCollection: BRIDGE_COLLECTION,
     module: moduleId,
     onchainAptosTokens: unique.size,
     checked: candidates.length,

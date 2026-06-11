@@ -113,17 +113,40 @@ function nftLevelImageUrl(level, id = null) {
   return `${base}/${lvl}/default.jpg`;
 }
 
-function demonKingTokenId(token) {
+function nftTokenId(token) {
   return String(token?.tokenId || token?.tokenAddress || token?.assetId || token?.asset || token?.mint || token?.id || '').trim();
 }
 
-function demonKingRarityForToken(chainKey, token) {
-  const tokenId = demonKingTokenId(token);
+function demonKingTokenId(token) {
+  return nftTokenId(token);
+}
+
+function rarityCollectionDbKey(collectionSlug) {
+  const slug = normalizeBridgeCollectionSlug(collectionSlug || 'demonking');
+  if (slug === 'demonking') return 'demon_king';
+  if (slug === 'dragon') return 'dragon';
+  return slug;
+}
+
+function collectionUsesRarity(collectionSlug) {
+  return !!gameDb.collectionSupportsRarity?.(rarityCollectionDbKey(collectionSlug));
+}
+
+function collectionLegacyRarityFallback(collectionSlug, legacyLevel) {
+  return rarityCollectionDbKey(collectionSlug) === 'demon_king' && normalizeNftLevel(legacyLevel) > 1
+    ? 'legendary'
+    : null;
+}
+
+function collectionRarityForToken(collectionSlug, chainKey, token) {
+  if (!collectionUsesRarity(collectionSlug)) return null;
+  const collectionKey = rarityCollectionDbKey(collectionSlug);
+  const tokenId = nftTokenId(token);
   const legacyLevel = normalizeNftLevel(token?.level || token?.legacyLevel || 1);
   const row = tokenId
-    ? gameDb.getNftRarity?.('demon_king', chainKey, tokenId, { legacyLevel })
+    ? gameDb.getNftRarity?.(collectionKey, chainKey, tokenId, { legacyLevel })
     : null;
-  const fallback = legacyLevel > 1 ? 'legendary' : null;
+  const fallback = collectionLegacyRarityFallback(collectionSlug, legacyLevel);
   const rarity = gameDb.normalizeNftRarity?.(row?.rarity || token?.rarity) || fallback;
   return {
     rarity,
@@ -133,24 +156,39 @@ function demonKingRarityForToken(chainKey, token) {
   };
 }
 
-function demonKingRarityLabelForTokenId(chainKey, tokenId, legacyLevel = 1) {
+function demonKingRarityForToken(chainKey, token) {
+  return collectionRarityForToken('demonking', chainKey, token);
+}
+
+function collectionRarityLabelForTokenId(collectionSlug, chainKey, tokenId, legacyLevel = 1) {
+  if (!collectionUsesRarity(collectionSlug)) return 'Unrevealed';
+  const collectionKey = rarityCollectionDbKey(collectionSlug);
   const row = tokenId
-    ? gameDb.getNftRarity?.('demon_king', chainKey, String(tokenId), { legacyLevel })
+    ? gameDb.getNftRarity?.(collectionKey, chainKey, String(tokenId), { legacyLevel })
     : null;
-  const rarity = gameDb.normalizeNftRarity?.(row?.rarity) || null;
+  const rarity = gameDb.normalizeNftRarity?.(row?.rarity)
+    || collectionLegacyRarityFallback(collectionSlug, legacyLevel);
   return rarity ? gameDb.NFT_RARITY_LABELS?.[rarity] || rarity : 'Unrevealed';
 }
 
-function demonKingBridgeSourceTokenId(sourceChain, burned = {}) {
+function demonKingRarityLabelForTokenId(chainKey, tokenId, legacyLevel = 1) {
+  return collectionRarityLabelForTokenId('demonking', chainKey, tokenId, legacyLevel);
+}
+
+function bridgeSourceTokenId(sourceChain, burned = {}) {
   if (sourceChain === 'solana') return burned.asset || null;
   if (sourceChain === 'aptos') return burned.tokenIndex || burned.tokenAddress || null;
   return burned.tokenId || null;
 }
 
-function demonKingBridgeSourceRarity(collectionSlug, sourceChain, burned = {}) {
-  if (collectionSlug !== 'demonking') return null;
-  const sourceTokenId = demonKingBridgeSourceTokenId(sourceChain, burned);
-  return demonKingRarityForToken(sourceChain, {
+function demonKingBridgeSourceTokenId(sourceChain, burned = {}) {
+  return bridgeSourceTokenId(sourceChain, burned);
+}
+
+function collectionBridgeSourceRarity(collectionSlug, sourceChain, burned = {}) {
+  if (!collectionUsesRarity(collectionSlug)) return null;
+  const sourceTokenId = bridgeSourceTokenId(sourceChain, burned);
+  return collectionRarityForToken(collectionSlug, sourceChain, {
     tokenId: sourceTokenId,
     tokenAddress: burned.tokenAddress,
     tokenIndex: burned.tokenIndex,
@@ -159,7 +197,11 @@ function demonKingBridgeSourceRarity(collectionSlug, sourceChain, burned = {}) {
   });
 }
 
-function preserveDemonKingBridgeRarity({
+function demonKingBridgeSourceRarity(collectionSlug, sourceChain, burned = {}) {
+  return collectionBridgeSourceRarity(collectionSlug, sourceChain, burned);
+}
+
+function preserveBridgeRarity({
   collectionSlug,
   sourceChain,
   destChain,
@@ -169,15 +211,16 @@ function preserveDemonKingBridgeRarity({
   sourceRef = null,
   destTx = null,
 } = {}) {
-  if (collectionSlug !== 'demonking') return [];
-  const sourceTokenId = demonKingBridgeSourceTokenId(sourceChain, burned);
-  const sourceRarity = demonKingBridgeSourceRarity(collectionSlug, sourceChain, burned);
+  if (!collectionUsesRarity(collectionSlug)) return [];
+  const collectionKey = rarityCollectionDbKey(collectionSlug);
+  const sourceTokenId = bridgeSourceTokenId(sourceChain, burned);
+  const sourceRarity = collectionBridgeSourceRarity(collectionSlug, sourceChain, burned);
   if (!sourceRarity?.rarity) return [];
   const uniqueDestIds = [...new Set((destTokenIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
   const saved = [];
   for (const tokenId of uniqueDestIds) {
     const row = gameDb.upsertNftRarity?.({
-      collection: 'demon_king',
+      collection: collectionKey,
       chain: destChain,
       tokenId,
       rarity: sourceRarity.rarity,
@@ -196,6 +239,10 @@ function preserveDemonKingBridgeRarity({
     if (row) saved.push(row);
   }
   return saved;
+}
+
+function preserveDemonKingBridgeRarity(options = {}) {
+  return preserveBridgeRarity(options);
 }
 
 function aptosMintedEventFromTx(tx) {
@@ -250,12 +297,15 @@ function solanaRoyaltyPlugin(publicKey, deployment = {}) {
   };
 }
 
-function decorateDemonKingOwnedBody(body, chainKey) {
+function decorateOwnedNftRarityBody(body, chainKey, collectionSlug = 'demonking') {
+  if (!collectionUsesRarity(collectionSlug)) return body;
   if (!body || !Array.isArray(body.tokens)) return body;
+  const collectionKey = rarityCollectionDbKey(collectionSlug);
   return {
     ...body,
     tokens: body.tokens.map((token) => {
-      const rarity = demonKingRarityForToken(chainKey || token?.chain || body.chain, token);
+      const rarity = collectionRarityForToken(collectionSlug, chainKey || token?.chain || body.chain, token);
+      const tokenId = nftTokenId(token) || token?.imageUrl || collectionSlug;
       return {
         ...token,
         level: rarity.legacyLevel,
@@ -263,10 +313,16 @@ function decorateDemonKingOwnedBody(body, chainKey) {
         rarity: rarity.rarity,
         rarityLabel: rarity.rarityLabel,
         rarityRevealedAt: rarity.rarityRevealedAt,
-        imageUrl: nftLevelImageUrl(1, demonKingTokenId(token) || token?.imageUrl || 'demon-king'),
+        imageUrl: collectionKey === 'demon_king'
+          ? nftLevelImageUrl(1, tokenId)
+          : (token?.imageUrl || token?.img || token?.image || null),
       };
     }),
   };
+}
+
+function decorateDemonKingOwnedBody(body, chainKey) {
+  return decorateOwnedNftRarityBody(body, chainKey, 'demonking');
 }
 
 function demonKingDisplayIdFromText(value) {
@@ -2112,7 +2168,9 @@ function mountNftV3Endpoints(router, ctx) {
       } else {
         return res.status(400).json({ error: `${collection.label} is not configured on ${chainKey}` });
       }
-      if (collectionSlug === 'demonking') body = decorateDemonKingOwnedBody(body, chainKey);
+      if (collectionUsesRarity(collectionSlug)) {
+        body = decorateOwnedNftRarityBody(body, chainKey, collectionSlug);
+      }
       res.set('Cache-Control', 'public, max-age=10');
       return res.json(body);
     } catch (err) {
@@ -3421,8 +3479,13 @@ function mountNftV3Endpoints(router, ctx) {
           throw err;
         }
         try {
+          const sourceRarity = collectionBridgeSourceRarity(collectionSlug, sourceChain, burned);
           const mintRes = await mintSolanaAssetForBridge({
-            recipient: destAddress, level: burned.level, sourceRef, collection: collectionSlug,
+            recipient: destAddress,
+            level: burned.level,
+            sourceRef,
+            collection: collectionSlug,
+            rarityLabel: sourceRarity?.rarityLabel || null,
           });
           // Record dest tx + asset address for post-mortem.
           try {
@@ -3430,6 +3493,17 @@ function mountNftV3Endpoints(router, ctx) {
                                WHERE source_ref = ? AND dest_chain = 'solana'`)
               .run(`${mintRes.assetAddress}@${mintRes.txSig}`, sourceRef);
           } catch { /* best-effort */ }
+          const rarityRows = preserveBridgeRarity({
+            collectionSlug,
+            sourceChain,
+            destChain,
+            burned,
+            destTokenIds: [mintRes.assetAddress],
+            destOwner: destAddress,
+            sourceRef,
+            destTx: mintRes.txSig,
+          });
+          const rarityRow = rarityRows[0] || null;
           return res.json({
             collection: collectionSlug,
             mode: 'solana-mint',
@@ -3439,6 +3513,8 @@ function mountNftV3Endpoints(router, ctx) {
             destinationChainId: CHAIN_IDS.solana,
             recipient: destAddress,
             level: burned.level,
+            rarity: rarityRow?.rarity || null,
+            rarityLabel: rarityRow?.rarityLabel || null,
             assetAddress: mintRes.assetAddress,
             tokenAccount: mintRes.tokenAccount || null,
             standard: mintRes.standard || 'mpl-core',
@@ -3841,7 +3917,7 @@ function mountNftV3Endpoints(router, ctx) {
           });
           const rarityRow = rarityRows[0] || null;
           let rarityOnchainTxHash = null;
-          if (collectionSlug === 'demonking' && aptosDestTokenAddress && rarityRow?.rarityLabel) {
+          if (collectionUsesRarity(collectionSlug) && aptosDestTokenAddress && rarityRow?.rarityLabel) {
             try {
               const rarityTx = await aptos.transaction.build.simple({
                 sender: aptosAccount().accountAddress,
@@ -3879,7 +3955,7 @@ function mountNftV3Endpoints(router, ctx) {
 
         if (destChain === 'solana') {
           // Solana already had the relay pattern; just call its helper.
-          const sourceRarity = demonKingBridgeSourceRarity(collectionSlug, sourceChain, burned);
+          const sourceRarity = collectionBridgeSourceRarity(collectionSlug, sourceChain, burned);
           const mintRes = await mintSolanaAssetForBridge({
             recipient: destAddress,
             level: burned.level,
@@ -3991,22 +4067,23 @@ function mountNftV3Endpoints(router, ctx) {
           ? '/api/nft/solana/bridged'
           : `/api/nft/${collectionSlug}/solana/bridged`;
         const metadataUrl = new URL(metadataPath, `${(process.env.NFT_PUBLIC_BASE_URL || 'https://clashofperps.fun').replace(/\/+$/, '')}/`);
-        if (collectionSlug === 'demonking') {
+        if (collectionUsesRarity(collectionSlug)) {
           metadataUrl.searchParams.set('asset', asset.publicKey.toString());
         } else {
           metadataUrl.searchParams.set('level', String(normalizedLevel));
         }
         metadataUrl.searchParams.set('src', String(sourceRef || '').slice(0, 80));
-        const plugins = collectionSlug === 'demonking'
+        const plugins = collectionUsesRarity(collectionSlug)
           ? [
               {
                 type: 'Attributes',
                 attributeList: [
                   { key: 'Game', value: 'Clash of Perps' },
-                  { key: 'Character', value: 'Demon King' },
+                  { key: 'Character', value: collectionLabel },
                   { key: 'Chain', value: 'Solana' },
                   { key: 'Standard', value: 'Metaplex Core' },
-                  { key: 'Rarity', value: rarityLabel || demonKingRarityLabelForTokenId('solana', asset.publicKey.toString(), normalizedLevel) },
+                  { key: 'Rarity', value: rarityLabel || collectionRarityLabelForTokenId(collectionSlug, 'solana', asset.publicKey.toString(), normalizedLevel) },
+                  { key: 'SourceRef', value: String(sourceRef || '').slice(0, 120) },
                   { key: 'Max Supply', value: '333' },
                 ],
               },
@@ -4022,7 +4099,7 @@ function mountNftV3Endpoints(router, ctx) {
           asset,
           collection: collectionAccount,
           authority: umi.identity,
-          name: collectionSlug === 'demonking' ? collectionLabel : `${collectionLabel} L${normalizedLevel}`,
+          name: collectionUsesRarity(collectionSlug) ? collectionLabel : `${collectionLabel} L${normalizedLevel}`,
           uri: metadataUrl.toString(),
           owner: publicKey(recipient),
           plugins,

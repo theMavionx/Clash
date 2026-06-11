@@ -64,6 +64,24 @@ export const NFT_RARITY_LABELS = {
   legendary: 'Legendary',
 };
 
+const NFT_RARITY_CARD_COLORS = {
+  common: {
+    border: '#2F80ED',
+    glow: 'rgba(47, 128, 237, 0.28)',
+    shadow: 'rgba(47, 128, 237, 0.18)',
+  },
+  epic: {
+    border: '#8B5CF6',
+    glow: 'rgba(139, 92, 246, 0.3)',
+    shadow: 'rgba(139, 92, 246, 0.2)',
+  },
+  legendary: {
+    border: '#F2BE37',
+    glow: 'rgba(242, 190, 55, 0.38)',
+    shadow: 'rgba(168, 107, 26, 0.24)',
+  },
+};
+
 function normalizeNftLevel(level) {
   const n = Number(level);
   return [1, 2, 3].includes(n) ? n : 1;
@@ -78,22 +96,50 @@ function demonKingLegacyRarityFallback(level) {
   return normalizeNftLevel(level) > 1 ? 'legendary' : null;
 }
 
+function nftCollectionUsesRarity(collection = 'demonking') {
+  const slug = normalizeNftCollectionSlug(collection);
+  return slug === 'demonking' || slug === 'dragon';
+}
+
+function nftCollectionDbRarityKey(collection = 'demonking') {
+  return normalizeNftCollectionSlug(collection) === 'demonking' ? 'demon_king' : normalizeNftCollectionSlug(collection);
+}
+
 export function nftRarityLabel(rarity, legacyLevel = 1) {
   const key = normalizeNftRarity(rarity) || demonKingLegacyRarityFallback(legacyLevel);
   return key ? NFT_RARITY_LABELS[key] : 'Unrevealed';
 }
 
-function normalizeDemonKingTokenRarity(token) {
+export function nftRarityCardStyle(rarity, legacyLevel = 1, options = {}) {
+  const key = normalizeNftRarity(rarity) || demonKingLegacyRarityFallback(legacyLevel);
+  const colors = key ? NFT_RARITY_CARD_COLORS[key] : null;
+  if (!colors) return {};
+  const active = !!options.active;
+  return {
+    border: `2px solid ${colors.border}`,
+    boxShadow: active
+      ? `0 0 0 2px ${colors.glow}, 0 3px 10px ${colors.shadow}, inset 0 0 0 1px rgba(255,255,255,0.45)`
+      : `0 0 0 2px ${colors.glow}, 0 2px 7px ${colors.shadow}`,
+  };
+}
+
+function normalizeCollectionTokenRarity(token, collection = 'demonking') {
   if (!token || typeof token !== 'object') return token;
+  const collectionSlug = normalizeNftCollectionSlug(collection);
   const legacyLevel = normalizeNftLevel(token.legacyLevel ?? token.legacy_level ?? token.level);
-  const rarity = normalizeNftRarity(token.rarity) || demonKingLegacyRarityFallback(legacyLevel);
+  const rarity = normalizeNftRarity(token.rarity)
+    || (collectionSlug === 'demonking' ? demonKingLegacyRarityFallback(legacyLevel) : null);
   return {
     ...token,
-    level: legacyLevel,
+    level: collectionSlug === 'demonking' ? legacyLevel : 1,
     legacyLevel,
     rarity,
     rarityLabel: rarity ? NFT_RARITY_LABELS[rarity] : 'Unrevealed',
   };
+}
+
+function normalizeDemonKingTokenRarity(token) {
+  return normalizeCollectionTokenRarity(token, 'demonking');
 }
 
 export function normalizeNftCollectionSlug(value) {
@@ -157,7 +203,7 @@ function normalizeNftPayloadImages(payload, collection = null) {
           ...token,
           imageUrl: normalizeNftImageUrl(token?.imageUrl, token?.level, token?.tokenId || token?.id || token?.asset || token?.mint, collectionSlug),
         };
-        return collectionSlug === 'demonking' ? normalizeDemonKingTokenRarity(normalized) : normalized;
+        return nftCollectionUsesRarity(collectionSlug) ? normalizeCollectionTokenRarity(normalized, collectionSlug) : normalized;
       })
     : payload.tokens;
   return { ...payload, tokens };
@@ -173,9 +219,9 @@ export async function fetchNftRarities({ collection = 'demonking', chain, tokenI
   const ids = [...new Set((Array.isArray(tokenIds) ? tokenIds : String(tokenIds || '').split(','))
     .map((id) => String(id || '').trim())
     .filter(Boolean))].slice(0, 500);
-  if (collectionSlug !== 'demonking' || !chainKey || !ids.length) return {};
+  if (!nftCollectionUsesRarity(collectionSlug) || !chainKey || !ids.length) return {};
   const params = new URLSearchParams({
-    collection: 'demon_king',
+    collection: nftCollectionDbRarityKey(collectionSlug),
     chain: chainKey,
     ids: ids.join(','),
   });
@@ -201,7 +247,7 @@ export async function fetchNftRarities({ collection = 'demonking', chain, tokenI
 
 async function enrichDemonKingRarities(payload, collection = 'demonking', signal) {
   const collectionSlug = normalizeNftCollectionSlug(collection || payload?.collection);
-  if (collectionSlug !== 'demonking' || !payload || !Array.isArray(payload.tokens) || !payload.tokens.length) {
+  if (!nftCollectionUsesRarity(collectionSlug) || !payload || !Array.isArray(payload.tokens) || !payload.tokens.length) {
     return normalizeNftPayloadImages(payload, collectionSlug);
   }
   const normalized = normalizeNftPayloadImages(payload, collectionSlug);
@@ -217,14 +263,14 @@ async function enrichDemonKingRarities(payload, collection = 'demonking', signal
       tokens: tokens.map((token) => {
         const id = nftTokenLookupId(token);
         const rarityRow = id ? rarities[id] : null;
-        return normalizeDemonKingTokenRarity({
+        return normalizeCollectionTokenRarity({
           ...token,
           ...(rarityRow ? {
             rarity: rarityRow.rarity,
             rarityLabel: rarityRow.rarityLabel,
             rarityRevealedAt: rarityRow.revealedAt || rarityRow.revealed_at || null,
           } : {}),
-        });
+        }, collectionSlug);
       }),
     };
   } catch {

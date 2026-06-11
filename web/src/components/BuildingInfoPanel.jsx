@@ -5,7 +5,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftLevelImageUrl, nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftLevelImageUrl, nftRarityCardStyle, nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -1186,6 +1186,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
           {!loading && availableTokens.map((token) => {
             const entry = nftBackedShipEntry(base, token);
             const tokenLabel = demonKingDisplayLabel(token, tokens);
+            const usesRarity = base === 'DemonKing' || base === 'FireDragon';
+            const rarityStyle = usesRarity
+              ? nftRarityCardStyle(token.rarity, base === 'DemonKing' ? (token.level || 1) : 1)
+              : {};
             const disabled = swapSlot === null
               ? shipTroops.length + 2 > capacity
               : !troopSwapPlacement(shipTroops, swapSlot, entry, capacity);
@@ -1194,7 +1198,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 key={entry}
                 type="button"
                 disabled={disabled}
-                style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, ...(disabled ? { opacity: 0.45, cursor: 'not-allowed' } : null)}}
+                style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0, ...(disabled ? { opacity: 0.45, cursor: 'not-allowed' } : null)}}
                 onClick={() => {
                   if (!disabled) handleLoadTroop(entry);
                 }}
@@ -1206,7 +1210,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   {useRatio}
                 </div>
                 <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>
-                  {base === 'DemonKing' ? nftRarityLabel(token.rarity, token.level || 1) : `Lvl ${token.level || 1}`}
+                  {usesRarity ? nftRarityLabel(token.rarity, base === 'DemonKing' ? (token.level || 1) : 1) : `Lvl ${token.level || 1}`}
                 </div>
                 <div style={LT.troopImgWrap}>
                   <img src={image} alt={cfg.label} style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP[base]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[base]?.offsetY || '0%'})` }} />
@@ -1399,6 +1403,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
             {!demonKingNftLoading && availableDemonNfts.map((token) => {
               const entry = demonKingShipEntry(token);
               const demonTokenLabel = demonKingDisplayLabel(token, demonKingNfts);
+              const rarityStyle = nftRarityCardStyle(token.rarity, token.level || 1);
               const disabled = swapSlot === null
                 ? shipTroops.length + 2 > capacity
                 : (() => {
@@ -1409,7 +1414,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   key={entry}
                   type="button"
                   disabled={disabled}
-                  style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, ...(disabled ? { opacity: 0.45, cursor: 'not-allowed' } : null)}}
+                  style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0, ...(disabled ? { opacity: 0.45, cursor: 'not-allowed' } : null)}}
                   onClick={() => {
                     if (!disabled) handleLoadTroop(entry);
                   }}

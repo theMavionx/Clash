@@ -3836,15 +3836,22 @@ function normalizeNftRarity(value) {
   return Object.prototype.hasOwnProperty.call(NFT_RARITY_LABELS, text) ? text : null;
 }
 
+function collectionSupportsRarity(collection) {
+  const key = normalizePlayerNftCollection(collection);
+  return key === 'demon_king' || key === 'dragon';
+}
+
 function demonKingLegacyRarityFallback(level) {
   return normalizeDemonKingNftLevel(level) > 1 ? 'legendary' : null;
 }
 
-function normalizeRarityRow(row, fallbackLevel = 1) {
-  const rarity = normalizeNftRarity(row?.rarity) || demonKingLegacyRarityFallback(fallbackLevel);
+function normalizeRarityRow(row, fallbackLevel = 1, fallbackCollection = 'demon_king') {
+  const collection = normalizePlayerNftCollection(row?.collection || fallbackCollection);
+  const rarity = normalizeNftRarity(row?.rarity)
+    || (collection === 'demon_king' ? demonKingLegacyRarityFallback(fallbackLevel) : null);
   if (!rarity) return null;
   return {
-    collection: normalizePlayerNftCollection(row?.collection || 'demon_king'),
+    collection,
     chain: String(row?.chain || '').toLowerCase(),
     tokenId: String(row?.token_id ?? row?.tokenId ?? ''),
     rarity,
@@ -3911,8 +3918,8 @@ function normalizeCollectionNftRow(row) {
   if (!row) return null;
   const collection = normalizePlayerNftCollection(row.collection);
   const level = normalizeDemonKingNftLevel(row.level);
-  const rarity = collection === 'demon_king'
-    ? (normalizeNftRarity(row.rarity) || demonKingLegacyRarityFallback(level))
+  const rarity = collectionSupportsRarity(collection)
+    ? (normalizeNftRarity(row.rarity) || (collection === 'demon_king' ? demonKingLegacyRarityFallback(level) : null))
     : null;
   return {
     playerId: row.player_id,
@@ -3922,7 +3929,7 @@ function normalizeCollectionNftRow(row) {
     wallet: row.wallet || '',
     level,
     legacyLevel: level,
-    ...(collection === 'demon_king' ? {
+    ...(collectionSupportsRarity(collection) ? {
       rarity,
       rarityLabel: rarity ? NFT_RARITY_LABELS[rarity] : 'Unrevealed',
       rarityRevealedAt: row.rarity_revealed_at || null,
@@ -4148,7 +4155,16 @@ function getNftRarity(collection = 'demon_king', chain, tokenId, options = {}) {
   const tokenText = String(tokenId ?? '').trim();
   if (!collectionKey || !chainKey || !tokenText) return null;
   const row = stmts.getNftRarity.get(collectionKey, chainKey, tokenText);
-  return normalizeRarityRow(row, options.legacyLevel);
+  if (!row) {
+    if (collectionKey !== 'demon_king') return null;
+    return normalizeRarityRow({
+      collection: collectionKey,
+      chain: chainKey,
+      token_id: tokenText,
+      legacy_level: options.legacyLevel,
+    }, options.legacyLevel, collectionKey);
+  }
+  return normalizeRarityRow(row, options.legacyLevel, collectionKey);
 }
 
 function listNftRarities(collection = 'demon_king', chain, tokenIds = [], options = {}) {
@@ -4169,7 +4185,7 @@ function listNftRarities(collection = 'demon_king', chain, tokenIds = [], option
   `).all(collectionKey, chainKey, ...uniqueIds);
   const byId = {};
   for (const row of rows) {
-    const normalized = normalizeRarityRow(row);
+    const normalized = normalizeRarityRow(row, options.legacyLevels?.[row.token_id], collectionKey);
     if (normalized?.tokenId) byId[normalized.tokenId] = normalized;
   }
   if (collectionKey === 'demon_king' && options.legacyLevels && typeof options.legacyLevels === 'object') {
@@ -5921,6 +5937,7 @@ module.exports = {
   markDemonKingNftWalletChecked,
   NFT_RARITY_LABELS,
   normalizeNftRarity,
+  collectionSupportsRarity,
   getNftRarity,
   listNftRarities,
   upsertNftRarity,

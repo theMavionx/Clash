@@ -22,6 +22,11 @@ import {
   solanaRpcFallbackUrls,
   solanaRpcHost,
 } from '../lib/solanaRpc';
+import {
+  buildSolanaWalletTxOptions,
+  isSolanaMobileWalletAdapter,
+  solanaWalletAdapterName as mobileSolanaWalletAdapterName,
+} from '../lib/solanaSeekerTx';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -1317,6 +1322,7 @@ export function useFlash() {
     const rpc = connectionRpcDiagnostics(txConnection);
     const requiredSigners = txRequiredSignerKeys(tx);
     const oneTapSession = meta?.oneTap ? await getActiveOneTapSession() : null;
+    const mobileWalletAdapter = !oneTapSession && isSolanaMobileWalletAdapter(solWallet);
     if (meta?.oneTap && !oneTapSession) {
       throw new Error('Flash one tap session expired or was removed. Enable Flash one tap again before trading.');
     }
@@ -1331,8 +1337,54 @@ export function useFlash() {
       magic_router: magicRouter,
       required_signers: requiredSigners,
       one_tap: !!oneTapSession,
+      mobile_wallet_adapter: !!mobileWalletAdapter,
+      wallet_adapter: mobileWalletAdapter ? mobileSolanaWalletAdapterName(solWallet) : solWalletAdapterName(solWallet),
     });
     const skipPreflight = magicRouter || shouldSkipFlashLocalSimulation(meta);
+    if (mobileWalletAdapter) {
+      const ownerSigner = solWallet.publicKey.toBase58();
+      const foreignSigner = requiredSigners.find(key => key !== ownerSigner);
+      if (foreignSigner) {
+        throw new Error(`Flash mobile wallet transaction requires an unexpected signer: ${foreignSigner}`);
+      }
+      const walletTxOptions = buildSolanaWalletTxOptions({
+        solWallet,
+        owner: ownerSigner,
+        label: `flash.${String(meta?.endpoint || meta?.builder || 'tx').replace(/^\/+/, '').replace(/[^a-z0-9_.-]+/gi, '_')}`,
+        venueLabel: 'Flash',
+        forceMobileVersionedTransaction: false,
+      });
+      if (!walletTxOptions?.sendTransaction) {
+        throw new Error('This Seeker wallet cannot send Flash transactions.');
+      }
+      const mobileSkipPreflight = magicRouter ? true : false;
+      console.info('[Flash tx] mobile wallet send start', {
+        tx: txMessageSummary(tx),
+        rpc,
+        wallet_path: walletTxOptions.walletPathOverride || 'mwa_sign_and_send',
+        wallet_adapter: walletTxOptions.adapterName,
+        skip_preflight: mobileSkipPreflight,
+        magic_router: magicRouter,
+        required_signers: requiredSigners,
+      });
+      const signature = await flashTimeout(
+        walletTxOptions.sendTransaction(tx, txConnection, {
+          skipPreflight: mobileSkipPreflight,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        }),
+        60_000,
+        'Flash Seeker wallet transaction timed out. Reopen the wallet prompt and try again.',
+      );
+      console.info('[Flash tx] mobile wallet send done', {
+        signature,
+        rpc,
+        wallet_path: walletTxOptions.walletPathOverride || 'mwa_sign_and_send',
+        magic_router: magicRouter,
+      });
+      await confirmSignature(signature, txConnection, { preferBackend: false, acceptProcessed: magicRouter || isFlashTradingTx(meta) });
+      return signature;
+    }
     let signed = tx;
     if (oneTapSession) {
       const sessionSigner = publicKeyText(oneTapSession.publicKey);

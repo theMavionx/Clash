@@ -5,7 +5,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftRarityCardStyle, nftRarityLabel, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -548,6 +548,7 @@ function BarnPanel({ building, onClose }) {
   );
   const isNftBackedTroop = !!currentNftTroop;
   const isDemonKingNftTroop = currentNftTroop?.collection === 'demonking' || currentNftTroop?.collection === 'demon_king';
+  const isRarityNftTroop = isDemonKingNftTroop || currentNftTroop?.collection === 'dragon';
   const selectedDemonNft = isNftBackedTroop
     ? demonKingNfts.find((token) => nftBackedShipEntry(currentTroopName, token) === selectedDemonKey) || demonKingNfts[0] || null
     : null;
@@ -705,14 +706,17 @@ function BarnPanel({ building, onClose }) {
                       const key = nftBackedShipEntry(currentTroopName, token);
                       const active = key === (selectedDemonKey || nftBackedShipEntry(currentTroopName, selectedDemonNft));
                       const tokenLabel = demonKingDisplayLabel(token, demonKingNfts);
+                      const rarityCardStyle = isRarityNftTroop
+                        ? nftRarityCardStyle(token.rarity, isDemonKingNftTroop ? (token.level || 1) : 1, { active })
+                        : {};
                       return (
                         <button
                           key={key}
                           type="button"
                           onClick={() => setSelectedDemonKey(key)}
-                          style={{...styles.demonTokenBtn, ...(active ? styles.demonTokenBtnActive : null)}}
+                          style={{...styles.demonTokenBtn, ...(active ? styles.demonTokenBtnActive : null), ...rarityCardStyle}}
                         >
-                          <span>{isDemonKingNftTroop ? nftRarityLabel(token.rarity, token.level || 1) : `Lv ${token.level || 1}`}</span>
+                          <span>{isRarityNftTroop ? nftRarityLabel(token.rarity, isDemonKingNftTroop ? (token.level || 1) : 1) : `Lv ${token.level || 1}`}</span>
                           <span>{tokenLabel}</span>
                         </button>
                       );

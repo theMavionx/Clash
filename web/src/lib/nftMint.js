@@ -60,12 +60,12 @@ export async function reserveNftMint({ collection = NFT_SALE_COLLECTION, chain, 
   return json;
 }
 
-export async function confirmNftMint({ collection = NFT_SALE_COLLECTION, chain, reservationId, tx, quantity = 1 }) {
+export async function confirmNftMint({ collection = NFT_SALE_COLLECTION, chain, reservationId, tx, quantity = 1, tokenIds = [], asset = null }) {
   if (!reservationId) return null;
   const response = await fetch(`${nftCollectionPath(collection)}/mint/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chain, reservationId, tx, quantity }),
+    body: JSON.stringify({ chain, reservationId, tx, quantity, tokenIds, asset }),
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(json?.error || `NFT confirm failed (${response.status})`);
@@ -430,6 +430,7 @@ export async function mintSolanaNft({ solWallet, config, payment, collection = N
     reservationId: reservation.reservationId,
     tx,
     quantity: 1,
+    asset: assetAddress,
   }).catch((err) => console.warn('[nft] mint confirm failed', err?.message || err));
   return {
     tx,
