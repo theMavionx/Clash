@@ -9402,6 +9402,15 @@ router.post('/players/login-wallet', (req, res) => {
     : null;
   if (!player) player = getUnifiedPlayerByWalletAnyForm(wallet);
   if (!player) return res.status(404).json({ error: 'No Clash account found for this wallet' });
+  if (req.body?.probeOnly === true) {
+    return res.json({
+      success: true,
+      id: player.id,
+      name: player.name,
+      wallet: player.wallet,
+      dex: player.dex,
+    });
+  }
   if (VALID_DEXES.has(dex) && dex !== player.dex) {
     try {
       safelySetPlayerActiveDex(player, dex, wallet, 'login-wallet');

@@ -1126,6 +1126,46 @@ function decodeTradeEventsLocally(events) {
   return decoded;
 }
 
+function decodeTradeEventsFromInnerInstructions(tx, accountKeys = []) {
+  const decoded = [];
+  const seen = new Set();
+  const innerRows = tx?.meta?.innerInstructions || [];
+  const offsets = [GMTRADE_TRADE_EVENT_DISCRIMINATOR_BYTES, 16, 0];
+  for (const row of innerRows) {
+    for (const ix of row?.instructions || []) {
+      const programId = String(accountKeys[Number(ix?.programIdIndex)] || '');
+      if (!GMTRADE_PROGRAM_IDS.includes(programId) || typeof bs58Decode !== 'function') continue;
+      let buf;
+      try {
+        buf = Buffer.from(bs58Decode(String(ix.data || '').trim()));
+      } catch {
+        continue;
+      }
+      if (buf.length < GMTRADE_TRADE_EVENT_MIN_SIZE) continue;
+      for (const offset of offsets) {
+        try {
+          const event = decodeGmtradeTradeEventBuffer(buf, offset);
+          const size = Number(event?.size_delta_usd || 0);
+          const slotOk = Number(event?.slot || 0) === Number(tx?.slot || 0);
+          if (!slotOk || event.store !== GMTRADE_STORE_ADDRESS || !isSolanaAddress(event.user) || !(size > 0 && size <= 10_000_000)) {
+            continue;
+          }
+          const key = `${event.trade_id}:${event.user}:${event.order}:${event.position}:${event.size_delta_raw}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          decoded.push({
+            ...event,
+            decoder: 'node_layout_gmsol_inner_trade_event',
+          });
+        } catch {
+          // Inner instructions include many CPI payloads. Only TradeEvent layouts pass validation above.
+        }
+      }
+    }
+  }
+  return decoded;
+}
+
 async function gmsolSdk() {
   if (!sdkPromise) {
     if (typeof globalThis.module?.require !== 'function' && typeof module?.require === 'function') {
@@ -2541,6 +2581,10 @@ async function verifySolanaSignature({ signature, wallet }) {
       console.warn('[gmtrade] trade event decode failed:', e.message);
     }
   }
+  const innerTradeEvents = decodeTradeEventsFromInnerInstructions(tx, accountKeys);
+  if (innerTradeEvents.length) {
+    tradeEvents = tradeEvents.concat(innerTradeEvents);
+  }
   const walletEvents = tradeEvents.filter(ev => String(ev?.user || '') === wallet);
   return {
     slot: tx.slot,
@@ -2677,7 +2721,10 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
     throw Object.assign(new Error('GMTrade verified notional out of range'), { status: 400 });
   }
   const symbol = baseSymbol(body.symbol || createOrderEvent?.symbol || 'GM') || 'GM';
-  const side = tradeEvent?.side || createOrderEvent?.side || (isCloseReport ? requestedSide : verifiedPosition?.side_label) || requestedSide;
+  const eventSide = tradeEvent
+    ? (tradeEvent.is_increase === false ? `close_${tradeEvent.side}` : tradeEvent.side)
+    : '';
+  const side = eventSide || createOrderEvent?.side || (isCloseReport ? requestedSide : verifiedPosition?.side_label) || requestedSide;
   const price = Number(body.price) > 0 ? String(body.price) : String(notional);
   const result = db.addTrade(playerId, {
     symbol,
@@ -2884,6 +2931,7 @@ module.exports = {
   referralUrl,
   _internal: {
     decodeGmtradeCreateOrderV2Instruction,
+    decodeTradeEventsFromInnerInstructions,
     decodeGmtradeTradeEvent,
     decodeGmtradeTradeEventBuffer,
     decodeTradeEventsLocally,

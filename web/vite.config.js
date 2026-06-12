@@ -354,7 +354,17 @@ export default defineConfig({
         },
         rewrite: (path) => path.replace(/^\/perpl-ws/, '/ws/v1'),
       },
-      '/api': API_PROXY_TARGET || 'http://127.0.0.1:4000',
+      '/api': {
+        target: API_PROXY_TARGET || 'http://127.0.0.1:4000',
+        changeOrigin: true,
+        proxyTimeout: 30000,
+        timeout: 30000,
+        configure: (proxy) => {
+          proxy.on('error', (err, req) => {
+            console.warn('[vite proxy] /api failed', req?.url, err?.message || err);
+          });
+        },
+      },
       '/ws': {
         target: WS_PROXY_TARGET || 'ws://127.0.0.1:4000',
         ws: true,

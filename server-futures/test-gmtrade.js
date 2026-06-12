@@ -12,7 +12,7 @@ process.env.GMTRADE_EXECUTION_LAMPORTS = '0';
 process.env.GMTRADE_ORDER_SOL_BUFFER_LAMPORTS = '0';
 
 const assert = require('assert');
-const { Keypair, Transaction, VersionedTransaction } = require('@solana/web3.js');
+const { Keypair, PublicKey, Transaction, VersionedTransaction } = require('@solana/web3.js');
 const bs58 = require('bs58');
 const gmtrade = require('./gmtrade');
 const bs58Encode = bs58.encode || bs58.default.encode;
@@ -85,6 +85,35 @@ async function main() {
   assert.equal(order.margin_usd, 90);
   assert.equal(order.size_delta_usd, 1800);
 
+  const innerOffset = 16;
+  const innerBuf = Buffer.alloc(innerOffset + 256 + positionSize * 2);
+  innerBuf.writeUInt8(1, innerOffset);
+  innerBuf.writeBigUInt64LE(130910n, innerOffset + 8);
+  new PublicKey('CTDLvGGXnoxvqLyTpGzdGLg9pD6JexKxKXSV8tqqo8bN').toBuffer().copy(innerBuf, innerOffset + 48);
+  Keypair.generate().publicKey.toBuffer().copy(innerBuf, innerOffset + 80);
+  new PublicKey('9HqCqKxVa8BiZeqZJRadCMizue3DBctmEjUjqA1veTKs').toBuffer().copy(innerBuf, innerOffset + 112);
+  Keypair.generate().publicKey.toBuffer().copy(innerBuf, innerOffset + 144);
+  Keypair.generate().publicKey.toBuffer().copy(innerBuf, innerOffset + 176);
+  innerBuf.writeBigInt64LE(1781278534n, innerOffset + 240);
+  innerBuf.writeBigUInt64LE(426009503n, innerOffset + 248);
+  writeU128Le(innerBuf, innerOffset + 256 + 64, 3600n * 10n ** 20n);
+  writeU128Le(innerBuf, innerOffset + 256 + positionSize + 64, 0n);
+  const innerEvents = gmtrade._internal.decodeTradeEventsFromInnerInstructions({
+    slot: 426009503,
+    meta: {
+      innerInstructions: [{
+        instructions: [{
+          programIdIndex: 1,
+          data: bs58Encode(innerBuf),
+        }],
+      }],
+    },
+  }, ['11111111111111111111111111111111', 'Gmso1uvJnLbawvw7yezdfCDcPydwW2s2iqG3w6MDucLo']);
+  assert.equal(innerEvents.length, 1);
+  assert.equal(innerEvents[0].user, '9HqCqKxVa8BiZeqZJRadCMizue3DBctmEjUjqA1veTKs');
+  assert.equal(innerEvents[0].is_increase, false);
+  assert.equal(innerEvents[0].size_delta_usd, 3600);
+
   const built = await gmtrade.buildCreateOrderTx({
     wallet: '1111111QLbz7JHiBTspS962RLKV8GndWFwiEaqKM',
     symbol: 'SOL',
@@ -106,6 +135,7 @@ async function main() {
     decoder: event.decoder,
     event_delta_usd: event.size_delta_usd,
     create_order_delta_usd: order.size_delta_usd,
+    inner_event_delta_usd: innerEvents[0].size_delta_usd,
     builder: built.builder,
     tx_kind: decoded.kind,
     tx_count: built.transactions.length,

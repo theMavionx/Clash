@@ -596,7 +596,7 @@ export function useAuthFlow() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: ctrl.signal,
-          body: JSON.stringify({ wallet: candidate.wallet, dex }),
+          body: JSON.stringify({ wallet: candidate.wallet, dex, probeOnly: true }),
         });
         if (r.ok) {
           const data = await r.json();
@@ -712,7 +712,11 @@ export function useAuthFlow() {
   // name form and then straight back out.
   const probeInFlight = candidate?.wallet && !isFarcasterCandidate &&
     existingAccountName === undefined;
-  const probeBlockingUi = probeInFlight && !probeWaitExpired;
+  // Do not fall through to the nickname form while the wallet-account probe
+  // is still unknown. The timeout is useful for diagnostics, but it is not
+  // proof that this is a new account; returning users were seeing `need_name`
+  // while `/api/players/login-wallet` was still resolving or retrying.
+  const probeBlockingUi = !!probeInFlight;
   const authDebug = useMemo(() => ({
     dex,
     dexPicked,
