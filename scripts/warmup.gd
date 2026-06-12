@@ -22,8 +22,8 @@ extends Node3D
 ## must keep the real effect alive long enough for particles/material variants
 ## to compile before the first attack starts.
 const HOME_WARMUP_FRAMES: int = 4
-const COMBAT_WARMUP_FRAMES: int = 160
-const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [8, 48, 88, 128]
+const COMBAT_WARMUP_FRAMES: int = 80
+const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [8, 48]
 ## Sub-pixel scales (< ~0.005) are frustum-culled by both renderers — the draw
 ## call never reaches the GPU and the pipeline isn't compiled. 0.02 is small
 ## enough to be invisible against the water/sky but big enough to rasterize.
