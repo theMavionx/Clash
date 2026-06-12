@@ -11,8 +11,10 @@ export const TOKEN_COLORS = {
   SKR: '#3B82F6',
   GOLD: '#FFD700', SILVER: '#C0C0C0', XAU: '#FFD700', XAG: '#C0C0C0',
   CL: '#1a1a1a', WTI: '#1a1a1a', BRENT: '#1a1a1a', USOILSPOT: '#1a1a1a',
+  CRUDEOIL: '#1a1a1a',
   NATGAS: '#4CAF50', EUR: '#2E7DFF', GBP: '#7A4CE0', JPY: '#D64242',
   AUD: '#169B62', NZD: '#0062A8', CAD: '#D52B1E', CHF: '#D52B1E',
+  USA100: '#2563EB', USA500: '#0F766E', XPT: '#C0C0C0', XPD: '#9CA3AF',
 };
 
 export const STOCK_SYMBOLS = new Set([
@@ -21,7 +23,8 @@ export const STOCK_SYMBOLS = new Set([
   'PLTR', 'SMCI', 'GME', 'BA', 'WMT', 'MCD', 'SBUX', 'BABA', 'KO', 'PEP',
   'JPM', 'BAC', 'GS', 'WFC', 'V', 'MA', 'CRCL', 'AVNT',
   'AVGO', 'BRKB', 'BZ', 'CRWV', 'CSCO', 'EWJ', 'EWY', 'FLNC', 'HD', 'H',
-  'MRVL', 'MU', 'PAYP', 'QCOM', 'RKLB', 'SNDK', 'SOXL', 'TSM', 'UBER',
+  'INTC', 'IREN', 'IWM', 'LLY', 'MRVL', 'MU', 'PAYP', 'QCOM', 'RKLB', 'SNDK',
+  'SOXL', 'TSM', 'TXN', 'UBER',
 ]);
 
 export const COMMODITY_SYMBOLS = new Set([
@@ -60,11 +63,16 @@ const LOCAL_ALIASES = {
   // Texas Intermediate, also our `BRENT` and `WTI` fallback) reads as
   // "this is an oil market" without ambiguity.
   BRENTOIL: ['BRENT', 'WTI', 'CL'],
+  CRUDEOIL: ['WTI', 'CL'],
   USOILSPOT: ['CL'],
+  USA100: ['QQQ'],
+  USA500: ['SP500', 'SPY'],
   GOLD: ['XAU'],
   SILVER: ['XAG'],
   XAU: ['GOLD'],
   XAG: ['SILVER'],
+  XPT: ['PLATINUM'],
+  XPD: ['PLATINUM'],
   // Pacifica-specific quote-suffixed perp; share the base SOL icon.
   SOLUSDC: ['SOL'],
 };
