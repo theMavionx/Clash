@@ -580,7 +580,7 @@ async function fetchWalletTrades(player, opts = {}) {
 //   - pacifica_agents (append-only, capped at 10 by /pacifica/agent).
 const PACIFICA_PAGE_LIMIT = 200;
 const PACIFICA_MAX_PAGES = 8;
-const PACIFICA_FETCH_FANOUT_CAP = 6; // master + up to 5 agents
+const PACIFICA_FETCH_FANOUT_CAP = Math.max(2, Number(process.env.PACIFICA_FETCH_FANOUT_CAP || 11)); // master + capped historical agents
 const PACIFICA_BUILDER_CODE = process.env.PACIFICA_BUILDER_CODE || 'clashofperps';
 const PACIFICA_FETCH_MIN_INTERVAL_MS = Math.max(100, Number(process.env.PACIFICA_FETCH_MIN_INTERVAL_MS || 900));
 const PACIFICA_RATE_LIMIT_COOLDOWN_MS = Math.max(5_000, Number(process.env.PACIFICA_RATE_LIMIT_COOLDOWN_MS || 60_000));

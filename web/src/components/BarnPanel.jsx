@@ -5,7 +5,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -76,35 +76,6 @@ const RES_ICONS = {
 };
 
 const stopPropagation = (e) => e.stopPropagation();
-
-function isEvmWalletAddress(value) {
-  return /^0x[0-9a-fA-F]{40}$/.test(String(value || '').trim());
-}
-
-function isSolanaWalletAddress(value) {
-  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || '').trim());
-}
-
-function isAptosWalletAddress(value) {
-  const text = String(value || '').trim();
-  return /^0x[0-9a-fA-F]{1,64}$/.test(text) && !isEvmWalletAddress(text);
-}
-
-function linkedDemonKingWalletHints(playerState) {
-  const hints = { evmAddress: null, solAddress: null, aptosAddress: null };
-  const candidates = [
-    playerState?.wallet,
-    playerState?.nft_gold_boost_wallet,
-  ];
-  for (const raw of candidates) {
-    const wallet = String(raw || '').trim();
-    if (!wallet) continue;
-    if (!hints.evmAddress && isEvmWalletAddress(wallet)) hints.evmAddress = wallet;
-    else if (!hints.solAddress && isSolanaWalletAddress(wallet)) hints.solAddress = wallet;
-    else if (!hints.aptosAddress && isAptosWalletAddress(wallet)) hints.aptosAddress = wallet;
-  }
-  return hints;
-}
 
 function demonKingShipEntry(token) {
   if (!token) return 'DemonKing';
@@ -396,15 +367,12 @@ function BarnPanel({ building, onClose }) {
     || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
-  const linkedWalletHints = useMemo(
-    () => linkedDemonKingWalletHints(playerState),
-    [playerState?.wallet, playerState?.nft_gold_boost_wallet],
-  );
-  const demonKingSyncTarget = useMemo(() => resolveDemonKingInventorySyncTarget({
-    evmAddress: linkedWalletHints.evmAddress || evmAddress,
-    solAddress: linkedWalletHints.solAddress || solAddress,
-    aptosAddress: linkedWalletHints.aptosAddress || aptosAddress,
-  }), [aptosAddress, evmAddress, linkedWalletHints, solAddress]);
+  const demonKingSyncTarget = useMemo(() => resolveDemonKingPlayerInventorySyncTarget({
+    player: playerState,
+    evmAddress,
+    solAddress,
+    aptosAddress,
+  }), [aptosAddress, evmAddress, playerState, solAddress]);
   const hasDemonKingWallet = !!demonKingSyncTarget;
 
   const [currentIndex, setCurrentIndex] = useState(0);

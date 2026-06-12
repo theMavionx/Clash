@@ -262,6 +262,23 @@ function QuestsTab({ markets = [] }) {
     if (!token) { setError('Not signed in yet — try again in a moment.'); return; }
     setLoading(true); setError(null);
     try {
+      const refreshResources = async () => {
+        try {
+          const rr = await fetch(`${GAME_API}/resources`, { headers: { 'x-token': token } });
+          if (!rr.ok) return;
+          const resources = await rr.json();
+          const nextResources = {
+            gold: Number(resources.gold || 0),
+            wood: Number(resources.wood || 0),
+            ore: Number(resources.ore || 0),
+          };
+          window.onGodotMessage?.({
+            action: 'resources',
+            data: nextResources,
+          });
+          window.godotBridge?.(JSON.stringify({ action: 'set_resources', data: nextResources }));
+        } catch {}
+      };
       const r = await fetch(`${GAME_API}/tasks/${id}/claim`, {
         method: 'POST',
         headers: { 'x-token': token, 'Content-Type': 'application/json' },
@@ -275,23 +292,8 @@ function QuestsTab({ markets = [] }) {
         };
         if (reward.gold || reward.wood || reward.ore) {
           window.onGodotMessage?.({ action: 'resources_add', data: reward });
-          fetch(`${GAME_API}/resources`, { headers: { 'x-token': token } })
-            .then(rr => rr.ok ? rr.json() : null)
-            .then(resources => {
-              if (!resources) return;
-              const nextResources = {
-                gold: Number(resources.gold || 0),
-                wood: Number(resources.wood || 0),
-                ore: Number(resources.ore || 0),
-              };
-              window.onGodotMessage?.({
-                action: 'resources',
-                data: nextResources,
-              });
-              window.godotBridge?.(JSON.stringify({ action: 'set_resources', data: nextResources }));
-            })
-            .catch(() => {});
         }
+        await refreshResources();
         if (reward.gold > 0) {
           setFlash({
             amount: reward.gold,

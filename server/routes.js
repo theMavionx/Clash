@@ -12947,7 +12947,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
 
 async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
@@ -13127,6 +13127,16 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   const claimCheck = tasks.canClaim(pt, task);
   if (!claimCheck.ok) {
     recordTaskTelemetry('blocked', { errorReason: claimCheck.reason });
+    if (claimCheck.reason === 'Already claimed') {
+      return res.json({
+        ok: true,
+        completed: true,
+        already_claimed: true,
+        reward: { gold: 0, wood: 0, ore: 0 },
+        progress_value: pt.progress_value || 0,
+        target_value: pt.target_value || 0,
+      });
+    }
     return res.status(400).json({ error: claimCheck.reason });
   }
 
@@ -13240,7 +13250,15 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       targetValue: result.target_value,
       errorReason: 'Already claimed by parallel request',
     });
-    return res.status(409).json({ error: 'Already claimed by parallel request' });
+    return res.json({
+      ok: true,
+      completed: true,
+      already_claimed: true,
+      raced: true,
+      reward: { gold: 0, wood: 0, ore: 0 },
+      progress_value: result.progress_value,
+      target_value: result.target_value,
+    });
   }
   const paidReward = payoutRes.reward || { gold: task.reward_gold || 0, wood: task.reward_wood || 0, ore: task.reward_ore || 0 };
   console.log(`[task ${id} claim] player=${req.player.name} -> PAID gold=${paidReward.gold||0} wood=${paidReward.wood||0} ore=${paidReward.ore||0} prosperity=${paidReward.prosperity_bonus_pct||0}% (${task.title})`);

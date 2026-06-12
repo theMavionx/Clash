@@ -20,7 +20,7 @@ import { INK_CHAIN_ID, ensureInkChain, inkChain } from '../lib/nadoConfig';
 import { fetchGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
-import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, resolveDemonKingConnectedSyncTarget, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
+import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
@@ -623,13 +623,12 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     aptos:    !!gameShopConfig?.aptos?.ready    && !!gameShopConfig?.aptos?.saleActive,
   };
   const shopChainReady = !!shopReadiness[shopChain];
-  const demonKingSyncTarget = useMemo(() => resolveDemonKingConnectedSyncTarget({
-    dex,
+  const demonKingSyncTarget = useMemo(() => resolveDemonKingPlayerInventorySyncTarget({
+    player,
     evmAddress,
-    evmChainId,
     solAddress,
     aptosAddress,
-  }), [aptosAddress, dex, evmAddress, evmChainId, solAddress]);
+  }), [aptosAddress, evmAddress, player, solAddress]);
   // Multi-token chains (Solana, Aptos) expose a sub-toggle. EVM-USDC-only
   // chains don't need one. Default to USDC on multi-token chains since
   // most players already have it from the trading flow.

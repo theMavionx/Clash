@@ -1064,6 +1064,82 @@ function isSolanaWalletAddress(value) {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || '').trim());
 }
 
+function pushUniqueWallet(list, value) {
+  const wallet = String(value || '').trim();
+  if (!wallet) return;
+  const key = isEvmWalletAddress(wallet) || (isAptosWalletAddress(wallet) && !isSolanaWalletAddress(wallet))
+    ? wallet.toLowerCase()
+    : wallet;
+  if (list.some((existing) => {
+    const existingText = String(existing || '').trim();
+    const existingKey = isEvmWalletAddress(existingText) || (isAptosWalletAddress(existingText) && !isSolanaWalletAddress(existingText))
+      ? existingText.toLowerCase()
+      : existingText;
+    return existingKey === key;
+  })) return;
+  list.push(wallet);
+}
+
+function addWalletHint(hints, raw) {
+  const wallet = String(raw || '').trim();
+  if (!wallet) return;
+  if (isEvmWalletAddress(wallet)) {
+    if (!hints.evmAddress) hints.evmAddress = wallet;
+    pushUniqueWallet(hints.evmAddresses, wallet);
+    return;
+  }
+  if (isSolanaWalletAddress(wallet)) {
+    if (!hints.solAddress) hints.solAddress = wallet;
+    pushUniqueWallet(hints.solAddresses, wallet);
+    return;
+  }
+  if (isAptosWalletAddress(wallet)) {
+    if (!hints.aptosAddress) hints.aptosAddress = wallet;
+    pushUniqueWallet(hints.aptosAddresses, wallet);
+  }
+}
+
+export function resolveDemonKingPlayerWalletHints(playerState, liveWallets = {}) {
+  const hints = {
+    evmAddress: null,
+    solAddress: null,
+    aptosAddress: null,
+    evmAddresses: [],
+    solAddresses: [],
+    aptosAddresses: [],
+  };
+
+  addWalletHint(hints, liveWallets.evmAddress);
+  addWalletHint(hints, liveWallets.solAddress);
+  addWalletHint(hints, liveWallets.aptosAddress);
+  addWalletHint(hints, playerState?.wallet);
+  addWalletHint(hints, playerState?.nft_gold_boost_wallet);
+
+  (Array.isArray(playerState?.wallets) ? playerState.wallets : []).forEach((row) => {
+    addWalletHint(hints, row?.address || row?.wallet_address || row?.wallet);
+  });
+  (Array.isArray(playerState?.dex_accounts) ? playerState.dex_accounts : []).forEach((row) => {
+    addWalletHint(hints, row?.wallet_address || row?.address || row?.wallet);
+    addWalletHint(hints, row?.metadata?.wallet || row?.metadata?.wallet_address);
+  });
+
+  return hints;
+}
+
+export function resolveDemonKingPlayerInventorySyncTarget({
+  player = null,
+  evmAddress = null,
+  solAddress = null,
+  aptosAddress = null,
+} = {}) {
+  const hints = resolveDemonKingPlayerWalletHints(player, { evmAddress, solAddress, aptosAddress });
+  return resolveDemonKingInventorySyncTarget({
+    evmAddresses: hints.evmAddresses,
+    solAddresses: hints.solAddresses,
+    aptosAddresses: hints.aptosAddresses,
+  });
+}
+
 export function resolveDemonKingConnectedSyncTarget({
   dex = '',
   evmAddress = null,
@@ -1105,21 +1181,38 @@ export function resolveDemonKingInventorySyncTarget({
   evmAddress = null,
   solAddress = null,
   aptosAddress = null,
+  evmAddresses = [],
+  solAddresses = [],
+  aptosAddresses = [],
 } = {}) {
   const evm = String(evmAddress || '').trim();
   const sol = String(solAddress || '').trim();
   const apt = String(aptosAddress || '').trim();
+  const evmList = [];
+  const solList = [];
+  const aptosList = [];
   const wallets = {};
   const chains = [];
 
-  if (isEvmWalletAddress(evm)) {
-    wallets.evm = evm;
+  [...(Array.isArray(evmAddresses) ? evmAddresses : [evmAddresses]), evm]
+    .forEach((wallet) => { if (isEvmWalletAddress(wallet)) pushUniqueWallet(evmList, wallet); });
+  [...(Array.isArray(solAddresses) ? solAddresses : [solAddresses]), sol]
+    .forEach((wallet) => { if (isSolanaWalletAddress(wallet)) pushUniqueWallet(solList, wallet); });
+  [...(Array.isArray(aptosAddresses) ? aptosAddresses : [aptosAddresses]), apt]
+    .forEach((wallet) => {
+      if (isAptosWalletAddress(wallet) && !isEvmWalletAddress(wallet)) pushUniqueWallet(aptosList, wallet);
+    });
+
+  if (evmList.length) {
+    wallets.evm = evmList;
     chains.push(...DEMON_KING_EVM_CHAINS);
-  } else if (isSolanaWalletAddress(sol)) {
-    wallets.solana = sol;
+  }
+  if (solList.length) {
+    wallets.solana = solList;
     chains.push('solana');
-  } else if (isAptosWalletAddress(apt) && !isEvmWalletAddress(apt)) {
-    wallets.aptos = apt;
+  }
+  if (aptosList.length) {
+    wallets.aptos = aptosList;
     chains.push('aptos');
   }
 
@@ -1130,12 +1223,22 @@ export function resolveDemonKingInventorySyncTarget({
 function normalizeDemonKingSyncJobs({ wallet, wallets, chains }) {
   const requested = normalizeDemonKingChains(chains);
   const jobs = [];
+  const seen = new Set();
   const addJob = (walletValue, candidateChains) => {
-    const walletText = String(walletValue || '').trim();
-    if (!walletText) return;
-    const chainList = requested.filter((chain) => candidateChains.includes(chain));
-    if (!chainList.length) return;
-    jobs.push({ wallet: walletText, chains: chainList });
+    const values = Array.isArray(walletValue) ? walletValue : [walletValue];
+    for (const value of values) {
+      const walletText = String(value || '').trim();
+      if (!walletText) continue;
+      const chainList = requested.filter((chain) => candidateChains.includes(chain));
+      if (!chainList.length) continue;
+      const walletKey = isEvmWalletAddress(walletText) || (isAptosWalletAddress(walletText) && !isSolanaWalletAddress(walletText))
+        ? walletText.toLowerCase()
+        : walletText;
+      const key = `${walletKey}:${chainList.join(',')}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      jobs.push({ wallet: walletText, chains: chainList });
+    }
   };
 
   if (wallets && typeof wallets === 'object') {
