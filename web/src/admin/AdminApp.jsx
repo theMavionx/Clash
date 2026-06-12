@@ -1424,8 +1424,8 @@ function EarningsPanel({ data, reload }) {
   const windowH24 = revenueWindows.find((row) => row.key === 'h24' || row.key === '24h') || {};
   const byDex = windowAll.dexes || revenue.dexes || revenue.by_dex || earnings.dexes || earnings.by_dex || {};
   const exactEarningsRows = Object.entries(earnings)
-    .filter(([dex, value]) => value && typeof value === 'object' && 'earned_usd' in value)
-    .map(([dex, value]) => ({ dex, ...value }));
+    .filter(([dex, value]) => value && typeof value === 'object' && ('earned_usd' in value || value.ok === false || 'error' in value))
+    .map(([dex, value]) => ({ dex, earned_usd: 0, ...value }));
   const exactTotalUsd = Number.isFinite(Number(earnings.total_usd))
     ? Number(earnings.total_usd)
     : exactEarningsRows.reduce((sum, row) => sum + (Number(row.earned_usd) || 0), 0);

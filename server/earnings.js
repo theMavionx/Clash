@@ -2210,6 +2210,14 @@ const CACHE_TTL_MS = 60 * 1000;
 let _cache = null;
 let _cacheAt = 0;
 
+const FAILED_EARNINGS_META = {
+  decibel: {
+    address: DECIBEL_BUILDER_ADDR,
+    subaccount: DECIBEL_BUILDER_SUBACCOUNT,
+    currency: 'USDC (Aptos)',
+  },
+};
+
 async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   const now = Date.now();
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
@@ -2231,9 +2239,17 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     fetchGmtradeEarnings(),
     fetchFlashEarnings(),
   ]);
-  const wrap = (label, r) => r.status === 'fulfilled'
-    ? { ok: true, ...r.value }
-    : { ok: false, error: String(r.reason?.message || r.reason).slice(0, 240) };
+  const wrap = (label, r) => {
+    if (r.status === 'fulfilled') return { ok: true, ...r.value };
+    const error = String(r.reason?.message || r.reason).slice(0, 240);
+    return {
+      ok: false,
+      earned_usd: 0,
+      ...(FAILED_EARNINGS_META[label] || {}),
+      error,
+      note: error,
+    };
+  };
 
   const out = {
     pacifica: { ...wrap('pacifica', pac), source: 'pacifica_builder_trades_sum' },
