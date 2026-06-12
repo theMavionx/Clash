@@ -103,18 +103,43 @@ async function aptosView(functionId, args = [], typeArguments = []) {
   return r.json();
 }
 
+async function aptosPublicView(functionId, args = [], typeArguments = []) {
+  const r = await fetch('https://fullnode.mainnet.aptoslabs.com/v1/view', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      function: functionId,
+      type_arguments: typeArguments,
+      arguments: args,
+    }),
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    throw new Error(`Aptos public view ${functionId} failed: ${r.status} ${body || r.statusText}`);
+  }
+  return r.json();
+}
+
 async function fetchAptBalanceOcta(addr) {
   if (!addr) return 0n;
+  const functionId = '0x1::primary_fungible_store::balance';
+  const args = [normalizeAptosAddress(addr), '0xa'];
+  const typeArguments = ['0x1::fungible_asset::Metadata'];
   try {
-    const j = await aptosView(
-      '0x1::primary_fungible_store::balance',
-      [normalizeAptosAddress(addr), '0xa'],
-      ['0x1::fungible_asset::Metadata'],
-    );
+    const j = await aptosView(functionId, args, typeArguments);
     const v = Array.isArray(j) ? j[0] : j;
     return v != null ? BigInt(String(v)) : 0n;
-  } catch {
-    return 0n;
+  } catch (primaryError) {
+    try {
+      const j = await aptosPublicView(functionId, args, typeArguments);
+      const v = Array.isArray(j) ? j[0] : j;
+      return v != null ? BigInt(String(v)) : 0n;
+    } catch {
+      if (/429|MonthlyCredit|credit cap|rate limit/i.test(String(primaryError?.message || primaryError))) {
+        console.warn('[decibel] APT balance primary fullnode failed; public fallback also failed:', primaryError.message);
+      }
+      return 0n;
+    }
   }
 }
 
