@@ -1413,6 +1413,15 @@ async function getCoingeckoMarketSnapshot() {
   }
 }
 
+function saneGmtradeOfficialPrice(symbol, officialRow, referenceRow) {
+  const official = Number(officialRow?.mark || officialRow?.oracle || 0);
+  const reference = Number(referenceRow?.mark || referenceRow?.oracle || 0);
+  if (!Number.isFinite(official) || official <= 0) return false;
+  if (!Number.isFinite(reference) || reference <= 0) return true;
+  const ratio = official / reference;
+  return ratio >= 0.01 && ratio <= 100;
+}
+
 async function getPrices() {
   if (Date.now() - priceCache.at < PRICE_CACHE_TTL_MS && priceCache.prices && Object.keys(priceCache.prices).length) {
     return priceCache.prices;
@@ -1445,9 +1454,18 @@ async function getPrices() {
   const cg = await getCoingeckoMarketSnapshot();
   for (const [symbol, row] of Object.entries(cg.prices || {})) {
     const prev = prices[symbol] || {};
+    const keepOfficial = saneGmtradeOfficialPrice(symbol, prev, row);
+    if (prev?.source === 'gmtrade_official_price_cache' && !keepOfficial) {
+      console.warn('[gmtrade] official price rejected by sanity check', {
+        symbol,
+        official: prev.mark,
+        coingecko: row.mark,
+      });
+    }
     prices[symbol] = {
       ...row,
-      ...prev,
+      ...(keepOfficial ? prev : {}),
+      source: keepOfficial ? (prev.source || row.source) : row.source,
       volume_24h: row.volume_24h || prev.volume_24h || '0',
       open_interest: row.open_interest || prev.open_interest || '0',
       funding_rate: row.funding_rate || prev.funding_rate || '0',
