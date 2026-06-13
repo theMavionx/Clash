@@ -56,6 +56,40 @@ function dailyPoolAutoPoints(base, pct, index) {
   return Math.max(1, Math.round(points));
 }
 
+function nowUtcText() {
+  return new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function utcDaySchedule(offsetDays = 0) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const base = new Date();
+  const start = Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() + offsetDays, 0, 0, 0);
+  const end = start + dayMs;
+  return {
+    starts_at: new Date(start).toISOString().slice(0, 19).replace('T', ' '),
+    ends_at: new Date(end).toISOString().slice(0, 19).replace('T', ' '),
+  };
+}
+
+function taskScheduleState(task) {
+  if (!task?.active) return { label: 'inactive', badge: 'off' };
+  const now = Date.now();
+  const startMs = task.starts_at ? Date.parse(String(task.starts_at).replace(' ', 'T') + 'Z') : NaN;
+  const endMs = task.ends_at ? Date.parse(String(task.ends_at).replace(' ', 'T') + 'Z') : NaN;
+  if (Number.isFinite(startMs) && startMs > now) return { label: 'scheduled', badge: 'gold' };
+  if (Number.isFinite(endMs) && endMs <= now) return { label: 'expired', badge: 'off' };
+  return { label: task.starts_at || task.ends_at ? 'live window' : 'active', badge: 'green' };
+}
+
+function repeatProgressionLabel(task) {
+  const cfg = task?.params?.repeat_progression;
+  if (!cfg?.enabled) return '';
+  const mode = String(cfg.mode || 'percent').toLowerCase();
+  if (mode === 'manual') return `manual targets: ${cfg.values || cfg.value || '-'}`;
+  if (mode === 'multiplier') return `x${Number(cfg.value ?? cfg.multiplier ?? 1).toLocaleString()} per claim`;
+  return `+${Number(cfg.value ?? cfg.percent ?? 0).toLocaleString()}% per claim`;
+}
+
 const NAV = [
   { id: 'overview', label: 'Overview', hint: 'Live health and workload', icon: 'OV' },
   { id: 'players', label: 'Players', hint: 'Accounts, resources, tools', icon: 'PL' },
@@ -1016,8 +1050,51 @@ function TournamentReviewStep({ form }) {
 function LeaderboardDrawer({ data, onClose }) {
   const rows = data.leaderboard || [];
   const t = data.tournament || {};
+  const summary = data.summary || {};
+  const visibleTotals = rows.reduce((acc, row) => {
+    acc.trades_count += Number(row.trades_count || 0);
+    acc.total_volume_usd += Number(row.volume_usd || 0);
+    acc.pnl_usd += Number(row.pnl_usd || 0);
+    acc.gold += Number(row.gold || 0);
+    acc.trophies += Number(row.trophies || 0);
+    return acc;
+  }, { trades_count: 0, total_volume_usd: 0, pnl_usd: 0, gold: 0, trophies: 0 });
+  const tournamentStats = {
+    players: Number(summary.players ?? rows.length) || 0,
+    trades_count: Number(summary.trades_count ?? visibleTotals.trades_count) || 0,
+    total_volume_usd: Number(summary.total_volume_usd ?? t.prize_total_volume_usd ?? visibleTotals.total_volume_usd) || 0,
+    pnl_usd: Number(summary.pnl_usd ?? visibleTotals.pnl_usd) || 0,
+    gold: Number(summary.gold ?? visibleTotals.gold) || 0,
+    trophies: Number(summary.trophies ?? visibleTotals.trophies) || 0,
+  };
   return (
     <Drawer title={`Leaderboard · #${t.id} ${t.name || ''}`} subtitle={`${rows.length} players · sort ${data.sort_label || t.sort_by || '-'}`} onClose={onClose}>
+      <div className="admin-stats" style={{ marginBottom: 16 }}>
+        <div className="admin-stat">
+          <div className="admin-stat-value" style={{ color: 'var(--admin-blue)' }}>{fmtUsd(tournamentStats.total_volume_usd, 0)}</div>
+          <div className="admin-stat-label">Total volume</div>
+        </div>
+        <div className="admin-stat">
+          <div className="admin-stat-value">{tournamentStats.trades_count.toLocaleString()}</div>
+          <div className="admin-stat-label">Total trades</div>
+        </div>
+        <div className="admin-stat">
+          <div className="admin-stat-value">{tournamentStats.players.toLocaleString()}</div>
+          <div className="admin-stat-label">Active players</div>
+        </div>
+        <div className="admin-stat">
+          <div className="admin-stat-value" style={{ color: tournamentStats.pnl_usd >= 0 ? 'var(--admin-green)' : 'var(--admin-red)' }}>{fmtUsd(tournamentStats.pnl_usd, 2)}</div>
+          <div className="admin-stat-label">Total PnL</div>
+        </div>
+        <div className="admin-stat">
+          <div className="admin-stat-value" style={{ color: 'var(--admin-gold)' }}>{Math.round(tournamentStats.gold).toLocaleString()}</div>
+          <div className="admin-stat-label">Gold earned</div>
+        </div>
+        <div className="admin-stat">
+          <div className="admin-stat-value">{Math.round(tournamentStats.trophies).toLocaleString()}</div>
+          <div className="admin-stat-label">Trophies</div>
+        </div>
+      </div>
       <div className="admin-table-wrap admin-scroll">
         <table className="admin-table">
           <thead><tr><th>Rank</th><th>Player</th><th>Team</th><th>Trading wallet</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th><th>Prize</th></tr></thead>
@@ -1174,7 +1251,7 @@ function TasksPanel({ data, reload }) {
     <div className="admin-grid">
       <StatsGrid stats={[
         { label: 'Tasks', value: summary.total || tasks.length },
-        { label: 'Active', value: summary.active || tasks.filter((t) => t.active).length, tone: 'green' },
+        { label: 'Active now', value: summary.active || tasks.filter((t) => taskScheduleState(t).label === 'active' || taskScheduleState(t).label === 'live window').length, tone: 'green' },
         { label: 'Started', value: summary.started || 0, tone: 'blue' },
         { label: 'Claimed', value: summary.claimed || 0, tone: 'gold' },
         { label: '24h Started', value: summary.last_24h?.started || 0 },
@@ -1194,20 +1271,30 @@ function TasksPanel({ data, reload }) {
             <table className="admin-table">
               <thead><tr><th>ID</th><th>Task</th><th>Type</th><th>Rewards</th><th>Status</th><th>Started</th><th>Claimed</th><th>Avg Progress</th><th>Last Activity</th><th>Actions</th></tr></thead>
               <tbody>
-                {rows.map((task) => (
+                {rows.map((task) => {
+                  const schedule = taskScheduleState(task);
+                  return (
                   <tr key={task.id}>
                     <td className="admin-mono">#{task.id}</td>
-                    <td><strong>{task.title}</strong><div className="admin-card-sub">{task.description}</div></td>
-                    <td><span className="admin-badge blue">{task.type}</span>{task.repeatable ? <div className="admin-card-sub">repeat {task.cooldown_hours || 0}h</div> : null}</td>
+                    <td>
+                      <strong>{task.title}</strong>
+                      <div className="admin-card-sub">{task.description}</div>
+                      {(task.starts_at || task.ends_at) ? <div className="admin-card-sub admin-mono">{task.starts_at || '-'} to {task.ends_at || '-'}</div> : null}
+                    </td>
+                    <td>
+                      <span className="admin-badge blue">{task.type}</span>
+                      {task.repeatable ? <div className="admin-card-sub">repeat {task.cooldown_hours || 0}h</div> : null}
+                      {repeatProgressionLabel(task) ? <div className="admin-card-sub">{repeatProgressionLabel(task)}</div> : null}
+                    </td>
                     <td>G:{task.reward_gold || 0} W:{task.reward_wood || 0} O:{task.reward_ore || 0}</td>
-                    <td><span className={'admin-badge ' + (task.active ? 'green' : 'off')}>{task.active ? 'active' : 'inactive'}</span></td>
+                    <td><span className={'admin-badge ' + schedule.badge}>{schedule.label}</span></td>
                     <td>{task.started_count || 0}</td>
                     <td>{task.claimed_count || 0}</td>
                     <td>{Math.round(Number(task.avg_progress || 0) * 100)}%</td>
                     <td>{fmtTime(task.last_claim || task.last_start)}</td>
                     <td><div className="admin-filter-row"><button className="admin-btn" onClick={() => setEditing(taskToForm(task))}>Edit</button><button className="admin-btn" onClick={() => setSelected(task)}>Players</button><button className="admin-btn danger" onClick={() => resetProgress(task)}>Reset</button><button className="admin-btn danger" onClick={() => deleteTask(task)}>Delete</button></div></td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           </div>
@@ -1231,6 +1318,23 @@ function TaskEditorDrawer({ task, onClose, onSaved }) {
 
   function updateParam(name, value) {
     setForm((prev) => ({ ...prev, params: { ...(prev.params || {}), [name]: value } }));
+  }
+
+  function updateRepeatProgression(patch) {
+    setForm((prev) => ({
+      ...prev,
+      params: {
+        ...(prev.params || {}),
+        repeat_progression: {
+          enabled: false,
+          mode: 'percent',
+          value: 20,
+          values: '',
+          ...((prev.params || {}).repeat_progression || {}),
+          ...patch,
+        },
+      },
+    }));
   }
 
   async function saveTask() {
@@ -1266,6 +1370,65 @@ function TaskEditorDrawer({ task, onClose, onSaved }) {
             <div className="admin-choice-grid">
               <ToggleChoice active={form.active} title="Active" subtitle="Visible and claimable in the live quest list." onClick={() => update({ active: !form.active })} />
               <ToggleChoice active={form.repeatable} title="Repeatable" subtitle="Player can claim it again after cooldown." onClick={() => update({ repeatable: !form.repeatable })} />
+            </div>
+            {form.repeatable && (
+              <div className="admin-card" style={{ background: 'rgba(15,23,42,0.72)' }}>
+                <div className="admin-card-head">
+                  <div>
+                    <div className="admin-card-title">Repeat Progression</div>
+                    <div className="admin-card-sub">Increase the next cycle target while keeping the same reward. Example: 100k +20% becomes 120k, then 144k.</div>
+                  </div>
+                </div>
+                <div className="admin-card-body admin-grid">
+                  <div className="admin-choice-grid">
+                    <ToggleChoice
+                      active={!!form.params?.repeat_progression?.enabled}
+                      title="Progressive target"
+                      subtitle="Each paid repeat claim raises the next target."
+                      onClick={() => updateRepeatProgression({ enabled: !form.params?.repeat_progression?.enabled })}
+                    />
+                  </div>
+                  {!!form.params?.repeat_progression?.enabled && (
+                    <>
+                      <div className="admin-form-grid three">
+                        <label className="admin-field">
+                          <span className="admin-label">Mode</span>
+                          <select className="admin-select" value={form.params?.repeat_progression?.mode || 'percent'} onChange={(e) => updateRepeatProgression({ mode: e.target.value })}>
+                            <option value="percent">Percent per claim</option>
+                            <option value="multiplier">Multiplier per claim</option>
+                            <option value="manual">Manual targets</option>
+                          </select>
+                        </label>
+                        {(form.params?.repeat_progression?.mode || 'percent') !== 'manual' ? (
+                          <label className="admin-field">
+                            <span className="admin-label">{(form.params?.repeat_progression?.mode || 'percent') === 'multiplier' ? 'Multiplier' : 'Percent'}</span>
+                            <input className="admin-input" type="number" step="0.01" value={form.params?.repeat_progression?.value ?? 20} onChange={(e) => updateRepeatProgression({ value: Number(e.target.value) || 0 })} />
+                          </label>
+                        ) : (
+                          <label className="admin-field" style={{ gridColumn: 'span 2' }}>
+                            <span className="admin-label">Manual target list</span>
+                            <input className="admin-input admin-mono" placeholder="100000, 120000, 150000" value={form.params?.repeat_progression?.values || ''} onChange={(e) => updateRepeatProgression({ values: e.target.value })} />
+                          </label>
+                        )}
+                      </div>
+                      <div className="admin-help">
+                        Percent and multiplier use the primary target field above as the base. Manual mode uses the list by claim number and repeats the last value after the list ends.
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="admin-card-sub">Schedule is UTC. Leave both fields empty for an always-available task.</div>
+            <div className="admin-filter-row">
+              <button className="admin-btn" type="button" onClick={() => update(utcDaySchedule(0))}>Today UTC daily</button>
+              <button className="admin-btn" type="button" onClick={() => update(utcDaySchedule(1))}>Tomorrow UTC daily</button>
+              <button className="admin-btn" type="button" onClick={() => update({ starts_at: nowUtcText(), ends_at: '' })}>Start now</button>
+              <button className="admin-btn danger" type="button" onClick={() => update({ starts_at: '', ends_at: '' })}>Clear schedule</button>
+            </div>
+            <div className="admin-form-grid two">
+              <label className="admin-field"><span className="admin-label">Starts at UTC</span><input className="admin-input admin-mono" placeholder="2026-06-13 00:00:00" value={form.starts_at || ''} onChange={(e) => update({ starts_at: e.target.value })} /></label>
+              <label className="admin-field"><span className="admin-label">Ends at UTC</span><input className="admin-input admin-mono" placeholder="2026-06-14 00:00:00" value={form.ends_at || ''} onChange={(e) => update({ ends_at: e.target.value })} /></label>
             </div>
           </div>
         </div>
@@ -2147,6 +2310,8 @@ function emptyTaskForm() {
     repeatable: false,
     cooldown_hours: 0,
     sort_order: 0,
+    starts_at: '',
+    ends_at: '',
   };
 }
 
@@ -2156,6 +2321,8 @@ function taskToForm(task) {
     ...task,
     active: !!task.active,
     repeatable: !!task.repeatable,
+    starts_at: task.starts_at || '',
+    ends_at: task.ends_at || '',
     params: { ...(task.params || {}) },
   };
 }
@@ -2205,6 +2372,8 @@ function taskFormToBody(form) {
     repeatable: !!form.repeatable,
     cooldown_hours: Number(form.cooldown_hours) || 0,
     sort_order: Number(form.sort_order) || 0,
+    starts_at: String(form.starts_at || '').trim(),
+    ends_at: String(form.ends_at || '').trim(),
   };
 }
 

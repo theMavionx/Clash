@@ -12131,7 +12131,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           : dex === 'katana'
             ? "AND verified_source = 'katana_api'"
           : dex === 'gmtrade'
-            ? "AND verified_source = 'gmtrade_tx'"
+            ? "AND verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')"
           : dex === 'flash'
             ? "AND verified_source = 'flash_tx'"
           : dex === 'phoenix'
@@ -12928,7 +12928,7 @@ router.get('/trading/stats', auth, async (req, res) => {
               : dex === 'katana'
                 ? "AND verified_source = 'katana_api'"
               : dex === 'gmtrade'
-                ? "AND verified_source = 'gmtrade_tx'"
+                ? "AND verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')"
               : dex === 'flash'
                 ? "AND verified_source = 'flash_tx'"
               : dex === 'phoenix'
@@ -15865,7 +15865,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
           : dex === 'katana'
             ? "verified_source = 'katana_api'"
           : dex === 'gmtrade'
-            ? "verified_source = 'gmtrade_tx'"
+            ? "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')"
           : dex === 'flash'
             ? "verified_source = 'flash_tx'"
           : dex === 'decibel'
@@ -16332,6 +16332,22 @@ router.get('/admin/stats', adminAuth, (req, res) => {
 });
 
 // ---------- Admin: Tasks CRUD ----------
+function normalizeTaskScheduleDate(value, field = 'date') {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T');
+  const ms = Date.parse(normalized + (/[zZ]$/u.test(normalized) ? '' : 'Z'));
+  if (!Number.isFinite(ms)) throw new Error(`${field} must be a valid UTC datetime`);
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function normalizeTaskSchedule(startsAt, endsAt) {
+  const starts = normalizeTaskScheduleDate(startsAt, 'starts_at');
+  const ends = normalizeTaskScheduleDate(endsAt, 'ends_at');
+  if (starts && ends && ends <= starts) throw new Error('ends_at must be after starts_at');
+  return { starts_at: starts, ends_at: ends };
+}
+
 router.get('/admin/tasks', adminAuth, (req, res) => {
   const list = tasks.getAllTasks();
   // Per-task aggregate stats
@@ -16369,7 +16385,12 @@ router.get('/admin/tasks', adminAuth, (req, res) => {
 // Overall quest system stats — for the big summary card
 router.get('/admin/tasks-summary', adminAuth, (req, res) => {
   const total = db.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n;
-  const active = db.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE active = 1').get().n;
+  const active = db.db.prepare(`
+    SELECT COUNT(*) AS n FROM tasks
+    WHERE active = 1
+      AND (starts_at IS NULL OR starts_at = '' OR starts_at <= datetime('now'))
+      AND (ends_at IS NULL OR ends_at = '' OR ends_at > datetime('now'))
+  `).get().n;
   const started = db.db.prepare('SELECT COUNT(*) AS n FROM player_tasks').get().n;
   const claimed = db.db.prepare('SELECT COUNT(*) AS n FROM player_tasks WHERE claimed_at IS NOT NULL').get().n;
   const uniquePlayers = db.db.prepare('SELECT COUNT(DISTINCT player_id) AS n FROM player_tasks').get().n;
@@ -16447,9 +16468,12 @@ router.post('/admin/tasks', adminAuth, (req, res) => {
   if (!b.title || typeof b.title !== 'string') return res.status(400).json({ error: 'title required' });
   const params = typeof b.params === 'object' && b.params !== null ? b.params : {};
   if (params.side && !tasks.VALID_SIDES.includes(params.side)) return res.status(400).json({ error: 'bad side' });
+  let schedule;
+  try { schedule = normalizeTaskSchedule(b.starts_at, b.ends_at); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
   const r = db.db.prepare(
-    `INSERT INTO tasks (type, title, description, params, reward_gold, reward_wood, reward_ore, active, repeatable, cooldown_hours, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO tasks (type, title, description, params, reward_gold, reward_wood, reward_ore, active, repeatable, cooldown_hours, sort_order, starts_at, ends_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     b.type,
     b.title.trim(),
@@ -16462,6 +16486,8 @@ router.post('/admin/tasks', adminAuth, (req, res) => {
     b.repeatable ? 1 : 0,
     Number(b.cooldown_hours) || 0,
     Number(b.sort_order) || 0,
+    schedule.starts_at,
+    schedule.ends_at,
   );
   res.json({ id: r.lastInsertRowid });
 });
@@ -16473,6 +16499,15 @@ router.patch('/admin/tasks/:id', adminAuth, (req, res) => {
   const existing = tasks.getTaskById(id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const params = b.params && typeof b.params === 'object' ? b.params : tasks.parseParams(existing.params);
+  let schedule;
+  try {
+    schedule = normalizeTaskSchedule(
+      b.starts_at !== undefined ? b.starts_at : existing.starts_at,
+      b.ends_at !== undefined ? b.ends_at : existing.ends_at,
+    );
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
   const merged = {
     type: tasks.VALID_TYPES.includes(b.type) ? b.type : existing.type,
     title: b.title != null ? String(b.title).trim() : existing.title,
@@ -16485,10 +16520,12 @@ router.patch('/admin/tasks/:id', adminAuth, (req, res) => {
     repeatable: b.repeatable != null ? (b.repeatable ? 1 : 0) : existing.repeatable,
     cooldown_hours: b.cooldown_hours != null ? Number(b.cooldown_hours) : existing.cooldown_hours,
     sort_order: b.sort_order != null ? Number(b.sort_order) : existing.sort_order,
+    starts_at: schedule.starts_at,
+    ends_at: schedule.ends_at,
   };
   db.db.prepare(
-    `UPDATE tasks SET type = ?, title = ?, description = ?, params = ?, reward_gold = ?, reward_wood = ?, reward_ore = ?, active = ?, repeatable = ?, cooldown_hours = ?, sort_order = ? WHERE id = ?`
-  ).run(merged.type, merged.title, merged.description, merged.params, merged.reward_gold, merged.reward_wood, merged.reward_ore, merged.active, merged.repeatable, merged.cooldown_hours, merged.sort_order, id);
+    `UPDATE tasks SET type = ?, title = ?, description = ?, params = ?, reward_gold = ?, reward_wood = ?, reward_ore = ?, active = ?, repeatable = ?, cooldown_hours = ?, sort_order = ?, starts_at = ?, ends_at = ? WHERE id = ?`
+  ).run(merged.type, merged.title, merged.description, merged.params, merged.reward_gold, merged.reward_wood, merged.reward_ore, merged.active, merged.repeatable, merged.cooldown_hours, merged.sort_order, merged.starts_at, merged.ends_at, id);
   res.json({ ok: true });
 });
 
@@ -17290,6 +17327,48 @@ function tournamentTotalVolumeUsd(tournamentId) {
   }
 }
 
+function tournamentLeaderboardSummary(tournamentId) {
+  if (!tournamentId) {
+    return {
+      players: 0,
+      trades_count: 0,
+      total_volume_usd: 0,
+      pnl_usd: 0,
+      gold: 0,
+      trophies: 0,
+    };
+  }
+  try {
+    const row = db.db.prepare(`
+      SELECT COUNT(*) AS players,
+             COALESCE(SUM(trades_count), 0) AS trades_count,
+             COALESCE(SUM(volume_usd), 0) AS total_volume_usd,
+             COALESCE(SUM(pnl_usd), 0) AS pnl_usd,
+             COALESCE(SUM(gold), 0) AS gold,
+             COALESCE(SUM(trophies), 0) AS trophies
+      FROM tournament_participants
+      WHERE tournament_id = ? AND left_at IS NULL
+    `).get(tournamentId);
+    return {
+      players: Number(row?.players || 0) || 0,
+      trades_count: Number(row?.trades_count || 0) || 0,
+      total_volume_usd: Number(row?.total_volume_usd || 0) || 0,
+      pnl_usd: Number(row?.pnl_usd || 0) || 0,
+      gold: Number(row?.gold || 0) || 0,
+      trophies: Number(row?.trophies || 0) || 0,
+    };
+  } catch {
+    return {
+      players: 0,
+      trades_count: 0,
+      total_volume_usd: 0,
+      pnl_usd: 0,
+      gold: 0,
+      trophies: 0,
+    };
+  }
+}
+
 function tournamentPrizeState(t, totalVolumeUsd = null) {
   const tiers = normalizeTournamentPrizeTiers(t?.prize_tiers);
   const totalVolume = sanitizePrizeNumber(
@@ -17451,7 +17530,7 @@ function tournamentTradeSourceWhere(dex) {
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
   if (dex === 'grvt') return "verified_source = 'grvt_builder'";
   if (dex === 'katana') return "verified_source = 'katana_api'";
-  if (dex === 'gmtrade') return "verified_source = 'gmtrade_tx'";
+  if (dex === 'gmtrade') return "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
   if (dex === 'flash') return "verified_source = 'flash_tx'";
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'server')";
@@ -18117,6 +18196,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     `).all(tid, limit);
   }
   const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
+  const summary = tournamentLeaderboardSummary(tid);
   const prize = tournamentPrizeState(t, totalVolumeUsd);
   if (mode === 'dex_vs_dex') {
     teamState = buildTournamentTeamState(rows, t, prize);
@@ -18137,6 +18217,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     tournament: tournamentRowToPublic(t, { totalVolumeUsd }),
     sort_by: sortBy,
     sort_label: tournamentSortLabel(t),
+    summary,
     prize,
     teams: teamState,
     leaderboard: rows.map((r, i) => ({

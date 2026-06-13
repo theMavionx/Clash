@@ -100,6 +100,11 @@ const GMTRADE_TX_MEMO = String(process.env.GMTRADE_TX_MEMO || '').trim();
 const GMTRADE_DISCOVER_MARKETS = String(process.env.GMTRADE_DISCOVER_MARKETS || '1').trim() !== '0';
 const GMTRADE_MARKET_ACCOUNT_DATA_SIZE = Number(process.env.GMTRADE_MARKET_ACCOUNT_DATA_SIZE || 0);
 const GMTRADE_MARKET_SYMBOLS = parseJsonEnv('GMTRADE_MARKET_SYMBOLS_JSON', {});
+const GMTRADE_VERIFIED_SOURCES = Object.freeze([
+  'gmtrade_tx',
+  'gmtrade_position_after_tx',
+  'gmtrade_close_tx_client_notional',
+]);
 const DEFAULT_GMTRADE_MARKET_TOKENS = [
   'DAY6Qr1FKgJQFvjJAhFUZUWHzx8UbbbkRmt6G6AYswWG',
   'AC7iz89CBopxsuzoPU5drW59PB9rZJYpvqaedGxAjFeK',
@@ -2688,7 +2693,7 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
       .sort((a, b) => Number(b.size_delta_usd) - Number(a.size_delta_usd))[0] || null
     : null;
   let verifiedPosition = null;
-  if (!tradeEvent && !createOrderEvent) {
+  if (!tradeEvent && !isCloseReport) {
     for (let attempt = 0; attempt < 6; attempt += 1) {
       verifiedPosition = await verifiedPositionForTradeReport({ wallet, tx, body }).catch((e) => {
         console.warn('[gmtrade] position fallback verification failed:', e.message);
@@ -2745,6 +2750,18 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
     : '';
   const side = eventSide || createOrderEvent?.side || (isCloseReport ? requestedSide : verifiedPosition?.side_label) || requestedSide;
   const price = Number(body.price) > 0 ? String(body.price) : String(notional);
+  const proofSource = tradeEvent
+    ? 'gmtrade_solana_tx'
+    : verifiedPosition
+    ? 'gmtrade_position_after_tx'
+    : canUseVerifiedCloseClientNotional
+    ? 'gmtrade_confirmed_close_tx_client_notional'
+    : 'gmtrade_client_notional';
+  const verifiedSource = proofSource === 'gmtrade_position_after_tx'
+    ? 'gmtrade_position_after_tx'
+    : proofSource === 'gmtrade_confirmed_close_tx_client_notional'
+    ? 'gmtrade_close_tx_client_notional'
+    : 'gmtrade_tx';
   const result = db.addTrade(playerId, {
     symbol,
     side,
@@ -2756,15 +2773,9 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
     status: 'filled',
     dex: 'gmtrade',
     notional_usd: notional,
-    verifiedSource: 'gmtrade_tx',
+    verifiedSource,
     proofJson: JSON.stringify({
-      source: tradeEvent
-        ? 'gmtrade_solana_tx'
-        : verifiedPosition
-        ? 'gmtrade_position_pda_after_tx'
-        : canUseVerifiedCloseClientNotional
-        ? 'gmtrade_confirmed_close_tx_client_notional'
-        : 'gmtrade_client_notional',
+      source: proofSource,
       signature,
       wallet,
       slot: tx.slot,
@@ -2914,6 +2925,7 @@ module.exports = {
     min_position_usd: GMTRADE_MIN_POSITION_USD,
     trade_event_decoder: rustBuilderAvailable() ? 'node_layout_and_rust_gmsol_sdk' : 'node_layout_gmsol_trade_event',
     allow_client_notional_reports: GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS,
+    verified_sources: GMTRADE_VERIFIED_SOURCES,
     program_ids: GMTRADE_PROGRAM_IDS,
     market_discovery_enabled: GMTRADE_DISCOVER_MARKETS,
     market_discovery_last_error: marketDiscoveryCache.error,
@@ -2945,6 +2957,7 @@ module.exports = {
   recordTradeReport,
   reconcilePendingTradeReportsForPlayer,
   referralUrl,
+  GMTRADE_VERIFIED_SOURCES,
   _internal: {
     decodeGmtradeCreateOrderV2Instruction,
     decodeTradeEventsFromInnerInstructions,

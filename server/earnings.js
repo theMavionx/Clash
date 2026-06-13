@@ -1389,6 +1389,11 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
   try {
     fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
     try { fdb.pragma('journal_mode = WAL'); } catch {}
+    const sources = Array.isArray(verifiedSource)
+      ? verifiedSource.map(String).filter(Boolean)
+      : [String(verifiedSource || '')].filter(Boolean);
+    if (!sources.length) throw new Error('missing verified source');
+    const sourceSql = sources.map(() => '?').join(', ');
     const volumeExpr = `
       CASE
         WHEN COALESCE(notional_usd, 0) > 0 THEN notional_usd
@@ -1416,8 +1421,8 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
       FROM trade_history
       WHERE dex = ?
         AND status = 'filled'
-        AND verified_source = ?
-    `).get(dex, verifiedSource) || {};
+        AND verified_source IN (${sourceSql})
+    `).get(dex, ...sources) || {};
     const recent = fdb.prepare(`
       SELECT COUNT(*) AS trades,
              COALESCE(SUM(${volumeExpr}), 0) AS volume_usd,
@@ -1426,19 +1431,19 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
       FROM trade_history
       WHERE dex = ?
         AND status = 'filled'
-        AND verified_source = ?
+        AND verified_source IN (${sourceSql})
         AND created_at > datetime('now', '-24 hours')
-    `).get(dex, verifiedSource) || {};
+    `).get(dex, ...sources) || {};
     const proofs = fdb.prepare(`
       SELECT player_id, symbol, side, amount, price, notional_usd, fee,
              order_id, client_order_id, created_at, proof_json
       FROM trade_history
       WHERE dex = ?
         AND status = 'filled'
-        AND verified_source = ?
+        AND verified_source IN (${sourceSql})
       ORDER BY created_at DESC
       LIMIT 20
-    `).all(dex, verifiedSource).map(row => ({
+    `).all(dex, ...sources).map(row => ({
       player_id: row.player_id,
       symbol: row.symbol,
       side: row.side,
@@ -1575,7 +1580,7 @@ async function fetchKatanaEarnings() {
 async function fetchGmtradeEarnings() {
   return localVerifiedBuilderEarnings({
     dex: 'gmtrade',
-    verifiedSource: 'gmtrade_tx',
+    verifiedSource: ['gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional'],
     currency: 'USDC (GMTrade/Solana)',
     feeBps: GMTRADE_BUILDER_FEE_BPS,
     sourceDetail: 'gmtrade_verified_tx_local_estimate',
@@ -1702,7 +1707,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'hibachi') return "verified_source = 'hibachi_api'";
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
   if (dex === 'katana') return "verified_source = 'katana_api'";
-  if (dex === 'gmtrade') return "verified_source = 'gmtrade_tx'";
+  if (dex === 'gmtrade') return "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
   if (dex === 'flash') return "verified_source = 'flash_tx'";
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";

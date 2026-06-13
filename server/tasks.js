@@ -50,6 +50,8 @@ try {
       repeatable INTEGER NOT NULL DEFAULT 0,
       cooldown_hours INTEGER NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL DEFAULT 0,
+      starts_at TEXT,
+      ends_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS player_tasks (
@@ -66,6 +68,9 @@ try {
     CREATE INDEX IF NOT EXISTS idx_player_tasks_player ON player_tasks(player_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_active ON tasks(active) WHERE active = 1;
   `);
+  try { db.db.exec(`ALTER TABLE tasks ADD COLUMN starts_at TEXT`); } catch {}
+  try { db.db.exec(`ALTER TABLE tasks ADD COLUMN ends_at TEXT`); } catch {}
+  try { db.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_schedule ON tasks(active, starts_at, ends_at, sort_order, id)`); } catch {}
 } catch (e) { console.error('tasks schema error', e); }
 
 const VALID_TYPES = ['volume', 'positions', 'combo_volume_attack', 'daily_trade_gold'];
@@ -168,6 +173,51 @@ function matchesSide(tradeSide, wantSide) {
   if (wantSide === 'long') return c.isLong && !c.isShort;
   if (wantSide === 'short') return c.isShort && !c.isLong;
   return true;
+}
+
+function paidTaskClaimCount(playerId, taskId) {
+  if (!playerId || !taskId) return 0;
+  try {
+    const row = db.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM task_claim_events
+      WHERE player_id = ? AND task_id = ? AND result = 'paid'
+    `).get(playerId, taskId);
+    return Math.max(0, Number(row?.n || 0) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function normalizeProgressionValues(value) {
+  if (Array.isArray(value)) return value.map(Number).filter(v => Number.isFinite(v) && v > 0);
+  return String(value || '')
+    .split(/[,\n]/u)
+    .map(v => Number(String(v).trim()))
+    .filter(v => Number.isFinite(v) && v > 0);
+}
+
+function progressiveTaskTarget(player, task, baseTarget) {
+  const base = Number(baseTarget) || 0;
+  if (base <= 0 || !task?.repeatable) return base;
+  const params = parseParams(task.params);
+  const cfg = params.repeat_progression || params.progression || {};
+  if (!cfg || cfg.enabled === false) return base;
+  const paidCount = paidTaskClaimCount(player?.id, task?.id);
+  const mode = String(cfg.mode || 'percent').toLowerCase();
+  if (mode === 'manual') {
+    const values = normalizeProgressionValues(cfg.values ?? cfg.targets ?? cfg.value);
+    if (!values.length) return base;
+    return values[Math.min(paidCount, values.length - 1)];
+  }
+  if (mode === 'multiplier') {
+    const multiplier = Number(cfg.multiplier ?? cfg.value);
+    if (!Number.isFinite(multiplier) || multiplier <= 0) return base;
+    return base * Math.pow(multiplier, paidCount);
+  }
+  const pct = Number(cfg.percent ?? cfg.value);
+  if (!Number.isFinite(pct) || pct === 0) return base;
+  return base * Math.pow(1 + pct / 100, paidCount);
 }
 
 function parseTaskTimeMs(value) {
@@ -414,7 +464,7 @@ function verifiedSourceWhereForDex(dex) {
   if (dex === 'hotstuff') return "AND verified_source = 'hotstuff_api'";
   if (dex === 'grvt') return "AND verified_source = 'grvt_builder'";
   if (dex === 'katana') return "AND verified_source = 'katana_api'";
-  if (dex === 'gmtrade') return "AND verified_source = 'gmtrade_tx'";
+  if (dex === 'gmtrade') return "AND verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
   if (dex === 'flash') return "AND verified_source = 'flash_tx'";
   if (dex === 'phoenix') return "AND verified_source IN ('worker', 'tx')";
   return "AND verified_source = 'worker'";
@@ -443,6 +493,12 @@ function getTaskFuturesDexes(player, requestedDex) {
     console.warn(`[tasks] linked dex read failed player=${player?.name || player?.id}:`, e.message);
   }
   return [...out];
+}
+
+function isGmtradeCloseFallbackTrade(trade) {
+  if (String(trade?.dex || '').toLowerCase() !== 'gmtrade') return false;
+  if (String(trade?.verified_source || '') === 'gmtrade_close_tx_client_notional') return true;
+  return classifyTrade(trade?.side).isClose;
 }
 
 async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
@@ -757,9 +813,10 @@ async function fetchPacificaAllTrades(player, opts = {}) {
 
 async function verifyVolume(player, task, snap) {
   const p = parseParams(task.params);
-  const target = Number(p.target_volume) || 0;
+  const target = progressiveTaskTarget(player, task, Number(p.target_volume) || 0);
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
+  const countClose = !!p.count_close;
   const wallet = resolveWallet(player);
   // Pass `since` so the Pacifica fetch can stop paging once it crosses
   // the snapshot baseline — for an active trader with thousands of
@@ -770,6 +827,7 @@ async function verifyVolume(player, task, snap) {
   let matched = 0;
   for (const t of trades) {
     if (!isAfterTaskSnapshot(snap, t)) continue;
+    if (!countClose && isGmtradeCloseFallbackTrade(t)) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
     // For Avantis rows we stashed notional_usd directly in _notional; for
@@ -786,7 +844,7 @@ async function verifyVolume(player, task, snap) {
 
 async function verifyPositions(player, task, snap) {
   const p = parseParams(task.params);
-  const target = Number(p.target_positions) || 0;
+  const target = progressiveTaskTarget(player, task, Number(p.target_positions) || 0);
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
   const countClose = !!p.count_close; // default: count openings only
@@ -799,6 +857,7 @@ async function verifyPositions(player, task, snap) {
     const orderKey = `${t.dex || player.dex || 'dex'}:${String(t.order_id || t.client_order_id || t.history_id || '')}`;
     if (orderKey && seenOrders.has(orderKey)) continue;
     if (orderKey) seenOrders.add(orderKey);
+    if (!countClose && isGmtradeCloseFallbackTrade(t)) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
     const c = classifyTrade(t.side);
@@ -811,16 +870,18 @@ async function verifyPositions(player, task, snap) {
 
 async function verifyComboVolumeAttack(player, task, snap) {
   const p = parseParams(task.params);
-  const targetVol = Number(p.target_volume) || 0;
+  const targetVol = progressiveTaskTarget(player, task, Number(p.target_volume) || 0);
   const targetWins = Number(p.target_wins) || 0;
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
+  const countClose = !!p.count_close;
 
   const startId = snap.trade_id_start || 0;
   const trades = await fetchWalletTrades(player, { since: startId });
   let vol = 0;
   for (const t of trades) {
     if (!isAfterTaskSnapshot(snap, t)) continue;
+    if (!countClose && isGmtradeCloseFallbackTrade(t)) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
     const notional = Number(t._notional) > 0
@@ -848,7 +909,7 @@ async function verifyComboVolumeAttack(player, task, snap) {
 
 async function verifyDailyTradeGold(player, task, snap) {
   const p = parseParams(task.params);
-  const target = Number(p.target_gold) || 0;
+  const target = progressiveTaskTarget(player, task, Number(p.target_gold) || 0);
   const from = snap.window_from;
   if (!from) return { progress_value: 0, target_value: target, completed: false };
   // Gold from trades is tracked in gold_history with reasons like "N trades", "Daily bonus", "+$X profit", "First deposit!", "First trade!"
@@ -884,7 +945,13 @@ async function verifyTask(player, task, snap) {
 
 // ---------- Helpers ----------
 function getActiveTasks() {
-  return db.db.prepare('SELECT * FROM tasks WHERE active = 1 ORDER BY sort_order ASC, id ASC').all();
+  return db.db.prepare(`
+    SELECT * FROM tasks
+    WHERE active = 1
+      AND (starts_at IS NULL OR starts_at = '' OR starts_at <= datetime('now'))
+      AND (ends_at IS NULL OR ends_at = '' OR ends_at > datetime('now'))
+    ORDER BY sort_order ASC, id ASC
+  `).all();
 }
 
 function getTaskById(id) {
