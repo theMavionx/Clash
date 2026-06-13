@@ -2898,6 +2898,7 @@ async function taskStats(id) {
     document.getElementById('taskStatsSummary').innerHTML =
       '<div class="stat"><div class="v">' + s.started + '</div><div class="l">Started</div></div>' +
       '<div class="stat"><div class="v" style="color:#34d399">' + s.claimed + '</div><div class="l">Claimed</div></div>' +
+      '<div class="stat"><div class="v" style="color:#fbbf24">' + (s.paid_claims || 0) + '</div><div class="l">Paid claims</div></div>' +
       '<div class="stat"><div class="v" style="color:#fca5a5">' + (s.started - s.claimed) + '</div><div class="l">In progress</div></div>';
     document.getElementById('taskStatsBody').innerHTML = (s.players || []).map(p => {
       const pct = p.target_value > 0 ? Math.min(100, Math.round((p.progress_value / p.target_value) * 100)) : 0;
@@ -2905,7 +2906,7 @@ async function taskStats(id) {
         '<div style="font-size:10px;color:#9ca3af;margin-top:2px">' + Math.floor(p.progress_value||0) + ' / ' + Math.floor(p.target_value||0) + ' (' + pct + '%)</div>';
       const walletShort = p.wallet ? (p.wallet.slice(0,4) + '…' + p.wallet.slice(-4)) : '—';
       return '<tr>' +
-        '<td><strong>' + esc(p.player_name || p.player_id) + '</strong></td>' +
+        '<td><strong>' + esc(p.player_name || p.player_id) + '</strong><div style="font-size:10px;color:#fbbf24">' + (p.paid_claim_count || 0) + ' paid / ' + (p.attempt_count || 0) + ' attempts</div></td>' +
         '<td class="mono" style="font-size:11px;color:#9ca3af">' + walletShort + '</td>' +
         '<td>' + progBar + '</td>' +
         '<td class="mono" style="font-size:11px">' + (p.started_at || '—').replace('T',' ').split('.')[0] + '</td>' +

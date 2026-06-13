@@ -5,10 +5,12 @@ import {
   PRIZE_PRESETS,
   TOURNAMENT_DEXES,
   buildPayouts,
+  defaultMegaConfig,
   emptyTournament,
   fmtTime,
   fmtUsd,
   formToTournamentBody,
+  normalizeMegaConfig,
   normalizeReward,
   rewardDefaults,
   tournamentToForm,
@@ -734,11 +736,18 @@ function TournamentScheduleStep({ form, update }) {
 
 function TournamentEligibilityStep({ form, update }) {
   const eligible = form.dex_scope === 'custom' ? form.eligible_dexes : (form.dex_scope === 'all' ? TOURNAMENT_DEXES : [form.dex]);
+  const mega = normalizeMegaConfig(form.mega_config || {});
   function toggleDex(dex) {
     const set = new Set(form.eligible_dexes || []);
     if (set.has(dex)) set.delete(dex);
     else set.add(dex);
     update({ eligible_dexes: Array.from(set), dex: form.dex || dex });
+  }
+  function updateMega(patch) {
+    update({ mega_config: normalizeMegaConfig({ ...mega, ...patch }) });
+  }
+  function setMegaTemplate(template) {
+    update({ mega_config: defaultMegaConfig(true, template) });
   }
   return (
     <div className="admin-grid">
@@ -762,6 +771,34 @@ function TournamentEligibilityStep({ form, update }) {
           <div className="admin-help">Selected: {eligible.map((d) => DEX_LABELS[d] || d).join(', ')}</div>
         </div>
       </div>
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Mega Tournament</div>
+            <div className="admin-card-sub">Optional sectors split one tournament into Whale/Dolphin/Shrimp or A/B/C leaderboards. Sector volume can sum every DEX or only selected DEXes.</div>
+          </div>
+        </div>
+        <div className="admin-card-body admin-grid">
+          <div className="admin-form-grid three">
+            <label className="admin-field">
+              <span className="admin-label">Tournament type</span>
+              <select className="admin-select" value={mega.enabled ? 'mega' : 'standard'} onChange={(e) => updateMega({ enabled: e.target.value === 'mega' })}>
+                <option value="standard">Standard</option>
+                <option value="mega">Mega with sectors</option>
+              </select>
+            </label>
+            <label className="admin-field">
+              <span className="admin-label">Sector template</span>
+              <select className="admin-select" value={mega.template || 'whale_dolphin_shrimp'} onChange={(e) => setMegaTemplate(e.target.value)} disabled={!mega.enabled}>
+                <option value="whale_dolphin_shrimp">Whale / Dolphin / Shrimp</option>
+                <option value="abc">Sector A / B / C</option>
+              </select>
+            </label>
+            <div className="admin-help">Players can join normally; they appear in the highest sector whose TH, trade, and volume rules they satisfy.</div>
+          </div>
+          {mega.enabled && <MegaSectorEditor mega={mega} updateMega={updateMega} />}
+        </div>
+      </div>
       {form.mode === 'dex_vs_dex' && (
         <div className="admin-card">
           <div className="admin-card-head"><div><div className="admin-card-title">Team Rules</div><div className="admin-card-sub">Team score decides the winning DEX. Member reward metric decides player split inside the winning side.</div></div></div>
@@ -772,6 +809,133 @@ function TournamentEligibilityStep({ form, update }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function MegaSectorEditor({ mega, updateMega }) {
+  const [activeSector, setActiveSector] = useState(0);
+  const sectors = mega.sectors || [];
+  function setSectors(next) {
+    const normalized = normalizeMegaConfig({ ...mega, sectors: next }).sectors;
+    updateMega({ sectors: normalized });
+    setActiveSector((value) => Math.max(0, Math.min(value, Math.max(0, normalized.length - 1))));
+  }
+  function updateSector(index, patch) {
+    const next = [...sectors];
+    next[index] = { ...next[index], ...patch };
+    setSectors(next);
+  }
+  function addSector() {
+    const next = [...sectors, { id: `sector_${sectors.length + 1}`, name: `Sector ${sectors.length + 1}`, min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] }];
+    setSectors(next);
+    setActiveSector(next.length - 1);
+  }
+  function removeSector(index) {
+    setSectors(sectors.filter((_, i) => i !== index));
+    setActiveSector((value) => Math.max(0, Math.min(value, sectors.length - 2)));
+  }
+  function updateSectorTier(sectorIndex, tierIndex, patch) {
+    const sector = sectors[sectorIndex];
+    const tiers = [...(sector.prize_tiers || [])];
+    tiers[tierIndex] = { ...tiers[tierIndex], ...patch };
+    updateSector(sectorIndex, { prize_tiers: tiers });
+  }
+  function removeSectorTier(sectorIndex, tierIndex) {
+    const sector = sectors[sectorIndex];
+    updateSector(sectorIndex, { prize_tiers: (sector.prize_tiers || []).filter((_, i) => i !== tierIndex) });
+  }
+  function addSectorTier(sectorIndex) {
+    const sector = sectors[sectorIndex];
+    updateSector(sectorIndex, { prize_tiers: [...(sector.prize_tiers || []), { volume_usd: 0, rewards: [normalizeReward(rewardDefaults('money'))] }] });
+  }
+  const current = sectors[activeSector] || null;
+  return (
+    <div className="admin-card nested-card">
+      <div className="admin-card-head">
+        <div>
+          <div className="admin-card-title">Mega Sectors</div>
+          <div className="admin-card-sub">Order matters: the first matching sector wins. Put Whale above Dolphin above Shrimp.</div>
+        </div>
+        <button className="admin-btn primary" onClick={addSector}>Add sector</button>
+      </div>
+      <div className="admin-card-body admin-grid">
+        <div className="tier-pager">
+          <button className="admin-btn" onClick={() => setActiveSector((value) => Math.max(0, value - 1))} disabled={activeSector === 0}>Previous sector</button>
+          <div className="tier-pager-center">
+            <strong>{current ? current.name : 'No sector'}</strong>
+            <span className="admin-card-sub">{sectors.length ? `Sector ${activeSector + 1} of ${sectors.length}` : 'Add at least one sector'}</span>
+          </div>
+          <button className="admin-btn" onClick={() => setActiveSector((value) => Math.min(sectors.length - 1, value + 1))} disabled={activeSector >= sectors.length - 1}>Next sector</button>
+        </div>
+        <div className="tier-chip-row">
+          {sectors.map((sector, idx) => (
+            <button key={`${sector.id}-${idx}`} className={'tier-chip' + (idx === activeSector ? ' active' : '')} onClick={() => setActiveSector(idx)}>
+              {sector.name}<span>{fmtUsd(sector.min_volume_usd || 0, 0)} min</span>
+            </button>
+          ))}
+        </div>
+        {current && (
+          <div className="admin-grid">
+            <div className="admin-form-grid three">
+              <label className="admin-field"><span className="admin-label">Sector ID</span><input className="admin-input" value={current.id} onChange={(e) => updateSector(activeSector, { id: e.target.value })} /></label>
+              <label className="admin-field"><span className="admin-label">Name</span><input className="admin-input" value={current.name} onChange={(e) => updateSector(activeSector, { name: e.target.value })} /></label>
+              <label className="admin-field"><span className="admin-label">Description</span><input className="admin-input" value={current.description || ''} onChange={(e) => updateSector(activeSector, { description: e.target.value })} /></label>
+            </div>
+            <div className="admin-form-grid three">
+              <NumberField label="Min Town Hall" value={current.min_town_hall_level} onChange={(v) => updateSector(activeSector, { min_town_hall_level: v })} />
+              <NumberField label="Min volume $" value={current.min_volume_usd} onChange={(v) => updateSector(activeSector, { min_volume_usd: v })} />
+              <NumberField label="Min trades / tx" value={current.min_trades} onChange={(v) => updateSector(activeSector, { min_trades: v })} />
+            </div>
+            <div className="admin-form-grid">
+              <label className="admin-field">
+                <span className="admin-label">Sector volume source</span>
+                <select className="admin-select" value={current.dex_scope || 'all'} onChange={(e) => updateSector(activeSector, { dex_scope: e.target.value })}>
+                  <option value="all">All DEXes summed</option>
+                  <option value="tournament">Tournament eligible DEXes</option>
+                  <option value="custom">Custom sector DEXes</option>
+                </select>
+              </label>
+              <button className="admin-btn danger" onClick={() => removeSector(activeSector)}>Remove sector</button>
+            </div>
+            {current.dex_scope === 'custom' && (
+              <div className="admin-choice-grid">
+                {TOURNAMENT_DEXES.map((dex) => {
+                  const active = (current.dexes || []).includes(dex);
+                  return (
+                    <button
+                      key={dex}
+                      className={'admin-choice' + (active ? ' active' : '')}
+                      onClick={() => {
+                        const set = new Set(current.dexes || []);
+                        if (set.has(dex)) set.delete(dex);
+                        else set.add(dex);
+                        updateSector(activeSector, { dexes: Array.from(set) });
+                      }}
+                    >
+                      <strong>{DEX_LABELS[dex]}</strong>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <div className="admin-toolbar">
+              <strong>Sector rewards</strong>
+              <button className="admin-btn" onClick={() => addSectorTier(activeSector)}>Add sector reward tier</button>
+            </div>
+            {(current.prize_tiers || []).map((tier, tierIndex) => (
+              <PrizeTierEditor
+                key={tierIndex}
+                tier={tier}
+                index={tierIndex}
+                updateTier={(idx, patch) => updateSectorTier(activeSector, idx, patch)}
+                removeTier={(idx) => removeSectorTier(activeSector, idx)}
+              />
+            ))}
+            {!(current.prize_tiers || []).length && <div className="admin-help">No sector-specific rewards yet. Add a tier if this sector needs its own prize pool.</div>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1097,17 +1261,28 @@ function LeaderboardDrawer({ data, onClose }) {
       </div>
       <div className="admin-table-wrap admin-scroll">
         <table className="admin-table">
-          <thead><tr><th>Rank</th><th>Player</th><th>Team</th><th>Trading wallet</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th><th>Prize</th></tr></thead>
+          <thead><tr><th>Rank</th><th>Player</th><th>Sector</th><th>Top DEX</th><th>Team</th><th>Trading wallet</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th><th>Prize</th></tr></thead>
           <tbody>
             {rows.map((r) => {
               const rewardWallet = compactWallet(r.reward_wallet_evm || r.reward_wallet_solana);
               const tradingWallet = compactWallet(r.trading_wallet);
+              const dexBreakdown = Array.isArray(r.dex_breakdown) ? r.dex_breakdown.slice(0, 4) : [];
               return (
                 <tr key={r.player_id || r.rank}>
                   <td>{r.rank}</td>
                   <td>
                     <strong>{r.name || short(r.wallet)}</strong>
                     {r.wallet ? <div className="admin-card-sub admin-mono admin-wallet-line">{short(r.wallet, 10, 6)}</div> : null}
+                  </td>
+                  <td>
+                    {r.mega_sector_name || '-'}
+                    {r.town_hall_level ? <div className="admin-card-sub">TH {r.town_hall_level}</div> : null}
+                  </td>
+                  <td>
+                    {r.top_dex_label || r.trading_dex || '-'}
+                    {dexBreakdown.map((item) => (
+                      <div key={item.dex} className="admin-card-sub">{item.label}: {fmtUsd(item.volume_usd || 0, 0)}</div>
+                    ))}
                   </td>
                   <td>{r.team_label || r.dex || '-'}</td>
                   <td>
@@ -1269,7 +1444,7 @@ function TasksPanel({ data, reload }) {
           </div>
           <div className="admin-table-wrap admin-scroll">
             <table className="admin-table">
-              <thead><tr><th>ID</th><th>Task</th><th>Type</th><th>Rewards</th><th>Status</th><th>Started</th><th>Claimed</th><th>Avg Progress</th><th>Last Activity</th><th>Actions</th></tr></thead>
+              <thead><tr><th>ID</th><th>Task</th><th>Type</th><th>Rewards</th><th>Status</th><th>Started</th><th>Current claimed</th><th>Paid claims</th><th>Avg Progress</th><th>Last Activity</th><th>Actions</th></tr></thead>
               <tbody>
                 {rows.map((task) => {
                   const schedule = taskScheduleState(task);
@@ -1290,8 +1465,15 @@ function TasksPanel({ data, reload }) {
                     <td><span className={'admin-badge ' + schedule.badge}>{schedule.label}</span></td>
                     <td>{task.started_count || 0}</td>
                     <td>{task.claimed_count || 0}</td>
+                    <td>
+                      <strong>{task.paid_claim_count || 0}</strong>
+                      <div className="admin-card-sub">{task.claim_attempt_count || 0} attempts</div>
+                      {(task.paid_rewards?.gold || task.paid_rewards?.wood || task.paid_rewards?.ore) ? (
+                        <div className="admin-card-sub">G:{task.paid_rewards.gold || 0} W:{task.paid_rewards.wood || 0} O:{task.paid_rewards.ore || 0}</div>
+                      ) : null}
+                    </td>
                     <td>{Math.round(Number(task.avg_progress || 0) * 100)}%</td>
-                    <td>{fmtTime(task.last_claim || task.last_start)}</td>
+                    <td>{fmtTime(task.last_paid_claim || task.last_claim || task.last_start)}</td>
                     <td><div className="admin-filter-row"><button className="admin-btn" onClick={() => setEditing(taskToForm(task))}>Edit</button><button className="admin-btn" onClick={() => setSelected(task)}>Players</button><button className="admin-btn danger" onClick={() => resetProgress(task)}>Reset</button><button className="admin-btn danger" onClick={() => deleteTask(task)}>Delete</button></div></td>
                   </tr>
                 );})}
@@ -1503,6 +1685,11 @@ function TaskPlayersDrawer({ task, onClose }) {
           <table className="admin-table">
             <thead><tr><th>Player</th><th>Progress</th><th>Started</th><th>Claimed</th><th>Wallet</th></tr></thead>
             <tbody>{(data.players || []).map((row) => <tr key={row.player_id}><td><strong>{row.player_name || row.player_id}</strong><div className="admin-card-sub admin-mono">{row.player_id}</div></td><td>{row.progress_value || 0}/{row.target_value || 0}</td><td>{fmtTime(row.started_at)}</td><td>{row.claimed_at ? <span className="admin-badge green">{fmtTime(row.claimed_at)}</span> : <span className="admin-badge off">not claimed</span>}</td><td className="admin-mono">{short(row.wallet, 8, 6)}</td></tr>)}</tbody>
+          </table>
+          <div className="admin-help" style={{ margin: '12px 0 6px' }}>Lifetime repeat history comes from task_claim_events and does not reset with current progress.</div>
+          <table className="admin-table">
+            <thead><tr><th>Player</th><th>Paid claims</th><th>Attempts</th><th>Rewards paid</th><th>Last paid</th></tr></thead>
+            <tbody>{(data.players || []).map((row) => <tr key={`${row.player_id}-lifetime`}><td><strong>{row.player_name || row.player_id}</strong><div className="admin-card-sub admin-mono">{row.player_id}</div></td><td><strong>{row.paid_claim_count || 0}</strong></td><td>{row.attempt_count || 0}<div className="admin-card-sub">{row.not_completed_count || 0} not ready · {row.blocked_count || 0} blocked</div></td><td>G:{row.paid_rewards?.gold || 0} W:{row.paid_rewards?.wood || 0} O:{row.paid_rewards?.ore || 0}</td><td>{fmtTime(row.last_paid_claim)}</td></tr>)}</tbody>
           </table>
         </div>
       )}
@@ -1984,7 +2171,13 @@ function NftPanel({ data }) {
   const logs = data.bridge_logs || {};
   const payments = data.payments || {};
   const demonKing = data.demon_king || {};
+  const dragon = data.dragon || {};
   const demonLevels = demonKing.level_summary || {};
+  const dragonLevels = dragon.level_summary || {};
+  const collectionCards = [
+    { key: 'demon_king', label: 'Demon King', data: demonKing, tone: 'blue' },
+    { key: 'dragon', label: 'Dragon', data: dragon, tone: 'gold' },
+  ];
   return (
     <div className="admin-grid">
       <StatsGrid stats={[
@@ -1995,6 +2188,8 @@ function NftPanel({ data }) {
         { label: 'Bridge 24h', value: bridges.summary?.h24 || 0, tone: 'blue' },
         { label: 'Demon King L2+ players', value: num(demonLevels.lvl2plus_players || 0), tone: 'green' },
         { label: 'Demon King L2+ NFTs', value: num(demonLevels.lvl2plus_tokens || 0), tone: 'blue' },
+        { label: 'Dragon players', value: num(dragonLevels.total_players || 0), tone: 'green' },
+        { label: 'Dragon NFTs', value: num(dragonLevels.total_tokens || 0), tone: 'gold' },
         { label: 'Log errors 24h', value: logs.summary?.errors_24h || 0, tone: logs.summary?.errors_24h ? 'red' : 'green' },
       ]} />
       <div className="admin-grid two">
@@ -2003,7 +2198,36 @@ function NftPanel({ data }) {
       </div>
       <div className="admin-grid two">
         <CompactTable title="Utility Payments" subtitle="NFT utility purchase revenue by chain and token." columns={['Chain', 'Token', 'Payments', 'Buyers', 'Revenue', 'Latest']} rows={(payments.utility_by_token || []).map((row) => [chainBadge(row.chain), row.token, row.payments, row.unique_buyers, fmtMaybeUsd(row.revenue_usd), fmtTime(row.latest_at)])} />
-        <CompactTable title="Demon King Levels" subtitle="Active Demon King NFT cache by level and unique game accounts." columns={['Level', 'NFTs', 'Players', 'Latest']} rows={(demonKing.by_level || []).map((row) => [`L${row.level || 1}`, num(row.tokens || 0), num(row.players || 0), fmtTime(row.latest_at)])} />
+        <CompactTable title="Marketplace NFT Sales" subtitle="Marketplace sales grouped by payment token." columns={['Chain', 'Token', 'Sales', 'Latest']} rows={(payments.marketplace_by_token || []).map((row) => [chainBadge(row.chain), row.token, row.sales, fmtTime(row.latest_at)])} />
+      </div>
+      <div className="admin-grid two">
+        {collectionCards.map((collection) => {
+          const summary = collection.data?.level_summary || {};
+          return (
+            <div className="admin-card" key={collection.key}>
+              <div className="admin-card-head">
+                <div>
+                  <div className="admin-card-title">{collection.label}</div>
+                  <div className="admin-card-sub">Active cached ownership split by chain, rarity, and legacy level.</div>
+                </div>
+                <span className={`admin-badge ${collection.tone}`}>{num(summary.total_tokens || 0)} NFTs</span>
+              </div>
+              <div className="admin-card-body">
+                <StatsGrid stats={[
+                  { label: 'NFTs', value: num(summary.total_tokens || 0), tone: collection.tone },
+                  { label: 'Players', value: num(summary.total_players || 0), tone: 'green' },
+                  { label: 'L2+ players', value: num(summary.lvl2plus_players || 0), tone: 'blue' },
+                  { label: 'L2+ NFTs', value: num(summary.lvl2plus_tokens || 0), tone: 'gold' },
+                ]} />
+                <div className="admin-grid" style={{ gap: 12, marginTop: 12 }}>
+                  <CompactTable title={`${collection.label} by Chain`} subtitle="Active wallet cache." columns={['Chain', 'NFTs', 'Players', 'Wallets', 'Latest']} rows={(collection.data?.by_chain || []).map((row) => [chainBadge(row.chain), num(row.tokens || 0), num(row.players || 0), num(row.wallets || 0), fmtTime(row.latest_at)])} />
+                  <CompactTable title={`${collection.label} by Rarity`} subtitle="Joined against nft_rarities." columns={['Rarity', 'NFTs', 'Players', 'Latest']} rows={(collection.data?.by_rarity || []).map((row) => [rarityBadge(row.rarity), num(row.tokens || 0), num(row.players || 0), fmtTime(row.latest_at)])} />
+                  <CompactTable title={`${collection.label} Levels`} subtitle="Legacy level cache for migration/debug." columns={['Level', 'NFTs', 'Players', 'Latest']} rows={(collection.data?.by_level || []).map((row) => [`L${row.level || 1}`, num(row.tokens || 0), num(row.players || 0), fmtTime(row.latest_at)])} />
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
       <div className="admin-grid two">
         <CompactTable title="Bridge Log Phases" subtitle="Recent health by bridge phase and status." columns={['Phase', 'Status', 'Count', 'Latest']} rows={(logs.by_phase || []).map((row) => [row.phase || '-', statusBadge(row.status), row.count, fmtTime(row.latest_at)])} />
@@ -2227,6 +2451,18 @@ function DexBadge({ dex }) {
 
 function chainBadge(chain) {
   return <span className="admin-badge blue">{chain || 'unknown'}</span>;
+}
+
+function rarityBadge(rarity) {
+  const value = String(rarity || 'unrevealed').toLowerCase();
+  const label = value === 'unrevealed'
+    ? 'Unrevealed'
+    : value.charAt(0).toUpperCase() + value.slice(1);
+  let tone = 'off';
+  if (value === 'common') tone = 'blue';
+  if (value === 'epic') tone = 'purple';
+  if (value === 'legendary') tone = 'gold';
+  return <span className={'admin-badge ' + tone}>{label}</span>;
 }
 
 function statusBadge(status) {

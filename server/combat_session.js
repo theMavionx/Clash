@@ -1008,7 +1008,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       if (pendingSpawns[i].time <= time) {
         const sp = pendingSpawns.splice(i, 1)[0];
         const baseStats = isNftBackedTroopType(sp.troopType)
-          ? computeNftTroopStats(sp.playerTroopLevels, sp.troopType, sp.nftRarity)
+          ? computeNftTroopStats(sp.playerTroopLevels, sp.troopType, sp.nftRarity, sp.troopLevel)
           : (TROOP_STATS[sp.troopType]?.[sp.troopLevel] || TROOP_STATS[sp.troopType]?.[1]);
         const stats = baseStats;
         if (!stats) continue;
@@ -1022,6 +1022,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           hp: stats.hp, damage: stats.damage,
           atkSpeed: stats.atkSpeed, moveSpeed: stats.moveSpeed, range: stats.range,
           melee: stats.melee, projSpeed: stats.projSpeed || 0,
+          directHit: !!stats.directHit,
           flying: !!stats.flying,
           targetType: stats.flying ? UNIT_TARGET_AIR : UNIT_TARGET_GROUND,
           hitDelay: stats.hitDelay || 0, shootDelay: stats.shootDelay || 0,
@@ -1636,6 +1637,33 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
             t._forceRetarget = true;
           }
           if (target.hp <= 0 && target.type) cannonEnergy += CANNON_ENERGY_PER_DESTROY;
+        }
+        if (t.atkTimer >= t.atkSpeed) {
+          t.atkTimer -= t.atkSpeed;
+          t.hitDone = false;
+        }
+      } else if (t.directHit) {
+        if (!t.hitDone && t.atkTimer >= t.atkSpeed * (t.hitDelay || 0.4)) {
+          t.hitDone = true;
+          const hpBefore = target.hp;
+          target.hp -= t.damage;
+          traceEvent('troop_ranged_direct_hit', {
+            troopId: t.id,
+            replayOrder: t.replayOrder ?? null,
+            troop: t.type,
+            targetKind: targetIsGuard ? 'guard' : 'building',
+            targetId: target.id,
+            targetType: target.type || 'guard',
+            target: traceEntityPayload(target, targetIsGuard ? 'guard' : 'building'),
+            damage: t.damage,
+            hpBefore,
+            hpAfter: target.hp,
+          });
+          if (target.hp <= 0 && target.type) {
+            traceBuildingDestroyed(target, 'troop_ranged_direct');
+            t._forceRetarget = true;
+            cannonEnergy += CANNON_ENERGY_PER_DESTROY;
+          }
         }
         if (t.atkTimer >= t.atkSpeed) {
           t.atkTimer -= t.atkSpeed;

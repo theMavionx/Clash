@@ -25,7 +25,9 @@ const DEX_LABELS = {
   monad: 'Perpl',
   phoenix: 'Phoenix',
   hyperliquid: 'Hyperliquid',
+  risex: 'RISEx',
   nado: 'Nado',
+  hibachi: 'Hibachi',
   hotstuff: 'Hotstuff',
   grvt: 'GRVT',
   katana: 'Katana',
@@ -193,6 +195,23 @@ function featuredMetric(sortKey, row) {
   };
 }
 
+function isMegaTournament(t) {
+  return !!(t?.is_mega || t?.tournament_kind === 'mega' || t?.mega_config?.enabled);
+}
+
+function sectorRequirementText(sector) {
+  const parts = [];
+  if (Number(sector?.min_town_hall_level || 0) > 0) parts.push(`TH ${sector.min_town_hall_level}`);
+  if (Number(sector?.min_volume_usd || 0) > 0) parts.push(`${fmtUsdWhole(sector.min_volume_usd)} vol`);
+  if (Number(sector?.min_trades || 0) > 0) parts.push(`${fmt(sector.min_trades)} trades`);
+  return parts.join(' · ') || 'Open';
+}
+
+function dexBreakdownSummary(row) {
+  const list = Array.isArray(row?.dex_breakdown) ? row.dex_breakdown : [];
+  return list.slice(0, 3).map((item) => `${item.label || DEX_LABELS[item.dex] || item.dex}: ${fmtUsdWhole(item.volume_usd)}`).join(' · ');
+}
+
 function TournamentPanel({ onClose }) {
   // Tab gate: 'active' (default) or 'history'. History shows ended
   // tournaments + their final leaderboards so a finished cup doesn't just
@@ -279,7 +298,13 @@ function TournamentPanel({ onClose }) {
   }, [board?.prize, t]);
   const activePrizeRewards = rewardPoolSummary(t?.prize_rewards || [], t?.prize_currency || 'USD');
   const nextPrizeRewards = rewardPoolSummary(t?.prize_next_tier?.rewards || [], t?.prize_currency || 'USD');
-
+  const myBoardRow = useMemo(() => {
+    if (!board || !playerId) return null;
+    return (board.leaderboard || []).find(r => r.player_id === playerId) || null;
+  }, [board, playerId]);
+  const megaSectors = useMemo(() => (
+    isMegaTournament(t) && Array.isArray(board?.mega?.sectors) ? board.mega.sectors : []
+  ), [board?.mega?.sectors, t]);
   useEffect(() => {
     const stored = String(myStats?.reward_wallet_evm || '').trim();
     if (!stored) {
@@ -474,6 +499,7 @@ function TournamentPanel({ onClose }) {
                 {t.description && <div style={S.tDesc}>{t.description}</div>}
                 <div style={S.tagRow}>
                   <span style={S.dexTag}>{dexLabel(t, dex)}</span>
+                  {isMegaTournament(t) && <span style={S.megaTag}>MEGA</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.teamTag}>DEX VS DEX</span>}
                   <span style={S.tag}>Sort: {sortLabel(t)}</span>
                   {isDailyPoolTournament(t) && <span style={S.prizeTag}>{fmt(t.daily_pool_points || 1000)} pts/day at 00:00 UTC</span>}
@@ -515,6 +541,34 @@ function TournamentPanel({ onClose }) {
                     <span>{fmtUsd(prizeProgress.currentVolume)} current</span>
                     <span>{fmtUsd(prizeProgress.nextVolume)} target</span>
                   </div>
+                </div>
+              )}
+
+              {isMegaTournament(t) && megaSectors.length > 0 && (
+                <div style={S.sectorCard}>
+                  <div style={S.sectorHeader}>
+                    <span style={S.sectorTitle}>Mega sectors</span>
+                    {myBoardRow?.mega_sector_name && <span style={S.sectorMine}>You: {myBoardRow.mega_sector_name}</span>}
+                  </div>
+                  <div style={S.sectorGrid}>
+                    {megaSectors.filter((sector) => sector.id !== 'unqualified').map((sector) => {
+                      const mine = myBoardRow?.mega_sector_id === sector.id;
+                      return (
+                        <div key={sector.id} style={mine ? S.sectorTileActive : S.sectorTile}>
+                          <div style={S.sectorTileTop}>
+                            <strong>{sector.name}</strong>
+                            <span>{sector.summary?.players || 0} players</span>
+                          </div>
+                          <div style={S.sectorReq}>{sectorRequirementText(sector)}</div>
+                          <div style={S.sectorReq}>{(sector.dex_labels || []).slice(0, 4).join(', ') || 'All DEXes'}</div>
+                          <div style={S.sectorVolume}>{fmtUsdWhole(sector.summary?.total_volume_usd || 0)} sector vol</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {myBoardRow?.dex_breakdown?.length > 0 && (
+                    <div style={S.dexBreakdownLine}>Your DEX volume: {dexBreakdownSummary(myBoardRow)}</div>
+                  )}
                 </div>
               )}
 
@@ -563,6 +617,8 @@ function TournamentPanel({ onClose }) {
                     {myRank && <span style={S.myCardRank}>#{myRank}</span>}
                   </div>
                   <div style={S.statRow}>
+                    {myBoardRow?.mega_sector_name && <Stat label="Sector" value={myBoardRow.mega_sector_name} />}
+                    {myBoardRow?.top_dex_label && <Stat label="Top DEX" value={myBoardRow.top_dex_label} />}
                     {isPointsSort(t.sort_by) && (
                       <Stat label="Score" value={`${fmtPoints(myStats.score)} pts`} />
                     )}
@@ -604,6 +660,8 @@ function TournamentPanel({ onClose }) {
                     {myRank && <span style={S.myCardRank}>#{myRank}</span>}
                   </div>
                   <div style={S.statRow}>
+                    {myBoardRow?.mega_sector_name && <Stat label="Sector" value={myBoardRow.mega_sector_name} />}
+                    {myBoardRow?.top_dex_label && <Stat label="Top DEX" value={myBoardRow.top_dex_label} />}
                     {isPointsSort(t.sort_by) && (
                       <Stat label="Score" value={`${fmtPoints(myStats.score)} pts`} />
                     )}
@@ -645,6 +703,16 @@ function TournamentPanel({ onClose }) {
               )}
 
               <div style={S.lbHeader}>Leaderboard</div>
+              {isMegaTournament(t) && megaSectors.length > 0 && (
+                <div style={S.lbGroupList}>
+                  {megaSectors.map((sector) => (
+                    <div key={sector.id} style={S.lbGroupHeader}>
+                      <span>{sector.name}</span>
+                      <small>{fmtUsdWhole(sector.summary?.total_volume_usd || 0)} vol · {sector.summary?.players || 0} players</small>
+                    </div>
+                  ))}
+                </div>
+              )}
               {t.mode === 'dex_vs_dex' && board?.teams?.teams?.length > 0 && (
                 <div style={S.teamBoard}>
                   {board.teams.teams.map((team) => (
@@ -672,6 +740,7 @@ function TournamentPanel({ onClose }) {
                   const featuredDisplay = featuredMetric(sortKey, r);
                   const prizeAmount = Number(r.prize_amount || 0);
                   const rankRewards = rankRewardSummary(r.prize_rewards || [], r.prize_currency || t.prize_currency || 'USD');
+                  const topDex = r.top_dex_label || r.team_label || null;
                   return (
                     <div
                       key={r.player_id}
@@ -693,9 +762,11 @@ function TournamentPanel({ onClose }) {
                       <div style={S.info}>
                         <span style={{ ...S.name, color: isMe ? '#b45309' : '#5C3A21' }}>
                           {r.name || (r.wallet || '').slice(0, 6) + '…'}{isMe ? ' (you)' : ''}
+                          {topDex && <em style={S.topDexBadge}>{topDex}</em>}
                         </span>
                         <span style={S.subRow}>
                           {r.team_label && <>{r.team_label} | </>}
+                          {isMegaTournament(t) && r.mega_sector_name && <>{r.mega_sector_name} · </>}
                           {fmt(r.trophies)} 🏆 · {r.trades_count} trades · {fmtUsd(r.volume_usd)} vol
                           {rankRewards.length > 0 && <> · <strong style={S.prizeText}>{rankRewards.join(' + ')}</strong></>}
                           {!rankRewards.length && prizeAmount > 0 && <> · <strong style={S.prizeText}>{fmtPrize(prizeAmount)} prize</strong></>}
@@ -943,6 +1014,11 @@ const S = {
     background: '#fee2e2', border: '2px solid #ef4444', color: '#991b1b',
     textTransform: 'uppercase', letterSpacing: 0.4,
   },
+  megaTag: {
+    fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
+    background: '#ede9fe', border: '2px solid #8b5cf6', color: '#5b21b6',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
   tag: {
     fontSize: 10, fontWeight: 800, padding: '3px 7px', borderRadius: 6,
     background: '#fdf8e7', border: '2px solid #d4c8b0', color: '#7c5a3a',
@@ -997,6 +1073,20 @@ const S = {
     display: 'flex', justifyContent: 'space-between', gap: 8,
     fontSize: 10, fontWeight: 800, color: '#7c5a3a',
   },
+  sectorCard: {
+    background: '#fdf8e7', border: '3px solid #d4c8b0', borderRadius: 14,
+    padding: 10, display: 'flex', flexDirection: 'column', gap: 8,
+  },
+  sectorHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  sectorTitle: { fontSize: 12, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase', letterSpacing: 0.5 },
+  sectorMine: { fontSize: 11, fontWeight: 900, color: '#15803d', background: '#dcfce7', border: '2px solid #22c55e', borderRadius: 8, padding: '3px 7px' },
+  sectorGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
+  sectorTile: { background: '#f7edd0', border: '2px solid #d4c8b0', borderRadius: 10, padding: 8 },
+  sectorTileActive: { background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 10, padding: 8 },
+  sectorTileTop: { display: 'flex', justifyContent: 'space-between', gap: 6, fontSize: 11, fontWeight: 900, color: '#5C3A21' },
+  sectorReq: { fontSize: 10, fontWeight: 800, color: '#7c5a3a', marginTop: 3 },
+  sectorVolume: { fontSize: 10, fontWeight: 900, color: '#15803d', marginTop: 4 },
+  dexBreakdownLine: { fontSize: 10, fontWeight: 800, color: '#7c5a3a' },
   teamBoard: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
   teamCard: {
     background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 10, padding: 8,
@@ -1007,6 +1097,13 @@ const S = {
   teamName: { fontSize: 11, fontWeight: 900, color: '#5C3A21' },
   teamMeta: { fontSize: 10, fontWeight: 800, color: '#7c5a3a', marginTop: 2 },
   teamPrize: { fontSize: 10, fontWeight: 900, color: '#15803d', marginTop: 3 },
+  lbGroupList: { display: 'flex', flexDirection: 'column', gap: 5 },
+  lbGroup: { display: 'flex', flexDirection: 'column', gap: 6 },
+  lbGroupHeader: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 9,
+    padding: '6px 8px', fontSize: 11, fontWeight: 900, color: '#5C3A21',
+  },
 
   rewardBox: {
     background: '#fef3c7', border: '3px solid #f59e0b', borderRadius: 14, padding: 10,
@@ -1191,6 +1288,12 @@ const S = {
   },
   info: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 },
   name: { fontSize: 13, fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  topDexBadge: {
+    display: 'inline-block', marginLeft: 6, verticalAlign: 'middle',
+    fontSize: 9, fontStyle: 'normal', fontWeight: 900, color: '#075985',
+    background: '#e0f2fe', border: '1px solid #38bdf8', borderRadius: 6,
+    padding: '1px 5px', textTransform: 'uppercase',
+  },
   subRow: {
     display: 'block', fontSize: 10, fontWeight: 700, color: '#a3906a',
     lineHeight: 1.22, overflowWrap: 'anywhere',

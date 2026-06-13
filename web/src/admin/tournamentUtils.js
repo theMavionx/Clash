@@ -69,8 +69,56 @@ export function emptyTournament() {
     points_pnl_weight: 20,
     prize_currency: 'USD',
     prize_tiers: [],
+    mega_config: defaultMegaConfig(false),
     rewards_in_cop: false,
     status: 'active',
+  };
+}
+
+export const MEGA_SECTOR_TEMPLATES = {
+  whale_dolphin_shrimp: [
+    { id: 'whale', name: 'Whale', min_town_hall_level: 3, min_volume_usd: 100000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'dolphin', name: 'Dolphin', min_town_hall_level: 2, min_volume_usd: 25000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'shrimp', name: 'Shrimp', min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
+  ],
+  abc: [
+    { id: 'a', name: 'Sector A', min_town_hall_level: 3, min_volume_usd: 100000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'b', name: 'Sector B', min_town_hall_level: 2, min_volume_usd: 25000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'c', name: 'Sector C', min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
+  ],
+};
+
+export function defaultMegaConfig(enabled = false, template = 'whale_dolphin_shrimp') {
+  return {
+    enabled: !!enabled,
+    template,
+    sectors: (MEGA_SECTOR_TEMPLATES[template] || MEGA_SECTOR_TEMPLATES.whale_dolphin_shrimp).map((sector) => ({
+      ...sector,
+      dexes: [...(sector.dexes || [])],
+      prize_tiers: normalizePrizeTiers(sector.prize_tiers || []),
+    })),
+  };
+}
+
+export function normalizeMegaConfig(raw = {}) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const template = source.template || 'whale_dolphin_shrimp';
+  const fallback = defaultMegaConfig(!!source.enabled, template);
+  const sectors = Array.isArray(source.sectors) && source.sectors.length ? source.sectors : fallback.sectors;
+  return {
+    enabled: !!source.enabled,
+    template,
+    sectors: sectors.map((sector, idx) => ({
+      id: String(sector.id || sector.key || `sector_${idx + 1}`).toLowerCase().replace(/[^a-z0-9_-]+/g, '_').slice(0, 32),
+      name: String(sector.name || sector.label || `Sector ${idx + 1}`).slice(0, 40),
+      description: String(sector.description || '').slice(0, 120),
+      min_town_hall_level: Math.max(0, Math.floor(Number(sector.min_town_hall_level ?? sector.min_th ?? 0) || 0)),
+      min_volume_usd: Math.max(0, Number(sector.min_volume_usd ?? sector.min_volume ?? 0) || 0),
+      min_trades: Math.max(0, Math.floor(Number(sector.min_trades ?? sector.min_tx ?? 0) || 0)),
+      dex_scope: ['all', 'tournament', 'custom'].includes(String(sector.dex_scope || '').toLowerCase()) ? String(sector.dex_scope).toLowerCase() : 'all',
+      dexes: Array.isArray(sector.dexes) ? sector.dexes.filter((dex) => TOURNAMENT_DEXES.includes(dex)) : [],
+      prize_tiers: normalizePrizeTiers(sector.prize_tiers || []),
+    })).filter((sector) => sector.id && sector.name),
   };
 }
 
@@ -98,6 +146,7 @@ export function tournamentToForm(tournament) {
     points_volume_weight: Number(tournament.points_volume_weight ?? tournament.points_weights?.volume ?? 60),
     points_pnl_weight: Number(tournament.points_pnl_weight ?? tournament.points_weights?.pnl ?? 20),
     prize_tiers: normalizePrizeTiers(tournament.prize_tiers || []),
+    mega_config: normalizeMegaConfig(tournament.mega_config || {}),
     team_prize_splits: Array.isArray(tournament.team_prize_splits) ? tournament.team_prize_splits : [],
     daily_pool_overrides: tournament.daily_pool_overrides || {},
   };
@@ -201,6 +250,7 @@ export function formToTournamentBody(form) {
     points_pnl_weight: Number(form.points_pnl_weight) || 0,
     prize_currency: String(form.prize_currency || 'USD').toUpperCase(),
     prize_tiers: normalizePrizeTiers(form.prize_tiers || []),
+    mega_config: normalizeMegaConfig(form.mega_config || {}),
     rewards_in_cop: !!form.rewards_in_cop,
     status: form.status || 'active',
   };
@@ -223,6 +273,15 @@ export function validateTournamentStep(step, form) {
     if (form.team_prize_mode === 'custom_split') {
       const total = (form.team_prize_splits || []).reduce((sum, row) => sum + Number(row.share_pct || 0), 0);
       if (Math.abs(total - 100) > 0.01) errors.push(`Team prize split must total 100%. Current total is ${total.toFixed(2)}%.`);
+    }
+    const mega = normalizeMegaConfig(form.mega_config || {});
+    if (mega.enabled) {
+      if (!mega.sectors.length) errors.push('Mega tournament needs at least one sector.');
+      for (const sector of mega.sectors) {
+        if (sector.dex_scope === 'custom' && !sector.dexes.length) {
+          errors.push(`Mega sector "${sector.name}" needs at least one custom DEX.`);
+        }
+      }
     }
   }
   if (step === 2) {

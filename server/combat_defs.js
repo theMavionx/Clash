@@ -30,10 +30,10 @@ const TROOP_STATS = {
     4: { hp: 425, damage: 82, atkSpeed: 0.78, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
   },
   ranger: {
-    1: { hp: 250, damage: 34, atkSpeed: 1.0,  moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
-    2: { hp: 330, damage: 45, atkSpeed: 0.92, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
-    3: { hp: 430, damage: 60, atkSpeed: 0.83, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
-    4: { hp: 560, damage: 80, atkSpeed: 0.76, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    1: { hp: 250, damage: 34, atkSpeed: 1.0,  moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    2: { hp: 330, damage: 45, atkSpeed: 0.92, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    3: { hp: 430, damage: 60, atkSpeed: 0.83, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    4: { hp: 560, damage: 80, atkSpeed: 0.76, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
   },
   demon_king: {
     1: { hp: 1080, damage: 92,  atkSpeed: 1.40, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
@@ -42,10 +42,10 @@ const TROOP_STATS = {
     4: { hp: 2400, damage: 207, atkSpeed: 1.10, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
   },
   fire_dragon: {
-    1: { hp: 360, damage: 140, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
-    2: { hp: 480, damage: 178, atkSpeed: 1.12, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
-    3: { hp: 636, damage: 250, atkSpeed: 1.00, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
-    4: { hp: 828, damage: 332, atkSpeed: 0.90, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
+    1: { hp: 360, damage: 140, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
+    2: { hp: 480, damage: 178, atkSpeed: 1.12, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
+    3: { hp: 636, damage: 250, atkSpeed: 1.00, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
+    4: { hp: 828, damage: 332, atkSpeed: 0.90, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
   },
 };
 
@@ -53,7 +53,7 @@ const TROOP_STATS = {
 // their power relative to two reference troops at the same troop level.
 const NFT_TROOP_REFERENCE = {
   demon_king: { troopType: 'knight', moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-  fire_dragon: { troopType: 'mage', moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, flying: true },
+  fire_dragon: { troopType: 'mage', moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
 };
 const NFT_RARITY_MULTIPLIERS = {
   common: 1.2,
@@ -79,7 +79,7 @@ function clampInt(value, min, max) {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-function troopLevelFromMap(levels = {}, troopType) {
+function troopLevelFromMap(levels = {}, troopType, fallbackLevel = 1) {
   const display = TROOP_TYPE_DISPLAY_KEYS[troopType];
   const compact = display ? display.replace(/\s+/g, '') : troopType;
   const candidates = [troopType, display, compact].filter(Boolean);
@@ -88,7 +88,7 @@ function troopLevelFromMap(levels = {}, troopType) {
       return clampInt(levels[key], 1, 4);
     }
   }
-  return 1;
+  return clampInt(fallbackLevel, 1, 4);
 }
 
 function normalizeNftRarity(rarity) {
@@ -96,9 +96,9 @@ function normalizeNftRarity(rarity) {
   return NFT_RARITY_MULTIPLIERS[key] ? key : 'common';
 }
 
-function computeNftTroopStats(troopLevels = {}, troopType = 'demon_king', rarity = 'common') {
+function computeNftTroopStats(troopLevels = {}, troopType = 'demon_king', rarity = 'common', fallbackLevel = 1) {
   const cfg = NFT_TROOP_REFERENCE[troopType] || NFT_TROOP_REFERENCE.demon_king;
-  const troopLevel = troopLevelFromMap(troopLevels, troopType);
+  const troopLevel = troopLevelFromMap(troopLevels, troopType, fallbackLevel);
   const reference = TROOP_STATS[cfg.troopType]?.[troopLevel] || TROOP_STATS[cfg.troopType]?.[1];
   const multiplier = NFT_RARITY_MULTIPLIERS[normalizeNftRarity(rarity)];
   const atkSpeed = Number(reference.atkSpeed) || 1;
@@ -110,7 +110,8 @@ function computeNftTroopStats(troopLevels = {}, troopType = 'demon_king', rarity
     range: cfg.range,
     melee: !!cfg.melee,
     hitDelay: cfg.hitDelay || 0,
-    projSpeed: reference.projSpeed || 0,
+    directHit: !!cfg.directHit,
+    projSpeed: cfg.directHit ? 0 : (reference.projSpeed || 0),
     shootDelay: reference.shootDelay || 0,
     flying: !!cfg.flying,
   };

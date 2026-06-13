@@ -852,6 +852,7 @@ try {
       daily_pool_enabled_at TEXT,
       prize_currency TEXT NOT NULL DEFAULT 'USD',
       prize_tiers    TEXT NOT NULL DEFAULT '[]',
+      mega_config    TEXT NOT NULL DEFAULT '{}',
       rewards_in_cop INTEGER NOT NULL DEFAULT 0,
       seeker_only  INTEGER NOT NULL DEFAULT 0,
       status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
@@ -924,6 +925,7 @@ try {
   } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_currency TEXT NOT NULL DEFAULT 'USD'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_tiers TEXT NOT NULL DEFAULT '[]'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN mega_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN rewards_in_cop INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_gold_boost REAL NOT NULL DEFAULT 1.0`); } catch {}
@@ -945,7 +947,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -981,6 +983,7 @@ try {
             daily_pool_enabled_at TEXT,
             prize_currency TEXT NOT NULL DEFAULT 'USD',
             prize_tiers    TEXT NOT NULL DEFAULT '[]',
+            mega_config    TEXT NOT NULL DEFAULT '{}',
             rewards_in_cop INTEGER NOT NULL DEFAULT 0,
             seeker_only  INTEGER NOT NULL DEFAULT 0,
             status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
@@ -993,7 +996,7 @@ try {
             id, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost,
             shield_hours, freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
             scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
-            prize_currency, prize_tiers, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
+            prize_currency, prize_tiers, mega_config, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
             id, name, description,
@@ -1023,6 +1026,7 @@ try {
             daily_pool_enabled_at,
             COALESCE(prize_currency, 'USD'),
             COALESCE(prize_tiers, '[]'),
+            COALESCE(mega_config, '{}'),
             COALESCE(rewards_in_cop, 0),
             COALESCE(seeker_only, 0),
             CASE WHEN status IN ('active','ended','draft') THEN status ELSE 'active' END,
@@ -1064,6 +1068,7 @@ try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_points REAL NOT NUL
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_growth_pct REAL NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_overrides TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_enabled_at TEXT`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN mega_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try {
   db.exec(`
     UPDATE tournaments

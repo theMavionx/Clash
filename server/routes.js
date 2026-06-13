@@ -462,6 +462,130 @@ function solanaCoreUpgradeMetadataUrl(req, assetId, sourceRef) {
   return url.toString();
 }
 
+function solanaCollectionRarityMetadataUrl(req, collection, assetId) {
+  const url = new URL(`/api/nft/${collection.slug}/solana/bridged`, `${nftPublicBase(req)}/`);
+  if (assetId) url.searchParams.set('asset', String(assetId));
+  return url.toString();
+}
+
+function normalizedSolanaCollectionRarityAttributes({ existing = [], collection, rarity }) {
+  const protectedKeys = new Set(['game', 'collection', 'character', 'chain', 'standard', 'rarity', 'level', 'stars', 'max supply']);
+  const output = [
+    { key: 'Game', value: 'Clash of Perps' },
+    { key: 'Collection', value: collection.name },
+    { key: 'Character', value: collection.character },
+    { key: 'Chain', value: 'Solana' },
+    { key: 'Standard', value: 'Metaplex Core' },
+    { key: 'Rarity', value: demonKingRarityLabel(rarity) },
+    { key: 'Max Supply', value: String(collection.maxSupply) },
+  ];
+  const seen = new Set(output.map((row) => row.key.toLowerCase()));
+  for (const attr of existing || []) {
+    const rawKey = String(attr?.key || attr?.trait_type || '').trim();
+    if (!rawKey) continue;
+    const key = rawKey.toLowerCase();
+    if (protectedKeys.has(key) || seen.has(key)) continue;
+    output.push({ key: rawKey, value: String(attr?.value ?? '') });
+    seen.add(key);
+  }
+  return output.filter((row) => row.key !== 'Rarity' || row.value);
+}
+
+async function syncSolanaCollectionRarityAsset({ req, collection, assetId, owner = '' }) {
+  if (!nftCollectionUsesRarity(collection)) return null;
+  const cleanAsset = String(assetId || '').trim();
+  if (!SOLANA_WALLET_RE.test(cleanAsset)) throw Object.assign(new Error('bad Solana asset id'), { status: 400 });
+  const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
+  if (!rawKey) throw Object.assign(new Error('Solana NFT authority key is not configured'), { status: 503 });
+  const rarity = nftCollectionRarityForMetadata(collection, 'solana', cleanAsset);
+  if (!rarity) throw Object.assign(new Error('Solana NFT rarity is not revealed in DB'), { status: 409 });
+  const dep = nftCollectionDeployment(collection.slug, 'solana');
+  const { parseSolanaSecretKey } = require('./bridge_helpers');
+  const secretBytes = parseSolanaSecretKey(rawKey);
+  const targetUri = solanaCollectionRarityMetadataUrl(req, collection, cleanAsset);
+  return withSolanaRpcFallback(async (rpc) => {
+    const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
+    const { keypairIdentity, publicKey } = await import('@metaplex-foundation/umi');
+    const { base58 } = await import('@metaplex-foundation/umi/serializers');
+    const { mplCore, fetchAsset, fetchCollection, update, updatePlugin, addPlugin } = await import('@metaplex-foundation/mpl-core');
+    const umi = createUmi(rpc).use(mplCore());
+    umi.use(keypairIdentity(umi.eddsa.createKeypairFromSecretKey(secretBytes)));
+    const asset = await fetchAsset(umi, publicKey(cleanAsset));
+    const actualOwner = String(asset?.owner || '');
+    if (owner && actualOwner && actualOwner !== owner) {
+      const err = new Error(`Solana source wallet is not the asset owner (expected ${owner}, on-chain owner ${actualOwner})`);
+      err.status = 403;
+      throw err;
+    }
+    const collectionAddress = String(asset?.updateAuthority?.type || '') === 'Collection'
+      ? String(asset.updateAuthority.address || '')
+      : '';
+    const collectionAccount = collectionAddress ? await fetchCollection(umi, publicKey(collectionAddress)) : undefined;
+    const currentUri = String(asset?.uri || '');
+    const currentName = String(asset?.name || '');
+    let metadataUpdateTxSig = null;
+    if (currentUri !== targetUri || currentName !== collection.name) {
+      const sig = await update(umi, {
+        asset,
+        ...(collectionAccount ? { collection: collectionAccount } : {}),
+        authority: umi.identity,
+        name: collection.name,
+        uri: targetUri,
+      }).sendAndConfirm(umi, {
+        send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+        confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+      });
+      metadataUpdateTxSig = base58.deserialize(sig.signature)[0];
+    }
+
+    const currentAttrs = [
+      asset?.attributes?.attributeList,
+      asset?.plugins?.attributes?.attributeList,
+    ].find(Array.isArray) || [];
+    const pluginPayload = {
+      type: 'Attributes',
+      attributeList: normalizedSolanaCollectionRarityAttributes({ existing: currentAttrs, collection, rarity }),
+    };
+    let attributesUpdateTxSig = null;
+    try {
+      const sig = await updatePlugin(umi, {
+        asset: publicKey(cleanAsset),
+        ...(collectionAddress ? { collection: publicKey(collectionAddress) } : {}),
+        authority: umi.identity,
+        plugin: pluginPayload,
+      }).sendAndConfirm(umi, {
+        send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+        confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+      });
+      attributesUpdateTxSig = base58.deserialize(sig.signature)[0];
+    } catch (err) {
+      if (!/Plugin not found/i.test(String(err?.message || err))) throw err;
+      const sig = await addPlugin(umi, {
+        asset: publicKey(cleanAsset),
+        ...(collectionAddress ? { collection: publicKey(collectionAddress) } : {}),
+        authority: umi.identity,
+        plugin: pluginPayload,
+      }).sendAndConfirm(umi, {
+        send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+        confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+      });
+      attributesUpdateTxSig = base58.deserialize(sig.signature)[0];
+    }
+
+    return {
+      asset: cleanAsset,
+      rarity,
+      uri: targetUri,
+      metadataUpdateTxSig,
+      attributesUpdateTxSig,
+      rpcHost: new URL(rpc).hostname,
+    };
+  }, {
+    urls: solanaRpcUrls([dep?.rpcUrl]),
+    label: `${collection.name} Solana rarity metadata sync`,
+  });
+}
+
 async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef }) {
   const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
   if (!rawKey) throw Object.assign(new Error('Solana NFT authority key is not configured'), { status: 503 });
@@ -4227,8 +4351,38 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
       tokenIds,
     });
     const rarities = recordCollectionMintRarities(collection, result);
+    const solanaRaritySync = [];
+    if (chain === 'solana' && nftCollectionUsesRarity(collection) && rarities.length) {
+      for (const tokenId of result.tokenIds || []) {
+        try {
+          // Direct Solana Candy Machine mints start with the hidden collection URI.
+          // Reveal the Core asset immediately after the tx is confirmed and DB
+          // rarity is assigned, so wallets/scanners see Rarity without a manual
+          // background sync.
+          // eslint-disable-next-line no-await-in-loop
+          const sync = await syncSolanaCollectionRarityAsset({
+            req,
+            collection,
+            assetId: tokenId,
+            owner: result.buyer || '',
+          });
+          if (sync) solanaRaritySync.push(sync);
+        } catch (syncErr) {
+          const row = {
+            asset: String(tokenId || ''),
+            error: (syncErr?.message || String(syncErr)).slice(0, 240),
+          };
+          solanaRaritySync.push(row);
+          console.warn('[nft] Solana rarity metadata sync failed:', {
+            collection: collection.slug,
+            asset: row.asset,
+            error: row.error,
+          });
+        }
+      }
+    }
     res.set('Cache-Control', 'no-store');
-    return res.json({ ok: true, ...result, rarities });
+    return res.json({ ok: true, ...result, rarities, solanaRaritySync });
   } catch (err) {
     const status = err?.status || (/chain|reservation/i.test(err?.message || '') ? 400 : 500);
     return res.status(status).json({ error: (err?.message || 'mint confirm failed').slice(0, 180) });
@@ -14314,7 +14468,7 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
       ORDER BY sales DESC, latest_at DESC
     `).all();
 
-    const demonKingLevelSummary = db.db.prepare(`
+    const collectionSummaryStmt = db.db.prepare(`
       SELECT
         COALESCE(COUNT(*), 0) AS total_tokens,
         COALESCE(COUNT(DISTINCT player_id), 0) AS total_players,
@@ -14323,21 +14477,65 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
         COALESCE(SUM(CASE WHEN level >= 3 THEN 1 ELSE 0 END), 0) AS lvl3_tokens,
         COALESCE(COUNT(DISTINCT CASE WHEN level >= 3 THEN player_id END), 0) AS lvl3_players
       FROM player_nfts
-      WHERE collection = 'demon_king'
+      WHERE collection = ?
         AND active = 1
-    `).get() || {};
+    `);
 
-    const demonKingByLevel = db.db.prepare(`
+    const collectionByLevelStmt = db.db.prepare(`
       SELECT level,
              COUNT(*) AS tokens,
              COUNT(DISTINCT player_id) AS players,
              MAX(updated_at) AS latest_at
       FROM player_nfts
-      WHERE collection = 'demon_king'
+      WHERE collection = ?
         AND active = 1
       GROUP BY level
       ORDER BY level ASC
-    `).all();
+    `);
+
+    const collectionByChainStmt = db.db.prepare(`
+      SELECT chain,
+             COUNT(*) AS tokens,
+             COUNT(DISTINCT player_id) AS players,
+             COUNT(DISTINCT wallet) AS wallets,
+             MAX(updated_at) AS latest_at
+      FROM player_nfts
+      WHERE collection = ?
+        AND active = 1
+      GROUP BY chain
+      ORDER BY tokens DESC, chain ASC
+    `);
+
+    const collectionByRarityStmt = db.db.prepare(`
+      SELECT COALESCE(r.rarity, 'unrevealed') AS rarity,
+             COUNT(*) AS tokens,
+             COUNT(DISTINCT n.player_id) AS players,
+             MAX(n.updated_at) AS latest_at
+      FROM player_nfts n
+      LEFT JOIN nft_rarities r
+        ON r.collection = n.collection
+       AND r.chain = n.chain
+       AND r.token_id = n.token_id
+      WHERE n.collection = ?
+        AND n.active = 1
+      GROUP BY COALESCE(r.rarity, 'unrevealed')
+      ORDER BY CASE COALESCE(r.rarity, 'unrevealed')
+        WHEN 'legendary' THEN 1
+        WHEN 'epic' THEN 2
+        WHEN 'common' THEN 3
+        ELSE 4
+      END
+    `);
+
+    const nftCollectionAnalytics = (collection) => ({
+      level_summary: collectionSummaryStmt.get(collection) || {},
+      by_level: collectionByLevelStmt.all(collection),
+      by_chain: collectionByChainStmt.all(collection),
+      by_rarity: collectionByRarityStmt.all(collection),
+    });
+
+    const demonKingAnalytics = nftCollectionAnalytics('demon_king');
+    const dragonAnalytics = nftCollectionAnalytics('dragon');
 
     res.set('Cache-Control', 'no-store');
     res.json({
@@ -14383,8 +14581,14 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
         marketplace_by_token: marketplacePaymentByToken,
       },
       demon_king: {
-        level_summary: demonKingLevelSummary,
-        by_level: demonKingByLevel,
+        ...demonKingAnalytics,
+      },
+      dragon: {
+        ...dragonAnalytics,
+      },
+      collections: {
+        demon_king: demonKingAnalytics,
+        dragon: dragonAnalytics,
       },
     });
   } catch (err) {
@@ -16362,11 +16566,26 @@ router.get('/admin/tasks', adminAuth, (req, res) => {
             MAX(claimed_at) AS last_claim, MAX(started_at) AS last_start
      FROM player_tasks GROUP BY task_id`
   ).all();
+  const eventRows = db.db.prepare(`
+    SELECT task_id,
+           COUNT(*) AS attempts,
+           COALESCE(SUM(CASE WHEN result = 'paid' THEN 1 ELSE 0 END), 0) AS paid_claims,
+           COUNT(DISTINCT CASE WHEN result = 'paid' THEN player_id ELSE NULL END) AS paid_players,
+           COALESCE(SUM(CASE WHEN result = 'paid' THEN reward_gold ELSE 0 END), 0) AS paid_gold,
+           COALESCE(SUM(CASE WHEN result = 'paid' THEN reward_wood ELSE 0 END), 0) AS paid_wood,
+           COALESCE(SUM(CASE WHEN result = 'paid' THEN reward_ore ELSE 0 END), 0) AS paid_ore,
+           MAX(CASE WHEN result = 'paid' THEN created_at ELSE NULL END) AS last_paid_claim,
+           MAX(created_at) AS last_attempt
+    FROM task_claim_events
+    GROUP BY task_id
+  `).all();
   const startedMap = {}; for (const r of startedRows) startedMap[r.task_id] = r.n;
   const claimedMap = {}; for (const r of claimedRows) claimedMap[r.task_id] = r.n;
   const progMap = {}; for (const r of progressRows) progMap[r.task_id] = r;
+  const eventMap = {}; for (const r of eventRows) eventMap[r.task_id] = r;
   res.json(list.map(t => {
     const p = progMap[t.id] || {};
+    const events = eventMap[t.id] || {};
     const started = startedMap[t.id] || 0;
     const claimed = claimedMap[t.id] || 0;
     return {
@@ -16378,6 +16597,16 @@ router.get('/admin/tasks', adminAuth, (req, res) => {
       avg_progress: p.avg_progress || 0,
       last_claim: p.last_claim || null,
       last_start: p.last_start || null,
+      claim_attempt_count: Number(events.attempts || 0),
+      paid_claim_count: Number(events.paid_claims || 0),
+      paid_player_count: Number(events.paid_players || 0),
+      paid_rewards: {
+        gold: Number(events.paid_gold || 0),
+        wood: Number(events.paid_wood || 0),
+        ore: Number(events.paid_ore || 0),
+      },
+      last_paid_claim: events.last_paid_claim || null,
+      last_claim_attempt: events.last_attempt || null,
     };
   }));
 });
@@ -16454,11 +16683,64 @@ router.get('/admin/tasks/:id/players', adminAuth, (req, res) => {
     WHERE pt.task_id = ?
     ORDER BY (pt.claimed_at IS NOT NULL) DESC, pt.started_at DESC
   `).all(id);
+  const eventRows = db.db.prepare(`
+    SELECT e.player_id,
+           p.name AS player_name,
+           p.wallet,
+           COUNT(*) AS attempt_count,
+           COALESCE(SUM(CASE WHEN e.result = 'paid' THEN 1 ELSE 0 END), 0) AS paid_claim_count,
+           COALESCE(SUM(CASE WHEN e.result = 'blocked' THEN 1 ELSE 0 END), 0) AS blocked_count,
+           COALESCE(SUM(CASE WHEN e.result = 'not_completed' THEN 1 ELSE 0 END), 0) AS not_completed_count,
+           COALESCE(SUM(CASE WHEN e.result = 'paid' THEN e.reward_gold ELSE 0 END), 0) AS paid_gold,
+           COALESCE(SUM(CASE WHEN e.result = 'paid' THEN e.reward_wood ELSE 0 END), 0) AS paid_wood,
+           COALESCE(SUM(CASE WHEN e.result = 'paid' THEN e.reward_ore ELSE 0 END), 0) AS paid_ore,
+           MAX(CASE WHEN e.result = 'paid' THEN e.created_at ELSE NULL END) AS last_paid_claim,
+           MAX(e.created_at) AS last_attempt
+    FROM task_claim_events e
+    LEFT JOIN players p ON p.id = e.player_id
+    WHERE e.task_id = ?
+    GROUP BY e.player_id
+  `).all(id);
+  const byPlayer = new Map(rows.map(row => [row.player_id, { ...row }]));
+  for (const row of eventRows) {
+    const existing = byPlayer.get(row.player_id) || {
+      player_id: row.player_id,
+      player_name: row.player_name,
+      wallet: row.wallet,
+      progress_value: 0,
+      target_value: 0,
+      started_at: null,
+      claimed_at: null,
+    };
+    byPlayer.set(row.player_id, {
+      ...existing,
+      player_name: existing.player_name || row.player_name,
+      wallet: existing.wallet || row.wallet,
+      attempt_count: Number(row.attempt_count || 0),
+      paid_claim_count: Number(row.paid_claim_count || 0),
+      blocked_count: Number(row.blocked_count || 0),
+      not_completed_count: Number(row.not_completed_count || 0),
+      paid_rewards: {
+        gold: Number(row.paid_gold || 0),
+        wood: Number(row.paid_wood || 0),
+        ore: Number(row.paid_ore || 0),
+      },
+      last_paid_claim: row.last_paid_claim || null,
+      last_attempt: row.last_attempt || null,
+    });
+  }
+  const players = Array.from(byPlayer.values()).sort((a, b) =>
+    (Number(b.paid_claim_count || 0) - Number(a.paid_claim_count || 0))
+    || (Number(b.attempt_count || 0) - Number(a.attempt_count || 0))
+    || String(b.claimed_at || b.started_at || b.last_attempt || '').localeCompare(String(a.claimed_at || a.started_at || a.last_attempt || ''))
+  );
   res.json({
     task: { id: task.id, title: task.title, type: task.type, repeatable: !!task.repeatable },
-    players: rows,
+    players,
     started: rows.length,
     claimed: rows.filter(r => r.claimed_at).length,
+    attempts: players.reduce((sum, row) => sum + Number(row.attempt_count || 0), 0),
+    paid_claims: players.reduce((sum, row) => sum + Number(row.paid_claim_count || 0), 0),
   });
 });
 
@@ -17293,6 +17575,116 @@ function normalizeTournamentPrizeTiers(input, { strict = false } = {}) {
   return tiers.sort((a, b) => a.volume_usd - b.volume_usd);
 }
 
+const DEFAULT_MEGA_SECTORS = [
+  { id: 'whale', name: 'Whale', min_town_hall_level: 3, min_volume_usd: 100000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+  { id: 'dolphin', name: 'Dolphin', min_town_hall_level: 2, min_volume_usd: 25000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+  { id: 'shrimp', name: 'Shrimp', min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
+];
+
+function normalizeMegaSectorId(value, fallback) {
+  const raw = String(value || fallback || '').trim().toLowerCase();
+  const clean = raw.replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32);
+  return clean || String(fallback || 'sector').slice(0, 32);
+}
+
+function normalizeMegaSectorNumber(value, fallback = 0, max = 1_000_000_000) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(max, Number(n.toFixed(4))));
+}
+
+function normalizeMegaSector(raw = {}, index = 0, { strict = false } = {}) {
+  const fallback = DEFAULT_MEGA_SECTORS[index] || { id: `sector_${index + 1}`, name: `Sector ${index + 1}` };
+  const id = normalizeMegaSectorId(raw.id || raw.key || raw.slug, fallback.id || `sector_${index + 1}`);
+  const name = sanitizePrizeText(raw.name || raw.label || fallback.name || id, fallback.name || id).slice(0, 40);
+  const dexScopeRaw = String(raw.dex_scope || raw.scope || fallback.dex_scope || 'all').trim().toLowerCase();
+  const dexScope = ['all', 'tournament', 'custom'].includes(dexScopeRaw) ? dexScopeRaw : 'all';
+  const dexes = normalizeTournamentDexList(raw.dexes || raw.eligible_dexes || raw.dex_list || []);
+  if (strict && dexScope === 'custom' && dexes.length === 0) {
+    throw new Error(`mega sector "${name}" custom DEX scope needs at least one DEX`);
+  }
+  const prizeTiers = normalizeTournamentPrizeTiers(raw.prize_tiers || raw.rewards_tiers || raw.tiers || [], { strict });
+  return {
+    id,
+    name,
+    description: sanitizePrizeText(raw.description || raw.hint || '', ''),
+    min_town_hall_level: Math.floor(normalizeMegaSectorNumber(raw.min_town_hall_level ?? raw.min_th ?? raw.town_hall_level, fallback.min_town_hall_level || 0, 20)),
+    min_volume_usd: normalizeMegaSectorNumber(raw.min_volume_usd ?? raw.volume_usd ?? raw.min_volume, fallback.min_volume_usd || 0),
+    min_trades: Math.floor(normalizeMegaSectorNumber(raw.min_trades ?? raw.trades ?? raw.min_tx ?? raw.min_transactions, fallback.min_trades || 0, 1_000_000)),
+    dex_scope: dexScope,
+    dexes,
+    prize_tiers: prizeTiers,
+  };
+}
+
+function normalizeTournamentMegaConfig(input, { strict = false } = {}) {
+  let raw = input;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) raw = {};
+    else {
+      try { raw = JSON.parse(trimmed); }
+      catch { throw new Error('mega_config must be JSON'); }
+    }
+  }
+  raw = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const enabled = parseBool(raw.enabled ?? raw.is_mega ?? raw.mega);
+  const template = String(raw.template || '').trim().toLowerCase();
+  const sourceSectors = Array.isArray(raw.sectors) && raw.sectors.length
+    ? raw.sectors
+    : (enabled && template === 'abc'
+      ? [
+        { id: 'a', name: 'Sector A', min_town_hall_level: 3, min_volume_usd: 100000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+        { id: 'b', name: 'Sector B', min_town_hall_level: 2, min_volume_usd: 25000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+        { id: 'c', name: 'Sector C', min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
+      ]
+      : DEFAULT_MEGA_SECTORS);
+  const seen = new Set();
+  const sectors = [];
+  for (let i = 0; i < sourceSectors.length; i += 1) {
+    const sector = normalizeMegaSector(sourceSectors[i], i, { strict });
+    let id = sector.id;
+    let suffix = 2;
+    while (seen.has(id)) {
+      id = `${sector.id}_${suffix}`;
+      suffix += 1;
+    }
+    sector.id = id;
+    seen.add(id);
+    sectors.push(sector);
+  }
+  if (strict && enabled && sectors.length === 0) throw new Error('mega tournament needs at least one sector');
+  return {
+    enabled,
+    template: template || 'whale_dolphin_shrimp',
+    sectors: enabled ? sectors.slice(0, 20) : sectors.slice(0, 20),
+  };
+}
+
+function isMegaTournament(t) {
+  try { return !!normalizeTournamentMegaConfig(t?.mega_config).enabled; }
+  catch { return false; }
+}
+
+function megaSectorDexes(t, sector) {
+  const scope = String(sector?.dex_scope || 'all').toLowerCase();
+  if (scope === 'custom') {
+    const list = normalizeTournamentDexList(sector.dexes || []);
+    return list.length ? list : tournamentEligibleDexes(t);
+  }
+  if (scope === 'tournament') return tournamentEligibleDexes(t);
+  return [...TOURNAMENT_DEXES];
+}
+
+function megaSectorPrizeState(t, sector, totalVolumeUsd) {
+  const proxy = {
+    ...t,
+    prize_tiers: JSON.stringify(normalizeTournamentPrizeTiers(sector?.prize_tiers || [])),
+  };
+  return tournamentPrizeState(proxy, totalVolumeUsd);
+}
+
 function tournamentPrizeRewardsByRank(activeTier) {
   const byRank = new Map();
   for (const reward of activeTier?.rewards || []) {
@@ -17367,6 +17759,190 @@ function tournamentLeaderboardSummary(tournamentId) {
       trophies: 0,
     };
   }
+}
+
+function tournamentDexBreakdowns(tournamentId) {
+  const byPlayer = new Map();
+  if (!tournamentId) return byPlayer;
+  let rows = [];
+  try {
+    rows = db.db.prepare(`
+      SELECT player_id, dex,
+             COALESCE(SUM(volume_usd), 0) AS volume_usd,
+             COALESCE(SUM(trades_count), 0) AS trades_count,
+             COALESCE(SUM(pnl_usd), 0) AS pnl_usd
+      FROM tournament_trade_credits
+      WHERE tournament_id = ?
+      GROUP BY player_id, dex
+    `).all(tournamentId);
+  } catch {
+    rows = [];
+  }
+  for (const row of rows) {
+    const playerId = row.player_id;
+    const dex = String(row.dex || '').toLowerCase();
+    if (!playerId || !TOURNAMENT_DEXES.includes(dex)) continue;
+    const state = byPlayer.get(playerId) || {
+      by_dex: {},
+      top_dex: null,
+      top_dex_label: null,
+      total_volume_usd: 0,
+      total_trades_count: 0,
+      total_pnl_usd: 0,
+    };
+    const volume = Number(row.volume_usd || 0) || 0;
+    const trades = Number(row.trades_count || 0) || 0;
+    const pnl = Number(row.pnl_usd || 0) || 0;
+    state.by_dex[dex] = {
+      dex,
+      label: TOURNAMENT_DEX_LABELS[dex] || dex,
+      volume_usd: Number(volume.toFixed(2)),
+      trades_count: trades,
+      pnl_usd: Number(pnl.toFixed(2)),
+    };
+    state.total_volume_usd += volume;
+    state.total_trades_count += trades;
+    state.total_pnl_usd += pnl;
+    const currentTop = state.top_dex ? state.by_dex[state.top_dex] : null;
+    if (!currentTop || volume > Number(currentTop.volume_usd || 0)) {
+      state.top_dex = dex;
+      state.top_dex_label = TOURNAMENT_DEX_LABELS[dex] || dex;
+    }
+    byPlayer.set(playerId, state);
+  }
+  for (const state of byPlayer.values()) {
+    state.total_volume_usd = Number(state.total_volume_usd.toFixed(2));
+    state.total_pnl_usd = Number(state.total_pnl_usd.toFixed(2));
+    state.dex_breakdown = Object.values(state.by_dex)
+      .sort((a, b) => Number(b.volume_usd || 0) - Number(a.volume_usd || 0) || a.dex.localeCompare(b.dex));
+  }
+  return byPlayer;
+}
+
+function applyTournamentDexBreakdowns(rows, t, breakdowns = null) {
+  const map = breakdowns || tournamentDexBreakdowns(t?.id);
+  for (const row of rows || []) {
+    const state = map.get(row.player_id);
+    if (!state) {
+      const fallbackDex = String(row.team_dex || row.player_dex || t?.dex || '').toLowerCase();
+      row.dex_breakdown = fallbackDex && TOURNAMENT_DEXES.includes(fallbackDex)
+        ? [{ dex: fallbackDex, label: TOURNAMENT_DEX_LABELS[fallbackDex] || fallbackDex, volume_usd: Number(row.volume_usd || 0) || 0, trades_count: Number(row.trades_count || 0) || 0, pnl_usd: Number(row.pnl_usd || 0) || 0 }]
+        : [];
+      row.top_dex = fallbackDex || null;
+      row.top_dex_label = fallbackDex ? (TOURNAMENT_DEX_LABELS[fallbackDex] || fallbackDex) : null;
+      continue;
+    }
+    row.dex_breakdown = state.dex_breakdown || [];
+    row.top_dex = state.top_dex || null;
+    row.top_dex_label = state.top_dex_label || null;
+  }
+  return rows;
+}
+
+function sumDexBreakdownForList(row, dexList) {
+  const allowed = new Set(dexList || []);
+  const breakdown = Array.isArray(row?.dex_breakdown) ? row.dex_breakdown : [];
+  const filtered = allowed.size ? breakdown.filter(item => allowed.has(item.dex)) : breakdown;
+  return filtered.reduce((acc, item) => {
+    acc.volume_usd += Number(item.volume_usd || 0) || 0;
+    acc.trades_count += Number(item.trades_count || 0) || 0;
+    acc.pnl_usd += Number(item.pnl_usd || 0) || 0;
+    return acc;
+  }, { volume_usd: 0, trades_count: 0, pnl_usd: 0 });
+}
+
+function buildMegaTournamentState(rows, t) {
+  const config = normalizeTournamentMegaConfig(t?.mega_config);
+  if (!config.enabled) return null;
+  const sectors = config.sectors.map((sector, index) => ({
+    ...sector,
+    rank: index + 1,
+    dexes: megaSectorDexes(t, sector),
+    players: [],
+    summary: { players: 0, trades_count: 0, total_volume_usd: 0, pnl_usd: 0, gold: 0, trophies: 0 },
+  }));
+  const unqualified = {
+    id: 'unqualified',
+    name: 'Unqualified',
+    rank: sectors.length + 1,
+    min_town_hall_level: 0,
+    min_volume_usd: 0,
+    min_trades: 0,
+    dex_scope: 'all',
+    dexes: [...TOURNAMENT_DEXES],
+    prize_tiers: [],
+    players: [],
+    summary: { players: 0, trades_count: 0, total_volume_usd: 0, pnl_usd: 0, gold: 0, trophies: 0 },
+  };
+  for (const row of rows || []) {
+    const townHall = Number(row.town_hall_level || 0) || 0;
+    let assigned = null;
+    let assignedStats = null;
+    for (const sector of sectors) {
+      const stats = sumDexBreakdownForList(row, sector.dexes);
+      if (townHall >= Number(sector.min_town_hall_level || 0)
+        && stats.volume_usd + 0.0001 >= Number(sector.min_volume_usd || 0)
+        && stats.trades_count >= Number(sector.min_trades || 0)) {
+        assigned = sector;
+        assignedStats = stats;
+        break;
+      }
+    }
+    if (!assigned) {
+      assigned = unqualified;
+      assignedStats = sumDexBreakdownForList(row, unqualified.dexes);
+    }
+    row.mega_sector_id = assigned.id;
+    row.mega_sector_name = assigned.name;
+    row.mega_sector_rank = assigned.rank;
+    row.mega_sector_volume_usd = Number((assignedStats.volume_usd || 0).toFixed(2));
+    row.mega_sector_trades_count = Number(assignedStats.trades_count || 0);
+    row.mega_sector_pnl_usd = Number((assignedStats.pnl_usd || 0).toFixed(2));
+    assigned.players.push(row);
+    assigned.summary.players += 1;
+    assigned.summary.trades_count += Number(row.mega_sector_trades_count || 0);
+    assigned.summary.total_volume_usd += Number(row.mega_sector_volume_usd || 0);
+    assigned.summary.pnl_usd += Number(row.mega_sector_pnl_usd || 0);
+    assigned.summary.gold += Number(row.gold || 0);
+    assigned.summary.trophies += Number(row.trophies || 0);
+  }
+  const sortRows = (list) => list.sort((a, b) =>
+    (Number(b.score) || 0) - (Number(a.score) || 0)
+    || (Number(b.mega_sector_volume_usd) || 0) - (Number(a.mega_sector_volume_usd) || 0)
+    || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+    || String(a.player_id).localeCompare(String(b.player_id))
+  );
+  for (const sector of [...sectors, unqualified]) {
+    sortRows(sector.players);
+    sector.players.forEach((row, idx) => { row.mega_sector_rank_position = idx + 1; });
+    sector.summary.total_volume_usd = Number(sector.summary.total_volume_usd.toFixed(2));
+    sector.summary.pnl_usd = Number(sector.summary.pnl_usd.toFixed(2));
+    const prize = megaSectorPrizeState(t, sector, sector.summary.total_volume_usd);
+    sector.prize = prize;
+    const prizeByRank = new Map((prize.payouts || []).map(p => [Number(p.rank), Number(p.amount_usd || 0)]));
+    const prizeRewardsByRank = new Map((prize.rewards_by_rank || []).map(p => [Number(p.rank), Array.isArray(p.rewards) ? p.rewards : []]));
+    for (const row of sector.players) {
+      row.mega_prize_amount = prizeByRank.get(row.mega_sector_rank_position) || 0;
+      row.mega_prize_rewards = prizeRewardsByRank.get(row.mega_sector_rank_position) || [];
+    }
+  }
+  return {
+    enabled: true,
+    sectors: [...sectors, ...(unqualified.players.length ? [unqualified] : [])].map((sector) => ({
+      id: sector.id,
+      name: sector.name,
+      description: sector.description || '',
+      min_town_hall_level: sector.min_town_hall_level,
+      min_volume_usd: sector.min_volume_usd,
+      min_trades: sector.min_trades,
+      dex_scope: sector.dex_scope,
+      dexes: sector.dexes,
+      dex_labels: (sector.dexes || []).map(d => TOURNAMENT_DEX_LABELS[d] || d),
+      summary: sector.summary,
+      prize: sector.prize,
+      player_ids: sector.players.map(r => r.player_id),
+    })),
+  };
 }
 
 function tournamentPrizeState(t, totalVolumeUsd = null) {
@@ -17457,6 +18033,9 @@ function tournamentRowToPublic(t, options = {}) {
   const teamMemberRewardBy = normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd');
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(t.attack_match_policy, 'all');
   const scoringMode = normalizeTournamentScoringMode(t.scoring_mode, 'live');
+  let megaConfig = {};
+  try { megaConfig = normalizeTournamentMegaConfig(t.mega_config); }
+  catch { megaConfig = normalizeTournamentMegaConfig({}); }
   let dailyPoolOverrides = {};
   try { dailyPoolOverrides = normalizeTournamentDailyPoolOverrides(t.daily_pool_overrides); }
   catch { dailyPoolOverrides = {}; }
@@ -17482,6 +18061,10 @@ function tournamentRowToPublic(t, options = {}) {
     attack_match_policy_label: tournamentAttackMatchPolicyLabel(attackMatchPolicy),
     scoring_mode: scoringMode,
     scoring_label: scoringMode === 'daily_pool' ? 'Daily points at 00:00 UTC' : 'Live scoring',
+    tournament_kind: megaConfig.enabled ? 'mega' : 'standard',
+    is_mega: megaConfig.enabled,
+    mega_config: megaConfig,
+    mega_sectors: megaConfig.sectors,
     daily_pool_points: normalizeTournamentDailyPoolPoints(t.daily_pool_points, 1000),
     daily_pool_growth_pct: normalizeTournamentDailyPoolGrowthPct(t.daily_pool_growth_pct, 0),
     daily_pool_overrides: dailyPoolOverrides,
@@ -18157,6 +18740,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd, tp.awarded_points,
            tp.team_dex, tp.reward_wallet_evm,
            p.name, p.wallet, p.dex AS player_dex,
+           COALESCE((SELECT MAX(level) FROM buildings b WHERE b.player_id = tp.player_id AND b.type = 'town_hall'), 0) AS town_hall_level,
            COALESCE(
              pda.wallet_address,
              CASE WHEN p.dex = COALESCE(tp.team_dex, p.dex, tt.dex) THEN p.wallet ELSE NULL END
@@ -18195,9 +18779,24 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     LIMIT ?
     `).all(tid, limit);
   }
+  const dexBreakdowns = tournamentDexBreakdowns(tid);
+  applyTournamentDexBreakdowns(rows, t, dexBreakdowns);
   const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
   const summary = tournamentLeaderboardSummary(tid);
   const prize = tournamentPrizeState(t, totalVolumeUsd);
+  let megaState = null;
+  if (isMegaTournament(t)) {
+    const allRows = db.db.prepare(baseSql).all(tid);
+    if (needsPointsScore || isTournamentPointsSort(sortBy) || tournamentUsesDailyPool(t)) applyTournamentPointsScore(allRows, t);
+    applyTournamentDexBreakdowns(allRows, t, dexBreakdowns);
+    megaState = buildMegaTournamentState(allRows, t);
+    const ordered = [];
+    for (const sector of megaState?.sectors || []) {
+      const ids = new Set(sector.player_ids || []);
+      ordered.push(...allRows.filter(row => ids.has(row.player_id)));
+    }
+    rows = ordered.slice(0, limit);
+  }
   if (mode === 'dex_vs_dex') {
     teamState = buildTournamentTeamState(rows, t, prize);
     const memberMetric = normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd');
@@ -18219,13 +18818,25 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     sort_label: tournamentSortLabel(t),
     summary,
     prize,
+    mega: megaState,
     teams: teamState,
     leaderboard: rows.map((r, i) => ({
-      rank: i + 1,
+      rank: r.mega_sector_rank_position || i + 1,
+      overall_rank: i + 1,
       player_id: r.player_id,
       name: r.name,
       wallet: r.wallet,
       dex: r.player_dex || r.team_dex || null,
+      top_dex: r.top_dex || null,
+      top_dex_label: r.top_dex_label || null,
+      dex_breakdown: r.dex_breakdown || [],
+      town_hall_level: Number(r.town_hall_level || 0) || 0,
+      mega_sector_id: r.mega_sector_id || null,
+      mega_sector_name: r.mega_sector_name || null,
+      mega_sector_rank: r.mega_sector_rank || null,
+      mega_sector_rank_position: r.mega_sector_rank_position || null,
+      mega_sector_volume_usd: r.mega_sector_volume_usd || 0,
+      mega_sector_trades_count: r.mega_sector_trades_count || 0,
       team_dex: r.team_dex || r.player_dex || null,
       team_label: r.team_label || null,
       team_rank: r.team_rank || null,
@@ -18243,9 +18854,9 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       volume_score: r.volume_score ?? null,
       trophy_score: r.trophy_score ?? null,
       pnl_score: r.pnl_score ?? null,
-      prize_amount: mode === 'dex_vs_dex' ? (r.prize_amount || 0) : (prizeByRank.get(i + 1) || 0),
+      prize_amount: r.mega_sector_id ? (r.mega_prize_amount || 0) : (mode === 'dex_vs_dex' ? (r.prize_amount || 0) : (prizeByRank.get(i + 1) || 0)),
       prize_currency: prize.currency,
-      prize_rewards: mode === 'dex_vs_dex' ? [] : (prizeRewardsByRank.get(i + 1) || []),
+      prize_rewards: r.mega_sector_id ? (r.mega_prize_rewards || []) : (mode === 'dex_vs_dex' ? [] : (prizeRewardsByRank.get(i + 1) || [])),
       ...(includeRewardWallets ? {
         reward_wallet_evm: r.reward_wallet_evm || null,
         trading_wallet: r.trading_wallet || null,
@@ -18290,7 +18901,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
-    prize_currency, prize_tiers, rewards_in_cop, seeker_only,
+    prize_currency, prize_tiers, mega_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
@@ -18348,6 +18959,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   if (windowError) return res.status(400).json({ error: windowError });
   let pointWeights;
   let prizeTiers;
+  let megaConfig;
   let shieldHours;
   try {
     shieldHours = normalizeTournamentShieldHours(shield_hours, null);
@@ -18358,6 +18970,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
       points_pnl_weight,
     }, DEFAULT_TOURNAMENT_POINT_WEIGHTS, { requireTotal: needsPointWeights });
     prizeTiers = normalizeTournamentPrizeTiers(prize_tiers, { strict: true });
+    megaConfig = normalizeTournamentMegaConfig(mega_config, { strict: true });
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -18375,10 +18988,10 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
       name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
       scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
-      prize_currency, prize_tiers, rewards_in_cop, seeker_only,
+      prize_currency, prize_tiers, mega_config, rewards_in_cop, seeker_only,
       shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim(),
     (description || '').toString().slice(0, 500),
@@ -18408,6 +19021,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     scoringMode === 'daily_pool' ? nowSql() : null,
     sanitizePrizeCurrency(prize_currency),
     JSON.stringify(prizeTiers),
+    JSON.stringify(megaConfig),
     parseBool(rewards_in_cop) ? 1 : 0,
     parseBool(seeker_only) ? 1 : 0,
     shieldHours,
@@ -18431,7 +19045,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
-    prize_currency, prize_tiers, rewards_in_cop, seeker_only,
+    prize_currency, prize_tiers, mega_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
   const dexConfig = normalizeTournamentDexConfig(req.body || {}, t);
@@ -18484,6 +19098,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     || (tournamentMode === 'dex_vs_dex' && (teamScoreBy === TOURNAMENT_POINTS_SORT || teamMemberRewardBy === TOURNAMENT_POINTS_SORT));
   let pointWeights;
   let nextPrizeTiers;
+  let nextMegaConfig;
   let teamSplits;
   let nextShieldHours;
   try {
@@ -18498,6 +19113,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     nextPrizeTiers = prize_tiers !== undefined
       ? normalizeTournamentPrizeTiers(prize_tiers, { strict: true })
       : normalizeTournamentPrizeTiers(t.prize_tiers);
+    nextMegaConfig = mega_config !== undefined
+      ? normalizeTournamentMegaConfig(mega_config, { strict: true })
+      : normalizeTournamentMegaConfig(t.mega_config);
     teamSplits = teamPrizeMode === 'custom_split'
       ? normalizeTournamentTeamPrizeSplits(team_prize_splits !== undefined ? team_prize_splits : t.team_prize_splits, tournamentEligibleDexes(dexConfig), { strict: tournamentMode === 'dex_vs_dex' })
       : [];
@@ -18538,6 +19156,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
       : null,
     prize_currency: prize_currency !== undefined ? sanitizePrizeCurrency(prize_currency) : sanitizePrizeCurrency(t.prize_currency),
     prize_tiers: nextPrizeTiers,
+    mega_config: nextMegaConfig,
     rewards_in_cop: rewards_in_cop !== undefined ? (parseBool(rewards_in_cop) ? 1 : 0) : Number(t.rewards_in_cop || 0),
     seeker_only: seeker_only !== undefined ? (parseBool(seeker_only) ? 1 : 0) : Number(t.seeker_only || 0),
     status: STATUSES.includes(status) ? status : t.status,
@@ -18554,7 +19173,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             gold_boost = ?, seeker_gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
                             scoring_mode = ?, daily_pool_points = ?, daily_pool_growth_pct = ?, daily_pool_overrides = ?, daily_pool_enabled_at = ?,
-                            prize_currency = ?, prize_tiers = ?, rewards_in_cop = ?, seeker_only = ?,
+                            prize_currency = ?, prize_tiers = ?, mega_config = ?, rewards_in_cop = ?, seeker_only = ?,
                             freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
   `).run(
@@ -18587,6 +19206,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.daily_pool_enabled_at,
     next.prize_currency,
     JSON.stringify(next.prize_tiers),
+    JSON.stringify(next.mega_config),
     next.rewards_in_cop,
     next.seeker_only,
     next.freeze_trophies,

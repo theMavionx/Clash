@@ -548,6 +548,11 @@ button {
   color: #bae6fd;
 }
 
+.admin-badge.purple {
+  background: rgba(88, 28, 135, 0.9);
+  color: #e9d5ff;
+}
+
 .admin-badge.off {
   background: rgba(51, 65, 85, 0.68);
   color: #94a3b8;

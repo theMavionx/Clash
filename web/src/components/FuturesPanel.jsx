@@ -1,4 +1,5 @@
 import { useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
+import confetti from 'canvas-confetti';
 import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -68,6 +69,35 @@ const PHOENIX_FEE_BUFFER_RATE = 0.0001;
 const PHOENIX_DEFAULT_REFERRAL_CODE = 'MVWG4BTW';
 const HOTSTUFF_MARKET_SLIPPAGE_RATE = 0.015;
 const HOTSTUFF_DEFAULT_TAKER_FEE_RATE = 0.00045;
+
+function fireTradeConfetti() {
+  try {
+    const end = Date.now() + 600;
+    const colors = ['#43a047', '#e8b830', '#0EA5E9', '#fdf8e7'];
+    const frame = () => {
+      confetti({
+        particleCount: 4,
+        angle: 60,
+        spread: 55,
+        origin: { x: 0, y: 0.7 },
+        colors,
+        scalar: 0.9,
+      });
+      confetti({
+        particleCount: 4,
+        angle: 120,
+        spread: 55,
+        origin: { x: 1, y: 0.7 },
+        colors,
+        scalar: 0.9,
+      });
+      if (Date.now() < end) requestAnimationFrame(frame);
+    };
+    frame();
+  } catch {
+    // canvas-confetti can fail in restricted wallet/app webviews.
+  }
+}
 const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
 
 function finiteNumber(value) {
@@ -2913,6 +2943,9 @@ function FuturesPanel() {
         if (result.status === 'submitted' && result.info) {
           setLocalAlert(result.info);
         }
+        if (orderType === 'market') {
+          fireTradeConfetti();
+        }
         setSuccessMsg(
           dex === 'gmtrade' && result.status === 'submitted'
             ? `${side.toUpperCase()} ${symbol} submitted`
@@ -4134,11 +4167,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Connecting Hibachi...' : 'Hibachi setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -4320,11 +4351,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Connecting GRVT...' : 'GRVT setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
             <div style={hlGateStyles.frame}>
@@ -4450,11 +4479,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Checking Katana...' : 'Katana setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
             <div style={hlGateStyles.frame}>
@@ -4651,11 +4678,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>GMTrade setup</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -4747,11 +4772,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Linking Avantis...' : 'Avantis setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -4863,6 +4886,9 @@ function FuturesPanel() {
           }}>
             <div style={S.header} onPointerDown={handlePointerDown}>
               <span style={S.headerTitle}>Hotstuff setup</span>
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
             </div>
             <div style={{
               ...S.body,
@@ -4903,11 +4929,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up Hotstuff...' : 'Hotstuff setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -5040,11 +5064,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up Pacifica...' : 'Pacifica setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -5208,11 +5230,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up Hyperliquid…' : 'Hyperliquid setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -5311,11 +5331,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up RISEx...' : 'RISEx setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{ ...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7' }}>
             <div style={hlGateStyles.frame}>
@@ -5722,13 +5740,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Activating Decibel…' : 'Decibel setup'}</span>
-            {/* Close button is hidden while activation is running so the
-                user can't bail out mid-signature and end up half-set-up. */}
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
