@@ -89,11 +89,16 @@ const ETHEREUM_ALCHEMY_KEY = process.env.ETHEREUM_ALCHEMY_KEY
 const BASE_RPC_PROXY_TARGET = 'https://mainnet.base.org';
 const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || viteEnv.VITE_FUTURES_PROXY
-  || (API_PROXY_TARGET && !/^https?:\/\/(?:localhost|127\.0\.0\.1):4000\b/i.test(API_PROXY_TARGET)
-    ? API_PROXY_TARGET
-    : 'http://127.0.0.1:3999');
-const FUTURES_PROXY_IS_DIRECT = /^https?:\/\/(?:localhost|127\.0\.0\.1):3999\b/i.test(FUTURES_PROXY_TARGET)
+  || 'http://127.0.0.1:3999';
+const FUTURES_PROXY_IS_DIRECT = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\b/i.test(FUTURES_PROXY_TARGET)
   || /^https?:\/\/[^/]+:3999\b/i.test(FUTURES_PROXY_TARGET);
+
+if (process.env.NODE_ENV !== 'production') {
+  console.log('[vite proxy]', {
+    api: API_PROXY_TARGET || 'http://127.0.0.1:4000',
+    futures: FUTURES_PROXY_TARGET,
+  });
+}
 
 export default defineConfig({
   // Vite 8 swapped the dep optimizer from esbuild to Rolldown and

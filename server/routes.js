@@ -10415,9 +10415,26 @@ router.post('/attack/result', auth, (req, res) => {
   const clientCasualties = (req.body?.casualties && typeof req.body.casualties === 'object')
     ? req.body.casualties
     : null;
+  const casualtySource = STRICT_BATTLE_REPLAY_VERIFICATION
+    ? 'server_sim_strict'
+    : (clientCasualties ? 'client_non_strict' : 'missing_client_non_strict');
   const resolvedCasualties = STRICT_BATTLE_REPLAY_VERIFICATION
-    ? verification.casualties
-    : (clientCasualties || verification.casualties);
+    ? (verification.casualties || {})
+    : (clientCasualties || {});
+  const replayDebug = {
+    ...verification,
+    clientCasualties: clientCasualties || {},
+    resolvedCasualties,
+    casualtySource,
+  };
+  if (!STRICT_BATTLE_REPLAY_VERIFICATION && !clientCasualties) {
+    console.warn('[BATTLE] Missing client casualties in non-strict mode; not applying server-sim casualties', {
+      attacker: req.player.id,
+      defender: defender_id,
+      battleSessionId,
+      simCasualties: verification.casualties || {},
+    });
+  }
 
   logBattle(`${claimedResult}->${serverResolvedResult} ${replayStatus}`, {
     attacker: req.player.id, defender: defender_id,
@@ -10452,7 +10469,7 @@ router.post('/attack/result', auth, (req, res) => {
     // Debug info logged server-side only — never expose sim internals to client
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
       releaseBattleSession('cancelled');
-      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', replayReason, null, verification);
+      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', replayReason, null, replayDebug);
       console.log('[SIM REJECT]', JSON.stringify(simDebug));
       return res.status(403).json({ error: 'Replay verification failed', reason: verification.reason });
     }
@@ -10464,10 +10481,10 @@ router.post('/attack/result', auth, (req, res) => {
     const nftWinTokensByCollection = _nftBackedWinTokensByCollectionFromActions(gameActions, req.player.id);
     const battleResult = db.battleVictory(req.player.id, defender_id, battleSessionId);
     if (battleResult.error) {
-      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', battleResult.error, null, verification);
+      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', battleResult.error, null, replayDebug);
       return res.status(400).json(battleResult);
     }
-    const replayId = db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', storedAcceptReason, battleResult.loot, verification);
+    const replayId = db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', storedAcceptReason, battleResult.loot, replayDebug);
     let demonKingNftWins = [];
     let nftTroopWins = {};
     try {
@@ -10494,9 +10511,10 @@ router.post('/attack/result', auth, (req, res) => {
 
   // Defeat — attacker loses trophies, defender gains
   const defeatResult = db.battleDefeat(req.player.id, defender_id, battleSessionId);
-  db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, verification);
+  db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, replayDebug);
 
-  // Remove server-simulated casualties from attacker's ships.
+  // Remove resolved casualties from attacker's ships. In non-strict mode this
+  // intentionally uses only the client result; server simulation is diagnostics.
   const appliedCasualties = _applyCasualties(req.player.id, resolvedCasualties);
 
   res.json({
@@ -11042,10 +11060,11 @@ router.post('/reinforce', auth, (req, res) => {
     if (totalToRestore === 0) return { cost: 0, restored: 0, ships: [] };
 
     const totalCost = totalToRestore * REINFORCE_COST;
-    const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
-    if (player.gold < totalCost) throw { status: 400, error: `Not enough gold (need ${totalCost})` };
-
-    db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(totalCost, req.player.id);
+    const spent = db.subtractResources(req.player.id, totalCost, 0, 0, {
+      sourceType: 'reinforce',
+      metadata: { restored: totalToRestore, cost_gold: totalCost },
+    });
+    if (spent?.error) throw { status: 400, error: `Not enough gold (need ${totalCost})` };
 
     // Append missing troops to current (preserves swaps, only restores casualties)
     // Cap to ship capacity to prevent overflow from swap+reinforce combo

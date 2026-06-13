@@ -1,85 +1,118 @@
 param(
   [int]$MainPort = 4000,
-  [int]$FuturesPort = 3999
+  [int]$FuturesPort = 3999,
+  [int]$WebPort = 5173,
+  [switch]$WithWeb,
+  [switch]$FullWorkers
 )
 
 $ErrorActionPreference = 'Stop'
+
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $MainDir = Join-Path $Root 'server'
 $FuturesDir = Join-Path $Root 'server-futures'
+$WebDir = Join-Path $Root 'web'
 $LogDir = Join-Path $Root '.local-logs'
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
-$services = @{
-  main = @{
-    Name = 'main'
-    Dir = $MainDir
-    Port = $MainPort
-    Out = Join-Path $LogDir 'main-4000.out.log'
-    Err = Join-Path $LogDir 'main-4000.err.log'
+function New-Service([string]$Name, [string]$Dir, [int]$Port, [string]$FileName, [string[]]$Arguments, [hashtable]$EnvVars, [string[]]$WatchDirs) {
+  @{
+    Name = $Name
+    Dir = $Dir
+    Port = $Port
+    FileName = $FileName
+    Arguments = $Arguments
+    EnvVars = $EnvVars
+    WatchDirs = $WatchDirs
+    Out = Join-Path $LogDir "$Name-$Port.out.log"
+    Err = Join-Path $LogDir "$Name-$Port.err.log"
     Proc = $null
     LastRestart = [DateTime]::MinValue
-  }
-  futures = @{
-    Name = 'futures'
-    Dir = $FuturesDir
-    Port = $FuturesPort
-    Out = Join-Path $LogDir 'futures-3999.out.log'
-    Err = Join-Path $LogDir 'futures-3999.err.log'
-    Proc = $null
-    LastRestart = [DateTime]::MinValue
+    RestartCount = 0
   }
 }
 
-function Stop-PortProcess([int]$Port) {
-  $pids = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-    Select-Object -ExpandProperty OwningProcess -Unique
-  foreach ($pidValue in $pids) {
-    if ($pidValue) {
-      Write-Host "Stopping process on port $Port (PID $pidValue)"
-      Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
-    }
+function Get-PortPids([int]$Port) {
+  @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -Unique |
+    Where-Object { $_ })
+}
+
+function Stop-PortProcess([int]$Port, [int]$ExceptPid = 0) {
+  foreach ($pidValue in Get-PortPids -Port $Port) {
+    if ($ExceptPid -and [int]$pidValue -eq [int]$ExceptPid) { continue }
+    Write-Host "[local-dev] stopping PID $pidValue on port $Port"
+    Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
   }
+}
+
+function Test-PortReady([int]$Port, [int]$ProcessId, [int]$TimeoutMs = 15000) {
+  $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+  while ((Get-Date) -lt $deadline) {
+    $pids = Get-PortPids -Port $Port
+    if ($pids -contains $ProcessId) { return $true }
+    Start-Sleep -Milliseconds 250
+  }
+  return $false
 }
 
 function Start-ServiceProcess([hashtable]$Service) {
   Stop-PortProcess -Port $Service.Port
-  Start-Sleep -Milliseconds 500
-  Write-Host "Starting $($Service.Name) backend on port $($Service.Port)"
-  $envBlock = @{
-    PORT = if ($Service.Name -eq 'main') { [string]$MainPort } else { $env:PORT }
-    FUTURES_PORT = if ($Service.Name -eq 'futures') { [string]$FuturesPort } else { $env:FUTURES_PORT }
-  }
-  $oldPort = $env:PORT
-  $oldFuturesPort = $env:FUTURES_PORT
+  Start-Sleep -Milliseconds 400
+
+  if (Test-Path $Service.Out) { Remove-Item -LiteralPath $Service.Out -Force -ErrorAction SilentlyContinue }
+  if (Test-Path $Service.Err) { Remove-Item -LiteralPath $Service.Err -Force -ErrorAction SilentlyContinue }
+
+  $oldEnv = @{}
   try {
-    if ($envBlock.PORT) { $env:PORT = $envBlock.PORT }
-    if ($envBlock.FUTURES_PORT) { $env:FUTURES_PORT = $envBlock.FUTURES_PORT }
-    $Service.Proc = Start-Process -FilePath 'node' `
-      -ArgumentList 'index.js' `
-      -WorkingDirectory $Service.Dir `
-      -RedirectStandardOutput $Service.Out `
-      -RedirectStandardError $Service.Err `
+    foreach ($key in $Service.EnvVars.Keys) {
+      $oldEnv[$key] = (Get-Item -LiteralPath "Env:$key" -ErrorAction SilentlyContinue).Value
+      Set-Item -LiteralPath "Env:$key" -Value ([string]$Service.EnvVars[$key])
+    }
+
+    Write-Host "[local-dev] starting $($Service.Name) on 127.0.0.1:$($Service.Port)"
+    $Service['Proc'] = Start-Process -FilePath $Service['FileName'] `
+      -ArgumentList $Service['Arguments'] `
+      -WorkingDirectory $Service['Dir'] `
+      -RedirectStandardOutput $Service['Out'] `
+      -RedirectStandardError $Service['Err'] `
       -WindowStyle Hidden `
       -PassThru
   } finally {
-    $env:PORT = $oldPort
-    $env:FUTURES_PORT = $oldFuturesPort
+    foreach ($key in $Service.EnvVars.Keys) {
+      if ($null -eq $oldEnv[$key]) {
+        Remove-Item -LiteralPath "Env:$key" -ErrorAction SilentlyContinue
+      } else {
+        Set-Item -LiteralPath "Env:$key" -Value $oldEnv[$key]
+      }
+    }
+  }
+
+  $Service.RestartCount += 1
+  $Service.LastRestart = Get-Date
+
+  if (Test-PortReady -Port $Service['Port'] -ProcessId $Service['Proc'].Id) {
+    Write-Host "[local-dev] $($Service.Name) ready: http://127.0.0.1:$($Service.Port) (PID $($Service['Proc'].Id))"
+  } else {
+    Write-Warning "[local-dev] $($Service.Name) did not bind port $($Service.Port) in time. Check $($Service.Err)"
   }
 }
 
 function Restart-ServiceProcess([hashtable]$Service, [string]$Reason) {
-  Write-Host "Restarting $($Service.Name) backend: $Reason"
-  if ($Service.Proc -and -not $Service.Proc.HasExited) {
-    Stop-Process -Id $Service.Proc.Id -Force -ErrorAction SilentlyContinue
+  $now = Get-Date
+  if (($now - $Service.LastRestart).TotalMilliseconds -lt 1500) { return }
+  Write-Host "[local-dev] restarting $($Service.Name): $Reason"
+  if ($Service['Proc'] -and -not $Service['Proc'].HasExited) {
+    Stop-Process -Id $Service['Proc'].Id -Force -ErrorAction SilentlyContinue
   }
   Start-ServiceProcess -Service $Service
 }
 
-function New-ServiceWatcher([hashtable]$Service) {
+function New-ServiceWatcher([hashtable]$Service, [string]$Path) {
+  if (-not (Test-Path $Path)) { return $null }
   $watcher = New-Object System.IO.FileSystemWatcher
-  $watcher.Path = $Service.Dir
+  $watcher.Path = $Path
   $watcher.IncludeSubdirectories = $true
   $watcher.Filter = '*.*'
   $watcher.NotifyFilter = [System.IO.NotifyFilters]'FileName, LastWrite, Size'
@@ -89,12 +122,9 @@ function New-ServiceWatcher([hashtable]$Service) {
     $path = $Event.SourceEventArgs.FullPath
     $ext = [System.IO.Path]::GetExtension($path).ToLowerInvariant()
     if ($ext -notin @('.js', '.cjs', '.mjs', '.json', '.env')) { return }
-    if ($path -match '\\node_modules\\|\\.git\\') { return }
-    $now = Get-Date
+    if ($path -match '\\node_modules\\|\\.git\\|\\.local-logs\\|\\dist\\') { return }
     $service = $Event.MessageData
-    if (($now - $service.LastRestart).TotalMilliseconds -lt 2500) { return }
-    $service.LastRestart = $now
-    Restart-ServiceProcess -Service $service -Reason $path
+    Restart-ServiceProcess -Service $service -Reason "file changed: $path"
   }.GetNewClosure()
 
   Register-ObjectEvent -InputObject $watcher -EventName Changed -Action $action -MessageData $Service | Out-Null
@@ -104,26 +134,91 @@ function New-ServiceWatcher([hashtable]$Service) {
   return $watcher
 }
 
-Start-ServiceProcess -Service $services.main
-Start-ServiceProcess -Service $services.futures
-
-$watchers = @(
-  New-ServiceWatcher -Service $services.main
-  New-ServiceWatcher -Service $services.futures
+$services = @(
+  (New-Service `
+    -Name 'main' `
+    -Dir $MainDir `
+    -Port $MainPort `
+    -FileName 'node' `
+    -Arguments @('index.js') `
+    -EnvVars @{
+      PORT = [string]$MainPort
+      CLASH_MARKETPLACE_INDEXER = $(if ($FullWorkers) { '1' } else { '0' })
+      CLASH_BRIDGE_RETRY_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
+      NFT_SUPPLY_REFRESH_DISABLE = $(if ($FullWorkers) { '0' } else { '1' })
+      CUSTODIAL_MARKETPLACE_SETTLEMENT_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
+    } `
+    -WatchDirs @($MainDir)),
+  (New-Service `
+    -Name 'futures' `
+    -Dir $FuturesDir `
+    -Port $FuturesPort `
+    -FileName 'node' `
+    -Arguments @('--experimental-wasm-modules', 'index.js') `
+    -EnvVars @{
+      FUTURES_PORT = [string]$FuturesPort
+      DECIBEL_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
+      AVANTIS_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
+      GMX_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
+      HYPERLIQUID_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
+      HOTSTUFF_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
+    } `
+    -WatchDirs @($FuturesDir))
 )
 
-Write-Host "Watching backends. Logs: $LogDir"
-Write-Host "Main: http://127.0.0.1:$MainPort"
-Write-Host "Futures: http://127.0.0.1:$FuturesPort"
-Write-Host 'Press Ctrl+C to stop the watcher.'
+if ($WithWeb) {
+  $services += (New-Service `
+    -Name 'web' `
+    -Dir $WebDir `
+    -Port $WebPort `
+    -FileName 'node' `
+    -Arguments @('node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', [string]$WebPort) `
+    -EnvVars @{
+      VITE_API_PROXY = "http://127.0.0.1:$MainPort"
+      VITE_WS_PROXY = "ws://127.0.0.1:$MainPort"
+      VITE_FUTURES_PROXY = "http://127.0.0.1:$FuturesPort"
+    } `
+    -WatchDirs @())
+}
 
+$watchers = @()
 try {
-  while ($true) { Start-Sleep -Seconds 1 }
+  foreach ($service in $services) {
+    Start-ServiceProcess -Service $service
+    foreach ($path in $service.WatchDirs) {
+      $watcher = New-ServiceWatcher -Service $service -Path $path
+      if ($watcher) { $watchers += $watcher }
+    }
+  }
+
+  Write-Host ''
+  Write-Host '[local-dev] running'
+  Write-Host "[local-dev] main API:    http://127.0.0.1:$MainPort"
+  Write-Host "[local-dev] futures API: http://127.0.0.1:$FuturesPort"
+  if ($WithWeb) { Write-Host "[local-dev] web:         http://127.0.0.1:$WebPort" }
+  Write-Host "[local-dev] logs:        $LogDir"
+  Write-Host '[local-dev] press Ctrl+C to stop.'
+
+  while ($true) {
+    foreach ($service in $services) {
+      if (-not $service['Proc']) { continue }
+      $service['Proc'].Refresh()
+      if ($service['Proc'].HasExited) {
+        Restart-ServiceProcess -Service $service -Reason "process exited with code $($service['Proc'].ExitCode)"
+      }
+    }
+    Start-Sleep -Seconds 1
+  }
 } finally {
   foreach ($watcher in $watchers) {
     if ($watcher) {
       $watcher.EnableRaisingEvents = $false
       $watcher.Dispose()
+    }
+  }
+  foreach ($service in $services) {
+    if ($service['Proc'] -and -not $service['Proc'].HasExited) {
+      Stop-Process -Id $service['Proc'].Id -Force -ErrorAction SilentlyContinue
     }
   }
 }

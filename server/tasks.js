@@ -459,6 +459,9 @@ async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
   if (!fdb) return [];
   try {
     const sourceWhere = verifiedSourceWhereForDex(dexFilter);
+    const statusWhere = dexFilter === 'gmtrade'
+      ? "AND (status = 'filled' OR (status = 'created' AND lower(COALESCE(order_type, '')) = 'market'))"
+      : "AND status = 'filled'";
     const settleWhere = opts.includeUnsettled
       ? ''
       : "AND created_at <= datetime('now', ?)";
@@ -468,7 +471,8 @@ async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
     const rows = fdb.prepare(`
       SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, verified_source, created_at
       FROM trade_history
-      WHERE player_id = ? AND dex = ? AND status = 'filled'
+      WHERE player_id = ? AND dex = ?
+        ${statusWhere}
         ${sourceWhere}
         ${settleWhere}
       ORDER BY id ASC

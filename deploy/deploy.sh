@@ -1688,7 +1688,6 @@ main() {
     write_nginx_config
     restart_services
     purge_cloudflare_godot_cache
-    backup_shared_databases
     cleanup_old_releases
 
     log "=== Deploy complete ==="
