@@ -2684,7 +2684,10 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
     && Number.isFinite(requestedNotional)
     && requestedNotional > 0
     && requestedNotional <= 10_000_000;
-  if (!tradeEvent && !createOrderEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS && !canUseVerifiedCloseClientNotional) {
+  // CreateOrderV2 proves that a GMTrade order was placed, but a limit order can
+  // sit unfilled or later be executed by a keeper transaction. Rewards and
+  // tournament volume must use execution/fill evidence only.
+  if (!tradeEvent && !verifiedPosition && !GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS && !canUseVerifiedCloseClientNotional) {
     if (options.storePending !== false) {
       persistPendingTradeReport(db, playerId, wallet, signature, body);
     }
@@ -2710,8 +2713,6 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
   const leverage = Number.isFinite(requestedLeverage) && requestedLeverage > 0 ? requestedLeverage : 1;
   const notional = tradeEvent
     ? Number(tradeEvent.size_delta_usd)
-    : createOrderEvent
-    ? Number(createOrderEvent.size_delta_usd)
     : verifiedPosition
     ? Number(verifiedPosition.size_usd || verifiedPosition.notional_usd)
     : canUseVerifiedCloseClientNotional
@@ -2741,8 +2742,6 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
     proofJson: JSON.stringify({
       source: tradeEvent
         ? 'gmtrade_solana_tx'
-        : createOrderEvent
-        ? 'gmtrade_create_order_v2_tx'
         : verifiedPosition
         ? 'gmtrade_position_pda_after_tx'
         : canUseVerifiedCloseClientNotional
@@ -2845,11 +2844,10 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
     }
     try {
       const tx = await verifySolanaSignature({ signature, wallet });
-      const hasWalletEvent = Array.isArray(tx.walletEvents) && tx.walletEvents.some(ev => Number(ev?.size_delta_usd) > 0);
-      const createOrderEvent = Array.isArray(tx.createOrderEvents)
-        ? tx.createOrderEvents.find(ev => Number(ev?.size_delta_usd) > 0)
+      const tradeEvent = Array.isArray(tx.walletEvents)
+        ? tx.walletEvents.find(ev => Number(ev?.size_delta_usd) > 0)
         : null;
-      if (!hasWalletEvent && !createOrderEvent) {
+      if (!tradeEvent) {
         skipped += 1;
         continue;
       }
@@ -2858,8 +2856,8 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
         signature,
         tx_hash: signature,
         wallet,
-        symbol: options.symbol || createOrderEvent?.symbol || 'GM',
-        side: options.side || createOrderEvent?.side || 'long',
+        symbol: options.symbol || tradeEvent?.symbol || 'GM',
+        side: options.side || tradeEvent?.side || 'long',
         amount: 0,
         leverage: 1,
       }, wallet, { storePending: true });
