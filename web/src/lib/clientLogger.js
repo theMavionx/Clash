@@ -146,7 +146,15 @@ function sanitize(value, depth = 0, seen = new WeakSet()) {
   }
   const out = {};
   for (const [key, child] of Object.entries(value).slice(0, 28)) {
-    out[key] = REDACT_KEY_RE.test(key) ? '[redacted]' : sanitize(child, depth + 1, seen);
+    if (REDACT_KEY_RE.test(key)) {
+      out[key] = '[redacted]';
+    } else if ((key === 'logs' || key === 'simulation_logs') && Array.isArray(child)) {
+      out[key] = child.slice(-80).map((v) => sanitize(v, depth + 1, seen));
+    } else if (key === 'err') {
+      out[key] = sanitize(child, depth - 1, seen);
+    } else {
+      out[key] = sanitize(child, depth + 1, seen);
+    }
   }
   return out;
 }

@@ -268,6 +268,9 @@ function simulationErrorMessage(value) {
   const logText = logs.join('\n');
   const err = value?.err ? JSON.stringify(value.err) : '';
   if (/insufficient funds/i.test(logText)) return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
+  if (/InstructionError/i.test(err) && /"Custom"\s*:\s*1/.test(err)) {
+    return 'GMTrade order setup failed because the wallet appears short on spendable USDC/SOL for this transaction. Reduce margin, close/cancel some orders, or add a little SOL for setup/rent.';
+  }
   return `GMTrade transaction simulation failed${err ? `: ${err}` : ''}`;
 }
 
@@ -283,6 +286,9 @@ function gmtradeUserError(error) {
   }
   if (/Tokenkeg|insufficient funds|custom program error:\s*0x1/i.test(message)) {
     return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
+  }
+  if (/InstructionError.*Custom.*1|Custom[":\s]+1/i.test(message)) {
+    return 'GMTrade order setup failed because the wallet appears short on spendable USDC/SOL for this transaction. Reduce margin, close/cancel some orders, or add a little SOL for setup/rent.';
   }
   return message || 'GMTrade order failed';
 }
