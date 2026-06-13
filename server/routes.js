@@ -18058,9 +18058,20 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   const baseSql = `
     SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd, tp.awarded_points,
            tp.team_dex, tp.reward_wallet_evm,
-           p.name, p.wallet, p.dex AS player_dex
+           p.name, p.wallet, p.dex AS player_dex,
+           COALESCE(
+             pda.wallet_address,
+             CASE WHEN p.dex = COALESCE(tp.team_dex, p.dex, tt.dex) THEN p.wallet ELSE NULL END
+           ) AS trading_wallet,
+           pda.account_id AS trading_account_id,
+           pda.chain_type AS trading_chain_type,
+           pda.dex AS trading_dex
     FROM tournament_participants tp
     JOIN players p ON p.id = tp.player_id
+    JOIN tournaments tt ON tt.id = tp.tournament_id
+    LEFT JOIN player_dex_accounts pda
+      ON pda.player_id = tp.player_id
+     AND pda.dex = COALESCE(tp.team_dex, p.dex, tt.dex)
     WHERE tp.tournament_id = ? AND tp.left_at IS NULL
   `;
   let rows;
@@ -18135,7 +18146,13 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       prize_amount: mode === 'dex_vs_dex' ? (r.prize_amount || 0) : (prizeByRank.get(i + 1) || 0),
       prize_currency: prize.currency,
       prize_rewards: mode === 'dex_vs_dex' ? [] : (prizeRewardsByRank.get(i + 1) || []),
-      ...(includeRewardWallets ? { reward_wallet_evm: r.reward_wallet_evm || null } : {}),
+      ...(includeRewardWallets ? {
+        reward_wallet_evm: r.reward_wallet_evm || null,
+        trading_wallet: r.trading_wallet || null,
+        trading_account_id: r.trading_account_id || null,
+        trading_chain_type: r.trading_chain_type || null,
+        trading_dex: r.trading_dex || r.team_dex || r.player_dex || null,
+      } : {}),
     })),
   });
 });

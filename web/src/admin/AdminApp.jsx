@@ -1020,10 +1020,11 @@ function LeaderboardDrawer({ data, onClose }) {
     <Drawer title={`Leaderboard · #${t.id} ${t.name || ''}`} subtitle={`${rows.length} players · sort ${data.sort_label || t.sort_by || '-'}`} onClose={onClose}>
       <div className="admin-table-wrap admin-scroll">
         <table className="admin-table">
-          <thead><tr><th>Rank</th><th>Player</th><th>Team</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th><th>Prize</th></tr></thead>
+          <thead><tr><th>Rank</th><th>Player</th><th>Team</th><th>Trading wallet</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th><th>Prize</th></tr></thead>
           <tbody>
             {rows.map((r) => {
               const rewardWallet = compactWallet(r.reward_wallet_evm || r.reward_wallet_solana);
+              const tradingWallet = compactWallet(r.trading_wallet);
               return (
                 <tr key={r.player_id || r.rank}>
                   <td>{r.rank}</td>
@@ -1032,6 +1033,11 @@ function LeaderboardDrawer({ data, onClose }) {
                     {r.wallet ? <div className="admin-card-sub admin-mono admin-wallet-line">{short(r.wallet, 10, 6)}</div> : null}
                   </td>
                   <td>{r.team_label || r.dex || '-'}</td>
+                  <td>
+                    {tradingWallet || '-'}
+                    {r.trading_account_id ? <div className="admin-card-sub admin-mono admin-wallet-line">Acct {short(r.trading_account_id, 10, 6)}</div> : null}
+                    {(r.trading_dex || r.trading_chain_type) ? <div className="admin-card-sub">{[r.trading_dex, r.trading_chain_type].filter(Boolean).join(' · ')}</div> : null}
+                  </td>
                   <td>{Number(r.score || 0).toFixed(2)}</td>
                   <td>{r.trophies || 0}</td>
                   <td>{r.gold || 0}</td>
