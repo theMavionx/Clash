@@ -1959,11 +1959,13 @@ router.get('/pyth/history', async (req, res) => {
       error: 'Failed to load Pyth history',
       errmsg: e.message,
     };
-    pythHistoryCache.set(key, { at: now, data });
+    if (e.status !== 429) {
+      pythHistoryCache.set(key, { at: now, data });
+    }
     res.set('Cache-Control', 'public, max-age=10');
     res.set('X-Pyth-Cache', 'error');
     if (e.status === 429) res.set('Retry-After', '10');
-    return res.json(data);
+    return res.status(e.status === 429 ? 429 : 200).json(data);
   }
 });
 

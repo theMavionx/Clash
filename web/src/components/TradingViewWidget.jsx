@@ -13,6 +13,7 @@ const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 // every Pyth feed. Route through our futures backend so browser CORS / 429s
 // do not blank Avantis charts, and repeated requests can be cached server-side.
 const PYTH_HISTORY_API = '/api/futures/pyth/history';
+const PYTH_HISTORY_DIRECT_API = 'https://benchmarks.pyth.network/v1/shims/tradingview/history';
 
 const INTERVALS = [
   { label: '1m', value: '1m', ms: 2 * 60 * 60 * 1000, pyth: '1' },
@@ -336,18 +337,31 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         from: String(fromSec),
         to: String(toSec),
       });
-      try {
-        const r = await fetch(`${PYTH_HISTORY_API}?${params.toString()}`);
+      const read = async (url) => {
+        const r = await fetch(url);
         const json = await r.json().catch(() => null);
         if (!r.ok) {
           return {
             s: 'error',
             errmsg: json?.errmsg || json?.error || `Pyth history ${r.status}`,
+            status: r.status,
           };
         }
         return json || { s: 'error', errmsg: 'empty Pyth history response' };
+      };
+      try {
+        const proxied = await read(`${PYTH_HISTORY_API}?${params.toString()}`);
+        if (proxied?.s !== 'error') return proxied;
+        // If the Clash proxy is rate-limited or temporarily stale, try Pyth
+        // directly from the user's browser before falling back to a flat line.
+        const direct = await read(`${PYTH_HISTORY_DIRECT_API}?${params.toString()}`);
+        return direct?.s === 'error' ? proxied : direct;
       } catch (e) {
-        return { s: 'error', errmsg: e?.message || 'Pyth history request failed' };
+        try {
+          return await read(`${PYTH_HISTORY_DIRECT_API}?${params.toString()}`);
+        } catch {
+          return { s: 'error', errmsg: e?.message || 'Pyth history request failed' };
+        }
       }
     }
 
