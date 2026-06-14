@@ -7816,6 +7816,47 @@ function dexAcceptsWallet(dex, wallet) {
   return walletChainType(wallet) === required;
 }
 
+function resolveClaimWalletForDex(player, dex, currentWallet = null) {
+  const normalizedDex = String(dex || '').toLowerCase();
+  if (dexAcceptsWallet(normalizedDex, currentWallet)) return canonicalWalletIdentifier(currentWallet);
+  try {
+    const row = db.db.prepare(`
+      SELECT wallet_address
+      FROM player_dex_accounts
+      WHERE player_id = ? AND dex = ?
+      ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
+      LIMIT 1
+    `).get(player.id, normalizedDex);
+    if (row && dexAcceptsWallet(normalizedDex, row.wallet_address)) {
+      return canonicalWalletIdentifier(row.wallet_address);
+    }
+  } catch {}
+  try {
+    const row = db.db.prepare(
+      'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+    ).get(player.id, normalizedDex);
+    if (row && dexAcceptsWallet(normalizedDex, row.wallet)) {
+      return canonicalWalletIdentifier(row.wallet);
+    }
+  } catch {}
+  try {
+    const chainType = DEX_REQUIRED_CHAIN[normalizedDex] || null;
+    if (chainType) {
+      const row = db.db.prepare(`
+        SELECT address
+        FROM player_wallets
+        WHERE player_id = ? AND chain_type = ?
+        ORDER BY is_primary DESC, updated_at DESC, id DESC
+        LIMIT 1
+      `).get(player.id, chainType);
+      if (row && dexAcceptsWallet(normalizedDex, row.address)) {
+        return canonicalWalletIdentifier(row.address);
+      }
+    }
+  } catch {}
+  return currentWallet;
+}
+
 function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown', opts = {}) {
   if (!player?.id || !VALID_DEXES.has(dex)) return { ok: false, changed: false, conflictResolved: false };
   const bindWallet = opts.bindWallet !== false;
@@ -12239,6 +12280,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   const playerDex = VALID_DEXES.has(String(req.player.dex || '').toLowerCase())
     ? String(req.player.dex).toLowerCase()
     : 'pacifica';
+  wallet = resolveClaimWalletForDex(req.player, playerDex, wallet);
   const recordClaimTelemetry = (event = {}) => {
     db.recordTradeClaimResult({
       playerId: req.player.id,

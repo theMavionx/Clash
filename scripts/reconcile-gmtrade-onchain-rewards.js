@@ -35,6 +35,7 @@ function sqlDateMs(value) {
 }
 
 function tradeInWindow(tournament, row) {
+  if (!tournament) return true;
   const tradeMs = sqlDateMs(row?.created_at) ?? Date.now();
   const startMs = Math.max(sqlDateMs(tournament.start_at) ?? 0, sqlDateMs(tournament.joined_at) ?? 0);
   const endMs = sqlDateMs(tournament.end_at) ?? Infinity;
@@ -87,18 +88,64 @@ function getTournament(tournamentId) {
 function getParticipants(tournamentId, names = []) {
   const nameFilter = names.length ? `AND p.name IN (${names.map(() => '?').join(',')})` : '';
   return mainDb.db.prepare(`
-    SELECT p.id, p.name, p.wallet, p.dex, p.gold, p.token,
+    SELECT p.id, p.name,
+           COALESCE(NULLIF(da.wallet_address, ''), p.wallet) AS wallet,
+           p.dex, p.gold, p.token, p.created_at,
            tp.tournament_id, tp.joined_at, tp.left_at,
            t.start_at, t.end_at, t.gold_boost, t.seeker_gold_boost,
            COALESCE(p.is_seeker, 0) AS is_seeker
     FROM tournament_participants tp
     JOIN players p ON p.id = tp.player_id
     JOIN tournaments t ON t.id = tp.tournament_id
+    LEFT JOIN player_dex_accounts da ON da.id = (
+      SELECT id FROM player_dex_accounts
+      WHERE player_id = p.id AND dex = 'gmtrade'
+      ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
+      LIMIT 1
+    )
     WHERE tp.tournament_id = ?
       AND tp.left_at IS NULL
       ${nameFilter}
     ORDER BY p.name COLLATE NOCASE
   `).all(tournamentId, ...names);
+}
+
+function getAllGmtradeAccounts(names = []) {
+  const nameFilter = names.length ? `AND p.name IN (${names.map(() => '?').join(',')})` : '';
+  return mainDb.db.prepare(`
+    SELECT p.id, p.name,
+           COALESCE(NULLIF(da.wallet_address, ''), p.wallet) AS wallet,
+           p.dex, p.gold, p.token, p.created_at,
+           da.status AS gmtrade_status,
+           COALESCE(p.is_seeker, 0) AS is_seeker
+    FROM players p
+    LEFT JOIN player_dex_accounts da ON da.id = (
+      SELECT id FROM player_dex_accounts
+      WHERE player_id = p.id AND dex = 'gmtrade'
+      ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
+      LIMIT 1
+    )
+    WHERE (lower(COALESCE(p.dex, '')) = 'gmtrade' OR da.id IS NOT NULL)
+      ${nameFilter}
+    ORDER BY p.name COLLATE NOCASE
+  `).all(...names);
+}
+
+function getPlayerTournamentScope(playerId, tournament) {
+  if (!tournament?.id) return null;
+  const row = mainDb.db.prepare(`
+    SELECT tp.tournament_id, tp.joined_at, tp.left_at,
+           t.start_at, t.end_at, t.gold_boost, t.seeker_gold_boost,
+           COALESCE(p.is_seeker, 0) AS is_seeker
+    FROM tournament_participants tp
+    JOIN tournaments t ON t.id = tp.tournament_id
+    JOIN players p ON p.id = tp.player_id
+    WHERE tp.tournament_id = ?
+      AND tp.player_id = ?
+      AND tp.left_at IS NULL
+    LIMIT 1
+  `).get(tournament.id, playerId);
+  return row || null;
 }
 
 function getReward(playerId) {
@@ -149,6 +196,7 @@ function getUncreditedTournamentRows(playerId, tournament) {
 
 async function main() {
   const apply = hasFlag('apply');
+  const allGmtradeAccounts = hasFlag('all-gmtrade-accounts');
   const tournamentId = Number(argValue('tournament-id', 0)) || null;
   const limit = Math.max(1, Math.min(1000, Number(argValue('limit', process.env.GMTRADE_RECONCILE_SIGNATURE_LIMIT || 300))));
   const names = String(argValue('names', '') || '')
@@ -156,8 +204,8 @@ async function main() {
     .map((s) => s.trim())
     .filter(Boolean);
   const tournament = getTournament(tournamentId);
-  if (!tournament) throw new Error('No GMTrade tournament found');
-  const participants = getParticipants(tournament.id, names);
+  if (!tournament && !allGmtradeAccounts) throw new Error('No GMTrade tournament found');
+  const participants = allGmtradeAccounts ? getAllGmtradeAccounts(names) : getParticipants(tournament.id, names);
   const out = [];
 
   for (const p of participants) {
@@ -172,10 +220,12 @@ async function main() {
       dryRun: !apply,
     });
     const reward = getReward(p.id);
-    const unpaidRows = getUnpaidRows(p.id, reward, { ...tournament, joined_at: p.joined_at, is_seeker: p.is_seeker });
-    const uncreditedRows = getUncreditedTournamentRows(p.id, { ...tournament, joined_at: p.joined_at, is_seeker: p.is_seeker });
+    const tournamentScope = allGmtradeAccounts ? getPlayerTournamentScope(p.id, tournament) : { ...tournament, joined_at: p.joined_at, is_seeker: p.is_seeker };
+    const goldScope = tournamentScope || { start_at: p.created_at, joined_at: p.created_at, end_at: null, is_seeker: p.is_seeker };
+    const unpaidRows = getUnpaidRows(p.id, reward, goldScope);
+    const uncreditedRows = tournamentScope ? getUncreditedTournamentRows(p.id, tournamentScope) : [];
     const goldCalc = volumeGoldForRows(unpaidRows);
-    const tournamentMultiplier = tournamentGoldMultiplier({ ...tournament, is_seeker: p.is_seeker });
+    const tournamentMultiplier = tournamentScope ? tournamentGoldMultiplier(tournamentScope) : 1;
     const tournamentGold = Math.round(goldCalc.gold * tournamentMultiplier);
     const prosperityGold = apply && tournamentGold > 0
       ? mainDb.applyAltarProsperityResourceBonus(p.id, { gold: tournamentGold, wood: 0, ore: 0 })
@@ -185,7 +235,7 @@ async function main() {
     let tournamentCredit = { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
     if (apply && uncreditedRows.length > 0) {
       tournamentCredit = mainDb.recordTournamentTradeRows(p.id, uncreditedRows, {
-        tournamentId: tournament.id,
+        tournamentId: tournamentScope.tournament_id || tournamentScope.id,
         source: 'trade_history',
         count: true,
         volume: true,
@@ -211,17 +261,19 @@ async function main() {
                  total_gold = total_gold + ?,
                  first_deposit = CASE WHEN first_trade = 1 THEN 1 ELSE first_deposit END,
                  updated_at = datetime('now')
-           WHERE player_id = ? AND dex = 'gmtrade'
+          WHERE player_id = ? AND dex = 'gmtrade'
         `).run(maxId, goldCalc.volume, paidGold, p.id);
-        mainDb.db.prepare(`
-          UPDATE tournament_participants
-             SET gold = gold + ?, last_activity_at = datetime('now')
-           WHERE tournament_id = ? AND player_id = ?
-        `).run(tournamentGold, tournament.id, p.id);
+        if (tournamentScope) {
+          mainDb.db.prepare(`
+            UPDATE tournament_participants
+               SET gold = gold + ?, last_activity_at = datetime('now')
+             WHERE tournament_id = ? AND player_id = ?
+          `).run(tournamentGold, tournamentScope.tournament_id || tournamentScope.id, p.id);
+        }
         mainDb.addResources(p.id, paidGold, 0, 0, {
           sourceType: 'gmtrade_reconcile',
           metadata: {
-            tournament_id: tournament.id,
+            tournament_id: tournamentScope ? (tournamentScope.tournament_id || tournamentScope.id) : null,
             credited_trades: goldCalc.credited,
             credited_volume_usd: goldCalc.volume,
             base_gold: goldCalc.gold,
@@ -239,7 +291,11 @@ async function main() {
     out.push({
       name: p.name,
       wallet: p.wallet,
+      player_id: p.id,
       mode: apply ? 'apply' : 'dry-run',
+      scope: tournamentScope
+        ? { type: 'tournament', tournament_id: tournamentScope.tournament_id || tournamentScope.id, joined_at: tournamentScope.joined_at }
+        : { type: 'account', start_at: p.created_at || null },
       scan,
       rows_before: beforeRows.length,
       rows_after: afterRows.length,
@@ -270,8 +326,9 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     apply,
-    tournament_id: tournament.id,
-    tournament: tournament.name,
+    all_gmtrade_accounts: allGmtradeAccounts,
+    tournament_id: tournament?.id || null,
+    tournament: tournament?.name || null,
     participants: participants.length,
     limit,
     results: out,
