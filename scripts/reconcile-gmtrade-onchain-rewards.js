@@ -195,6 +195,10 @@ function getUncreditedTournamentRows(playerId, tournament) {
 }
 
 async function main() {
+  const printJson = console.log.bind(console);
+  if (hasFlag('quiet')) {
+    console.log = (...args) => console.error(...args);
+  }
   const apply = hasFlag('apply');
   const allGmtradeAccounts = hasFlag('all-gmtrade-accounts');
   const tournamentId = Number(argValue('tournament-id', 0)) || null;
@@ -323,7 +327,7 @@ async function main() {
     });
   }
 
-  console.log(JSON.stringify({
+  printJson(JSON.stringify({
     ok: true,
     apply,
     all_gmtrade_accounts: allGmtradeAccounts,
