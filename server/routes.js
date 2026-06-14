@@ -12311,7 +12311,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           }
         }
         if (typeof gmtrade.backfillRecentOnchainTradesForPlayer === 'function' && gmtrade.isSolanaAddress(wallet)) {
-          const backfilled = await gmtrade.backfillRecentOnchainTradesForPlayer(fdb, req.player.id, wallet, { limit: 60 });
+          const gmtradeBackfillLimit = Math.max(60, Math.min(1000, Number(process.env.GMTRADE_CLAIM_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 300)));
+          const backfilled = await gmtrade.backfillRecentOnchainTradesForPlayer(fdb, req.player.id, wallet, { limit: gmtradeBackfillLimit });
           if (backfilled.imported || backfilled.pending || backfilled.errors) {
             console.log(`[claim-gold gmtrade] on-chain backfill player=${req.player.name} checked=${backfilled.checked} candidates=${backfilled.candidates} imported=${backfilled.imported} pending=${backfilled.pending} skipped=${backfilled.skipped} errors=${backfilled.errors}`);
           }
@@ -13205,6 +13206,17 @@ router.get('/trading/stats', auth, async (req, res) => {
 // ==================== TASKS (QUESTS) ====================
 
 const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const TASK_PROGRESS_REFRESH_TIMEOUT_MS = Math.max(1000, Number(process.env.TASK_PROGRESS_REFRESH_TIMEOUT_MS || 5000));
+
+function withTaskProgressTimeout(promise, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label || 'task progress'} timed out after ${TASK_PROGRESS_REFRESH_TIMEOUT_MS}ms`)), TASK_PROGRESS_REFRESH_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
@@ -13226,7 +13238,10 @@ async function maybeRefreshTaskProgress(player, task, playerTask) {
         ).run(playerTask.snapshot, player.id, task.id);
       }
     }
-    const result = await tasks.verifyTask(player, task, snap);
+    const result = await withTaskProgressTimeout(
+      tasks.verifyTask(player, task, snap),
+      `player=${player?.name || player?.id} task=${task?.id} dex=${dex}`
+    );
     const progress = result.target_value > 0
       ? Math.min(1, result.progress_value / result.target_value)
       : 0;

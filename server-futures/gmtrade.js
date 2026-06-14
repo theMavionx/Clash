@@ -96,6 +96,14 @@ const GMTRADE_MIN_POSITION_USD = Math.max(0, Number(process.env.GMTRADE_MIN_POSI
 const GMTRADE_POSITION_VERIFY_SLOT_WINDOW = Math.max(1, Number(process.env.GMTRADE_POSITION_VERIFY_SLOT_WINDOW || 500));
 const GMTRADE_ENABLE_NODE_SDK_BUILDER = String(process.env.GMTRADE_ENABLE_NODE_SDK_BUILDER || '1').trim() !== '0';
 const GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS = String(process.env.GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS || '').trim() === '1';
+const GMTRADE_BACKFILL_SIGNATURE_LIMIT = Math.max(
+  1,
+  Math.min(1000, Number(process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 300))
+);
+const GMTRADE_BACKFILL_PAGE_SIZE = Math.max(
+  1,
+  Math.min(100, Number(process.env.GMTRADE_BACKFILL_PAGE_SIZE || 100))
+);
 const GMTRADE_TX_MEMO = String(process.env.GMTRADE_TX_MEMO || '').trim();
 const GMTRADE_DISCOVER_MARKETS = String(process.env.GMTRADE_DISCOVER_MARKETS || '1').trim() !== '0';
 const GMTRADE_MARKET_ACCOUNT_DATA_SIZE = Number(process.env.GMTRADE_MARKET_ACCOUNT_DATA_SIZE || 0);
@@ -2645,6 +2653,13 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function solanaBlockTimeToSql(blockTime) {
+  const seconds = Number(blockTime);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const iso = new Date(seconds * 1000).toISOString();
+  return iso.replace('T', ' ').slice(0, 19);
+}
+
 async function verifiedPositionForTradeReport({ wallet, tx, body }) {
   const wantedSymbol = baseSymbol(body.symbol || '');
   const wantedSide = normalizeSide(body.side);
@@ -2774,6 +2789,7 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
     dex: 'gmtrade',
     notional_usd: notional,
     verifiedSource,
+    createdAt: solanaBlockTimeToSql(tx.blockTime),
     proofJson: JSON.stringify({
       source: proofSource,
       signature,
@@ -2846,21 +2862,33 @@ async function reconcilePendingTradeReportsForPlayer(db, playerId, options = {})
 
 async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, options = {}) {
   if (!playerId || !isSolanaAddress(wallet)) {
-    return { checked: 0, candidates: 0, imported: 0, pending: 0, skipped: 0, errors: 0 };
+    return { checked: 0, candidates: 0, imported: 0, pending: 0, skipped: 0, errors: 0, pages: 0 };
   }
-  const limit = Math.max(1, Math.min(100, Number(options.limit || 60)));
+  const maxSignatures = Math.max(1, Math.min(1000, Number(options.limit || GMTRADE_BACKFILL_SIGNATURE_LIMIT)));
+  const pageSize = Math.max(1, Math.min(100, Number(options.pageSize || GMTRADE_BACKFILL_PAGE_SIZE), maxSignatures));
   const minSlot = Math.max(0, Number(options.minSlot || 0));
-  const rows = await rpcSignaturesForAddress(wallet, { limit }).catch((e) => {
-    console.warn('[gmtrade] on-chain signature scan failed:', e.message);
-    return [];
-  });
+  const rows = [];
+  let before = options.before ? String(options.before) : null;
+  let pages = 0;
+  while (rows.length < maxSignatures) {
+    const batchLimit = Math.min(pageSize, maxSignatures - rows.length);
+    const batch = await rpcSignaturesForAddress(wallet, { limit: batchLimit, before }).catch((e) => {
+      console.warn('[gmtrade] on-chain signature scan failed:', e.message);
+      return [];
+    });
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    pages += 1;
+    rows.push(...batch);
+    before = String(batch[batch.length - 1]?.signature || '');
+    if (!before || batch.length < batchLimit) break;
+  }
   let checked = 0;
   let candidates = 0;
   let imported = 0;
   let pending = 0;
   let skipped = 0;
   let errors = 0;
-  for (const row of (Array.isArray(rows) ? rows : []).reverse()) {
+  for (const row of rows.reverse()) {
     checked += 1;
     if (row?.err) {
       skipped += 1;
@@ -2894,11 +2922,15 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
       else if (result?.pending) pending += 1;
       else skipped += 1;
     } catch (e) {
-      errors += 1;
-      console.warn('[gmtrade] on-chain backfill tx failed:', signature, e.message);
+      if (/does not include a known GMTrade\/GMSOL program/i.test(String(e?.message || ''))) {
+        skipped += 1;
+      } else {
+        errors += 1;
+        console.warn('[gmtrade] on-chain backfill tx failed:', signature, e.message);
+      }
     }
   }
-  return { checked, candidates, imported, pending, skipped, errors };
+  return { checked, candidates, imported, pending, skipped, errors, pages };
 }
 
 module.exports = {
@@ -2921,7 +2953,7 @@ module.exports = {
     node_sdk_builder_enabled: GMTRADE_ENABLE_NODE_SDK_BUILDER,
     market_data: 'coingecko_gmtrade_derivatives_with_pyth_fallback',
     market_data_last_error: marketInfoCache.error,
-    reward_verification: 'confirmed_solana_signature_trade_event_or_create_order_v2',
+    reward_verification: 'confirmed_solana_signature_trade_event_or_position_after_tx',
     min_position_usd: GMTRADE_MIN_POSITION_USD,
     trade_event_decoder: rustBuilderAvailable() ? 'node_layout_and_rust_gmsol_sdk' : 'node_layout_gmsol_trade_event',
     allow_client_notional_reports: GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS,

@@ -220,8 +220,8 @@ const stmts = {
   // partial index) silently drops instead of throwing. Prevents one
   // duplicate report from crashing the request handler.
   addTrade: db.prepare(`
-    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source, pnl, fee, proof_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source, pnl, fee, proof_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
   `),
   recordDecibelOrderProof: db.prepare(`
     INSERT OR IGNORE INTO decibel_order_proofs (
@@ -346,7 +346,7 @@ function getDeposits(playerId) {
 
 // ---------- Trade Functions ----------
 
-function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0, verifiedSource = 'server', pnl = null, fee = null, proofJson = null }) {
+function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0, verifiedSource = 'server', pnl = null, fee = null, proofJson = null, createdAt = null }) {
   const info = stmts.addTrade.run(
     playerId, symbol, side, orderType,
     amount, price || null,
@@ -354,7 +354,8 @@ function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, c
     status, dex, notional_usd, verifiedSource,
     pnl != null ? String(pnl) : null,
     fee != null ? String(fee) : null,
-    proofJson != null ? String(proofJson) : null
+    proofJson != null ? String(proofJson) : null,
+    createdAt != null ? String(createdAt) : null
   );
   return { id: info.changes ? info.lastInsertRowid : null, changes: info.changes };
 }

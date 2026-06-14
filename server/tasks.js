@@ -349,8 +349,15 @@ async function maybeReconcileGmtrade(player, wallet) {
   try {
     const futuresDb = require('../server-futures/db');
     const gmtrade = require('../server-futures/gmtrade');
-    if (typeof gmtrade.reconcilePendingTradeReportsForPlayer !== 'function') return null;
-    return await gmtrade.reconcilePendingTradeReportsForPlayer(futuresDb, player.id, { limit: 50 });
+    const out = {};
+    if (typeof gmtrade.reconcilePendingTradeReportsForPlayer === 'function') {
+      out.pending = await gmtrade.reconcilePendingTradeReportsForPlayer(futuresDb, player.id, { limit: 50 });
+    }
+    if (typeof gmtrade.backfillRecentOnchainTradesForPlayer === 'function') {
+      const limit = Math.max(60, Math.min(1000, Number(process.env.GMTRADE_TASK_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 150)));
+      out.backfill = await gmtrade.backfillRecentOnchainTradesForPlayer(futuresDb, player.id, wallet, { limit });
+    }
+    return out;
   } catch (e) {
     console.warn(`[tasks gmtrade] pending reconcile failed player=${player.name || player.id}:`, e.message);
     return null;
@@ -515,9 +522,7 @@ async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
   if (!fdb) return [];
   try {
     const sourceWhere = verifiedSourceWhereForDex(dexFilter);
-    const statusWhere = dexFilter === 'gmtrade'
-      ? "AND (status = 'filled' OR (status = 'created' AND lower(COALESCE(order_type, '')) = 'market'))"
-      : "AND status = 'filled'";
+    const statusWhere = "AND status = 'filled'";
     const settleWhere = opts.includeUnsettled
       ? ''
       : "AND created_at <= datetime('now', ?)";
