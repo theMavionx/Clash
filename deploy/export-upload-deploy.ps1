@@ -1,11 +1,11 @@
 param(
-  [string]$RemoteHost = "92.205.29.88",
-  [string]$RemoteUser = "bloxxdotfun",
+  [string]$RemoteHost = "31.97.72.65",
+  [string]$RemoteUser = "root",
   [string]$RemoteSourceDir = "/opt/clash",
   [string]$Branch = "main",
   [string]$GodotExe = $env:GODOT_EXE,
   [string]$PuttyDir = "C:\Program Files\PuTTY",
-  [string]$HostKey = "ssh-ed25519 255 SHA256:Q2aRdzOkyAUCNA1VV+mVHRD+adpoLpE3o7Lrw5qfeVA",
+  [string]$HostKey = "ssh-ed25519 255 SHA256:7ewi+hdoJkhNQSeN/YaarW8D+GMi2JYLGq2243jsc6I",
   [switch]$SkipDeploy
 )
 
