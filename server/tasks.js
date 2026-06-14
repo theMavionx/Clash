@@ -354,7 +354,7 @@ async function maybeReconcileGmtrade(player, wallet) {
       out.pending = await gmtrade.reconcilePendingTradeReportsForPlayer(futuresDb, player.id, { limit: 50 });
     }
     if (typeof gmtrade.backfillRecentOnchainTradesForPlayer === 'function') {
-      const limit = Math.max(60, Math.min(1000, Number(process.env.GMTRADE_TASK_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 150)));
+      const limit = Math.max(60, Math.min(1000, Number(process.env.GMTRADE_TASK_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 300)));
       out.backfill = await gmtrade.backfillRecentOnchainTradesForPlayer(futuresDb, player.id, wallet, { limit });
     }
     return out;

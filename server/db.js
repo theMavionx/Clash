@@ -2370,6 +2370,26 @@ const stmts = {
     ORDER BY t.id DESC
     LIMIT 1
   `),
+  getTournamentByIdForPlayer: db.prepare(`
+    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only, p.team_dex,
+           t.gold_boost, COALESCE(t.seeker_gold_boost, 1.0) AS seeker_gold_boost, t.trophy_boost,
+           COALESCE(pl.is_seeker, 0) AS is_seeker,
+           COALESCE(t.freeze_trophies, 1) AS freeze_trophies, t.sort_by,
+           COALESCE(t.scoring_mode, 'live') AS scoring_mode,
+           COALESCE(t.daily_pool_points, 1000) AS daily_pool_points,
+           t.daily_pool_enabled_at,
+           t.shield_hours, t.start_at, t.end_at, p.joined_at
+    FROM tournament_participants p
+    JOIN players pl ON pl.id = p.player_id
+    JOIN tournaments t ON t.id = p.tournament_id
+    WHERE t.id = ?
+      AND p.player_id = ?
+      AND p.left_at IS NULL
+      AND t.status = 'active'
+      AND (t.end_at IS NULL OR replace(replace(t.end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+    LIMIT 1
+  `),
   getActiveTournamentAttackPolicyForPlayer: db.prepare(`
     SELECT t.id AS tournament_id, t.name, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only,
            COALESCE(t.attack_match_policy, 'all') AS attack_match_policy,
@@ -2470,6 +2490,11 @@ const stmts = {
 function getPlayerActiveTournament(playerId) {
   if (!playerId) return null;
   return stmts.getActiveTournamentForPlayer.get(playerId) || null;
+}
+
+function getPlayerTournamentById(playerId, tournamentId) {
+  if (!playerId || !tournamentId) return null;
+  return stmts.getTournamentByIdForPlayer.get(tournamentId, playerId) || null;
 }
 
 const TOURNAMENT_ATTACK_MATCH_POLICIES = new Set(['all', 'enemy_or_non_participant', 'enemy_only']);
@@ -2745,7 +2770,9 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
   if (!playerId || !Array.isArray(rows) || rows.length === 0) {
     return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
   }
-  const t = getPlayerActiveTournament(playerId);
+  const t = opts.tournamentId || opts.tournament_id
+    ? getPlayerTournamentById(playerId, opts.tournamentId || opts.tournament_id)
+    : getPlayerActiveTournament(playerId);
   if (!t) return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
 
   const source = String(opts.source || 'trade_history');

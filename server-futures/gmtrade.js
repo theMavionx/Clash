@@ -2862,11 +2862,13 @@ async function reconcilePendingTradeReportsForPlayer(db, playerId, options = {})
 
 async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, options = {}) {
   if (!playerId || !isSolanaAddress(wallet)) {
-    return { checked: 0, candidates: 0, imported: 0, pending: 0, skipped: 0, errors: 0, pages: 0 };
+    return { checked: 0, candidates: 0, imported: 0, would_import: 0, pending: 0, skipped: 0, duplicates: 0, errors: 0, pages: 0 };
   }
   const maxSignatures = Math.max(1, Math.min(1000, Number(options.limit || GMTRADE_BACKFILL_SIGNATURE_LIMIT)));
   const pageSize = Math.max(1, Math.min(100, Number(options.pageSize || GMTRADE_BACKFILL_PAGE_SIZE), maxSignatures));
   const minSlot = Math.max(0, Number(options.minSlot || 0));
+  const dryRun = options.dryRun === true;
+  const includeDetails = options.details === true;
   const rows = [];
   let before = options.before ? String(options.before) : null;
   let pages = 0;
@@ -2885,9 +2887,15 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
   let checked = 0;
   let candidates = 0;
   let imported = 0;
+  let wouldImport = 0;
   let pending = 0;
   let skipped = 0;
+  let duplicates = 0;
   let errors = 0;
+  const details = [];
+  const existingStmt = db?.db?.prepare
+    ? db.db.prepare(`SELECT id, player_id FROM trade_history WHERE dex = 'gmtrade' AND client_order_id = ? LIMIT 1`)
+    : null;
   for (const row of rows.reverse()) {
     checked += 1;
     if (row?.err) {
@@ -2896,6 +2904,12 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
     }
     const signature = String(row?.signature || '').trim();
     if (!signature || (minSlot > 0 && Number(row?.slot || 0) <= minSlot)) {
+      skipped += 1;
+      continue;
+    }
+    const existing = existingStmt ? existingStmt.get(`gmtrade:${signature}`) : null;
+    if (existing) {
+      duplicates += 1;
       skipped += 1;
       continue;
     }
@@ -2909,6 +2923,20 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
         continue;
       }
       candidates += 1;
+      if (dryRun) {
+        wouldImport += 1;
+        if (includeDetails) {
+          details.push({
+            signature,
+            slot: tx.slot,
+            block_time: tx.blockTime,
+            symbol: tradeEvent?.symbol || 'GM',
+            side: tradeEvent?.side || 'long',
+            notional_usd: Number(tradeEvent?.size_delta_usd || 0),
+          });
+        }
+        continue;
+      }
       const result = await recordTradeReport(db, playerId, {
         signature,
         tx_hash: signature,
@@ -2930,7 +2958,9 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
       }
     }
   }
-  return { checked, candidates, imported, pending, skipped, errors, pages };
+  const out = { checked, candidates, imported, would_import: wouldImport, pending, skipped, duplicates, errors, pages };
+  if (includeDetails) out.details = details;
+  return out;
 }
 
 module.exports = {
