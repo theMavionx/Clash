@@ -1630,6 +1630,71 @@ function normalizePriceRow(prices, symbol) {
   return Number(row?.mark || row?.oracle || 0) || 0;
 }
 
+function normalizePositionTokenAmount(amount, sizeUsd, markPriceHint) {
+  const initialAmount = Number(amount);
+  const notional = Number(sizeUsd);
+  const mark = Number(markPriceHint);
+  if (!Number.isFinite(initialAmount) || initialAmount <= 0) {
+    return {
+      amount: Number.isFinite(notional) && notional > 0 && Number.isFinite(mark) && mark > 0 ? notional / mark : 0,
+      method: 'fallback_from_mark',
+    };
+  }
+  if (!Number.isFinite(notional) || notional <= 0 || !Number.isFinite(mark) || mark <= 0) {
+    return { amount: initialAmount, method: 'raw_no_mark_hint' };
+  }
+
+  const score = (candidateAmount) => {
+    if (!Number.isFinite(candidateAmount) || candidateAmount <= 0) return Number.POSITIVE_INFINITY;
+    const candidateEntry = notional / candidateAmount;
+    if (!Number.isFinite(candidateEntry) || candidateEntry <= 0) return Number.POSITIVE_INFINITY;
+    return Math.abs(candidateEntry - mark) / mark;
+  };
+
+  let bestAmount = initialAmount;
+  let bestDistance = score(initialAmount);
+  let bestPower = 0;
+
+  // GMTrade position accounts have used different token amount scales across
+  // market configs. Choose the scale whose implied entry is closest to the
+  // current mark; this prevents raw 1e8/1e18 mismatches from exploding PnL.
+  for (let power = -18; power <= 18; power += 1) {
+    if (power === 0) continue;
+    const candidateAmount = initialAmount * (10 ** power);
+    const distance = score(candidateAmount);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestAmount = candidateAmount;
+      bestPower = power;
+    }
+  }
+
+  if (bestDistance < 0.5) {
+    return {
+      amount: bestAmount,
+      method: bestPower === 0 ? 'raw' : `scaled_1e${bestPower}`,
+      distance: bestDistance,
+    };
+  }
+
+  const initialEntry = notional / initialAmount;
+  const ratio = Math.max(initialEntry / mark, mark / initialEntry);
+  if (Number.isFinite(ratio) && ratio > 1000) {
+    return {
+      amount: notional / mark,
+      method: 'fallback_impossible_entry_from_mark',
+      distance: bestDistance,
+      ratio,
+    };
+  }
+
+  return {
+    amount: bestAmount,
+    method: bestPower === 0 ? 'raw_unscaled' : `scaled_1e${bestPower}_loose`,
+    distance: bestDistance,
+  };
+}
+
 function decodePositionAccount(encoded, meta = {}) {
   const buf = rawBase64ToBuffer(encoded);
   if (buf.length < 232 || !buf.subarray(0, 8).equals(GMTRADE_POSITION_DISCRIMINATOR)) return null;
@@ -1641,29 +1706,12 @@ function decodePositionAccount(encoded, meta = {}) {
   const amountTokensRaw = readU128LeSafe(buf, 184);
   const collateralRaw = readU128LeSafe(buf, 200);
   const collateralDecimals = Number(meta.collateral_decimals || GMTRADE_DEFAULT_COLLATERAL_DECIMALS);
-  let amount = decimalNumber(amountTokensRaw, Number(meta.token_decimals || GMTRADE_TOKEN_AMOUNT_DECIMALS));
+  const rawAmount = decimalNumber(amountTokensRaw, Number(meta.token_decimals || GMTRADE_TOKEN_AMOUNT_DECIMALS));
   const margin = decimalNumber(collateralRaw, collateralDecimals);
   const leverage = margin > 0 ? sizeUsd / margin : null;
   const markPriceHint = Number(meta.mark_price || 0);
-  if (amount > 0 && sizeUsd > 0 && markPriceHint > 0) {
-    const currentEntry = sizeUsd / amount;
-    let bestAmount = amount;
-    let bestDistance = Math.abs(currentEntry - markPriceHint) / markPriceHint;
-    for (let power = -6; power <= 6; power += 1) {
-      if (power === 0) continue;
-      const candidateAmount = amount * (10 ** power);
-      if (!(candidateAmount > 0)) continue;
-      const candidateEntry = sizeUsd / candidateAmount;
-      const distance = Math.abs(candidateEntry - markPriceHint) / markPriceHint;
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestAmount = candidateAmount;
-      }
-    }
-    if (bestAmount !== amount && bestDistance < 0.5) {
-      amount = bestAmount;
-    }
-  }
+  const amountNormalization = normalizePositionTokenAmount(rawAmount, sizeUsd, markPriceHint);
+  const amount = amountNormalization.amount;
   const entryPrice = amount > 0 ? sizeUsd / amount : 0;
   const markPrice = markPriceHint || entryPrice;
   const pnlUsd = amount > 0 && markPrice > 0 && entryPrice > 0
@@ -1705,6 +1753,7 @@ function decodePositionAccount(encoded, meta = {}) {
       size_usd_raw: String(sizeRaw),
       size_in_tokens_raw: String(amountTokensRaw),
       collateral_amount_raw: String(collateralRaw),
+      amount_normalization: amountNormalization,
     },
   };
 }
