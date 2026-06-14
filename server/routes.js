@@ -586,6 +586,48 @@ async function syncSolanaCollectionRarityAsset({ req, collection, assetId, owner
   });
 }
 
+const SOLANA_RARITY_SYNC_RETRY_DELAYS_MS = [0, 750, 1500, 3000, 5000, 8000];
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetrySolanaRaritySync(err) {
+  const status = Number(err?.status || err?.statusCode || 0);
+  if (!status) return true;
+  return [404, 409, 429, 500, 502, 503, 504].includes(status);
+}
+
+async function syncSolanaCollectionRarityAssetWithRetry(options) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < SOLANA_RARITY_SYNC_RETRY_DELAYS_MS.length; attempt += 1) {
+    const delay = SOLANA_RARITY_SYNC_RETRY_DELAYS_MS[attempt];
+    if (delay > 0) {
+      // Fresh Metaplex Core assets can lag behind the mint tx on public RPC/DAS.
+      // Retrying here keeps minted NFTs revealed without a later manual sync job.
+      // eslint-disable-next-line no-await-in-loop
+      await waitMs(delay);
+    }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const sync = await syncSolanaCollectionRarityAsset(options);
+      return sync ? { ...sync, attempts: attempt + 1 } : sync;
+    } catch (err) {
+      lastErr = err;
+      const error = (err?.message || String(err)).slice(0, 240);
+      console.warn('[nft] Solana rarity metadata sync retry failed:', {
+        collection: options?.collection?.slug,
+        asset: options?.assetId,
+        attempt: attempt + 1,
+        retrying: attempt < SOLANA_RARITY_SYNC_RETRY_DELAYS_MS.length - 1 && shouldRetrySolanaRaritySync(err),
+        error,
+      });
+      if (!shouldRetrySolanaRaritySync(err)) break;
+    }
+  }
+  throw lastErr || new Error('Solana rarity metadata sync failed');
+}
+
 async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef }) {
   const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
   if (!rawKey) throw Object.assign(new Error('Solana NFT authority key is not configured'), { status: 503 });
@@ -1139,8 +1181,19 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
     readAppSettingJson(key, null) || collectionDeploymentBaselineSupply(collection),
   );
   const tx = String(body.tx || body.hash || body.signature || '').trim();
-  if (tx && state.confirmedTxs.some((row) => row.tx === tx)) {
-    return { alreadyConfirmed: true, supply: collectionSupplyResponse(collection, state) };
+  if (tx) {
+    const confirmed = state.confirmedTxs.find((row) => row.tx === tx);
+    if (confirmed) {
+      return {
+        alreadyConfirmed: true,
+        supply: collectionSupplyResponse(collection, state),
+        chain: confirmed.chain || body.chain || 'unknown',
+        quantity: confirmed.quantity || body.quantity || 1,
+        tokenIds: Array.isArray(confirmed.tokenIds) ? confirmed.tokenIds : [],
+        reservationId: confirmed.reservationId || body.reservationId || null,
+        tx,
+      };
+    }
   }
   const reservationId = String(body.reservationId || '').trim();
   const idx = state.reservations.findIndex((row) => row.id === reservationId);
@@ -1169,6 +1222,7 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
       reservationId,
       chain,
       quantity,
+      tokenIds: mintedTokenIds,
       confirmedAt: new Date().toISOString(),
     });
     state.confirmedTxs = state.confirmedTxs.slice(-200);
@@ -4330,7 +4384,7 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
     if (!collection) return res.status(404).json({ error: 'collection not found' });
     const chain = String(req.body?.chain || '').toLowerCase();
     if (!NFT_COLLECTION_CHAIN_LABELS[chain]) return res.status(400).json({ error: 'bad chain' });
-    const tokenIds = [
+    const requestedTokenIds = [
       ...(Array.isArray(req.body?.tokenIds) ? req.body.tokenIds : []),
       ...(Array.isArray(req.body?.token_ids) ? req.body.token_ids : []),
       ...(Array.isArray(req.body?.assets) ? req.body.assets : []),
@@ -4348,23 +4402,37 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
       tx: txHash,
       chain,
       quantity: req.body?.quantity,
-      tokenIds,
+      tokenIds: requestedTokenIds,
     });
-    const rarities = recordCollectionMintRarities(collection, result);
+    const resultTokenIds = Array.isArray(result.tokenIds)
+      ? result.tokenIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+    const rarityTokenIds = Array.from(new Set((resultTokenIds.length ? resultTokenIds : requestedTokenIds)
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)));
+    const resultForRarity = {
+      ...result,
+      chain: result.chain || chain,
+      tokenIds: rarityTokenIds,
+      reservationId: result.reservationId || req.body?.reservationId || null,
+      tx: result.tx || txHash,
+      buyer: result.buyer || req.body?.buyer || req.body?.wallet || null,
+    };
+    const rarities = result.alreadyConfirmed ? [] : recordCollectionMintRarities(collection, resultForRarity);
     const solanaRaritySync = [];
-    if (chain === 'solana' && nftCollectionUsesRarity(collection) && rarities.length) {
-      for (const tokenId of result.tokenIds || []) {
+    if (chain === 'solana' && nftCollectionUsesRarity(collection) && rarityTokenIds.length) {
+      for (const tokenId of rarityTokenIds) {
         try {
           // Direct Solana Candy Machine mints start with the hidden collection URI.
           // Reveal the Core asset immediately after the tx is confirmed and DB
           // rarity is assigned, so wallets/scanners see Rarity without a manual
           // background sync.
           // eslint-disable-next-line no-await-in-loop
-          const sync = await syncSolanaCollectionRarityAsset({
+          const sync = await syncSolanaCollectionRarityAssetWithRetry({
             req,
             collection,
             assetId: tokenId,
-            owner: result.buyer || '',
+            owner: resultForRarity.buyer || '',
           });
           if (sync) solanaRaritySync.push(sync);
         } catch (syncErr) {
@@ -4382,7 +4450,14 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
       }
     }
     res.set('Cache-Control', 'no-store');
-    return res.json({ ok: true, ...result, rarities, solanaRaritySync });
+    return res.json({
+      ok: true,
+      ...result,
+      tokenIds: resultTokenIds.length ? resultTokenIds : rarityTokenIds,
+      rarities,
+      solanaRaritySync,
+      solanaRaritySyncOk: solanaRaritySync.every((row) => !row?.error),
+    });
   } catch (err) {
     const status = err?.status || (/chain|reservation/i.test(err?.message || '') ? 400 : 500);
     return res.status(status).json({ error: (err?.message || 'mint confirm failed').slice(0, 180) });
@@ -17576,9 +17651,9 @@ function normalizeTournamentPrizeTiers(input, { strict = false } = {}) {
 }
 
 const DEFAULT_MEGA_SECTORS = [
-  { id: 'whale', name: 'Whale', min_town_hall_level: 3, min_volume_usd: 100000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
-  { id: 'dolphin', name: 'Dolphin', min_town_hall_level: 2, min_volume_usd: 25000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
-  { id: 'shrimp', name: 'Shrimp', min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
+  { id: 'whale', name: 'Whale', min_town_hall_level: 3, min_volume_usd: 100000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+  { id: 'dolphin', name: 'Dolphin', min_town_hall_level: 2, min_volume_usd: 25000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+  { id: 'shrimp', name: 'Shrimp', min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
 ];
 
 function normalizeMegaSectorId(value, fallback) {
@@ -17611,6 +17686,7 @@ function normalizeMegaSector(raw = {}, index = 0, { strict = false } = {}) {
     description: sanitizePrizeText(raw.description || raw.hint || '', ''),
     min_town_hall_level: Math.floor(normalizeMegaSectorNumber(raw.min_town_hall_level ?? raw.min_th ?? raw.town_hall_level, fallback.min_town_hall_level || 0, 20)),
     min_volume_usd: normalizeMegaSectorNumber(raw.min_volume_usd ?? raw.volume_usd ?? raw.min_volume, fallback.min_volume_usd || 0),
+    min_daily_volume_usd: normalizeMegaSectorNumber(raw.min_daily_volume_usd ?? raw.daily_volume_usd ?? raw.min_daily_volume ?? raw.daily_volume, fallback.min_daily_volume_usd || 0),
     min_trades: Math.floor(normalizeMegaSectorNumber(raw.min_trades ?? raw.trades ?? raw.min_tx ?? raw.min_transactions, fallback.min_trades || 0, 1_000_000)),
     dex_scope: dexScope,
     dexes,
@@ -17635,9 +17711,9 @@ function normalizeTournamentMegaConfig(input, { strict = false } = {}) {
     ? raw.sectors
     : (enabled && template === 'abc'
       ? [
-        { id: 'a', name: 'Sector A', min_town_hall_level: 3, min_volume_usd: 100000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
-        { id: 'b', name: 'Sector B', min_town_hall_level: 2, min_volume_usd: 25000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
-        { id: 'c', name: 'Sector C', min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
+        { id: 'a', name: 'Sector A', min_town_hall_level: 3, min_volume_usd: 100000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+        { id: 'b', name: 'Sector B', min_town_hall_level: 2, min_volume_usd: 25000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+        { id: 'c', name: 'Sector C', min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
       ]
       : DEFAULT_MEGA_SECTORS);
   const seen = new Set();
@@ -17819,6 +17895,61 @@ function tournamentDexBreakdowns(tournamentId) {
   return byPlayer;
 }
 
+function tournamentDailyDexBreakdowns(tournamentId, dayUtc = tournamentUtcDayString()) {
+  const byPlayer = new Map();
+  if (!tournamentId) return byPlayer;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dayUtc || '')) ? String(dayUtc) : tournamentUtcDayString();
+  const dayStart = `${day} 00:00:00`;
+  const dayEnd = `${day} 23:59:59`;
+  let rows = [];
+  try {
+    rows = db.db.prepare(`
+      SELECT player_id, dex,
+             COALESCE(SUM(volume_usd), 0) AS volume_usd,
+             COALESCE(SUM(trades_count), 0) AS trades_count,
+             COALESCE(SUM(pnl_usd), 0) AS pnl_usd
+      FROM tournament_trade_credits
+      WHERE tournament_id = ?
+        AND replace(replace(credited_at, 'T', ' '), 'Z', '') BETWEEN ? AND ?
+      GROUP BY player_id, dex
+    `).all(tournamentId, dayStart, dayEnd);
+  } catch {
+    rows = [];
+  }
+  for (const row of rows) {
+    const playerId = row.player_id;
+    const dex = String(row.dex || '').toLowerCase();
+    if (!playerId || !TOURNAMENT_DEXES.includes(dex)) continue;
+    const state = byPlayer.get(playerId) || {
+      by_dex: {},
+      total_volume_usd: 0,
+      total_trades_count: 0,
+      total_pnl_usd: 0,
+    };
+    const volume = Number(row.volume_usd || 0) || 0;
+    const trades = Number(row.trades_count || 0) || 0;
+    const pnl = Number(row.pnl_usd || 0) || 0;
+    state.by_dex[dex] = {
+      dex,
+      label: TOURNAMENT_DEX_LABELS[dex] || dex,
+      volume_usd: Number(volume.toFixed(2)),
+      trades_count: trades,
+      pnl_usd: Number(pnl.toFixed(2)),
+    };
+    state.total_volume_usd += volume;
+    state.total_trades_count += trades;
+    state.total_pnl_usd += pnl;
+    byPlayer.set(playerId, state);
+  }
+  for (const state of byPlayer.values()) {
+    state.total_volume_usd = Number(state.total_volume_usd.toFixed(2));
+    state.total_pnl_usd = Number(state.total_pnl_usd.toFixed(2));
+    state.dex_breakdown = Object.values(state.by_dex)
+      .sort((a, b) => Number(b.volume_usd || 0) - Number(a.volume_usd || 0) || a.dex.localeCompare(b.dex));
+  }
+  return byPlayer;
+}
+
 function applyTournamentDexBreakdowns(rows, t, breakdowns = null) {
   const map = breakdowns || tournamentDexBreakdowns(t?.id);
   for (const row of rows || []) {
@@ -17835,6 +17966,25 @@ function applyTournamentDexBreakdowns(rows, t, breakdowns = null) {
     row.dex_breakdown = state.dex_breakdown || [];
     row.top_dex = state.top_dex || null;
     row.top_dex_label = state.top_dex_label || null;
+  }
+  return rows;
+}
+
+function applyTournamentDailyDexBreakdowns(rows, t, breakdowns = null) {
+  const map = breakdowns || tournamentDailyDexBreakdowns(t?.id);
+  for (const row of rows || []) {
+    const state = map.get(row.player_id);
+    if (!state) {
+      row.daily_dex_breakdown = [];
+      row.daily_volume_usd = 0;
+      row.daily_trades_count = 0;
+      row.daily_pnl_usd = 0;
+      continue;
+    }
+    row.daily_dex_breakdown = state.dex_breakdown || [];
+    row.daily_volume_usd = state.total_volume_usd || 0;
+    row.daily_trades_count = state.total_trades_count || 0;
+    row.daily_pnl_usd = state.total_pnl_usd || 0;
   }
   return rows;
 }
@@ -17859,7 +18009,7 @@ function buildMegaTournamentState(rows, t) {
     rank: index + 1,
     dexes: megaSectorDexes(t, sector),
     players: [],
-    summary: { players: 0, trades_count: 0, total_volume_usd: 0, pnl_usd: 0, gold: 0, trophies: 0 },
+    summary: { players: 0, trades_count: 0, total_volume_usd: 0, daily_volume_usd: 0, pnl_usd: 0, gold: 0, trophies: 0 },
   }));
   const unqualified = {
     id: 'unqualified',
@@ -17867,41 +18017,49 @@ function buildMegaTournamentState(rows, t) {
     rank: sectors.length + 1,
     min_town_hall_level: 0,
     min_volume_usd: 0,
+    min_daily_volume_usd: 0,
     min_trades: 0,
     dex_scope: 'all',
     dexes: [...TOURNAMENT_DEXES],
     prize_tiers: [],
     players: [],
-    summary: { players: 0, trades_count: 0, total_volume_usd: 0, pnl_usd: 0, gold: 0, trophies: 0 },
+    summary: { players: 0, trades_count: 0, total_volume_usd: 0, daily_volume_usd: 0, pnl_usd: 0, gold: 0, trophies: 0 },
   };
   for (const row of rows || []) {
     const townHall = Number(row.town_hall_level || 0) || 0;
     let assigned = null;
     let assignedStats = null;
+    let assignedDailyStats = null;
     for (const sector of sectors) {
       const stats = sumDexBreakdownForList(row, sector.dexes);
+      const dailyStats = sumDexBreakdownForList({ dex_breakdown: row.daily_dex_breakdown || [] }, sector.dexes);
       if (townHall >= Number(sector.min_town_hall_level || 0)
         && stats.volume_usd + 0.0001 >= Number(sector.min_volume_usd || 0)
+        && dailyStats.volume_usd + 0.0001 >= Number(sector.min_daily_volume_usd || 0)
         && stats.trades_count >= Number(sector.min_trades || 0)) {
         assigned = sector;
         assignedStats = stats;
+        assignedDailyStats = dailyStats;
         break;
       }
     }
     if (!assigned) {
       assigned = unqualified;
       assignedStats = sumDexBreakdownForList(row, unqualified.dexes);
+      assignedDailyStats = sumDexBreakdownForList({ dex_breakdown: row.daily_dex_breakdown || [] }, unqualified.dexes);
     }
     row.mega_sector_id = assigned.id;
     row.mega_sector_name = assigned.name;
     row.mega_sector_rank = assigned.rank;
     row.mega_sector_volume_usd = Number((assignedStats.volume_usd || 0).toFixed(2));
+    row.mega_sector_daily_volume_usd = Number((assignedDailyStats.volume_usd || 0).toFixed(2));
     row.mega_sector_trades_count = Number(assignedStats.trades_count || 0);
     row.mega_sector_pnl_usd = Number((assignedStats.pnl_usd || 0).toFixed(2));
     assigned.players.push(row);
     assigned.summary.players += 1;
     assigned.summary.trades_count += Number(row.mega_sector_trades_count || 0);
     assigned.summary.total_volume_usd += Number(row.mega_sector_volume_usd || 0);
+    assigned.summary.daily_volume_usd += Number(row.mega_sector_daily_volume_usd || 0);
     assigned.summary.pnl_usd += Number(row.mega_sector_pnl_usd || 0);
     assigned.summary.gold += Number(row.gold || 0);
     assigned.summary.trophies += Number(row.trophies || 0);
@@ -17916,6 +18074,7 @@ function buildMegaTournamentState(rows, t) {
     sortRows(sector.players);
     sector.players.forEach((row, idx) => { row.mega_sector_rank_position = idx + 1; });
     sector.summary.total_volume_usd = Number(sector.summary.total_volume_usd.toFixed(2));
+    sector.summary.daily_volume_usd = Number(sector.summary.daily_volume_usd.toFixed(2));
     sector.summary.pnl_usd = Number(sector.summary.pnl_usd.toFixed(2));
     const prize = megaSectorPrizeState(t, sector, sector.summary.total_volume_usd);
     sector.prize = prize;
@@ -17934,6 +18093,7 @@ function buildMegaTournamentState(rows, t) {
       description: sector.description || '',
       min_town_hall_level: sector.min_town_hall_level,
       min_volume_usd: sector.min_volume_usd,
+      min_daily_volume_usd: sector.min_daily_volume_usd,
       min_trades: sector.min_trades,
       dex_scope: sector.dex_scope,
       dexes: sector.dexes,
@@ -18780,7 +18940,9 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     `).all(tid, limit);
   }
   const dexBreakdowns = tournamentDexBreakdowns(tid);
+  const dailyDexBreakdowns = tournamentDailyDexBreakdowns(tid);
   applyTournamentDexBreakdowns(rows, t, dexBreakdowns);
+  applyTournamentDailyDexBreakdowns(rows, t, dailyDexBreakdowns);
   const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
   const summary = tournamentLeaderboardSummary(tid);
   const prize = tournamentPrizeState(t, totalVolumeUsd);
@@ -18789,6 +18951,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     const allRows = db.db.prepare(baseSql).all(tid);
     if (needsPointsScore || isTournamentPointsSort(sortBy) || tournamentUsesDailyPool(t)) applyTournamentPointsScore(allRows, t);
     applyTournamentDexBreakdowns(allRows, t, dexBreakdowns);
+    applyTournamentDailyDexBreakdowns(allRows, t, dailyDexBreakdowns);
     megaState = buildMegaTournamentState(allRows, t);
     const ordered = [];
     for (const sector of megaState?.sectors || []) {
@@ -18830,12 +18993,15 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       top_dex: r.top_dex || null,
       top_dex_label: r.top_dex_label || null,
       dex_breakdown: r.dex_breakdown || [],
+      daily_dex_breakdown: r.daily_dex_breakdown || [],
+      daily_volume_usd: r.daily_volume_usd || 0,
       town_hall_level: Number(r.town_hall_level || 0) || 0,
       mega_sector_id: r.mega_sector_id || null,
       mega_sector_name: r.mega_sector_name || null,
       mega_sector_rank: r.mega_sector_rank || null,
       mega_sector_rank_position: r.mega_sector_rank_position || null,
       mega_sector_volume_usd: r.mega_sector_volume_usd || 0,
+      mega_sector_daily_volume_usd: r.mega_sector_daily_volume_usd || 0,
       mega_sector_trades_count: r.mega_sector_trades_count || 0,
       team_dex: r.team_dex || r.player_dex || null,
       team_label: r.team_label || null,

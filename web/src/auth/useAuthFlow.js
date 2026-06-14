@@ -54,6 +54,7 @@ const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
 const ACCOUNT_PROBE_TIMEOUT_MS = 10000;
 const ACCOUNT_PROBE_MAX_RETRIES = 3;
 const ACCOUNT_PROBE_UI_WAIT_MS = 4500;
+const MANUAL_RECONNECT_WALLET_WAIT_MS = 8000;
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
 // user isn't authenticated anywhere; keeps the "Joining…" UX intact when
@@ -161,10 +162,12 @@ function walletCacheKey(wallet, dex) {
   const raw = String(wallet || '').trim();
   const w = raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
   if (!w) return '';
-  // The same EVM wallet can have separate rows per venue. A wallet-only
-  // cache key leaks "missing" or "found" probe results across DEXes and can
-  // send the user into new-account registration while their old DEX row exists.
-  return dex ? `${String(dex).toLowerCase()}:${w}` : w;
+  // Unified account model: one wallet resolves to one Clash account, while
+  // the chosen DEX is a profile/venue setting. Keep this cache wallet-only
+  // so switching venues does not send returning users into the relogin/name
+  // form just because they have not traded on that DEX before.
+  void dex;
+  return w;
 }
 
 function readAccountProbeCache(wallet, dex) {
@@ -490,6 +493,16 @@ export function useAuthFlow() {
     storedAuthWallet === rawCandidateWallet
   );
   const candidate = manualReconnectRequired && !manualReconnectSatisfied ? null : rawCandidate;
+  const [manualReconnectWaitExpired, setManualReconnectWaitExpired] = useState(false);
+
+  useEffect(() => {
+    setManualReconnectWaitExpired(false);
+    if (!manualReconnectRequired || manualReconnectSatisfied || rawCandidateWallet || !storedAuthWallet || !dexPicked) {
+      return undefined;
+    }
+    const timer = setTimeout(() => setManualReconnectWaitExpired(true), MANUAL_RECONNECT_WALLET_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [manualReconnectRequired, manualReconnectSatisfied, rawCandidateWallet, storedAuthWallet, dexPicked, dex]);
 
   useEffect(() => {
     if (!manualReconnectSatisfied) return;
@@ -743,6 +756,7 @@ export function useAuthFlow() {
     privyAuthed,
     manualReconnectRequired,
     manualReconnectSatisfied,
+    manualReconnectWaitExpired,
     storedAuthWalletPresent: !!storedAuthWallet,
     smReady,
     isInFrame,
@@ -751,13 +765,21 @@ export function useAuthFlow() {
     dex, dexPicked, booting, graceExpired, registering, candidate,
     probeInFlight, probeBlockingUi, probeWaitExpired, existingAccountName, suggestedName, isFarcasterCandidate,
     showRegister, readyForRegister, privyEnabled, privyReady, privyAuthed,
-    manualReconnectRequired, manualReconnectSatisfied, storedAuthWallet, smReady, isInFrame, fcLoading,
+    manualReconnectRequired, manualReconnectSatisfied, manualReconnectWaitExpired, storedAuthWallet, smReady, isInFrame, fcLoading,
   ]);
 
   const state = useMemo(() => {
     if (registerError && candidate) return 'need_name';
     if (registering) return 'registering';
     if (booting) return 'booting';
+    if (
+      manualReconnectRequired &&
+      !manualReconnectSatisfied &&
+      storedAuthWallet &&
+      dexPicked &&
+      !rawCandidateWallet &&
+      !manualReconnectWaitExpired
+    ) return 'auto_connecting';
     if (manualReconnectRequired && !manualReconnectSatisfied) return 'manual_connect';
     if (!candidate && !dexPicked) return 'manual_connect';
     if (!candidate && dexPicked && !graceExpired) return 'auto_connecting';
@@ -775,7 +797,8 @@ export function useAuthFlow() {
     if (!graceExpired) return 'auto_connecting';
     return 'manual_connect';
   }, [registerError, registering, booting, dexPicked, candidate, suggestedName, graceExpired,
-      isFarcasterCandidate, probeBlockingUi, existingAccountName, manualReconnectRequired, manualReconnectSatisfied]);
+      isFarcasterCandidate, probeBlockingUi, existingAccountName, manualReconnectRequired, manualReconnectSatisfied,
+      storedAuthWallet, rawCandidateWallet, manualReconnectWaitExpired]);
 
   const lastAuthStateLogRef = useRef('');
   useEffect(() => {

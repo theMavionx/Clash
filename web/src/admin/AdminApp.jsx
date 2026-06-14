@@ -827,7 +827,7 @@ function MegaSectorEditor({ mega, updateMega }) {
     setSectors(next);
   }
   function addSector() {
-    const next = [...sectors, { id: `sector_${sectors.length + 1}`, name: `Sector ${sectors.length + 1}`, min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] }];
+    const next = [...sectors, { id: `sector_${sectors.length + 1}`, name: `Sector ${sectors.length + 1}`, min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] }];
     setSectors(next);
     setActiveSector(next.length - 1);
   }
@@ -871,7 +871,7 @@ function MegaSectorEditor({ mega, updateMega }) {
         <div className="tier-chip-row">
           {sectors.map((sector, idx) => (
             <button key={`${sector.id}-${idx}`} className={'tier-chip' + (idx === activeSector ? ' active' : '')} onClick={() => setActiveSector(idx)}>
-              {sector.name}<span>{fmtUsd(sector.min_volume_usd || 0, 0)} min</span>
+              {sector.name}<span>{fmtUsd(sector.min_volume_usd || 0, 0)} total{Number(sector.min_daily_volume_usd || 0) > 0 ? ` · ${fmtUsd(sector.min_daily_volume_usd, 0)} daily` : ''}</span>
             </button>
           ))}
         </div>
@@ -886,6 +886,7 @@ function MegaSectorEditor({ mega, updateMega }) {
               <NumberField label="Min Town Hall" value={current.min_town_hall_level} onChange={(v) => updateSector(activeSector, { min_town_hall_level: v })} />
               <NumberField label="Min volume $" value={current.min_volume_usd} onChange={(v) => updateSector(activeSector, { min_volume_usd: v })} />
               <NumberField label="Min trades / tx" value={current.min_trades} onChange={(v) => updateSector(activeSector, { min_trades: v })} />
+              <NumberField label="Min daily volume $" value={current.min_daily_volume_usd || 0} onChange={(v) => updateSector(activeSector, { min_daily_volume_usd: v })} />
             </div>
             <div className="admin-form-grid">
               <label className="admin-field">
@@ -1609,8 +1610,26 @@ function TaskEditorDrawer({ task, onClose, onSaved }) {
               <button className="admin-btn danger" type="button" onClick={() => update({ starts_at: '', ends_at: '' })}>Clear schedule</button>
             </div>
             <div className="admin-form-grid two">
-              <label className="admin-field"><span className="admin-label">Starts at UTC</span><input className="admin-input admin-mono" placeholder="2026-06-13 00:00:00" value={form.starts_at || ''} onChange={(e) => update({ starts_at: e.target.value })} /></label>
-              <label className="admin-field"><span className="admin-label">Ends at UTC</span><input className="admin-input admin-mono" placeholder="2026-06-14 00:00:00" value={form.ends_at || ''} onChange={(e) => update({ ends_at: e.target.value })} /></label>
+              <label className="admin-field">
+                <span className="admin-label">Starts at UTC</span>
+                <input
+                  className="admin-input admin-mono"
+                  type="datetime-local"
+                  step="1"
+                  value={utcTextToDatetimeLocal(form.starts_at)}
+                  onChange={(e) => update({ starts_at: datetimeLocalToUtcText(e.target.value) })}
+                />
+              </label>
+              <label className="admin-field">
+                <span className="admin-label">Ends at UTC</span>
+                <input
+                  className="admin-input admin-mono"
+                  type="datetime-local"
+                  step="1"
+                  value={utcTextToDatetimeLocal(form.ends_at)}
+                  onChange={(e) => update({ ends_at: datetimeLocalToUtcText(e.target.value) })}
+                />
+              </label>
             </div>
           </div>
         </div>

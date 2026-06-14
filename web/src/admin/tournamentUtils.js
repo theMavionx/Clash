@@ -77,14 +77,14 @@ export function emptyTournament() {
 
 export const MEGA_SECTOR_TEMPLATES = {
   whale_dolphin_shrimp: [
-    { id: 'whale', name: 'Whale', min_town_hall_level: 3, min_volume_usd: 100000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
-    { id: 'dolphin', name: 'Dolphin', min_town_hall_level: 2, min_volume_usd: 25000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
-    { id: 'shrimp', name: 'Shrimp', min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'whale', name: 'Whale', min_town_hall_level: 3, min_volume_usd: 100000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'dolphin', name: 'Dolphin', min_town_hall_level: 2, min_volume_usd: 25000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'shrimp', name: 'Shrimp', min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
   ],
   abc: [
-    { id: 'a', name: 'Sector A', min_town_hall_level: 3, min_volume_usd: 100000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
-    { id: 'b', name: 'Sector B', min_town_hall_level: 2, min_volume_usd: 25000, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
-    { id: 'c', name: 'Sector C', min_town_hall_level: 1, min_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'a', name: 'Sector A', min_town_hall_level: 3, min_volume_usd: 100000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'b', name: 'Sector B', min_town_hall_level: 2, min_volume_usd: 25000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [] },
+    { id: 'c', name: 'Sector C', min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] },
   ],
 };
 
@@ -114,6 +114,7 @@ export function normalizeMegaConfig(raw = {}) {
       description: String(sector.description || '').slice(0, 120),
       min_town_hall_level: Math.max(0, Math.floor(Number(sector.min_town_hall_level ?? sector.min_th ?? 0) || 0)),
       min_volume_usd: Math.max(0, Number(sector.min_volume_usd ?? sector.min_volume ?? 0) || 0),
+      min_daily_volume_usd: Math.max(0, Number(sector.min_daily_volume_usd ?? sector.daily_volume_usd ?? sector.min_daily_volume ?? 0) || 0),
       min_trades: Math.max(0, Math.floor(Number(sector.min_trades ?? sector.min_tx ?? 0) || 0)),
       dex_scope: ['all', 'tournament', 'custom'].includes(String(sector.dex_scope || '').toLowerCase()) ? String(sector.dex_scope).toLowerCase() : 'all',
       dexes: Array.isArray(sector.dexes) ? sector.dexes.filter((dex) => TOURNAMENT_DEXES.includes(dex)) : [],

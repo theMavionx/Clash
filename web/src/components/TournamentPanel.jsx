@@ -203,6 +203,7 @@ function sectorRequirementText(sector) {
   const parts = [];
   if (Number(sector?.min_town_hall_level || 0) > 0) parts.push(`TH ${sector.min_town_hall_level}`);
   if (Number(sector?.min_volume_usd || 0) > 0) parts.push(`${fmtUsdWhole(sector.min_volume_usd)} vol`);
+  if (Number(sector?.min_daily_volume_usd || 0) > 0) parts.push(`${fmtUsdWhole(sector.min_daily_volume_usd)} daily`);
   if (Number(sector?.min_trades || 0) > 0) parts.push(`${fmt(sector.min_trades)} trades`);
   return parts.join(' · ') || 'Open';
 }
@@ -562,6 +563,9 @@ function TournamentPanel({ onClose }) {
                           <div style={S.sectorReq}>{sectorRequirementText(sector)}</div>
                           <div style={S.sectorReq}>{(sector.dex_labels || []).slice(0, 4).join(', ') || 'All DEXes'}</div>
                           <div style={S.sectorVolume}>{fmtUsdWhole(sector.summary?.total_volume_usd || 0)} sector vol</div>
+                          {(Number(sector.min_daily_volume_usd || 0) > 0 || Number(sector.summary?.daily_volume_usd || 0) > 0) && (
+                            <div style={S.sectorReq}>{fmtUsdWhole(sector.summary?.daily_volume_usd || 0)} today</div>
+                          )}
                         </div>
                       );
                     })}
