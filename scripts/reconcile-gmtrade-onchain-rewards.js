@@ -34,6 +34,12 @@ function sqlDateMs(value) {
   return Number.isFinite(ms) ? ms : null;
 }
 
+function sqlDateFromUnixSeconds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return new Date(n * 1000).toISOString().slice(0, 19).replace('T', ' ');
+}
+
 function tradeInWindow(tournament, row) {
   if (!tournament) return true;
   const tradeMs = sqlDateMs(row?.created_at) ?? Date.now();
@@ -60,6 +66,23 @@ function volumeGoldForRows(rows) {
     credited += 1;
   }
   return { credited, volume, gold };
+}
+
+function dryRunRowsFromScan(scan, reward) {
+  if (!Array.isArray(scan?.details)) return [];
+  const baseId = Number(reward?.last_trade_id || 0);
+  return scan.details.map((detail, index) => ({
+    id: baseId + index + 1,
+    symbol: detail.symbol || 'GM',
+    side: detail.side || 'long',
+    amount: 0,
+    notional_usd: Number(detail.notional_usd || 0),
+    pnl: 0,
+    status: 'filled',
+    verified_source: 'gmtrade_tx',
+    client_order_id: `gmtrade:${detail.signature}`,
+    created_at: sqlDateFromUnixSeconds(detail.block_time) || new Date().toISOString().slice(0, 19).replace('T', ' '),
+  }));
 }
 
 function tournamentGoldMultiplier(tournament) {
@@ -222,12 +245,18 @@ async function main() {
     const scan = await gmtrade.backfillRecentOnchainTradesForPlayer(futuresDb, p.id, p.wallet, {
       limit,
       dryRun: !apply,
+      details: !apply,
     });
     const reward = getReward(p.id);
     const tournamentScope = allGmtradeAccounts ? getPlayerTournamentScope(p.id, tournament) : { ...tournament, joined_at: p.joined_at, is_seeker: p.is_seeker };
     const goldScope = tournamentScope || { start_at: p.created_at, joined_at: p.created_at, end_at: null, is_seeker: p.is_seeker };
-    const unpaidRows = getUnpaidRows(p.id, reward, goldScope);
-    const uncreditedRows = tournamentScope ? getUncreditedTournamentRows(p.id, tournamentScope) : [];
+    const dryRunRows = apply ? [] : dryRunRowsFromScan(scan, reward);
+    const unpaidRows = getUnpaidRows(p.id, reward, goldScope)
+      .concat(dryRunRows.filter((row) => tradeInWindow(goldScope, row)));
+    const uncreditedRows = tournamentScope
+      ? getUncreditedTournamentRows(p.id, tournamentScope)
+        .concat(dryRunRows.filter((row) => tradeInWindow(tournamentScope, row)))
+      : [];
     const goldCalc = volumeGoldForRows(unpaidRows);
     const tournamentMultiplier = tournamentScope ? tournamentGoldMultiplier(tournamentScope) : 1;
     const tournamentGold = Math.round(goldCalc.gold * tournamentMultiplier);
