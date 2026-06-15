@@ -2709,6 +2709,36 @@ function solanaBlockTimeToSql(blockTime) {
   return iso.replace('T', ' ').slice(0, 19);
 }
 
+function positiveFinite(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function saneExecutionPrice(value, { notional = 0, mark = 0 } = {}) {
+  const price = positiveFinite(value);
+  if (!price || price > 1_000_000_000) return 0;
+  const n = positiveFinite(notional);
+  if (n && Math.abs(price - n) / Math.max(1, n) < 0.000001) return 0;
+  const ref = positiveFinite(mark);
+  if (ref && (price < ref / 1000 || price > ref * 1000)) return 0;
+  return price;
+}
+
+async function gmtradeMarketContext({ symbol, marketToken } = {}) {
+  let cfg = null;
+  const token = String(marketToken || '').trim();
+  if (token) {
+    cfg = await configFromMarketToken(token).catch(() => null);
+  }
+  if (!cfg && symbol) {
+    cfg = await resolveMarketConfig(symbol).catch(() => null);
+  }
+  const resolvedSymbol = baseSymbol(symbol || cfg?.symbol || '') || '';
+  const prices = await getPrices().catch(() => ({}));
+  const mark = normalizePriceRow(prices, resolvedSymbol);
+  return { cfg, symbol: resolvedSymbol, mark };
+}
+
 async function verifiedPositionForTradeReport({ wallet, tx, body }) {
   const wantedSymbol = baseSymbol(body.symbol || '');
   const wantedSide = normalizeSide(body.side);
@@ -2742,6 +2772,7 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
   const wallet = resolveRequestWallet(body, playerWallet);
   const signature = String(body.tx_hash || body.signature || '').trim();
   const requestedAmount = Number(body.amount);
+  const requestedTokenAmount = Number(body.token_amount || body.tokenAmount || body.quantity || body.qty);
   const requestedLeverage = Number(body.leverage || 1);
   const requestedNotional = Number(body.notional_usd || body.notionalUsd);
   const requestedMargin = Number(body.margin_usd || body.marginUsd);
@@ -2808,12 +2839,24 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
   if (!Number.isFinite(notional) || notional <= 0 || notional > 10_000_000) {
     throw Object.assign(new Error('GMTrade verified notional out of range'), { status: 400 });
   }
-  const symbol = baseSymbol(body.symbol || createOrderEvent?.symbol || 'GM') || 'GM';
+  const marketToken = tradeEvent?.market_token || createOrderEvent?.market_token || verifiedPosition?.market_token || body.market_token || body.marketToken || '';
+  const marketCtx = await gmtradeMarketContext({ symbol: body.symbol || createOrderEvent?.symbol || verifiedPosition?.symbol || '', marketToken });
+  const symbol = baseSymbol(body.symbol || createOrderEvent?.symbol || tradeEvent?.symbol || verifiedPosition?.symbol || marketCtx.symbol || 'GM') || 'GM';
   const eventSide = tradeEvent
     ? (tradeEvent.is_increase === false ? `close_${tradeEvent.side}` : tradeEvent.side)
     : '';
   const side = eventSide || createOrderEvent?.side || (isCloseReport ? requestedSide : verifiedPosition?.side_label) || requestedSide;
-  const price = Number(body.price) > 0 ? String(body.price) : String(notional);
+  const bodyPrice = saneExecutionPrice(body.price, { notional, mark: marketCtx.mark });
+  const positionPrice = saneExecutionPrice(verifiedPosition?.entry_price || verifiedPosition?.mark_price, { notional, mark: marketCtx.mark });
+  const tokenAmount = Number.isFinite(requestedTokenAmount) && requestedTokenAmount > 0
+    ? requestedTokenAmount
+    : (bodyPrice > 0 ? notional / bodyPrice : 0);
+  const inferredPrice = tokenAmount > 0 ? saneExecutionPrice(notional / tokenAmount, { notional, mark: marketCtx.mark }) : 0;
+  const markPrice = saneExecutionPrice(marketCtx.mark, { notional, mark: marketCtx.mark });
+  const price = String(bodyPrice || positionPrice || inferredPrice || markPrice || 0);
+  const displayAmount = tokenAmount > 0
+    ? tokenAmount
+    : (Number(price) > 0 ? notional / Number(price) : amount || notional);
   const proofSource = tradeEvent
     ? 'gmtrade_solana_tx'
     : verifiedPosition
@@ -2830,7 +2873,7 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
     symbol,
     side,
     orderType: String(body.order_type || body.orderType || 'market').toLowerCase(),
-    amount: String(amount || notional),
+    amount: String(displayAmount),
     price,
     orderId: null,
     clientOrderId: `gmtrade:${signature}`,
@@ -2852,9 +2895,16 @@ async function recordTradeReport(db, playerId, body = {}, playerWallet = '', opt
       create_order: createOrderEvent,
       position: verifiedPosition,
       client_amount: Number.isFinite(requestedAmount) ? requestedAmount : null,
+      client_token_amount: Number.isFinite(requestedTokenAmount) ? requestedTokenAmount : null,
       client_leverage: Number.isFinite(requestedLeverage) ? requestedLeverage : null,
       client_notional_usd: Number.isFinite(requestedNotional) ? requestedNotional : null,
       client_margin_usd: Number.isFinite(requestedMargin) ? requestedMargin : null,
+      market_context: {
+        market_token: marketToken || null,
+        symbol: marketCtx.symbol || null,
+        mark_price: marketCtx.mark || null,
+        selected_price: Number(price) || null,
+      },
       reduce_only: body.reduce_only === true || body.reduceOnly === true,
       account_keys: tx.accountKeys.slice(0, 32),
     }),

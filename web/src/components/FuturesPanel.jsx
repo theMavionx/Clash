@@ -2927,6 +2927,15 @@ function FuturesPanel() {
           ? { market_token: currentMarket.market_token || currentMarket.marketToken }
           : {}),
       };
+      if (dex === 'gmtrade') {
+        const gmtradeOrderPrice = orderType === 'limit' ? parseFloat(limitPrice) : tradePrice;
+        if (Number.isFinite(gmtradeOrderPrice) && gmtradeOrderPrice > 0) {
+          tradeOptions.price = gmtradeOrderPrice;
+          if (Number.isFinite(positionUsdc) && positionUsdc > 0) {
+            tradeOptions.token_amount = positionUsdc / gmtradeOrderPrice;
+          }
+        }
+      }
       if (orderType === 'market') {
         // 5th arg (leverage) is only read by useAvantis; usePacifica ignores it.
         result = await placeMarketOrder(symbol, side, qty, '0.5', leverage, tradeOptions);

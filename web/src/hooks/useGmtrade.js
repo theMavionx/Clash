@@ -589,6 +589,7 @@ export function useGmtrade() {
     orderType = 'market',
     notionalUsd,
     marginUsd,
+    tokenAmount,
     reduceOnly = false,
   } = {}) => {
     if (!token) return { error: 'Missing game session token' };
@@ -606,6 +607,7 @@ export function useGmtrade() {
           amount,
           leverage,
           price,
+          token_amount: tokenAmount,
           order_type: orderType,
           notional_usd: notionalUsd,
           margin_usd: marginUsd,
@@ -899,6 +901,7 @@ export function useGmtrade() {
         margin_usd: options?.margin_usd,
         market_token: options?.market_token || options?.marketToken,
         reduce_only: options?.reduce_only === true,
+        token_amount: options?.token_amount ?? options?.tokenAmount,
         order_type: options?.order_type || 'market',
       };
       const trace = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
@@ -997,6 +1000,7 @@ export function useGmtrade() {
             amount: margin,
             leverage,
             price: options?.price,
+            tokenAmount: options?.token_amount ?? options?.tokenAmount,
             orderType: normalizedOrderType,
             notionalUsd: options?.notional_usd,
             marginUsd: options?.margin_usd,
@@ -1089,6 +1093,8 @@ export function useGmtrade() {
       ...options,
       notional_usd: Number.isFinite(notionalUsd) && notionalUsd > 0 ? notionalUsd : options?.notional_usd,
       margin_usd: Number.isFinite(marginUsd) && marginUsd > 0 ? marginUsd : options?.margin_usd,
+      token_amount: Number.isFinite(positionTokenAmount) && positionTokenAmount > 0 ? positionTokenAmount * fraction : options?.token_amount,
+      price: Number(live?.entry_price || live?.mark_price || 0) > 0 ? Number(live.entry_price || live.mark_price) : options?.price,
       collateral_delta_usd: fullCloseCollateralDelta,
       order_type: options?.order_type || 'market',
       reduce_only: true,
