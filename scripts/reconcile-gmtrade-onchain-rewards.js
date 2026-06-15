@@ -112,7 +112,9 @@ function getParticipants(tournamentId, names = []) {
   const nameFilter = names.length ? `AND p.name IN (${names.map(() => '?').join(',')})` : '';
   return mainDb.db.prepare(`
     SELECT p.id, p.name,
-           COALESCE(NULLIF(da.wallet_address, ''), p.wallet) AS wallet,
+           NULLIF(da.wallet_address, '') AS dex_wallet,
+           NULLIF(tr.wallet, '') AS reward_wallet,
+           p.wallet AS player_wallet,
            p.dex, p.gold, p.token, p.created_at,
            tp.tournament_id, tp.joined_at, tp.left_at,
            t.start_at, t.end_at, t.gold_boost, t.seeker_gold_boost,
@@ -126,18 +128,25 @@ function getParticipants(tournamentId, names = []) {
       ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
       LIMIT 1
     )
+    LEFT JOIN trading_rewards tr ON tr.player_id = p.id AND tr.dex = 'gmtrade'
     WHERE tp.tournament_id = ?
       AND tp.left_at IS NULL
       ${nameFilter}
     ORDER BY p.name COLLATE NOCASE
-  `).all(tournamentId, ...names);
+  `).all(tournamentId, ...names)
+    .map((row) => ({
+      ...row,
+      wallet: [row.dex_wallet, row.reward_wallet, row.player_wallet].find(gmtrade.isSolanaAddress) || row.dex_wallet || row.reward_wallet || row.player_wallet,
+    }));
 }
 
 function getAllGmtradeAccounts(names = []) {
   const nameFilter = names.length ? `AND p.name IN (${names.map(() => '?').join(',')})` : '';
   return mainDb.db.prepare(`
     SELECT p.id, p.name,
-           COALESCE(NULLIF(da.wallet_address, ''), p.wallet) AS wallet,
+           NULLIF(da.wallet_address, '') AS dex_wallet,
+           NULLIF(tr.wallet, '') AS reward_wallet,
+           p.wallet AS player_wallet,
            p.dex, p.gold, p.token, p.created_at,
            da.status AS gmtrade_status,
            COALESCE(p.is_seeker, 0) AS is_seeker
@@ -148,10 +157,15 @@ function getAllGmtradeAccounts(names = []) {
       ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
       LIMIT 1
     )
+    LEFT JOIN trading_rewards tr ON tr.player_id = p.id AND tr.dex = 'gmtrade'
     WHERE (lower(COALESCE(p.dex, '')) = 'gmtrade' OR da.id IS NOT NULL)
       ${nameFilter}
     ORDER BY p.name COLLATE NOCASE
-  `).all(...names);
+  `).all(...names)
+    .map((row) => ({
+      ...row,
+      wallet: [row.dex_wallet, row.reward_wallet, row.player_wallet].find(gmtrade.isSolanaAddress) || row.dex_wallet || row.reward_wallet || row.player_wallet,
+    }));
 }
 
 function getPlayerTournamentScope(playerId, tournament) {
