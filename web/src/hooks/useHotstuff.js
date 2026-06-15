@@ -32,6 +32,7 @@ import {
 } from '../lib/encryptedCredentialStorage';
 
 const POLL_INTERVAL_MS = 5_000;
+const WALLET_USDC_POLL_INTERVAL_MS = 30_000;
 const AGENT_STORAGE_PREFIX = 'clash_hotstuff_agent_v1';
 const AGENT_VALIDITY_MS = 180 * 24 * 60 * 60 * 1000;
 const ERC20_BALANCE_ABI = [
@@ -45,7 +46,9 @@ const ERC20_BALANCE_ABI = [
 ];
 
 function shouldUseHotstuffAlchemyProxy() {
-  return Number(HOTSTUFF_BRIDGE_CHAIN_ID) === 1;
+  // Paid Alchemy is a fallback only. Mainnet wallet balance polling runs often,
+  // so it must try the public/browser RPC rotation first.
+  return false;
 }
 
 function num(value, fallback = 0) {
@@ -551,7 +554,7 @@ export function useHotstuff() {
     refresh();
     fetchWalletUsdc();
     const iv = setInterval(refresh, POLL_INTERVAL_MS);
-    const walletIv = setInterval(fetchWalletUsdc, POLL_INTERVAL_MS);
+    const walletIv = setInterval(fetchWalletUsdc, WALLET_USDC_POLL_INTERVAL_MS);
     return () => {
       clearInterval(iv);
       clearInterval(walletIv);

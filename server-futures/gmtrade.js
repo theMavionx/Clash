@@ -233,7 +233,7 @@ const GMTRADE_OFFICIAL_PRICE_DECIMALS = {
   ETH: 18,
   WETH: 18,
   USDC: 6,
-  XRP: 8,
+  XRP: 6,
   DOGE: 8,
   SUI: 9,
   BNB: 18,
@@ -243,15 +243,26 @@ const GMTRADE_OFFICIAL_PRICE_DECIMALS = {
   LTC: 8,
   AAVE: 18,
   PEPE: 18,
+  BOME: 6,
+  BONK: 5,
+  WIF: 6,
+  TRUMP: 6,
+  MELANIA: 6,
+  FARTCOIN: 6,
+  PUMP: 18,
+  WLFI: 18,
+  HYPE: 8,
   TRX: 6,
   XLM: 7,
   ADA: 6,
   DOT: 10,
-  AVAX: 9,
+  AVAX: 18,
   ARB: 18,
   NEAR: 24,
   ZEC: 8,
   TAO: 9,
+  BCH: 8,
+  TON: 9,
   XAU: 18,
   GOLD: 18,
   XAG: 18,
@@ -515,6 +526,19 @@ function findUserAddress(owner, programId = GMTRADE_PROGRAM_IDS[0]) {
     new PublicKey(programId)
   );
   return String(address);
+}
+
+function gmtradeUserAddressesForWallet(wallet) {
+  if (!isSolanaAddress(wallet)) return [];
+  const out = [wallet];
+  for (const programId of GMTRADE_PROGRAM_IDS) {
+    try {
+      out.push(findUserAddress(wallet, programId));
+    } catch {
+      // Ignore stale program ids or malformed input.
+    }
+  }
+  return [...new Set(out.filter(Boolean))];
 }
 
 function referralCodeBytes(code = GMTRADE_REFERRAL_CODE) {
@@ -1077,10 +1101,18 @@ function decodeGmtradeTradeEvent(encoded) {
 }
 
 function decodeGmtradeCreateOrderV2Instruction(ix, accountKeys = []) {
-  if (!ix || typeof bs58Decode !== 'function') return null;
+  if (!ix) return null;
   let buf;
   try {
-    buf = Buffer.from(bs58Decode(String(ix.data || '').trim()));
+    if (Buffer.isBuffer(ix.data)) {
+      buf = Buffer.from(ix.data);
+    } else if (ix.data instanceof Uint8Array) {
+      buf = Buffer.from(ix.data);
+    } else if (typeof ix.data === 'string' && typeof bs58Decode === 'function') {
+      buf = Buffer.from(bs58Decode(String(ix.data || '').trim()));
+    } else {
+      return null;
+    }
   } catch {
     return null;
   }
@@ -1090,7 +1122,11 @@ function decodeGmtradeCreateOrderV2Instruction(ix, accountKeys = []) {
   const sizeRaw = readU128Le(buf, 59);
   const sizeUsd = gmRawUsdToNumber(sizeRaw);
   if (!Number.isFinite(sizeUsd) || sizeUsd <= 0 || sizeUsd > 10_000_000) return null;
-  const accounts = Array.isArray(ix.accounts) ? ix.accounts : [];
+  const accounts = Array.isArray(ix.accounts)
+    ? ix.accounts
+    : Array.isArray(ix.accountKeyIndexes)
+    ? ix.accountKeyIndexes
+    : [];
   const accountAt = (idx) => {
     const keyIdx = Number(accounts[idx]);
     return Number.isInteger(keyIdx) ? String(accountKeys[keyIdx] || '') : '';
@@ -1117,7 +1153,9 @@ function decodeGmtradeCreateOrderV2Instruction(ix, accountKeys = []) {
 
 function decodeGmtradeCreateOrderV2Instructions(tx, accountKeys = []) {
   const out = [];
-  const instructions = tx?.transaction?.message?.instructions || [];
+  const instructions = tx?.transaction?.message?.instructions
+    || tx?.transaction?.message?.compiledInstructions
+    || [];
   for (const ix of instructions) {
     const programId = String(accountKeys[Number(ix?.programIdIndex)] || '');
     if (!GMTRADE_PROGRAM_IDS.includes(programId)) continue;
@@ -1147,10 +1185,18 @@ function decodeTradeEventsFromInnerInstructions(tx, accountKeys = []) {
   for (const row of innerRows) {
     for (const ix of row?.instructions || []) {
       const programId = String(accountKeys[Number(ix?.programIdIndex)] || '');
-      if (!GMTRADE_PROGRAM_IDS.includes(programId) || typeof bs58Decode !== 'function') continue;
+      if (!GMTRADE_PROGRAM_IDS.includes(programId)) continue;
       let buf;
       try {
-        buf = Buffer.from(bs58Decode(String(ix.data || '').trim()));
+        if (Buffer.isBuffer(ix.data)) {
+          buf = Buffer.from(ix.data);
+        } else if (ix.data instanceof Uint8Array) {
+          buf = Buffer.from(ix.data);
+        } else if (typeof ix.data === 'string' && typeof bs58Decode === 'function') {
+          buf = Buffer.from(bs58Decode(String(ix.data || '').trim()));
+        } else {
+          continue;
+        }
       } catch {
         continue;
       }
@@ -1433,6 +1479,33 @@ function saneGmtradeOfficialPrice(symbol, officialRow, referenceRow) {
   if (!Number.isFinite(reference) || reference <= 0) return true;
   const ratio = official / reference;
   return ratio >= 0.01 && ratio <= 100;
+}
+
+function ensureNonMarketableGmtradeLimit({ kind, side, price, mark }) {
+  if (kind !== 'LimitIncrease' && kind !== 'LimitDecrease') return;
+  const p = Number(price);
+  const m = Number(mark);
+  if (!Number.isFinite(p) || p <= 0 || !Number.isFinite(m) || m <= 0) return;
+  const isLong = side === 'long' || side === 'close_long';
+  const isDecrease = kind === 'LimitDecrease';
+  const isMarketable = isDecrease
+    ? (isLong ? p <= m : p >= m)
+    : (isLong ? p >= m : p <= m);
+  if (!isMarketable) return;
+  const direction = isDecrease
+    ? (isLong ? 'above' : 'below')
+    : (isLong ? 'below' : 'above');
+  throw Object.assign(
+    new Error(`GMTrade limit price is marketable at the current mark ($${m.toFixed(4)}). Use Market, or place the limit ${direction} mark price.`),
+    {
+      status: 400,
+      code: 'GMTRADE_MARKETABLE_LIMIT',
+      mark_price: m,
+      limit_price: p,
+      kind,
+      side,
+    },
+  );
 }
 
 async function getPrices() {
@@ -2289,6 +2362,15 @@ async function buildCreateOrderTx(body = {}, playerWallet = '') {
     if (!Number.isFinite(price) || price <= 0) {
       throw Object.assign(new Error('GMTrade trigger orders require trigger price'), { status: 400 });
     }
+    if (kind === 'LimitIncrease' || kind === 'LimitDecrease') {
+      const prices = await getPrices().catch(() => ({}));
+      ensureNonMarketableGmtradeLimit({
+        kind,
+        side,
+        price,
+        mark: normalizePriceRow(prices, cfg.symbol),
+      });
+    }
     params.trigger_price = priceToGmUnitPrice(priceText, cfg);
     if (kind === 'LimitIncrease' || kind === 'LimitDecrease') {
       const slippageBps = stableNumber(body.slippage_bps || body.slippageBps || GMTRADE_ORDER_SLIPPAGE_BPS, 'slippage bps', {
@@ -2640,8 +2722,9 @@ async function verifySolanaSignature({ signature, wallet }) {
     ...(loaded.writable || []).map(String),
     ...(loaded.readonly || []).map(String),
   ];
-  if (!accountKeys.includes(wallet)) {
-    throw Object.assign(new Error('GMTrade transaction is not signed by this player wallet'), { status: 403 });
+  const walletAccountAliases = gmtradeUserAddressesForWallet(wallet);
+  if (!walletAccountAliases.some(address => accountKeys.includes(address))) {
+    throw Object.assign(new Error('GMTrade transaction is not linked to this player wallet'), { status: 403 });
   }
   const hasGmtradeProgram = GMTRADE_PROGRAM_IDS.some(id => accountKeys.includes(id));
   if (!hasGmtradeProgram) {
@@ -2665,7 +2748,8 @@ async function verifySolanaSignature({ signature, wallet }) {
   if (innerTradeEvents.length) {
     tradeEvents = tradeEvents.concat(innerTradeEvents);
   }
-  const walletEvents = tradeEvents.filter(ev => String(ev?.user || '') === wallet);
+  const walletEventUsers = new Set(walletAccountAliases);
+  const walletEvents = tradeEvents.filter(ev => walletEventUsers.has(String(ev?.user || '')));
   return {
     slot: tx.slot,
     blockTime: tx.blockTime || null,
@@ -2674,6 +2758,7 @@ async function verifySolanaSignature({ signature, wallet }) {
     tradeEvents,
     walletEvents,
     createOrderEvents,
+    walletAccountAliases,
   };
 }
 
@@ -2969,19 +3054,30 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
   const dryRun = options.dryRun === true;
   const includeDetails = options.details === true;
   const rows = [];
-  let before = options.before ? String(options.before) : null;
+  const seenSignatures = new Set();
+  const scanAddresses = gmtradeUserAddressesForWallet(wallet);
   let pages = 0;
-  while (rows.length < maxSignatures) {
-    const batchLimit = Math.min(pageSize, maxSignatures - rows.length);
-    const batch = await rpcSignaturesForAddress(wallet, { limit: batchLimit, before }).catch((e) => {
-      console.warn('[gmtrade] on-chain signature scan failed:', e.message);
-      return [];
-    });
-    if (!Array.isArray(batch) || batch.length === 0) break;
-    pages += 1;
-    rows.push(...batch);
-    before = String(batch[batch.length - 1]?.signature || '');
-    if (!before || batch.length < batchLimit) break;
+  for (const scanAddress of scanAddresses) {
+    let before = options.before ? String(options.before) : null;
+    let perAddress = 0;
+    while (perAddress < maxSignatures) {
+      const batchLimit = Math.min(pageSize, maxSignatures - perAddress);
+      const batch = await rpcSignaturesForAddress(scanAddress, { limit: batchLimit, before }).catch((e) => {
+        console.warn('[gmtrade] on-chain signature scan failed:', scanAddress, e.message);
+        return [];
+      });
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      pages += 1;
+      for (const item of batch) {
+        const signature = String(item?.signature || '').trim();
+        if (!signature || seenSignatures.has(signature)) continue;
+        seenSignatures.add(signature);
+        rows.push({ ...item, scan_address: scanAddress });
+      }
+      perAddress += batch.length;
+      before = String(batch[batch.length - 1]?.signature || '');
+      if (!before || batch.length < batchLimit) break;
+    }
   }
   let checked = 0;
   let candidates = 0;
@@ -2995,7 +3091,8 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
   const existingStmt = db?.db?.prepare
     ? db.db.prepare(`SELECT id, player_id FROM trade_history WHERE dex = 'gmtrade' AND client_order_id = ? LIMIT 1`)
     : null;
-  for (const row of rows.reverse()) {
+  rows.sort((a, b) => Number(a?.slot || 0) - Number(b?.slot || 0));
+  for (const row of rows) {
     checked += 1;
     if (row?.err) {
       skipped += 1;
@@ -3032,6 +3129,7 @@ async function backfillRecentOnchainTradesForPlayer(db, playerId, wallet, option
             symbol: tradeEvent?.symbol || 'GM',
             side: tradeEvent?.side || 'long',
             notional_usd: Number(tradeEvent?.size_delta_usd || 0),
+            scan_address: row.scan_address || null,
           });
         }
         continue;

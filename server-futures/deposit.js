@@ -12,9 +12,6 @@ const { keypairFromSecret } = require('./pacifica');
 // ---------- Constants ----------
 
 function configuredSolanaRpcUrl() {
-  const alchemyKey = String(process.env.SOLANA_ALCHEMY_API_KEY || process.env.ALCHEMY_SOLANA_API_KEY || '').trim();
-  if (alchemyKey) return `https://solana-mainnet.g.alchemy.com/v2/${encodeURIComponent(alchemyKey)}`;
-
   const heliusKey = String(
     process.env.SOLANA_HELIUS_API_KEY
     || process.env.HELIUS_API_KEY
@@ -23,13 +20,21 @@ function configuredSolanaRpcUrl() {
   ).trim();
   if (heliusKey) return `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusKey)}`;
 
-  const rpcUrl = String(process.env.SOLANA_RPC_URL || process.env.NFT_SOLANA_RPC_URL || '').trim();
+  const rpcUrl = String(
+    process.env.SOLANA_RPC_URL
+    || process.env.NFT_SOLANA_RPC_URL
+    || process.env.GMTRADE_SOLANA_RPC_URL
+    || '',
+  ).trim();
   if (/^https?:\/\//i.test(rpcUrl)) {
     try {
       const host = new URL(rpcUrl).hostname;
       if (host !== 'api.mainnet-beta.solana.com' && host !== 'solana-rpc.publicnode.com') return rpcUrl;
     } catch {}
   }
+
+  const alchemyKey = String(process.env.SOLANA_ALCHEMY_API_KEY || process.env.ALCHEMY_SOLANA_API_KEY || '').trim();
+  if (alchemyKey) return `https://solana-mainnet.g.alchemy.com/v2/${encodeURIComponent(alchemyKey)}`;
 
   throw new Error('Solana RPC endpoint is not configured');
 }

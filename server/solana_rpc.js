@@ -68,13 +68,13 @@ function isPublicSolanaRpcUrl(url) {
 function solanaRpcUrls(extraUrls = [], env = process.env) {
   const extras = Array.isArray(extraUrls) ? extraUrls : [extraUrls];
   const urls = [
-    alchemySolanaRpcUrl(env),
     heliusSolanaRpcUrl(env),
     ...splitSolanaRpcUrls(env.NFT_SOLANA_RPC_URL),
     ...splitSolanaRpcUrls(env.SOLANA_RPC_URL),
     ...splitSolanaRpcUrls(env.VITE_SOLANA_RPC_URL),
     ...extras.flatMap(splitSolanaRpcUrls),
     tatumSolanaRpcUrl(env),
+    alchemySolanaRpcUrl(env),
     ...DEFAULT_SOLANA_RPC_URLS,
   ];
   return Array.from(new Set(urls.filter((url) => (
