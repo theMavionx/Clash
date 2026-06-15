@@ -6979,6 +6979,7 @@ function FuturesPanel() {
                       data-nodrag
                       title="Refresh balance and orders"
                       aria-label="Refresh balance and orders"
+                      aria-busy={manualTradingRefreshBusy}
                       onClick={refreshTradingSnapshot}
                       disabled={manualTradingRefreshBusy}
                       style={{
@@ -6991,9 +6992,21 @@ function FuturesPanel() {
                         fontWeight: 900,
                         cursor: manualTradingRefreshBusy ? 'default' : 'pointer',
                         lineHeight: 1,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
                       }}
                     >
-                      {manualTradingRefreshBusy ? '...' : '↻'}
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          display: 'inline-block',
+                          animation: manualTradingRefreshBusy ? 'wallet-spin 0.75s linear infinite' : 'none',
+                          transformOrigin: '50% 50%',
+                        }}
+                      >
+                        {'\u21bb'}
+                      </span>
                     </button>
                   </span>
                 )}
