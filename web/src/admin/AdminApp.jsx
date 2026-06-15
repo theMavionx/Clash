@@ -446,7 +446,7 @@ function PlayersPanel({ players, reload }) {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
+                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Created</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -455,6 +455,7 @@ function PlayersPanel({ players, reload }) {
                     <td><strong>{p.name}</strong><div className="admin-card-sub admin-mono">{p.id}</div></td>
                     <td><DexBadge dex={p.dex} /></td>
                     <td className="admin-mono">{short(p.wallet)}</td>
+                    <td className="admin-mono">{fmtTime(p.created_at)}</td>
                     <td>{p.trophies}</td>
                     <td>{p.level}</td>
                     <td style={{ color: 'var(--admin-gold)' }}>{num(p.gold)}</td>
@@ -496,7 +497,7 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
   }
 
   return (
-    <Drawer title={`Player Tools · ${player.name}`} subtitle="Dangerous actions are grouped here so the main table stays readable." onClose={onClose}>
+    <Drawer title={`Player Tools · ${player.name}`} subtitle={`Created ${fmtTime(player.created_at)}. Dangerous actions are grouped here so the main table stays readable.`} onClose={onClose}>
       <div className="admin-grid">
         <div className="admin-card">
           <div className="admin-card-head"><div><div className="admin-card-title">Resources</div><div className="admin-card-sub">Apply exact amounts to this account.</div></div></div>

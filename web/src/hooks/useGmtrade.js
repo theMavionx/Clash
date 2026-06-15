@@ -16,15 +16,13 @@ import { registeredDexWallet } from '../lib/playerDexAccounts';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
-const POLL_MS = 12_000;
+const POLL_MS = 60_000;
 const REALTIME_RECONNECT_MAX_MS = 15_000;
 const WALLET_USDC_RPC_TIMEOUT_MS = 2_500;
 const GMTRADE_REFERRAL_URL = 'https://gmtrade.xyz/referrals/?ref=gamingperps';
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const GMTRADE_WALLET_BALANCE_RPC_URLS = [
-  SAME_ORIGIN_SOLANA_ALCHEMY_URL,
-  SAME_ORIGIN_SOLANA_RPC_URL,
   ...SOLANA_RPC_URLS.filter((url) => {
     try {
       const origin = typeof window !== 'undefined' ? window.location.origin : 'https://clashofperps.fun';
@@ -34,6 +32,8 @@ const GMTRADE_WALLET_BALANCE_RPC_URLS = [
       return true;
     }
   }),
+  SAME_ORIGIN_SOLANA_RPC_URL,
+  SAME_ORIGIN_SOLANA_ALCHEMY_URL,
 ].filter((url, index, list) => url && list.indexOf(url) === index);
 
 function playerToken(player) {
@@ -500,8 +500,20 @@ export function useGmtrade() {
   useEffect(() => {
     if (!isActiveDex) return undefined;
     refresh();
-    const timer = setInterval(refresh, POLL_MS);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      refresh();
+    }, POLL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') refresh();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(timer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex, refresh]);
 
   useEffect(() => {

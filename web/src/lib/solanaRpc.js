@@ -377,9 +377,9 @@ async function solanaRpcFallbackFetch(urls, _input, init = {}) {
 export function solanaRpcFallbackUrls(preferredUrl = '', urls = SOLANA_RPC_URLS) {
   return [
     preferredUrl,
-    SAME_ORIGIN_SOLANA_ALCHEMY_URL,
-    SAME_ORIGIN_SOLANA_RPC_URL,
     ...(urls || []),
+    SAME_ORIGIN_SOLANA_RPC_URL,
+    SAME_ORIGIN_SOLANA_ALCHEMY_URL,
   ].filter((url, index, list) => url && list.indexOf(url) === index);
 }
 

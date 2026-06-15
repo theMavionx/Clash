@@ -38,7 +38,7 @@ const FUTURES_API = '/api/futures';
 // spinner stuck if the tx was dropped from the mempool.
 const TX_TIMEOUT_MS = 90_000;
 const BALANCE_FETCH_MIN_INTERVAL_MS = 15_000;
-const AVANTIS_POLL_INTERVAL_MS = 10_000;
+const AVANTIS_POLL_INTERVAL_MS = 45_000;
 const AVANTIS_REFERRAL_CACHE_PREFIX = 'clash_avantis_ref_verified:';
 const AVANTIS_REFERRAL_GAS_BLOCK_MS = 90_000;
 const AVANTIS_REFERRAL_GAS_MESSAGE =
@@ -1517,8 +1517,20 @@ export function useAvantis() {
       refreshSmartWallet();
     };
     tick();
-    const iv = setInterval(tick, AVANTIS_POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      tick();
+    }, AVANTIS_POLL_INTERVAL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') tick();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [walletAddr, isActiveDex, fetchAccount, fetchPositions, fetchOrders, fetchPrices, fetchBalance, refreshSmartWallet]);
 
   // Referral linkage read — runs once per wallet (on-chain state, no polling).
@@ -1541,7 +1553,10 @@ export function useAvantis() {
     // Fire once shortly after mount so a stale "pending claim" from a
     // worker-polled close lands quickly.
     const kickoff = setTimeout(fire, 3000);
-    const iv = setInterval(fire, 30_000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [walletAddr, isActiveDex]);
 

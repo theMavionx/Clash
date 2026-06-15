@@ -199,6 +199,14 @@ function isMegaTournament(t) {
   return !!(t?.is_mega || t?.tournament_kind === 'mega' || t?.mega_config?.enabled);
 }
 
+function shouldShowLeaderboardDexBadge(t) {
+  if (isMegaTournament(t)) return true;
+  if (t?.mode === 'dex_vs_dex') return true;
+  if (t?.dex_scope === 'all' || t?.dex_scope === 'custom') return true;
+  const eligible = Array.isArray(t?.eligible_dexes) ? t.eligible_dexes.filter(Boolean) : [];
+  return eligible.length > 1;
+}
+
 function sectorRequirementText(sector) {
   const parts = [];
   if (Number(sector?.min_town_hall_level || 0) > 0) parts.push(`TH ${sector.min_town_hall_level}`);
@@ -744,7 +752,7 @@ function TournamentPanel({ onClose }) {
                   const featuredDisplay = featuredMetric(sortKey, r);
                   const prizeAmount = Number(r.prize_amount || 0);
                   const rankRewards = rankRewardSummary(r.prize_rewards || [], r.prize_currency || t.prize_currency || 'USD');
-                  const topDex = r.top_dex_label || r.team_label || null;
+                  const topDex = shouldShowLeaderboardDexBadge(t) ? (r.top_dex_label || r.team_label || null) : null;
                   return (
                     <div
                       key={r.player_id}

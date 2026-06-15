@@ -33,7 +33,7 @@ import {
   rememberHyperliquidAgent,
 } from '../lib/hyperliquidClient';
 
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 45_000;
 const CLAIM_LOOKBACK_SECONDS = 15 * 60;
 const DEPOSIT_CREDIT_TOLERANCE_USD = 0.01;
 const DEPOSIT_STATUS_MAX_AGE_MS = 10 * 60 * 1000;
@@ -793,8 +793,20 @@ export function useHyperliquid() {
       if (walletAddr) fetchAccount();
     };
     tick();
-    const iv = setInterval(tick, POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      tick();
+    }, POLL_INTERVAL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') tick();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex, walletAddr, fetchPrices, fetchAccount]);
 
   const getRewardAuthToken = useCallback(() => (
@@ -939,7 +951,10 @@ export function useHyperliquid() {
       if (typeof claimFn === 'function') await claimFn({ tokenOverride: token, reason: 'poll' });
     };
     const kickoff = setTimeout(fire, 3000);
-    const iv = setInterval(fire, 30_000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [walletAddr, isActiveDex, getRewardAuthToken]);
 

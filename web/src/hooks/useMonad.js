@@ -52,7 +52,7 @@ import {
 } from '../lib/perplClient';
 import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 
-const POLL_CONTEXT_MS = 8_000;
+const POLL_CONTEXT_MS = 30_000;
 const BLOCK_TTL_BUFFER = 50;        // Fallback only; prefer market.order_ttl_blocks.
 const BLOCK_CACHE_MS = 800;         // eth_blockNumber cached for ~2 blocks.
 const AUSD_DECIMALS = 6;
@@ -749,11 +749,29 @@ export function useMonad() {
       } catch (e) {
         if (!cancelled) console.warn('[useMonad] context poll failed', e?.message || e);
       } finally {
-        if (!cancelled) timer = setTimeout(tick, POLL_CONTEXT_MS);
+        if (!cancelled) {
+          timer = setTimeout(() => {
+            if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+              timer = setTimeout(tick, POLL_CONTEXT_MS);
+              return;
+            }
+            tick();
+          }, POLL_CONTEXT_MS);
+        }
       }
     };
     tick();
-    return () => { cancelled = true; clearTimeout(timer); };
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') tick();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex]);
 
   // ── SIWE login (explicit) ────────────────────────────────────────────

@@ -64,8 +64,8 @@ function bpsToChainUnits(bps) { return Math.round(Number(bps) * 100); }
 // doesn't block the polling loop forever.
 const READ_TIMEOUT_MS = 8_000;
 const ACCOUNT_READ_TIMEOUT_MS = READ_TIMEOUT_MS;
-const DECIBEL_STATE_POLL_MS = 15_000;
-const DECIBEL_PRICE_POLL_MS = 5_000;
+const DECIBEL_STATE_POLL_MS = 45_000;
+const DECIBEL_PRICE_POLL_MS = 15_000;
 const ACCOUNT_WARN_THROTTLE_MS = 60_000;
 const ACCOUNT_BACKOFF_BASE_MS = 10_000;
 const ACCOUNT_BACKOFF_MAX_MS = 60_000;
@@ -2243,11 +2243,27 @@ export function useDecibel() {
     };
     tickState();
     tickPrices();
-    const stateIv = setInterval(tickState, DECIBEL_STATE_POLL_MS);
-    const priceIv = setInterval(tickPrices, DECIBEL_PRICE_POLL_MS);
+    const stateIv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      tickState();
+    }, DECIBEL_STATE_POLL_MS);
+    const priceIv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      tickPrices();
+    }, DECIBEL_PRICE_POLL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        tickState();
+        tickPrices();
+      }
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
     return () => {
       clearInterval(stateIv);
       clearInterval(priceIv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
     };
   }, [address, isActiveDex, fetchAccount, fetchPositions, fetchOrders, fetchPrices, fetchBalance]);
 
@@ -2281,7 +2297,10 @@ export function useDecibel() {
       if (typeof fn === 'function') fn();
     };
     const kickoff = setTimeout(fire, 3000);
-    const iv = setInterval(fire, 30_000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [address, isActiveDex]);
 

@@ -2003,6 +2003,24 @@ function FuturesPanel() {
     (privyEnabled && !privyReady) ||
     (privyEnabled && privyAuthed && solanaWalletGrace)
   );
+  const [manualTradingRefreshBusy, setManualTradingRefreshBusy] = useState(false);
+  const refreshTradingSnapshot = useCallback(async () => {
+    if (manualTradingRefreshBusy) return;
+    setManualTradingRefreshBusy(true);
+    try {
+      const calls = [
+        trading?.fetchAccount,
+        trading?.fetchPositions,
+        trading?.fetchOrders,
+        trading?.fetchBalance,
+      ]
+        .filter(fn => typeof fn === 'function')
+        .map(fn => Promise.resolve().then(() => fn()));
+      if (calls.length) await Promise.allSettled(calls);
+    } finally {
+      setManualTradingRefreshBusy(false);
+    }
+  }, [manualTradingRefreshBusy, trading]);
 
   const { isMobile } = useLayout();
   // Drag state — ref-based: zero React re-renders during drag, no listener leaks
@@ -6953,7 +6971,32 @@ function FuturesPanel() {
               <span style={{...S.label, color: accentLight}}>{isFlash ? 'Deposit USDC' : isGmtrade ? 'GMTrade native wallet' : isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
               {isFundingBusy
                 ? <span style={{...S.detail, color: '#15803D'}}>{isMovingToPerp ? 'Moving to trading' : 'Depositing'}{pendingDepositLabel ? ` ${pendingDepositLabel} USDC` : ''}...</span>
-                : walletUsdcText && <span style={S.detail}>{walletUsdcText}</span>}
+                : walletUsdcText && (
+                  <span style={{...S.detail, display: 'inline-flex', alignItems: 'center', gap: 6}}>
+                    {walletUsdcText}
+                    <button
+                      type="button"
+                      data-nodrag
+                      title="Refresh balance and orders"
+                      aria-label="Refresh balance and orders"
+                      onClick={refreshTradingSnapshot}
+                      disabled={manualTradingRefreshBusy}
+                      style={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: '50%',
+                        border: `2px solid ${accentBtnBorder}`,
+                        background: manualTradingRefreshBusy ? '#e7dcc2' : '#fff8e6',
+                        color: accentDark,
+                        fontWeight: 900,
+                        cursor: manualTradingRefreshBusy ? 'default' : 'pointer',
+                        lineHeight: 1,
+                      }}
+                    >
+                      {manualTradingRefreshBusy ? '...' : '↻'}
+                    </button>
+                  </span>
+                )}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
               {!isHyperliquid && !isHibachi && !isFlash && (

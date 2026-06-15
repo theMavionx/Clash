@@ -12353,7 +12353,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           }
         }
         if (typeof gmtrade.backfillRecentOnchainTradesForPlayer === 'function' && gmtrade.isSolanaAddress(wallet)) {
-          const gmtradeBackfillLimit = Math.max(60, Math.min(1000, Number(process.env.GMTRADE_CLAIM_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 300)));
+          const gmtradeBackfillLimit = Math.max(25, Math.min(500, Number(process.env.GMTRADE_CLAIM_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 80)));
           const backfilled = await gmtrade.backfillRecentOnchainTradesForPlayer(fdb, req.player.id, wallet, { limit: gmtradeBackfillLimit });
           if (backfilled.imported || backfilled.pending || backfilled.errors) {
             console.log(`[claim-gold gmtrade] on-chain backfill player=${req.player.name} checked=${backfilled.checked} candidates=${backfilled.candidates} imported=${backfilled.imported} pending=${backfilled.pending} skipped=${backfilled.skipped} errors=${backfilled.errors}`);
@@ -17405,10 +17405,24 @@ function applyTournamentPointsScore(rows, t) {
     return rows;
   }
   const w = tournamentPointWeights(t);
+  const maxVolume = rows.reduce((max, r) => Math.max(max, Math.max(0, Number(r.volume_usd) || 0)), 0);
+  const maxTrophies = rows.reduce((max, r) => Math.max(max, Math.max(0, Number(r.trophies) || 0)), 0);
+  const maxPnl = rows.reduce((max, r) => Math.max(max, Math.max(0, Number(r.pnl_usd) || 0)), 0);
+  const maxRawScore = rows.reduce((max, r) => {
+    const rawVolume = Math.max(0, Number(r.volume_usd) || 0) * (w.volume / 100);
+    const rawTrophies = Math.max(0, Number(r.trophies) || 0) * (w.trophies / 100);
+    const rawPnl = Math.max(0, Number(r.pnl_usd) || 0) * (w.pnl / 100);
+    return Math.max(max, rawVolume + rawTrophies + rawPnl);
+  }, 0);
+  const totalWeight = Math.max(1, (Number(w.volume) || 0) + (Number(w.trophies) || 0) + (Number(w.pnl) || 0));
+  const scoreScale = maxRawScore > 0 ? maxRawScore / totalWeight : 1;
   for (const r of rows) {
-    const volumeScore = Math.max(0, Number(r.volume_usd) || 0) * (w.volume / 100);
-    const trophyScore = Math.max(0, Number(r.trophies) || 0) * (w.trophies / 100);
-    const pnlScore = Math.max(0, Number(r.pnl_usd) || 0) * (w.pnl / 100);
+    const volumeValue = Math.max(0, Number(r.volume_usd) || 0);
+    const trophyValue = Math.max(0, Number(r.trophies) || 0);
+    const pnlValue = Math.max(0, Number(r.pnl_usd) || 0);
+    const volumeScore = (maxVolume > 0 ? (volumeValue / maxVolume) * w.volume : 0) * scoreScale;
+    const trophyScore = (maxTrophies > 0 ? (trophyValue / maxTrophies) * w.trophies : 0) * scoreScale;
+    const pnlScore = (maxPnl > 0 ? (pnlValue / maxPnl) * w.pnl : 0) * scoreScale;
     r.volume_score = Number(volumeScore.toFixed(4));
     r.trophy_score = Number(trophyScore.toFixed(4));
     r.pnl_score = Number(pnlScore.toFixed(4));

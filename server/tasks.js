@@ -79,7 +79,7 @@ const TASK_TRADE_SETTLE_DELAY_SECONDS = 0;
 const TASK_START_TRADE_GRACE_MS = Math.max(0, Number(process.env.TASK_START_TRADE_GRACE_MS || 120_000));
 const HOTSTUFF_TASK_IMPORT_MS = Math.max(5_000, Number(process.env.HOTSTUFF_TASK_IMPORT_MS || 15_000));
 const hotstuffTaskImportCache = new Map();
-const GMTRADE_TASK_RECONCILE_MS = Math.max(5_000, Number(process.env.GMTRADE_TASK_RECONCILE_MS || 15_000));
+const GMTRADE_TASK_RECONCILE_MS = Math.max(60_000, Number(process.env.GMTRADE_TASK_RECONCILE_MS || 300_000));
 const gmtradeTaskReconcileCache = new Map();
 const FUTURES_TASK_DEXES = new Set([
   'avantis',
@@ -354,7 +354,7 @@ async function maybeReconcileGmtrade(player, wallet) {
       out.pending = await gmtrade.reconcilePendingTradeReportsForPlayer(futuresDb, player.id, { limit: 50 });
     }
     if (typeof gmtrade.backfillRecentOnchainTradesForPlayer === 'function') {
-      const limit = Math.max(60, Math.min(1000, Number(process.env.GMTRADE_TASK_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 300)));
+      const limit = Math.max(25, Math.min(500, Number(process.env.GMTRADE_TASK_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 80)));
       out.backfill = await gmtrade.backfillRecentOnchainTradesForPlayer(futuresDb, player.id, wallet, { limit });
     }
     return out;

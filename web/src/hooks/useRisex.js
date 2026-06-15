@@ -31,7 +31,7 @@ import {
   risexErrorMessage,
 } from '../lib/risexClient';
 
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 45_000;
 const CLAIM_LOOKBACK_ATTEMPTS = 5;
 
 function parseChainId(value) {
@@ -496,8 +496,20 @@ export function useRisex() {
       }
     };
     tick();
-    const iv = setInterval(tick, POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      tick();
+    }, POLL_INTERVAL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') tick();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex, walletAddr, fetchPrices, fetchAccount, refreshSignerStatus]);
 
   const activate = useCallback(async (opts = {}) => {
@@ -699,7 +711,10 @@ export function useRisex() {
       await claimGoldRef.current?.({ reason: 'poll' });
     };
     const kickoff = setTimeout(fire, 3000);
-    const iv = setInterval(fire, 30_000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [walletAddr, isActiveDex]);
 
