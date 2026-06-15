@@ -13305,31 +13305,11 @@ async function maybeRefreshTaskProgress(player, task, playerTask) {
   }
 }
 
-// Rate-limit tasks endpoints per player (2s)
-const taskRateLimit = new Map();
-setInterval(() => {
-  const cutoff = Date.now() - 60000;
-  for (const [k, v] of taskRateLimit) if (v < cutoff) taskRateLimit.delete(k);
-}, 600000);
-
-// Per-player gate for task endpoints. Default 20ms (was 2000ms — bumped
-// 100× more lenient per user request). The endpoints below pass shorter
-// values (e.g. 500 → 5) which scale with the same factor automatically.
-// SQLite-backed task progress is idempotent so spam is safe.
-function rateGate(playerId, ms = 20) {
-  const effective = Math.max(0, Math.floor(ms / 100));
-  if (effective === 0) return true;
-  const last = taskRateLimit.get(playerId);
-  if (last && Date.now() - last < effective) return false;
-  taskRateLimit.set(playerId, Date.now());
-  return true;
-}
-
 // List active tasks + player progress.
 // This is a read-only hydration endpoint hit by React effects and panel
 // refreshes. It is idempotent, and the browser can legitimately issue two
 // requests in the same tick during reconnect/dev StrictMode, so we do not
-// rate-limit it. Claim/start endpoints below keep their write protections.
+// rate-limit it. Claim/start endpoints are idempotent and DB race-protected.
 router.get('/tasks', auth, async (req, res) => {
   const list = tasks.getActiveTasks();
   const out = [];
@@ -13391,7 +13371,7 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
     const check = tasks.canClaim(existing, task);
     if (!check.ok && check.reason && check.reason.startsWith('Cooldown')) {
       console.log(`[task ${id} start] player=${req.player.name} -> COOLDOWN ${check.reason}`);
-      return res.status(429).json({ error: check.reason });
+      return res.status(400).json({ error: check.reason });
     }
   }
 
@@ -13406,9 +13386,6 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
 
 // Claim a task — verifies against Pacifica + battle_replays, pays out on success
 router.post('/tasks/:id/claim', auth, async (req, res) => {
-  if (!rateGate('claim:' + req.player.id, 3000)) {
-    return res.status(429).json({ error: 'slow down' });
-  }
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
   const task = tasks.getTaskById(id);
