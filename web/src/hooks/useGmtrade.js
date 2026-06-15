@@ -35,6 +35,11 @@ const GMTRADE_WALLET_BALANCE_RPC_URLS = [
   SAME_ORIGIN_SOLANA_RPC_URL,
   SAME_ORIGIN_SOLANA_ALCHEMY_URL,
 ].filter((url, index, list) => url && list.indexOf(url) === index);
+const GMTRADE_TX_RPC_URLS = [
+  SAME_ORIGIN_SOLANA_ALCHEMY_URL,
+  SAME_ORIGIN_SOLANA_RPC_URL,
+  ...SOLANA_RPC_URLS,
+].filter((url, index, list) => url && list.indexOf(url) === index);
 
 function playerToken(player) {
   return player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
@@ -702,7 +707,7 @@ export function useGmtrade() {
   }, [gmtradeLog, token]);
 
   const selectTxConnection = useCallback(async (attempt = 0, trace = '') => {
-    const selection = await selectFreshSolanaRpcUrl(SOLANA_RPC_URLS);
+    const selection = await selectFreshSolanaRpcUrl(GMTRADE_TX_RPC_URLS);
     const selectedUrl = selection?.selected?.url || '';
     if (!selectedUrl && !connection) throw new Error('Solana RPC connection is unavailable');
     const txConnection = selectedUrl
