@@ -1,7 +1,8 @@
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { useLayout } from '../hooks/useIsMobile';
 import { cartoonBtn } from '../styles/theme';
 import { colors, shared } from './basic/styles';
+import { usePlayer } from '../hooks/useGodot';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 
 const BOT_TYPES = [
@@ -44,68 +45,35 @@ const PRESETS = {
   calm: {
     label: 'Calm',
     title: 'Calm preset',
-    copy: 'Slower refresh, tighter inventory guardrails, fewer mock order changes.',
+    copy: 'Slower refresh, tighter inventory guardrails, fewer order changes.',
   },
   aggressive: {
     label: 'Aggressive',
     title: 'Aggressive preset',
-    copy: 'Faster refresh, wider working range, more mock quote updates.',
+    copy: 'Faster refresh, wider working range, more quote updates.',
   },
 };
 
 const DEFAULT_BOTS = [
   {
-    id: 'bot-1',
-    type: 'delta_neutral',
-    market: 'ETH-PERP',
-    status: 'Running',
-    tradeSize: 25,
-    maxPosition: 250,
-    preset: 'calm',
-    pnl: 18.42,
-    inventory: '-$12',
-    spread: '0.18%',
-    fills: 42,
-    uptime: '2h 14m',
-    lastAction: 'Hedged filled ask leg',
-  },
-  {
-    id: 'bot-2',
+    id: 'symmetric_mm:hyperliquid:BTC-USD,ETH-USD',
     type: 'symmetric_mm',
-    market: 'BTC-PERP',
-    status: 'Running',
-    tradeSize: 20,
-    maxPosition: 200,
-    preset: 'aggressive',
-    pnl: 7.16,
-    inventory: '+$38',
-    spread: '0.11%',
-    fills: 28,
-    uptime: '51m',
-    lastAction: 'Requoted both sides',
-  },
-  {
-    id: 'bot-3',
-    type: 'ping_pong',
-    market: 'SOL-PERP',
+    market: 'BTC-USD, ETH-USD',
     status: 'Paused',
-    tradeSize: 15,
-    maxPosition: 120,
-    preset: 'calm',
-    pnl: -2.9,
+    tradeSize: 1000,
+    maxPosition: 20000,
+    preset: 'aggressive',
+    pnl: 0,
     inventory: '$0',
-    spread: '0.24%',
-    fills: 9,
+    spread: '0.14%',
+    fills: 0,
     uptime: 'Idle',
-    lastAction: 'Waiting for lower band',
-  },
+    lastAction: 'Idle',
+  }
 ];
 
 const DEFAULT_HISTORY = [
-  { id: 'h-1', time: '12:44', bot: 'Delta Neutral', event: 'Mock hedge completed', value: '+$4.12' },
-  { id: 'h-2', time: '12:31', bot: 'Symmetric MM', event: 'Quote pair refreshed', value: '0.11%' },
-  { id: 'h-3', time: '12:18', bot: 'Ping Pong', event: 'Sell leg filled', value: '+$1.06' },
-  { id: 'h-4', time: '11:57', bot: 'Delta Neutral', event: 'Inventory reduced', value: '-$32' },
+  { id: 'h-1', time: '12:00', bot: 'System', event: 'MM Bot controller initialized', value: 'Ready' },
 ];
 
 const STEPS = ['strategy', 'risk', 'review'];
@@ -126,6 +94,43 @@ function signedMoney(value) {
 function getBotType(type) {
   return BOT_TYPES.find((bot) => bot.id === type) || BOT_TYPES[0];
 }
+
+const getBotConfigDetails = (id) => {
+  if (id.includes('grvt')) return { tradeSize: 750, maxPosition: 15000, preset: 'calm' };
+  if (id.includes('hyperliquid') && id.includes('symmetric_mm')) return { tradeSize: 1000, maxPosition: 20000, preset: 'aggressive' };
+  if (id.includes('avantis')) return { tradeSize: 2000, maxPosition: 20000, preset: 'calm' };
+  if (id.includes('gmx')) return { tradeSize: 1500, maxPosition: 15000, preset: 'calm' };
+  if (id.includes('mock')) return { tradeSize: 50, maxPosition: 500, preset: 'calm' };
+  return { tradeSize: 200, maxPosition: 2000, preset: 'calm' };
+};
+
+const matchPositionToBot = (botId, posExchange, posSymbol) => {
+  const parts = botId.toLowerCase().split(':');
+  const bExchanges = parts[1] ? parts[1].split('<->') : [];
+  const bSymbols = parts[2] ? parts[2].split(',') : [];
+  return bExchanges.includes(String(posExchange).toLowerCase()) || bSymbols.includes(String(posSymbol).toLowerCase());
+};
+
+const mapHandleToBot = (handle, runningList) => {
+  const details = getBotConfigDetails(handle.id);
+  const isRunning = runningList.some(r => r.id === handle.id);
+  const market = handle.symbols.map(s => s.toUpperCase()).join(', ');
+  return {
+    id: handle.id,
+    type: handle.kind,
+    market: market,
+    status: isRunning ? 'Running' : 'Paused',
+    tradeSize: details.tradeSize,
+    maxPosition: details.maxPosition,
+    preset: details.preset,
+    pnl: 0,
+    inventory: '0.00',
+    spread: handle.kind === 'ping_pong' ? '0.22%' : '0.14%',
+    fills: 0,
+    uptime: isRunning ? 'Active' : 'Idle',
+    lastAction: isRunning ? 'Running strategy cycle' : 'Idle',
+  };
+};
 
 function RobotGlyph({ size = 28, color = '#5C3A21' }) {
   return (
@@ -171,6 +176,7 @@ function StepDots({ activeStep }) {
   );
 }
 
+// Bounded slider card matching premium styling
 function SliderField({ label, value, min, max, step, onChange, defaultValue }) {
   return (
     <div style={S.sliderCard}>
@@ -197,7 +203,7 @@ function SliderField({ label, value, min, max, step, onChange, defaultValue }) {
   );
 }
 
-function BotCard({ bot, expanded, onToggle }) {
+function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
   const type = getBotType(bot.type);
   const pnlPositive = Number(bot.pnl) >= 0;
   return (
@@ -220,7 +226,7 @@ function BotCard({ bot, expanded, onToggle }) {
         </div>
         <div style={S.metricGrid}>
           <div style={S.metric}>
-            <span style={S.metricLabel}>Mock PnL</span>
+            <span style={S.metricLabel}>Real PnL</span>
             <strong style={{ ...S.metricValue, color: pnlPositive ? colors.long : colors.short }}>
               {signedMoney(bot.pnl)}
             </strong>
@@ -259,8 +265,27 @@ function BotCard({ bot, expanded, onToggle }) {
             </div>
           </div>
           <div style={S.lastAction}>
-            <span>Last mock action</span>
+            <span>Last bot action</span>
             <strong>{bot.lastAction}</strong>
+          </div>
+          <div style={S.actionsRow}>
+            {bot.status === 'Running' ? (
+              <button
+                type="button"
+                style={{ ...cartoonBtn('#E53935', '#C62828'), padding: '8px 16px', fontSize: 13, borderRadius: 10 }}
+                onClick={(e) => { e.stopPropagation(); onStop(bot.id); }}
+              >
+                Stop Bot
+              </button>
+            ) : (
+              <button
+                type="button"
+                style={{ ...cartoonBtn('#43A047', '#2E7D32'), padding: '8px 16px', fontSize: 13, borderRadius: 10 }}
+                onClick={(e) => { e.stopPropagation(); onStart(bot.id); }}
+              >
+                Start Bot
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -270,21 +295,26 @@ function BotCard({ bot, expanded, onToggle }) {
 
 function BotsPanel({ onClose }) {
   const { isMobile } = useLayout();
+  const player = usePlayer();
+  const token = player?.token || null;
+
   const [view, setView] = useState('dashboard');
   const [step, setStep] = useState('strategy');
   const [bots, setBots] = useState(DEFAULT_BOTS);
   const [history, setHistory] = useState(DEFAULT_HISTORY);
-  const [expandedBotId, setExpandedBotId] = useState(DEFAULT_BOTS[0].id);
+  const [expandedBotId, setExpandedBotId] = useState(DEFAULT_BOTS[0]?.id || null);
   const [selectedType, setSelectedType] = useState('delta_neutral');
   const [tradeSize, setTradeSize] = useState(20);
   const [maxPosition, setMaxPosition] = useState(200);
   const [preset, setPreset] = useState('calm');
   const [notice, setNotice] = useState('');
+  const [totalPnl, setTotalPnl] = useState(0);
+  const [fillsCount, setFillsCount] = useState(0);
 
   const selectedBot = useMemo(() => getBotType(selectedType), [selectedType]);
   const activeCount = bots.filter((bot) => bot.status === 'Running').length;
-  const mockPnl = bots.reduce((sum, bot) => sum + Number(bot.pnl || 0), 0);
-  const totalFills = bots.reduce((sum, bot) => sum + Number(bot.fills || 0), 0);
+  const mockPnl = totalPnl !== 0 ? totalPnl : bots.reduce((sum, bot) => sum + Number(bot.pnl || 0), 0);
+  const totalFills = fillsCount !== 0 ? fillsCount : bots.reduce((sum, bot) => sum + Number(bot.fills || 0), 0);
 
   const resetLaunch = useCallback(() => {
     setStep('strategy');
@@ -300,40 +330,205 @@ function BotsPanel({ onClose }) {
     setView('launch');
   }, [resetLaunch]);
 
-  const launchMockBot = useCallback(() => {
-    const type = getBotType(selectedType);
-    const id = `bot-${Date.now()}`;
-    const nextBot = {
-      id,
-      type: selectedType,
-      market: 'ETH-PERP',
-      status: 'Running',
-      tradeSize,
-      maxPosition,
-      preset,
-      pnl: 0,
-      inventory: '$0',
-      spread: selectedType === 'ping_pong' ? '0.22%' : '0.14%',
-      fills: 0,
-      uptime: 'Just now',
-      lastAction: 'Mock bot configured',
-    };
-    setBots((current) => [nextBot, ...current]);
-    setHistory((current) => [
-      {
-        id: `h-${Date.now()}`,
-        time: 'Now',
-        bot: type.name,
-        event: 'Mock bot configured',
-        value: `${money(tradeSize)} / ${money(maxPosition)}`,
-      },
-      ...current,
-    ]);
-    setExpandedBotId(id);
-    setNotice('Mock bot added to the dashboard. No real orders were placed.');
+  const fetchInstances = useCallback(() => {
+    if (!token) return;
+    fetch('/api/v1/strategies/instances', {
+      headers: { 'x-token': token }
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (!res || !res.data) return;
+        const { running = [], configured = [] } = res.data;
+        const allHandles = [...configured];
+        running.forEach((r) => {
+          if (!allHandles.some((h) => h.id === r.id)) {
+            allHandles.push(r);
+          }
+        });
+        const mappedBots = allHandles.map((h) => mapHandleToBot(h, running));
+        if (mappedBots.length > 0) {
+          setBots(mappedBots);
+          if (!expandedBotId) {
+            setExpandedBotId(mappedBots[0].id);
+          }
+        }
+      })
+      .catch((err) => console.error('fetch instances failed:', err));
+  }, [token, expandedBotId]);
+
+  const handleStartBot = useCallback((id) => {
+    if (!token) return;
+    fetch(`/api/v1/strategies/${encodeURIComponent(id)}/start`, {
+      method: 'POST',
+      headers: { 'x-token': token }
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.data?.status === 'started' || res?.data?.action === 'start_all') {
+          setNotice(`Bot started successfully!`);
+          fetchInstances();
+        } else {
+          setNotice(`Failed to start bot: ${res?.error || 'unknown error'}`);
+        }
+      })
+      .catch((err) => {
+        console.error('start bot failed:', err);
+        setNotice('Network error starting bot');
+      });
+  }, [token, fetchInstances]);
+
+  const handleStopBot = useCallback((id) => {
+    if (!token) return;
+    fetch(`/api/v1/strategies/${encodeURIComponent(id)}/stop`, {
+      method: 'POST',
+      headers: { 'x-token': token }
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.data?.status === 'stopped' || res?.data?.action === 'stop_all') {
+          setNotice(`Bot stopped successfully.`);
+          fetchInstances();
+        } else {
+          setNotice(`Failed to stop bot: ${res?.error || 'unknown error'}`);
+        }
+      })
+      .catch((err) => {
+        console.error('stop bot failed:', err);
+        setNotice('Network error stopping bot');
+      });
+  }, [token, fetchInstances]);
+
+  const launchBot = useCallback(() => {
+    if (!token) return;
+    fetch(`/api/v1/strategies/${encodeURIComponent(selectedType)}/start`, {
+      method: 'POST',
+      headers: { 'x-token': token }
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.data?.action === 'start_all' || res?.data?.status === 'started') {
+          setNotice(`Launched ${getBotType(selectedType).name} strategies successfully!`);
+          fetchInstances();
+        } else {
+          setNotice(`Launch failed: ${res?.error || 'no configured instances found'}`);
+        }
+      })
+      .catch((err) => {
+        console.error('launch failed:', err);
+        setNotice('Network error launching strategies');
+      });
     setView('dashboard');
     resetLaunch();
-  }, [maxPosition, preset, resetLaunch, selectedType, tradeSize]);
+  }, [selectedType, token, fetchInstances, resetLaunch]);
+
+  // Real-time WebSocket updates via Clash game backend mediator
+  useEffect(() => {
+    if (!token) return;
+    fetchInstances();
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/api/v1/bot/ws?token=${encodeURIComponent(token)}`;
+    let ws;
+    let reconnectTimer;
+
+    const connectWs = () => {
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          action: 'subscribe',
+          channels: ['strategies', 'orders', 'positions', 'pnl', 'volume_stats', 'alerts']
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'strategy_event') {
+            fetchInstances();
+            const time = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+            setHistory((prev) => [
+              {
+                id: `h-${Date.now()}`,
+                time,
+                bot: msg.data.strategy_id?.split(':')[0].replace('_', ' ').toUpperCase() || 'BOT',
+                event: msg.data.type || 'Lifecycle event',
+                value: msg.data.reason || 'state change'
+              },
+              ...prev.slice(0, 49)
+            ]);
+          } else if (msg.type === 'pnl_snapshot') {
+            setTotalPnl(Number(msg.data.net_pnl_usd) || 0);
+          } else if (msg.type === 'volume_stats') {
+            setFillsCount(Number(msg.data.total_volume_usd_24h) || 0);
+          } else if (msg.type === 'position_update') {
+            const pos = msg.data;
+            setBots((currentBots) => currentBots.map((b) => {
+              if (matchPositionToBot(b.id, pos.exchange, pos.symbol)) {
+                return {
+                  ...b,
+                  inventory: `${pos.size >= 0 ? '+' : ''}${Number(pos.size).toFixed(3)}`,
+                  pnl: Number(pos.unrealized_pnl) || 0,
+                  lastAction: `Position updated: size=${pos.size}`
+                };
+              }
+              return b;
+            }));
+          } else if (msg.type === 'order_update') {
+            const ord = msg.data;
+            if (ord.status === 'Filled' || ord.status === 'PartiallyFilled') {
+              setBots((currentBots) => currentBots.map((b) => {
+                const parts = b.id.toLowerCase().split(':');
+                const bExchange = parts[1];
+                const bSymbols = parts[2] ? parts[2].split(',') : [];
+                const matches = bExchange === String(ord.exchange).toLowerCase() && bSymbols.includes(String(ord.symbol).toLowerCase());
+                if (matches) {
+                  return {
+                    ...b,
+                    fills: b.fills + 1,
+                    lastAction: `Order filled: ${ord.filled_size} @ ${ord.avg_fill_price || 'mkt'}`
+                  };
+                }
+                return b;
+              }));
+
+              const time = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+              setHistory((prev) => [
+                {
+                  id: `h-${Date.now()}`,
+                  time,
+                  bot: ord.exchange.toUpperCase(),
+                  event: `Filled ${ord.symbol}`,
+                  value: `${ord.filled_size} @ ${ord.avg_fill_price || 'mkt'}`
+                },
+                ...prev.slice(0, 49)
+              ]);
+            }
+          }
+        } catch (err) {
+          console.warn('[bot-ws] parse failed:', err);
+        }
+      };
+
+      ws.onclose = () => {
+        reconnectTimer = setTimeout(connectWs, 3000);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    };
+
+    connectWs();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
+    };
+  }, [token, fetchInstances]);
 
   const goBack = useCallback(() => {
     const index = STEPS.indexOf(step);
@@ -358,7 +553,7 @@ function BotsPanel({ onClose }) {
           <strong style={S.summaryValue}>{activeCount}</strong>
         </div>
         <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Mock PnL</span>
+          <span style={S.metricLabel}>Real PnL</span>
           <strong style={{ ...S.summaryValue, color: mockPnl >= 0 ? colors.long : colors.short }}>
             {signedMoney(mockPnl)}
           </strong>
@@ -399,6 +594,8 @@ function BotsPanel({ onClose }) {
             bot={bot}
             expanded={expandedBotId === bot.id}
             onToggle={(id) => setExpandedBotId((current) => (current === id ? null : id))}
+            onStart={handleStartBot}
+            onStop={handleStopBot}
           />
         ))}
       </div>
@@ -460,7 +657,7 @@ function BotsPanel({ onClose }) {
         <div style={S.stepPage}>
           <div>
             <h2 style={S.stepTitle}>Choose Bot Strategy</h2>
-            <p style={S.stepCopy}>Pick one mock market-making bot. It will only update this dashboard.</p>
+            <p style={S.stepCopy}>Select the market-making strategy kind you want to coordinate.</p>
           </div>
           <div style={S.strategyGrid}>
             {BOT_TYPES.map((bot) => {
@@ -495,7 +692,7 @@ function BotsPanel({ onClose }) {
         <div style={S.stepPage}>
           <div>
             <h2 style={S.stepTitle}>Set Risk Limits</h2>
-            <p style={S.stepCopy}>Only three controls for now: deal size, maximum position, and behavior preset.</p>
+            <p style={S.stepCopy}>Configure controls: deal size, maximum position, and behavior preset.</p>
           </div>
           <SliderField
             label="Trade Size"
@@ -541,8 +738,8 @@ function BotsPanel({ onClose }) {
       {step === 'review' && (
         <div style={S.stepPage}>
           <div>
-            <h2 style={S.stepTitle}>Review Mock Bot</h2>
-            <p style={S.stepCopy}>This is a UI mock. Launching does not place orders or call an API.</p>
+            <h2 style={S.stepTitle}>Review and Launch</h2>
+            <p style={S.stepCopy}>Review your strategy parameters before spinning up the MM bots.</p>
           </div>
           <div style={S.reviewCard}>
             <div style={S.cardTop}>
@@ -559,11 +756,11 @@ function BotsPanel({ onClose }) {
               <span>Trade Size <strong>{money(tradeSize)}</strong></span>
               <span>Maximum Position <strong>{money(maxPosition)}</strong></span>
               <span>Preset <strong>{PRESETS[preset].label}</strong></span>
-              <span>Market <strong>ETH-PERP mock</strong></span>
+              <span>Status <strong>Ready to launch</strong></span>
             </div>
           </div>
-          <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.nextButton }} onClick={launchMockBot}>
-            Launch Mock Bot
+          <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.nextButton }} onClick={launchBot}>
+            Launch Bot
           </button>
         </div>
       )}
@@ -578,7 +775,7 @@ function BotsPanel({ onClose }) {
           <RobotButtonMark size={46} />
           <div>
             <div style={S.headerTitle}>Bots</div>
-            <div style={S.headerSub}>Mock MM bot control room</div>
+            <div style={S.headerSub}>MM Bot control room</div>
           </div>
         </div>
         <button type="button" style={S.closeButton} onClick={onClose} aria-label="Close Bots panel">
@@ -1184,5 +1381,11 @@ const S = {
     borderRadius: 14,
     fontSize: 16,
     marginTop: 'auto',
+  },
+  actionsRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 8,
   },
 };

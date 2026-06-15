@@ -5132,6 +5132,58 @@ const server = http.createServer(app);
 // WebSocket on same server
 setupWebSocket(server);
 
+// Proxy WebSocket connections for the bot (port 8080)
+const WebSocket = require('ws');
+const botWss = new WebSocket.Server({ noServer: true });
+botWss.on('connection', (clientWs, upgradeReq) => {
+  const url = require('url').parse(upgradeReq.url, true);
+  const token = upgradeReq.headers['x-token'] || url.query?.token;
+  let tenantId = 'default';
+  if (token) {
+    try {
+      const db = require('./db');
+      const player = db.authenticatePlayer(token);
+      if (player) {
+        tenantId = player.id;
+      }
+    } catch (err) {
+      console.warn('[bot-ws-proxy] player auth failed:', err.message);
+    }
+  }
+
+  const botWs = new WebSocket(`ws://127.0.0.1:8080/ws`, {
+    headers: {
+      'X-Tenant-Id': tenantId,
+    }
+  });
+
+  clientWs.on('message', (message) => {
+    if (botWs.readyState === WebSocket.OPEN) {
+      botWs.send(message);
+    }
+  });
+
+  botWs.on('message', (message) => {
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(message);
+    }
+  });
+
+  clientWs.on('close', () => botWs.close());
+  botWs.on('close', () => clientWs.close());
+  clientWs.on('error', () => botWs.close());
+  botWs.on('error', () => clientWs.close());
+});
+
+server.on('upgrade', (request, socket, head) => {
+  const pathname = require('url').parse(request.url).pathname;
+  if (pathname === '/api/v1/bot/ws' || pathname === '/ws-bot') {
+    botWss.handleUpgrade(request, socket, head, (ws) => {
+      botWss.emit('connection', ws, request);
+    });
+  }
+});
+
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Clash server running on http://127.0.0.1:${PORT}`);
   console.log(`WebSocket available at ws://127.0.0.1:${PORT}/ws`);
