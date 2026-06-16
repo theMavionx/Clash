@@ -2017,7 +2017,6 @@ function AiChatPanel({ onClose }) {
     try {
       if (dex !== 'avantis') throw new Error('Switch this game account to Avantis before signing the action.');
       if (!avantisReady || !avantisWalletAddr) throw new Error('Connect your Base wallet before signing the Avantis action.');
-      if (avantisWalletMismatch) throw new Error('Connected Base wallet does not match this game account.');
       if (action.wallet && String(action.wallet).toLowerCase() !== String(avantisWalletAddr).toLowerCase()) {
         throw new Error('Prepared action is for a different Avantis wallet.');
       }

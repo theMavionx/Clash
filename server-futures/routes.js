@@ -658,15 +658,14 @@ function gmtradeLinkedSolanaWallet(req) {
 }
 
 function gmtradeRequestWallet(req) {
-  const linked = gmtradeLinkedSolanaWallet(req);
   const requested = String(req.query?.address || req.query?.wallet || '').trim();
-  if (requested && requested !== linked) {
-    throw Object.assign(
-      new Error('GMTrade wallet mismatch. Switch to the Solana wallet linked to this game account.'),
-      { status: 403 },
-    );
+  if (requested) {
+    if (!gmtrade.isSolanaAddress(requested)) {
+      throw Object.assign(new Error('GMTrade request wallet must be a valid Solana address.'), { status: 400 });
+    }
+    return requested;
   }
-  return linked;
+  return gmtradeLinkedSolanaWallet(req);
 }
 
 function flashLinkedSolanaWallet(req) {
@@ -681,15 +680,14 @@ function flashLinkedSolanaWallet(req) {
 }
 
 function flashRequestWallet(req) {
-  const linked = flashLinkedSolanaWallet(req);
   const requested = String(req.query?.address || req.query?.wallet || '').trim();
-  if (requested && requested !== linked) {
-    throw Object.assign(
-      new Error('Flash wallet mismatch. Switch to the Solana wallet linked to this game account.'),
-      { status: 403 },
-    );
+  if (requested) {
+    if (!flash.isSolanaAddress(requested)) {
+      throw Object.assign(new Error('Flash request wallet must be a valid Solana address.'), { status: 400 });
+    }
+    return requested;
   }
-  return linked;
+  return flashLinkedSolanaWallet(req);
 }
 
 function flashBodyWallet(req) {
@@ -874,11 +872,6 @@ async function requireDecibelOwnerAndSubaccount(req, res) {
   );
   if (!subaccount) {
     res.status(400).json({ error: 'subaccountAddr required' });
-    return null;
-  }
-  const primary = normalizeAptosAddress(await decibel.getPrimarySubaccountAddr(owner));
-  if (subaccount !== primary) {
-    res.status(400).json({ error: 'subaccountAddr does not match the registered wallet primary Decibel subaccount' });
     return null;
   }
   return { owner, subaccount };

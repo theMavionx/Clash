@@ -415,16 +415,9 @@ function tokenDecimalsForSymbol(value, fallback = GMTRADE_TOKEN_AMOUNT_DECIMALS)
 function resolveRequestWallet(body = {}, playerWallet = '') {
   const bodyWallet = String(body.wallet || body.address || '').trim();
   const linkedWallet = String(playerWallet || '').trim();
-  const linkedIsSolana = isSolanaAddress(linkedWallet);
-  const wallet = linkedIsSolana ? linkedWallet : (bodyWallet || linkedWallet);
+  const wallet = bodyWallet || linkedWallet;
   if (!isSolanaAddress(wallet)) {
     throw Object.assign(new Error('GMTrade linked Solana wallet address required'), { status: 400 });
-  }
-  if (bodyWallet && bodyWallet !== wallet) {
-    throw Object.assign(
-      new Error('GMTrade wallet mismatch. Connect the Solana wallet linked to this game account before trading.'),
-      { status: 403 },
-    );
   }
   return wallet;
 }

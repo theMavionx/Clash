@@ -1245,7 +1245,6 @@ export function useHyperliquid() {
     setLoading(true);
     setError(null);
     try {
-      if (walletMismatch) throw new Error('Connected wallet does not match this game account');
       const market = findMarket(symbol) || (await ensureMarkets()).find(m => m.symbol === hyperliquidSymbol(symbol));
       if (!market) throw new Error(`No Hyperliquid market for ${symbol}`);
       const mark = num(market.mark || market.mid || market.oracle);
@@ -1292,7 +1291,7 @@ export function useHyperliquid() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletMismatch, findMarket, ensureMarkets, tradingExchange, ensurePerpUsdc, ensureBuilderApproved, fetchAccount, syncRewards]);
+  }, [findMarket, ensureMarkets, tradingExchange, ensurePerpUsdc, ensureBuilderApproved, fetchAccount, syncRewards]);
 
   const placeLimitOrder = useCallback(async (symbol, side, limitPrice, collateralUsdc, tif = 'GTC', leverage = 1) => {
     if (tradeInFlightRef.current) return { error: 'Trade already in progress' };
@@ -1300,7 +1299,6 @@ export function useHyperliquid() {
     setLoading(true);
     setError(null);
     try {
-      if (walletMismatch) throw new Error('Connected wallet does not match this game account');
       const market = findMarket(symbol) || (await ensureMarkets()).find(m => m.symbol === hyperliquidSymbol(symbol));
       if (!market) throw new Error(`No Hyperliquid market for ${symbol}`);
       const limit = num(limitPrice);
@@ -1345,7 +1343,7 @@ export function useHyperliquid() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletMismatch, findMarket, ensureMarkets, tradingExchange, ensurePerpUsdc, ensureBuilderApproved, fetchOrders]);
+  }, [findMarket, ensureMarkets, tradingExchange, ensurePerpUsdc, ensureBuilderApproved, fetchOrders]);
 
   const cancelOrder = useCallback(async (symbol, orderId, pairIndex) => {
     setError(null);
@@ -1377,7 +1375,6 @@ export function useHyperliquid() {
     setLoading(true);
     setError(null);
     try {
-      if (walletMismatch) throw new Error('Connected wallet does not match this game account');
       const market = findMarket(symbol) || (await ensureMarkets()).find(m => m.symbol === hyperliquidSymbol(symbol));
       if (!market) throw new Error(`No Hyperliquid market for ${symbol}`);
       const mark = num(market.mark || market.mid || market.oracle);

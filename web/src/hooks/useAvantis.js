@@ -982,18 +982,12 @@ export function useAvantis() {
     if (!isReady || !walletClient || !walletAddr) {
       throw new Error('Connect your Base wallet to trade on Avantis');
     }
-    if (walletMismatch) {
-      throw new Error(
-        `Connected wallet ${shortAddress(walletAddr)} does not match this game account (${shortAddress(registeredEvmWallet)}). ` +
-        'Switch wallet or log in with the connected wallet first.'
-      );
-    }
     if (hasReferrer !== true) {
       throw new Error(hasReferrer === null
         ? 'Checking Avantis builder code. Try again in a moment.'
         : 'Approve the Clash builder code before trading on Avantis.');
     }
-  }, [isReady, walletClient, walletAddr, walletMismatch, registeredEvmWallet, hasReferrer]);
+  }, [isReady, walletClient, walletAddr, hasReferrer]);
 
   // ───── Place market order ─────
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage, options = {}) => {
