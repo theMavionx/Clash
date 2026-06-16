@@ -12337,6 +12337,25 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       await importGrvtFillsForClaim(req.player.id);
     } else if (dex === 'hotstuff') {
       await importHotstuffFillsForClaim(req.player.id, wallet);
+    } else if (dex === 'katana') {
+      try {
+        const katana = require('../server-futures/katana');
+        const apiKey = req.headers['x-katana-api-key'];
+        const apiSecret = req.headers['x-katana-api-secret'];
+        const katanaWallet = req.headers['x-katana-wallet'] || wallet;
+        if (apiKey && apiSecret && katanaWallet) {
+          const imported = await katana.importFillsForPlayer(req.player.id, {
+            apiKey,
+            apiSecret,
+            wallet: katanaWallet,
+          }, { wallet: katanaWallet, limit: 100 });
+          if (imported.imported || imported.updated || imported.adopted) {
+            console.log(`[claim-gold katana] imported fills player=${req.player.name} imported=${imported.imported} updated=${imported.updated} adopted=${imported.adopted} skipped=${imported.skipped}`);
+          }
+        }
+      } catch (e) {
+        console.warn(`[claim-gold katana] import fills failed player=${req.player.name}:`, e.message);
+      }
     }
     const fdb = futuresDbReadonly();
     if (!fdb) {

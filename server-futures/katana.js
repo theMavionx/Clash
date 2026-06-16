@@ -62,6 +62,17 @@ function jsonSafe(value) {
   return value;
 }
 
+function arrayRows(payload, ...keys) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of keys) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.result)) return payload.result;
+  if (Array.isArray(payload?.rows)) return payload.rows;
+  return [];
+}
+
 function sdk() {
   return require('@katanaperps/katana-perps-sdk');
 }
@@ -381,6 +392,78 @@ function normalizeOrder(row) {
     pair_index: row?.market,
     trade_index: row?.orderId,
     _raw: row,
+  };
+}
+
+function valueOf(row, ...keys) {
+  for (const key of keys) {
+    const value = row?.[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+}
+
+function normalizeFill(wallet, fill) {
+  const market = valueOf(fill, 'market', 'symbol', 'instrument', 'instrumentName');
+  const symbol = baseSymbol(market);
+  if (!symbol) return null;
+  const quantity = Math.abs(num(valueOf(
+    fill,
+    'quantity',
+    'executedQuantity',
+    'baseQuantity',
+    'baseQty',
+    'size',
+    'filledQuantity',
+  )));
+  const price = Math.abs(num(valueOf(fill, 'price', 'executionPrice', 'avgExecutionPrice', 'fillPrice')));
+  const quote = Math.abs(num(valueOf(
+    fill,
+    'quoteQuantity',
+    'quoteQty',
+    'notional',
+    'notionalUsd',
+    'notional_usd',
+    'value',
+  )));
+  const notional = quote || (quantity && price ? quantity * price : 0);
+  if (!Number.isFinite(notional) || notional < 10 || notional > 10_000_000) return null;
+  const rawSide = String(valueOf(fill, 'side', 'takerSide', 'direction') || '').trim().toLowerCase();
+  const reduceOnly = !!valueOf(fill, 'reduceOnly', 'reduce_only');
+  const side = reduceOnly
+    ? (rawSide === 'sell' || rawSide === 'short' || rawSide === 'ask' ? 'close_long' : 'close_short')
+    : (rawSide === 'sell' || rawSide === 'short' || rawSide === 'ask' ? 'short' : 'long');
+  const fillId = String(valueOf(fill, 'fillId', 'fill_id', 'tradeId', 'trade_id', 'id', 'executionId') || '').trim();
+  const orderId = String(valueOf(fill, 'orderId', 'order_id') || '').trim();
+  const clientOrderId = String(valueOf(fill, 'clientOrderId', 'client_order_id') || '').trim();
+  const key = `katana:${String(wallet || '').toLowerCase()}:${fillId || orderId || clientOrderId || `${market}:${side}:${quantity}:${price}`}`;
+  const timestamp = valueOf(fill, 'createdAt', 'created_at', 'timestamp', 'time', 'filledAt', 'filled_at');
+  const tsMs = typeof timestamp === 'number'
+    ? (timestamp > 1e12 ? timestamp : timestamp * 1000)
+    : Date.parse(String(timestamp || ''));
+  return {
+    symbol,
+    side,
+    orderType: reduceOnly ? 'close' : String(valueOf(fill, 'orderType', 'order_type', 'type') || 'market'),
+    amount: String(quantity || ''),
+    price: String(price || ''),
+    orderId: orderId || fillId || null,
+    clientOrderId: key,
+    status: 'filled',
+    dex: 'katana',
+    notional_usd: notional,
+    verifiedSource: 'katana_api',
+    fee: valueOf(fill, 'builderFee', 'builder_fee', 'fee') != null ? String(valueOf(fill, 'builderFee', 'builder_fee', 'fee')) : null,
+    proofJson: JSON.stringify({
+      source: 'katana_fill_api',
+      wallet: String(wallet || '').toLowerCase(),
+      fill_id: fillId || null,
+      order_id: orderId || null,
+      client_order_id: clientOrderId || null,
+      raw: fill,
+    }),
+    createdAt: Number.isFinite(tsMs) ? new Date(tsMs).toISOString() : null,
+    _raw: fill,
   };
 }
 
@@ -705,7 +788,79 @@ async function getFills(credsInput, wallet, params = {}) {
   if (params.market) query.market = marketName(params.market);
   if (params.fromId) query.fromId = String(params.fromId);
   const rows = await client.getFills(query);
-  return Array.isArray(rows) ? rows : [];
+  return arrayRows(rows, 'fills', 'trades', 'executions');
+}
+
+async function importFillsForPlayer(playerId, credsInput, opts = {}) {
+  const creds = credentials(credsInput);
+  const db = require('./db');
+  const wallet = walletParam(opts.wallet || creds.wallet, creds);
+  const fills = await getFills(creds, wallet, {
+    limit: opts.limit || 100,
+    market: opts.market,
+    fromId: opts.fromId,
+  }).catch((e) => {
+    logKatana('import fills read failed', errorInfo(e));
+    return [];
+  });
+  let imported = 0;
+  let adopted = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const fill of (Array.isArray(fills) ? fills : [])) {
+    const trade = normalizeFill(wallet, fill);
+    if (!trade) { skipped++; continue; }
+    try {
+      const before = db.db.prepare('SELECT id, player_id FROM trade_history WHERE client_order_id = ? LIMIT 1').get(trade.clientOrderId);
+      if (before) {
+        const info = db.db.prepare(`
+          UPDATE trade_history
+          SET player_id = ?,
+              symbol = COALESCE(NULLIF(?, ''), symbol),
+              side = COALESCE(NULLIF(?, ''), side),
+              order_type = COALESCE(NULLIF(?, ''), order_type),
+              amount = COALESCE(NULLIF(?, ''), amount),
+              price = COALESCE(NULLIF(?, ''), price),
+              order_id = COALESCE(NULLIF(?, ''), order_id),
+              status = 'filled',
+              notional_usd = CASE WHEN ? > 0 THEN ? ELSE notional_usd END,
+              verified_source = 'katana_api',
+              fee = COALESCE(NULLIF(?, ''), fee),
+              proof_json = COALESCE(NULLIF(?, ''), proof_json)
+          WHERE id = ? AND dex = 'katana'
+        `).run(
+          playerId,
+          trade.symbol,
+          trade.side,
+          trade.orderType,
+          trade.amount,
+          trade.price,
+          trade.orderId || '',
+          trade.notional_usd,
+          trade.notional_usd,
+          trade.fee || '',
+          trade.proofJson || '',
+          before.id,
+        );
+        if (info.changes > 0) {
+          updated++;
+          if (before.player_id !== playerId) adopted++;
+        } else {
+          skipped++;
+        }
+        continue;
+      }
+      const r = db.addTrade(playerId, trade);
+      if (r?.id) imported++;
+      else skipped++;
+    } catch (e) {
+      skipped++;
+      if (!/UNIQUE|constraint/i.test(e.message || '')) {
+        console.warn('[katana] import fill failed:', e.message);
+      }
+    }
+  }
+  return { ok: true, imported, updated, adopted, skipped, total: fills.length };
 }
 
 async function getDelegatedKeys(credsInput, wallet) {
@@ -878,6 +1033,7 @@ module.exports = {
   getFills,
   getFundingRates,
   getHealth,
+  importFillsForPlayer,
   getMarketInfo,
   getOrderbook,
   getOrders,

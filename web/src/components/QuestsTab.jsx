@@ -241,7 +241,12 @@ function QuestsTab({ markets = [] }) {
     // Poll while mounted; also refetches whenever token changes (e.g. after
     // auto-login completes or the user switches accounts).
     const iv = setInterval(() => fetchTasks(token), 20000);
-    return () => clearInterval(iv);
+    const onTradeReward = () => fetchTasks(token);
+    window.addEventListener('clash:trading-reward-claimed', onTradeReward);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener('clash:trading-reward-claimed', onTradeReward);
+    };
   }, [fetchTasks, token]);
 
   const handleStart = useCallback(async (id) => {

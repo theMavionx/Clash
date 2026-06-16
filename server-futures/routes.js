@@ -1279,13 +1279,7 @@ function katanaCredsFromReq(req) {
 function requireKatanaOwner(req, res) {
   if (!ensureKatana(req, res)) return null;
   try {
-    const creds = katanaCredsFromReq(req);
-    const playerWallet = String(req.playerWallet || '').toLowerCase();
-    if (playerWallet && String(creds.wallet || '').toLowerCase() !== playerWallet) {
-      res.status(403).json({ error: 'Katana wallet must match the wallet registered to this game account' });
-      return null;
-    }
-    return creds;
+    return katanaCredsFromReq(req);
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || 'Katana credentials required' });
     return null;
@@ -1399,6 +1393,22 @@ router.get('/katana/fills', auth, async (req, res) => {
     }));
   } catch (e) {
     katanaRouteError(res, e, 'Failed to load Katana fills');
+  }
+});
+
+router.post('/katana/import-fills', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    const result = await katana.importFillsForPlayer(req.playerId, creds, {
+      wallet: req.body?.wallet || req.query?.wallet || req.playerWallet,
+      market: req.body?.market || req.query?.market,
+      limit: req.body?.limit || req.query?.limit || 100,
+      fromId: req.body?.fromId || req.body?.from_id || req.query?.fromId,
+    });
+    res.json(result);
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to import Katana fills');
   }
 });
 
