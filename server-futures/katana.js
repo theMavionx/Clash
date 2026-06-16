@@ -19,6 +19,8 @@ const KATANA_APP_URL =
   (process.env.KATANA_PERPS_APP_URL || 'https://perps.katana.network').replace(/\/+$/, '');
 const KATANA_ACCESS_CODE =
   (process.env.KATANA_PERPS_REFERRAL_CODE || process.env.KATANA_PERPS_ACCESS_CODE || 'CLASHOFPERPS').trim();
+const KATANA_BUILDER_CODE =
+  (process.env.KATANA_PERPS_BUILDER_CODE || process.env.KATANA_BUILDER_CODE || 'B:Px8lQrCA').trim();
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.KATANA_PERPS_TIMEOUT_MS || 5000)));
 const PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.KATANA_PERPS_PUBLIC_CACHE_TTL_MS || 10_000)));
 const PUBLIC_STALE_TTL_MS = Math.max(PUBLIC_CACHE_TTL_MS, Math.min(900_000, Number(process.env.KATANA_PERPS_PUBLIC_STALE_TTL_MS || 300_000)));
@@ -77,6 +79,25 @@ function isValidAccessCode(code) {
   return /^[A-Z0-9]{4,32}$/u.test(value);
 }
 
+function validBuilderCode(code) {
+  const value = String(code || '').trim();
+  return /^B:[A-Za-z0-9]{8}$/u.test(value) ? value : '';
+}
+
+function stripBuilderCode(clientOrderId) {
+  return String(clientOrderId || '').trim().replace(/^B:[A-Za-z0-9]{8}/u, '');
+}
+
+function katanaClientOrderId(input = {}) {
+  const prefix = validBuilderCode(KATANA_BUILDER_CODE);
+  const provided = stripBuilderCode(input.clientOrderId || input.client_order_id);
+  const fallback = uuidv1().replace(/-/g, '');
+  const suffix = String(provided || fallback)
+    .replace(/[^\x21-\x7e]/g, '')
+    .slice(0, prefix ? 30 : 40);
+  return `${prefix}${suffix}`.slice(0, 40);
+}
+
 function referralUrl(code = KATANA_ACCESS_CODE) {
   const value = normalizeCode(code);
   return value ? `${KATANA_APP_URL}/r/${encodeURIComponent(value)}` : KATANA_APP_URL;
@@ -99,6 +120,7 @@ function configStatus() {
     required_user_fields: ['api_key', 'api_secret'],
     required_wallet: true,
     server_private_key_required: false,
+    builder_code_configured: !!validBuilderCode(KATANA_BUILDER_CODE),
     missing_env: [],
   };
 }
@@ -459,7 +481,7 @@ function orderParams(input = {}, creds, options = {}) {
   if (!params.quantity || !(Number(params.quantity) > 0)) {
     throw Object.assign(new Error('Katana order quantity must be at least 0.0001 base units'), { status: 400 });
   }
-  if (input.clientOrderId || input.client_order_id) params.clientOrderId = String(input.clientOrderId || input.client_order_id).slice(0, 40);
+  params.clientOrderId = katanaClientOrderId(input);
   if (input.reduceOnly !== undefined || input.reduce_only !== undefined) params.reduceOnly = !!(input.reduceOnly ?? input.reduce_only);
   const isTriggerOrder = type === OrderType.takeProfitMarket
     || type === OrderType.stopLossMarket

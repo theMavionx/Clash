@@ -328,6 +328,7 @@ prepare_shared_runtime() {
                 printf '%s\n' VITE_HOTSTUFF_BROKER_FEE_RATE=0.0001
                 printf '%s\n' VITE_HIBACHI_REFERRAL_URL=https://hibachi.xyz/r/M4S4XNAGP4
                 printf '%s\n' KATANA_PERPS_REFERRAL_CODE=CLASHOFPERPS
+                printf '%s\n' KATANA_PERPS_BUILDER_CODE=B:Px8lQrCA
                 printf '%s\n' VITE_KATANA_PERPS_REFERRAL_CODE=CLASHOFPERPS
                 printf '%s\n' GMTRADE_APP_URL=https://gmtrade.xyz/trade
                 printf '%s\n' GMTRADE_SOLANA_RPC_URL=https://rpc-1.gmtrade.xyz/
@@ -396,6 +397,7 @@ prepare_shared_runtime() {
     ensure_env_default "KATANA_PERPS_API_URL" "https://api-perps.katana.network/v1"
     ensure_env_default "KATANA_PERPS_APP_URL" "https://perps.katana.network"
     ensure_env_default "KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
+    ensure_env_default "KATANA_PERPS_BUILDER_CODE" "B:Px8lQrCA"
     ensure_env_default "VITE_KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
     ensure_env_default "GMTRADE_APP_URL" "https://gmtrade.xyz/trade"
     ensure_env_default "GMTRADE_SOLANA_RPC_URL" "https://rpc-1.gmtrade.xyz/"
@@ -493,6 +495,7 @@ prepare_shared_runtime() {
     set_env_value "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0001"
     set_env_value "VITE_HIBACHI_REFERRAL_URL" "https://hibachi.xyz/r/M4S4XNAGP4"
     set_env_value "KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
+    set_env_value "KATANA_PERPS_BUILDER_CODE" "B:Px8lQrCA"
     set_env_value "VITE_KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
     set_env_value "GMTRADE_ENABLE_NODE_SDK_BUILDER" "1"
     set_env_value "GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS" "0"
