@@ -1676,12 +1676,11 @@ const BottomPanel = memo(function BottomPanel({
   closePosition, cancelOrder, dex, loading, historyAccountAddr, markets, onClosedPositionSnapshot,
 }) {
   const tpslOrders = Array.isArray(orders) ? orders : filteredOrders;
-  // Avantis has no order-flow history or funding payments exposed via a
-  // public API like Pacifica, so we hide those tabs entirely on that DEX.
+  // Avantis/Flash do not expose funding payments in the trading UI flow.
   const tabs = [
     { id: 'positions', label: `Positions (${filteredPositions.length})` },
     { id: 'orders', label: `Orders (${filteredOrders.length})` },
-    ...(dex === 'avantis' ? [] : [
+    ...(dex === 'avantis' || dex === 'flash' ? [] : [
       { id: 'history', label: 'History' },
       { id: 'funding', label: 'Funding' },
     ]),
@@ -1829,7 +1828,7 @@ const BottomPanel = memo(function BottomPanel({
             </table>
           ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
         )}
-        {bottomTab === 'history' && dex !== 'avantis' && (
+        {bottomTab === 'history' && dex !== 'avantis' && dex !== 'flash' && (
           <TradeHistory
             walletAddr={walletAddr}
             accountAddr={historyAccountAddr}
@@ -1838,7 +1837,7 @@ const BottomPanel = memo(function BottomPanel({
             filters={btmFilters}
           />
         )}
-        {bottomTab === 'funding' && dex !== 'avantis' && (
+        {bottomTab === 'funding' && dex !== 'avantis' && dex !== 'flash' && (
           <FundingHistory
             walletAddr={walletAddr}
             accountAddr={historyAccountAddr}
@@ -2469,7 +2468,7 @@ function FuturesPanel() {
   // Avantis doesn't have a signed funding rate — the number here is the
   // borrow-fee % per hour traders pay LPs. Relabel the badge so users
   // don't read it as the Pacifica-style signed periodic funding rate.
-  const fundingLabel = dex === 'avantis' ? 'BORROW/h' : 'FUNDING';
+  const fundingLabel = dex === 'avantis' ? 'BORROW/h' : dex === 'flash' ? 'MARGIN/h' : 'FUNDING';
 
   // Convert USDC amount to token amount, rounded to lot size
   const lotSize = useMemo(() => {

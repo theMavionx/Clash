@@ -316,7 +316,13 @@ async function getTokens() {
 }
 
 async function getPrices() {
-  const prices = await request('/v2/prices');
+  const [prices, fundingRates] = await Promise.all([
+    request('/v2/prices'),
+    getFundingRates().catch(e => {
+      console.warn('[flash] funding rates unavailable:', e?.message || e);
+      return new Map();
+    }),
+  ]);
   return Object.entries(prices || {}).map(([symbol, row]) => ({
     symbol,
     price: Number(row?.priceUi ?? row?.price_ui ?? 0),
@@ -325,6 +331,9 @@ async function getPrices() {
     exponent: row?.exponent,
     timestamp_us: row?.timestampUs ?? row?.timestamp_us,
     market_session: row?.marketSession,
+    funding_rate: fundingRates.get(symbol)?.hourlyRate ?? 0,
+    funding_rate_raw: fundingRates.get(symbol)?.rawRate ?? null,
+    funding_rate_source: fundingRates.has(symbol) ? 'flash_raw_custody_borrow_rate' : null,
   }));
 }
 
@@ -339,6 +348,10 @@ async function getMarketInfo() {
       base: symbol,
       quote: 'USDC',
       price: priceMap.get(symbol)?.price || 0,
+      funding_rate: priceMap.get(symbol)?.funding_rate || 0,
+      funding_rate_raw: priceMap.get(symbol)?.funding_rate_raw ?? null,
+      funding_rate_source: priceMap.get(symbol)?.funding_rate_source || null,
+      funding_label: 'MARGIN/h',
       max_leverage: 100,
       min_order_size: 1,
       tick_size: symbol === 'BTC' ? '0.1' : '0.01',
@@ -346,6 +359,33 @@ async function getMarketInfo() {
       source: 'flash_v2',
     };
   });
+}
+
+async function getFundingRates() {
+  const [tokens, custodies] = await Promise.all([
+    getTokens(),
+    request('/v2/raw/custodies'),
+  ]);
+  const symbolByMint = new Map((Array.isArray(tokens) ? tokens : [])
+    .map(t => [String(t?.mintKey || '').trim(), normalizeToken(t?.symbol, '')])
+    .filter(([mint, symbol]) => mint && symbol));
+  const rates = new Map();
+  for (const row of Array.isArray(custodies) ? custodies : []) {
+    const account = row?.account || row;
+    const symbol = symbolByMint.get(String(account?.tokenMint || '').trim());
+    if (!symbol) continue;
+    const rawRate = Number(account?.borrowRateState?.currentRate ?? 0);
+    if (!Number.isFinite(rawRate)) continue;
+    // Flash custody borrow rates are fixed-point hourly rates. 1e9 maps the
+    // raw value to a decimal fraction, so 20_000 -> 0.0020% per hour.
+    const hourlyRate = rawRate / 1_000_000_000;
+    rates.set(symbol, {
+      rawRate,
+      hourlyRate: Number.isFinite(hourlyRate) ? hourlyRate : 0,
+      custody: row?.pubkey || '',
+    });
+  }
+  return rates;
 }
 
 async function getPositionsByAddress(owner, includePnlInLeverageDisplay = true) {
