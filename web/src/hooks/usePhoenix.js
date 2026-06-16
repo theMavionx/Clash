@@ -1605,7 +1605,7 @@ export function usePhoenix() {
   const walletAddr = adapterAddr || privyAddr || null;
   const ownerPk = useMemo(() => walletAddr ? new PublicKey(walletAddr) : null, [walletAddr]);
   const registeredSolanaWallet = registeredDexWallet(player, 'phoenix', 'solana') || null;
-  const walletMismatch = !!(registeredSolanaWallet && walletAddr && registeredSolanaWallet !== walletAddr);
+  const walletMismatch = false;
   const walletMismatchMessage = useMemo(() => {
     if (!walletMismatch) return '';
     const connected = shortPhoenixAddress(walletAddr) || 'current wallet';

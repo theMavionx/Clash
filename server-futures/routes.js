@@ -865,9 +865,8 @@ function ensureDecibel(req, res) {
 async function requireDecibelOwnerAndSubaccount(req, res) {
   if (!ensureDecibel(req, res)) return null;
   const owner = normalizeAptosAddress(req.body?.owner || req.query?.owner || req.playerWallet);
-  const playerWallet = normalizeAptosAddress(req.playerWallet);
-  if (!owner || !playerWallet || owner !== playerWallet) {
-    res.status(403).json({ error: 'owner must match the wallet registered to this game account' });
+  if (!owner) {
+    res.status(400).json({ error: 'owner required' });
     return null;
   }
   const subaccount = normalizeAptosAddress(
@@ -2931,13 +2930,8 @@ function requireRisexOwner(req, res) {
     return null;
   }
   const account = risex.normalizeAddress(req.body?.account || req.query?.account || req.playerWallet);
-  const playerWallet = risex.normalizeAddress(req.playerWallet);
   if (!account) {
     res.status(400).json({ error: 'account required (0x...)' });
-    return null;
-  }
-  if (playerWallet && account !== playerWallet) {
-    res.status(403).json({ error: 'account must match the wallet registered to this game account' });
     return null;
   }
   return { account };
@@ -3272,13 +3266,8 @@ function requireNadoOwner(req, res) {
     return null;
   }
   const account = nado.normalizeAddress(req.body?.account || req.query?.account || req.playerWallet);
-  const playerWallet = nado.normalizeAddress(req.playerWallet);
   if (!account) {
     res.status(400).json({ error: 'account required (0x...)' });
-    return null;
-  }
-  if (playerWallet && account !== playerWallet) {
-    res.status(403).json({ error: 'account must match the wallet registered to this game account' });
     return null;
   }
   return { account };
@@ -3438,13 +3427,8 @@ function requireHotstuffOwner(req, res) {
     return null;
   }
   const account = hotstuff.normalizeAddress(req.body?.account || req.query?.account || req.playerWallet);
-  const playerWallet = hotstuff.normalizeAddress(req.playerWallet);
   if (!account) {
     res.status(400).json({ error: 'account required (0x...)' });
-    return null;
-  }
-  if (playerWallet && account !== playerWallet) {
-    res.status(403).json({ error: 'account must match the wallet registered to this game account' });
     return null;
   }
   return { account };

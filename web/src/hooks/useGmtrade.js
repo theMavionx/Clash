@@ -325,10 +325,7 @@ export function useGmtrade() {
   const realtimeWsRef = useRef(null);
   const referralWalletRef = useRef('');
 
-  const walletMismatch = useMemo(() => {
-    const registeredSolana = registeredDexWallet(player, 'gmtrade', 'solana');
-    return !!registeredSolana && !!walletAddr && registeredSolana !== walletAddr;
-  }, [player, walletAddr]);
+  const walletMismatch = false;
 
   useEffect(() => {
     if (!isActiveDex || !token || !walletAddr || walletMismatch) return;

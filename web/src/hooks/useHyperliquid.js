@@ -419,7 +419,7 @@ export function useHyperliquid() {
   const registeredWallet = registeredDexWallet(player, 'hyperliquid', 'evm');
   const registeredEvmWallet = isHyperliquidAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
-  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
+  const walletMismatch = false;
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);

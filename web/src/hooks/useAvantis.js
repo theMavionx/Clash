@@ -449,7 +449,7 @@ export function useAvantis() {
   }, [player?.token]);
   const registeredEvmWallet = registeredDexWallet(player, 'avantis', 'evm') || null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
-  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
+  const walletMismatch = false;
   const scheduleClaim = useCallback((delayMs = 2500) => {
     const t = setTimeout(() => {
       const fn = claimGoldRef.current;

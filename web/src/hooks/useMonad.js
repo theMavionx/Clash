@@ -666,7 +666,7 @@ export function useMonad() {
   const activeEvmWallet = /^0x[0-9a-fA-F]{40}$/.test(address || '')
     ? String(address).toLowerCase()
     : null;
-  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
+  const walletMismatch = false;
 
   const [connected, setConnected] = useState(() => isPerplAuthed());
   const [authedWallet, setAuthedWallet] = useState(() => getAuthedAddress());

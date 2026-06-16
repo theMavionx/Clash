@@ -146,6 +146,29 @@ const TASK_SIDES = [
   { id: 'short', label: 'Short only' },
 ];
 
+const TASK_ELIGIBILITY_OPTIONS = [
+  { id: 'all', label: 'Everyone', badge: 'Everyone' },
+  { id: 'soldiers_only', label: 'Soldiers only', badge: 'Soldiers' },
+  { id: 'demon_king', label: 'Demon King holders', badge: 'Demon King' },
+  { id: 'dragon', label: 'Dragon holders', badge: 'Dragon' },
+  { id: 'demon_or_dragon', label: 'Demon King or Dragon', badge: 'NFT Elite' },
+  { id: 'demon_and_dragon', label: 'Demon King and Dragon', badge: 'Demon + Dragon' },
+];
+
+function normalizeTaskEligibilityConfig(params) {
+  const raw = params?.eligibility && typeof params.eligibility === 'object' ? params.eligibility : {};
+  const option = TASK_ELIGIBILITY_OPTIONS.find((item) => item.id === raw.mode) || TASK_ELIGIBILITY_OPTIONS[0];
+  return { mode: option.id, label: String(raw.label || '').trim() };
+}
+
+function taskEligibilityAdminLabel(taskOrParams) {
+  const params = taskOrParams?.params ? taskOrParams.params : taskOrParams;
+  const cfg = normalizeTaskEligibilityConfig(params || {});
+  if (cfg.mode === 'all') return '';
+  const option = TASK_ELIGIBILITY_OPTIONS.find((item) => item.id === cfg.mode);
+  return cfg.label || option?.badge || 'Exclusive';
+}
+
 export default function AdminApp() {
   const [key, setKey] = useState(getStoredAdminKey);
   const [authed, setAuthed] = useState(false);
@@ -1456,6 +1479,7 @@ function TasksPanel({ data, reload }) {
                     <td>
                       <strong>{task.title}</strong>
                       <div className="admin-card-sub">{task.description}</div>
+                      {taskEligibilityAdminLabel(task) ? <div><span className="admin-badge purple">Exclusive: {taskEligibilityAdminLabel(task)}</span></div> : null}
                       {(task.starts_at || task.ends_at) ? <div className="admin-card-sub admin-mono">{task.starts_at || '-'} to {task.ends_at || '-'}</div> : null}
                     </td>
                     <td>
@@ -1515,6 +1539,21 @@ function TaskEditorDrawer({ task, onClose, onSaved }) {
           value: 20,
           values: '',
           ...((prev.params || {}).repeat_progression || {}),
+          ...patch,
+        },
+      },
+    }));
+  }
+
+  function updateEligibility(patch) {
+    setForm((prev) => ({
+      ...prev,
+      params: {
+        ...(prev.params || {}),
+        eligibility: {
+          mode: 'all',
+          label: '',
+          ...normalizeTaskEligibilityConfig(prev.params || {}),
           ...patch,
         },
       },
@@ -1635,6 +1674,33 @@ function TaskEditorDrawer({ task, onClose, onSaved }) {
           </div>
         </div>
         <div className="admin-card">
+          <div className="admin-card-head"><div><div className="admin-card-title">Eligibility</div><div className="admin-card-sub">Controls which player segment can see, start, and claim this quest.</div></div></div>
+          <div className="admin-card-body admin-grid">
+            <div className="admin-form-grid two">
+              <label className="admin-field">
+                <span className="admin-label">Audience</span>
+                <select
+                  className="admin-select"
+                  value={normalizeTaskEligibilityConfig(form.params || {}).mode}
+                  onChange={(e) => updateEligibility({ mode: e.target.value })}
+                >
+                  {TASK_ELIGIBILITY_OPTIONS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+              </label>
+              <label className="admin-field">
+                <span className="admin-label">Badge label</span>
+                <input
+                  className="admin-input"
+                  placeholder="Optional custom badge"
+                  value={normalizeTaskEligibilityConfig(form.params || {}).label}
+                  onChange={(e) => updateEligibility({ label: e.target.value })}
+                />
+              </label>
+            </div>
+            <div className="admin-help">Soldiers only means players with no active Demon King and no active Dragon NFT. This is checked against player_nfts, not battle replay troop composition.</div>
+          </div>
+        </div>
+        <div className="admin-card">
           <div className="admin-card-head"><div><div className="admin-card-title">Verifier Params</div><div className="admin-card-sub">Params are stored as JSON and consumed by the existing task verifier.</div></div></div>
           <div className="admin-card-body admin-grid">
             <div className="admin-form-grid three">
@@ -1688,6 +1754,7 @@ function TaskEditorDrawer({ task, onClose, onSaved }) {
 function TaskPlayersDrawer({ task, onClose }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  const eligibilityLabel = taskEligibilityAdminLabel(task);
   useEffect(() => {
     let alive = true;
     adminGet(`/admin/tasks/${task.id}/players`).then((result) => {
@@ -1698,10 +1765,11 @@ function TaskPlayersDrawer({ task, onClose }) {
     return () => { alive = false; };
   }, [task.id]);
   return (
-    <Drawer title={`Task Players · ${task.title}`} subtitle={`${data?.started || 0} started · ${data?.claimed || 0} claimed`} onClose={onClose}>
+    <Drawer title={`Task Players · ${task.title}`} subtitle={`${data?.started || 0} started · ${data?.claimed || 0} claimed${eligibilityLabel ? ` · Exclusive: ${eligibilityLabel}` : ''}`} onClose={onClose}>
       {error && <div className="admin-error">{error}</div>}
       {!data ? <div className="admin-help">Loading...</div> : (
         <div className="admin-table-wrap admin-scroll">
+          {eligibilityLabel ? <div className="admin-help" style={{ margin: '0 0 12px' }}>Eligibility: <strong>{eligibilityLabel}</strong>. Players outside this segment do not see this quest and cannot start or claim it through the API.</div> : null}
           <table className="admin-table">
             <thead><tr><th>Player</th><th>Progress</th><th>Started</th><th>Claimed</th><th>Wallet</th></tr></thead>
             <tbody>{(data.players || []).map((row) => <tr key={row.player_id}><td><strong>{row.player_name || row.player_id}</strong><div className="admin-card-sub admin-mono">{row.player_id}</div></td><td>{row.progress_value || 0}/{row.target_value || 0}</td><td>{fmtTime(row.started_at)}</td><td>{row.claimed_at ? <span className="admin-badge green">{fmtTime(row.claimed_at)}</span> : <span className="admin-badge off">not claimed</span>}</td><td className="admin-mono">{short(row.wallet, 8, 6)}</td></tr>)}</tbody>
@@ -2558,7 +2626,7 @@ function emptyTaskForm() {
     type: 'volume',
     title: '',
     description: '',
-    params: { symbol: 'any', side: 'any', target_volume: 1000 },
+    params: { symbol: 'any', side: 'any', target_volume: 1000, eligibility: { mode: 'all', label: '' } },
     reward_gold: 0,
     reward_wood: 0,
     reward_ore: 0,
@@ -2572,6 +2640,8 @@ function emptyTaskForm() {
 }
 
 function taskToForm(task) {
+  const params = { ...(task.params || {}) };
+  params.eligibility = normalizeTaskEligibilityConfig(params);
   return {
     ...emptyTaskForm(),
     ...task,
@@ -2579,7 +2649,7 @@ function taskToForm(task) {
     repeatable: !!task.repeatable,
     starts_at: task.starts_at || '',
     ends_at: task.ends_at || '',
-    params: { ...(task.params || {}) },
+    params,
   };
 }
 
@@ -2600,6 +2670,7 @@ function setTaskPrimaryTarget(form, value) {
 
 function taskFormToBody(form) {
   const params = { ...(form.params || {}) };
+  params.eligibility = normalizeTaskEligibilityConfig(params);
   if (form.type === 'volume' && params.target_volume == null) params.target_volume = Number(params.target || 0) || 0;
   if (form.type === 'positions' && params.target_positions == null) params.target_positions = Number(params.target || 0) || 0;
   if (form.type === 'combo_volume_attack') {

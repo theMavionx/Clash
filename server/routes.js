@@ -13333,6 +13333,8 @@ router.get('/tasks', auth, async (req, res) => {
   const list = tasks.getActiveTasks();
   const out = [];
   for (const t of list) {
+    const eligibility = tasks.checkTaskEligibility(req.player, t);
+    if (!eligibility.ok) continue;
     let pt = tasks.getPlayerTask(req.player.id, t.id);
     pt = await maybeRefreshTaskProgress(req.player, t, pt);
     out.push({
@@ -13350,6 +13352,7 @@ router.get('/tasks', auth, async (req, res) => {
       progress_value: pt ? pt.progress_value : 0,
       target_value: pt ? pt.target_value : 0,
       claimed_at: pt ? pt.claimed_at : null,
+      eligibility: eligibility.eligibility,
     });
   }
   res.json(out);
@@ -13378,6 +13381,11 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
   if (!task || !task.active) {
     recordTaskTelemetry('not_active', { errorReason: 'Task not active' });
     return res.status(404).json({ error: 'Task not active' });
+  }
+  const eligibility = tasks.checkTaskEligibility(req.player, task);
+  if (!eligibility.ok) {
+    recordTaskTelemetry('blocked', { errorReason: eligibility.reason, metadata: { eligibility: eligibility.eligibility, access: eligibility.access } });
+    return res.status(403).json({ error: eligibility.reason || 'Task is not available for this account', eligibility: eligibility.eligibility });
   }
 
   const existing = tasks.getPlayerTask(req.player.id, id);
@@ -13424,6 +13432,11 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     });
   };
   if (!task || !task.active) return res.status(404).json({ error: 'Task not active' });
+  const eligibility = tasks.checkTaskEligibility(req.player, task);
+  if (!eligibility.ok) {
+    recordTaskTelemetry('blocked', { errorReason: eligibility.reason, metadata: { eligibility: eligibility.eligibility, access: eligibility.access } });
+    return res.status(403).json({ error: eligibility.reason || 'Task is not available for this account', eligibility: eligibility.eligibility });
+  }
 
   let pt = tasks.getPlayerTask(req.player.id, id);
   if (!pt) {

@@ -75,6 +75,22 @@ try {
 
 const VALID_TYPES = ['volume', 'positions', 'combo_volume_attack', 'daily_trade_gold'];
 const VALID_SIDES = ['any', 'long', 'short'];
+const TASK_ELIGIBILITY_MODES = new Set([
+  'all',
+  'soldiers_only',
+  'demon_king',
+  'dragon',
+  'demon_or_dragon',
+  'demon_and_dragon',
+]);
+const TASK_ELIGIBILITY_LABELS = {
+  all: 'Everyone',
+  soldiers_only: 'Soldiers',
+  demon_king: 'Demon King',
+  dragon: 'Dragon',
+  demon_or_dragon: 'NFT Elite',
+  demon_and_dragon: 'Demon + Dragon',
+};
 const TASK_TRADE_SETTLE_DELAY_SECONDS = 0;
 const TASK_START_TRADE_GRACE_MS = Math.max(0, Number(process.env.TASK_START_TRADE_GRACE_MS || 120_000));
 const HOTSTUFF_TASK_IMPORT_MS = Math.max(5_000, Number(process.env.HOTSTUFF_TASK_IMPORT_MS || 15_000));
@@ -100,6 +116,66 @@ const FUTURES_TASK_DEXES = new Set([
 
 function parseParams(p) {
   try { return typeof p === 'string' ? JSON.parse(p) : (p || {}); } catch { return {}; }
+}
+
+function normalizeTaskEligibility(input) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const mode = TASK_ELIGIBILITY_MODES.has(String(raw.mode || 'all'))
+    ? String(raw.mode || 'all')
+    : 'all';
+  return {
+    mode,
+    label: String(raw.label || '').trim(),
+  };
+}
+
+function taskEligibilityLabel(eligibility) {
+  const cfg = normalizeTaskEligibility(eligibility);
+  return cfg.label || TASK_ELIGIBILITY_LABELS[cfg.mode] || 'Exclusive';
+}
+
+function playerNftAccess(playerId) {
+  const access = { demon_king: false, dragon: false, has_nft: false };
+  if (!playerId) return access;
+  try {
+    const rows = db.db.prepare(`
+      SELECT LOWER(collection) AS collection, COUNT(*) AS n
+      FROM player_nfts
+      WHERE player_id = ?
+        AND active = 1
+        AND LOWER(collection) IN ('demon_king', 'dragon')
+      GROUP BY LOWER(collection)
+    `).all(playerId);
+    for (const row of rows || []) {
+      if (row.collection === 'demon_king' && Number(row.n || 0) > 0) access.demon_king = true;
+      if (row.collection === 'dragon' && Number(row.n || 0) > 0) access.dragon = true;
+    }
+    access.has_nft = access.demon_king || access.dragon;
+  } catch (e) {
+    console.warn('[tasks] nft eligibility read failed:', e.message);
+  }
+  return access;
+}
+
+function checkTaskEligibility(player, task) {
+  const params = parseParams(task?.params);
+  const eligibility = normalizeTaskEligibility(params.eligibility);
+  if (eligibility.mode === 'all') return { ok: true, eligibility, access: null };
+
+  const access = playerNftAccess(player?.id);
+  let ok = false;
+  if (eligibility.mode === 'soldiers_only') ok = !access.demon_king && !access.dragon;
+  else if (eligibility.mode === 'demon_king') ok = access.demon_king;
+  else if (eligibility.mode === 'dragon') ok = access.dragon;
+  else if (eligibility.mode === 'demon_or_dragon') ok = access.demon_king || access.dragon;
+  else if (eligibility.mode === 'demon_and_dragon') ok = access.demon_king && access.dragon;
+
+  return {
+    ok,
+    eligibility,
+    access,
+    reason: ok ? '' : `Task requires ${taskEligibilityLabel(eligibility)}`,
+  };
 }
 
 const TASK_SYMBOL_ALIASES = {
@@ -1001,7 +1077,13 @@ function canClaim(playerTask, task) {
 module.exports = {
   VALID_TYPES,
   VALID_SIDES,
+  TASK_ELIGIBILITY_MODES,
+  TASK_ELIGIBILITY_LABELS,
   parseParams,
+  normalizeTaskEligibility,
+  taskEligibilityLabel,
+  playerNftAccess,
+  checkTaskEligibility,
   buildSnapshot,
   verifyTask,
   getActiveTasks,

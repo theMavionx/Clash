@@ -377,7 +377,7 @@ export function useGmx() {
   // user's balances. Returns true ONLY when both are present and differ.
   const registeredEvmWallet = registeredDexWallet(player, 'gmx', 'evm') || null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
-  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
+  const walletMismatch = false;
 
   // Lazy-load the SDK on first need. Cached via module singleton — repeat
   // calls return immediately. Failures bubble up; UI surfaces them.

@@ -113,7 +113,7 @@ export function useRisex() {
   const registeredWallet = registeredDexWallet(player, 'risex', 'evm');
   const registeredEvmWallet = isRisexAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
-  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
+  const walletMismatch = false;
 
   const token = useMemo(() => (
     (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null

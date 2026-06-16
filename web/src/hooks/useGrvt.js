@@ -337,9 +337,7 @@ export function useGrvt() {
   const oneTapSignerAddress = oneTapSigner?.address || null;
   const walletAddr = evmWallet?.address || player?.wallet || oneTapSignerAddress || null;
   const registeredEvmWallet = registeredDexWallet(player, 'grvt', 'evm') || null;
-  const walletMismatch = !!walletAddr
-    && /^0x[a-fA-F0-9]{40}$/.test(String(registeredEvmWallet || ''))
-    && String(registeredEvmWallet).toLowerCase() !== String(walletAddr).toLowerCase();
+  const walletMismatch = false;
   const hasResolvedCredentials = !!(
     credentials?.subAccountId
     && (credentials?.apiKey || (credentials?.cookie && credentials?.accountId))

@@ -1076,10 +1076,7 @@ export function useFlash() {
     return () => { cancelled = true; };
   }, [isActiveDex, walletAddr]);
 
-  const walletMismatch = useMemo(() => {
-    const solanaLike = registeredDexWallet(player, 'flash', 'solana');
-    return !!solanaLike && !!walletAddr && solanaLike !== walletAddr;
-  }, [player, walletAddr]);
+  const walletMismatch = false;
 
   useEffect(() => {
     if (!isActiveDex || !token || !walletAddr || walletMismatch) return;

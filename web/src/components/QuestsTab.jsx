@@ -138,6 +138,21 @@ function describeTask(t) {
   }
 }
 
+const QUEST_ELIGIBILITY_BADGES = {
+  soldiers_only: 'Soldiers',
+  demon_king: 'Demon King',
+  dragon: 'Dragon',
+  demon_or_dragon: 'NFT Elite',
+  demon_and_dragon: 'Demon + Dragon',
+};
+
+function questEligibilityBadge(task) {
+  const cfg = task?.eligibility || task?.params?.eligibility || {};
+  const mode = String(cfg.mode || 'all');
+  if (mode === 'all') return '';
+  return String(cfg.label || '').trim() || QUEST_ELIGIBILITY_BADGES[mode] || 'Exclusive';
+}
+
 function QuestCard({ task, onStart, onClaim, loading }) {
   const pct = task.target_value > 0 ? Math.min(1, task.progress_value / task.target_value) : 0;
   const isDone = task.target_value > 0 && task.progress_value >= task.target_value;
@@ -145,13 +160,17 @@ function QuestCard({ task, onStart, onClaim, loading }) {
   const autoRestarted = isClaimed && task.repeatable && Number(task.cooldown_hours || 0) <= 0;
   const canReClaim = isClaimed && task.repeatable && !autoRestarted;
   const showClaimed = isClaimed && !task.repeatable;
+  const exclusiveBadge = questEligibilityBadge(task);
 
   return (
     <div style={S.card}>
       <div style={S.cardHeader}>
         <span style={S.cardTitle}>{task.title}</span>
-        {showClaimed && <span style={S.badgeDone}>Claimed</span>}
-        {task.repeatable && <span style={S.badgeRepeat}>{autoRestarted ? 'Active again' : 'Repeatable'}</span>}
+        <span style={S.badgeRow}>
+          {exclusiveBadge && <span style={S.badgeExclusive}>{exclusiveBadge}</span>}
+          {showClaimed && <span style={S.badgeDone}>Claimed</span>}
+          {task.repeatable && <span style={S.badgeRepeat}>{autoRestarted ? 'Active again' : 'Repeatable'}</span>}
+        </span>
       </div>
       {task.description && <div style={S.cardDesc}>{task.description}</div>}
       <div style={S.cardAuto}>{describeTask(task)}</div>
@@ -405,6 +424,8 @@ const S = {
     fontWeight: 800, fontSize: 12, border: '2px solid #a3906a', borderRadius: 8, cursor: 'pointer',
   },
   doneLabel: { fontSize: 18, fontWeight: 900, color: '#6ab344' },
+  badgeRow: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' },
+  badgeExclusive: { fontSize: 10, fontWeight: 900, color: '#fff', background: 'linear-gradient(180deg, #8b5cf6 0%, #5b21b6 100%)', padding: '2px 6px', borderRadius: 4, border: '1px solid #4c1d95', textShadow: '1px 1px 0 rgba(0,0,0,0.25)' },
   badgeDone: { fontSize: 10, fontWeight: 800, color: '#4d7a2e', background: '#e8f5d8', padding: '2px 6px', borderRadius: 4, border: '1px solid #6ab344' },
   badgeRepeat: { fontSize: 10, fontWeight: 800, color: '#5C3A21', background: '#fff5cc', padding: '2px 6px', borderRadius: 4, border: '1px solid #e8b830' },
   empty: { textAlign: 'center', padding: 40, color: '#8a7252' },
