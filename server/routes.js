@@ -19288,12 +19288,14 @@ try {
 }
 
 // Proxy all bot & strategy requests to the bot backend (port 8080)
+const BOT_URL = process.env.CLASH_BOT_URL || 'http://62.72.35.202:8080';
 async function proxyToBot(req, res) {
   try {
-    const targetUrl = `http://127.0.0.1:8080${req.originalUrl}`;
+    const targetUrl = `${BOT_URL}${req.originalUrl}`;
+    const targetHost = BOT_URL.replace(/^https?:\/\//, '');
     const headers = {
       ...req.headers,
-      'host': '127.0.0.1:8080',
+      'host': targetHost,
       'x-tenant-id': req.player?.id || '',
     };
     delete headers.connection;

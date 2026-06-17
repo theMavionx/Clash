@@ -5151,7 +5151,8 @@ botWss.on('connection', (clientWs, upgradeReq) => {
     }
   }
 
-  const botWs = new WebSocket(`ws://127.0.0.1:8080/ws`, {
+  const BOT_WS_URL = process.env.CLASH_BOT_WS_URL || 'ws://62.72.35.202:8080';
+  const botWs = new WebSocket(`${BOT_WS_URL}/ws`, {
     headers: {
       'X-Tenant-Id': tenantId,
     }
