@@ -18338,7 +18338,7 @@ function normalizeTournamentMegaConfig(input, { strict = false } = {}) {
   raw = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const enabled = parseBool(raw.enabled ?? raw.is_mega ?? raw.mega);
   const template = String(raw.template || '').trim().toLowerCase();
-  const sourceSectors = Array.isArray(raw.sectors) && raw.sectors.length
+  const sourceSectors = Array.isArray(raw.sectors)
     ? raw.sectors
     : (enabled && template === 'abc'
       ? [
@@ -18361,7 +18361,6 @@ function normalizeTournamentMegaConfig(input, { strict = false } = {}) {
     seen.add(id);
     sectors.push(sector);
   }
-  if (strict && enabled && sectors.length === 0) throw new Error('mega tournament needs at least one sector');
   return {
     enabled,
     template: template || 'whale_dolphin_shrimp',
@@ -18636,6 +18635,15 @@ function buildMegaTournamentState(rows, t) {
   const config = normalizeTournamentMegaConfig(t?.mega_config);
   if (!config.enabled) return null;
   const rootRewardConfig = normalizeTournamentRewardConfig(t?.reward_config || {});
+  if (!config.sectors.length) {
+    return {
+      enabled: true,
+      sectors: [],
+      sectorless: true,
+      reward_config: rootRewardConfig,
+      summary: tournamentLeaderboardSummary(t?.id),
+    };
+  }
   const sectors = config.sectors.map((sector, index) => ({
     ...sector,
     rank: index + 1,
@@ -19703,12 +19711,14 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     applyTournamentDexBreakdowns(allRows, t, dexBreakdowns);
     applyTournamentDailyDexBreakdowns(allRows, t, dailyDexBreakdowns);
     megaState = buildMegaTournamentState(allRows, t);
-    const ordered = [];
-    for (const sector of megaState?.sectors || []) {
-      const ids = new Set(sector.player_ids || []);
-      ordered.push(...allRows.filter(row => ids.has(row.player_id)));
+    if ((megaState?.sectors || []).length > 0) {
+      const ordered = [];
+      for (const sector of megaState.sectors || []) {
+        const ids = new Set(sector.player_ids || []);
+        ordered.push(...allRows.filter(row => ids.has(row.player_id)));
+      }
+      rows = ordered.slice(0, limit);
     }
-    rows = ordered.slice(0, limit);
   }
   if (mode === 'dex_vs_dex') {
     teamState = buildTournamentTeamState(rows, t, prize);

@@ -1365,6 +1365,19 @@ function TournamentEligibilityStep({ form, update }) {
   function setMegaTemplate(template) {
     update({ mega_config: defaultMegaConfig(true, template) });
   }
+  function setMegaType(value) {
+    if (value === 'standard') {
+      updateMega({ enabled: false });
+      return;
+    }
+    if (value === 'mega_flat') {
+      update({ mega_config: normalizeMegaConfig({ ...mega, enabled: true, sectors: [] }) });
+      return;
+    }
+    const next = mega.sectors?.length ? normalizeMegaConfig({ ...mega, enabled: true }) : defaultMegaConfig(true, mega.template || 'whale_dolphin_shrimp');
+    update({ mega_config: next });
+  }
+  const megaType = !mega.enabled ? 'standard' : (mega.sectors?.length ? 'mega_sectors' : 'mega_flat');
   return (
     <div className="admin-grid">
       <div className="admin-card">
@@ -1398,21 +1411,27 @@ function TournamentEligibilityStep({ form, update }) {
           <div className="admin-form-grid three">
             <label className="admin-field">
               <span className="admin-label">Tournament type</span>
-              <select className="admin-select" value={mega.enabled ? 'mega' : 'standard'} onChange={(e) => updateMega({ enabled: e.target.value === 'mega' })}>
+              <select className="admin-select" value={megaType} onChange={(e) => setMegaType(e.target.value)}>
                 <option value="standard">Standard</option>
-                <option value="mega">Mega with sectors</option>
+                <option value="mega_flat">Mega without sectors</option>
+                <option value="mega_sectors">Mega with sectors</option>
               </select>
             </label>
             <label className="admin-field">
               <span className="admin-label">Sector template</span>
-              <select className="admin-select" value={mega.template || 'whale_dolphin_shrimp'} onChange={(e) => setMegaTemplate(e.target.value)} disabled={!mega.enabled}>
+              <select className="admin-select" value={mega.template || 'whale_dolphin_shrimp'} onChange={(e) => setMegaTemplate(e.target.value)} disabled={megaType !== 'mega_sectors'}>
                 <option value="whale_dolphin_shrimp">Whale / Dolphin / Shrimp</option>
                 <option value="abc">Sector A / B / C</option>
               </select>
             </label>
-            <div className="admin-help">Players can join normally; they appear in the highest sector whose TH, trade, and volume rules they satisfy.</div>
+            <div className="admin-help">{megaType === 'mega_flat' ? 'Players share one leaderboard, but mega reward schedules and lucky raider rules still apply.' : 'Players can join normally; they appear in the highest sector whose TH, trade, and volume rules they satisfy.'}</div>
           </div>
-          {mega.enabled && <MegaSectorEditor mega={mega} updateMega={updateMega} />}
+          {megaType === 'mega_sectors' && <MegaSectorEditor mega={mega} updateMega={updateMega} />}
+          {megaType === 'mega_flat' && (
+            <div className="admin-help">
+              This mega tournament has no sectors. Use the Reward Schedule step for daily pools, final prizes, and Lucky Daily Raider settings.
+            </div>
+          )}
         </div>
       </div>
       {form.mode === 'dex_vs_dex' && (

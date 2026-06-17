@@ -106,7 +106,7 @@ export function normalizeMegaConfig(raw = {}) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const template = source.template || 'whale_dolphin_shrimp';
   const fallback = defaultMegaConfig(!!source.enabled, template);
-  const sectors = Array.isArray(source.sectors) && source.sectors.length ? source.sectors : fallback.sectors;
+  const sectors = Array.isArray(source.sectors) ? source.sectors : fallback.sectors;
   return {
     enabled: !!source.enabled,
     template,
@@ -371,7 +371,6 @@ export function validateTournamentStep(step, form) {
     }
     const mega = normalizeMegaConfig(form.mega_config || {});
     if (mega.enabled) {
-      if (!mega.sectors.length) errors.push('Mega tournament needs at least one sector.');
       for (const sector of mega.sectors) {
         if (sector.dex_scope === 'custom' && !sector.dexes.length) {
           errors.push(`Mega sector "${sector.name}" needs at least one custom DEX.`);
