@@ -853,6 +853,7 @@ try {
       prize_currency TEXT NOT NULL DEFAULT 'USD',
       prize_tiers    TEXT NOT NULL DEFAULT '[]',
       mega_config    TEXT NOT NULL DEFAULT '{}',
+      reward_config  TEXT NOT NULL DEFAULT '{}',
       rewards_in_cop INTEGER NOT NULL DEFAULT 0,
       seeker_only  INTEGER NOT NULL DEFAULT 0,
       status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
@@ -926,6 +927,8 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_currency TEXT NOT NULL DEFAULT 'USD'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_tiers TEXT NOT NULL DEFAULT '[]'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN mega_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN reward_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
+  try { db.exec(`UPDATE tournaments SET reward_config = '{}' WHERE reward_config IS NULL OR reward_config = ''`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN rewards_in_cop INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_gold_boost REAL NOT NULL DEFAULT 1.0`); } catch {}
@@ -947,7 +950,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -984,6 +987,7 @@ try {
             prize_currency TEXT NOT NULL DEFAULT 'USD',
             prize_tiers    TEXT NOT NULL DEFAULT '[]',
             mega_config    TEXT NOT NULL DEFAULT '{}',
+            reward_config  TEXT NOT NULL DEFAULT '{}',
             rewards_in_cop INTEGER NOT NULL DEFAULT 0,
             seeker_only  INTEGER NOT NULL DEFAULT 0,
             status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
@@ -996,7 +1000,7 @@ try {
             id, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost,
             shield_hours, freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
             scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
-            prize_currency, prize_tiers, mega_config, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
+            prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
             id, name, description,
@@ -1027,6 +1031,7 @@ try {
             COALESCE(prize_currency, 'USD'),
             COALESCE(prize_tiers, '[]'),
             COALESCE(mega_config, '{}'),
+            COALESCE(reward_config, '{}'),
             COALESCE(rewards_in_cop, 0),
             COALESCE(seeker_only, 0),
             CASE WHEN status IN ('active','ended','draft') THEN status ELSE 'active' END,
@@ -1069,6 +1074,8 @@ try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_growth_pct REAL NOT
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_overrides TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_enabled_at TEXT`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN mega_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN reward_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
+try { db.exec(`UPDATE tournaments SET reward_config = '{}' WHERE reward_config IS NULL OR reward_config = ''`); } catch {}
 try {
   db.exec(`
     UPDATE tournaments
@@ -1188,6 +1195,35 @@ try {
       details_json  TEXT NOT NULL DEFAULT '{}',
       PRIMARY KEY (tournament_id, day_utc)
     );
+
+    CREATE TABLE IF NOT EXISTS tournament_lucky_raider_runs (
+      tournament_id    INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      day_utc          TEXT NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'pending',
+      seed             TEXT NOT NULL DEFAULT '',
+      winner_player_id TEXT,
+      details_json     TEXT NOT NULL DEFAULT '{}',
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (tournament_id, day_utc)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tlr_runs_winner
+      ON tournament_lucky_raider_runs(winner_player_id, tournament_id);
+
+    CREATE TABLE IF NOT EXISTS tournament_lucky_raider_entries (
+      tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      day_utc       TEXT NOT NULL,
+      player_id     TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      volume_usd    REAL NOT NULL DEFAULT 0,
+      tickets       INTEGER NOT NULL DEFAULT 0,
+      eligible      INTEGER NOT NULL DEFAULT 0,
+      reason        TEXT,
+      details_json  TEXT NOT NULL DEFAULT '{}',
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (tournament_id, day_utc, player_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tlr_entries_player
+      ON tournament_lucky_raider_entries(player_id, tournament_id, day_utc);
   `);
 } catch (e) { console.warn('[db] tournament daily pool migration:', e.message); }
 
@@ -2465,6 +2501,27 @@ const stmts = {
       (tournament_id, day_utc, player_id, category, points, raw_value)
     VALUES (?, ?, ?, ?, ?, ?)
   `),
+  getTournamentLuckyRaiderRun: db.prepare(`
+    SELECT * FROM tournament_lucky_raider_runs
+    WHERE tournament_id = ? AND day_utc = ?
+  `),
+  upsertTournamentLuckyRaiderEntry: db.prepare(`
+    INSERT INTO tournament_lucky_raider_entries (
+      tournament_id, day_utc, player_id, volume_usd, tickets, eligible, reason, details_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(tournament_id, day_utc, player_id) DO UPDATE SET
+      volume_usd = excluded.volume_usd,
+      tickets = excluded.tickets,
+      eligible = excluded.eligible,
+      reason = excluded.reason,
+      details_json = excluded.details_json,
+      updated_at = datetime('now')
+  `),
+  insertTournamentLuckyRaiderRun: db.prepare(`
+    INSERT OR IGNORE INTO tournament_lucky_raider_runs (
+      tournament_id, day_utc, status, seed, winner_player_id, details_json
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `),
   addTournamentAwardedPoints: db.prepare(`
     UPDATE tournament_participants
        SET awarded_points = awarded_points + ?,
@@ -2714,8 +2771,56 @@ function utcDayFromSql(value) {
   return utcDayFromMs(sqlDateMs(value) ?? Date.now());
 }
 
+function parseTournamentRewardConfig(value) {
+  let raw = value;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) raw = {};
+    else {
+      try { raw = JSON.parse(text); } catch { raw = {}; }
+    }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) raw = {};
+  const luckyRaw = raw.lucky_daily_raider && typeof raw.lucky_daily_raider === 'object'
+    ? raw.lucky_daily_raider
+    : {};
+  const collections = Array.isArray(luckyRaw.required_collections)
+    ? luckyRaw.required_collections
+    : [];
+  const requiredCollections = collections
+    .map((v) => String(v || '').trim().toLowerCase())
+    .filter((v) => ['demon_king', 'dragon'].includes(v));
+  return {
+    ...raw,
+    daily_pools: Array.isArray(raw.daily_pools) ? raw.daily_pools : [],
+    final_pools: Array.isArray(raw.final_pools) ? raw.final_pools : [],
+    lucky_daily_raider: {
+      enabled: !!luckyRaw.enabled,
+      label: String(luckyRaw.label || 'Lucky Daily Raider').slice(0, 80),
+      volume_per_ticket_usd: Math.max(1, Math.min(10_000_000, Number(luckyRaw.volume_per_ticket_usd || 1000) || 1000)),
+      max_tickets: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20))),
+      require_nft: !!luckyRaw.require_nft,
+      required_collections: requiredCollections.length ? requiredCollections : ['demon_king', 'dragon'],
+      rewards: Array.isArray(luckyRaw.rewards) ? luckyRaw.rewards : [],
+      draw_time_utc: String(luckyRaw.draw_time_utc || '00:05').slice(0, 16),
+    },
+  };
+}
+
+function tournamentLuckyRaiderConfig(t) {
+  return parseTournamentRewardConfig(t?.reward_config).lucky_daily_raider;
+}
+
+function tournamentHasLuckyRaider(t) {
+  return !!tournamentLuckyRaiderConfig(t).enabled;
+}
+
 function isDailyPoolTournament(t) {
   return String(t?.scoring_mode || 'live').toLowerCase() === 'daily_pool';
+}
+
+function tournamentNeedsDailyActivity(t) {
+  return isDailyPoolTournament(t) || tournamentHasLuckyRaider(t);
 }
 
 function dailyPoolWeights(t) {
@@ -2730,7 +2835,7 @@ function dailyPoolWeights(t) {
 }
 
 function recordTournamentDailyActivity(t, playerId, metrics = {}, opts = {}) {
-  if (!playerId || !isDailyPoolTournament(t)) return false;
+  if (!playerId || !tournamentNeedsDailyActivity(t)) return false;
   const eventId = String(opts.eventId || opts.event_id || '').trim();
   if (!eventId) return false;
   const source = String(opts.source || 'event').trim() || 'event';
@@ -2988,25 +3093,203 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
   })();
 }
 
+function playerHasTournamentRewardNft(playerId, collections = ['demon_king', 'dragon']) {
+  const allowed = (Array.isArray(collections) ? collections : [])
+    .map((v) => String(v || '').trim().toLowerCase())
+    .filter((v) => ['demon_king', 'dragon'].includes(v));
+  const list = allowed.length ? allowed : ['demon_king', 'dragon'];
+  const placeholders = list.map(() => '?').join(',');
+  const row = db.prepare(`
+    SELECT 1 AS ok
+      FROM player_nfts
+     WHERE player_id = ?
+       AND active = 1
+       AND collection IN (${placeholders})
+     LIMIT 1
+  `).get(playerId, ...list);
+  return !!row;
+}
+
+function weightedLuckyRaiderWinner(entries, seed) {
+  const eligible = (entries || []).filter((entry) => Number(entry.tickets || 0) > 0 && Number(entry.eligible || 0) === 1);
+  const totalTickets = eligible.reduce((sum, entry) => sum + Math.max(0, Math.floor(Number(entry.tickets || 0))), 0);
+  if (totalTickets <= 0) return { winner: null, totalTickets: 0, pick: null };
+  const hex = crypto.createHash('sha256').update(String(seed)).digest('hex');
+  let cursor = Number(BigInt(`0x${hex.slice(0, 15)}`) % BigInt(totalTickets));
+  const pick = cursor;
+  for (const entry of eligible) {
+    const tickets = Math.max(0, Math.floor(Number(entry.tickets || 0)));
+    if (cursor < tickets) return { winner: entry, totalTickets, pick };
+    cursor -= tickets;
+  }
+  return { winner: eligible[eligible.length - 1] || null, totalTickets, pick };
+}
+
+function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
+  const tid = Number(tournamentId);
+  const day = normalizeDailyPoolDay(dayInput);
+  if (!Number.isFinite(tid) || tid <= 0) return { ok: false, error: 'invalid tournament id' };
+  return db.transaction(() => {
+    const t = db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+    if (!t) return { ok: false, error: 'tournament not found' };
+    const cfg = tournamentLuckyRaiderConfig(t);
+    if (!cfg.enabled) return { ok: true, skipped: true, reason: 'lucky_raider_disabled', tournament_id: tid, day_utc: day };
+    const existing = stmts.getTournamentLuckyRaiderRun.get(tid, day);
+    if (existing && !options.force) {
+      let details = {};
+      try { details = JSON.parse(existing.details_json || '{}'); } catch {}
+      return {
+        ok: true,
+        skipped: true,
+        alreadyProcessed: true,
+        tournament_id: tid,
+        day_utc: day,
+        status: existing.status,
+        winner_player_id: existing.winner_player_id || null,
+        details,
+      };
+    }
+    if (existing && options.force) {
+      db.prepare('DELETE FROM tournament_lucky_raider_runs WHERE tournament_id = ? AND day_utc = ?').run(tid, day);
+      db.prepare('DELETE FROM tournament_lucky_raider_entries WHERE tournament_id = ? AND day_utc = ?').run(tid, day);
+    }
+
+    const rows = db.prepare(`
+      SELECT tp.player_id,
+             p.name,
+             COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
+             COALESCE(SUM(a.trades_count), 0) AS trades_count
+        FROM tournament_participants tp
+        LEFT JOIN players p ON p.id = tp.player_id
+        LEFT JOIN tournament_daily_activity a
+          ON a.tournament_id = tp.tournament_id
+         AND a.player_id = tp.player_id
+         AND a.day_utc = ?
+       WHERE tp.tournament_id = ?
+         AND tp.left_at IS NULL
+       GROUP BY tp.player_id
+    `).all(day, tid);
+
+    const entries = [];
+    for (const row of rows) {
+      const volume = Math.max(0, safeUsd(row.volume_usd, 1_000_000_000));
+      const ticketsRaw = Math.floor(volume / cfg.volume_per_ticket_usd);
+      const tickets = Math.max(0, Math.min(cfg.max_tickets, ticketsRaw));
+      let eligible = tickets > 0 ? 1 : 0;
+      let reason = tickets > 0 ? 'eligible' : 'volume_below_ticket';
+      let hasNft = false;
+      if (cfg.require_nft) {
+        hasNft = playerHasTournamentRewardNft(row.player_id, cfg.required_collections);
+        if (!hasNft) {
+          eligible = 0;
+          reason = 'missing_required_nft';
+        }
+      }
+      const details = {
+        name: row.name || '',
+        trades_count: Number(row.trades_count || 0) || 0,
+        volume_per_ticket_usd: cfg.volume_per_ticket_usd,
+        max_tickets: cfg.max_tickets,
+        require_nft: cfg.require_nft,
+        required_collections: cfg.required_collections,
+        has_required_nft: cfg.require_nft ? hasNft : null,
+        uncapped_tickets: ticketsRaw,
+      };
+      const entry = {
+        player_id: row.player_id,
+        name: row.name || '',
+        volume_usd: Number(volume.toFixed(2)),
+        tickets,
+        eligible,
+        reason,
+        details,
+      };
+      stmts.upsertTournamentLuckyRaiderEntry.run(
+        tid,
+        day,
+        entry.player_id,
+        entry.volume_usd,
+        entry.tickets,
+        entry.eligible,
+        entry.reason,
+        JSON.stringify(entry.details)
+      );
+      entries.push(entry);
+    }
+
+    const configHash = crypto.createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 16);
+    const seed = `${tid}:${day}:${configHash}`;
+    const pick = weightedLuckyRaiderWinner(entries, seed);
+    const winner = pick.winner || null;
+    const details = {
+      config: cfg,
+      config_hash: configHash,
+      players: rows.length,
+      eligible_players: entries.filter((entry) => Number(entry.eligible || 0) === 1 && Number(entry.tickets || 0) > 0).length,
+      total_tickets: pick.totalTickets,
+      pick: pick.pick,
+      entries: entries.map((entry) => ({
+        player_id: entry.player_id,
+        name: entry.name,
+        volume_usd: entry.volume_usd,
+        tickets: entry.tickets,
+        eligible: !!entry.eligible,
+        reason: entry.reason,
+      })),
+    };
+    const status = winner ? 'completed' : 'no_entries';
+    stmts.insertTournamentLuckyRaiderRun.run(
+      tid,
+      day,
+      status,
+      seed,
+      winner?.player_id || null,
+      JSON.stringify(details)
+    );
+    return {
+      ok: true,
+      tournament_id: tid,
+      day_utc: day,
+      status,
+      winner_player_id: winner?.player_id || null,
+      winner_name: winner?.name || null,
+      total_tickets: pick.totalTickets,
+      eligible_players: details.eligible_players,
+      entries: entries.length,
+      details,
+    };
+  })();
+}
+
 function awardPendingTournamentDailyPools(options = {}) {
   const now = options.now instanceof Date ? options.now : new Date();
   const maxDays = Math.max(1, Math.min(60, Number(options.maxDays || 14)));
   const tournaments = db.prepare(`
     SELECT *
       FROM tournaments
-     WHERE COALESCE(scoring_mode, 'live') = 'daily_pool'
-       AND status IN ('active','ended')
+     WHERE status IN ('active','ended')
   `).all();
   const results = [];
   for (const t of tournaments) {
+    const needsDailyPool = isDailyPoolTournament(t);
+    const needsLucky = tournamentHasLuckyRaider(t);
+    if (!needsDailyPool && !needsLucky) continue;
     const first = tournamentFirstDailyPoolDay(t);
     const last = tournamentLastClosedDailyPoolDay(t, now);
     if (first > last) continue;
     let day = first;
     let guard = 0;
     while (day <= last && guard < maxDays) {
-      const run = stmts.getTournamentDailyRun.get(t.id, day);
-      if (!run) results.push(awardTournamentDailyPoolDay(t.id, day));
+      const dayResults = [];
+      if (needsDailyPool) {
+        const run = stmts.getTournamentDailyRun.get(t.id, day);
+        if (!run) dayResults.push(awardTournamentDailyPoolDay(t.id, day));
+      }
+      if (needsLucky) {
+        const luckyRun = stmts.getTournamentLuckyRaiderRun.get(t.id, day);
+        if (!luckyRun) dayResults.push(awardTournamentLuckyRaiderDay(t.id, day));
+      }
+      results.push(...dayResults.filter((result) => result && !result.skipped));
       day = addUtcDays(day, 1);
       guard += 1;
     }
@@ -5993,6 +6276,7 @@ module.exports = {
   recordTournamentTrade,
   recordTournamentTradeRows,
   awardTournamentDailyPoolDay,
+  awardTournamentLuckyRaiderDay,
   awardTournamentFinalDailyPoolDay,
   awardPendingTournamentDailyPools,
   seedTournamentDailyPoolBaseline,

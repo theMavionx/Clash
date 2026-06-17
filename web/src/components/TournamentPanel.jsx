@@ -221,6 +221,58 @@ function dexBreakdownSummary(row) {
   return list.slice(0, 3).map((item) => `${item.label || DEX_LABELS[item.dex] || item.dex}: ${fmtUsdWhole(item.volume_usd)}`).join(' · ');
 }
 
+function rewardScheduleHasContent(schedule) {
+  return !!(
+    (schedule?.daily_pools || []).length
+    || (schedule?.final_pools || []).length
+    || schedule?.lucky_daily_raider?.enabled
+  );
+}
+
+function rewardPoolLine(pool, fallbackCurrency = 'USD') {
+  const rewards = rewardPoolSummary(pool?.rewards || [], fallbackCurrency);
+  const label = pool?.label || 'Reward pool';
+  const top = Number(pool?.top_n || 0) > 0 ? `top ${pool.top_n}` : '';
+  return [label, top, rewards.join(' + ')].filter(Boolean).join(' В· ');
+}
+
+function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
+  if (!rewardScheduleHasContent(schedule)) return null;
+  const lucky = schedule?.lucky_daily_raider || {};
+  const required = (lucky.required_collections || [])
+    .map((item) => item === 'demon_king' ? 'Demon King' : item === 'dragon' ? 'Dragon' : item)
+    .join(' or ');
+  const luckyRewards = rewardPoolSummary(lucky.rewards || [], currency);
+  return (
+    <div style={S.rewardScheduleCard}>
+      <div style={S.rewardScheduleHeader}>
+        <strong>Rewards</strong>
+        {sectorName && <span>{sectorName}</span>}
+      </div>
+      {(schedule.daily_pools || []).filter((pool) => pool.enabled !== false).map((pool, idx) => (
+        <div key={`daily-${idx}`} style={S.rewardScheduleLine}>Daily: {rewardPoolLine(pool, currency)}</div>
+      ))}
+      {(schedule.final_pools || []).filter((pool) => pool.enabled !== false).map((pool, idx) => (
+        <div key={`final-${idx}`} style={S.rewardScheduleLine}>Final: {rewardPoolLine(pool, currency)}</div>
+      ))}
+      {lucky.enabled && (
+        <div style={S.rewardScheduleLucky}>
+          <div><strong>{lucky.label || 'Lucky Daily Raider'}</strong>: {fmtUsdWhole(lucky.volume_per_ticket_usd)} volume = 1 ticket, max {fmt(lucky.max_tickets)}</div>
+          {lucky.require_nft && <div>Requires {required || 'Dragon or Demon King'}</div>}
+          {lucky.my_tickets !== undefined && (
+            <div>
+              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume В· {fmt(lucky.my_tickets || 0)}/{fmt(lucky.max_tickets || 0)} tickets
+              {lucky.my_reason && lucky.my_reason !== 'eligible' ? ` В· ${String(lucky.my_reason).replace(/_/g, ' ')}` : ''}
+            </div>
+          )}
+          {luckyRewards.length > 0 && <div>Prize: {luckyRewards.join(' + ')}</div>}
+          {lucky.last_winner?.name && <div>Last winner: {lucky.last_winner.name}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TournamentPanel({ onClose }) {
   // Tab gate: 'active' (default) or 'history'. History shows ended
   // tournaments + their final leaderboards so a finished cup doesn't just
@@ -314,6 +366,16 @@ function TournamentPanel({ onClose }) {
   const megaSectors = useMemo(() => (
     isMegaTournament(t) && Array.isArray(board?.mega?.sectors) ? board.mega.sectors : []
   ), [board?.mega?.sectors, t]);
+  const activeRewardSchedule = useMemo(() => {
+    if (!t) return null;
+    if (isMegaTournament(t) && myBoardRow?.mega_sector_id) {
+      const sector = megaSectors.find((item) => item.id === myBoardRow.mega_sector_id);
+      if (sector?.reward_config && rewardScheduleHasContent(sector.reward_config)) {
+        return { schedule: sector.reward_config, sectorName: sector.name };
+      }
+    }
+    return { schedule: board?.reward_schedule || t.reward_schedule || t.reward_config || null, sectorName: null };
+  }, [board?.reward_schedule, megaSectors, myBoardRow?.mega_sector_id, t]);
   useEffect(() => {
     const stored = String(myStats?.reward_wallet_evm || '').trim();
     if (!stored) {
@@ -551,6 +613,14 @@ function TournamentPanel({ onClose }) {
                     <span>{fmtUsd(prizeProgress.nextVolume)} target</span>
                   </div>
                 </div>
+              )}
+
+              {activeRewardSchedule?.schedule && (
+                <RewardScheduleCard
+                  schedule={activeRewardSchedule.schedule}
+                  sectorName={activeRewardSchedule.sectorName}
+                  currency={t.prize_currency || 'USD'}
+                />
               )}
 
               {isMegaTournament(t) && megaSectors.length > 0 && (
@@ -1084,6 +1154,25 @@ const S = {
   prizeProgressMeta: {
     display: 'flex', justifyContent: 'space-between', gap: 8,
     fontSize: 10, fontWeight: 800, color: '#7c5a3a',
+  },
+  rewardScheduleCard: {
+    background: '#fdf8e7', border: '3px solid #d4c8b0', borderRadius: 14,
+    padding: 10, display: 'flex', flexDirection: 'column', gap: 6,
+  },
+  rewardScheduleHeader: {
+    display: 'flex', justifyContent: 'space-between', gap: 8,
+    fontSize: 12, fontWeight: 900, color: '#5C3A21',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  rewardScheduleLine: {
+    fontSize: 11, fontWeight: 900, color: '#5C3A21',
+    background: '#f7edd0', border: '2px solid #d4c8b0', borderRadius: 8,
+    padding: '5px 7px',
+  },
+  rewardScheduleLucky: {
+    fontSize: 10, fontWeight: 800, color: '#7c5a3a',
+    background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 8,
+    padding: '6px 7px', display: 'flex', flexDirection: 'column', gap: 3,
   },
   sectorCard: {
     background: '#fdf8e7', border: '3px solid #d4c8b0', borderRadius: 14,

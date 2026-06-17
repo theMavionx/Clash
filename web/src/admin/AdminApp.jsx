@@ -12,6 +12,8 @@ import {
   formToTournamentBody,
   normalizeMegaConfig,
   normalizeReward,
+  normalizeRewardConfig,
+  rewardConfigPreset5000,
   rewardDefaults,
   tournamentToForm,
   validateTournamentStep,
@@ -163,10 +165,23 @@ function normalizeTaskEligibilityConfig(params) {
 
 function taskEligibilityAdminLabel(taskOrParams) {
   const params = taskOrParams?.params ? taskOrParams.params : taskOrParams;
-  const cfg = normalizeTaskEligibilityConfig(params || {});
+  const source = params?.eligibility ? params : { eligibility: taskOrParams?.eligibility };
+  const cfg = normalizeTaskEligibilityConfig(source || {});
   if (cfg.mode === 'all') return '';
   const option = TASK_ELIGIBILITY_OPTIONS.find((item) => item.id === cfg.mode);
   return cfg.label || option?.badge || 'Exclusive';
+}
+
+function applyAdminTableLabels(root = document) {
+  root.querySelectorAll?.('.admin-table').forEach((table) => {
+    const headers = Array.from(table.querySelectorAll('thead th')).map((cell) => cell.textContent.trim());
+    if (!headers.length) return;
+    table.querySelectorAll('tbody tr').forEach((row) => {
+      Array.from(row.children).forEach((cell, index) => {
+        if (cell.tagName === 'TD') cell.setAttribute('data-label', headers[index] || '');
+      });
+    });
+  });
 }
 
 export default function AdminApp() {
@@ -259,6 +274,26 @@ export default function AdminApp() {
     }, 15000);
     return () => clearInterval(id);
   }, [active, authed]);
+
+  useEffect(() => {
+    if (!authed || typeof document === 'undefined' || typeof MutationObserver === 'undefined') return undefined;
+    const root = document.getElementById('admin-root') || document;
+    let frame = 0;
+    const schedule = () => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        applyAdminTableLabels(root);
+      });
+    };
+    schedule();
+    const observer = new MutationObserver(schedule);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [authed]);
 
   if (!authed) {
     return (
@@ -431,7 +466,8 @@ function MiniList({ rows }) {
 function PlayersPanel({ players, reload }) {
   const [search, setSearch] = useState('');
   const [dex, setDex] = useState('all');
-  const [selected, setSelected] = useState(null);
+  const [profileTarget, setProfileTarget] = useState(null);
+  const [selectedTools, setSelectedTools] = useState(null);
   const filtered = useMemo(() => players.filter((p) => {
     const hay = `${p.name || ''} ${p.id || ''} ${p.wallet || ''}`.toLowerCase();
     return (!search || hay.includes(search.toLowerCase())) && (dex === 'all' || (p.dex || '') === dex);
@@ -451,7 +487,7 @@ function PlayersPanel({ players, reload }) {
         <div className="admin-card-head">
           <div>
             <div className="admin-card-title">Players</div>
-            <div className="admin-card-sub">Search by name, id, or wallet. Row actions open a focused operations drawer.</div>
+            <div className="admin-card-sub">Search by name, id, or wallet. Open a read-first 360 profile; destructive actions stay in Tools.</div>
           </div>
         </div>
         <div className="admin-card-body">
@@ -475,18 +511,23 @@ function PlayersPanel({ players, reload }) {
               <tbody>
                 {filtered.map((p) => (
                   <tr key={p.id || p.name}>
-                    <td><strong>{p.name}</strong><div className="admin-card-sub admin-mono">{p.id}</div></td>
-                    <td><DexBadge dex={p.dex} /></td>
-                    <td className="admin-mono">{short(p.wallet)}</td>
-                    <td className="admin-mono">{fmtTime(p.created_at)}</td>
-                    <td>{p.trophies}</td>
-                    <td>{p.level}</td>
-                    <td style={{ color: 'var(--admin-gold)' }}>{num(p.gold)}</td>
-                    <td style={{ color: 'var(--admin-wood)' }}>{num(p.wood)}</td>
-                    <td style={{ color: '#b8c4d8' }}>{num(p.ore)}</td>
-                    <td>{fmtUsd(p.trading_volume || 0)}</td>
-                    <td><PresenceBadge player={p} /></td>
-                    <td><button className="admin-btn" onClick={() => setSelected(p)}>Tools</button></td>
+                    <td data-label="Name"><strong>{p.name}</strong><div className="admin-card-sub admin-mono">{p.id}</div></td>
+                    <td data-label="DEX"><DexBadge dex={p.dex} /></td>
+                    <td data-label="Wallet" className="admin-mono">{short(p.wallet)}</td>
+                    <td data-label="Created" className="admin-mono">{fmtTime(p.created_at)}</td>
+                    <td data-label="Trophies">{p.trophies}</td>
+                    <td data-label="Level">{p.level}</td>
+                    <td data-label="Gold" style={{ color: 'var(--admin-gold)' }}>{num(p.gold)}</td>
+                    <td data-label="Wood" style={{ color: 'var(--admin-wood)' }}>{num(p.wood)}</td>
+                    <td data-label="Ore" style={{ color: '#b8c4d8' }}>{num(p.ore)}</td>
+                    <td data-label="Trade Vol">{fmtUsd(p.trading_volume || 0)}</td>
+                    <td data-label="Status"><PresenceBadge player={p} /></td>
+                    <td data-label="Actions">
+                      <div className="admin-filter-row">
+                        <button className="admin-btn primary" onClick={() => setProfileTarget(p)}>Open</button>
+                        <button className="admin-btn" onClick={() => setSelectedTools(p)}>Tools</button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -494,7 +535,558 @@ function PlayersPanel({ players, reload }) {
           </div>
         </div>
       </div>
-      {selected && <PlayerToolsDrawer player={selected} onClose={() => setSelected(null)} reload={reload} />}
+      {profileTarget && (
+        <PlayerProfileDrawer
+          player={profileTarget}
+          onClose={() => setProfileTarget(null)}
+          onOpenTools={(player) => setSelectedTools(player)}
+          reload={reload}
+        />
+      )}
+      {selectedTools && <PlayerToolsDrawer player={selectedTools} onClose={() => setSelectedTools(null)} reload={reload} />}
+    </div>
+  );
+}
+
+const PLAYER_PROFILE_TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'base', label: 'Base' },
+  { id: 'activity', label: 'Activity' },
+  { id: 'trading', label: 'Trading' },
+  { id: 'quests', label: 'Quests' },
+  { id: 'nft', label: 'NFT' },
+  { id: 'battles', label: 'Battles' },
+  { id: 'support', label: 'Support & Logs' },
+  { id: 'marketing', label: 'Marketing' },
+];
+
+function profileValue(value, fallback = '-') {
+  if (value === null || value === undefined || value === '') return fallback;
+  if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString() : fallback;
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+}
+
+function profileUsd(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? fmtUsd(n) : '$0';
+}
+
+function profileDate(value) {
+  return value ? fmtTime(value) : '-';
+}
+
+function profileJsonPreview(value) {
+  if (!value) return '-';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function ProfileMetricGrid({ items }) {
+  return (
+    <div className="player-profile-metrics">
+      {(items || []).map((item) => (
+        <div className="player-profile-metric" key={item.label}>
+          <div className="player-profile-metric-value" style={{ color: toneColor(item.tone) }}>{item.value}</div>
+          <div className="player-profile-metric-label">{item.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProfileInfoGrid({ rows }) {
+  return (
+    <div className="player-profile-info">
+      {(rows || []).map((row) => (
+        <div className="player-profile-info-row" key={row.label}>
+          <span>{row.label}</span>
+          <strong className={row.mono ? 'admin-mono' : ''}>{profileValue(row.value)}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProfileTable({ columns, rows, empty = 'No rows.' }) {
+  if (!rows?.length) return <div className="admin-help">{empty}</div>;
+  return (
+    <div className="admin-table-wrap compact player-profile-table-wrap">
+      <table className="admin-table player-profile-table">
+        <thead>
+          <tr>{columns.map((col) => <th key={col.key}>{col.label}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr key={row.id || row.token_id || row.task_id || row.created_at || idx}>
+              {columns.map((col) => {
+                const raw = typeof col.render === 'function' ? col.render(row) : row[col.key];
+                return <td key={col.key} data-label={col.label}>{raw}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ProfileSection({ title, subtitle, children }) {
+  return (
+    <div className="admin-card">
+      <div className="admin-card-head">
+        <div>
+          <div className="admin-card-title">{title}</div>
+          {subtitle && <div className="admin-card-sub">{subtitle}</div>}
+        </div>
+      </div>
+      <div className="admin-card-body admin-grid">{children}</div>
+    </div>
+  );
+}
+
+function ProfileFlags({ flags }) {
+  if (!flags?.length) return <div className="admin-help">No computed risk or marketing flags.</div>;
+  return (
+    <div className="admin-filter-row">
+      {flags.map((flag) => <span key={flag.key || flag.label} className={`admin-badge ${flag.tone || 'blue'}`}>{flag.label}</span>)}
+    </div>
+  );
+}
+
+function PlayerProfileDrawer({ player, onClose, onOpenTools, reload }) {
+  const [tab, setTab] = useState('overview');
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  async function loadProfile() {
+    setLoading(true);
+    setError('');
+    try {
+      const data = await adminGet(`/admin/players/${encodeURIComponent(player.id || player.name)}/profile`);
+      setProfile(data);
+    } catch (err) {
+      setError(err.message || 'Could not load player profile');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player?.id, player?.name]);
+
+  const p = profile?.player || player;
+  const flags = profile?.marketing?.flags || [];
+  return (
+    <Drawer
+      title={`Player Profile - ${p?.name || player.name}`}
+      subtitle={`${p?.id || player.id || '-'} - created ${profileDate(p?.created_at)}`}
+      onClose={onClose}
+    >
+      <div className="player-profile">
+        <div className="player-profile-toolbar">
+          <div className="admin-filter-row">
+            <span className={`admin-badge ${p?.online ? 'green' : 'off'}`}>{p?.online ? 'Online' : 'Offline'}</span>
+            {p?.dex && <DexBadge dex={p.dex} />}
+            {flags.slice(0, 4).map((flag) => <span key={flag.key} className={`admin-badge ${flag.tone || 'blue'}`}>{flag.label}</span>)}
+          </div>
+          <div className="admin-filter-row">
+            <button className="admin-btn" onClick={loadProfile} disabled={loading}>{loading ? 'Refreshing...' : 'Refresh profile'}</button>
+            <button className="admin-btn danger" onClick={() => onOpenTools?.(p)}>Open Tools</button>
+          </div>
+        </div>
+        <div className="player-profile-tabs">
+          {PLAYER_PROFILE_TABS.map((item) => (
+            <button key={item.id} className={'player-profile-tab' + (tab === item.id ? ' active' : '')} onClick={() => setTab(item.id)}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+        {loading && <div className="admin-help">Loading full player profile...</div>}
+        {error && <div className="admin-error">{error}</div>}
+        {!loading && !error && profile && (
+          <div className="player-profile-content">
+            {tab === 'overview' && <PlayerProfileOverview profile={profile} />}
+            {tab === 'base' && <PlayerProfileBase profile={profile} />}
+            {tab === 'activity' && <PlayerProfileActivity profile={profile} />}
+            {tab === 'trading' && <PlayerProfileTrading profile={profile} />}
+            {tab === 'quests' && <PlayerProfileQuests profile={profile} />}
+            {tab === 'nft' && <PlayerProfileNft profile={profile} />}
+            {tab === 'battles' && <PlayerProfileBattles profile={profile} />}
+            {tab === 'support' && <PlayerProfileSupport profile={profile} />}
+            {tab === 'marketing' && <PlayerProfileMarketing profile={profile} />}
+          </div>
+        )}
+      </div>
+    </Drawer>
+  );
+}
+
+function PlayerProfileOverview({ profile }) {
+  const p = profile.player || {};
+  return (
+    <div className="admin-grid">
+      <ProfileMetricGrid items={[
+        { label: 'Gold', value: num(p.resources?.gold || 0), tone: 'gold' },
+        { label: 'Wood', value: num(p.resources?.wood || 0), tone: 'green' },
+        { label: 'Ore', value: num(p.resources?.ore || 0), tone: 'blue' },
+        { label: 'Trophies', value: num(p.trophies || 0) },
+        { label: 'Trade volume', value: profileUsd(profile.overview?.total_trade_volume || 0), tone: 'green' },
+        { label: 'TH', value: profile.overview?.town_hall_level || 0, tone: 'gold' },
+      ]} />
+      <div className="admin-grid two">
+        <ProfileSection title="Identity" subtitle="Login and linked wallet summary.">
+          <ProfileInfoGrid rows={[
+            { label: 'Player ID', value: p.id, mono: true },
+            { label: 'Name', value: p.name },
+            { label: 'Primary login wallet', value: short(profile.identity?.primary_login_wallet || p.wallet), mono: true },
+            { label: 'DEX', value: DEX_LABELS[p.dex] || p.dex || '-' },
+            { label: 'Futures mode', value: p.futures_mode || '-' },
+            { label: 'Created', value: profileDate(p.created_at) },
+            { label: 'Last seen', value: profileDate(p.last_seen_at) },
+            { label: 'Shield until', value: profileDate(p.shield_until) },
+          ]} />
+        </ProfileSection>
+        <ProfileSection title="Quick Signals" subtitle="High-signal development and support markers.">
+          <ProfileFlags flags={profile.marketing?.flags || []} />
+          <ProfileInfoGrid rows={[
+            { label: 'Buildings', value: profile.overview?.buildings_count || 0 },
+            { label: 'Linked wallets', value: profile.overview?.wallets_count || 0 },
+            { label: 'DEX accounts', value: profile.overview?.dex_accounts_count || 0 },
+            { label: 'Active NFTs', value: profile.overview?.active_nfts || 0 },
+            { label: 'Battle wins', value: profile.overview?.battle_wins || 0 },
+            { label: 'Retention score', value: profile.marketing?.retention_score ?? '-' },
+          ]} />
+        </ProfileSection>
+      </div>
+      <ProfileSection title="Wallets" subtitle="All linked wallets and auth identities.">
+        <ProfileTable
+          columns={[
+            { key: 'chain_type', label: 'Chain' },
+            { key: 'address', label: 'Address', render: (r) => <span className="admin-mono">{r.address}</span> },
+            { key: 'label', label: 'Label' },
+            { key: 'is_primary', label: 'Primary', render: (r) => Number(r.is_primary || 0) ? 'Yes' : 'No' },
+            { key: 'updated_at', label: 'Updated', render: (r) => profileDate(r.updated_at) },
+          ]}
+          rows={profile.identity?.wallets || []}
+        />
+      </ProfileSection>
+    </div>
+  );
+}
+
+function PlayerProfileBase({ profile }) {
+  const base = profile.base || {};
+  const diagnostics = base.diagnostics || {};
+  return (
+    <div className="admin-grid">
+      <ProfileMetricGrid items={[
+        { label: 'Town Hall', value: base.town_hall?.level || 0, tone: 'gold' },
+        { label: 'Buildings', value: base.buildings_count || 0 },
+        { label: 'Ports', value: diagnostics.ports || 0, tone: 'blue' },
+        { label: 'Troops', value: (base.troop_levels || []).length },
+        { label: 'Altar skills', value: (base.altar_skills || []).length },
+        { label: 'Duplicate cells', value: (diagnostics.duplicate_cells || []).length, tone: diagnostics.duplicate_cells?.length ? 'red' : 'green' },
+      ]} />
+      <ProfileSection title="Building Groups" subtitle="Current server-side base composition grouped by type and level.">
+        <ProfileTable
+          columns={[
+            { key: 'type', label: 'Type' },
+            { key: 'count', label: 'Count' },
+            { key: 'max_level', label: 'Max Lv' },
+            { key: 'levels', label: 'Levels', render: (r) => profileJsonPreview(r.levels) },
+          ]}
+          rows={base.buildings_by_type || []}
+        />
+      </ProfileSection>
+      <div className="admin-grid two">
+        <ProfileSection title="Troop Levels">
+          <ProfileTable columns={[{ key: 'troop_type', label: 'Troop' }, { key: 'level', label: 'Level' }]} rows={base.troop_levels || []} />
+        </ProfileSection>
+        <ProfileSection title="Altar Skills">
+          <ProfileTable columns={[{ key: 'skill_id', label: 'Skill' }, { key: 'level', label: 'Level' }]} rows={base.altar_skills || []} />
+        </ProfileSection>
+      </div>
+      <ProfileSection title="Diagnostics">
+        <ProfileInfoGrid rows={[
+          { label: 'Missing Town Hall', value: diagnostics.missing_town_hall },
+          { label: 'Empty base', value: diagnostics.empty_base },
+          { label: 'Duplicate cells', value: (diagnostics.duplicate_cells || []).length },
+        ]} />
+      </ProfileSection>
+    </div>
+  );
+}
+
+function PlayerProfileActivity({ profile }) {
+  const activity = profile.activity || {};
+  return (
+    <div className="admin-grid">
+      <ProfileMetricGrid items={[
+        { label: 'Estimated hours', value: activity.all_time?.estimated_hours || 0, tone: 'blue' },
+        { label: 'Sessions 7d', value: activity.last_7d?.sessions || 0 },
+        { label: 'Sessions 30d', value: activity.last_30d?.sessions || 0 },
+        { label: 'Active days 7d', value: activity.last_7d?.active_days || 0, tone: 'green' },
+        { label: 'Active days 30d', value: activity.last_30d?.active_days || 0, tone: 'green' },
+        { label: 'Avg session', value: `${activity.last_30d?.avg_session_minutes || 0}m` },
+      ]} />
+      <ProfileSection title="Session Estimate" subtitle="Derived from activity/client heartbeat events with a 30-minute inactivity gap.">
+        <ProfileInfoGrid rows={[
+          { label: 'First seen', value: profileDate(activity.all_time?.first_seen) },
+          { label: 'Last action', value: profileDate(activity.all_time?.last_action) },
+          { label: 'All sessions', value: activity.all_time?.sessions || 0 },
+          { label: 'All active days', value: activity.all_time?.active_days || 0 },
+        ]} />
+      </ProfileSection>
+      <ProfileSection title="Recent Sessions">
+        <ProfileTable
+          columns={[
+            { key: 'start_at', label: 'Start', render: (r) => profileDate(r.start_at) },
+            { key: 'end_at', label: 'End', render: (r) => profileDate(r.end_at) },
+            { key: 'minutes', label: 'Minutes' },
+            { key: 'events', label: 'Events' },
+          ]}
+          rows={activity.all_time?.recent_sessions || []}
+        />
+      </ProfileSection>
+      <ProfileSection title="UTC Heatmap" subtitle="Compact event distribution for the last 30 days.">
+        <div className="player-profile-heatmap">
+          {(activity.heatmap?.hours || []).map((h) => <span key={h.hour} title={`${h.hour}:00 UTC · ${h.events} events`} style={{ opacity: 0.25 + Math.min(0.75, h.events / 20) }}>{String(h.hour).padStart(2, '0')}</span>)}
+        </div>
+      </ProfileSection>
+    </div>
+  );
+}
+
+function PlayerProfileTrading({ profile }) {
+  const trading = profile.trading || {};
+  return (
+    <div className="admin-grid">
+      <ProfileMetricGrid items={[
+        { label: 'Total volume', value: profileUsd(trading.summary?.total_volume || 0), tone: 'green' },
+        { label: 'Trade gold', value: num(trading.summary?.total_gold || 0), tone: 'gold' },
+        { label: 'Futures rows', value: trading.summary?.futures_trade_rows || 0 },
+        { label: 'Cached rows', value: trading.summary?.cached_trade_rows || 0 },
+        { label: 'Last claim', value: profileDate(trading.summary?.latest_claim_at) },
+      ]} />
+      <ProfileSection title="DEX Reward Rows" subtitle="Per-DEX reward cursor and claimed volume state.">
+        <ProfileTable
+          columns={[
+            { key: 'dex', label: 'DEX', render: (r) => <DexBadge dex={r.dex} /> },
+            { key: 'wallet', label: 'Wallet', render: (r) => <span className="admin-mono">{short(r.wallet)}</span> },
+            { key: 'total_volume', label: 'Volume', render: (r) => profileUsd(r.total_volume) },
+            { key: 'total_gold', label: 'Gold', render: (r) => num(r.total_gold || 0) },
+            { key: 'last_trade_id', label: 'Cursor' },
+            { key: 'last_daily', label: 'Last daily', render: (r) => profileDate(r.last_daily) },
+          ]}
+          rows={trading.rewards || []}
+        />
+      </ProfileSection>
+      <ProfileSection title="Latest Futures Trades">
+        <ProfileTable
+          columns={[
+            { key: 'id', label: 'ID' },
+            { key: 'dex', label: 'DEX' },
+            { key: 'symbol', label: 'Symbol' },
+            { key: 'side', label: 'Side' },
+            { key: 'notional_usd', label: 'Notional', render: (r) => profileUsd(r.notional_usd) },
+            { key: 'status', label: 'Status' },
+            { key: 'verified_source', label: 'Source' },
+            { key: 'created_at', label: 'Time', render: (r) => profileDate(r.created_at) },
+          ]}
+          rows={trading.latest_futures_trades || []}
+        />
+      </ProfileSection>
+      <ProfileSection title="Trading Gaps">
+        <ProfileInfoGrid rows={[
+          { label: 'Trades exist without gold', value: trading.suspicious?.trades_exist_without_gold },
+          { label: 'Futures volume > reward volume', value: trading.suspicious?.futures_volume_without_rewards },
+          { label: 'Reward cursor sum', value: trading.suspicious?.reward_trade_cursor_sum || 0 },
+        ]} />
+      </ProfileSection>
+    </div>
+  );
+}
+
+function PlayerProfileQuests({ profile }) {
+  const quests = profile.quests || {};
+  return (
+    <div className="admin-grid">
+      <ProfileMetricGrid items={[
+        { label: 'Attempts', value: quests.summary?.attempts || 0 },
+        { label: 'Claimed', value: quests.summary?.claimed || 0, tone: 'green' },
+        { label: 'Failed', value: quests.summary?.failed || 0, tone: quests.summary?.failed ? 'red' : 'green' },
+        { label: 'Last attempt', value: profileDate(quests.summary?.last_attempt_at) },
+      ]} />
+      <ProfileSection title="Current Task Progress">
+        <ProfileTable
+          columns={[
+            { key: 'task_id', label: 'Task' },
+            { key: 'title', label: 'Title' },
+            { key: 'progress_value', label: 'Progress' },
+            { key: 'target_value', label: 'Target' },
+            { key: 'repeatable', label: 'Repeat', render: (r) => Number(r.repeatable || 0) ? 'Yes' : 'No' },
+            { key: 'claimed_at', label: 'Claimed', render: (r) => profileDate(r.claimed_at) },
+          ]}
+          rows={quests.current || []}
+        />
+      </ProfileSection>
+      <ProfileSection title="Claim Events">
+        <ProfileTable
+          columns={[
+            { key: 'task_id', label: 'Task' },
+            { key: 'task_title', label: 'Title' },
+            { key: 'result', label: 'Result' },
+            { key: 'progress_value', label: 'Progress' },
+            { key: 'reward_gold', label: 'Gold' },
+            { key: 'error_reason', label: 'Reason' },
+            { key: 'created_at', label: 'Time', render: (r) => profileDate(r.created_at) },
+          ]}
+          rows={quests.claims || []}
+        />
+      </ProfileSection>
+    </div>
+  );
+}
+
+function PlayerProfileNft({ profile }) {
+  const nft = profile.nft || {};
+  return (
+    <div className="admin-grid">
+      <ProfileMetricGrid items={[
+        { label: 'Active NFTs', value: nft.summary?.active || 0 },
+        { label: 'Demon King', value: nft.summary?.demon_king || 0, tone: 'purple' },
+        { label: 'Dragon', value: nft.summary?.dragon || 0, tone: 'gold' },
+      ]} />
+      <ProfileSection title="NFT Ownership Cache" subtitle="Active server cache by linked wallets.">
+        <ProfileTable
+          columns={[
+            { key: 'collection', label: 'Collection' },
+            { key: 'chain', label: 'Chain' },
+            { key: 'token_id', label: 'Token', render: (r) => <span className="admin-mono">{short(r.token_id, 8, 6)}</span> },
+            { key: 'wallet', label: 'Wallet', render: (r) => <span className="admin-mono">{short(r.wallet)}</span> },
+            { key: 'level', label: 'Level' },
+            { key: 'active', label: 'Active', render: (r) => Number(r.active || 0) ? 'Yes' : 'No' },
+            { key: 'source', label: 'Source' },
+            { key: 'updated_at', label: 'Updated', render: (r) => profileDate(r.updated_at) },
+          ]}
+          rows={nft.items || []}
+        />
+      </ProfileSection>
+    </div>
+  );
+}
+
+function PlayerProfileBattles({ profile }) {
+  const battles = profile.battles || {};
+  return (
+    <div className="admin-grid">
+      <ProfileMetricGrid items={[
+        { label: 'Total', value: battles.summary?.total || 0 },
+        { label: 'Attacks', value: battles.summary?.attacks || 0 },
+        { label: 'Defenses', value: battles.summary?.defenses || 0 },
+        { label: 'Wins', value: battles.summary?.attack_wins || 0, tone: 'green' },
+        { label: 'Rejected', value: battles.summary?.rejected || 0, tone: battles.summary?.rejected ? 'red' : 'green' },
+      ]} />
+      <ProfileSection title="Recent Replays">
+        <ProfileTable
+          columns={[
+            { key: 'id', label: 'Replay' },
+            { key: 'role', label: 'Role' },
+            { key: 'claimed_result', label: 'Claimed' },
+            { key: 'verified_result', label: 'Verified' },
+            { key: 'verification_reason', label: 'Reason' },
+            { key: 'loot_gold', label: 'Gold' },
+            { key: 'created_at', label: 'Time', render: (r) => profileDate(r.created_at) },
+          ]}
+          rows={battles.replays || []}
+        />
+      </ProfileSection>
+      <ProfileSection title="Battle Sessions">
+        <ProfileTable
+          columns={[
+            { key: 'id', label: 'Session', render: (r) => <span className="admin-mono">{short(r.id, 8, 6)}</span> },
+            { key: 'role', label: 'Role' },
+            { key: 'status', label: 'Status' },
+            { key: 'surrendered_at', label: 'Surrender', render: (r) => profileDate(r.surrendered_at) },
+            { key: 'created_at', label: 'Created', render: (r) => profileDate(r.created_at) },
+          ]}
+          rows={battles.sessions || []}
+        />
+      </ProfileSection>
+    </div>
+  );
+}
+
+function PlayerProfileSupport({ profile }) {
+  const support = profile.support || {};
+  return (
+    <div className="admin-grid">
+      <ProfileMetricGrid items={[
+        { label: 'Errors 24h', value: support.stats?.recent_errors_24h || 0, tone: support.stats?.recent_errors_24h ? 'red' : 'green' },
+        { label: 'Errors 7d', value: support.stats?.recent_errors_7d || 0, tone: support.stats?.recent_errors_7d ? 'red' : 'green' },
+        { label: 'Open feedback', value: support.stats?.feedback_open || 0, tone: support.stats?.feedback_open ? 'gold' : 'green' },
+      ]} />
+      <ProfileSection title="Device / Page Context">
+        <ProfileInfoGrid rows={[
+          { label: 'Latest URL', value: support.stats?.latest_url },
+          { label: 'Latest UA', value: support.stats?.latest_ua },
+        ]} />
+      </ProfileSection>
+      <ProfileSection title="Latest Client Logs">
+        <ProfileTable
+          columns={[
+            { key: 'id', label: 'ID' },
+            { key: 'level', label: 'Level' },
+            { key: 'source', label: 'Source' },
+            { key: 'message', label: 'Message' },
+            { key: 'url', label: 'URL' },
+            { key: 'created_at', label: 'Time', render: (r) => profileDate(r.created_at) },
+          ]}
+          rows={support.client_logs || []}
+        />
+      </ProfileSection>
+      <ProfileSection title="Feedback Reports">
+        <ProfileTable
+          columns={[
+            { key: 'id', label: 'ID' },
+            { key: 'kind', label: 'Kind' },
+            { key: 'status', label: 'Status' },
+            { key: 'message', label: 'Message' },
+            { key: 'contact_type', label: 'Contact' },
+            { key: 'created_at', label: 'Time', render: (r) => profileDate(r.created_at) },
+          ]}
+          rows={support.feedback || []}
+        />
+      </ProfileSection>
+    </div>
+  );
+}
+
+function PlayerProfileMarketing({ profile }) {
+  const m = profile.marketing || {};
+  return (
+    <div className="admin-grid">
+      <ProfileMetricGrid items={[
+        { label: 'Account age', value: m.account_age_days == null ? '-' : `${m.account_age_days}d` },
+        { label: 'Retention', value: `${m.retention_score || 0}/100`, tone: 'blue' },
+        { label: 'Value', value: m.value_segment || '-' },
+        { label: 'NFT segment', value: m.nft_holder_segment || '-' },
+        { label: 'Trader', value: m.trader_segment || '-' },
+      ]} />
+      <ProfileSection title="Marketing Segments">
+        <ProfileFlags flags={m.flags || []} />
+        <ProfileInfoGrid rows={[
+          { label: 'Acquisition wallet type', value: m.acquisition_wallet_type },
+          { label: 'Acquisition DEX', value: m.acquisition_dex },
+          { label: 'Value segment', value: m.value_segment },
+          { label: 'NFT holder segment', value: m.nft_holder_segment },
+          { label: 'Trader segment', value: m.trader_segment },
+        ]} />
+      </ProfileSection>
     </div>
   );
 }
@@ -851,7 +1443,7 @@ function MegaSectorEditor({ mega, updateMega }) {
     setSectors(next);
   }
   function addSector() {
-    const next = [...sectors, { id: `sector_${sectors.length + 1}`, name: `Sector ${sectors.length + 1}`, min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [] }];
+    const next = [...sectors, { id: `sector_${sectors.length + 1}`, name: `Sector ${sectors.length + 1}`, min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: normalizeRewardConfig({}) }];
     setSectors(next);
     setActiveSector(next.length - 1);
   }
@@ -958,6 +1550,12 @@ function MegaSectorEditor({ mega, updateMega }) {
               />
             ))}
             {!(current.prize_tiers || []).length && <div className="admin-help">No sector-specific rewards yet. Add a tier if this sector needs its own prize pool.</div>}
+            <RewardScheduleEditor
+              title="Sector Reward Schedule"
+              subtitle="Optional override for this sector. Leave empty to inherit the root tournament reward schedule."
+              value={current.reward_config || {}}
+              onChange={(reward_config) => updateSector(activeSector, { reward_config })}
+            />
           </div>
         )}
       </div>
@@ -1125,41 +1723,230 @@ function TournamentRewardsStep({ form, update }) {
   }
   const currentTier = tiers[activeTier] || null;
   return (
+    <div className="admin-grid">
+      <RewardScheduleEditor
+        title="Reward Schedule"
+        subtitle="Daily pools, final rewards, and Lucky Daily Raider are additive to legacy volume tiers."
+        value={form.reward_config}
+        onChange={(reward_config) => update({ reward_config })}
+        allowPreset
+      />
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div><div className="admin-card-title">Legacy Volume Tiers</div><div className="admin-card-sub">Prize tiers unlock by total tournament volume. Kept for backwards compatibility with older events.</div></div>
+          <button className="admin-btn primary" onClick={addTier}>Add tier</button>
+        </div>
+        <div className="admin-card-body admin-grid">
+          <div className="admin-form-grid">
+            <label className="admin-field"><span className="admin-label">Prize currency</span><input className="admin-input" value={form.prize_currency} onChange={(e) => update({ prize_currency: e.target.value.toUpperCase() })} /></label>
+            <label className="admin-field"><span className="admin-label">Rewards in COP</span><select className="admin-select" value={form.rewards_in_cop ? '1' : '0'} onChange={(e) => update({ rewards_in_cop: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
+          </div>
+          {!tiers.length && <div className="admin-help">No legacy prize tiers configured. Tournament can use only the reward schedule above.</div>}
+          {!!tiers.length && (
+            <>
+              <div className="tier-pager">
+                <button className="admin-btn" onClick={() => setActiveTier((value) => Math.max(0, value - 1))} disabled={activeTier === 0}>Previous tier</button>
+                <div className="tier-pager-center">
+                  <strong>Tier {activeTier + 1} of {tiers.length}</strong>
+                  <span className="admin-card-sub">Use Previous/Next to edit one tier at a time.</span>
+                </div>
+                <button className="admin-btn" onClick={() => setActiveTier((value) => Math.min(tiers.length - 1, value + 1))} disabled={activeTier >= tiers.length - 1}>Next tier</button>
+              </div>
+              <div className="tier-chip-row">
+                {tiers.map((tier, idx) => (
+                  <button
+                    key={idx}
+                    className={'tier-chip' + (idx === activeTier ? ' active' : '')}
+                    onClick={() => setActiveTier(idx)}
+                  >
+                    Tier {idx + 1}<span>${Number(tier.volume_usd || 0).toLocaleString()}</span>
+                  </button>
+                ))}
+              </div>
+              {currentTier && <PrizeTierEditor tier={currentTier} index={activeTier} updateTier={updateTier} removeTier={removeTier} />}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subtitle = '', allowPreset = false }) {
+  const config = normalizeRewardConfig(value || {});
+  function setConfig(next) {
+    onChange(normalizeRewardConfig(next));
+  }
+  function updateList(key, next) {
+    setConfig({ ...config, [key]: next });
+  }
+  function addPool(key, label) {
+    updateList(key, [...(config[key] || []), { enabled: true, label, top_n: key === 'daily_pools' ? 5 : 10, metric: 'points', rewards: [normalizeReward(rewardDefaults('money'))], payouts: [] }]);
+  }
+  function updatePool(key, index, patch) {
+    const next = [...(config[key] || [])];
+    next[index] = { ...next[index], ...patch };
+    updateList(key, next);
+  }
+  function removePool(key, index) {
+    updateList(key, (config[key] || []).filter((_, idx) => idx !== index));
+  }
+  function updateLucky(patch) {
+    setConfig({ ...config, lucky_daily_raider: { ...config.lucky_daily_raider, ...patch } });
+  }
+  return (
     <div className="admin-card">
       <div className="admin-card-head">
-        <div><div className="admin-card-title">Rewards</div><div className="admin-card-sub">Prize tiers unlock by total tournament volume. Each tier can have cash, points, AMP, NFT, or custom rewards.</div></div>
-        <button className="admin-btn primary" onClick={addTier}>Add tier</button>
+        <div><div className="admin-card-title">{title}</div><div className="admin-card-sub">{subtitle || 'Configure automatic reward blocks without changing the tournament scoring mode.'}</div></div>
+        {allowPreset && <button className="admin-btn primary" onClick={() => onChange(rewardConfigPreset5000())}>Use $5k / 10 days preset</button>}
       </div>
       <div className="admin-card-body admin-grid">
-        <div className="admin-form-grid">
-          <label className="admin-field"><span className="admin-label">Prize currency</span><input className="admin-input" value={form.prize_currency} onChange={(e) => update({ prize_currency: e.target.value.toUpperCase() })} /></label>
-          <label className="admin-field"><span className="admin-label">Rewards in COP</span><select className="admin-select" value={form.rewards_in_cop ? '1' : '0'} onChange={(e) => update({ rewards_in_cop: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
+        <div className="admin-toolbar">
+          <strong>Daily pools</strong>
+          <button className="admin-btn" onClick={() => addPool('daily_pools', 'Daily Pool')}>Add daily pool</button>
         </div>
-        {!tiers.length && <div className="admin-help">No prize tiers configured. Tournament can still run without rewards.</div>}
-        {!!tiers.length && (
-          <>
-            <div className="tier-pager">
-              <button className="admin-btn" onClick={() => setActiveTier((value) => Math.max(0, value - 1))} disabled={activeTier === 0}>Previous tier</button>
-              <div className="tier-pager-center">
-                <strong>Tier {activeTier + 1} of {tiers.length}</strong>
-                <span className="admin-card-sub">Use Previous/Next to edit one tier at a time.</span>
+        {(config.daily_pools || []).map((pool, index) => (
+          <RewardSchedulePoolEditor
+            key={`daily-${index}`}
+            pool={pool}
+            index={index}
+            updatePool={(idx, patch) => updatePool('daily_pools', idx, patch)}
+            removePool={(idx) => removePool('daily_pools', idx)}
+          />
+        ))}
+        {!(config.daily_pools || []).length && <div className="admin-help">No daily reward pool configured.</div>}
+
+        <div className="admin-toolbar">
+          <strong>Final pools</strong>
+          <button className="admin-btn" onClick={() => addPool('final_pools', 'Final Pool')}>Add final pool</button>
+        </div>
+        {(config.final_pools || []).map((pool, index) => (
+          <RewardSchedulePoolEditor
+            key={`final-${index}`}
+            pool={pool}
+            index={index}
+            updatePool={(idx, patch) => updatePool('final_pools', idx, patch)}
+            removePool={(idx) => removePool('final_pools', idx)}
+          />
+        ))}
+        {!(config.final_pools || []).length && <div className="admin-help">No final reward pool configured.</div>}
+
+        <div className="admin-card nested-card">
+          <div className="admin-card-head"><div><div className="admin-card-title">Lucky Daily Raider</div><div className="admin-card-sub">Automatic weighted daily draw. Tickets come from UTC-day volume and can require Dragon or Demon King ownership.</div></div></div>
+          <div className="admin-card-body admin-grid">
+            <div className="admin-form-grid three">
+              <label className="admin-field"><span className="admin-label">Enabled</span><select className="admin-select" value={config.lucky_daily_raider.enabled ? '1' : '0'} onChange={(e) => updateLucky({ enabled: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
+              <label className="admin-field"><span className="admin-label">Label</span><input className="admin-input" value={config.lucky_daily_raider.label} onChange={(e) => updateLucky({ label: e.target.value })} /></label>
+              <label className="admin-field"><span className="admin-label">Draw time UTC</span><input className="admin-input" value={config.lucky_daily_raider.draw_time_utc} onChange={(e) => updateLucky({ draw_time_utc: e.target.value })} /></label>
+            </div>
+            <div className="admin-form-grid three">
+              <NumberField label="$ volume per ticket" value={config.lucky_daily_raider.volume_per_ticket_usd} onChange={(v) => updateLucky({ volume_per_ticket_usd: v })} />
+              <NumberField label="Max tickets" value={config.lucky_daily_raider.max_tickets} onChange={(v) => updateLucky({ max_tickets: v })} />
+              <label className="admin-field"><span className="admin-label">NFT required</span><select className="admin-select" value={config.lucky_daily_raider.require_nft ? '1' : '0'} onChange={(e) => updateLucky({ require_nft: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
+            </div>
+            {config.lucky_daily_raider.require_nft && (
+              <div className="admin-choice-grid">
+                {[
+                  ['demon_king', 'Demon King'],
+                  ['dragon', 'Dragon'],
+                ].map(([collection, label]) => {
+                  const active = (config.lucky_daily_raider.required_collections || []).includes(collection);
+                  return (
+                    <button
+                      key={collection}
+                      className={'admin-choice' + (active ? ' active' : '')}
+                      onClick={() => {
+                        const set = new Set(config.lucky_daily_raider.required_collections || []);
+                        if (set.has(collection)) set.delete(collection);
+                        else set.add(collection);
+                        updateLucky({ required_collections: Array.from(set) });
+                      }}
+                    >
+                      <strong>{label}</strong>
+                    </button>
+                  );
+                })}
               </div>
-              <button className="admin-btn" onClick={() => setActiveTier((value) => Math.min(tiers.length - 1, value + 1))} disabled={activeTier >= tiers.length - 1}>Next tier</button>
-            </div>
-            <div className="tier-chip-row">
-              {tiers.map((tier, idx) => (
-                <button
-                  key={idx}
-                  className={'tier-chip' + (idx === activeTier ? ' active' : '')}
-                  onClick={() => setActiveTier(idx)}
-                >
-                  Tier {idx + 1}<span>${Number(tier.volume_usd || 0).toLocaleString()}</span>
-                </button>
-              ))}
-            </div>
-            {currentTier && <PrizeTierEditor tier={currentTier} index={activeTier} updateTier={updateTier} removeTier={removeTier} />}
-          </>
-        )}
+            )}
+            <RewardRowsEditor
+              rewards={config.lucky_daily_raider.rewards || []}
+              onChange={(rewards) => updateLucky({ rewards })}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RewardSchedulePoolEditor({ pool, index, updatePool, removePool }) {
+  function update(patch) {
+    updatePool(index, patch);
+  }
+  return (
+    <div className="admin-card nested-card">
+      <div className="admin-card-head">
+        <div><div className="admin-card-title">{pool.label || `Pool ${index + 1}`}</div><div className="admin-card-sub">Top winners and reward rows are fully editable.</div></div>
+        <button className="admin-btn danger" onClick={() => removePool(index)}>Remove pool</button>
+      </div>
+      <div className="admin-card-body admin-grid">
+        <div className="admin-form-grid three">
+          <label className="admin-field"><span className="admin-label">Enabled</span><select className="admin-select" value={pool.enabled ? '1' : '0'} onChange={(e) => update({ enabled: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
+          <label className="admin-field"><span className="admin-label">Label</span><input className="admin-input" value={pool.label || ''} onChange={(e) => update({ label: e.target.value })} /></label>
+          <NumberField label="Top winners" value={pool.top_n || 5} onChange={(v) => update({ top_n: v })} />
+            <label className="admin-field"><span className="admin-label">Metric</span><MetricSelect value={pool.metric || 'points'} onChange={(value) => update({ metric: value })} /></label>
+        </div>
+        <RewardRowsEditor rewards={pool.rewards || []} onChange={(rewards) => update({ rewards })} />
+      </div>
+    </div>
+  );
+}
+
+function RewardRowsEditor({ rewards, onChange }) {
+  function updateReward(rewardIndex, patch) {
+    const next = [...(rewards || [])];
+    const reward = normalizeReward({ ...next[rewardIndex], ...patch });
+    if ('pool_amount' in patch || 'winners' in patch || 'preset' in patch || 'type' in patch) reward.payouts = buildPayouts(reward);
+    next[rewardIndex] = reward;
+    onChange(next);
+  }
+  function addReward(type) {
+    onChange([...(rewards || []), normalizeReward(rewardDefaults(type))]);
+  }
+  function removeReward(rewardIndex) {
+    onChange((rewards || []).filter((_, idx) => idx !== rewardIndex));
+  }
+  return (
+    <div className="admin-grid">
+      {(rewards || []).map((reward, rewardIndex) => (
+        <div className="reward-row" key={rewardIndex}>
+          <div className="admin-form-grid three">
+            <label className="admin-field"><span className="admin-label">Type</span><select className="admin-select" value={reward.type} onChange={(e) => updateReward(rewardIndex, rewardDefaults(e.target.value))}><option value="money">Money</option><option value="points">Points</option><option value="amp">AMP</option><option value="nft">NFT</option><option value="custom">Custom</option></select></label>
+            <label className="admin-field"><span className="admin-label">Name</span><input className="admin-input" value={reward.label} onChange={(e) => updateReward(rewardIndex, { label: e.target.value })} /></label>
+            <label className="admin-field"><span className="admin-label">Unit</span><input className="admin-input" value={reward.type === 'money' ? reward.currency : reward.unit} onChange={(e) => updateReward(rewardIndex, reward.type === 'money' ? { currency: e.target.value, unit: e.target.value } : { unit: e.target.value })} /></label>
+          </div>
+          <div className="admin-form-grid three">
+            <NumberField label="Pool" value={reward.pool_amount} onChange={(v) => updateReward(rewardIndex, { pool_amount: v })} />
+            <NumberField label="Winners" value={reward.winners} onChange={(v) => updateReward(rewardIndex, { winners: v })} />
+            <label className="admin-field"><span className="admin-label">Preset</span><select className="admin-select" value={reward.preset} onChange={(e) => updateReward(rewardIndex, { preset: e.target.value })}>{PRIZE_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
+          </div>
+          <div className="payout-grid">
+            {(reward.payouts || []).map((payout, pIndex) => (
+              <div className="admin-field" key={pIndex}>
+                <span className="admin-label">Rank {payout.rank}</span>
+                <input className="admin-input" type="number" value={payout.amount} onChange={(e) => {
+                  const payouts = [...(reward.payouts || [])];
+                  payouts[pIndex] = { ...payout, amount: Number(e.target.value) || 0 };
+                  updateReward(rewardIndex, { payouts });
+                }} />
+              </div>
+            ))}
+          </div>
+          <button className="admin-btn danger" onClick={() => removeReward(rewardIndex)}>Remove reward</button>
+        </div>
+      ))}
+      <div className="admin-filter-row">
+        {['money', 'points', 'amp', 'nft', 'custom'].map((type) => <button className="admin-btn" key={type} onClick={() => addReward(type)}>+ {type}</button>)}
       </div>
     </div>
   );
@@ -1754,7 +2541,7 @@ function TaskEditorDrawer({ task, onClose, onSaved }) {
 function TaskPlayersDrawer({ task, onClose }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
-  const eligibilityLabel = taskEligibilityAdminLabel(task);
+  const eligibilityLabel = taskEligibilityAdminLabel(data?.task || task);
   useEffect(() => {
     let alive = true;
     adminGet(`/admin/tasks/${task.id}/players`).then((result) => {
@@ -2712,6 +3499,7 @@ function toneColor(tone) {
   if (tone === 'green') return 'var(--admin-green)';
   if (tone === 'blue') return 'var(--admin-blue)';
   if (tone === 'red') return 'var(--admin-red)';
+  if (tone === 'purple') return '#c084fc';
   return 'var(--admin-gold)';
 }
 

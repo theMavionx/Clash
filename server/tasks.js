@@ -134,6 +134,22 @@ function taskEligibilityLabel(eligibility) {
   return cfg.label || TASK_ELIGIBILITY_LABELS[cfg.mode] || 'Exclusive';
 }
 
+function taskSqlDateMs(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  const parsed = Date.parse(text.includes('T') ? text : `${text.replace(' ', 'T')}Z`);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isTaskLive(task, nowMs = Date.now()) {
+  if (!task || Number(task.active || 0) !== 1) return false;
+  const startsMs = taskSqlDateMs(task.starts_at);
+  const endsMs = taskSqlDateMs(task.ends_at);
+  if (startsMs && startsMs > nowMs) return false;
+  if (endsMs && endsMs <= nowMs) return false;
+  return true;
+}
+
 function playerNftAccess(playerId) {
   const access = { demon_king: false, dragon: false, has_nft: false };
   if (!playerId) return access;
@@ -1082,6 +1098,7 @@ module.exports = {
   parseParams,
   normalizeTaskEligibility,
   taskEligibilityLabel,
+  isTaskLive,
   playerNftAccess,
   checkTaskEligibility,
   buildSnapshot,
