@@ -20933,4 +20933,44 @@ try {
   console.warn('[nft-v3] failed to mount V3 endpoints:', err?.message || err);
 }
 
+// Proxy all bot & strategy requests to the bot backend (port 8080)
+const BOT_URL = process.env.CLASH_BOT_URL || 'http://62.72.35.202:8080';
+async function proxyToBot(req, res) {
+  try {
+    const targetUrl = `${BOT_URL}${req.originalUrl}`;
+    const targetHost = BOT_URL.replace(/^https?:\/\//, '');
+    const headers = {
+      ...req.headers,
+      'host': targetHost,
+      'x-tenant-id': req.player?.id || '',
+    };
+    delete headers.connection;
+    delete headers.keepalive;
+
+    const options = {
+      method: req.method,
+      headers,
+    };
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body) {
+      options.body = JSON.stringify(req.body);
+      options.headers['content-type'] = 'application/json';
+    }
+    const response = await fetch(targetUrl, options);
+    const bodyText = await response.text();
+    res.status(response.status);
+    for (const [key, value] of response.headers.entries()) {
+      if (['content-encoding', 'transfer-encoding', 'connection'].includes(key.toLowerCase())) continue;
+      res.setHeader(key, value);
+    }
+    res.send(bodyText);
+  } catch (error) {
+    console.error('[bot proxy error]:', error.message);
+    res.status(502).json({ error: 'Bad Gateway connecting to bot backend' });
+  }
+}
+
+router.use('/v1/strategies', auth, proxyToBot);
+router.use('/v1/bot', auth, proxyToBot);
+
 module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };
+
