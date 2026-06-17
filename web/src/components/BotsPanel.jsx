@@ -111,14 +111,28 @@ const matchPositionToBot = (botId, posExchange, posSymbol) => {
   return bExchanges.includes(String(posExchange).toLowerCase()) || bSymbols.includes(String(posSymbol).toLowerCase());
 };
 
+const getExchangeName = (id) => {
+  if (!id) return '';
+  const parts = id.split(':');
+  if (parts.length < 2) return 'Unknown';
+  const rawExchange = parts[1];
+  if (rawExchange.includes('<->')) {
+    const venues = rawExchange.split('<->');
+    return `${venues[0].toUpperCase()} / ${venues[1].toUpperCase()}`;
+  }
+  return rawExchange.toUpperCase();
+};
+
 const mapHandleToBot = (handle, runningList) => {
   const details = getBotConfigDetails(handle.id);
   const isRunning = runningList.some(r => r.id === handle.id);
   const market = handle.symbols.map(s => s.toUpperCase()).join(', ');
+  const exchange = getExchangeName(handle.id);
   return {
     id: handle.id,
     type: handle.kind,
     market: market,
+    exchange: exchange,
     status: isRunning ? 'Running' : 'Paused',
     tradeSize: details.tradeSize,
     maxPosition: details.maxPosition,
@@ -220,7 +234,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
                 {bot.status}
               </span>
             </div>
-            <span style={S.cardSub}>{bot.market} / {type.code}</span>
+            <span style={S.cardSub}>{bot.market} on <strong>{bot.exchange}</strong> / {type.code}</span>
           </div>
           <span style={S.expandIcon}>{expanded ? '−' : '+'}</span>
         </div>
@@ -311,6 +325,24 @@ function BotsPanel({ onClose }) {
   const [totalPnl, setTotalPnl] = useState(0);
   const [fillsCount, setFillsCount] = useState(0);
 
+  const [configuredInstances, setConfiguredInstances] = useState([]);
+  const [selectedInstanceId, setSelectedInstanceId] = useState('');
+
+  const filteredInstances = useMemo(() => {
+    return configuredInstances.filter(inst => inst.kind === selectedType);
+  }, [configuredInstances, selectedType]);
+
+  useEffect(() => {
+    if (filteredInstances.length > 0) {
+      const match = filteredInstances.find(inst => inst.id === selectedInstanceId);
+      if (!match) {
+        setSelectedInstanceId(filteredInstances[0].id);
+      }
+    } else {
+      setSelectedInstanceId('');
+    }
+  }, [selectedType, filteredInstances, selectedInstanceId]);
+
   const selectedBot = useMemo(() => getBotType(selectedType), [selectedType]);
   const activeCount = bots.filter((bot) => bot.status === 'Running').length;
   const mockPnl = totalPnl !== 0 ? totalPnl : bots.reduce((sum, bot) => sum + Number(bot.pnl || 0), 0);
@@ -322,6 +354,7 @@ function BotsPanel({ onClose }) {
     setTradeSize(20);
     setMaxPosition(200);
     setPreset('calm');
+    setSelectedInstanceId('');
   }, []);
 
   const openLaunch = useCallback(() => {
@@ -339,6 +372,7 @@ function BotsPanel({ onClose }) {
       .then((res) => {
         if (!res || !res.data) return;
         const { running = [], configured = [] } = res.data;
+        setConfiguredInstances(configured);
         const allHandles = [...configured];
         running.forEach((r) => {
           if (!allHandles.some((h) => h.id === r.id)) {
@@ -399,27 +433,48 @@ function BotsPanel({ onClose }) {
   }, [token, fetchInstances]);
 
   const launchBot = useCallback(() => {
-    if (!token) return;
-    fetch(`/api/v1/strategies/${encodeURIComponent(selectedType)}/start`, {
-      method: 'POST',
-      headers: { 'x-token': token }
+    if (!token || !selectedInstanceId) {
+      setNotice('Please select a strategy and exchange instance first.');
+      return;
+    }
+    const spreadBps = preset === 'aggressive' ? 4 : 8;
+
+    fetch(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/config`, {
+      method: 'PUT',
+      headers: {
+        'x-token': token,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        order_size_usd: String(tradeSize),
+        position_size_usd: String(maxPosition),
+        spread_bps: spreadBps,
+        min_funding_diff_bps: spreadBps,
+      })
     })
       .then((r) => r.json())
+      .then(() => {
+        return fetch(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/start`, {
+          method: 'POST',
+          headers: { 'x-token': token }
+        });
+      })
+      .then((r) => r.json())
       .then((res) => {
-        if (res?.data?.action === 'start_all' || res?.data?.status === 'started') {
-          setNotice(`Launched ${getBotType(selectedType).name} strategies successfully!`);
+        if (res?.data?.status === 'started') {
+          setNotice(`Launched ${getBotType(selectedType).name} on ${getExchangeName(selectedInstanceId)} successfully!`);
           fetchInstances();
         } else {
-          setNotice(`Launch failed: ${res?.error || 'no configured instances found'}`);
+          setNotice(`Launch failed: ${res?.error || 'unknown error'}`);
         }
       })
       .catch((err) => {
         console.error('launch failed:', err);
-        setNotice('Network error launching strategies');
+        setNotice('Network error launching strategy');
       });
     setView('dashboard');
     resetLaunch();
-  }, [selectedType, token, fetchInstances, resetLaunch]);
+  }, [selectedInstanceId, token, tradeSize, maxPosition, preset, selectedType, fetchInstances, resetLaunch]);
 
   // Real-time WebSocket updates via Clash game backend mediator
   useEffect(() => {
@@ -682,7 +737,70 @@ function BotsPanel({ onClose }) {
               );
             })}
           </div>
-          <button type="button" style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.nextButton }} onClick={() => setStep('risk')}>
+          {selectedType && filteredInstances.length > 0 && (
+            <div style={{
+              background: '#e8dfc8',
+              border: '3px solid #d4c8b0',
+              borderRadius: 12,
+              padding: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              marginTop: 12,
+              boxSizing: 'border-box',
+            }}>
+              <span style={S.label}>Select Exchange Venue</span>
+              <select
+                value={selectedInstanceId}
+                onChange={(e) => setSelectedInstanceId(e.target.value)}
+                style={{
+                  border: '2px solid #bba882',
+                  background: '#fdf8e7',
+                  borderRadius: 10,
+                  color: '#5C3A21',
+                  fontSize: 14,
+                  fontWeight: 900,
+                  padding: '9px 10px',
+                  cursor: 'pointer',
+                  width: '100%',
+                  fontFamily: 'inherit',
+                  outline: 'none',
+                }}
+              >
+                {filteredInstances.map((inst) => (
+                  <option key={inst.id} value={inst.id}>
+                    {getExchangeName(inst.id)} ({inst.symbols.join(', ')})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {selectedType && filteredInstances.length === 0 && (
+            <div style={{
+              background: '#f8d7da',
+              border: '3px solid #f5c6cb',
+              borderRadius: 12,
+              padding: 12,
+              color: '#721c24',
+              fontSize: 13,
+              fontWeight: 800,
+              marginTop: 12,
+              boxSizing: 'border-box',
+            }}>
+              No configured exchange instances for this strategy found in strategies.toml.
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={!selectedInstanceId}
+            style={{
+              ...cartoonBtn(selectedInstanceId ? '#1E88E5' : '#a3906a', selectedInstanceId ? '#1565C0' : '#8c7d5c'),
+              ...S.nextButton,
+              opacity: selectedInstanceId ? 1 : 0.6,
+              cursor: selectedInstanceId ? 'pointer' : 'not-allowed',
+            }}
+            onClick={() => setStep('risk')}
+          >
             Continue
           </button>
         </div>
@@ -753,6 +871,8 @@ function BotsPanel({ onClose }) {
             </div>
             <p style={S.detailCopy}>{selectedBot.description}</p>
             <div style={S.reviewRows}>
+              <span>Exchange <strong>{getExchangeName(selectedInstanceId)}</strong></span>
+              <span>Market <strong>{configuredInstances.find(i => i.id === selectedInstanceId)?.symbols?.join(', ') || ''}</strong></span>
               <span>Trade Size <strong>{money(tradeSize)}</strong></span>
               <span>Maximum Position <strong>{money(maxPosition)}</strong></span>
               <span>Preset <strong>{PRESETS[preset].label}</strong></span>
