@@ -1890,7 +1890,7 @@ async function payoutSolanaToken({ to, amount, ctx, order = null }) {
   const baseConfig = paymentConfigs(ctx).solana;
   const config = solanaSellerPayoutTokenConfig(ctx, order, baseConfig);
   const label = String(config.label || config.token || 'token').toUpperCase();
-  const { PublicKey, Transaction } = require('@solana/web3.js');
+  const { Connection, PublicKey, Transaction } = require('@solana/web3.js');
   const {
     ASSOCIATED_TOKEN_PROGRAM_ID,
     TOKEN_PROGRAM_ID,
