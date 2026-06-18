@@ -1898,7 +1898,6 @@ async function payoutSolanaToken({ to, amount, ctx, order = null }) {
     createTransferCheckedInstruction,
     getAssociatedTokenAddressSync,
   } = require('@solana/spl-token');
-  const conn = solanaConnection();
   const mintPk = new PublicKey(config.tokenAddress);
   const destOwner = new PublicKey(normalizeSolanaPubkey(to, 'Seller payout wallet'));
   const srcAta = getAssociatedTokenAddressSync(mintPk, signer.publicKey, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
@@ -1929,56 +1928,61 @@ async function payoutSolanaToken({ to, amount, ctx, order = null }) {
   const revenueAta = revenueAmount > 0n
     ? getAssociatedTokenAddressSync(mintPk, revenueOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID)
     : null;
-  const [srcInfo, destInfo, revenueInfo, signerLamports, tokenRentLamports] = await Promise.all([
-    conn.getAccountInfo(srcAta, 'confirmed'),
-    conn.getAccountInfo(destAta, 'confirmed'),
-    revenueAta ? conn.getAccountInfo(revenueAta, 'confirmed') : Promise.resolve(null),
-    conn.getBalance(signer.publicKey, 'confirmed'),
-    conn.getMinimumBalanceForRentExemption(165),
-  ]);
-  if (!srcInfo) throw httpError(409, `Solana payout source USDC account is missing for ${signerAddress}`);
-  let sourceUsdc = 0n;
-  try {
-    sourceUsdc = BigInt((await conn.getTokenAccountBalance(srcAta, 'confirmed')).value.amount || '0');
-  } catch {
-    sourceUsdc = 0n;
-  }
-  if (sourceUsdc < requiredSourceAmount) {
-    throw httpError(
-      409,
-      `Solana payout treasury has insufficient ${label}: need ${formatUnits(requiredSourceAmount, config.decimals)}, available ${formatUnits(sourceUsdc, config.decimals)}`
-    );
-  }
-  const rentNeeded = (destInfo ? 0 : tokenRentLamports) + (revenueAta && !revenueInfo ? tokenRentLamports : 0);
-  if (signerLamports < rentNeeded + 10_000) {
-    throw httpError(
-      409,
-      `Solana payout treasury needs SOL for recipient token accounts: need about ${formatUnits(String(rentNeeded + 10_000), 9)} SOL`
-    );
-  }
+  return withSolanaRpcFallback(async (rpc) => {
+    const conn = createSolanaConnection(Connection, rpc, 'confirmed');
+    const [srcInfo, destInfo, revenueInfo, signerLamports, tokenRentLamports] = await Promise.all([
+      conn.getAccountInfo(srcAta, 'confirmed'),
+      conn.getAccountInfo(destAta, 'confirmed'),
+      revenueAta ? conn.getAccountInfo(revenueAta, 'confirmed') : Promise.resolve(null),
+      conn.getBalance(signer.publicKey, 'confirmed'),
+      conn.getMinimumBalanceForRentExemption(165),
+    ]);
+    if (!srcInfo) throw httpError(409, `Solana payout source USDC account is missing for ${signerAddress}`);
+    let sourceUsdc = 0n;
+    try {
+      sourceUsdc = BigInt((await conn.getTokenAccountBalance(srcAta, 'confirmed')).value.amount || '0');
+    } catch (err) {
+      const msg = String(err?.message || err || '');
+      if (/429|too many requests|max usage reached|rate.?limit|timeout|fetch failed|econnreset|etimedout/i.test(msg)) throw err;
+      sourceUsdc = 0n;
+    }
+    if (sourceUsdc < requiredSourceAmount) {
+      throw httpError(
+        409,
+        `Solana payout treasury has insufficient ${label}: need ${formatUnits(requiredSourceAmount, config.decimals)}, available ${formatUnits(sourceUsdc, config.decimals)}`
+      );
+    }
+    const rentNeeded = (destInfo ? 0 : tokenRentLamports) + (revenueAta && !revenueInfo ? tokenRentLamports : 0);
+    if (signerLamports < rentNeeded + 10_000) {
+      throw httpError(
+        409,
+        `Solana payout treasury needs SOL for recipient token accounts: need about ${formatUnits(String(rentNeeded + 10_000), 9)} SOL`
+      );
+    }
 
-  const tx = new Transaction();
-  tx.add(createAssociatedTokenAccountIdempotentInstruction(
-    signer.publicKey,
-    destAta,
-    destOwner,
-    mintPk,
-    TOKEN_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID
-  ));
-  tx.add(createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, sellerAmount, config.decimals, [], TOKEN_PROGRAM_ID));
-  if (revenueAmount > 0n && revenueAta) {
+    const tx = new Transaction();
     tx.add(createAssociatedTokenAccountIdempotentInstruction(
       signer.publicKey,
-      revenueAta,
-      revenueOwner,
+      destAta,
+      destOwner,
       mintPk,
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID
     ));
-    tx.add(createTransferCheckedInstruction(srcAta, mintPk, revenueAta, signer.publicKey, revenueAmount, config.decimals, [], TOKEN_PROGRAM_ID));
-  }
-  return sendAndConfirmFresh(conn, tx, [signer], 'Custodial marketplace seller payout');
+    tx.add(createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, sellerAmount, config.decimals, [], TOKEN_PROGRAM_ID));
+    if (revenueAmount > 0n && revenueAta) {
+      tx.add(createAssociatedTokenAccountIdempotentInstruction(
+        signer.publicKey,
+        revenueAta,
+        revenueOwner,
+        mintPk,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      ));
+      tx.add(createTransferCheckedInstruction(srcAta, mintPk, revenueAta, signer.publicKey, revenueAmount, config.decimals, [], TOKEN_PROGRAM_ID));
+    }
+    return sendAndConfirmFresh(conn, tx, [signer], 'Custodial marketplace seller payout');
+  }, { label: 'Custodial marketplace seller payout' });
 }
 
 async function payoutAptosUsdc({ to, amount, ctx }) {
