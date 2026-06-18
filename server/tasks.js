@@ -8,6 +8,7 @@
 
 const db = require('./db');
 const path = require('path');
+const tradeRecon = require('./trade_reconciliation');
 
 // Lazy read-only handle to server-futures/futures.db (same pattern as
 // routes.js claim-gold). Returns null if server-futures isn't deployed.
@@ -93,10 +94,6 @@ const TASK_ELIGIBILITY_LABELS = {
 };
 const TASK_TRADE_SETTLE_DELAY_SECONDS = 0;
 const TASK_START_TRADE_GRACE_MS = Math.max(0, Number(process.env.TASK_START_TRADE_GRACE_MS || 120_000));
-const HOTSTUFF_TASK_IMPORT_MS = Math.max(5_000, Number(process.env.HOTSTUFF_TASK_IMPORT_MS || 15_000));
-const hotstuffTaskImportCache = new Map();
-const GMTRADE_TASK_RECONCILE_MS = Math.max(60_000, Number(process.env.GMTRADE_TASK_RECONCILE_MS || 300_000));
-const gmtradeTaskReconcileCache = new Map();
 const FUTURES_TASK_DEXES = new Set([
   'avantis',
   'decibel',
@@ -417,45 +414,6 @@ function isAptosWallet(w) {
   return APTOS_RE.test(padAptos(w));
 }
 
-async function maybeImportHotstuffFills(player, wallet) {
-  if (!player || !isEvmWallet(wallet)) return null;
-  const key = `${player.id}:${String(wallet).toLowerCase()}`;
-  const last = hotstuffTaskImportCache.get(key) || 0;
-  if (Date.now() - last < HOTSTUFF_TASK_IMPORT_MS) return null;
-  hotstuffTaskImportCache.set(key, Date.now());
-  try {
-    const hotstuff = require('../server-futures/hotstuff');
-    return await hotstuff.importFillsForPlayer(player.id, wallet, { limit: 100 });
-  } catch (e) {
-    console.warn(`[tasks hotstuff] fill import failed player=${player.name || player.id}:`, e.message);
-    return null;
-  }
-}
-
-async function maybeReconcileGmtrade(player, wallet) {
-  if (!player || !isSolanaWallet(wallet)) return null;
-  const key = `${player.id}:${wallet}`;
-  const last = gmtradeTaskReconcileCache.get(key) || 0;
-  if (Date.now() - last < GMTRADE_TASK_RECONCILE_MS) return null;
-  gmtradeTaskReconcileCache.set(key, Date.now());
-  try {
-    const futuresDb = require('../server-futures/db');
-    const gmtrade = require('../server-futures/gmtrade');
-    const out = {};
-    if (typeof gmtrade.reconcilePendingTradeReportsForPlayer === 'function') {
-      out.pending = await gmtrade.reconcilePendingTradeReportsForPlayer(futuresDb, player.id, { limit: 50 });
-    }
-    if (typeof gmtrade.backfillRecentOnchainTradesForPlayer === 'function') {
-      const limit = Math.max(25, Math.min(500, Number(process.env.GMTRADE_TASK_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 80)));
-      out.backfill = await gmtrade.backfillRecentOnchainTradesForPlayer(futuresDb, player.id, wallet, { limit });
-    }
-    return out;
-  } catch (e) {
-    console.warn(`[tasks gmtrade] pending reconcile failed player=${player.name || player.id}:`, e.message);
-    return null;
-  }
-}
-
 // Resolve which wallet to query upstream APIs with. Order:
 //   1. Pacifica AGENT wallet (if bound) — Pacifica's /v1/trades/history
 //      indexes by signer pubkey, and once a user binds an agent every
@@ -554,19 +512,7 @@ function resolveWalletForDex(player, dex) {
 }
 
 function verifiedSourceWhereForDex(dex) {
-  if (dex === 'decibel') return "AND verified_source IN ('decibel_fill', 'server')";
-  if (dex === 'monad') return "AND verified_source IN ('perpl_api', 'perpl_ws')";
-  if (dex === 'hyperliquid') return "AND verified_source = 'hyperliquid_api'";
-  if (dex === 'risex') return "AND verified_source = 'risex_api'";
-  if (dex === 'nado') return "AND verified_source = 'nado_api'";
-  if (dex === 'hibachi') return "AND verified_source = 'hibachi_api'";
-  if (dex === 'hotstuff') return "AND verified_source = 'hotstuff_api'";
-  if (dex === 'grvt') return "AND verified_source = 'grvt_builder'";
-  if (dex === 'katana') return "AND verified_source = 'katana_api'";
-  if (dex === 'gmtrade') return "AND verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
-  if (dex === 'flash') return "AND verified_source = 'flash_tx'";
-  if (dex === 'phoenix') return "AND verified_source IN ('worker', 'tx')";
-  return "AND verified_source = 'worker'";
+  return tradeRecon.verifiedSourceWhereForDex(dex, { prefix: 'AND ' });
 }
 
 function getTaskFuturesDexes(player, requestedDex) {
@@ -603,26 +549,12 @@ function isGmtradeCloseFallbackTrade(trade) {
 async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
   const wallet = resolveWalletForDex(player, dexFilter);
   if (wallet && !walletMatchesDex(dexFilter, wallet)) return [];
-  if (dexFilter === 'hotstuff') {
-    if (!wallet) return [];
-    await maybeImportHotstuffFills(player, wallet);
-  } else if (dexFilter === 'decibel') {
-    if (!wallet) return [];
-    try {
-      const decibelRewards = require('../server-futures/decibel-rewards-worker');
-      if (typeof decibelRewards.importRecentLimitFillsForPlayer === 'function') {
-        const imported = await decibelRewards.importRecentLimitFillsForPlayer(player.id, wallet);
-        if (imported.imported || imported.skipped) {
-          console.log(`[tasks decibel] limit-fill import player=${player.name} imported=${imported.imported || 0} skipped=${imported.skipped || '-'}`);
-        }
-      }
-    } catch (e) {
-      console.warn(`[tasks decibel] limit-fill import failed player=${player?.name || player?.id}:`, e.message);
-    }
-  } else if (dexFilter === 'gmtrade') {
-    if (!wallet) return [];
-    await maybeReconcileGmtrade(player, wallet);
-  }
+  await tradeRecon.reconcileTradesForPlayer(player, {
+    dex: dexFilter,
+    wallet,
+    reason: 'tasks',
+    force: opts.forceSync === true,
+  });
   const fdb = futuresDbReadonly();
   if (!fdb) return [];
   try {

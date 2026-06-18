@@ -14,6 +14,7 @@ const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
+const tradeRecon = require('./trade_reconciliation');
 const { broadcastToPlayer, consumePendingAgentEvents } = require('./websocket');
 const {
   solanaToken2022CollectionId,
@@ -12223,30 +12224,6 @@ function futuresDbReadonly() {
   return _futuresDb;
 }
 
-async function importGrvtFillsForClaim(playerId) {
-  try {
-    const futuresDb = require('../server-futures/db');
-    const grvt = require('../server-futures/grvt');
-    const creds = futuresDb.getGrvtCredentials(playerId);
-    if (!creds?.apiKey || !creds?.subAccountId) return null;
-    return await grvt.importFillsForPlayer(playerId, creds, { limit: 100 });
-  } catch (e) {
-    console.warn('[claim-gold grvt] pre-import failed:', e.message);
-    return null;
-  }
-}
-
-async function importHotstuffFillsForClaim(playerId, wallet) {
-  try {
-    const hotstuff = require('../server-futures/hotstuff');
-    if (!hotstuff.isEvmAddress(wallet)) return null;
-    return await hotstuff.importFillsForPlayer(playerId, wallet, { limit: 100 });
-  } catch (e) {
-    console.warn('[claim-gold hotstuff] pre-import failed:', e.message);
-    return null;
-  }
-}
-
 router.post('/trading/claim-gold', auth, async (req, res) => {
   const claimStartedAt = Date.now();
   // Rate limit
@@ -12333,66 +12310,27 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
   if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') {
-    if (dex === 'grvt') {
-      await importGrvtFillsForClaim(req.player.id);
-    } else if (dex === 'hotstuff') {
-      await importHotstuffFillsForClaim(req.player.id, wallet);
-    } else if (dex === 'decibel') {
-      try {
-        const decibelRewards = require('../server-futures/decibel-rewards-worker');
-        if (typeof decibelRewards.importRecentLimitFillsForPlayer === 'function') {
-          const imported = await decibelRewards.importRecentLimitFillsForPlayer(req.player.id, wallet);
-          if (imported.imported || imported.skipped) {
-            console.log(`[claim-gold decibel] limit-fill import player=${req.player.name} imported=${imported.imported || 0} skipped=${imported.skipped || '-'} sub=${String(imported.subaccount || '').slice(0, 10)}`);
-          }
-        }
-      } catch (e) {
-        console.warn(`[claim-gold decibel] limit-fill import failed player=${req.player.name}:`, e.message);
-      }
-    } else if (dex === 'katana') {
-      try {
-        const katana = require('../server-futures/katana');
-        const apiKey = req.headers['x-katana-api-key'];
-        const apiSecret = req.headers['x-katana-api-secret'];
-        const katanaWallet = req.headers['x-katana-wallet'] || wallet;
-        if (apiKey && apiSecret && katanaWallet) {
-          const imported = await katana.importFillsForPlayer(req.player.id, {
-            apiKey,
-            apiSecret,
-            wallet: katanaWallet,
-          }, { wallet: katanaWallet, limit: 100 });
-          if (imported.imported || imported.updated || imported.adopted) {
-            console.log(`[claim-gold katana] imported fills player=${req.player.name} imported=${imported.imported} updated=${imported.updated} adopted=${imported.adopted} skipped=${imported.skipped}`);
-          }
-        }
-      } catch (e) {
-        console.warn(`[claim-gold katana] import fills failed player=${req.player.name}:`, e.message);
-      }
+    const reconcile = await tradeRecon.reconcileTradesForPlayer(req.player, {
+      dex,
+      wallet,
+      headers: req.headers,
+      reason: 'claim_gold',
+      limit: 100,
+    });
+    if (reconcile.imported || reconcile.adopted || reconcile.updated || reconcile.errors || (reconcile.skipped && reconcile.skipped !== 'cooldown' && reconcile.skipped !== 'worker_indexed')) {
+      console.log(`[claim-gold ${dex}] reconcile player=${req.player.name} ${JSON.stringify({
+        imported: reconcile.imported || 0,
+        adopted: reconcile.adopted || 0,
+        updated: reconcile.updated || 0,
+        checked: reconcile.checked || 0,
+        skipped: reconcile.skipped || null,
+        errors: reconcile.errors || 0,
+      })}`);
     }
     const fdb = futuresDbReadonly();
     if (!fdb) {
       recordClaimTelemetry({ result: 'service_unavailable', reason: 'Futures service unavailable' });
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
-    }
-    if (dex === 'gmtrade') {
-      try {
-        const gmtrade = require('../server-futures/gmtrade');
-        if (typeof gmtrade.reconcilePendingTradeReportsForPlayer === 'function') {
-          const reconciled = await gmtrade.reconcilePendingTradeReportsForPlayer(fdb, req.player.id, { limit: 50 });
-          if (reconciled.imported || reconciled.errors) {
-            console.log(`[claim-gold gmtrade] pending reconcile player=${req.player.name} checked=${reconciled.checked} imported=${reconciled.imported} pending=${reconciled.pending} errors=${reconciled.errors}`);
-          }
-        }
-        if (typeof gmtrade.backfillRecentOnchainTradesForPlayer === 'function' && gmtrade.isSolanaAddress(wallet)) {
-          const gmtradeBackfillLimit = Math.max(25, Math.min(500, Number(process.env.GMTRADE_CLAIM_BACKFILL_SIGNATURE_LIMIT || process.env.GMTRADE_BACKFILL_SIGNATURE_LIMIT || 80)));
-          const backfilled = await gmtrade.backfillRecentOnchainTradesForPlayer(fdb, req.player.id, wallet, { limit: gmtradeBackfillLimit });
-          if (backfilled.imported || backfilled.pending || backfilled.errors) {
-            console.log(`[claim-gold gmtrade] on-chain backfill player=${req.player.name} checked=${backfilled.checked} candidates=${backfilled.candidates} imported=${backfilled.imported} pending=${backfilled.pending} skipped=${backfilled.skipped} errors=${backfilled.errors}`);
-          }
-        }
-      } catch (e) {
-        console.warn(`[claim-gold gmtrade] reconcile/backfill failed player=${req.player.name}:`, e.message);
-      }
     }
     let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     if (!reward) {
@@ -12415,31 +12353,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let newTrades = [];
     let hyperliquidWalletRowsAvailable = 0;
     const rewardSettleDelaySql = `-${TRADE_REWARD_SETTLE_DELAY_SECONDS} seconds`;
-    const sourceWhere = dex === 'decibel'
-      ? "AND verified_source IN ('decibel_fill', 'server')"
-      : dex === 'monad'
-        ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
-        : dex === 'hyperliquid'
-          ? "AND verified_source = 'hyperliquid_api'"
-        : dex === 'risex'
-          ? "AND verified_source = 'risex_api'"
-          : dex === 'nado'
-            ? "AND verified_source = 'nado_api'"
-          : dex === 'hibachi'
-            ? "AND verified_source = 'hibachi_api'"
-          : dex === 'hotstuff'
-            ? "AND verified_source = 'hotstuff_api'"
-          : dex === 'grvt'
-            ? "AND verified_source = 'grvt_builder'"
-          : dex === 'katana'
-            ? "AND verified_source = 'katana_api'"
-          : dex === 'gmtrade'
-            ? "AND verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')"
-          : dex === 'flash'
-            ? "AND verified_source = 'flash_tx'"
-          : dex === 'phoenix'
-            ? "AND verified_source IN ('worker', 'tx')"
-        : "AND verified_source = 'worker'";
+    const sourceWhere = tradeRecon.verifiedSourceWhereForDex(dex, { prefix: 'AND ' });
     const hyperliquidWalletPrefix = dex === 'hyperliquid' && EVM_WALLET_RE.test(String(wallet || ''))
       ? `hyperliquid:${String(wallet).toLowerCase()}:%`
       : null;
@@ -13209,34 +13123,17 @@ router.get('/trading/stats', auth, async (req, res) => {
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
   if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') {
+    await tradeRecon.reconcileTradesForPlayer(req.player, {
+      dex,
+      wallet: req.player.wallet,
+      headers: req.headers,
+      reason: 'stats',
+      limit: 50,
+    });
     const fdb = futuresDbReadonly();
     if (fdb) {
       try {
-        const sourceClause = dex === 'decibel'
-          ? "AND verified_source IN ('decibel_fill', 'server')"
-          : dex === 'monad'
-            ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
-            : dex === 'hyperliquid'
-              ? "AND verified_source = 'hyperliquid_api'"
-            : dex === 'risex'
-              ? "AND verified_source = 'risex_api'"
-              : dex === 'nado'
-                ? "AND verified_source = 'nado_api'"
-              : dex === 'hibachi'
-                ? "AND verified_source = 'hibachi_api'"
-              : dex === 'hotstuff'
-                ? "AND verified_source = 'hotstuff_api'"
-              : dex === 'grvt'
-                ? "AND verified_source = 'grvt_builder'"
-              : dex === 'katana'
-                ? "AND verified_source = 'katana_api'"
-              : dex === 'gmtrade'
-                ? "AND verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')"
-              : dex === 'flash'
-                ? "AND verified_source = 'flash_tx'"
-              : dex === 'phoenix'
-                ? "AND verified_source IN ('worker', 'tx')"
-            : "AND verified_source = 'worker'";
+        const sourceClause = tradeRecon.verifiedSourceWhereForDex(dex, { prefix: 'AND ' });
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
           FROM trade_history
@@ -16668,31 +16565,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   try {
     const fdb = futuresDbReadonly();
     if (fdb) {
-      const sourceWhereForDex = (dex) => dex === 'monad'
-        ? "verified_source IN ('perpl_api', 'perpl_ws')"
-        : dex === 'hyperliquid'
-          ? "verified_source = 'hyperliquid_api'"
-        : dex === 'risex'
-          ? "verified_source = 'risex_api'"
-          : dex === 'nado'
-            ? "verified_source = 'nado_api'"
-          : dex === 'hibachi'
-            ? "verified_source = 'hibachi_api'"
-          : dex === 'hotstuff'
-            ? "verified_source = 'hotstuff_api'"
-          : dex === 'grvt'
-            ? "verified_source = 'grvt_builder'"
-          : dex === 'katana'
-            ? "verified_source = 'katana_api'"
-          : dex === 'gmtrade'
-            ? "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')"
-          : dex === 'flash'
-            ? "verified_source = 'flash_tx'"
-          : dex === 'decibel'
-          ? "verified_source IN ('decibel_fill', 'server')"
-        : dex === 'phoenix'
-          ? "verified_source IN ('worker', 'tx')"
-          : "verified_source = 'worker'";
+      const sourceWhereForDex = (dex) => tradeRecon.verifiedSourceWhereForDex(dex);
       const nameLookup = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
       for (const dex of ACTIVITY_DEXES) {
         const sourceWhere = sourceWhereForDex(dex);
@@ -19020,20 +18893,7 @@ function tournamentRowToPublic(t, options = {}) {
 }
 
 function tournamentTradeSourceWhere(dex) {
-  if (dex === 'decibel') return "verified_source IN ('decibel_fill', 'server')";
-  if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
-  if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
-  if (dex === 'risex') return "verified_source = 'risex_api'";
-  if (dex === 'nado') return "verified_source = 'nado_api'";
-  if (dex === 'hibachi') return "verified_source = 'hibachi_api'";
-  if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
-  if (dex === 'grvt') return "verified_source = 'grvt_builder'";
-  if (dex === 'katana') return "verified_source = 'katana_api'";
-  if (dex === 'gmtrade') return "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
-  if (dex === 'flash') return "verified_source = 'flash_tx'";
-  if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
-  if (dex === 'gmx') return "verified_source IN ('worker', 'server')";
-  return "verified_source = 'worker'";
+  return tradeRecon.verifiedSourceWhereForDex(dex);
 }
 
 function syncFuturesTournamentRows(playerId, dex) {
