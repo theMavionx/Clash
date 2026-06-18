@@ -272,6 +272,15 @@ const stmts = {
        AND verified_source='worker'
        AND client_order_id=?
   `),
+  upgradeDecibelWorkerTradeByOrder: db.prepare(`
+    UPDATE trade_history
+       SET verified_source='decibel_fill',
+           proof_json=COALESCE(?, proof_json),
+           fee=COALESCE(?, fee)
+     WHERE dex='decibel'
+       AND verified_source='worker'
+       AND order_id=?
+  `),
   upsertPendingGmtradeTradeReport: db.prepare(`
     INSERT INTO gmtrade_pending_trade_reports
       (signature, player_id, wallet, body_json, attempts, last_error, updated_at)
@@ -461,6 +470,16 @@ function upgradeDecibelWorkerTradeByClient({ clientOrderId, proofJson = null, fe
   return { changes: info.changes || 0 };
 }
 
+function upgradeDecibelWorkerTradeByOrder({ orderId, proofJson = null, fee = null } = {}) {
+  if (!orderId) return { changes: 0 };
+  const info = stmts.upgradeDecibelWorkerTradeByOrder.run(
+    proofJson == null ? null : String(proofJson),
+    fee == null ? null : String(fee),
+    String(orderId),
+  );
+  return { changes: info.changes || 0 };
+}
+
 function getTrades(playerId) {
   return stmts.getTrades.all(playerId);
 }
@@ -516,6 +535,7 @@ module.exports = {
   recordDecibelOrderProof,
   getDecibelOrderProof,
   upgradeDecibelWorkerTradeByClient,
+  upgradeDecibelWorkerTradeByOrder,
 };
 
 // One-time encryption migration: any row where secret_key doesn't start with

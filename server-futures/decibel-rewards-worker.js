@@ -202,6 +202,11 @@ function proofForOrderKey(key) {
   return null;
 }
 
+function orderIdFromMatchingKey(key) {
+  const raw = String(key || '');
+  return raw.startsWith('order:') ? raw.slice('order:'.length) : '';
+}
+
 async function fetchAptosTxByVersion(version) {
   const raw = String(version || '').trim();
   if (!/^\d+$/.test(raw)) return null;
@@ -403,13 +408,14 @@ function aggregateLimitFills(trades, limitOrderKeySet, limitOrderByKey, marketMa
 
     const side = sideFromFill(fill);
     const key = `${matchingKey}:${side}`;
+    const matchedOrderId = orderIdFromMatchingKey(matchingKey);
     const current = groups.get(key) || {
       key,
       proofKey: matchingKey,
       order: limitOrderByKey?.get(matchingKey) || null,
       symbol: symbolFromFill(fill, marketMap),
       side,
-      orderId: fieldString(fill, ['order_id', 'orderId', 'orderID']) || matchingKey,
+      orderId: matchedOrderId || fieldString(fill, ['order_id', 'orderId', 'orderID']) || matchingKey,
       clientOrderId: `decibel:limit-fill:${matchingKey}:${side}`,
       sizeAbs: 0,
       notional: 0,
@@ -530,7 +536,12 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
         proofJson,
         fee: fill.fee,
       });
-      stats.updated += upgrade.changes || 0;
+      const orderUpgrade = db.upgradeDecibelWorkerTradeByOrder({
+        orderId: fill.orderId,
+        proofJson,
+        fee: fill.fee,
+      });
+      stats.updated += (upgrade.changes || 0) + (orderUpgrade.changes || 0);
     } else {
       stats.unverified++;
     }

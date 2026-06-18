@@ -18896,9 +18896,27 @@ function tournamentTradeSourceWhere(dex) {
   return tradeRecon.verifiedSourceWhereForDex(dex);
 }
 
-function syncFuturesTournamentRows(playerId, dex) {
+const FUTURES_TOURNAMENT_SYNC_DEXES = new Set([
+  'avantis',
+  'decibel',
+  'gmx',
+  'monad',
+  'phoenix',
+  'hyperliquid',
+  'risex',
+  'nado',
+  'hibachi',
+  'hotstuff',
+  'grvt',
+  'katana',
+  'gmtrade',
+  'flash',
+]);
+const tournamentParticipantSyncCache = new Map();
+
+function syncFuturesTournamentRows(playerId, dex, opts = {}) {
   const normalizedDex = String(dex || '').toLowerCase();
-  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'].includes(normalizedDex)) {
+  if (!playerId || !FUTURES_TOURNAMENT_SYNC_DEXES.has(normalizedDex)) {
     return { ok: true, skipped: true };
   }
   const fdb = futuresDbReadonly();
@@ -18914,6 +18932,7 @@ function syncFuturesTournamentRows(playerId, dex) {
       LIMIT 2000
     `).all(playerId, normalizedDex);
     const main = db.recordTournamentTradeRows(playerId, rows, {
+      tournamentId: opts.tournamentId || opts.tournament_id,
       source: 'trade_history',
       dex: normalizedDex,
       count: true,
@@ -18928,6 +18947,59 @@ function syncFuturesTournamentRows(playerId, dex) {
     console.warn(`[tournament-sync ${normalizedDex}] failed for player=${String(playerId).slice(0, 8)}:`, e.message);
     return { ok: false, reason: e.message };
   }
+}
+
+function syncFuturesTournamentParticipants(tournament, opts = {}) {
+  const t = tournament && typeof tournament === 'object'
+    ? tournament
+    : db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(parseInt(tournament, 10));
+  const normalizedDex = String(t?.dex || '').toLowerCase();
+  if (!t?.id || !FUTURES_TOURNAMENT_SYNC_DEXES.has(normalizedDex)) {
+    return { ok: true, skipped: true };
+  }
+  if (opts.liveOnly !== false && tournamentPhase(t) !== 'live') {
+    return { ok: true, skipped: 'not_live' };
+  }
+  const cacheKey = `${t.id}:${normalizedDex}`;
+  const nowMs = Date.now();
+  const cooldownMs = Math.max(5000, Number(process.env.TOURNAMENT_GLOBAL_SYNC_COOLDOWN_MS || 45000));
+  const cachedAt = tournamentParticipantSyncCache.get(cacheKey) || 0;
+  if (!opts.force && nowMs - cachedAt < cooldownMs) {
+    return { ok: true, skipped: 'cooldown' };
+  }
+  tournamentParticipantSyncCache.set(cacheKey, nowMs);
+  const limit = Math.max(1, Math.min(1000, Number(opts.limit || process.env.TOURNAMENT_GLOBAL_SYNC_LIMIT || 500)));
+  const participants = db.db.prepare(`
+    SELECT player_id
+    FROM tournament_participants
+    WHERE tournament_id = ? AND left_at IS NULL
+    ORDER BY last_activity_at DESC, joined_at DESC
+    LIMIT ?
+  `).all(t.id, limit);
+  const summary = {
+    ok: true,
+    tournament_id: t.id,
+    dex: normalizedDex,
+    players: participants.length,
+    rows: 0,
+    inserted: 0,
+    activity_events: 0,
+    failed: 0,
+  };
+  for (const participant of participants) {
+    const result = syncFuturesTournamentRows(participant.player_id, normalizedDex, { tournamentId: t.id });
+    if (!result?.ok) {
+      summary.failed++;
+      continue;
+    }
+    summary.rows += Number(result.rows || 0);
+    summary.inserted += Number(result.main?.inserted || 0);
+    summary.activity_events += Number(result.main?.activity_events || 0);
+  }
+  if (summary.inserted || summary.failed) {
+    console.log('[tournament-sync] participants', JSON.stringify(summary));
+  }
+  return summary;
 }
 
 // List all live tournaments visible to players (active, not yet ended).
@@ -19470,6 +19542,7 @@ router.get('/tournaments/:id/daily-points', (req, res) => {
   if (!tournamentUsesDailyPool(t)) {
     return res.json({ tournament: tournamentRowToPublic(t), my_player_id: null, days: [] });
   }
+  try { syncFuturesTournamentParticipants(t); } catch {}
 
   let viewer = null;
   const token = req.headers['x-token'];
@@ -19482,7 +19555,7 @@ router.get('/tournaments/:id/daily-points', (req, res) => {
       WHERE tournament_id = ? AND player_id = ?
     `).get(tid, viewer.id);
     if (participant && participant.left_at === null) {
-      try { syncFuturesTournamentRows(viewer.id, viewer.dex); } catch {}
+      try { syncFuturesTournamentRows(viewer.id, viewer.dex, { tournamentId: tid }); } catch {}
     }
   }
 
@@ -19502,6 +19575,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
+  try { syncFuturesTournamentParticipants(t); } catch {}
   let viewer = null;
   const token = req.headers['x-token'];
   if (typeof token === 'string' && token.length > 10) {
@@ -19513,7 +19587,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       WHERE tournament_id = ? AND player_id = ?
     `).get(tid, viewer.id);
     if (participant && participant.left_at === null) {
-      try { syncFuturesTournamentRows(viewer.id, viewer.dex); } catch {}
+      try { syncFuturesTournamentRows(viewer.id, viewer.dex, { tournamentId: tid }); } catch {}
     }
   }
   // Whitelist sort columns to defend against future schema drift.
@@ -20155,6 +20229,7 @@ router.get('/admin/tournaments/:id/daily-points', adminAuth, (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
+  try { syncFuturesTournamentParticipants(t, { force: String(req.query.sync || '') === '1' }); } catch {}
   const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 14));
   try {
     const days = db.db.prepare(`
