@@ -31,6 +31,7 @@ const DECIBEL_LIMIT_FILL_LOOKBACK = Math.max(
   50,
   Math.min(500, Number(process.env.DECIBEL_LIMIT_FILL_LOOKBACK || 250))
 );
+const DECIBEL_RECONCILE_DEBUG = String(process.env.DECIBEL_RECONCILE_DEBUG || '1') !== '0';
 
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
@@ -118,11 +119,76 @@ function txVersionFromOrder(row) {
 
 function orderKeys(row) {
   const keys = new Set();
-  const orderId = fieldString(row, ['order_id', 'orderId', 'orderID']);
-  const clientOrderId = fieldString(row, ['client_order_id', 'clientOrderId', 'clientOrderID']);
+  const orderId = fieldString(row, [
+    'order_id', 'orderId', 'orderID',
+    'oid', 'order_index', 'orderIndex', 'order_idx', 'orderIdx',
+  ]);
+  const clientOrderId = fieldString(row, [
+    'client_order_id', 'clientOrderId', 'clientOrderID',
+    'client_id', 'clientId', 'client_oid', 'clientOid', 'cloid',
+  ]);
   if (orderId) keys.add(`order:${orderId.toLowerCase()}`);
   if (clientOrderId) keys.add(`client:${clientOrderId.toLowerCase()}`);
   return keys;
+}
+
+function boolish(value) {
+  if (value === true || value === 1) return true;
+  const s = String(value ?? '').trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes';
+}
+
+function orderText(row) {
+  return [
+    'order_type', 'orderType', 'type',
+    'trigger_type', 'triggerType',
+    'trigger_condition', 'triggerCondition',
+    'trigger_price', 'triggerPrice',
+    'take_profit', 'takeProfit',
+    'stop_loss', 'stopLoss',
+    'reduce_only', 'reduceOnly', 'is_reduce_only', 'isReduceOnly',
+    'source', 'reason', 'category',
+    'action', 'trade_action', 'order_action',
+    'time_in_force', 'timeInForce', 'tif',
+  ].map((key) => fieldString(row, [key]).toLowerCase()).filter(Boolean).join(' ');
+}
+
+function isTriggerOrTpSlOrder(row) {
+  const text = orderText(row);
+  if (/\b(tp|sl|tpsl)\b/.test(text)) return true;
+  if (text.includes('takeprofit') || text.includes('take_profit') || text.includes('take profit')) return true;
+  if (text.includes('stoploss') || text.includes('stop_loss') || text.includes('stop loss')) return true;
+  if (text.includes('trigger') || text.includes('conditional')) return true;
+  if (boolish(row?.reduce_only ?? row?.reduceOnly ?? row?.is_reduce_only ?? row?.isReduceOnly)
+    && (fieldString(row, ['trigger_price', 'triggerPrice']) || text.includes('close'))) {
+    return true;
+  }
+  return false;
+}
+
+function decibelOrderDebugKind(row) {
+  const type = fieldString(row, ['order_type', 'orderType', 'type']) || 'unknown';
+  const tif = fieldString(row, ['time_in_force', 'timeInForce', 'tif']);
+  const status = fieldString(row, ['status', 'order_status', 'orderStatus', 'state']);
+  const trigger = isTriggerOrTpSlOrder(row) ? 'trigger/tpsl' : '';
+  return [type, tif, status, trigger].filter(Boolean).join('|').toLowerCase();
+}
+
+function countKinds(rows, limit = 8) {
+  const counts = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const key = decibelOrderDebugKind(row);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([kind, count]) => ({ kind, count }));
+}
+
+function shortAddr(addr) {
+  const s = String(addr || '');
+  return s.length > 16 ? `${s.slice(0, 10)}...${s.slice(-6)}` : s;
 }
 
 function proofForOrderKey(key) {
@@ -250,7 +316,7 @@ async function proofFromOrderTx(playerId, subAddr, order, marketMap) {
     clientOrderId: orderClientId || null,
     symbol: symbolFromFill(order, marketMap),
     side: sideFromFill(order),
-    orderType: 'limit',
+    orderType: isTriggerOrTpSlOrder(order) ? 'trigger' : 'limit',
     marketName: fieldString(market || order, ['market_name', 'marketName', 'symbol']) || null,
     marketAddr: txMarket || orderMarket || null,
     builderAddr,
@@ -273,8 +339,10 @@ function isFilledLimitOrder(row) {
   const status = fieldString(row, ['status', 'order_status', 'orderStatus', 'state']).toLowerCase();
   if (status && !status.includes('fill')) return false;
   const type = fieldString(row, ['order_type', 'orderType', 'type']).toLowerCase();
-  if (type.includes('market') || type.includes('ioc')) return false;
+  const isTriggerOrTpSl = isTriggerOrTpSlOrder(row);
+  if ((type.includes('market') || type.includes('ioc')) && !isTriggerOrTpSl) return false;
   if (type.includes('limit')) return true;
+  if (isTriggerOrTpSl) return true;
   const tif = fieldString(row, ['time_in_force', 'timeInForce', 'tif']).toLowerCase();
   return tif.includes('good') || tif.includes('gtc');
 }
@@ -360,25 +428,62 @@ function aggregateLimitFills(trades, limitOrderKeySet, limitOrderByKey, marketMa
   return Array.from(groups.values()).filter(g => g.notional >= MIN_RECORDED_NOTIONAL_USD);
 }
 
-async function recordRecentLimitFills(playerId, subAddr) {
+async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
   const [orders, trades, marketMap] = await Promise.all([
     decibel.fetchOrderHistory(subAddr, { limit: DECIBEL_LIMIT_FILL_LOOKBACK, sortDir: 'DESC' }),
     decibel.fetchTradeHistory(subAddr, { limit: DECIBEL_LIMIT_FILL_LOOKBACK, sortDir: 'DESC' }),
     marketsByAddress(),
   ]);
+  const filledOrders = Array.isArray(orders)
+    ? orders.filter((order) => {
+      const status = fieldString(order, ['status', 'order_status', 'orderStatus', 'state']).toLowerCase();
+      return !status || status.includes('fill');
+    })
+    : [];
   const limitOrderKeySet = new Set();
   const limitOrderByKey = new Map();
-  for (const order of orders) {
+  let eligibleOrderCount = 0;
+  for (const order of Array.isArray(orders) ? orders : []) {
     if (!isFilledLimitOrder(order)) continue;
+    eligibleOrderCount++;
     for (const key of orderKeys(order)) {
       limitOrderKeySet.add(key);
       if (!limitOrderByKey.has(key)) limitOrderByKey.set(key, order);
     }
   }
-  if (!limitOrderKeySet.size) return 0;
+  let tradeRowsWithKeys = 0;
+  let unmatchedTradeRows = 0;
+  for (const trade of Array.isArray(trades) ? trades : []) {
+    const keys = orderKeys(trade);
+    if (!keys.size) continue;
+    tradeRowsWithKeys++;
+    if (!Array.from(keys).some((key) => limitOrderKeySet.has(key))) unmatchedTradeRows++;
+  }
+  const stats = {
+    imported: 0,
+    updated: 0,
+    matched: 0,
+    verified: 0,
+    unverified: 0,
+    orders: Array.isArray(orders) ? orders.length : 0,
+    filled_orders: filledOrders.length,
+    eligible_orders: eligibleOrderCount,
+    eligible_order_keys: limitOrderKeySet.size,
+    trades: Array.isArray(trades) ? trades.length : 0,
+    trade_rows_with_keys: tradeRowsWithKeys,
+    unmatched_trade_rows: unmatchedTradeRows,
+    lookback: DECIBEL_LIMIT_FILL_LOOKBACK,
+  };
+  if (!limitOrderKeySet.size) {
+    if (DECIBEL_RECONCILE_DEBUG) {
+      console.log(`[decibel-reconcile] player=${playerId} sub=${shortAddr(subAddr)} no eligible filled limit/tpsl orders orders=${stats.orders} filled_orders=${stats.filled_orders} trades=${stats.trades} trade_rows_with_keys=${stats.trade_rows_with_keys} kinds=${JSON.stringify(countKinds(orders))}`);
+    }
+    return opts.details ? stats : 0;
+  }
 
-  let inserted = 0;
-  for (const fill of aggregateLimitFills(trades, limitOrderKeySet, limitOrderByKey, marketMap)) {
+  const aggregatedFills = aggregateLimitFills(trades, limitOrderKeySet, limitOrderByKey, marketMap);
+  stats.matched = aggregatedFills.length;
+  for (const fill of aggregatedFills) {
     const avgPrice = fill.sizeAbs > 0 ? fill.weightedPrice / fill.sizeAbs : 0;
     const isClose = String(fill.side || '').startsWith('close_');
     let proof = proofForOrderKey(fill.proofKey);
@@ -417,16 +522,23 @@ async function recordRecentLimitFills(playerId, subAddr) {
       fee: fill.fee,
       proofJson,
     });
+    stats.imported += r.changes || 0;
     if (proof) {
-      db.upgradeDecibelWorkerTradeByClient({
+      stats.verified++;
+      const upgrade = db.upgradeDecibelWorkerTradeByClient({
         clientOrderId: fill.clientOrderId,
         proofJson,
         fee: fill.fee,
       });
+      stats.updated += upgrade.changes || 0;
+    } else {
+      stats.unverified++;
     }
-    inserted += r.changes || 0;
   }
-  return inserted;
+  if (DECIBEL_RECONCILE_DEBUG) {
+    console.log(`[decibel-reconcile] player=${playerId} sub=${shortAddr(subAddr)} orders=${stats.orders} filled_orders=${stats.filled_orders} eligible_orders=${stats.eligible_orders} eligible_order_keys=${stats.eligible_order_keys} trades=${stats.trades} trade_rows_with_keys=${stats.trade_rows_with_keys} unmatched_trade_rows=${stats.unmatched_trade_rows} matched=${stats.matched} inserted=${stats.imported} updated=${stats.updated} verified=${stats.verified} unverified=${stats.unverified} kinds=${JSON.stringify(countKinds(orders))}`);
+  }
+  return opts.details ? stats : stats.imported;
 }
 
 async function importRecentLimitFillsForPlayer(playerId, ownerAddr) {
@@ -438,8 +550,8 @@ async function importRecentLimitFillsForPlayer(playerId, ownerAddr) {
   if (!subAddr) {
     return { imported: 0, skipped: 'missing_decibel_subaccount' };
   }
-  const imported = await recordRecentLimitFills(playerId, subAddr);
-  return { imported, subaccount: subAddr };
+  const stats = await recordRecentLimitFills(playerId, subAddr, { details: true });
+  return { ...stats, subaccount: subAddr };
 }
 
 async function pollOnce(mainDb) {
