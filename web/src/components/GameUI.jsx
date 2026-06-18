@@ -15,7 +15,6 @@ import NftGoldBoostButton from './NftGoldBoostButton';
 import FeedbackButton from './FeedbackButton';
 import { useSend, useUI, useSelectedBuilding, useTutorial, usePlayer } from '../hooks/useGodot';
 import { useAgentActions } from '../hooks/useAgentActions';
-import { useLayout } from '../hooks/useIsMobile';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import { useSkrHandle } from '../hooks/useSkrHandle';
 import { getAvailableDexConfigs, isDexAvailableInContext, useDex } from '../contexts/DexContext';
@@ -27,7 +26,6 @@ import {
   readLastPlayerDexPreferenceAsync,
   writeLastPlayerDexPreference,
 } from '../lib/lastPlayerDex';
-import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 
 // Heavy components are lazy-loaded — their JS only ships to the user
 // when they actually open the relevant UI. Saves ~600KB from the
@@ -38,21 +36,6 @@ const FuturesPanel = lazy(lazyWithClientReload(() => import('./FuturesPanel'), '
 const ProfileModal = lazy(lazyWithClientReload(() => import('./ProfileModal'), 'ProfileModal'));
 const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'), 'BattleLogPanel'));
 const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
-const BotsPanel = lazy(lazyWithClientReload(() => import('./BotsPanel'), 'BotsPanel'));
-
-function BotsButtonGlyph({ size = 28 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <path d="M16 3v4" stroke="#5C3A21" strokeWidth="2.4" strokeLinecap="round" />
-      <circle cx="16" cy="3.5" r="2" fill="#E8B830" stroke="#5C3A21" strokeWidth="1.6" />
-      <rect x="5.5" y="8" width="21" height="17" rx="5" fill="#fdf8e7" stroke="#5C3A21" strokeWidth="2.4" />
-      <circle cx="12" cy="16" r="2.4" fill="#1E88E5" />
-      <circle cx="20" cy="16" r="2.4" fill="#43A047" />
-      <path d="M12 21.5h8" stroke="#5C3A21" strokeWidth="2.2" strokeLinecap="round" />
-      <path d="M3 15.5v4M29 15.5v4" stroke="#5C3A21" strokeWidth="2.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function VenuePickerOverlay({ isSolanaMobile, onPick }) {
   const dexOptions = getAvailableDexConfigs({ isInFrame: false, isSolanaMobile });
@@ -100,7 +83,6 @@ export default function GameUI() {
   const { tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useTutorial();
   const player = usePlayer();
   const { selectedBuilding } = useSelectedBuilding();
-  const { isMobile, actionScale } = useLayout();
   const { isSolanaMobile, ready: solanaMobileReady } = useSolanaMobile();
   const { handle: seekerHandle } = useSkrHandle(player?.wallet);
   const seekerMarkRef = useRef('');
@@ -112,9 +94,7 @@ export default function GameUI() {
   const [showProfile, setShowProfile] = useState(false);
   const [showBattleLog, setShowBattleLog] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
-  const [showBots, setShowBots] = useState(false);
   const [showVenuePicker, setShowVenuePicker] = useState(false);
-  const canShowBotsButton = !enemyMode?.active || !!enemyMode?.is_replay;
 
   useEffect(() => {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
@@ -222,10 +202,6 @@ export default function GameUI() {
   }, [enemyMode?.active, setTutorialPhase, tutorialFlags]);
 
   // Pause island when heavy overlay panels are open (futures, shop, barn, profile).
-  // BotsPanel is intentionally excluded. On desktop it behaves like a
-  // non-blocking mock control room. On mobile it covers the screen, but
-  // pausing Godot is not necessary since
-  // input can't reach the canvas through the panel anyway.
   const barnOpen = showTroops;
   const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard);
   const showFloatingUtilities = !enemyMode?.active && !anyPanelOpen;
@@ -245,9 +221,6 @@ export default function GameUI() {
   useEffect(() => {
     if (showLeaderboard) addClientBreadcrumb('ui.panel_open', { panel: 'leaderboard' });
   }, [showLeaderboard]);
-  useEffect(() => {
-    if (showBots) addClientBreadcrumb('ui.panel_open', { panel: 'bots' });
-  }, [showBots]);
 
   useEffect(() => {
     if (!solanaMobileReady || !isSolanaMobile) return;
@@ -338,57 +311,6 @@ export default function GameUI() {
           onPick={chooseVenue}
         />
       )}
-      {canShowBotsButton && (() => {
-        // Mirror ActionButtons sizing so we land cleanly between the
-        // SHOP / TRADE columns regardless of which phone the player has.
-        // btnSize/btnSmall here match ActionButtons.jsx exactly.
-        const baseAnchor = isMobile ? 8 : 12;
-        const baseGap = isMobile ? 8 : 12;
-        const tradeSize = Math.round((isMobile ? 110 : 140) * actionScale);
-        const sideSize = Math.round((isMobile ? 88 : 110) * actionScale);
-        const botsSize = Math.round((isMobile ? 64 : 68) * actionScale);
-        // Vertical center of the side buttons (SHOP / Tournament etc):
-        //   sideBottom + sideSize/2
-        // Match Bots center to it: botsBottom + botsSize/2 = sideBottom + sideSize/2
-        const botsBottom = baseAnchor + Math.round((sideSize - botsSize) / 2);
-        const botsRight = baseAnchor + tradeSize + baseGap;
-        return (
-          <button
-            style={{
-              ...styles.botsButton,
-              width: botsSize,
-              height: botsSize,
-              bottom: botsBottom,
-              right: botsRight,
-              top: 'auto',
-              left: 'auto',
-            }}
-            onClick={() => setShowBots(true)}
-            onMouseOver={(event) => {
-              event.currentTarget.style.transform = 'scale(1.08)';
-              event.currentTarget.style.filter = 'brightness(1.1)';
-            }}
-            onMouseOut={(event) => {
-              event.currentTarget.style.transform = 'scale(1)';
-              event.currentTarget.style.filter = 'none';
-            }}
-            onMouseDown={(event) => {
-              event.currentTarget.style.transform = 'scale(0.92)';
-            }}
-            onMouseUp={(event) => {
-              event.currentTarget.style.transform = 'scale(1.08)';
-            }}
-            title="Open Bots"
-            aria-label="Open Bots"
-          >
-            <div style={{ ...styles.botsButtonBg, backgroundImage: `url(${buttonBg})` }} />
-            <div style={styles.botsButtonContent}>
-              <BotsButtonGlyph size={Math.max(28, Math.round(botsSize * 0.52))} />
-              <span style={{ ...styles.botsButtonLabel, fontSize: Math.max(8, Math.round(botsSize * 0.16)) }}>BOTS</span>
-            </div>
-          </button>
-        );
-      })()}
       <ActionButtons onOpenBattleLog={() => setShowBattleLog(true)} />
       <ErrorToast message={error} />
       <FpsTracker />
@@ -423,9 +345,6 @@ export default function GameUI() {
             <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
           )}
 
-          {showBots && (
-            <BotsPanel onClose={() => setShowBots(false)} />
-          )}
         </Suspense>
       </ChunkErrorBoundary>
 
@@ -552,53 +471,5 @@ const styles = {
     inset: 0,
     pointerEvents: 'none',
     zIndex: 5,
-  },
-  // Bots trigger, anchored to the bottom-right action group via inline
-  // `bottom`/`right` overrides in the render.
-  botsButton: {
-    position: 'fixed',
-    // Size is set inline so it tracks isMobile / matches btnSmall in
-    // ActionButtons. No hard width/height here.
-    pointerEvents: 'auto',
-    zIndex: 20,
-    border: 'none',
-    background: 'none',
-    padding: 0,
-    cursor: 'pointer',
-    transition: 'transform 0.1s ease-out, filter 0.1s',
-    outline: 'none',
-    fontFamily: 'inherit',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  botsButtonBg: {
-    position: 'absolute',
-    inset: 0,
-    backgroundSize: '100% 100%',
-    backgroundRepeat: 'no-repeat',
-    filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.4))',
-    zIndex: 0,
-  },
-  botsButtonContent: {
-    position: 'absolute',
-    inset: 0,
-    zIndex: 2,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 0,
-    paddingBottom: 3,
-    filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.24))',
-    userSelect: 'none',
-    pointerEvents: 'none',
-  },
-  botsButtonLabel: {
-    color: '#fff7df',
-    fontWeight: 900,
-    lineHeight: 1,
-    textShadow: '0 2px 0 rgba(92,58,33,0.75)',
-    letterSpacing: 0,
   },
 };
