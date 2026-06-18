@@ -429,6 +429,19 @@ async function recordRecentLimitFills(playerId, subAddr) {
   return inserted;
 }
 
+async function importRecentLimitFillsForPlayer(playerId, ownerAddr) {
+  const addr = String(ownerAddr || '').toLowerCase();
+  if (!playerId || !/^0x[0-9a-f]{1,64}$/.test(addr)) {
+    return { imported: 0, skipped: 'missing_player_or_aptos_wallet' };
+  }
+  const subAddr = await resolveSubaccount(addr);
+  if (!subAddr) {
+    return { imported: 0, skipped: 'missing_decibel_subaccount' };
+  }
+  const imported = await recordRecentLimitFills(playerId, subAddr);
+  return { imported, subaccount: subAddr };
+}
+
 async function pollOnce(mainDb) {
   const rows = mainDb.prepare(
     `SELECT DISTINCT p.id, COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) AS wallet
@@ -607,4 +620,4 @@ function start() {
   console.log(`[decibel-rewards-worker] started, polling every ${POLL_MS / 1000} s`);
 }
 
-module.exports = { start, pollOnce };
+module.exports = { start, pollOnce, importRecentLimitFillsForPlayer };

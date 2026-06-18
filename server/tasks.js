@@ -606,6 +606,19 @@ async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
   if (dexFilter === 'hotstuff') {
     if (!wallet) return [];
     await maybeImportHotstuffFills(player, wallet);
+  } else if (dexFilter === 'decibel') {
+    if (!wallet) return [];
+    try {
+      const decibelRewards = require('../server-futures/decibel-rewards-worker');
+      if (typeof decibelRewards.importRecentLimitFillsForPlayer === 'function') {
+        const imported = await decibelRewards.importRecentLimitFillsForPlayer(player.id, wallet);
+        if (imported.imported || imported.skipped) {
+          console.log(`[tasks decibel] limit-fill import player=${player.name} imported=${imported.imported || 0} skipped=${imported.skipped || '-'}`);
+        }
+      }
+    } catch (e) {
+      console.warn(`[tasks decibel] limit-fill import failed player=${player?.name || player?.id}:`, e.message);
+    }
   } else if (dexFilter === 'gmtrade') {
     if (!wallet) return [];
     await maybeReconcileGmtrade(player, wallet);

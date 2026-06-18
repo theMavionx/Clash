@@ -12337,6 +12337,18 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       await importGrvtFillsForClaim(req.player.id);
     } else if (dex === 'hotstuff') {
       await importHotstuffFillsForClaim(req.player.id, wallet);
+    } else if (dex === 'decibel') {
+      try {
+        const decibelRewards = require('../server-futures/decibel-rewards-worker');
+        if (typeof decibelRewards.importRecentLimitFillsForPlayer === 'function') {
+          const imported = await decibelRewards.importRecentLimitFillsForPlayer(req.player.id, wallet);
+          if (imported.imported || imported.skipped) {
+            console.log(`[claim-gold decibel] limit-fill import player=${req.player.name} imported=${imported.imported || 0} skipped=${imported.skipped || '-'} sub=${String(imported.subaccount || '').slice(0, 10)}`);
+          }
+        }
+      } catch (e) {
+        console.warn(`[claim-gold decibel] limit-fill import failed player=${req.player.name}:`, e.message);
+      }
     } else if (dex === 'katana') {
       try {
         const katana = require('../server-futures/katana');
@@ -12404,7 +12416,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let hyperliquidWalletRowsAvailable = 0;
     const rewardSettleDelaySql = `-${TRADE_REWARD_SETTLE_DELAY_SECONDS} seconds`;
     const sourceWhere = dex === 'decibel'
-      ? "AND verified_source = 'decibel_fill'"
+      ? "AND verified_source IN ('decibel_fill', 'server')"
       : dex === 'monad'
         ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
         : dex === 'hyperliquid'
@@ -13201,7 +13213,7 @@ router.get('/trading/stats', auth, async (req, res) => {
     if (fdb) {
       try {
         const sourceClause = dex === 'decibel'
-          ? "AND verified_source = 'decibel_fill'"
+          ? "AND verified_source IN ('decibel_fill', 'server')"
           : dex === 'monad'
             ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
             : dex === 'hyperliquid'
@@ -16677,7 +16689,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
           : dex === 'flash'
             ? "verified_source = 'flash_tx'"
           : dex === 'decibel'
-          ? "verified_source = 'decibel_fill'"
+          ? "verified_source IN ('decibel_fill', 'server')"
         : dex === 'phoenix'
           ? "verified_source IN ('worker', 'tx')"
           : "verified_source = 'worker'";
@@ -19008,7 +19020,7 @@ function tournamentRowToPublic(t, options = {}) {
 }
 
 function tournamentTradeSourceWhere(dex) {
-  if (dex === 'decibel') return "verified_source = 'decibel_fill'";
+  if (dex === 'decibel') return "verified_source IN ('decibel_fill', 'server')";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
@@ -20983,4 +20995,3 @@ router.use('/v1/strategies', auth, proxyToBot);
 router.use('/v1/bot', auth, proxyToBot);
 
 module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };
-

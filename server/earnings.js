@@ -1698,7 +1698,7 @@ function decibelFeeBpsForDate(value) {
 }
 
 function tradeSourceWhereForAnalytics(dex) {
-  if (dex === 'decibel') return "verified_source = 'decibel_fill'";
+  if (dex === 'decibel') return "verified_source IN ('decibel_fill', 'server')";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'grvt') return "verified_source = 'grvt_builder'";
