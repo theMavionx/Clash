@@ -32,8 +32,27 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 
 - Agents follow user instructions directly
 - Multi-file changes should be explained before applying
-- No commits without user instruction
+- No commits, pushes, pull-request merges, production deploys, or production database changes
+  without explicit owner approval in the current conversation
 - Use Godot MCP tools when available for scene inspection
+- Local checks, local servers, local playtests, and draft file edits are allowed when they help
+  complete the requested task
+
+## Quality Bar
+
+- For feature, gameplay, UI, balance, server, or content changes, the task is not done until
+  the agent has run the most relevant local verification it can reasonably run.
+- Prefer a real local flow over static inspection when the change affects gameplay or user
+  experience: start local services, open the local client, run a replay/simulation, or use
+  Godot/live inspection when available.
+- If verification finds a bug caused by the change, fix it and re-run the focused check before
+  reporting completion.
+- Do not break existing working systems while adding or removing functionality. If a requested
+  change intentionally breaks compatibility or removes behavior, warn the owner before doing it.
+- Preserve existing behavior by default; changes should be additive or narrowly targeted unless
+  the owner explicitly asks for a replacement/removal.
+- In the final report, state what was changed, what was verified, and any remaining risk or check
+  that could not be run.
 
 ## Coding Standards
 
@@ -42,6 +61,49 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 ## Context Management
 
 @.codex/docs/context-management.md
+
+## Project Memory
+
+@production/agent-memory.md
+
+## Project Story
+
+@production/project-story.md
+
+## Owner-Agent Rules
+
+@production/owner-agent-rules.md
+
+## Active Goals
+
+@production/active-goals.md
+
+## Personal Workflow
+
+- At the start of a fresh chat, context recovery, broad repo analysis, or goal work, read:
+  `AGENTS.md`, `production/owner-agent-rules.md`, `production/project-story.md`,
+  `production/agent-memory.md`, `production/active-goals.md`, and
+  `production/session-state/active.md`.
+- For a fresh chat or after context loss, load project memory first:
+  `tools/codex/start-context.cmd`
+- If the owner says `Старт`, `Start`, `Start Context`, or `Story`, run the project-start
+  workflow and summarize the game, repo state, active goals, and best next action.
+- Treat `production/active-goals.md` as the source of truth for current goals.
+- When starting goal work, update the goal status/checkpoint before broad edits.
+- For production deploys, use the `deploy-clash` skill and the existing deploy scripts.
+- Optional local git hooks live in `tools/codex/git-hooks/` and can be installed with
+  `tools/codex/install-git-hooks.cmd`.
+- For manual owner playtests, use `tools/codex/playtest-local.cmd`.
+- For local balance verification, use `tools/codex/local-test-balance.cmd`.
+
+## Branch Discipline
+
+- `main` is the integration branch.
+- Balance-related work belongs on `codex/balance`.
+- Before starting balance work, run `git status --short --branch`; if not already on
+  `codex/balance`, switch to it only when doing so will not overwrite local changes.
+- Keep balance commits limited to economy, combat, progression, resource buildings, and
+  tuning support files. Use a separate branch for unrelated features.
 
 ## Engine Version Reference
 
@@ -55,7 +117,7 @@ Server definitions in `server/db.js` -> `BUILDING_DEFS`.
 Types: Town Hall, Mine, Barn, Port, Sawmill, Turret, Storage, Archer Tower, Tombstone.
 
 ### Troops
-Base class: `scripts/base_troop.gd`. Individual: knight, mage, barbarian, archer, ranger.
+Base class: `scripts/base_troop.gd`. Active individuals: knight, mage, archer, demon king, fire dragon.
 Deployed from ships via `scripts/attack_system.gd`.
 Dual targeting: closest building OR skeleton guard.
 

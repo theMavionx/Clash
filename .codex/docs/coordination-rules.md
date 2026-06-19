@@ -2,7 +2,26 @@
 
 ## Operating Mode
 
-Codex works user-first in this repository. Implement requested changes directly when the scope is clear, but explain multi-file edits before applying them and never commit unless the user asks.
+Codex works user-first in this repository. Implement requested changes directly when the scope is clear, but explain multi-file edits before applying them.
+
+No commits, pushes, pull-request merges, production deploys, or production database changes are allowed unless the owner explicitly approves that exact action in the current conversation. Local checks, local dev servers, and local playtests are allowed when they do not affect production.
+
+## Definition Of Done
+
+- Inspect the affected system before editing.
+- Implement the smallest coherent change that satisfies the request.
+- Run focused verification after the change. For gameplay/user-facing changes, prefer a real local check or playtest over static review alone.
+- If verification exposes a regression or bug caused by the change, fix it and verify again.
+- Do not break previously working systems unless the owner explicitly approves the break or replacement.
+- Warn before intentional behavior removal, compatibility breaks, schema risks, or production-impacting actions.
+- Final updates must include changed scope, checks run, and any remaining unverified risk.
+
+## Branch Discipline
+
+- `main` is the integration branch.
+- `codex/balance` is the owner-designated branch for economy, combat, progression, resource-building, and tuning work.
+- Before balance work, check `git status --short --branch`.
+- Do not mix unrelated feature work into balance commits.
 
 ## Delegation Model
 
