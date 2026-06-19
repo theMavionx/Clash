@@ -32,23 +32,11 @@ const NORMAL_TROOP_STATS: Dictionary = {
 		3: {"hp": 265, "damage": 104, "atk_speed": 1.0},
 		4: {"hp": 345, "damage": 138, "atk_speed": 0.90},
 	},
-	"barbarian": {
-		1: {"hp": 240, "damage": 24, "atk_speed": 0.60},
-		2: {"hp": 320, "damage": 32, "atk_speed": 0.55},
-		3: {"hp": 420, "damage": 43, "atk_speed": 0.50},
-		4: {"hp": 550, "damage": 57, "atk_speed": 0.46},
-	},
 	"archer": {
 		1: {"hp": 210, "damage": 40, "atk_speed": 1.05},
 		2: {"hp": 280, "damage": 51, "atk_speed": 0.95},
 		3: {"hp": 310, "damage": 58, "atk_speed": 0.85},
 		4: {"hp": 425, "damage": 82, "atk_speed": 0.78},
-	},
-	"ranger": {
-		1: {"hp": 250, "damage": 34, "atk_speed": 1.0},
-		2: {"hp": 330, "damage": 45, "atk_speed": 0.92},
-		3: {"hp": 430, "damage": 60, "atk_speed": 0.83},
-		4: {"hp": 560, "damage": 80, "atk_speed": 0.76},
 	},
 }
 

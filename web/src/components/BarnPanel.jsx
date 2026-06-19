@@ -13,9 +13,7 @@ import stoneIcon from '../assets/resources/stone_bar.png';
 
 import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
-import arbaletImg from '../assets/units/arbalet.png';
 import archerImg from '../assets/units/archer.png';
-import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
 
 // Module-level CSS — injected once, not re-parsed on every render
@@ -51,17 +49,13 @@ const UNIT_IMAGES = {
   Knight: knightImg,
   Mage: mageImg,
   Archer: archerImg,
-  Ranger: arbaletImg,
-  Barbarian: berserkImg,
   DemonKing: demonKingImg,
 };
 
 const CARD_TROOP_STYLE_MAP = {
   Knight: { scale: 1.8, offsetY: '35%' },
   Mage: { scale: 1.85, offsetY: '45%' },
-  Barbarian: { scale: 1.25, offsetY: '15%' },
   Archer: { scale: 1.25, offsetY: '15%' },
-  Ranger: { scale: 1.25, offsetY: '15%' },
   DemonKing: { scale: 1.35, offsetY: '10%' },
 };
 
@@ -218,16 +212,6 @@ const TROOP_STATS = {
     },
     maxStats: { hp: 345, damage: 138, atk_speed: 1.25 }
   },
-  Barbarian: {
-    display: "Barbarian",
-    stats: {
-      1: { hp: 240, damage: 24, atk_speed: 0.6 },
-      2: { hp: 320, damage: 32, atk_speed: 0.55 },
-      3: { hp: 420, damage: 43, atk_speed: 0.5 },
-      4: { hp: 550, damage: 57, atk_speed: 0.46 },
-    },
-    maxStats: { hp: 550, damage: 57, atk_speed: 0.6 }
-  },
   Archer: {
     display: "Archer",
     stats: {
@@ -237,16 +221,6 @@ const TROOP_STATS = {
       4: { hp: 425, damage: 82, atk_speed: 0.78 },
     },
     maxStats: { hp: 425, damage: 82, atk_speed: 1.05 }
-  },
-  Ranger: {
-    display: "Ranger",
-    stats: {
-      1: { hp: 250, damage: 34, atk_speed: 1.0 },
-      2: { hp: 330, damage: 45, atk_speed: 0.92 },
-      3: { hp: 430, damage: 60, atk_speed: 0.83 },
-      4: { hp: 560, damage: 80, atk_speed: 0.76 },
-    },
-    maxStats: { hp: 560, damage: 80, atk_speed: 1.0 }
   },
   DemonKing: {
     display: "Demon King",
@@ -259,8 +233,8 @@ const TROOP_STATS = {
   }
 };
 
-const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger', 'DemonKing'];
-const NORMAL_TROOP_NAMES = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Archer', 'DemonKing'];
+const NORMAL_TROOP_NAMES = ['Knight', 'Mage', 'Archer'];
 const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
 const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL = { 1: 1.2, 2: 1.3, 3: 1.4 };
 const DEMON_KING_SLOT_COUNT = 2;

@@ -13,8 +13,6 @@ import NftMintPanel from './NftMintPanel';
 import knightImg  from '../assets/units/knight.png';
 import mageImg    from '../assets/units/mage.png';
 import archerImg  from '../assets/units/archer.png';
-import arbaletImg from '../assets/units/arbalet.png';
-import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
 
 // Matches SHIP_TROOPS index order in attack_system.gd — must stay in sync!
@@ -98,9 +96,7 @@ const RallyGrenadeIcon = ({ size = 48 }) => (
 const TROOP_IMG_MAP = {
   knight: { img: knightImg, label: 'Knight', zoom: 1.35, offsetY: '10%' },
   mage: { img: mageImg, label: 'Mage', zoom: 1.45, offsetY: '15%' },
-  barbarian: { img: berserkImg, label: 'Barbarian' },
   archer: { img: archerImg, label: 'Archer' },
-  ranger: { img: arbaletImg, label: 'Ranger' },
   demonking: { img: demonKingImg, label: 'Demon King' },
   demon_king: { img: demonKingImg, label: 'Demon King' },
 };
@@ -791,7 +787,7 @@ function ActionButtons({ onOpenBattleLog }) {
 
 const REINFORCE_COST = 50;
 const UNIT_IMG_MAP = {
-  Knight: knightImg, Mage: mageImg, Barbarian: berserkImg, Archer: archerImg, Ranger: arbaletImg,
+  Knight: knightImg, Mage: mageImg, Archer: archerImg,
 };
 
 function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {

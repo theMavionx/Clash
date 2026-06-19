@@ -51,9 +51,7 @@ const SHIP_SCALES: Array[float] = [0.05, 0.05, 0.05]
 const TROOP_DEFS: Dictionary = {
 	"Knight":    {"model": "res://Model/Characters/Model/Knight.glb",      "script": "res://scripts/knight.gd"},
 	"Mage":      {"model": "res://Model/Characters/Model/Mage.glb",        "script": "res://scripts/mage.gd"},
-	"Barbarian": {"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
 	"Archer":    {"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
-	"Ranger":    {"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
 	"DemonKing": {"model": "res://Model/Characters/Model/DemonKing_Body.fbx",   "script": "res://scripts/demon_king.gd"},
 	"FireDragon": {"model": "res://Model/Characters/FireDragon/FireDragon.tscn", "script": "res://scripts/fire_dragon.gd"},
 }
@@ -62,9 +60,7 @@ const TROOP_DEFS: Dictionary = {
 const SHIP_TROOPS = [
 	{"model": "res://Model/Characters/Model/Knight.glb",      "script": "res://scripts/knight.gd"},
 	{"model": "res://Model/Characters/Model/Mage.glb",        "script": "res://scripts/mage.gd"},
-	{"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
 	{"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
-	{"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -1015,9 +1011,7 @@ static func _script_to_troop_key(script_path: String) -> String:
 	match file:
 		"knight":     return "Knight"
 		"mage":       return "Mage"
-		"barbarian":  return "Barbarian"
 		"archer":     return "Archer"
-		"ranger":     return "Ranger"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return file.capitalize()
@@ -1030,12 +1024,8 @@ static func _normalize_troop_entry(troop_name: String) -> String:
 			return "Knight"
 		"mage":
 			return "Mage"
-		"barbarian":
-			return "Barbarian"
 		"archer":
 			return "Archer"
-		"ranger":
-			return "Ranger"
 		"demonking", "demon_king":
 			return "DemonKing"
 		"firedragon", "fire_dragon":

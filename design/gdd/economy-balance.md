@@ -27,7 +27,7 @@ ore are secondary resources that create parallel decision-making but are never t
 primary blocker.
 
 ⚠️ **Balance risk (headline):** At the current shipped gold rates (Section 3.2), the
-target player earns ~360G/day, while a fully maxed base + troops costs **~55,400G net**
+target player earns ~360G/day, while a fully maxed base + troops costs **~54,550G net**
 of starting resources (Section 4.1). The economy as built takes **~10–12 weeks** to max,
 not the intended 3–4. Closing this gap requires either raising gold income or lowering
 gold sinks (see Section 7 sensitivity).
@@ -99,7 +99,7 @@ Assumes ~360G/day steady-state after day 1, no raiding.
 
 **Total available gold by end of day 28: ~14,880G** (raiding can supplement — see 5.4).
 
-⚠️ This is ~40,500G short of the ~55,400G net needed to fully max (Section 4.1).
+⚠️ This is ~40,500G short of the ~54,550G net needed to fully max (Section 4.1).
 
 ### 3.4 Wood and Ore Income — Production Buildings
 
@@ -183,13 +183,13 @@ HP per level: 3,500 / 6,000 / 10,000.
 |----------|------|------|-----|
 | All buildings placed + upgraded to Lv3 | 54,400G | 149,000W | 105,200O |
 | Ships (5 ports × 500G) | 2,500G | 0 | 0 |
-| Troop upgrades (all to Lv3) | 2,520G | 870W | 1,550O |
-| **TOTAL** | **59,420G** | **149,870W** | **106,750O** |
-| Minus starting resources (4,000 each) | **55,420G** | **145,870W** | **102,750O** |
+| Troop upgrades (all active troops to Lv3) | 1,650G | 500W | 1,050O |
+| **TOTAL** | **58,550G** | **149,500W** | **106,250O** |
+| Minus starting resources (4,000 each) | **54,550G** | **145,500W** | **102,250O** |
 
 **Available by day 28 (no raiding):** ~14,880G / hundreds-of-thousands W / hundreds-of-thousands O.
 
-⚠️ **Balance risk:** Gold falls ~40,500G short of the 55,420G needed. At ~360G/day plus
+⚠️ **Balance risk:** Gold falls ~39,700G short of the 54,550G needed. At ~360G/day plus
 modest raiding, full max takes **~10–12 weeks**, not the intended 3–4. Either gold income
 must rise (e.g. `GOLD_DAILY_TRADE` toward 700–900, the v1.0 intent) or gold sinks must
 drop. Wood and ore are comfortably covered.
@@ -204,14 +204,12 @@ the data but is never charged, since `max_level = 3`.)
 |-------|-----------|-----------|-------------|----------|
 | Knight | 150G + 100O | 300G + 250O | **450G + 350O** | gold/ore |
 | Mage | 200G + 200O | 500G + 500O | **700G + 700O** | gold/ore |
-| Barbarian | 150G + 150O | 350G + 350O | **500G + 500O** | gold/ore |
 | Archer | 150G + 150W | 350G + 350W | **500G + 500W** | gold/wood |
-| Ranger | 120G + 120W | 250G + 250W | **370G + 370W** | gold/wood |
-| **Totals** | — | — | **2,520G + 870W + 1,550O** | — |
+| **Totals** | — | — | **1,650G + 500W + 1,050O** | — |
 | Demon King ⚗️ | — | — | **no server cost yet** | premium, 2 ship slots |
 
 (The unused `cost[2]` entries are: Knight 600G+500O, Mage 1000G+1000O,
-Barbarian 700G+700O, Archer 700G+700W, Ranger 500G+500W.)
+Archer 700G+700W.)
 
 ⚗️ **Demon King is not in `TROOP_DEFS`** — it has no server-side cost and is not part of
 the economy totals. It is defined client-side (`demon_king.gd`, registered in
@@ -336,9 +334,7 @@ The upgrade-cost multiplier system (`base * level`) is unchanged; only base cost
 ```javascript
 knight:    { cost: [{ gold: 150, ore: 100 }, { gold: 300, ore: 250 }, { gold:  600, ore:  500 }] },
 mage:      { cost: [{ gold: 200, ore: 200 }, { gold: 500, ore: 500 }, { gold: 1000, ore: 1000 }] },
-barbarian: { cost: [{ gold: 150, ore: 150 }, { gold: 350, ore: 350 }, { gold:  700, ore:  700 }] },
 archer:    { cost: [{ gold: 150, wood: 150 }, { gold: 350, wood: 350 }, { gold: 700, wood: 700 }] },
-ranger:    { cost: [{ gold: 120, wood: 120 }, { gold: 250, wood: 250 }, { gold: 500, wood: 500 }] },
 // demon_king: NOT YET DEFINED server-side. Proposed (pending approval):
 // demon_king: { max_level: 3, slot_cost: 2,
 //   cost: [{ gold: 400, ore: 350 }, { gold: 800, ore: 700 }, { gold: 1600, ore: 1400 }] },

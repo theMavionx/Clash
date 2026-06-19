@@ -682,7 +682,7 @@ static func _find_anim_player_recursive(node: Node) -> AnimationPlayer:
 	return null
 
 
-## Animation file paths for the medium rig — shared by Knight, Mage, Barbarian.
+## Animation file paths for the medium rig — shared by Knight, Mage, and Archer.
 ## Subclasses that use this rig should assign `anim_files = MEDIUM_RIG_ANIM_FILES` in `_init_stats()`.
 const MEDIUM_RIG_ANIM_FILES: Array = [
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
@@ -1063,9 +1063,7 @@ func _get_troop_name() -> String:
 	match file:
 		"knight": return "Knight"
 		"mage": return "Mage"
-		"barbarian": return "Barbarian"
 		"archer": return "Archer"
-		"ranger": return "Ranger"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return ""

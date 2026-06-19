@@ -1,7 +1,17 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const crypto = require('crypto');
-const { CANONICAL_GRID_CONFIG } = require('./combat_defs');
+const {
+  CANONICAL_GRID_CONFIG,
+  TROOP_STATS,
+  computeDemonKingStats,
+  DEFENSE_STATS,
+  SKELETON_GUARD,
+} = require('./combat_defs');
+const {
+  MATCHMAKING_CONFIG,
+  buildBotBaseTemplates,
+} = require('./matchmaking_defs');
 const uuidv4 = () => crypto.randomUUID();
 
 const DB_PATH = process.env.CLASH_MAIN_DB || path.join(__dirname, 'clash.db');
@@ -103,6 +113,13 @@ try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_contract TEXT`); } 
 try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_verified_at TEXT`); } catch {}
 // PvP win counter. Used by Demon King NFT-backed progression gates.
 try { db.exec(`ALTER TABLE players ADD COLUMN battle_wins INTEGER NOT NULL DEFAULT 0`); } catch {}
+// Server-generated raid targets. Only the selected bot template is materialized
+// as a temporary marked player so the existing battle verifier, building
+// loader, and resource transfer paths stay compatible with client expectations.
+try { db.exec(`ALTER TABLE players ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN bot_difficulty TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN bot_variant INTEGER`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN bot_generation TEXT`); } catch {}
 
 // Unified account identity layer. The legacy `players.wallet` and
 // `players.dex` columns remain for compatibility, but new auth paths should
@@ -1298,6 +1315,50 @@ try {
 // reference surrendered_at.
 try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN surrendered_at TEXT`); } catch {}
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS raid_matchmaking (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      battle_session_id     TEXT UNIQUE,
+      attacker_id           TEXT NOT NULL,
+      defender_id           TEXT NOT NULL,
+      target_is_bot         INTEGER NOT NULL DEFAULT 0,
+      target_bot_difficulty TEXT,
+      attacker_th           INTEGER NOT NULL DEFAULT 1,
+      defender_th           INTEGER NOT NULL DEFAULT 1,
+      attack_power          REAL NOT NULL DEFAULT 0,
+      base_power            REAL NOT NULL DEFAULT 0,
+      base_power_ratio      REAL NOT NULL DEFAULT 0,
+      difficulty_bucket     TEXT NOT NULL DEFAULT 'normal',
+      recovery_level        INTEGER NOT NULL DEFAULT 0,
+      recent_success_rate   REAL,
+      recent_raid_count     INTEGER NOT NULL DEFAULT 0,
+      consecutive_losses    INTEGER NOT NULL DEFAULT 0,
+      match_score           REAL NOT NULL DEFAULT 0,
+      live_candidate_count  INTEGER NOT NULL DEFAULT 0,
+      bot_candidate_count   INTEGER NOT NULL DEFAULT 0,
+      selection_reason      TEXT,
+      result                TEXT,
+      verified_result       TEXT,
+      completed_at          TEXT,
+      duration_sec          REAL,
+      sim_th_hp_pct         REAL,
+      sim_buildings_destroyed INTEGER DEFAULT 0,
+      main_loss_reason      TEXT,
+      loot_gold             INTEGER DEFAULT 0,
+      loot_wood             INTEGER DEFAULT 0,
+      loot_ore              INTEGER DEFAULT 0,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_raid_matchmaking_attacker_created
+      ON raid_matchmaking(attacker_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_raid_matchmaking_result_created
+      ON raid_matchmaking(result, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_raid_matchmaking_defender_created
+      ON raid_matchmaking(defender_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] raid matchmaking migration:', e.message); }
+
 // Paid utility purchases. Kept separate from `players.wallet`: a player can
 // be logged in through Aptos/Solana/etc. and still pay from a one-off Base
 // wallet without changing their DEX identity.
@@ -1543,13 +1604,14 @@ const stmts = {
     INSERT INTO players (id, name, token, gold, wood, ore)
     VALUES (?, ?, ?, 2000, 2000, 2000)
   `),
-  getPlayerByToken: db.prepare(`SELECT * FROM players WHERE token = ?`),
-  getPlayerByName: db.prepare(`SELECT * FROM players WHERE name = ?`),
-  getPlayerByNameCasefold: db.prepare(`SELECT * FROM players WHERE lower(name) = lower(?) LIMIT 1`),
+  getPlayerByToken: db.prepare(`SELECT * FROM players WHERE token = ? AND COALESCE(is_bot, 0) = 0`),
+  getPlayerByName: db.prepare(`SELECT * FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0`),
+  getPlayerByNameCasefold: db.prepare(`SELECT * FROM players WHERE lower(name) = lower(?) AND COALESCE(is_bot, 0) = 0 LIMIT 1`),
   searchPlayersByName: db.prepare(`
     SELECT id, name, trophies, level, shield_until
     FROM players
     WHERE lower(name) LIKE lower(?) ESCAPE '\\'
+      AND COALESCE(is_bot, 0) = 0
     ORDER BY
       CASE WHEN lower(name) = lower(?) THEN 0 ELSE 1 END,
       length(name) ASC,
@@ -1668,8 +1730,13 @@ const stmts = {
   // or surrendered against. Without this, the matchmaker can re-pair a
   // player with a base that /attack/result will later reject.
   findEnemyCandidates: db.prepare(`
-    SELECT id, name, trophies, level FROM players
+    SELECT id, name, trophies, level,
+           COALESCE(is_bot, 0) AS is_bot,
+           bot_difficulty,
+           bot_variant
+    FROM players
     WHERE id != ?
+      AND COALESCE(is_bot, 0) = 0
       AND (shield_until IS NULL OR shield_until < datetime('now'))
       AND NOT (
         last_attacked_by = ?
@@ -1963,13 +2030,66 @@ const stmts = {
     VALUES (?, ?, ?, 'cancelled', datetime('now'), datetime('now'), datetime('now'))
   `),
 
-  // Tournaments — used by battle paths to detect whether a player is
-  // currently joined to an active tournament available to their DEX. When yes,
-  // main `players.trophies` writes are skipped and the delta is routed
-  // (with boost) into `tournament_participants.trophies` instead.
-  // Joins with `players.dex` to enforce single/custom/all DEX scoping; `left_at IS NULL`
-  // means the participant is still active (didn't soft-leave).
-  // Status='active' + (end_at IS NULL OR end_at > now) defines "live now".
+  // Raid matchmaking analytics. One row is created when /find-enemy reserves
+  // a target, then completed by /attack/result or /battle/surrender.
+  insertRaidMatchmaking: db.prepare(`
+    INSERT INTO raid_matchmaking (
+      battle_session_id, attacker_id, defender_id,
+      target_is_bot, target_bot_difficulty,
+      attacker_th, defender_th,
+      attack_power, base_power, base_power_ratio,
+      difficulty_bucket, recovery_level,
+      recent_success_rate, recent_raid_count, consecutive_losses,
+      match_score, live_candidate_count, bot_candidate_count, selection_reason
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  getRaidMatchmakingBySession: db.prepare(`
+    SELECT *
+    FROM raid_matchmaking
+    WHERE battle_session_id = ?
+    LIMIT 1
+  `),
+  completeRaidMatchmaking: db.prepare(`
+    UPDATE raid_matchmaking
+    SET result = ?,
+        verified_result = ?,
+        completed_at = datetime('now'),
+        duration_sec = ?,
+        sim_th_hp_pct = ?,
+        sim_buildings_destroyed = ?,
+        main_loss_reason = ?,
+        loot_gold = ?,
+        loot_wood = ?,
+        loot_ore = ?
+    WHERE battle_session_id = ?
+  `),
+  markRaidMatchmakingSurrender: db.prepare(`
+    UPDATE raid_matchmaking
+    SET result = 'surrender',
+        verified_result = 'surrender',
+        completed_at = datetime('now'),
+        main_loss_reason = 'surrender'
+    WHERE battle_session_id = ? AND attacker_id = ?
+  `),
+  recentRaidMatchmakingResults: db.prepare(`
+    SELECT result, target_is_bot, target_bot_difficulty, difficulty_bucket, recovery_level, created_at
+    FROM raid_matchmaking
+    WHERE attacker_id = ?
+      AND result IN ('victory', 'defeat')
+    ORDER BY created_at DESC
+    LIMIT ?
+  `),
+  recentBattleReplayResults: db.prepare(`
+    SELECT claimed_result, verified_result, sim_th_hp_pct, created_at
+    FROM battle_replays
+    WHERE attacker_id = ?
+      AND lower(COALESCE(verified_result, '')) IN ('accepted', 'victory')
+    ORDER BY created_at DESC
+    LIMIT ?
+  `),
+
+  // Tournaments: used by battle paths to detect whether a player is currently
+  // joined to an active tournament available to their DEX.
   getActiveTournamentForPlayer: db.prepare(`
     SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only, p.team_dex,
            t.gold_boost, COALESCE(t.seeker_gold_boost, 1.0) AS seeker_gold_boost, t.trophy_boost,
@@ -2822,14 +2942,161 @@ function normalizeTownHallHpRows() {
 
 normalizeTownHallHpRows();
 
+function botBuildingHp(type, level) {
+  const def = BUILDING_DEFS[type];
+  if (!def) return 1;
+  const hpLevels = def.hp_levels || [1];
+  const idx = Math.max(0, Math.min(hpLevels.length - 1, Math.trunc(Number(level) || 1) - 1));
+  return Math.max(1, Number(hpLevels[idx]) || 1);
+}
+
+let botTemplateByIdCache = null;
+
+function botTemplateById(templateId) {
+  if (!botTemplateByIdCache) {
+    botTemplateByIdCache = new Map(buildBotBaseTemplates().map((template) => [template.id, template]));
+  }
+  return botTemplateByIdCache.get(templateId) || null;
+}
+
+function botMaterializedToken(templateId, sessionId) {
+  return `bot-${crypto.createHash('sha256')
+    .update(`raid-bot:${templateId}:${sessionId}`)
+    .digest('hex')}`;
+}
+
+function cleanupOldBotTargets() {
+  try {
+    const result = db.prepare(`
+      DELETE FROM players
+      WHERE COALESCE(is_bot, 0) = 1
+        AND NOT EXISTS (
+          SELECT 1 FROM battle_sessions s
+          WHERE s.defender_id = players.id
+            AND s.status = 'active'
+            AND s.reserved_until > datetime('now')
+        )
+        AND (
+          id LIKE 'bot-th%'
+          OR created_at < datetime('now', '-2 days')
+        )
+    `).run();
+    if (result.changes > 0) {
+      console.log(`[db] cleaned up ${result.changes} old raid bot target(s)`);
+    }
+  } catch (e) {
+    console.warn('[db] bot target cleanup warning:', e.message);
+  }
+}
+
+function virtualBotCandidatesForProfile(attackPower, profile) {
+  const attackerTh = Math.max(1, Math.min(4, Number(attackPower.town_hall_level || 1)));
+  const minTh = profile.recovery_level > 0 ? Math.max(1, attackerTh - 1) : Math.max(1, attackerTh - 1);
+  const maxTh = profile.recovery_level > 0
+    ? attackerTh
+    : profile.selection_reason === 'strong_player'
+      ? Math.min(4, attackerTh + 1)
+      : Math.min(4, attackerTh + 1);
+  const allowedDifficulties = profile.recovery_level > 0
+    ? new Set(['easy', 'normal'])
+    : profile.selection_reason === 'strong_player'
+      ? new Set(['normal', 'hard'])
+      : new Set(['easy', 'normal', 'hard']);
+
+  return buildBotBaseTemplates()
+    .filter((template) => template.th >= minTh && template.th <= maxTh && allowedDifficulties.has(template.difficulty))
+    .map((template) => {
+      const base = computeBasePowerFromBuildings(template.buildings);
+      return {
+        id: template.id,
+        name: template.name,
+        trophies: template.trophies,
+        level: template.th,
+        is_bot: 1,
+        is_virtual_bot: true,
+        bot_template_id: template.id,
+        bot_difficulty: template.difficulty,
+        bot_variant: template.variant,
+        bot_generation: template.generation,
+        bot_template: template,
+        base_power: base.power,
+        defender_th: base.town_hall_level,
+      };
+    });
+}
+
+function materializeBotTarget(candidate, sessionId) {
+  const template = candidate.bot_template || botTemplateById(candidate.bot_template_id || candidate.id);
+  if (!template) throw new Error('Bot template not found');
+  const suffix = String(sessionId || uuidv4()).replace(/-/g, '').slice(0, 12);
+  const botId = `bot-raid-${template.id}-${suffix}`;
+  const botName = `${template.name} ${suffix.slice(0, 4)}`;
+  const insertBot = db.prepare(`
+    INSERT INTO players (
+      id, name, token, gold, wood, ore, trophies, level,
+      is_bot, bot_difficulty, bot_variant, bot_generation,
+      shield_until, last_attacked_by, last_attacked_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, NULL, NULL)
+  `);
+  const insertBuilding = db.prepare(`
+    INSERT INTO buildings (
+      player_id, type, level, grid_x, grid_z, grid_index,
+      hp, max_hp, has_ship, ship_troops, ship_troops_template
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]')
+  `);
+
+  insertBot.run(
+    botId,
+    botName,
+    botMaterializedToken(template.id, sessionId),
+    template.resources.gold,
+    template.resources.wood,
+    template.resources.ore,
+    template.trophies,
+    template.th,
+    template.difficulty,
+    template.variant,
+    template.generation
+  );
+
+  for (const building of template.buildings) {
+    const maxHp = botBuildingHp(building.type, building.level);
+    insertBuilding.run(
+      botId,
+      building.type,
+      building.level,
+      building.grid_x,
+      building.grid_z,
+      building.grid_index || 0,
+      maxHp,
+      maxHp,
+      building.has_ship ? 1 : 0
+    );
+  }
+
+  return {
+    ...candidate,
+    id: botId,
+    name: botName,
+    trophies: template.trophies,
+    level: template.th,
+    is_bot: 1,
+    is_virtual_bot: false,
+    bot_difficulty: template.difficulty,
+    bot_variant: template.variant,
+    bot_generation: template.generation,
+    bot_template_id: template.id,
+  };
+}
+
+cleanupOldBotTargets();
+
 // ---------- Troop Definitions ----------
 
 const TROOP_DEFS = {
   knight:    { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 },  { gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 }] },
   mage:      { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
-  barbarian: { max_level: 4, cost: [{ gold: 175, wood: 0, ore: 175 }, { gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }] },
   archer:    { max_level: 4, cost: [{ gold: 175, wood: 175, ore: 0 }, { gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }] },
-  ranger:    { max_level: 4, cost: [{ gold: 125, wood: 125, ore: 0 }, { gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }] },
   demon_king: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
   fire_dragon: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
 };
@@ -4253,6 +4520,335 @@ function getProductionStatus(playerId) {
   return result;
 }
 
+const MATCHMAKING_TROOP_ALIASES = {
+  demonking: 'demon_king',
+  demon_king: 'demon_king',
+  firedragon: 'fire_dragon',
+  fire_dragon: 'fire_dragon',
+};
+
+function clampMatchNumber(value, min, max, fallback = min) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizeMatchTroopType(entry) {
+  const raw = String(entry || '').split(':')[0].trim().toLowerCase();
+  return MATCHMAKING_TROOP_ALIASES[raw] || raw;
+}
+
+function matchTroopEntryLevel(entry, fallback = 1) {
+  const match = String(entry || '').match(/:L([1-4])$/i);
+  if (match) return clampMatchNumber(match[1], 1, 4, fallback);
+  return clampMatchNumber(fallback, 1, 4, 1);
+}
+
+function troopLevelsObject(playerId) {
+  const levels = {};
+  for (const row of getTroopLevels(playerId)) {
+    levels[row.troop_type] = clampMatchNumber(row.level, 1, 4, 1);
+  }
+  return levels;
+}
+
+function safeJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function troopPowerFromEntry(entry, levelMap) {
+  if (String(entry || '') === '_SLOT_FILLER_') return 0;
+  const troopType = normalizeMatchTroopType(entry);
+  if (!troopType || (!TROOP_STATS[troopType] && troopType !== 'demon_king')) return 0;
+  const fallbackLevel = levelMap[troopType] || 1;
+  const level = matchTroopEntryLevel(entry, fallbackLevel);
+  const stats = troopType === 'demon_king'
+    ? computeDemonKingStats(levelMap, Math.min(3, level))
+    : (TROOP_STATS[troopType]?.[level] || TROOP_STATS[troopType]?.[1]);
+  if (!stats) return 0;
+  const hp = Math.max(1, Number(stats.hp) || 1);
+  const damage = Math.max(0, Number(stats.damage) || 0);
+  const atkSpeed = Math.max(0.1, Number(stats.atkSpeed) || 1);
+  const dps = damage / atkSpeed;
+  const rangeBonus = Number(stats.range || 0) >= 0.9 ? 80 : 0;
+  const flyingBonus = stats.flying ? 140 : 0;
+  return hp * 0.18 + dps * 28 + rangeBonus + flyingBonus;
+}
+
+function computeAttackPower(playerId) {
+  const levels = troopLevelsObject(playerId);
+  const ports = stmts.getBuildings.all(playerId)
+    .filter((b) => b.type === 'port' && Number(b.has_ship) === 1);
+  let power = 0;
+  let troopCount = 0;
+  let shipCount = 0;
+  let shipCapacity = 0;
+  for (const port of ports) {
+    const troops = safeJsonArray(port.ship_troops);
+    if (troops.length === 0) continue;
+    shipCount += 1;
+    const portLevel = clampMatchNumber(port.level, 1, 4, 1);
+    shipCapacity += portLevel * 3;
+    power += 120 + portLevel * 90;
+    for (const troop of troops) {
+      if (String(troop || '') === '_SLOT_FILLER_') continue;
+      const p = troopPowerFromEntry(troop, levels);
+      if (p <= 0) continue;
+      troopCount += 1;
+      power += p;
+    }
+  }
+  const thLevel = getTownHallLevel(playerId);
+  power += Math.max(0, thLevel - 1) * 180;
+  return {
+    power: Math.max(1, Math.round(power)),
+    town_hall_level: thLevel,
+    troop_count: troopCount,
+    ship_count: shipCount,
+    ship_capacity: shipCapacity,
+  };
+}
+
+function defensePowerForBuilding(building) {
+  const type = String(building.type || '').toLowerCase();
+  const level = Math.max(1, Math.trunc(Number(building.level) || 1));
+  if (type === 'turret') {
+    const stats = DEFENSE_STATS.turret[level] || DEFENSE_STATS.turret[1];
+    const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
+    return dps * 35 + (Number(stats.detectRange) || 0) * 180;
+  }
+  if (type === 'archer_tower') {
+    const stats = DEFENSE_STATS.archer_tower[level] || DEFENSE_STATS.archer_tower[1];
+    const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
+    return dps * 32 + (Number(stats.detectRange) || 0) * 170;
+  }
+  if (type === 'mage_tower') {
+    const stats = DEFENSE_STATS.mage_tower[level] || DEFENSE_STATS.mage_tower[1];
+    const dps = (Number(stats.maxDamage || stats.damage) || 0) / Math.max(0.1, Number(stats.tickRate || stats.fireRate) || 1);
+    return dps * 24 + (Number(stats.detectRange) || 0) * 170;
+  }
+  if (type === 'tombstone') {
+    const stats = SKELETON_GUARD.levels?.[level] || SKELETON_GUARD;
+    const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.atkSpeed) || 1);
+    return (Number(stats.hp) || 0) * 0.12 + dps * 38 + (Number(stats.detectionRadius) || 0) * 170;
+  }
+  return 0;
+}
+
+function computeBasePowerFromBuildings(buildings = []) {
+  let power = 0;
+  let thLevel = 1;
+  let defenseCount = 0;
+  for (const building of buildings) {
+    const type = String(building.type || '').toLowerCase();
+    const level = Math.max(1, Math.trunc(Number(building.level) || 1));
+    const maxHp = Math.max(1, Number(building.max_hp) || botBuildingHp(type, level));
+    const hpWeight = type === 'town_hall'
+      ? 0.22
+      : DEFENSE_BUILDING_TYPES.has(type)
+        ? 0.18
+        : 0.10;
+    power += maxHp * hpWeight;
+    if (type === 'town_hall') {
+      thLevel = Math.max(thLevel, level);
+      power += level * 420;
+    }
+    const defensePower = defensePowerForBuilding(building);
+    if (defensePower > 0) {
+      defenseCount += 1;
+      power += defensePower;
+    }
+  }
+  if (defenseCount >= 3) power += Math.min(600, (defenseCount - 2) * 140);
+  return {
+    power: Math.max(1, Math.round(power)),
+    town_hall_level: thLevel,
+    defense_count: defenseCount,
+  };
+}
+
+function computeBasePower(playerId) {
+  return computeBasePowerFromBuildings(stmts.getBuildings.all(playerId));
+}
+
+function replayRowToRaidResult(row) {
+  const claimed = String(row?.claimed_result || '').toLowerCase();
+  if (claimed === 'victory') return 'victory';
+  const thHp = Number(row?.sim_th_hp_pct);
+  if (Number.isFinite(thHp) && thHp <= 0.02) return 'victory';
+  return 'defeat';
+}
+
+function getRecentRaidPerformance(playerId) {
+  const limit = MATCHMAKING_CONFIG.recentRaidWindow;
+  let rows = stmts.recentRaidMatchmakingResults.all(playerId, limit);
+  if (!rows.length) {
+    rows = stmts.recentBattleReplayResults.all(playerId, limit)
+      .map((row) => ({ result: replayRowToRaidResult(row), created_at: row.created_at }));
+  }
+  let wins = 0;
+  let losses = 0;
+  let consecutiveLosses = 0;
+  for (const row of rows) {
+    if (row.result === 'victory') wins += 1;
+    if (row.result === 'defeat') losses += 1;
+  }
+  for (const row of rows) {
+    if (row.result === 'defeat') consecutiveLosses += 1;
+    else break;
+  }
+  return {
+    raids: rows.length,
+    wins,
+    losses,
+    success_rate: rows.length ? wins / rows.length : null,
+    consecutive_losses: consecutiveLosses,
+  };
+}
+
+function matchmakingProfileForPlayer(playerId, attackPower) {
+  const recent = getRecentRaidPerformance(playerId);
+  const rate = recent.success_rate;
+  let recoveryLevel = 0;
+  if (recent.consecutive_losses >= MATCHMAKING_CONFIG.recoveryLossStreakStrong) {
+    recoveryLevel = 2;
+  } else if (
+    recent.consecutive_losses >= MATCHMAKING_CONFIG.recoveryLossStreakSoft
+    || (recent.raids >= MATCHMAKING_CONFIG.minRecoveryRaids && rate != null && rate < MATCHMAKING_CONFIG.strugglingSuccessRate)
+  ) {
+    recoveryLevel = 1;
+  }
+
+  let ratioBand = MATCHMAKING_CONFIG.normalRatio;
+  let difficulty = 'normal';
+  let botBias = 0.10;
+  let liveBias = 0;
+  let selectionReason = 'normal';
+
+  if (recoveryLevel >= 2) {
+    ratioBand = MATCHMAKING_CONFIG.easyRatio;
+    difficulty = 'easy';
+    botBias = -0.20;
+    liveBias = 0.10;
+    selectionReason = 'recovery_strong';
+  } else if (recoveryLevel === 1) {
+    ratioBand = {
+      min: MATCHMAKING_CONFIG.easyRatio.min,
+      target: (MATCHMAKING_CONFIG.easyRatio.target + MATCHMAKING_CONFIG.normalRatio.target) / 2,
+      max: MATCHMAKING_CONFIG.normalRatio.max,
+    };
+    difficulty = 'easy';
+    botBias = -0.08;
+    liveBias = 0.04;
+    selectionReason = 'recovery_soft';
+  } else if (recent.raids >= 5 && rate != null && rate > MATCHMAKING_CONFIG.strongPlayerSuccessRate) {
+    ratioBand = MATCHMAKING_CONFIG.hardRatio;
+    difficulty = 'hard';
+    botBias = 0.18;
+    liveBias = -0.04;
+    selectionReason = 'strong_player';
+  }
+
+  return {
+    ...recent,
+    recovery_level: recoveryLevel,
+    target_ratio: ratioBand.target,
+    ratio_band: ratioBand,
+    preferred_difficulty: difficulty,
+    bot_bias: botBias,
+    live_bias: liveBias,
+    selection_reason: selectionReason,
+    attack_power: attackPower,
+  };
+}
+
+function scoreMatchCandidate(candidate, attackPower, profile) {
+  const base = Number(candidate.base_power || 0) > 0
+    ? {
+        power: Number(candidate.base_power),
+        town_hall_level: Number(candidate.defender_th || candidate.level || 1),
+      }
+    : computeBasePower(candidate.id);
+  const ratio = base.power / Math.max(1, attackPower.power);
+  const band = profile.ratio_band;
+  let score = Math.abs(ratio - profile.target_ratio);
+  if (ratio < band.min) score += (band.min - ratio) * 1.5;
+  if (ratio > band.max) score += (ratio - band.max) * 1.8;
+  const thDiff = Math.abs(base.town_hall_level - attackPower.town_hall_level);
+  score += thDiff * 0.16;
+  if (base.town_hall_level > attackPower.town_hall_level) score += 0.10;
+  const isBot = Number(candidate.is_bot || 0) === 1 || candidate.is_virtual_bot;
+  score += isBot ? profile.bot_bias : profile.live_bias;
+  if (isBot && candidate.bot_difficulty && candidate.bot_difficulty !== profile.preferred_difficulty) {
+    score += candidate.bot_difficulty === 'hard' && profile.recovery_level > 0 ? 0.25 : 0.06;
+  }
+  score += Math.random() * 0.05;
+  return {
+    ...candidate,
+    is_bot: isBot,
+    base_power: base.power,
+    defender_th: base.town_hall_level,
+    base_power_ratio: ratio,
+    match_score: score,
+  };
+}
+
+function chooseWeightedCandidate(scored) {
+  if (!scored.length) return null;
+  const sorted = [...scored].sort((a, b) => a.match_score - b.match_score);
+  const pool = sorted.slice(0, Math.max(1, MATCHMAKING_CONFIG.candidatePoolSize));
+  let total = 0;
+  const weights = pool.map((candidate, index) => {
+    const weight = 1 / (0.18 + Math.max(0, candidate.match_score)) + Math.max(0, pool.length - index) * 0.015;
+    total += weight;
+    return weight;
+  });
+  let roll = Math.random() * total;
+  for (let i = 0; i < pool.length; i += 1) {
+    roll -= weights[i];
+    if (roll <= 0) return pool[i];
+  }
+  return pool[0];
+}
+
+function botCandidatesAllowedForTournament(matchFilter) {
+  const ctx = matchFilter?.context || null;
+  return !ctx || ctx.attack_match_policy !== 'enemy_only';
+}
+
+function getRaidRewardProfile(battleSessionId) {
+  const sid = normalizeBattleSessionId(battleSessionId);
+  const row = sid ? stmts.getRaidMatchmakingBySession.get(sid) : null;
+  if (!row || Number(row.target_is_bot || 0) !== 1) {
+    return { is_bot: false, loot_multiplier: 1, trophy_multiplier: 1, matchmaking: row || null };
+  }
+  const reason = String(row.selection_reason || '');
+  const difficulty = String(row.target_bot_difficulty || row.difficulty_bucket || 'normal');
+  const lootKey = Number(row.recovery_level || 0) >= 2
+    ? 'recovery_strong'
+    : Number(row.recovery_level || 0) >= 1
+      ? 'recovery_soft'
+      : difficulty;
+  return {
+    is_bot: true,
+    loot_multiplier: MATCHMAKING_CONFIG.botLootMultiplier[lootKey] || MATCHMAKING_CONFIG.botLootMultiplier.normal,
+    trophy_multiplier: MATCHMAKING_CONFIG.botTrophyMultiplier[lootKey] || MATCHMAKING_CONFIG.botTrophyMultiplier.normal,
+    matchmaking: row,
+    reason,
+  };
+}
+
+function isBotPlayer(playerId) {
+  if (!playerId) return false;
+  return Number(stmts.getPlayerById.get(playerId)?.is_bot || 0) === 1;
+}
+
 // Calculate base strength score: TH level * 100 + building progress %
 function getBaseStrength(playerId) {
   const buildings = stmts.getBuildings.all(playerId);
@@ -4338,10 +4934,21 @@ function findEnemy(playerId) {
   // One attacker should have only one live target reservation. If they tap
   // Find Enemy again, the newest target replaces the previous lock.
   stmts.cancelBattleSessionsForAttacker.run(playerId);
-  const myStrength = getBaseStrength(playerId);
+  const attackPower = computeAttackPower(playerId);
+  const profile = matchmakingProfileForPlayer(playerId, attackPower);
   const rawCandidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId, playerId);
   const matchFilter = filterTournamentAttackCandidates(playerId, rawCandidates);
-  const candidates = matchFilter.candidates;
+  const liveCandidates = matchFilter.candidates;
+  const includeBots = botCandidatesAllowedForTournament(matchFilter)
+    && (
+      profile.recovery_level > 0
+      || liveCandidates.length < MATCHMAKING_CONFIG.minLiveCandidatesBeforeBots
+      || attackPower.town_hall_level >= 3
+    );
+  const botCandidates = includeBots
+    ? virtualBotCandidatesForProfile(attackPower, profile)
+    : [];
+  const candidates = [...liveCandidates, ...botCandidates];
   // Friendly user-facing message — same wording for "everybody is shielded"
   // and "no real bases registered yet" because from the player's POV they
   // both mean the same thing: come back later.
@@ -4357,21 +4964,10 @@ function findEnemy(playerId) {
     };
   }
 
-  // Pick closest base strength
-  let best = null, bestDiff = Infinity;
-  for (const c of candidates) {
-    const str = getBaseStrength(c.id);
-    const diff = Math.abs(str - myStrength);
-    if (diff < bestDiff) { bestDiff = diff; best = c; }
-  }
+  const scoredCandidates = candidates.map((candidate) => scoreMatchCandidate(candidate, attackPower, profile));
+  let best = chooseWeightedCandidate(scoredCandidates);
   if (!best) return { error: NO_TARGETS };
 
-  // Repair enemy buildings before attack
-  repairAllBuildings(best.id);
-  const buildings = getPlayerBuildings(best.id);
-  const resources = getResources(best.id);
-  const sessionId = uuidv4();
-  const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
   const attackCostGold = getAttackCost(playerId);
   if (!canAfford(playerId, attackCostGold, 0, 0)) {
     return {
@@ -4381,9 +4977,35 @@ function findEnemy(playerId) {
       resources: getResources(playerId),
     };
   }
+
+  const sessionId = uuidv4();
+  if (best.is_virtual_bot) {
+    best = materializeBotTarget(best, sessionId);
+  }
+
+  // Repair enemy buildings before attack
+  repairAllBuildings(best.id);
+  const buildings = getPlayerBuildings(best.id);
+  const repairedBase = computeBasePowerFromBuildings(buildings);
+  const basePowerRatio = repairedBase.power / Math.max(1, attackPower.power);
+  const difficultyBucket = basePowerRatio < MATCHMAKING_CONFIG.normalRatio.min
+    ? 'easy'
+    : basePowerRatio > MATCHMAKING_CONFIG.normalRatio.max
+      ? 'hard'
+      : 'normal';
+  const resources = getResources(best.id);
+  const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
   const attackerResources = subtractResources(playerId, attackCostGold, 0, 0, {
     sourceType: 'attack_cost',
-    metadata: { match_type: 'random', defender_id: best.id, battle_session_id: sessionId },
+    metadata: {
+      match_type: best.is_bot ? 'bot' : 'live',
+      selection_reason: profile.selection_reason,
+      defender_id: best.id,
+      battle_session_id: sessionId,
+      attack_power: attackPower.power,
+      base_power: repairedBase.power,
+      base_power_ratio: Number(basePowerRatio.toFixed(4)),
+    },
   });
   if (attackerResources?.error) {
     return {
@@ -4394,11 +5016,53 @@ function findEnemy(playerId) {
     };
   }
   stmts.createBattleSession.run(sessionId, playerId, best.id, reservedUntil);
+  try {
+    stmts.insertRaidMatchmaking.run(
+      sessionId,
+      playerId,
+      best.id,
+      best.is_bot ? 1 : 0,
+      best.bot_difficulty || null,
+      attackPower.town_hall_level,
+      repairedBase.town_hall_level,
+      attackPower.power,
+      repairedBase.power,
+      Number(basePowerRatio.toFixed(6)),
+      difficultyBucket,
+      profile.recovery_level,
+      profile.success_rate == null ? null : Number(profile.success_rate.toFixed(6)),
+      profile.raids,
+      profile.consecutive_losses,
+      Number(best.match_score.toFixed(6)),
+      liveCandidates.length,
+      botCandidates.length,
+      profile.selection_reason
+    );
+  } catch (e) {
+    console.warn('[matchmaking] failed to record raid match:', e.message);
+  }
   return {
     id: best.id,
     name: best.name,
     trophies: best.trophies,
     level: best.level,
+    is_bot: best.is_bot,
+    matchmaking: {
+      target_is_bot: best.is_bot,
+      target_bot_difficulty: best.bot_difficulty || null,
+      difficulty_bucket: difficultyBucket,
+      selection_reason: profile.selection_reason,
+      recovery_level: profile.recovery_level,
+      recent_success_rate: profile.success_rate,
+      recent_raid_count: profile.raids,
+      consecutive_losses: profile.consecutive_losses,
+      attack_power: attackPower.power,
+      base_power: repairedBase.power,
+      base_power_ratio: Number(basePowerRatio.toFixed(4)),
+      live_candidate_count: liveCandidates.length,
+      bot_candidate_count: botCandidates.length,
+      target_success_rate: MATCHMAKING_CONFIG.targetSuccessRate,
+    },
     buildings,
     resources,
     attacker_resources: attackerResources,
@@ -4434,6 +5098,7 @@ function resolveNamedBattleTarget(playerId, rawTargetName) {
   }
   if (!target) return { error: `Player "${targetName}" not found.` };
   if (target.id === playerId) return { error: 'Cannot attack yourself.' };
+  if (Number(target.is_bot || 0) === 1) return { error: `Player "${targetName}" not found.` };
 
   const shield = battleShieldInfo(target);
   if (shield) {
@@ -4594,6 +5259,7 @@ function markSurrender(attackerId, defenderId, sessionId = '') {
   const sid = normalizeBattleSessionId(sessionId);
   if (sid) {
     const r = stmts.markSurrenderById.run(sid, attackerId);
+    try { stmts.markRaidMatchmakingSurrender.run(sid, attackerId); } catch {}
     if (r.changes > 0) return true;
   }
   const pair = stmts.markSurrenderByPair.run(attackerId, defenderId);
@@ -4730,6 +5396,7 @@ const SHIELD_HOURS = 6; // 6-hour shield after being raided
 const ATTACK_COOLDOWN_HOURS = 1; // can't attack same player for 1 hour
 
 function getPostRaidShieldHours(defenderId) {
+  if (isBotPlayer(defenderId)) return 0;
   const t = getPlayerActiveTournament(defenderId);
   if (!t || t.shield_hours === null || t.shield_hours === undefined || t.shield_hours === '') {
     return SHIELD_HOURS;
@@ -4740,12 +5407,13 @@ function getPostRaidShieldHours(defenderId) {
 }
 
 function battleDefeat(attackerId, defenderId, battleSessionId = '') {
+  const defenderIsBot = isBotPlayer(defenderId);
   // Trophy deltas route through applyTrophyDelta so per-player tournament
   // freeze is honoured: a tournament-joined player's main `players.trophies`
   // stays put, and the delta is funneled (with optional positive-only
   // boost) into `tournament_participants.trophies` instead.
   applyTrophyDelta(attackerId, -TROPHY_LOSS, { source: 'attack_loss', eventId: battleSessionId });
-  applyTrophyDelta(defenderId,  TROPHY_WIN);
+  if (!defenderIsBot) applyTrophyDelta(defenderId,  TROPHY_WIN);
   finishBattleSession(battleSessionId, attackerId, defenderId, 'completed');
   // Return current main trophies for backwards-compat with callers that
   // displayed them in the response. For tournament-frozen players these
@@ -4773,9 +5441,11 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   if (battleAttackCooldownInfo(defender, attackerId)) return { error: 'Already attacked this player recently' };
 
   // Calculate loot — 30% of defender's resources (floored to whole numbers)
-  const lootGold = Math.floor((defender.gold || 0) * LOOT_PERCENT);
-  const lootWood = Math.floor((defender.wood || 0) * LOOT_PERCENT);
-  const lootOre = Math.floor((defender.ore || 0) * LOOT_PERCENT);
+  const rewardProfile = getRaidRewardProfile(battleSessionId);
+  const lootPercent = LOOT_PERCENT * rewardProfile.loot_multiplier;
+  const lootGold = Math.floor((defender.gold || 0) * lootPercent);
+  const lootWood = Math.floor((defender.wood || 0) * lootPercent);
+  const lootOre = Math.floor((defender.ore || 0) * lootPercent);
 
   const boostedLoot = applyAltarProsperityResourceBonus(attackerId, {
     gold: lootGold,
@@ -4787,13 +5457,20 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   // creates the extra resources for the attacker.
   subtractResources(defenderId, lootGold, lootWood, lootOre, {
     sourceType: 'raid_loot_defender',
-    metadata: { attacker_id: attackerId, battle_session_id: battleSessionId },
+    metadata: {
+      attacker_id: attackerId,
+      battle_session_id: battleSessionId,
+      target_is_bot: rewardProfile.is_bot,
+      loot_multiplier: rewardProfile.loot_multiplier,
+    },
   });
   addResources(attackerId, boostedLoot.gold, boostedLoot.wood, boostedLoot.ore, {
     sourceType: 'raid_loot_attacker',
     metadata: {
       defender_id: defenderId,
       battle_session_id: battleSessionId,
+      target_is_bot: rewardProfile.is_bot,
+      loot_multiplier: rewardProfile.loot_multiplier,
       base: boostedLoot.base,
       bonus: boostedLoot.bonus,
       prosperity_bonus_pct: boostedLoot.prosperity_bonus_pct,
@@ -4813,9 +5490,12 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   // trophies frozen and the delta credited (with boost on positive
   // delta) to their tournament_participants row instead.
   const trophyBonus = rollAltarTrophyBonus(attackerId);
-  const attackerTrophyDelta = TROPHY_WIN + trophyBonus.bonus;
+  const trophyBase = Math.max(1, Math.round(TROPHY_WIN * rewardProfile.trophy_multiplier));
+  const attackerTrophyDelta = trophyBase + trophyBonus.bonus;
   applyTrophyDelta(attackerId, attackerTrophyDelta, { source: 'attack_win', eventId: battleSessionId });
-  applyTrophyDelta(defenderId, -TROPHY_LOSS, { source: 'defense_loss', eventId: battleSessionId });
+  if (!rewardProfile.is_bot) {
+    applyTrophyDelta(defenderId, -TROPHY_LOSS, { source: 'defense_loss', eventId: battleSessionId });
+  }
   stmts.incrementBattleWins.run(attackerId);
   finishBattleSession(battleSessionId, attackerId, defenderId, 'completed');
 
@@ -4826,11 +5506,15 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
     altar_prosperity_bonus_pct: boostedLoot.prosperity_bonus_pct,
     altar_prosperity_bonus: boostedLoot.bonus,
     attacker_resources: getResources(attackerId),
-    trophy_base: TROPHY_WIN,
+    trophy_base: trophyBase,
+    trophy_base_unmodified: TROPHY_WIN,
+    trophy_target_multiplier: rewardProfile.trophy_multiplier,
     trophy_bonus: trophyBonus.bonus,
     trophy_bonus_level: trophyBonus.level,
     trophy_bonus_range: { min: trophyBonus.min, max: trophyBonus.max },
     trophy_delta: attackerTrophyDelta,
+    target_is_bot: rewardProfile.is_bot,
+    loot_multiplier: rewardProfile.loot_multiplier,
     // Re-read main trophies for response. For attacker frozen by a
     // tournament this stays at the pre-battle value (the tournament
     // counter took the increment); the futures/HUD UI reads tournament
@@ -4940,6 +5624,52 @@ function replaySimDebug(simResult) {
   return text;
 }
 
+function battleSessionIdFromReplayData(replayData) {
+  const actions = Array.isArray(replayData?.actions)
+    ? replayData.actions
+    : (Array.isArray(replayData) ? replayData : []);
+  const battleStart = actions.find((action) => action?.type === 'battle_start');
+  return normalizeBattleSessionId(battleStart?.battle_session_id || replayData?.battle_session_id || '');
+}
+
+function resolvedRaidResult(claimedResult, verifiedResult, simResult) {
+  const verified = String(verifiedResult || '').toLowerCase();
+  if (verified && verified !== 'accepted' && verified !== 'victory') return verified;
+  if (simResult?.resolvedResult) return String(simResult.resolvedResult).toLowerCase();
+  if (simResult?.townHallDestroyed || (Number(simResult?.townHallHpPct) <= 0.02)) return 'victory';
+  const claimed = String(claimedResult || '').toLowerCase();
+  return claimed === 'victory' ? 'victory' : 'defeat';
+}
+
+function completeRaidMatchmakingFromReplay(replayData, claimedResult, verifiedResult, reason, loot, simResult, duration) {
+  const sessionId = battleSessionIdFromReplayData(replayData);
+  if (!sessionId) return;
+  const actions = Array.isArray(replayData?.actions)
+    ? replayData.actions
+    : (Array.isArray(replayData) ? replayData : []);
+  const shipActions = actions.filter((action) => action?.type === 'place_ship');
+  let result = resolvedRaidResult(claimedResult, verifiedResult, simResult);
+  if (result === 'defeat' && (shipActions.length === 0 || Number(duration || 0) < 15)) {
+    result = 'abandoned';
+  }
+  try {
+    stmts.completeRaidMatchmaking.run(
+      result,
+      verifiedResult || null,
+      Number.isFinite(Number(duration)) ? Number(duration) : null,
+      simResult?.townHallHpPct ?? null,
+      simResult?.buildingsDestroyed ?? 0,
+      reason || simResult?.reason || null,
+      loot?.gold || 0,
+      loot?.wood || 0,
+      loot?.ore || 0,
+      sessionId
+    );
+  } catch (e) {
+    console.warn('[matchmaking] failed to complete raid match:', e.message);
+  }
+}
+
 function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, claimedResult, verifiedResult, reason, loot, simResult) {
   const duration = replayDurationSec(replayData, simResult);
   const info = stmts.insertReplay.run(
@@ -4949,7 +5679,135 @@ function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, clai
     simResult?.townHallHpPct ?? null, simResult?.buildingsDestroyed ?? 0,
     replaySimDebug(simResult), duration
   );
+  completeRaidMatchmakingFromReplay(replayData, claimedResult, verifiedResult, reason, loot, simResult, duration);
   return Number(info?.lastInsertRowid || 0) || null;
+}
+
+function getPlayerMatchmakingStats(playerId) {
+  const attackPower = computeAttackPower(playerId);
+  const profile = matchmakingProfileForPlayer(playerId, attackPower);
+  const recent = db.prepare(`
+    SELECT battle_session_id, defender_id, target_is_bot, target_bot_difficulty,
+           attacker_th, defender_th, attack_power, base_power, base_power_ratio,
+           difficulty_bucket, recovery_level, selection_reason, result, created_at, completed_at
+    FROM raid_matchmaking
+    WHERE attacker_id = ?
+    ORDER BY created_at DESC
+    LIMIT 20
+  `).all(playerId);
+  return {
+    target_success_rate: MATCHMAKING_CONFIG.targetSuccessRate,
+    target_band: MATCHMAKING_CONFIG.targetBand,
+    attack_power: attackPower,
+    profile,
+    recent,
+  };
+}
+
+function getGlobalMatchmakingStats(days = 7) {
+  const safeDays = Math.max(1, Math.min(90, Math.trunc(Number(days) || 7)));
+  const params = [`-${safeDays} days`];
+  const summary = db.prepare(`
+    SELECT
+      COUNT(*) AS raids,
+      SUM(CASE WHEN result IN ('victory', 'defeat') THEN 1 ELSE 0 END) AS decided_raids,
+      SUM(CASE WHEN result = 'victory' THEN 1 ELSE 0 END) AS wins,
+      SUM(CASE WHEN result = 'defeat' THEN 1 ELSE 0 END) AS losses,
+      SUM(CASE WHEN result = 'surrender' THEN 1 ELSE 0 END) AS surrenders,
+      SUM(CASE WHEN result = 'abandoned' THEN 1 ELSE 0 END) AS abandoned,
+      SUM(CASE WHEN target_is_bot = 1 THEN 1 ELSE 0 END) AS bot_matches,
+      SUM(CASE WHEN recovery_level > 0 THEN 1 ELSE 0 END) AS recovery_matches,
+      AVG(base_power_ratio) AS avg_base_power_ratio,
+      AVG(CASE WHEN result IN ('victory', 'defeat') THEN CASE WHEN result = 'victory' THEN 1.0 ELSE 0.0 END END) AS success_rate
+    FROM raid_matchmaking
+    WHERE created_at > datetime('now', ?)
+  `).get(...params);
+  const byTh = db.prepare(`
+    SELECT attacker_th,
+           COUNT(*) AS raids,
+           SUM(CASE WHEN result IN ('victory', 'defeat') THEN 1 ELSE 0 END) AS decided_raids,
+           SUM(CASE WHEN result = 'victory' THEN 1 ELSE 0 END) AS wins,
+           SUM(CASE WHEN target_is_bot = 1 THEN 1 ELSE 0 END) AS bot_matches,
+           SUM(CASE WHEN recovery_level > 0 THEN 1 ELSE 0 END) AS recovery_matches,
+           AVG(base_power_ratio) AS avg_base_power_ratio,
+           AVG(CASE WHEN result IN ('victory', 'defeat') THEN CASE WHEN result = 'victory' THEN 1.0 ELSE 0.0 END END) AS success_rate
+    FROM raid_matchmaking
+    WHERE created_at > datetime('now', ?)
+    GROUP BY attacker_th
+    ORDER BY attacker_th
+  `).all(...params);
+  const byTarget = db.prepare(`
+    SELECT CASE WHEN target_is_bot = 1 THEN 'bot' ELSE 'live' END AS target_type,
+           COALESCE(target_bot_difficulty, difficulty_bucket, 'live') AS bucket,
+           COUNT(*) AS raids,
+           SUM(CASE WHEN result IN ('victory', 'defeat') THEN 1 ELSE 0 END) AS decided_raids,
+           SUM(CASE WHEN result = 'victory' THEN 1 ELSE 0 END) AS wins,
+           SUM(CASE WHEN recovery_level > 0 THEN 1 ELSE 0 END) AS recovery_matches,
+           AVG(base_power_ratio) AS avg_base_power_ratio,
+           AVG(CASE WHEN result IN ('victory', 'defeat') THEN CASE WHEN result = 'victory' THEN 1.0 ELSE 0.0 END END) AS success_rate
+    FROM raid_matchmaking
+    WHERE created_at > datetime('now', ?)
+    GROUP BY target_type, bucket
+    ORDER BY target_type, bucket
+  `).all(...params);
+  const byPlayer = db.prepare(`
+    WITH player_th AS (
+      SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
+      FROM players p
+      LEFT JOIN buildings b ON b.player_id = p.id
+      WHERE COALESCE(p.is_bot, 0) = 0
+      GROUP BY p.id
+    ),
+    mm AS (
+      SELECT attacker_id,
+             COUNT(*) AS raids,
+             SUM(CASE WHEN result IN ('victory', 'defeat') THEN 1 ELSE 0 END) AS decided_raids,
+             SUM(CASE WHEN result = 'victory' THEN 1 ELSE 0 END) AS wins,
+             SUM(CASE WHEN result = 'defeat' THEN 1 ELSE 0 END) AS losses,
+             SUM(CASE WHEN target_is_bot = 1 THEN 1 ELSE 0 END) AS bot_matches,
+             SUM(CASE WHEN recovery_level > 0 THEN 1 ELSE 0 END) AS recovery_matches,
+             AVG(base_power_ratio) AS avg_base_power_ratio,
+             MAX(created_at) AS latest_at
+      FROM raid_matchmaking
+      WHERE created_at > datetime('now', ?)
+      GROUP BY attacker_id
+    )
+    SELECT p.id, p.name, p.dex, COALESCE(pt.th_level, 1) AS th_level,
+           mm.raids, mm.decided_raids, mm.wins, mm.losses,
+           mm.bot_matches, mm.recovery_matches, mm.avg_base_power_ratio,
+           CASE WHEN mm.decided_raids > 0 THEN CAST(mm.wins AS REAL) / mm.decided_raids ELSE NULL END AS success_rate,
+           CASE WHEN mm.raids > 0 THEN CAST(mm.bot_matches AS REAL) / mm.raids ELSE NULL END AS bot_share,
+           mm.latest_at
+    FROM mm
+    JOIN players p ON p.id = mm.attacker_id AND COALESCE(p.is_bot, 0) = 0
+    LEFT JOIN player_th pt ON pt.id = p.id
+    ORDER BY mm.raids DESC, success_rate ASC, mm.latest_at DESC
+    LIMIT 120
+  `).all(...params);
+  const botTemplateInventory = Object.values(buildBotBaseTemplates().reduce((acc, template) => {
+    const key = `${template.th}:${template.difficulty}`;
+    if (!acc[key]) acc[key] = { th: template.th, difficulty: template.difficulty, templates: 0 };
+    acc[key].templates += 1;
+    return acc;
+  }, {})).sort((a, b) => a.th - b.th || String(a.difficulty).localeCompare(String(b.difficulty)));
+  const activeBotTargets = db.prepare(`
+    SELECT level AS th, bot_difficulty AS difficulty, COUNT(*) AS active_targets
+    FROM players
+    WHERE COALESCE(is_bot, 0) = 1
+    GROUP BY level, bot_difficulty
+    ORDER BY level, bot_difficulty
+  `).all();
+  return {
+    days: safeDays,
+    target_success_rate: MATCHMAKING_CONFIG.targetSuccessRate,
+    target_band: MATCHMAKING_CONFIG.targetBand,
+    summary,
+    by_th: byTh,
+    by_target: byTarget,
+    by_player: byPlayer,
+    bot_templates: botTemplateInventory,
+    active_bot_targets: activeBotTargets,
+  };
 }
 
 module.exports = {
@@ -5031,6 +5889,8 @@ module.exports = {
   markSurrender,
   validateBattleSession,
   finishBattleSession,
+  getPlayerMatchmakingStats,
+  getGlobalMatchmakingStats,
   // Tournament hooks — exported so server/routes.js claim-gold path and
   // server-futures rewards-workers can credit volume / pnl into
   // tournament_participants alongside the normal flow.

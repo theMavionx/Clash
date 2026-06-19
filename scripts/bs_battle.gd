@@ -1961,8 +1961,6 @@ static func _troop_script_to_name(troop: Node3D) -> String:
 	match path:
 		"knight": return "Knight"
 		"mage": return "Mage"
-		"barbarian": return "Barbarian"
 		"archer": return "Archer"
-		"ranger": return "Ranger"
 		"fire_dragon": return "FireDragon"
 	return ""

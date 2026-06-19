@@ -26,9 +26,7 @@ import imgAltar from '../assets/units/altar.png';
 
 import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
-import arbaletImg from '../assets/units/arbalet.png';
 import archerImg from '../assets/units/archer.png';
-import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
 
 const ICONS = { gold: goldIcon, wood: woodIcon, ore: stoneIcon };
@@ -38,26 +36,20 @@ const UNIT_IMAGES = {
   Knight: knightImg,
   Mage: mageImg,
   Archer: archerImg,
-  Ranger: arbaletImg,
-  Barbarian: berserkImg,
   DemonKing: demonKingImg,
 };
 
 const TROOP_STYLE_MAP = {
   Knight: { scale: 2.2, offsetY: '35%' },
   Mage: { scale: 2.5, offsetY: '50%' },
-  Barbarian: { scale: 1.9, offsetY: '25%' },
   Archer: { scale: 1.9, offsetY: '25%' },
-  Ranger: { scale: 1.9, offsetY: '25%' },
   DemonKing: { scale: 1.3, offsetY: '10%' },
 };
 
 const CARD_TROOP_STYLE_MAP = {
   Knight: { scale: 1.35, offsetY: '0%' },
   Mage: { scale: 1.45, offsetY: '0%' },
-  Barbarian: { scale: 1.05, offsetY: '0%' },
   Archer: { scale: 1.05, offsetY: '0%' },
-  Ranger: { scale: 1.05, offsetY: '0%' },
   // Demon King renders with the same full-bleed `troopImg` treatment as
   // the other troops (cover + top-center) — bumped a touch larger so the
   // boss portrait reads as the centerpiece it is.
@@ -152,9 +144,7 @@ function troopBaseName(name) {
   if (lower === 'demonking' || lower === 'demon_king') return 'DemonKing';
   if (lower === 'knight') return 'Knight';
   if (lower === 'mage') return 'Mage';
-  if (lower === 'barbarian') return 'Barbarian';
   if (lower === 'archer') return 'Archer';
-  if (lower === 'ranger') return 'Ranger';
   return base;
 }
 

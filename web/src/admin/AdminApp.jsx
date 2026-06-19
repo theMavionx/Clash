@@ -77,7 +77,10 @@ const NAV = [
 const SIMPLE_LOADERS = {
   replays: () => adminGet('/admin/replays'),
   tasks: () => Promise.all([adminGet('/admin/tasks'), adminGet('/admin/tasks-summary')]).then(([tasks, summary]) => ({ tasks, summary })),
-  stats: () => adminGet('/admin/stats'),
+  stats: () => Promise.all([
+    adminGet('/admin/stats'),
+    adminGet('/admin/matchmaking/stats?days=7').catch((error) => ({ error: error.message })),
+  ]).then(([stats, matchmaking]) => ({ ...stats, matchmaking })),
   earnings: () => Promise.all([
     adminGet('/admin/earnings'),
     adminGet('/admin/revenue-analytics').catch((error) => ({ error: error.message })),
@@ -380,6 +383,8 @@ function PlayersPanel({ players, reload }) {
     { label: 'Online', value: players.filter((p) => p.online).length, tone: 'green' },
     { label: 'Active 7d', value: players.filter((p) => p.active_7d).length, tone: 'blue' },
     { label: 'Shielded', value: players.filter((p) => p.shield_active).length, tone: 'gold' },
+    { label: 'MM avg win', value: averageMatchmakingRate(players), tone: 'green' },
+    { label: 'Recovery 7d', value: num(players.reduce((sum, p) => sum + Number(p.matchmaking?.recovery_matches_7d || 0), 0)), tone: 'blue' },
   ];
 
   return (
@@ -407,7 +412,7 @@ function PlayersPanel({ players, reload }) {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
+                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Trophies</th><th>Level</th><th>MM 7d</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -418,6 +423,7 @@ function PlayersPanel({ players, reload }) {
                     <td className="admin-mono">{short(p.wallet)}</td>
                     <td>{p.trophies}</td>
                     <td>{p.level}</td>
+                    <td><MatchmakingPlayerCell player={p} /></td>
                     <td style={{ color: 'var(--admin-gold)' }}>{num(p.gold)}</td>
                     <td style={{ color: 'var(--admin-wood)' }}>{num(p.wood)}</td>
                     <td style={{ color: '#b8c4d8' }}>{num(p.ore)}</td>
@@ -1087,6 +1093,14 @@ function StatsPanel({ data }) {
   const thRows = data.player_analytics?.town_hall?.distribution || [];
   const deviceRows = data.devices?.summary || [];
   const playerRows = data.player_analytics?.players || [];
+  const mm = data.matchmaking || {};
+  const mmSummary = mm.summary || {};
+  const mmDecided = Number(mmSummary.decided_raids || 0);
+  const mmRaids = Number(mmSummary.raids || 0);
+  const mmTargetLow = Number(mm.target_band?.min ?? 0.55);
+  const mmTargetHigh = Number(mm.target_band?.max ?? 0.6);
+  const mmSuccess = Number.isFinite(Number(mmSummary.success_rate)) ? Number(mmSummary.success_rate) : null;
+  const mmTone = mmSuccess == null ? 'gold' : (mmSuccess >= mmTargetLow && mmSuccess <= mmTargetHigh ? 'green' : 'red');
   return (
     <div className="admin-grid">
       <StatsGrid stats={[
@@ -1097,6 +1111,37 @@ function StatsPanel({ data }) {
         { label: 'Replays', value: data.replays || 0 },
         { label: 'Memory MB', value: data.memory || 0, tone: 'gold' },
       ]} />
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Matchmaking Health</div>
+            <div className="admin-card-sub">Last {mm.days || 7} days. Target win rate {formatPct(mmTargetLow)}-{formatPct(mmTargetHigh)} with bot recovery tracked separately.</div>
+          </div>
+          {mm.error ? <span className="admin-badge red">API error</span> : <span className={'admin-badge ' + (mmTone === 'green' ? 'green' : mmTone === 'red' ? 'red' : 'gold')}>{formatPct(mmSuccess)}</span>}
+        </div>
+        <div className="admin-card-body admin-grid">
+          {mm.error ? <div className="admin-error">{mm.error}</div> : null}
+          <StatsGrid stats={[
+            { label: 'Raids', value: num(mmRaids) },
+            { label: 'Decided', value: num(mmDecided), tone: 'blue' },
+            { label: 'Win rate', value: formatPct(mmSuccess), tone: mmTone },
+            { label: 'Bot matches', value: `${num(mmSummary.bot_matches || 0)} (${formatPct(mmRaids ? Number(mmSummary.bot_matches || 0) / mmRaids : null)})`, tone: 'gold' },
+            { label: 'Recovery', value: num(mmSummary.recovery_matches || 0), tone: 'blue' },
+            { label: 'Avg base ratio', value: ratioText(mmSummary.avg_base_power_ratio), tone: 'green' },
+          ]} />
+          <div className="admin-grid two">
+            <CompactTable title="By Town Hall" subtitle="Success rate and bot usage grouped by attacker TH." columns={['TH', 'Raids', 'Win rate', 'Bot', 'Recovery', 'Base ratio']} rows={(mm.by_th || []).map((row) => [`TH ${row.attacker_th || 1}`, num(row.raids), formatPct(row.success_rate), num(row.bot_matches), num(row.recovery_matches), ratioText(row.avg_base_power_ratio)])} />
+            <CompactTable title="By Target Type" subtitle="Live bases vs generated bot bases and selected difficulty bucket." columns={['Target', 'Bucket', 'Raids', 'Win rate', 'Recovery', 'Base ratio']} rows={(mm.by_target || []).map((row) => [row.target_type || '-', row.bucket || '-', num(row.raids), formatPct(row.success_rate), num(row.recovery_matches), ratioText(row.avg_base_power_ratio)])} />
+          </div>
+          <div className="admin-grid two">
+            <CompactTable title="Players Matchmaking" subtitle="Per-player 7d telemetry used to spot players below the target band." columns={['Player', 'TH', 'Raids', 'Win rate', 'Bot share', 'Recovery']} rows={(mm.by_player || []).map((row) => [row.name || short(row.id), `TH ${row.th_level || 1}`, num(row.raids), formatPct(row.success_rate), formatPct(row.bot_share), num(row.recovery_matches)])} />
+            <CompactTable title="Bot Base Inventory" subtitle="96 templates are kept in memory; temporary target rows are materialized only during selection." columns={['TH', 'Difficulty', 'Templates', 'Active targets']} rows={(mm.bot_templates || []).map((row) => {
+              const active = (mm.active_bot_targets || []).find((target) => Number(target.th) === Number(row.th) && String(target.difficulty || '') === String(row.difficulty || ''));
+              return [`TH ${row.th}`, row.difficulty, num(row.templates), num(active?.active_targets || 0)];
+            })} />
+          </div>
+        </div>
+      </div>
       <div className="admin-grid two">
         <CompactTable title="DEX Adoption" subtitle="Player count, active buckets, and trading reward volume by DEX." columns={['DEX', 'Players', 'Online', '24h', '7d', 'Reward Gold', 'Reward Vol']} rows={dexRows.map((row) => {
           const activity = activityRows.find((r) => r.dex === row.dex) || {};
@@ -1418,10 +1463,9 @@ function EarningsPanel({ data, reload }) {
   const revenueWindows = Array.isArray(revenue.windows) ? revenue.windows : [];
   const windowAll = revenueWindows.find((row) => row.key === 'all') || revenueWindows[revenueWindows.length - 1] || {};
   const windowD30 = revenueWindows.find((row) => row.key === 'd30' || row.key === '30d') || {};
-  const windowH24 = revenueWindows.find((row) => row.key === 'h24' || row.key === '24h') || {};
   const byDex = windowAll.dexes || revenue.dexes || revenue.by_dex || earnings.dexes || earnings.by_dex || {};
   const exactEarningsRows = Object.entries(earnings)
-    .filter(([dex, value]) => value && typeof value === 'object' && 'earned_usd' in value)
+    .filter(([, value]) => value && typeof value === 'object' && 'earned_usd' in value)
     .map(([dex, value]) => ({ dex, ...value }));
   const exactTotalUsd = Number.isFinite(Number(earnings.total_usd))
     ? Number(earnings.total_usd)
@@ -1862,6 +1906,29 @@ function PresenceBadge({ player }) {
   return <span className="admin-badge off">OFF</span>;
 }
 
+function MatchmakingPlayerCell({ player }) {
+  const mm = player.matchmaking || {};
+  const raids = Number(mm.raids_7d || 0);
+  const decided = Number(mm.decided_7d || 0);
+  const success = mm.success_rate_7d == null ? null : Number(mm.success_rate_7d);
+  let tone = 'off';
+  if (decided > 0) tone = success >= 0.55 && success <= 0.6 ? 'green' : 'gold';
+  if (decided >= 3 && success < 0.45) tone = 'red';
+  return (
+    <div>
+      <span className={'admin-badge ' + tone}>{decided > 0 ? formatPct(success) : 'No raids'}</span>
+      <div className="admin-card-sub">
+        {num(raids)} raids - bot {formatPct(mm.bot_share_7d)} - rec {num(mm.recovery_matches_7d || 0)}
+      </div>
+      {mm.last ? (
+        <div className="admin-card-sub">
+          last {mm.last.target_is_bot ? (mm.last.target_bot_difficulty || 'bot') : 'live'} - {mm.last.result || 'pending'}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PrizeSummary({ tournament }) {
   const tiers = Array.isArray(tournament.prize_tiers) ? tournament.prize_tiers : [];
   if (!tiers.length) return <span className="admin-badge off">No prizes</span>;
@@ -2012,6 +2079,29 @@ function compactWallet(value) {
 
 function num(value) {
   return Number(value || 0).toLocaleString();
+}
+
+function formatPct(value, digits = 1) {
+  if (value == null || value === '' || Number.isNaN(Number(value))) return '-';
+  const pct = Number(value) * 100;
+  const fixed = pct.toFixed(digits);
+  return `${fixed.replace(/\.0$/u, '')}%`;
+}
+
+function ratioText(value) {
+  if (value == null || value === '' || Number.isNaN(Number(value))) return '-';
+  return `${Number(value).toFixed(2)}x`;
+}
+
+function averageMatchmakingRate(players) {
+  let wins = 0;
+  let decided = 0;
+  for (const player of players || []) {
+    const mm = player.matchmaking || {};
+    wins += Number(mm.wins_7d || 0);
+    decided += Number(mm.decided_7d || 0);
+  }
+  return decided > 0 ? formatPct(wins / decided) : '-';
 }
 
 function fmtMaybeUsd(value) {

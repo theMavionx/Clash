@@ -86,8 +86,13 @@ const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(
 
 app.get('/', dashboardAuth, (req, res) => {
   const db = require('./db');
-  const players = db.db.prepare('SELECT id, name, trophies, level, gold, wood, ore, created_at FROM players ORDER BY trophies DESC').all();
-  const totalBuildings = db.db.prepare('SELECT COUNT(*) as count FROM buildings').get().count;
+  const players = db.db.prepare('SELECT id, name, trophies, level, gold, wood, ore, created_at FROM players WHERE COALESCE(is_bot, 0) = 0 ORDER BY trophies DESC').all();
+  const totalBuildings = db.db.prepare(`
+    SELECT COUNT(*) as count
+    FROM buildings b
+    JOIN players p ON p.id = b.player_id
+    WHERE COALESCE(p.is_bot, 0) = 0
+  `).get().count;
   const online = getOnlinePlayers();
   const uptime = process.uptime();
   const hours = Math.floor(uptime / 3600);
@@ -158,6 +163,7 @@ app.get('/trading-stats', dashboardAuth, async (req, res) => {
       SELECT r.*, p.name, p.dex AS player_dex
       FROM trading_rewards r
       JOIN players p ON r.player_id = p.id
+      WHERE COALESCE(p.is_bot, 0) = 0
       ORDER BY r.total_gold DESC
     `).all();
   } catch { /* no trading_rewards yet */ }
@@ -473,7 +479,7 @@ app.get('/api/admin/panel', (req, res) => {
   <div class="panel active" id="tab-players">
     <div class="stats" id="playerStats"></div>
     <table><thead><tr>
-      <th>Name</th><th>DEX</th><th>UI</th><th>Wallet</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Gold</th><th>Trade Vol</th><th>Buildings</th><th>Shield</th><th>Status</th><th>Joined</th><th>Actions</th>
+      <th>Name</th><th>DEX</th><th>UI</th><th>Wallet</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Gold</th><th>Trade Vol</th><th>Buildings</th><th>MM 7d</th><th>Shield</th><th>Status</th><th>Joined</th><th>Actions</th>
     </tr></thead><tbody id="playersBody"></tbody></table>
   </div>
 
@@ -612,6 +618,31 @@ app.get('/api/admin/panel', (req, res) => {
         </tr></thead><tbody id="combatAttackersBody"></tbody></table>
       </div>
     </div>
+
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Matchmaking Health</h2>
+    <div class="stats" id="matchmakingStats"></div>
+    <div style="font-size:12px;color:#9ca3af;margin:-10px 0 14px" id="matchmakingNote"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">By Town Hall</h3>
+        <table><thead><tr>
+          <th>TH</th><th>Issued</th><th>Win %</th><th>Bot %</th><th>Recovery</th><th>Ratio</th>
+        </tr></thead><tbody id="matchmakingThBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:520px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Target Mix</h3>
+        <table><thead><tr>
+          <th>Target</th><th>Bucket</th><th>Issued</th><th>Win %</th><th>Recovery</th><th>Ratio</th>
+        </tr></thead><tbody id="matchmakingTargetBody"></tbody></table>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px;flex-wrap:wrap">
+      <h3 style="color:#9ca3af;font-size:13px;margin:0;text-transform:uppercase;letter-spacing:0.5px">Players Matchmaking 7d</h3>
+      <span style="color:#6b7280;font-size:12px">Sorted by issued targets, then low win-rate</span>
+    </div>
+    <table style="margin-bottom:20px"><thead><tr>
+      <th>Player</th><th>DEX</th><th>TH</th><th>Issued</th><th>Win %</th><th>Bot %</th><th>Recovery</th><th>Avg Ratio</th><th>Latest</th>
+    </tr></thead><tbody id="matchmakingPlayersBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Growth Funnel</h2>
     <div class="stats" id="growthFunnelStats"></div>
@@ -1534,6 +1565,31 @@ function renderPlayers() {
     if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'K';
     return '$' + v.toFixed(0);
   }
+  function mmPct(value) {
+    if (value === null || value === undefined || value === '') return '-';
+    const n = Number(value);
+    return Number.isFinite(n) ? (n * 100).toFixed(1) + '%' : '-';
+  }
+  function mmRatio(value) {
+    if (value === null || value === undefined || value === '') return '-';
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(2) + 'x' : '-';
+  }
+  function mmCell(p) {
+    const mm = p.matchmaking || {};
+    const last = mm.last || null;
+    if (!mm.raids_7d && !last) return '<span class="badge badge-off">no raids</span>';
+    const rate = mm.success_rate_7d == null ? '-' : mmPct(mm.success_rate_7d);
+    const botShare = mm.bot_share_7d == null ? '-' : mmPct(mm.bot_share_7d);
+    const lastText = last
+      ? (last.target_is_bot ? 'bot' : 'live') + ' / ' + (last.result || 'open') + ' / ' + mmRatio(last.base_power_ratio)
+      : 'no latest';
+    return '<div style="line-height:1.35;min-width:108px">' +
+      '<strong>' + (mm.raids_7d || 0) + '</strong> raids · <span style="color:#4ade80">' + rate + '</span>' +
+      '<div style="font-size:11px;color:#9ca3af">bot ' + botShare + ' · rec ' + (mm.recovery_matches_7d || 0) + '</div>' +
+      '<div style="font-size:10px;color:#6b7280">' + esc(lastText) + '</div>' +
+    '</div>';
+  }
   document.getElementById('playersBody').innerHTML = players.map(p =>
     '<tr>' +
     '<td><strong>' + esc(p.name) + '</strong></td>' +
@@ -1548,6 +1604,7 @@ function renderPlayers() {
     '<td style="color:#fbbf24">' + (p.trading_gold || 0) + '</td>' +
     '<td style="color:#9ca3af;font-size:12px">' + fmtUSD(p.trading_volume) + '</td>' +
     '<td>' + p.buildings_count + '</td>' +
+    '<td>' + mmCell(p) + '</td>' +
     '<td>' + (p.shield_active ? '<span class="badge badge-shield">' + p.shield_remaining + 'm left</span>' : '<span class="badge badge-off">none</span>') + '</td>' +
     '<td title="' + (p.last_seen_age_sec != null ? Math.round(p.last_seen_age_sec/60) + ' min ago' : 'never') + '">' + statusBadge(p) + '</td>' +
     '<td class="mono">' + (p.created_at||'').split(' ')[0] + '</td>' +
@@ -2137,7 +2194,10 @@ async function loadFeedback() {
 
 async function loadStats() {
   try {
-    const s = await api('/admin/stats');
+    const [s, matchmaking] = await Promise.all([
+      api('/admin/stats'),
+      api('/admin/matchmaking/stats?days=7').catch(() => ({ error: 'matchmaking stats unavailable' })),
+    ]);
     // Activity card row — heartbeat-based presence. Drives the answer
     // to "how many players are actually online / active per day". Any
     // missing fields fall through to 0 so a partial backend (older
@@ -2218,6 +2278,23 @@ async function loadStats() {
       const n = Number(v) || 0;
       return n.toFixed(1) + '%';
     }
+    function rateText(v) {
+      if (v === null || v === undefined || v === '') return '-';
+      const n = Number(v);
+      return Number.isFinite(n) ? (n * 100).toFixed(1) + '%' : '-';
+    }
+    function ratioText(v) {
+      if (v === null || v === undefined || v === '') return '-';
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(2) + 'x' : '-';
+    }
+    function simpleCard(label, value, sub, color) {
+      return '<div class="stat" style="border-color:' + color + '">' +
+        '<div class="v" style="color:' + color + '">' + value + '</div>' +
+        '<div class="l">' + label + '</div>' +
+        (sub ? '<div style="font-size:11px;color:#9ca3af;margin-top:8px;line-height:1.5">' + sub + '</div>' : '') +
+      '</div>';
+    }
     function combatCard(row, color) {
       return '<div class="stat" style="border-color:' + color + '">' +
         '<div class="v" style="color:' + color + '">' + (row.attacks || 0) + '</div>' +
@@ -2257,6 +2334,67 @@ async function loadStats() {
           '<td style="color:#e8b830">' + Math.round(row.avg_loot_gold || 0) + 'G</td>' +
         '</tr>').join('')
       : '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:20px">No attackers yet</td></tr>';
+
+    const mm = matchmaking || {};
+    const mmSummary = mm.summary || {};
+    const targetBand = mm.target_band || { min: 0.55, max: 0.60 };
+    const mmSuccess = Number(mmSummary.success_rate);
+    const inTarget = Number.isFinite(mmSuccess) && mmSuccess >= Number(targetBand.min || 0) && mmSuccess <= Number(targetBand.max || 1);
+    const botShare = Number(mmSummary.raids || 0) > 0 ? Number(mmSummary.bot_matches || 0) / Number(mmSummary.raids || 1) : null;
+    const recoveryShare = Number(mmSummary.raids || 0) > 0 ? Number(mmSummary.recovery_matches || 0) / Number(mmSummary.raids || 1) : null;
+    const targetText = rateText(targetBand.min) + '-' + rateText(targetBand.max);
+    document.getElementById('matchmakingStats').innerHTML =
+      simpleCard('Win rate 7d', rateText(mmSummary.success_rate), 'target: ' + targetText + (inTarget ? ' · inside band' : ' · outside band'), inTarget ? '#4ade80' : '#f59e0b') +
+      simpleCard('Issued targets', mmSummary.raids || 0, (mmSummary.decided_raids || 0) + ' decided · ' + (mmSummary.surrenders || 0) + ' surrendered · ' + (mmSummary.abandoned || 0) + ' abandoned', '#38bdf8') +
+      simpleCard('Bot target share', rateText(botShare), (mmSummary.bot_matches || 0) + ' bot matches', '#a78bfa') +
+      simpleCard('Recovery usage', rateText(recoveryShare), (mmSummary.recovery_matches || 0) + ' recovery matches', '#f97316') +
+      simpleCard('Avg power ratio', ratioText(mmSummary.avg_base_power_ratio), 'base power / attack power', '#fbbf24');
+    document.getElementById('matchmakingNote').textContent = mm.error
+      ? mm.error
+      : 'Raid matchmaking telemetry is based on /find-enemy reservations completed by replay results. Surrender and abandoned losses do not feed recovery.';
+
+    const mmThRows = mm.by_th || [];
+    document.getElementById('matchmakingThBody').innerHTML = mmThRows.length
+      ? mmThRows.map(row => {
+          const raids = Number(row.raids || 0);
+          const botPct = raids > 0 ? Number(row.bot_matches || 0) / raids : null;
+          return '<tr>' +
+            '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.attacker_th || 1) + '</span></td>' +
+            '<td style="font-weight:800">' + raids + '<div style="font-size:10px;color:#6b7280">' + (row.decided_raids || 0) + ' decided</div></td>' +
+            '<td style="color:#4ade80">' + rateText(row.success_rate) + '</td>' +
+            '<td>' + rateText(botPct) + '</td>' +
+            '<td style="color:#f97316">' + (row.recovery_matches || 0) + '</td>' +
+            '<td>' + ratioText(row.avg_base_power_ratio) + '</td>' +
+          '</tr>';
+        }).join('')
+      : '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:20px">No matchmaking TH data yet</td></tr>';
+
+    const mmTargetRows = mm.by_target || [];
+    document.getElementById('matchmakingTargetBody').innerHTML = mmTargetRows.length
+      ? mmTargetRows.map(row => '<tr>' +
+          '<td><span class="badge" style="background:' + (row.target_type === 'bot' ? '#4c1d95;color:#ddd6fe' : '#064e3b;color:#bbf7d0') + '">' + esc(row.target_type || 'live') + '</span></td>' +
+          '<td>' + esc(row.bucket || '-') + '</td>' +
+          '<td style="font-weight:800">' + (row.raids || 0) + '<div style="font-size:10px;color:#6b7280">' + (row.decided_raids || 0) + ' decided</div></td>' +
+          '<td style="color:#4ade80">' + rateText(row.success_rate) + '</td>' +
+          '<td style="color:#f97316">' + (row.recovery_matches || 0) + '</td>' +
+          '<td>' + ratioText(row.avg_base_power_ratio) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:20px">No target mix data yet</td></tr>';
+
+    const mmPlayerRows = mm.by_player || [];
+    document.getElementById('matchmakingPlayersBody').innerHTML = mmPlayerRows.length
+      ? mmPlayerRows.map(row => '<tr>' +
+          '<td><strong>' + esc(row.name || row.id || '-') + '</strong></td>' +
+          '<td>' + dexBadge(row.dex) + ' <span style="color:#9ca3af">' + esc(row.dex || 'unknown') + '</span></td>' +
+          '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.th_level || 1) + '</span></td>' +
+          '<td style="font-weight:800">' + (row.raids || 0) + '<div style="font-size:10px;color:#6b7280">' + (row.decided_raids || 0) + ' decided</div></td>' +
+          '<td style="color:#4ade80">' + rateText(row.success_rate) + '</td>' +
+          '<td>' + rateText(row.bot_share) + '</td>' +
+          '<td style="color:#f97316">' + (row.recovery_matches || 0) + '</td>' +
+          '<td>' + ratioText(row.avg_base_power_ratio) + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.latest_at)) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="9" style="color:#6b7280;text-align:center;padding:20px">No per-player matchmaking yet</td></tr>';
 
     const funnel = s.growth_funnel || {};
     const tradingFunnel = funnel.trading || {};

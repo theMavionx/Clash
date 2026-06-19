@@ -18,24 +18,18 @@ enum WanderState { IDLE, WALKING, BOARDING }
 # ── Weapon paths — same as combat troops ──────────────────────
 const WEAPON_PATHS: Dictionary = {
 	"Knight":    "res://Model/Characters/Assets/sword_1handed.gltf",
-	"Barbarian": "res://Model/Characters/Assets/axe_1handed.gltf",
 	"Mage":      "res://Model/Characters/Assets/staff.gltf",
 	"Archer":    "res://Model/Characters/Assets/bow_withString.gltf",
-	"Ranger":    "res://Model/Characters/Assets/crossbow_1handed.gltf",
 }
 const WEAPON_BONES: Dictionary = {
 	"Knight": "handslot.r",
-	"Barbarian": "handslot.r",
 	"Mage": "handslot.r",
 	"Archer": "handslot.l",
-	"Ranger": "handslot.r",
 }
 const WEAPON_ROTATIONS: Dictionary = {
 	"Knight": Vector3.ZERO,
-	"Barbarian": Vector3(0, 180, 0),
 	"Mage": Vector3.ZERO,
 	"Archer": Vector3(-90, 180, 0),
-	"Ranger": Vector3(0, 90, 0),
 }
 
 signal boarded  # emitted when troop reaches port and disappears

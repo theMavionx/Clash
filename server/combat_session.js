@@ -50,9 +50,7 @@ const TRACE_MAX_EVENTS = Math.max(100, Number(process.env.CLASH_SIM_TRACE_MAX ||
 const TROOP_NAMES = {
   knight: 'Knight',
   mage: 'Mage',
-  barbarian: 'Barbarian',
   archer: 'Archer',
-  ranger: 'Ranger',
   demon_king: 'DemonKing',
   fire_dragon: 'FireDragon',
 };

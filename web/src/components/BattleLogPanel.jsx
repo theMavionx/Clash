@@ -7,9 +7,7 @@ const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 const TROOP_LABELS = {
   knight: 'Knight',
   mage: 'Mage',
-  barbarian: 'Barbarian',
   archer: 'Archer',
-  ranger: 'Ranger',
   demonking: 'Demon King',
   demon_king: 'Demon King',
 };

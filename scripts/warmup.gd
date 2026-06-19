@@ -222,16 +222,13 @@ func _warmup_upgrade_outline() -> void:
 
 ## Warm Godot's internal load() cache with every weapon/projectile scene used
 ## by troop subclasses in `_setup_weapons`. Paths mirror the @export defaults
-## in knight/mage/barbarian/archer/ranger — keep in sync if those change.
+## in knight/mage/archer — keep in sync if those change.
 func _prewarm_weapon_scenes() -> void:
 	const WEAPON_PATHS: Array[String] = [
 		"res://Model/Characters/Assets/sword_1handed.gltf",
 		"res://Model/Characters/Assets/staff.gltf",
-		"res://Model/Characters/Assets/axe_1handed.gltf",
 		"res://Model/Characters/Assets/bow_withString.gltf",
 		"res://Model/Characters/Assets/arrow_bow.gltf",
-		"res://Model/Characters/Assets/crossbow_1handed.gltf",
-		"res://Model/Characters/Assets/arrow_crossbow.gltf",
 	]
 	var loaded := 0
 	for path in WEAPON_PATHS:

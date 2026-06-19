@@ -9378,9 +9378,7 @@ router.delete('/buildings/:id', auth, (req, res) => {
 const TROOP_NAME_MAP = {
   knight: 'Knight',
   mage: 'Mage',
-  barbarian: 'Barbarian',
   archer: 'Archer',
-  ranger: 'Ranger',
   demonking: 'DemonKing',
   demon_king: 'DemonKing',
   firedragon: 'FireDragon',
@@ -10066,8 +10064,25 @@ router.get('/find-enemy', auth, (req, res) => {
     logBattle('find_enemy failed', { player: req.player.id, error: result.error, attack_cost_gold: result.attack_cost_gold });
     return res.status(result.status || 404).json(result);
   }
-  logBattle('find_enemy', { attacker: req.player.id, defender: result.id, name: result.name, battle_session_id: result.battle_session_id, attack_cost_gold: result.attack_cost_gold });
+  logBattle('find_enemy', {
+    attacker: req.player.id,
+    defender: result.id,
+    name: result.name,
+    is_bot: !!result.is_bot,
+    selection_reason: result.matchmaking?.selection_reason || null,
+    base_power_ratio: result.matchmaking?.base_power_ratio || null,
+    battle_session_id: result.battle_session_id,
+    attack_cost_gold: result.attack_cost_gold,
+  });
   res.json(result);
+});
+
+router.get('/matchmaking/stats', auth, (req, res) => {
+  res.json(db.getPlayerMatchmakingStats(req.player.id));
+});
+
+router.get('/admin/matchmaking/stats', adminAuth, (req, res) => {
+  res.json(db.getGlobalMatchmakingStats(req.query?.days || 7));
 });
 
 
@@ -10598,6 +10613,7 @@ router.get('/leaderboard', (req, res) => {
       COALESCE((SELECT MAX(b.level) FROM buildings b WHERE b.player_id = p.id AND b.type = 'town_hall'), 1) AS level
     FROM players p
     WHERE p.trophies > 0
+      AND COALESCE(p.is_bot, 0) = 0
     ORDER BY p.trophies DESC
     LIMIT 50
   `).all();
@@ -12790,7 +12806,9 @@ router.get('/admin/players', adminAuth, (req, res) => {
            futures_mode, tutorial_flags,
            shield_until, last_attacked_by, last_attacked_at, created_at,
            last_seen_at
-    FROM players ORDER BY trophies DESC
+    FROM players
+    WHERE COALESCE(is_bot, 0) = 0
+    ORDER BY trophies DESC
   `).all();
   // Pull per-player trading rewards in one shot so the UI can show gold
   // earned from trading next to each row (no N+1 query).
@@ -12806,8 +12824,72 @@ router.get('/admin/players', adminAuth, (req, res) => {
     `).all();
     for (const r of rewards) rewardsMap[r.player_id] = r;
   } catch { /* trading_rewards missing on fresh DB */ }
+  const matchmakingMap = {};
+  const matchmakingLatestMap = {};
+  try {
+    const rows = db.db.prepare(`
+      SELECT attacker_id,
+             COUNT(*) AS raids_7d,
+             SUM(CASE WHEN result IN ('victory', 'defeat') THEN 1 ELSE 0 END) AS decided_7d,
+             SUM(CASE WHEN result = 'victory' THEN 1 ELSE 0 END) AS wins_7d,
+             SUM(CASE WHEN result = 'defeat' THEN 1 ELSE 0 END) AS losses_7d,
+             SUM(CASE WHEN target_is_bot = 1 THEN 1 ELSE 0 END) AS bot_matches_7d,
+             SUM(CASE WHEN recovery_level > 0 THEN 1 ELSE 0 END) AS recovery_matches_7d,
+             AVG(base_power_ratio) AS avg_base_power_ratio_7d
+      FROM raid_matchmaking
+      WHERE created_at > datetime('now', '-7 days')
+      GROUP BY attacker_id
+    `).all();
+    for (const row of rows) {
+      const raids = Number(row.raids_7d || 0);
+      const decided = Number(row.decided_7d || 0);
+      matchmakingMap[row.attacker_id] = {
+        raids_7d: raids,
+        decided_7d: decided,
+        wins_7d: Number(row.wins_7d || 0),
+        losses_7d: Number(row.losses_7d || 0),
+        success_rate_7d: decided > 0 ? Number(row.wins_7d || 0) / decided : null,
+        bot_matches_7d: Number(row.bot_matches_7d || 0),
+        bot_share_7d: raids > 0 ? Number(row.bot_matches_7d || 0) / raids : null,
+        recovery_matches_7d: Number(row.recovery_matches_7d || 0),
+        avg_base_power_ratio_7d: row.avg_base_power_ratio_7d == null ? null : Number(row.avg_base_power_ratio_7d),
+      };
+    }
+    const latestRows = db.db.prepare(`
+      SELECT attacker_id, defender_id, target_is_bot, target_bot_difficulty,
+             difficulty_bucket, recovery_level, base_power_ratio, result, created_at
+      FROM raid_matchmaking
+      ORDER BY created_at DESC, id DESC
+      LIMIT 5000
+    `).all();
+    for (const row of latestRows) {
+      if (!matchmakingLatestMap[row.attacker_id]) {
+        matchmakingLatestMap[row.attacker_id] = {
+          defender_id: row.defender_id,
+          target_is_bot: Number(row.target_is_bot || 0) === 1,
+          target_bot_difficulty: row.target_bot_difficulty || null,
+          difficulty_bucket: row.difficulty_bucket || null,
+          recovery_level: Number(row.recovery_level || 0),
+          base_power_ratio: row.base_power_ratio == null ? null : Number(row.base_power_ratio),
+          result: row.result || null,
+          created_at: row.created_at || null,
+        };
+      }
+    }
+  } catch { /* raid_matchmaking missing on older DB */ }
   res.json(players.map(p => {
     const tr = rewardsMap[p.id];
+    const mm = matchmakingMap[p.id] || {
+      raids_7d: 0,
+      decided_7d: 0,
+      wins_7d: 0,
+      losses_7d: 0,
+      success_rate_7d: null,
+      bot_matches_7d: 0,
+      bot_share_7d: null,
+      recovery_matches_7d: 0,
+      avg_base_power_ratio_7d: null,
+    };
     // Online = heartbeat within the past 5 min. Same window as the
     // /admin/stats counter so the row badge agrees with the headline
     // number. SQLite returns last_seen_at as "YYYY-MM-DD HH:MM:SS" UTC
@@ -12827,6 +12909,10 @@ router.get('/admin/players', adminAuth, (req, res) => {
       trading_gold: tr?.total_gold || 0,
       trading_volume: tr?.total_volume || 0,
       trading_last_daily: tr?.last_daily || null,
+      matchmaking: {
+        ...mm,
+        last: matchmakingLatestMap[p.id] || null,
+      },
       // Heartbeat-derived presence flags. Computed server-side so the
       // panel JS doesn't have to re-implement the same time math 5 places.
       online: ageMs <= 5 * 60 * 1000,
@@ -12856,10 +12942,11 @@ router.post('/admin/seed-town-halls', adminAuth, (req, res) => {
   const missing = db.db.prepare(`
     SELECT p.id
     FROM players p
-    WHERE NOT EXISTS (
-      SELECT 1 FROM buildings b
-      WHERE b.player_id = p.id AND b.type = 'town_hall'
-    )
+    WHERE COALESCE(p.is_bot, 0) = 0
+      AND NOT EXISTS (
+        SELECT 1 FROM buildings b
+        WHERE b.player_id = p.id AND b.type = 'town_hall'
+      )
   `).all();
 
   const fetchOccupiedCells = db.db.prepare(`
@@ -13866,7 +13953,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
 
 router.delete('/admin/players/:name', adminAuth, (req, res) => {
   try {
-    const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
+    const player = db.db.prepare('SELECT id FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
     db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
     db.db.prepare('DELETE FROM troop_levels WHERE player_id = ?').run(player.id);
@@ -13889,7 +13976,7 @@ router.delete('/admin/players/:name', adminAuth, (req, res) => {
 // is OLDER than the cursor) and one-time bonuses (first_deposit,
 // first_trade) couldn't be re-earned.
 router.post('/admin/players/:name/reset', adminAuth, (req, res) => {
-  const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
+  const player = db.db.prepare('SELECT id FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
   db.db.prepare('UPDATE players SET gold = 4000, wood = 4000, ore = 4000, trophies = 0 WHERE id = ?').run(player.id);
@@ -13904,7 +13991,7 @@ router.post('/admin/players/:name/reset', adminAuth, (req, res) => {
 
 // Reset trophies for one player
 router.post('/admin/players/:name/reset-trophies', adminAuth, (req, res) => {
-  const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
+  const player = db.db.prepare('SELECT id FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   db.db.prepare('UPDATE players SET trophies = 0 WHERE id = ?').run(player.id);
   res.json({ reset_trophies: req.params.name });
@@ -13912,7 +13999,7 @@ router.post('/admin/players/:name/reset-trophies', adminAuth, (req, res) => {
 
 // Adjust or set main account trophies for one player.
 router.post('/admin/players/:name/trophies', adminAuth, (req, res) => {
-  const player = db.db.prepare('SELECT id, name, trophies FROM players WHERE name = ?').get(req.params.name);
+  const player = db.db.prepare('SELECT id, name, trophies FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   const hasSet = req.body && Object.prototype.hasOwnProperty.call(req.body, 'set');
   const raw = hasSet ? req.body.set : (req.body?.delta ?? req.body?.trophies ?? req.body?.amount);
@@ -13935,7 +14022,7 @@ router.post('/admin/players/:name/trophies', adminAuth, (req, res) => {
 
 // Reset trophies for ALL players
 router.post('/admin/reset-all-trophies', adminAuth, (req, res) => {
-  const result = db.db.prepare('UPDATE players SET trophies = 0').run();
+  const result = db.db.prepare('UPDATE players SET trophies = 0 WHERE COALESCE(is_bot, 0) = 0').run();
   res.json({ reset: result.changes });
 });
 
@@ -13945,7 +14032,7 @@ router.post('/admin/add-resources-all', adminAuth, (req, res) => {
   if (typeof gold !== 'number' || typeof wood !== 'number' || typeof ore !== 'number') {
     return res.status(400).json({ error: 'gold, wood, ore must be numbers' });
   }
-  const players = db.db.prepare('SELECT id FROM players').all();
+  const players = db.db.prepare('SELECT id FROM players WHERE COALESCE(is_bot, 0) = 0').all();
   let updated = 0;
   for (const p of players) {
     db.addResources(p.id, gold, wood, ore, {
@@ -13959,7 +14046,7 @@ router.post('/admin/add-resources-all', adminAuth, (req, res) => {
 
 // Add resources to a specific player by name
 router.post('/admin/players/:name/add-resources', adminAuth, (req, res) => {
-  const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
+  const player = db.db.prepare('SELECT id FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   const { gold = 0, wood = 0, ore = 0 } = req.body;
   if (typeof gold !== 'number' || typeof wood !== 'number' || typeof ore !== 'number') {
@@ -14069,7 +14156,7 @@ function adminInsertBuilding(playerId, type, level, requestedGridIndex = null) {
 // the target tile is legal and unoccupied.
 router.post('/admin/players/:name/add-building', adminAuth, (req, res) => {
   try {
-    const player = db.db.prepare('SELECT id, name FROM players WHERE name = ?').get(req.params.name);
+    const player = db.db.prepare('SELECT id, name FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
 
     const type = String(req.body?.type || '').trim().toLowerCase();
@@ -14132,7 +14219,7 @@ router.post('/admin/players/:name/add-building', adminAuth, (req, res) => {
 
 router.post('/admin/players/:name/max-village', adminAuth, (req, res) => {
   try {
-    const player = db.db.prepare('SELECT id, name FROM players WHERE name = ?').get(req.params.name);
+    const player = db.db.prepare('SELECT id, name FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
     const townHallLevel = Math.max(1, Math.min(4, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
     const result = db.db.transaction(() => {
@@ -14439,6 +14526,7 @@ function buildDeviceStats() {
         GROUP BY player_id
       ) latest ON latest.player_id = p.id
       LEFT JOIN client_logs cl ON cl.id = latest.latest_log_id
+      WHERE COALESCE(p.is_bot, 0) = 0
     `).all();
 
     const byDexMap = {};
@@ -14463,7 +14551,8 @@ function buildDeviceStats() {
       SELECT COALESCE(NULLIF(seeker_source, ''), 'client') AS source,
              COUNT(*) AS players
       FROM players
-      WHERE COALESCE(is_seeker, 0) = 1 OR seeker_id IS NOT NULL
+      WHERE COALESCE(is_bot, 0) = 0
+        AND (COALESCE(is_seeker, 0) = 1 OR seeker_id IS NOT NULL)
       GROUP BY COALESCE(NULLIF(seeker_source, ''), 'client')
       ORDER BY players DESC, source ASC
     `).all();
@@ -14685,12 +14774,14 @@ function buildAdminGrowthFunnelStats({ playerCount, activeQ }) {
   const dexSelected = Number(adminSafeGet(`
     SELECT COUNT(*) AS n
     FROM players
-    WHERE dex IS NOT NULL AND LENGTH(TRIM(dex)) > 0
+    WHERE COALESCE(is_bot, 0) = 0
+      AND dex IS NOT NULL AND LENGTH(TRIM(dex)) > 0
   `).n || 0);
   const futuresModePicked = Number(adminSafeGet(`
     SELECT COUNT(*) AS n
     FROM players
-    WHERE futures_mode IS NOT NULL AND LENGTH(TRIM(futures_mode)) > 0
+    WHERE COALESCE(is_bot, 0) = 0
+      AND futures_mode IS NOT NULL AND LENGTH(TRIM(futures_mode)) > 0
   `).n || 0);
   const trading = adminSafeGet(`
     SELECT
@@ -14766,15 +14857,19 @@ function buildAdminGrowthFunnelStats({ playerCount, activeQ }) {
     WITH dex_links AS (
       SELECT id AS player_id, COALESCE(NULLIF(dex, ''), 'unknown') AS dex
       FROM players
-      WHERE dex IS NOT NULL AND dex <> ''
+      WHERE COALESCE(is_bot, 0) = 0
+        AND dex IS NOT NULL AND dex <> ''
       UNION
       SELECT id AS player_id, 'unknown' AS dex
       FROM players
-      WHERE dex IS NULL OR dex = ''
+      WHERE COALESCE(is_bot, 0) = 0
+        AND (dex IS NULL OR dex = '')
       UNION
-      SELECT player_id, COALESCE(NULLIF(dex, ''), 'unknown') AS dex
-      FROM player_dex_accounts
-      WHERE status <> 'disconnected'
+      SELECT a.player_id, COALESCE(NULLIF(a.dex, ''), 'unknown') AS dex
+      FROM player_dex_accounts a
+      JOIN players p ON p.id = a.player_id
+      WHERE a.status <> 'disconnected'
+        AND COALESCE(p.is_bot, 0) = 0
     ),
     trading AS (
       SELECT player_id,
@@ -14805,7 +14900,7 @@ function buildAdminGrowthFunnelStats({ playerCount, activeQ }) {
       COALESCE(SUM(CASE WHEN purchases.purchases > 0 THEN 1 ELSE 0 END), 0) AS shop_buyers,
       COALESCE(SUM(CASE WHEN purchases.project_token_purchase > 0 THEN 1 ELSE 0 END), 0) AS project_token_buyers
     FROM dex_links dl
-    LEFT JOIN players p ON p.id = dl.player_id
+    JOIN players p ON p.id = dl.player_id AND COALESCE(p.is_bot, 0) = 0
     LEFT JOIN trading t ON t.player_id = p.id AND t.dex = dl.dex
     LEFT JOIN purchases ON purchases.player_id = p.id
     GROUP BY dl.dex
@@ -15144,17 +15239,22 @@ function buildAdminTelemetryStats() {
 
 // Server stats
 router.get('/admin/stats', adminAuth, (req, res) => {
-  const playerCount = db.db.prepare('SELECT COUNT(*) as c FROM players').get().c;
-  const buildingCount = db.db.prepare('SELECT COUNT(*) as c FROM buildings').get().c;
+  const playerCount = db.db.prepare('SELECT COUNT(*) as c FROM players WHERE COALESCE(is_bot, 0) = 0').get().c;
+  const buildingCount = db.db.prepare(`
+    SELECT COUNT(*) as c
+    FROM buildings b
+    JOIN players p ON p.id = b.player_id
+    WHERE COALESCE(p.is_bot, 0) = 0
+  `).get().c;
   const replayCount = db.db.prepare('SELECT COUNT(*) as c FROM battle_replays').get().c;
   const accepted = db.db.prepare("SELECT COUNT(*) as c FROM battle_replays WHERE verified_result='accepted'").get().c;
   const rejected = db.db.prepare("SELECT COUNT(*) as c FROM battle_replays WHERE verified_result='rejected'").get().c;
-  const totalGold = db.db.prepare('SELECT SUM(gold) as s FROM players').get().s || 0;
-  const totalWood = db.db.prepare('SELECT SUM(wood) as s FROM players').get().s || 0;
-  const totalOre = db.db.prepare('SELECT SUM(ore) as s FROM players').get().s || 0;
-  const shielded = db.db.prepare("SELECT COUNT(*) as c FROM players WHERE shield_until > datetime('now')").get().c;
+  const totalGold = db.db.prepare('SELECT SUM(gold) as s FROM players WHERE COALESCE(is_bot, 0) = 0').get().s || 0;
+  const totalWood = db.db.prepare('SELECT SUM(wood) as s FROM players WHERE COALESCE(is_bot, 0) = 0').get().s || 0;
+  const totalOre = db.db.prepare('SELECT SUM(ore) as s FROM players WHERE COALESCE(is_bot, 0) = 0').get().s || 0;
+  const shielded = db.db.prepare("SELECT COUNT(*) as c FROM players WHERE COALESCE(is_bot, 0) = 0 AND shield_until > datetime('now')").get().c;
   const recentBattles = db.db.prepare("SELECT COUNT(*) as c FROM battle_replays WHERE created_at > datetime('now', '-1 hour')").get().c;
-  const topPlayers = db.db.prepare('SELECT name, trophies, gold, wood, ore, dex FROM players ORDER BY trophies DESC LIMIT 10').all();
+  const topPlayers = db.db.prepare('SELECT name, trophies, gold, wood, ore, dex FROM players WHERE COALESCE(is_bot, 0) = 0 ORDER BY trophies DESC LIMIT 10').all();
 
   // DEX breakdown — aggregate by players.dex so we can show Pacifica vs
   // Avantis adoption / volume / gold distribution side by side. Guarded
@@ -15163,15 +15263,19 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     WITH dex_links AS (
       SELECT id AS player_id, COALESCE(NULLIF(dex, ''), 'unknown') AS dex
       FROM players
-      WHERE dex IS NOT NULL AND dex <> ''
+      WHERE COALESCE(is_bot, 0) = 0
+        AND dex IS NOT NULL AND dex <> ''
       UNION
       SELECT id AS player_id, 'unknown' AS dex
       FROM players
-      WHERE dex IS NULL OR dex = ''
+      WHERE COALESCE(is_bot, 0) = 0
+        AND (dex IS NULL OR dex = '')
       UNION
-      SELECT player_id, COALESCE(NULLIF(dex, ''), 'unknown') AS dex
-      FROM player_dex_accounts
-      WHERE status <> 'disconnected'
+      SELECT a.player_id, COALESCE(NULLIF(a.dex, ''), 'unknown') AS dex
+      FROM player_dex_accounts a
+      JOIN players p ON p.id = a.player_id
+      WHERE a.status <> 'disconnected'
+        AND COALESCE(p.is_bot, 0) = 0
     )
     SELECT dex, COUNT(DISTINCT player_id) AS n
     FROM dex_links
@@ -15184,7 +15288,9 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   try {
     byUiMode = db.db.prepare(`
       SELECT COALESCE(futures_mode, 'none') AS mode, COUNT(*) AS n
-      FROM players GROUP BY futures_mode
+      FROM players
+      WHERE COALESCE(is_bot, 0) = 0
+      GROUP BY futures_mode
     `).all();
   } catch { /* futures_mode column may not exist on a very old DB */ }
   let rewardsByDex = [];
@@ -15195,7 +15301,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
              COALESCE(SUM(r.total_gold), 0) AS total_gold,
              COALESCE(SUM(r.total_volume), 0) AS total_volume
       FROM trading_rewards r
-      LEFT JOIN players p ON p.id = r.player_id
+      JOIN players p ON p.id = r.player_id AND COALESCE(p.is_bot, 0) = 0
       GROUP BY r.dex
     `).all();
   } catch { /* trading_rewards missing */ }
@@ -15393,7 +15499,9 @@ router.get('/admin/stats', adminAuth, (req, res) => {
       COUNT(CASE WHEN last_seen_at > datetime('now', '-24 hours')   THEN 1 END) AS active_24h,
       COUNT(CASE WHEN last_seen_at > datetime('now', '-7 days')     THEN 1 END) AS active_7d,
       COUNT(CASE WHEN last_seen_at > datetime('now', '-30 days')    THEN 1 END) AS active_30d
-    FROM players WHERE last_seen_at IS NOT NULL
+    FROM players
+    WHERE COALESCE(is_bot, 0) = 0
+      AND last_seen_at IS NOT NULL
   `).get();
 
   // Same buckets sliced by DEX so the panel can show "active Pacifica
@@ -15404,7 +15512,9 @@ router.get('/admin/stats', adminAuth, (req, res) => {
       COUNT(CASE WHEN last_seen_at > datetime('now', '-5 minutes')  THEN 1 END) AS online_now,
       COUNT(CASE WHEN last_seen_at > datetime('now', '-24 hours')   THEN 1 END) AS active_24h,
       COUNT(CASE WHEN last_seen_at > datetime('now', '-7 days')     THEN 1 END) AS active_7d
-    FROM players WHERE last_seen_at IS NOT NULL
+    FROM players
+    WHERE COALESCE(is_bot, 0) = 0
+      AND last_seen_at IS NOT NULL
     GROUP BY dex
   `).all();
   const combatStats = buildAdminCombatStats();
@@ -15476,16 +15586,21 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     const eventRows = [];
     try {
       eventRows.push(...db.db.prepare(`
-        SELECT player_id, created_at, event_type AS action, source
-        FROM player_activity_events
-        WHERE created_at > datetime('now', '-30 days')
+        SELECT e.player_id, e.created_at, e.event_type AS action, e.source
+        FROM player_activity_events e
+        JOIN players p ON p.id = e.player_id
+        WHERE e.created_at > datetime('now', '-30 days')
+          AND COALESCE(p.is_bot, 0) = 0
       `).all());
     } catch {}
     try {
       eventRows.push(...db.db.prepare(`
-        SELECT player_id, created_at, COALESCE(NULLIF(source, ''), level, 'client_log') AS action, 'client_log' AS source
-        FROM client_logs
-        WHERE player_id IS NOT NULL AND created_at > datetime('now', '-30 days')
+        SELECT cl.player_id, cl.created_at, COALESCE(NULLIF(cl.source, ''), cl.level, 'client_log') AS action, 'client_log' AS source
+        FROM client_logs cl
+        JOIN players p ON p.id = cl.player_id
+        WHERE cl.player_id IS NOT NULL
+          AND cl.created_at > datetime('now', '-30 days')
+          AND COALESCE(p.is_bot, 0) = 0
       `).all());
     } catch {}
 
@@ -15560,6 +15675,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
         SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
         FROM players p
         LEFT JOIN buildings b ON b.player_id = p.id
+        WHERE COALESCE(p.is_bot, 0) = 0
         GROUP BY p.id
       ),
       total AS (SELECT COUNT(*) AS n FROM player_th)
@@ -15575,6 +15691,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
         SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
         FROM players p
         LEFT JOIN buildings b ON b.player_id = p.id
+        WHERE COALESCE(p.is_bot, 0) = 0
         GROUP BY p.id
       )
       SELECT ROUND(AVG(th_level), 2) AS avg_th FROM player_th
@@ -15595,6 +15712,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
              COUNT(b.id) AS buildings_count
       FROM players p
       LEFT JOIN buildings b ON b.player_id = p.id
+      WHERE COALESCE(p.is_bot, 0) = 0
       GROUP BY p.id
       ORDER BY p.last_seen_at DESC
     `).all().map((p) => {
@@ -18250,7 +18368,7 @@ router.post('/diag/pacifica/upload', (req, res) => {
   const token = req.headers['x-token'];
   if (typeof token === 'string' && token.length > 10) {
     try {
-      const row = db.db.prepare('SELECT id FROM players WHERE token = ? LIMIT 1').get(token);
+      const row = db.db.prepare('SELECT id FROM players WHERE token = ? AND COALESCE(is_bot, 0) = 0 LIMIT 1').get(token);
       if (row) playerId = row.id;
     } catch {}
   }
