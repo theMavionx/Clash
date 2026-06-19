@@ -3,16 +3,16 @@ extends Node3D
 ## Fires a slow arcing cannonball at ground troops and deals splash damage.
 
 const LEVEL_STATS := {
-	1: {"damage": 95, "fire_rate": 2.40, "detect_range": 1.55, "splash_radius": 0.22, "travel_time": 0.82},
-	2: {"damage": 135, "fire_rate": 2.25, "detect_range": 1.75, "splash_radius": 0.26, "travel_time": 0.78},
-	3: {"damage": 185, "fire_rate": 2.10, "detect_range": 1.95, "splash_radius": 0.30, "travel_time": 0.74},
-	4: {"damage": 245, "fire_rate": 1.95, "detect_range": 2.15, "splash_radius": 0.34, "travel_time": 0.70},
+	1: {"damage": 95, "fire_rate": 2.40, "detect_range": 2.05, "splash_radius": 0.22, "travel_time": 0.82},
+	2: {"damage": 135, "fire_rate": 2.25, "detect_range": 2.25, "splash_radius": 0.26, "travel_time": 0.78},
+	3: {"damage": 185, "fire_rate": 2.10, "detect_range": 2.45, "splash_radius": 0.30, "travel_time": 0.74},
+	4: {"damage": 245, "fire_rate": 1.95, "detect_range": 2.65, "splash_radius": 0.34, "travel_time": 0.70},
 }
 
 const PROJECTILE_SCENE: String = "res://Model/Mortar/mortar_lvl2_projectile.fbx"
 const PROJECTILE_POOL_SIZE: int = 8
-const PROJECTILE_SCALES: Array[float] = [0.040, 0.045, 0.050, 0.055]
-const MUZZLE_HEIGHTS: Array[float] = [0.26, 0.30, 0.34, 0.38]
+const PROJECTILE_SCALES: Array[float] = [0.030, 0.034, 0.038, 0.042]
+const MUZZLE_HEIGHTS: Array[float] = [0.22, 0.25, 0.28, 0.31]
 const ARC_HEIGHTS: Array[float] = [0.50, 0.57, 0.65, 0.74]
 const TARGET_SEARCH_INTERVAL: float = 0.15
 const IMPACT_FX_DURATION: float = 0.32
@@ -327,8 +327,8 @@ func _instantiate_projectile_node() -> Node3D:
 		node = Node3D.new()
 		var mesh := MeshInstance3D.new()
 		var sphere := SphereMesh.new()
-		sphere.radius = 0.035
-		sphere.height = 0.070
+		sphere.radius = 0.026
+		sphere.height = 0.052
 		sphere.radial_segments = 12
 		sphere.rings = 6
 		mesh.mesh = sphere
@@ -402,8 +402,8 @@ func _spawn_impact_fx(pos: Vector3, radius: float) -> void:
 
 	var core := MeshInstance3D.new()
 	var sphere := SphereMesh.new()
-	sphere.radius = 0.07
-	sphere.height = 0.14
+	sphere.radius = 0.055
+	sphere.height = 0.11
 	sphere.radial_segments = 16
 	sphere.rings = 8
 	core.mesh = sphere

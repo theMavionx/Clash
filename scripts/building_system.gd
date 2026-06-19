@@ -823,8 +823,8 @@ func _refresh_bs_cache() -> void:
 func _register_test_only_buildings() -> void:
 	building_defs["mortar"] = {
 		"name": "Mortar",
-		"cells": Vector2i(3, 3),
-		"footprint_extra": 0.7,
+		"cells": Vector2i(2, 2),
+		"footprint_extra": 0.45,
 		"color": Color(0.6, 0.36, 0.18, 0.5),
 		"height": 0.45,
 		"scene": "res://Model/Mortar/mortar_lvl1.fbx",
@@ -834,7 +834,7 @@ func _register_test_only_buildings() -> void:
 			"res://Model/Mortar/mortar_lvl3.fbx",
 			"res://Model/Mortar/mortar_lvl4.fbx",
 		],
-		"model_scale": 0.039,
+		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
 		"hp_levels": [1700, 2800, 4300, 6200],
 		"cost": {"gold": 600, "wood": 900, "ore": 700},
@@ -857,7 +857,7 @@ func _register_test_only_buildings() -> void:
 		],
 		"test_damage": 245,
 		"test_damage_levels": [95, 135, 185, 245],
-		"test_range": 2.15,
+		"test_range": 2.65,
 		"test_reload_sec": 1.95,
 	}
 
@@ -3498,7 +3498,7 @@ func _select_building(b: Dictionary) -> void:
 
 	# Range indicator for defense buildings
 	_hide_range_indicator()
-	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower"]
+	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower", "mortar"]
 	if b.id in defense_ids and is_instance_valid(b.get("node", null)):
 		var bnode = b["node"]
 		var r: float = 1.0
