@@ -144,6 +144,11 @@ tools/codex/deploy-local-to-prod.cmd -Branch main
 - A task is only complete after the agent has run focused local verification when feasible.
 - For gameplay/UI/server changes, prefer real local checks, local playtests, replay simulations,
   or Godot/live inspection over static inspection alone.
+- Verify the actual changed behavior before calling work complete. For example, a new defense
+  projectile needs evidence that it fires, travels/impacts, and damages a target or records
+  combat telemetry.
+- If a live behavior check is not possible, run the strongest fallback check and clearly state
+  the remaining unverified risk.
 - If the agent finds a bug caused by its change, it should fix it and re-run the focused check
   before reporting completion.
 - Do not break existing working systems by default. Warn before intentional removals,

@@ -20,6 +20,14 @@ Primary job:
 - Read the relevant project files before changing code.
 - Make focused changes that match existing project patterns.
 - Run the most relevant local check or simulation when feasible.
+- Verify the actual behavior that changed, especially gameplay, UI, server, economy, and
+  content changes. Do not stop at syntax checks when a local playtest, replay, simulation,
+  browser flow, admin flow, or Godot inspection can prove the behavior.
+- For combat/defense work, verify observable outcomes such as projectile spawn/travel/impact,
+  target HP changes, death/cleanup behavior, and replay/telemetry events when applicable.
+- If verification finds a bug caused by the change, fix it and rerun the focused check before
+  calling the task complete.
+- If the environment blocks real verification, explain the block and the remaining risk.
 - Report what changed, what was verified, and what remains risky.
 - Do not commit, push, deploy, merge, or change production data without explicit owner approval.
 

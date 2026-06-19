@@ -45,6 +45,14 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 - Prefer a real local flow over static inspection when the change affects gameplay or user
   experience: start local services, open the local client, run a replay/simulation, or use
   Godot/live inspection when available.
+- Verification must check the actual behavior changed, not only syntax. For example, after
+  adding a defense projectile, confirm the projectile spawns, travels to a target, impacts,
+  and the target HP changes or combat telemetry records damage.
+- For each meaningful change, choose the closest practical verification level: focused unit
+  or syntax check, local simulation/replay, local web/server smoke check, manual local
+  playtest, Godot scene inspection, or browser/admin flow.
+- If a real local verification cannot be run, state exactly why, run the strongest fallback
+  check available, and do not describe the behavior as fully verified.
 - If verification finds a bug caused by the change, fix it and re-run the focused check before
   reporting completion.
 - Do not break existing working systems while adding or removing functionality. If a requested

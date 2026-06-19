@@ -40,6 +40,9 @@ Main current goals:
   local verification that is feasible.
 - Prefer local playtests, replay simulations, local web/server checks, or Godot/live inspection
   for user-facing gameplay work.
+- Verification should prove the actual changed behavior. For Mortar-style defense work, check
+  projectile spawn/travel/impact plus target HP damage or combat telemetry, not only syntax.
+- If live verification is blocked, run the best fallback and report the remaining risk clearly.
 - If verification finds a bug caused by the current change, fix it and verify again.
 - Do not break existing working systems by default; warn before intentional removals or
   compatibility breaks.

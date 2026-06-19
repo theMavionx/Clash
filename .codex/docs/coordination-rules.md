@@ -11,6 +11,12 @@ No commits, pushes, pull-request merges, production deploys, or production datab
 - Inspect the affected system before editing.
 - Implement the smallest coherent change that satisfies the request.
 - Run focused verification after the change. For gameplay/user-facing changes, prefer a real local check or playtest over static review alone.
+- Verify the actual changed behavior, not just that files parse. Gameplay changes should be
+  checked through the closest practical live flow, replay, local simulation, or Godot scene
+  inspection. Example: a new Mortar projectile is not done until the agent verifies that a
+  projectile is emitted, reaches/impacts a target, and damage or telemetry is observed.
+- If a real behavior check is impossible in the current environment, run the strongest fallback
+  check and clearly report the unverified risk instead of claiming full verification.
 - If verification exposes a regression or bug caused by the change, fix it and verify again.
 - Do not break previously working systems unless the owner explicitly approves the break or replacement.
 - Warn before intentional behavior removal, compatibility breaks, schema risks, or production-impacting actions.
