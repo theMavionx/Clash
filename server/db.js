@@ -2443,12 +2443,24 @@ const stmts = {
   // battle_session_id from /find-enemy. Idempotent: re-stamping the same
   // row updates surrendered_at to the latest call so the 24h cooldown
   // window restarts (unlikely race, but defensive).
+  getSurrenderSessionById: db.prepare(`
+    SELECT id, attacker_id, defender_id, surrendered_at
+    FROM battle_sessions
+    WHERE id = ? AND attacker_id = ? AND defender_id = ?
+  `),
+  getLatestSurrenderSessionForPair: db.prepare(`
+    SELECT id, attacker_id, defender_id, surrendered_at
+    FROM battle_sessions
+    WHERE attacker_id = ? AND defender_id = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `),
   markSurrenderById: db.prepare(`
     UPDATE battle_sessions
     SET surrendered_at = datetime('now'),
         status = 'cancelled',
         completed_at = COALESCE(completed_at, datetime('now'))
-    WHERE id = ? AND attacker_id = ?
+    WHERE id = ? AND attacker_id = ? AND defender_id = ? AND surrendered_at IS NULL
   `),
   // Surrender stamp by attacker+defender pair — fallback used when the
   // client lost the session id (page reload, sailor abandon). Targets the
@@ -2458,12 +2470,7 @@ const stmts = {
     SET surrendered_at = datetime('now'),
         status = CASE WHEN status = 'active' THEN 'cancelled' ELSE status END,
         completed_at = COALESCE(completed_at, datetime('now'))
-    WHERE id = (
-      SELECT id FROM battle_sessions
-      WHERE attacker_id = ? AND defender_id = ?
-      ORDER BY created_at DESC
-      LIMIT 1
-    )
+    WHERE id = ? AND attacker_id = ? AND defender_id = ? AND surrendered_at IS NULL
   `),
   // Insert-only fallback when no battle_session row exists for this pair
   // (extremely rare — find-enemy always creates one, but guards against
@@ -6160,25 +6167,65 @@ function findEnemyByName(playerId, rawTargetName) {
   })();
 }
 
-// Stamps the matchmaker cooldown for a surrender. Tries the session id
-// first (precise), then falls back to the most recent attacker/defender
-// session, then inserts a synthetic marker row if no session exists at all.
-// Returns true when a row was actually stamped — useful for the route to
-// confirm the cooldown is now in place.
-function markSurrender(attackerId, defenderId, sessionId = '') {
-  if (!attackerId || !defenderId) return false;
+// Stamps the matchmaker cooldown for a surrender and applies the normal
+// battle-loss trophy penalty once. Retry calls for the same session/pair do
+// not subtract trophies again because surrendered_at is already populated.
+const _markSurrenderTxn = db.transaction((attackerId, defenderId, sessionId = '') => {
+  if (!attackerId || !defenderId) return { ok: false, error: 'missing_player' };
   const sid = normalizeBattleSessionId(sessionId);
-  if (sid) {
-    const r = stmts.markSurrenderById.run(sid, attackerId);
-    if (r.changes > 0) return true;
+  let session = sid ? stmts.getSurrenderSessionById.get(sid, attackerId, defenderId) : null;
+  let synthetic = false;
+  if (!session) {
+    session = stmts.getLatestSurrenderSessionForPair.get(attackerId, defenderId);
   }
-  const pair = stmts.markSurrenderByPair.run(attackerId, defenderId);
-  if (pair.changes > 0) return true;
+  if (!session) {
+    const syntheticId = uuidv4();
+    stmts.insertSurrenderMarker.run(syntheticId, attackerId, defenderId);
+    session = { id: syntheticId, attacker_id: attackerId, defender_id: defenderId, surrendered_at: null };
+    synthetic = true;
+  }
+  if (session.surrendered_at && !synthetic) {
+    return {
+      ok: true,
+      stamped: true,
+      already_surrendered: true,
+      trophy_delta: 0,
+      trophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
+      battle_session_id: session.id,
+    };
+  }
+  const r = synthetic
+    ? { changes: 1 }
+    : (sid && session.id === sid
+      ? stmts.markSurrenderById.run(session.id, attackerId, defenderId)
+      : stmts.markSurrenderByPair.run(session.id, attackerId, defenderId));
+  if (r.changes <= 0) {
+    return {
+      ok: true,
+      stamped: true,
+      already_surrendered: true,
+      trophy_delta: 0,
+      trophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
+      battle_session_id: session.id,
+    };
+  }
+  applyTrophyDelta(attackerId, -TROPHY_LOSS, { source: 'surrender', eventId: session.id });
+  return {
+    ok: true,
+    stamped: true,
+    already_surrendered: false,
+    trophy_delta: -TROPHY_LOSS,
+    trophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
+    battle_session_id: session.id,
+  };
+});
+
+function markSurrender(attackerId, defenderId, sessionId = '') {
   try {
-    stmts.insertSurrenderMarker.run(uuidv4(), attackerId, defenderId);
-    return true;
-  } catch {
-    return false;
+    return _markSurrenderTxn(attackerId, defenderId, sessionId);
+  } catch (e) {
+    console.warn('[surrender]', e.message);
+    return { ok: false, stamped: false, error: e.message };
   }
 }
 

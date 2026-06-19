@@ -10875,8 +10875,16 @@ router.post('/battle/surrender', auth, (req, res) => {
   if (!defenderId) return res.status(400).json({ error: 'defender_id required' });
   if (defenderId === req.player.id) return res.status(400).json({ error: 'Cannot surrender to yourself' });
   const sessionId = String(req.body?.battle_session_id || req.body?.session_id || '').trim();
-  const stamped = db.markSurrender(req.player.id, defenderId, sessionId);
-  res.json({ ok: true, stamped, cooldown_hours: 24 });
+  const result = db.markSurrender(req.player.id, defenderId, sessionId);
+  if (!result?.ok) return res.status(500).json({ error: result?.error || 'Failed to record surrender' });
+  res.json({
+    ok: true,
+    stamped: !!result.stamped,
+    cooldown_hours: 24,
+    already_surrendered: !!result.already_surrendered,
+    trophy_delta: Number(result.trophy_delta || 0),
+    trophies: Number(result.trophies || 0),
+  });
 });
 
 // Find enemy with closest trophies
