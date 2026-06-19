@@ -23,6 +23,7 @@ Main current goals:
 2. Full game balance pass across resources, buildings, troops, defenses, upgrades, and progression.
 3. Agent workflow, memory, hooks, skills, and deployment automation.
 4. Resource building upgrade content for Sawmill, Storage, and Mine.
+5. Mortar functionality and Town Hall 5 expansion with TH5 unlocks.
 
 ## Git Notes
 

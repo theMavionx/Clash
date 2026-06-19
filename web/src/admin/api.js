@@ -1,7 +1,22 @@
 const KEY_STORAGE = 'admin_key';
 
+function queryAdminKey() {
+  try {
+    const host = window.location.hostname;
+    if (!['localhost', '127.0.0.1', '::1'].includes(host)) return '';
+    return new URLSearchParams(window.location.search).get('admin_key') || '';
+  } catch {
+    return '';
+  }
+}
+
 export function getStoredAdminKey() {
   try {
+    const keyFromQuery = queryAdminKey();
+    if (keyFromQuery) {
+      localStorage.setItem(KEY_STORAGE, keyFromQuery);
+      return keyFromQuery;
+    }
     return localStorage.getItem(KEY_STORAGE) || '';
   } catch {
     return '';

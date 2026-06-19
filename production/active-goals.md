@@ -162,6 +162,70 @@ Next checkpoint:
 - Audit current Sawmill, Storage, and Mine level definitions, available models, and
   server/client mismatches before adding new levels.
 
+## G-005 Mortar And Town Hall 5 Expansion
+
+- Status: active
+- Priority: P1
+- Branch: `codex/building-assets` for Mortar assets, building models, textures,
+  Godot import metadata, and visual progression; use `codex/balance` for final
+  combat/economy tuning values.
+- Owner intent: make Mortar a real working defense building and add Town Hall 5
+  progression with new unlocks.
+- Core idea: TH5 should feel like a meaningful new tier: it unlocks a new defense
+  building, new resource-building levels, and at least one new magic/defense level.
+
+Scope:
+
+- Make Mortar fully functional, not only a test-only model registration.
+- Add Mortar placement/build flow, unlock rules, HP, cost, range, reload, damage,
+  projectile behavior, splash behavior, targeting rules, and UI/admin support.
+- Add Town Hall level 5 upgrade support across server and client.
+- Add TH5 upgrade costs, HP, upgrade timing, display text, max-level logic, and
+  safe handling for existing player data.
+- Add TH5 unlocks for a new Sawmill level, Mine level, and Storage level.
+- Add a new Mage Tower level for TH5, or audit/complete Mage Tower first if the
+  implementation is currently partial or missing.
+- Add Mortar as the new TH5 building.
+- Keep server authoritative building definitions and Godot/client building
+  definitions synchronized.
+
+Key files and docs:
+
+- `scripts/building_system.gd`
+- `scripts/bs_cannon.gd`
+- `scripts/attack_system.gd`
+- `server/db.js`
+- `server/routes.js`
+- `server/combat_defs.js`
+- `server/combat_session.js`
+- `web/src/admin/AdminApp.jsx`
+- `web/src/components/BuildingInfoPanel.jsx`
+- `web/src/components/ShopPanel.jsx`
+- `Model/Mortar/`
+- `Model/Sawmill/`
+- `Model/Mine/`
+- `Model/Storage/`
+
+Acceptance criteria:
+
+- Players can upgrade Town Hall to level 5.
+- TH5 unlock rules are visible and enforced consistently on server and client.
+- Sawmill, Mine, and Storage receive new TH5-appropriate levels.
+- Mage Tower has a new TH5-appropriate level, or the plan clearly documents why
+  Mage Tower must be implemented before it can be leveled.
+- Mortar can be built/unlocked at TH5 and works in actual combat, not only as a
+  static model.
+- Mortar is testable locally through the normal local playtest/admin flow.
+- Mortar and TH5 values are included in the balance pass before production deploy.
+- Local verification covers at least syntax checks, local playtest placement, and
+  a focused combat/balance check for Mortar impact.
+
+Next checkpoint:
+
+- Audit current TH max-level assumptions, Mage Tower status, Mortar assets,
+  server/client building definition mismatches, and the exact places where TH4 is
+  hard-coded before implementing TH5.
+
 ## Parking Lot
 
 - Add CI once the local checks are stable.
