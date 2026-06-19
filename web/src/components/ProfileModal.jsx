@@ -770,12 +770,12 @@ function ProfileModal({ onClose }) {
             </button>
           </div>
 
-          {referralSummary && (
+          {referralSummary?.code && referralSummary?.active && (
             <div style={S.referralBox}>
               <div style={S.referralHead}>
                 <div>
                   <div style={S.sectionTitle}>Referral</div>
-                  <div style={S.referralSub}>10% of confirmed Clash revenue</div>
+                  <div style={S.referralSub}>{Number(referralSummary.rate_bps || 0) / 100}% of confirmed Clash revenue</div>
                 </div>
                 <button
                   type="button"

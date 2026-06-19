@@ -101,6 +101,55 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
   return { me, loading, loaded, error, refresh, join, leave, updateRewardWallet };
 }
 
+export function useLuckyRaider({ active = false, pollMs = 30000 } = {}) {
+  const player = usePlayer();
+  const token = player?.token;
+  const [me, setMe] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(null);
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+
+  const refresh = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    setError(null);
+    const fetchToken = token;
+    try {
+      const res = await fetch('/api/tournaments/lucky-raider', {
+        headers: { 'x-token': fetchToken },
+      });
+      if (!res.ok) throw new Error('failed to load lucky raider');
+      const data = await res.json();
+      if (tokenRef.current !== fetchToken) return;
+      setMe(data);
+      setLoaded(true);
+    } catch (e) {
+      setError(e.message || 'error');
+      setLoaded(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!active) return;
+    if (!token) {
+      setMe(null);
+      setLoading(false);
+      setLoaded(false);
+      return;
+    }
+    setLoaded(false);
+    refresh();
+    const id = setInterval(refresh, pollMs);
+    return () => clearInterval(id);
+  }, [active, token, pollMs, refresh]);
+
+  return { me, loading, loaded, error, refresh };
+}
+
 // Public leaderboard fetcher — separate from the per-player state above
 // because anyone can spectate (even pre-login). Polls every 10s while the
 // panel is open since users want to see their rank update in near-real-time

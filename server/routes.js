@@ -8058,8 +8058,6 @@ router.post('/players/register', (req, res) => {
           wallet: wallet || null,
           dex: requestedDex,
         });
-      } else {
-        db.ensureReferralCode(existing);
       }
       const state = db.getFullPlayerState(existing.id);
       return res.json({ ...state, token: existing.token });
@@ -17498,6 +17496,11 @@ function tournamentDexScope(t) {
   return list.length > 1 ? 'custom' : 'single';
 }
 
+function normalizeTournamentEventKind(value) {
+  const raw = String(value || 'standard').trim().toLowerCase();
+  return raw === 'lucky_raider' ? 'lucky_raider' : 'standard';
+}
+
 function tournamentDexLabel(t) {
   const list = tournamentEligibleDexes(t);
   if (tournamentDexScope(t) === 'all' || list.length === TOURNAMENT_DEXES.length) return 'All DEXes';
@@ -18967,6 +18970,7 @@ function tournamentRowToPublic(t, options = {}) {
   catch { dailyPoolOverrides = {}; }
   return {
     id: t.id,
+    event_kind: normalizeTournamentEventKind(t.event_kind),
     name: t.name,
     description: t.description || '',
     dex: t.dex,
@@ -18987,7 +18991,8 @@ function tournamentRowToPublic(t, options = {}) {
     attack_match_policy_label: tournamentAttackMatchPolicyLabel(attackMatchPolicy),
     scoring_mode: scoringMode,
     scoring_label: scoringMode === 'daily_pool' ? 'Daily points at 00:00 UTC' : 'Live scoring',
-    tournament_kind: megaConfig.enabled ? 'mega' : 'standard',
+    tournament_kind: normalizeTournamentEventKind(t.event_kind) === 'lucky_raider' ? 'lucky_raider' : (megaConfig.enabled ? 'mega' : 'standard'),
+    is_lucky_raider_event: normalizeTournamentEventKind(t.event_kind) === 'lucky_raider',
     is_mega: megaConfig.enabled,
     mega_config: megaConfig,
     mega_sectors: megaConfig.sectors,
@@ -19149,6 +19154,7 @@ router.get('/tournaments', (req, res) => {
   const rows = db.db.prepare(`
     SELECT * FROM tournaments
     WHERE status = 'active'
+      AND COALESCE(event_kind, 'standard') = 'standard'
       AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND (
         replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
@@ -19162,6 +19168,68 @@ router.get('/tournaments', (req, res) => {
   res.json({ tournaments: rows.map(tournamentRowToPublic) });
 });
 
+function ensureLuckyRaiderParticipant(t, player) {
+  if (!t?.id || !player?.id) return null;
+  db.db.prepare(`
+    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, last_activity_at)
+    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, NULL, NULL, datetime('now'))
+    ON CONFLICT(tournament_id, player_id) DO UPDATE SET
+      left_at = NULL,
+      last_activity_at = datetime('now')
+  `).run(t.id, player.id);
+  return db.db.prepare(`
+    SELECT * FROM tournament_participants
+    WHERE tournament_id = ? AND player_id = ?
+  `).get(t.id, player.id);
+}
+
+router.get('/tournaments/lucky-raider', auth, (req, res) => {
+  const dex = req.player.dex;
+  const seekerAccess = isSeekerPlayer(req.player) ? 1 : 0;
+  const rows = db.db.prepare(`
+    SELECT * FROM tournaments
+    WHERE status = 'active'
+      AND COALESCE(event_kind, 'standard') = 'lucky_raider'
+      AND (
+        COALESCE(dex_scope, 'single') = 'all'
+        OR dex = ?
+        OR instr(COALESCE(eligible_dexes, '[]'), '"' || ? || '"') > 0
+      )
+      AND (COALESCE(seeker_only, 0) = 0 OR ? = 1)
+      AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+    ORDER BY id DESC
+    LIMIT 10
+  `).all(dex, dex, seekerAccess);
+  const t = rows.find((row) => {
+    try { return normalizeTournamentRewardConfig(row.reward_config).lucky_daily_raider.enabled; }
+    catch { return false; }
+  });
+  if (!t) {
+    return res.json({ tournament: null, joined: false, phase: null, can_join: false, reward_schedule: null });
+  }
+  const pub = tournamentRowToPublic(t);
+  const me = ensureLuckyRaiderParticipant(t, req.player);
+  const rewardSchedule = tournamentRewardScheduleState(t, req.player.id);
+  return res.json({
+    tournament: { ...pub, reward_schedule: rewardSchedule },
+    joined: !!me && me.left_at === null,
+    phase: pub.phase,
+    can_join: false,
+    me: me ? {
+      trophies: me.trophies,
+      gold: me.gold,
+      trades_count: me.trades_count,
+      volume_usd: me.volume_usd,
+      pnl_usd: me.pnl_usd,
+      awarded_points: me.awarded_points || 0,
+      joined_at: me.joined_at,
+      left_at: me.left_at,
+    } : null,
+    reward_schedule: rewardSchedule,
+  });
+});
+
 // Player's current tournament context: the active tournament available to their DEX
 // (if any) plus their participation row. UI uses this to decide whether to
 // show "Join" or "Leave + leaderboard" on the trophy button.
@@ -19171,6 +19239,7 @@ router.get('/tournaments/me', auth, (req, res) => {
   const t = db.db.prepare(`
     SELECT * FROM tournaments
     WHERE status = 'active'
+      AND COALESCE(event_kind, 'standard') = 'standard'
       AND (
         COALESCE(dex_scope, 'single') = 'all'
         OR dex = ?
@@ -19266,6 +19335,7 @@ router.get('/tournaments/history', auth, (req, res) => {
         t.status = 'ended'
         OR (t.end_at IS NOT NULL AND replace(replace(t.end_at, 'T', ' '), ' UTC', '') <= datetime('now'))
       )
+      AND COALESCE(t.event_kind, 'standard') = 'standard'
       AND (
         COALESCE(t.dex_scope, 'single') = 'all'
         OR t.dex = ?
@@ -19909,7 +19979,7 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
 // default to 1.0 (no boost), sort_by defaults to raw weighted points.
 router.post('/admin/tournaments', adminAuth, (req, res) => {
   const {
-    name, description, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
+    name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
@@ -19917,6 +19987,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  const eventKind = normalizeTournamentEventKind(event_kind);
   const dexConfig = normalizeTournamentDexConfig(req.body || {});
   const tournamentMode = normalizeTournamentMode(mode);
   const teamScoreBy = normalizeTournamentTeamMetric(team_score_by, 'volume_usd');
@@ -19982,9 +20053,17 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
       points_volume_weight,
       points_pnl_weight,
     }, DEFAULT_TOURNAMENT_POINT_WEIGHTS, { requireTotal: needsPointWeights });
-    prizeTiers = normalizeTournamentPrizeTiers(prize_tiers, { strict: true });
-    megaConfig = normalizeTournamentMegaConfig(mega_config, { strict: true });
+    prizeTiers = eventKind === 'lucky_raider' ? [] : normalizeTournamentPrizeTiers(prize_tiers, { strict: true });
+    megaConfig = eventKind === 'lucky_raider' ? normalizeTournamentMegaConfig({ enabled: false }, { strict: true }) : normalizeTournamentMegaConfig(mega_config, { strict: true });
     rewardConfig = normalizeTournamentRewardConfig(reward_config, { strict: true });
+    if (eventKind === 'lucky_raider') {
+      rewardConfig = normalizeTournamentRewardConfig({
+        ...rewardConfig,
+        daily_pools: [],
+        final_pools: [],
+        lucky_daily_raider: { ...rewardConfig.lucky_daily_raider, enabled: true },
+      }, { strict: true });
+    }
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -19999,14 +20078,15 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const prereg = parseBool(preregistration_enabled) ? 1 : 0;
   const r = db.db.prepare(`
     INSERT INTO tournaments (
-      name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
+      event_kind, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
       scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
       prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
       shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
+    eventKind,
     name.trim(),
     (description || '').toString().slice(0, 500),
     dexConfig.dex,
@@ -20056,13 +20136,14 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'not found' });
   const {
-    name, description, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
+    name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
+  const nextEventKind = event_kind !== undefined ? normalizeTournamentEventKind(event_kind) : normalizeTournamentEventKind(t.event_kind);
   const dexConfig = normalizeTournamentDexConfig(req.body || {}, t);
   const tournamentMode = normalizeTournamentMode(mode !== undefined ? mode : t.mode);
   const teamScoreBy = normalizeTournamentTeamMetric(team_score_by !== undefined ? team_score_by : t.team_score_by, 'volume_usd');
@@ -20126,15 +20207,23 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
       points_volume_weight: points_volume_weight !== undefined ? points_volume_weight : t.points_volume_weight,
       points_pnl_weight: points_pnl_weight !== undefined ? points_pnl_weight : t.points_pnl_weight,
     }, fallbackWeights, { requireTotal: needsPointWeights });
-    nextPrizeTiers = prize_tiers !== undefined
+    nextPrizeTiers = nextEventKind === 'lucky_raider' ? [] : (prize_tiers !== undefined
       ? normalizeTournamentPrizeTiers(prize_tiers, { strict: true })
-      : normalizeTournamentPrizeTiers(t.prize_tiers);
-    nextMegaConfig = mega_config !== undefined
+      : normalizeTournamentPrizeTiers(t.prize_tiers));
+    nextMegaConfig = nextEventKind === 'lucky_raider' ? normalizeTournamentMegaConfig({ enabled: false }, { strict: true }) : (mega_config !== undefined
       ? normalizeTournamentMegaConfig(mega_config, { strict: true })
-      : normalizeTournamentMegaConfig(t.mega_config);
+      : normalizeTournamentMegaConfig(t.mega_config));
     nextRewardConfig = reward_config !== undefined
       ? normalizeTournamentRewardConfig(reward_config, { strict: true })
       : normalizeTournamentRewardConfig(t.reward_config);
+    if (nextEventKind === 'lucky_raider') {
+      nextRewardConfig = normalizeTournamentRewardConfig({
+        ...nextRewardConfig,
+        daily_pools: [],
+        final_pools: [],
+        lucky_daily_raider: { ...nextRewardConfig.lucky_daily_raider, enabled: true },
+      }, { strict: true });
+    }
     teamSplits = teamPrizeMode === 'custom_split'
       ? normalizeTournamentTeamPrizeSplits(team_prize_splits !== undefined ? team_prize_splits : t.team_prize_splits, tournamentEligibleDexes(dexConfig), { strict: tournamentMode === 'dex_vs_dex' })
       : [];
@@ -20143,6 +20232,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   }
   const next = {
     name: name && typeof name === 'string' ? name.trim() : t.name,
+    event_kind: nextEventKind,
     description: description !== undefined ? String(description).slice(0, 500) : t.description,
     dex: dexConfig.dex,
     dex_scope: dexConfig.dex_scope,
@@ -20187,7 +20277,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     registration_closes_at: nextRegistrationClosesAt,
   };
   db.db.prepare(`
-    UPDATE tournaments SET name = ?, description = ?, dex = ?, dex_scope = ?, eligible_dexes = ?,
+    UPDATE tournaments SET event_kind = ?, name = ?, description = ?, dex = ?, dex_scope = ?, eligible_dexes = ?,
                             mode = ?, team_score_by = ?, team_prize_mode = ?, team_prize_splits = ?, team_member_reward_by = ?, attack_match_policy = ?,
                             start_at = ?, end_at = ?,
                             gold_boost = ?, seeker_gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
@@ -20197,6 +20287,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
   `).run(
+    next.event_kind,
     next.name,
     next.description,
     next.dex,
@@ -20759,6 +20850,7 @@ function syncExactReferralFuturesEarnings({ limit = 5000 } = {}) {
 router.get('/admin/referrals', adminAuth, (req, res) => {
   try {
     const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+    const settings = db.getReferralSettings();
     const rows = db.db.prepare(`
       WITH invite_counts AS (
         SELECT referrer_player_id, COUNT(DISTINCT referred_player_id) AS invited_count
@@ -20780,6 +20872,12 @@ router.get('/admin/referrals', adminAuth, (req, res) => {
         p.name AS player_name,
         rc.code,
         rc.slug,
+        rc.commission_bps,
+        rc.manual_enabled,
+        rc.active,
+        rc.note,
+        rc.created_at,
+        rc.updated_at,
         COALESCE(ic.invited_count, 0) AS invited_count,
         COALESCE(et.confirmed_usd_e6, 0) AS confirmed_usd_e6,
         COALESCE(et.pending_usd_e6, 0) AS pending_usd_e6,
@@ -20796,6 +20894,10 @@ router.get('/admin/referrals', adminAuth, (req, res) => {
       confirmed_usd: Number(row.confirmed_usd_e6 || 0) / 1_000_000,
       pending_usd: Number(row.pending_usd_e6 || 0) / 1_000_000,
       paid_usd: Number(row.paid_usd_e6 || 0) / 1_000_000,
+      commission_percent: Number(row.commission_bps || settings.default_bps || 0) / 100,
+      visible: settings.mode === 'all' || Number(row.manual_enabled || 0) === 1,
+      active: !!row.active,
+      manual_enabled: !!row.manual_enabled,
     }));
     const recent = db.db.prepare(`
       SELECT e.*, rp.name AS referrer_name, up.name AS referred_name
@@ -20863,10 +20965,60 @@ router.get('/admin/referrals', adminAuth, (req, res) => {
       ...row,
       amount_usd: Number(row.amount_usd_e6 || 0) / 1_000_000,
     }));
-    res.json({ rows, referrals, recent, payouts, rate_bps: 1000 });
+    res.json({ rows, referrals, recent, payouts, settings, rate_bps: settings.default_bps });
   } catch (e) {
     console.warn('[referrals] admin list failed:', e.message);
     res.status(500).json({ error: 'Failed to load referrals' });
+  }
+});
+
+router.post('/admin/referrals/settings', adminAuth, (req, res) => {
+  try {
+    const settings = db.setReferralSettings({
+      mode: req.body?.mode,
+      default_bps: req.body?.default_bps ?? Math.round(Number(req.body?.default_percent || 10) * 100),
+    });
+    res.json({ ok: true, settings });
+  } catch (e) {
+    console.warn('[referrals] settings update failed:', e.message);
+    res.status(500).json({ error: 'Failed to update referral settings' });
+  }
+});
+
+router.post('/admin/referrals/issue', adminAuth, (req, res) => {
+  try {
+    const player = req.body?.player || req.body?.player_id || req.body?.name;
+    const commissionBps = req.body?.commission_bps ?? Math.round(Number(req.body?.commission_percent || 10) * 100);
+    const code = db.issueReferralCodeForPlayer(player, {
+      code: req.body?.code,
+      commissionBps,
+      active: req.body?.active == null ? true : !!req.body.active,
+      note: req.body?.note,
+    });
+    res.json({ ok: true, code: { ...code, active: !!code.active, manual_enabled: !!code.manual_enabled } });
+  } catch (e) {
+    const message = e.message || 'Failed to issue referral code';
+    const status = /not found/i.test(message) ? 404 : (/already used/i.test(message) ? 409 : 500);
+    console.warn('[referrals] issue failed:', message);
+    res.status(status).json({ error: message });
+  }
+});
+
+router.post('/admin/referrals/:playerId/code', adminAuth, (req, res) => {
+  try {
+    const commissionBps = req.body?.commission_bps ?? Math.round(Number(req.body?.commission_percent || 10) * 100);
+    const code = db.issueReferralCodeForPlayer(req.params.playerId, {
+      code: req.body?.code,
+      commissionBps,
+      active: req.body?.active == null ? true : !!req.body.active,
+      note: req.body?.note,
+    });
+    res.json({ ok: true, code: { ...code, active: !!code.active, manual_enabled: !!code.manual_enabled } });
+  } catch (e) {
+    const message = e.message || 'Failed to update referral code';
+    const status = /not found/i.test(message) ? 404 : (/already used/i.test(message) ? 409 : 500);
+    console.warn('[referrals] code update failed:', message);
+    res.status(status).json({ error: message });
   }
 });
 

@@ -34,8 +34,10 @@ export const PRIZE_PRESETS = [
   { id: 'linear', label: 'Linear drop', linear: true },
 ];
 
-export function emptyTournament() {
+export function emptyTournament(eventKind = 'standard') {
+  const kind = eventKind === 'lucky_raider' ? 'lucky_raider' : 'standard';
   return {
+    event_kind: kind,
     name: '',
     description: '',
     dex: 'pacifica',
@@ -70,9 +72,23 @@ export function emptyTournament() {
     prize_currency: 'USD',
     prize_tiers: [],
     mega_config: defaultMegaConfig(false),
-    reward_config: defaultRewardConfig(),
+    reward_config: kind === 'lucky_raider' ? rewardConfigPresetLuckyRaider() : defaultRewardConfig(),
     rewards_in_cop: false,
     status: 'active',
+  };
+}
+
+export function emptyLuckyRaiderEvent() {
+  return {
+    ...emptyTournament('lucky_raider'),
+    name: 'Daily Lucky Raider',
+    description: 'Daily raid lottery. Win attacks to earn tickets.',
+    dex_scope: 'all',
+    eligible_dexes: [...TOURNAMENT_DEXES],
+    sort_by: 'points',
+    scoring_mode: 'live',
+    prize_tiers: [],
+    mega_config: defaultMegaConfig(false),
   };
 }
 
@@ -135,6 +151,7 @@ export function tournamentToForm(tournament) {
   return {
     ...base,
     ...tournament,
+    event_kind: tournament.event_kind === 'lucky_raider' || tournament.tournament_kind === 'lucky_raider' ? 'lucky_raider' : 'standard',
     eligible_dexes: eligible,
     dex: tournament.dex || eligible[0] || base.dex,
     dex_scope: tournament.dex_scope || (eligible.length > 1 ? 'custom' : 'single'),
@@ -348,6 +365,7 @@ export function formToTournamentBody(form) {
       ? (form.eligible_dexes || []).filter((d) => TOURNAMENT_DEXES.includes(d))
       : [form.dex || 'pacifica'];
   return {
+    event_kind: form.event_kind === 'lucky_raider' ? 'lucky_raider' : 'standard',
     name: String(form.name || '').trim(),
     description: String(form.description || '').slice(0, 500),
     dex: form.dex || eligible[0] || 'pacifica',
@@ -379,8 +397,8 @@ export function formToTournamentBody(form) {
     points_volume_weight: Number(form.points_volume_weight) || 0,
     points_pnl_weight: Number(form.points_pnl_weight) || 0,
     prize_currency: String(form.prize_currency || 'USD').toUpperCase(),
-    prize_tiers: normalizePrizeTiers(form.prize_tiers || []),
-    mega_config: normalizeMegaConfig(form.mega_config || {}),
+    prize_tiers: form.event_kind === 'lucky_raider' ? [] : normalizePrizeTiers(form.prize_tiers || []),
+    mega_config: form.event_kind === 'lucky_raider' ? defaultMegaConfig(false) : normalizeMegaConfig(form.mega_config || {}),
     reward_config: normalizeRewardConfig(form.reward_config || {}),
     rewards_in_cop: !!form.rewards_in_cop,
     status: form.status || 'active',

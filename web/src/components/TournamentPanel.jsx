@@ -5,7 +5,7 @@
 // e8dfc8 rows. Three states (no tournament / not joined / joined) share the
 // same paper modal so the visual language is consistent across the game.
 import { memo, useEffect, useState, useMemo } from 'react';
-import { useTournament, useTournamentDailyPoints, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
+import { useLuckyRaider, useTournament, useTournamentDailyPoints, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
 import { usePlayer } from '../hooks/useGodot';
 import { useDex } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
@@ -395,7 +395,12 @@ function TournamentPanel({ onClose }) {
     join,
     leave,
     updateRewardWallet,
-  } = useTournament({ active: tab === 'active' || tab === 'lucky' });
+  } = useTournament({ active: tab === 'active' });
+  const {
+    me: luckyMe,
+    loaded: luckyLoaded,
+    error: luckyError,
+  } = useLuckyRaider({ active: tab === 'lucky' });
   const { items: history } = useTournamentHistory({ active: tab === 'history' });
   const player = usePlayer();
   const { dex } = useDex();
@@ -408,11 +413,12 @@ function TournamentPanel({ onClose }) {
     () => (history || []).find(t => t.id === pickedHistoryId) || null,
     [history, pickedHistoryId]
   );
-  const t = tab === 'history' ? historyTournament : liveTournament;
+  const luckyTournament = luckyMe?.tournament || null;
+  const t = tab === 'history' ? historyTournament : (tab === 'lucky' ? luckyTournament : liveTournament);
   const isHistory = tab === 'history' && !!historyTournament;
 
-  const joined = !!me?.joined;
-  const myStats = isHistory ? (historyTournament?.me || null) : (me?.me || null);
+  const joined = tab === 'lucky' ? !!luckyMe?.joined : !!me?.joined;
+  const myStats = isHistory ? (historyTournament?.me || null) : (tab === 'lucky' ? (luckyMe?.me || null) : (me?.me || null));
   const needsCopRewardWallet = !!t?.rewards_in_cop;
   const storedRewardWallet = String(myStats?.reward_wallet_evm || '').trim();
   const hasRewardWallet = needsCopRewardWallet
@@ -423,7 +429,7 @@ function TournamentPanel({ onClose }) {
   const preregistration = !isHistory && phase === 'preregistration';
   const live = !isHistory && phase === 'live';
   const canJoin = !isHistory && !!me?.can_join;
-  const { board } = useTournamentLeaderboard(t?.id, { active: !!t, pollMs: isHistory ? 60000 : 10000 });
+  const { board } = useTournamentLeaderboard(t?.id, { active: !!t && tab !== 'lucky', pollMs: isHistory ? 60000 : 10000 });
   const dailyActive = !!t && isDailyPoolTournament(t);
   const { daily } = useTournamentDailyPoints(t?.id, {
     active: dailyActive,
@@ -440,6 +446,7 @@ function TournamentPanel({ onClose }) {
   const [busy, setBusy] = useState(false);
   const [rewardWalletEvm, setRewardWalletEvm] = useState('');
   const activeInitialLoading = tab === 'active' && !tournamentLoaded && !me;
+  const luckyInitialLoading = tab === 'lucky' && !luckyLoaded && !luckyMe;
   const prizeProgress = useMemo(() => {
     if (!t) return null;
     const prizeState = board?.prize || {};
@@ -672,17 +679,31 @@ function TournamentPanel({ onClose }) {
             </button>
           )}
 
-          {tab === 'lucky' && !activeInitialLoading && !t && (
+          {tab === 'lucky' && luckyInitialLoading && (
+            <div style={S.empty}>
+              <div style={S.emptyTitle}>Loading Lucky Raider...</div>
+              <div style={S.emptySub}>Checking today's tickets and draw history.</div>
+            </div>
+          )}
+
+          {tab === 'lucky' && !luckyInitialLoading && luckyError && !t && (
+            <div style={S.empty}>
+              <div style={S.emptyTitle}>Could not load Lucky Raider</div>
+              <div style={S.emptySub}>{luckyError}</div>
+            </div>
+          )}
+
+          {tab === 'lucky' && !luckyInitialLoading && !luckyError && !t && (
             <div style={S.empty}>
               <div style={S.emptyTitle}>No Lucky Raider running</div>
-              <div style={S.emptySub}>There is no active tournament with a daily lucky draw right now.</div>
+              <div style={S.emptySub}>There is no standalone daily lucky raid draw right now.</div>
             </div>
           )}
 
           {tab === 'lucky' && t && (
             <LuckyRaiderPanel
               t={t}
-              schedule={board?.reward_schedule || activeRewardSchedule?.schedule || t.reward_schedule || t.reward_config}
+              schedule={luckyMe?.reward_schedule || t.reward_schedule || t.reward_config}
             />
           )}
 

@@ -7,6 +7,7 @@ import {
   buildPayouts,
   defaultMegaConfig,
   emptyTournament,
+  emptyLuckyRaiderEvent,
   fmtTime,
   fmtUsd,
   formToTournamentBody,
@@ -1205,7 +1206,10 @@ function TournamentsPanel({ tournaments, reload }) {
             <div className="admin-card-title">Tournament Control</div>
             <div className="admin-card-sub">Creation and editing uses a step wizard: schedule, eligibility, scoring, rewards, review.</div>
           </div>
-          <button className="admin-btn primary" onClick={() => setEditing(emptyTournament())}>Create tournament</button>
+          <div className="admin-actions">
+            <button className="admin-btn" onClick={() => setEditing(emptyLuckyRaiderEvent())}>Create Daily Lucky Raider</button>
+            <button className="admin-btn primary" onClick={() => setEditing(emptyTournament())}>Create tournament</button>
+          </div>
         </div>
         <div className="admin-card-body">
           <div className="admin-toolbar">
@@ -1225,7 +1229,7 @@ function TournamentsPanel({ tournaments, reload }) {
                     <td className="admin-mono">#{t.id}</td>
                     <td><strong>{t.name}</strong><div className="admin-card-sub">{t.description}</div></td>
                     <td>{t.dex_scope === 'all' ? <span className="admin-badge gold">All DEXes</span> : <DexBadge dex={t.dex} />}</td>
-                    <td>{t.mode === 'dex_vs_dex' ? 'DEX vs DEX' : 'Individual'}</td>
+                    <td>{t.event_kind === 'lucky_raider' ? 'Lucky Raider' : (t.mode === 'dex_vs_dex' ? 'DEX vs DEX' : 'Individual')}</td>
                     <td><span className={'admin-badge ' + (t.status === 'active' ? 'green' : t.status === 'draft' ? 'gold' : 'off')}>{t.phase || t.status}</span></td>
                     <td>{t.participants || 0}<div className="admin-card-sub">{t.registered || 0} registered</div></td>
                     <td className="admin-mono">{fmtTime(t.start_at)}<br />{fmtTime(t.end_at)}</td>
@@ -1257,14 +1261,27 @@ function TournamentWizard({ initial, onClose, onSaved }) {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const isEdit = !!initial?.id;
-  const steps = ['Schedule', 'Eligibility', 'Scoring', 'Rewards', 'Review'];
+  const isLuckyRaider = form.event_kind === 'lucky_raider';
+  const steps = isLuckyRaider
+    ? [
+        { label: 'Schedule', validate: 0, hint: 'Event window' },
+        { label: 'Lucky Raider', validate: 3, hint: 'Tickets and prizes' },
+        { label: 'Review', validate: 4, hint: 'Final check' },
+      ]
+    : [
+        { label: 'Schedule', validate: 0, hint: wizardHint(0) },
+        { label: 'Eligibility', validate: 1, hint: wizardHint(1) },
+        { label: 'Scoring', validate: 2, hint: wizardHint(2) },
+        { label: 'Rewards', validate: 3, hint: wizardHint(3) },
+        { label: 'Review', validate: 4, hint: wizardHint(4) },
+      ];
 
   function update(patch) {
     setForm((prev) => ({ ...prev, ...patch }));
   }
 
   function next() {
-    const errors = validateTournamentStep(step, form);
+    const errors = validateTournamentStep(steps[step]?.validate ?? step, form);
     if (errors.length) {
       setError(errors.join(' '));
       return;
@@ -1274,7 +1291,7 @@ function TournamentWizard({ initial, onClose, onSaved }) {
   }
 
   async function save() {
-    const allErrors = steps.flatMap((_, idx) => validateTournamentStep(idx, form));
+    const allErrors = steps.flatMap((item) => validateTournamentStep(item.validate, form));
     if (allErrors.length) {
       setError(allErrors[0]);
       return;
@@ -1294,23 +1311,26 @@ function TournamentWizard({ initial, onClose, onSaved }) {
   }
 
   return (
-    <Drawer title={isEdit ? `Edit Tournament #${initial.id}` : 'Create Tournament'} subtitle="Guided setup keeps the form readable and validates each operational decision." onClose={onClose}>
+    <Drawer title={isEdit ? `Edit ${isLuckyRaider ? 'Daily Lucky Raider' : 'Tournament'} #${initial.id}` : (isLuckyRaider ? 'Create Daily Lucky Raider' : 'Create Tournament')} subtitle={isLuckyRaider ? 'Standalone daily raid lottery. It does not require a normal tournament leaderboard.' : 'Guided setup keeps the form readable and validates each operational decision.'} onClose={onClose}>
       <div className="wizard">
         <div className="wizard-steps">
-          {steps.map((label, idx) => (
-            <button key={label} className={'wizard-step' + (step === idx ? ' active' : '')} onClick={() => setStep(idx)}>
+          {steps.map((item, idx) => (
+            <button key={item.label} className={'wizard-step' + (step === idx ? ' active' : '')} onClick={() => setStep(idx)}>
               <span className="wizard-step-number">{idx + 1}</span>
-              <span><strong>{label}</strong><span className="admin-card-sub" style={{ display: 'block' }}>{wizardHint(idx)}</span></span>
+              <span><strong>{item.label}</strong><span className="admin-card-sub" style={{ display: 'block' }}>{item.hint}</span></span>
             </button>
           ))}
         </div>
         <div className="wizard-panel">
           {error && <div className="admin-error">{error}</div>}
-          {step === 0 && <TournamentScheduleStep form={form} update={update} />}
-          {step === 1 && <TournamentEligibilityStep form={form} update={update} />}
-          {step === 2 && <TournamentScoringStep form={form} update={update} />}
-          {step === 3 && <TournamentRewardsStep form={form} update={update} />}
-          {step === 4 && <TournamentReviewStep form={form} />}
+          {!isLuckyRaider && step === 0 && <TournamentScheduleStep form={form} update={update} />}
+          {!isLuckyRaider && step === 1 && <TournamentEligibilityStep form={form} update={update} />}
+          {!isLuckyRaider && step === 2 && <TournamentScoringStep form={form} update={update} />}
+          {!isLuckyRaider && step === 3 && <TournamentRewardsStep form={form} update={update} />}
+          {!isLuckyRaider && step === 4 && <TournamentReviewStep form={form} />}
+          {isLuckyRaider && step === 0 && <TournamentScheduleStep form={form} update={update} />}
+          {isLuckyRaider && step === 1 && <TournamentRewardsStep form={form} update={update} />}
+          {isLuckyRaider && step === 2 && <TournamentReviewStep form={form} />}
           <div className="wizard-footer">
             <button className="admin-btn" onClick={() => setStep((value) => Math.max(0, value - 1))} disabled={step === 0}>Back</button>
             <div className="admin-filter-row">
@@ -1319,7 +1339,7 @@ function TournamentWizard({ initial, onClose, onSaved }) {
               {step < steps.length - 1 ? (
                 <button className="admin-btn primary" onClick={next}>Next</button>
               ) : (
-                <button className="admin-btn primary" onClick={save} disabled={saving}>{saving ? 'Saving...' : (isEdit ? 'Save changes' : 'Create tournament')}</button>
+                <button className="admin-btn primary" onClick={save} disabled={saving}>{saving ? 'Saving...' : (isEdit ? 'Save changes' : (isLuckyRaider ? 'Create Lucky Raider' : 'Create tournament'))}</button>
               )}
             </div>
           </div>
@@ -1714,6 +1734,7 @@ function DailyPoolConfig({ form, update }) {
 function TournamentRewardsStep({ form, update }) {
   const [activeTier, setActiveTier] = useState(0);
   const tiers = form.prize_tiers || [];
+  const isLuckyRaider = form.event_kind === 'lucky_raider';
 
   function normalizeEditableTiers(next) {
     return (Array.isArray(next) ? next : []).map((tier) => ({
@@ -1742,6 +1763,18 @@ function TournamentRewardsStep({ form, update }) {
     setActiveTier((value) => Math.max(0, Math.min(value, tiers.length - 2)));
   }
   const currentTier = tiers[activeTier] || null;
+  if (isLuckyRaider) {
+    return (
+      <RewardScheduleEditor
+        title="Daily Lucky Raider Settings"
+        subtitle="Standalone raid lottery. Configure ticket rules, winner count, and reward rows without legacy tournament volume tiers."
+        value={form.reward_config}
+        onChange={(reward_config) => update({ reward_config })}
+        luckyOnly
+        allowPreset
+      />
+    );
+  }
   return (
     <div className="admin-grid">
       <RewardScheduleEditor
@@ -1792,7 +1825,7 @@ function TournamentRewardsStep({ form, update }) {
   );
 }
 
-function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subtitle = '', allowPreset = false }) {
+function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subtitle = '', allowPreset = false, luckyOnly = false }) {
   const config = normalizeRewardConfig(value || {});
   function setConfig(next) {
     onChange(normalizeRewardConfig(next));
@@ -1824,35 +1857,39 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
         </div>
       </div>
       <div className="admin-card-body admin-grid">
-        <div className="admin-toolbar">
-          <strong>Daily pools</strong>
-          <button className="admin-btn" onClick={() => addPool('daily_pools', 'Daily Pool')}>Add daily pool</button>
-        </div>
-        {(config.daily_pools || []).map((pool, index) => (
-          <RewardSchedulePoolEditor
-            key={`daily-${index}`}
-            pool={pool}
-            index={index}
-            updatePool={(idx, patch) => updatePool('daily_pools', idx, patch)}
-            removePool={(idx) => removePool('daily_pools', idx)}
-          />
-        ))}
-        {!(config.daily_pools || []).length && <div className="admin-help">No daily reward pool configured.</div>}
+        {!luckyOnly && (
+          <>
+            <div className="admin-toolbar">
+              <strong>Daily pools</strong>
+              <button className="admin-btn" onClick={() => addPool('daily_pools', 'Daily Pool')}>Add daily pool</button>
+            </div>
+            {(config.daily_pools || []).map((pool, index) => (
+              <RewardSchedulePoolEditor
+                key={`daily-${index}`}
+                pool={pool}
+                index={index}
+                updatePool={(idx, patch) => updatePool('daily_pools', idx, patch)}
+                removePool={(idx) => removePool('daily_pools', idx)}
+              />
+            ))}
+            {!(config.daily_pools || []).length && <div className="admin-help">No daily reward pool configured.</div>}
 
-        <div className="admin-toolbar">
-          <strong>Final pools</strong>
-          <button className="admin-btn" onClick={() => addPool('final_pools', 'Final Pool')}>Add final pool</button>
-        </div>
-        {(config.final_pools || []).map((pool, index) => (
-          <RewardSchedulePoolEditor
-            key={`final-${index}`}
-            pool={pool}
-            index={index}
-            updatePool={(idx, patch) => updatePool('final_pools', idx, patch)}
-            removePool={(idx) => removePool('final_pools', idx)}
-          />
-        ))}
-        {!(config.final_pools || []).length && <div className="admin-help">No final reward pool configured.</div>}
+            <div className="admin-toolbar">
+              <strong>Final pools</strong>
+              <button className="admin-btn" onClick={() => addPool('final_pools', 'Final Pool')}>Add final pool</button>
+            </div>
+            {(config.final_pools || []).map((pool, index) => (
+              <RewardSchedulePoolEditor
+                key={`final-${index}`}
+                pool={pool}
+                index={index}
+                updatePool={(idx, patch) => updatePool('final_pools', idx, patch)}
+                removePool={(idx) => removePool('final_pools', idx)}
+              />
+            ))}
+            {!(config.final_pools || []).length && <div className="admin-help">No final reward pool configured.</div>}
+          </>
+        )}
 
         <div className="admin-card nested-card">
           <div className="admin-card-head"><div><div className="admin-card-title">Lucky Daily Raider</div><div className="admin-card-sub">Automatic weighted daily draw. Tickets can come from UTC-day volume, winning attacks, or both.</div></div></div>
@@ -2761,11 +2798,21 @@ function ReferralsPanel({ data, reload }) {
   const referrals = data?.referrals || [];
   const recent = data?.recent || [];
   const payouts = data?.payouts || [];
-  const rate = Number(data?.rate_bps || 0) / 100;
+  const settings = data?.settings || { mode: 'selected', default_bps: data?.rate_bps || 1000 };
+  const rate = Number(settings.default_bps || data?.rate_bps || 0) / 100;
   const [query, setQuery] = useState('');
   const [selectedReferrer, setSelectedReferrer] = useState(null);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
+  const [modeDraft, setModeDraft] = useState(settings.mode || 'selected');
+  const [defaultRateDraft, setDefaultRateDraft] = useState(String(rate || 10));
+  const [issueDraft, setIssueDraft] = useState({ player: '', code: '', commission: String(rate || 10), note: '' });
+
+  useEffect(() => {
+    setModeDraft(settings.mode || 'selected');
+    setDefaultRateDraft(String(Number(settings.default_bps || 1000) / 100));
+    setIssueDraft((prev) => ({ ...prev, commission: prev.commission || String(Number(settings.default_bps || 1000) / 100) }));
+  }, [settings.mode, settings.default_bps]);
 
   const filteredRows = rows.filter((row) => {
     const hay = `${row.player_name || ''} ${row.player_id || ''} ${row.code || ''}`.toLowerCase();
@@ -2830,6 +2877,47 @@ function ReferralsPanel({ data, reload }) {
     });
   }
 
+  async function saveSettings() {
+    await runAction('Save settings', async () => {
+      const result = await adminPost('/admin/referrals/settings', {
+        mode: modeDraft,
+        default_percent: Number(defaultRateDraft || 0),
+      });
+      const pct = Number(result.settings?.default_bps || 0) / 100;
+      return { message: `Referral settings saved: ${result.settings?.mode || modeDraft}, ${pct}% default.` };
+    });
+  }
+
+  async function issueReferral() {
+    await runAction('Issue referral', async () => {
+      const result = await adminPost('/admin/referrals/issue', {
+        player: issueDraft.player,
+        code: issueDraft.code,
+        commission_percent: Number(issueDraft.commission || 0),
+        note: issueDraft.note,
+        active: true,
+      });
+      setIssueDraft({ player: '', code: '', commission: String(rate || 10), note: '' });
+      return { message: `Referral issued: /r/${result.code?.code || ''}` };
+    });
+  }
+
+  async function editReferral(row) {
+    const nextRate = window.prompt(`Commission percent for ${row.player_name || row.player_id}`, String(Number(row.commission_bps || settings.default_bps || 1000) / 100));
+    if (nextRate == null) return;
+    const nextCode = window.prompt('Referral code', row.code || '') || row.code || '';
+    const active = window.confirm('Keep this referral active and visible? OK = active, Cancel = hidden/disabled.');
+    await runAction('Update referral', async () => {
+      const result = await adminPost(`/admin/referrals/${encodeURIComponent(row.player_id)}/code`, {
+        code: nextCode,
+        commission_percent: Number(nextRate || 0),
+        active,
+        note: row.note || '',
+      });
+      return { message: `Referral updated: /r/${result.code?.code || nextCode}` };
+    });
+  }
+
   if (!data) return <LoadingCard title="Referrals" />;
 
   return (
@@ -2847,7 +2935,10 @@ function ReferralsPanel({ data, reload }) {
         <div className="admin-card-head">
           <div>
             <div className="admin-card-title">Referral Commissions</div>
-            <div className="admin-card-sub">{rate || 10}% commission ledger across shop, NFT, marketplace, and exact builder-fee sources.</div>
+            <div className="admin-card-sub">
+              {settings.mode === 'all' ? 'Every player can expose a referral link.' : 'Referral links are hidden unless manually issued.'}
+              {' '}Default commission: {rate || 10}%.
+            </div>
           </div>
           <div className="admin-filter-row">
             {message ? <span className={'admin-badge ' + (message.toLowerCase().includes('failed') ? 'red' : 'green')}>{message}</span> : null}
@@ -2856,24 +2947,54 @@ function ReferralsPanel({ data, reload }) {
           </div>
         </div>
         <div className="admin-card-body">
+          <div className="admin-grid two">
+            <div className="admin-card subtle">
+              <div className="admin-card-title">Visibility</div>
+              <div className="admin-form-grid">
+                <label><span>Referral mode</span><select className="admin-input" value={modeDraft} onChange={(e) => setModeDraft(e.target.value)}>
+                  <option value="selected">Selected users only</option>
+                  <option value="all">Everyone</option>
+                </select></label>
+                <label><span>Default commission %</span><input className="admin-input" type="number" min="0" max="100" step="0.01" value={defaultRateDraft} onChange={(e) => setDefaultRateDraft(e.target.value)} /></label>
+              </div>
+              <div className="admin-filter-row" style={{ marginTop: 10 }}>
+                <button className="admin-btn primary" onClick={saveSettings} disabled={!!busy}>{busy === 'Save settings' ? 'Saving...' : 'Save settings'}</button>
+                <span className="admin-help">Selected mode hides referral boxes for everyone except issued users.</span>
+              </div>
+            </div>
+            <div className="admin-card subtle">
+              <div className="admin-card-title">Issue Referral</div>
+              <div className="admin-form-grid">
+                <label><span>Player id or exact name</span><input className="admin-input" value={issueDraft.player} onChange={(e) => setIssueDraft((v) => ({ ...v, player: e.target.value }))} placeholder="player id / nickname" /></label>
+                <label><span>Custom code (optional)</span><input className="admin-input" value={issueDraft.code} onChange={(e) => setIssueDraft((v) => ({ ...v, code: e.target.value }))} placeholder="e.g. caencu" /></label>
+                <label><span>Commission %</span><input className="admin-input" type="number" min="0" max="100" step="0.01" value={issueDraft.commission} onChange={(e) => setIssueDraft((v) => ({ ...v, commission: e.target.value }))} /></label>
+                <label><span>Note</span><input className="admin-input" value={issueDraft.note} onChange={(e) => setIssueDraft((v) => ({ ...v, note: e.target.value }))} placeholder="optional admin note" /></label>
+              </div>
+              <div className="admin-filter-row" style={{ marginTop: 10 }}>
+                <button className="admin-btn green" onClick={issueReferral} disabled={!!busy || !issueDraft.player.trim()}>{busy === 'Issue referral' ? 'Issuing...' : 'Issue / update'}</button>
+              </div>
+            </div>
+          </div>
           <div className="admin-toolbar">
             <input className="admin-input" placeholder="Search referrer, id, or code" value={query} onChange={(e) => setQuery(e.target.value)} />
             <span className="admin-help">{filteredRows.length} shown</span>
           </div>
           <div className="admin-table-wrap admin-scroll">
             <table className="admin-table">
-              <thead><tr><th>Referrer</th><th>Code</th><th>Invited</th><th>Confirmed</th><th>Pending</th><th>Paid</th><th>Events</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Referrer</th><th>Code</th><th>Rate</th><th>Status</th><th>Invited</th><th>Confirmed</th><th>Pending</th><th>Paid</th><th>Events</th><th>Actions</th></tr></thead>
               <tbody>
                 {filteredRows.map((row) => (
                   <tr key={row.player_id}>
                     <td><strong>{row.player_name || '-'}</strong><div className="admin-card-sub admin-mono">{row.player_id}</div></td>
                     <td><span className="admin-badge gold">{row.code}</span><div className="admin-card-sub admin-mono">/r/{row.code}</div></td>
+                    <td>{Number(row.commission_bps || settings.default_bps || 0) / 100}%</td>
+                    <td>{row.active && row.visible ? <span className="admin-badge green">visible</span> : row.active ? <span className="admin-badge">hidden</span> : <span className="admin-badge red">disabled</span>}</td>
                     <td><button className="admin-btn" onClick={() => setSelectedReferrer(row)}>{num(referralsByReferrer[row.player_id]?.length || row.invited_count)} referrals</button></td>
                     <td style={{ color: 'var(--admin-gold)' }}>{fmtMaybeUsd(row.confirmed_usd)}</td>
                     <td>{fmtMaybeUsd(row.pending_usd)}</td>
                     <td style={{ color: 'var(--admin-green)' }}>{fmtMaybeUsd(row.paid_usd)}</td>
                     <td>{num(row.events_count)}</td>
-                    <td><div className="admin-filter-row"><button className="admin-btn" onClick={() => setSelectedReferrer(row)}>Open</button><button className="admin-btn primary" onClick={() => createPayout(row)} disabled={!!busy || Number(row.confirmed_usd || 0) <= 0}>Create payout</button></div></td>
+                    <td><div className="admin-filter-row"><button className="admin-btn" onClick={() => setSelectedReferrer(row)}>Open</button><button className="admin-btn" onClick={() => editReferral(row)} disabled={!!busy}>Edit</button><button className="admin-btn primary" onClick={() => createPayout(row)} disabled={!!busy || Number(row.confirmed_usd || 0) <= 0}>Create payout</button></div></td>
                   </tr>
                 ))}
               </tbody>
