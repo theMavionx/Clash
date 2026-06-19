@@ -1,4 +1,4 @@
-class_name BuildingSystem
+﻿class_name BuildingSystem
 extends Node3D
 
 ## Grid-based building system (Clash of Clans style)
@@ -801,6 +801,48 @@ func _refresh_bs_cache() -> void:
 	_building_systems = get_tree().get_nodes_in_group("building_systems")
 
 
+func _register_test_only_buildings() -> void:
+	building_defs["mortar"] = {
+		"name": "Mortar",
+		"cells": Vector2i(3, 3),
+		"footprint_extra": 0.7,
+		"color": Color(0.6, 0.36, 0.18, 0.5),
+		"height": 0.45,
+		"scene": "res://Model/Mortar/mortar_lvl1.fbx",
+		"scenes": [
+			"res://Model/Mortar/mortar_lvl1.fbx",
+			"res://Model/Mortar/mortar_lvl2.fbx",
+			"res://Model/Mortar/mortar_lvl3.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+		],
+		"model_scale": 0.039,
+		"model_rotation_y": 0.0,
+		"hp_levels": [1700, 2800, 4300, 6200],
+		"cost": {"gold": 600, "wood": 900, "ore": 700},
+		"altar_ward_bonus": true,
+		"test_only": true,
+		"hp_bar_height": 0.6,
+		"albedo_texture": "res://Model/Mortar/mortar_albedo.png",
+		"emission_texture": "res://Model/Mortar/mortar_emit.png",
+		"construction_scenes": [
+			"res://Model/Mortar/mortar_lvl1_construction.fbx",
+			"res://Model/Mortar/mortar_lvl2_construction.fbx",
+			"res://Model/Mortar/mortar_lvl3_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+		],
+		"projectile_scenes": [
+			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl3_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+		],
+		"test_damage": 320,
+		"test_damage_levels": [180, 240, 320, 420],
+		"test_range": 1.45,
+		"test_reload_sec": 2.8,
+	}
+
+
 func _exit_tree() -> void:
 	if _cannon:
 		_cannon._stop_attack_ship_waves()
@@ -814,6 +856,7 @@ func _ready() -> void:
 	if test_mode:
 		_net = null  # Local-only: bypass all server gating
 		resources = {"wood": 9_999_999, "gold": 9_999_999, "ore": 9_999_999}
+		_register_test_only_buildings()
 	_cannon = BSCannon.new().init(self)
 	_rally = BSRally.new().init(self)
 	_battle = BSBattle.new().init(self)
@@ -1314,8 +1357,16 @@ func _create_fps_label() -> void:
 	_fps_lbl.add_theme_color_override("font_shadow_color", Color(1, 1, 1, 0.5))
 	_fps_lbl.add_theme_constant_override("shadow_offset_x", 1)
 	_fps_lbl.add_theme_constant_override("shadow_offset_y", 1)
-	_fps_lbl.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	_fps_lbl.offset_left = 14
+	if test_mode:
+		_fps_lbl.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+		_fps_lbl.offset_left = -170
+		_fps_lbl.offset_right = -14
+		_fps_lbl.offset_top = 14
+		_fps_lbl.offset_bottom = 54
+		_fps_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	else:
+		_fps_lbl.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+		_fps_lbl.offset_left = 14
 	canvas.add_child(_fps_lbl)
 
 

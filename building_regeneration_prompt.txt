@@ -1,0 +1,73 @@
+Use the provided target building image as the main reference and regenerate this building as a clean game-ready stylized 3D asset.
+
+Reference priority:
+1. The provided target building image is the main reference for the specific building type, silhouette, function, proportions, and composition.
+2. The provided building_generation_prompt.txt style guide is the main reference for the overall art direction, upgrade progression, geometry quality, color rules, no-ground rule, idle/static asset rule, and negative prompt rules.
+3. Previously generated building images are secondary visual consistency references. Use them to keep the same game style, camera angle, material treatment, color language, level progression, and overall visual identity across the full building set.
+
+Important reference rule:
+Do not copy mistakes, distortions, warped geometry, action-process poses, cropped framing, fake checkerboard backgrounds, ground tiles, or illogical object placement from previous images.
+Copy only the successful style decisions: clean stylized low-poly shapes, readable silhouettes, hand-painted material feel, warm natural palette, clear construction, and consistent game-ready presentation.
+
+Keep the same building type, main silhouette, function, proportions, camera angle, and overall composition from the reference image.
+Preserve the core identity of the building, but improve the asset quality, structure clarity, and logical design.
+
+Targeted detail replacement:
+If the user marks, names, circles, describes, or points to a specific unwanted detail, replace only that detail with a better logical alternative.
+Do not redesign the whole building when only one detail is disliked.
+Keep all good parts of the building unchanged: main silhouette, roof shape, walls, entrance, camera angle, proportions, material style, color family, and upgrade level.
+The replacement detail must match the building function, style, material palette, and construction logic.
+The new detail should feel intentionally designed, physically attached, and useful for the building.
+If the unwanted detail is random clutter, remove it or replace it with a simpler functional detail.
+If the unwanted detail is illogical, floating, warped, duplicated, melted, too noisy, or visually confusing, replace it with a clean readable object in the same location.
+If replacing a functional part, keep the function clear but improve the shape and placement.
+The changed area should blend naturally with the rest of the asset and should not look pasted on.
+Do not add extra new details beyond the requested replacement.
+Do not change unrelated parts of the building.
+
+Optional user edit fields:
+Unwanted detail: [DESCRIBE DETAIL TO REPLACE]
+Replacement idea: [OPTIONAL DESIRED REPLACEMENT]
+Keep unchanged: [OPTIONAL PARTS THAT MUST STAY THE SAME]
+
+Style:
+Colorful stylized low-poly, hand-painted texture look, chunky readable shapes, exaggerated proportions, soft rounded edges, clean silhouette, mobile strategy game asset, slightly cartoon fantasy, island village aesthetic.
+
+Camera/readability:
+Keep the same 3/4 isometric top-down view as the reference.
+Show the full building, not a close-up.
+Keep the entire object inside the frame with clear empty margin around it.
+Make it instantly recognizable from far away with large readable details and a strong clean silhouette.
+
+Clean-up instructions:
+Fix warped geometry, melted parts, distorted beams, tangled ropes, clipping, random clutter, and illogical object placement.
+Make all beams straight and properly connected.
+Make ropes clean, simple, and attached logically to beams or functional parts.
+Make wooden planks follow clear directions.
+Make stone blocks chunky and readable.
+Make mechanical parts aligned, separated, and physically believable.
+Remove any random or meaningless props.
+Remove any props that make the building look like an action scene or production process in progress.
+When cleaning up a specific unwanted detail, replace only the problematic detail and preserve the rest of the building.
+
+Idle/static asset rule:
+Regenerate the building as an idle game asset, not as an active process.
+The building should look ready to work, but not currently operating.
+Do not show logs, ore, tools, weapons, or resources being actively processed, cut, mined, fired, poured, forged, or moved.
+If this is a sawmill, show the saw blade, cutting area, stacked logs, and wooden structure, but do not place a log halfway inside the blade and do not show active cutting.
+Functional props should be stored, staged, mounted, or attached logically, not caught mid-action.
+
+No ground/base rule:
+Generate only the building object itself.
+Do not generate terrain, grass, dirt, sand, stone floor, platform, pedestal, base tile, circular base, square base, landscape, environment, or ground under the building.
+The building should stand alone with clean bottom contact points, ready to be placed directly on an existing game map grid.
+
+Lighting/render:
+Soft daylight, cel-shaded/toon shaded, ambient occlusion, clean hand-painted albedo, low roughness shine only on metal, no photorealism.
+
+Output:
+Single isolated building asset only, centered, full object visible, neutral or real transparent background.
+No fake checkerboard transparency pattern.
+No ground, no terrain, no base tile, no pedestal, no platform, no characters, no UI, no text, no logo.
+
+Negative prompt: warped geometry, melted geometry, distorted parts, deformed beams, twisted wood, tangled ropes, duplicated ropes, ropes fused into wood, clipping, intersecting objects, floating parts, disconnected parts, broken construction, impossible structure, messy planks, noisy tiny details, overcomplicated details, bad perspective, cropped object, close-up, out of frame, cut off roof, cut off sides, fake transparent checkerboard, checkerboard background, illogical design, random props, meaningless decorations, unstable structure, impossible support, unsupported heavy parts, random objects on roof, random objects on walls, floating decorations, cluttered composition, chaotic placement, props with no purpose, confusing construction, inconsistent function, action scene, active process, production in progress, working machinery, in-use machinery, object being processed, log being cut, log inside saw blade, saw cutting log, active mining, active forging, firing weapon, attacking, motion blur, sparks, flying debris, impact effect, explosion, active flames, animation frame, ground, terrain, grass, dirt, sand, stone floor, platform, pedestal, base tile, foundation slab, circular base, square base, landscape, environment, background props, rocks around the building, plants around the building, photorealistic, text, logo, watermark

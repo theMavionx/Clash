@@ -1,0 +1,121 @@
+Create a game-ready stylized 3D building asset for a fantasy island base-builder / mobile strategy game.
+
+Building type: [BUILDING NAME]
+Function: [RESOURCE / DEFENSE / STORAGE / TOWN HALL / PORT / MAGIC / DECORATION]
+Upgrade level: [LEVEL 1-10]
+Main accent color: [USE THE REQUIRED COLOR FROM THE ACCENT COLOR GUIDE]
+
+Core style:
+Bright chunky smooth mobile strategy building, Clash-of-Clans-like genre feel, but not a copy of any exact Clash of Clans asset, logo, shield, UI, character, or proprietary silhouette.
+Toy-like proportions, oversized roofs, thick beams, rounded stone blocks, soft bevels, smooth polished surfaces, saturated colors, hand-painted material look, clean toon/cel shading, strong readable silhouette.
+The model should feel sturdy, playful, premium, smooth, and instantly readable from a small isometric game camera.
+
+Camera:
+Orthographic 3/4 isometric view.
+Show the front and right side only.
+Main entrance, gate, work area, weapon face, or functional front must be clearly visible.
+Right side must also show readable architecture.
+Full building visible, centered, with clean empty margin.
+No back view, left side view, front-left view, straight front-only view, close-up, or cropped parts.
+
+Smoothness:
+Use chunky smooth forms, rounded corners, soft bevels, and polished toy-like surfaces.
+Wood beams are thick and rounded, not sharp sticks.
+Stone blocks are rounded and clean, not jagged rocks.
+Roof tiles/panels have smooth curved edges.
+Metal has rounded bevels and mild stylized shine.
+Avoid jagged low-poly facets, harsh angular edges, rough polygon shading, triangulated artifacts, lumpy surfaces, and rough blockout geometry.
+
+Set consistency:
+All buildings should share the same village art language: warm carved wood, soft gray rounded stone, clay/painted roofs, thick planks, rope lashings, metal bands, painted trim, clean hand-painted textures, matching bevel softness, matching lighting, and matching camera.
+Each building must be unique in function and silhouette, but clearly built in the same world.
+
+Most important upgrade rule:
+The upgrade must NOT be a scaled-up lower-level mesh.
+Do not simply stretch the building from 10 cm to 12 cm.
+Do not enlarge every part proportionally.
+Do not keep the same layout with bigger walls, roof, windows, doors, beams, and props.
+
+Higher levels must grow through real construction:
+new rooms, side wings, front/right extensions, attached work bays, bigger storage bays, second floors, partial second floors, tower sections, raised platforms, larger functional modules, fortified foundations, wider entrance frames, new roof layers, roof extensions, dormers, balconies, buttresses, braces, stone corners, corner towers, or integrated defensive/resource structures.
+
+For levels 2-10, include at least two visible architectural changes from this list:
+new attached room, side wing, front extension, wider stone foundation, higher wall section, changed roof silhouette, new roof layer, porch, balcony, partial/full second floor, tower cap, raised platform, expanded work bay, larger storage chamber, reinforced entrance frame, buttresses, corner towers, larger machine/weapon/crystal housing, or integrated defensive wall pieces.
+
+Material progression:
+Materials must improve with level.
+Level 1-2: rough wood, simple planks, basic straw/clay roof, small stone supports, simple rope, minimal metal.
+Level 3-4: cleaner timber, regular stone blocks, first painted trim, stronger roof pieces, reinforced beams, simple metal brackets.
+Level 5-6: carved wood, larger stone base, stronger metal bands, cleaner roof construction, improved wall panels, richer accent color.
+Level 7-8: fortified stone corners, heavy braces, iron/bronze reinforcement, refined roof geometry, polished wood, premium carved stone.
+Level 9-10: heroic/legendary craftsmanship, layered roof, refined stone and metal, prestigious trim, strong controlled accent color, final premium finish.
+
+Architecture progression:
+Level 1: compact primitive starter, one main room/structure, single simple roof, one entrance, rough materials, no extra floor or wing.
+Level 2: cleaner starter with small built improvement: wider footing, stronger front frame, small porch, improved roof edge, or tiny utility nook.
+Level 3: first clear extension: side room, work bay, covered entrance, shaped doorway, raised roof edge, stronger posts, or right-side attachment.
+Level 4: developed village version with larger side bay, front porch, bigger foundation, chimney, wheel housing, weapon mount, dock module, storage chamber, or reinforced entrance.
+Level 5: established mid-tier with second roof layer, larger entrance frame, expanded right-side room, small tower part, balcony, platform, bigger work area, or stronger central module.
+Level 6: advanced version with partial second floor, wider side wing, larger attached room, taller central volume, stronger stone base, or larger function module.
+Level 7: fortified large version with thick stone corners, braced beams, protective side walls, taller central mass, stronger upper platform, buttresses, or fortified housing.
+Level 8: elite version with refined roof geometry, full second-floor element, expanded side volume, tower-like mass, carved stone front, bronze/gold trim, or controlled magical/functional module.
+Level 9: heroic version with layered massing, broad footprint expression, strong front entrance, powerful right-side profile, high-quality materials, and multiple integrated volumes.
+Level 10: legendary final version, largest and most complete, with expanded wings/rooms, extra floor, taller central mass, grand roof hierarchy, major function module, wider foundation, reinforced supports, and premium finish.
+
+Visual mass progression:
+Level 1 = 100%, Level 2 = 110-120%, Level 3 = 125-140%, Level 4 = 145-165%, Level 5 = 170-190%, Level 6 = 200-225%, Level 7 = 230-260%, Level 8 = 270-300%, Level 9 = 310-340%, Level 10 = 350-400%.
+Size growth must come from added architecture and better construction, not uniform scaling.
+The upgrade must be readable even if all small props are removed.
+
+Symmetry and detail harmony:
+Small details must be intentional, symmetric, paired, or visually balanced.
+Repeated decorative details should appear as clean matching pairs/sets: beams, trims, roof caps, stones, metal bands, banners, lamps, spikes, brackets, shutters, rope ties, crystals, gold trim, or ornaments.
+Functional asymmetry is allowed only when needed: saw housing, mine rail, chimney, weapon mount, crane, dock rope, anchor, crystal holder, storage hatch, stairs, ladder, side room, porch, or machine housing.
+If one functional feature is asymmetrical, balance it with roof massing, supports, stone weight, trim, color accent, or another architectural feature.
+No one-sided clutter, random small details, mismatched pairs, or lopsided decoration.
+
+Functional identity:
+Make the building function obvious through architecture.
+Town Hall: central civic building, large door, red roof, gold accents, premium trim.
+Sawmill: saw housing, work bay, built-in log storage, braces, green/orange accent.
+Mine: mine entrance, tunnel frame, stone supports, ore hints, rails/cart elements, gold/yellow accent.
+Barn: broad storage body, large front doors, farm roof, red/orange accent.
+Port: dock-like wood, rope, anchor/naval cues, blue/teal accent.
+Storage: protected volume, reinforced walls, metal bands, lockable doors, bronze/yellow accent.
+Turret: heavy base, weapon mount, reinforced upper section, dark red/iron accent.
+Archer Tower: tall supported platform, railing, canopy/roof, green accent.
+Mage Tower: vertical magical structure, crystal focus, carved supports, purple/cyan glow.
+Tombstone: haunted stone massing, carved tomb forms, embedded green/cold purple glow.
+
+Logical construction:
+Every part must have a purpose, support, and believable attachment point.
+Heavy additions need foundations, pillars, braces, beams, or stone walls.
+Upper floors, balconies, platforms, towers, roofs, and side wings must be visibly supported.
+Ropes bind or hold things. Metal bands reinforce. Banners/signs attach to structure. Crystals sit in sockets/frames.
+No floating parts, unsupported extensions, random roof props, chaotic placement, or meaningless decoration.
+
+Idle/static:
+Generate an idle building asset, not an action scene.
+Ready to work/defend/store/produce, but not operating.
+No active cutting, mining, forging, firing, attacking, moving resources, sparks, explosions, motion blur, flying debris, impact effects, active flames, or animation frame.
+Props/resources may appear only if stored, staged, mounted, or built into the architecture.
+
+Accent color guide:
+Town Hall: red roof + gold.
+Sawmill: green or warm orange.
+Mine: gold or yellow.
+Barn: red or orange.
+Port: blue or teal.
+Storage: bronze or yellow metal.
+Turret: dark red or iron.
+Archer Tower: green.
+Mage Tower: purple or cyan.
+Tombstone: green glow or cold purple.
+Accent must cover about 10-20% of visible surface, stay stable across levels, and be visible from the camera.
+
+Output:
+Single isolated building only, centered, full object visible, neutral or real transparent background.
+No ground, terrain, grass, dirt, sand, stone floor, platform, pedestal, base tile, foundation slab, landscape, props around the building, characters, UI, text, logo, watermark, or fake checkerboard transparency.
+
+Negative prompt:
+scaled-up lower-level model, uniform scale, stretched mesh, same architecture but bigger, same footprint, no new geometry, no added room, no extension, no second floor, no material improvement, texture-only upgrade, color-only upgrade, prop-only upgrade, decoration-only upgrade, clutter-based upgrade, random attached boxes, unsupported extensions, one-sided clutter, unbalanced decoration, mismatched pairs, lopsided details, jagged low-poly, harsh facets, sharp un-beveled edges, rough polygon shading, blockout geometry, lumpy surfaces, noisy tiny details, overcomplicated details, exact Clash of Clans copy, copied Supercell asset, copyrighted character, photorealistic, gritty realism, thin fragile parts, warped geometry, melted geometry, clipping, floating parts, disconnected parts, impossible structure, bad perspective, cropped object, wrong camera angle, hidden entrance, missing accent color, monochrome, random accent color, inconsistent style, random props, meaningless decoration, action scene, active process, motion blur, sparks, explosion, active flames, ground, terrain, platform, pedestal, base tile, background props, text, logo, watermark
