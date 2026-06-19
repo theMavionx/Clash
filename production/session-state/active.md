@@ -11,6 +11,7 @@ The repository is being prepared for faster owner-driven Codex work. Durable con
 - project skills under `.agents/skills/`
 - helper scripts under `tools/codex/`
 - balance work branch: `codex/balance`
+- building asset/content branch: `codex/building-assets`
 
 ## Active Goals
 
@@ -28,6 +29,8 @@ Main current goals:
 - Preserve dirty user changes.
 - Do not commit, push, merge, or deploy without explicit user instruction.
 - Put balance-related work and balance commits on `codex/balance`.
+- Put new building models, textures, Godot imports, and building asset/content commits
+  on `codex/building-assets`.
 - Pull-request prompts on GitHub are expected when a non-main branch is ahead of `main`.
 
 ## Quality Notes

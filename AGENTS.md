@@ -104,6 +104,12 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
   `codex/balance`, switch to it only when doing so will not overwrite local changes.
 - Keep balance commits limited to economy, combat, progression, resource buildings, and
   tuning support files. Use a separate branch for unrelated features.
+- New building content belongs on `codex/building-assets`.
+- Use `codex/building-assets` for new/updated building models, Town Hall variants,
+  resource/defense building visuals, Godot `.import` files, textures, test-only building
+  registrations, and building asset pipeline docs.
+- If a building change includes combat/economy numbers, split pure visuals/assets from
+  balance tuning when practical; put tuning-only changes on `codex/balance`.
 
 ## Engine Version Reference
 

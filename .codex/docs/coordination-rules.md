@@ -20,8 +20,11 @@ No commits, pushes, pull-request merges, production deploys, or production datab
 
 - `main` is the integration branch.
 - `codex/balance` is the owner-designated branch for economy, combat, progression, resource-building, and tuning work.
+- `codex/building-assets` is the owner-designated branch for new building models, Town Hall variants, resource/defense building visuals, textures, Godot `.import` files, test-only building registrations, and building asset pipeline docs.
 - Before balance work, check `git status --short --branch`.
 - Do not mix unrelated feature work into balance commits.
+- Before building-asset work, check `git status --short --branch`; switch to `codex/building-assets` only when doing so will not overwrite local changes.
+- Keep pure asset/model work separate from tuning-only balance work when practical.
 
 ## Delegation Model
 

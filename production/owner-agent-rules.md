@@ -92,6 +92,7 @@ These are owner-facing shortcuts. They are not magic by themselves; they tell th
 | `Stop Play Test` | Stop local playtest servers | Run `tools/codex/stop-local-playtest.cmd`. |
 | `Local Test Balance` | Local balance verification | Run `tools/codex/local-test-balance.cmd` or the relevant PvP balance simulation. |
 | `PvP Balance` | PvP simulation report | Run or update `tools/pvp-balance/run.js` reports for requested TH/profile. |
+| `Building Assets` | Building/model work branch | Check git status, use `codex/building-assets` when safe, and keep new building models/assets/test registrations separate from balance tuning. |
 | `Do Goal G-XXX` | Execute a tracked goal | Read `production/active-goals.md`, update checkpoint, implement, verify, and report. |
 | `User Log` | Show recent owner requests | Read `production/user-request-log.md` and summarize recent entries. |
 | `Skill Ideas` | Suggest new skills/shortcuts | Analyze `production/user-request-log.md` for repeated workflows and suggest useful activation words or skills. |

@@ -54,6 +54,9 @@ Use `-Full` when you need full active-goal detail.
 - `origin/main` is the integration branch.
 - `codex/mm-bots` has been used for bot/matchmaking work and may diverge from `main`.
 - `codex/balance` is the dedicated branch for balance-related work and balance commits.
+- `codex/building-assets` is the dedicated branch for new building models, Town Hall
+  variants, building textures, Godot import metadata, test-only building registrations,
+  and building asset pipeline docs.
 - GitHub branch protection was not configured at the time of the last inspection.
 - Collaborators can commit directly to `main` if they have write/admin access.
 - Pull-request prompts appear when someone pushes to a non-main branch that is ahead of `main`.
@@ -135,6 +138,8 @@ tools/codex/deploy-local-to-prod.cmd -Branch main
 
 - No commits, pushes, PR merges, or production deploys without explicit user instruction.
 - Keep balance-related commits on `codex/balance` unless the user directs otherwise.
+- Keep building model/asset/content commits on `codex/building-assets` unless the user
+  directs otherwise.
 - Explain multi-file edits before applying them.
 - A task is only complete after the agent has run focused local verification when feasible.
 - For gameplay/UI/server changes, prefer real local checks, local playtests, replay simulations,

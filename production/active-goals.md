@@ -121,6 +121,9 @@ Next checkpoint:
 
 - Status: active
 - Priority: P1
+- Branch: `codex/building-assets` for new models, textures, import metadata, visual
+  progression, and test-only building registrations; use `codex/balance` for
+  tuning-only economy/combat values.
 - Owner intent: add proper progression content for resource buildings so upgrades feel
   visually and mechanically meaningful.
 - Core idea: add or complete upgraded versions for the Sawmill, Storage, and Mine,
