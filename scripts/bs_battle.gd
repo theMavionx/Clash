@@ -1,4 +1,4 @@
-## BSBattle — Enemy attack, battle, and replay subsystem extracted from BuildingSystem.
+﻿## BSBattle — Enemy attack, battle, and replay subsystem extracted from BuildingSystem.
 ## Implements the find-enemy flow, island switching, return-home, town-hall-destroyed
 ## victory/defeat handling, and replay playback.
 ##
@@ -563,7 +563,7 @@ func _stop_defensive_combat_after_town_hall_destroyed() -> void:
 	for bsys in bs._building_systems:
 		for b in bsys.placed_buildings:
 			var bid: String = str(b.get("id", ""))
-			if not (bid in ["turret", "archer_tower", "tombstone"]):
+			if not (bid in ["turret", "archer_tower", "tombstone", "mage_tower", "mortar"]):
 				continue
 			var bnode: Node = b.get("node", null)
 			if is_instance_valid(bnode):

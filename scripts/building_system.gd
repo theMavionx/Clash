@@ -483,6 +483,7 @@ var _cel_shader: Shader
 static var _scene_res_cache: Dictionary = {}
 static var _turret_script_res: Script = null
 static var _mage_tower_script_res: Script = null
+static var _mortar_script_res: Script = null
 static var _altar_effect_script_res: Script = null
 
 
@@ -524,6 +525,24 @@ func _attach_altar_effect(model: Node) -> void:
 	if _altar_effect_script_res != null:
 		(model as Node3D).set_script(_altar_effect_script_res)
 
+func _attach_building_defense_script(node: Node3D, building_type: String) -> void:
+	if node == null:
+		return
+	if building_type == "turret":
+		if _turret_script_res == null:
+			_turret_script_res = _load_script_resource("res://scripts/turret.gd")
+		if _turret_script_res:
+			node.set_script(_turret_script_res)
+	elif building_type == "mage_tower":
+		if _mage_tower_script_res == null:
+			_mage_tower_script_res = _load_script_resource("res://scripts/tower_mage.gd")
+		if _mage_tower_script_res:
+			node.set_script(_mage_tower_script_res)
+	elif building_type == "mortar":
+		if _mortar_script_res == null:
+			_mortar_script_res = _load_script_resource("res://scripts/tower_mortar.gd")
+		if _mortar_script_res:
+			node.set_script(_mortar_script_res)
 # ── Ship node cache ───────────────────────────────────────────
 var _ship_attack_node: Node3D = null
 var _ship_base_node: Node3D = null
@@ -833,15 +852,14 @@ func _register_test_only_buildings() -> void:
 		"projectile_scenes": [
 			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
 			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
-			"res://Model/Mortar/mortar_lvl3_projectile.fbx",
-			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
 		],
-		"test_damage": 320,
-		"test_damage_levels": [180, 240, 320, 420],
-		"test_range": 1.45,
-		"test_reload_sec": 2.8,
+		"test_damage": 245,
+		"test_damage_levels": [95, 135, 185, 245],
+		"test_range": 2.15,
+		"test_reload_sec": 1.95,
 	}
-
 
 func _exit_tree() -> void:
 	if _cannon:
@@ -2189,14 +2207,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			var base = _create_building_base(def, cache_key)
 			node.add_child(base)
 		
-		if building_type == "turret":
-			var turret_script = _turret_script_res if _turret_script_res else _load_script_resource("res://scripts/turret.gd")
-			if turret_script:
-				node.set_script(turret_script)
-		elif building_type == "mage_tower":
-			var mage_script = _mage_tower_script_res if _mage_tower_script_res else _load_script_resource("res://scripts/tower_mage.gd")
-			if mage_script:
-				node.set_script(mage_script)
+		_attach_building_defense_script(node, building_type)
+
 		if scene_path != "":
 			var scene_res = _scene_res_cache.get(scene_path, null)
 			if scene_res == null:
@@ -2860,6 +2872,8 @@ func _preload_building_scenes() -> void:
 		_turret_script_res = _load_script_resource("res://scripts/turret.gd")
 	if _mage_tower_script_res == null:
 		_mage_tower_script_res = _load_script_resource("res://scripts/tower_mage.gd")
+	if _mortar_script_res == null:
+		_mortar_script_res = _load_script_resource("res://scripts/tower_mortar.gd")
 
 
 ## Build cache key for a building type at a specific level.
@@ -2953,15 +2967,9 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 		var base = _create_building_base(def, current_building_id)
 		node.add_child(base)
 	
-	# Attach turret AI script BEFORE adding children so _process registers
-	if current_building_id == "turret":
-		var turret_script = _turret_script_res if _turret_script_res else _load_script_resource("res://scripts/turret.gd")
-		if turret_script:
-			node.set_script(turret_script)
-	elif current_building_id == "mage_tower":
-		var mage_script = _mage_tower_script_res if _mage_tower_script_res else _load_script_resource("res://scripts/tower_mage.gd")
-		if mage_script:
-			node.set_script(mage_script)
+	# Attach defense AI script BEFORE adding children so _process registers
+	_attach_building_defense_script(node, current_building_id)
+
 	if def.has("scene"):
 		var _scene_path: String = def.scene
 		var scene_res = _scene_res_cache.get(_scene_path, null)
