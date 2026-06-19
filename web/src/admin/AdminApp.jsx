@@ -1168,9 +1168,13 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
 
 function TournamentsPanel({ tournaments, reload }) {
   const [query, setQuery] = useState('');
+  const [viewMode, setViewMode] = useState('tournaments');
   const [editing, setEditing] = useState(null);
   const [leaderboard, setLeaderboard] = useState(null);
-  const filtered = tournaments.filter((t) => `${t.name || ''} ${t.id} ${t.dex || ''} ${t.status || ''}`.toLowerCase().includes(query.toLowerCase()));
+  const luckyEvents = tournaments.filter((t) => t.event_kind === 'lucky_raider');
+  const normalEvents = tournaments.filter((t) => t.event_kind !== 'lucky_raider');
+  const visibleEvents = viewMode === 'lucky_raider' ? luckyEvents : normalEvents;
+  const filtered = visibleEvents.filter((t) => `${t.name || ''} ${t.id} ${t.dex || ''} ${t.status || ''}`.toLowerCase().includes(query.toLowerCase()));
   const active = tournaments.filter((t) => t.status === 'active').length;
   const draft = tournaments.filter((t) => t.status === 'draft').length;
   const ended = tournaments.filter((t) => t.status === 'ended').length;
@@ -1196,6 +1200,7 @@ function TournamentsPanel({ tournaments, reload }) {
     <div className="admin-grid">
       <StatsGrid stats={[
         { label: 'Tournaments', value: tournaments.length },
+        { label: 'Lucky Raiders', value: luckyEvents.length, tone: 'blue' },
         { label: 'Active', value: active, tone: 'green' },
         { label: 'Draft', value: draft, tone: 'gold' },
         { label: 'Ended', value: ended },
@@ -1203,17 +1208,35 @@ function TournamentsPanel({ tournaments, reload }) {
       <div className="admin-card">
         <div className="admin-card-head">
           <div>
-            <div className="admin-card-title">Tournament Control</div>
-            <div className="admin-card-sub">Creation and editing uses a step wizard: schedule, eligibility, scoring, rewards, review.</div>
+            <div className="admin-card-title">{viewMode === 'lucky_raider' ? 'Daily Lucky Raider Control' : 'Tournament Control'}</div>
+            <div className="admin-card-sub">
+              {viewMode === 'lucky_raider'
+                ? 'Standalone daily raid lottery: tickets, winners, history, and rewards without a tournament leaderboard.'
+                : 'Creation and editing uses a step wizard: schedule, eligibility, scoring, rewards, review.'}
+            </div>
           </div>
           <div className="admin-actions">
-            <button className="admin-btn" onClick={() => setEditing(emptyLuckyRaiderEvent())}>Create Daily Lucky Raider</button>
-            <button className="admin-btn primary" onClick={() => setEditing(emptyTournament())}>Create tournament</button>
+            <button className={'admin-btn ' + (viewMode === 'tournaments' ? 'primary' : '')} onClick={() => setViewMode('tournaments')}>Tournaments</button>
+            <button className={'admin-btn ' + (viewMode === 'lucky_raider' ? 'primary' : '')} onClick={() => setViewMode('lucky_raider')}>Daily Lucky Raider</button>
+            {viewMode === 'lucky_raider'
+              ? <button className="admin-btn green" onClick={() => setEditing(emptyLuckyRaiderEvent())}>Create Daily Lucky Raider</button>
+              : <button className="admin-btn primary" onClick={() => setEditing(emptyTournament())}>Create tournament</button>}
           </div>
         </div>
         <div className="admin-card-body">
+          {viewMode === 'lucky_raider' && (
+            <div className="admin-card subtle" style={{ marginBottom: 12 }}>
+              <div className="admin-card-head">
+                <div>
+                  <div className="admin-card-title">Lucky Daily Raider</div>
+                  <div className="admin-card-sub">Use this for the daily “raid and win money” mechanic: tickets from winning attacks or volume, max tickets per day, editable prize places and history.</div>
+                </div>
+                <button className="admin-btn green" onClick={() => setEditing(emptyLuckyRaiderEvent())}>Create standalone Lucky Raider</button>
+              </div>
+            </div>
+          )}
           <div className="admin-toolbar">
-            <input className="admin-input" placeholder="Search tournaments" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <input className="admin-input" placeholder={viewMode === 'lucky_raider' ? 'Search lucky raider events' : 'Search tournaments'} value={query} onChange={(e) => setQuery(e.target.value)} />
             <span className="admin-help">{filtered.length} shown</span>
           </div>
           <div className="admin-table-wrap admin-scroll">
