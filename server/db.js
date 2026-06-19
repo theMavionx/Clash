@@ -2790,6 +2790,10 @@ function parseTournamentRewardConfig(value) {
   const requiredCollections = collections
     .map((v) => String(v || '').trim().toLowerCase())
     .filter((v) => ['demon_king', 'dragon'].includes(v));
+  const ticketMetricRaw = String(luckyRaw.ticket_metric || luckyRaw.metric || 'volume').trim().toLowerCase();
+  const ticketMetric = ['volume', 'attack_wins', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(ticketMetricRaw)
+    ? ticketMetricRaw
+    : 'volume';
   return {
     ...raw,
     daily_pools: Array.isArray(raw.daily_pools) ? raw.daily_pools : [],
@@ -2797,7 +2801,11 @@ function parseTournamentRewardConfig(value) {
     lucky_daily_raider: {
       enabled: !!luckyRaw.enabled,
       label: String(luckyRaw.label || 'Lucky Daily Raider').slice(0, 80),
+      ticket_metric: ticketMetric,
       volume_per_ticket_usd: Math.max(1, Math.min(10_000_000, Number(luckyRaw.volume_per_ticket_usd || 1000) || 1000)),
+      attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
+      min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
+      winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
       max_tickets: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20))),
       require_nft: !!luckyRaw.require_nft,
       required_collections: requiredCollections.length ? requiredCollections : ['demon_king', 'dragon'],
@@ -3125,6 +3133,83 @@ function weightedLuckyRaiderWinner(entries, seed) {
   return { winner: eligible[eligible.length - 1] || null, totalTickets, pick };
 }
 
+function weightedLuckyRaiderWinners(entries, seed, count = 1) {
+  const targetCount = Math.max(1, Math.min(100, Math.floor(Number(count || 1) || 1)));
+  let remaining = (entries || []).filter((entry) => Number(entry.tickets || 0) > 0 && Number(entry.eligible || 0) === 1);
+  const initialTotalTickets = remaining.reduce((sum, entry) => sum + Math.max(0, Math.floor(Number(entry.tickets || 0))), 0);
+  const winners = [];
+  const picks = [];
+  for (let place = 1; place <= targetCount && remaining.length > 0; place += 1) {
+    const totalTickets = remaining.reduce((sum, entry) => sum + Math.max(0, Math.floor(Number(entry.tickets || 0))), 0);
+    if (totalTickets <= 0) break;
+    const hex = crypto.createHash('sha256').update(`${seed}:${place}`).digest('hex');
+    let cursor = Number(BigInt(`0x${hex.slice(0, 15)}`) % BigInt(totalTickets));
+    const pick = cursor;
+    let selectedIndex = remaining.length - 1;
+    for (let i = 0; i < remaining.length; i += 1) {
+      const tickets = Math.max(0, Math.floor(Number(remaining[i].tickets || 0)));
+      if (cursor < tickets) {
+        selectedIndex = i;
+        break;
+      }
+      cursor -= tickets;
+    }
+    const [winner] = remaining.splice(selectedIndex, 1);
+    winners.push({ ...winner, place });
+    picks.push({ place, pick, total_tickets: totalTickets });
+  }
+  return {
+    winner: winners[0] || null,
+    winners,
+    totalTickets: initialTotalTickets,
+    picks,
+    pick: picks[0]?.pick ?? null,
+  };
+}
+
+function luckyRaiderRewardsForPlace(cfg, place) {
+  const rewards = Array.isArray(cfg?.rewards) ? cfg.rewards : [];
+  return rewards.map((reward) => {
+    const payouts = Array.isArray(reward?.payouts) ? reward.payouts : [];
+    const payout = payouts.find((p) => Number(p.rank) === Number(place));
+    if (!payout || Number(payout.amount || 0) <= 0) return null;
+    return {
+      type: reward.type || 'custom',
+      label: reward.label || reward.name || 'Reward',
+      currency: reward.currency || null,
+      unit: reward.unit || reward.currency || null,
+      amount: Number(payout.amount || 0),
+    };
+  }).filter(Boolean);
+}
+
+function luckyRaiderTicketState(cfg, volume, attackWins) {
+  const metric = String(cfg?.ticket_metric || 'volume').toLowerCase();
+  const volumeTickets = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const attackTickets = Math.floor(Math.max(0, Math.floor(Number(attackWins) || 0)) / Math.max(1, Math.floor(Number(cfg?.attack_wins_per_ticket || 10) || 10)));
+  let ticketsRaw = volumeTickets;
+  if (metric === 'attack_wins') ticketsRaw = attackTickets;
+  else if (metric === 'volume_or_attack_wins') ticketsRaw = Math.max(volumeTickets, attackTickets);
+  else if (metric === 'volume_and_attack_wins') ticketsRaw = Math.min(volumeTickets, attackTickets);
+  const minAttackWins = Math.max(0, Math.floor(Number(cfg?.min_attack_wins || 0) || 0));
+  let reason = ticketsRaw > 0 ? 'eligible' : 'below_ticket_threshold';
+  if ((metric === 'attack_wins' || metric === 'volume_and_attack_wins') && attackTickets <= 0) reason = 'attack_wins_below_ticket';
+  else if (metric === 'volume' && volumeTickets <= 0) reason = 'volume_below_ticket';
+  else if (metric === 'volume_or_attack_wins' && volumeTickets <= 0 && attackTickets <= 0) reason = 'volume_or_attack_wins_below_ticket';
+  if (minAttackWins > 0 && Math.max(0, Math.floor(Number(attackWins) || 0)) < minAttackWins) {
+    reason = 'min_attack_wins_not_met';
+    ticketsRaw = 0;
+  }
+  return {
+    ticket_metric: metric,
+    volume_tickets: Math.max(0, volumeTickets),
+    attack_win_tickets: Math.max(0, attackTickets),
+    uncapped_tickets: Math.max(0, ticketsRaw),
+    tickets: Math.max(0, Math.min(Math.max(1, Math.floor(Number(cfg?.max_tickets || 20) || 20)), ticketsRaw)),
+    reason,
+  };
+}
+
 function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
   const tid = Number(tournamentId);
   const day = normalizeDailyPoolDay(dayInput);
@@ -3158,7 +3243,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       SELECT tp.player_id,
              p.name,
              COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
-             COALESCE(SUM(a.trades_count), 0) AS trades_count
+             COALESCE(SUM(a.trades_count), 0) AS trades_count,
+             COALESCE(SUM(CASE WHEN a.source = 'attack_win' THEN 1 ELSE 0 END), 0) AS attack_wins
         FROM tournament_participants tp
         LEFT JOIN players p ON p.id = tp.player_id
         LEFT JOIN tournament_daily_activity a
@@ -3173,10 +3259,12 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
     const entries = [];
     for (const row of rows) {
       const volume = Math.max(0, safeUsd(row.volume_usd, 1_000_000_000));
-      const ticketsRaw = Math.floor(volume / cfg.volume_per_ticket_usd);
-      const tickets = Math.max(0, Math.min(cfg.max_tickets, ticketsRaw));
+      const attackWins = Math.max(0, Math.floor(Number(row.attack_wins || 0) || 0));
+      const ticketState = luckyRaiderTicketState(cfg, volume, attackWins);
+      const ticketsRaw = ticketState.uncapped_tickets;
+      const tickets = ticketState.tickets;
       let eligible = tickets > 0 ? 1 : 0;
-      let reason = tickets > 0 ? 'eligible' : 'volume_below_ticket';
+      let reason = tickets > 0 ? 'eligible' : ticketState.reason;
       let hasNft = false;
       if (cfg.require_nft) {
         hasNft = playerHasTournamentRewardNft(row.player_id, cfg.required_collections);
@@ -3188,17 +3276,24 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       const details = {
         name: row.name || '',
         trades_count: Number(row.trades_count || 0) || 0,
+        attack_wins: attackWins,
+        ticket_metric: cfg.ticket_metric,
         volume_per_ticket_usd: cfg.volume_per_ticket_usd,
+        attack_wins_per_ticket: cfg.attack_wins_per_ticket,
+        min_attack_wins: cfg.min_attack_wins,
         max_tickets: cfg.max_tickets,
         require_nft: cfg.require_nft,
         required_collections: cfg.required_collections,
         has_required_nft: cfg.require_nft ? hasNft : null,
+        volume_tickets: ticketState.volume_tickets,
+        attack_win_tickets: ticketState.attack_win_tickets,
         uncapped_tickets: ticketsRaw,
       };
       const entry = {
         player_id: row.player_id,
         name: row.name || '',
         volume_usd: Number(volume.toFixed(2)),
+        attack_wins: attackWins,
         tickets,
         eligible,
         reason,
@@ -3219,8 +3314,17 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
 
     const configHash = crypto.createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 16);
     const seed = `${tid}:${day}:${configHash}`;
-    const pick = weightedLuckyRaiderWinner(entries, seed);
+    const pick = weightedLuckyRaiderWinners(entries, seed, cfg.winner_count || 1);
     const winner = pick.winner || null;
+    const winners = (pick.winners || []).map((entry) => ({
+      place: entry.place,
+      player_id: entry.player_id,
+      name: entry.name,
+      volume_usd: entry.volume_usd,
+      attack_wins: entry.attack_wins,
+      tickets: entry.tickets,
+      rewards: luckyRaiderRewardsForPlace(cfg, entry.place),
+    }));
     const details = {
       config: cfg,
       config_hash: configHash,
@@ -3228,10 +3332,14 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       eligible_players: entries.filter((entry) => Number(entry.eligible || 0) === 1 && Number(entry.tickets || 0) > 0).length,
       total_tickets: pick.totalTickets,
       pick: pick.pick,
+      picks: pick.picks || [],
+      winner_count: cfg.winner_count || 1,
+      winners,
       entries: entries.map((entry) => ({
         player_id: entry.player_id,
         name: entry.name,
         volume_usd: entry.volume_usd,
+        attack_wins: entry.attack_wins,
         tickets: entry.tickets,
         eligible: !!entry.eligible,
         reason: entry.reason,
@@ -3253,6 +3361,7 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       status,
       winner_player_id: winner?.player_id || null,
       winner_name: winner?.name || null,
+      winners,
       total_tickets: pick.totalTickets,
       eligible_players: details.eligible_players,
       entries: entries.length,

@@ -14,6 +14,7 @@ import {
   normalizeReward,
   normalizeRewardConfig,
   rewardConfigPreset5000,
+  rewardConfigPresetLuckyRaider,
   rewardDefaults,
   tournamentToForm,
   validateTournamentStep,
@@ -1817,7 +1818,10 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
     <div className="admin-card">
       <div className="admin-card-head">
         <div><div className="admin-card-title">{title}</div><div className="admin-card-sub">{subtitle || 'Configure automatic reward blocks without changing the tournament scoring mode.'}</div></div>
-        {allowPreset && <button className="admin-btn primary" onClick={() => onChange(rewardConfigPreset5000())}>Use $5k / 10 days preset</button>}
+        <div className="admin-actions">
+          {allowPreset && <button className="admin-btn primary" onClick={() => onChange(rewardConfigPreset5000())}>Use $5k / 10 days preset</button>}
+          {allowPreset && <button className="admin-btn" onClick={() => onChange(rewardConfigPresetLuckyRaider())}>Use Daily Lucky Raider preset</button>}
+        </div>
       </div>
       <div className="admin-card-body admin-grid">
         <div className="admin-toolbar">
@@ -1851,7 +1855,7 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
         {!(config.final_pools || []).length && <div className="admin-help">No final reward pool configured.</div>}
 
         <div className="admin-card nested-card">
-          <div className="admin-card-head"><div><div className="admin-card-title">Lucky Daily Raider</div><div className="admin-card-sub">Automatic weighted daily draw. Tickets come from UTC-day volume and can require Dragon or Demon King ownership.</div></div></div>
+          <div className="admin-card-head"><div><div className="admin-card-title">Lucky Daily Raider</div><div className="admin-card-sub">Automatic weighted daily draw. Tickets can come from UTC-day volume, winning attacks, or both.</div></div></div>
           <div className="admin-card-body admin-grid">
             <div className="admin-form-grid three">
               <label className="admin-field"><span className="admin-label">Enabled</span><select className="admin-select" value={config.lucky_daily_raider.enabled ? '1' : '0'} onChange={(e) => updateLucky({ enabled: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
@@ -1859,8 +1863,24 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
               <label className="admin-field"><span className="admin-label">Draw time UTC</span><input className="admin-input" value={config.lucky_daily_raider.draw_time_utc} onChange={(e) => updateLucky({ draw_time_utc: e.target.value })} /></label>
             </div>
             <div className="admin-form-grid three">
+              <label className="admin-field">
+                <span className="admin-label">Ticket rule</span>
+                <select className="admin-select" value={config.lucky_daily_raider.ticket_metric || 'volume'} onChange={(e) => updateLucky({ ticket_metric: e.target.value })}>
+                  <option value="volume">Volume only</option>
+                  <option value="attack_wins">Winning attacks only</option>
+                  <option value="volume_or_attack_wins">Volume OR winning attacks</option>
+                  <option value="volume_and_attack_wins">Volume AND winning attacks</option>
+                </select>
+              </label>
               <NumberField label="$ volume per ticket" value={config.lucky_daily_raider.volume_per_ticket_usd} onChange={(v) => updateLucky({ volume_per_ticket_usd: v })} />
+              <NumberField label="Winning attacks per ticket" value={config.lucky_daily_raider.attack_wins_per_ticket || 10} onChange={(v) => updateLucky({ attack_wins_per_ticket: v })} />
+            </div>
+            <div className="admin-form-grid three">
+              <NumberField label="Min winning attacks" value={config.lucky_daily_raider.min_attack_wins || 0} onChange={(v) => updateLucky({ min_attack_wins: v })} />
+              <NumberField label="Winner places" value={config.lucky_daily_raider.winner_count || 1} onChange={(v) => updateLucky({ winner_count: v })} />
               <NumberField label="Max tickets" value={config.lucky_daily_raider.max_tickets} onChange={(v) => updateLucky({ max_tickets: v })} />
+            </div>
+            <div className="admin-form-grid three">
               <label className="admin-field"><span className="admin-label">NFT required</span><select className="admin-select" value={config.lucky_daily_raider.require_nft ? '1' : '0'} onChange={(e) => updateLucky({ require_nft: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
             </div>
             {config.lucky_daily_raider.require_nft && (

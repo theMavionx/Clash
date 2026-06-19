@@ -196,7 +196,11 @@ export function defaultRewardConfig() {
     lucky_daily_raider: {
       enabled: false,
       label: 'Lucky Daily Raider',
+      ticket_metric: 'volume',
       volume_per_ticket_usd: 1000,
+      attack_wins_per_ticket: 10,
+      min_attack_wins: 0,
+      winner_count: 1,
       max_tickets: 20,
       require_nft: false,
       required_collections: ['demon_king', 'dragon'],
@@ -230,13 +234,20 @@ export function normalizeRewardConfig(raw = {}) {
   const collections = Array.isArray(lucky.required_collections)
     ? lucky.required_collections.filter((item) => ['demon_king', 'dragon'].includes(item))
     : base.lucky_daily_raider.required_collections;
+  const ticketMetric = ['volume', 'attack_wins', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(lucky.ticket_metric)
+    ? lucky.ticket_metric
+    : base.lucky_daily_raider.ticket_metric;
   return {
     daily_pools: (Array.isArray(source.daily_pools) ? source.daily_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Daily pool ${idx + 1}`)),
     final_pools: (Array.isArray(source.final_pools) ? source.final_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Final pool ${idx + 1}`)),
     lucky_daily_raider: {
       enabled: !!lucky.enabled,
       label: String(lucky.label || base.lucky_daily_raider.label).slice(0, 80),
+      ticket_metric: ticketMetric,
       volume_per_ticket_usd: Math.max(1, Number(lucky.volume_per_ticket_usd || base.lucky_daily_raider.volume_per_ticket_usd) || 1000),
+      attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(lucky.attack_wins_per_ticket || base.lucky_daily_raider.attack_wins_per_ticket) || 10))),
+      min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(lucky.min_attack_wins || 0) || 0))),
+      winner_count: Math.max(1, Math.min(100, Math.floor(Number(lucky.winner_count || lucky.winners || 1) || 1))),
       max_tickets: Math.max(1, Math.min(100000, Math.floor(Number(lucky.max_tickets || base.lucky_daily_raider.max_tickets) || 20))),
       require_nft: !!lucky.require_nft,
       required_collections: collections.length ? collections : ['demon_king', 'dragon'],
@@ -268,11 +279,36 @@ export function rewardConfigPreset5000() {
     lucky_daily_raider: {
       enabled: true,
       label: 'Lucky Daily Raider',
+      ticket_metric: 'volume',
       volume_per_ticket_usd: 1000,
+      attack_wins_per_ticket: 10,
+      min_attack_wins: 0,
+      winner_count: 1,
       max_tickets: 20,
       require_nft: true,
       required_collections: ['demon_king', 'dragon'],
       rewards: [{ ...rewardDefaults('money'), label: 'Lucky cash', pool_amount: 50, winners: 1, preset: 'winner_take_all' }],
+      draw_time_utc: '00:05',
+    },
+  });
+}
+
+export function rewardConfigPresetLuckyRaider() {
+  return normalizeRewardConfig({
+    daily_pools: [],
+    final_pools: [],
+    lucky_daily_raider: {
+      enabled: true,
+      label: 'Daily Lucky Raider',
+      ticket_metric: 'attack_wins',
+      volume_per_ticket_usd: 1000,
+      attack_wins_per_ticket: 1,
+      min_attack_wins: 0,
+      winner_count: 3,
+      max_tickets: 50,
+      require_nft: false,
+      required_collections: ['demon_king', 'dragon'],
+      rewards: [{ ...rewardDefaults('money'), label: 'CLASH daily prize', currency: 'CLASH', unit: 'CLASH', pool_amount: 100, winners: 3, preset: 'equal' }],
       draw_time_utc: '00:05',
     },
   });

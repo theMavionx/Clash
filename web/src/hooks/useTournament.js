@@ -106,28 +106,35 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
 // panel is open since users want to see their rank update in near-real-time
 // when they trade or battle.
 export function useTournamentLeaderboard(tournamentId, { active = false, pollMs = 10000 } = {}) {
+  const player = usePlayer();
+  const token = player?.token;
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(false);
   const idRef = useRef(tournamentId);
+  const tokenRef = useRef(token);
   idRef.current = tournamentId;
+  tokenRef.current = token;
 
   const refresh = useCallback(async () => {
     if (!tournamentId) return;
     setLoading(true);
     const fetchId = tournamentId;
+    const fetchToken = token;
     try {
-      const res = await fetch(`/api/tournaments/${fetchId}/leaderboard?limit=50`);
+      const res = await fetch(`/api/tournaments/${fetchId}/leaderboard?limit=50`, {
+        headers: fetchToken ? { 'x-token': fetchToken } : {},
+      });
       if (!res.ok) throw new Error('failed');
       const data = await res.json();
       // Stale-response guard for tournament-id swaps.
-      if (idRef.current !== fetchId) return;
+      if (idRef.current !== fetchId || tokenRef.current !== fetchToken) return;
       setBoard(data);
     } catch {
       /* keep last-known board on transient failure */
     } finally {
       setLoading(false);
     }
-  }, [tournamentId]);
+  }, [tournamentId, token]);
 
   useEffect(() => {
     if (!active || !tournamentId) return;

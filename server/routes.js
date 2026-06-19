@@ -7457,6 +7457,26 @@ function getAllPlayersByWalletAnyForm(wallet) {
 const _lastSeenBumpAt = new Map(); // playerId -> Date.now()
 const LAST_SEEN_THROTTLE_MS = 60_000;
 
+router.get('/public/player-stats', (_req, res) => {
+  try {
+    const row = db.db.prepare(`
+      SELECT
+        COUNT(*) AS total_players,
+        COUNT(CASE WHEN last_seen_at > datetime('now', '-5 minutes') THEN 1 END) AS online_players
+      FROM players
+    `).get();
+    res.set('Cache-Control', 'public, max-age=15');
+    res.json({
+      total_players: Number(row?.total_players || 0),
+      online_players: Number(row?.online_players || 0),
+      online_window_seconds: 300,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'player stats unavailable' });
+  }
+});
+
 function auth(req, res, next) {
   const token = req.headers['x-token'];
   if (!token) return res.status(401).json({ error: 'Missing x-token header' });
@@ -18140,13 +18160,21 @@ function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
     ? luckyRaw.required_collections.map((v) => String(v || '').trim().toLowerCase()).filter((v) => ['demon_king', 'dragon'].includes(v))
     : [];
   const luckyRewards = normalizePrizeRewards(Array.isArray(luckyRaw.rewards) ? luckyRaw.rewards : [], null, { strict });
+  const ticketMetricRaw = String(luckyRaw.ticket_metric || luckyRaw.metric || 'volume').trim().toLowerCase();
+  const ticketMetric = ['volume', 'attack_wins', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(ticketMetricRaw)
+    ? ticketMetricRaw
+    : 'volume';
   return {
     daily_pools: normalizeRewardSchedulePools(raw.daily_pools, { strict, labelPrefix: 'Daily pool' }),
     final_pools: normalizeRewardSchedulePools(raw.final_pools, { strict, labelPrefix: 'Final pool' }),
     lucky_daily_raider: {
       enabled: parseBool(luckyRaw.enabled),
       label: sanitizePrizeText(luckyRaw.label || 'Lucky Daily Raider', 'Lucky Daily Raider'),
+      ticket_metric: ticketMetric,
       volume_per_ticket_usd: Math.max(1, Math.min(10_000_000, sanitizePrizeNumber(luckyRaw.volume_per_ticket_usd, 1000))),
+      attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
+      min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
+      winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
       max_tickets: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20))),
       require_nft: parseBool(luckyRaw.require_nft),
       required_collections: collections.length ? collections : ['demon_king', 'dragon'],
@@ -18688,10 +18716,16 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
   const today = tournamentUtcDayString();
   let lastRun = null;
   let myVolume = 0;
+  let myAttackWins = 0;
   let myTickets = 0;
+  let myVolumeTickets = 0;
+  let myAttackWinTickets = 0;
   let myEligible = false;
   let myReason = viewerId ? 'no_volume' : 'anonymous';
   let hasRequiredNft = null;
+  let lastRunDetails = {};
+  let todayEntries = [];
+  let historyRuns = [];
   try {
     lastRun = db.db.prepare(`
       SELECT r.*, p.name AS winner_name, p.wallet AS winner_wallet
@@ -18701,6 +18735,83 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
        ORDER BY r.day_utc DESC
        LIMIT 1
     `).get(tid);
+    try { lastRunDetails = lastRun?.details_json ? JSON.parse(lastRun.details_json) : {}; } catch { lastRunDetails = {}; }
+  } catch {}
+  try {
+    const rows = db.db.prepare(`
+      SELECT tp.player_id,
+             p.name,
+             p.wallet,
+             COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
+             COALESCE(SUM(CASE WHEN a.source = 'attack_win' THEN 1 ELSE 0 END), 0) AS attack_wins
+        FROM tournament_participants tp
+        JOIN players p ON p.id = tp.player_id
+        LEFT JOIN tournament_daily_activity a
+          ON a.tournament_id = tp.tournament_id
+         AND a.player_id = tp.player_id
+         AND a.day_utc = ?
+       WHERE tp.tournament_id = ?
+         AND tp.left_at IS NULL
+       GROUP BY tp.player_id
+    `).all(today, tid);
+    todayEntries = rows.map((row) => {
+      const volume = Math.max(0, Number(row.volume_usd || 0) || 0);
+      const attackWins = Math.max(0, Math.floor(Number(row.attack_wins || 0) || 0));
+      const volumeTickets = Math.floor(volume / Math.max(1, Number(cfg.volume_per_ticket_usd || 1000) || 1000));
+      const attackTickets = Math.floor(attackWins / Math.max(1, Number(cfg.attack_wins_per_ticket || 10) || 10));
+      let uncapped = volumeTickets;
+      if (cfg.ticket_metric === 'attack_wins') uncapped = attackTickets;
+      else if (cfg.ticket_metric === 'volume_or_attack_wins') uncapped = Math.max(volumeTickets, attackTickets);
+      else if (cfg.ticket_metric === 'volume_and_attack_wins') uncapped = Math.min(volumeTickets, attackTickets);
+      const minAttackWins = Math.max(0, Number(cfg.min_attack_wins || 0) || 0);
+      if (minAttackWins > 0 && attackWins < minAttackWins) uncapped = 0;
+      const tickets = Math.max(0, Math.min(cfg.max_tickets, uncapped));
+      let reason = tickets > 0 ? 'eligible' : 'below_ticket_threshold';
+      let hasNft = null;
+      if (cfg.require_nft) {
+        hasNft = playerHasTournamentRewardNft(row.player_id, cfg.required_collections);
+        if (!hasNft) reason = 'missing_required_nft';
+      }
+      return {
+        player_id: row.player_id,
+        name: row.name || '',
+        wallet: row.wallet || null,
+        volume_usd: Number(volume.toFixed(2)),
+        attack_wins: attackWins,
+        volume_tickets: Math.max(0, volumeTickets),
+        attack_win_tickets: Math.max(0, attackTickets),
+        tickets: cfg.require_nft && !hasNft ? 0 : tickets,
+        eligible: tickets > 0 && (!cfg.require_nft || hasNft),
+        reason,
+        has_required_nft: hasNft,
+      };
+    })
+      .sort((a, b) => Number(b.tickets || 0) - Number(a.tickets || 0)
+        || Number(b.attack_wins || 0) - Number(a.attack_wins || 0)
+        || Number(b.volume_usd || 0) - Number(a.volume_usd || 0)
+        || String(a.player_id).localeCompare(String(b.player_id)))
+      .slice(0, 50);
+  } catch {}
+  try {
+    const runs = db.db.prepare(`
+      SELECT *
+        FROM tournament_lucky_raider_runs
+       WHERE tournament_id = ?
+       ORDER BY day_utc DESC
+       LIMIT 14
+    `).all(tid);
+    historyRuns = runs.map((run) => {
+      let details = {};
+      try { details = run.details_json ? JSON.parse(run.details_json) : {}; } catch { details = {}; }
+      return {
+        day_utc: run.day_utc,
+        status: run.status,
+        total_tickets: Number(details.total_tickets || 0) || 0,
+        eligible_players: Number(details.eligible_players || 0) || 0,
+        winner_count: Number(details.winner_count || cfg.winner_count || 1) || 1,
+        winners: Array.isArray(details.winners) ? details.winners : [],
+      };
+    });
   } catch {}
   if (viewerId) {
     try {
@@ -18710,22 +18821,44 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
          WHERE tournament_id = ? AND day_utc = ? AND player_id = ?
       `).get(tid, today, viewerId);
       const live = db.db.prepare(`
-        SELECT COALESCE(SUM(volume_usd), 0) AS volume_usd
+        SELECT COALESCE(SUM(volume_usd), 0) AS volume_usd,
+               COALESCE(SUM(CASE WHEN source = 'attack_win' THEN 1 ELSE 0 END), 0) AS attack_wins
           FROM tournament_daily_activity
          WHERE tournament_id = ? AND day_utc = ? AND player_id = ?
       `).get(tid, today, viewerId);
       myVolume = Number(live?.volume_usd ?? entry?.volume_usd ?? 0) || 0;
-      const uncapped = Math.floor(myVolume / cfg.volume_per_ticket_usd);
+      let entryDetails = {};
+      try { entryDetails = entry?.details_json ? JSON.parse(entry.details_json) : {}; } catch {}
+      myAttackWins = Number(live?.attack_wins ?? entryDetails.attack_wins ?? 0) || 0;
+      const volumeTickets = Math.floor(Math.max(0, myVolume) / Math.max(1, Number(cfg.volume_per_ticket_usd || 1000) || 1000));
+      const attackTickets = Math.floor(Math.max(0, Math.floor(myAttackWins)) / Math.max(1, Number(cfg.attack_wins_per_ticket || 10) || 10));
+      let uncapped = volumeTickets;
+      if (cfg.ticket_metric === 'attack_wins') uncapped = attackTickets;
+      else if (cfg.ticket_metric === 'volume_or_attack_wins') uncapped = Math.max(volumeTickets, attackTickets);
+      else if (cfg.ticket_metric === 'volume_and_attack_wins') uncapped = Math.min(volumeTickets, attackTickets);
+      const minAttackWins = Math.max(0, Number(cfg.min_attack_wins || 0) || 0);
+      if (minAttackWins > 0 && myAttackWins < minAttackWins) uncapped = 0;
+      myVolumeTickets = Math.max(0, volumeTickets);
+      myAttackWinTickets = Math.max(0, attackTickets);
       myTickets = Math.max(0, Math.min(cfg.max_tickets, uncapped));
       hasRequiredNft = cfg.require_nft ? playerHasTournamentRewardNft(viewerId, cfg.required_collections) : true;
       myEligible = myTickets > 0 && (!cfg.require_nft || hasRequiredNft);
-      myReason = myTickets <= 0 ? 'volume_below_ticket' : (!hasRequiredNft ? 'missing_required_nft' : 'eligible');
+      if (myTickets > 0) myReason = !hasRequiredNft ? 'missing_required_nft' : 'eligible';
+      else if (minAttackWins > 0 && myAttackWins < minAttackWins) myReason = 'min_attack_wins_not_met';
+      else if (cfg.ticket_metric === 'attack_wins') myReason = 'attack_wins_below_ticket';
+      else if (cfg.ticket_metric === 'volume_and_attack_wins') myReason = 'volume_and_attack_wins_below_ticket';
+      else if (cfg.ticket_metric === 'volume_or_attack_wins') myReason = 'volume_or_attack_wins_below_ticket';
+      else myReason = 'volume_below_ticket';
     } catch {}
   }
   return {
     enabled: true,
     label: cfg.label,
+    ticket_metric: cfg.ticket_metric,
     volume_per_ticket_usd: cfg.volume_per_ticket_usd,
+    attack_wins_per_ticket: cfg.attack_wins_per_ticket,
+    min_attack_wins: cfg.min_attack_wins,
+    winner_count: cfg.winner_count,
     max_tickets: cfg.max_tickets,
     require_nft: cfg.require_nft,
     required_collections: cfg.required_collections,
@@ -18733,10 +18866,15 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
     draw_time_utc: cfg.draw_time_utc,
     today_day_utc: today,
     my_volume_usd: Number(myVolume.toFixed(2)),
+    my_attack_wins: Math.max(0, Math.floor(myAttackWins)),
+    my_volume_tickets: myVolumeTickets,
+    my_attack_win_tickets: myAttackWinTickets,
     my_tickets: myTickets,
     my_eligible: myEligible,
     my_reason: myReason,
     has_required_nft: hasRequiredNft,
+    today_entries: todayEntries,
+    history: historyRuns,
     last_winner: lastRun ? {
       day_utc: lastRun.day_utc,
       status: lastRun.status,
@@ -18744,6 +18882,7 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
       name: lastRun.winner_name || null,
       wallet: lastRun.winner_wallet || null,
     } : null,
+    last_winners: Array.isArray(lastRunDetails.winners) ? lastRunDetails.winners : [],
   };
 }
 

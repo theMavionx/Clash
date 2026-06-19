@@ -124,6 +124,13 @@ function compactPlayerName(row) {
   return String(row?.player_id || '').slice(0, 8) || 'Player';
 }
 
+function shortWallet(wallet) {
+  const text = String(wallet || '').trim();
+  if (!text) return '';
+  if (text.length <= 14) return text;
+  return `${text.slice(0, 6)}...${text.slice(-4)}`;
+}
+
 function isPointsSort(sortBy) {
   return sortBy === 'points' || sortBy === 'volume_trophies_50_50';
 }
@@ -243,6 +250,16 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
     .map((item) => item === 'demon_king' ? 'Demon King' : item === 'dragon' ? 'Dragon' : item)
     .join(' or ');
   const luckyRewards = rewardPoolSummary(lucky.rewards || [], currency);
+  const ticketMetric = String(lucky.ticket_metric || 'volume');
+  const attackWinsPerTicket = fmt(lucky.attack_wins_per_ticket || 10);
+  const volumePerTicket = fmtUsdWhole(lucky.volume_per_ticket_usd);
+  const luckyTicketRule = ticketMetric === 'attack_wins'
+    ? `${attackWinsPerTicket} winning attacks = 1 ticket`
+    : ticketMetric === 'volume_or_attack_wins'
+      ? `${volumePerTicket} volume OR ${attackWinsPerTicket} winning attacks = 1 ticket`
+      : ticketMetric === 'volume_and_attack_wins'
+        ? `${volumePerTicket} volume AND ${attackWinsPerTicket} winning attacks = 1 ticket`
+        : `${volumePerTicket} volume = 1 ticket`;
   return (
     <div style={S.rewardScheduleCard}>
       <div style={S.rewardScheduleHeader}>
@@ -257,19 +274,107 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
       ))}
       {lucky.enabled && (
         <div style={S.rewardScheduleLucky}>
-          <div><strong>{lucky.label || 'Lucky Daily Raider'}</strong>: {fmtUsdWhole(lucky.volume_per_ticket_usd)} volume = 1 ticket, max {fmt(lucky.max_tickets)}</div>
+          <div><strong>{lucky.label || 'Lucky Daily Raider'}</strong>: {luckyTicketRule}, top {fmt(lucky.winner_count || 1)}, max {fmt(lucky.max_tickets)} tickets</div>
+          {Number(lucky.min_attack_wins || 0) > 0 && <div>Minimum today: {fmt(lucky.min_attack_wins)} winning attacks</div>}
           {lucky.require_nft && <div>Requires {required || 'Dragon or Demon King'}</div>}
           {lucky.my_tickets !== undefined && (
             <div>
-              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume В· {fmt(lucky.my_tickets || 0)}/{fmt(lucky.max_tickets || 0)} tickets
-              {lucky.my_reason && lucky.my_reason !== 'eligible' ? ` В· ${String(lucky.my_reason).replace(/_/g, ' ')}` : ''}
+              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume | {fmt(lucky.my_attack_wins || 0)} wins | {fmt(lucky.my_tickets || 0)}/{fmt(lucky.max_tickets || 0)} tickets
+              {lucky.my_reason && lucky.my_reason !== 'eligible' ? ` | ${String(lucky.my_reason).replace(/_/g, ' ')}` : ''}
             </div>
           )}
           {luckyRewards.length > 0 && <div>Prize: {luckyRewards.join(' + ')}</div>}
-          {lucky.last_winner?.name && <div>Last winner: {lucky.last_winner.name}</div>}
+          {Array.isArray(lucky.last_winners) && lucky.last_winners.length > 0 ? (
+            <div>Last winners: {lucky.last_winners.slice(0, 5).map((winner) => `#${winner.place || '?'} ${winner.name || winner.player_id || 'Player'}`).join(' | ')}</div>
+          ) : lucky.last_winner?.name && <div>Last winner: {lucky.last_winner.name}</div>}
         </div>
       )}
     </div>
+  );
+}
+
+function LuckyRaiderPanel({ t, schedule }) {
+  const lucky = schedule?.lucky_daily_raider || {};
+  if (!lucky.enabled) {
+    return (
+      <div style={S.empty}>
+        <div style={S.emptyTitle}>No Daily Lucky Raider</div>
+        <div style={S.emptySub}>This tournament does not have a lucky daily raid draw configured.</div>
+      </div>
+    );
+  }
+  const rewards = rewardPoolSummary(lucky.rewards || [], t?.prize_currency || 'USD');
+  const metric = String(lucky.ticket_metric || 'volume');
+  const rule = metric === 'attack_wins'
+    ? `${fmt(lucky.attack_wins_per_ticket || 1)} victory = 1 ticket`
+    : metric === 'volume_or_attack_wins'
+      ? `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume OR ${fmt(lucky.attack_wins_per_ticket || 1)} wins = 1 ticket`
+      : metric === 'volume_and_attack_wins'
+        ? `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume AND ${fmt(lucky.attack_wins_per_ticket || 1)} wins = 1 ticket`
+        : `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume = 1 ticket`;
+  const entries = Array.isArray(lucky.today_entries) ? lucky.today_entries : [];
+  const history = Array.isArray(lucky.history) ? lucky.history : [];
+  return (
+    <>
+      <div style={S.luckyHero}>
+        <div>
+          <div style={S.luckyKicker}>Daily Lucky Raider</div>
+          <div style={S.luckyTitle}>{lucky.label || 'Daily Lucky Raider'}</div>
+          <div style={S.luckySub}>Raid, win tickets, and let the daily draw pick the winners.</div>
+        </div>
+        <div style={S.luckyPrize}>{rewards.join(' + ') || 'Prize configured by admin'}</div>
+      </div>
+
+      <div style={S.luckyGrid}>
+        <Stat label="Your tickets" value={`${fmt(lucky.my_tickets || 0)} / ${fmt(lucky.max_tickets || 0)}`} />
+        <Stat label="Today wins" value={fmt(lucky.my_attack_wins || 0)} />
+        <Stat label="Today volume" value={fmtUsdWhole(lucky.my_volume_usd || 0)} />
+        <Stat label="Winners" value={fmt(lucky.winner_count || 1)} />
+      </div>
+
+      <div style={S.luckyRuleBox}>
+        <strong>{rule}</strong>
+        <span>Max {fmt(lucky.max_tickets || 0)} tickets per UTC day. Draw runs at {lucky.draw_time_utc || '00:05'} UTC.</span>
+        {lucky.require_nft && <span>Requires Dragon or Demon King NFT.</span>}
+        {lucky.my_reason && lucky.my_reason !== 'eligible' && <span>Status: {String(lucky.my_reason).replace(/_/g, ' ')}</span>}
+      </div>
+
+      <div style={S.luckySectionTitle}>Today entries</div>
+      <div style={S.luckyList}>
+        {!entries.length && <div style={S.emptySmall}>No tickets yet today.</div>}
+        {entries.map((entry, idx) => (
+          <div key={entry.player_id || idx} style={S.luckyEntry}>
+            <div style={S.luckyRank}>{idx + 1}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={S.luckyEntryName}>{entry.name || shortWallet(entry.wallet) || 'Player'}</div>
+              <div style={S.luckyEntryMeta}>
+                {fmt(entry.attack_wins || 0)} wins | {fmtUsdWhole(entry.volume_usd || 0)} volume
+                {entry.reason && entry.reason !== 'eligible' ? ` | ${String(entry.reason).replace(/_/g, ' ')}` : ''}
+              </div>
+            </div>
+            <div style={S.luckyTickets}>{fmt(entry.tickets || 0)} tickets</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={S.luckySectionTitle}>Draw history</div>
+      <div style={S.luckyList}>
+        {!history.length && <div style={S.emptySmall}>No completed draws yet.</div>}
+        {history.map((run) => (
+          <div key={run.day_utc} style={S.luckyHistoryRow}>
+            <div style={S.luckyHistoryDay}>{fmtDay(run.day_utc)}</div>
+            <div style={S.luckyHistoryMeta}>
+              {run.status} | {fmt(run.eligible_players || 0)} players | {fmt(run.total_tickets || 0)} tickets
+              {Array.isArray(run.winners) && run.winners.length > 0 && (
+                <div style={S.luckyHistoryWinners}>
+                  {run.winners.map((winner) => `#${winner.place || '?'} ${winner.name || 'Player'} (${fmt(winner.tickets || 0)})`).join(' | ')}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -290,7 +395,7 @@ function TournamentPanel({ onClose }) {
     join,
     leave,
     updateRewardWallet,
-  } = useTournament({ active: tab === 'active' });
+  } = useTournament({ active: tab === 'active' || tab === 'lucky' });
   const { items: history } = useTournamentHistory({ active: tab === 'history' });
   const player = usePlayer();
   const { dex } = useDex();
@@ -475,6 +580,10 @@ function TournamentPanel({ onClose }) {
             style={tab === 'history' ? S.tabActive : S.tab}
             onClick={() => setTab('history')}
           >History</button>
+          <button
+            style={tab === 'lucky' ? S.tabActive : S.tab}
+            onClick={() => { setTab('lucky'); setPickedHistoryId(null); }}
+          >Lucky</button>
         </div>
 
         <div
@@ -563,7 +672,21 @@ function TournamentPanel({ onClose }) {
             </button>
           )}
 
-          {t && (
+          {tab === 'lucky' && !activeInitialLoading && !t && (
+            <div style={S.empty}>
+              <div style={S.emptyTitle}>No Lucky Raider running</div>
+              <div style={S.emptySub}>There is no active tournament with a daily lucky draw right now.</div>
+            </div>
+          )}
+
+          {tab === 'lucky' && t && (
+            <LuckyRaiderPanel
+              t={t}
+              schedule={board?.reward_schedule || activeRewardSchedule?.schedule || t.reward_schedule || t.reward_config}
+            />
+          )}
+
+          {tab !== 'lucky' && t && (
             <>
               <div style={S.tCard}>
                 <div style={S.tName}>{t.name}</div>
@@ -1076,9 +1199,98 @@ const S = {
   },
   body: { flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', scrollbarWidth: 'none' },
   empty: { textAlign: 'center', padding: 28, color: '#a3906a', fontWeight: 700, fontSize: 13 },
+  emptySmall: { textAlign: 'center', padding: 14, color: '#a3906a', fontWeight: 800, fontSize: 12 },
   emptyIcon: { fontSize: 44, marginBottom: 6 },
   emptyTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21', marginBottom: 4 },
   emptySub: { fontSize: 12, color: '#a3906a', lineHeight: 1.5 },
+
+  luckyHero: {
+    background: 'linear-gradient(135deg, #fef3c7 0%, #fdf8e7 100%)',
+    border: '3px solid #f59e0b',
+    borderRadius: 14,
+    padding: 12,
+    display: 'flex',
+    gap: 10,
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  luckyKicker: {
+    fontSize: 10,
+    fontWeight: 900,
+    color: '#b45309',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  luckyTitle: { fontSize: 18, fontWeight: 900, color: '#5C3A21', marginTop: 2 },
+  luckySub: { fontSize: 12, fontWeight: 700, color: '#7c5a3a', lineHeight: 1.35, marginTop: 3 },
+  luckyPrize: {
+    fontSize: 12,
+    fontWeight: 900,
+    color: '#15803d',
+    background: '#dcfce7',
+    border: '2px solid #22c55e',
+    borderRadius: 10,
+    padding: '6px 8px',
+    textAlign: 'right',
+    maxWidth: 128,
+  },
+  luckyGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 },
+  luckyRuleBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    background: '#e8dfc8',
+    border: '3px solid #d4c8b0',
+    borderRadius: 14,
+    padding: 10,
+    color: '#7c5a3a',
+    fontSize: 12,
+    fontWeight: 800,
+    lineHeight: 1.35,
+  },
+  luckySectionTitle: {
+    fontSize: 12,
+    fontWeight: 900,
+    color: '#5C3A21',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginTop: 2,
+  },
+  luckyList: { display: 'flex', flexDirection: 'column', gap: 6 },
+  luckyEntry: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    background: '#fdf8e7',
+    border: '2px solid #d4c8b0',
+    borderRadius: 12,
+    padding: '8px 9px',
+  },
+  luckyRank: {
+    width: 24,
+    height: 24,
+    borderRadius: '50%',
+    background: '#f59e0b',
+    color: '#fff',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 12,
+    fontWeight: 900,
+    flexShrink: 0,
+  },
+  luckyEntryName: { fontSize: 13, fontWeight: 900, color: '#5C3A21', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  luckyEntryMeta: { fontSize: 10, fontWeight: 800, color: '#a3906a', marginTop: 2 },
+  luckyTickets: { fontSize: 12, fontWeight: 900, color: '#b45309', whiteSpace: 'nowrap' },
+  luckyHistoryRow: {
+    background: '#e8dfc8',
+    border: '2px solid #d4c8b0',
+    borderRadius: 12,
+    padding: 9,
+  },
+  luckyHistoryDay: { fontSize: 12, fontWeight: 900, color: '#5C3A21' },
+  luckyHistoryMeta: { fontSize: 11, fontWeight: 800, color: '#7c5a3a', lineHeight: 1.45, marginTop: 3 },
+  luckyHistoryWinners: { color: '#15803d', marginTop: 3 },
 
   tCard: {
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 14, padding: 12,
