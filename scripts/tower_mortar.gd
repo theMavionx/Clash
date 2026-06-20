@@ -21,6 +21,11 @@ const ATTACK_SFX_PATHS: Array[String] = [
 ]
 const ATTACK_SFX_VOLUME_DB: float = -2.0
 const ATTACK_SFX_PITCH_JITTER: float = 0.05
+const IMPACT_SFX_PATHS: Array[String] = [
+	"res://Musik/sound_effects/Mortar/mortar_impact.mp3",
+]
+const IMPACT_SFX_VOLUME_DB: float = -1.0
+const IMPACT_SFX_PITCH_JITTER: float = 0.04
 const CAN_TARGET_GROUND: bool = true
 const CAN_TARGET_AIR: bool = false
 
@@ -31,6 +36,8 @@ static var _impact_mat: StandardMaterial3D = null
 static var _ring_mat: StandardMaterial3D = null
 static var _attack_sfx_streams: Array[AudioStream] = []
 static var _attack_sfx_loaded: bool = false
+static var _impact_sfx_streams: Array[AudioStream] = []
+static var _impact_sfx_loaded: bool = false
 
 var level: int = 1
 var damage: int = 95
@@ -52,15 +59,18 @@ var _active_fx: Array[Node] = []
 var _pool_ready: bool = false
 var _pool_exhausted_warned: bool = false
 var _attack_sfx_player: AudioStreamPlayer3D = null
+var _impact_sfx_player: AudioStreamPlayer3D = null
 
 
 func _ready() -> void:
 	_apply_stats()
 	_ensure_materials()
 	_preload_attack_sfx()
+	_preload_impact_sfx()
 	call_deferred("_find_visual_model")
 	call_deferred("_build_pool")
 	call_deferred("_setup_attack_sfx_player")
+	call_deferred("_setup_impact_sfx_player")
 
 
 func set_level(lvl: int) -> void:
@@ -81,6 +91,8 @@ func _play_victory() -> void:
 	_fire_timer = 0.0
 	if is_instance_valid(_attack_sfx_player) and _attack_sfx_player.playing:
 		_attack_sfx_player.stop()
+	if is_instance_valid(_impact_sfx_player) and _impact_sfx_player.playing:
+		_impact_sfx_player.stop()
 	_clear_owned_projectiles()
 
 
@@ -89,6 +101,9 @@ func cleanup_defense_visuals() -> void:
 	if is_instance_valid(_attack_sfx_player):
 		_attack_sfx_player.queue_free()
 	_attack_sfx_player = null
+	if is_instance_valid(_impact_sfx_player):
+		_impact_sfx_player.queue_free()
+	_impact_sfx_player = null
 
 
 func _clear_owned_projectiles() -> void:
@@ -247,6 +262,7 @@ func _update_projectiles(delta: float) -> void:
 		if t >= 1.0:
 			_apply_splash(impact_pos, int(p.damage), float(p.radius))
 			_spawn_impact_fx(impact_pos, float(p.radius))
+			_play_impact_sfx(impact_pos)
 			_return_to_pool(p)
 			_active.remove_at(i)
 		i -= 1
@@ -479,6 +495,19 @@ func _setup_attack_sfx_player() -> void:
 	scene_root.add_child(_attack_sfx_player)
 
 
+func _setup_impact_sfx_player() -> void:
+	if is_instance_valid(_impact_sfx_player):
+		return
+	var scene_root: Node = get_tree().current_scene
+	if scene_root == null:
+		scene_root = self
+	_impact_sfx_player = AudioStreamPlayer3D.new()
+	_impact_sfx_player.name = "MortarImpactSFX"
+	_impact_sfx_player.volume_db = IMPACT_SFX_VOLUME_DB
+	_impact_sfx_player.max_distance = 14.0
+	scene_root.add_child(_impact_sfx_player)
+
+
 static func _preload_attack_sfx() -> void:
 	if _attack_sfx_loaded:
 		return
@@ -487,6 +516,16 @@ static func _preload_attack_sfx() -> void:
 		var stream: AudioStream = ResourceLoader.load(path) as AudioStream
 		if stream:
 			_attack_sfx_streams.append(stream)
+
+
+static func _preload_impact_sfx() -> void:
+	if _impact_sfx_loaded:
+		return
+	_impact_sfx_loaded = true
+	for path in IMPACT_SFX_PATHS:
+		var stream: AudioStream = ResourceLoader.load(path) as AudioStream
+		if stream:
+			_impact_sfx_streams.append(stream)
 
 
 func _play_attack_sfx(pos: Vector3) -> void:
@@ -502,6 +541,21 @@ func _play_attack_sfx(pos: Vector3) -> void:
 	_attack_sfx_player.stream = _attack_sfx_streams.pick_random()
 	_attack_sfx_player.pitch_scale = randf_range(1.0 - ATTACK_SFX_PITCH_JITTER, 1.0 + ATTACK_SFX_PITCH_JITTER)
 	_attack_sfx_player.play()
+
+
+func _play_impact_sfx(pos: Vector3) -> void:
+	if _impact_sfx_streams.is_empty():
+		_preload_impact_sfx()
+	if _impact_sfx_streams.is_empty():
+		return
+	if not is_instance_valid(_impact_sfx_player):
+		_setup_impact_sfx_player()
+	if not is_instance_valid(_impact_sfx_player):
+		return
+	_impact_sfx_player.global_position = pos
+	_impact_sfx_player.stream = _impact_sfx_streams.pick_random()
+	_impact_sfx_player.pitch_scale = randf_range(1.0 - IMPACT_SFX_PITCH_JITTER, 1.0 + IMPACT_SFX_PITCH_JITTER)
+	_impact_sfx_player.play()
 
 
 func _record_defense_telemetry(kind: String, target: Node3D, extra: Dictionary = {}) -> void:
