@@ -483,6 +483,7 @@ var _cel_shader: Shader
 static var _scene_res_cache: Dictionary = {}
 static var _turret_script_res: Script = null
 static var _mage_tower_script_res: Script = null
+static var _mortar_script_res: Script = null
 static var _altar_effect_script_res: Script = null
 
 
@@ -523,6 +524,26 @@ func _attach_altar_effect(model: Node) -> void:
 		_altar_effect_script_res = _load_script_resource("res://scripts/altar_effect.gd")
 	if _altar_effect_script_res != null:
 		(model as Node3D).set_script(_altar_effect_script_res)
+
+
+func _attach_building_defense_script(node: Node3D, building_type: String) -> void:
+	if node == null:
+		return
+	if building_type == "turret":
+		if _turret_script_res == null:
+			_turret_script_res = _load_script_resource("res://scripts/turret.gd")
+		if _turret_script_res:
+			node.set_script(_turret_script_res)
+	elif building_type == "mage_tower":
+		if _mage_tower_script_res == null:
+			_mage_tower_script_res = _load_script_resource("res://scripts/tower_mage.gd")
+		if _mage_tower_script_res:
+			node.set_script(_mage_tower_script_res)
+	elif building_type == "mortar":
+		if _mortar_script_res == null:
+			_mortar_script_res = _load_script_resource("res://scripts/tower_mortar.gd")
+		if _mortar_script_res:
+			node.set_script(_mortar_script_res)
 
 # ── Ship node cache ───────────────────────────────────────────
 var _ship_attack_node: Node3D = null
@@ -760,6 +781,48 @@ func _refresh_bs_cache() -> void:
 	_building_systems = get_tree().get_nodes_in_group("building_systems")
 
 
+func _register_test_only_buildings() -> void:
+	building_defs["mortar"] = {
+		"name": "Mortar",
+		"cells": Vector2i(2, 2),
+		"footprint_extra": 0.45,
+		"color": Color(0.6, 0.36, 0.18, 0.5),
+		"height": 0.45,
+		"scene": "res://Model/Mortar/mortar_lvl1.fbx",
+		"scenes": [
+			"res://Model/Mortar/mortar_lvl1.fbx",
+			"res://Model/Mortar/mortar_lvl2.fbx",
+			"res://Model/Mortar/mortar_lvl3.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+		],
+		"model_scale": 0.032,
+		"model_rotation_y": 0.0,
+		"hp_levels": [1700, 2800, 4300, 6200],
+		"cost": {"gold": 600, "wood": 900, "ore": 700},
+		"altar_ward_bonus": true,
+		"test_only": true,
+		"hp_bar_height": 0.6,
+		"albedo_texture": "res://Model/Mortar/mortar_albedo.png",
+		"emission_texture": "res://Model/Mortar/mortar_emit.png",
+		"construction_scenes": [
+			"res://Model/Mortar/mortar_lvl1_construction.fbx",
+			"res://Model/Mortar/mortar_lvl2_construction.fbx",
+			"res://Model/Mortar/mortar_lvl3_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+		],
+		"projectile_scenes": [
+			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
+		],
+		"test_damage": 245,
+		"test_damage_levels": [95, 135, 185, 245],
+		"test_range": 2.65,
+		"test_reload_sec": 1.95,
+	}
+
+
 func _exit_tree() -> void:
 	if _cannon:
 		_cannon._stop_attack_ship_waves()
@@ -773,6 +836,7 @@ func _ready() -> void:
 	if test_mode:
 		_net = null  # Local-only: bypass all server gating
 		resources = {"wood": 9_999_999, "gold": 9_999_999, "ore": 9_999_999}
+		_register_test_only_buildings()
 	_cannon = BSCannon.new().init(self)
 	_rally = BSRally.new().init(self)
 	_battle = BSBattle.new().init(self)
@@ -1273,8 +1337,16 @@ func _create_fps_label() -> void:
 	_fps_lbl.add_theme_color_override("font_shadow_color", Color(1, 1, 1, 0.5))
 	_fps_lbl.add_theme_constant_override("shadow_offset_x", 1)
 	_fps_lbl.add_theme_constant_override("shadow_offset_y", 1)
-	_fps_lbl.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	_fps_lbl.offset_left = 14
+	if test_mode:
+		_fps_lbl.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+		_fps_lbl.offset_left = -170
+		_fps_lbl.offset_right = -14
+		_fps_lbl.offset_top = 14
+		_fps_lbl.offset_bottom = 54
+		_fps_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	else:
+		_fps_lbl.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+		_fps_lbl.offset_left = 14
 	canvas.add_child(_fps_lbl)
 
 
@@ -2097,14 +2169,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			var base = _create_building_base(def, cache_key)
 			node.add_child(base)
 		
-		if building_type == "turret":
-			var turret_script = _turret_script_res if _turret_script_res else _load_script_resource("res://scripts/turret.gd")
-			if turret_script:
-				node.set_script(turret_script)
-		elif building_type == "mage_tower":
-			var mage_script = _mage_tower_script_res if _mage_tower_script_res else _load_script_resource("res://scripts/tower_mage.gd")
-			if mage_script:
-				node.set_script(mage_script)
+		_attach_building_defense_script(node, building_type)
 		if scene_path != "":
 			var scene_res = _scene_res_cache.get(scene_path, null)
 			if scene_res == null:
@@ -2764,6 +2829,8 @@ func _preload_building_scenes() -> void:
 		_turret_script_res = _load_script_resource("res://scripts/turret.gd")
 	if _mage_tower_script_res == null:
 		_mage_tower_script_res = _load_script_resource("res://scripts/tower_mage.gd")
+	if _mortar_script_res == null:
+		_mortar_script_res = _load_script_resource("res://scripts/tower_mortar.gd")
 
 
 ## Build cache key for a building type at a specific level.
@@ -2858,14 +2925,7 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 		node.add_child(base)
 	
 	# Attach turret AI script BEFORE adding children so _process registers
-	if current_building_id == "turret":
-		var turret_script = _turret_script_res if _turret_script_res else _load_script_resource("res://scripts/turret.gd")
-		if turret_script:
-			node.set_script(turret_script)
-	elif current_building_id == "mage_tower":
-		var mage_script = _mage_tower_script_res if _mage_tower_script_res else _load_script_resource("res://scripts/tower_mage.gd")
-		if mage_script:
-			node.set_script(mage_script)
+	_attach_building_defense_script(node, current_building_id)
 	if def.has("scene"):
 		var _scene_path: String = def.scene
 		var scene_res = _scene_res_cache.get(_scene_path, null)
@@ -3394,7 +3454,7 @@ func _select_building(b: Dictionary) -> void:
 
 	# Range indicator for defense buildings
 	_hide_range_indicator()
-	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower"]
+	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower", "mortar"]
 	if b.id in defense_ids and is_instance_valid(b.get("node", null)):
 		var bnode = b["node"]
 		var r: float = 1.0
