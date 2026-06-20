@@ -10,11 +10,11 @@ const POOL_SIZE: int = 12
 const TARGET_SEARCH_INTERVAL: float = 0.15
 
 const LEVEL_STATS = {
-	1: {"damage": 25, "fire_rate": 1.0, "detect_range": 1.0},
-	2: {"damage": 62, "fire_rate": 0.68, "detect_range": 1.30},
-	3: {"damage": 112, "fire_rate": 0.52, "detect_range": 1.52},
-	4: {"damage": 158, "fire_rate": 0.44, "detect_range": 1.68},
-	5: {"damage": 210, "fire_rate": 0.38, "detect_range": 1.85},
+	1: {"damage": 25, "fire_rate": 1.0, "detect_range": 1.10},
+	2: {"damage": 62, "fire_rate": 0.68, "detect_range": 1.32},
+	3: {"damage": 112, "fire_rate": 0.52, "detect_range": 1.55},
+	4: {"damage": 158, "fire_rate": 0.44, "detect_range": 1.78},
+	5: {"damage": 210, "fire_rate": 0.38, "detect_range": 2.00},
 }
 
 enum State { IDLE, ATTACKING, VICTORY }
@@ -24,7 +24,7 @@ var level: int = 1
 var damage: int = 90
 var ward_bonus_pct: int = 0
 var fire_rate: float = 1.2
-var detect_range: float = 1.0
+var detect_range: float = 1.10
 var _fire_timer: float = 0.0
 var _target: Node3D = null
 var _target_search_timer: float = 0.0

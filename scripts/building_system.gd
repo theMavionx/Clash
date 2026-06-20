@@ -173,7 +173,7 @@ var building_defs: Dictionary = {
 		"albedo_texture": "res://Model/MageTower/mage_tower_albedo.png",
 		"emission_texture": "res://Model/MageTower/mage_tower_emit.png",
 		# Combat: tower_mage.gd is attached to the building node (like turret),
-		# casting magic orbs at troops within detect_range=1.0 (turret radius).
+		# casting magic orbs at troops within its balanced defense range.
 	},
 	"tombstone": {
 		"name": "Tombstone",
@@ -818,7 +818,7 @@ func _register_test_only_buildings() -> void:
 		],
 		"test_damage": 245,
 		"test_damage_levels": [95, 135, 185, 245],
-		"test_range": 2.65,
+		"test_range": 2.90,
 		"test_reload_sec": 1.95,
 	}
 

@@ -3,10 +3,10 @@ extends Node3D
 ## Uses object pooling to avoid per-shot allocations and first-fire lag.
 
 const LEVEL_STATS = {
-	1: {"damage": 35, "fire_rate": 0.70, "detect_range": 0.95},
-	2: {"damage": 68, "fire_rate": 0.48, "detect_range": 1.08},
-	3: {"damage": 122, "fire_rate": 0.34, "detect_range": 1.22},
-	4: {"damage": 170, "fire_rate": 0.29, "detect_range": 1.32},
+	1: {"damage": 35, "fire_rate": 0.70, "detect_range": 0.90},
+	2: {"damage": 68, "fire_rate": 0.48, "detect_range": 1.05},
+	3: {"damage": 122, "fire_rate": 0.34, "detect_range": 1.18},
+	4: {"damage": 170, "fire_rate": 0.29, "detect_range": 1.30},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [
@@ -31,7 +31,7 @@ const ATTACK_SFX_PITCH_JITTER: float = 0.04
 const CAN_TARGET_GROUND: bool = true
 const CAN_TARGET_AIR: bool = false
 
-@export var detect_range: float = 0.95   # just below Archer range (1.0): kiting needs positioning, not free
+@export var detect_range: float = 0.90
 @export var bullet_speed: float = 4.0
 
 var level: int = 1

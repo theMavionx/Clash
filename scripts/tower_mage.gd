@@ -11,25 +11,25 @@ const LEVEL_STATS := {
 		"max_damage": 18,
 		"tick_rate": 0.25,
 		"ramp_time": 4.0,
-		"detect_range": 1.0,
+		"detect_range": 1.05,
 	},
 	2: {
 		"base_damage": 11,
 		"max_damage": 54,
 		"tick_rate": 0.20,
 		"ramp_time": 3.0,
-		"detect_range": 1.22,
+		"detect_range": 1.24,
 	},
 	3: {
 		"base_damage": 18,
 		"max_damage": 96,
 		"tick_rate": 0.16,
 		"ramp_time": 2.5,
-		"detect_range": 1.38,
+		"detect_range": 1.45,
 	},
 }
 
-@export var detect_range: float = 1.0
+@export var detect_range: float = 1.05
 ## When true the crystal sinks/shrinks away while no enemy is in range. Off by
 ## default so the crystal stays visible in the base view, where there are never
 ## enemy troops.

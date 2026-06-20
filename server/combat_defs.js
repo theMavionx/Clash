@@ -110,17 +110,17 @@ function monotonicDemonKingHitDamage(bestDps, demonLevel) {
 // Defense building stats: turrets fire bullets, archer towers fire arrows.
 const DEFENSE_STATS = {
   turret: {
-    1: { damage: 35, fireRate: 0.70, detectRange: 0.95, projSpeed: 4.0 },
-    2: { damage: 68, fireRate: 0.48, detectRange: 1.08, projSpeed: 4.0 },
-    3: { damage: 122, fireRate: 0.34, detectRange: 1.22, projSpeed: 4.0 },
-    4: { damage: 170, fireRate: 0.29, detectRange: 1.32, projSpeed: 4.0 },
+    1: { damage: 35, fireRate: 0.70, detectRange: 0.90, projSpeed: 4.0 },
+    2: { damage: 68, fireRate: 0.48, detectRange: 1.05, projSpeed: 4.0 },
+    3: { damage: 122, fireRate: 0.34, detectRange: 1.18, projSpeed: 4.0 },
+    4: { damage: 170, fireRate: 0.29, detectRange: 1.30, projSpeed: 4.0 },
   },
   archer_tower: {
-    1: { damage: 25, fireRate: 1.0,  detectRange: 1.0, projSpeed: 2.5 },
-    2: { damage: 62, fireRate: 0.68, detectRange: 1.30, projSpeed: 2.5 },
-    3: { damage: 112, fireRate: 0.52, detectRange: 1.52, projSpeed: 2.5 },
-    4: { damage: 158, fireRate: 0.44, detectRange: 1.68, projSpeed: 2.5 },
-    5: { damage: 210, fireRate: 0.38, detectRange: 1.85, projSpeed: 2.5 },
+    1: { damage: 25, fireRate: 1.0,  detectRange: 1.10, projSpeed: 2.5 },
+    2: { damage: 62, fireRate: 0.68, detectRange: 1.32, projSpeed: 2.5 },
+    3: { damage: 112, fireRate: 0.52, detectRange: 1.55, projSpeed: 2.5 },
+    4: { damage: 158, fireRate: 0.44, detectRange: 1.78, projSpeed: 2.5 },
+    5: { damage: 210, fireRate: 0.38, detectRange: 2.00, projSpeed: 2.5 },
   },
   mage_tower: {
     1: {
@@ -129,7 +129,7 @@ const DEFENSE_STATS = {
       maxDamage: 18,
       tickRate: 0.25,
       rampTime: 4.0,
-      detectRange: 1.0,
+      detectRange: 1.05,
       damage: 4,
       fireRate: 0.25,
       projSpeed: 0,
@@ -140,7 +140,7 @@ const DEFENSE_STATS = {
       maxDamage: 54,
       tickRate: 0.20,
       rampTime: 3.0,
-      detectRange: 1.22,
+      detectRange: 1.24,
       damage: 11,
       fireRate: 0.20,
       projSpeed: 0,
@@ -151,7 +151,7 @@ const DEFENSE_STATS = {
       maxDamage: 96,
       tickRate: 0.16,
       rampTime: 2.5,
-      detectRange: 1.38,
+      detectRange: 1.45,
       damage: 18,
       fireRate: 0.16,
       projSpeed: 0,
@@ -163,7 +163,7 @@ const DEFENSE_STATS = {
 const SKELETON_GUARD = {
   levels: {
     1: { hp: 360, damage: 38, atkSpeed: 0.86, moveSpeed: 0.46, detectionRadius: 0.95 },
-    2: { hp: 520, damage: 60, atkSpeed: 0.74, moveSpeed: 0.52, detectionRadius: 1.18 },
+    2: { hp: 520, damage: 60, atkSpeed: 0.74, moveSpeed: 0.52, detectionRadius: 1.10 },
     3: { hp: 620, damage: 72, atkSpeed: 0.70, moveSpeed: 0.54, detectionRadius: 1.25 },
     4: { hp: 820, damage: 96, atkSpeed: 0.64, moveSpeed: 0.58, detectionRadius: 1.40 },
   },
@@ -171,7 +171,7 @@ const SKELETON_GUARD = {
   damage: 60,
   atkSpeed: 0.74,
   moveSpeed: 0.52,
-  detectionRadius: 1.18,
+  detectionRadius: 1.10,
   attackRange: 0.15,
   separationRadius: 0.15,
   separationForce: 0.4,
