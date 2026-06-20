@@ -189,7 +189,6 @@ const BASE_LAYOUTS = {
       b('port', 3, 3, 0, 1, { has_ship: 1 }),
       b('port', 3, 9, 0, 1, { has_ship: 1 }),
       b('port', 2, 15, 0, 1, { has_ship: 1 }),
-      b('port', 2, 21, 0, 1, { has_ship: 1 }),
     ],
   },
   4: {
@@ -211,8 +210,7 @@ const BASE_LAYOUTS = {
       b('storage', 2, 5, 12),
       b('port', 3, 3, 0, 1, { has_ship: 1 }),
       b('port', 3, 9, 0, 1, { has_ship: 1 }),
-      b('port', 2, 15, 0, 1, { has_ship: 1 }),
-      b('port', 2, 21, 0, 1, { has_ship: 1 }),
+      b('port', 3, 15, 0, 1, { has_ship: 1 }),
     ],
     normal: [
       b('town_hall', 4, 11, 11),
@@ -236,10 +234,9 @@ const BASE_LAYOUTS = {
       b('storage', 3, 16, 13),
       b('storage', 3, 5, 12),
       b('storage', 2, 18, 18),
-      b('port', 4, 3, 0, 1, { has_ship: 1 }),
+      b('port', 3, 3, 0, 1, { has_ship: 1 }),
       b('port', 3, 9, 0, 1, { has_ship: 1 }),
       b('port', 3, 15, 0, 1, { has_ship: 1 }),
-      b('port', 2, 21, 0, 1, { has_ship: 1 }),
     ],
     hard: [
       b('town_hall', 4, 11, 11),
@@ -264,10 +261,9 @@ const BASE_LAYOUTS = {
       b('storage', 4, 16, 13),
       b('storage', 3, 5, 12),
       b('storage', 3, 18, 18),
-      b('port', 4, 3, 0, 1, { has_ship: 1 }),
-      b('port', 4, 9, 0, 1, { has_ship: 1 }),
+      b('port', 3, 3, 0, 1, { has_ship: 1 }),
+      b('port', 3, 9, 0, 1, { has_ship: 1 }),
       b('port', 3, 15, 0, 1, { has_ship: 1 }),
-      b('port', 3, 21, 0, 1, { has_ship: 1 }),
     ],
   },
 };

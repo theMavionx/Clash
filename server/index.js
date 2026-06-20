@@ -1329,7 +1329,7 @@ const ADMIN_BUILDING_TOOL_DEFS = [
   { type: 'barn', label: 'Barn', max: 4 },
   { type: 'mage_tower', label: 'Mage Tower', max: 4 },
   { type: 'mine', label: 'Mine', max: 5 },
-  { type: 'mortar', label: 'Mortar', max: 4 },
+  { type: 'mortar', label: 'Mortar', max: 1 },
   { type: 'port', label: 'Port', max: 5 },
   { type: 'sawmill', label: 'Sawmill', max: 5 },
   { type: 'storage', label: 'Storage', max: 5 },

@@ -7,7 +7,7 @@ extends Node3D
 @export var sail_duration: float = 3.0
 @export var spawn_distance: float = 4.0
 @export var water_node_path: NodePath = "../Water"
-@export var max_ships: int = 6
+@export var max_ships: int = 3
 @export var troop_spawn_delay: float = 0.2
 @export var troop_scale: float = 0.1
 
@@ -483,14 +483,15 @@ func _is_within_ship_plane(pos: Vector3) -> bool:
 func _try_place_ship(hit: Vector3) -> bool:
 	if not _is_within_ship_plane(hit):
 		return false
-	if _ships_placed >= _fleet.size():
+	var ship_limit: int = mini(_fleet.size(), max_ships)
+	if _ships_placed >= ship_limit:
 		return false
 	# Find which ship to place — use selected index, skip already-placed ships
-	var ship_idx: int = clampi(_next_troop_idx, 0, _fleet.size() - 1)
+	var ship_idx: int = clampi(_next_troop_idx, 0, ship_limit - 1)
 	if _fleet[ship_idx].get("_placed", false):
 		# Selected ship already placed — find next unplaced
 		ship_idx = -1
-		for i in _fleet.size():
+		for i in ship_limit:
 			if not _fleet[i].get("_placed", false):
 				ship_idx = i
 				break
@@ -561,7 +562,7 @@ func _try_place_ship(hit: Vector3) -> bool:
 				"port_number": s.get("port_number", i + 1),
 				"port_server_id": s.get("port_server_id", -1),
 			})
-		bridge.send_to_react("fleet_info", {"total_ships": _fleet.size(), "placed": _ships_placed, "ships": ships_update})
+		bridge.send_to_react("fleet_info", {"total_ships": ship_limit, "placed": _ships_placed, "ships": ships_update})
 	return true
 
 
@@ -737,10 +738,11 @@ func _spawn_single_ship(target: Vector3, ship_idx: int = -1, target_is_stop_pos:
 func replay_place_ship_from_spawn(action: Dictionary) -> bool:
 	if _fleet.is_empty():
 		return replay_deploy_troops_at_spawn(action)
-	if _ships_placed >= _fleet.size():
+	var ship_limit: int = mini(_fleet.size(), max_ships)
+	if _ships_placed >= ship_limit:
 		return false
 	var ship_idx: int = _ships_placed
-	for i in _fleet.size():
+	for i in ship_limit:
 		if not _fleet[i].get("_placed", false):
 			ship_idx = i
 			break
@@ -792,6 +794,8 @@ func replay_deploy_troops_at_spawn(action: Dictionary) -> bool:
 			troop_names.append(legacy_name.capitalize())
 	if troop_names.is_empty():
 		return false
+	if not _fleet.is_empty() and _ships_placed >= mini(_fleet.size(), max_ships):
+		return false
 	var recorded_levels: Dictionary = {}
 	var raw_levels = action.get("troopLevels", action.get("troop_levels", {}))
 	if raw_levels is Dictionary:
@@ -800,8 +804,9 @@ func replay_deploy_troops_at_spawn(action: Dictionary) -> bool:
 	var spawn_pos: Vector3 = Vector3(float(action.get("x", 0.0)), water_y, float(action.get("z", 0.0)))
 	_spawn_troops_at_pos(troop_names, recorded_levels, spawn_pos)
 	if not _fleet.is_empty():
-		var ship_idx: int = clampi(_ships_placed, 0, _fleet.size() - 1)
-		for i in _fleet.size():
+		var ship_limit: int = mini(_fleet.size(), max_ships)
+		var ship_idx: int = clampi(_ships_placed, 0, ship_limit - 1)
+		for i in ship_limit:
 			if not _fleet[i].get("_placed", false):
 				ship_idx = i
 				break

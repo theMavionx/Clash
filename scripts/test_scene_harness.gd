@@ -22,21 +22,23 @@ const MAX_VILLAGE_BUILD_ORDER: Array[String] = [
 	"archer_tower",
 	"turret",
 	"mage_tower",
+	"mortar",
 	"port",
 ]
 
 const TEST_TH_MAX_COUNT: Dictionary = {
-	"mine": [1, 2, 3, 3],
-	"sawmill": [1, 2, 3, 3],
-	"barn": [1, 1, 1, 1],
-	"port": [1, 2, 5, 5],
-	"archer_tower": [1, 2, 3, 3],
-	"tombstone": [0, 1, 3, 3],
-	"altar": [1, 1, 1, 1],
-	"turret": [0, 0, 3, 3],
-	"storage": [0, 1, 2, 3],
-	"mage_tower": [0, 0, 0, 2],
-	"town_hall": [1, 1, 1, 1],
+	"mine": [1, 2, 3, 3, 4],
+	"sawmill": [1, 2, 3, 3, 4],
+	"barn": [1, 1, 1, 1, 1],
+	"port": [1, 2, 3, 3, 3],
+	"archer_tower": [1, 2, 3, 3, 3],
+	"tombstone": [0, 1, 3, 3, 3],
+	"altar": [1, 1, 1, 1, 1],
+	"turret": [0, 0, 3, 3, 3],
+	"storage": [0, 1, 2, 3, 4],
+	"mage_tower": [0, 0, 0, 2, 2],
+	"mortar": [0, 0, 0, 0, 1],
+	"town_hall": [1, 1, 1, 1, 1],
 }
 
 const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "DemonKing", "FireDragon"]
@@ -169,7 +171,7 @@ func _create_panel() -> void:
 	max_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	max_row.add_theme_constant_override("separation", 6)
 	vbox.add_child(max_row)
-	for th_level in range(1, 5):
+	for th_level in range(1, 6):
 		var btn := Button.new()
 		btn.text = str(th_level)
 		btn.custom_minimum_size = Vector2(42, 38)
@@ -513,7 +515,7 @@ func build_working_village() -> void:
 
 
 func build_max_village_for_town_hall(th_level: int) -> void:
-	th_level = clampi(th_level, 1, 4)
+	th_level = clampi(th_level, 1, 5)
 	_build_generation += 1
 	var generation := _build_generation
 	reset_sandbox(false)

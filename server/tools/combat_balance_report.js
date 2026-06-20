@@ -18,6 +18,7 @@ const {
   CANONICAL_GRID_CONFIG,
   CANONICAL_GRID_CONFIGS,
   TIME_LIMIT_SEC,
+  MAX_SHIPS,
   TROOPS_PER_SHIP,
 } = require('../combat_defs');
 
@@ -30,14 +31,14 @@ const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [3500, 8000, 16000, 24000, 36000] },
   mine: { size: [3, 3], hp_levels: [1200, 2200, 3800, 6000, 9000] },
   barn: { size: [4, 3], hp_levels: [2000, 3500, 6000, 9500] },
-  port: { size: [4, 3], hp_levels: [1800, 3200, 5500, 8500, 12500] },
+  port: { size: [4, 3], hp_levels: [1800, 3200, 5500] },
   sawmill: { size: [3, 3], hp_levels: [1200, 2200, 3800, 6000, 9000] },
   turret: { size: [2, 2], hp_levels: [900, 1600, 2800, 4500] },
   tombstone: { size: [3, 3], hp_levels: [1000, 1500, 2000, 2700] },
   storage: { size: [4, 5], hp_levels: [1400, 2500, 4200, 6500, 9500] },
   archer_tower: { size: [3, 3], hp_levels: [800, 1500, 2500, 3800, 5600] },
   mage_tower: { size: [3, 3], hp_levels: [700, 1200, 2000, 3100] },
-  mortar: { size: [2, 2], hp_levels: [1700, 2800, 4300, 6200] },
+  mortar: { size: [2, 2], hp_levels: [1700] },
 };
 
 function loadVerifierWithoutDb() {
@@ -175,7 +176,7 @@ function withDemon(level, rest) {
   return [demonToken(level), SLOT_FILLER, ...rest];
 }
 
-function chunkShips(tokens, maxShips = 5, slotsPerShip = TROOPS_PER_SHIP) {
+function chunkShips(tokens, maxShips = MAX_SHIPS, slotsPerShip = TROOPS_PER_SHIP) {
   const chunks = [];
   for (let i = 0; i < tokens.length && chunks.length < maxShips; i += slotsPerShip) {
     chunks.push(tokens.slice(i, i + slotsPerShip));

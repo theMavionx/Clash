@@ -400,7 +400,7 @@ Assumes target player: $30 deposit, 10x, 1-2 trades/day, ~1h/day, collecting pro
 - Place Turrets (3), third production buildings, second Storage, additional Ports.
 
 ### Weeks 9–12 — Max Out
-- Upgrade all buildings to Lv3, all troops to Lv3, all 5 ships active.
+- Upgrade all buildings to Lv3, all troops to Lv3, all 3 ships active.
 - Full max realistically lands around **week 10–12** at current gold rates (week 6–8 with
   active raiding).
 

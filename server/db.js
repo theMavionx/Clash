@@ -2792,7 +2792,7 @@ const TH_MAX_COUNT = {
   mine:         [1, 2, 3, 3, 4],
   sawmill:      [1, 2, 3, 3, 4],
   barn:         [1, 1, 1, 1, 1],
-  port:         [1, 2, 5, 5, 6],
+  port:         [1, 2, 3, 3, 3],
   altar:        [1, 1, 1, 1, 1],
   archer_tower: [1, 2, 3, 3, 3],
   tombstone:    [0, 1, 3, 3, 3],  // unlocked at TH2
@@ -2837,10 +2837,10 @@ const BUILDING_DEFS = {
     max_count: 1,
   },
   port: {
-    size: [4, 3], max_level: 5,
-    hp_levels: [1800, 3200, 5500, 8500, 12500],
+    size: [4, 3], max_level: 3,
+    hp_levels: [1800, 3200, 5500],
     cost: { gold: 240, wood: 560, ore: 480 },
-    max_count: 6,
+    max_count: 3,
   },
   altar: {
     size: [3, 3], max_level: 1,
@@ -2887,8 +2887,8 @@ const BUILDING_DEFS = {
     max_count: 2,
   },
   mortar: {
-    size: [2, 2], max_level: 4,
-    hp_levels: [1700, 2800, 4300, 6200],
+    size: [2, 2], max_level: 1,
+    hp_levels: [1700],
     cost: { gold: 600, wood: 900, ore: 700 },
     max_count: 1,
   },
@@ -2951,6 +2951,41 @@ function normalizeTownHallHpRows() {
 }
 
 normalizeTownHallHpRows();
+
+function normalizePortLevelRows() {
+  const def = BUILDING_DEFS.port;
+  const maxLevel = Number(def?.max_level || 3);
+  const hpLevels = def?.hp_levels || [];
+  const cappedMaxHp = hpLevels[maxLevel - 1] || hpLevels[hpLevels.length - 1] || 1;
+  const rows = db.prepare(`
+    SELECT id, level, hp, max_hp
+    FROM buildings
+    WHERE type = 'port' AND level > ?
+  `).all(maxLevel);
+  if (!rows.length) return;
+
+  const update = db.prepare(`
+    UPDATE buildings SET level = ?, hp = ?, max_hp = ? WHERE id = ?
+  `);
+  let updated = 0;
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const oldMaxHp = Math.max(1, Number(row.max_hp) || cappedMaxHp);
+      const oldHp = Math.max(0, Number(row.hp) || 0);
+      const hpRatio = Math.max(0, Math.min(1, oldHp / oldMaxHp));
+      const nextHp = Math.max(0, Math.min(cappedMaxHp, Math.round(cappedMaxHp * hpRatio)));
+      update.run(maxLevel, nextHp, cappedMaxHp, row.id);
+      updated += 1;
+    }
+  });
+  tx();
+
+  if (updated > 0) {
+    console.log(`[db] normalized ${updated} Port row(s) to level ${maxLevel}`);
+  }
+}
+
+normalizePortLevelRows();
 
 function botBuildingHp(type, level) {
   const def = BUILDING_DEFS[type];
@@ -4606,7 +4641,7 @@ function computeAttackPower(playerId) {
     const troops = safeJsonArray(port.ship_troops);
     if (troops.length === 0) continue;
     shipCount += 1;
-    const portLevel = clampMatchNumber(port.level, 1, 5, 1);
+    const portLevel = clampMatchNumber(port.level, 1, BUILDING_DEFS.port.max_level, 1);
     shipCapacity += portLevel * 3;
     power += 120 + portLevel * 90;
     for (const troop of troops) {
@@ -4649,7 +4684,10 @@ function defensePowerForBuilding(building) {
   if (type === 'mortar') {
     const stats = DEFENSE_STATS.mortar[level] || DEFENSE_STATS.mortar[1];
     const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
-    return dps * 30 + (Number(stats.detectRange) || 0) * 165 + (Number(stats.splashRadius) || 0) * 360;
+    return dps * 30
+      + (Number(stats.detectRange) || 0) * 165
+      + (Number(stats.splashRadius) || 0) * 360
+      - (Number(stats.minRange) || 0) * 90;
   }
   if (type === 'tombstone') {
     const stats = SKELETON_GUARD.levels?.[level] || SKELETON_GUARD;

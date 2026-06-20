@@ -97,6 +97,15 @@ function troopTargetType(troop) {
 
 function canDefenseTargetTroop(defense, troop) {
   if (!troop || troop.hp <= 0) return false;
+  const minRange = Math.max(0, Number(defense?.minRange) || 0);
+  if (
+    minRange > 0
+    && Number.isFinite(Number(defense?.x))
+    && Number.isFinite(Number(defense?.z))
+    && distSq2d(Number(defense.x), Number(defense.z), troop.x, troop.z) < minRange * minRange
+  ) {
+    return false;
+  }
   return troopTargetType(troop) === UNIT_TARGET_AIR
     ? defense.targetAir !== false
     : defense.targetGround !== false;
@@ -807,6 +816,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       defenses.push({
         buildingId: b.id, type: 'mortar',
         damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
+        minRange: s.minRange,
         projSpeed: s.projSpeed,
         splashRadius: s.splashRadius,
         targetGround: true, targetAir: false,
@@ -1244,6 +1254,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           replayOrder: near?.target?.replayOrder ?? null,
           targetTroop: near?.target?.type ?? null,
           dist: near ? Math.round(Math.sqrt(near.distSq) * 1000) / 1000 : null,
+          minRange: d.minRange ?? 0,
           candidates: debugTrace ? aliveTroops.map(troop => ({
             id: troop.id,
             replayOrder: troop.replayOrder ?? null,
@@ -1349,6 +1360,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           replayOrder: currentTarget.replayOrder ?? null,
           targetTroop: currentTarget.type,
           targetHp: currentTarget.hp,
+          minRange: d.minRange ?? 0,
           projectileX: round3(d.x),
           projectileZ: round3(d.z),
           target: traceEntityPayload(currentTarget, 'troop'),

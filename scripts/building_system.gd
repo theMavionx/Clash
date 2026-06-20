@@ -7,6 +7,7 @@ extends Node3D
 const ALTAR_MODEL_SCENE_PATH: String = "res://Model/Altar/Models/Stylized_Altar_web.tscn"
 const ALTAR_MODEL_SCENE = preload(ALTAR_MODEL_SCENE_PATH)
 const SHIP_COST_GOLD: int = 250
+const MAX_PORT_SHIP_LEVEL: int = 3
 
 # ── Grid Settings ─────────────────────────────────────────────
 @export var grid_width: int = 27
@@ -56,7 +57,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Port/1.glb", "res://Model/Port/2.glb", "res://Model/Port/3.glb"],
 		"model_scale": 0.25,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1800, 3200, 5500, 8500, 12500],
+		"hp_levels": [1800, 3200, 5500],
 		"cost": {"gold": 240, "wood": 560, "ore": 480},
 		"ship_cost": {"gold": SHIP_COST_GOLD},
 		"no_outline": true,
@@ -190,7 +191,7 @@ var building_defs: Dictionary = {
 		],
 		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1700, 2800, 4300, 6200],
+		"hp_levels": [1700],
 		"cost": {"gold": 600, "wood": 900, "ore": 700},
 		"max_count": 1,
 		"altar_ward_bonus": true,
@@ -328,7 +329,7 @@ const TH_MAX_COUNT: Dictionary = {
 	"mine": [1, 2, 3, 3, 4],
 	"sawmill": [1, 2, 3, 3, 4],
 	"barn": [1, 1, 1, 1, 1],
-	"port": [1, 2, 5, 5, 6],
+	"port": [1, 2, 3, 3, 3],
 	"altar": [1, 1, 1, 1, 1],
 	"archer_tower": [1, 2, 3, 3, 3],
 	"tombstone": [0, 1, 3, 3, 3],
@@ -843,7 +844,7 @@ func _register_test_only_buildings() -> void:
 		],
 		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1700, 2800, 4300, 6200],
+		"hp_levels": [1700],
 		"cost": {"gold": 600, "wood": 900, "ore": 700},
 		"altar_ward_bonus": true,
 		"test_only": true,
@@ -1081,7 +1082,7 @@ func _apply_agent_place_building(payload: Dictionary) -> void:
 			var pnode: Node3D = b.get("node", null)
 			if is_instance_valid(pnode):
 				pnode.set_meta("has_ship", true)
-				pnode.set_meta("ship_level", b.get("level", 1))
+				pnode.set_meta("ship_level", clampi(int(b.get("level", 1)), 1, MAX_PORT_SHIP_LEVEL))
 				pnode.set_meta("ship_troops", building.get("ship_troops", []))
 				_port._spawn_port_ship(b)
 	if payload.has("resources"):
@@ -1131,7 +1132,7 @@ func _apply_agent_buy_ship(payload: Dictionary) -> void:
 		return
 	if not pnode.has_meta("has_ship"):
 		pnode.set_meta("has_ship", true)
-		pnode.set_meta("ship_level", b.get("level", 1))
+		pnode.set_meta("ship_level", clampi(int(b.get("level", 1)), 1, MAX_PORT_SHIP_LEVEL))
 		pnode.set_meta("ship_troops", payload.get("ship_troops", []))
 		owned_ships += 1
 		if _port:
@@ -1154,9 +1155,9 @@ func _apply_agent_ship_troops(payload: Dictionary) -> void:
 	if payload.has("ship_troops"):
 		pnode.set_meta("ship_troops", payload.ship_troops)
 	if payload.has("ship_level"):
-		pnode.set_meta("ship_level", int(payload.ship_level))
+		pnode.set_meta("ship_level", clampi(int(payload.ship_level), 1, MAX_PORT_SHIP_LEVEL))
 	elif not pnode.has_meta("ship_level"):
-		pnode.set_meta("ship_level", b.get("level", 1))
+		pnode.set_meta("ship_level", clampi(int(b.get("level", 1)), 1, MAX_PORT_SHIP_LEVEL))
 	if not pnode.has_meta("has_ship"):
 		pnode.set_meta("has_ship", true)
 		_port._spawn_port_ship(b)
@@ -1273,7 +1274,7 @@ func _emit_ship_update(b: Dictionary) -> void:
 	var pnode: Node3D = b.get("node", null)
 	if not is_instance_valid(pnode):
 		return
-	var ship_level: int = pnode.get_meta("ship_level", b.get("level", 1))
+	var ship_level: int = clampi(int(pnode.get_meta("ship_level", b.get("level", 1))), 1, MAX_PORT_SHIP_LEVEL)
 	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("ship_updated", {
@@ -2186,6 +2187,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			continue
 		var def = building_defs[building_type]
 		var level: int = b.get("level", 1)
+		if building_type == "port":
+			level = clampi(level, 1, MAX_PORT_SHIP_LEVEL)
 		var hp: int = b.get("hp", _get_hp_for(def, level))
 		var max_hp: int = b.get("max_hp", hp)
 		var gp = Vector2i(b["grid_x"], b["grid_z"])
@@ -3461,6 +3464,7 @@ func _find_building_at(gp: Vector2i) -> Dictionary:
 	return {}
 
 func _select_building(b: Dictionary) -> void:
+	_set_mortar_range_visuals_for_selected(false)
 	selected_building = b
 	var def = building_defs[b.id]
 	var level = b.get("level", 1)
@@ -3483,7 +3487,7 @@ func _select_building(b: Dictionary) -> void:
 		var bs_port_number: int = 0
 		if b.has("node") and is_instance_valid(b["node"]) and b["node"].has_meta("has_ship"):
 			bs_has_ship = true
-			bs_ship_level = b["node"].get_meta("ship_level", 1)
+			bs_ship_level = clampi(int(b["node"].get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL)
 			bs_ship_troops = b["node"].get_meta("ship_troops", [])
 		if b.id == "port":
 			bs_port_number = _port_display_number_for_building(b)
@@ -3508,13 +3512,15 @@ func _select_building(b: Dictionary) -> void:
 
 	# Range indicator for defense buildings
 	_hide_range_indicator()
-	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower", "mortar"]
+	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower"]
 	if b.id in defense_ids and is_instance_valid(b.get("node", null)):
 		var bnode = b["node"]
 		var r: float = 1.0
 		if bnode.get_script() and bnode.get("detect_range") != null:
 			r = bnode.detect_range
 		_show_range_indicator(bnode.global_position, r)
+	elif b.id == "mortar":
+		_set_mortar_range_visuals_for_building(b, true)
 
 	# Move arrows (own island only)
 	if not is_viewing_enemy:
@@ -3600,6 +3606,7 @@ func _select_building(b: Dictionary) -> void:
 func _deselect_building() -> void:
 	if _is_moving:
 		_cancel_move(false)
+	_set_mortar_range_visuals_for_selected(false)
 	selected_building = {}
 	_hide_range_indicator()
 	_hide_move_arrows()
@@ -3615,6 +3622,20 @@ func _deselect_building() -> void:
 	var cam = get_node_or_null("/root/IslandScene/CameraRig")
 	if cam:
 		cam.zoom_blocked = false
+
+
+func _set_mortar_range_visuals_for_selected(visible: bool) -> void:
+	if selected_building.size() == 0:
+		return
+	_set_mortar_range_visuals_for_building(selected_building, visible)
+
+
+func _set_mortar_range_visuals_for_building(b: Dictionary, visible: bool) -> void:
+	if b.get("id", "") != "mortar":
+		return
+	var bnode: Node = b.get("node", null)
+	if is_instance_valid(bnode) and bnode.has_method("set_range_visuals_visible"):
+		bnode.call("set_range_visuals_visible", visible)
 
 
 func _upgrade_selected() -> void:
@@ -3815,7 +3836,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 				old_ship_node.get_parent().remove_child(old_ship_node)
 				old_ship_node.queue_free()
 			pnode.remove_meta("ship_node")
-			pnode.set_meta("ship_level", b.level)
+			pnode.set_meta("ship_level", clampi(int(b.level), 1, MAX_PORT_SHIP_LEVEL))
 			_port._spawn_port_ship(b)
 		_refresh_port_number_labels()
 
@@ -4920,8 +4941,8 @@ func _refresh_port_panel() -> void:
 
 	var port_node = b.get("node", null)
 	var has_ship = is_instance_valid(port_node) and port_node.has_meta("has_ship")
-	var ship_level: int = port_node.get_meta("ship_level", 0) if has_ship and is_instance_valid(port_node) else 0
-	var ship_capacity: int = ship_level * 3  # Lv1=3, Lv2=6, Lv3=9, Lv4=12
+	var ship_level: int = clampi(int(port_node.get_meta("ship_level", 0)), 0, MAX_PORT_SHIP_LEVEL) if has_ship and is_instance_valid(port_node) else 0
+	var ship_capacity: int = ship_level * 3  # Lv1=3, Lv2=6, Lv3=9
 	var ship_troops: Array = port_node.get_meta("ship_troops", []) if has_ship and is_instance_valid(port_node) else []
 
 	if has_ship:
@@ -5057,7 +5078,7 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 		return
 	_hide_ship_panel()
 
-	var ship_level: int = pnode.get_meta("ship_level", 1)
+	var ship_level: int = clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL)
 	var ship_troops: Array = pnode.get_meta("ship_troops", [])
 
 	# Find the port building dict that owns this node (search all building systems)
@@ -5165,10 +5186,11 @@ func _reinforce_troops() -> void:
 			if selected_building.get("id") == "port":
 				var pnode = selected_building.get("node")
 				if is_instance_valid(pnode) and pnode.has_meta("ship_troops"):
+					var ship_level: int = clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL)
 					bridge.send_to_react("ship_updated", {
 						"ship_troops": pnode.get_meta("ship_troops", []),
-						"ship_level": pnode.get_meta("ship_level", 1),
-						"ship_capacity": pnode.get_meta("ship_level", 1) * 3,
+						"ship_level": ship_level,
+						"ship_capacity": ship_level * 3,
 					})
 
 ## Legacy live-death hook. Casualties are applied once from /attack/result.
@@ -5185,12 +5207,14 @@ func _apply_ships_from_server(ships: Array) -> void:
 	for ship_data in ships:
 		var sid: int = ship_data.get("id", -1)
 		var server_troops: Array = ship_data.get("ship_troops", [])
+		var server_level: int = clampi(int(ship_data.get("level", 1)), 1, MAX_PORT_SHIP_LEVEL)
 		for bs_node in _building_systems:
 			for b in bs_node.placed_buildings:
 				if b.get("server_id") == sid and b.get("id") == "port":
 					var pnode = b.get("node")
 					if is_instance_valid(pnode):
 						pnode.set_meta("ship_troops", server_troops)
+						pnode.set_meta("ship_level", server_level)
 
 func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) -> void:
 	_port._swap_troop_on_ship(slot, troop_name, extra)
@@ -5760,7 +5784,7 @@ func _build_fleet() -> Array:
 			var pnode = b.get("node", null)
 			if not is_instance_valid(pnode) or not pnode.has_meta("has_ship"):
 				continue
-			var ship_level: int = pnode.get_meta("ship_level", 1)
+			var ship_level: int = clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL)
 			var ship_troops: Array = pnode.get_meta("ship_troops", [])
 			if not ship_troops.is_empty():
 				fleet.append({

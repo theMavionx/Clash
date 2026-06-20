@@ -19,7 +19,8 @@ const PROFILE_TH_WEIGHTS = {
 const SHIP_LEVELS_BY_TH = {
   2: [2, 1],
   3: [3, 2, 2],
-  4: [4, 4, 3, 3, 2],
+  4: [3, 3, 3],
+  5: [3, 3, 3],
 };
 
 const args = parseArgs(process.argv.slice(2));

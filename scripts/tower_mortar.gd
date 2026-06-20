@@ -3,10 +3,10 @@ extends Node3D
 ## Fires a slow arcing cannonball at ground troops and deals splash damage.
 
 const LEVEL_STATS := {
-	1: {"damage": 95, "fire_rate": 2.40, "detect_range": 2.15, "splash_radius": 0.22, "travel_time": 0.82},
-	2: {"damage": 135, "fire_rate": 2.25, "detect_range": 2.40, "splash_radius": 0.26, "travel_time": 0.78},
-	3: {"damage": 185, "fire_rate": 2.10, "detect_range": 2.65, "splash_radius": 0.30, "travel_time": 0.74},
-	4: {"damage": 245, "fire_rate": 1.95, "detect_range": 2.90, "splash_radius": 0.34, "travel_time": 0.70},
+	1: {"damage": 95, "fire_rate": 2.40, "detect_range": 1.433, "min_range": 0.70, "splash_radius": 0.22, "travel_time": 0.82},
+	2: {"damage": 135, "fire_rate": 2.25, "detect_range": 1.600, "min_range": 0.75, "splash_radius": 0.26, "travel_time": 0.78},
+	3: {"damage": 185, "fire_rate": 2.10, "detect_range": 1.767, "min_range": 0.80, "splash_radius": 0.30, "travel_time": 0.74},
+	4: {"damage": 245, "fire_rate": 1.95, "detect_range": 1.933, "min_range": 0.85, "splash_radius": 0.34, "travel_time": 0.70},
 }
 
 const PROJECTILE_SCENE: String = "res://Model/Mortar/mortar_lvl2_projectile.fbx"
@@ -28,12 +28,18 @@ const IMPACT_SFX_VOLUME_DB: float = -1.0
 const IMPACT_SFX_PITCH_JITTER: float = 0.04
 const CAN_TARGET_GROUND: bool = true
 const CAN_TARGET_AIR: bool = false
+const RANGE_VISUAL_HEIGHT: float = 0.012
+const RANGE_VISUAL_ALPHA: float = 0.155
+const DEAD_ZONE_VISUAL_ALPHA: float = 0.185
 
 static var _projectile_scene_res: PackedScene = null
 static var _projectile_scene_checked: bool = false
 static var _projectile_mat: StandardMaterial3D = null
 static var _impact_mat: StandardMaterial3D = null
 static var _ring_mat: StandardMaterial3D = null
+static var _range_outer_mat: StandardMaterial3D = null
+static var _range_dead_mat: StandardMaterial3D = null
+static var _range_edge_mat: StandardMaterial3D = null
 static var _attack_sfx_streams: Array[AudioStream] = []
 static var _attack_sfx_loaded: bool = false
 static var _impact_sfx_streams: Array[AudioStream] = []
@@ -43,7 +49,8 @@ var level: int = 1
 var damage: int = 95
 var ward_bonus_pct: int = 0
 var fire_rate: float = 2.4
-var detect_range: float = 2.15
+var detect_range: float = 1.433
+var min_range: float = 0.70
 var splash_radius: float = 0.22
 var travel_time: float = 0.82
 
@@ -58,6 +65,10 @@ var _pool_ready: bool = false
 var _pool_exhausted_warned: bool = false
 var _attack_sfx_player: AudioStreamPlayer3D = null
 var _impact_sfx_player: AudioStreamPlayer3D = null
+var _range_outer_node: MeshInstance3D = null
+var _range_dead_node: MeshInstance3D = null
+var _range_edge_node: MeshInstance3D = null
+var _range_visuals_visible: bool = false
 
 
 func _ready() -> void:
@@ -68,6 +79,7 @@ func _ready() -> void:
 	call_deferred("_build_pool")
 	call_deferred("_setup_attack_sfx_player")
 	call_deferred("_setup_impact_sfx_player")
+	call_deferred("_setup_range_visuals")
 
 
 func set_level(lvl: int) -> void:
@@ -78,6 +90,13 @@ func set_level(lvl: int) -> void:
 func set_ward_bonus_pct(pct: int) -> void:
 	ward_bonus_pct = maxi(0, pct)
 	_apply_stats()
+
+
+func set_range_visuals_visible(visible: bool) -> void:
+	_range_visuals_visible = visible
+	if visible and (not is_instance_valid(_range_outer_node) or not is_instance_valid(_range_dead_node) or not is_instance_valid(_range_edge_node)):
+		_setup_range_visuals()
+	_update_range_visuals()
 
 
 func _play_victory() -> void:
@@ -99,6 +118,15 @@ func cleanup_defense_visuals() -> void:
 	if is_instance_valid(_impact_sfx_player):
 		_impact_sfx_player.queue_free()
 	_impact_sfx_player = null
+	if is_instance_valid(_range_outer_node):
+		_range_outer_node.queue_free()
+	_range_outer_node = null
+	if is_instance_valid(_range_dead_node):
+		_range_dead_node.queue_free()
+	_range_dead_node = null
+	if is_instance_valid(_range_edge_node):
+		_range_edge_node.queue_free()
+	_range_edge_node = null
 
 
 func _clear_owned_projectiles() -> void:
@@ -127,14 +155,17 @@ func _apply_stats() -> void:
 	damage = ceili(float(s.damage) * multiplier)
 	fire_rate = float(s.fire_rate)
 	detect_range = float(s.detect_range)
+	min_range = float(s.min_range)
 	splash_radius = float(s.splash_radius)
 	travel_time = float(s.travel_time)
+	_update_range_visuals()
 
 
 func _physics_process(delta: float) -> void:
 	delta = BaseTroop.combat_delta(delta)
 	if not _pool_ready:
 		_build_pool()
+	_update_range_visuals()
 
 	_update_projectiles(delta)
 
@@ -150,7 +181,7 @@ func _physics_process(delta: float) -> void:
 		_target_search_timer = 0.0
 		_find_target()
 
-	if _target and BaseTroop.can_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	if _is_valid_mortar_target(_target):
 		if not _is_attacking:
 			_is_attacking = true
 			_fire_timer = fire_rate
@@ -166,10 +197,12 @@ func _physics_process(delta: float) -> void:
 
 func _find_target() -> void:
 	var detect_sq: float = detect_range * detect_range
-	if _target and BaseTroop.can_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	var min_sq: float = min_range * min_range
+	if _is_valid_mortar_target(_target):
 		var dx0: float = global_position.x - _target.global_position.x
 		var dz0: float = global_position.z - _target.global_position.z
-		if dx0 * dx0 + dz0 * dz0 <= detect_sq:
+		var d0_sq: float = dx0 * dx0 + dz0 * dz0
+		if d0_sq >= min_sq and d0_sq <= detect_sq:
 			return
 
 	_target = null
@@ -181,13 +214,15 @@ func _find_target() -> void:
 		var dx: float = my_pos.x - troop.global_position.x
 		var dz: float = my_pos.z - troop.global_position.z
 		var d_sq: float = dx * dx + dz * dz
+		if d_sq < min_sq:
+			continue
 		if d_sq < nearest_dist_sq:
 			nearest_dist_sq = d_sq
 			_target = troop
 
 
 func _fire_at_target(target: Node3D) -> void:
-	if not BaseTroop.can_target_troop(target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	if not _is_valid_mortar_target(target):
 		return
 	var p: Dictionary = _get_pooled_projectile()
 	if p.is_empty():
@@ -219,6 +254,7 @@ func _fire_at_target(target: Node3D) -> void:
 	_play_attack_sfx(start_pos)
 	_record_defense_telemetry("defense_fire", target, {
 		"damage": damage,
+		"min_range": snappedf(min_range, 0.001),
 		"splash_radius": snappedf(splash_radius, 0.001),
 		"projectile_x": snappedf(start_pos.x, 0.001),
 		"projectile_y": snappedf(start_pos.y, 0.001),
@@ -227,6 +263,17 @@ func _fire_at_target(target: Node3D) -> void:
 		"impact_z": snappedf(impact_pos.z, 0.001),
 		"pool_active": _active.size(),
 	})
+
+
+func _is_valid_mortar_target(target: Node3D) -> bool:
+	if not is_instance_valid(target):
+		return false
+	if not BaseTroop.can_target_troop(target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+		return false
+	var dx: float = global_position.x - target.global_position.x
+	var dz: float = global_position.z - target.global_position.z
+	var dist_sq: float = dx * dx + dz * dz
+	return dist_sq >= min_range * min_range and dist_sq <= detect_range * detect_range
 
 
 func _update_projectiles(delta: float) -> void:
@@ -444,6 +491,100 @@ func _ensure_materials() -> void:
 		_ring_mat.emission = Color(1.0, 0.70, 0.20, 0.42)
 		_ring_mat.emission_energy_multiplier = 2.0
 		_ring_mat.albedo_color = Color(1.0, 0.70, 0.20, 0.42)
+	if _range_outer_mat == null:
+		_range_outer_mat = StandardMaterial3D.new()
+		_range_outer_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_range_outer_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_range_outer_mat.no_depth_test = false
+		_range_outer_mat.albedo_color = Color(1.0, 1.0, 1.0, RANGE_VISUAL_ALPHA)
+		_range_outer_mat.emission_enabled = true
+		_range_outer_mat.emission = Color(1.0, 1.0, 1.0, RANGE_VISUAL_ALPHA)
+		_range_outer_mat.emission_energy_multiplier = 0.65
+	if _range_dead_mat == null:
+		_range_dead_mat = StandardMaterial3D.new()
+		_range_dead_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_range_dead_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_range_dead_mat.no_depth_test = false
+		_range_dead_mat.albedo_color = Color(1.0, 0.18, 0.10, DEAD_ZONE_VISUAL_ALPHA)
+		_range_dead_mat.emission_enabled = true
+		_range_dead_mat.emission = Color(1.0, 0.18, 0.10, DEAD_ZONE_VISUAL_ALPHA)
+		_range_dead_mat.emission_energy_multiplier = 0.75
+	if _range_edge_mat == null:
+		_range_edge_mat = StandardMaterial3D.new()
+		_range_edge_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_range_edge_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_range_edge_mat.no_depth_test = false
+		_range_edge_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.92)
+		_range_edge_mat.emission_enabled = true
+		_range_edge_mat.emission = Color(1.0, 1.0, 1.0, 0.92)
+		_range_edge_mat.emission_energy_multiplier = 0.85
+
+
+func _setup_range_visuals() -> void:
+	if is_instance_valid(_range_outer_node) and is_instance_valid(_range_dead_node) and is_instance_valid(_range_edge_node):
+		_update_range_visuals()
+		return
+	_ensure_materials()
+	var scene_root: Node = get_tree().current_scene
+	if scene_root == null:
+		scene_root = self
+	if not is_instance_valid(_range_outer_node):
+		_range_outer_node = _make_range_disc("MortarFireRange", _range_outer_mat)
+		scene_root.add_child(_range_outer_node)
+	if not is_instance_valid(_range_dead_node):
+		_range_dead_node = _make_range_disc("MortarDeadZone", _range_dead_mat)
+		scene_root.add_child(_range_dead_node)
+	if not is_instance_valid(_range_edge_node):
+		_range_edge_node = _make_range_ring("MortarFireRangeEdge", _range_edge_mat)
+		scene_root.add_child(_range_edge_node)
+	_update_range_visuals()
+
+
+func _make_range_disc(node_name: String, mat: Material) -> MeshInstance3D:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 1.0
+	mesh.bottom_radius = 1.0
+	mesh.height = 0.006
+	mesh.radial_segments = 96
+	var node := MeshInstance3D.new()
+	node.name = node_name
+	node.mesh = mesh
+	node.material_override = mat
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.visible = false
+	return node
+
+
+func _make_range_ring(node_name: String, mat: Material) -> MeshInstance3D:
+	var segments: int = 96
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+	for i in range(segments + 1):
+		var a: float = (float(i) / float(segments)) * TAU
+		mesh.surface_add_vertex(Vector3(cos(a), 0.0, sin(a)))
+	mesh.surface_end()
+	var node := MeshInstance3D.new()
+	node.name = node_name
+	node.mesh = mesh
+	node.material_override = mat
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.visible = false
+	return node
+
+
+func _update_range_visuals() -> void:
+	if is_instance_valid(_range_outer_node):
+		_range_outer_node.global_position = Vector3(global_position.x, global_position.y + RANGE_VISUAL_HEIGHT, global_position.z)
+		_range_outer_node.scale = Vector3(detect_range, 1.0, detect_range)
+		_range_outer_node.visible = _range_visuals_visible
+	if is_instance_valid(_range_dead_node):
+		_range_dead_node.global_position = Vector3(global_position.x, global_position.y + RANGE_VISUAL_HEIGHT + 0.002, global_position.z)
+		_range_dead_node.scale = Vector3(min_range, 1.0, min_range)
+		_range_dead_node.visible = _range_visuals_visible
+	if is_instance_valid(_range_edge_node):
+		_range_edge_node.global_position = Vector3(global_position.x, global_position.y + RANGE_VISUAL_HEIGHT + 0.004, global_position.z)
+		_range_edge_node.scale = Vector3(detect_range, 1.0, detect_range)
+		_range_edge_node.visible = _range_visuals_visible
 
 
 func _apply_projectile_material(root: Node) -> void:

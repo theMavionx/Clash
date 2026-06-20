@@ -158,10 +158,10 @@ const DEFENSE_STATS = {
     },
   },
   mortar: {
-    1: { damage: 95, fireRate: 2.40, detectRange: 2.15, projSpeed: 3.0, splashRadius: 0.22 },
-    2: { damage: 135, fireRate: 2.25, detectRange: 2.40, projSpeed: 3.2, splashRadius: 0.26 },
-    3: { damage: 185, fireRate: 2.10, detectRange: 2.65, projSpeed: 3.4, splashRadius: 0.30 },
-    4: { damage: 245, fireRate: 1.95, detectRange: 2.90, projSpeed: 3.6, splashRadius: 0.34 },
+    1: { damage: 95, fireRate: 2.40, detectRange: 1.433, minRange: 0.70, projSpeed: 3.0, splashRadius: 0.22 },
+    2: { damage: 135, fireRate: 2.25, detectRange: 1.600, minRange: 0.75, projSpeed: 3.2, splashRadius: 0.26 },
+    3: { damage: 185, fireRate: 2.10, detectRange: 1.767, minRange: 0.80, projSpeed: 3.4, splashRadius: 0.30 },
+    4: { damage: 245, fireRate: 1.95, detectRange: 1.933, minRange: 0.85, projSpeed: 3.6, splashRadius: 0.34 },
   },
 };
 
@@ -186,9 +186,9 @@ const SKELETON_GUARD = {
 };
 
 // Attack session constraints
-const MAX_SHIPS = 6;
-const TROOPS_PER_SHIP = 15;                     // Lv5 port capacity: 5 * 3
-const MAX_TROOPS = MAX_SHIPS * TROOPS_PER_SHIP; // 90
+const MAX_SHIPS = 3;
+const TROOPS_PER_SHIP = 9;                      // Lv3 port capacity: 3 * 3
+const MAX_TROOPS = MAX_SHIPS * TROOPS_PER_SHIP; // 27
 const SAIL_DELAY_SEC = 3.0;
 const TIME_LIMIT_SEC = 180;
 const LOOT_PERCENT = 0.15;

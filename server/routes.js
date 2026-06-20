@@ -14,6 +14,7 @@ const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
+const { MAX_SHIPS } = require('./combat_defs');
 const { broadcastToPlayer, consumePendingAgentEvents } = require('./websocket');
 const {
   solanaToken2022CollectionId,
@@ -9534,6 +9535,13 @@ function _demonKingWinTokensFromActions(actions, playerId) {
 function _troopSlotCost(name) {
   return _isHeavyTroop(name) ? 2 : 1;
 }
+function _shipLevelForPort(building) {
+  const maxPortLevel = Number(db.BUILDING_DEFS?.port?.max_level || 3);
+  return Math.max(1, Math.min(maxPortLevel, Number(building?.level) || 1));
+}
+function _shipCapacityForPort(building) {
+  return _shipLevelForPort(building) * 3;
+}
 function _appendTroopSlots(shipTroops, troopName) {
   const normalized = _normalizeTroopName(troopName);
   shipTroops.push(_canonicalTroopEntry(troopName));
@@ -9767,7 +9775,7 @@ function _getShipsPayload(playerId) {
   const ports = db.db.prepare('SELECT id, level, ship_troops, ship_troops_template, has_ship FROM buildings WHERE player_id = ? AND type = ?').all(playerId, 'port');
   return ports.filter(p => p.has_ship).map(p => ({
     id: p.id,
-    level: p.level,
+    level: _shipLevelForPort(p),
     ship_troops: JSON.parse(p.ship_troops || '[]'),
     ship_troops_template: JSON.parse(p.ship_troops_template || '[]'),
   }));
@@ -9812,7 +9820,7 @@ router.post('/attack/result', auth, (req, res) => {
       return res.status(403).json({ error: 'No ships deployed' });
     }
   }
-  if (shipActions.length > 5) {
+  if (shipActions.length > MAX_SHIPS) {
     replayWarnings.push(`Too many ships in replay (${shipActions.length})`);
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
       releaseBattleSession('cancelled');
@@ -10209,7 +10217,8 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
     if (building.type !== 'port' || !building.has_ship) throw { status: 400, error: 'No ship at this port' };
 
     const shipTroops = JSON.parse(building.ship_troops || '[]');
-    const capacity = building.level * 3;  // 3x capacity: Lv1=3, Lv2=6, Lv3=9, Lv4=12
+    const shipLevel = _shipLevelForPort(building);
+    const capacity = _shipCapacityForPort(building);  // 3x capacity: Lv1=3, Lv2=6, Lv3=9
     const slotCost = _troopSlotCost(normalizedTroop);
     if (shipTroops.length + slotCost > capacity) throw { status: 400, error: 'Ship is full' };
     const troopEntry = verifiedDemonKing?.troopEntry || _canonicalTroopEntry(troop_name);
@@ -10236,7 +10245,7 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
     db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
-    return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: capacity, resources: updated };
+    return { ship_troops: shipTroops, ship_level: shipLevel, ship_capacity: capacity, resources: updated };
   });
 
   try {
@@ -10271,7 +10280,8 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     const shipTroops = JSON.parse(building.ship_troops || '[]');
     if (slot < 0 || slot >= shipTroops.length) throw { status: 400, error: 'Invalid slot' };
     if (_isSlotFiller(shipTroops[slot])) throw { status: 400, error: 'Cannot replace a reserved heavy-unit slot' };
-    const capacity = building.level * 3;
+    const shipLevel = _shipLevelForPort(building);
+    const capacity = _shipCapacityForPort(building);
     const span = _swapSpanForReplacement(shipTroops, slot, normalizedTroop, capacity);
     if (!span) throw { status: 400, error: 'Not enough ship capacity for this troop' };
     const slotsToReplace = span.end - span.start;
@@ -10305,7 +10315,7 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
-    return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: building.level * 3, resources: updated };
+    return { ship_troops: shipTroops, ship_level: shipLevel, ship_capacity: capacity, resources: updated };
   });
 
   try {
@@ -10350,8 +10360,8 @@ router.post('/buildings/:id/remove-troop', auth, (req, res) => {
     return {
       ship_troops: shipTroops,
       removed_troops: removedTroops,
-      ship_level: building.level,
-      ship_capacity: building.level * 3,
+      ship_level: _shipLevelForPort(building),
+      ship_capacity: _shipCapacityForPort(building),
       resources: updated,
       building_id: building.id,
       requested_building_id: buildingId,
@@ -10373,7 +10383,7 @@ router.get('/ships', auth, (req, res) => {
   const ports = db.db.prepare('SELECT id, level, ship_troops, ship_troops_template, has_ship FROM buildings WHERE player_id = ? AND type = ?').all(req.player.id, 'port');
   const ships = ports.filter(p => p.has_ship).map(p => ({
     id: p.id,
-    level: p.level,
+    level: _shipLevelForPort(p),
     ship_troops: JSON.parse(p.ship_troops || '[]'),
     ship_troops_template: JSON.parse(p.ship_troops_template || '[]'),
   }));
@@ -10522,7 +10532,7 @@ router.post('/reinforce', auth, (req, res) => {
     // Cap to ship capacity to prevent overflow from swap+reinforce combo
     const resultShips = [];
     for (const { port, current, toAdd } of shipsToRestore) {
-      const capacity = port.level * 3;
+      const capacity = _shipCapacityForPort(port);
       const slotsAvailable = Math.max(0, capacity - current.length);
       const restored = [...current, ...toAdd.slice(0, slotsAvailable)];
       const troopsJson = JSON.stringify(restored);
@@ -14106,7 +14116,7 @@ const ADMIN_TH_MAX_COUNT = {
   mine: [1, 2, 3, 3, 4],
   sawmill: [1, 2, 3, 3, 4],
   barn: [1, 1, 1, 1, 1],
-  port: [1, 2, 5, 5, 6],
+  port: [1, 2, 3, 3, 3],
   archer_tower: [1, 2, 3, 3, 3],
   tombstone: [0, 1, 3, 3, 3],
   altar: [1, 1, 1, 1, 1],
