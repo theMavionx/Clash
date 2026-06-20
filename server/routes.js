@@ -14098,21 +14098,23 @@ const ADMIN_MAX_VILLAGE_BUILD_ORDER = [
   'archer_tower',
   'turret',
   'mage_tower',
+  'mortar',
   'port',
 ];
 
 const ADMIN_TH_MAX_COUNT = {
-  mine: [1, 2, 3, 3],
-  sawmill: [1, 2, 3, 3],
-  barn: [1, 1, 1, 1],
-  port: [1, 2, 5, 5],
-  archer_tower: [1, 2, 3, 3],
-  tombstone: [0, 1, 3, 3],
-  altar: [1, 1, 1, 1],
-  turret: [0, 0, 3, 3],
-  storage: [0, 1, 2, 3],
-  mage_tower: [0, 0, 0, 2],
-  town_hall: [1, 1, 1, 1],
+  mine: [1, 2, 3, 3, 4],
+  sawmill: [1, 2, 3, 3, 4],
+  barn: [1, 1, 1, 1, 1],
+  port: [1, 2, 5, 5, 6],
+  archer_tower: [1, 2, 3, 3, 3],
+  tombstone: [0, 1, 3, 3, 3],
+  altar: [1, 1, 1, 1, 1],
+  turret: [0, 0, 3, 3, 3],
+  storage: [0, 1, 2, 3, 4],
+  mage_tower: [0, 0, 0, 2, 2],
+  mortar: [0, 0, 0, 0, 1],
+  town_hall: [1, 1, 1, 1, 1],
 };
 
 function adminMaxBuildingCountForTh(type, townHallLevel) {
@@ -14221,7 +14223,7 @@ router.post('/admin/players/:name/max-village', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
-    const townHallLevel = Math.max(1, Math.min(4, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
+    const townHallLevel = Math.max(1, Math.min(5, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
     const result = db.db.transaction(() => {
       db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
       const added = [];

@@ -7,7 +7,7 @@ extends Node3D
 @export var sail_duration: float = 3.0
 @export var spawn_distance: float = 4.0
 @export var water_node_path: NodePath = "../Water"
-@export var max_ships: int = 5
+@export var max_ships: int = 6
 @export var troop_spawn_delay: float = 0.2
 @export var troop_scale: float = 0.1
 

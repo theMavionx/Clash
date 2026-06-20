@@ -38,6 +38,7 @@ const BOT_RESOURCES_BY_TH = {
   2: { gold: 5400, wood: 6200, ore: 5600 },
   3: { gold: 12000, wood: 14500, ore: 13000 },
   4: { gold: 23000, wood: 28000, ore: 25000 },
+  5: { gold: 42000, wood: 50000, ore: 45000 },
 };
 
 const BOT_BUILDING_SIZES = {
@@ -51,6 +52,7 @@ const BOT_BUILDING_SIZES = {
   storage: [4, 5],
   archer_tower: [3, 3],
   mage_tower: [3, 3],
+  mortar: [2, 2],
 };
 
 const BOT_GRID_SPECS = {

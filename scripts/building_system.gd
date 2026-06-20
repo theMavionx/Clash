@@ -29,11 +29,11 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Mine/1.glb",
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
-		"hp_levels": [1200, 2200, 3800, 6000],
+		"hp_levels": [1200, 2200, 3800, 6000, 9000],
 		"cost": {"gold": 80, "wood": 200},
 		"produces": "ore",
-		"produce_rate": [18, 33, 54, 81],    # per minute per level
-		"produce_max": [200, 400, 800, 1600],  # max stored before collection
+		"produce_rate": [18, 33, 54, 81, 120],    # per minute per level
+		"produce_max": [200, 400, 800, 1600, 3000],  # max stored before collection
 	},
 	"barn": {
 		"name": "Barn",
@@ -56,7 +56,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Port/1.glb", "res://Model/Port/2.glb", "res://Model/Port/3.glb"],
 		"model_scale": 0.25,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1800, 3200, 5500, 8500],
+		"hp_levels": [1800, 3200, 5500, 8500, 12500],
 		"cost": {"gold": 240, "wood": 560, "ore": 480},
 		"ship_cost": {"gold": SHIP_COST_GOLD},
 		"no_outline": true,
@@ -68,11 +68,11 @@ var building_defs: Dictionary = {
 		"height": 0.35,
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
-		"hp_levels": [1200, 2200, 3800, 6000],
+		"hp_levels": [1200, 2200, 3800, 6000, 9000],
 		"cost": {"gold": 80, "ore": 200},
 		"produces": "wood",
-		"produce_rate": [24, 45, 72, 108],
-		"produce_max": [250, 500, 1000, 2000],
+		"produce_rate": [24, 45, 72, 108, 160],
+		"produce_max": [250, 500, 1000, 2000, 3750],
 	},
 	"town_hall": {
 		"name": "Town Hall",
@@ -81,13 +81,13 @@ var building_defs: Dictionary = {
 		"color": Color(0.7, 0.55, 0.2, 0.5),
 		"height": 0.5,
 		"scene": "res://Model/Town_Hall/1.gltf",
-		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb"],
+		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb", "res://Model/Town_Hall/5.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [3500, 8000, 16000, 24000],
+		"hp_levels": [3500, 8000, 16000, 24000, 36000],
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 800, "wood": 2400, "ore": 2000}, 3: {"gold": 3000, "wood": 7000, "ore": 6000}, 4: {"gold": 10000, "wood": 20000, "ore": 17000}},
+		"upgrade_cost": {2: {"gold": 800, "wood": 2400, "ore": 2000}, 3: {"gold": 3000, "wood": 7000, "ore": 6000}, 4: {"gold": 10000, "wood": 20000, "ore": 17000}, 5: {"gold": 26000, "wood": 52000, "ore": 46000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -130,7 +130,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb"],
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
-		"hp_levels": [1400, 2500, 4200, 6500],
+		"hp_levels": [1400, 2500, 4200, 6500, 9500],
 		"cost": {"gold": 140, "wood": 550},
 	},
 	"archer_tower": {
@@ -162,7 +162,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx"],
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
-		"hp_levels": [700, 1200, 2000],
+		"hp_levels": [700, 1200, 2000, 3100],
 		"cost": {"gold": 800, "ore": 1300},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -174,6 +174,45 @@ var building_defs: Dictionary = {
 		"emission_texture": "res://Model/MageTower/mage_tower_emit.png",
 		# Combat: tower_mage.gd is attached to the building node (like turret),
 		# casting magic orbs at troops within its balanced defense range.
+	},
+	"mortar": {
+		"name": "Mortar",
+		"cells": Vector2i(2, 2),
+		"footprint_extra": 0.45,
+		"color": Color(0.6, 0.36, 0.18, 0.5),
+		"height": 0.45,
+		"scene": "res://Model/Mortar/mortar_lvl1.fbx",
+		"scenes": [
+			"res://Model/Mortar/mortar_lvl1.fbx",
+			"res://Model/Mortar/mortar_lvl2.fbx",
+			"res://Model/Mortar/mortar_lvl3.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+		],
+		"model_scale": 0.032,
+		"model_rotation_y": 0.0,
+		"hp_levels": [1700, 2800, 4300, 6200],
+		"cost": {"gold": 600, "wood": 900, "ore": 700},
+		"max_count": 1,
+		"altar_ward_bonus": true,
+		"hp_bar_height": 0.6,
+		"albedo_texture": "res://Model/Mortar/mortar_albedo.png",
+		"emission_texture": "res://Model/Mortar/mortar_emit.png",
+		"construction_scenes": [
+			"res://Model/Mortar/mortar_lvl1_construction.fbx",
+			"res://Model/Mortar/mortar_lvl2_construction.fbx",
+			"res://Model/Mortar/mortar_lvl3_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+		],
+		"projectile_scenes": [
+			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl3_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+		],
+		"test_damage": 245,
+		"test_damage_levels": [95, 135, 185, 245],
+		"test_range": 2.90,
+		"test_reload_sec": 1.95,
 	},
 	"tombstone": {
 		"name": "Tombstone",
@@ -239,12 +278,14 @@ const TH_BASE_CAPACITY: Dictionary = {
 	2: {"gold": 20000, "wood": 20000, "ore": 20000},
 	3: {"gold": 40000, "wood": 40000, "ore": 40000},
 	4: {"gold": 70000, "wood": 70000, "ore": 70000},
+	5: {"gold": 110000, "wood": 110000, "ore": 110000},
 }
 const STORAGE_CAPACITY: Dictionary = {
 	1: {"gold": 15000, "wood": 15000, "ore": 15000},
 	2: {"gold": 20000, "wood": 20000, "ore": 20000},
 	3: {"gold": 30000, "wood": 30000, "ore": 30000},
 	4: {"gold": 50000, "wood": 50000, "ore": 50000},
+	5: {"gold": 75000, "wood": 75000, "ore": 75000},
 }
 
 func _get_resource_caps() -> Dictionary:
@@ -254,7 +295,7 @@ func _get_resource_caps() -> Dictionary:
 		for b in bs.placed_buildings:
 			if b.get("id", "") == "town_hall":
 				th_level = maxi(th_level, b.get("level", 1))
-	var base: Dictionary = TH_BASE_CAPACITY.get(mini(th_level, 4), TH_BASE_CAPACITY[1])
+	var base: Dictionary = TH_BASE_CAPACITY.get(mini(th_level, 5), TH_BASE_CAPACITY[1])
 	var max_gold: int = base.gold
 	var max_wood: int = base.wood
 	var max_ore: int = base.ore
@@ -279,27 +320,30 @@ const TH_UNLOCK: Dictionary = {
 	"tombstone": 2,
 	"turret": 3,
 	"mage_tower": 4,
+	"mortar": 5,
 }
 
-# Max count per building per TH level: [th1, th2, th3, th4]
+# Max count per building per TH level: [th1, th2, th3, th4, th5]
 const TH_MAX_COUNT: Dictionary = {
-	"mine": [1, 2, 3, 3],
-	"sawmill": [1, 2, 3, 3],
-	"barn": [1, 1, 1, 1],
-	"port": [1, 2, 5, 5],
-	"altar": [1, 1, 1, 1],
-	"archer_tower": [1, 2, 3, 3],
-	"tombstone": [0, 1, 3, 3],
-	"turret": [0, 0, 3, 3],
-	"storage": [0, 1, 2, 3],
-	"mage_tower": [0, 0, 0, 2],
-	"town_hall": [1, 1, 1, 1],
+	"mine": [1, 2, 3, 3, 4],
+	"sawmill": [1, 2, 3, 3, 4],
+	"barn": [1, 1, 1, 1, 1],
+	"port": [1, 2, 5, 5, 6],
+	"altar": [1, 1, 1, 1, 1],
+	"archer_tower": [1, 2, 3, 3, 3],
+	"tombstone": [0, 1, 3, 3, 3],
+	"turret": [0, 0, 3, 3, 3],
+	"storage": [0, 1, 2, 3, 4],
+	"mage_tower": [0, 0, 0, 2, 2],
+	"mortar": [0, 0, 0, 0, 1],
+	"town_hall": [1, 1, 1, 1, 1],
 }
 
 const TH_UPGRADE_REQUIRES: Dictionary = {
 	1: ["mine", "sawmill", "barn", "port"],
 	2: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower"],
 	3: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower", "turret"],
+	4: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower", "turret", "mage_tower"],
 }
 
 func _get_th_level() -> int:
@@ -782,6 +826,8 @@ func _refresh_bs_cache() -> void:
 
 
 func _register_test_only_buildings() -> void:
+	if building_defs.has("mortar"):
+		return
 	building_defs["mortar"] = {
 		"name": "Mortar",
 		"cells": Vector2i(2, 2),
@@ -3203,14 +3249,22 @@ func _try_place_building() -> bool:
 		return false
 
 	# Check max_count limit (e.g. Town Hall = 1) — bypassed in test_mode
-	if not test_mode and def.has("max_count"):
-		var count = 0
-		for b in placed_buildings:
-			if b.id == current_building_id:
-				count += 1
-		if count >= def.max_count:
-			print("Max %s limit reached (%d)" % [def.name, def.max_count])
-			return false
+	if not test_mode:
+		var max_count: int = -1
+		if TH_MAX_COUNT.has(current_building_id):
+			var limits: Array = TH_MAX_COUNT[current_building_id]
+			max_count = int(limits[clampi(_get_th_level() - 1, 0, limits.size() - 1)])
+		elif def.has("max_count"):
+			max_count = int(def.max_count)
+		if max_count >= 0:
+			var count: int = 0
+			for bs in _building_systems:
+				for b in bs.placed_buildings:
+					if b.get("id", "") == current_building_id:
+						count += 1
+			if count >= max_count:
+				print("Max %s limit reached (%d)" % [def.name, max_count])
+				return false
 
 	# Save placement params before async call
 	var place_id = current_building_id

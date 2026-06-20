@@ -396,7 +396,7 @@ func _spawn_port_ship(b_override: Dictionary = {}) -> void:
 	# return an unstable yaw, so derive the dock yaw from the stable grid parent.
 	var dock_yaw: float = _get_port_dock_yaw(port_node)
 	var forward = Vector3(sin(dock_yaw), 0, cos(dock_yaw))
-	var ship_dist = [0.35, 0.35, 0.4, 0.57][clampi(port_level, 0, 3)]
+	var ship_dist = [0.35, 0.40, 0.48, 0.57, 0.64][clampi(port_level - 1, 0, 4)]
 	ship.global_position = port_pos + forward * ship_dist
 	ship.global_position.y = bs._water_y - 0.03
 	ship.global_rotation = Vector3(0.0, dock_yaw + PI * 0.5, 0.0)

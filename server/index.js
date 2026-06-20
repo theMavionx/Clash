@@ -1327,13 +1327,14 @@ const ADMIN_BUILDING_TOOL_DEFS = [
   { type: 'altar', label: 'Altar', max: 1 },
   { type: 'archer_tower', label: 'Archer Tower', max: 5 },
   { type: 'barn', label: 'Barn', max: 4 },
-  { type: 'mage_tower', label: 'Mage Tower', max: 3 },
-  { type: 'mine', label: 'Mine', max: 4 },
-  { type: 'port', label: 'Port', max: 4 },
-  { type: 'sawmill', label: 'Sawmill', max: 4 },
-  { type: 'storage', label: 'Storage', max: 4 },
+  { type: 'mage_tower', label: 'Mage Tower', max: 4 },
+  { type: 'mine', label: 'Mine', max: 5 },
+  { type: 'mortar', label: 'Mortar', max: 4 },
+  { type: 'port', label: 'Port', max: 5 },
+  { type: 'sawmill', label: 'Sawmill', max: 5 },
+  { type: 'storage', label: 'Storage', max: 5 },
   { type: 'tombstone', label: 'Tombstone', max: 4 },
-  { type: 'town_hall', label: 'Town Hall', max: 4 },
+  { type: 'town_hall', label: 'Town Hall', max: 5 },
   { type: 'turret', label: 'Turret', max: 5 },
 ];
 const ADMIN_BUILDING_TYPES = ADMIN_BUILDING_TOOL_DEFS.map((b) => b.type);
@@ -1717,7 +1718,7 @@ function renderBuildingTools() {
   const resourceBox = document.getElementById('localResourceRows');
   const trophyBox = document.getElementById('localTrophyRows');
   if (!maxBox || !rowsBox || !resourceBox || !trophyBox) return;
-  maxBox.innerHTML = [1, 2, 3, 4].map((level) =>
+  maxBox.innerHTML = [1, 2, 3, 4, 5].map((level) =>
     '<button class="btn" onclick="buildMaxVillage(' + level + ')">' + level + '</button>'
   ).join('');
   resourceBox.innerHTML = ADMIN_RESOURCE_TOOL_DEFS.map((def) => {
@@ -1812,11 +1813,11 @@ async function buildMaxVillage(level) {
 
 async function maxEverything() {
   if (!localToolsPlayer) return;
-  if (!confirm('Clear buildings, build max TH4 village, and fill all resources for ' + localToolsPlayer + '?')) return;
+  if (!confirm('Clear buildings, build max TH5 village, and fill all resources for ' + localToolsPlayer + '?')) return;
   setLocalToolsStatus('Building max village...');
   try {
     const village = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/max-village', {
-      town_hall_level: 4,
+      town_hall_level: 5,
     });
     const resources = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/add-resources', {
       gold: 999999999,

@@ -38,6 +38,7 @@ const DESC_MAP = {
   archer_tower: 'Ranged defense',
   archertower: 'Ranged defense',
   mage_tower: 'Casts splash magic at enemies',
+  mortar: 'Fires arcing splash shells',
   altar: 'Onchain base boost',
 };
 
@@ -51,6 +52,7 @@ const CATEGORY_MAP = {
   archer_tower: 'Defense',
   archertower: 'Defense',
   mage_tower: 'Defense',
+  mortar: 'Defense',
   altar: 'Economy',
   port: 'Military',
   town_hall: 'Economy',
@@ -68,6 +70,7 @@ const THUMBNAIL_MAP = {
   archer_tower: imgArcherTower,
   archertower: imgArcherTower,
   mage_tower: imgMageTower,
+  mortar: imgTurret,
   storage: imgStorage,
   altar: imgAltar,
 };
@@ -79,6 +82,7 @@ const THUMBNAIL_SCALE_MAP = {
   archer_tower: 1.4,
   archertower: 1.4,
   mage_tower: 1.2,
+  mortar: 1.15,
   altar: 1.28,
 };
 

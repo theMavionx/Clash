@@ -801,6 +801,20 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         _searchTimer: 0,
       });
     }
+    if (b.type === 'mortar') {
+      const mortarLevel = Math.max(1, Math.min(Number(b.level) || 1, 4));
+      const s = DEFENSE_STATS.mortar[mortarLevel] || DEFENSE_STATS.mortar[1];
+      defenses.push({
+        buildingId: b.id, type: 'mortar',
+        damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
+        projSpeed: s.projSpeed,
+        splashRadius: s.splashRadius,
+        targetGround: true, targetAir: false,
+        x: b.x, z: b.z,
+        timer: 0, isAttacking: false, targetId: null,
+        _searchTimer: 0,
+      });
+    }
     if (b.type === 'tombstone') {
       const guardCount = b.level || 1;
       const guardLevel = Math.max(1, Math.min(4, Number(b.level) || 1));
@@ -1116,6 +1130,48 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           z: Math.round(target.z * 1000) / 1000,
         });
       }
+      if (Number(p.splashRadius) > 0) {
+        const splashRadius = Math.max(0, Number(p.splashRadius) || 0);
+        const splashSq = splashRadius * splashRadius;
+        for (const other of aliveTroops) {
+          if (!other || other.id === target.id || other.hp <= 0) continue;
+          if (!canDefenseTargetTroop({ targetGround: true, targetAir: false }, other)) continue;
+          const dx = target.x - other.x;
+          const dz = target.z - other.z;
+          const distSq = dx * dx + dz * dz;
+          if (distSq > splashSq) continue;
+          const dist = Math.sqrt(distSq);
+          const falloff = 1.0 - Math.min(1, dist / Math.max(0.001, splashRadius)) * 0.45;
+          const splashDamage = Math.max(1, Math.round(p.damage * falloff));
+          const splashHpBefore = other.hp;
+          other.hp -= splashDamage;
+          traceEvent('defense_splash_hit', {
+            defenseType: p.defenseType,
+            buildingId: p.ownerRef?.id ?? null,
+            targetTroopId: other.id,
+            replayOrder: other.replayOrder ?? null,
+            targetTroop: other.type,
+            damage: splashDamage,
+            hpBefore: splashHpBefore,
+            hpAfter: other.hp,
+            splashRadius,
+            distance: Math.round(dist * 1000) / 1000,
+            x: Math.round(other.x * 1000) / 1000,
+            z: Math.round(other.z * 1000) / 1000,
+          });
+          if (other.hp <= 0) {
+            traceEvent('troop_death', {
+              troopId: other.id,
+              replayOrder: other.replayOrder ?? null,
+              troop: other.type,
+              damage: splashDamage,
+              hp: other.hp,
+              x: Math.round(other.x * 1000) / 1000,
+              z: Math.round(other.z * 1000) / 1000,
+            });
+          }
+        }
+      }
     }, (p, reason) => {
       traceEvent('defense_projectile_lost_target', {
         reason,
@@ -1282,6 +1338,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           defenseType: d.type,
           ownerRef: bld,
           targetRef: currentTarget, speed: d.projSpeed, damage: d.damage,
+          splashRadius: d.splashRadius || 0,
           isBuilding: false,
           hitDistSq: d.type === 'turret' ? TURRET_HIT_DIST_SQ : PROJ_HIT_DIST_SQ,
         });

@@ -1592,8 +1592,8 @@ try {
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
-  mine:    { resource: 'ore',  rate: [18, 33, 54, 81], max: [200, 400, 800, 1600] },    // per minute
-  sawmill: { resource: 'wood', rate: [24, 45, 72, 108], max: [250, 500, 1000, 2000] },
+  mine:    { resource: 'ore',  rate: [18, 33, 54, 81, 120], max: [200, 400, 800, 1600, 3000] },    // per minute
+  sawmill: { resource: 'wood', rate: [24, 45, 72, 108, 160], max: [250, 500, 1000, 2000, 3750] },
 };
 
 // ---------- Prepared Statements ----------
@@ -2784,21 +2784,23 @@ const TH_UNLOCK = {
   tombstone: 2,  // unlocked at TH2
   turret:    3,  // unlocked at TH3
   mage_tower: 4, // unlocked at TH4
+  mortar:    5,  // unlocked at TH5
 };
 
-// Max count per building type PER TH level: { type: [th1, th2, th3, th4] }
+// Max count per building type PER TH level: { type: [th1, th2, th3, th4, th5] }
 const TH_MAX_COUNT = {
-  mine:         [1, 2, 3, 3],
-  sawmill:      [1, 2, 3, 3],
-  barn:         [1, 1, 1, 1],
-  port:         [1, 2, 5, 5],
-  altar:        [1, 1, 1, 1],
-  archer_tower: [1, 2, 3, 3],
-  tombstone:    [0, 1, 3, 3],  // unlocked at TH2
-  turret:       [0, 0, 3, 3],  // unlocked at TH3
-  storage:      [0, 1, 2, 3],  // unlocked at TH2
-  mage_tower:   [0, 0, 0, 2],  // unlocked at TH4
-  town_hall:    [1, 1, 1, 1],
+  mine:         [1, 2, 3, 3, 4],
+  sawmill:      [1, 2, 3, 3, 4],
+  barn:         [1, 1, 1, 1, 1],
+  port:         [1, 2, 5, 5, 6],
+  altar:        [1, 1, 1, 1, 1],
+  archer_tower: [1, 2, 3, 3, 3],
+  tombstone:    [0, 1, 3, 3, 3],  // unlocked at TH2
+  turret:       [0, 0, 3, 3, 3],  // unlocked at TH3
+  storage:      [0, 1, 2, 3, 4],  // unlocked at TH2
+  mage_tower:   [0, 0, 0, 2, 2],  // unlocked at TH4
+  mortar:       [0, 0, 0, 0, 1],  // unlocked at TH5
+  town_hall:    [1, 1, 1, 1, 1],
 };
 
 // Required buildings to upgrade Town Hall (all must be at TH's current level)
@@ -2806,23 +2808,25 @@ const TH_UPGRADE_REQUIRES = {
   1: ['mine', 'sawmill', 'barn', 'port'],
   2: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower'],
   3: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower', 'turret'],
+  4: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower'],
 };
 
 const BUILDING_DEFS = {
   town_hall: {
-    size: [4, 4], max_level: 4,
-    hp_levels: [3500, 8000, 16000, 24000],
+    size: [4, 4], max_level: 5,
+    hp_levels: [3500, 8000, 16000, 24000, 36000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
       2: { gold: 800, wood: 2400, ore: 2000 },
       3: { gold: 3000, wood: 7000, ore: 6000 },
       4: { gold: 10000, wood: 20000, ore: 17000 },
+      5: { gold: 26000, wood: 52000, ore: 46000 },
     },
     max_count: 1,
   },
   mine: {
-    size: [3, 3], max_level: 4,
-    hp_levels: [1200, 2200, 3800, 6000],
+    size: [3, 3], max_level: 5,
+    hp_levels: [1200, 2200, 3800, 6000, 9000],
     cost: { gold: 80, wood: 200, ore: 0 },
     max_count: 4,
   },
@@ -2833,10 +2837,10 @@ const BUILDING_DEFS = {
     max_count: 1,
   },
   port: {
-    size: [4, 3], max_level: 4,
-    hp_levels: [1800, 3200, 5500, 8500],
+    size: [4, 3], max_level: 5,
+    hp_levels: [1800, 3200, 5500, 8500, 12500],
     cost: { gold: 240, wood: 560, ore: 480 },
-    max_count: 2,
+    max_count: 6,
   },
   altar: {
     size: [3, 3], max_level: 1,
@@ -2847,8 +2851,8 @@ const BUILDING_DEFS = {
     shop_sku: 'altar',
   },
   sawmill: {
-    size: [3, 3], max_level: 4,
-    hp_levels: [1200, 2200, 3800, 6000],
+    size: [3, 3], max_level: 5,
+    hp_levels: [1200, 2200, 3800, 6000, 9000],
     cost: { gold: 80, wood: 0, ore: 200 },
     max_count: 4,
   },
@@ -2865,10 +2869,10 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   storage: {
-    size: [4, 5], max_level: 4,
-    hp_levels: [1400, 2500, 4200, 6500],
+    size: [4, 5], max_level: 5,
+    hp_levels: [1400, 2500, 4200, 6500, 9500],
     cost: { gold: 140, wood: 550, ore: 0 },
-    max_count: 3,
+    max_count: 4,
   },
   archer_tower: {
     size: [3, 3], max_level: 5,
@@ -2877,10 +2881,16 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   mage_tower: {
-    size: [3, 3], max_level: 3,
-    hp_levels: [700, 1200, 2000],
+    size: [3, 3], max_level: 4,
+    hp_levels: [700, 1200, 2000, 3100],
     cost: { gold: 800, wood: 0, ore: 1300 },
     max_count: 2,
+  },
+  mortar: {
+    size: [2, 2], max_level: 4,
+    hp_levels: [1700, 2800, 4300, 6200],
+    cost: { gold: 600, wood: 900, ore: 700 },
+    max_count: 1,
   },
 };
 
@@ -2990,13 +3000,13 @@ function cleanupOldBotTargets() {
 }
 
 function virtualBotCandidatesForProfile(attackPower, profile) {
-  const attackerTh = Math.max(1, Math.min(4, Number(attackPower.town_hall_level || 1)));
+  const attackerTh = Math.max(1, Math.min(5, Number(attackPower.town_hall_level || 1)));
   const minTh = profile.recovery_level > 0 ? Math.max(1, attackerTh - 1) : Math.max(1, attackerTh - 1);
   const maxTh = profile.recovery_level > 0
     ? attackerTh
     : profile.selection_reason === 'strong_player'
-      ? Math.min(4, attackerTh + 1)
-      : Math.min(4, attackerTh + 1);
+      ? Math.min(5, attackerTh + 1)
+      : Math.min(5, attackerTh + 1);
   const allowedDifficulties = profile.recovery_level > 0
     ? new Set(['easy', 'normal'])
     : profile.selection_reason === 'strong_player'
@@ -3138,7 +3148,7 @@ const ALTAR_SKILL_DEFS = {
   },
 };
 
-const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone']);
+const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar']);
 
 const DEMON_KING_UPGRADE_WINS = {
   2: 1000,
@@ -3162,16 +3172,17 @@ const TROPHY_WIN = 30;
 const TROPHY_LOSS = 15;  // defender loses this on defeat
 
 const TROPHY_TABLE = {
-  town_hall: [50, 120, 250, 450],
-  mine:      [10, 25, 50, 90],
+  town_hall: [50, 120, 250, 450, 720],
+  mine:      [10, 25, 50, 90, 145],
   barn:      [10, 25, 50, 90],
-  port:      [15, 35, 70, 125],
-  sawmill:   [10, 25, 50, 90],
+  port:      [15, 35, 70, 125, 195],
+  sawmill:   [10, 25, 50, 90, 145],
   turret:    [20, 45, 90, 160],
   tombstone: [5, 10, 20, 40],
-  storage:      [10, 25, 50, 90],
+  storage:      [10, 25, 50, 90, 145],
   archer_tower: [15, 35, 70, 125, 200],
-  mage_tower:   [20, 45, 90],
+  mage_tower:   [20, 45, 90, 145],
+  mortar:       [30, 65, 125, 210],
 };
 
 // ---------- Helper Functions ----------
@@ -3705,6 +3716,7 @@ const TH_BASE_CAPACITY = {
   2: { gold: 20000, wood: 20000, ore: 20000 },
   3: { gold: 40000, wood: 40000, ore: 40000 },
   4: { gold: 70000, wood: 70000, ore: 70000 },
+  5: { gold: 110000, wood: 110000, ore: 110000 },
 };
 
 // Additional capacity per Storage building per level
@@ -3713,6 +3725,7 @@ const STORAGE_CAPACITY = {
   2: { gold: 20000, wood: 20000, ore: 20000 },
   3: { gold: 30000, wood: 30000, ore: 30000 },
   4: { gold: 50000, wood: 50000, ore: 50000 },
+  5: { gold: 75000, wood: 75000, ore: 75000 },
 };
 
 function getResourceCaps(playerId) {
@@ -3722,7 +3735,7 @@ function getResourceCaps(playerId) {
   for (const b of buildings) {
     if (b.type === 'town_hall') thLevel = b.level;
   }
-  const base = TH_BASE_CAPACITY[Math.min(thLevel, 4)] || TH_BASE_CAPACITY[1];
+  const base = TH_BASE_CAPACITY[Math.min(thLevel, 5)] || TH_BASE_CAPACITY[1];
   let maxGold = base.gold;
   let maxWood = base.wood;
   let maxOre = base.ore;
@@ -4593,7 +4606,7 @@ function computeAttackPower(playerId) {
     const troops = safeJsonArray(port.ship_troops);
     if (troops.length === 0) continue;
     shipCount += 1;
-    const portLevel = clampMatchNumber(port.level, 1, 4, 1);
+    const portLevel = clampMatchNumber(port.level, 1, 5, 1);
     shipCapacity += portLevel * 3;
     power += 120 + portLevel * 90;
     for (const troop of troops) {
@@ -4632,6 +4645,11 @@ function defensePowerForBuilding(building) {
     const stats = DEFENSE_STATS.mage_tower[level] || DEFENSE_STATS.mage_tower[1];
     const dps = (Number(stats.maxDamage || stats.damage) || 0) / Math.max(0.1, Number(stats.tickRate || stats.fireRate) || 1);
     return dps * 24 + (Number(stats.detectRange) || 0) * 170;
+  }
+  if (type === 'mortar') {
+    const stats = DEFENSE_STATS.mortar[level] || DEFENSE_STATS.mortar[1];
+    const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
+    return dps * 30 + (Number(stats.detectRange) || 0) * 165 + (Number(stats.splashRadius) || 0) * 360;
   }
   if (type === 'tombstone') {
     const stats = SKELETON_GUARD.levels?.[level] || SKELETON_GUARD;

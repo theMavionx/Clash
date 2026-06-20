@@ -493,11 +493,11 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
         <div className="admin-card">
           <div className="admin-card-head"><div><div className="admin-card-title">Village Presets</div><div className="admin-card-sub">Server-side building tools with auto placement.</div></div></div>
           <div className="admin-card-body admin-filter-row">
-            {[1, 2, 3, 4].map((level) => (
+            {[1, 2, 3, 4, 5].map((level) => (
               <button className="admin-btn" key={level} onClick={() => run(`Max village TH${level}`, () => adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: level }))}>TH {level}</button>
             ))}
             <button className="admin-btn green" onClick={() => run('Max everything', async () => {
-              await adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: 4 });
+              await adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: 5 });
               return adminPost(`/admin/players/${encodeURIComponent(player.name)}/add-resources`, { gold: 999999999, wood: 999999999, ore: 999999999 });
             })}>Max everything</button>
           </div>

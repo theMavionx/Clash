@@ -27,16 +27,17 @@ const ACTIVE_ROSTER = new Set([...CORE_ROSTER, ...PREMIUM_DEFERRED_ROSTER]);
 const SLOT_FILLER = '_SLOT_FILLER_';
 
 const BUILDING_DEFS = {
-  town_hall: { size: [4, 4], hp_levels: [3500, 8000, 16000, 24000] },
-  mine: { size: [3, 3], hp_levels: [1200, 2200, 3800, 6000] },
+  town_hall: { size: [4, 4], hp_levels: [3500, 8000, 16000, 24000, 36000] },
+  mine: { size: [3, 3], hp_levels: [1200, 2200, 3800, 6000, 9000] },
   barn: { size: [4, 3], hp_levels: [2000, 3500, 6000, 9500] },
-  port: { size: [4, 3], hp_levels: [1800, 3200, 5500, 8500] },
-  sawmill: { size: [3, 3], hp_levels: [1200, 2200, 3800, 6000] },
+  port: { size: [4, 3], hp_levels: [1800, 3200, 5500, 8500, 12500] },
+  sawmill: { size: [3, 3], hp_levels: [1200, 2200, 3800, 6000, 9000] },
   turret: { size: [2, 2], hp_levels: [900, 1600, 2800, 4500] },
   tombstone: { size: [3, 3], hp_levels: [1000, 1500, 2000, 2700] },
-  storage: { size: [4, 5], hp_levels: [1400, 2500, 4200, 6500] },
+  storage: { size: [4, 5], hp_levels: [1400, 2500, 4200, 6500, 9500] },
   archer_tower: { size: [3, 3], hp_levels: [800, 1500, 2500, 3800, 5600] },
-  mage_tower: { size: [3, 3], hp_levels: [700, 1200, 2000] },
+  mage_tower: { size: [3, 3], hp_levels: [700, 1200, 2000, 3100] },
+  mortar: { size: [2, 2], hp_levels: [1700, 2800, 4300, 6200] },
 };
 
 function loadVerifierWithoutDb() {
@@ -235,7 +236,7 @@ function validateRoster(name, loadouts) {
 
 function matchedLayout(th) {
   const b = buildingFactory();
-  const level = Math.max(1, Math.min(4, th));
+  const level = Math.max(1, Math.min(5, th));
   const buildings = [
     b('town_hall', level, 11, 11),
     b('mine', level, 7, 11),
@@ -273,6 +274,23 @@ function matchedLayout(th) {
       b('mage_tower', 3, 8, 10),
       b('mage_tower', 3, 16, 10),
       b('tombstone', 3, 3, 19),
+    );
+  }
+
+  if (th >= 5) {
+    for (const building of buildings) {
+      if (building.type === 'mage_tower') {
+        building.level = 4;
+        building.hp = BUILDING_DEFS.mage_tower.hp_levels[3];
+        building.max_hp = BUILDING_DEFS.mage_tower.hp_levels[3];
+      }
+    }
+    buildings.push(
+      b('mine', 5, 1, 14),
+      b('sawmill', 5, 21, 12),
+      b('port', 5, 11, 22),
+      b('storage', 5, 20, 20),
+      b('mortar', 4, 12, 3),
     );
   }
 
@@ -351,7 +369,7 @@ function standardMix(total, demonLevel = null) {
 
 function scenarioLoadouts(kind, options = {}) {
   const ships = options.ships || 5;
-  const shipLevel = Math.max(1, Math.min(4, Number(options.shipLevel || options.attackerTh || options.level || 1)));
+  const shipLevel = Math.max(1, Math.min(5, Number(options.shipLevel || options.attackerTh || options.level || 1)));
   const slotsPerShip = Math.max(1, Math.min(TROOPS_PER_SHIP, shipLevel * 3));
   const slots = ships * slotsPerShip;
   const level = options.level || 1;
@@ -410,6 +428,16 @@ function smokeScenarios() {
       loadouts: scenarioLoadouts('standard', { ships: 5, shipLevel: 4 }),
       spawn: 'north',
       tags: ['matched'],
+    },
+    {
+      name: 'TH5 matched mixed roster',
+      defenderTh: 5,
+      attackerTh: 5,
+      level: 5,
+      defense: matchedLayout(5),
+      loadouts: scenarioLoadouts('standard', { ships: 6, shipLevel: 5 }),
+      spawn: 'north',
+      tags: ['matched', 'th5'],
     },
     {
       name: 'All Archer spam into TH3',
@@ -558,18 +586,18 @@ const HEAVY_LAYOUT_TARGET = {
 };
 
 const EXPECTED_BUCKET_COUNTS = {
-  same_th_mixed: 24,
-  spam: 24,
-  strong_comp: 24,
-  lower_vs_higher: 20,
-  higher_vs_lower: 20,
+  same_th_mixed: 32,
+  spam: 32,
+  strong_comp: 32,
+  lower_vs_higher: 28,
+  higher_vs_lower: 28,
   heavy_defense: 30,
 };
 
-const SHIPS_BY_TH = { 1: 1, 2: 2, 3: 4, 4: 5 };
+const SHIPS_BY_TH = { 1: 1, 2: 2, 3: 4, 4: 5, 5: 6 };
 const BATCH_SPAWNS = ['south', 'north', 'west', 'ring'];
 const HEAVY_SPAWNS = ['south', 'north', 'west', 'east', 'ring'];
-const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'mage_tower', 'tombstone']);
+const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'mage_tower', 'tombstone', 'mortar']);
 
 function clampGrid(value) {
   return Math.max(1, Math.min(23, Math.round(Number(value) || 1)));
@@ -631,7 +659,7 @@ function defenseLayout(defenderTh, layoutVariant) {
 }
 
 function loadoutOptions(attackerTh, loadoutKind) {
-  const th = Math.max(1, Math.min(4, Number(attackerTh) || 1));
+  const th = Math.max(1, Math.min(5, Number(attackerTh) || 1));
   return {
     ships: SHIPS_BY_TH[th] || 1,
     shipLevel: th,
@@ -672,7 +700,7 @@ function makeBatchScenario({ bucket, defenderTh, attackerTh, layoutVariant = 'st
 
 function sameThMixedCases() {
   const cases = [];
-  for (const th of [2, 3, 4]) {
+  for (const th of [2, 3, 4, 5]) {
     for (const spawn of BATCH_SPAWNS) {
       for (const layoutVariant of ['standard', 'anti_south']) {
         cases.push(makeBatchScenario({
@@ -692,7 +720,7 @@ function sameThMixedCases() {
 function spamCases() {
   const cases = [];
   const layoutBySpawn = { south: 'anti_south', north: 'standard', west: 'compact', ring: 'spread' };
-  for (const th of [2, 3, 4]) {
+  for (const th of [2, 3, 4, 5]) {
     for (const spawn of BATCH_SPAWNS) {
       for (const loadoutKind of ['archer_spam', 'mage_burst']) {
         cases.push(makeBatchScenario({
@@ -712,7 +740,7 @@ function spamCases() {
 function strongCompCases() {
   const cases = [];
   const layoutBySpawn = { south: 'standard', north: 'standard', west: 'spread', ring: 'anti_south' };
-  for (const th of [2, 3, 4]) {
+  for (const th of [2, 3, 4, 5]) {
     for (const spawn of BATCH_SPAWNS) {
       for (const loadoutKind of ['knight_archer', 'knight_mage']) {
         cases.push(makeBatchScenario({
@@ -736,6 +764,8 @@ function lowerVsHigherCases() {
     [2, 3],
     [2, 4],
     [3, 4],
+    [3, 5],
+    [4, 5],
   ];
   const cases = [];
   for (const [attackerTh, defenderTh] of pairs) {
@@ -760,6 +790,8 @@ function higherVsLowerCases() {
     [3, 2],
     [4, 2],
     [4, 3],
+    [5, 3],
+    [5, 4],
   ];
   const cases = [];
   for (const [attackerTh, defenderTh] of pairs) {
