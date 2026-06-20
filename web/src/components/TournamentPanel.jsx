@@ -279,7 +279,7 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
           {lucky.require_nft && <div>Requires {required || 'Dragon or Demon King'}</div>}
           {lucky.my_tickets !== undefined && (
             <div>
-              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume | {fmt(lucky.my_attack_wins || 0)} wins | {fmt(lucky.my_tickets || 0)}/{fmt(lucky.max_tickets || 0)} tickets
+              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume | {fmt(luckyCountedAttackWins(lucky, lucky.my_attack_wins))} wins | {fmt(lucky.my_tickets || 0)}/{fmt(lucky.max_tickets || 0)} tickets
               {lucky.my_reason && lucky.my_reason !== 'eligible' ? ` | ${String(lucky.my_reason).replace(/_/g, ' ')}` : ''}
             </div>
           )}
@@ -291,6 +291,14 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
       )}
     </div>
   );
+}
+
+function luckyCountedAttackWins(lucky, rawWins) {
+  const wins = Math.max(0, Math.floor(Number(rawWins || 0) || 0));
+  const maxTickets = Math.max(0, Math.floor(Number(lucky?.max_tickets || 0) || 0));
+  const winsPerTicket = Math.max(1, Math.floor(Number(lucky?.attack_wins_per_ticket || 1) || 1));
+  if (maxTickets <= 0) return wins;
+  return Math.min(wins, maxTickets * winsPerTicket);
 }
 
 function LuckyRaiderPanel({ t, schedule }) {
@@ -327,7 +335,7 @@ function LuckyRaiderPanel({ t, schedule }) {
 
       <div style={S.luckyGrid}>
         <Stat label="Your tickets" value={`${fmt(lucky.my_tickets || 0)} / ${fmt(lucky.max_tickets || 0)}`} />
-        <Stat label="Today wins" value={fmt(lucky.my_attack_wins || 0)} />
+        <Stat label="Today wins" value={fmt(luckyCountedAttackWins(lucky, lucky.my_attack_wins))} />
         <Stat label="Today volume" value={fmtUsdWhole(lucky.my_volume_usd || 0)} />
         <Stat label="Winners" value={fmt(lucky.winner_count || 1)} />
       </div>
@@ -348,7 +356,7 @@ function LuckyRaiderPanel({ t, schedule }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={S.luckyEntryName}>{entry.name || shortWallet(entry.wallet) || 'Player'}</div>
               <div style={S.luckyEntryMeta}>
-                {fmt(entry.attack_wins || 0)} wins | {fmtUsdWhole(entry.volume_usd || 0)} volume
+                {fmt(luckyCountedAttackWins(lucky, entry.attack_wins))} wins | {fmtUsdWhole(entry.volume_usd || 0)} volume
                 {entry.reason && entry.reason !== 'eligible' ? ` | ${String(entry.reason).replace(/_/g, ' ')}` : ''}
               </div>
             </div>
