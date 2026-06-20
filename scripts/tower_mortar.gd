@@ -45,8 +45,6 @@ var _target: Node3D = null
 var _target_search_timer: float = 0.0
 var _fire_timer: float = 0.0
 var _is_attacking: bool = false
-var _visual_model: Node3D = null
-var _visual_base_rotation_y: float = 0.0
 var _pool: Array[Dictionary] = []
 var _active: Array[Dictionary] = []
 var _active_fx: Array[Node] = []
@@ -59,7 +57,6 @@ func _ready() -> void:
 	_apply_stats()
 	_ensure_materials()
 	_preload_attack_sfx()
-	call_deferred("_find_visual_model")
 	call_deferred("_build_pool")
 	call_deferred("_setup_attack_sfx_player")
 
@@ -67,8 +64,6 @@ func _ready() -> void:
 func set_level(lvl: int) -> void:
 	level = clampi(lvl, 1, LEVEL_STATS.size())
 	_apply_stats()
-	_visual_model = null
-	call_deferred("_find_visual_model")
 
 
 func set_ward_bonus_pct(pct: int) -> void:
@@ -142,7 +137,6 @@ func _physics_process(delta: float) -> void:
 		_find_target()
 
 	if _target and BaseTroop.can_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
-		_face_target(_target.global_position)
 		if not _is_attacking:
 			_is_attacking = true
 			_fire_timer = fire_rate
@@ -365,28 +359,6 @@ func _muzzle_position(target_pos: Vector3) -> Vector3:
 		dir = dir.normalized()
 	var muzzle_y: float = MUZZLE_HEIGHTS[clampi(level - 1, 0, MUZZLE_HEIGHTS.size() - 1)]
 	return global_position + Vector3(0, muzzle_y, 0) + dir * 0.08
-
-
-func _face_target(target_pos: Vector3) -> void:
-	if not is_instance_valid(_visual_model):
-		_find_visual_model()
-	if not is_instance_valid(_visual_model):
-		return
-	var diff: Vector3 = target_pos - global_position
-	diff.y = 0.0
-	if diff.length_squared() <= 0.0001:
-		return
-	var y_angle: float = atan2(diff.x, diff.z)
-	_visual_model.rotation.y = _visual_base_rotation_y + y_angle
-
-
-func _find_visual_model() -> void:
-	for child in get_children():
-		if child is Node3D and child.has_meta("building_visual_model"):
-			_visual_model = child as Node3D
-			_visual_base_rotation_y = _visual_model.rotation.y
-			return
-	_visual_model = null
 
 
 func _spawn_impact_fx(pos: Vector3, radius: float) -> void:
