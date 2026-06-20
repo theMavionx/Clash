@@ -3379,6 +3379,113 @@ function luckyRaiderTicketState(cfg, volume, attackWins) {
   };
 }
 
+function sqlDateStringFromMs(ms) {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function luckyRaiderDayWindow(t, dayInput) {
+  const day = normalizeDailyPoolDay(dayInput);
+  let startMs = Date.parse(`${day}T00:00:00Z`);
+  let endMs = Date.parse(`${addUtcDays(day, 1)}T00:00:00Z`);
+  const tournamentStartMs = sqlDateMs(t?.start_at);
+  const tournamentEndMs = sqlDateMs(t?.end_at);
+  if (Number.isFinite(tournamentStartMs)) startMs = Math.max(startMs, tournamentStartMs);
+  if (Number.isFinite(tournamentEndMs)) endMs = Math.min(endMs, tournamentEndMs);
+  if (!Number.isFinite(startMs)) startMs = Date.parse(`${day}T00:00:00Z`);
+  if (!Number.isFinite(endMs) || endMs < startMs) endMs = startMs;
+  return {
+    day,
+    start_sql: sqlDateStringFromMs(startMs),
+    end_sql: sqlDateStringFromMs(endMs),
+  };
+}
+
+function luckyRaiderMaxCountedAttacks(cfg) {
+  return Math.max(1, Math.floor(Number(cfg?.max_tickets || 20) || 20));
+}
+
+function luckyRaiderAttackStatsForPlayer(t, playerId, dayInput, cfgInput = null) {
+  if (!playerId) {
+    return {
+      attack_attempts: 0,
+      attack_wins: 0,
+      attack_surrenders: 0,
+      raw_attack_attempts: 0,
+      raw_attack_wins: 0,
+      raw_attack_surrenders: 0,
+      max_counted_attacks: luckyRaiderMaxCountedAttacks(cfgInput),
+    };
+  }
+  const cfg = cfgInput || tournamentLuckyRaiderConfig(t);
+  const maxCountedAttacks = luckyRaiderMaxCountedAttacks(cfg);
+  const window = luckyRaiderDayWindow(t, dayInput);
+  const row = db.prepare(`
+    WITH events AS (
+      SELECT r.created_at AS event_at,
+             'replay:' || r.id AS event_id,
+             CASE
+               WHEN lower(COALESCE(r.claimed_result, '')) = 'victory'
+                AND lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory')
+               THEN 1 ELSE 0
+             END AS is_win,
+             0 AS is_surrender
+        FROM battle_replays r
+       WHERE r.attacker_id = ?
+         AND r.created_at >= ?
+         AND r.created_at < ?
+         AND lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory')
+      UNION ALL
+      SELECT s.surrendered_at AS event_at,
+             'surrender:' || s.id AS event_id,
+             0 AS is_win,
+             1 AS is_surrender
+        FROM battle_sessions s
+       WHERE s.attacker_id = ?
+         AND s.surrendered_at IS NOT NULL
+         AND s.surrendered_at >= ?
+         AND s.surrendered_at < ?
+    ),
+    ranked AS (
+      SELECT *,
+             ROW_NUMBER() OVER (ORDER BY event_at ASC, event_id ASC) AS rn
+        FROM events
+    ),
+    first_attacks AS (
+      SELECT COUNT(*) AS attack_attempts,
+             COALESCE(SUM(is_win), 0) AS attack_wins,
+             COALESCE(SUM(is_surrender), 0) AS attack_surrenders
+        FROM ranked
+       WHERE rn <= ?
+    ),
+    all_attacks AS (
+      SELECT COUNT(*) AS raw_attack_attempts,
+             COALESCE(SUM(is_win), 0) AS raw_attack_wins,
+             COALESCE(SUM(is_surrender), 0) AS raw_attack_surrenders
+        FROM events
+    )
+    SELECT first_attacks.attack_attempts,
+           first_attacks.attack_wins,
+           first_attacks.attack_surrenders,
+           all_attacks.raw_attack_attempts,
+           all_attacks.raw_attack_wins,
+           all_attacks.raw_attack_surrenders
+      FROM first_attacks, all_attacks
+  `).get(
+    playerId, window.start_sql, window.end_sql,
+    playerId, window.start_sql, window.end_sql,
+    maxCountedAttacks
+  ) || {};
+  return {
+    attack_attempts: Math.max(0, Math.floor(Number(row.attack_attempts || 0) || 0)),
+    attack_wins: Math.max(0, Math.floor(Number(row.attack_wins || 0) || 0)),
+    attack_surrenders: Math.max(0, Math.floor(Number(row.attack_surrenders || 0) || 0)),
+    raw_attack_attempts: Math.max(0, Math.floor(Number(row.raw_attack_attempts || 0) || 0)),
+    raw_attack_wins: Math.max(0, Math.floor(Number(row.raw_attack_wins || 0) || 0)),
+    raw_attack_surrenders: Math.max(0, Math.floor(Number(row.raw_attack_surrenders || 0) || 0)),
+    max_counted_attacks: maxCountedAttacks,
+  };
+}
+
 function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
   const tid = Number(tournamentId);
   const day = normalizeDailyPoolDay(dayInput);
@@ -3412,8 +3519,7 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       SELECT tp.player_id,
              p.name,
              COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
-             COALESCE(SUM(a.trades_count), 0) AS trades_count,
-             COALESCE(SUM(CASE WHEN a.source = 'attack_win' THEN 1 ELSE 0 END), 0) AS attack_wins
+             COALESCE(SUM(a.trades_count), 0) AS trades_count
         FROM tournament_participants tp
         LEFT JOIN players p ON p.id = tp.player_id
         LEFT JOIN tournament_daily_activity a
@@ -3428,7 +3534,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
     const entries = [];
     for (const row of rows) {
       const volume = Math.max(0, safeUsd(row.volume_usd, 1_000_000_000));
-      const attackWins = Math.max(0, Math.floor(Number(row.attack_wins || 0) || 0));
+      const attackStats = luckyRaiderAttackStatsForPlayer(t, row.player_id, day, cfg);
+      const attackWins = attackStats.attack_wins;
       const ticketState = luckyRaiderTicketState(cfg, volume, attackWins);
       const ticketsRaw = ticketState.uncapped_tickets;
       const tickets = ticketState.tickets;
@@ -3446,6 +3553,12 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         name: row.name || '',
         trades_count: Number(row.trades_count || 0) || 0,
         attack_wins: attackWins,
+        attack_attempts: attackStats.attack_attempts,
+        attack_surrenders: attackStats.attack_surrenders,
+        raw_attack_wins: attackStats.raw_attack_wins,
+        raw_attack_attempts: attackStats.raw_attack_attempts,
+        raw_attack_surrenders: attackStats.raw_attack_surrenders,
+        max_counted_attacks: attackStats.max_counted_attacks,
         ticket_metric: cfg.ticket_metric,
         volume_per_ticket_usd: cfg.volume_per_ticket_usd,
         attack_wins_per_ticket: cfg.attack_wins_per_ticket,
@@ -3463,6 +3576,11 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         name: row.name || '',
         volume_usd: Number(volume.toFixed(2)),
         attack_wins: attackWins,
+        attack_attempts: attackStats.attack_attempts,
+        attack_surrenders: attackStats.attack_surrenders,
+        raw_attack_wins: attackStats.raw_attack_wins,
+        raw_attack_attempts: attackStats.raw_attack_attempts,
+        raw_attack_surrenders: attackStats.raw_attack_surrenders,
         tickets,
         eligible,
         reason,
@@ -3491,6 +3609,9 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       name: entry.name,
       volume_usd: entry.volume_usd,
       attack_wins: entry.attack_wins,
+      attack_attempts: entry.attack_attempts,
+      raw_attack_wins: entry.raw_attack_wins,
+      raw_attack_attempts: entry.raw_attack_attempts,
       tickets: entry.tickets,
       rewards: luckyRaiderRewardsForPlace(cfg, entry.place),
     }));
@@ -3509,6 +3630,9 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         name: entry.name,
         volume_usd: entry.volume_usd,
         attack_wins: entry.attack_wins,
+        attack_attempts: entry.attack_attempts,
+        raw_attack_wins: entry.raw_attack_wins,
+        raw_attack_attempts: entry.raw_attack_attempts,
         tickets: entry.tickets,
         eligible: !!entry.eligible,
         reason: entry.reason,
@@ -6704,6 +6828,7 @@ module.exports = {
   applyGoldReward,
   recordTournamentTrade,
   recordTournamentTradeRows,
+  luckyRaiderAttackStatsForPlayer,
   awardTournamentDailyPoolDay,
   awardTournamentLuckyRaiderDay,
   awardTournamentFinalDailyPoolDay,

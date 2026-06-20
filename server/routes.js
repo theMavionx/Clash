@@ -18720,14 +18720,6 @@ function playerHasTournamentRewardNft(playerId, collections = ['demon_king', 'dr
   }
 }
 
-function luckyRaiderCountedAttackWins(cfg, rawWins) {
-  const wins = Math.max(0, Math.floor(Number(rawWins || 0) || 0));
-  const maxTickets = Math.max(0, Math.floor(Number(cfg?.max_tickets || 0) || 0));
-  const winsPerTicket = Math.max(1, Math.floor(Number(cfg?.attack_wins_per_ticket || 1) || 1));
-  if (maxTickets <= 0) return wins;
-  return Math.min(wins, maxTickets * winsPerTicket);
-}
-
 function tournamentLuckyRaiderState(t, viewerId = null) {
   const cfg = normalizeTournamentRewardConfig(t?.reward_config || {}).lucky_daily_raider;
   if (!cfg.enabled) return { enabled: false };
@@ -18736,6 +18728,11 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
   let lastRun = null;
   let myVolume = 0;
   let myAttackWins = 0;
+  let myAttackAttempts = 0;
+  let myAttackSurrenders = 0;
+  let myRawAttackWins = 0;
+  let myRawAttackAttempts = 0;
+  let myRawAttackSurrenders = 0;
   let myTickets = 0;
   let myVolumeTickets = 0;
   let myAttackWinTickets = 0;
@@ -18761,8 +18758,7 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
       SELECT tp.player_id,
              p.name,
              p.wallet,
-             COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
-             COALESCE(SUM(CASE WHEN a.source = 'attack_win' THEN 1 ELSE 0 END), 0) AS attack_wins
+             COALESCE(SUM(a.volume_usd), 0) AS volume_usd
         FROM tournament_participants tp
         JOIN players p ON p.id = tp.player_id
         LEFT JOIN tournament_daily_activity a
@@ -18775,8 +18771,10 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
     `).all(today, tid);
     todayEntries = rows.map((row) => {
       const volume = Math.max(0, Number(row.volume_usd || 0) || 0);
-      const attackWins = Math.max(0, Math.floor(Number(row.attack_wins || 0) || 0));
-      const countedAttackWins = luckyRaiderCountedAttackWins(cfg, attackWins);
+      const attackStats = typeof db.luckyRaiderAttackStatsForPlayer === 'function'
+        ? db.luckyRaiderAttackStatsForPlayer(t, row.player_id, today, cfg)
+        : { attack_wins: 0, raw_attack_wins: 0, attack_attempts: 0, raw_attack_attempts: 0, attack_surrenders: 0, raw_attack_surrenders: 0 };
+      const attackWins = Math.max(0, Math.floor(Number(attackStats.attack_wins || 0) || 0));
       const volumeTickets = Math.floor(volume / Math.max(1, Number(cfg.volume_per_ticket_usd || 1000) || 1000));
       const attackTickets = Math.floor(attackWins / Math.max(1, Number(cfg.attack_wins_per_ticket || 10) || 10));
       let uncapped = volumeTickets;
@@ -18797,8 +18795,13 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
         name: row.name || '',
         wallet: row.wallet || null,
         volume_usd: Number(volume.toFixed(2)),
-        attack_wins: countedAttackWins,
-        raw_attack_wins: attackWins,
+        attack_wins: attackWins,
+        attack_attempts: Math.max(0, Math.floor(Number(attackStats.attack_attempts || 0) || 0)),
+        attack_surrenders: Math.max(0, Math.floor(Number(attackStats.attack_surrenders || 0) || 0)),
+        raw_attack_wins: Math.max(0, Math.floor(Number(attackStats.raw_attack_wins || attackWins) || 0)),
+        raw_attack_attempts: Math.max(0, Math.floor(Number(attackStats.raw_attack_attempts || 0) || 0)),
+        raw_attack_surrenders: Math.max(0, Math.floor(Number(attackStats.raw_attack_surrenders || 0) || 0)),
+        max_counted_attacks: Math.max(0, Math.floor(Number(attackStats.max_counted_attacks || cfg.max_tickets || 0) || 0)),
         volume_tickets: Math.max(0, volumeTickets),
         attack_win_tickets: Math.max(0, attackTickets),
         tickets: cfg.require_nft && !hasNft ? 0 : tickets,
@@ -18842,16 +18845,29 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
          WHERE tournament_id = ? AND day_utc = ? AND player_id = ?
       `).get(tid, today, viewerId);
       const live = db.db.prepare(`
-        SELECT COALESCE(SUM(volume_usd), 0) AS volume_usd,
-               COALESCE(SUM(CASE WHEN source = 'attack_win' THEN 1 ELSE 0 END), 0) AS attack_wins
+        SELECT COALESCE(SUM(volume_usd), 0) AS volume_usd
           FROM tournament_daily_activity
          WHERE tournament_id = ? AND day_utc = ? AND player_id = ?
       `).get(tid, today, viewerId);
       myVolume = Number(live?.volume_usd ?? entry?.volume_usd ?? 0) || 0;
       let entryDetails = {};
       try { entryDetails = entry?.details_json ? JSON.parse(entry.details_json) : {}; } catch {}
-      myAttackWins = Number(live?.attack_wins ?? entryDetails.attack_wins ?? 0) || 0;
-      const countedMyAttackWins = luckyRaiderCountedAttackWins(cfg, myAttackWins);
+      const attackStats = typeof db.luckyRaiderAttackStatsForPlayer === 'function'
+        ? db.luckyRaiderAttackStatsForPlayer(t, viewerId, today, cfg)
+        : {
+          attack_wins: Number(entryDetails.attack_wins || 0) || 0,
+          raw_attack_wins: Number(entryDetails.raw_attack_wins || entryDetails.attack_wins || 0) || 0,
+          attack_attempts: Number(entryDetails.attack_attempts || 0) || 0,
+          raw_attack_attempts: Number(entryDetails.raw_attack_attempts || 0) || 0,
+          attack_surrenders: Number(entryDetails.attack_surrenders || 0) || 0,
+          raw_attack_surrenders: Number(entryDetails.raw_attack_surrenders || 0) || 0,
+        };
+      myAttackWins = Number(attackStats.attack_wins || 0) || 0;
+      myAttackAttempts = Math.max(0, Math.floor(Number(attackStats.attack_attempts || 0) || 0));
+      myAttackSurrenders = Math.max(0, Math.floor(Number(attackStats.attack_surrenders || 0) || 0));
+      myRawAttackWins = Math.max(0, Math.floor(Number(attackStats.raw_attack_wins || myAttackWins) || 0));
+      myRawAttackAttempts = Math.max(0, Math.floor(Number(attackStats.raw_attack_attempts || 0) || 0));
+      myRawAttackSurrenders = Math.max(0, Math.floor(Number(attackStats.raw_attack_surrenders || 0) || 0));
       const volumeTickets = Math.floor(Math.max(0, myVolume) / Math.max(1, Number(cfg.volume_per_ticket_usd || 1000) || 1000));
       const attackTickets = Math.floor(Math.max(0, Math.floor(myAttackWins)) / Math.max(1, Number(cfg.attack_wins_per_ticket || 10) || 10));
       let uncapped = volumeTickets;
@@ -18871,7 +18887,6 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
       else if (cfg.ticket_metric === 'volume_and_attack_wins') myReason = 'volume_and_attack_wins_below_ticket';
       else if (cfg.ticket_metric === 'volume_or_attack_wins') myReason = 'volume_or_attack_wins_below_ticket';
       else myReason = 'volume_below_ticket';
-      myAttackWins = countedMyAttackWins;
     } catch {}
   }
   return {
@@ -18890,6 +18905,11 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
     today_day_utc: today,
     my_volume_usd: Number(myVolume.toFixed(2)),
     my_attack_wins: Math.max(0, Math.floor(myAttackWins)),
+    my_attack_attempts: myAttackAttempts,
+    my_attack_surrenders: myAttackSurrenders,
+    my_raw_attack_wins: myRawAttackWins,
+    my_raw_attack_attempts: myRawAttackAttempts,
+    my_raw_attack_surrenders: myRawAttackSurrenders,
     my_volume_tickets: myVolumeTickets,
     my_attack_win_tickets: myAttackWinTickets,
     my_tickets: myTickets,
