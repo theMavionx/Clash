@@ -17,8 +17,7 @@ const ARC_HEIGHTS: Array[float] = [0.50, 0.57, 0.65, 0.74]
 const TARGET_SEARCH_INTERVAL: float = 0.15
 const IMPACT_FX_DURATION: float = 0.32
 const ATTACK_SFX_PATHS: Array[String] = [
-	"res://Musik/sound_effects/Turret/Turret_Attack1.mp3",
-	"res://Musik/sound_effects/Turret/Turret_Attack2.mp3",
+	"res://Musik/sound_effects/Mortar/mortar_launch.mp3",
 ]
 const ATTACK_SFX_VOLUME_DB: float = -2.0
 const ATTACK_SFX_PITCH_JITTER: float = 0.05
