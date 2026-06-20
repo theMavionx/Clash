@@ -215,6 +215,9 @@ Acceptance criteria:
   Mage Tower must be implemented before it can be leveled.
 - Mortar can be built/unlocked at TH5 and works in actual combat, not only as a
   static model.
+- TH5 unlocks exactly one Mortar and caps it at level 1 until a later approved
+  progression pass adds higher Mortar levels.
+- TH5 increases Mine, Sawmill, and Storage count limits by one each.
 - Mortar is testable locally through the normal local playtest/admin flow.
 - Mortar and TH5 values are included in the balance pass before production deploy.
 - Local verification covers at least syntax checks, local playtest placement, and
@@ -222,9 +225,21 @@ Acceptance criteria:
 
 Next checkpoint:
 
-- Audit current TH max-level assumptions, Mage Tower status, Mortar assets,
-  server/client building definition mismatches, and the exact places where TH4 is
-  hard-coded before implementing TH5.
+- Refresh browser/manual playtest for the current reachable max fleet: 3 ships x
+  9 troop slots. Previous 6x15/90-troop stress data is now historical overload
+  data, not the current player maximum.
+- Continue the balance pass for TH4/TH5 because the latest local smoke check has
+  0 invalid replays but still warns that matched TH4/TH5 attacks struggle against
+  heavy defenses.
+
+Latest local checkpoint:
+
+- Mortar dead zone is implemented in Godot and the server verifier.
+- Mortar attack radius is reduced by 1.5x and has a minimum range/dead zone.
+- Mortar selection visuals show a white attack radius and red dead zone only
+  while the Mortar is selected.
+- Godot CLI was not available from PATH, so live editor verification still needs
+  a manual local playtest.
 
 ## Parking Lot
 
