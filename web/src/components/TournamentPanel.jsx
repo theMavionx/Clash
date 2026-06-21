@@ -280,7 +280,7 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
           {lucky.my_tickets !== undefined && (
             <div>
               Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume | {luckyAttackSummary(lucky)} | {fmt(lucky.my_tickets || 0)}/{fmt(lucky.max_tickets || 0)} tickets
-              {lucky.my_reason && lucky.my_reason !== 'eligible' ? ` | ${String(lucky.my_reason).replace(/_/g, ' ')}` : ''}
+              {luckyReasonText(lucky.my_reason) ? ` | ${luckyReasonText(lucky.my_reason)}` : ''}
             </div>
           )}
           {luckyRewards.length > 0 && <div>Prize: {luckyRewards.join(' + ')}</div>}
@@ -327,6 +327,15 @@ function luckyWinTicketText(lucky) {
   return winsPerTicket === 1 ? '1 win = 1 ticket' : `${fmt(winsPerTicket)} wins = 1 ticket`;
 }
 
+function luckyReasonText(reason) {
+  const key = String(reason || '').trim();
+  if (!key || key === 'eligible') return '';
+  if (key === 'attack_wins_below_ticket') return 'No ticket yet: counted wins are below the ticket requirement';
+  if (key === 'volume_below_ticket') return 'No ticket yet: counted volume is below the ticket requirement';
+  if (key === 'nft_required') return 'NFT requirement not met';
+  return key.replace(/_/g, ' ');
+}
+
 function LuckyRaiderPanel({ t, schedule }) {
   const lucky = schedule?.lucky_daily_raider || {};
   if (!lucky.enabled) {
@@ -351,6 +360,7 @@ function LuckyRaiderPanel({ t, schedule }) {
   const history = Array.isArray(lucky.history) ? lucky.history : [];
   const myStats = luckyAttackStats(lucky);
   const myRawOverflow = myStats.rawAttempts > myStats.attempts;
+  const myReason = luckyReasonText(lucky.my_reason);
   return (
     <>
       <div style={S.luckyHero}>
@@ -371,13 +381,14 @@ function LuckyRaiderPanel({ t, schedule }) {
 
       <div style={S.luckyRuleBox}>
         <strong>{rule}</strong>
-        <span>Daily score: first {fmt(myStats.limit)} attacks only. A win counts toward tickets; a defeat or surrender counts as an attack but gives 0 tickets.</span>
+        <span>First {fmt(myStats.limit)} attacks per UTC day count for tickets. Max {fmt(lucky.max_tickets || myStats.limit)} tickets/day.</span>
+        <span>A win gives a ticket; a defeat or surrender spends one of those first {fmt(myStats.limit)} attacks and gives 0 tickets.</span>
         <span>Your counted score: {fmt(myStats.wins)} wins, {fmt(myStats.losses)} losses, {fmt(lucky.my_tickets || 0)} tickets.</span>
         {myStats.surrenders > 0 && <span>Your losses include {fmt(myStats.surrenders)} surrender{myStats.surrenders === 1 ? '' : 's'}.</span>}
         {myRawOverflow && <span>Total today: {fmt(myStats.rawAttempts)} attacks / {fmt(myStats.rawWins)} wins. Extra attacks after #{fmt(myStats.limit)} do not add tickets.</span>}
         <span>Draw runs at {lucky.draw_time_utc || '00:05'} UTC.</span>
         {lucky.require_nft && <span>Requires Dragon or Demon King NFT.</span>}
-        {lucky.my_reason && lucky.my_reason !== 'eligible' && <span>Status: {String(lucky.my_reason).replace(/_/g, ' ')}</span>}
+        {myReason && <span>Status: {myReason}</span>}
       </div>
 
       <div style={S.luckySectionTitle}>Today entries</div>
@@ -390,7 +401,7 @@ function LuckyRaiderPanel({ t, schedule }) {
               <div style={S.luckyEntryName}>{entry.name || shortWallet(entry.wallet) || 'Player'}</div>
               <div style={S.luckyEntryMeta}>
                 {luckyEntryDetail(entry, lucky)}
-                {entry.reason && entry.reason !== 'eligible' ? ` | ${String(entry.reason).replace(/_/g, ' ')}` : ''}
+                {luckyReasonText(entry.reason) ? ` | ${luckyReasonText(entry.reason)}` : ''}
               </div>
               {Number(entry.raw_attack_attempts || 0) > Number(entry.attack_attempts || 0) && (
                 <div style={S.luckyEntrySubMeta}>
