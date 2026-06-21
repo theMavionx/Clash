@@ -40,9 +40,9 @@
     },
     "clash": {
       "usdPrice": "10",
-      "clashUsd": "0.0004796",
-      "amount": "20850708925",
-      "amountUi": "20850.708925",
+      "clashUsd": "0.0004649",
+      "amount": "21510002152",
+      "amountUi": "21510.002152",
       "decimals": 6,
       "symbol": "CLASH",
       "tokenProgram": "token-2022",
@@ -66,5 +66,18 @@
   "saleActivateTx": "2A13wWJsU74GguKCaJEVDyM585hsMoYugBU1LyVAu8aqSW14eA8S6SfTf3AeXcrD7Q4cn2r67of6S4fYxw7Bc3gD",
   "saleActivatedAt": "2026-06-08T15:33:20.429Z",
   "saleActivationConfirmedAt": "2026-06-08T15:40:00.000Z",
-  "updatedAt": "2026-06-21T15:45:04.589Z"
+  "updatedAt": "2026-06-21T15:52:00.876Z",
+  "paymentPriceSync": {
+    "clash": {
+      "priceUsd": "0.0004649",
+      "source": "DexScreener pumpswap GT7Ac2YdrtbMfbWVhr2Au1RvyMp7KrERsoYjoxZTHvoF",
+      "dexId": "pumpswap",
+      "pairAddress": "GT7Ac2YdrtbMfbWVhr2Au1RvyMp7KrERsoYjoxZTHvoF",
+      "liquidityUsd": 53259.01,
+      "targetUsd": "10",
+      "amount": "21510002152",
+      "amountUi": "21510.002152",
+      "syncedAt": "2026-06-21T15:52:00.876Z"
+    }
+  }
 }
