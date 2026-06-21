@@ -480,6 +480,7 @@ function PlayersPanel({ players, reload }) {
     { label: 'Online', value: players.filter((p) => p.online).length, tone: 'green' },
     { label: 'Active 7d', value: players.filter((p) => p.active_7d).length, tone: 'blue' },
     { label: 'Shielded', value: players.filter((p) => p.shield_active).length, tone: 'gold' },
+    { label: 'Banned', value: players.filter((p) => p.banned_at).length, tone: 'red' },
   ];
 
   return (
@@ -513,7 +514,10 @@ function PlayersPanel({ players, reload }) {
               <tbody>
                 {filtered.map((p) => (
                   <tr key={p.id || p.name}>
-                    <td data-label="Name"><strong>{p.name}</strong><div className="admin-card-sub admin-mono">{p.id}</div></td>
+                    <td data-label="Name">
+                      <strong>{p.name}</strong>{p.banned_at ? <span className="admin-badge red" style={{ marginLeft: 8 }}>BANNED</span> : null}
+                      <div className="admin-card-sub admin-mono">{p.id}</div>
+                    </td>
                     <td data-label="DEX"><DexBadge dex={p.dex} /></td>
                     <td data-label="Wallet" className="admin-mono">{short(p.wallet)}</td>
                     <td data-label="Created" className="admin-mono">{fmtTime(p.created_at)}</td>
@@ -691,6 +695,7 @@ function PlayerProfileDrawer({ player, onClose, onOpenTools, reload }) {
       <div className="player-profile">
         <div className="player-profile-toolbar">
           <div className="admin-filter-row">
+            {p?.banned_at && <span className="admin-badge red">BANNED</span>}
             <span className={`admin-badge ${p?.online ? 'green' : 'off'}`}>{p?.online ? 'Online' : 'Offline'}</span>
             {p?.dex && <DexBadge dex={p.dex} />}
             {flags.slice(0, 4).map((flag) => <span key={flag.key} className={`admin-badge ${flag.tone || 'blue'}`}>{flag.label}</span>)}
@@ -749,6 +754,8 @@ function PlayerProfileOverview({ profile }) {
             { label: 'Futures mode', value: p.futures_mode || '-' },
             { label: 'Created', value: profileDate(p.created_at) },
             { label: 'Last seen', value: profileDate(p.last_seen_at) },
+            { label: 'Banned at', value: profileDate(p.banned_at) },
+            { label: 'Ban reason', value: p.banned_reason || '-' },
             { label: 'Shield until', value: profileDate(p.shield_until) },
           ]} />
         </ProfileSection>
@@ -1097,6 +1104,8 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
   const [resource, setResource] = useState({ gold: 5000, wood: 5000, ore: 5000 });
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
+  const playerKey = encodeURIComponent(player.id || player.name);
+  const playerIsBanned = !!player.banned_at;
 
   async function run(label, fn) {
     if (busy) return;
@@ -1111,6 +1120,21 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
     } finally {
       setBusy('');
     }
+  }
+
+  function banAccount() {
+    const reason = window.prompt(`Ban reason for ${player.name}`, 'Suspicious reward wallet abuse');
+    if (reason === null) return;
+    const blacklistWallets = window.confirm(`Also blacklist all linked wallets for ${player.name}?`);
+    run('Ban account', () => adminPost(`/admin/players/${playerKey}/ban`, {
+      reason: reason.trim() || 'admin ban',
+      blacklist_wallets: blacklistWallets,
+    }));
+  }
+
+  function unbanAccount() {
+    if (!window.confirm(`Unban ${player.name}? Wallet blacklist entries will stay unchanged.`)) return;
+    run('Unban account', () => adminPost(`/admin/players/${playerKey}/unban`, {}));
   }
 
   return (
@@ -1151,6 +1175,23 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
               await adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: 4 });
               return adminPost(`/admin/players/${encodeURIComponent(player.name)}/add-resources`, { gold: 999999999, wood: 999999999, ore: 999999999 });
             })}>Max everything</button>
+          </div>
+        </div>
+        <div className="admin-card">
+          <div className="admin-card-head"><div><div className="admin-card-title">Moderation</div><div className="admin-card-sub">Soft-ban account access without deleting audit history.</div></div></div>
+          <div className="admin-card-body admin-grid">
+            {playerIsBanned ? (
+              <div className="admin-help">Banned {fmtTime(player.banned_at)}{player.banned_reason ? ` - ${player.banned_reason}` : ''}</div>
+            ) : (
+              <div className="admin-help">Account is currently allowed to log in.</div>
+            )}
+            <div className="admin-filter-row">
+              {playerIsBanned ? (
+                <button className="admin-btn" onClick={unbanAccount}>Unban account</button>
+              ) : (
+                <button className="admin-btn danger" onClick={banAccount}>Ban account</button>
+              )}
+            </div>
           </div>
         </div>
         <div className="admin-card">
@@ -3540,6 +3581,7 @@ function statusBadge(status) {
 }
 
 function PresenceBadge({ player }) {
+  if (player.banned_at) return <span className="admin-badge red">BANNED</span>;
   if (player.online) return <span className="admin-badge green">ONLINE</span>;
   if (player.active_24h) return <span className="admin-badge blue">24h</span>;
   if (player.active_7d) return <span className="admin-badge off">7d</span>;

@@ -122,6 +122,33 @@ function canonicalWalletIdentifier(wallet) {
   return raw;
 }
 
+function walletBlacklistEntry(wallet) {
+  if (!wallet || !isValidWallet(wallet)) return null;
+  return db.getWalletBlacklist(canonicalWalletIdentifier(wallet));
+}
+
+function rejectBlacklistedWallet(req, res, wallet, action) {
+  const entry = walletBlacklistEntry(wallet);
+  if (!entry) return false;
+  console.warn('[security] blocked blacklisted wallet', {
+    action,
+    wallet: canonicalWalletIdentifier(wallet),
+    player: req.player?.name || null,
+    ip: req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || null,
+    ua: String(req.headers['user-agent'] || '').slice(0, 160),
+  });
+  res.status(403).json({ error: 'This wallet is blocked. Contact support.' });
+  return true;
+}
+
+function rejectBannedPlayer(res, player) {
+  res.status(403).json({
+    error: 'This account is banned.',
+    banned_at: player?.banned_at || null,
+    banned_reason: player?.banned_reason || null,
+  });
+}
+
 function upsertUnifiedIdentity(playerId, wallet, opts = {}) {
   if (!playerId || !wallet || !isValidWallet(wallet)) return;
   const chainType = walletChainType(wallet);
@@ -8062,6 +8089,7 @@ function markPlayerSeekerIfPresent(playerId, body) {
 router.post('/players/register', (req, res) => {
   const { name, wallet, dex, fid } = req.body;
   if (wallet && !requireFirstPartyBrowserContext(req, res, 'players.register')) return;
+  if (wallet && rejectBlacklistedWallet(req, res, wallet, 'players.register')) return;
   const requestedDex = VALID_DEXES.has(dex) ? dex : 'pacifica';
   const seekerCapability = normalizeSeekerCapability(req.body || {});
   const referralCode = String(req.body?.referralCode || req.body?.ref || req.body?.invite || '').trim();
@@ -8094,6 +8122,7 @@ router.post('/players/register', (req, res) => {
     }
 
     if (existing) {
+      if (db.isPlayerBanned(existing)) return rejectBannedPlayer(res, existing);
       // Optional rename on re-login (same as before, scoped to this row).
       const trimmed = normalizePlayerNameInput(name);
       const looksAutoDerived = /^player_[0-9a-f]{4,}$/i.test(trimmed);
@@ -9711,6 +9740,7 @@ router.post('/players/link-wallet', auth, (req, res) => {
   const { wallet } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
   if (!requireFirstPartyBrowserContext(req, res, 'players.link-wallet')) return;
+  if (rejectBlacklistedWallet(req, res, wallet, 'players.link-wallet')) return;
 
   const current = req.player;
   // Same-DEX collision check. We exclude current.id so a no-op rebind
@@ -9749,12 +9779,14 @@ router.post('/players/link-wallet', auth, (req, res) => {
 router.post('/players/login-wallet', (req, res) => {
   const { wallet, dex } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
+  if (rejectBlacklistedWallet(req, res, wallet, 'players.login-wallet')) return;
 
   let player = VALID_DEXES.has(dex)
     ? getPlayerByWalletAndDexAnyForm(wallet, dex)
     : null;
   if (!player) player = getUnifiedPlayerByWalletAnyForm(wallet);
   if (!player) return res.status(404).json({ error: 'No Clash account found for this wallet' });
+  if (db.isPlayerBanned(player)) return rejectBannedPlayer(res, player);
   if (req.body?.probeOnly === true) {
     return res.json({
       success: true,
@@ -9900,6 +9932,7 @@ router.post('/players/dex-accounts/:dex/select', auth, (req, res) => {
   const wallet = String(req.body?.wallet || req.player.wallet || '').trim();
   const venueWallet = dexAcceptsWallet(dex, wallet) ? wallet : '';
   if (venueWallet && !requireFirstPartyBrowserContext(req, res, 'players.dex-account.select')) return;
+  if (venueWallet && rejectBlacklistedWallet(req, res, venueWallet, 'players.dex-account.select')) return;
   if (venueWallet) {
     upsertUnifiedIdentity(req.player.id, venueWallet, { label: req.body?.walletSource || req.body?.source });
   }
@@ -9927,6 +9960,7 @@ router.post('/players/dex-accounts/:dex/link', auth, (req, res) => {
     return res.status(400).json({ error: 'Valid wallet required' });
   }
   if (!requireFirstPartyBrowserContext(req, res, 'players.dex-account.link')) return;
+  if (rejectBlacklistedWallet(req, res, wallet, 'players.dex-account.link')) return;
   const chainType = walletChainType(wallet);
   const requiredChain = DEX_REQUIRED_CHAIN[dex] || null;
   if (requiredChain && chainType !== requiredChain) {
@@ -13703,6 +13737,85 @@ function isAdminRequest(req) {
   return !!(ADMIN_KEY && req.headers['x-admin-key'] === ADMIN_KEY);
 }
 
+function adminPlayerPayload(player) {
+  if (!player) return null;
+  return {
+    id: player.id,
+    name: player.name,
+    wallet: player.wallet || null,
+    dex: player.dex || null,
+    banned_at: player.banned_at || null,
+    banned_reason: player.banned_reason || null,
+    banned_by: player.banned_by || null,
+  };
+}
+
+function adminCollectPlayerWallets(player) {
+  if (!player?.id) return [];
+  const seen = new Set();
+  const wallets = [];
+  function add(rawWallet, source) {
+    const text = String(rawWallet || '').trim();
+    if (!text || !isValidWallet(text)) return;
+    const wallet = canonicalWalletIdentifier(text);
+    const key = wallet.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    wallets.push({ wallet, chain_type: walletChainType(wallet), source });
+  }
+  add(player.wallet, 'players.wallet');
+  for (const row of db.db.prepare(`
+    SELECT chain_type, address
+    FROM player_wallets
+    WHERE player_id = ?
+  `).all(player.id)) {
+    add(row.address, `player_wallets.${row.chain_type || 'wallet'}`);
+  }
+  for (const row of db.db.prepare(`
+    SELECT type, identifier
+    FROM player_auth_identities
+    WHERE player_id = ?
+  `).all(player.id)) {
+    add(row.identifier, `player_auth_identities.${row.type || 'identity'}`);
+  }
+  for (const row of db.db.prepare(`
+    SELECT dex, wallet_address
+    FROM player_dex_accounts
+    WHERE player_id = ?
+      AND wallet_address IS NOT NULL
+  `).all(player.id)) {
+    add(row.wallet_address, `player_dex_accounts.${row.dex || 'dex'}`);
+  }
+  return wallets;
+}
+
+router.get('/admin/wallet-blacklist', adminAuth, (req, res) => {
+  res.json({ ok: true, wallets: db.listWalletBlacklist(req.query?.limit) });
+});
+
+router.post('/admin/wallet-blacklist', adminAuth, (req, res) => {
+  const walletInput = String(req.body?.wallet || '').trim();
+  if (!walletInput || !isValidWallet(walletInput)) {
+    return res.status(400).json({ error: 'Valid wallet required' });
+  }
+  const wallet = canonicalWalletIdentifier(walletInput);
+  const row = db.blacklistWallet(wallet, {
+    chainType: walletChainType(wallet),
+    reason: req.body?.reason || 'admin blacklist',
+    playerId: req.body?.player_id || req.body?.playerId || null,
+    createdBy: 'admin',
+  });
+  res.json({ ok: true, wallet: row });
+});
+
+router.delete('/admin/wallet-blacklist/:wallet', adminAuth, (req, res) => {
+  const walletInput = String(req.params.wallet || '').trim();
+  if (!walletInput) return res.status(400).json({ error: 'Wallet required' });
+  const wallet = isValidWallet(walletInput) ? canonicalWalletIdentifier(walletInput) : walletInput;
+  const result = db.unblacklistWallet(wallet);
+  res.json({ ok: true, removed: result.changes || 0 });
+});
+
 router.post('/admin/shop/solana/reconcile', adminAuth, async (req, res) => {
   try {
     const limit = Number(req.body?.limit || req.query?.limit || 100);
@@ -13720,7 +13833,7 @@ router.get('/admin/players', adminAuth, (req, res) => {
     SELECT id, name, trophies, level, gold, wood, ore, wallet, dex,
            futures_mode, tutorial_flags,
            shield_until, last_attacked_by, last_attacked_at, created_at,
-           last_seen_at
+           last_seen_at, banned_at, banned_reason, banned_by
     FROM players ORDER BY trophies DESC
   `).all();
   // Pull per-player trading rewards in one shot so the UI can show gold
@@ -13748,6 +13861,7 @@ router.get('/admin/players', adminAuth, (req, res) => {
     return {
       ...p,
       dex: p.dex || null,
+      banned: !!p.banned_at,
       // futures_mode: 'pro' | 'basic' | null. NULL means user has not yet
       // made the first-time selection (haven't opened the futures panel
       // since the feature shipped).
@@ -13769,6 +13883,38 @@ router.get('/admin/players', adminAuth, (req, res) => {
       last_seen_age_sec: lastSeenMs ? Math.floor(ageMs / 1000) : null,
     };
   }));
+});
+
+router.post('/admin/players/:name/ban', adminAuth, (req, res) => {
+  const identifier = String(req.params.name || '').trim();
+  const existing = db.getAdminPlayer(identifier);
+  if (!existing) return res.status(404).json({ error: 'Player not found' });
+  const reason = String(req.body?.reason || 'admin ban').trim().slice(0, 500) || 'admin ban';
+  const banned = db.banPlayer(existing.id, { reason, bannedBy: 'admin' });
+  const blacklistedWallets = [];
+  if (req.body?.blacklist_wallets === true || req.body?.blacklistWallets === true) {
+    for (const item of adminCollectPlayerWallets(existing)) {
+      const row = db.blacklistWallet(item.wallet, {
+        chainType: item.chain_type,
+        reason,
+        playerId: existing.id,
+        createdBy: 'admin-ban',
+      });
+      if (row) blacklistedWallets.push({ ...item, reason: row.reason });
+    }
+  }
+  res.json({
+    ok: true,
+    player: adminPlayerPayload(banned),
+    blacklisted_wallets: blacklistedWallets,
+  });
+});
+
+router.post('/admin/players/:name/unban', adminAuth, (req, res) => {
+  const identifier = String(req.params.name || '').trim();
+  const unbanned = db.unbanPlayer(identifier);
+  if (!unbanned) return res.status(404).json({ error: 'Player not found' });
+  res.json({ ok: true, player: adminPlayerPayload(unbanned) });
 });
 
 function adminProfileSqlMs(value) {
@@ -14079,6 +14225,7 @@ function adminBuildPlayerProfile(player) {
   const recentClaimFailures = taskClaims.filter((row) => String(row.result || '').toLowerCase() !== 'claimed' && adminProfileAgeDays(row.created_at) <= 7).length;
   const rewardTradeCount = rewards.reduce((sum, row) => sum + Number(row.last_trade_id || 0), 0);
   const flags = [];
+  if (player.banned_at) flags.push({ key: 'banned', label: 'Banned account', tone: 'red' });
   if (createdAgeDays !== null && createdAgeDays <= 7 && totalVolume >= 10_000) flags.push({ key: 'new_high_value', label: 'New high value', tone: 'green' });
   if (!townHall || (Number(battleSummary.total || 0) <= 0 && totalVolume <= 0)) flags.push({ key: 'stuck_onboarding', label: 'Stuck onboarding', tone: 'gold' });
   if (recentClaimFailures >= 3) flags.push({ key: 'quest_friction', label: 'Quest friction', tone: 'red' });
@@ -14096,6 +14243,9 @@ function adminBuildPlayerProfile(player) {
       futures_mode: player.futures_mode || null,
       created_at: player.created_at,
       last_seen_at: player.last_seen_at || null,
+      banned_at: player.banned_at || null,
+      banned_reason: player.banned_reason || null,
+      banned_by: player.banned_by || null,
       online: lastSeenAgeMs <= 5 * 60 * 1000,
       last_seen_age_sec: Number.isFinite(lastSeenAgeMs) ? Math.max(0, Math.floor(lastSeenAgeMs / 1000)) : null,
       resources: { gold: player.gold, wood: player.wood, ore: player.ore },
@@ -14220,7 +14370,8 @@ router.get('/admin/players/:id/profile', adminAuth, (req, res) => {
   const player = db.db.prepare(`
     SELECT id, name, trophies, level, gold, wood, ore, wallet, dex, futures_mode,
            shield_until, last_attacked_by, last_attacked_at, created_at, last_seen_at,
-           battle_wins, is_seeker, seeker_id, seeker_source
+           battle_wins, is_seeker, seeker_id, seeker_source,
+           banned_at, banned_reason, banned_by
       FROM players
      WHERE id = ? OR name = ? OR lower(name) = lower(?)
      LIMIT 1
@@ -18105,6 +18256,9 @@ function validatePlayerClashRewardWallet(playerId, wallet) {
   if (!normalized) {
     return { ok: false, error: 'valid Solana reward wallet required for CLASH rewards' };
   }
+  if (db.isWalletBlacklisted(normalized)) {
+    return { ok: false, error: 'This reward wallet is blocked. Contact support.' };
+  }
   if (!playerOwnsSolanaRewardWallet(playerId, normalized)) {
     return {
       ok: false,
@@ -19639,6 +19793,8 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
     );
     if (!validation.ok) return res.status(400).json({ error: validation.error });
     rewardWallet = validation.wallet;
+  } else if (rewardWallet && rejectBlacklistedWallet(req, res, rewardWallet, 'tournaments.join.reward-wallet')) {
+    return;
   }
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.

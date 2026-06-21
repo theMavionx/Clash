@@ -103,6 +103,29 @@ try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_contract TEXT`); } 
 try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_verified_at TEXT`); } catch {}
 // PvP win counter. Used by Demon King NFT-backed progression gates.
 try { db.exec(`ALTER TABLE players ADD COLUMN battle_wins INTEGER NOT NULL DEFAULT 0`); } catch {}
+// Account moderation. Banned accounts keep their rows for auditability but
+// cannot authenticate or receive token-bearing login responses.
+try { db.exec(`ALTER TABLE players ADD COLUMN banned_at TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN banned_reason TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN banned_by TEXT`); } catch {}
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS wallet_blacklist (
+      wallet     TEXT PRIMARY KEY,
+      chain_type TEXT,
+      reason     TEXT,
+      player_id  TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_by TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_wallet_blacklist_player
+      ON wallet_blacklist(player_id);
+  `);
+} catch (e) {
+  console.warn('[db] wallet blacklist migration warning:', e.message);
+}
 
 // Unified account identity layer. The legacy `players.wallet` and
 // `players.dex` columns remain for compatibility, but new auth paths should
@@ -1897,6 +1920,48 @@ const stmts = {
   // is now a UNIQUE pair so this returns at most one row.
   getPlayerByWalletAndDex: db.prepare(`SELECT * FROM players WHERE wallet = ? AND dex = ? LIMIT 1`),
   getPlayerById: db.prepare(`SELECT * FROM players WHERE id = ?`),
+  getAdminPlayerByIdentifier: db.prepare(`
+    SELECT * FROM players
+    WHERE id = ? OR name = ? OR lower(name) = lower(?)
+    LIMIT 1
+  `),
+  banPlayerById: db.prepare(`
+    UPDATE players
+    SET banned_at = COALESCE(banned_at, datetime('now')),
+        banned_reason = ?,
+        banned_by = ?
+    WHERE id = ?
+  `),
+  unbanPlayerById: db.prepare(`
+    UPDATE players
+    SET banned_at = NULL,
+        banned_reason = NULL,
+        banned_by = NULL
+    WHERE id = ?
+  `),
+  getWalletBlacklist: db.prepare(`
+    SELECT *
+    FROM wallet_blacklist
+    WHERE lower(wallet) = lower(?)
+    LIMIT 1
+  `),
+  upsertWalletBlacklist: db.prepare(`
+    INSERT INTO wallet_blacklist (wallet, chain_type, reason, player_id, created_by, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(wallet) DO UPDATE SET
+      chain_type = COALESCE(excluded.chain_type, wallet_blacklist.chain_type),
+      reason = COALESCE(NULLIF(excluded.reason, ''), wallet_blacklist.reason),
+      player_id = COALESCE(excluded.player_id, wallet_blacklist.player_id),
+      created_by = COALESCE(excluded.created_by, wallet_blacklist.created_by),
+      updated_at = datetime('now')
+  `),
+  deleteWalletBlacklist: db.prepare(`DELETE FROM wallet_blacklist WHERE lower(wallet) = lower(?)`),
+  listWalletBlacklist: db.prepare(`
+    SELECT *
+    FROM wallet_blacklist
+    ORDER BY updated_at DESC, created_at DESC
+    LIMIT ?
+  `),
   // Heartbeat — fired on every authenticated API call by the auth
   // middleware. Idempotent (single UPDATE), no event sourcing needed.
   // The TEXT column stores ISO-ish "YYYY-MM-DD HH:MM:SS" so SQLite's
@@ -3938,6 +4003,7 @@ function isPlayerSolanaWalletLinked(playerId, wallet) {
   const pid = String(playerId || '').trim();
   const address = String(wallet || '').trim();
   if (!pid || !address) return false;
+  if (isWalletBlacklisted(address)) return false;
   const row = db.prepare(`
     SELECT 1 AS ok
     WHERE EXISTS (
@@ -4959,8 +5025,71 @@ function registerPlayer(name, options = {}) {
   return player;
 }
 
+function isPlayerBanned(player) {
+  return !!(player && player.banned_at);
+}
+
 function authenticatePlayer(token) {
-  return stmts.getPlayerByToken.get(token);
+  const player = stmts.getPlayerByToken.get(token);
+  return isPlayerBanned(player) ? null : player;
+}
+
+function getAdminPlayer(identifier) {
+  const key = String(identifier || '').trim();
+  if (!key) return null;
+  return stmts.getAdminPlayerByIdentifier.get(key, key, key) || null;
+}
+
+function banPlayer(identifier, options = {}) {
+  const player = getAdminPlayer(identifier);
+  if (!player) return null;
+  const reason = String(options.reason || 'admin ban').trim().slice(0, 500) || 'admin ban';
+  const bannedBy = String(options.bannedBy || options.banned_by || 'admin').trim().slice(0, 120) || 'admin';
+  stmts.banPlayerById.run(reason, bannedBy, player.id);
+  return stmts.getPlayerById.get(player.id) || null;
+}
+
+function unbanPlayer(identifier) {
+  const player = getAdminPlayer(identifier);
+  if (!player) return null;
+  stmts.unbanPlayerById.run(player.id);
+  return stmts.getPlayerById.get(player.id) || null;
+}
+
+function walletBlacklistKey(wallet) {
+  return String(wallet || '').trim();
+}
+
+function getWalletBlacklist(wallet) {
+  const key = walletBlacklistKey(wallet);
+  if (!key) return null;
+  return stmts.getWalletBlacklist.get(key) || null;
+}
+
+function isWalletBlacklisted(wallet) {
+  return !!getWalletBlacklist(wallet);
+}
+
+function blacklistWallet(wallet, options = {}) {
+  const key = walletBlacklistKey(wallet);
+  if (!key) return null;
+  const chainType = String(options.chainType || options.chain_type || '').trim().toLowerCase() || null;
+  const reason = String(options.reason || 'admin blacklist').trim().slice(0, 500) || 'admin blacklist';
+  const playerId = String(options.playerId || options.player_id || '').trim() || null;
+  const createdBy = String(options.createdBy || options.created_by || 'admin').trim().slice(0, 120) || 'admin';
+  stmts.upsertWalletBlacklist.run(key, chainType, reason, playerId, createdBy);
+  return getWalletBlacklist(key);
+}
+
+function unblacklistWallet(wallet) {
+  const key = walletBlacklistKey(wallet);
+  if (!key) return { changes: 0 };
+  return stmts.deleteWalletBlacklist.run(key);
+}
+
+function listWalletBlacklist(limit = 200) {
+  const n = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 200)));
+  return stmts.listWalletBlacklist.all(n);
 }
 
 function normalizeDemonKingNftLevel(level) {
@@ -7059,6 +7188,15 @@ module.exports = {
   ALTAR_SKILL_DEFS,
   registerPlayer,
   authenticatePlayer,
+  isPlayerBanned,
+  getAdminPlayer,
+  banPlayer,
+  unbanPlayer,
+  getWalletBlacklist,
+  isWalletBlacklisted,
+  blacklistWallet,
+  unblacklistWallet,
+  listWalletBlacklist,
   ensureReferralCode,
   issueReferralCodeForPlayer,
   getReferralSettings,
