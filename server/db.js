@@ -6261,15 +6261,17 @@ function upgradeBuilding(playerId, buildingId) {
   const nextLevel = building.level + 1;
   const thLevel = getTownHallLevel(playerId);
 
-  // Town Hall upgrade — check all required buildings are at current TH level
+  // Town Hall upgrade — check required buildings up to their own cap.
   if (building.type === 'town_hall') {
     const required = TH_UPGRADE_REQUIRES[building.level];
     if (required) {
       const allBuildings = stmts.getBuildings.all(playerId);
       for (const reqType of required) {
-        const found = allBuildings.find(b => b.type === reqType && b.level >= building.level);
+        const reqDef = BUILDING_DEFS[reqType] || {};
+        const requiredLevel = Math.min(building.level, Number(reqDef.max_level) || building.level);
+        const found = allBuildings.find(b => b.type === reqType && b.level >= requiredLevel);
         if (!found) {
-          return { error: `Upgrade all ${reqType} to level ${building.level} first` };
+          return { error: `Upgrade all ${reqType} to level ${requiredLevel} first` };
         }
       }
     }

@@ -185,6 +185,50 @@ function troopUnitSpanAt(troops, index) {
   return { start, end };
 }
 
+function loadedTroopGroups(troops) {
+  const list = Array.isArray(troops) ? troops : [];
+  const byKey = new Map();
+  const groups = [];
+  let index = 0;
+  while (index < list.length) {
+    const entry = list[index];
+    if (!entry || entry === SLOT_FILLER) {
+      index += 1;
+      continue;
+    }
+    const span = troopUnitSpanAt(list, index) || { start: index, end: index + 1 };
+    const base = troopBaseName(entry);
+    const isTokenBacked = !!nftBackedTroopConfig(base);
+    const key = isTokenBacked ? `${base}:${String(entry)}` : base;
+    let group = byKey.get(key);
+    if (!group) {
+      group = {
+        key,
+        entry,
+        base,
+        count: 0,
+        slots: 0,
+        start: span.start,
+        end: span.end,
+        spans: [],
+      };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    group.count += 1;
+    group.slots += Math.max(1, span.end - span.start);
+    group.end = span.end;
+    group.spans.push(span);
+    index = span.end;
+  }
+  return groups.sort((a, b) => a.start - b.start);
+}
+
+function loadedTroopGroupForSlot(groups, slot) {
+  if (!Array.isArray(groups) || slot === null || slot === undefined) return null;
+  return groups.find((group) => group.spans.some((span) => slot >= span.start && slot < span.end)) || null;
+}
+
 function troopSwapPlacement(troops, slot, replacementName, capacity) {
   const list = Array.isArray(troops) ? troops : [];
   const replacementCost = troopSlotCost(replacementName);
@@ -1043,7 +1087,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
       return troopLvls[base] || troopLvls[base.toLowerCase()] || troopLvls[name] || troopLvls[String(name || '').toLowerCase()] || 1;
     };
     const allTroops = ['Knight', 'Mage', 'Archer'];
+    const loadedGroups = loadedTroopGroups(shipTroops);
     const selectedSpan = swapSlot !== null ? troopUnitSpanAt(shipTroops, swapSlot) : null;
+    const selectedGroup = loadedTroopGroupForSlot(loadedGroups, swapSlot);
+    const freeSlots = Math.max(0, capacity - shipTroops.length);
     const nftKeysFromTroops = (troops, base, skipSpan = null) => {
       const keys = [];
       (Array.isArray(troops) ? troops : []).forEach((entry, index) => {
@@ -1251,64 +1298,80 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
           {/* Loaded troops slots */}
           <div style={{...LT.loadedBar, padding: isMobile ? '11px 10px' : '12px 16px', flexWrap: 'wrap', gap: isMobile ? 7 : 8, ...(mobileLoadedBarStyle || {})}}>
-            {Array.from({ length: capacity }).map((_, i) => {
-              const t = shipTroops[i];
-              const isSwapping = swapSlot === i;
-              if (t) {
-                if (t === SLOT_FILLER) {
-                  return (
-                    <div key={i} style={{...LT.emptySlot, width: slotW, height: slotH, opacity: 0.6}}>
-                    <span style={{fontSize: isMobile ? 11 : 12, fontWeight: 900}}>2/2</span>
-                    </div>
-                  );
-                }
-                const base = troopBaseName(t);
-                const level = getTroopLvl(t);
-                const nftCfg = nftBackedTroopConfig(base);
-                const nftTokens = base === 'FireDragon' ? dragonNfts : demonKingNfts;
-                const imgSrc = nftCfg?.image || UNIT_IMAGES[base];
-                const nftTokenLabel = nftCfg
-                  ? demonKingDisplayLabel(demonKingDisplayIdFromEntry(t, nftTokens))
-                  : '';
-                return (
-                  <div
-                    key={i}
-                    style={{ ...LT.loadedSlot, width: slotW, height: slotH, ...(isSwapping ? LT.loadedSlotActive : {}) }}
-                    onClick={() => setSwapSlot(isSwapping ? null : i)}
-                  >
-                    <div style={{ ...LT.troopImgWrap, paddingBottom: 0 }}>
-                      {imgSrc && (
-                        <div key={`${t}-${i}`} style={{ animation: 'swapFlash 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards', width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                          <img
-                            src={imgSrc}
-                            alt={base}
-                            style={{
-                              ...LT.loadedSlotImg,
-                              transform: `scale(${CARD_TROOP_STYLE_MAP[base]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[base]?.offsetY || '0%'})`,
-                            }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                    {nftTokenLabel && (
-                      <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 11 : 9}}>
-                        {nftTokenLabel}
+            {loadedGroups.map((group) => {
+              const t = group.entry;
+              const base = group.base;
+              const isSwapping = !!selectedGroup && selectedGroup.key === group.key;
+              const nftCfg = nftBackedTroopConfig(base);
+              const nftTokens = base === 'FireDragon' ? dragonNfts : demonKingNfts;
+              const imgSrc = nftCfg?.image || UNIT_IMAGES[base];
+              const nftTokenLabel = nftCfg
+                ? demonKingDisplayLabel(demonKingDisplayIdFromEntry(t, nftTokens))
+                : '';
+              return (
+                <div
+                  key={group.key}
+                  style={{ ...LT.loadedSlot, width: slotW, height: slotH, ...(isSwapping ? LT.loadedSlotActive : {}) }}
+                  onClick={() => setSwapSlot(isSwapping ? null : group.start)}
+                >
+                  <div style={{ ...LT.troopImgWrap, paddingBottom: 0 }}>
+                    {imgSrc && (
+                      <div key={`${t}-${group.count}-${group.slots}`} style={{ animation: 'swapFlash 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards', width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                        <img
+                          src={imgSrc}
+                          alt={base}
+                          style={{
+                            ...LT.loadedSlotImg,
+                            transform: `scale(${CARD_TROOP_STYLE_MAP[base]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[base]?.offsetY || '0%'})`,
+                          }}
+                        />
                       </div>
                     )}
-                    {isSwapping && <div style={LT.swapBadge}>SWAP</div>}
                   </div>
-                );
-              }
-              return (
-                <div key={`empty-${i}`} style={{...LT.emptySlot, width: slotW, height: slotH}} onClick={() => setSwapSlot(i)}>?</div>
+                  {nftTokenLabel && (
+                    <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 11 : 9}}>
+                      {nftTokenLabel}
+                    </div>
+                  )}
+                  {group.count > 1 && (
+                    <div style={{...LT.loadedCountBadge, fontSize: isMobile ? 11 : 12}}>
+                      x{group.count}
+                    </div>
+                  )}
+                  {group.slots > group.count && (
+                    <div style={{...LT.loadedSlotUseBadge, fontSize: isMobile ? 8 : 9}}>
+                      {group.slots} slots
+                    </div>
+                  )}
+                  {isSwapping && <div style={LT.swapBadge}>SWAP</div>}
+                </div>
               );
             })}
+            <div
+              key="free-slots"
+              style={{
+                ...LT.freeSlotSummary,
+                width: Math.max(slotW, isMobile ? 74 : 86),
+                height: slotH,
+                ...(freeSlots <= 0 ? LT.freeSlotSummaryFull : null),
+              }}
+              onClick={() => {
+                if (freeSlots > 0) setSwapSlot(shipTroops.length);
+              }}
+            >
+              <span style={{...LT.freeSlotNumber, fontSize: isMobile ? 20 : 24}}>{freeSlots}</span>
+              <span style={{...LT.freeSlotText, fontSize: isMobile ? 9 : 10}}>
+                {freeSlots > 0 ? 'FREE SLOTS' : 'FULL'}
+              </span>
+            </div>
           </div>
 
           {swapSlot !== null && (
             <div style={{...LT.swapActionBar, ...(isMobile ? { flexDirection: 'column', gap: 6, padding: '8px 10px' } : {})}}>
               <div style={{...LT.swapHint, fontSize: isMobile ? 12 : 14}}>
-                {selectedSpan ? `Slot ${selectedSpan.start + 1} selected` : `Select a troop below for slot ${swapSlot + 1}`}
+                {selectedGroup
+                  ? `${selectedGroup.base}${selectedGroup.count > 1 ? ` x${selectedGroup.count}` : ''} selected`
+                  : selectedSpan ? `Slot ${selectedSpan.start + 1} selected` : `Select a troop below for slot ${swapSlot + 1}`}
               </div>
               {selectedSpan && (
                 <button type="button" style={LT.removeTroopBtn} onClick={handleRemoveTroop}>
@@ -2319,10 +2382,75 @@ const LT = {
     transformOrigin: 'top center',
   },
   loadedSlotActive: { border: '2px solid #E53935', filter: 'brightness(1.15)', transform: 'scale(1.05)', zIndex: 10 },
+  loadedCountBadge: {
+    position: 'absolute',
+    right: 5,
+    bottom: 5,
+    minWidth: 24,
+    padding: '3px 6px',
+    borderRadius: 999,
+    background: 'linear-gradient(180deg, #ffd95a 0%, #f39b15 100%)',
+    border: '1px solid rgba(101, 58, 13, 0.45)',
+    color: '#4a2f1c',
+    fontWeight: 900,
+    lineHeight: 1,
+    textAlign: 'center',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.35)',
+    zIndex: 18,
+  },
+  loadedSlotUseBadge: {
+    position: 'absolute',
+    left: 5,
+    bottom: 5,
+    padding: '3px 5px',
+    borderRadius: 5,
+    background: 'rgba(32, 20, 12, 0.72)',
+    color: '#fff4c7',
+    border: '1px solid rgba(255, 229, 145, 0.45)',
+    fontWeight: 900,
+    lineHeight: 1,
+    textTransform: 'uppercase',
+    textShadow: '0 1px 2px rgba(0,0,0,0.9)',
+    zIndex: 18,
+  },
   emptySlot: {
     width: 70, height: 90, background: 'rgba(0,0,0,0.05)', border: '2px dashed #928d81', borderRadius: 8,
     display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#928d81', fontSize: 24, fontWeight: 900, cursor: 'pointer',
     transition: 'filter 0.1s',
+  },
+  freeSlotSummary: {
+    width: 86,
+    height: 90,
+    borderRadius: 8,
+    background: 'rgba(0,0,0,0.05)',
+    border: '2px dashed #928d81',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#786f60',
+    fontWeight: 900,
+    cursor: 'pointer',
+    textAlign: 'center',
+    gap: 4,
+    transition: 'filter 0.1s',
+  },
+  freeSlotSummaryFull: {
+    opacity: 0.58,
+    cursor: 'default',
+  },
+  freeSlotNumber: {
+    color: '#5f4b35',
+    fontWeight: 900,
+    lineHeight: 1,
+  },
+  freeSlotText: {
+    maxWidth: '100%',
+    padding: '0 4px',
+    color: '#928d81',
+    fontWeight: 900,
+    lineHeight: 1.05,
+    textTransform: 'uppercase',
   },
   grid: {
     display: 'flex', flexWrap: 'wrap', gap: 10,

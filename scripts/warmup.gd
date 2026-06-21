@@ -18,12 +18,12 @@ extends Node3D
 ## attack starts.
 
 ## WebGL2 shader compile is async and can take several rendered frames per
-## variant. FireDragon's full breath VFX lives for ~0.8s, so combat warmup
-## must keep the real effect alive long enough for particles/material variants
-## to compile before the first attack starts.
+## variant. Keep combat warmup short enough that attack entry is not dominated
+## by hidden pre-draw work; the nodes below already exercise each material
+## variant on the first few frames.
 const HOME_WARMUP_FRAMES: int = 4
-const COMBAT_WARMUP_FRAMES: int = 80
-const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [8, 48]
+const COMBAT_WARMUP_FRAMES: int = 40
+const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [8, 24]
 ## Sub-pixel scales (< ~0.005) are frustum-culled by both renderers — the draw
 ## call never reaches the GPU and the pipeline isn't compiled. 0.02 is small
 ## enough to be invisible against the water/sky but big enough to rasterize.

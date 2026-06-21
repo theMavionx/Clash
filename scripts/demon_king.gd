@@ -96,6 +96,8 @@ const ANIM_NAME_MAP: Dictionary = {
 
 static var _merged_anim_cache_by_skeleton: Dictionary = {}
 
+const DEBUG_DEMON_KING_ANIMS: bool = false
+
 var player_troop_levels: Dictionary = {}
 var nft_rarity: String = "common"
 var _manual_tint_variant: bool = false
@@ -203,6 +205,7 @@ func _init_stats() -> void:
 	var s: Dictionary = _compute_dynamic_stats(level, player_troop_levels, nft_rarity)
 	move_speed = 0.38        # 24% slower than Knight (0.50) — heavy boss feel
 	attack_range = 0.32      # 33% greater reach than Knight (0.24) — large hit zone
+	can_pass_through_friendly_units = true
 	hp = s.hp
 	damage = s.damage
 	atk_speed = s.atk_speed
@@ -334,7 +337,8 @@ func _use_embedded_anim_player_and_merge() -> void:
 	if target_skel == null:
 		push_warning("DemonKing: no Skeleton3D under anim_player root")
 	var target_skel_rel: NodePath = ap_root_node.get_path_to(target_skel) if target_skel else ^"Skeleton3D"
-	print("[DemonKing] anim_player root: ", ap_root_node.name, " skel_rel: ", target_skel_rel)
+	if DEBUG_DEMON_KING_ANIMS:
+		print("[DemonKing] anim_player root: ", ap_root_node.name, " skel_rel: ", target_skel_rel)
 
 	# Merge sibling FBX animations with bone-track retargeting + per-clip
 	# loop mode. Warmup builds this cache once so the first real deployment
@@ -352,7 +356,8 @@ func _use_embedded_anim_player_and_merge() -> void:
 	if not anim_player.has_animation(attack_anim):
 		push_warning("DemonKing: '%s' alias missing — attack animation will not play" % attack_anim)
 
-	print("[DemonKing] lib anims: ", anim_player.get_animation_list())
+	if DEBUG_DEMON_KING_ANIMS:
+		print("[DemonKing] lib anims: ", anim_player.get_animation_list())
 
 
 func _merge_cached_sibling_anims(lib: AnimationLibrary, target_skel_rel: NodePath) -> void:

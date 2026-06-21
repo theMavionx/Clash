@@ -410,10 +410,15 @@ func _can_upgrade_th() -> Dictionary:
 	var required: Array = TH_UPGRADE_REQUIRES.get(th_level, [])
 	var missing: Array = []
 	for req_type in required:
+		var req_def: Dictionary = building_defs.get(req_type, {})
+		var req_hp_levels: Array = req_def.get("hp_levels", [])
+		var required_level: int = th_level
+		if not req_hp_levels.is_empty():
+			required_level = mini(th_level, req_hp_levels.size())
 		var found: bool = false
 		for bs in _building_systems:
 			for b in bs.placed_buildings:
-				if b.get("id", "") == req_type and b.get("level", 1) >= th_level:
+				if b.get("id", "") == req_type and b.get("level", 1) >= required_level:
 					found = true
 					break
 			if found:

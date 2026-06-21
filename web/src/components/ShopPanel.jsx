@@ -16,6 +16,7 @@ import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
 import imgMageTower from '../assets/buildings/magetower.png';
+import imgMortar from '../assets/buildings/mortar.png';
 import imgAltar from '../assets/units/altar.png';
 
 const ALTAR_PRICE_LABEL = '$15.00';
@@ -70,7 +71,7 @@ const THUMBNAIL_MAP = {
   archer_tower: imgArcherTower,
   archertower: imgArcherTower,
   mage_tower: imgMageTower,
-  mortar: imgTurret,
+  mortar: imgMortar,
   storage: imgStorage,
   altar: imgAltar,
 };

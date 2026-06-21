@@ -7,6 +7,7 @@ extends Node3D
 @export var attack_range: float = 0.15
 @export var separation_radius: float = 0.14
 @export var separation_force: float = 0.6
+@export var can_pass_through_friendly_units: bool = false
 @export var attack_sfx_path: String = ""
 @export_enum("ground", "air") var unit_target_type: String = "ground"
 
@@ -1392,18 +1393,20 @@ func _apply_separation_steering(move_dir: Vector3, target_pos: Vector3, delta: f
 	var forward: Vector3 = move_dir / move_len if move_len > 0.0001 else Vector3.ZERO
 	var lateral: Vector3 = Vector3.UP.cross(forward).normalized() if forward.length_squared() > 0.0001 else Vector3.ZERO
 
-	# Troop-to-troop separation
-	for other in _get_troops_cached():
-		if other == self or not is_instance_valid(other):
-			continue
-		var to_other = other.global_position - global_position
-		to_other.y = 0
-		var d_sq = to_other.length_squared()
-		if d_sq > sep_range_sq or d_sq < 0.000001:
-			continue
-		var d = sqrt(d_sq)
-		if d < separation_radius:
-			sep -= (to_other / d) * (separation_radius - d) / separation_radius
+	# Troop-to-troop separation. Heavy pass-through units still avoid guards
+	# and buildings, but allied troops should not be able to body-block them.
+	if not can_pass_through_friendly_units:
+		for other in _get_troops_cached():
+			if other == self or not is_instance_valid(other):
+				continue
+			var to_other = other.global_position - global_position
+			to_other.y = 0
+			var d_sq = to_other.length_squared()
+			if d_sq > sep_range_sq or d_sq < 0.000001:
+				continue
+			var d = sqrt(d_sq)
+			if d < separation_radius:
+				sep -= (to_other / d) * (separation_radius - d) / separation_radius
 
 	# Guard avoidance — light push from non-target guards
 	for guard in _get_guards_list_cached():
@@ -1519,6 +1522,10 @@ func _move_to_target(delta: float) -> void:
 
 
 func _get_separation() -> Vector3:
+	if can_pass_through_friendly_units:
+		_last_separation = Vector3.ZERO
+		return Vector3.ZERO
+
 	# Use cached result from move (updated every 3rd frame)
 	_sep_counter += 1
 	if _sep_counter % 3 != 0:

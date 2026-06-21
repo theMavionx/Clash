@@ -73,6 +73,10 @@ function isNftBackedTroopType(troopType) {
   return troopType === 'demon_king' || troopType === 'fire_dragon';
 }
 
+function troopPassesThroughFriendlyUnits(troop) {
+  return normalizeTroopTypeName(troop?.type) === 'demon_king';
+}
+
 function troopEntryLevel(name) {
   const troopType = normalizeTroopTypeName(name);
   if (isNftBackedTroopType(troopType)) return null;
@@ -245,17 +249,19 @@ function applyMovementSteering(t, moveX, moveZ, target, aliveTroops, aliveGuards
   const sepRangeSq = SEPARATION_RADIUS * SEPARATION_RADIUS * 4.0;
 
   if (SEPARATION_RADIUS > 0 && SEPARATION_FORCE > 0) {
-    for (const other of aliveTroops) {
-      if (other === t || other.hp <= 0) continue;
-      const ox = other.x - t.x;
-      const oz = other.z - t.z;
-      const dsq = ox * ox + oz * oz;
-      if (dsq > sepRangeSq || dsq < 0.000001) continue;
-      const d = Math.sqrt(dsq);
-      if (d < SEPARATION_RADIUS) {
-        const push = (SEPARATION_RADIUS - d) / SEPARATION_RADIUS;
-        sepX -= (ox / d) * push;
-        sepZ -= (oz / d) * push;
+    if (!troopPassesThroughFriendlyUnits(t)) {
+      for (const other of aliveTroops) {
+        if (other === t || other.hp <= 0) continue;
+        const ox = other.x - t.x;
+        const oz = other.z - t.z;
+        const dsq = ox * ox + oz * oz;
+        if (dsq > sepRangeSq || dsq < 0.000001) continue;
+        const d = Math.sqrt(dsq);
+        if (d < SEPARATION_RADIUS) {
+          const push = (SEPARATION_RADIUS - d) / SEPARATION_RADIUS;
+          sepX -= (ox / d) * push;
+          sepZ -= (oz / d) * push;
+        }
       }
     }
 

@@ -7,6 +7,7 @@ node_modules/
 
 # Server
 server/*.db
+server/*.db.backup-*
 server/*.db-wal
 server/*.db-shm
 

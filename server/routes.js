@@ -11399,28 +11399,38 @@ router.post('/troop-died', auth, (req, res) => {
   });
 });
 
-// Get casualties: compare ship_troops vs ship_troops_template to find missing troops
-router.get('/casualties', auth, (req, res) => {
-  _sanitizeDisabledShipTroopsForPlayer(req.player.id);
-  const ports = db.db.prepare('SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
+function _buildReinforcePlan(playerId) {
+  _sanitizeDisabledShipTroopsForPlayer(playerId);
+  const ports = db.db.prepare('SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
   const casualties = {};
-  let totalMissing = 0;
+  const shipsToRestore = [];
+  let totalToRestore = 0;
 
   for (const port of ports) {
-    const current = JSON.parse(port.ship_troops || '[]');
-    const template = JSON.parse(port.ship_troops_template || '[]');
+    let current = [];
+    let template = [];
+    try { current = JSON.parse(port.ship_troops || '[]'); } catch { current = []; }
+    try { template = JSON.parse(port.ship_troops_template || '[]'); } catch { template = []; }
+    if (template.length === 0) continue;
+
     const missingSlots = Math.max(0, template.length - current.length);
     if (missingSlots <= 0) continue;
-    // Count how many of each troop type are missing
+
+    const capacity = _shipCapacityForPort(port);
+    const slotBudget = Math.max(0, Math.min(missingSlots, capacity - current.length));
+    if (slotBudget <= 0) continue;
+
     const currentCounts = {};
     for (const t of current) {
       if (_isSlotFiller(t)) continue;
       const normalized = _normalizeTroopName(t);
       currentCounts[normalized] = (currentCounts[normalized] || 0) + 1;
     }
-    let portMissing = 0;
+
+    const toAdd = [];
+    let restoredCount = 0;
     for (const t of template) {
-      if (portMissing >= missingSlots) break;
+      if (toAdd.length >= slotBudget) break;
       if (_isSlotFiller(t)) continue;
       const normalized = _normalizeTroopName(t);
       if (_isNftBackedTroop(normalized)) continue;
@@ -11428,59 +11438,35 @@ router.get('/casualties', auth, (req, res) => {
         currentCounts[normalized]--;
       } else {
         const slotCost = _troopSlotCost(normalized);
+        if (toAdd.length + slotCost > slotBudget) continue;
+        _appendTroopSlots(toAdd, normalized);
         casualties[normalized] = (casualties[normalized] || 0) + 1;
-        totalMissing++;
-        portMissing += slotCost;
+        restoredCount += 1;
       }
+    }
+    if (toAdd.length > 0) {
+      shipsToRestore.push({ port, current, toAdd });
+      totalToRestore += restoredCount;
     }
   }
 
+  return { casualties, totalToRestore, shipsToRestore };
+}
+
+// Get casualties: compare ship_troops vs ship_troops_template to find restorable missing troops
+router.get('/casualties', auth, (req, res) => {
+  const plan = _buildReinforcePlan(req.player.id);
   res.json({
-    casualties,
-    total: totalMissing,
-    cost: totalMissing * REINFORCE_COST,
+    casualties: plan.casualties,
+    total: plan.totalToRestore,
+    cost: plan.totalToRestore * REINFORCE_COST,
   });
 });
 
 // Reinforce: restore dead troops from template (costs 50 gold per restored troop)
 router.post('/reinforce', auth, (req, res) => {
   const txn = db.db.transaction(() => {
-    _sanitizeDisabledShipTroopsForPlayer(req.player.id);
-    const ports = db.db.prepare('SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
-
-    let totalToRestore = 0;
-    const shipsToRestore = [];
-
-    for (const port of ports) {
-      const current = JSON.parse(port.ship_troops || '[]');
-      const template = JSON.parse(port.ship_troops_template || '[]');
-      if (template.length === 0) continue;
-      const missingSlots = Math.max(0, template.length - current.length);
-      if (missingSlots <= 0) continue;
-      // Count missing troops by type (template - current)
-      const currentCounts = {};
-      for (const t of current) {
-        if (_isSlotFiller(t)) continue;
-        const normalized = _normalizeTroopName(t);
-        currentCounts[normalized] = (currentCounts[normalized] || 0) + 1;
-      }
-      const toAdd = [];
-      for (const t of template) {
-        if (toAdd.length >= missingSlots) break;
-        if (_isSlotFiller(t)) continue;
-        const normalized = _normalizeTroopName(t);
-        if (_isNftBackedTroop(normalized)) continue;
-        if (currentCounts[normalized] && currentCounts[normalized] > 0) {
-          currentCounts[normalized]--;
-        } else {
-          _appendTroopSlots(toAdd, normalized);
-          totalToRestore += 1;
-        }
-      }
-      if (toAdd.length > 0) {
-        shipsToRestore.push({ port, current, toAdd });
-      }
-    }
+    const { totalToRestore, shipsToRestore } = _buildReinforcePlan(req.player.id);
 
     if (totalToRestore === 0) return { cost: 0, restored: 0, ships: [] };
 
@@ -11491,13 +11477,11 @@ router.post('/reinforce', auth, (req, res) => {
     });
     if (spent?.error) throw { status: 400, error: `Not enough gold (need ${totalCost})` };
 
-    // Append missing troops to current (preserves swaps, only restores casualties)
-    // Cap to ship capacity to prevent overflow from swap+reinforce combo
+    // Append only pre-clipped missing troops to current (preserves swaps,
+    // restores casualties, and never charges for troops that do not fit).
     const resultShips = [];
     for (const { port, current, toAdd } of shipsToRestore) {
-      const capacity = _shipCapacityForPort(port);
-      const slotsAvailable = Math.max(0, capacity - current.length);
-      const restored = [...current, ...toAdd.slice(0, slotsAvailable)];
+      const restored = [...current, ...toAdd];
       const troopsJson = JSON.stringify(restored);
       db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, port.id);
       resultShips.push({ id: port.id, ship_troops: restored });
@@ -19558,6 +19542,15 @@ const FUTURES_TOURNAMENT_SYNC_DEXES = new Set([
 ]);
 const tournamentParticipantSyncCache = new Map();
 
+function tournamentParticipantSyncDex(t, participant) {
+  const candidateDex = String(participant?.player_dex || participant?.dex || participant?.team_dex || '').toLowerCase();
+  if (FUTURES_TOURNAMENT_SYNC_DEXES.has(candidateDex) && isTournamentForDex(t, candidateDex)) {
+    return candidateDex;
+  }
+  const tournamentDex = String(t?.dex || '').toLowerCase();
+  return FUTURES_TOURNAMENT_SYNC_DEXES.has(tournamentDex) ? tournamentDex : null;
+}
+
 function syncFuturesTournamentRows(playerId, dex, opts = {}) {
   const normalizedDex = String(dex || '').toLowerCase();
   if (!playerId || !FUTURES_TOURNAMENT_SYNC_DEXES.has(normalizedDex)) {
@@ -19597,14 +19590,13 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
   const t = tournament && typeof tournament === 'object'
     ? tournament
     : db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(parseInt(tournament, 10));
-  const normalizedDex = String(t?.dex || '').toLowerCase();
-  if (!t?.id || !FUTURES_TOURNAMENT_SYNC_DEXES.has(normalizedDex)) {
+  if (!t?.id) {
     return { ok: true, skipped: true };
   }
   if (opts.liveOnly !== false && tournamentPhase(t) !== 'live') {
     return { ok: true, skipped: 'not_live' };
   }
-  const cacheKey = `${t.id}:${normalizedDex}`;
+  const cacheKey = `${t.id}:participants`;
   const nowMs = Date.now();
   const cooldownMs = Math.max(5000, Number(process.env.TOURNAMENT_GLOBAL_SYNC_COOLDOWN_MS || 45000));
   const cachedAt = tournamentParticipantSyncCache.get(cacheKey) || 0;
@@ -19614,31 +19606,47 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
   tournamentParticipantSyncCache.set(cacheKey, nowMs);
   const limit = Math.max(1, Math.min(1000, Number(opts.limit || process.env.TOURNAMENT_GLOBAL_SYNC_LIMIT || 500)));
   const participants = db.db.prepare(`
-    SELECT player_id
-    FROM tournament_participants
-    WHERE tournament_id = ? AND left_at IS NULL
-    ORDER BY last_activity_at DESC, joined_at DESC
+    SELECT tp.player_id, tp.team_dex, p.dex AS player_dex
+    FROM tournament_participants tp
+    JOIN players p ON p.id = tp.player_id
+    WHERE tp.tournament_id = ? AND tp.left_at IS NULL
+    ORDER BY tp.last_activity_at DESC, tp.joined_at DESC
     LIMIT ?
   `).all(t.id, limit);
   const summary = {
     ok: true,
     tournament_id: t.id,
-    dex: normalizedDex,
     players: participants.length,
     rows: 0,
     inserted: 0,
     activity_events: 0,
     failed: 0,
+    skipped: 0,
+    by_dex: {},
   };
   for (const participant of participants) {
-    const result = syncFuturesTournamentRows(participant.player_id, normalizedDex, { tournamentId: t.id });
-    if (!result?.ok) {
-      summary.failed++;
+    const syncDex = tournamentParticipantSyncDex(t, participant);
+    if (!syncDex) {
+      summary.skipped++;
       continue;
     }
-    summary.rows += Number(result.rows || 0);
-    summary.inserted += Number(result.main?.inserted || 0);
-    summary.activity_events += Number(result.main?.activity_events || 0);
+    if (!summary.by_dex[syncDex]) summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, activity_events: 0, failed: 0 };
+    summary.by_dex[syncDex].players++;
+    const result = syncFuturesTournamentRows(participant.player_id, syncDex, { tournamentId: t.id });
+    if (!result?.ok) {
+      summary.failed++;
+      summary.by_dex[syncDex].failed++;
+      continue;
+    }
+    const rows = Number(result.rows || 0);
+    const inserted = Number(result.main?.inserted || result.main?.credited_rows || 0);
+    const activityEvents = Number(result.main?.activity_events || result.main?.credited_rows || 0);
+    summary.rows += rows;
+    summary.inserted += inserted;
+    summary.activity_events += activityEvents;
+    summary.by_dex[syncDex].rows += rows;
+    summary.by_dex[syncDex].inserted += inserted;
+    summary.by_dex[syncDex].activity_events += activityEvents;
   }
   if (summary.inserted || summary.failed) {
     console.log('[tournament-sync] participants', JSON.stringify(summary));
@@ -19710,7 +19718,6 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
   if (!t) {
     return res.json({ tournament: null, joined: false, phase: null, can_join: false, reward_schedule: null });
   }
-  const pub = tournamentRowToPublic(t);
   const needsClashRewardWallet = tournamentRequiresClashRewardWallet(t);
   let me = db.db.prepare(`
     SELECT * FROM tournament_participants
@@ -19720,6 +19727,16 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
   if (!needsClashRewardWallet || hasValidRewardWallet) {
     me = ensureLuckyRaiderParticipant(t, req.player);
   }
+  if (me && me.left_at === null && tournamentPhase(t) === 'live' && isTournamentForDex(t, req.player.dex)) {
+    const sync = syncFuturesTournamentRows(req.player.id, req.player.dex, { tournamentId: t.id });
+    if (sync?.ok && Number(sync.main?.credited_rows || sync.main?.inserted || 0) > 0) {
+      me = db.db.prepare(`
+        SELECT * FROM tournament_participants
+        WHERE tournament_id = ? AND player_id = ?
+      `).get(t.id, req.player.id);
+    }
+  }
+  const pub = tournamentRowToPublic(t);
   const rewardSchedule = tournamentRewardScheduleState(t, req.player.id);
   return res.json({
     tournament: { ...pub, reward_schedule: rewardSchedule },
@@ -21171,13 +21188,42 @@ router.delete('/admin/tournaments/:id', adminAuth, (req, res) => {
 
 let tournamentDailyPoolTimer = null;
 
+function syncTournamentAwardInputs() {
+  const rows = db.db.prepare(`
+    SELECT *
+      FROM tournaments
+     WHERE status = 'active'
+       AND (
+         COALESCE(scoring_mode, 'live') = 'daily_pool'
+         OR COALESCE(event_kind, 'standard') = 'lucky_raider'
+       )
+  `).all();
+  const summaries = [];
+  for (const t of rows) {
+    let usesLucky = false;
+    try { usesLucky = !!normalizeTournamentRewardConfig(t.reward_config || {}).lucky_daily_raider.enabled; } catch {}
+    if (!tournamentUsesDailyPool(t) && !usesLucky) continue;
+    try {
+      const summary = syncFuturesTournamentParticipants(t);
+      const skippedReason = typeof summary?.skipped === 'string' ? summary.skipped : null;
+      if (summary && !skippedReason && (summary.rows || summary.inserted || summary.failed)) {
+        summaries.push(summary);
+      }
+    } catch (err) {
+      console.warn(`[tournament-sync] award input sync failed tournament=${t.id}:`, err?.message || err);
+    }
+  }
+  return summaries;
+}
+
 async function runTournamentDailyPoolSweep(label = 'timer') {
   try {
+    const syncSummaries = syncTournamentAwardInputs();
     const result = db.awardPendingTournamentDailyPools({
       maxDays: Math.max(1, Math.min(60, Number(process.env.TOURNAMENT_DAILY_POOL_MAX_DAYS || 14))),
     });
-    if (Number(result?.processed || 0) > 0) {
-      console.log(`[tournament daily-pool ${label}] processed=${result.processed}`);
+    if (Number(result?.processed || 0) > 0 || syncSummaries.length) {
+      console.log(`[tournament daily-pool ${label}] processed=${result?.processed || 0} synced=${syncSummaries.length}`);
     }
     await luckyRaiderPayouts.runLuckyRaiderPayoutSweep(`daily-pool:${label}`);
   } catch (err) {

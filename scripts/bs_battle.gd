@@ -203,6 +203,10 @@ func _paid_casualty_counts(casualties: Dictionary = {}, use_pending_if_empty: bo
 	return counts
 
 
+func _actual_battle_casualties() -> Dictionary:
+	return _paid_casualty_counts(_pending_troop_death_counts)
+
+
 func _flush_troop_deaths_once(casualties: Dictionary = {}, use_pending_if_empty: bool = false) -> void:
 	if _troop_deaths_flushed:
 		return
@@ -1165,18 +1169,9 @@ func _on_town_hall_destroyed() -> void:
 	if is_instance_valid(bs):
 		await bs.get_tree().process_frame
 
-	# 1. Set all troops to VICTORY after cleanup (they stop fighting)
-	var deployed_troops: Dictionary = {}
-	var attack_sys: Node = bs.get_node_or_null("../AttackSystem")
-	var fleet_ref: Array = attack_sys._fleet if attack_sys else _saved_fleet
-	for ship in fleet_ref:
-		if not ship.get("_placed", false):
-			continue
-		for t_name in ship.get("troops", []):
-			if str(t_name) == "_SLOT_FILLER_":
-				continue
-			deployed_troops[t_name] = deployed_troops.get(t_name, 0) + 1
-	var surviving_troops: Dictionary = {}
+	# 1. Set all spawned troops to VICTORY after cleanup (they stop fighting).
+	# Very fast TH kills can happen while ship troops are still in delayed spawn,
+	# so casualties come from actual death reports, not deployed-minus-survivors.
 	for troop in bs.get_tree().get_nodes_in_group("troops"):
 		if is_instance_valid(troop) and "state" in troop:
 			if troop.has_method("_play_victory"):
@@ -1184,9 +1179,6 @@ func _on_town_hall_destroyed() -> void:
 					troop._play_victory()
 			else:
 				troop.state = troop.State.VICTORY
-			var t_key: String = _troop_script_to_name(troop)
-			if t_key != "":
-				surviving_troops[t_key] = surviving_troops.get(t_key, 0) + 1
 
 	# 2. Collect remaining ALIVE buildings (skip TH and already-destroyed ones)
 	var remaining: Array = []
@@ -1202,15 +1194,11 @@ func _on_town_hall_destroyed() -> void:
 	# Shuffle for random destruction order
 	remaining.shuffle()
 
-	# Count casualties NOW (troop counts are stable after the VICTORY trigger
-	# above — no new troops will spawn, and _play_victory stops them fighting).
+	# Count casualties from troops that actually died before victory.
 	# Doing it here means we can kick off the server submit in parallel with
-	# the chain-destroy animation.
-	var casualties_early: Dictionary = {}
-	for t_name in deployed_troops:
-		var lost_early: int = deployed_troops[t_name] - surviving_troops.get(t_name, 0)
-		if lost_early > 0:
-			casualties_early[t_name] = lost_early
+	# the chain-destroy animation. Only actual death reports are submitted;
+	# delayed-spawn troops are not counted as lost.
+	var casualties_early: Dictionary = _actual_battle_casualties()
 
 	# Fire the server submit in the background so its round-trip (1-3 s)
 	# overlaps with the chain-destroy animation + admire delay instead of
@@ -1917,14 +1905,7 @@ func check_defeat(delta: float) -> void:
 	# Submit defeat
 	var net_def: Node = bs._net
 	var def_id: String = enemy_info.get("id", "")
-	var defeat_casualties: Dictionary = {}
-	for ship in _saved_fleet:
-		if not ship.get("_placed", false):
-			continue  # skip ships that were never deployed
-		for t_name in ship.get("troops", []):
-			if str(t_name) == "_SLOT_FILLER_":
-				continue
-			defeat_casualties[t_name] = defeat_casualties.get(t_name, 0) + 1
+	var defeat_casualties: Dictionary = _actual_battle_casualties()
 	if net_def and net_def.has_token() and def_id != "" and not _victory_declared:
 		_victory_declared = true  # prevent double-submission
 		_record_battle_end("defeat")
@@ -1958,25 +1939,7 @@ func _force_defeat(reason: String) -> void:
 	var audio = bs.get_node_or_null("/root/AudioManager")
 	if audio and audio.has_method("play_result"):
 		audio.play_result()
-	var deployed_troops: Dictionary = {}
-	for ship in _saved_fleet:
-		if not ship.get("_placed", false):
-			continue
-		for t_name in ship.get("troops", []):
-			if str(t_name) == "_SLOT_FILLER_":
-				continue
-			deployed_troops[t_name] = deployed_troops.get(t_name, 0) + 1
-	var surviving_troops: Dictionary = {}
-	for troop in bs.get_tree().get_nodes_in_group("troops"):
-		if is_instance_valid(troop) and "state" in troop:
-			var t_key: String = _troop_script_to_name(troop)
-			if t_key != "":
-				surviving_troops[t_key] = surviving_troops.get(t_key, 0) + 1
-	var defeat_casualties: Dictionary = {}
-	for t_name in deployed_troops:
-		var lost_count: int = deployed_troops[t_name] - surviving_troops.get(t_name, 0)
-		if lost_count > 0:
-			defeat_casualties[t_name] = lost_count
+	var defeat_casualties: Dictionary = _actual_battle_casualties()
 
 	var net_def: Node = bs._net
 	var def_id: String = enemy_info.get("id", "")
