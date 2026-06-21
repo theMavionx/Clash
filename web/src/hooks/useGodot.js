@@ -33,6 +33,34 @@ function isNftBackedTroopName(name) {
     || String(name || '').trim().startsWith('FireDragon:');
 }
 
+function normalizeTroopLevelKey(name) {
+  const normalized = String(name || '').trim().toLowerCase().replace(/[_\s-]/g, '');
+  if (normalized === 'demonking') return 'DemonKing';
+  if (normalized === 'firedragon') return 'FireDragon';
+  if (normalized === 'knight') return 'Knight';
+  if (normalized === 'mage') return 'Mage';
+  if (normalized === 'barbarian') return 'Barbarian';
+  if (normalized === 'archer') return 'Archer';
+  if (normalized === 'ranger') return 'Ranger';
+  return String(name || '').trim();
+}
+
+function normalizeTroopLevels(payload) {
+  const next = {};
+  if (Array.isArray(payload)) {
+    payload.forEach((row) => {
+      const key = normalizeTroopLevelKey(row?.troop_type || row?.troopName || row?.name);
+      if (key) next[key] = Number(row?.level) || 1;
+    });
+    return next;
+  }
+  Object.entries(payload || {}).forEach(([name, level]) => {
+    const key = normalizeTroopLevelKey(name);
+    if (key) next[key] = Number(level) || 1;
+  });
+  return next;
+}
+
 function postReplayTelemetry(data, tokenOverride = null) {
   // Replay telemetry upload is intentionally disabled for now. Godot can still
   // collect local combat diagnostics, but the browser no longer posts the large
@@ -217,6 +245,13 @@ export function GodotProvider({ children }) {
                 } catch {}
               })
               .catch(() => {});
+            fetch('/api/troops', { cache: 'no-store', headers: { 'x-token': shieldFetchToken } })
+              .then(r => r.ok ? r.json() : null)
+              .then(rows => {
+                if (!rows || window._playerToken !== shieldFetchToken) return;
+                setTroopLevels(normalizeTroopLevels(rows));
+              })
+              .catch(() => {});
           }
           break;
         case 'resources':
@@ -245,7 +280,7 @@ export function GodotProvider({ children }) {
           });
           break;
         case 'troop_levels':
-          setTroopLevels(data);
+          setTroopLevels(normalizeTroopLevels(data));
           break;
         case 'demon_king_upgrade_required':
           window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {

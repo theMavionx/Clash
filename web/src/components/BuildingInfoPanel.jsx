@@ -111,7 +111,7 @@ const DESC_MAP = {
   archer_tower: 'Ranged defense against invaders.',
   archertower: 'Ranged defense against invaders.',
   mage_tower: 'Casts splash magic at groups of enemy troops.',
-  mortar: 'Launches arcing splash shells at distant enemies.',
+  mortar: 'Long-range splash defense with a minimum firing range.',
   residence: 'Residences produce gold.',
 };
 

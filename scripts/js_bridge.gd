@@ -212,7 +212,7 @@ func _send_initial_state() -> void:
 		var troop_defs := {}
 		for key in bs.troop_defs:
 			var td = bs.troop_defs[key]
-			troop_defs[key] = {"display": td.display, "costs": {}}
+			troop_defs[key] = {"display": td.display, "costs": {}, "max_level": int(td.get("max_level", 1))}
 			for lvl in td.costs:
 				troop_defs[key].costs[str(lvl)] = td.costs[lvl]
 		# Count how many of each type are already placed

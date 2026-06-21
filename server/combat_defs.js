@@ -4,48 +4,71 @@
 // verification re-simulates client battles server-side, so stat drift here
 // causes valid wins to be rejected.
 
+const MAX_TROOP_LEVEL = 7;
+
 const TROOP_STATS = {
   knight: {
     1: { hp: 450,  damage: 38, atkSpeed: 1.40, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
     2: { hp: 600,  damage: 50, atkSpeed: 1.30, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
     3: { hp: 780,  damage: 66, atkSpeed: 1.20, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
     4: { hp: 1000, damage: 86, atkSpeed: 1.10, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    5: { hp: 1260, damage: 112, atkSpeed: 1.02, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    6: { hp: 1560, damage: 145, atkSpeed: 0.96, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    7: { hp: 1900, damage: 185, atkSpeed: 0.90, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
   },
   mage: {
     1: { hp: 150, damage: 58,  atkSpeed: 1.25, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     2: { hp: 200, damage: 74,  atkSpeed: 1.12, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     3: { hp: 265, damage: 104, atkSpeed: 1.0,  moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     4: { hp: 345, damage: 138, atkSpeed: 0.9,  moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    5: { hp: 440, damage: 182, atkSpeed: 0.82, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    6: { hp: 555, damage: 238, atkSpeed: 0.76, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    7: { hp: 690, damage: 310, atkSpeed: 0.70, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
   },
   barbarian: {
     1: { hp: 240, damage: 24, atkSpeed: 0.6,  moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
     2: { hp: 320, damage: 32, atkSpeed: 0.55, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
     3: { hp: 420, damage: 43, atkSpeed: 0.5,  moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
     4: { hp: 550, damage: 57, atkSpeed: 0.46, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
+    5: { hp: 705, damage: 75, atkSpeed: 0.42, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
+    6: { hp: 880, damage: 97, atkSpeed: 0.39, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
+    7: { hp: 1080, damage: 124, atkSpeed: 0.36, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
   },
   archer: {
     1: { hp: 210, damage: 40, atkSpeed: 1.05, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
     2: { hp: 280, damage: 51, atkSpeed: 0.95, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
     3: { hp: 310, damage: 58, atkSpeed: 0.85, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
     4: { hp: 425, damage: 82, atkSpeed: 0.78, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    5: { hp: 540, damage: 108, atkSpeed: 0.72, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    6: { hp: 680, damage: 140, atkSpeed: 0.67, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    7: { hp: 840, damage: 180, atkSpeed: 0.62, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
   },
   ranger: {
     1: { hp: 250, damage: 34, atkSpeed: 1.0,  moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
     2: { hp: 330, damage: 45, atkSpeed: 0.92, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
     3: { hp: 430, damage: 60, atkSpeed: 0.83, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
     4: { hp: 560, damage: 80, atkSpeed: 0.76, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    5: { hp: 710, damage: 106, atkSpeed: 0.70, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    6: { hp: 890, damage: 140, atkSpeed: 0.65, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    7: { hp: 1100, damage: 182, atkSpeed: 0.60, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
   },
   demon_king: {
     1: { hp: 1080, damage: 92,  atkSpeed: 1.40, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
     2: { hp: 1440, damage: 120, atkSpeed: 1.30, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
     3: { hp: 1872, damage: 159, atkSpeed: 1.20, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
     4: { hp: 2400, damage: 207, atkSpeed: 1.10, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    5: { hp: 3024, damage: 269, atkSpeed: 1.02, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    6: { hp: 3744, damage: 348, atkSpeed: 0.96, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    7: { hp: 4560, damage: 444, atkSpeed: 0.90, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
   },
   fire_dragon: {
     1: { hp: 360, damage: 140, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
     2: { hp: 480, damage: 178, atkSpeed: 1.12, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
     3: { hp: 636, damage: 250, atkSpeed: 1.00, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
     4: { hp: 828, damage: 332, atkSpeed: 0.90, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
+    5: { hp: 1056, damage: 437, atkSpeed: 0.82, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
+    6: { hp: 1332, damage: 572, atkSpeed: 0.76, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
+    7: { hp: 1656, damage: 744, atkSpeed: 0.70, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
   },
 };
 
@@ -85,10 +108,10 @@ function troopLevelFromMap(levels = {}, troopType, fallbackLevel = 1) {
   const candidates = [troopType, display, compact].filter(Boolean);
   for (const key of candidates) {
     if (Object.prototype.hasOwnProperty.call(levels, key)) {
-      return clampInt(levels[key], 1, 4);
+      return clampInt(levels[key], 1, MAX_TROOP_LEVEL);
     }
   }
-  return clampInt(fallbackLevel, 1, 4);
+  return clampInt(fallbackLevel, 1, MAX_TROOP_LEVEL);
 }
 
 function normalizeNftRarity(rarity) {
@@ -200,6 +223,12 @@ const DEFENSE_STATS = {
     3: { damage: 185, fireRate: 2.10, detectRange: 1.767, minRange: 0.80, projSpeed: 3.4, splashRadius: 0.30 },
     4: { damage: 245, fireRate: 1.95, detectRange: 1.933, minRange: 0.85, projSpeed: 3.6, splashRadius: 0.34 },
   },
+  mortar: {
+    1: { damage: 95, fireRate: 2.40, detectRange: 1.433, minRange: 0.70, projSpeed: 3.0, splashRadius: 0.22 },
+    2: { damage: 135, fireRate: 2.25, detectRange: 1.600, minRange: 0.75, projSpeed: 3.2, splashRadius: 0.26 },
+    3: { damage: 185, fireRate: 2.10, detectRange: 1.767, minRange: 0.80, projSpeed: 3.4, splashRadius: 0.30 },
+    4: { damage: 245, fireRate: 1.95, detectRange: 1.933, minRange: 0.85, projSpeed: 3.6, splashRadius: 0.34 },
+  },
 };
 
 // Skeleton guards spawned by tombstone buildings
@@ -223,9 +252,9 @@ const SKELETON_GUARD = {
 };
 
 // Attack session constraints
-const MAX_SHIPS = 5;
-const TROOPS_PER_SHIP = 12;                     // Lv4 port capacity: 4 * 3
-const MAX_TROOPS = MAX_SHIPS * TROOPS_PER_SHIP; // 60
+const MAX_SHIPS = 3;
+const TROOPS_PER_SHIP = 9;                      // Lv3 port capacity: 3 * 3
+const MAX_TROOPS = MAX_SHIPS * TROOPS_PER_SHIP; // 27
 const SAIL_DELAY_SEC = 3.0;
 const TIME_LIMIT_SEC = 180;
 const LOOT_PERCENT = 0.15;
@@ -283,6 +312,7 @@ const CANONICAL_GRID_CONFIGS = {
 const CANONICAL_GRID_CONFIG = CANONICAL_GRID_CONFIGS[0];
 
 module.exports = {
+  MAX_TROOP_LEVEL,
   TROOP_STATS,
   computeNftTroopStats,
   computeDemonKingStats,

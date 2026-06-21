@@ -178,6 +178,8 @@ function demonKingDisplayLabel(token, tokens = []) {
   return text ? `#${text}` : '';
 }
 
+const MAX_TROOP_LEVEL = 7;
+
 const TROOP_STATS = {
   Knight: {
     display: "Knight",
@@ -186,8 +188,11 @@ const TROOP_STATS = {
       2: { hp: 600, damage: 50, atk_speed: 1.3 },
       3: { hp: 780, damage: 66, atk_speed: 1.2 },
       4: { hp: 1000, damage: 86, atk_speed: 1.1 },
+      5: { hp: 1260, damage: 112, atk_speed: 1.02 },
+      6: { hp: 1560, damage: 145, atk_speed: 0.96 },
+      7: { hp: 1900, damage: 185, atk_speed: 0.9 },
     },
-    maxStats: { hp: 1000, damage: 86, atk_speed: 1.4 }
+    maxStats: { hp: 1900, damage: 185, atk_speed: 1.4 }
   },
   Mage: {
     display: "Mage",
@@ -196,8 +201,11 @@ const TROOP_STATS = {
       2: { hp: 200, damage: 74, atk_speed: 1.12 },
       3: { hp: 265, damage: 104, atk_speed: 1.0 },
       4: { hp: 345, damage: 138, atk_speed: 0.9 },
+      5: { hp: 440, damage: 182, atk_speed: 0.82 },
+      6: { hp: 555, damage: 238, atk_speed: 0.76 },
+      7: { hp: 690, damage: 310, atk_speed: 0.7 },
     },
-    maxStats: { hp: 345, damage: 138, atk_speed: 1.25 }
+    maxStats: { hp: 690, damage: 310, atk_speed: 1.25 }
   },
   Barbarian: {
     display: "Barbarian",
@@ -206,8 +214,11 @@ const TROOP_STATS = {
       2: { hp: 320, damage: 32, atk_speed: 0.55 },
       3: { hp: 420, damage: 43, atk_speed: 0.5 },
       4: { hp: 550, damage: 57, atk_speed: 0.46 },
+      5: { hp: 705, damage: 75, atk_speed: 0.42 },
+      6: { hp: 880, damage: 97, atk_speed: 0.39 },
+      7: { hp: 1080, damage: 124, atk_speed: 0.36 },
     },
-    maxStats: { hp: 550, damage: 57, atk_speed: 0.6 }
+    maxStats: { hp: 1080, damage: 124, atk_speed: 0.6 }
   },
   Archer: {
     display: "Archer",
@@ -216,8 +227,11 @@ const TROOP_STATS = {
       2: { hp: 280, damage: 51, atk_speed: 0.95 },
       3: { hp: 310, damage: 58, atk_speed: 0.85 },
       4: { hp: 425, damage: 82, atk_speed: 0.78 },
+      5: { hp: 540, damage: 108, atk_speed: 0.72 },
+      6: { hp: 680, damage: 140, atk_speed: 0.67 },
+      7: { hp: 840, damage: 180, atk_speed: 0.62 },
     },
-    maxStats: { hp: 425, damage: 82, atk_speed: 1.05 }
+    maxStats: { hp: 840, damage: 180, atk_speed: 1.05 }
   },
   Ranger: {
     display: "Ranger",
@@ -226,8 +240,11 @@ const TROOP_STATS = {
       2: { hp: 330, damage: 45, atk_speed: 0.92 },
       3: { hp: 430, damage: 60, atk_speed: 0.83 },
       4: { hp: 560, damage: 80, atk_speed: 0.76 },
+      5: { hp: 710, damage: 106, atk_speed: 0.7 },
+      6: { hp: 890, damage: 140, atk_speed: 0.65 },
+      7: { hp: 1100, damage: 182, atk_speed: 0.6 },
     },
-    maxStats: { hp: 560, damage: 80, atk_speed: 1.0 }
+    maxStats: { hp: 1100, damage: 182, atk_speed: 1.0 }
   },
   DemonKing: {
     display: "Demon King",
@@ -236,8 +253,11 @@ const TROOP_STATS = {
       2: { hp: 1440, damage: 120, atk_speed: 1.3 },
       3: { hp: 1872, damage: 159, atk_speed: 1.2 },
       4: { hp: 2400, damage: 207, atk_speed: 1.1 },
+      5: { hp: 3024, damage: 269, atk_speed: 1.02 },
+      6: { hp: 3744, damage: 348, atk_speed: 0.96 },
+      7: { hp: 4560, damage: 444, atk_speed: 0.9 },
     },
-    maxStats: { hp: 2400, damage: 207, atk_speed: 1.1 }
+    maxStats: { hp: 4560, damage: 444, atk_speed: 1.4 }
   },
   FireDragon: {
     display: "Dragon",
@@ -246,8 +266,11 @@ const TROOP_STATS = {
       2: { hp: 480, damage: 178, atk_speed: 1.12 },
       3: { hp: 636, damage: 250, atk_speed: 1.0 },
       4: { hp: 828, damage: 332, atk_speed: 0.9 },
+      5: { hp: 1056, damage: 437, atk_speed: 0.82 },
+      6: { hp: 1332, damage: 572, atk_speed: 0.76 },
+      7: { hp: 1656, damage: 744, atk_speed: 0.7 },
     },
-    maxStats: { hp: 828, damage: 332, atk_speed: 0.9 }
+    maxStats: { hp: 1656, damage: 744, atk_speed: 1.25 }
   }
 };
 
@@ -298,14 +321,14 @@ function clampLevel(value, min, max) {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-function troopLevelFromMap(levels = {}, troopName) {
+function troopLevelFromMap(levels = {}, troopName, fallbackLevel = 1) {
   const keys = TROOP_LEVEL_KEYS[troopName] || [troopName, troopName.toLowerCase()];
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(levels, key)) {
-      return clampLevel(levels[key], 1, 4);
+      return clampLevel(levels[key], 1, MAX_TROOP_LEVEL);
     }
   }
-  return 1;
+  return clampLevel(fallbackLevel, 1, MAX_TROOP_LEVEL);
 }
 
 function rarityMultiplier(rarity) {
@@ -315,9 +338,9 @@ function rarityMultiplier(rarity) {
 
 function computeNftTroopStats(name, level, troopLevels = {}, rarity = 'common') {
   const referenceName = NFT_REFERENCE_TROOPS[name];
-  const sharedLevel = troopLevelFromMap(troopLevels, name) || clampLevel(level, 1, 4);
+  const sharedLevel = troopLevelFromMap(troopLevels, name, level);
   const stats = TROOP_STATS[referenceName]?.stats?.[sharedLevel] || TROOP_STATS[referenceName]?.stats?.[1];
-  if (!stats) return TROOP_STATS[name]?.stats?.[clampLevel(level, 1, 4)];
+  if (!stats) return TROOP_STATS[name]?.stats?.[clampLevel(level, 1, MAX_TROOP_LEVEL)];
   const mult = rarityMultiplier(rarity);
   return {
     hp: Math.ceil((Number(stats.hp) || 0) * NFT_TROOP_SLOT_COUNT * mult),
@@ -332,10 +355,16 @@ function getTroopStats(name, level, troopLevels = {}, rarity = 'common') {
 }
 
 function getTroopMaxStats(name, troopLevels = {}, rarity = 'common') {
+  const maxLevel = Math.max(
+    1,
+    ...Object.keys(TROOP_STATS[name]?.stats || {})
+      .map((key) => Number(key))
+      .filter((value) => Number.isFinite(value)),
+  );
   if (NFT_REFERENCE_TROOPS[name]) {
-    return computeNftTroopStats(name, 4, { ...(troopLevels || {}), [name]: 4 }, rarity);
+    return computeNftTroopStats(name, maxLevel, { ...(troopLevels || {}), [name]: maxLevel }, rarity);
   }
-  return TROOP_STATS[name]?.maxStats;
+  return TROOP_STATS[name]?.maxStats || TROOP_STATS[name]?.stats?.[maxLevel];
 }
 
 const ProgressBar = ({ label, value, max, gradient, showAsTime = false, valueText = null }) => {
@@ -388,7 +417,7 @@ function BarnPanel({ building, onClose }) {
   const currentTroopName = troopNames[safeIndex];
   const currentNftTroop = nftBackedTroopConfig(currentTroopName);
   const tdef = currentTroopName ? troops[currentTroopName] : null;
-  const lvl = currentTroopName ? (troopLevels[currentTroopName] || 1) : 1;
+  const lvl = currentTroopName ? troopLevelFromMap(troopLevels, currentTroopName, 1) : 1;
   const prevLvlRef = useRef(lvl);
   const prevTroopRef = useRef(currentTroopName);
 
@@ -509,12 +538,13 @@ function BarnPanel({ building, onClose }) {
   
   if (troopNames.length === 0) return null;
   
-  const troopMaxLevel = Math.max(
+  const maxLevelFromCosts = Math.max(
     1,
     ...Object.keys(tdef?.costs || {})
       .map((key) => Number(key))
       .filter((value) => Number.isFinite(value)),
   );
+  const troopMaxLevel = Math.max(1, Number(tdef?.max_level) || maxLevelFromCosts);
   const isNftBackedTroop = !!currentNftTroop;
   const isDemonKingNftTroop = currentNftTroop?.collection === 'demonking' || currentNftTroop?.collection === 'demon_king';
   const isRarityNftTroop = isDemonKingNftTroop || currentNftTroop?.collection === 'dragon';

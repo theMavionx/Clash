@@ -11732,10 +11732,12 @@ router.post('/reinforce', auth, (req, res) => {
     // restores casualties, and never charges for troops that do not fit).
     const resultShips = [];
     for (const { port, current, toAdd } of shipsToRestore) {
-      const restored = [...current, ...toAdd];
+      const capacity = _shipCapacityForPort(port);
+      const slotsAvailable = Math.max(0, capacity - current.length);
+      const restored = [...current, ...toAdd.slice(0, slotsAvailable)];
       const troopsJson = JSON.stringify(restored);
       db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, port.id);
-      resultShips.push({ id: port.id, ship_troops: restored });
+      resultShips.push({ id: port.id, level: _shipLevelForPort(port), ship_troops: restored, ship_capacity: capacity });
     }
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);

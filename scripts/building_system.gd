@@ -215,6 +215,45 @@ var building_defs: Dictionary = {
 		"test_range": 2.90,
 		"test_reload_sec": 1.95,
 	},
+	"mortar": {
+		"name": "Mortar",
+		"cells": Vector2i(2, 2),
+		"footprint_extra": 0.45,
+		"color": Color(0.6, 0.36, 0.18, 0.5),
+		"height": 0.45,
+		"scene": "res://Model/Mortar/mortar_lvl1.fbx",
+		"scenes": [
+			"res://Model/Mortar/mortar_lvl1.fbx",
+			"res://Model/Mortar/mortar_lvl2.fbx",
+			"res://Model/Mortar/mortar_lvl3.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+		],
+		"model_scale": 0.032,
+		"model_rotation_y": 0.0,
+		"hp_levels": [1700],
+		"cost": {"gold": 600, "wood": 900, "ore": 700},
+		"max_count": 1,
+		"altar_ward_bonus": true,
+		"hp_bar_height": 0.6,
+		"albedo_texture": "res://Model/Mortar/mortar_albedo.png",
+		"emission_texture": "res://Model/Mortar/mortar_emit.png",
+		"construction_scenes": [
+			"res://Model/Mortar/mortar_lvl1_construction.fbx",
+			"res://Model/Mortar/mortar_lvl2_construction.fbx",
+			"res://Model/Mortar/mortar_lvl3_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+		],
+		"projectile_scenes": [
+			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl3_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+		],
+		"test_damage": 245,
+		"test_damage_levels": [95, 135, 185, 245],
+		"test_range": 2.90,
+		"test_reload_sec": 1.95,
+	},
 	"tombstone": {
 		"name": "Tombstone",
 		"cells": Vector2i(3, 3),
@@ -776,33 +815,42 @@ var troop_defs: Dictionary = {
 		"display": "Knight (Tank)",
 		"model": "res://Model/Characters/Model/Knight.glb",
 		"script": "res://scripts/knight.gd",
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 150, "ore": 125},
-			2: {"gold": 150, "ore": 125},
-			3: {"gold": 300, "ore": 250},
-			4: {"gold": 600, "ore": 500},
+			2: {"gold": 300, "ore": 250},
+			3: {"gold": 600, "ore": 500},
+			4: {"gold": 1200, "ore": 1000},
+			5: {"gold": 2200, "ore": 1800},
+			6: {"gold": 3800, "ore": 3200},
 		}
 	},
 	"Mage": {
 		"display": "Wizard (Burst Mage)",
 		"model": "res://Model/Characters/Model/Mage.glb",
 		"script": "res://scripts/mage.gd",
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
-			2: {"gold": 250, "ore": 250},
-			3: {"gold": 500, "ore": 500},
-			4: {"gold": 1000, "ore": 1000},
+			2: {"gold": 500, "ore": 500},
+			3: {"gold": 1000, "ore": 1000},
+			4: {"gold": 2000, "ore": 2000},
+			5: {"gold": 3600, "ore": 3600},
+			6: {"gold": 6000, "ore": 6000},
 		}
 	},
 	"Archer": {
 		"display": "Archer (Sniper)",
 		"model": "res://Model/Characters/Model/Ranger.glb",
 		"script": "res://scripts/archer.gd",
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 175, "wood": 175},
-			2: {"gold": 175, "wood": 175},
-			3: {"gold": 350, "wood": 350},
-			4: {"gold": 700, "wood": 700},
+			2: {"gold": 350, "wood": 350},
+			3: {"gold": 700, "wood": 700},
+			4: {"gold": 1400, "wood": 1400},
+			5: {"gold": 2600, "wood": 2600},
+			6: {"gold": 4400, "wood": 4400},
 		}
 	},
 	"DemonKing": {
@@ -811,11 +859,14 @@ var troop_defs: Dictionary = {
 		"script": "res://scripts/demon_king.gd",
 		"slot_cost": 2,                # eats two ship slots; trade-off for raw power
 		"buy_cost": 0,                 # NFT-backed; loading is free and reusable
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 150, "ore": 125},
 			2: {"gold": 300, "ore": 250},
 			3: {"gold": 600, "ore": 500},
-			4: {"gold": 0, "wood": 0, "ore": 0},
+			4: {"gold": 1200, "ore": 1000},
+			5: {"gold": 2200, "ore": 1800},
+			6: {"gold": 3800, "ore": 3200},
 		}
 	},
 	"FireDragon": {
@@ -824,11 +875,14 @@ var troop_defs: Dictionary = {
 		"script": "res://scripts/fire_dragon.gd",
 		"slot_cost": 2,
 		"buy_cost": 0,
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
 			2: {"gold": 500, "ore": 500},
 			3: {"gold": 1000, "ore": 1000},
-			4: {"gold": 0, "wood": 0, "ore": 0},
+			4: {"gold": 2000, "ore": 2000},
+			5: {"gold": 3600, "ore": 3600},
+			6: {"gold": 6000, "ore": 6000},
 		}
 	},
 }
@@ -3717,11 +3771,7 @@ func _upgrade_selected() -> void:
 			net.trophies = result["trophies"]
 			_update_player_name_label()
 		if result.has("resources"):
-			var res = result["resources"]
-			resources.gold = res.gold
-			resources.wood = res.wood
-			resources.ore = res.ore
-			_update_resource_ui()
+			_apply_resources_from_server(result["resources"])
 		# Use level from server response
 		if result.has("level"):
 			level = result["level"] - 1
@@ -5523,10 +5573,12 @@ func _can_afford(costs: Dictionary) -> bool:
 
 func _get_troop_max_level(troop_name: String) -> int:
 	var tdef: Dictionary = troop_defs.get(troop_name, {})
+	if tdef.has("max_level"):
+		return maxi(1, int(tdef.get("max_level", 1)))
 	var costs: Dictionary = tdef.get("costs", {})
 	var max_level: int = 1
 	for key in costs.keys():
-		max_level = maxi(max_level, int(key))
+		max_level = maxi(max_level, int(key) + 1)
 	return max_level
 
 
@@ -5540,12 +5592,7 @@ func _refresh_troop_levels_from_server() -> void:
 		return
 	var server_troops = await net.get_troops()
 	if server_troops is Array:
-		for t in server_troops:
-			var troop_type = str(t.get("troop_type", ""))
-			var level = int(t.get("level", 1))
-			var local_name = _local_troop_name_from_server(troop_type)
-			if troop_levels.has(local_name):
-				troop_levels[local_name] = level
+		_load_troop_levels_from_server(server_troops)
 	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("troop_levels", troop_levels)
@@ -5581,6 +5628,8 @@ func _upgrade_troop(troop_name: String) -> void:
 		var result = await net.upgrade_troop(troop_name)
 		_server_busy = false
 		if result.has("error"):
+			if str(result.get("error", "")) == "Already at max level":
+				await _refresh_troop_levels_from_server()
 			if str(result.get("code", "")) == "NFT_TROOP_REQUIRED":
 				if _bridge:
 					_bridge.send_to_react("nft_troop_required", result)
@@ -5592,14 +5641,12 @@ func _upgrade_troop(troop_name: String) -> void:
 			net.trophies = result["trophies"]
 			_update_player_name_label()
 		if result.has("resources"):
-			var res = result["resources"]
-			resources.gold = res.gold
-			resources.wood = res.wood
-			resources.ore = res.ore
-			_update_resource_ui()
+			_apply_resources_from_server(result["resources"])
 
 	# Server OK — apply locally and refetch to stay in sync
 	troop_levels[troop_name] = next_lvl
+	if _bridge:
+		_bridge.send_to_react("troop_levels", troop_levels)
 	var troop = get_tree().current_scene.find_child(troop_name, true, false)
 	if troop and troop.has_method("upgrade_to"):
 		troop.upgrade_to(next_lvl)

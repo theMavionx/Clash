@@ -39,7 +39,7 @@ const DESC_MAP = {
   archer_tower: 'Ranged defense',
   archertower: 'Ranged defense',
   mage_tower: 'Casts splash magic at enemies',
-  mortar: 'Fires arcing splash shells',
+  mortar: 'Long-range splash defense',
   altar: 'Onchain base boost',
 };
 

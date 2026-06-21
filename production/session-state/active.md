@@ -1,24 +1,73 @@
-# Session State
+# Active Session State
 
-## Current Task
-Economy balance design doc — full resource flow and progression timeline
+Last updated: 2026-06-18
 
-## Status
-- [x] Read db.js for all current costs/rates
-- [x] Mathematical analysis complete
-- [x] design/gdd/economy-balance.md written and complete
+## Current Focus
 
-## Key Decisions Made
-- Raise GOLD_DAILY_TRADE: 200 → 750
-- Raise GOLD_PER_USD_VOLUME: 0.05 → 0.20
-- Keep first-day bonuses (500 deposit, 300 first trade)
-- Reduce building gold costs ~50%, shift burden to wood/ore
-- Keep Town Hall upgrade costs unchanged (gold gates)
-- 4-week target for full max with $30 deposit / 1-2 trades daily
+The repository is being prepared for faster owner-driven Codex work. Durable context now lives in:
 
-## Files Being Worked On
-- design/gdd/economy-balance.md (primary output)
-- server/db.js (will need reward rate updates — not yet modified)
+- `production/agent-memory.md`
+- `production/active-goals.md`
+- project skills under `.agents/skills/`
+- helper scripts under `tools/codex/`
+- balance work branch: `codex/balance`
+- building asset/content branch: `codex/building-assets`
 
-## Open Questions
-None — proceeding to write doc
+## Active Goals
+
+See `production/active-goals.md`.
+
+Main current goals:
+
+1. PvP arena bots and matchmaking targeting a normal player win rate of 55-58%.
+2. Full game balance pass across resources, buildings, troops, defenses, upgrades, and progression.
+3. Agent workflow, memory, hooks, skills, and deployment automation.
+4. Resource building upgrade content for Sawmill, Storage, and Mine.
+5. Mortar functionality and Town Hall 5 expansion with TH5 unlocks.
+
+## Git Notes
+
+- Preserve dirty user changes.
+- Do not commit, push, merge, or deploy without explicit user instruction.
+- Put balance-related work and balance commits on `codex/balance`.
+- Put new building models, textures, Godot imports, and building asset/content commits
+  on `codex/building-assets`.
+- Pull-request prompts on GitHub are expected when a non-main branch is ahead of `main`.
+
+## Quality Notes
+
+- Before reporting a feature/gameplay/UI/server task as done, run the most relevant focused
+  local verification that is feasible.
+- Prefer local playtests, replay simulations, local web/server checks, or Godot/live inspection
+  for user-facing gameplay work.
+- Verification should prove the actual changed behavior. For Mortar-style defense work, check
+  projectile spawn/travel/impact plus target HP damage or combat telemetry, not only syntax.
+- If live verification is blocked, run the best fallback and report the remaining risk clearly.
+- If verification finds a bug caused by the current change, fix it and verify again.
+- Do not break existing working systems by default; warn before intentional removals or
+  compatibility breaks.
+
+## Next Useful Checkpoint
+
+Run:
+
+```powershell
+tools/codex/start-context.cmd -Full
+tools/codex/check-repo.cmd -Mode Quick
+```
+
+Current execution focus: G-002 Full Game Balance Pass checkpoint complete.
+
+Completed on 2026-06-18:
+
+1. Added TH4/TH2-TH4 support to `tools/pvp-balance/run.js`.
+2. Tuned TH4 normal/hard bot templates in `server/matchmaking_defs.js`.
+3. Improved TH4 PvP breakability from 22.1% attacker win rate to 57.8%.
+4. Verified mixed TH2-TH4 PvP at 56.9% across 3000 generated battles.
+5. Documented before/after reasoning in `production/reports/g002-full-balance-pass-2026-06-18.md`.
+
+Remaining follow-up:
+
+- Decide target economy max-out pace. Current live server pacing is about 102 days
+  to full TH4 max before raid income, which may be acceptable for monetization but
+  no longer matches the older 4-week economy fantasy.

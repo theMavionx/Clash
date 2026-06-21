@@ -44,11 +44,11 @@ const TEST_TH_MAX_COUNT: Dictionary = {
 
 const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "DemonKing", "FireDragon"]
 const TEST_ATTACK_MAX_LEVEL: Dictionary = {
-	"Knight": 4,
-	"Mage": 4,
-	"Archer": 4,
-	"DemonKing": 4,
-	"FireDragon": 4,
+	"Knight": 7,
+	"Mage": 7,
+	"Archer": 7,
+	"DemonKing": 7,
+	"FireDragon": 7,
 }
 const TEST_ATTACK_SHIP_LEVEL: int = 3
 const TEST_SPEED_PRESETS: Array[float] = [0.5, 1.0, 2.0, 4.0]
@@ -74,6 +74,7 @@ func _core_layout() -> Array:
 		{"grid": "main", "id": "archer_tower", "pos": Vector2i(15, 13)},
 		{"grid": "main", "id": "turret", "pos": Vector2i(20, 10)},
 		{"grid": "main", "id": "mage_tower", "pos": Vector2i(20, 15)},
+		{"grid": "main", "id": "mortar", "pos": Vector2i(23, 13)},
 		{"grid": "port", "id": "port", "pos": Vector2i(2, 0)},
 		{"grid": "port", "id": "port", "pos": Vector2i(8, 0)},
 		{"grid": "port", "id": "port", "pos": Vector2i(14, 0)},
@@ -353,9 +354,9 @@ func _spawn_demon_king_color_preview(scene_res: PackedScene, script_res: Script,
 		return
 	preview.name = "DemonKingPreview_%s" % String(entry.get("variant", "purple")).capitalize()
 	preview.set_script(script_res)
-	preview.set("level", 4)
+	preview.set("level", 7)
 	if preview.has_method("set_player_troop_levels"):
-		preview.call("set_player_troop_levels", {"DemonKing": 4})
+		preview.call("set_player_troop_levels", {"DemonKing": 7})
 	if preview.has_method("set_tint_variant"):
 		preview.call("set_tint_variant", String(entry.get("variant", "purple")))
 	preview.position = entry.get("pos", Vector3.ZERO)

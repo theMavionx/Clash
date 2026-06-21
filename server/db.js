@@ -4637,19 +4637,130 @@ cleanupOldBotTargets();
 // ---------- Troop Definitions ----------
 
 const TROOP_DEFS = {
-  knight:    { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 },  { gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 }] },
-  mage:      { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
-  barbarian: { max_level: 4, cost: [{ gold: 175, wood: 0, ore: 175 }, { gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }] },
-  archer:    { max_level: 4, cost: [{ gold: 175, wood: 175, ore: 0 }, { gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }] },
-  ranger:    { max_level: 4, cost: [{ gold: 125, wood: 125, ore: 0 }, { gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }] },
-  demon_king: { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 }, { gold: 300, wood: 0, ore: 250 }, { gold: 600, wood: 0, ore: 500 }] },
-  fire_dragon: { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
+  knight: {
+    max_level: 7,
+    cost: [
+      { gold: 150, wood: 0, ore: 125 },
+      { gold: 300, wood: 0, ore: 250 },
+      { gold: 600, wood: 0, ore: 500 },
+      { gold: 1200, wood: 0, ore: 1000 },
+      { gold: 2200, wood: 0, ore: 1800 },
+      { gold: 3800, wood: 0, ore: 3200 },
+    ],
+  },
+  mage: {
+    max_level: 7,
+    cost: [
+      { gold: 250, wood: 0, ore: 250 },
+      { gold: 500, wood: 0, ore: 500 },
+      { gold: 1000, wood: 0, ore: 1000 },
+      { gold: 2000, wood: 0, ore: 2000 },
+      { gold: 3600, wood: 0, ore: 3600 },
+      { gold: 6000, wood: 0, ore: 6000 },
+    ],
+  },
+  barbarian: {
+    max_level: 7,
+    cost: [
+      { gold: 175, wood: 0, ore: 175 },
+      { gold: 350, wood: 0, ore: 350 },
+      { gold: 700, wood: 0, ore: 700 },
+      { gold: 1400, wood: 0, ore: 1400 },
+      { gold: 2600, wood: 0, ore: 2600 },
+      { gold: 4400, wood: 0, ore: 4400 },
+    ],
+  },
+  archer: {
+    max_level: 7,
+    cost: [
+      { gold: 175, wood: 175, ore: 0 },
+      { gold: 350, wood: 350, ore: 0 },
+      { gold: 700, wood: 700, ore: 0 },
+      { gold: 1400, wood: 1400, ore: 0 },
+      { gold: 2600, wood: 2600, ore: 0 },
+      { gold: 4400, wood: 4400, ore: 0 },
+    ],
+  },
+  ranger: {
+    max_level: 7,
+    cost: [
+      { gold: 125, wood: 125, ore: 0 },
+      { gold: 250, wood: 250, ore: 0 },
+      { gold: 500, wood: 500, ore: 0 },
+      { gold: 1000, wood: 1000, ore: 0 },
+      { gold: 1900, wood: 1900, ore: 0 },
+      { gold: 3200, wood: 3200, ore: 0 },
+    ],
+  },
+  demon_king: {
+    max_level: 7,
+    cost: [
+      { gold: 150, wood: 0, ore: 125 },
+      { gold: 300, wood: 0, ore: 250 },
+      { gold: 600, wood: 0, ore: 500 },
+      { gold: 1200, wood: 0, ore: 1000 },
+      { gold: 2200, wood: 0, ore: 1800 },
+      { gold: 3800, wood: 0, ore: 3200 },
+    ],
+  },
+  fire_dragon: {
+    max_level: 7,
+    cost: [
+      { gold: 250, wood: 0, ore: 250 },
+      { gold: 500, wood: 0, ore: 500 },
+      { gold: 1000, wood: 0, ore: 1000 },
+      { gold: 2000, wood: 0, ore: 2000 },
+      { gold: 3600, wood: 0, ore: 3600 },
+      { gold: 6000, wood: 0, ore: 6000 },
+    ],
+  },
 };
 const DISABLED_TROOP_TYPES = new Set(['barbarian', 'ranger']);
 const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_TROOP_TYPES.has(troop));
+const TROOP_LEVEL_TOWN_HALL_REQUIREMENTS = {
+  5: 5,
+  6: 5,
+  7: 5,
+};
+
+function normalizeTroopTypeKey(troopType) {
+  const compact = String(troopType || '').trim().toLowerCase().replace(/[\s_-]/g, '');
+  if (compact === 'demonking') return 'demon_king';
+  if (compact === 'firedragon') return 'fire_dragon';
+  if (TROOP_DEFS[compact]) return compact;
+  return String(troopType || '').trim().toLowerCase();
+}
+
+function clampTroopLevelForType(troopType, level) {
+  const def = TROOP_DEFS[troopType];
+  const maxLevel = Number(def?.max_level) || 1;
+  const numericLevel = Number(level) || 1;
+  return Math.max(1, Math.min(maxLevel, Math.trunc(numericLevel)));
+}
 
 function isTroopDisabled(troopType) {
-  return DISABLED_TROOP_TYPES.has(String(troopType || '').trim().toLowerCase());
+  return DISABLED_TROOP_TYPES.has(normalizeTroopTypeKey(troopType));
+}
+
+function getTroopLevelTownHallRequirement(level) {
+  return TROOP_LEVEL_TOWN_HALL_REQUIREMENTS[Number(level)] || 1;
+}
+
+function getTroopTownHallGate(playerId, nextLevel) {
+  const currentTownHallLevel = getTownHallLevel(playerId);
+  if (!nextLevel) {
+    return {
+      current_town_hall_level: currentTownHallLevel,
+      required_town_hall_level: null,
+      town_hall_ready: true,
+    };
+  }
+  const requiredTownHallLevel = getTroopLevelTownHallRequirement(nextLevel);
+  return {
+    current_town_hall_level: currentTownHallLevel,
+    required_town_hall_level: requiredTownHallLevel,
+    town_hall_ready: currentTownHallLevel >= requiredTownHallLevel,
+  };
 }
 
 const ALTAR_SKILL_DEFS = {
@@ -6422,7 +6533,7 @@ const NFT_BACKED_TROOP_COLLECTIONS = {
 };
 
 function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
-  const troopKey = String(troopType || '').trim().toLowerCase();
+  const troopKey = normalizeTroopTypeKey(troopType);
   const cfg = NFT_BACKED_TROOP_COLLECTIONS[troopKey];
   const def = TROOP_DEFS[troopKey];
   if (!cfg || !def) return null;
@@ -6430,6 +6541,7 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
   const current = levels.find(t => t.troop_type === troopKey);
   const currentLevel = current ? current.level : 1;
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
+  const thGate = getTroopTownHallGate(playerId, nextLevel);
   const token = normalizeDemonKingBattleToken(options);
   const battleWins = token ? getCollectionBattleWins(playerId, cfg.collection, token.chain, token.tokenId) : 0;
   const ownedCount = listPlayerCollectionNfts(playerId, cfg.collection).length;
@@ -6440,6 +6552,9 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
     current_level: currentLevel,
     max_level: def.max_level,
     next_level: nextLevel,
+    current_town_hall_level: thGate.current_town_hall_level,
+    required_town_hall_level: thGate.required_town_hall_level,
+    town_hall_ready: thGate.town_hall_ready,
     owns_nft: ownedCount > 0,
     owned_nfts: ownedCount,
     cost: nextLevel ? def.cost[currentLevel - 1] : null,
@@ -6463,6 +6578,7 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
   const current = levels.find(t => t.troop_type === 'demon_king');
   const currentLevel = current ? current.level : 1;
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
+  const thGate = getTroopTownHallGate(playerId, nextLevel);
   const requiredWins = nextLevel ? demonKingRequiredWins(nextLevel) : null;
   const token = normalizeDemonKingBattleToken(options);
   const battleWins = token ? getDemonKingBattleWins(playerId, token.chain, token.tokenId) : 0;
@@ -6471,6 +6587,9 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
     current_level: currentLevel,
     max_level: def.max_level,
     next_level: nextLevel,
+    current_town_hall_level: thGate.current_town_hall_level,
+    required_town_hall_level: thGate.required_town_hall_level,
+    town_hall_ready: thGate.town_hall_ready,
     battle_wins: battleWins,
     wins: battleWins,
     account_battle_wins: getBattleWins(playerId),
@@ -6484,30 +6603,48 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
 }
 
 function upgradeTroop(playerId, troopType, options = {}) {
-  if (isTroopDisabled(troopType)) {
+  const troopKey = normalizeTroopTypeKey(troopType);
+  if (isTroopDisabled(troopKey)) {
     return {
       error: 'Troop disabled',
       code: 'TROOP_DISABLED',
-      troop_type: troopType,
+      troop_type: troopKey,
       status: 400,
     };
   }
 
-  const def = TROOP_DEFS[troopType];
+  const def = TROOP_DEFS[troopKey];
   if (!def) return { error: `Unknown troop type: ${troopType}` };
 
   const levels = stmts.getTroopLevels.all(playerId);
-  const current = levels.find(t => t.troop_type === troopType);
-  const currentLevel = current ? current.level : 1;
+  const current = levels.find(t => normalizeTroopTypeKey(t.troop_type) === troopKey);
+  const currentLevel = current ? clampTroopLevelForType(troopKey, current.level) : 1;
 
   if (currentLevel >= def.max_level) {
     return { error: 'Already at max level' };
   }
 
-  const nftCfg = NFT_BACKED_TROOP_COLLECTIONS[troopType];
+  const nextLevel = currentLevel + 1;
+  const thGate = getTroopTownHallGate(playerId, nextLevel);
+  if (!thGate.town_hall_ready) {
+    return {
+      error: `Town Hall level ${thGate.required_town_hall_level} required for troop level ${nextLevel}`,
+      code: 'TOWN_HALL_LEVEL_REQUIRED',
+      status: 403,
+      troop_type: troopKey,
+      current_level: currentLevel,
+      next_level: nextLevel,
+      max_level: def.max_level,
+      current_town_hall_level: thGate.current_town_hall_level,
+      required_town_hall_level: thGate.required_town_hall_level,
+      town_hall_ready: false,
+    };
+  }
+
+  const nftCfg = NFT_BACKED_TROOP_COLLECTIONS[troopKey];
   if (nftCfg && listPlayerCollectionNfts(playerId, nftCfg.collection).length === 0) {
     return {
-      ...getNftBackedTroopUpgradeStatus(playerId, troopType),
+      ...getNftBackedTroopUpgradeStatus(playerId, troopKey),
       error: `${nftCfg.label} NFT required`,
       code: 'NFT_TROOP_REQUIRED',
       status: 403,
@@ -6515,25 +6652,48 @@ function upgradeTroop(playerId, troopType, options = {}) {
   }
 
   const cost = def.cost[currentLevel - 1]; // cost to upgrade FROM current level
+  if (!cost) {
+    return {
+      error: `Missing upgrade cost for ${troopType} level ${currentLevel}`,
+      code: 'TROOP_UPGRADE_COST_MISSING',
+      status: 500,
+      troop_type: troopKey,
+      current_level: currentLevel,
+      next_level: nextLevel,
+    };
+  }
   if (!canAfford(playerId, cost.gold, cost.wood, cost.ore)) {
     return { error: 'Not enough resources', cost };
   }
 
   subtractResources(playerId, cost.gold, cost.wood, cost.ore, {
     sourceType: 'troop_upgrade',
-    metadata: { troop_type: troopType, from_level: currentLevel, to_level: currentLevel + 1 },
+    metadata: { troop_type: troopKey, from_level: currentLevel, to_level: nextLevel },
   });
-  const newLevel = currentLevel + 1;
-  stmts.upsertTroopLevel.run(playerId, troopType, newLevel);
+  const newLevel = nextLevel;
+  stmts.upsertTroopLevel.run(playerId, troopKey, newLevel);
 
   return {
-    troop_type: troopType, level: newLevel, cost,
+    troop_type: troopKey, level: newLevel, cost,
     resources: getResources(playerId),
   };
 }
 
 function getTroopLevels(playerId) {
-  return stmts.getTroopLevels.all(playerId).filter((row) => !isTroopDisabled(row.troop_type));
+  const levelsByType = {};
+  for (const troopType of ACTIVE_TROOP_TYPES) levelsByType[troopType] = 1;
+  for (const row of stmts.getTroopLevels.all(playerId)) {
+    const troopType = normalizeTroopTypeKey(row.troop_type);
+    if (!TROOP_DEFS[troopType] || isTroopDisabled(troopType)) continue;
+    levelsByType[troopType] = Math.max(
+      levelsByType[troopType] || 1,
+      clampTroopLevelForType(troopType, row.level),
+    );
+  }
+  return ACTIVE_TROOP_TYPES.map((troopType) => ({
+    troop_type: troopType,
+    level: clampTroopLevelForType(troopType, levelsByType[troopType]),
+  }));
 }
 
 function getAltarSkillLevels(playerId) {
