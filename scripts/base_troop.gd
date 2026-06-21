@@ -1093,7 +1093,9 @@ func _get_troop_name() -> String:
 	match file:
 		"knight": return "Knight"
 		"mage": return "Mage"
+		"barbarian": return "Barbarian"
 		"archer": return "Archer"
+		"ranger": return "Ranger"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return ""

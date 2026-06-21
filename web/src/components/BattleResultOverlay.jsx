@@ -9,8 +9,10 @@ import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
 import archerImg from '../assets/units/archer.png';
+import arbaletImg from '../assets/units/arbalet.png';
+import berserkImg from '../assets/units/berserk.png';
 
-const UNIT_IMAGES = { Knight: knightImg, Mage: mageImg, Archer: archerImg };
+const UNIT_IMAGES = { Knight: knightImg, Mage: mageImg, Barbarian: berserkImg, Archer: archerImg, Ranger: arbaletImg };
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 

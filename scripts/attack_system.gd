@@ -1036,7 +1036,9 @@ static func _script_to_troop_key(script_path: String) -> String:
 	match file:
 		"knight":     return "Knight"
 		"mage":       return "Mage"
+		"barbarian":  return "Barbarian"
 		"archer":     return "Archer"
+		"ranger":     return "Ranger"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return file.capitalize()
@@ -1049,8 +1051,12 @@ static func _normalize_troop_entry(troop_name: String) -> String:
 			return "Knight"
 		"mage":
 			return "Mage"
+		"barbarian":
+			return "Barbarian"
 		"archer":
 			return "Archer"
+		"ranger":
+			return "Ranger"
 		"demonking", "demon_king":
 			return "DemonKing"
 		"firedragon", "fire_dragon":

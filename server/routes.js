@@ -10188,7 +10188,9 @@ router.delete('/buildings/:id', auth, (req, res) => {
 const TROOP_NAME_MAP = {
   knight: 'Knight',
   mage: 'Mage',
+  barbarian: 'Barbarian',
   archer: 'Archer',
+  ranger: 'Ranger',
   demonking: 'DemonKing',
   demon_king: 'DemonKing',
   firedragon: 'FireDragon',

@@ -33,8 +33,12 @@ func _troop_entry_base_name(troop_name: String) -> String:
 			return "Knight"
 		"mage":
 			return "Mage"
+		"barbarian":
+			return "Barbarian"
 		"archer":
 			return "Archer"
+		"ranger":
+			return "Ranger"
 	return base
 
 

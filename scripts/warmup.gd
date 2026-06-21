@@ -235,8 +235,10 @@ func _warmup_upgrade_outline() -> void:
 func _prewarm_weapon_scenes() -> void:
 	const WEAPON_PATHS: Array[String] = [
 		"res://Model/Characters/Assets/sword_1handed.gltf",
+		"res://Model/Characters/Assets/axe_1handed.gltf",
 		"res://Model/Characters/Assets/staff.gltf",
 		"res://Model/Characters/Assets/bow_withString.gltf",
+		"res://Model/Characters/Assets/crossbow_1handed.gltf",
 		"res://Model/Characters/Assets/arrow_bow.gltf",
 	]
 	var loaded := 0
