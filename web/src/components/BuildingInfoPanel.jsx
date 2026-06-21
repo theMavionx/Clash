@@ -22,6 +22,7 @@ import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
 import imgShip from '../assets/buildings/shipsmall.png';
 import imgMageTower from '../assets/buildings/magetower.png';
+import imgMortar from '../assets/buildings/mortar.png';
 import imgAltar from '../assets/units/altar.png';
 
 import knightImg from '../assets/units/knight.png';
@@ -83,8 +84,19 @@ const THUMBNAIL_MAP = {
   archer_tower: imgArcherTower,
   archertower: imgArcherTower,
   mage_tower: imgMageTower,
+  mortar: imgMortar,
   storage: imgStorage,
   altar: imgAltar,
+};
+
+const THUMBNAIL_STYLE_MAP = {
+  mortar: {
+    left: '53%',
+    top: '50%',
+    transform: 'translate(-50%, -50%) scale(1.2)',
+    transformOrigin: 'center center',
+    objectPosition: 'center center',
+  },
 };
 
 const DESC_MAP = {
@@ -99,6 +111,7 @@ const DESC_MAP = {
   archer_tower: 'Ranged defense against invaders.',
   archertower: 'Ranged defense against invaders.',
   mage_tower: 'Casts splash magic at groups of enemy troops.',
+  mortar: 'Launches arcing splash shells at distant enemies.',
   residence: 'Residences produce gold.',
 };
 
@@ -877,7 +890,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
     <img
       src={THUMBNAIL_MAP[building.id]}
       alt={building.name}
-      style={building.id === 'altar' ? { ...styles.characterImg, ...styles.altarStaticImg } : styles.characterImg}
+      style={building.id === 'altar'
+        ? { ...styles.characterImg, ...styles.altarStaticImg }
+        : { ...styles.characterImg, ...(THUMBNAIL_STYLE_MAP[building.id] || {}) }}
     />
   ) : (
     <div style={{...styles.characterImg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 150}}>🏠</div>

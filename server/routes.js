@@ -85,6 +85,11 @@ function isValidWallet(w) {
     || EVM_WALLET_RE.test(w)
     || (APTOS_WALLET_RE.test(w) && !EVM_WALLET_RE.test(w));
 }
+
+function isStorableAuthWallet(w) {
+  return isValidWallet(w) || isLocalGuestWallet(w);
+}
+
 // Kept as alias so older references keep working.
 const WALLET_RE = SOLANA_WALLET_RE;
 void WALLET_RE;
@@ -361,7 +366,7 @@ function rejectBannedPlayer(res, player) {
 }
 
 function upsertUnifiedIdentity(playerId, wallet, opts = {}) {
-  if (!playerId || !wallet || !isValidWallet(wallet)) return;
+  if (!playerId || !wallet || !isStorableAuthWallet(wallet)) return;
   const chainType = walletChainType(wallet);
   const identifier = canonicalWalletIdentifier(wallet);
   const label = String(opts.label || '').trim() || null;
@@ -393,7 +398,7 @@ function upsertUnifiedIdentity(playerId, wallet, opts = {}) {
 function upsertPlayerDexAccount(playerId, dex, wallet, status = 'ready', metadata = {}) {
   if (!playerId || !VALID_DEXES.has(dex)) return;
   const chainType = wallet ? walletChainType(wallet) : null;
-  const address = wallet && isValidWallet(wallet) ? canonicalWalletIdentifier(wallet) : null;
+  const address = wallet && isStorableAuthWallet(wallet) ? canonicalWalletIdentifier(wallet) : null;
   const clearWallet = !!metadata?.__clear_wallet;
   const cleanMetadata = { ...(metadata || {}) };
   delete cleanMetadata.__clear_wallet;
@@ -7777,6 +7782,25 @@ function isAllowedFirstPartyHost(host) {
     || h === '::1';
 }
 
+function normalizeLocalDevelopmentHost(host) {
+  return String(host || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+}
+
+function isLocalDevelopmentHost(host) {
+  const h = normalizeLocalDevelopmentHost(host);
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
+function isLocalDevelopmentRequest(req) {
+  const requestHost = requestHeaderHost(req.headers['x-forwarded-host'] || req.headers.host);
+  const originHost = urlHeaderHost(req.headers.origin);
+  const refererHost = urlHeaderHost(req.headers.referer);
+  if (!isLocalDevelopmentHost(requestHost)) return false;
+  if (originHost && !isLocalDevelopmentHost(originHost)) return false;
+  if (refererHost && !isLocalDevelopmentHost(refererHost)) return false;
+  return true;
+}
+
 function isScriptedHttpClient(req) {
   const ua = String(req.headers['user-agent'] || '').toLowerCase();
   return /\b(node|undici|curl|wget|python|axios|got|postman|insomnia|httpie)\b/.test(ua);
@@ -8181,7 +8205,7 @@ function resolveClaimWalletForDex(player, dex, currentWallet = null) {
 function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown', opts = {}) {
   if (!player?.id || !VALID_DEXES.has(dex)) return { ok: false, changed: false, conflictResolved: false };
   const bindWallet = opts.bindWallet !== false;
-  const walletToBind = bindWallet && wallet && isValidWallet(wallet)
+  const walletToBind = bindWallet && wallet && isStorableAuthWallet(wallet)
     ? canonicalWalletIdentifier(wallet)
     : null;
   const runUpdate = () => {
@@ -8299,11 +8323,15 @@ function markPlayerSeekerIfPresent(playerId, body) {
 
 router.post('/players/register', async (req, res) => {
   const { name, wallet, dex, fid } = req.body;
+  const localGuestWallet = isLocalGuestWallet(wallet);
   if (wallet && !requireFirstPartyBrowserContext(req, res, 'players.register')) return;
   if (wallet && rejectBlacklistedWallet(req, res, wallet, 'players.register')) return;
+  if (localGuestWallet && !isLocalDevelopmentRequest(req)) {
+    return res.status(403).json({ error: 'Local guest mode is only available on localhost.' });
+  }
   const hasRequestedDex = VALID_DEXES.has(dex);
   let requestedDex = hasRequestedDex ? dex : 'pacifica';
-  if (wallet && !isLocalGuestWallet(wallet)) {
+  if (wallet && !localGuestWallet) {
     const proofDex = VALID_DEXES.has(dex) ? dex : '';
     const authProof = await verifyWalletAuthProof(req, { wallet, dex: proofDex });
     if (!authProof.ok) return res.status(authProof.status || 401).json({ error: authProof.error });
@@ -8317,7 +8345,6 @@ router.post('/players/register', async (req, res) => {
   // the same EVM wallet. So we only treat a row as "this is your account"
   // when BOTH the wallet AND the requested DEX match.
   if (wallet) {
-    const localGuestWallet = isLocalGuestWallet(wallet);
     let existing = hasRequestedDex ? getPlayerByWalletAndDexAnyForm(wallet, requestedDex) : null;
     if (!existing) existing = getUnifiedPlayerByWalletAnyForm(wallet);
     if (existing && !hasRequestedDex) requestedDex = existing.dex || 'pacifica';
@@ -15945,7 +15972,6 @@ function adminBuildingTargetLevelForTh(type, def, townHallLevel) {
 }
 
 function adminBuildingMaxLevel(type, def) {
-  if (type === 'turret') return Math.max(5, Number(def?.max_level) || 1);
   return Number(def?.max_level) || 1;
 }
 

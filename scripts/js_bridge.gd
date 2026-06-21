@@ -152,7 +152,7 @@ func _local_guest_mode_enabled() -> bool:
 func _get_local_guest_id() -> String:
 	if not _local_guest_mode_enabled():
 		return ""
-	var guest_id_value = JavaScriptBridge.eval("(function(){try{var u=new URL(window.location.href);var g=(u.searchParams.get('guest')||'').toLowerCase();if(g!=='1'&&g!=='true'&&g!=='new')return '';var id=u.searchParams.get('guest_id');if(!id||g==='new'){id='g_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);u.searchParams.set('guest','1');u.searchParams.set('guest_id',id);window.history.replaceState(null,'',u.toString());}try{window.localStorage.removeItem('clash_game_auth_v1');window.localStorage.setItem('clash.localGuest',id);}catch(e){}return id;}catch(e){return '';}})()", true)
+	var guest_id_value = JavaScriptBridge.eval("(function(){try{var u=new URL(window.location.href);var g=(u.searchParams.get('guest')||'').toLowerCase();if(g!=='1'&&g!=='true'&&g!=='new')return '';var id=u.searchParams.get('guest_id')||'';try{if(!id)id=window.localStorage.getItem('clash.localGuest')||'';}catch(e){}if(!id){id='g_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);}if(g!=='1'||u.searchParams.get('guest_id')!==id){u.searchParams.set('guest','1');u.searchParams.set('guest_id',id);window.history.replaceState(null,'',u.toString());}try{window.localStorage.removeItem('clash_game_auth_v1');window.localStorage.setItem('clash.localGuest',id);}catch(e){}return id;}catch(e){return '';}})()", true)
 	var guest_id: String = String(guest_id_value).strip_edges()
 	return guest_id
 

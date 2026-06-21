@@ -25,9 +25,7 @@ const dragonImg = '/cdn/nft/dragon/1/default.jpg';
 const ATTACK_TROOPS = [
   { key: 'knight',    label: 'Knight',    img: knightImg,  zoom: 1.35, offsetY: '10%' },
   { key: 'mage',      label: 'Mage',      img: mageImg,    zoom: 1.45, offsetY: '15%' },
-  { key: 'barbarian', label: 'Barbarian', img: berserkImg },
   { key: 'archer',    label: 'Archer',    img: archerImg },
-  { key: 'ranger',    label: 'Ranger',    img: arbaletImg },
   { key: 'demonking', label: 'Demon King', img: demonKingImg },
   { key: 'firedragon', label: 'Dragon', img: dragonImg },
 ];

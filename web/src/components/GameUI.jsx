@@ -37,6 +37,44 @@ const ProfileModal = lazy(lazyWithClientReload(() => import('./ProfileModal'), '
 const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'), 'BattleLogPanel'));
 const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
 
+const LOCAL_GUEST_DEFAULT_DEX = 'pacifica';
+
+function isLocalBrowserHost() {
+  if (typeof window === 'undefined') return false;
+  const host = String(window.location?.hostname || '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+}
+
+function currentUrlRequestsLocalGuest() {
+  if (typeof window === 'undefined') return false;
+  try {
+    const value = new URL(window.location.href).searchParams.get('guest');
+    return ['1', 'true', 'new'].includes(String(value || '').toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function localStorageHasLocalGuestMarker() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return !!localStorage.getItem('clash.localGuest');
+  } catch {
+    return false;
+  }
+}
+
+function isLocalGuestPlayer(player) {
+  const wallet = String(player?.wallet || '');
+  const name = String(player?.name || player?.player_name || '');
+  return wallet.startsWith('local_guest_') || name.startsWith('Guest_');
+}
+
+function shouldBypassVenuePickerForLocalGuest(player) {
+  if (!isLocalBrowserHost()) return false;
+  return currentUrlRequestsLocalGuest() || localStorageHasLocalGuestMarker() || isLocalGuestPlayer(player);
+}
+
 function VenuePickerOverlay({ isSolanaMobile, onPick }) {
   const dexOptions = getAvailableDexConfigs({ isInFrame: false, isSolanaMobile });
   return (
@@ -100,6 +138,12 @@ export default function GameUI() {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
     if (!token || showRegister) return;
     if (!solanaMobileReady) return;
+    if (shouldBypassVenuePickerForLocalGuest(player)) {
+      setDex(LOCAL_GUEST_DEFAULT_DEX);
+      setShowVenuePicker(false);
+      addClientBreadcrumb('venue_picker.local_guest_bypass', { dex: LOCAL_GUEST_DEFAULT_DEX });
+      return;
+    }
     const preferenceOwner = { ...player, token };
     const applySavedDex = (savedDex) => {
       if (!savedDex || !isDexAvailableInContext(savedDex, { isInFrame: false, isSolanaMobile })) return false;
@@ -140,6 +184,15 @@ export default function GameUI() {
 
   useEffect(() => {
     const openVenuePicker = (event) => {
+      if (shouldBypassVenuePickerForLocalGuest(player)) {
+        setDex(LOCAL_GUEST_DEFAULT_DEX);
+        setShowVenuePicker(false);
+        addClientBreadcrumb('venue_picker.local_guest_open_blocked', {
+          source: event?.detail?.source || 'unknown',
+          dex: LOCAL_GUEST_DEFAULT_DEX,
+        });
+        return;
+      }
       addClientBreadcrumb('venue_picker.open', {
         source: event?.detail?.source || 'unknown',
         currentDex: event?.detail?.currentDex || null,
@@ -148,7 +201,7 @@ export default function GameUI() {
     };
     window.addEventListener('clash-open-venue-picker', openVenuePicker);
     return () => window.removeEventListener('clash-open-venue-picker', openVenuePicker);
-  }, []);
+  }, [player, setDex]);
 
   useEffect(() => {
     if (!selectedBuilding) setShowTroops(false);

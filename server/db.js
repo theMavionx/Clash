@@ -4355,8 +4355,8 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   turret: {
-    size: [2, 2], max_level: 4,
-    hp_levels: [900, 1600, 2800, 4500],
+    size: [2, 2], max_level: 5,
+    hp_levels: [900, 1600, 2800, 4500, 6800],
     cost: { gold: 220, wood: 700, ore: 580 },
     max_count: 6,
   },
@@ -4379,8 +4379,8 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   mage_tower: {
-    size: [3, 3], max_level: 4,
-    hp_levels: [700, 1200, 2000, 3100],
+    size: [3, 3], max_level: 5,
+    hp_levels: [700, 1200, 2000, 3100, 4600],
     cost: { gold: 800, wood: 0, ore: 1300 },
     max_count: 2,
   },
@@ -4645,7 +4645,7 @@ const TROOP_DEFS = {
   demon_king: { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 }, { gold: 300, wood: 0, ore: 250 }, { gold: 600, wood: 0, ore: 500 }] },
   fire_dragon: { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
 };
-const DISABLED_TROOP_TYPES = new Set();
+const DISABLED_TROOP_TYPES = new Set(['barbarian', 'ranger']);
 const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_TROOP_TYPES.has(troop));
 
 function isTroopDisabled(troopType) {
@@ -4712,11 +4712,11 @@ const TROPHY_TABLE = {
   barn:      [10, 25, 50, 90],
   port:      [15, 35, 70, 125, 195],
   sawmill:   [10, 25, 50, 90, 145],
-  turret:    [20, 45, 90, 160],
+  turret:    [20, 45, 90, 160, 255],
   tombstone: [5, 10, 20, 40],
   storage:      [10, 25, 50, 90, 145],
   archer_tower: [15, 35, 70, 125, 200],
-  mage_tower:   [20, 45, 90, 145],
+  mage_tower:   [20, 45, 90, 145, 225],
   mortar:       [30, 65, 125, 210],
 };
 
@@ -6533,7 +6533,7 @@ function upgradeTroop(playerId, troopType, options = {}) {
 }
 
 function getTroopLevels(playerId) {
-  return stmts.getTroopLevels.all(playerId);
+  return stmts.getTroopLevels.all(playerId).filter((row) => !isTroopDisabled(row.troop_type));
 }
 
 function getAltarSkillLevels(playerId) {

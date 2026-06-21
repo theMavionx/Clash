@@ -347,7 +347,11 @@ export function GodotProvider({ children }) {
         case 'th_info':
           setBuildingDefs(prev => {
             const th_level = data.level || 1, th_progress = data.progress || 0, th_progress_total = data.progress_total || 0;
-            if (prev.th_level === th_level && prev.th_progress === th_progress && prev.th_progress_total === th_progress_total) return prev;
+            const th_unlock = data.unlock || {};
+            const th_max_counts = data.max_counts || {};
+            const sameUnlocks = JSON.stringify(prev.th_unlock || {}) === JSON.stringify(th_unlock);
+            const sameMaxCounts = JSON.stringify(prev.th_max_counts || {}) === JSON.stringify(th_max_counts);
+            if (prev.th_level === th_level && prev.th_progress === th_progress && prev.th_progress_total === th_progress_total && sameUnlocks && sameMaxCounts) return prev;
             return { ...prev, th_level, th_unlock: data.unlock || {}, th_max_counts: data.max_counts || {}, th_progress, th_progress_total };
           });
           break;

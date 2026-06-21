@@ -76,8 +76,13 @@ function prepareLocalGuestSession() {
     }
 
     let guestId = String(url.searchParams.get('guest_id') || '').trim();
-    if (!guestId || guest === 'new') {
+    if (!guestId) {
+      guestId = String(window.localStorage.getItem('clash.localGuest') || '').trim();
+    }
+    if (!guestId) {
       guestId = makeLocalGuestId();
+    }
+    if (guest !== '1' || url.searchParams.get('guest_id') !== guestId) {
       url.searchParams.set('guest', '1');
       url.searchParams.set('guest_id', guestId);
       window.history.replaceState(null, '', url.toString());

@@ -251,7 +251,7 @@ const TROOP_STATS = {
   }
 };
 
-const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger', 'DemonKing', 'FireDragon'];
+const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Archer', 'DemonKing', 'FireDragon'];
 const NFT_TROOP_SLOT_COUNT = 2;
 const NFT_RARITY_MULTIPLIERS = {
   common: 1.2,

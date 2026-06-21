@@ -99,7 +99,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
 		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3],
-		"hp_levels": [900, 1600, 2800, 4500],
+		"hp_levels": [900, 1600, 2800, 4500, 6800],
 		"cost": {"gold": 220, "wood": 700, "ore": 580},
 		"altar_ward_bonus": true,
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
@@ -163,7 +163,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx"],
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
-		"hp_levels": [700, 1200, 2000, 3100],
+		"hp_levels": [700, 1200, 2000, 3100, 4600],
 		"cost": {"gold": 800, "ore": 1300},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -769,7 +769,7 @@ const SHIP_DISPLAY_SCALE: float = 0.05
 var barn_panel: PanelContainer
 var barn_vbox: VBoxContainer
 var troop_levels: Dictionary = {
-	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1, "DemonKing": 1, "FireDragon": 1,
+	"Knight": 1, "Mage": 1, "Archer": 1, "DemonKing": 1, "FireDragon": 1,
 }
 var troop_defs: Dictionary = {
 	"Knight": {
@@ -794,17 +794,6 @@ var troop_defs: Dictionary = {
 			4: {"gold": 1000, "ore": 1000},
 		}
 	},
-	"Barbarian": {
-		"display": "Berserk (Melee Bruiser)",
-		"model": "res://Model/Characters/Model/Barbarian.glb",
-		"script": "res://scripts/barbarian.gd",
-		"costs": {
-			1: {"gold": 175, "ore": 175},
-			2: {"gold": 175, "ore": 175},
-			3: {"gold": 350, "ore": 350},
-			4: {"gold": 700, "ore": 700},
-		}
-	},
 	"Archer": {
 		"display": "Archer (Sniper)",
 		"model": "res://Model/Characters/Model/Ranger.glb",
@@ -814,17 +803,6 @@ var troop_defs: Dictionary = {
 			2: {"gold": 175, "wood": 175},
 			3: {"gold": 350, "wood": 350},
 			4: {"gold": 700, "wood": 700},
-		}
-	},
-	"Ranger": {
-		"display": "Ranger (Crossbow)",
-		"model": "res://Model/Characters/Model/Rogue_Hooded.glb",
-		"script": "res://scripts/ranger.gd",
-		"costs": {
-			1: {"gold": 125, "wood": 125},
-			2: {"gold": 125, "wood": 125},
-			3: {"gold": 250, "wood": 250},
-			4: {"gold": 500, "wood": 500},
 		}
 	},
 	"DemonKing": {
