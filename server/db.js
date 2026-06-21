@@ -3934,6 +3934,29 @@ function updateTournamentLuckyRaiderPayoutDestination(id, wallet) {
   return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
 }
 
+function isPlayerSolanaWalletLinked(playerId, wallet) {
+  const pid = String(playerId || '').trim();
+  const address = String(wallet || '').trim();
+  if (!pid || !address) return false;
+  const row = db.prepare(`
+    SELECT 1 AS ok
+    WHERE EXISTS (
+      SELECT 1 FROM player_wallets
+      WHERE player_id = ? AND chain_type = 'solana' AND address = ?
+    )
+    OR EXISTS (
+      SELECT 1 FROM player_dex_accounts
+      WHERE player_id = ? AND chain_type = 'solana' AND wallet_address = ?
+    )
+    OR EXISTS (
+      SELECT 1 FROM players
+      WHERE id = ? AND wallet = ?
+    )
+    LIMIT 1
+  `).get(pid, address, pid, address, pid, address);
+  return !!row;
+}
+
 function markTournamentLuckyRaiderPayoutPaid(id, result = {}) {
   const payoutId = String(id || '').trim();
   if (!payoutId) return null;
@@ -7131,6 +7154,7 @@ module.exports = {
   listPendingTournamentLuckyRaiderPayouts,
   claimTournamentLuckyRaiderPayout,
   updateTournamentLuckyRaiderPayoutDestination,
+  isPlayerSolanaWalletLinked,
   markTournamentLuckyRaiderPayoutPaid,
   markTournamentLuckyRaiderPayoutFailed,
   seedTournamentDailyPoolBaseline,

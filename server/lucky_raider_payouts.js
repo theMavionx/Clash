@@ -317,6 +317,9 @@ async function processLuckyRaiderPayout(row, options = {}) {
       payout.destination_wallet || payout.current_destination_wallet || '',
       'Lucky Raider payout wallet'
     );
+    if (!gameDb.isPlayerSolanaWalletLinked(payout.player_id, destination)) {
+      throw new Error('Lucky Raider payout wallet is not linked to the winner account');
+    }
     if (destination !== payout.destination_wallet) {
       gameDb.updateTournamentLuckyRaiderPayoutDestination(payout.id, destination);
     }

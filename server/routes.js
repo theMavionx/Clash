@@ -18012,6 +18012,42 @@ function normalizeRewardSolanaWallet(v) {
   return SOLANA_REWARD_WALLET_RE.test(s) ? s : null;
 }
 
+function playerOwnsSolanaRewardWallet(playerId, wallet) {
+  const normalized = normalizeRewardSolanaWallet(wallet);
+  if (!playerId || !normalized) return false;
+  const row = db.db.prepare(`
+    SELECT 1 AS ok
+    WHERE EXISTS (
+      SELECT 1 FROM player_wallets
+      WHERE player_id = ? AND chain_type = 'solana' AND address = ?
+    )
+    OR EXISTS (
+      SELECT 1 FROM player_dex_accounts
+      WHERE player_id = ? AND chain_type = 'solana' AND wallet_address = ?
+    )
+    OR EXISTS (
+      SELECT 1 FROM players
+      WHERE id = ? AND wallet = ?
+    )
+    LIMIT 1
+  `).get(playerId, normalized, playerId, normalized, playerId, normalized);
+  return !!row;
+}
+
+function validatePlayerClashRewardWallet(playerId, wallet) {
+  const normalized = normalizeRewardSolanaWallet(wallet);
+  if (!normalized) {
+    return { ok: false, error: 'valid Solana reward wallet required for CLASH rewards' };
+  }
+  if (!playerOwnsSolanaRewardWallet(playerId, normalized)) {
+    return {
+      ok: false,
+      error: 'connect this Solana wallet to your profile before using it for CLASH rewards',
+    };
+  }
+  return { ok: true, wallet: normalized };
+}
+
 function rewardUsesClashToken(reward) {
   if (!reward || typeof reward !== 'object') return false;
   const currency = String(reward.currency || '').trim().toUpperCase();
@@ -19323,7 +19359,7 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
     SELECT * FROM tournament_participants
     WHERE tournament_id = ? AND player_id = ?
   `).get(t.id, req.player.id);
-  const hasValidRewardWallet = !needsClashRewardWallet || SOLANA_REWARD_WALLET_RE.test(String(me?.reward_wallet_evm || '').trim());
+  const hasValidRewardWallet = !needsClashRewardWallet || playerOwnsSolanaRewardWallet(req.player.id, me?.reward_wallet_evm);
   if (!needsClashRewardWallet || hasValidRewardWallet) {
     me = ensureLuckyRaiderParticipant(t, req.player);
   }
@@ -19526,11 +19562,16 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   }
   if (!canJoinTournament(t, now)) return res.status(400).json({ error: phase === 'live' ? 'registration is closed' : 'tournament is not joinable' });
   const needsClashRewardWallet = tournamentRequiresClashRewardWallet(t);
-  const rewardWallet = needsClashRewardWallet
-    ? normalizeRewardSolanaWallet(req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm)
+  let rewardWallet = needsClashRewardWallet
+    ? null
     : normalizeRewardEvmWallet(req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm);
-  if (needsClashRewardWallet && !rewardWallet) {
-    return res.status(400).json({ error: 'valid Solana reward wallet required for CLASH rewards' });
+  if (needsClashRewardWallet) {
+    const validation = validatePlayerClashRewardWallet(
+      req.player.id,
+      req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm,
+    );
+    if (!validation.ok) return res.status(400).json({ error: validation.error });
+    rewardWallet = validation.wallet;
   }
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.
@@ -19563,12 +19604,13 @@ router.post('/tournaments/:id/reward-wallet', auth, (req, res) => {
   if (!tournamentRequiresClashRewardWallet(t)) {
     return res.status(400).json({ error: 'this tournament does not use CLASH reward addresses' });
   }
-  const rewardWallet = normalizeRewardSolanaWallet(
-    req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm,
-  );
-  if (!rewardWallet) {
-    return res.status(400).json({ error: 'valid Solana reward wallet required for CLASH rewards' });
-  }
+  const rewardWalletInput = req.body?.reward_wallet_solana
+    ?? req.body?.rewardWalletSolana
+    ?? req.body?.reward_wallet_evm
+    ?? req.body?.rewardWalletEvm;
+  const rewardWalletValidation = validatePlayerClashRewardWallet(req.player.id, rewardWalletInput);
+  if (!rewardWalletValidation.ok) return res.status(400).json({ error: rewardWalletValidation.error });
+  const rewardWallet = rewardWalletValidation.wallet;
   const participant = db.db.prepare(`
     SELECT reward_wallet_evm, left_at
     FROM tournament_participants
