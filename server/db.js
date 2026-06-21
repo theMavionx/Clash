@@ -1232,6 +1232,36 @@ try {
     );
     CREATE INDEX IF NOT EXISTS idx_tlr_entries_player
       ON tournament_lucky_raider_entries(player_id, tournament_id, day_utc);
+
+    CREATE TABLE IF NOT EXISTS tournament_lucky_raider_payouts (
+      id                 TEXT PRIMARY KEY,
+      tournament_id      INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      day_utc            TEXT NOT NULL,
+      place              INTEGER NOT NULL,
+      reward_index       INTEGER NOT NULL DEFAULT 0,
+      player_id          TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      destination_wallet TEXT,
+      reward_label       TEXT NOT NULL DEFAULT '',
+      reward_currency    TEXT NOT NULL DEFAULT '',
+      reward_amount_usd  REAL NOT NULL DEFAULT 0,
+      clash_usd_price    REAL NOT NULL DEFAULT 0,
+      clash_amount       TEXT NOT NULL DEFAULT '',
+      clash_amount_units TEXT NOT NULL DEFAULT '',
+      price_source       TEXT,
+      status             TEXT NOT NULL DEFAULT 'pending',
+      tx_hash            TEXT,
+      error              TEXT,
+      attempts           INTEGER NOT NULL DEFAULT 0,
+      metadata_json      TEXT NOT NULL DEFAULT '{}',
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      paid_at            TEXT,
+      UNIQUE(tournament_id, day_utc, place, reward_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tlr_payouts_status
+      ON tournament_lucky_raider_payouts(status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_tlr_payouts_player
+      ON tournament_lucky_raider_payouts(player_id, tournament_id, day_utc);
   `);
 } catch (e) { console.warn('[db] tournament daily pool migration:', e.message); }
 
@@ -2632,6 +2662,92 @@ const stmts = {
       tournament_id, day_utc, status, seed, winner_player_id, details_json
     ) VALUES (?, ?, ?, ?, ?, ?)
   `),
+  insertTournamentLuckyRaiderPayout: db.prepare(`
+    INSERT OR IGNORE INTO tournament_lucky_raider_payouts (
+      id, tournament_id, day_utc, place, reward_index, player_id,
+      destination_wallet, reward_label, reward_currency, reward_amount_usd,
+      status, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  getTournamentLuckyRaiderPayout: db.prepare(`
+    SELECT lp.*,
+           p.name AS player_name,
+           t.name AS tournament_name,
+           tp.reward_wallet_evm AS current_destination_wallet
+      FROM tournament_lucky_raider_payouts lp
+      LEFT JOIN players p ON p.id = lp.player_id
+      LEFT JOIN tournaments t ON t.id = lp.tournament_id
+      LEFT JOIN tournament_participants tp
+        ON tp.tournament_id = lp.tournament_id
+       AND tp.player_id = lp.player_id
+     WHERE lp.id = ?
+  `),
+  listPendingTournamentLuckyRaiderPayouts: db.prepare(`
+    SELECT lp.*,
+           p.name AS player_name,
+           t.name AS tournament_name,
+           tp.reward_wallet_evm AS current_destination_wallet
+      FROM tournament_lucky_raider_payouts lp
+      LEFT JOIN players p ON p.id = lp.player_id
+      LEFT JOIN tournaments t ON t.id = lp.tournament_id
+      LEFT JOIN tournament_participants tp
+        ON tp.tournament_id = lp.tournament_id
+       AND tp.player_id = lp.player_id
+     WHERE lp.status IN ('pending', 'failed')
+       AND lp.attempts < ?
+       AND (
+         lp.status = 'pending'
+         OR lp.updated_at <= datetime('now', ?)
+       )
+     ORDER BY lp.created_at ASC, lp.id ASC
+     LIMIT ?
+  `),
+  claimTournamentLuckyRaiderPayout: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET status = 'processing',
+           attempts = attempts + 1,
+           error = NULL,
+           updated_at = datetime('now')
+     WHERE id = ?
+       AND status IN ('pending', 'failed')
+       AND attempts < ?
+  `),
+  updateTournamentLuckyRaiderPayoutDestination: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET destination_wallet = ?,
+           updated_at = datetime('now')
+     WHERE id = ?
+  `),
+  markTournamentLuckyRaiderPayoutPaid: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET status = 'paid',
+           tx_hash = ?,
+           clash_usd_price = ?,
+           clash_amount = ?,
+           clash_amount_units = ?,
+           price_source = ?,
+           error = NULL,
+           paid_at = datetime('now'),
+           updated_at = datetime('now')
+     WHERE id = ?
+  `),
+  markTournamentLuckyRaiderPayoutFailed: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET status = 'failed',
+           error = ?,
+           updated_at = datetime('now')
+     WHERE id = ?
+       AND status = 'processing'
+  `),
+  voidTournamentLuckyRaiderPendingPayouts: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET status = 'void',
+           error = ?,
+           updated_at = datetime('now')
+     WHERE tournament_id = ?
+       AND day_utc = ?
+       AND status IN ('pending', 'failed', 'processing')
+  `),
   addTournamentAwardedPoints: db.prepare(`
     UPDATE tournament_participants
        SET awarded_points = awarded_points + ?,
@@ -2921,6 +3037,7 @@ function parseTournamentRewardConfig(value) {
       label: String(luckyRaw.label || 'Lucky Daily Raider').slice(0, 80),
       ticket_metric: ticketMetric,
       volume_per_ticket_usd: Math.max(1, Math.min(10_000_000, Number(luckyRaw.volume_per_ticket_usd || 1000) || 1000)),
+      volume_tickets_per_step: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.volume_tickets_per_step ?? luckyRaw.volume_bonus_tickets_per_step ?? 1) || 1))),
       attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
       min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
       winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
@@ -3196,6 +3313,26 @@ function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
   return endDay < yesterday ? endDay : yesterday;
 }
 
+function luckyRaiderDrawTimeMinutes(cfg) {
+  const raw = String(cfg?.draw_time_utc || '00:05').trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return 5;
+  const hours = Math.max(0, Math.min(23, Number(match[1]) || 0));
+  const minutes = Math.max(0, Math.min(59, Number(match[2]) || 0));
+  return hours * 60 + minutes;
+}
+
+function tournamentLastClosedLuckyRaiderDay(t, now = new Date()) {
+  const baseLast = tournamentLastClosedDailyPoolDay(t, now);
+  const cfg = tournamentLuckyRaiderConfig(t);
+  const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const yesterday = previousUtcDay(now);
+  if (baseLast === yesterday && nowMinutes < luckyRaiderDrawTimeMinutes(cfg)) {
+    return addUtcDays(baseLast, -1);
+  }
+  return baseLast;
+}
+
 function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
   const tid = Number(tournamentId);
   const day = normalizeDailyPoolDay(dayInput);
@@ -3355,9 +3492,80 @@ function luckyRaiderRewardsForPlace(cfg, place) {
   }).filter(Boolean);
 }
 
+function luckyRaiderRewardUsesClashToken(reward) {
+  if (!reward || typeof reward !== 'object') return false;
+  const currency = String(reward.currency || '').trim().toUpperCase();
+  const unit = String(reward.unit || '').trim().toUpperCase();
+  const symbol = String(reward.symbol || reward.token || '').trim().toUpperCase();
+  return [currency, unit, symbol].some((value) => value === 'CLASH' || value === 'COP');
+}
+
+function luckyRaiderPayoutId(tournamentId, day, place, rewardIndex) {
+  return `tlr:${Number(tournamentId)}:${normalizeDailyPoolDay(day)}:${Number(place)}:${Number(rewardIndex)}`;
+}
+
+function queueTournamentLuckyRaiderPayouts(t, dayInput, winners) {
+  const tid = Number(t?.id);
+  const day = normalizeDailyPoolDay(dayInput);
+  if (!Number.isFinite(tid) || tid <= 0 || !Array.isArray(winners) || winners.length === 0) {
+    return { queued: 0, skipped: 0 };
+  }
+  let queued = 0;
+  let skipped = 0;
+  for (const winner of winners) {
+    const rewards = Array.isArray(winner?.rewards) ? winner.rewards : [];
+    const place = Math.max(1, Math.floor(Number(winner?.place || 0) || 0));
+    if (!winner?.player_id || place <= 0) continue;
+    const participant = db.prepare(`
+      SELECT reward_wallet_evm
+        FROM tournament_participants
+       WHERE tournament_id = ? AND player_id = ?
+    `).get(tid, winner.player_id);
+    for (let i = 0; i < rewards.length; i += 1) {
+      const reward = rewards[i];
+      if (!luckyRaiderRewardUsesClashToken(reward)) {
+        skipped += 1;
+        continue;
+      }
+      const amountUsd = Number(reward.amount || 0);
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+        skipped += 1;
+        continue;
+      }
+      const id = luckyRaiderPayoutId(tid, day, place, i);
+      const metadata = {
+        source: 'lucky_raider',
+        tournament_name: t.name || '',
+        player_name: winner.name || '',
+        reward_type: reward.type || 'custom',
+        reward_unit: reward.unit || reward.currency || '',
+        amount_source: 'usd_budget',
+      };
+      const result = stmts.insertTournamentLuckyRaiderPayout.run(
+        id,
+        tid,
+        day,
+        place,
+        i,
+        winner.player_id,
+        participant?.reward_wallet_evm || null,
+        String(reward.label || 'CLASH reward').slice(0, 120),
+        String(reward.currency || reward.unit || 'CLASH').toUpperCase().slice(0, 24),
+        Number(amountUsd.toFixed(6)),
+        'pending',
+        JSON.stringify(metadata)
+      );
+      if (result.changes) queued += 1;
+    }
+  }
+  return { queued, skipped };
+}
+
 function luckyRaiderTicketState(cfg, volume, attackWins) {
   const metric = String(cfg?.ticket_metric || 'volume').toLowerCase();
-  const rawVolumeTickets = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const rawVolumeSteps = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const volumeTicketsPerStep = Math.max(1, Math.floor(Number(cfg?.volume_tickets_per_step || 1) || 1));
+  const rawVolumeTickets = rawVolumeSteps * volumeTicketsPerStep;
   const maxVolumeTickets = Math.max(0, Math.floor(Number(cfg?.max_volume_tickets || 0) || 0));
   const volumeTickets = maxVolumeTickets > 0 ? Math.min(rawVolumeTickets, maxVolumeTickets) : rawVolumeTickets;
   const attackTickets = Math.floor(Math.max(0, Math.floor(Number(attackWins) || 0)) / Math.max(1, Math.floor(Number(cfg?.attack_wins_per_ticket || 10) || 10)));
@@ -3380,6 +3588,8 @@ function luckyRaiderTicketState(cfg, volume, attackWins) {
     ticket_metric: metric,
     volume_tickets: Math.max(0, volumeTickets),
     raw_volume_tickets: Math.max(0, rawVolumeTickets),
+    raw_volume_steps: Math.max(0, rawVolumeSteps),
+    volume_tickets_per_step: volumeTicketsPerStep,
     max_volume_tickets: maxVolumeTickets,
     attack_win_tickets: Math.max(0, attackTickets),
     uncapped_tickets: Math.max(0, ticketsRaw),
@@ -3522,6 +3732,7 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
     if (existing && options.force) {
       db.prepare('DELETE FROM tournament_lucky_raider_runs WHERE tournament_id = ? AND day_utc = ?').run(tid, day);
       db.prepare('DELETE FROM tournament_lucky_raider_entries WHERE tournament_id = ? AND day_utc = ?').run(tid, day);
+      stmts.voidTournamentLuckyRaiderPendingPayouts.run('voided by forced Lucky Raider rerun', tid, day);
     }
 
     const rows = db.prepare(`
@@ -3570,6 +3781,7 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         max_counted_attacks: attackStats.max_counted_attacks,
         ticket_metric: cfg.ticket_metric,
         volume_per_ticket_usd: cfg.volume_per_ticket_usd,
+        volume_tickets_per_step: cfg.volume_tickets_per_step,
         attack_wins_per_ticket: cfg.attack_wins_per_ticket,
         min_attack_wins: cfg.min_attack_wins,
         max_tickets: cfg.max_tickets,
@@ -3578,6 +3790,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         has_required_nft: cfg.require_nft ? hasNft : null,
         volume_tickets: ticketState.volume_tickets,
         raw_volume_tickets: ticketState.raw_volume_tickets,
+        raw_volume_steps: ticketState.raw_volume_steps,
+        volume_tickets_per_step: ticketState.volume_tickets_per_step,
         max_volume_tickets: ticketState.max_volume_tickets,
         attack_win_tickets: ticketState.attack_win_tickets,
         uncapped_tickets: ticketsRaw,
@@ -3625,6 +3839,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       raw_attack_attempts: entry.raw_attack_attempts,
       volume_tickets: entry.details.volume_tickets,
       raw_volume_tickets: entry.details.raw_volume_tickets,
+      raw_volume_steps: entry.details.raw_volume_steps,
+      volume_tickets_per_step: entry.details.volume_tickets_per_step,
       attack_win_tickets: entry.details.attack_win_tickets,
       tickets: entry.tickets,
       rewards: luckyRaiderRewardsForPlace(cfg, entry.place),
@@ -3649,6 +3865,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         raw_attack_attempts: entry.raw_attack_attempts,
         volume_tickets: entry.details.volume_tickets,
         raw_volume_tickets: entry.details.raw_volume_tickets,
+        raw_volume_steps: entry.details.raw_volume_steps,
+        volume_tickets_per_step: entry.details.volume_tickets_per_step,
         attack_win_tickets: entry.details.attack_win_tickets,
         tickets: entry.tickets,
         eligible: !!entry.eligible,
@@ -3664,6 +3882,15 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       winner?.player_id || null,
       JSON.stringify(details)
     );
+    const payoutQueue = queueTournamentLuckyRaiderPayouts(t, day, winners);
+    if (payoutQueue.queued || payoutQueue.skipped) {
+      details.payout_queue = payoutQueue;
+      db.prepare(`
+        UPDATE tournament_lucky_raider_runs
+           SET details_json = ?
+         WHERE tournament_id = ? AND day_utc = ?
+      `).run(JSON.stringify(details), tid, day);
+    }
     return {
       ok: true,
       tournament_id: tid,
@@ -3675,9 +3902,58 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       total_tickets: pick.totalTickets,
       eligible_players: details.eligible_players,
       entries: entries.length,
+      payout_queue: payoutQueue,
       details,
     };
   })();
+}
+
+function listPendingTournamentLuckyRaiderPayouts(options = {}) {
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(options.limit || 25) || 25)));
+  const maxAttempts = Math.max(1, Math.min(50, Math.floor(Number(options.maxAttempts || 5) || 5)));
+  const retrySeconds = Math.max(0, Math.min(86_400, Math.floor(Number(options.retrySeconds || 300) || 300)));
+  return stmts.listPendingTournamentLuckyRaiderPayouts.all(maxAttempts, `-${retrySeconds} seconds`, limit);
+}
+
+function claimTournamentLuckyRaiderPayout(id, options = {}) {
+  const payoutId = String(id || '').trim();
+  if (!payoutId) return null;
+  const maxAttempts = Math.max(1, Math.min(50, Math.floor(Number(options.maxAttempts || 5) || 5)));
+  return db.transaction(() => {
+    const result = stmts.claimTournamentLuckyRaiderPayout.run(payoutId, maxAttempts);
+    if (!result.changes) return null;
+    return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
+  })();
+}
+
+function updateTournamentLuckyRaiderPayoutDestination(id, wallet) {
+  const payoutId = String(id || '').trim();
+  const destination = String(wallet || '').trim();
+  if (!payoutId || !destination) return null;
+  stmts.updateTournamentLuckyRaiderPayoutDestination.run(destination, payoutId);
+  return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
+}
+
+function markTournamentLuckyRaiderPayoutPaid(id, result = {}) {
+  const payoutId = String(id || '').trim();
+  if (!payoutId) return null;
+  stmts.markTournamentLuckyRaiderPayoutPaid.run(
+    String(result.txHash || result.tx_hash || ''),
+    Number(result.clashUsdPrice || result.clash_usd_price || 0) || 0,
+    String(result.clashAmount || result.clash_amount || ''),
+    String(result.clashAmountUnits || result.clash_amount_units || ''),
+    String(result.priceSource || result.price_source || ''),
+    payoutId
+  );
+  return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
+}
+
+function markTournamentLuckyRaiderPayoutFailed(id, error) {
+  const payoutId = String(id || '').trim();
+  if (!payoutId) return null;
+  const message = String(error?.message || error || 'payout failed').slice(0, 500);
+  stmts.markTournamentLuckyRaiderPayoutFailed.run(message, payoutId);
+  return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
 }
 
 function awardPendingTournamentDailyPools(options = {}) {
@@ -3694,17 +3970,19 @@ function awardPendingTournamentDailyPools(options = {}) {
     const needsLucky = tournamentHasLuckyRaider(t);
     if (!needsDailyPool && !needsLucky) continue;
     const first = tournamentFirstDailyPoolDay(t);
-    const last = tournamentLastClosedDailyPoolDay(t, now);
+    const dailyLast = needsDailyPool ? tournamentLastClosedDailyPoolDay(t, now) : addUtcDays(first, -1);
+    const luckyLast = needsLucky ? tournamentLastClosedLuckyRaiderDay(t, now) : addUtcDays(first, -1);
+    const last = dailyLast > luckyLast ? dailyLast : luckyLast;
     if (first > last) continue;
     let day = first;
     let guard = 0;
     while (day <= last && guard < maxDays) {
       const dayResults = [];
-      if (needsDailyPool) {
+      if (needsDailyPool && day <= dailyLast) {
         const run = stmts.getTournamentDailyRun.get(t.id, day);
         if (!run) dayResults.push(awardTournamentDailyPoolDay(t.id, day));
       }
-      if (needsLucky) {
+      if (needsLucky && day <= luckyLast) {
         const luckyRun = stmts.getTournamentLuckyRaiderRun.get(t.id, day);
         if (!luckyRun) dayResults.push(awardTournamentLuckyRaiderDay(t.id, day));
       }
@@ -6850,6 +7128,11 @@ module.exports = {
   awardTournamentLuckyRaiderDay,
   awardTournamentFinalDailyPoolDay,
   awardPendingTournamentDailyPools,
+  listPendingTournamentLuckyRaiderPayouts,
+  claimTournamentLuckyRaiderPayout,
+  updateTournamentLuckyRaiderPayoutDestination,
+  markTournamentLuckyRaiderPayoutPaid,
+  markTournamentLuckyRaiderPayoutFailed,
   seedTournamentDailyPoolBaseline,
   getResourceCaps,
   storeReplay,

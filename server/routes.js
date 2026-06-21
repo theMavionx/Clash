@@ -15,6 +15,7 @@ const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
 const tradeRecon = require('./trade_reconciliation');
+const luckyRaiderPayouts = require('./lucky_raider_payouts');
 const { broadcastToPlayer, consumePendingAgentEvents } = require('./websocket');
 const {
   solanaToken2022CollectionId,
@@ -18011,6 +18012,18 @@ function normalizeRewardSolanaWallet(v) {
   return SOLANA_REWARD_WALLET_RE.test(s) ? s : null;
 }
 
+function rewardUsesClashToken(reward) {
+  if (!reward || typeof reward !== 'object') return false;
+  const currency = String(reward.currency || '').trim().toUpperCase();
+  const unit = String(reward.unit || '').trim().toUpperCase();
+  const symbol = String(reward.symbol || reward.token || '').trim().toUpperCase();
+  return [currency, unit, symbol].some((value) => value === 'CLASH' || value === 'COP');
+}
+
+function rewardsContainClashToken(rewards) {
+  return Array.isArray(rewards) && rewards.some(rewardUsesClashToken);
+}
+
 function normalizePrizePayouts(input) {
   const arr = Array.isArray(input)
     ? input
@@ -18184,6 +18197,7 @@ function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
       label: sanitizePrizeText(luckyRaw.label || 'Lucky Daily Raider', 'Lucky Daily Raider'),
       ticket_metric: ticketMetric,
       volume_per_ticket_usd: Math.max(1, Math.min(10_000_000, sanitizePrizeNumber(luckyRaw.volume_per_ticket_usd, 1000))),
+      volume_tickets_per_step: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.volume_tickets_per_step ?? luckyRaw.volume_bonus_tickets_per_step ?? 1) || 1))),
       attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
       min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
       winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
@@ -18206,9 +18220,25 @@ function rewardConfigHasContent(config) {
     || (normalized.lucky_daily_raider.rewards || []).length > 0;
 }
 
+function rewardConfigUsesClashToken(config) {
+  const normalized = normalizeTournamentRewardConfig(config || {});
+  if (rewardsContainClashToken(normalized.lucky_daily_raider?.rewards)) return true;
+  for (const pool of [...(normalized.daily_pools || []), ...(normalized.final_pools || [])]) {
+    if (rewardsContainClashToken(pool?.rewards)) return true;
+  }
+  return false;
+}
+
+function megaConfigUsesClashToken(megaConfig) {
+  const sectors = Array.isArray(megaConfig?.sectors) ? megaConfig.sectors : [];
+  return sectors.some((sector) => rewardConfigUsesClashToken(sector?.reward_config || {}));
+}
+
 function luckyRaiderTicketState(cfg, volume, attackWins) {
   const metric = String(cfg?.ticket_metric || 'volume').toLowerCase();
-  const rawVolumeTickets = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const rawVolumeSteps = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const volumeTicketsPerStep = Math.max(1, Math.floor(Number(cfg?.volume_tickets_per_step || 1) || 1));
+  const rawVolumeTickets = rawVolumeSteps * volumeTicketsPerStep;
   const maxVolumeTickets = Math.max(0, Math.floor(Number(cfg?.max_volume_tickets || 0) || 0));
   const volumeTickets = maxVolumeTickets > 0 ? Math.min(rawVolumeTickets, maxVolumeTickets) : rawVolumeTickets;
   const attackTickets = Math.floor(Math.max(0, Math.floor(Number(attackWins) || 0)) / Math.max(1, Math.floor(Number(cfg?.attack_wins_per_ticket || 10) || 10)));
@@ -18229,6 +18259,8 @@ function luckyRaiderTicketState(cfg, volume, attackWins) {
   return {
     volume_tickets: Math.max(0, volumeTickets),
     raw_volume_tickets: Math.max(0, rawVolumeTickets),
+    raw_volume_steps: Math.max(0, rawVolumeSteps),
+    volume_tickets_per_step: volumeTicketsPerStep,
     max_volume_tickets: maxVolumeTickets,
     attack_win_tickets: Math.max(0, attackTickets),
     uncapped_tickets: Math.max(0, uncapped),
@@ -18831,6 +18863,8 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
         max_counted_attacks: Math.max(0, Math.floor(Number(attackStats.max_counted_attacks || cfg.max_counted_attacks || cfg.max_tickets || 0) || 0)),
         volume_tickets: ticketState.volume_tickets,
         raw_volume_tickets: ticketState.raw_volume_tickets,
+        raw_volume_steps: ticketState.raw_volume_steps,
+        volume_tickets_per_step: ticketState.volume_tickets_per_step,
         max_volume_tickets: ticketState.max_volume_tickets,
         attack_win_tickets: ticketState.attack_win_tickets,
         tickets: cfg.require_nft && !hasNft ? 0 : tickets,
@@ -18912,6 +18946,7 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
     label: cfg.label,
     ticket_metric: cfg.ticket_metric,
     volume_per_ticket_usd: cfg.volume_per_ticket_usd,
+    volume_tickets_per_step: cfg.volume_tickets_per_step,
     attack_wins_per_ticket: cfg.attack_wins_per_ticket,
     min_attack_wins: cfg.min_attack_wins,
     winner_count: cfg.winner_count,
@@ -19008,6 +19043,18 @@ function canJoinTournament(t, now = nowSql()) {
   return false;
 }
 
+function tournamentRequiresClashRewardWallet(t) {
+  if (!t) return false;
+  if (Number(t.rewards_in_cop || 0)) return true;
+  if (rewardConfigUsesClashToken(t.reward_config || {})) return true;
+  let megaConfig = {};
+  try { megaConfig = normalizeTournamentMegaConfig(t.mega_config); } catch { megaConfig = {}; }
+  if (megaConfigUsesClashToken(megaConfig)) return true;
+  let prizeTiers = [];
+  try { prizeTiers = normalizeTournamentPrizeTiers(t.prize_tiers || []); } catch { prizeTiers = []; }
+  return prizeTiers.some((tier) => rewardsContainClashToken(tier.rewards || []));
+}
+
 function tournamentRowToPublic(t, options = {}) {
   const now = nowSql();
   const phase = tournamentPhase(t, now);
@@ -19085,7 +19132,7 @@ function tournamentRowToPublic(t, options = {}) {
     prize_rewards_by_rank: prize.rewards_by_rank,
     reward_config: rewardConfig,
     reward_schedule: tournamentRewardScheduleState(t),
-    rewards_in_cop: !!Number(t.rewards_in_cop || 0),
+    rewards_in_cop: tournamentRequiresClashRewardWallet(t),
     status: t.status,
     phase,
     preregistration_enabled: !!Number(t.preregistration_enabled || 0),
@@ -19228,15 +19275,17 @@ router.get('/tournaments', (req, res) => {
   res.json({ tournaments: rows.map(tournamentRowToPublic) });
 });
 
-function ensureLuckyRaiderParticipant(t, player) {
+function ensureLuckyRaiderParticipant(t, player, rewardWallet = null) {
   if (!t?.id || !player?.id) return null;
+  const normalizedRewardWallet = rewardWallet ? normalizeRewardSolanaWallet(rewardWallet) : null;
   db.db.prepare(`
     INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, last_activity_at)
-    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, NULL, NULL, datetime('now'))
+    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, NULL, ?, datetime('now'))
     ON CONFLICT(tournament_id, player_id) DO UPDATE SET
       left_at = NULL,
+      reward_wallet_evm = COALESCE(excluded.reward_wallet_evm, tournament_participants.reward_wallet_evm),
       last_activity_at = datetime('now')
-  `).run(t.id, player.id);
+  `).run(t.id, player.id, normalizedRewardWallet);
   return db.db.prepare(`
     SELECT * FROM tournament_participants
     WHERE tournament_id = ? AND player_id = ?
@@ -19269,13 +19318,23 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
     return res.json({ tournament: null, joined: false, phase: null, can_join: false, reward_schedule: null });
   }
   const pub = tournamentRowToPublic(t);
-  const me = ensureLuckyRaiderParticipant(t, req.player);
+  const needsClashRewardWallet = tournamentRequiresClashRewardWallet(t);
+  let me = db.db.prepare(`
+    SELECT * FROM tournament_participants
+    WHERE tournament_id = ? AND player_id = ?
+  `).get(t.id, req.player.id);
+  const hasValidRewardWallet = !needsClashRewardWallet || SOLANA_REWARD_WALLET_RE.test(String(me?.reward_wallet_evm || '').trim());
+  if (!needsClashRewardWallet || hasValidRewardWallet) {
+    me = ensureLuckyRaiderParticipant(t, req.player);
+  }
   const rewardSchedule = tournamentRewardScheduleState(t, req.player.id);
   return res.json({
     tournament: { ...pub, reward_schedule: rewardSchedule },
     joined: !!me && me.left_at === null,
     phase: pub.phase,
-    can_join: false,
+    can_join: needsClashRewardWallet && !hasValidRewardWallet,
+    needs_reward_wallet: needsClashRewardWallet,
+    has_reward_wallet: hasValidRewardWallet,
     me: me ? {
       trophies: me.trophies,
       gold: me.gold,
@@ -19285,6 +19344,8 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
       awarded_points: me.awarded_points || 0,
       joined_at: me.joined_at,
       left_at: me.left_at,
+      reward_wallet_evm: me.reward_wallet_evm || null,
+      reward_wallet_solana: me.reward_wallet_evm || null,
     } : null,
     reward_schedule: rewardSchedule,
   });
@@ -19464,10 +19525,11 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
     return res.status(400).json({ error: 'pre-registration is closed' });
   }
   if (!canJoinTournament(t, now)) return res.status(400).json({ error: phase === 'live' ? 'registration is closed' : 'tournament is not joinable' });
-  const rewardWallet = Number(t.rewards_in_cop || 0)
+  const needsClashRewardWallet = tournamentRequiresClashRewardWallet(t);
+  const rewardWallet = needsClashRewardWallet
     ? normalizeRewardSolanaWallet(req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm)
     : normalizeRewardEvmWallet(req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm);
-  if (Number(t.rewards_in_cop || 0) && !rewardWallet) {
+  if (needsClashRewardWallet && !rewardWallet) {
     return res.status(400).json({ error: 'valid Solana reward wallet required for CLASH rewards' });
   }
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
@@ -19498,22 +19560,33 @@ router.post('/tournaments/:id/reward-wallet', auth, (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
-  if (!Number(t.rewards_in_cop || 0)) {
+  if (!tournamentRequiresClashRewardWallet(t)) {
     return res.status(400).json({ error: 'this tournament does not use CLASH reward addresses' });
-  }
-  const participant = db.db.prepare(`
-    SELECT reward_wallet_evm, left_at
-    FROM tournament_participants
-    WHERE tournament_id = ? AND player_id = ?
-  `).get(tid, req.player.id);
-  if (!participant || participant.left_at !== null) {
-    return res.status(400).json({ error: 'you are not registered in this tournament' });
   }
   const rewardWallet = normalizeRewardSolanaWallet(
     req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm,
   );
   if (!rewardWallet) {
     return res.status(400).json({ error: 'valid Solana reward wallet required for CLASH rewards' });
+  }
+  const participant = db.db.prepare(`
+    SELECT reward_wallet_evm, left_at
+    FROM tournament_participants
+    WHERE tournament_id = ? AND player_id = ?
+  `).get(tid, req.player.id);
+  const isLuckyRaiderEvent = normalizeTournamentEventKind(t.event_kind) === 'lucky_raider';
+  if (!participant || participant.left_at !== null) {
+    if (isLuckyRaiderEvent) {
+      const me = ensureLuckyRaiderParticipant(t, req.player, rewardWallet);
+      console.log(`[tournament ${tid} reward-wallet] player=${req.player.name} -> ${rewardWallet}`);
+      return res.json({
+        ok: true,
+        joined: !!me && me.left_at === null,
+        reward_wallet_evm: rewardWallet,
+        reward_wallet_solana: rewardWallet,
+      });
+    }
+    return res.status(400).json({ error: 'you are not registered in this tournament' });
   }
   db.db.prepare(`
     UPDATE tournament_participants
@@ -20691,7 +20764,7 @@ router.delete('/admin/tournaments/:id', adminAuth, (req, res) => {
 
 let tournamentDailyPoolTimer = null;
 
-function runTournamentDailyPoolSweep(label = 'timer') {
+async function runTournamentDailyPoolSweep(label = 'timer') {
   try {
     const result = db.awardPendingTournamentDailyPools({
       maxDays: Math.max(1, Math.min(60, Number(process.env.TOURNAMENT_DAILY_POOL_MAX_DAYS || 14))),
@@ -20699,6 +20772,7 @@ function runTournamentDailyPoolSweep(label = 'timer') {
     if (Number(result?.processed || 0) > 0) {
       console.log(`[tournament daily-pool ${label}] processed=${result.processed}`);
     }
+    await luckyRaiderPayouts.runLuckyRaiderPayoutSweep(`daily-pool:${label}`);
   } catch (err) {
     console.warn('[tournament daily-pool] sweep failed:', err?.message || err);
   }
@@ -20714,6 +20788,7 @@ function startTournamentDailyPoolScheduler() {
 }
 
 startTournamentDailyPoolScheduler();
+luckyRaiderPayouts.startLuckyRaiderPayoutWorker();
 
 // ==================== ENCRYPTED CLIENT DIAGNOSTICS ====================
 //

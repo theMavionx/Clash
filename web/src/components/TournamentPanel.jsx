@@ -253,8 +253,9 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
   const ticketMetric = String(lucky.ticket_metric || 'volume');
   const attackWinsPerTicket = fmt(lucky.attack_wins_per_ticket || 10);
   const volumePerTicket = fmtUsdWhole(lucky.volume_per_ticket_usd);
+  const volumeTicketsPerStep = Math.max(1, Math.floor(Number(lucky.volume_tickets_per_step || 1) || 1));
   const maxVolumeTickets = Math.max(0, Math.floor(Number(lucky.max_volume_tickets || 0) || 0));
-  const volumeBonusText = `${volumePerTicket} volume = +1${maxVolumeTickets > 0 ? `, max +${fmt(maxVolumeTickets)}` : ''}`;
+  const volumeBonusText = `${volumePerTicket} volume = +${fmt(volumeTicketsPerStep)}${maxVolumeTickets > 0 ? `, max +${fmt(maxVolumeTickets)}` : ''}`;
   const luckyTicketRule = ticketMetric === 'attack_wins'
     ? `${attackWinsPerTicket} winning attacks = 1 ticket`
     : ticketMetric === 'attack_wins_plus_volume'
@@ -320,13 +321,14 @@ function luckyTicketStats(source = {}, lucky = source) {
   const volume = Math.max(0, Math.floor(Number(source.volume_tickets ?? source.my_volume_tickets ?? 0) || 0));
   const total = Math.max(0, Math.floor(Number(source.tickets ?? source.my_tickets ?? (attack + volume)) || 0));
   const maxVolume = Math.max(0, Math.floor(Number(source.max_volume_tickets ?? lucky?.max_volume_tickets ?? 0) || 0));
-  const volumePerTicket = Math.max(1, Number(source.volume_per_ticket_usd ?? lucky?.volume_per_ticket_usd ?? 10000) || 10000);
-  return { attack, volume, total, maxVolume, volumePerTicket };
+  const volumePerTicket = Math.max(1, Number(source.volume_per_ticket_usd ?? lucky?.volume_per_ticket_usd ?? 1000) || 1000);
+  const volumeTicketsPerStep = Math.max(1, Math.floor(Number(source.volume_tickets_per_step ?? lucky?.volume_tickets_per_step ?? 1) || 1));
+  return { attack, volume, total, maxVolume, volumePerTicket, volumeTicketsPerStep };
 }
 
 function luckyVolumeBonusText(lucky) {
   const s = luckyTicketStats(lucky);
-  return `${fmtUsdWhole(s.volumePerTicket)} volume = +1 bonus ticket${s.maxVolume > 0 ? `, max +${fmt(s.maxVolume)}` : ''}`;
+  return `${fmtUsdWhole(s.volumePerTicket)} volume = +${fmt(s.volumeTicketsPerStep)} bonus ticket${s.volumeTicketsPerStep === 1 ? '' : 's'}${s.maxVolume > 0 ? `, max +${fmt(s.maxVolume)}` : ''}`;
 }
 
 function luckyTicketBreakdown(source = {}, lucky = source) {
@@ -422,7 +424,7 @@ function LuckyRaiderPanel({ t, schedule }) {
         {metric === 'attack_wins_plus_volume' && (
           <span>
             Volume bonus: {volumeBonusText}
-            {myTickets.maxVolume > 0 ? `. ${fmtUsdWhole(myTickets.maxVolume * myTickets.volumePerTicket)} volume gives +${fmt(myTickets.maxVolume)} tickets.` : '.'}
+            {myTickets.maxVolume > 0 ? `. ${fmtUsdWhole(Math.ceil(myTickets.maxVolume / myTickets.volumeTicketsPerStep) * myTickets.volumePerTicket)} volume reaches the +${fmt(myTickets.maxVolume)} cap.` : '.'}
           </span>
         )}
         <span>Your counted score: {fmt(myStats.wins)} wins, {fmt(myStats.losses)} losses, {luckyTicketBreakdown(lucky)} tickets.</span>
@@ -504,6 +506,7 @@ function TournamentPanel({ onClose }) {
     me: luckyMe,
     loaded: luckyLoaded,
     error: luckyError,
+    updateRewardWallet: updateLuckyRewardWallet,
   } = useLuckyRaider({ active: tab === 'lucky' });
   const { items: history } = useTournamentHistory({ active: tab === 'history' });
   const player = usePlayer();
@@ -529,6 +532,7 @@ function TournamentPanel({ onClose }) {
     ? SOLANA_WALLET_RE.test(storedRewardWallet)
     : !!storedRewardWallet;
   const canAddMissingRewardWallet = !isHistory && joined && needsCopRewardWallet && !hasRewardWallet;
+  const canSaveLuckyRewardWallet = tab === 'lucky' && !isHistory && !!t && needsCopRewardWallet && !hasRewardWallet;
   const phase = t?.phase || me?.phase || null;
   const preregistration = !isHistory && phase === 'preregistration';
   const live = !isHistory && phase === 'live';
@@ -658,6 +662,18 @@ function TournamentPanel({ onClose }) {
     }
     setBusy(true);
     const result = await updateRewardWallet(t.id, rewardWallet);
+    if (result && result.ok === false) alert(result.error || 'Could not save CLASH reward address');
+    setBusy(false);
+  };
+  const handleSaveLuckyRewardWallet = async () => {
+    if (!t || busy || !canSaveLuckyRewardWallet) return;
+    const rewardWallet = rewardWalletEvm.trim();
+    if (!SOLANA_WALLET_RE.test(rewardWallet)) {
+      alert('Enter a valid Solana address for CLASH rewards.');
+      return;
+    }
+    setBusy(true);
+    const result = await updateLuckyRewardWallet(t.id, rewardWallet);
     if (result && result.ok === false) alert(result.error || 'Could not save CLASH reward address');
     setBusy(false);
   };
@@ -805,10 +821,29 @@ function TournamentPanel({ onClose }) {
           )}
 
           {tab === 'lucky' && t && (
-            <LuckyRaiderPanel
-              t={t}
-              schedule={luckyMe?.reward_schedule || t.reward_schedule || t.reward_config}
-            />
+            <>
+              {canSaveLuckyRewardWallet && (
+                <div style={S.rewardBox}>
+                  <div style={S.rewardLabel}>CLASH Solana reward address</div>
+                  <div style={S.rewardHelp}>Enter the Solana wallet where CLASH prize tokens should be sent. Lucky Raider registration needs this address before your tickets can be finalized for rewards.</div>
+                  <input
+                    style={S.rewardInput}
+                    value={rewardWalletEvm}
+                    onChange={(e) => setRewardWalletEvm(e.target.value)}
+                    placeholder="Solana wallet address"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                  />
+                  <button style={S.rewardSaveBtn} onClick={handleSaveLuckyRewardWallet} disabled={busy}>
+                    {busy ? 'SAVING...' : (joined ? 'SAVE ADDRESS' : 'REGISTER LUCKY RAIDER')}
+                  </button>
+                </div>
+              )}
+              <LuckyRaiderPanel
+                t={t}
+                schedule={luckyMe?.reward_schedule || t.reward_schedule || t.reward_config}
+              />
+            </>
           )}
 
           {tab !== 'lucky' && t && (
@@ -1548,6 +1583,7 @@ const S = {
     background: '#fef3c7', border: '3px solid #f59e0b', borderRadius: 14, padding: 10,
   },
   rewardLabel: { fontSize: 11, fontWeight: 900, color: '#7c5a3a', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
+  rewardHelp: { fontSize: 11, fontWeight: 700, color: '#7c5a3a', lineHeight: 1.35, marginBottom: 7 },
   rewardInput: {
     width: '100%', boxSizing: 'border-box', border: '2px solid #d4c8b0', borderRadius: 10,
     background: '#fdf8e7', color: '#5C3A21', fontSize: 12, fontWeight: 800,

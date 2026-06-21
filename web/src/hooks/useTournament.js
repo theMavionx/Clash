@@ -147,7 +147,20 @@ export function useLuckyRaider({ active = false, pollMs = 30000 } = {}) {
     return () => clearInterval(id);
   }, [active, token, pollMs, refresh]);
 
-  return { me, loading, loaded, error, refresh };
+  const updateRewardWallet = useCallback(async (tournamentId, rewardWalletEvm) => {
+    if (!token) return { ok: false, error: 'not authenticated' };
+    const res = await fetch(`/api/tournaments/${tournamentId}/reward-wallet`, {
+      method: 'POST',
+      headers: { 'x-token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reward_wallet_evm: rewardWalletEvm, reward_wallet_solana: rewardWalletEvm }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch {}
+    await refresh();
+    return { ok: res.ok, ...(data || {}) };
+  }, [token, refresh]);
+
+  return { me, loading, loaded, error, refresh, updateRewardWallet };
 }
 
 // Public leaderboard fetcher — separate from the per-player state above
