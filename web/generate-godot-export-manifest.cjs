@@ -121,6 +121,24 @@ function parseGlb(filePath) {
   return json ? { data, json, binOffset } : null;
 }
 
+function textureDepsForFbx(filePath) {
+  const deps = [];
+  const seen = new Set();
+  const text = fs.readFileSync(filePath).toString('latin1');
+  const re = /([^\\/\0\r\n"']+\.(?:png|jpe?g|webp))/gi;
+  let match;
+  while ((match = re.exec(text))) {
+    const basename = path.basename(match[1].replace(/\\/g, '/'));
+    if (seen.has(basename)) continue;
+    seen.add(basename);
+    const texturePath = path.join(path.dirname(filePath), basename);
+    if (fs.existsSync(texturePath) && textureExts.has(path.extname(texturePath).toLowerCase())) {
+      deps.push(fsToRes(texturePath));
+    }
+  }
+  return deps;
+}
+
 function ensureEmbeddedGlbImage(glbPath, parsed, image, index) {
   if (image.bufferView == null || !parsed?.binOffset) return null;
   const view = parsed.json.bufferViews?.[image.bufferView];
@@ -154,6 +172,11 @@ function textureDepsForScene(resPath) {
           deps.push(fsToRes(texturePath));
         }
       }
+      return deps;
+    }
+
+    if (ext === '.fbx') {
+      deps.push(...textureDepsForFbx(filePath));
       return deps;
     }
 
