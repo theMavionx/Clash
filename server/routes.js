@@ -7513,6 +7513,67 @@ function agentAuth(req, res, next) {
   next();
 }
 
+function requestHeaderHost(value) {
+  const raw = String(Array.isArray(value) ? value[0] : value || '').trim();
+  if (!raw) return '';
+  const first = raw.split(',')[0].trim();
+  return first.replace(/:\d+$/, '').toLowerCase();
+}
+
+function urlHeaderHost(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isAllowedFirstPartyHost(host) {
+  const h = String(host || '').toLowerCase();
+  return h === 'clashofperps.fun'
+    || h === 'www.clashofperps.fun'
+    || h === 'localhost'
+    || h === '127.0.0.1'
+    || h === '::1';
+}
+
+function isScriptedHttpClient(req) {
+  const ua = String(req.headers['user-agent'] || '').toLowerCase();
+  return /\b(node|undici|curl|wget|python|axios|got|postman|insomnia|httpie)\b/.test(ua);
+}
+
+function hasFirstPartyBrowserContext(req) {
+  if (isScriptedHttpClient(req)) return false;
+  const requestHost = requestHeaderHost(req.headers['x-forwarded-host'] || req.headers.host);
+  const originHost = urlHeaderHost(req.headers.origin);
+  const refererHost = urlHeaderHost(req.headers.referer);
+  if (originHost) {
+    return originHost === requestHost || isAllowedFirstPartyHost(originHost);
+  }
+  if (refererHost) {
+    return refererHost === requestHost || isAllowedFirstPartyHost(refererHost);
+  }
+  return false;
+}
+
+function requireFirstPartyBrowserContext(req, res, action) {
+  if (hasFirstPartyBrowserContext(req)) return true;
+  console.warn('[security] blocked scripted wallet endpoint', {
+    action,
+    method: req.method,
+    path: req.originalUrl || req.url,
+    player: req.player?.name || null,
+    ip: req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || null,
+    ua: String(req.headers['user-agent'] || '').slice(0, 160),
+    origin: String(req.headers.origin || '').slice(0, 160),
+    referer: String(req.headers.referer || '').slice(0, 160),
+  });
+  res.status(403).json({ error: 'Open Clash in the browser and connect your wallet again.' });
+  return false;
+}
+
 // ==================== CLIENT LOGS (no auth) ====================
 // Per-IP rate limit — no auth, so only the IP is usable as a key. Bucket
 // cleans up expired entries every 5 minutes to bound memory growth under
@@ -8000,6 +8061,7 @@ function markPlayerSeekerIfPresent(playerId, body) {
 
 router.post('/players/register', (req, res) => {
   const { name, wallet, dex, fid } = req.body;
+  if (wallet && !requireFirstPartyBrowserContext(req, res, 'players.register')) return;
   const requestedDex = VALID_DEXES.has(dex) ? dex : 'pacifica';
   const seekerCapability = normalizeSeekerCapability(req.body || {});
   const referralCode = String(req.body?.referralCode || req.body?.ref || req.body?.invite || '').trim();
@@ -9648,6 +9710,7 @@ router.get('/agent-events/pending', auth, (req, res) => {
 router.post('/players/link-wallet', auth, (req, res) => {
   const { wallet } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
+  if (!requireFirstPartyBrowserContext(req, res, 'players.link-wallet')) return;
 
   const current = req.player;
   // Same-DEX collision check. We exclude current.id so a no-op rebind
@@ -9701,6 +9764,7 @@ router.post('/players/login-wallet', (req, res) => {
       dex: player.dex,
     });
   }
+  if (!requireFirstPartyBrowserContext(req, res, 'players.login-wallet')) return;
   if (VALID_DEXES.has(dex) && dex !== player.dex) {
     try {
       safelySetPlayerActiveDex(player, dex, wallet, 'login-wallet');
@@ -9835,6 +9899,7 @@ router.post('/players/dex-accounts/:dex/select', auth, (req, res) => {
   if (!VALID_DEXES.has(dex)) return res.status(400).json({ error: 'Unsupported DEX' });
   const wallet = String(req.body?.wallet || req.player.wallet || '').trim();
   const venueWallet = dexAcceptsWallet(dex, wallet) ? wallet : '';
+  if (venueWallet && !requireFirstPartyBrowserContext(req, res, 'players.dex-account.select')) return;
   if (venueWallet) {
     upsertUnifiedIdentity(req.player.id, venueWallet, { label: req.body?.walletSource || req.body?.source });
   }
@@ -9861,6 +9926,7 @@ router.post('/players/dex-accounts/:dex/link', auth, (req, res) => {
   if (!wallet || !isValidWallet(wallet)) {
     return res.status(400).json({ error: 'Valid wallet required' });
   }
+  if (!requireFirstPartyBrowserContext(req, res, 'players.dex-account.link')) return;
   const chainType = walletChainType(wallet);
   const requiredChain = DEX_REQUIRED_CHAIN[dex] || null;
   if (requiredChain && chainType !== requiredChain) {
@@ -19566,6 +19632,7 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
     ? null
     : normalizeRewardEvmWallet(req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm);
   if (needsClashRewardWallet) {
+    if (!requireFirstPartyBrowserContext(req, res, 'tournaments.join.clash-wallet')) return;
     const validation = validatePlayerClashRewardWallet(
       req.player.id,
       req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm,
@@ -19608,6 +19675,7 @@ router.post('/tournaments/:id/reward-wallet', auth, (req, res) => {
     ?? req.body?.rewardWalletSolana
     ?? req.body?.reward_wallet_evm
     ?? req.body?.rewardWalletEvm;
+  if (!requireFirstPartyBrowserContext(req, res, 'tournaments.reward-wallet')) return;
   const rewardWalletValidation = validatePlayerClashRewardWallet(req.player.id, rewardWalletInput);
   if (!rewardWalletValidation.ok) return res.status(400).json({ error: rewardWalletValidation.error });
   const rewardWallet = rewardWalletValidation.wallet;
