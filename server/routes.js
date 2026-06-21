@@ -17733,6 +17733,11 @@ function tournamentDexLabel(t) {
   return list.map(d => TOURNAMENT_DEX_LABELS[d] || d).join(', ');
 }
 
+function tournamentSingleDex(t) {
+  const list = tournamentEligibleDexes(t);
+  return tournamentDexScope(t) === 'single' && list.length === 1 ? list[0] : null;
+}
+
 function isTournamentForDex(t, dex) {
   const normalizedDex = String(dex || '').toLowerCase();
   return TOURNAMENT_DEXES.includes(normalizedDex) && tournamentEligibleDexes(t).includes(normalizedDex);
@@ -20204,6 +20209,10 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
   const includeRewardWallets = isAdminRequest(req);
   const mode = normalizeTournamentMode(t.mode);
+  const singleTournamentDex = tournamentSingleDex(t);
+  const tradingWalletDexSql = singleTournamentDex
+    ? `'${singleTournamentDex}'`
+    : 'COALESCE(tp.team_dex, p.dex, tt.dex)';
   const needsPointsScore = isTournamentPointsSort(sortBy)
     || tournamentUsesDailyPool(t)
     || normalizeTournamentTeamMetric(t.team_score_by, 'volume_usd') === TOURNAMENT_POINTS_SORT
@@ -20215,17 +20224,17 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
            COALESCE((SELECT MAX(level) FROM buildings b WHERE b.player_id = tp.player_id AND b.type = 'town_hall'), 0) AS town_hall_level,
            COALESCE(
              pda.wallet_address,
-             CASE WHEN p.dex = COALESCE(tp.team_dex, p.dex, tt.dex) THEN p.wallet ELSE NULL END
+             CASE WHEN pda.player_id IS NULL AND p.dex = ${tradingWalletDexSql} THEN p.wallet ELSE NULL END
            ) AS trading_wallet,
            pda.account_id AS trading_account_id,
            pda.chain_type AS trading_chain_type,
-           pda.dex AS trading_dex
+           COALESCE(pda.dex, ${tradingWalletDexSql}) AS trading_dex
     FROM tournament_participants tp
     JOIN players p ON p.id = tp.player_id
     JOIN tournaments tt ON tt.id = tp.tournament_id
     LEFT JOIN player_dex_accounts pda
       ON pda.player_id = tp.player_id
-     AND pda.dex = COALESCE(tp.team_dex, p.dex, tt.dex)
+     AND pda.dex = ${tradingWalletDexSql}
     WHERE tp.tournament_id = ? AND tp.left_at IS NULL
   `;
   let rows;
