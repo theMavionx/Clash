@@ -279,7 +279,7 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
           {lucky.require_nft && <div>Requires {required || 'Dragon or Demon King'}</div>}
           {lucky.my_tickets !== undefined && (
             <div>
-              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume | {fmt(luckyCountedAttackWins(lucky, lucky.my_attack_wins))} wins | {fmt(lucky.my_tickets || 0)}/{fmt(lucky.max_tickets || 0)} tickets
+              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume | {luckyAttackSummary(lucky)} | {fmt(lucky.my_tickets || 0)}/{fmt(lucky.max_tickets || 0)} tickets
               {lucky.my_reason && lucky.my_reason !== 'eligible' ? ` | ${String(lucky.my_reason).replace(/_/g, ' ')}` : ''}
             </div>
           )}
@@ -293,12 +293,38 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
   );
 }
 
-function luckyCountedAttackWins(lucky, rawWins) {
-  const wins = Math.max(0, Math.floor(Number(rawWins || 0) || 0));
-  const maxTickets = Math.max(0, Math.floor(Number(lucky?.max_tickets || 0) || 0));
+function luckyAttackStats(source = {}, lucky = source) {
+  const limit = Math.max(1, Math.floor(Number(source.max_counted_attacks ?? lucky?.max_counted_attacks ?? lucky?.max_tickets ?? 50) || 50));
+  const wins = Math.max(0, Math.floor(Number(source.attack_wins ?? source.my_attack_wins ?? 0) || 0));
+  const attemptsRaw = Number(source.attack_attempts ?? source.my_attack_attempts);
+  const attempts = Math.max(0, Math.floor(Number.isFinite(attemptsRaw) ? attemptsRaw : Math.min(limit, wins)));
+  const losses = Math.max(0, attempts - wins);
+  const surrenders = Math.max(0, Math.floor(Number(source.attack_surrenders ?? source.my_attack_surrenders ?? 0) || 0));
+  const rawAttempts = Math.max(0, Math.floor(Number(source.raw_attack_attempts ?? source.my_raw_attack_attempts ?? attempts) || 0));
+  const rawWins = Math.max(0, Math.floor(Number(source.raw_attack_wins ?? source.my_raw_attack_wins ?? wins) || 0));
+  const rawLosses = Math.max(0, rawAttempts - rawWins);
+  return { limit, wins, attempts, losses, surrenders, rawAttempts, rawWins, rawLosses };
+}
+
+function luckyAttackSummary(source = {}, lucky = source) {
+  const s = luckyAttackStats(source, lucky);
+  return `${fmt(s.wins)} wins / ${fmt(s.losses)} losses from ${fmt(s.attempts)}/${fmt(s.limit)} attacks`;
+}
+
+function luckyEntryDetail(entry, lucky) {
+  const s = luckyAttackStats(entry, lucky);
+  const parts = [
+    `${fmt(s.wins)}W`,
+    `${fmt(s.losses)}L`,
+    `${fmt(s.attempts)}/${fmt(s.limit)} attacks`,
+  ];
+  if (s.surrenders > 0) parts.push(`${fmt(s.surrenders)} surrender`);
+  return parts.join(' | ');
+}
+
+function luckyWinTicketText(lucky) {
   const winsPerTicket = Math.max(1, Math.floor(Number(lucky?.attack_wins_per_ticket || 1) || 1));
-  if (maxTickets <= 0) return wins;
-  return Math.min(wins, maxTickets * winsPerTicket);
+  return winsPerTicket === 1 ? '1 win = 1 ticket' : `${fmt(winsPerTicket)} wins = 1 ticket`;
 }
 
 function LuckyRaiderPanel({ t, schedule }) {
@@ -313,36 +339,43 @@ function LuckyRaiderPanel({ t, schedule }) {
   }
   const rewards = rewardPoolSummary(lucky.rewards || [], t?.prize_currency || 'USD');
   const metric = String(lucky.ticket_metric || 'volume');
+  const winTicketText = luckyWinTicketText(lucky);
   const rule = metric === 'attack_wins'
-    ? `${fmt(lucky.attack_wins_per_ticket || 1)} victory = 1 ticket`
+    ? winTicketText
     : metric === 'volume_or_attack_wins'
-      ? `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume OR ${fmt(lucky.attack_wins_per_ticket || 1)} wins = 1 ticket`
+      ? `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume OR ${winTicketText}`
       : metric === 'volume_and_attack_wins'
-        ? `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume AND ${fmt(lucky.attack_wins_per_ticket || 1)} wins = 1 ticket`
+        ? `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume AND ${winTicketText}`
         : `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume = 1 ticket`;
   const entries = Array.isArray(lucky.today_entries) ? lucky.today_entries : [];
   const history = Array.isArray(lucky.history) ? lucky.history : [];
+  const myStats = luckyAttackStats(lucky);
+  const myRawOverflow = myStats.rawAttempts > myStats.attempts;
   return (
     <>
       <div style={S.luckyHero}>
         <div>
           <div style={S.luckyKicker}>Daily Lucky Raider</div>
           <div style={S.luckyTitle}>{lucky.label || 'Daily Lucky Raider'}</div>
-          <div style={S.luckySub}>Raid, win tickets, and let the daily draw pick the winners.</div>
+          <div style={S.luckySub}>Only your first {fmt(myStats.limit)} attacks each UTC day count. Wins become tickets; losses and surrenders spend an attack and give 0 tickets.</div>
         </div>
         <div style={S.luckyPrize}>{rewards.join(' + ') || 'Prize configured by admin'}</div>
       </div>
 
       <div style={S.luckyGrid}>
         <Stat label="Your tickets" value={`${fmt(lucky.my_tickets || 0)} / ${fmt(lucky.max_tickets || 0)}`} />
-        <Stat label="Today wins" value={fmt(luckyCountedAttackWins(lucky, lucky.my_attack_wins))} />
-        <Stat label="Today volume" value={fmtUsdWhole(lucky.my_volume_usd || 0)} />
+        <Stat label="Won / Lost" value={`${fmt(myStats.wins)} / ${fmt(myStats.losses)}`} />
+        <Stat label="Counted attacks" value={`${fmt(myStats.attempts)} / ${fmt(myStats.limit)}`} />
         <Stat label="Winners" value={fmt(lucky.winner_count || 1)} />
       </div>
 
       <div style={S.luckyRuleBox}>
         <strong>{rule}</strong>
-        <span>Max {fmt(lucky.max_tickets || 0)} tickets per UTC day. Draw runs at {lucky.draw_time_utc || '00:05'} UTC.</span>
+        <span>Daily score: first {fmt(myStats.limit)} attacks only. A win counts toward tickets; a defeat or surrender counts as an attack but gives 0 tickets.</span>
+        <span>Your counted score: {fmt(myStats.wins)} wins, {fmt(myStats.losses)} losses, {fmt(lucky.my_tickets || 0)} tickets.</span>
+        {myStats.surrenders > 0 && <span>Your losses include {fmt(myStats.surrenders)} surrender{myStats.surrenders === 1 ? '' : 's'}.</span>}
+        {myRawOverflow && <span>Total today: {fmt(myStats.rawAttempts)} attacks / {fmt(myStats.rawWins)} wins. Extra attacks after #{fmt(myStats.limit)} do not add tickets.</span>}
+        <span>Draw runs at {lucky.draw_time_utc || '00:05'} UTC.</span>
         {lucky.require_nft && <span>Requires Dragon or Demon King NFT.</span>}
         {lucky.my_reason && lucky.my_reason !== 'eligible' && <span>Status: {String(lucky.my_reason).replace(/_/g, ' ')}</span>}
       </div>
@@ -356,9 +389,14 @@ function LuckyRaiderPanel({ t, schedule }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={S.luckyEntryName}>{entry.name || shortWallet(entry.wallet) || 'Player'}</div>
               <div style={S.luckyEntryMeta}>
-                {fmt(luckyCountedAttackWins(lucky, entry.attack_wins))} wins | {fmtUsdWhole(entry.volume_usd || 0)} volume
+                {luckyEntryDetail(entry, lucky)}
                 {entry.reason && entry.reason !== 'eligible' ? ` | ${String(entry.reason).replace(/_/g, ' ')}` : ''}
               </div>
+              {Number(entry.raw_attack_attempts || 0) > Number(entry.attack_attempts || 0) && (
+                <div style={S.luckyEntrySubMeta}>
+                  Total today: {fmt(entry.raw_attack_attempts || 0)} attacks / {fmt(entry.raw_attack_wins || 0)} wins
+                </div>
+              )}
             </div>
             <div style={S.luckyTickets}>{fmt(entry.tickets || 0)} tickets</div>
           </div>
@@ -1310,6 +1348,7 @@ const S = {
   },
   luckyEntryName: { fontSize: 13, fontWeight: 900, color: '#5C3A21', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   luckyEntryMeta: { fontSize: 10, fontWeight: 800, color: '#a3906a', marginTop: 2 },
+  luckyEntrySubMeta: { fontSize: 9, fontWeight: 800, color: '#7c5a3a', marginTop: 2, opacity: 0.85 },
   luckyTickets: { fontSize: 12, fontWeight: 900, color: '#b45309', whiteSpace: 'nowrap' },
   luckyHistoryRow: {
     background: '#e8dfc8',
