@@ -20381,7 +20381,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
-    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
+    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
@@ -20417,7 +20417,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const sgb = normalizeTournamentBoost(seeker_gold_boost, 1);
   const tb = normalizeTournamentBoost(trophy_boost, 1);
   const freeze = freeze_trophies === undefined ? 1 : (parseBool(freeze_trophies) ? 1 : 0);
-  let startIso, endIso, registrationOpenIso, registrationCloseIso;
+  let startIso, endIso, registrationOpenIso, registrationCloseIso, dailyPoolEnabledIso;
   try {
     startIso = start_at && typeof start_at === 'string'
       ? normalizeTournamentDate(start_at, 'start_at', { nullable: false })
@@ -20428,6 +20428,9 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
       : null;
     registrationCloseIso = registration_closes_at && typeof registration_closes_at === 'string'
       ? normalizeTournamentDate(registration_closes_at, 'registration_closes_at')
+      : null;
+    dailyPoolEnabledIso = daily_pool_enabled_at && typeof daily_pool_enabled_at === 'string'
+      ? normalizeTournamentDate(daily_pool_enabled_at, 'daily_pool_enabled_at')
       : null;
   } catch (e) {
     return res.status(400).json({ error: e.message });
@@ -20511,7 +20514,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     dailyPoolPoints,
     dailyPoolGrowthPct,
     JSON.stringify(dailyPoolOverrides),
-    scoringMode === 'daily_pool' ? nowSql() : null,
+    scoringMode === 'daily_pool' ? (dailyPoolEnabledIso || nowSql()) : null,
     sanitizePrizeCurrency(prize_currency),
     JSON.stringify(prizeTiers),
     JSON.stringify(megaConfig),
@@ -20538,7 +20541,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
-    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
+    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
@@ -20563,7 +20566,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     return res.status(400).json({ error: 'DEX vs DEX tournaments need at least two eligible DEXes' });
   }
   const STATUSES = ['active', 'ended', 'draft'];
-  let nextStartAt, nextEndAt, nextRegistrationOpensAt, nextRegistrationClosesAt;
+  let nextStartAt, nextEndAt, nextRegistrationOpensAt, nextRegistrationClosesAt, nextDailyPoolEnabledAt;
   try {
     nextStartAt = start_at !== undefined
       ? normalizeTournamentDate(start_at, 'start_at', { nullable: false })
@@ -20577,6 +20580,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     nextRegistrationClosesAt = registration_closes_at === null || registration_closes_at === ''
       ? null
       : (registration_closes_at !== undefined ? normalizeTournamentDate(registration_closes_at, 'registration_closes_at') : cleanSqlDate(t.registration_closes_at));
+    nextDailyPoolEnabledAt = daily_pool_enabled_at === null || daily_pool_enabled_at === ''
+      ? null
+      : (daily_pool_enabled_at !== undefined ? normalizeTournamentDate(daily_pool_enabled_at, 'daily_pool_enabled_at') : cleanSqlDate(t.daily_pool_enabled_at));
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -20660,7 +20666,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     daily_pool_growth_pct: nextDailyPoolGrowthPct,
     daily_pool_overrides: nextDailyPoolOverrides,
     daily_pool_enabled_at: nextScoringMode === 'daily_pool'
-      ? (normalizeTournamentScoringMode(t.scoring_mode, 'live') === 'daily_pool' ? (cleanSqlDate(t.daily_pool_enabled_at) || nowSql()) : nowSql())
+      ? (nextDailyPoolEnabledAt || (normalizeTournamentScoringMode(t.scoring_mode, 'live') === 'daily_pool' ? (cleanSqlDate(t.daily_pool_enabled_at) || nowSql()) : nowSql()))
       : null,
     prize_currency: prize_currency !== undefined ? sanitizePrizeCurrency(prize_currency) : sanitizePrizeCurrency(t.prize_currency),
     prize_tiers: nextPrizeTiers,

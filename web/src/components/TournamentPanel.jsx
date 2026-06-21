@@ -1157,7 +1157,9 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
   const pointsKey = processed ? 'awarded_points' : 'estimated_points';
   const rankKey = processed ? 'rank' : 'estimate_rank';
   const mine = myPlayerId ? players.find(row => row.player_id === myPlayerId) : null;
-  const pool = Number(day?.estimate?.pool || t?.daily_pool_points || 1000) || 1000;
+  const runPool = Number(day?.run?.details?.pool || day?.run?.details?.pool_state?.points || 0);
+  const estimatePool = Number(day?.estimate?.pool || 0);
+  const pool = (processed && runPool > 0 ? runPool : estimatePool) || Number(t?.daily_pool_points || 1000) || 1000;
   const activeDayId = selectedDayId || day?.day_utc;
   const minePoints = mine ? Number(mine[pointsKey] || 0) : 0;
   const mineRank = mine ? Number(mine[rankKey] || mine.rank || 0) : 0;
