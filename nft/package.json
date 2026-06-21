@@ -49,6 +49,8 @@
     "marketplace:solana": "node scripts/solana-marketplace.mjs",
     "set-price:solana": "node scripts/set-solana-price.mjs",
     "set-payments:solana": "node scripts/set-solana-payments.mjs",
+    "sync:solana:payments": "node scripts/sync-solana-token-payment.mjs",
+    "watch:solana:payments": "node scripts/watch-solana-payments.mjs",
     "sale:solana": "node scripts/set-solana-sale.mjs",
     "sale:aptos": "node scripts/set-aptos-sale.mjs",
     "quote:prices": "node scripts/price-quote.mjs",

@@ -104,6 +104,7 @@ cleanup_non_root_clash_pm2() {
         pm2_as_user "$owner" "$owner_home" "$pm2_home" delete clash-hermes-jobs 2>/dev/null || true
         pm2_as_user "$owner" "$owner_home" "$pm2_home" delete clash-futures 2>/dev/null || true
         pm2_as_user "$owner" "$owner_home" "$pm2_home" delete clash-mcp 2>/dev/null || true
+        pm2_as_user "$owner" "$owner_home" "$pm2_home" delete clash-solana-payment-sync 2>/dev/null || true
         pm2_as_user "$owner" "$owner_home" "$pm2_home" save 2>/dev/null || true
     done
 }
@@ -427,6 +428,10 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_INK_EXPLORER_URL" "https://explorer.inkonchain.com"
     ensure_env_default "VITE_NFT_INK_CONTRACT" "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F"
     ensure_env_default "CLASH_WALLET_ENCRYPTION_KEY" "$(openssl rand -hex 32)"
+    ensure_env_default "NFT_SOLANA_PAYMENT_SYNC_ENABLED" "1"
+    ensure_env_default "NFT_SOLANA_PAYMENT_SYNC_COLLECTIONS" "dragon:clash"
+    ensure_env_default "NFT_SOLANA_PAYMENT_SYNC_INTERVAL_MS" "300000"
+    ensure_env_default "NFT_SOLANA_PAYMENT_SYNC_MIN_CHANGE_BPS" "50"
     ensure_env_default "VITE_PRIVY_APP_ID" ""
     ensure_env_default "VITE_APTOS_NODE_API_KEY" ""
     ensure_env_default "VITE_ARBITRUM_RPC_URL" ""
@@ -1629,6 +1634,22 @@ restart_services() {
             --cwd "$CURRENT_LINK/mcp" \
             --env production \
             -- --env-file="$ENV_FILE" "$CURRENT_LINK/mcp/src/server.mjs"
+    fi
+
+    pm2_root delete clash-solana-payment-sync 2>/dev/null || true
+    local payment_sync_enabled payment_sync_key
+    payment_sync_enabled="$(env_file_value NFT_SOLANA_PAYMENT_SYNC_ENABLED)"
+    payment_sync_key="$(first_env_file_value SOLANA_NFT_KEY NFT_SOLANA_KEY NFT_KEY)"
+    if [ "${payment_sync_enabled:-1}" != "0" ] \
+        && [ -n "$payment_sync_key" ] \
+        && [ -f "$CURRENT_LINK/nft/scripts/watch-solana-payments.mjs" ]; then
+        pm2_root start node \
+            --name clash-solana-payment-sync \
+            --cwd "$CURRENT_LINK/nft" \
+            --env production \
+            -- --env-file="$ENV_FILE" "$CURRENT_LINK/nft/scripts/watch-solana-payments.mjs"
+    else
+        log "Solana payment sync worker not started (disabled, key missing, or nft scripts missing)."
     fi
 
     pm2_root save

@@ -10,13 +10,13 @@
   "maxSupply": 333,
   "globalSupplyCap": 333,
   "usdPrice": "15",
-  "priceLamports": "222090613",
+  "priceLamports": "202483802",
   "treasury": "4dJVN3sQSCjeypkc8knCaRQmeT68upDQwZY7a9s8qjHA",
   "paymentGroups": {
     "sol": {
       "usdPrice": "15",
-      "solUsd": "67.54",
-      "lamports": "222090613",
+      "solUsd": "74.08",
+      "lamports": "202483802",
       "destination": "4dJVN3sQSCjeypkc8knCaRQmeT68upDQwZY7a9s8qjHA"
     },
     "usdc": {
@@ -29,19 +29,20 @@
     },
     "skr": {
       "usdPrice": "13",
-      "skrUsd": "0.009862",
-      "amount": "1318191037",
-      "amountUi": "1318.191037",
+      "skrUsd": "0.008658",
+      "amount": "1501501502",
+      "amountUi": "1501.501502",
       "decimals": 6,
       "symbol": "SKR",
+      "tokenProgram": "spl-token",
       "mint": "SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3",
       "destinationAta": "9knHyBvV69L6zXqNnKitJJKJ5jbAW7ExsiiWDPy1vc7i"
     },
     "clash": {
       "usdPrice": "10",
-      "clashUsd": "0.0003147",
-      "amount": "31776294885",
-      "amountUi": "31776.294885",
+      "clashUsd": "0.0004649",
+      "amount": "21510002152",
+      "amountUi": "21510.002152",
       "decimals": 6,
       "symbol": "CLASH",
       "tokenProgram": "token-2022",
@@ -64,5 +65,19 @@
   "candyGuardUpdatedAt": "2026-06-08T15:32:21.919Z",
   "saleActivateTx": "2A13wWJsU74GguKCaJEVDyM585hsMoYugBU1LyVAu8aqSW14eA8S6SfTf3AeXcrD7Q4cn2r67of6S4fYxw7Bc3gD",
   "saleActivatedAt": "2026-06-08T15:33:20.429Z",
-  "saleActivationConfirmedAt": "2026-06-08T15:40:00.000Z"
+  "saleActivationConfirmedAt": "2026-06-08T15:40:00.000Z",
+  "updatedAt": "2026-06-21T15:52:00.876Z",
+  "paymentPriceSync": {
+    "clash": {
+      "priceUsd": "0.0004649",
+      "source": "DexScreener pumpswap GT7Ac2YdrtbMfbWVhr2Au1RvyMp7KrERsoYjoxZTHvoF",
+      "dexId": "pumpswap",
+      "pairAddress": "GT7Ac2YdrtbMfbWVhr2Au1RvyMp7KrERsoYjoxZTHvoF",
+      "liquidityUsd": 53259.01,
+      "targetUsd": "10",
+      "amount": "21510002152",
+      "amountUi": "21510.002152",
+      "syncedAt": "2026-06-21T15:52:00.876Z"
+    }
+  }
 }
