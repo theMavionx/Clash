@@ -10352,6 +10352,13 @@ function _nftBackedWinTokensByCollectionFromActions(actions, playerId) {
 function _troopSlotCost(name) {
   return _isHeavyTroop(name) ? 2 : 1;
 }
+function _shipLevelForPort(building) {
+  const maxPortLevel = Number(db.BUILDING_DEFS?.port?.max_level || 3);
+  return Math.max(1, Math.min(maxPortLevel, Number(building?.level) || 1));
+}
+function _shipCapacityForPort(building) {
+  return _shipLevelForPort(building) * 3;
+}
 function _appendTroopSlots(shipTroops, troopName) {
   const normalized = _normalizeTroopName(troopName);
   shipTroops.push(_canonicalTroopEntry(troopName));
@@ -11043,7 +11050,8 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
     if (building.type !== 'port' || !building.has_ship) throw { status: 400, error: 'No ship at this port' };
 
     const shipTroops = JSON.parse(building.ship_troops || '[]');
-    const capacity = building.level * 3;  // 3x capacity: Lv1=3, Lv2=6, Lv3=9, Lv4=12
+    const shipLevel = _shipLevelForPort(building);
+    const capacity = _shipCapacityForPort(building);  // 3x capacity: Lv1=3, Lv2=6, Lv3=9
     const slotCost = _troopSlotCost(normalizedTroop);
     if (shipTroops.length + slotCost > capacity) throw { status: 400, error: 'Ship is full' };
     const troopEntry = verifiedNftTroop?.troopEntry || _canonicalTroopEntry(troop_name);
@@ -11071,7 +11079,7 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
     db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
-    return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: capacity, resources: updated };
+    return { ship_troops: shipTroops, ship_level: shipLevel, ship_capacity: capacity, resources: updated };
   });
 
   try {
@@ -11106,7 +11114,8 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     const shipTroops = JSON.parse(building.ship_troops || '[]');
     if (slot < 0 || slot >= shipTroops.length) throw { status: 400, error: 'Invalid slot' };
     if (_isSlotFiller(shipTroops[slot])) throw { status: 400, error: 'Cannot replace a reserved heavy-unit slot' };
-    const capacity = building.level * 3;
+    const shipLevel = _shipLevelForPort(building);
+    const capacity = _shipCapacityForPort(building);
     const span = _swapSpanForReplacement(shipTroops, slot, normalizedTroop, capacity);
     if (!span) throw { status: 400, error: 'Not enough ship capacity for this troop' };
     const slotsToReplace = span.end - span.start;
@@ -11141,7 +11150,7 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
-    return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: building.level * 3, resources: updated };
+    return { ship_troops: shipTroops, ship_level: shipLevel, ship_capacity: capacity, resources: updated };
   });
 
   try {
@@ -11186,8 +11195,8 @@ router.post('/buildings/:id/remove-troop', auth, (req, res) => {
     return {
       ship_troops: shipTroops,
       removed_troops: removedTroops,
-      ship_level: building.level,
-      ship_capacity: building.level * 3,
+      ship_level: _shipLevelForPort(building),
+      ship_capacity: _shipCapacityForPort(building),
       resources: updated,
       building_id: building.id,
       requested_building_id: buildingId,
@@ -11209,7 +11218,7 @@ router.get('/ships', auth, (req, res) => {
   const ports = db.db.prepare('SELECT id, level, ship_troops, ship_troops_template, has_ship FROM buildings WHERE player_id = ? AND type = ?').all(req.player.id, 'port');
   const ships = ports.filter(p => p.has_ship).map(p => ({
     id: p.id,
-    level: p.level,
+    level: _shipLevelForPort(p),
     ship_troops: JSON.parse(p.ship_troops || '[]'),
     ship_troops_template: JSON.parse(p.ship_troops_template || '[]'),
   }));
@@ -11359,12 +11368,12 @@ router.post('/reinforce', auth, (req, res) => {
     // Cap to ship capacity to prevent overflow from swap+reinforce combo
     const resultShips = [];
     for (const { port, current, toAdd } of shipsToRestore) {
-      const capacity = port.level * 3;
+      const capacity = _shipCapacityForPort(port);
       const slotsAvailable = Math.max(0, capacity - current.length);
       const restored = [...current, ...toAdd.slice(0, slotsAvailable)];
       const troopsJson = JSON.stringify(restored);
       db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, port.id);
-      resultShips.push({ id: port.id, ship_troops: restored });
+      resultShips.push({ id: port.id, level: _shipLevelForPort(port), ship_troops: restored, ship_capacity: capacity });
     }
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
@@ -15380,21 +15389,23 @@ const ADMIN_MAX_VILLAGE_BUILD_ORDER = [
   'archer_tower',
   'turret',
   'mage_tower',
+  'mortar',
   'port',
 ];
 
 const ADMIN_TH_MAX_COUNT = {
-  mine: [1, 2, 3, 3],
-  sawmill: [1, 2, 3, 3],
-  barn: [1, 1, 1, 1],
-  port: [1, 2, 5, 5],
-  archer_tower: [1, 2, 3, 3],
-  tombstone: [0, 1, 3, 3],
-  altar: [1, 1, 1, 1],
-  turret: [0, 0, 3, 3],
-  storage: [0, 1, 2, 3],
-  mage_tower: [0, 0, 0, 2],
-  town_hall: [1, 1, 1, 1],
+  mine: [1, 2, 3, 3, 4],
+  sawmill: [1, 2, 3, 3, 4],
+  barn: [1, 1, 1, 1, 1],
+  port: [1, 2, 3, 3, 3],
+  archer_tower: [1, 2, 3, 3, 3],
+  tombstone: [0, 1, 3, 3, 3],
+  altar: [1, 1, 1, 1, 1],
+  turret: [0, 0, 3, 3, 3],
+  storage: [0, 1, 2, 3, 4],
+  mage_tower: [0, 0, 0, 2, 2],
+  mortar: [0, 0, 0, 0, 1],
+  town_hall: [1, 1, 1, 1, 1],
 };
 
 function adminMaxBuildingCountForTh(type, townHallLevel) {
@@ -15503,7 +15514,7 @@ router.post('/admin/players/:name/max-village', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ?').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
-    const townHallLevel = Math.max(1, Math.min(4, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
+    const townHallLevel = Math.max(1, Math.min(5, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
     const result = db.db.transaction(() => {
       db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
       const added = [];

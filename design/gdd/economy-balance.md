@@ -196,6 +196,27 @@ drop. Wood and ore are comfortably covered.
 
 ### 4.2 Live Troop Costs (`TROOP_DEFS.cost`)
 
+**2026-06-21 implementation override:** all `TROOP_DEFS` entries now use
+`max_level = 7`. The `cost` array is indexed by *current* level:
+`cost[0]` = Lv1->Lv2, `cost[1]` = Lv2->Lv3, through `cost[5]` = Lv6->Lv7.
+Troop Lv5, Lv6, and Lv7 upgrades require Town Hall Lv5; the server enforces this in
+`upgradeTroop()` with `TOWN_HALL_LEVEL_REQUIRED`.
+
+| Troop | Lv1->2 | Lv2->3 | Lv3->4 | Lv4->5 | Lv5->6 | Lv6->7 | Total Lv1->7 |
+|-------|--------|--------|--------|--------|--------|--------|--------------|
+| Knight | 150G+125O | 300G+250O | 600G+500O | 1200G+1000O | 2200G+1800O | 3800G+3200O | **8250G+6875O** |
+| Mage | 250G+250O | 500G+500O | 1000G+1000O | 2000G+2000O | 3600G+3600O | 6000G+6000O | **13350G+13350O** |
+| Barbarian | 175G+175O | 350G+350O | 700G+700O | 1400G+1400O | 2600G+2600O | 4400G+4400O | **9625G+9625O** |
+| Archer | 175G+175W | 350G+350W | 700G+700W | 1400G+1400W | 2600G+2600W | 4400G+4400W | **9625G+9625W** |
+| Ranger | 125G+125W | 250G+250W | 500G+500W | 1000G+1000W | 1900G+1900W | 3200G+3200W | **6995G+6995W** |
+| Demon King | 150G+125O | 300G+250O | 600G+500O | 1200G+1000O | 2200G+1800O | 3800G+3200O | **8250G+6875O** |
+| Fire Dragon | 250G+250O | 500G+500O | 1000G+1000O | 2000G+2000O | 3600G+3600O | 6000G+6000O | **13350G+13350O** |
+| **Totals** | - | - | - | - | - | - | **69445G + 16620W + 50075O** |
+
+Demon King and Fire Dragon remain NFT-backed 2-slot troops, but they now have server-side
+`TROOP_DEFS` entries and upgrade costs. Their combat stats scale from Knight and Mage,
+respectively, at the same shared troop level plus rarity multiplier.
+
 Troops start at Lv1 (free, auto-initialized at player creation). The `cost` array is
 indexed by *current* level: `cost[0]` = Lv1→Lv2, `cost[1]` = Lv2→Lv3. (`cost[2]` exists in
 the data but is never charged, since `max_level = 3`.)

@@ -11,6 +11,9 @@ const MAGE_LEVEL_STATS: Dictionary = {
 	2: {"hp": 200, "damage": 74, "atk_speed": 1.12},
 	3: {"hp": 265, "damage": 104, "atk_speed": 1.0},
 	4: {"hp": 345, "damage": 138, "atk_speed": 0.90},
+	5: {"hp": 440, "damage": 182, "atk_speed": 0.82},
+	6: {"hp": 555, "damage": 238, "atk_speed": 0.76},
+	7: {"hp": 690, "damage": 310, "atk_speed": 0.70},
 }
 
 const NFT_RARITY_MULTIPLIERS: Dictionary = {
@@ -20,6 +23,7 @@ const NFT_RARITY_MULTIPLIERS: Dictionary = {
 	"unrevealed": 1.2,
 }
 const DRAGON_SLOT_COUNT: float = 2.0
+const MAX_TROOP_LEVEL: int = 7
 
 const ANIMATION_PATHS: Dictionary = {
 	"bite_attack": "res://Model/Characters/FireDragon/Animations/fire_dragon_bite_attack.fbx",
@@ -79,7 +83,7 @@ static var _shared_fire_particle_materials: Dictionary = {}
 
 
 func _init_stats() -> void:
-	level = clampi(level, 1, 4)
+	level = clampi(level, 1, MAX_TROOP_LEVEL)
 	var stats: Dictionary = _compute_dynamic_stats(level, player_troop_levels, nft_rarity)
 	unit_target_type = BaseTroop.UNIT_TARGET_AIR
 	move_speed = 0.38
@@ -117,12 +121,12 @@ static func _troop_level_from_map(levels: Dictionary, troop_type: String) -> int
 		aliases.append("FireDragon")
 	for key in aliases:
 		if levels.has(key):
-			return clampi(int(levels[key]), 1, 4)
+			return clampi(int(levels[key]), 1, MAX_TROOP_LEVEL)
 	return 1
 
 
 static func _compute_dynamic_stats(dragon_level: int, levels: Dictionary, rarity: String = "common") -> Dictionary:
-	var clamped_level: int = clampi(dragon_level, 1, 4)
+	var clamped_level: int = clampi(dragon_level, 1, MAX_TROOP_LEVEL)
 	var troop_level: int = _troop_level_from_map(levels, "fire_dragon")
 	if not levels.has("fire_dragon") and not levels.has("FireDragon"):
 		troop_level = clamped_level

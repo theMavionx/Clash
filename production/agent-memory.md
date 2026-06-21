@@ -61,6 +61,9 @@ Use `-Full` when you need full active-goal detail.
 - Collaborators can commit directly to `main` if they have write/admin access.
 - Pull-request prompts appear when someone pushes to a non-main branch that is ahead of `main`.
 - `production/active-goals.md` is the source of truth for what the user wants next.
+- Troop upgrades are intended to reach Lv7: Lv5-Lv7 require Town Hall Lv5, server `TROOP_DEFS`
+  are authoritative, and matching stats must stay in sync across `server/combat_defs.js`,
+  `scripts/*troop*.gd`, and `web/src/components/BarnPanel.jsx`.
 
 ## Risky Areas
 
@@ -108,6 +111,15 @@ tools/codex/playtest-local.cmd
 
 This starts local server/web if needed and opens the game in guest mode plus the admin panel.
 The local playtest admin key is `local-dev-admin`; it is set only for the local server process.
+
+Full owner-facing local test:
+
+```powershell
+tools/codex/playtest-local.cmd -ExportGodot -GuestCount 2 -OpenServerDashboard
+```
+
+Use this for `Play Test`, `Local Test`, or `Тест локально`. It exports Godot locally,
+starts local server/web, opens two separate guest player sessions, and opens the local admin panel.
 Stop local playtest background servers with:
 
 ```powershell

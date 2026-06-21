@@ -6,14 +6,68 @@ param(
     [switch]$NoOpen,
     [switch]$OpenServerDashboard,
     [string]$LocalAdminKey = "local-dev-admin",
-    [int]$WaitSeconds = 45
+    [int]$WaitSeconds = 45,
+    [int]$GuestCount = 1,
+    [switch]$ExportGodot,
+    [string]$GodotExe = $env:GODOT_EXE,
+    [ValidateSet("release", "debug")]
+    [string]$GodotExportMode = "release"
 )
 
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $LogDir = Join-Path $RepoRoot ".tmp\local-playtest"
+$WebDir = Join-Path $RepoRoot "web"
+$LocalGodotDir = Join-Path $WebDir "public\godot"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+function Resolve-GodotExe {
+    param([string]$Preferred)
+    if ($Preferred -and (Test-Path -LiteralPath $Preferred)) {
+        return (Resolve-Path -LiteralPath $Preferred).Path
+    }
+
+    $candidates = @(
+        (Join-Path $RepoRoot ".tmp-godot\engine\Godot_v4.6.1-stable_win64_console.exe"),
+        (Join-Path $RepoRoot ".tmp-godot\engine\Godot_v4.6.1-stable_win64.exe"),
+        "C:\Users\Admin\Downloads\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe",
+        "C:\Users\Admin\Downloads\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64.exe",
+        "C:\Users\Admin\Godot_v4.6.3-stable_win64.exe\Godot_v4.6.3-stable_win64_console.exe",
+        "C:\Users\Admin\Godot_v4.6.3-stable_win64.exe\Godot_v4.6.3-stable_win64.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "Godot executable not found. Set GODOT_EXE or pass -GodotExe."
+}
+
+function Invoke-LocalGodotExport {
+    $godotPath = Resolve-GodotExe -Preferred $GodotExe
+    $exportHtml = Join-Path $LocalGodotDir "Work.html"
+    $manifestScript = Join-Path $WebDir "generate-godot-export-manifest.cjs"
+    $runtimeManifestScript = Join-Path $WebDir "write-godot-runtime-manifest.cjs"
+    $exportFlag = if ($GodotExportMode -eq "debug") { "--export-debug" } else { "--export-release" }
+
+    Write-Host "==> Generating Godot export manifest"
+    & node $manifestScript
+    if ($LASTEXITCODE -ne 0) { throw "Godot export manifest failed with exit code $LASTEXITCODE" }
+
+    Write-Host "==> Exporting Godot Web $GodotExportMode"
+    New-Item -ItemType Directory -Force -Path $LocalGodotDir | Out-Null
+    & $godotPath --headless --path $RepoRoot $exportFlag "Web" $exportHtml
+    if ($LASTEXITCODE -ne 0) { throw "Godot export failed with exit code $LASTEXITCODE" }
+    if (-not (Test-Path -LiteralPath (Join-Path $LocalGodotDir "Work.pck"))) {
+        throw "Godot export did not produce Work.pck"
+    }
+
+    Write-Host "==> Writing Godot runtime manifest"
+    & node $runtimeManifestScript $LocalGodotDir "local-export"
+    if ($LASTEXITCODE -ne 0) { throw "Godot runtime manifest failed with exit code $LASTEXITCODE" }
+}
 
 function Test-TcpPort {
     param([int]$Port)
@@ -87,10 +141,30 @@ function Get-ChromePath {
 }
 
 function Open-LocalUrls {
-    param([string[]]$Urls)
+    param(
+        [string[]]$Urls,
+        [int]$GuestProfileCount = 1
+    )
 
     $chromePath = Get-ChromePath
     if ($chromePath) {
+        if ($GuestProfileCount -gt 1) {
+            Write-Host "Opening local playtest in Chrome with separate local profiles..."
+            for ($i = 0; $i -lt $Urls.Count; $i++) {
+                $profileName = if ($i -lt $GuestProfileCount) { "chrome-guest-$($i + 1)" } else { "chrome-admin" }
+                $profileDir = Join-Path $LogDir $profileName
+                New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+                Start-Process -FilePath $chromePath -ArgumentList @(
+                    "--new-window",
+                    "--no-first-run",
+                    "--user-data-dir=$profileDir",
+                    $Urls[$i]
+                )
+                Start-Sleep -Milliseconds 500
+            }
+            return
+        }
+
         Write-Host "Opening local playtest in Chrome..."
         Start-Process -FilePath $chromePath -ArgumentList (@("--new-window") + $Urls)
         return
@@ -109,6 +183,11 @@ Write-Host "Logs: $LogDir"
 Write-Host ""
 Write-Host "Safety: local only. This command does not deploy, push, merge, or commit."
 Write-Host ""
+
+if ($ExportGodot) {
+    Invoke-LocalGodotExport
+    Write-Host ""
+}
 
 $startedProcesses = @()
 
@@ -159,14 +238,23 @@ if (-not $SkipWeb) {
     Wait-ForPort -Name "Web" -Port $WebPort
 }
 
-$gameUrl = "http://127.0.0.1:$WebPort/?guest=new"
+$GuestCount = [Math]::Max(1, $GuestCount)
+$guestStamp = Get-Date -Format "yyyyMMddHHmmss"
+$gameUrls = @()
+for ($i = 1; $i -le $GuestCount; $i++) {
+    $guestId = "g_local_${guestStamp}_$i"
+    $gameUrls += "http://127.0.0.1:$WebPort/?guest=1&guest_id=$guestId"
+}
+$gameUrl = $gameUrls[0]
 $adminKeyForUrl = [uri]::EscapeDataString($LocalAdminKey)
 $adminUrl = "http://127.0.0.1:$WebPort/admin.html?admin_key=$adminKeyForUrl"
 $serverUrl = "http://127.0.0.1:$ServerPort/"
 
 Write-Host ""
 Write-Host "Manual test URLs:"
-Write-Host "Game guest mode: $gameUrl"
+for ($i = 0; $i -lt $gameUrls.Count; $i++) {
+    Write-Host "Player $($i + 1) guest: $($gameUrls[$i])"
+}
 Write-Host "Admin panel:     $adminUrl"
 Write-Host "Local admin key: $LocalAdminKey"
 if ($OpenServerDashboard) {
@@ -182,9 +270,9 @@ Write-Host "Close the browser tabs when done."
 Write-Host "Stop background local servers with: tools\codex\stop-local-playtest.cmd"
 
 if (-not $NoOpen) {
-    $urlsToOpen = @($gameUrl, $adminUrl)
+    $urlsToOpen = @($gameUrls) + @($adminUrl)
     if ($OpenServerDashboard) {
         $urlsToOpen += $serverUrl
     }
-    Open-LocalUrls -Urls $urlsToOpen
+    Open-LocalUrls -Urls $urlsToOpen -GuestProfileCount $GuestCount
 }

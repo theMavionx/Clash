@@ -27,11 +27,15 @@ const LEVEL_STATS = {
 	2: {"hp": 330, "damage": 45, "atk_speed": 0.92},
 	3: {"hp": 430, "damage": 60, "atk_speed": 0.83},
 	4: {"hp": 560, "damage": 80, "atk_speed": 0.76},
+	5: {"hp": 710, "damage": 106, "atk_speed": 0.70},
+	6: {"hp": 890, "damage": 140, "atk_speed": 0.65},
+	7: {"hp": 1100, "damage": 182, "atk_speed": 0.60},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
 ## from LEVEL_STATS for the current level. Called by BaseTroop._ready().
 func _init_stats() -> void:
+	level = clampi(level, 1, LEVEL_STATS.size())
 	var s = LEVEL_STATS[level]
 	move_speed = 0.55
 	attack_range = 0.85   # shorter than Archer — trades reach for mobility + survivability

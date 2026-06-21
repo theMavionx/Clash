@@ -83,6 +83,7 @@ const THUMBNAIL_MAP = {
   archer_tower: imgArcherTower,
   archertower: imgArcherTower,
   mage_tower: imgMageTower,
+  mortar: imgTurret,
   storage: imgStorage,
   altar: imgAltar,
 };
@@ -99,6 +100,7 @@ const DESC_MAP = {
   archer_tower: 'Ranged defense against invaders.',
   archertower: 'Ranged defense against invaders.',
   mage_tower: 'Casts splash magic at groups of enemy troops.',
+  mortar: 'Long-range splash defense with a minimum firing range.',
   residence: 'Residences produce gold.',
 };
 

@@ -24,30 +24,45 @@ const NORMAL_TROOP_STATS: Dictionary = {
 		2: {"hp": 600, "damage": 50, "atk_speed": 1.30},
 		3: {"hp": 780, "damage": 66, "atk_speed": 1.20},
 		4: {"hp": 1000, "damage": 86, "atk_speed": 1.10},
+		5: {"hp": 1260, "damage": 112, "atk_speed": 1.02},
+		6: {"hp": 1560, "damage": 145, "atk_speed": 0.96},
+		7: {"hp": 1900, "damage": 185, "atk_speed": 0.90},
 	},
 	"mage": {
 		1: {"hp": 150, "damage": 58, "atk_speed": 1.25},
 		2: {"hp": 200, "damage": 74, "atk_speed": 1.12},
 		3: {"hp": 265, "damage": 104, "atk_speed": 1.0},
 		4: {"hp": 345, "damage": 138, "atk_speed": 0.90},
+		5: {"hp": 440, "damage": 182, "atk_speed": 0.82},
+		6: {"hp": 555, "damage": 238, "atk_speed": 0.76},
+		7: {"hp": 690, "damage": 310, "atk_speed": 0.70},
 	},
 	"barbarian": {
 		1: {"hp": 240, "damage": 24, "atk_speed": 0.60},
 		2: {"hp": 320, "damage": 32, "atk_speed": 0.55},
 		3: {"hp": 420, "damage": 43, "atk_speed": 0.50},
 		4: {"hp": 550, "damage": 57, "atk_speed": 0.46},
+		5: {"hp": 705, "damage": 75, "atk_speed": 0.42},
+		6: {"hp": 880, "damage": 97, "atk_speed": 0.39},
+		7: {"hp": 1080, "damage": 124, "atk_speed": 0.36},
 	},
 	"archer": {
 		1: {"hp": 210, "damage": 40, "atk_speed": 1.05},
 		2: {"hp": 280, "damage": 51, "atk_speed": 0.95},
 		3: {"hp": 310, "damage": 58, "atk_speed": 0.85},
 		4: {"hp": 425, "damage": 82, "atk_speed": 0.78},
+		5: {"hp": 540, "damage": 108, "atk_speed": 0.72},
+		6: {"hp": 680, "damage": 140, "atk_speed": 0.67},
+		7: {"hp": 840, "damage": 180, "atk_speed": 0.62},
 	},
 	"ranger": {
 		1: {"hp": 250, "damage": 34, "atk_speed": 1.0},
 		2: {"hp": 330, "damage": 45, "atk_speed": 0.92},
 		3: {"hp": 430, "damage": 60, "atk_speed": 0.83},
 		4: {"hp": 560, "damage": 80, "atk_speed": 0.76},
+		5: {"hp": 710, "damage": 106, "atk_speed": 0.70},
+		6: {"hp": 890, "damage": 140, "atk_speed": 0.65},
+		7: {"hp": 1100, "damage": 182, "atk_speed": 0.60},
 	},
 }
 
@@ -58,6 +73,7 @@ const NFT_RARITY_MULTIPLIERS: Dictionary = {
 	"unrevealed": 1.2,
 }
 const DEMON_KING_SLOT_COUNT: float = 2.0
+const MAX_TROOP_LEVEL: int = 7
 
 const DEMON_ANIM_FILES: Array = [
 	"res://Model/Characters/Animations/DemonKing/DemonKing_Attack01.fbx",
@@ -199,7 +215,7 @@ const RARITY_TINT_VARIANTS: Dictionary = {
 func _init_stats() -> void:
 	# Clamp to a valid tier — upgrade_to(lvl) could be handed an out-of-range
 	# level (server desync, bad payload) and dynamic stat calculation stays safe.
-	level = clampi(level, 1, 4)
+	level = clampi(level, 1, MAX_TROOP_LEVEL)
 	var s: Dictionary = _compute_dynamic_stats(level, player_troop_levels, nft_rarity)
 	move_speed = 0.38        # 24% slower than Knight (0.50) — heavy boss feel
 	attack_range = 0.32      # 33% greater reach than Knight (0.24) — large hit zone
@@ -262,12 +278,12 @@ static func _troop_level_from_map(levels: Dictionary, troop_type: String) -> int
 		aliases.append("DemonKing")
 	for key in aliases:
 		if levels.has(key):
-			return clampi(int(levels[key]), 1, 4)
+			return clampi(int(levels[key]), 1, MAX_TROOP_LEVEL)
 	return 1
 
 
 static func _compute_dynamic_stats(demon_level: int, levels: Dictionary, rarity: String = "common") -> Dictionary:
-	var clamped_level: int = clampi(demon_level, 1, 4)
+	var clamped_level: int = clampi(demon_level, 1, MAX_TROOP_LEVEL)
 	var troop_level: int = _troop_level_from_map(levels, "demon_king")
 	if not levels.has("demon_king") and not levels.has("DemonKing"):
 		troop_level = clamped_level

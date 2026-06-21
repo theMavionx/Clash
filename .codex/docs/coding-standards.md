@@ -16,6 +16,13 @@
 - Do not manually modify generated `.import` files.
 - Check Godot 4.6.1 reference docs in `docs/engine-reference/godot/` before using uncertain APIs.
 
+## React/Web UI
+
+- Keep all UI images, thumbnails, icons, previews, and modal content visually centered unless a deliberate asymmetric layout is part of the design.
+- React UI should look concise, balanced, and polished: no accidental offsets, clipping, overflow, oversized assets, cramped text, or noisy decoration.
+- For image previews, tune scale, `object-fit`, `object-position`, and container alignment together so the visible object appears centered, not just the raw image bounds.
+- After changing React UI, run the closest practical visual check: local browser/HMR check, screenshot, or build plus manual refresh note.
+
 ## Backend
 
 - Keep gameplay-critical validation server-side.

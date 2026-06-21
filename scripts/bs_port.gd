@@ -9,6 +9,7 @@ const SHIP_MODELS: Array[String] = [
 	"res://Model/Ship/Ships/ship-pirate-large_3.glb",
 ]
 const SHIP_DISPLAY_SCALE: float = 0.05
+const MAX_SHIP_LEVEL: int = 3
 
 var bs: Node3D
 
@@ -114,12 +115,13 @@ func _ship_edit_context(port_node: Node3D, ship_troops: Array) -> Dictionary:
 
 ## Buys a ship at the level of the currently selected building.
 func _buy_ship() -> void:
-	var lvl: int = bs.selected_building.get("level", 1)
+	var lvl: int = clampi(int(bs.selected_building.get("level", 1)), 1, MAX_SHIP_LEVEL)
 	_buy_ship_level(lvl)
 
 ## Buys a ship at the given level for the currently selected port, deducting
 ## SHIP_COST_GOLD from the player's gold and spawning the ship model.
 func _buy_ship_level(ship_lvl: int) -> void:
+	ship_lvl = clampi(ship_lvl, 1, MAX_SHIP_LEVEL)
 	if bs.resources.get("gold", 0) < SHIP_COST_GOLD:
 		return
 	var port_node: Node3D = bs.selected_building.get("node", null)
@@ -176,7 +178,7 @@ func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
 	var port_node: Node3D = bs.selected_building.get("node", null)
 	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
 		return
-	var ship_level: int = port_node.get_meta("ship_level", 1)
+	var ship_level: int = clampi(int(port_node.get_meta("ship_level", 1)), 1, MAX_SHIP_LEVEL)
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
 	var troop_base_name: String = _troop_entry_base_name(troop_name)
 	var tdef: Dictionary = bs.troop_defs.get(troop_base_name, {})
@@ -233,7 +235,7 @@ func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) 
 		return
 	var troop_base_name: String = _troop_entry_base_name(troop_name)
 	var slot_cost: int = int(bs.troop_defs.get(troop_base_name, {}).get("slot_cost", 1))
-	var ship_level: int = port_node.get_meta("ship_level", 1)
+	var ship_level: int = clampi(int(port_node.get_meta("ship_level", 1)), 1, MAX_SHIP_LEVEL)
 	# Ask server
 	var sid: int = bs.selected_building.get("server_id", -1)
 	var net: Node = bs._net
@@ -291,7 +293,7 @@ func _remove_troop_from_ship(slot: int) -> void:
 	var span: Dictionary = _troop_unit_span_at(ship_troops, slot)
 	if span.is_empty():
 		return
-	var ship_level: int = port_node.get_meta("ship_level", 1)
+	var ship_level: int = clampi(int(port_node.get_meta("ship_level", 1)), 1, MAX_SHIP_LEVEL)
 	var sid: int = bs.selected_building.get("server_id", -1)
 	var net: Node = bs._net
 	if net and net.has_token() and sid >= 0:
@@ -377,7 +379,7 @@ func _spawn_port_ship(b_override: Dictionary = {}) -> void:
 	var port_node: Node3D = b.get("node", null)
 	if not is_instance_valid(port_node):
 		return
-	var port_level: int = b.get("level", 1)
+	var port_level: int = clampi(int(b.get("level", 1)), 1, MAX_SHIP_LEVEL)
 	var model_idx = clampi(port_level - 1, 0, SHIP_MODELS.size() - 1)
 	# Share AttackSystem's ship cache without pulling the full combat troop
 	# preload into the home-island boot path.
@@ -400,7 +402,7 @@ func _spawn_port_ship(b_override: Dictionary = {}) -> void:
 	# return an unstable yaw, so derive the dock yaw from the stable grid parent.
 	var dock_yaw: float = _get_port_dock_yaw(port_node)
 	var forward = Vector3(sin(dock_yaw), 0, cos(dock_yaw))
-	var ship_dist = [0.35, 0.35, 0.4, 0.57][clampi(port_level, 0, 3)]
+	var ship_dist = [0.35, 0.40, 0.48][clampi(port_level - 1, 0, 2)]
 	ship.global_position = port_pos + forward * ship_dist
 	ship.global_position.y = bs._water_y - 0.03
 	ship.global_rotation = Vector3(0.0, dock_yaw + PI * 0.5, 0.0)
@@ -434,7 +436,7 @@ func _find_port_with_free_slot(from_pos: Vector3, needed_slots: int = 1) -> Dict
 				var pnode = b.get("node", null)
 				if not is_instance_valid(pnode) or not pnode.has_meta("has_ship"):
 					continue
-				var ship_level: int = pnode.get_meta("ship_level", 1)
+				var ship_level: int = clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_SHIP_LEVEL)
 				var ship_troops: Array = pnode.get_meta("ship_troops", [])
 				var capacity: int = ship_level * 3
 				if capacity - ship_troops.size() < needed_slots:
@@ -454,7 +456,7 @@ func _get_free_ship_slots() -> int:
 			if b.get("id") == "port":
 				var pnode = b.get("node", null)
 				if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
-					var ship_level: int = pnode.get_meta("ship_level", 1)
+					var ship_level: int = clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_SHIP_LEVEL)
 					var ship_troops: Array = pnode.get_meta("ship_troops", [])
 					free += ship_level * 3 - ship_troops.size()
 	return free
@@ -485,5 +487,5 @@ func _get_total_ship_capacity() -> int:
 			if b.get("id") == "port":
 				var pnode = b.get("node", null)
 				if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
-					total += pnode.get_meta("ship_level", 1) * 3
+					total += clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_SHIP_LEVEL) * 3
 	return total

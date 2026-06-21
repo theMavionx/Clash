@@ -1831,8 +1831,8 @@ try {
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
-  mine:    { resource: 'ore',  rate: [18, 33, 54, 81], max: [200, 400, 800, 1600] },    // per minute
-  sawmill: { resource: 'wood', rate: [24, 45, 72, 108], max: [250, 500, 1000, 2000] },
+  mine:    { resource: 'ore',  rate: [18, 33, 54, 81, 120], max: [200, 400, 800, 1600, 3000] },    // per minute
+  sawmill: { resource: 'wood', rate: [24, 45, 72, 108, 160], max: [250, 500, 1000, 2000, 3750] },
 };
 
 // ---------- Prepared Statements ----------
@@ -3619,21 +3619,23 @@ const TH_UNLOCK = {
   tombstone: 2,  // unlocked at TH2
   turret:    3,  // unlocked at TH3
   mage_tower: 4, // unlocked at TH4
+  mortar:    5,  // unlocked at TH5
 };
 
-// Max count per building type PER TH level: { type: [th1, th2, th3, th4] }
+// Max count per building type PER TH level: { type: [th1, th2, th3, th4, th5] }
 const TH_MAX_COUNT = {
-  mine:         [1, 2, 3, 3],
-  sawmill:      [1, 2, 3, 3],
-  barn:         [1, 1, 1, 1],
-  port:         [1, 2, 5, 5],
-  altar:        [1, 1, 1, 1],
-  archer_tower: [1, 2, 3, 3],
-  tombstone:    [0, 1, 3, 3],  // unlocked at TH2
-  turret:       [0, 0, 3, 3],  // unlocked at TH3
-  storage:      [0, 1, 2, 3],  // unlocked at TH2
-  mage_tower:   [0, 0, 0, 2],  // unlocked at TH4
-  town_hall:    [1, 1, 1, 1],
+  mine:         [1, 2, 3, 3, 4],
+  sawmill:      [1, 2, 3, 3, 4],
+  barn:         [1, 1, 1, 1, 1],
+  port:         [1, 2, 3, 3, 3],
+  altar:        [1, 1, 1, 1, 1],
+  archer_tower: [1, 2, 3, 3, 3],
+  tombstone:    [0, 1, 3, 3, 3],  // unlocked at TH2
+  turret:       [0, 0, 3, 3, 3],  // unlocked at TH3
+  storage:      [0, 1, 2, 3, 4],  // unlocked at TH2
+  mage_tower:   [0, 0, 0, 2, 2],  // unlocked at TH4
+  mortar:       [0, 0, 0, 0, 1],  // unlocked at TH5
+  town_hall:    [1, 1, 1, 1, 1],
 };
 
 // Required buildings to upgrade Town Hall (all must be at TH's current level)
@@ -3641,23 +3643,25 @@ const TH_UPGRADE_REQUIRES = {
   1: ['mine', 'sawmill', 'barn', 'port'],
   2: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower'],
   3: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower', 'turret'],
+  4: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower'],
 };
 
 const BUILDING_DEFS = {
   town_hall: {
-    size: [4, 4], max_level: 4,
-    hp_levels: [3500, 8000, 16000, 24000],
+    size: [4, 4], max_level: 5,
+    hp_levels: [3500, 8000, 16000, 24000, 36000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
       2: { gold: 800, wood: 2400, ore: 2000 },
       3: { gold: 3000, wood: 7000, ore: 6000 },
       4: { gold: 10000, wood: 20000, ore: 17000 },
+      5: { gold: 26000, wood: 52000, ore: 46000 },
     },
     max_count: 1,
   },
   mine: {
-    size: [3, 3], max_level: 4,
-    hp_levels: [1200, 2200, 3800, 6000],
+    size: [3, 3], max_level: 5,
+    hp_levels: [1200, 2200, 3800, 6000, 9000],
     cost: { gold: 80, wood: 200, ore: 0 },
     max_count: 4,
   },
@@ -3668,10 +3672,10 @@ const BUILDING_DEFS = {
     max_count: 1,
   },
   port: {
-    size: [4, 3], max_level: 4,
-    hp_levels: [1800, 3200, 5500, 8500],
+    size: [4, 3], max_level: 3,
+    hp_levels: [1800, 3200, 5500],
     cost: { gold: 240, wood: 560, ore: 480 },
-    max_count: 2,
+    max_count: 3,
   },
   altar: {
     size: [3, 3], max_level: 1,
@@ -3682,8 +3686,8 @@ const BUILDING_DEFS = {
     shop_sku: 'altar',
   },
   sawmill: {
-    size: [3, 3], max_level: 4,
-    hp_levels: [1200, 2200, 3800, 6000],
+    size: [3, 3], max_level: 5,
+    hp_levels: [1200, 2200, 3800, 6000, 9000],
     cost: { gold: 80, wood: 0, ore: 200 },
     max_count: 4,
   },
@@ -3700,10 +3704,10 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   storage: {
-    size: [4, 5], max_level: 4,
-    hp_levels: [1400, 2500, 4200, 6500],
+    size: [4, 5], max_level: 5,
+    hp_levels: [1400, 2500, 4200, 6500, 9500],
     cost: { gold: 140, wood: 550, ore: 0 },
-    max_count: 3,
+    max_count: 4,
   },
   archer_tower: {
     size: [3, 3], max_level: 5,
@@ -3712,10 +3716,16 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   mage_tower: {
-    size: [3, 3], max_level: 3,
-    hp_levels: [700, 1200, 2000],
+    size: [3, 3], max_level: 4,
+    hp_levels: [700, 1200, 2000, 3100],
     cost: { gold: 800, wood: 0, ore: 1300 },
     max_count: 2,
+  },
+  mortar: {
+    size: [2, 2], max_level: 1,
+    hp_levels: [1700],
+    cost: { gold: 600, wood: 900, ore: 700 },
+    max_count: 1,
   },
 };
 
@@ -3777,22 +3787,168 @@ function normalizeTownHallHpRows() {
 
 normalizeTownHallHpRows();
 
+function normalizePortLevelRows() {
+  const def = BUILDING_DEFS.port;
+  const maxLevel = Number(def?.max_level || 3);
+  const hpLevels = def?.hp_levels || [];
+  const cappedMaxHp = hpLevels[maxLevel - 1] || hpLevels[hpLevels.length - 1] || 1;
+  const rows = db.prepare(`
+    SELECT id, level, hp, max_hp
+    FROM buildings
+    WHERE type = 'port' AND level > ?
+  `).all(maxLevel);
+  if (!rows.length) return;
+
+  const update = db.prepare(`
+    UPDATE buildings SET level = ?, hp = ?, max_hp = ? WHERE id = ?
+  `);
+  let updated = 0;
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const oldMaxHp = Math.max(1, Number(row.max_hp) || cappedMaxHp);
+      const oldHp = Math.max(0, Number(row.hp) || 0);
+      const hpRatio = Math.max(0, Math.min(1, oldHp / oldMaxHp));
+      const nextHp = Math.max(0, Math.min(cappedMaxHp, Math.round(cappedMaxHp * hpRatio)));
+      update.run(maxLevel, nextHp, cappedMaxHp, row.id);
+      updated += 1;
+    }
+  });
+  tx();
+
+  if (updated > 0) {
+    console.log(`[db] normalized ${updated} Port row(s) to level ${maxLevel}`);
+  }
+}
+
+normalizePortLevelRows();
+
 // ---------- Troop Definitions ----------
 
 const TROOP_DEFS = {
-  knight:    { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 },  { gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 }] },
-  mage:      { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
-  barbarian: { max_level: 4, cost: [{ gold: 175, wood: 0, ore: 175 }, { gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }] },
-  archer:    { max_level: 4, cost: [{ gold: 175, wood: 175, ore: 0 }, { gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }] },
-  ranger:    { max_level: 4, cost: [{ gold: 125, wood: 125, ore: 0 }, { gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }] },
-  demon_king: { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 }, { gold: 300, wood: 0, ore: 250 }, { gold: 600, wood: 0, ore: 500 }] },
-  fire_dragon: { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
+  knight: {
+    max_level: 7,
+    cost: [
+      { gold: 150, wood: 0, ore: 125 },
+      { gold: 300, wood: 0, ore: 250 },
+      { gold: 600, wood: 0, ore: 500 },
+      { gold: 1200, wood: 0, ore: 1000 },
+      { gold: 2200, wood: 0, ore: 1800 },
+      { gold: 3800, wood: 0, ore: 3200 },
+    ],
+  },
+  mage: {
+    max_level: 7,
+    cost: [
+      { gold: 250, wood: 0, ore: 250 },
+      { gold: 500, wood: 0, ore: 500 },
+      { gold: 1000, wood: 0, ore: 1000 },
+      { gold: 2000, wood: 0, ore: 2000 },
+      { gold: 3600, wood: 0, ore: 3600 },
+      { gold: 6000, wood: 0, ore: 6000 },
+    ],
+  },
+  barbarian: {
+    max_level: 7,
+    cost: [
+      { gold: 175, wood: 0, ore: 175 },
+      { gold: 350, wood: 0, ore: 350 },
+      { gold: 700, wood: 0, ore: 700 },
+      { gold: 1400, wood: 0, ore: 1400 },
+      { gold: 2600, wood: 0, ore: 2600 },
+      { gold: 4400, wood: 0, ore: 4400 },
+    ],
+  },
+  archer: {
+    max_level: 7,
+    cost: [
+      { gold: 175, wood: 175, ore: 0 },
+      { gold: 350, wood: 350, ore: 0 },
+      { gold: 700, wood: 700, ore: 0 },
+      { gold: 1400, wood: 1400, ore: 0 },
+      { gold: 2600, wood: 2600, ore: 0 },
+      { gold: 4400, wood: 4400, ore: 0 },
+    ],
+  },
+  ranger: {
+    max_level: 7,
+    cost: [
+      { gold: 125, wood: 125, ore: 0 },
+      { gold: 250, wood: 250, ore: 0 },
+      { gold: 500, wood: 500, ore: 0 },
+      { gold: 1000, wood: 1000, ore: 0 },
+      { gold: 1900, wood: 1900, ore: 0 },
+      { gold: 3200, wood: 3200, ore: 0 },
+    ],
+  },
+  demon_king: {
+    max_level: 7,
+    cost: [
+      { gold: 150, wood: 0, ore: 125 },
+      { gold: 300, wood: 0, ore: 250 },
+      { gold: 600, wood: 0, ore: 500 },
+      { gold: 1200, wood: 0, ore: 1000 },
+      { gold: 2200, wood: 0, ore: 1800 },
+      { gold: 3800, wood: 0, ore: 3200 },
+    ],
+  },
+  fire_dragon: {
+    max_level: 7,
+    cost: [
+      { gold: 250, wood: 0, ore: 250 },
+      { gold: 500, wood: 0, ore: 500 },
+      { gold: 1000, wood: 0, ore: 1000 },
+      { gold: 2000, wood: 0, ore: 2000 },
+      { gold: 3600, wood: 0, ore: 3600 },
+      { gold: 6000, wood: 0, ore: 6000 },
+    ],
+  },
 };
 const DISABLED_TROOP_TYPES = new Set();
 const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_TROOP_TYPES.has(troop));
+const TROOP_LEVEL_TOWN_HALL_REQUIREMENTS = {
+  5: 5,
+  6: 5,
+  7: 5,
+};
+
+function normalizeTroopTypeKey(troopType) {
+  const compact = String(troopType || '').trim().toLowerCase().replace(/[\s_-]/g, '');
+  if (compact === 'demonking') return 'demon_king';
+  if (compact === 'firedragon') return 'fire_dragon';
+  if (TROOP_DEFS[compact]) return compact;
+  return String(troopType || '').trim().toLowerCase();
+}
+
+function clampTroopLevelForType(troopType, level) {
+  const def = TROOP_DEFS[troopType];
+  const maxLevel = Number(def?.max_level) || 1;
+  const numericLevel = Number(level) || 1;
+  return Math.max(1, Math.min(maxLevel, Math.trunc(numericLevel)));
+}
 
 function isTroopDisabled(troopType) {
-  return DISABLED_TROOP_TYPES.has(String(troopType || '').trim().toLowerCase());
+  return DISABLED_TROOP_TYPES.has(normalizeTroopTypeKey(troopType));
+}
+
+function getTroopLevelTownHallRequirement(level) {
+  return TROOP_LEVEL_TOWN_HALL_REQUIREMENTS[Number(level)] || 1;
+}
+
+function getTroopTownHallGate(playerId, nextLevel) {
+  const currentTownHallLevel = getTownHallLevel(playerId);
+  if (!nextLevel) {
+    return {
+      current_town_hall_level: currentTownHallLevel,
+      required_town_hall_level: null,
+      town_hall_ready: true,
+    };
+  }
+  const requiredTownHallLevel = getTroopLevelTownHallRequirement(nextLevel);
+  return {
+    current_town_hall_level: currentTownHallLevel,
+    required_town_hall_level: requiredTownHallLevel,
+    town_hall_ready: currentTownHallLevel >= requiredTownHallLevel,
+  };
 }
 
 const ALTAR_SKILL_DEFS = {
@@ -3826,7 +3982,7 @@ const ALTAR_SKILL_DEFS = {
   },
 };
 
-const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone']);
+const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'mortar', 'tombstone']);
 
 const DEMON_KING_UPGRADE_WINS = {
   2: 1000,
@@ -3850,16 +4006,17 @@ const TROPHY_WIN = 30;
 const TROPHY_LOSS = 15;  // defender loses this on defeat
 
 const TROPHY_TABLE = {
-  town_hall: [50, 120, 250, 450],
-  mine:      [10, 25, 50, 90],
+  town_hall: [50, 120, 250, 450, 720],
+  mine:      [10, 25, 50, 90, 145],
   barn:      [10, 25, 50, 90],
-  port:      [15, 35, 70, 125],
-  sawmill:   [10, 25, 50, 90],
+  port:      [15, 35, 70, 125, 195],
+  sawmill:   [10, 25, 50, 90, 145],
   turret:    [20, 45, 90, 160],
   tombstone: [5, 10, 20, 40],
-  storage:      [10, 25, 50, 90],
+  storage:      [10, 25, 50, 90, 145],
   archer_tower: [15, 35, 70, 125, 200],
-  mage_tower:   [20, 45, 90],
+  mage_tower:   [20, 45, 90, 145],
+  mortar:       [30, 65, 125, 210],
 };
 
 // ---------- Helper Functions ----------
@@ -4987,6 +5144,7 @@ const TH_BASE_CAPACITY = {
   2: { gold: 20000, wood: 20000, ore: 20000 },
   3: { gold: 40000, wood: 40000, ore: 40000 },
   4: { gold: 70000, wood: 70000, ore: 70000 },
+  5: { gold: 110000, wood: 110000, ore: 110000 },
 };
 
 // Additional capacity per Storage building per level
@@ -4995,6 +5153,7 @@ const STORAGE_CAPACITY = {
   2: { gold: 20000, wood: 20000, ore: 20000 },
   3: { gold: 30000, wood: 30000, ore: 30000 },
   4: { gold: 50000, wood: 50000, ore: 50000 },
+  5: { gold: 75000, wood: 75000, ore: 75000 },
 };
 
 function getResourceCaps(playerId) {
@@ -5004,7 +5163,7 @@ function getResourceCaps(playerId) {
   for (const b of buildings) {
     if (b.type === 'town_hall') thLevel = b.level;
   }
-  const base = TH_BASE_CAPACITY[Math.min(thLevel, 4)] || TH_BASE_CAPACITY[1];
+  const base = TH_BASE_CAPACITY[Math.min(thLevel, 5)] || TH_BASE_CAPACITY[1];
   let maxGold = base.gold;
   let maxWood = base.wood;
   let maxOre = base.ore;
@@ -5497,7 +5656,7 @@ const NFT_BACKED_TROOP_COLLECTIONS = {
 };
 
 function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
-  const troopKey = String(troopType || '').trim().toLowerCase();
+  const troopKey = normalizeTroopTypeKey(troopType);
   const cfg = NFT_BACKED_TROOP_COLLECTIONS[troopKey];
   const def = TROOP_DEFS[troopKey];
   if (!cfg || !def) return null;
@@ -5505,6 +5664,7 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
   const current = levels.find(t => t.troop_type === troopKey);
   const currentLevel = current ? current.level : 1;
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
+  const thGate = getTroopTownHallGate(playerId, nextLevel);
   const token = normalizeDemonKingBattleToken(options);
   const battleWins = token ? getCollectionBattleWins(playerId, cfg.collection, token.chain, token.tokenId) : 0;
   const ownedCount = listPlayerCollectionNfts(playerId, cfg.collection).length;
@@ -5515,6 +5675,9 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
     current_level: currentLevel,
     max_level: def.max_level,
     next_level: nextLevel,
+    current_town_hall_level: thGate.current_town_hall_level,
+    required_town_hall_level: thGate.required_town_hall_level,
+    town_hall_ready: thGate.town_hall_ready,
     owns_nft: ownedCount > 0,
     owned_nfts: ownedCount,
     cost: nextLevel ? def.cost[currentLevel - 1] : null,
@@ -5538,6 +5701,7 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
   const current = levels.find(t => t.troop_type === 'demon_king');
   const currentLevel = current ? current.level : 1;
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
+  const thGate = getTroopTownHallGate(playerId, nextLevel);
   const requiredWins = nextLevel ? demonKingRequiredWins(nextLevel) : null;
   const token = normalizeDemonKingBattleToken(options);
   const battleWins = token ? getDemonKingBattleWins(playerId, token.chain, token.tokenId) : 0;
@@ -5546,6 +5710,9 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
     current_level: currentLevel,
     max_level: def.max_level,
     next_level: nextLevel,
+    current_town_hall_level: thGate.current_town_hall_level,
+    required_town_hall_level: thGate.required_town_hall_level,
+    town_hall_ready: thGate.town_hall_ready,
     battle_wins: battleWins,
     wins: battleWins,
     account_battle_wins: getBattleWins(playerId),
@@ -5559,30 +5726,48 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
 }
 
 function upgradeTroop(playerId, troopType, options = {}) {
-  if (isTroopDisabled(troopType)) {
+  const troopKey = normalizeTroopTypeKey(troopType);
+  if (isTroopDisabled(troopKey)) {
     return {
       error: 'Troop disabled',
       code: 'TROOP_DISABLED',
-      troop_type: troopType,
+      troop_type: troopKey,
       status: 400,
     };
   }
 
-  const def = TROOP_DEFS[troopType];
+  const def = TROOP_DEFS[troopKey];
   if (!def) return { error: `Unknown troop type: ${troopType}` };
 
   const levels = stmts.getTroopLevels.all(playerId);
-  const current = levels.find(t => t.troop_type === troopType);
-  const currentLevel = current ? current.level : 1;
+  const current = levels.find(t => normalizeTroopTypeKey(t.troop_type) === troopKey);
+  const currentLevel = current ? clampTroopLevelForType(troopKey, current.level) : 1;
 
   if (currentLevel >= def.max_level) {
     return { error: 'Already at max level' };
   }
 
-  const nftCfg = NFT_BACKED_TROOP_COLLECTIONS[troopType];
+  const nextLevel = currentLevel + 1;
+  const thGate = getTroopTownHallGate(playerId, nextLevel);
+  if (!thGate.town_hall_ready) {
+    return {
+      error: `Town Hall level ${thGate.required_town_hall_level} required for troop level ${nextLevel}`,
+      code: 'TOWN_HALL_LEVEL_REQUIRED',
+      status: 403,
+      troop_type: troopKey,
+      current_level: currentLevel,
+      next_level: nextLevel,
+      max_level: def.max_level,
+      current_town_hall_level: thGate.current_town_hall_level,
+      required_town_hall_level: thGate.required_town_hall_level,
+      town_hall_ready: false,
+    };
+  }
+
+  const nftCfg = NFT_BACKED_TROOP_COLLECTIONS[troopKey];
   if (nftCfg && listPlayerCollectionNfts(playerId, nftCfg.collection).length === 0) {
     return {
-      ...getNftBackedTroopUpgradeStatus(playerId, troopType),
+      ...getNftBackedTroopUpgradeStatus(playerId, troopKey),
       error: `${nftCfg.label} NFT required`,
       code: 'NFT_TROOP_REQUIRED',
       status: 403,
@@ -5590,25 +5775,48 @@ function upgradeTroop(playerId, troopType, options = {}) {
   }
 
   const cost = def.cost[currentLevel - 1]; // cost to upgrade FROM current level
+  if (!cost) {
+    return {
+      error: `Missing upgrade cost for ${troopType} level ${currentLevel}`,
+      code: 'TROOP_UPGRADE_COST_MISSING',
+      status: 500,
+      troop_type: troopKey,
+      current_level: currentLevel,
+      next_level: nextLevel,
+    };
+  }
   if (!canAfford(playerId, cost.gold, cost.wood, cost.ore)) {
     return { error: 'Not enough resources', cost };
   }
 
   subtractResources(playerId, cost.gold, cost.wood, cost.ore, {
     sourceType: 'troop_upgrade',
-    metadata: { troop_type: troopType, from_level: currentLevel, to_level: currentLevel + 1 },
+    metadata: { troop_type: troopKey, from_level: currentLevel, to_level: nextLevel },
   });
-  const newLevel = currentLevel + 1;
-  stmts.upsertTroopLevel.run(playerId, troopType, newLevel);
+  const newLevel = nextLevel;
+  stmts.upsertTroopLevel.run(playerId, troopKey, newLevel);
 
   return {
-    troop_type: troopType, level: newLevel, cost,
+    troop_type: troopKey, level: newLevel, cost,
     resources: getResources(playerId),
   };
 }
 
 function getTroopLevels(playerId) {
-  return stmts.getTroopLevels.all(playerId);
+  const levelsByType = {};
+  for (const troopType of ACTIVE_TROOP_TYPES) levelsByType[troopType] = 1;
+  for (const row of stmts.getTroopLevels.all(playerId)) {
+    const troopType = normalizeTroopTypeKey(row.troop_type);
+    if (!TROOP_DEFS[troopType] || isTroopDisabled(troopType)) continue;
+    levelsByType[troopType] = Math.max(
+      levelsByType[troopType] || 1,
+      clampTroopLevelForType(troopType, row.level),
+    );
+  }
+  return ACTIVE_TROOP_TYPES.map((troopType) => ({
+    troop_type: troopType,
+    level: clampTroopLevelForType(troopType, levelsByType[troopType]),
+  }));
 }
 
 function getAltarSkillLevels(playerId) {

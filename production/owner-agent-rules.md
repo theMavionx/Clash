@@ -96,7 +96,9 @@ These are owner-facing shortcuts. They are not magic by themselves; they tell th
 | `Story` | Project/game story brief | Read `production/project-story.md` and summarize what the game is, what systems exist, and what the owner is building next. |
 | `Check Repo` | Quick repository check | Run `tools/codex/check-repo.cmd -Mode Quick` and summarize result. |
 | `Full Check` | Stronger local verification | Run `tools/codex/check-repo.cmd -Mode Full` when feasible. |
-| `Play Test` | Local game playtest | Run `tools/codex/playtest-local.cmd`, open local game/admin flow if available, and report URL/status. |
+| `Play Test` | Full local playtest | Run `tools/codex/playtest-local.cmd -ExportGodot -GuestCount 2 -OpenServerDashboard`, open two local guest players plus admin, and report URL/status. |
+| `Local Test` | Same as `Play Test` | Same full local playtest workflow: fresh local Godot export, local server/web, two guest players, and admin panel. |
+| `Тест локально` | Same as `Play Test` | Same full local playtest workflow for Ukrainian input. |
 | `Stop Play Test` | Stop local playtest servers | Run `tools/codex/stop-local-playtest.cmd`. |
 | `Local Test Balance` | Local balance verification | Run `tools/codex/local-test-balance.cmd` or the relevant PvP balance simulation. |
 | `PvP Balance` | PvP simulation report | Run or update `tools/pvp-balance/run.js` reports for requested TH/profile. |
@@ -127,3 +129,9 @@ Default behavior:
 - If a command sequence would help, run it yourself when safe.
 - If a repeated workflow appears, remember it and suggest a shortcut later.
 - Do not spam command lists unless asked.
+
+React/UI preference:
+
+- All game UI images, building previews, icons, thumbnails, and modal content should be visually centered by default.
+- UI changes should look concise and polished: balanced spacing, readable scale, no accidental clipping, overflow, off-center assets, or noisy decoration.
+- When a raw asset has uneven transparent padding or visual weight, adjust the React preview style so the visible object, not only the image bounding box, appears centered.

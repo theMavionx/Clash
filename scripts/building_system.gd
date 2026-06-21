@@ -7,6 +7,7 @@ extends Node3D
 const ALTAR_MODEL_SCENE_PATH: String = "res://Model/Altar/Models/Stylized_Altar_web.tscn"
 const ALTAR_MODEL_SCENE = preload(ALTAR_MODEL_SCENE_PATH)
 const SHIP_COST_GOLD: int = 250
+const MAX_PORT_SHIP_LEVEL: int = 3
 
 # ── Grid Settings ─────────────────────────────────────────────
 @export var grid_width: int = 27
@@ -29,11 +30,11 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Mine/1.glb",
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
-		"hp_levels": [1200, 2200, 3800, 6000],
+		"hp_levels": [1200, 2200, 3800, 6000, 9000],
 		"cost": {"gold": 80, "wood": 200},
 		"produces": "ore",
-		"produce_rate": [18, 33, 54, 81],    # per minute per level
-		"produce_max": [200, 400, 800, 1600],  # max stored before collection
+		"produce_rate": [18, 33, 54, 81, 120],    # per minute per level
+		"produce_max": [200, 400, 800, 1600, 3000],  # max stored before collection
 	},
 	"barn": {
 		"name": "Barn",
@@ -56,7 +57,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Port/1.glb", "res://Model/Port/2.glb", "res://Model/Port/3.glb"],
 		"model_scale": 0.25,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1800, 3200, 5500, 8500],
+		"hp_levels": [1800, 3200, 5500],
 		"cost": {"gold": 240, "wood": 560, "ore": 480},
 		"ship_cost": {"gold": SHIP_COST_GOLD},
 		"no_outline": true,
@@ -68,11 +69,11 @@ var building_defs: Dictionary = {
 		"height": 0.35,
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
-		"hp_levels": [1200, 2200, 3800, 6000],
+		"hp_levels": [1200, 2200, 3800, 6000, 9000],
 		"cost": {"gold": 80, "ore": 200},
 		"produces": "wood",
-		"produce_rate": [24, 45, 72, 108],
-		"produce_max": [250, 500, 1000, 2000],
+		"produce_rate": [24, 45, 72, 108, 160],
+		"produce_max": [250, 500, 1000, 2000, 3750],
 	},
 	"town_hall": {
 		"name": "Town Hall",
@@ -81,13 +82,13 @@ var building_defs: Dictionary = {
 		"color": Color(0.7, 0.55, 0.2, 0.5),
 		"height": 0.5,
 		"scene": "res://Model/Town_Hall/1.gltf",
-		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb"],
+		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb", "res://Model/Town_Hall/5.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [3500, 8000, 16000, 24000],
+		"hp_levels": [3500, 8000, 16000, 24000, 36000],
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 800, "wood": 2400, "ore": 2000}, 3: {"gold": 3000, "wood": 7000, "ore": 6000}, 4: {"gold": 10000, "wood": 20000, "ore": 17000}},
+		"upgrade_cost": {2: {"gold": 800, "wood": 2400, "ore": 2000}, 3: {"gold": 3000, "wood": 7000, "ore": 6000}, 4: {"gold": 10000, "wood": 20000, "ore": 17000}, 5: {"gold": 26000, "wood": 52000, "ore": 46000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -130,7 +131,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb"],
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
-		"hp_levels": [1400, 2500, 4200, 6500],
+		"hp_levels": [1400, 2500, 4200, 6500, 9500],
 		"cost": {"gold": 140, "wood": 550},
 	},
 	"archer_tower": {
@@ -162,7 +163,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx"],
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
-		"hp_levels": [700, 1200, 2000],
+		"hp_levels": [700, 1200, 2000, 3100],
 		"cost": {"gold": 800, "ore": 1300},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -174,6 +175,45 @@ var building_defs: Dictionary = {
 		"emission_texture": "res://Model/MageTower/mage_tower_emit.png",
 		# Combat: tower_mage.gd is attached to the building node (like turret),
 		# casting magic orbs at troops within detect_range=1.0 (turret radius).
+	},
+	"mortar": {
+		"name": "Mortar",
+		"cells": Vector2i(2, 2),
+		"footprint_extra": 0.45,
+		"color": Color(0.6, 0.36, 0.18, 0.5),
+		"height": 0.45,
+		"scene": "res://Model/Mortar/mortar_lvl1.fbx",
+		"scenes": [
+			"res://Model/Mortar/mortar_lvl1.fbx",
+			"res://Model/Mortar/mortar_lvl2.fbx",
+			"res://Model/Mortar/mortar_lvl3.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+		],
+		"model_scale": 0.032,
+		"model_rotation_y": 0.0,
+		"hp_levels": [1700],
+		"cost": {"gold": 600, "wood": 900, "ore": 700},
+		"max_count": 1,
+		"altar_ward_bonus": true,
+		"hp_bar_height": 0.6,
+		"albedo_texture": "res://Model/Mortar/mortar_albedo.png",
+		"emission_texture": "res://Model/Mortar/mortar_emit.png",
+		"construction_scenes": [
+			"res://Model/Mortar/mortar_lvl1_construction.fbx",
+			"res://Model/Mortar/mortar_lvl2_construction.fbx",
+			"res://Model/Mortar/mortar_lvl3_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+		],
+		"projectile_scenes": [
+			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl3_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+		],
+		"test_damage": 245,
+		"test_damage_levels": [95, 135, 185, 245],
+		"test_range": 2.90,
+		"test_reload_sec": 1.95,
 	},
 	"tombstone": {
 		"name": "Tombstone",
@@ -239,12 +279,14 @@ const TH_BASE_CAPACITY: Dictionary = {
 	2: {"gold": 20000, "wood": 20000, "ore": 20000},
 	3: {"gold": 40000, "wood": 40000, "ore": 40000},
 	4: {"gold": 70000, "wood": 70000, "ore": 70000},
+	5: {"gold": 110000, "wood": 110000, "ore": 110000},
 }
 const STORAGE_CAPACITY: Dictionary = {
 	1: {"gold": 15000, "wood": 15000, "ore": 15000},
 	2: {"gold": 20000, "wood": 20000, "ore": 20000},
 	3: {"gold": 30000, "wood": 30000, "ore": 30000},
 	4: {"gold": 50000, "wood": 50000, "ore": 50000},
+	5: {"gold": 75000, "wood": 75000, "ore": 75000},
 }
 
 func _get_resource_caps() -> Dictionary:
@@ -254,7 +296,7 @@ func _get_resource_caps() -> Dictionary:
 		for b in bs.placed_buildings:
 			if b.get("id", "") == "town_hall":
 				th_level = maxi(th_level, b.get("level", 1))
-	var base: Dictionary = TH_BASE_CAPACITY.get(mini(th_level, 4), TH_BASE_CAPACITY[1])
+	var base: Dictionary = TH_BASE_CAPACITY.get(mini(th_level, 5), TH_BASE_CAPACITY[1])
 	var max_gold: int = base.gold
 	var max_wood: int = base.wood
 	var max_ore: int = base.ore
@@ -279,27 +321,30 @@ const TH_UNLOCK: Dictionary = {
 	"tombstone": 2,
 	"turret": 3,
 	"mage_tower": 4,
+	"mortar": 5,
 }
 
-# Max count per building per TH level: [th1, th2, th3, th4]
+# Max count per building per TH level: [th1, th2, th3, th4, th5]
 const TH_MAX_COUNT: Dictionary = {
-	"mine": [1, 2, 3, 3],
-	"sawmill": [1, 2, 3, 3],
-	"barn": [1, 1, 1, 1],
-	"port": [1, 2, 5, 5],
-	"altar": [1, 1, 1, 1],
-	"archer_tower": [1, 2, 3, 3],
-	"tombstone": [0, 1, 3, 3],
-	"turret": [0, 0, 3, 3],
-	"storage": [0, 1, 2, 3],
-	"mage_tower": [0, 0, 0, 2],
-	"town_hall": [1, 1, 1, 1],
+	"mine": [1, 2, 3, 3, 4],
+	"sawmill": [1, 2, 3, 3, 4],
+	"barn": [1, 1, 1, 1, 1],
+	"port": [1, 2, 3, 3, 3],
+	"altar": [1, 1, 1, 1, 1],
+	"archer_tower": [1, 2, 3, 3, 3],
+	"tombstone": [0, 1, 3, 3, 3],
+	"turret": [0, 0, 3, 3, 3],
+	"storage": [0, 1, 2, 3, 4],
+	"mage_tower": [0, 0, 0, 2, 2],
+	"mortar": [0, 0, 0, 0, 1],
+	"town_hall": [1, 1, 1, 1, 1],
 }
 
 const TH_UPGRADE_REQUIRES: Dictionary = {
 	1: ["mine", "sawmill", "barn", "port"],
 	2: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower"],
 	3: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower", "turret"],
+	4: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower", "turret", "mage_tower"],
 }
 
 func _get_th_level() -> int:
@@ -483,6 +528,7 @@ var _cel_shader: Shader
 static var _scene_res_cache: Dictionary = {}
 static var _turret_script_res: Script = null
 static var _mage_tower_script_res: Script = null
+static var _mortar_script_res: Script = null
 static var _altar_effect_script_res: Script = null
 
 
@@ -705,55 +751,70 @@ var troop_defs: Dictionary = {
 		"display": "Knight (Tank)",
 		"model": "res://Model/Characters/Model/Knight.glb",
 		"script": "res://scripts/knight.gd",
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 150, "ore": 125},
-			2: {"gold": 150, "ore": 125},
-			3: {"gold": 300, "ore": 250},
-			4: {"gold": 600, "ore": 500},
+			2: {"gold": 300, "ore": 250},
+			3: {"gold": 600, "ore": 500},
+			4: {"gold": 1200, "ore": 1000},
+			5: {"gold": 2200, "ore": 1800},
+			6: {"gold": 3800, "ore": 3200},
 		}
 	},
 	"Mage": {
 		"display": "Wizard (Burst Mage)",
 		"model": "res://Model/Characters/Model/Mage.glb",
 		"script": "res://scripts/mage.gd",
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
-			2: {"gold": 250, "ore": 250},
-			3: {"gold": 500, "ore": 500},
-			4: {"gold": 1000, "ore": 1000},
+			2: {"gold": 500, "ore": 500},
+			3: {"gold": 1000, "ore": 1000},
+			4: {"gold": 2000, "ore": 2000},
+			5: {"gold": 3600, "ore": 3600},
+			6: {"gold": 6000, "ore": 6000},
 		}
 	},
 	"Barbarian": {
 		"display": "Berserk (Melee Bruiser)",
 		"model": "res://Model/Characters/Model/Barbarian.glb",
 		"script": "res://scripts/barbarian.gd",
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 175, "ore": 175},
-			2: {"gold": 175, "ore": 175},
-			3: {"gold": 350, "ore": 350},
-			4: {"gold": 700, "ore": 700},
+			2: {"gold": 350, "ore": 350},
+			3: {"gold": 700, "ore": 700},
+			4: {"gold": 1400, "ore": 1400},
+			5: {"gold": 2600, "ore": 2600},
+			6: {"gold": 4400, "ore": 4400},
 		}
 	},
 	"Archer": {
 		"display": "Archer (Sniper)",
 		"model": "res://Model/Characters/Model/Ranger.glb",
 		"script": "res://scripts/archer.gd",
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 175, "wood": 175},
-			2: {"gold": 175, "wood": 175},
-			3: {"gold": 350, "wood": 350},
-			4: {"gold": 700, "wood": 700},
+			2: {"gold": 350, "wood": 350},
+			3: {"gold": 700, "wood": 700},
+			4: {"gold": 1400, "wood": 1400},
+			5: {"gold": 2600, "wood": 2600},
+			6: {"gold": 4400, "wood": 4400},
 		}
 	},
 	"Ranger": {
 		"display": "Ranger (Crossbow)",
 		"model": "res://Model/Characters/Model/Rogue_Hooded.glb",
 		"script": "res://scripts/ranger.gd",
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 125, "wood": 125},
-			2: {"gold": 125, "wood": 125},
-			3: {"gold": 250, "wood": 250},
-			4: {"gold": 500, "wood": 500},
+			2: {"gold": 250, "wood": 250},
+			3: {"gold": 500, "wood": 500},
+			4: {"gold": 1000, "wood": 1000},
+			5: {"gold": 1900, "wood": 1900},
+			6: {"gold": 3200, "wood": 3200},
 		}
 	},
 	"DemonKing": {
@@ -762,11 +823,14 @@ var troop_defs: Dictionary = {
 		"script": "res://scripts/demon_king.gd",
 		"slot_cost": 2,                # eats two ship slots; trade-off for raw power
 		"buy_cost": 0,                 # NFT-backed; loading is free and reusable
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 150, "ore": 125},
 			2: {"gold": 300, "ore": 250},
 			3: {"gold": 600, "ore": 500},
-			4: {"gold": 0, "wood": 0, "ore": 0},
+			4: {"gold": 1200, "ore": 1000},
+			5: {"gold": 2200, "ore": 1800},
+			6: {"gold": 3800, "ore": 3200},
 		}
 	},
 	"FireDragon": {
@@ -775,11 +839,14 @@ var troop_defs: Dictionary = {
 		"script": "res://scripts/fire_dragon.gd",
 		"slot_cost": 2,
 		"buy_cost": 0,
+		"max_level": 7,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
 			2: {"gold": 500, "ore": 500},
 			3: {"gold": 1000, "ore": 1000},
-			4: {"gold": 0, "wood": 0, "ore": 0},
+			4: {"gold": 2000, "ore": 2000},
+			5: {"gold": 3600, "ore": 3600},
+			6: {"gold": 6000, "ore": 6000},
 		}
 	},
 }
@@ -1012,7 +1079,7 @@ func _apply_agent_place_building(payload: Dictionary) -> void:
 			var pnode: Node3D = b.get("node", null)
 			if is_instance_valid(pnode):
 				pnode.set_meta("has_ship", true)
-				pnode.set_meta("ship_level", b.get("level", 1))
+				pnode.set_meta("ship_level", clampi(int(b.get("level", 1)), 1, MAX_PORT_SHIP_LEVEL))
 				pnode.set_meta("ship_troops", building.get("ship_troops", []))
 				_port._spawn_port_ship(b)
 	if payload.has("resources"):
@@ -1062,7 +1129,7 @@ func _apply_agent_buy_ship(payload: Dictionary) -> void:
 		return
 	if not pnode.has_meta("has_ship"):
 		pnode.set_meta("has_ship", true)
-		pnode.set_meta("ship_level", b.get("level", 1))
+		pnode.set_meta("ship_level", clampi(int(b.get("level", 1)), 1, MAX_PORT_SHIP_LEVEL))
 		pnode.set_meta("ship_troops", payload.get("ship_troops", []))
 		owned_ships += 1
 		if _port:
@@ -1085,9 +1152,9 @@ func _apply_agent_ship_troops(payload: Dictionary) -> void:
 	if payload.has("ship_troops"):
 		pnode.set_meta("ship_troops", payload.ship_troops)
 	if payload.has("ship_level"):
-		pnode.set_meta("ship_level", int(payload.ship_level))
+		pnode.set_meta("ship_level", clampi(int(payload.ship_level), 1, MAX_PORT_SHIP_LEVEL))
 	elif not pnode.has_meta("ship_level"):
-		pnode.set_meta("ship_level", b.get("level", 1))
+		pnode.set_meta("ship_level", clampi(int(b.get("level", 1)), 1, MAX_PORT_SHIP_LEVEL))
 	if not pnode.has_meta("has_ship"):
 		pnode.set_meta("has_ship", true)
 		_port._spawn_port_ship(b)
@@ -1204,7 +1271,7 @@ func _emit_ship_update(b: Dictionary) -> void:
 	var pnode: Node3D = b.get("node", null)
 	if not is_instance_valid(pnode):
 		return
-	var ship_level: int = pnode.get_meta("ship_level", b.get("level", 1))
+	var ship_level: int = clampi(int(pnode.get_meta("ship_level", b.get("level", 1))), 1, MAX_PORT_SHIP_LEVEL)
 	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("ship_updated", {
@@ -2109,6 +2176,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			continue
 		var def = building_defs[building_type]
 		var level: int = b.get("level", 1)
+		if building_type == "port":
+			level = clampi(level, 1, MAX_PORT_SHIP_LEVEL)
 		var hp: int = b.get("hp", _get_hp_for(def, level))
 		var max_hp: int = b.get("max_hp", hp)
 		var gp = Vector2i(b["grid_x"], b["grid_z"])
@@ -2146,6 +2215,10 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			var mage_script = _mage_tower_script_res if _mage_tower_script_res else _load_script_resource("res://scripts/tower_mage.gd")
 			if mage_script:
 				node.set_script(mage_script)
+		elif building_type == "mortar":
+			var mortar_script = _mortar_script_res if _mortar_script_res else _load_script_resource("res://scripts/tower_mortar.gd")
+			if mortar_script:
+				node.set_script(mortar_script)
 		if scene_path != "":
 			var scene_res = _scene_res_cache.get(scene_path, null)
 			if scene_res == null:
@@ -2809,6 +2882,8 @@ func _preload_building_scenes() -> void:
 		_turret_script_res = _load_script_resource("res://scripts/turret.gd")
 	if _mage_tower_script_res == null:
 		_mage_tower_script_res = _load_script_resource("res://scripts/tower_mage.gd")
+	if _mortar_script_res == null:
+		_mortar_script_res = _load_script_resource("res://scripts/tower_mortar.gd")
 
 
 ## Build cache key for a building type at a specific level.
@@ -2911,6 +2986,10 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 		var mage_script = _mage_tower_script_res if _mage_tower_script_res else _load_script_resource("res://scripts/tower_mage.gd")
 		if mage_script:
 			node.set_script(mage_script)
+	elif current_building_id == "mortar":
+		var mortar_script = _mortar_script_res if _mortar_script_res else _load_script_resource("res://scripts/tower_mortar.gd")
+		if mortar_script:
+			node.set_script(mortar_script)
 	if def.has("scene"):
 		var _scene_path: String = def.scene
 		var scene_res = _scene_res_cache.get(_scene_path, null)
@@ -3392,6 +3471,7 @@ func _find_building_at(gp: Vector2i) -> Dictionary:
 	return {}
 
 func _select_building(b: Dictionary) -> void:
+	_set_mortar_range_visuals_for_selected(false)
 	selected_building = b
 	var def = building_defs[b.id]
 	var level = b.get("level", 1)
@@ -3414,7 +3494,7 @@ func _select_building(b: Dictionary) -> void:
 		var bs_port_number: int = 0
 		if b.has("node") and is_instance_valid(b["node"]) and b["node"].has_meta("has_ship"):
 			bs_has_ship = true
-			bs_ship_level = b["node"].get_meta("ship_level", 1)
+			bs_ship_level = clampi(int(b["node"].get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL)
 			bs_ship_troops = b["node"].get_meta("ship_troops", [])
 		if b.id == "port":
 			bs_port_number = _port_display_number_for_building(b)
@@ -3446,6 +3526,8 @@ func _select_building(b: Dictionary) -> void:
 		if bnode.get_script() and bnode.get("detect_range") != null:
 			r = bnode.detect_range
 		_show_range_indicator(bnode.global_position, r)
+	elif b.id == "mortar":
+		_set_mortar_range_visuals_for_building(b, true)
 
 	# Move arrows (own island only)
 	if not is_viewing_enemy:
@@ -3531,6 +3613,7 @@ func _select_building(b: Dictionary) -> void:
 func _deselect_building() -> void:
 	if _is_moving:
 		_cancel_move(false)
+	_set_mortar_range_visuals_for_selected(false)
 	selected_building = {}
 	_hide_range_indicator()
 	_hide_move_arrows()
@@ -3546,6 +3629,20 @@ func _deselect_building() -> void:
 	var cam = get_node_or_null("/root/IslandScene/CameraRig")
 	if cam:
 		cam.zoom_blocked = false
+
+
+func _set_mortar_range_visuals_for_selected(visible: bool) -> void:
+	if selected_building.size() == 0:
+		return
+	_set_mortar_range_visuals_for_building(selected_building, visible)
+
+
+func _set_mortar_range_visuals_for_building(b: Dictionary, visible: bool) -> void:
+	if b.get("id", "") != "mortar":
+		return
+	var bnode: Node = b.get("node", null)
+	if is_instance_valid(bnode) and bnode.has_method("set_range_visuals_visible"):
+		bnode.call("set_range_visuals_visible", visible)
 
 
 func _upgrade_selected() -> void:
@@ -3595,11 +3692,7 @@ func _upgrade_selected() -> void:
 			net.trophies = result["trophies"]
 			_update_player_name_label()
 		if result.has("resources"):
-			var res = result["resources"]
-			resources.gold = res.gold
-			resources.wood = res.wood
-			resources.ore = res.ore
-			_update_resource_ui()
+			_apply_resources_from_server(result["resources"])
 		# Use level from server response
 		if result.has("level"):
 			level = result["level"] - 1
@@ -3746,7 +3839,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 				old_ship_node.get_parent().remove_child(old_ship_node)
 				old_ship_node.queue_free()
 			pnode.remove_meta("ship_node")
-			pnode.set_meta("ship_level", b.level)
+			pnode.set_meta("ship_level", clampi(int(b.level), 1, MAX_PORT_SHIP_LEVEL))
 			_port._spawn_port_ship(b)
 		_refresh_port_number_labels()
 
@@ -4853,8 +4946,8 @@ func _refresh_port_panel() -> void:
 
 	var port_node = b.get("node", null)
 	var has_ship = is_instance_valid(port_node) and port_node.has_meta("has_ship")
-	var ship_level: int = port_node.get_meta("ship_level", 0) if has_ship and is_instance_valid(port_node) else 0
-	var ship_capacity: int = ship_level * 3  # Lv1=3, Lv2=6, Lv3=9, Lv4=12
+	var ship_level: int = clampi(int(port_node.get_meta("ship_level", 0)), 0, MAX_PORT_SHIP_LEVEL) if has_ship and is_instance_valid(port_node) else 0
+	var ship_capacity: int = ship_level * 3  # Lv1=3, Lv2=6, Lv3=9
 	var ship_troops: Array = port_node.get_meta("ship_troops", []) if has_ship and is_instance_valid(port_node) else []
 
 	if has_ship:
@@ -4990,7 +5083,7 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 		return
 	_hide_ship_panel()
 
-	var ship_level: int = pnode.get_meta("ship_level", 1)
+	var ship_level: int = clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL)
 	var ship_troops: Array = pnode.get_meta("ship_troops", [])
 
 	# Find the port building dict that owns this node (search all building systems)
@@ -5100,8 +5193,8 @@ func _reinforce_troops() -> void:
 				if is_instance_valid(pnode) and pnode.has_meta("ship_troops"):
 					bridge.send_to_react("ship_updated", {
 						"ship_troops": pnode.get_meta("ship_troops", []),
-						"ship_level": pnode.get_meta("ship_level", 1),
-						"ship_capacity": pnode.get_meta("ship_level", 1) * 3,
+						"ship_level": clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL),
+						"ship_capacity": clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL) * 3,
 					})
 
 ## Legacy live-death hook. Casualties are applied once from /attack/result.
@@ -5124,6 +5217,8 @@ func _apply_ships_from_server(ships: Array) -> void:
 					var pnode = b.get("node")
 					if is_instance_valid(pnode):
 						pnode.set_meta("ship_troops", server_troops)
+						if ship_data.has("level"):
+							pnode.set_meta("ship_level", clampi(int(ship_data.get("level", 1)), 1, MAX_PORT_SHIP_LEVEL))
 
 func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) -> void:
 	_port._swap_troop_on_ship(slot, troop_name, extra)
@@ -5398,10 +5493,12 @@ func _can_afford(costs: Dictionary) -> bool:
 
 func _get_troop_max_level(troop_name: String) -> int:
 	var tdef: Dictionary = troop_defs.get(troop_name, {})
+	if tdef.has("max_level"):
+		return maxi(1, int(tdef.get("max_level", 1)))
 	var costs: Dictionary = tdef.get("costs", {})
 	var max_level: int = 1
 	for key in costs.keys():
-		max_level = maxi(max_level, int(key))
+		max_level = maxi(max_level, int(key) + 1)
 	return max_level
 
 
@@ -5415,12 +5512,7 @@ func _refresh_troop_levels_from_server() -> void:
 		return
 	var server_troops = await net.get_troops()
 	if server_troops is Array:
-		for t in server_troops:
-			var troop_type = str(t.get("troop_type", ""))
-			var level = int(t.get("level", 1))
-			var local_name = _local_troop_name_from_server(troop_type)
-			if troop_levels.has(local_name):
-				troop_levels[local_name] = level
+		_load_troop_levels_from_server(server_troops)
 	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("troop_levels", troop_levels)
@@ -5456,6 +5548,8 @@ func _upgrade_troop(troop_name: String) -> void:
 		var result = await net.upgrade_troop(troop_name)
 		_server_busy = false
 		if result.has("error"):
+			if str(result.get("error", "")) == "Already at max level":
+				await _refresh_troop_levels_from_server()
 			if str(result.get("code", "")) == "NFT_TROOP_REQUIRED":
 				if _bridge:
 					_bridge.send_to_react("nft_troop_required", result)
@@ -5467,14 +5561,12 @@ func _upgrade_troop(troop_name: String) -> void:
 			net.trophies = result["trophies"]
 			_update_player_name_label()
 		if result.has("resources"):
-			var res = result["resources"]
-			resources.gold = res.gold
-			resources.wood = res.wood
-			resources.ore = res.ore
-			_update_resource_ui()
+			_apply_resources_from_server(result["resources"])
 
 	# Server OK — apply locally and refetch to stay in sync
 	troop_levels[troop_name] = next_lvl
+	if _bridge:
+		_bridge.send_to_react("troop_levels", troop_levels)
 	var troop = get_tree().current_scene.find_child(troop_name, true, false)
 	if troop and troop.has_method("upgrade_to"):
 		troop.upgrade_to(next_lvl)
@@ -5689,7 +5781,7 @@ func _build_fleet() -> Array:
 			var pnode = b.get("node", null)
 			if not is_instance_valid(pnode) or not pnode.has_meta("has_ship"):
 				continue
-			var ship_level: int = pnode.get_meta("ship_level", 1)
+			var ship_level: int = clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL)
 			var ship_troops: Array = pnode.get_meta("ship_troops", [])
 			if not ship_troops.is_empty():
 				fleet.append({
