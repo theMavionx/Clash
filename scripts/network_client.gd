@@ -203,7 +203,7 @@ func has_token() -> bool:
 
 # ── Registration ──────────────────────────────────────────────
 
-func register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0) -> Dictionary:
+func register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0, auth_proof: Dictionary = {}) -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
 	var headers = ["Content-Type: application/json"]
@@ -217,6 +217,8 @@ func register(player_name: String, wallet: String = "", dex: String = "", fid: i
 	# to an explicit Avantis/Pacifica wallet.
 	if fid > 0:
 		data["fid"] = fid
+	if auth_proof.size() > 0:
+		data["auth_proof"] = auth_proof
 	var body = JSON.stringify(data)
 	http.request(SERVER_URL + "/players/register", headers, HTTPClient.METHOD_POST, body)
 	var result = await http.request_completed
@@ -253,7 +255,7 @@ func login() -> Dictionary:
 
 # ── Login by wallet (recover account after cache clear) ───────
 
-func login_by_wallet(wallet: String, dex: String = "") -> Dictionary:
+func login_by_wallet(wallet: String, dex: String = "", auth_proof: Dictionary = {}) -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
 	var headers = ["Content-Type: application/json"]
@@ -264,6 +266,8 @@ func login_by_wallet(wallet: String, dex: String = "") -> Dictionary:
 	var payload = {"wallet": wallet}
 	if dex != "":
 		payload["dex"] = dex
+	if auth_proof.size() > 0:
+		payload["auth_proof"] = auth_proof
 	var body = JSON.stringify(payload)
 	http.request(SERVER_URL + "/players/login-wallet", headers, HTTPClient.METHOD_POST, body)
 	var result = await http.request_completed

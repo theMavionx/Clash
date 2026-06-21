@@ -122,6 +122,216 @@ function canonicalWalletIdentifier(wallet) {
   return raw;
 }
 
+function decodeSolanaSignatureBytes(value, encoding = '') {
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (/^[0-9a-fA-F]{128}$/.test(raw)) return Uint8Array.from(Buffer.from(raw, 'hex'));
+  const preferred = String(encoding || '').toLowerCase();
+  if (preferred === 'base64') {
+    const bytes = Uint8Array.from(Buffer.from(raw, 'base64'));
+    return bytes.length === 64 ? bytes : null;
+  }
+  if (preferred === 'base58') {
+    try {
+      const bytes = bs58.decode(raw);
+      return bytes.length === 64 ? bytes : null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const bytes = Uint8Array.from(Buffer.from(raw, 'base64'));
+    if (bytes.length === 64) return bytes;
+  } catch { /* fall through */ }
+  try {
+    const bytes = bs58.decode(raw);
+    return bytes.length === 64 ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+function verifySolanaWalletSignature(wallet, message, signature, encoding = '') {
+  try {
+    const publicKeyBytes = bs58.decode(String(wallet || '').trim());
+    if (publicKeyBytes.length !== 32) return false;
+    const signatureBytes = decodeSolanaSignatureBytes(signature, encoding);
+    if (!signatureBytes || signatureBytes.length !== 64) return false;
+    return nacl.sign.detached.verify(
+      Uint8Array.from(Buffer.from(String(message || ''), 'utf8')),
+      signatureBytes,
+      publicKeyBytes,
+    );
+  } catch {
+    return false;
+  }
+}
+
+const WALLET_AUTH_ACTION = 'wallet-auth';
+const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
+const EVM_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const SOLANA_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash']);
+let aptosTsSdkPromise = null;
+
+function walletChainTypeForDex(wallet, dex = '') {
+  const venue = String(dex || '').toLowerCase();
+  if (venue === 'decibel') return 'aptos';
+  if (EVM_DEXES.has(venue)) return 'evm';
+  if (SOLANA_DEXES.has(venue)) return 'solana';
+  return walletChainType(wallet);
+}
+
+function walletAuthMessage({ wallet, dex, issuedAt }) {
+  return [
+    'Clash wallet auth',
+    `Action: ${WALLET_AUTH_ACTION}`,
+    `Wallet: ${canonicalWalletIdentifier(wallet)}`,
+    `DEX: ${String(dex || '').toLowerCase()}`,
+    `Issued At: ${issuedAt}`,
+  ].join('\n');
+}
+
+function walletAuthProofFromBody(body = {}) {
+  const proof = body.auth_proof || body.authProof || body.wallet_auth_proof || body.walletAuthProof || null;
+  return proof && typeof proof === 'object' && !Array.isArray(proof) ? proof : {};
+}
+
+function normalizeHexInput(value, expectedBytes = 0) {
+  if (value == null) return '';
+  if (Array.isArray(value)) {
+    const bytes = Uint8Array.from(value);
+    if (expectedBytes && bytes.length !== expectedBytes) return '';
+    return `0x${Buffer.from(bytes).toString('hex')}`;
+  }
+  if (value && typeof value.toUint8Array === 'function') {
+    const bytes = value.toUint8Array();
+    if (expectedBytes && bytes.length !== expectedBytes) return '';
+    return `0x${Buffer.from(bytes).toString('hex')}`;
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const hex = raw.startsWith('0x') || raw.startsWith('0X') ? raw.slice(2) : raw;
+  if (!/^[0-9a-fA-F]+$/.test(hex)) return '';
+  if (hex.length % 2 !== 0) return '';
+  if (expectedBytes && hex.length !== expectedBytes * 2) return '';
+  return `0x${hex.toLowerCase()}`;
+}
+
+async function aptosTsSdk() {
+  if (!aptosTsSdkPromise) {
+    aptosTsSdkPromise = Promise.resolve().then(() => {
+      const candidates = [
+        path.join(__dirname, '..', 'web', 'node_modules'),
+        path.join(__dirname, '..', 'server-futures', 'node_modules'),
+      ];
+      for (const base of candidates) {
+        try {
+          const sdkPath = require.resolve('@aptos-labs/ts-sdk', { paths: [base] });
+          return require(sdkPath);
+        } catch { /* try next */ }
+      }
+      throw new Error('@aptos-labs/ts-sdk not found');
+    }).catch((e) => {
+      aptosTsSdkPromise = null;
+      throw e;
+    });
+  }
+  return aptosTsSdkPromise;
+}
+
+async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
+  const publicKeyHex = normalizeHexInput(proof.public_key || proof.publicKey, 32);
+  const signatureHex = normalizeHexInput(proof.signature, 64);
+  if (!publicKeyHex || !signatureHex) return false;
+  const expectedFullMessage = [
+    'APTOS',
+    `message: ${message}`,
+    `nonce: ${issuedAt}`,
+  ].join('\n');
+  const suppliedFullMessage = String(proof.full_message || proof.fullMessage || '').trim();
+  if (suppliedFullMessage && suppliedFullMessage !== expectedFullMessage) return false;
+  try {
+    const { Ed25519PublicKey, Ed25519Signature } = await aptosTsSdk();
+    const publicKey = new Ed25519PublicKey(publicKeyHex);
+    const derivedAddress = publicKey.authKey().derivedAddress().toStringLong().toLowerCase();
+    if (derivedAddress !== normalizeAptosWallet(wallet).toLowerCase()) return false;
+    const signature = new Ed25519Signature(signatureHex);
+    return publicKey.verifySignature({
+      message: Uint8Array.from(Buffer.from(expectedFullMessage, 'utf8')),
+      signature,
+    });
+  } catch (e) {
+    console.warn('[auth] aptos wallet proof verification failed:', e.message);
+    return false;
+  }
+}
+
+async function verifyWalletAuthProof(req, { wallet, dex }) {
+  if (!wallet || isLocalGuestWallet(wallet)) return { ok: true };
+  if (!isValidWallet(wallet)) return { ok: false, status: 400, error: 'Valid wallet required' };
+  const proof = walletAuthProofFromBody(req.body || {});
+  const issuedAt = String(proof.issued_at || proof.issuedAt || '').trim();
+  const issuedMs = Date.parse(issuedAt);
+  if (!Number.isFinite(issuedMs)) {
+    return { ok: false, status: 401, error: 'Wallet signature required. Connect your wallet again.' };
+  }
+  if (Math.abs(Date.now() - issuedMs) > WALLET_AUTH_MAX_AGE_MS) {
+    return { ok: false, status: 401, error: 'Wallet signature expired. Connect your wallet again.' };
+  }
+  const canonicalWallet = canonicalWalletIdentifier(wallet);
+  const requestedDex = String(dex || '').toLowerCase();
+  const expectedMessage = walletAuthMessage({ wallet: canonicalWallet, dex: requestedDex, issuedAt });
+  const suppliedAction = String(proof.action || '').trim().toLowerCase();
+  if (suppliedAction && suppliedAction !== WALLET_AUTH_ACTION) {
+    return { ok: false, status: 401, error: 'Wallet signature action mismatch. Connect again.' };
+  }
+  const suppliedDex = String(proof.dex || '').trim().toLowerCase();
+  if (suppliedDex && suppliedDex !== requestedDex) {
+    return { ok: false, status: 401, error: 'Wallet signature DEX mismatch. Connect again.' };
+  }
+  const suppliedMessage = String(proof.message || '').trim();
+  if (suppliedMessage && suppliedMessage !== expectedMessage) {
+    return { ok: false, status: 401, error: 'Wallet signature message mismatch. Connect again.' };
+  }
+  const expectedChain = walletChainTypeForDex(wallet, requestedDex);
+  const suppliedChain = String(proof.chain_type || proof.chainType || '').toLowerCase();
+  if (suppliedChain && suppliedChain !== expectedChain) {
+    return { ok: false, status: 401, error: 'Wallet signature chain mismatch. Connect again.' };
+  }
+  const signature = proof.signature;
+  let verified = false;
+  if (expectedChain === 'solana') {
+    verified = verifySolanaWalletSignature(wallet, expectedMessage, signature, proof.signature_encoding || proof.signatureEncoding || '');
+  } else if (expectedChain === 'evm') {
+    try {
+      const { verifyMessage } = await nftGoldBoostViem();
+      verified = await verifyMessage({
+        address: canonicalWallet,
+        message: expectedMessage,
+        signature: String(signature || ''),
+      });
+    } catch (e) {
+      console.warn('[auth] evm wallet proof verification failed:', e.message);
+      verified = false;
+    }
+  } else if (expectedChain === 'aptos') {
+    verified = await verifyAptosWalletAuthProof(wallet, expectedMessage, issuedAt, proof);
+  }
+  if (!verified) {
+    console.warn('[security] rejected wallet auth proof', {
+      dex: requestedDex,
+      chain: expectedChain,
+      wallet: canonicalWallet,
+      path: req.originalUrl || req.url,
+      ip: req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || null,
+      ua: String(req.headers['user-agent'] || '').slice(0, 160),
+    });
+    return { ok: false, status: 401, error: 'Wallet signature verification failed. Connect again.' };
+  }
+  return { ok: true, chain: expectedChain, wallet: canonicalWallet };
+}
+
 function walletBlacklistEntry(wallet) {
   if (!wallet || !isValidWallet(wallet)) return null;
   return db.getWalletBlacklist(canonicalWalletIdentifier(wallet));
@@ -8086,11 +8296,17 @@ function markPlayerSeekerIfPresent(playerId, body) {
   return seeker;
 }
 
-router.post('/players/register', (req, res) => {
+router.post('/players/register', async (req, res) => {
   const { name, wallet, dex, fid } = req.body;
   if (wallet && !requireFirstPartyBrowserContext(req, res, 'players.register')) return;
   if (wallet && rejectBlacklistedWallet(req, res, wallet, 'players.register')) return;
-  const requestedDex = VALID_DEXES.has(dex) ? dex : 'pacifica';
+  const hasRequestedDex = VALID_DEXES.has(dex);
+  let requestedDex = hasRequestedDex ? dex : 'pacifica';
+  if (wallet && !isLocalGuestWallet(wallet)) {
+    const proofDex = VALID_DEXES.has(dex) ? dex : '';
+    const authProof = await verifyWalletAuthProof(req, { wallet, dex: proofDex });
+    if (!authProof.ok) return res.status(authProof.status || 401).json({ error: authProof.error });
+  }
   const seekerCapability = normalizeSeekerCapability(req.body || {});
   const referralCode = String(req.body?.referralCode || req.body?.ref || req.body?.invite || '').trim();
 
@@ -8101,8 +8317,9 @@ router.post('/players/register', (req, res) => {
   // when BOTH the wallet AND the requested DEX match.
   if (wallet) {
     const localGuestWallet = isLocalGuestWallet(wallet);
-    let existing = getPlayerByWalletAndDexAnyForm(wallet, requestedDex)
-      || getUnifiedPlayerByWalletAnyForm(wallet);
+    let existing = hasRequestedDex ? getPlayerByWalletAndDexAnyForm(wallet, requestedDex) : null;
+    if (!existing) existing = getUnifiedPlayerByWalletAnyForm(wallet);
+    if (existing && !hasRequestedDex) requestedDex = existing.dex || 'pacifica';
 
     // Migration path for Farcaster placeholder rows (wallet = `fc_<fid>`).
     // Same dex must match — if the placeholder was created on Pacifica and
@@ -9736,11 +9953,14 @@ router.get('/agent-events/pending', auth, (req, res) => {
 // the Avantis row of a different player still routes the client to that
 // canonical row; binding one that only collides with this user's GMX row
 // is fine.
-router.post('/players/link-wallet', auth, (req, res) => {
+router.post('/players/link-wallet', auth, async (req, res) => {
   const { wallet } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
   if (!requireFirstPartyBrowserContext(req, res, 'players.link-wallet')) return;
   if (rejectBlacklistedWallet(req, res, wallet, 'players.link-wallet')) return;
+  const linkDex = VALID_DEXES.has(req.player.dex) ? req.player.dex : '';
+  const authProof = await verifyWalletAuthProof(req, { wallet, dex: linkDex });
+  if (!authProof.ok) return res.status(authProof.status || 401).json({ error: authProof.error });
 
   const current = req.player;
   // Same-DEX collision check. We exclude current.id so a no-op rebind
@@ -9776,7 +9996,7 @@ router.post('/players/link-wallet', auth, (req, res) => {
 // can match the right row. Without dex we fall back to "any account this
 // wallet owns" for back-compat with old clients (returns highest-trophy
 // row). New clients always send dex — see useAuthFlow.js.
-router.post('/players/login-wallet', (req, res) => {
+router.post('/players/login-wallet', async (req, res) => {
   const { wallet, dex } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
   if (rejectBlacklistedWallet(req, res, wallet, 'players.login-wallet')) return;
@@ -9797,6 +10017,10 @@ router.post('/players/login-wallet', (req, res) => {
     });
   }
   if (!requireFirstPartyBrowserContext(req, res, 'players.login-wallet')) return;
+  const requestedDex = VALID_DEXES.has(dex) ? dex : (player.dex || '');
+  const proofDex = VALID_DEXES.has(dex) ? dex : '';
+  const authProof = await verifyWalletAuthProof(req, { wallet, dex: proofDex });
+  if (!authProof.ok) return res.status(authProof.status || 401).json({ error: authProof.error });
   if (VALID_DEXES.has(dex) && dex !== player.dex) {
     try {
       safelySetPlayerActiveDex(player, dex, wallet, 'login-wallet');
@@ -18229,41 +18453,14 @@ function normalizeRewardSolanaWallet(v) {
   return SOLANA_REWARD_WALLET_RE.test(s) ? s : null;
 }
 
-function playerOwnsSolanaRewardWallet(playerId, wallet) {
-  const normalized = normalizeRewardSolanaWallet(wallet);
-  if (!playerId || !normalized) return false;
-  const row = db.db.prepare(`
-    SELECT 1 AS ok
-    WHERE EXISTS (
-      SELECT 1 FROM player_wallets
-      WHERE player_id = ? AND chain_type = 'solana' AND address = ?
-    )
-    OR EXISTS (
-      SELECT 1 FROM player_dex_accounts
-      WHERE player_id = ? AND chain_type = 'solana' AND wallet_address = ?
-    )
-    OR EXISTS (
-      SELECT 1 FROM players
-      WHERE id = ? AND wallet = ?
-    )
-    LIMIT 1
-  `).get(playerId, normalized, playerId, normalized, playerId, normalized);
-  return !!row;
-}
-
 function validatePlayerClashRewardWallet(playerId, wallet) {
+  void playerId;
   const normalized = normalizeRewardSolanaWallet(wallet);
   if (!normalized) {
     return { ok: false, error: 'valid Solana reward wallet required for CLASH rewards' };
   }
   if (db.isWalletBlacklisted(normalized)) {
     return { ok: false, error: 'This reward wallet is blocked. Contact support.' };
-  }
-  if (!playerOwnsSolanaRewardWallet(playerId, normalized)) {
-    return {
-      ok: false,
-      error: 'connect this Solana wallet to your profile before using it for CLASH rewards',
-    };
   }
   return { ok: true, wallet: normalized };
 }
@@ -19579,7 +19776,8 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
     SELECT * FROM tournament_participants
     WHERE tournament_id = ? AND player_id = ?
   `).get(t.id, req.player.id);
-  const hasValidRewardWallet = !needsClashRewardWallet || playerOwnsSolanaRewardWallet(req.player.id, me?.reward_wallet_evm);
+  const storedRewardWallet = normalizeRewardSolanaWallet(me?.reward_wallet_evm);
+  const hasValidRewardWallet = !needsClashRewardWallet || (!!storedRewardWallet && !db.isWalletBlacklisted(storedRewardWallet));
   if (!needsClashRewardWallet || hasValidRewardWallet) {
     me = ensureLuckyRaiderParticipant(t, req.player);
   }

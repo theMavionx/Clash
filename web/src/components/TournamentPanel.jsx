@@ -549,7 +549,7 @@ function TournamentPanel({ onClose }) {
     if (!dailyDays.length) return null;
     return dailyDays.find(day => day.day_utc === pickedDailyDay) || dailyDays[0];
   }, [dailyDays, pickedDailyDay]);
-  const playerId = player?.player_id;
+  const playerId = player?.player_id || player?.id;
   const dailyMyPlayerId = daily?.my_player_id || playerId;
   const [busy, setBusy] = useState(false);
   const [rewardWalletEvm, setRewardWalletEvm] = useState('');

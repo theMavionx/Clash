@@ -248,6 +248,23 @@ function NameForm({ wallet, suggested, seekerHandle, error, onBack, onClearError
   );
 }
 
+function ContinueAccount({ wallet, name, error, onContinue }) {
+  return (
+    <div style={S.bodyStack}>
+      <h3 style={S.sectionTitle}>WELCOME BACK</h3>
+      <div style={S.walletPill}>
+        <span style={S.walletDot} />
+        <span style={S.walletAddr}>{wallet.slice(0, 6)}...{wallet.slice(-4)}</span>
+      </div>
+      {name && <p style={S.subtle}>{name}</p>}
+      {error && <div style={S.nameError}>{error}</div>}
+      <button type="button" style={S.primaryBtn} onClick={onContinue}>
+        CONTINUE
+      </button>
+    </div>
+  );
+}
+
 function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
   const venue = dex === 'flash' ? 'FLASH TRADE' : dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
   const connectCopy = dex === 'gmtrade'
@@ -432,7 +449,7 @@ function EmailIcon() {
 function RegisterPanel() {
   const {
     state, dex, dexPicked, isInFrame, isSolanaMobile, fcUser, candidate, suggestedName, seekerHandle,
-    privyEnabled, privyAuthed, actions, registerError,
+    existingAccountName, privyEnabled, privyAuthed, actions, registerError,
   } = useAuthFlow();
 
   const { select, wallets, connect } = useWallet();
@@ -510,6 +527,15 @@ function RegisterPanel() {
         );
       case 'registering':
         return <Spinner label="Finalising…" />;
+      case 'confirm_login':
+        return (
+          <ContinueAccount
+            wallet={candidate.wallet}
+            name={existingAccountName || suggestedName || ''}
+            error={registerError}
+            onContinue={actions.confirmLogin}
+          />
+        );
       case 'need_name':
         return (
           <NameForm
@@ -574,6 +600,7 @@ function RegisterPanel() {
   const showDexBadge =
     dexPicked && (
     state === 'manual_connect' ||
+    state === 'confirm_login' ||
     state === 'need_name' ||
     (state === 'auto_connecting' && !(isInFrame && fcUser))
     );
@@ -581,6 +608,7 @@ function RegisterPanel() {
   const headerTitle = (() => {
     if (state === 'pick_dex') return 'WELCOME';
     if (!dexPicked && state === 'manual_connect') return 'CLASH ACCOUNT';
+    if (state === 'confirm_login') return 'WELCOME BACK';
     if (state === 'need_name') return 'YOUR NAME';
     if (state === 'registering' || state === 'auto_connecting' || state === 'booting') return 'LOADING';
     if (dex === 'avantis') return 'AVANTIS LOGIN';

@@ -412,7 +412,10 @@ export function GodotProvider({ children }) {
   const sendToGodot = useCallback((action, data = {}) => {
     if (window.godotBridge) {
       window.godotBridge(JSON.stringify({ action, data }));
+      return true;
     }
+    console.warn('[godot] bridge not ready for action', action);
+    return false;
   }, []);
 
   // Stable context objects — only re-created when their specific values change
