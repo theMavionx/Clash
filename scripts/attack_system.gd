@@ -419,7 +419,8 @@ func _input(event: InputEvent) -> void:
 				else:
 					get_viewport().set_input_as_handled()
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			exit_attack_mode()
+			# RMB is easy to hit accidentally in web builds. Do not cancel ship
+			# placement here; surrender/return_home are the explicit exits.
 			get_viewport().set_input_as_handled()
 
 
