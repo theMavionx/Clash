@@ -46,7 +46,8 @@ function formatUtcDay(ms) {
 }
 
 function tournamentUtcDays(form, limit = 31) {
-  const startMs = parseUtcDateMs(form.start_at);
+  const scheduleStart = form.scoring_mode === 'daily_pool' ? (form.daily_pool_enabled_at || form.start_at) : form.start_at;
+  const startMs = parseUtcDateMs(scheduleStart);
   if (!Number.isFinite(startMs)) return [];
   const endMsRaw = parseUtcDateMs(form.end_at);
   const dayMs = 24 * 60 * 60 * 1000;
@@ -1684,6 +1685,12 @@ function TournamentScoringStep({ form, update }) {
           <label className="admin-field"><span className="admin-label">Scoring mode</span><select className="admin-select" value={form.scoring_mode} onChange={(e) => update({ scoring_mode: e.target.value })}><option value="live">Live scoring</option><option value="daily_pool">Daily point pool</option></select></label>
           <NumberField label="Daily pool points" value={form.daily_pool_points} onChange={(v) => update({ daily_pool_points: v })} />
         </div>
+        {form.scoring_mode === 'daily_pool' && (
+          <div className="admin-form-grid three">
+            <DateTimeField label="Daily pool starts at" value={form.daily_pool_enabled_at} onChange={(value) => update({ daily_pool_enabled_at: value })} />
+            <div className="admin-help">Leave blank to keep the existing activation time.</div>
+          </div>
+        )}
         {form.scoring_mode === 'daily_pool' && <DailyPoolConfig form={form} update={update} />}
         <div className="admin-form-grid three">
           <NumberField label="Trophy weight %" value={form.points_trophy_weight} onChange={(v) => update({ points_trophy_weight: v })} />

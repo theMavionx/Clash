@@ -99,6 +99,34 @@ try { db.exec(`ALTER TABLE players ADD COLUMN futures_mode TEXT`); } catch {}
 // so the WS clients map stayed empty and admin always showed everyone
 // offline.
 try { db.exec(`ALTER TABLE players ADD COLUMN last_seen_at TEXT`); } catch {}
+
+// Security migration ledger for one-shot incident response mutations.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS security_migrations (
+      key        TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+} catch (e) { console.warn('[db] security_migrations migration:', e.message); }
+
+// 2026-06-21: wallet auth used to issue player tokens by wallet+dex without
+// a wallet signature. Rotate all existing session tokens once so any token
+// minted through that legacy flow becomes invalid after the security deploy.
+try {
+  const migrationKey = 'rotate-player-tokens-wallet-auth-proof-2026-06-21';
+  const applied = db.prepare('SELECT key FROM security_migrations WHERE key = ?').get(migrationKey);
+  if (!applied) {
+    const players = db.prepare('SELECT id FROM players').all();
+    const rotateTokens = db.transaction((rows) => {
+      const update = db.prepare('UPDATE players SET token = ? WHERE id = ?');
+      for (const row of rows) update.run(uuidv4(), row.id);
+      db.prepare('INSERT INTO security_migrations (key) VALUES (?)').run(migrationKey);
+    });
+    rotateTokens(players);
+    console.warn(`[db] rotated ${players.length} player session tokens for wallet-auth proof migration`);
+  }
+} catch (e) { console.warn('[db] player token security rotation failed:', e.message); }
 // Seeker/Saga device capability. The browser can only persist the Solana
 // Mobile signal and optional .skr handle; a cryptographic SGT ownership check
 // can be layered on later if tournaments need hard anti-spoofing.

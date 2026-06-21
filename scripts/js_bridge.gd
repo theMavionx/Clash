@@ -345,7 +345,10 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				var tn = data.get("troop_name", "")
 				bs._upgrade_troop(tn)
 		"register":
-			_do_register(data.get("name", ""), data.get("wallet", ""), data.get("dex", ""), int(data.get("fid", 0)))
+			var auth_proof = data.get("authProof", data.get("auth_proof", {}))
+			if not (auth_proof is Dictionary):
+				auth_proof = {}
+			_do_register(data.get("name", ""), data.get("wallet", ""), data.get("dex", ""), int(data.get("fid", 0)), auth_proof)
 		"set_player_name_client":
 			var net = get_node_or_null("/root/Net")
 			var next_name := String(data.get("name", "")).strip_edges()
@@ -601,7 +604,7 @@ func _handle_agent_action(event: Dictionary) -> void:
 					bsys._apply_agent_remove_building(payload)
 
 
-func _do_register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0) -> void:
+func _do_register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0, auth_proof: Dictionary = {}) -> void:
 	var net = get_node_or_null("/root/Net")
 	if not net:
 		send_to_react("error", {"message": "Network not available"})
@@ -626,7 +629,7 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "", fi
 		# is exactly the desired "switching DEX → fresh per-DEX account"
 		# behaviour the client now relies on. set_dex is no longer needed
 		# (it's a server-side no-op now).
-		var wallet_result = await net.login_by_wallet(wallet, dex)
+		var wallet_result = await net.login_by_wallet(wallet, dex, auth_proof)
 		if wallet_result.has("token"):
 			send_to_react("registered", {"success": true})
 			send_to_react("state", {
@@ -641,7 +644,7 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "", fi
 		send_to_react("auth_error", {"message": "Name must be at least 2 characters", "stage": "register"})
 		send_to_react("error", {"message": "Name must be at least 2 characters"})
 		return
-	var result = await net.register(player_name, wallet, dex, fid)
+	var result = await net.register(player_name, wallet, dex, fid, auth_proof)
 	if result.has("error"):
 		var message := str(result.error)
 		send_to_react("auth_error", {"message": message, "stage": "register"})

@@ -26,6 +26,7 @@ export function AptosWalletProvider({ children }) {
     account, connected, wallet, wallets, network,
     connect: adapterConnect,
     disconnect: adapterDisconnect,
+    signMessage,
     signAndSubmitTransaction,
   } = adapter;
 
@@ -87,6 +88,12 @@ export function AptosWalletProvider({ children }) {
     return signAndSubmitTransaction(tx);
   }, [address, signAndSubmitTransaction]);
 
+  const loginSignMessage = useCallback(async (payload) => {
+    if (!address) throw new Error('Connect Petra wallet first');
+    if (typeof signMessage !== 'function') throw new Error('Aptos wallet cannot sign messages');
+    return signMessage(payload);
+  }, [address, signMessage]);
+
   const getLoginAccountAddress = useCallback(() => {
     if (!address) return null;
     try { return AccountAddress.fromString(address); }
@@ -108,10 +115,11 @@ export function AptosWalletProvider({ children }) {
     clearError: () => {},
     connect,
     disconnect,
+    signMessage: loginSignMessage,
     loginSignAndSubmit,
     getLoginAccountAddress,
     walletName: wallet?.name || null,
-  }), [address, publicKey, chainId, connected, hasProvider, connect, disconnect, loginSignAndSubmit, getLoginAccountAddress, wallet?.name]);
+  }), [address, publicKey, chainId, connected, hasProvider, connect, disconnect, loginSignMessage, loginSignAndSubmit, getLoginAccountAddress, wallet?.name]);
 
   return (
     <AptosWalletContext.Provider value={value}>

@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { SolanaMobileWalletAdapterWalletName } from '@solana-mobile/wallet-standard-mobile';
+import { useSignMessage as usePrivySolanaSignMessage } from '@privy-io/react-auth/solana';
 import { useSend, useUI } from '../hooks/useGodot';
 import { isDexAvailableInContext, useDex } from '../contexts/DexContext';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
@@ -55,6 +56,11 @@ const ACCOUNT_PROBE_TIMEOUT_MS = 10000;
 const ACCOUNT_PROBE_MAX_RETRIES = 3;
 const ACCOUNT_PROBE_UI_WAIT_MS = 4500;
 const MANUAL_RECONNECT_WALLET_WAIT_MS = 8000;
+const WALLET_AUTH_PROOF_TIMEOUT_MS = 20000;
+const WALLET_AUTH_ACTION = 'wallet-auth';
+const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
+const EVM_AUTH_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const SOLANA_AUTH_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash']);
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
 // user isn't authenticated anywhere; keeps the "Joining…" UX intact when
@@ -97,6 +103,104 @@ function canonicalWalletAddress(address) {
     return `0x${raw.replace(/^0x/i, '').padStart(64, '0').toLowerCase()}`;
   }
   return raw;
+}
+
+function walletAddressChainType(wallet) {
+  const raw = String(wallet || '').trim();
+  if (!raw) return 'unknown';
+  if (/^0x[0-9a-fA-F]{40}$/.test(raw)) return 'evm';
+  if (/^0x[0-9a-fA-F]{1,64}$/.test(raw)) return 'aptos';
+  return 'solana';
+}
+
+function walletChainTypeForKnownDex(dex) {
+  const venue = String(dex || '').toLowerCase();
+  if (venue === 'decibel') return 'aptos';
+  if (EVM_AUTH_DEXES.has(venue)) return 'evm';
+  if (SOLANA_AUTH_DEXES.has(venue)) return 'solana';
+  return 'unknown';
+}
+
+function walletChainTypeForDex(wallet, dex) {
+  const dexType = walletChainTypeForKnownDex(dex);
+  if (dexType !== 'unknown') return dexType;
+  return walletAddressChainType(wallet);
+}
+
+function walletDexMismatchMessage(walletType, dexType) {
+  if (walletType === 'evm' && dexType === 'solana') {
+    return 'This is an EVM wallet. Press CHANGE and pick an EVM DEX before continuing.';
+  }
+  if (walletType === 'solana' && dexType === 'evm') {
+    return 'This DEX needs an EVM wallet. Go back and connect an EVM wallet.';
+  }
+  if (walletType === 'aptos' && dexType !== 'aptos') {
+    return 'This is an Aptos wallet. Press CHANGE and pick Decibel before continuing.';
+  }
+  if (dexType === 'aptos' && walletType !== 'aptos') {
+    return 'Decibel needs an Aptos wallet. Go back and connect Petra.';
+  }
+  return 'Connected wallet does not match the selected DEX. Press CHANGE and pick the right DEX.';
+}
+
+function walletAuthMessage({ wallet, dex, issuedAt }) {
+  return [
+    'Clash wallet auth',
+    `Action: ${WALLET_AUTH_ACTION}`,
+    `Wallet: ${canonicalWalletAddress(wallet)}`,
+    `DEX: ${String(dex || '').toLowerCase()}`,
+    `Issued At: ${issuedAt}`,
+  ].join('\n');
+}
+
+function withTimeout(promise, ms, message) {
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+}
+
+function bytesToBase64(bytes) {
+  const arr = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || []);
+  let binary = '';
+  for (const b of arr) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+function bytesToHex(bytes) {
+  const arr = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || []);
+  return `0x${Array.from(arr, b => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function signatureToHex(signature) {
+  if (!signature) return '';
+  if (typeof signature === 'string') return signature.startsWith('0x') ? signature : `0x${signature}`;
+  if (signature instanceof Uint8Array || Array.isArray(signature)) return bytesToHex(signature);
+  if (typeof signature.toUint8Array === 'function') return bytesToHex(signature.toUint8Array());
+  if (typeof signature.toString === 'function') {
+    const text = signature.toString();
+    return text.startsWith('0x') ? text : `0x${text}`;
+  }
+  return '';
+}
+
+let cachedFarcasterSolanaProvider = null;
+async function signFarcasterSolanaMessage(messageBytes) {
+  try {
+    if (!cachedFarcasterSolanaProvider) {
+      const { sdk } = await import('@farcaster/miniapp-sdk');
+      cachedFarcasterSolanaProvider = await sdk.wallet.getSolanaProvider();
+    }
+    if (!cachedFarcasterSolanaProvider?.signMessage) return null;
+    const res = await cachedFarcasterSolanaProvider.signMessage(bytesToBase64(messageBytes));
+    if (!res?.signature) return null;
+    return Uint8Array.from(atob(res.signature), c => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
 }
 
 function readStoredAuthWallet() {
@@ -220,6 +324,13 @@ export function useAuthFlow() {
   // to tap the wallet picker even though we know exactly which adapter
   // (Mobile Wallet Adapter) we want on Saga/Seeker.
   const solWallet = useSolWallet();
+  let privySolanaSignMessage = null;
+  if (PRIVY_ENABLED) {
+    // VITE_PRIVY_APP_ID is a build-time constant, so this hook order is stable.
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const { signMessage } = usePrivySolanaSignMessage();
+    privySolanaSignMessage = signMessage;
+  }
   const { showRegister } = useUI();
   const {
     enabled: privyEnabled,
@@ -227,8 +338,10 @@ export function useAuthFlow() {
     authenticated: privyAuthed,
     login: privyLogin,
     logout: privyLogout,
+    solanaWallets: privySolanaWallets,
   } = useOptionalPrivy();
-  const { setExternalProvider: setEvmProvider, disconnect: evmDisconnect } = useEvmWallet();
+  const evmWallet = useEvmWallet();
+  const { setExternalProvider: setEvmProvider, disconnect: evmDisconnect } = evmWallet;
 
   const [dexPicked, setDexPickedState] = useState(readDexPicked);
   const [manualReconnectRequired, setManualReconnectRequired] = useState(readManualReconnectRequired);
@@ -494,6 +607,100 @@ export function useAuthFlow() {
   );
   const candidate = manualReconnectRequired && !manualReconnectSatisfied ? null : rawCandidate;
   const [manualReconnectWaitExpired, setManualReconnectWaitExpired] = useState(false);
+  const createWalletAuthProof = useCallback(async ({ wallet, dex: proofDex, source }) => {
+    if (!wallet || String(wallet).startsWith('local_guest_')) return null;
+    const issuedAt = new Date().toISOString();
+    const canonicalWallet = canonicalWalletAddress(wallet);
+    const walletType = walletAddressChainType(canonicalWallet);
+    const dexType = walletChainTypeForKnownDex(proofDex);
+    if (dexType !== 'unknown' && walletType !== 'unknown' && walletType !== dexType) {
+      throw new Error(walletDexMismatchMessage(walletType, dexType));
+    }
+    const chainType = walletChainTypeForDex(canonicalWallet, proofDex);
+    const message = walletAuthMessage({ wallet: canonicalWallet, dex: proofDex, issuedAt });
+    if (chainType === 'solana') {
+      const messageBytes = new TextEncoder().encode(message);
+      let sigBytes = null;
+      if (source === 'farcaster' || isInFrame) {
+        sigBytes = await signFarcasterSolanaMessage(messageBytes);
+      }
+      if (!sigBytes && source === 'privy' && privySolanaSignMessage) {
+        const walletObj = (privySolanaWallets || []).find(w => w?.address === wallet || w?.address === canonicalWallet)
+          || (privySolanaWallets || []).find(w => w?.walletClientType === 'privy')
+          || (privySolanaWallets || [])[0]
+          || null;
+        if (walletObj) {
+          const result = await privySolanaSignMessage({ message: messageBytes, wallet: walletObj });
+          sigBytes = result?.signature || result;
+        }
+      }
+      if (!sigBytes && typeof solWallet?.signMessage === 'function') {
+        sigBytes = await solWallet.signMessage(messageBytes);
+      }
+      if (!sigBytes) throw new Error('Wallet signature required. Connect your Solana wallet again.');
+      return {
+        action: WALLET_AUTH_ACTION,
+        chain_type: chainType,
+        wallet: canonicalWallet,
+        dex: String(proofDex || '').toLowerCase(),
+        issued_at: issuedAt,
+        message,
+        signature: typeof sigBytes === 'string' ? sigBytes : bytesToBase64(sigBytes),
+        signature_encoding: typeof sigBytes === 'string' ? '' : 'base64',
+      };
+    }
+    if (chainType === 'evm') {
+      let signature = '';
+      if (evmWallet?.walletClient?.signMessage) {
+        signature = await evmWallet.walletClient.signMessage({ account: canonicalWallet, message });
+      } else if (evmWallet?.provider?.request) {
+        signature = await evmWallet.provider.request({
+          method: 'personal_sign',
+          params: [message, canonicalWallet],
+        });
+      }
+      if (!signature) throw new Error('Wallet signature required. Connect your EVM wallet again.');
+      return {
+        action: WALLET_AUTH_ACTION,
+        chain_type: chainType,
+        wallet: canonicalWallet,
+        dex: String(proofDex || '').toLowerCase(),
+        issued_at: issuedAt,
+        message,
+        signature,
+      };
+    }
+    if (chainType === 'aptos') {
+      if (typeof aptosWallet?.signMessage !== 'function') {
+        throw new Error('Wallet signature required. Connect Petra again.');
+      }
+      if (!aptosWallet?.publicKey) {
+        throw new Error('Aptos public key unavailable. Reconnect Petra and try again.');
+      }
+      const signed = await aptosWallet.signMessage({ message, nonce: issuedAt });
+      return {
+        action: WALLET_AUTH_ACTION,
+        chain_type: chainType,
+        wallet: canonicalWallet,
+        dex: String(proofDex || '').toLowerCase(),
+        issued_at: issuedAt,
+        message,
+        full_message: signed?.fullMessage || '',
+        public_key: aptosWallet.publicKey,
+        signature: signatureToHex(signed?.signature),
+        signature_encoding: 'hex',
+      };
+    }
+    throw new Error('Unsupported wallet type. Reconnect your wallet.');
+  }, [
+    aptosWallet,
+    evmWallet?.provider,
+    evmWallet?.walletClient,
+    isInFrame,
+    privySolanaSignMessage,
+    privySolanaWallets,
+    solWallet,
+  ]);
 
   useEffect(() => {
     setManualReconnectWaitExpired(false);
@@ -584,13 +791,14 @@ export function useAuthFlow() {
   useEffect(() => {
     if (!candidate?.wallet) return;
     if (fcUser) return; // FC users keep the existing fast-path
+    const authDex = dexPicked ? dex : '';
     // Probe is now per-(wallet, dex). The same wallet has a separate
     // account on each DEX, so we re-probe whenever the user switches
     // DEX. Old code keyed by wallet alone and returned the user's
     // Avantis name when they switched to GMX — leading to "I'm logged
     // in as my Avantis account on GMX" confusion.
-    const key = walletCacheKey(candidate.wallet, dex);
-    const cached = readAccountProbeCache(candidate.wallet, dex);
+    const key = walletCacheKey(candidate.wallet, authDex);
+    const cached = readAccountProbeCache(candidate.wallet, authDex);
     if (!(key in probedNameByWallet) && cached !== undefined) {
       setProbedNameByWallet(prev => (
         key in prev ? prev : { ...prev, [key]: cached }
@@ -605,11 +813,13 @@ export function useAuthFlow() {
       const timer = setTimeout(() => ctrl.abort(), ACCOUNT_PROBE_TIMEOUT_MS);
       let verified = false;
       try {
+        const body = { wallet: candidate.wallet, probeOnly: true };
+        if (authDex) body.dex = authDex;
         const r = await fetch('/api/players/login-wallet', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: ctrl.signal,
-          body: JSON.stringify({ wallet: candidate.wallet, dex, probeOnly: true }),
+          body: JSON.stringify(body),
         });
         if (r.ok) {
           const data = await r.json();
@@ -624,7 +834,7 @@ export function useAuthFlow() {
           // the server's name-collision suffix kicked in (ggkhg → ggkhg1).
           // Treat any cross-dex response as "no account on this dex".
           const name = data?.name || null;
-          writeAccountProbeCache(candidate.wallet, dex, name);
+          writeAccountProbeCache(candidate.wallet, authDex, name);
           probeRetryCountRef.current[key] = 0;
           setProbedNameByWallet(prev => ({ ...prev, [key]: name }));
           verified = true;
@@ -633,7 +843,7 @@ export function useAuthFlow() {
           // as new user for this DEX. They may have an account on a
           // different DEX with the same wallet — that's fine, switching
           // DEX in the picker will re-probe and find it.
-          writeAccountProbeCache(candidate.wallet, dex, null);
+          writeAccountProbeCache(candidate.wallet, authDex, null);
           probeRetryCountRef.current[key] = 0;
           setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
           verified = true;
@@ -669,10 +879,10 @@ export function useAuthFlow() {
         probeInFlightRef.current[key] = false;
       }
     })();
-  }, [candidate, dex, fcUser, probedNameByWallet]);
+  }, [candidate, dex, dexPicked, fcUser, probedNameByWallet]);
 
   // Resolved existing-account name (or null if none / not yet probed).
-  const candidateWalletKey = candidate?.wallet ? walletCacheKey(candidate.wallet, dex) : '';
+  const candidateWalletKey = candidate?.wallet ? walletCacheKey(candidate.wallet, dexPicked ? dex : '') : '';
   const existingAccountName = candidateWalletKey
     ? probedNameByWallet[candidateWalletKey]
     : undefined;
@@ -791,7 +1001,7 @@ export function useAuthFlow() {
     // Returning user — server already has an account for this wallet;
     // fire register with their stored name (which is auto-derived-safe so
     // Godot's login_by_wallet fast-path takes over and no rename happens).
-    if (candidate && existingAccountName) return 'registering';
+    if (candidate && existingAccountName) return 'confirm_login';
     // Brand-new user — prompt for a display name.
     if (candidate) return 'need_name';
     if (!graceExpired) return 'auto_connecting';
@@ -896,6 +1106,7 @@ export function useAuthFlow() {
     if (!fcUser) {
       if (existingAccountName === undefined) return;
       if (existingAccountName === null) return;
+      return;
     }
     const nameToUse = existingAccountName || suggestedName;
     if (!nameToUse) return;
@@ -909,29 +1120,31 @@ export function useAuthFlow() {
     // from Avantis to GMX would silently no-op the GMX register because
     // `lastRegisteredRef.current` still pointed at the wallet from the
     // Avantis register, and the user would never get a GMX row created.
-    const candidateKey = `${String(dex).toLowerCase()}:${String(candidate.wallet).toLowerCase()}`;
+    const authDex = dexPicked ? dex : '';
+    const candidateKey = `${authDex || 'account'}:${String(candidate.wallet).toLowerCase()}`;
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     setRegisterError('');
-    const payload = { name: nameToUse, wallet: candidate.wallet, dex };
+    const payload = { name: nameToUse, wallet: candidate.wallet };
+    if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
+    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana') {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
       // resolver hard-codes 'base' regardless of which DEX is active, so
       // trusting candidate.chain would mis-tag GMX/Perpl registrations as
       // Base. The wallet address itself is identical on every EVM chain so
       // the server can later look up trade history on the right chain via
       // this tag.
-      payload.chain = dex === 'gmx' ? 'arbitrum'
-        : dex === 'monad' ? 'monad'
-        : dex === 'hyperliquid' ? 'arbitrum'
-        : dex === 'risex' ? 'rise'
-        : dex === 'nado' ? 'ink'
-        : dex === 'hibachi' ? 'base'
-        : dex === 'hotstuff' ? 'mainnet'
-        : dex === 'grvt' ? 'grvt'
-        : dex === 'katana' ? 'katana'
+      payload.chain = authDex === 'gmx' ? 'arbitrum'
+        : authDex === 'monad' ? 'monad'
+        : authDex === 'hyperliquid' ? 'arbitrum'
+        : authDex === 'risex' ? 'rise'
+        : authDex === 'nado' ? 'ink'
+        : authDex === 'hibachi' ? 'base'
+        : authDex === 'hotstuff' ? 'mainnet'
+        : authDex === 'grvt' ? 'grvt'
+        : authDex === 'katana' ? 'katana'
         : 'base';
       payload.walletSource = candidate.source;
     }
@@ -945,13 +1158,59 @@ export function useAuthFlow() {
       source: candidate.source || null,
       mode: 'auto',
     });
-    sendToGodot('register', payload);
-    // Safety: if Godot never acks (network partition), clear the spinner
-    // after 10s so the user can retry or pick a different path.
-    const t = setTimeout(() => setRegistering(false), 10000);
-    return () => clearTimeout(t);
-  }, [readyForRegister, candidate, suggestedName, dex, sendToGodot, fcUser,
-      existingAccountName]);
+    // Safety: if Godot never acks (network partition / stale bridge), stop
+    // the derived "returning user" register loop and surface a retryable error.
+    let cancelled = false;
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      setRegistering(false);
+      setRegisterError('Game login timed out. Reload the page or press BACK and reconnect.');
+      lastRegisteredRef.current = null;
+      addClientBreadcrumb('auth.register_timeout', {
+        dex,
+        source: candidate.source || null,
+        mode: 'auto',
+      }, 'warn');
+    }, WALLET_AUTH_PROOF_TIMEOUT_MS + 5000);
+    (async () => {
+      try {
+        const authProof = await withTimeout(
+          createWalletAuthProof({
+            wallet: candidate.wallet,
+            dex: authDex,
+            source: candidate.source,
+          }),
+          WALLET_AUTH_PROOF_TIMEOUT_MS,
+          'Wallet signature timed out. Reconnect your wallet and try again.'
+        );
+        if (cancelled) return;
+        if (authProof) {
+          payload.authProof = authProof;
+          payload.auth_proof = authProof;
+        }
+        if (!sendToGodot('register', payload)) {
+          throw new Error('Game bridge is not ready. Reload the page and try again.');
+        }
+      } catch (e) {
+        if (cancelled) return;
+        clearTimeout(t);
+        const message = authErrorMessage(e?.message || 'Wallet signature required. Connect again.');
+        setRegistering(false);
+        setRegisterError(message);
+        lastRegisteredRef.current = null;
+        addClientBreadcrumb('auth.wallet_proof_failed', {
+          dex,
+          source: candidate.source || null,
+          message,
+        }, 'warn');
+      }
+    })();
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [readyForRegister, dexPicked, candidate, suggestedName, dex, sendToGodot, fcUser,
+      existingAccountName, createWalletAuthProof]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Actions exposed to the UI. All auth decisions flow through here.
@@ -1000,30 +1259,32 @@ export function useAuthFlow() {
     fcEvmTriedRef.current = false;
   }, []);
 
-  const submitName = useCallback((name) => {
+  const submitName = useCallback(async (name) => {
     if (!candidate || !name || name.trim().length < 2) return;
     // Key the dedup ref on (wallet, dex). Same wallet on different DEXes
     // is now a different account — without `dex` in the key, switching
     // from Avantis to GMX would silently no-op the GMX register because
     // `lastRegisteredRef.current` still pointed at the wallet from the
     // Avantis register, and the user would never get a GMX row created.
-    const candidateKey = `${String(dex).toLowerCase()}:${String(candidate.wallet).toLowerCase()}`;
+    const authDex = dexPicked ? dex : '';
+    const candidateKey = `${authDex || 'account'}:${String(candidate.wallet).toLowerCase()}`;
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     setRegisterError('');
-    const payload = { name: name.trim(), wallet: candidate.wallet, dex };
+    const payload = { name: name.trim(), wallet: candidate.wallet };
+    if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
-      payload.chain = dex === 'gmx' ? 'arbitrum'
-        : dex === 'monad' ? 'monad'
-        : dex === 'hyperliquid' ? 'arbitrum'
-        : dex === 'risex' ? 'rise'
-        : dex === 'nado' ? 'ink'
-        : dex === 'hibachi' ? 'base'
-        : dex === 'hotstuff' ? 'mainnet'
-        : dex === 'grvt' ? 'grvt'
-        : dex === 'katana' ? 'katana'
+    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana') {
+      payload.chain = authDex === 'gmx' ? 'arbitrum'
+        : authDex === 'monad' ? 'monad'
+        : authDex === 'hyperliquid' ? 'arbitrum'
+        : authDex === 'risex' ? 'rise'
+        : authDex === 'nado' ? 'ink'
+        : authDex === 'hibachi' ? 'base'
+        : authDex === 'hotstuff' ? 'mainnet'
+        : authDex === 'grvt' ? 'grvt'
+        : authDex === 'katana' ? 'katana'
         : 'base';
       payload.walletSource = candidate.source;
     }
@@ -1033,12 +1294,44 @@ export function useAuthFlow() {
       source: candidate.source || null,
       mode: 'manual_name',
     });
-    sendToGodot('register', payload);
-    const t = setTimeout(() => setRegistering(false), 10000);
-    return () => clearTimeout(t);
-  }, [candidate, dex, sendToGodot, fcUser]);
+    try {
+      const authProof = await withTimeout(
+        createWalletAuthProof({
+          wallet: candidate.wallet,
+          dex: authDex,
+          source: candidate.source,
+        }),
+        WALLET_AUTH_PROOF_TIMEOUT_MS,
+        'Wallet signature timed out. Reconnect your wallet and try again.'
+      );
+      if (authProof) {
+        payload.authProof = authProof;
+        payload.auth_proof = authProof;
+      }
+      if (!sendToGodot('register', payload)) {
+        throw new Error('Game bridge is not ready. Reload the page and try again.');
+      }
+      setTimeout(() => setRegistering(false), 10000);
+    } catch (e) {
+      const message = authErrorMessage(e?.message || 'Wallet signature required. Connect again.');
+      setRegistering(false);
+      setRegisterError(message);
+      lastRegisteredRef.current = null;
+      addClientBreadcrumb('auth.wallet_proof_failed', {
+        dex,
+        source: candidate.source || null,
+        message,
+      }, 'warn');
+    }
+  }, [candidate, dex, dexPicked, sendToGodot, fcUser, createWalletAuthProof]);
 
   // Trigger manual Privy login (email) — Privy renders its own modal.
+  const confirmLogin = useCallback(() => {
+    const name = existingAccountName || suggestedName || '';
+    if (!name) return;
+    submitName(name);
+  }, [existingAccountName, suggestedName, submitName]);
+
   const loginWithPrivy = useCallback(() => {
     if (!privyEnabled) return;
     clearManualReconnectRequired();
@@ -1078,6 +1371,7 @@ export function useAuthFlow() {
     fcUser,
     candidate,
     suggestedName,
+    existingAccountName,
     seekerHandle,
     privyEnabled,
     privyAuthed,
@@ -1085,6 +1379,7 @@ export function useAuthFlow() {
       pickDex,
       unpickDex,
       submitName,
+      confirmLogin,
       clearRegisterError: () => setRegisterError(''),
       loginWithPrivy,
       beginManualWalletConnect,
