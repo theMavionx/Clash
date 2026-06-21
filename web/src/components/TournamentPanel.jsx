@@ -253,8 +253,12 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
   const ticketMetric = String(lucky.ticket_metric || 'volume');
   const attackWinsPerTicket = fmt(lucky.attack_wins_per_ticket || 10);
   const volumePerTicket = fmtUsdWhole(lucky.volume_per_ticket_usd);
+  const maxVolumeTickets = Math.max(0, Math.floor(Number(lucky.max_volume_tickets || 0) || 0));
+  const volumeBonusText = `${volumePerTicket} volume = +1${maxVolumeTickets > 0 ? `, max +${fmt(maxVolumeTickets)}` : ''}`;
   const luckyTicketRule = ticketMetric === 'attack_wins'
     ? `${attackWinsPerTicket} winning attacks = 1 ticket`
+    : ticketMetric === 'attack_wins_plus_volume'
+      ? `${attackWinsPerTicket} winning attacks = 1 ticket + ${volumeBonusText}`
     : ticketMetric === 'volume_or_attack_wins'
       ? `${volumePerTicket} volume OR ${attackWinsPerTicket} winning attacks = 1 ticket`
       : ticketMetric === 'volume_and_attack_wins'
@@ -279,7 +283,7 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
           {lucky.require_nft && <div>Requires {required || 'Dragon or Demon King'}</div>}
           {lucky.my_tickets !== undefined && (
             <div>
-              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume | {luckyAttackSummary(lucky)} | {fmt(lucky.my_tickets || 0)}/{fmt(lucky.max_tickets || 0)} tickets
+              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume | {luckyAttackSummary(lucky)} | {luckyTicketBreakdown(lucky)}/{fmt(lucky.max_tickets || 0)} tickets
               {luckyReasonText(lucky.my_reason) ? ` | ${luckyReasonText(lucky.my_reason)}` : ''}
             </div>
           )}
@@ -311,6 +315,27 @@ function luckyAttackSummary(source = {}, lucky = source) {
   return `${fmt(s.wins)} wins / ${fmt(s.losses)} losses from ${fmt(s.attempts)}/${fmt(s.limit)} attacks`;
 }
 
+function luckyTicketStats(source = {}, lucky = source) {
+  const attack = Math.max(0, Math.floor(Number(source.attack_win_tickets ?? source.my_attack_win_tickets ?? 0) || 0));
+  const volume = Math.max(0, Math.floor(Number(source.volume_tickets ?? source.my_volume_tickets ?? 0) || 0));
+  const total = Math.max(0, Math.floor(Number(source.tickets ?? source.my_tickets ?? (attack + volume)) || 0));
+  const maxVolume = Math.max(0, Math.floor(Number(source.max_volume_tickets ?? lucky?.max_volume_tickets ?? 0) || 0));
+  const volumePerTicket = Math.max(1, Number(source.volume_per_ticket_usd ?? lucky?.volume_per_ticket_usd ?? 10000) || 10000);
+  return { attack, volume, total, maxVolume, volumePerTicket };
+}
+
+function luckyVolumeBonusText(lucky) {
+  const s = luckyTicketStats(lucky);
+  return `${fmtUsdWhole(s.volumePerTicket)} volume = +1 bonus ticket${s.maxVolume > 0 ? `, max +${fmt(s.maxVolume)}` : ''}`;
+}
+
+function luckyTicketBreakdown(source = {}, lucky = source) {
+  const metric = String(lucky?.ticket_metric || source.ticket_metric || '').toLowerCase();
+  const s = luckyTicketStats(source, lucky);
+  if (metric === 'attack_wins_plus_volume') return `${fmt(s.attack)} attack + ${fmt(s.volume)} volume = ${fmt(s.total)}`;
+  return fmt(s.total);
+}
+
 function luckyEntryDetail(entry, lucky) {
   const s = luckyAttackStats(entry, lucky);
   const parts = [
@@ -332,7 +357,12 @@ function luckyReasonText(reason) {
   if (!key || key === 'eligible') return '';
   if (key === 'attack_wins_below_ticket') return 'No ticket yet: counted wins are below the ticket requirement';
   if (key === 'volume_below_ticket') return 'No ticket yet: counted volume is below the ticket requirement';
+  if (key === 'attack_wins_plus_volume_below_ticket') return 'No ticket yet: counted wins and volume are below ticket requirements';
+  if (key === 'volume_or_attack_wins_below_ticket') return 'No ticket yet: counted wins or volume are below ticket requirements';
+  if (key === 'volume_and_attack_wins_below_ticket') return 'No ticket yet: counted wins and volume are below ticket requirements';
   if (key === 'nft_required') return 'NFT requirement not met';
+  if (key === 'missing_required_nft') return 'NFT requirement not met';
+  if (key === 'min_attack_wins_not_met') return 'Minimum counted wins not met';
   return key.replace(/_/g, ' ');
 }
 
@@ -349,8 +379,11 @@ function LuckyRaiderPanel({ t, schedule }) {
   const rewards = rewardPoolSummary(lucky.rewards || [], t?.prize_currency || 'USD');
   const metric = String(lucky.ticket_metric || 'volume');
   const winTicketText = luckyWinTicketText(lucky);
+  const volumeBonusText = luckyVolumeBonusText(lucky);
   const rule = metric === 'attack_wins'
     ? winTicketText
+    : metric === 'attack_wins_plus_volume'
+      ? `${winTicketText} + ${volumeBonusText}`
     : metric === 'volume_or_attack_wins'
       ? `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume OR ${winTicketText}`
       : metric === 'volume_and_attack_wins'
@@ -359,6 +392,7 @@ function LuckyRaiderPanel({ t, schedule }) {
   const entries = Array.isArray(lucky.today_entries) ? lucky.today_entries : [];
   const history = Array.isArray(lucky.history) ? lucky.history : [];
   const myStats = luckyAttackStats(lucky);
+  const myTickets = luckyTicketStats(lucky);
   const myRawOverflow = myStats.rawAttempts > myStats.attempts;
   const myReason = luckyReasonText(lucky.my_reason);
   return (
@@ -367,13 +401,15 @@ function LuckyRaiderPanel({ t, schedule }) {
         <div>
           <div style={S.luckyKicker}>Daily Lucky Raider</div>
           <div style={S.luckyTitle}>{lucky.label || 'Daily Lucky Raider'}</div>
-          <div style={S.luckySub}>Only your first {fmt(myStats.limit)} attacks each UTC day count. Wins become tickets; losses and surrenders spend an attack and give 0 tickets.</div>
+          <div style={S.luckySub}>Only your first {fmt(myStats.limit)} attacks each UTC day count. Wins become tickets; losses and surrenders spend an attack and give 0 tickets. Volume can add bonus tickets.</div>
         </div>
         <div style={S.luckyPrize}>{rewards.join(' + ') || 'Prize configured by admin'}</div>
       </div>
 
       <div style={S.luckyGrid}>
         <Stat label="Your tickets" value={`${fmt(lucky.my_tickets || 0)} / ${fmt(lucky.max_tickets || 0)}`} />
+        <Stat label="Attack tickets" value={fmt(myTickets.attack)} />
+        <Stat label="Volume tickets" value={`${fmt(myTickets.volume)}${myTickets.maxVolume > 0 ? ` / ${fmt(myTickets.maxVolume)}` : ''}`} />
         <Stat label="Won / Lost" value={`${fmt(myStats.wins)} / ${fmt(myStats.losses)}`} />
         <Stat label="Counted attacks" value={`${fmt(myStats.attempts)} / ${fmt(myStats.limit)}`} />
         <Stat label="Winners" value={fmt(lucky.winner_count || 1)} />
@@ -381,9 +417,15 @@ function LuckyRaiderPanel({ t, schedule }) {
 
       <div style={S.luckyRuleBox}>
         <strong>{rule}</strong>
-        <span>First {fmt(myStats.limit)} attacks per UTC day count for tickets. Max {fmt(lucky.max_tickets || myStats.limit)} tickets/day.</span>
+        <span>First {fmt(myStats.limit)} attacks per UTC day count for attack tickets. Total cap is {fmt(lucky.max_tickets || myStats.limit)} tickets/day.</span>
         <span>A win gives a ticket; a defeat or surrender spends one of those first {fmt(myStats.limit)} attacks and gives 0 tickets.</span>
-        <span>Your counted score: {fmt(myStats.wins)} wins, {fmt(myStats.losses)} losses, {fmt(lucky.my_tickets || 0)} tickets.</span>
+        {metric === 'attack_wins_plus_volume' && (
+          <span>
+            Volume bonus: {volumeBonusText}
+            {myTickets.maxVolume > 0 ? `. ${fmtUsdWhole(myTickets.maxVolume * myTickets.volumePerTicket)} volume gives +${fmt(myTickets.maxVolume)} tickets.` : '.'}
+          </span>
+        )}
+        <span>Your counted score: {fmt(myStats.wins)} wins, {fmt(myStats.losses)} losses, {luckyTicketBreakdown(lucky)} tickets.</span>
         {myStats.surrenders > 0 && <span>Your losses include {fmt(myStats.surrenders)} surrender{myStats.surrenders === 1 ? '' : 's'}.</span>}
         {myRawOverflow && <span>Total today: {fmt(myStats.rawAttempts)} attacks / {fmt(myStats.rawWins)} wins. Extra attacks after #{fmt(myStats.limit)} do not add tickets.</span>}
         <span>Draw runs at {lucky.draw_time_utc || '00:05'} UTC.</span>
@@ -406,6 +448,11 @@ function LuckyRaiderPanel({ t, schedule }) {
               {Number(entry.raw_attack_attempts || 0) > Number(entry.attack_attempts || 0) && (
                 <div style={S.luckyEntrySubMeta}>
                   Total today: {fmt(entry.raw_attack_attempts || 0)} attacks / {fmt(entry.raw_attack_wins || 0)} wins
+                </div>
+              )}
+              {metric === 'attack_wins_plus_volume' && (
+                <div style={S.luckyEntrySubMeta}>
+                  Tickets: {luckyTicketBreakdown(entry, lucky)}
                 </div>
               )}
             </div>

@@ -18172,9 +18172,10 @@ function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
     : [];
   const luckyRewards = normalizePrizeRewards(Array.isArray(luckyRaw.rewards) ? luckyRaw.rewards : [], null, { strict });
   const ticketMetricRaw = String(luckyRaw.ticket_metric || luckyRaw.metric || 'volume').trim().toLowerCase();
-  const ticketMetric = ['volume', 'attack_wins', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(ticketMetricRaw)
+  const ticketMetric = ['volume', 'attack_wins', 'attack_wins_plus_volume', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(ticketMetricRaw)
     ? ticketMetricRaw
     : 'volume';
+  const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20)));
   return {
     daily_pools: normalizeRewardSchedulePools(raw.daily_pools, { strict, labelPrefix: 'Daily pool' }),
     final_pools: normalizeRewardSchedulePools(raw.final_pools, { strict, labelPrefix: 'Final pool' }),
@@ -18186,7 +18187,9 @@ function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
       attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
       min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
       winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
-      max_tickets: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20))),
+      max_tickets: maxTickets,
+      max_counted_attacks: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_counted_attacks || luckyRaw.max_attack_tickets || maxTickets) || maxTickets))),
+      max_volume_tickets: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.max_volume_tickets ?? luckyRaw.max_volume_bonus_tickets ?? 0) || 0))),
       require_nft: parseBool(luckyRaw.require_nft),
       required_collections: collections.length ? collections : ['demon_king', 'dragon'],
       rewards: luckyRewards,
@@ -18201,6 +18204,37 @@ function rewardConfigHasContent(config) {
     || normalized.final_pools.length > 0
     || !!normalized.lucky_daily_raider.enabled
     || (normalized.lucky_daily_raider.rewards || []).length > 0;
+}
+
+function luckyRaiderTicketState(cfg, volume, attackWins) {
+  const metric = String(cfg?.ticket_metric || 'volume').toLowerCase();
+  const rawVolumeTickets = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const maxVolumeTickets = Math.max(0, Math.floor(Number(cfg?.max_volume_tickets || 0) || 0));
+  const volumeTickets = maxVolumeTickets > 0 ? Math.min(rawVolumeTickets, maxVolumeTickets) : rawVolumeTickets;
+  const attackTickets = Math.floor(Math.max(0, Math.floor(Number(attackWins) || 0)) / Math.max(1, Math.floor(Number(cfg?.attack_wins_per_ticket || 10) || 10)));
+  let uncapped = volumeTickets;
+  if (metric === 'attack_wins') uncapped = attackTickets;
+  else if (metric === 'attack_wins_plus_volume') uncapped = attackTickets + volumeTickets;
+  else if (metric === 'volume_or_attack_wins') uncapped = Math.max(volumeTickets, attackTickets);
+  else if (metric === 'volume_and_attack_wins') uncapped = Math.min(volumeTickets, attackTickets);
+  const minAttackWins = Math.max(0, Math.floor(Number(cfg?.min_attack_wins || 0) || 0));
+  let reason = uncapped > 0 ? 'eligible' : 'below_ticket_threshold';
+  if ((metric === 'attack_wins' || metric === 'volume_and_attack_wins') && attackTickets <= 0) reason = 'attack_wins_below_ticket';
+  else if (metric === 'volume' && volumeTickets <= 0) reason = 'volume_below_ticket';
+  else if (metric === 'attack_wins_plus_volume' && attackTickets <= 0 && volumeTickets <= 0) reason = 'attack_wins_plus_volume_below_ticket';
+  else if (metric === 'volume_or_attack_wins' && volumeTickets <= 0 && attackTickets <= 0) reason = 'volume_or_attack_wins_below_ticket';
+  if (minAttackWins > 0 && Math.max(0, Math.floor(Number(attackWins) || 0)) < minAttackWins) uncapped = 0;
+  if (minAttackWins > 0 && Math.max(0, Math.floor(Number(attackWins) || 0)) < minAttackWins) reason = 'min_attack_wins_not_met';
+  const maxTickets = Math.max(1, Math.floor(Number(cfg?.max_tickets || 20) || 20));
+  return {
+    volume_tickets: Math.max(0, volumeTickets),
+    raw_volume_tickets: Math.max(0, rawVolumeTickets),
+    max_volume_tickets: maxVolumeTickets,
+    attack_win_tickets: Math.max(0, attackTickets),
+    uncapped_tickets: Math.max(0, uncapped),
+    tickets: Math.max(0, Math.min(maxTickets, uncapped)),
+    reason,
+  };
 }
 
 const DEFAULT_MEGA_SECTORS = [
@@ -18775,16 +18809,9 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
         ? db.luckyRaiderAttackStatsForPlayer(t, row.player_id, today, cfg)
         : { attack_wins: 0, raw_attack_wins: 0, attack_attempts: 0, raw_attack_attempts: 0, attack_surrenders: 0, raw_attack_surrenders: 0 };
       const attackWins = Math.max(0, Math.floor(Number(attackStats.attack_wins || 0) || 0));
-      const volumeTickets = Math.floor(volume / Math.max(1, Number(cfg.volume_per_ticket_usd || 1000) || 1000));
-      const attackTickets = Math.floor(attackWins / Math.max(1, Number(cfg.attack_wins_per_ticket || 10) || 10));
-      let uncapped = volumeTickets;
-      if (cfg.ticket_metric === 'attack_wins') uncapped = attackTickets;
-      else if (cfg.ticket_metric === 'volume_or_attack_wins') uncapped = Math.max(volumeTickets, attackTickets);
-      else if (cfg.ticket_metric === 'volume_and_attack_wins') uncapped = Math.min(volumeTickets, attackTickets);
-      const minAttackWins = Math.max(0, Number(cfg.min_attack_wins || 0) || 0);
-      if (minAttackWins > 0 && attackWins < minAttackWins) uncapped = 0;
-      const tickets = Math.max(0, Math.min(cfg.max_tickets, uncapped));
-      let reason = tickets > 0 ? 'eligible' : 'below_ticket_threshold';
+      const ticketState = luckyRaiderTicketState(cfg, volume, attackWins);
+      const tickets = ticketState.tickets;
+      let reason = tickets > 0 ? 'eligible' : ticketState.reason;
       let hasNft = null;
       if (cfg.require_nft) {
         hasNft = playerHasTournamentRewardNft(row.player_id, cfg.required_collections);
@@ -18801,9 +18828,11 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
         raw_attack_wins: Math.max(0, Math.floor(Number(attackStats.raw_attack_wins || attackWins) || 0)),
         raw_attack_attempts: Math.max(0, Math.floor(Number(attackStats.raw_attack_attempts || 0) || 0)),
         raw_attack_surrenders: Math.max(0, Math.floor(Number(attackStats.raw_attack_surrenders || 0) || 0)),
-        max_counted_attacks: Math.max(0, Math.floor(Number(attackStats.max_counted_attacks || cfg.max_tickets || 0) || 0)),
-        volume_tickets: Math.max(0, volumeTickets),
-        attack_win_tickets: Math.max(0, attackTickets),
+        max_counted_attacks: Math.max(0, Math.floor(Number(attackStats.max_counted_attacks || cfg.max_counted_attacks || cfg.max_tickets || 0) || 0)),
+        volume_tickets: ticketState.volume_tickets,
+        raw_volume_tickets: ticketState.raw_volume_tickets,
+        max_volume_tickets: ticketState.max_volume_tickets,
+        attack_win_tickets: ticketState.attack_win_tickets,
         tickets: cfg.require_nft && !hasNft ? 0 : tickets,
         eligible: tickets > 0 && (!cfg.require_nft || hasNft),
         reason,
@@ -18868,25 +18897,14 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
       myRawAttackWins = Math.max(0, Math.floor(Number(attackStats.raw_attack_wins || myAttackWins) || 0));
       myRawAttackAttempts = Math.max(0, Math.floor(Number(attackStats.raw_attack_attempts || 0) || 0));
       myRawAttackSurrenders = Math.max(0, Math.floor(Number(attackStats.raw_attack_surrenders || 0) || 0));
-      const volumeTickets = Math.floor(Math.max(0, myVolume) / Math.max(1, Number(cfg.volume_per_ticket_usd || 1000) || 1000));
-      const attackTickets = Math.floor(Math.max(0, Math.floor(myAttackWins)) / Math.max(1, Number(cfg.attack_wins_per_ticket || 10) || 10));
-      let uncapped = volumeTickets;
-      if (cfg.ticket_metric === 'attack_wins') uncapped = attackTickets;
-      else if (cfg.ticket_metric === 'volume_or_attack_wins') uncapped = Math.max(volumeTickets, attackTickets);
-      else if (cfg.ticket_metric === 'volume_and_attack_wins') uncapped = Math.min(volumeTickets, attackTickets);
-      const minAttackWins = Math.max(0, Number(cfg.min_attack_wins || 0) || 0);
-      if (minAttackWins > 0 && myAttackWins < minAttackWins) uncapped = 0;
-      myVolumeTickets = Math.max(0, volumeTickets);
-      myAttackWinTickets = Math.max(0, attackTickets);
-      myTickets = Math.max(0, Math.min(cfg.max_tickets, uncapped));
+      const ticketState = luckyRaiderTicketState(cfg, myVolume, myAttackWins);
+      myVolumeTickets = ticketState.volume_tickets;
+      myAttackWinTickets = ticketState.attack_win_tickets;
+      myTickets = ticketState.tickets;
       hasRequiredNft = cfg.require_nft ? playerHasTournamentRewardNft(viewerId, cfg.required_collections) : true;
       myEligible = myTickets > 0 && (!cfg.require_nft || hasRequiredNft);
       if (myTickets > 0) myReason = !hasRequiredNft ? 'missing_required_nft' : 'eligible';
-      else if (minAttackWins > 0 && myAttackWins < minAttackWins) myReason = 'min_attack_wins_not_met';
-      else if (cfg.ticket_metric === 'attack_wins') myReason = 'attack_wins_below_ticket';
-      else if (cfg.ticket_metric === 'volume_and_attack_wins') myReason = 'volume_and_attack_wins_below_ticket';
-      else if (cfg.ticket_metric === 'volume_or_attack_wins') myReason = 'volume_or_attack_wins_below_ticket';
-      else myReason = 'volume_below_ticket';
+      else myReason = ticketState.reason;
     } catch {}
   }
   return {
@@ -18898,6 +18916,8 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
     min_attack_wins: cfg.min_attack_wins,
     winner_count: cfg.winner_count,
     max_tickets: cfg.max_tickets,
+    max_counted_attacks: cfg.max_counted_attacks,
+    max_volume_tickets: cfg.max_volume_tickets,
     require_nft: cfg.require_nft,
     required_collections: cfg.required_collections,
     rewards: cfg.rewards,

@@ -2908,9 +2908,10 @@ function parseTournamentRewardConfig(value) {
     .map((v) => String(v || '').trim().toLowerCase())
     .filter((v) => ['demon_king', 'dragon'].includes(v));
   const ticketMetricRaw = String(luckyRaw.ticket_metric || luckyRaw.metric || 'volume').trim().toLowerCase();
-  const ticketMetric = ['volume', 'attack_wins', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(ticketMetricRaw)
+  const ticketMetric = ['volume', 'attack_wins', 'attack_wins_plus_volume', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(ticketMetricRaw)
     ? ticketMetricRaw
     : 'volume';
+  const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20)));
   return {
     ...raw,
     daily_pools: Array.isArray(raw.daily_pools) ? raw.daily_pools : [],
@@ -2923,7 +2924,9 @@ function parseTournamentRewardConfig(value) {
       attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
       min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
       winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
-      max_tickets: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20))),
+      max_tickets: maxTickets,
+      max_counted_attacks: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_counted_attacks || luckyRaw.max_attack_tickets || maxTickets) || maxTickets))),
+      max_volume_tickets: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.max_volume_tickets ?? luckyRaw.max_volume_bonus_tickets ?? 0) || 0))),
       require_nft: !!luckyRaw.require_nft,
       required_collections: requiredCollections.length ? requiredCollections : ['demon_king', 'dragon'],
       rewards: Array.isArray(luckyRaw.rewards) ? luckyRaw.rewards : [],
@@ -3354,16 +3357,20 @@ function luckyRaiderRewardsForPlace(cfg, place) {
 
 function luckyRaiderTicketState(cfg, volume, attackWins) {
   const metric = String(cfg?.ticket_metric || 'volume').toLowerCase();
-  const volumeTickets = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const rawVolumeTickets = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const maxVolumeTickets = Math.max(0, Math.floor(Number(cfg?.max_volume_tickets || 0) || 0));
+  const volumeTickets = maxVolumeTickets > 0 ? Math.min(rawVolumeTickets, maxVolumeTickets) : rawVolumeTickets;
   const attackTickets = Math.floor(Math.max(0, Math.floor(Number(attackWins) || 0)) / Math.max(1, Math.floor(Number(cfg?.attack_wins_per_ticket || 10) || 10)));
   let ticketsRaw = volumeTickets;
   if (metric === 'attack_wins') ticketsRaw = attackTickets;
+  else if (metric === 'attack_wins_plus_volume') ticketsRaw = attackTickets + volumeTickets;
   else if (metric === 'volume_or_attack_wins') ticketsRaw = Math.max(volumeTickets, attackTickets);
   else if (metric === 'volume_and_attack_wins') ticketsRaw = Math.min(volumeTickets, attackTickets);
   const minAttackWins = Math.max(0, Math.floor(Number(cfg?.min_attack_wins || 0) || 0));
   let reason = ticketsRaw > 0 ? 'eligible' : 'below_ticket_threshold';
   if ((metric === 'attack_wins' || metric === 'volume_and_attack_wins') && attackTickets <= 0) reason = 'attack_wins_below_ticket';
   else if (metric === 'volume' && volumeTickets <= 0) reason = 'volume_below_ticket';
+  else if (metric === 'attack_wins_plus_volume' && attackTickets <= 0 && volumeTickets <= 0) reason = 'attack_wins_plus_volume_below_ticket';
   else if (metric === 'volume_or_attack_wins' && volumeTickets <= 0 && attackTickets <= 0) reason = 'volume_or_attack_wins_below_ticket';
   if (minAttackWins > 0 && Math.max(0, Math.floor(Number(attackWins) || 0)) < minAttackWins) {
     reason = 'min_attack_wins_not_met';
@@ -3372,6 +3379,8 @@ function luckyRaiderTicketState(cfg, volume, attackWins) {
   return {
     ticket_metric: metric,
     volume_tickets: Math.max(0, volumeTickets),
+    raw_volume_tickets: Math.max(0, rawVolumeTickets),
+    max_volume_tickets: maxVolumeTickets,
     attack_win_tickets: Math.max(0, attackTickets),
     uncapped_tickets: Math.max(0, ticketsRaw),
     tickets: Math.max(0, Math.min(Math.max(1, Math.floor(Number(cfg?.max_tickets || 20) || 20)), ticketsRaw)),
@@ -3401,7 +3410,7 @@ function luckyRaiderDayWindow(t, dayInput) {
 }
 
 function luckyRaiderMaxCountedAttacks(cfg) {
-  return Math.max(1, Math.floor(Number(cfg?.max_tickets || 20) || 20));
+  return Math.max(1, Math.floor(Number(cfg?.max_counted_attacks || cfg?.max_tickets || 20) || 20));
 }
 
 function luckyRaiderAttackStatsForPlayer(t, playerId, dayInput, cfgInput = null) {
@@ -3568,6 +3577,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         required_collections: cfg.required_collections,
         has_required_nft: cfg.require_nft ? hasNft : null,
         volume_tickets: ticketState.volume_tickets,
+        raw_volume_tickets: ticketState.raw_volume_tickets,
+        max_volume_tickets: ticketState.max_volume_tickets,
         attack_win_tickets: ticketState.attack_win_tickets,
         uncapped_tickets: ticketsRaw,
       };
@@ -3612,6 +3623,9 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       attack_attempts: entry.attack_attempts,
       raw_attack_wins: entry.raw_attack_wins,
       raw_attack_attempts: entry.raw_attack_attempts,
+      volume_tickets: entry.details.volume_tickets,
+      raw_volume_tickets: entry.details.raw_volume_tickets,
+      attack_win_tickets: entry.details.attack_win_tickets,
       tickets: entry.tickets,
       rewards: luckyRaiderRewardsForPlace(cfg, entry.place),
     }));
@@ -3633,6 +3647,9 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         attack_attempts: entry.attack_attempts,
         raw_attack_wins: entry.raw_attack_wins,
         raw_attack_attempts: entry.raw_attack_attempts,
+        volume_tickets: entry.details.volume_tickets,
+        raw_volume_tickets: entry.details.raw_volume_tickets,
+        attack_win_tickets: entry.details.attack_win_tickets,
         tickets: entry.tickets,
         eligible: !!entry.eligible,
         reason: entry.reason,

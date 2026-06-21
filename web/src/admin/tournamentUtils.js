@@ -82,7 +82,7 @@ export function emptyLuckyRaiderEvent() {
   return {
     ...emptyTournament('lucky_raider'),
     name: 'Daily Lucky Raider',
-    description: 'Daily raid lottery. Win attacks to earn tickets.',
+    description: 'Daily raid lottery. Win attacks and trade volume to earn tickets.',
     dex_scope: 'all',
     eligible_dexes: [...TOURNAMENT_DEXES],
     sort_by: 'points',
@@ -219,6 +219,8 @@ export function defaultRewardConfig() {
       min_attack_wins: 0,
       winner_count: 1,
       max_tickets: 20,
+      max_counted_attacks: 20,
+      max_volume_tickets: 0,
       require_nft: false,
       required_collections: ['demon_king', 'dragon'],
       rewards: [],
@@ -251,9 +253,10 @@ export function normalizeRewardConfig(raw = {}) {
   const collections = Array.isArray(lucky.required_collections)
     ? lucky.required_collections.filter((item) => ['demon_king', 'dragon'].includes(item))
     : base.lucky_daily_raider.required_collections;
-  const ticketMetric = ['volume', 'attack_wins', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(lucky.ticket_metric)
+  const ticketMetric = ['volume', 'attack_wins', 'attack_wins_plus_volume', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(lucky.ticket_metric)
     ? lucky.ticket_metric
     : base.lucky_daily_raider.ticket_metric;
+  const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(lucky.max_tickets || base.lucky_daily_raider.max_tickets) || 20)));
   return {
     daily_pools: (Array.isArray(source.daily_pools) ? source.daily_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Daily pool ${idx + 1}`)),
     final_pools: (Array.isArray(source.final_pools) ? source.final_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Final pool ${idx + 1}`)),
@@ -265,7 +268,9 @@ export function normalizeRewardConfig(raw = {}) {
       attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(lucky.attack_wins_per_ticket || base.lucky_daily_raider.attack_wins_per_ticket) || 10))),
       min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(lucky.min_attack_wins || 0) || 0))),
       winner_count: Math.max(1, Math.min(100, Math.floor(Number(lucky.winner_count || lucky.winners || 1) || 1))),
-      max_tickets: Math.max(1, Math.min(100000, Math.floor(Number(lucky.max_tickets || base.lucky_daily_raider.max_tickets) || 20))),
+      max_tickets: maxTickets,
+      max_counted_attacks: Math.max(1, Math.min(100000, Math.floor(Number(lucky.max_counted_attacks || lucky.max_attack_tickets || maxTickets) || maxTickets))),
+      max_volume_tickets: Math.max(0, Math.min(100000, Math.floor(Number(lucky.max_volume_tickets ?? lucky.max_volume_bonus_tickets ?? base.lucky_daily_raider.max_volume_tickets) || 0))),
       require_nft: !!lucky.require_nft,
       required_collections: collections.length ? collections : ['demon_king', 'dragon'],
       rewards: (Array.isArray(lucky.rewards) ? lucky.rewards : []).map(normalizeReward),
@@ -302,6 +307,8 @@ export function rewardConfigPreset5000() {
       min_attack_wins: 0,
       winner_count: 1,
       max_tickets: 20,
+      max_counted_attacks: 20,
+      max_volume_tickets: 0,
       require_nft: true,
       required_collections: ['demon_king', 'dragon'],
       rewards: [{ ...rewardDefaults('money'), label: 'Lucky cash', pool_amount: 50, winners: 1, preset: 'winner_take_all' }],
@@ -317,12 +324,14 @@ export function rewardConfigPresetLuckyRaider() {
     lucky_daily_raider: {
       enabled: true,
       label: 'Daily Lucky Raider',
-      ticket_metric: 'attack_wins',
-      volume_per_ticket_usd: 1000,
+      ticket_metric: 'attack_wins_plus_volume',
+      volume_per_ticket_usd: 10000,
       attack_wins_per_ticket: 1,
       min_attack_wins: 0,
       winner_count: 3,
-      max_tickets: 50,
+      max_tickets: 55,
+      max_counted_attacks: 50,
+      max_volume_tickets: 5,
       require_nft: false,
       required_collections: ['demon_king', 'dragon'],
       rewards: [{ ...rewardDefaults('money'), label: 'CLASH daily prize', currency: 'CLASH', unit: 'CLASH', pool_amount: 100, winners: 3, preset: 'equal' }],

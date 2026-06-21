@@ -1928,6 +1928,7 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
                 <select className="admin-select" value={config.lucky_daily_raider.ticket_metric || 'volume'} onChange={(e) => updateLucky({ ticket_metric: e.target.value })}>
                   <option value="volume">Volume only</option>
                   <option value="attack_wins">Winning attacks only</option>
+                  <option value="attack_wins_plus_volume">Winning attacks + volume bonus</option>
                   <option value="volume_or_attack_wins">Volume OR winning attacks</option>
                   <option value="volume_and_attack_wins">Volume AND winning attacks</option>
                 </select>
@@ -1939,6 +1940,10 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
               <NumberField label="Min winning attacks" value={config.lucky_daily_raider.min_attack_wins || 0} onChange={(v) => updateLucky({ min_attack_wins: v })} />
               <NumberField label="Winner places" value={config.lucky_daily_raider.winner_count || 1} onChange={(v) => updateLucky({ winner_count: v })} />
               <NumberField label="Max tickets" value={config.lucky_daily_raider.max_tickets} onChange={(v) => updateLucky({ max_tickets: v })} />
+            </div>
+            <div className="admin-form-grid three">
+              <NumberField label="Max counted attacks" value={config.lucky_daily_raider.max_counted_attacks || config.lucky_daily_raider.max_tickets || 50} onChange={(v) => updateLucky({ max_counted_attacks: v })} />
+              <NumberField label="Max volume tickets" value={config.lucky_daily_raider.max_volume_tickets || 0} onChange={(v) => updateLucky({ max_volume_tickets: v })} />
             </div>
             <div className="admin-form-grid three">
               <label className="admin-field"><span className="admin-label">NFT required</span><select className="admin-select" value={config.lucky_daily_raider.require_nft ? '1' : '0'} onChange={(e) => updateLucky({ require_nft: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
