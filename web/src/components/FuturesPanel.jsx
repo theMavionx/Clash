@@ -4364,7 +4364,8 @@ function FuturesPanel() {
   // ==================== GRVT API KEY GATE ====================
   if (dex === 'grvt' && hasWallet && setupVerified !== true) {
     const isRunning = referralLinking || loading;
-    const grvtCanSave = grvtApiKeyInput.trim().length > 0 && !isRunning;
+    const grvtCanAuthorize = !isRunning;
+    const grvtCanSaveManual = grvtApiKeyInput.trim().length > 0 && !isRunning;
 
     return (
       <>
@@ -4386,9 +4387,9 @@ function FuturesPanel() {
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
-                <span style={hlGateStyles.title}>Add GRVT API key</span>
+                <span style={hlGateStyles.title}>Authorize GRVT trading</span>
                 <span style={hlGateStyles.subtitle}>
-                  Create a GRVT API key from the trading account where your funds are held. Clash uses it to read balance, orders, positions, and builder-code fills.
+                  Sign once with your GRVT wallet. Clash creates the GRVT API key and local trading signer automatically.
                 </span>
               </div>
 
@@ -4405,8 +4406,8 @@ function FuturesPanel() {
                     {isRunning ? <span style={hlGateStyles.spinner} /> : 2}
                   </span>
                   <span style={hlGateStyles.stepText}>
-                    <span style={{ ...hlGateStyles.stepLabel, ...(isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Store GRVT API key locally</span>
-                    <span style={hlGateStyles.stepHint}>Clash auto-detects the GRVT trading account from that key.</span>
+                    <span style={{ ...hlGateStyles.stepLabel, ...(isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Sign builder authorization</span>
+                    <span style={hlGateStyles.stepHint}>One wallet signature creates the GRVT API key and tags the Clash builder.</span>
                   </span>
                 </li>
                 <li style={hlGateStyles.stepItem}>
@@ -4418,6 +4419,27 @@ function FuturesPanel() {
                 </li>
               </ol>
 
+              <button
+                style={{ ...hlGateStyles.primaryBtn, ...(!grvtCanAuthorize ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={!grvtCanAuthorize}
+                onClick={async () => {
+                  if (!activate) return;
+                  setReferralLinking(true);
+                  try {
+                    const res = await activate({ autoBuilderKey: true });
+                    if (res?.error) setLocalAlert(res.error);
+                    else {
+                      setGrvtApiKeyInput('');
+                      setSuccessMsg('GRVT trading authorized.');
+                    }
+                  } finally {
+                    setReferralLinking(false);
+                  }
+                }}
+              >
+                {isRunning ? 'Connecting...' : 'Authorize with wallet ->'}
+              </button>
+
               <div style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -4428,12 +4450,12 @@ function FuturesPanel() {
                 padding: 12,
               }}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>GRVT API key</span>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Existing GRVT API key</span>
                   <input
                     type="password"
                     value={grvtApiKeyInput}
                     onChange={(e) => setGrvtApiKeyInput(e.target.value)}
-                    placeholder="Paste your GRVT API key"
+                    placeholder="Fallback: paste API key"
                     autoComplete="new-password"
                     autoCapitalize="none"
                     autoCorrect="off"
@@ -4442,36 +4464,41 @@ function FuturesPanel() {
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
                   />
                 </label>
-                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
-                  Stored encrypted in this browser only. Create the key from the GRVT trading account where your funds are held.
-                </div>
-              </div>
-
-              <button
-                style={{ ...hlGateStyles.primaryBtn, ...(!grvtCanSave ? hlGateStyles.primaryBtnBusy : null) }}
-                disabled={!grvtCanSave}
-                onClick={async () => {
-                  if (!activate) return;
-                  const apiKey = grvtApiKeyInput.trim();
-                  if (!apiKey) {
-                    setLocalAlert('Enter your GRVT API key');
-                    return;
-                  }
-                  setReferralLinking(true);
-                  try {
-                    const res = await activate({ apiKey });
-                    if (res?.error) setLocalAlert(res.error);
-                    else {
-                      setGrvtApiKeyInput('');
-                      setSuccessMsg('GRVT API key saved in this browser.');
+                <button
+                  style={{
+                    ...hlGateStyles.primaryBtn,
+                    ...(!grvtCanSaveManual ? hlGateStyles.primaryBtnBusy : null),
+                    width: '100%',
+                    padding: '10px 12px',
+                    background: '#fff6dc',
+                    color: '#5C3A21',
+                    border: '2px solid #9f8759',
+                    textShadow: 'none',
+                  }}
+                  disabled={!grvtCanSaveManual}
+                  onClick={async () => {
+                    if (!activate) return;
+                    const apiKey = grvtApiKeyInput.trim();
+                    if (!apiKey) {
+                      setLocalAlert('Enter your GRVT API key');
+                      return;
                     }
-                  } finally {
-                    setReferralLinking(false);
-                  }
-                }}
-              >
-                {isRunning ? 'Connecting...' : 'Add GRVT API key ->'}
-              </button>
+                    setReferralLinking(true);
+                    try {
+                      const res = await activate({ apiKey });
+                      if (res?.error) setLocalAlert(res.error);
+                      else {
+                        setGrvtApiKeyInput('');
+                        setSuccessMsg('GRVT API key saved in this browser.');
+                      }
+                    } finally {
+                      setReferralLinking(false);
+                    }
+                  }}
+                >
+                  Use existing API key
+                </button>
+              </div>
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
@@ -6802,6 +6829,24 @@ function FuturesPanel() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
               </div>
+              <button
+                type="button"
+                style={{...S.btnSmall, width: '100%', padding: '10px 12px', background: '#16A34A', color: '#fff', border: '2px solid #15803D'}}
+                disabled={loading}
+                onClick={async () => {
+                  const res = await activate?.({ autoBuilderKey: true });
+                  if (res?.error) {
+                    setLocalAlert(res.error);
+                    return;
+                  }
+                  setGrvtApiKeyInput('');
+                  setGrvtPrivateKeyInput('');
+                  setGrvtAccountModalOpen(false);
+                  setSuccessMsg('GRVT trading authorized.');
+                }}
+              >
+                {loading ? 'Authorizing...' : 'Authorize with wallet'}
+              </button>
               <label style={{display: 'flex', flexDirection: 'column', gap: 6}}>
                 <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>New GRVT API key</span>
                 <input

@@ -3713,18 +3713,30 @@ router.post('/grvt/set-position-config', auth, async (req, res) => {
 
 router.post('/grvt/authorize-builder', auth, async (req, res) => {
   try {
-    const creds = requireGrvtOwner(req, res);
-    if (!creds) return;
+    if (req.dex !== 'grvt') {
+      return res.status(409).json({
+        error: `Account is registered for '${req.dex}'. Switch DEX to grvt before calling GRVT endpoints.`,
+        stored_dex: req.dex,
+        requested_dex: 'grvt',
+      });
+    }
     const mainAccountId = String(
       req.body?.main_account_id
       || req.body?.mainAccountId
       || ''
     ).trim();
+    const playerWallet = String(req.playerWallet || '').trim().toLowerCase();
+    if (/^0x[a-f0-9]{40}$/i.test(playerWallet) && mainAccountId.toLowerCase() !== playerWallet) {
+      return res.status(403).json({ error: 'GRVT authorization wallet does not match this game account.' });
+    }
     const result = await grvt.authorizeBuilder({
       mainAccountId,
       signature: req.body?.signature,
       maxFuturesFeeRate: req.body?.max_futures_fee_rate || req.body?.maxFuturesFeeRate,
       maxSpotFeeRate: req.body?.max_spot_fee_rate || req.body?.maxSpotFeeRate,
+      builderApiKeyLabel: req.body?.builder_api_key_label || req.body?.builderApiKeyLabel,
+      builderApiKeySigner: req.body?.builder_api_key_signer || req.body?.builderApiKeySigner,
+      builderApiKeyPermissions: req.body?.builder_api_key_permissions || req.body?.builderApiKeyPermissions,
     });
     res.json(result);
   } catch (e) {

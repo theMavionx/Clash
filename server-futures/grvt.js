@@ -17,9 +17,25 @@ function normalizeBuilderFeePercent(raw, bps) {
   }
   return String(bps / 100);
 }
+function normalizePermissionString(value) {
+  const order = ['Admin', 'InternalTransfer', 'ExternalTransfer', 'Withdraw', 'VaultInvestor', 'Trade'];
+  const aliases = new Map(order.map(name => [name.toLowerCase(), name]));
+  const parts = String(value || '')
+    .split('&')
+    .map(part => aliases.get(part.trim().toLowerCase()))
+    .filter(Boolean);
+  const unique = [...new Set(parts)];
+  unique.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  return unique.join('&') || 'Trade';
+}
 const GRVT_BUILDER_FEE_RATE = normalizeBuilderFeePercent(
   process.env.GRVT_BUILDER_FEE_RATE || process.env.VITE_GRVT_BUILDER_FEE_RATE,
   GRVT_BUILDER_FEE_BPS,
+);
+const GRVT_BUILDER_API_KEY_PERMISSIONS = normalizePermissionString(
+  process.env.GRVT_BUILDER_API_KEY_PERMISSIONS
+    || process.env.VITE_GRVT_BUILDER_API_KEY_PERMISSIONS
+    || 'Admin&Trade',
 );
 const GRVT_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(1000, Number(process.env.GRVT_FILL_LOOKBACK_LIMIT || 500)));
 const GRVT_CHAIN_ID = String(process.env.GRVT_CHAIN_ID || process.env.VITE_GRVT_CHAIN_ID || '325').trim();
@@ -213,11 +229,34 @@ async function apiKeyAuthHeaders(apiKey, fallbackAccountHeader = '') {
   return { Cookie: cookie, 'X-Grvt-Account-Id': accountHeader, subAccountId, fundingAccountAddress };
 }
 
+async function getSubAccountIds(headers = {}) {
+  const cleanHeaders = {
+    Cookie: headers.Cookie,
+    'X-Grvt-Account-Id': headers['X-Grvt-Account-Id'],
+  };
+  const payload = await tradePost('get_sub_accounts', {}, {}, cleanHeaders);
+  const result = resultOf(payload);
+  const ids = Array.isArray(result?.sub_account_ids)
+    ? result.sub_account_ids
+    : Array.isArray(result?.sa)
+      ? result.sa
+      : Array.isArray(payload?.sub_account_ids)
+        ? payload.sub_account_ids
+        : Array.isArray(payload?.sa)
+          ? payload.sa
+          : [];
+  return ids.map(id => String(id || '').trim()).filter(Boolean);
+}
+
 async function resolveCreds(credsInput) {
   const creds = credentials(credsInput);
   if (creds.apiKey) {
     const session = await apiKeyAuthHeaders(creds.apiKey, creds.accountId);
-    const subAccountId = session.subAccountId || creds.subAccountId;
+    let subAccountId = session.subAccountId || creds.subAccountId;
+    if (!subAccountId) {
+      const subAccounts = await getSubAccountIds(session).catch(() => []);
+      subAccountId = subAccounts[0] || '';
+    }
     if (!subAccountId) throw new Error('GRVT API key login did not return sub_account_id; create the key from the funded GRVT trading account and save it again');
     return {
       ...creds,
@@ -494,6 +533,7 @@ function getBuilderConfig() {
     accountHeader: GRVT_BUILDER_ACCOUNT_HEADER || null,
     feeBps: GRVT_BUILDER_FEE_BPS,
     feeRate: GRVT_BUILDER_FEE_RATE,
+    apiKeyPermissions: GRVT_BUILDER_API_KEY_PERMISSIONS,
     authMode: GRVT_BUILDER_COOKIE ? 'cookie' : (GRVT_BUILDER_API_KEY ? 'api_key' : 'missing'),
     configured: builderConfigured(),
   };
@@ -763,6 +803,17 @@ async function authorizeBuilder(input = {}) {
   if (!GRVT_BUILDER_ACCOUNT_ID) throw new Error('GRVT builder account is not configured');
   const mainAccountId = String(input.mainAccountId || input.main_account_id || '').trim();
   if (!/^0x[a-fA-F0-9]{40}$/.test(mainAccountId)) throw new Error('GRVT funding account address required');
+  const apiKeySigner = String(input.builderApiKeySigner || input.builder_api_key_signer || '').trim();
+  if (apiKeySigner && !/^0x[a-fA-F0-9]{40}$/.test(apiKeySigner)) {
+    throw new Error('GRVT builder API key signer must be an EVM address');
+  }
+  const apiKeyPermissions = normalizePermissionString(
+    input.builderApiKeyPermissions || input.builder_api_key_permissions || GRVT_BUILDER_API_KEY_PERMISSIONS,
+  );
+  const apiKeyLabel = String(input.builderApiKeyLabel || input.builder_api_key_label || `clash-${Date.now().toString(36)}`)
+    .trim()
+    .replace(/[^a-zA-Z0-9_.:-]/gu, '-')
+    .slice(0, 64);
   const sig = input.signature || {};
   const body = {
     main_account_id: mainAccountId,
@@ -779,8 +830,17 @@ async function authorizeBuilder(input = {}) {
       chain_id: String(sig.chain_id || sig.ci || GRVT_CHAIN_ID),
     },
   };
+  if (apiKeySigner) {
+    body.builder_api_key_label = apiKeyLabel || `clash-${Date.now().toString(36)}`;
+    body.builder_api_key_signer = apiKeySigner;
+    body.builder_api_key_permissions = apiKeyPermissions;
+  }
   const { data } = await authPost('/auth/builder/authorize', body);
-  return { success: true, result: data || null };
+  return {
+    success: true,
+    apiKey: data?.api_key || data?.apiKey || null,
+    result: data || null,
+  };
 }
 
 let builderSession = { cookie: '', accountHeader: '', expiresAt: 0 };

@@ -5,7 +5,7 @@ import { GRVT_CHAIN_ID, ensureGrvtChain } from '../lib/grvtConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
 import { usePlayer } from './useGodot';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
-import { privateKeyToAccount } from 'viem/accounts';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
@@ -19,7 +19,10 @@ const POLL_INTERVAL_MS = 45_000;
 const WALLET_USDC_POLL_INTERVAL_MS = 120_000;
 const GRVT_REF_URL = 'https://grvt.io/?ref=UERIHL5';
 const GRVT_BUILDER_ACCOUNT_ID = String(import.meta.env.VITE_GRVT_BUILDER_ACCOUNT_ID || '').trim();
-  const GRVT_BUILDER_FEE_RATE = String(import.meta.env.VITE_GRVT_BUILDER_FEE_RATE || '0.01').trim();
+const GRVT_BUILDER_FEE_RATE = String(import.meta.env.VITE_GRVT_BUILDER_FEE_RATE || '0.01').trim();
+const GRVT_BUILDER_API_KEY_PERMISSIONS = normalizeGrvtPermissions(
+  import.meta.env.VITE_GRVT_BUILDER_API_KEY_PERMISSIONS || 'Admin&Trade',
+);
 function rows(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.data)) return payload.data;
@@ -37,6 +40,18 @@ function normalizeGrvtCredentials(value) {
     subAccountId: String(value.subAccountId || ''),
     fundingAccountAddress: String(value.fundingAccountAddress || ''),
   };
+}
+
+function normalizeGrvtPermissions(value) {
+  const order = ['Admin', 'InternalTransfer', 'ExternalTransfer', 'Withdraw', 'VaultInvestor', 'Trade'];
+  const aliases = new Map(order.map(name => [name.toLowerCase(), name]));
+  const parts = String(value || '')
+    .split('&')
+    .map(part => aliases.get(part.trim().toLowerCase()))
+    .filter(Boolean);
+  const unique = [...new Set(parts)];
+  unique.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  return unique.join('&') || 'Trade';
 }
 
 async function loadCredentials() {
@@ -67,6 +82,10 @@ function signerFromPrivateKey(value) {
   const privateKey = normalizePrivateKey(value);
   const account = privateKeyToAccount(privateKey);
   return { privateKey, account, address: account.address };
+}
+
+function createOneTapSigner() {
+  return signerFromPrivateKey(generatePrivateKey());
 }
 
 function normalizeOneTapSigner(value) {
@@ -107,6 +126,16 @@ function stripDomainTypes(types = {}) {
 
 function grvtErrorMessage(error, fallback = 'GRVT request failed') {
   return error?.detail || error?.error || error?.message || String(error || fallback);
+}
+
+function apiKeyFromAuthorizeResult(value) {
+  return String(
+    value?.apiKey
+    || value?.api_key
+    || value?.result?.api_key
+    || value?.result?.apiKey
+    || '',
+  ).trim();
 }
 
 function finiteNumber(...values) {
@@ -437,6 +466,110 @@ export function useGrvt() {
     }
   }, [authHeaders, fetchJson, isActiveDex, token]);
 
+  const activateWithBuilderSignature = useCallback(async () => {
+    if (!token) throw new Error('Game session is not ready');
+    const mainAccountId = String(evmWallet?.address || '').trim();
+    if (!/^0x[a-fA-F0-9]{40}$/u.test(mainAccountId)) throw new Error('Connect your GRVT Exchange wallet first');
+    const provider = evmWallet?.provider;
+    if (!provider) throw new Error('GRVT wallet signer is not ready');
+
+    const config = builderConfig || await fetchBuilderConfig();
+    const builderAccount = String(config?.accountId || GRVT_BUILDER_ACCOUNT_ID || '').trim();
+    const builderFeeRate = String(config?.feeRate || GRVT_BUILDER_FEE_RATE || '0').trim();
+    const permissions = normalizeGrvtPermissions(config?.apiKeyPermissions || GRVT_BUILDER_API_KEY_PERMISSIONS);
+    if (!builderAccount || !/^0x[a-fA-F0-9]{40}$/u.test(builderAccount)) {
+      throw new Error('GRVT builder account is not configured');
+    }
+
+    await ensureGrvtSigningChain(provider);
+    const signer = createOneTapSigner();
+    const nonce = randomUint32();
+    const expiration = nowNs() + 30n * 60n * 1_000_000_000n;
+    const maxFee = builderFeeSignValue(builderFeeRate);
+    const primaryType = 'AddAccountSignerWithBuilder';
+    const types = {
+      EIP712Domain: [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+      ],
+      [primaryType]: [
+        { name: 'accountID', type: 'address' },
+        { name: 'signer', type: 'address' },
+        { name: 'permissions', type: 'string' },
+        { name: 'builderAccountID', type: 'address' },
+        { name: 'maxFutureFeeRate', type: 'uint32' },
+        { name: 'maxSpotFeeRate', type: 'uint32' },
+        { name: 'nonce', type: 'uint32' },
+        { name: 'expiration', type: 'int64' },
+      ],
+    };
+    const rawSignature = await signTypedDataCompat({
+      provider,
+      walletClient: null,
+      account: mainAccountId,
+      domain: { name: 'GRVT Exchange', version: '0', chainId: GRVT_CHAIN_ID },
+      types,
+      primaryType,
+      message: {
+        accountID: mainAccountId,
+        signer: signer.address,
+        permissions,
+        builderAccountID: builderAccount,
+        maxFutureFeeRate: maxFee,
+        maxSpotFeeRate: maxFee,
+        nonce,
+        expiration,
+      },
+    });
+    const sig = splitSignature(rawSignature);
+    const authorized = await fetchJson('/api/futures/grvt/authorize-builder', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        main_account_id: mainAccountId,
+        max_futures_fee_rate: builderFeeRate,
+        max_spot_fee_rate: builderFeeRate,
+        builder_api_key_label: `clash-${Date.now().toString(36)}`,
+        builder_api_key_signer: signer.address,
+        builder_api_key_permissions: permissions,
+        signature: {
+          signer: mainAccountId,
+          r: sig.r,
+          s: sig.s,
+          v: sig.v,
+          expiration: expiration.toString(),
+          nonce,
+          chain_id: String(GRVT_CHAIN_ID),
+        },
+      }),
+    });
+    const apiKey = apiKeyFromAuthorizeResult(authorized);
+    if (!apiKey) throw new Error('GRVT did not return an API key for this authorization');
+    const saved = await resolveBrowserCredentials({ apiKey });
+    const resolved = {
+      apiKey,
+      subAccountId: String(saved?.sub_account_id || '').trim(),
+      fundingAccountAddress: String(saved?.funding_account_address || mainAccountId).trim(),
+    };
+    if (!resolved.subAccountId) {
+      throw new Error('GRVT could not find a trading account for the new API key. Create or fund a GRVT trading account, then try again.');
+    }
+    await Promise.all([
+      writeCredentials(resolved),
+      writeOneTapSigner(signer),
+    ]);
+    setCredentials(resolved);
+    setOneTapSigner(signer);
+    setBuilderAuthorized(true);
+    return {
+      success: true,
+      auto_created_api_key: true,
+      signer: signer.address,
+      sub_account_id: resolved.subAccountId,
+    };
+  }, [authHeaders, builderConfig, evmWallet?.address, evmWallet?.provider, fetchBuilderConfig, fetchJson, resolveBrowserCredentials, token]);
+
   const fetchMarkets = useCallback(async () => {
     try {
       const payload = await fetchJson('/api/futures/markets?dex=grvt');
@@ -687,6 +820,10 @@ export function useGrvt() {
     setLoading(true);
     setError(null);
     try {
+      const wantsAutoBuilderKey = !input || input.autoBuilderKey || input.auto_builder_key;
+      if (wantsAutoBuilderKey && !String(input?.apiKey || input?.api_key || '').trim()) {
+        return await activateWithBuilderSignature();
+      }
       const next = input
         ? {
           apiKey: String(input.apiKey || input.api_key || '').trim(),
@@ -712,7 +849,7 @@ export function useGrvt() {
     } finally {
       setLoading(false);
     }
-  }, [credentials?.fundingAccountAddress, credentials?.subAccountId, resolveBrowserCredentials]);
+  }, [activateWithBuilderSignature, credentials?.fundingAccountAddress, credentials?.subAccountId, resolveBrowserCredentials]);
 
   const disconnect = useCallback(async () => {
     await clearCredentials();
