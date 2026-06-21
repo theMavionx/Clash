@@ -12,12 +12,12 @@
  */
 
 const {
-  TROOP_STATS, computeDemonKingStats, DEFENSE_STATS, SKELETON_GUARD,
+  TROOP_STATS, computeNftTroopStats, DEFENSE_STATS, SKELETON_GUARD,
   MAX_SHIPS, TROOPS_PER_SHIP, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
   CANNON_DAMAGE, CANNON_INITIAL_ENERGY, CANNON_ENERGY_PER_DESTROY,
   CANNON_RELOAD_SEC, CANNON_SPEED, CANNON_MIN_FLIGHT_SEC,
   CANNON_START_POS, CANNON_TARGET_Y,
-  cannonShotCost, VALID_TROOP_TYPES,
+  cannonShotCost, VALID_TROOP_TYPES, normalizeNftRarity,
 } = require('./combat_defs');
 const { BUILDING_DEFS } = require('./db');
 const TROOP_PROJECTILE_SPAWN_Y = 0.154; // troop global Y + BaseTroop.PROJECTILE_SPAWN_Y in Godot telemetry
@@ -67,9 +67,33 @@ function normalizeTroopTypeName(name) {
   return TROOP_TYPE_ALIASES[raw] || raw;
 }
 
+function isNftBackedTroopType(troopType) {
+  return troopType === 'demon_king' || troopType === 'fire_dragon';
+}
+
 function troopEntryLevel(name) {
-  const match = String(name || '').match(/:L([1-3])$/i);
+  const troopType = normalizeTroopTypeName(name);
+  if (isNftBackedTroopType(troopType)) return null;
+  const match = String(name || '').match(/:L([1-4])(?:$|:)/i);
   return match ? Number(match[1]) : null;
+}
+
+function nftCollectionForTroopType(troopType) {
+  if (troopType === 'fire_dragon') return 'dragon';
+  if (troopType === 'demon_king') return 'demon_king';
+  return null;
+}
+
+function nftRarityFromEntry(name) {
+  const match = String(name || '').match(/:R(common|epic|legendary|unrevealed)(?:$|:)/i);
+  return match ? normalizeNftRarity(match[1]) : null;
+}
+
+function nftRarityLookupKey(troopType, name) {
+  const collection = nftCollectionForTroopType(troopType);
+  const parts = String(name || '').split(':');
+  if (!collection || parts.length < 3) return '';
+  return `${collection}:${String(parts[1] || '').toLowerCase()}:${String(parts[2] || '')}`.toLowerCase();
 }
 
 // ---------- Helpers ----------
@@ -570,7 +594,7 @@ function clearDeadOwnerProjectiles(projectiles, phase = null, onLost = null) {
 
 // ---------- Replay Verifier ----------
 
-function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, gridConfigs, serverTroopLevels, defenderAltarLevels = {}, debugTrace = false }) {
+function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, gridConfigs, serverTroopLevels, serverNftRarities = {}, defenderAltarLevels = {}, debugTrace = false }) {
   const gridConfigMap = normalizeGridConfigs(gridConfig, gridConfigs);
   const defaultGridConfig = gridConfigMap['0'] || Object.values(gridConfigMap)[0];
   if (!isValidGridConfig(defaultGridConfig)) {
@@ -892,6 +916,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
             time: act.t + SAIL_DELAY_SEC + ti * TROOP_SPAWN_DELAY,
             troopType, troopLevel: level,
             playerTroopLevels: serverTroopLevels || act.playerTroopLevels || act.troopLevels || {},
+            nftRarity: isNftBackedTroopType(troopType)
+              ? (serverNftRarities[nftRarityLookupKey(troopType, rawName)] || nftRarityFromEntry(rawName) || 'common')
+              : null,
             x: finiteNumber(troopSpawn.x, spawnX),
             z: finiteNumber(troopSpawn.z, spawnZ),
             replayOrder: shipReplayIndex * 100 + ti,
@@ -1002,8 +1029,8 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     for (let i = pendingSpawns.length - 1; i >= 0; i--) {
       if (pendingSpawns[i].time <= time) {
         const sp = pendingSpawns.splice(i, 1)[0];
-        const baseStats = sp.troopType === 'demon_king'
-          ? computeDemonKingStats(sp.playerTroopLevels, sp.troopLevel)
+        const baseStats = isNftBackedTroopType(sp.troopType)
+          ? computeNftTroopStats(sp.playerTroopLevels, sp.troopType, sp.nftRarity, sp.troopLevel)
           : (TROOP_STATS[sp.troopType]?.[sp.troopLevel] || TROOP_STATS[sp.troopType]?.[1]);
         const stats = baseStats;
         if (!stats) continue;
@@ -1017,6 +1044,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           hp: stats.hp, damage: stats.damage,
           atkSpeed: stats.atkSpeed, moveSpeed: stats.moveSpeed, range: stats.range,
           melee: stats.melee, projSpeed: stats.projSpeed || 0,
+          directHit: !!stats.directHit,
           flying: !!stats.flying,
           targetType: stats.flying ? UNIT_TARGET_AIR : UNIT_TARGET_GROUND,
           hitDelay: stats.hitDelay || 0, shootDelay: stats.shootDelay || 0,
@@ -1676,6 +1704,33 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
             t._forceRetarget = true;
           }
           if (target.hp <= 0 && target.type) cannonEnergy += CANNON_ENERGY_PER_DESTROY;
+        }
+        if (t.atkTimer >= t.atkSpeed) {
+          t.atkTimer -= t.atkSpeed;
+          t.hitDone = false;
+        }
+      } else if (t.directHit) {
+        if (!t.hitDone && t.atkTimer >= t.atkSpeed * (t.hitDelay || 0.4)) {
+          t.hitDone = true;
+          const hpBefore = target.hp;
+          target.hp -= t.damage;
+          traceEvent('troop_ranged_direct_hit', {
+            troopId: t.id,
+            replayOrder: t.replayOrder ?? null,
+            troop: t.type,
+            targetKind: targetIsGuard ? 'guard' : 'building',
+            targetId: target.id,
+            targetType: target.type || 'guard',
+            target: traceEntityPayload(target, targetIsGuard ? 'guard' : 'building'),
+            damage: t.damage,
+            hpBefore,
+            hpAfter: target.hp,
+          });
+          if (target.hp <= 0 && target.type) {
+            traceBuildingDestroyed(target, 'troop_ranged_direct');
+            t._forceRetarget = true;
+            cannonEnergy += CANNON_ENERGY_PER_DESTROY;
+          }
         }
         if (t.atkTimer >= t.atkSpeed) {
           t.atkTimer -= t.atkSpeed;

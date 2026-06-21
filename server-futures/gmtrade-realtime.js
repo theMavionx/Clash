@@ -56,9 +56,6 @@ function normalizeWallet(wallet, playerWallet) {
   if (!gmtrade.isSolanaAddress(value)) {
     throw Object.assign(new Error('Valid GMTrade Solana wallet required'), { status: 400 });
   }
-  if (playerWallet && value !== String(playerWallet).trim()) {
-    throw Object.assign(new Error('Connected wallet does not match registered GMTrade wallet'), { status: 409 });
-  }
   return value;
 }
 

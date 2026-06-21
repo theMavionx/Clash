@@ -126,6 +126,7 @@ function ProfileModal({ onClose }) {
   const [accountLinks, setAccountLinks] = useState({ wallets: [], dex_accounts: [], active_dex: '' });
   const [walletActionError, setWalletActionError] = useState('');
   const [walletActionBusy, setWalletActionBusy] = useState('');
+  const [referralSummary, setReferralSummary] = useState(player?.referral || null);
 
   useEffect(() => {
     if (!editingName) setNameDraft(currentName);
@@ -296,7 +297,12 @@ function ProfileModal({ onClose }) {
     if (!wallet?.address || walletActionBusy) return;
     const chain = wallet.chain_type || walletChainType(wallet.address);
     const key = `${chain}:${wallet.address}`;
-    const isLoginWallet = !!wallet.is_login_wallet;
+    const walletAddress = canonicalWallet(wallet.address);
+    const loginAddress = canonicalWallet(player?.wallet || '');
+    const currentActiveAddress = canonicalWallet(activeWallet || '');
+    const isLoginWallet = !!wallet.is_login_wallet
+      || (!!loginAddress && walletAddress === loginAddress)
+      || (!!currentActiveAddress && walletAddress === currentActiveAddress);
     setWalletActionBusy(key);
     setWalletActionError('');
     try {
@@ -310,7 +316,11 @@ function ProfileModal({ onClose }) {
             });
             if (!r.ok) {
               const data = await r.json().catch(() => ({}));
-              console.warn('[profile] wallet unlink failed before logout:', data?.error || r.status);
+              if (r.status === 401 || r.status === 404) {
+                console.warn('[profile] wallet unlink skipped before local disconnect:', data?.error || r.status);
+              } else {
+                console.warn('[profile] wallet unlink failed before logout:', data?.error || r.status);
+              }
             }
           } catch (e) {
             console.warn('[profile] wallet unlink request failed before logout:', e?.message || e);
@@ -329,7 +339,7 @@ function ProfileModal({ onClose }) {
     } finally {
       setWalletActionBusy('');
     }
-  }, [disconnectWalletContext, logoutEverything, onClose, player?.token, refreshAccountLinks, walletActionBusy]);
+  }, [activeWallet, disconnectWalletContext, logoutEverything, onClose, player?.token, player?.wallet, refreshAccountLinks, walletActionBusy]);
 
   const handleEvmConnected = ({ address, provider, rdns }) => {
     setEvmModalOpen(false);
@@ -495,6 +505,34 @@ function ProfileModal({ onClose }) {
     })();
     return () => { cancelled = true; };
   }, [token]);
+
+  useEffect(() => {
+    setReferralSummary(player?.referral || null);
+  }, [player?.referral]);
+
+  useEffect(() => {
+    if (!token) { setReferralSummary(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/players/referral', { headers: { 'x-token': token } });
+        const d = await r.json().catch(() => ({}));
+        if (!cancelled && r.ok) setReferralSummary(d.referral || null);
+      } catch { /* leave state payload */ }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const referralLink = useMemo(() => {
+    const code = referralSummary?.code || referralSummary?.slug || '';
+    if (!code || typeof window === 'undefined') return '';
+    return `${window.location.origin}/r/${code}`;
+  }, [referralSummary?.code, referralSummary?.slug]);
+
+  const money = useCallback((value) => {
+    const n = Number(value || 0);
+    return `$${n.toFixed(n >= 10 ? 2 : 4)}`;
+  }, []);
 
   return (
     <>
@@ -731,6 +769,51 @@ function ProfileModal({ onClose }) {
               <span>{soundEnabled ? 'ON' : 'OFF'}</span>
             </button>
           </div>
+
+          {referralSummary?.code && referralSummary?.active && (
+            <div style={S.referralBox}>
+              <div style={S.referralHead}>
+                <div>
+                  <div style={S.sectionTitle}>Referral</div>
+                  <div style={S.referralSub}>{Number(referralSummary.rate_bps || 0) / 100}% of confirmed Clash revenue</div>
+                </div>
+                <button
+                  type="button"
+                  style={S.referralCopyBtn}
+                  onClick={async () => {
+                    try { await navigator.clipboard.writeText(referralLink); } catch {}
+                    setCopied('referral-link');
+                    setTimeout(() => setCopied(false), 1500);
+                  }}
+                  disabled={!referralLink}
+                >
+                  {copied === 'referral-link' ? 'COPIED' : 'COPY'}
+                </button>
+              </div>
+              <div style={S.referralLink}>{referralLink || referralSummary.code}</div>
+              {referralSummary.referred_by && (
+                <div style={S.referralBy}>Invited by {referralSummary.referred_by.name}</div>
+              )}
+              <div style={S.referralStats}>
+                <div style={S.referralStat}>
+                  <span style={S.referralStatLabel}>Invited</span>
+                  <strong>{Number(referralSummary.invited_count || 0)}</strong>
+                </div>
+                <div style={S.referralStat}>
+                  <span style={S.referralStatLabel}>Confirmed</span>
+                  <strong>{money(referralSummary.confirmed_usd)}</strong>
+                </div>
+                <div style={S.referralStat}>
+                  <span style={S.referralStatLabel}>Pending</span>
+                  <strong>{money(referralSummary.pending_usd)}</strong>
+                </div>
+                <div style={S.referralStat}>
+                  <span style={S.referralStatLabel}>Paid</span>
+                  <strong>{money(referralSummary.paid_usd)}</strong>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Wallets */}
           {profileWallets.length ? (
@@ -1166,6 +1249,52 @@ const S = {
   soundToggleOff: {
     background: 'linear-gradient(180deg, #A3906A 0%, #6E5A3C 100%)',
     border: '3px solid #4F3E28',
+  },
+  referralBox: {
+    display: 'flex', flexDirection: 'column', gap: 8,
+    padding: '10px 12px', borderRadius: 14,
+    background: 'linear-gradient(180deg, #E8F5E9 0%, #D8EBCB 100%)',
+    border: '3px solid #91A971',
+    boxShadow: '0 3px 0 #6F8656, inset 0 1px 0 rgba(255,255,255,0.55)',
+  },
+  referralHead: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+  },
+  referralSub: {
+    marginTop: 2, color: '#5E7447', fontSize: 11, fontWeight: 900,
+  },
+  referralCopyBtn: {
+    height: 34, padding: '0 12px', borderRadius: 9,
+    background: 'linear-gradient(180deg, #6AB344 0%, #4D7A2E 100%)',
+    border: '2px solid #3A5E22', color: '#fff',
+    fontSize: 11, fontWeight: 900, cursor: 'pointer',
+    textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+  },
+  referralLink: {
+    padding: '8px 9px', borderRadius: 9,
+    background: 'rgba(255,255,255,0.55)',
+    border: '1px solid rgba(92,58,33,0.16)',
+    color: '#395726', fontSize: 12, fontWeight: 900,
+    fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  referralBy: {
+    color: '#5E7447', fontSize: 11, fontWeight: 900,
+  },
+  referralStats: {
+    display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6,
+  },
+  referralStat: {
+    display: 'flex', flexDirection: 'column', gap: 2,
+    minWidth: 0, padding: '7px 5px', borderRadius: 9,
+    background: 'rgba(255,255,255,0.5)',
+    border: '1px solid rgba(92,58,33,0.14)',
+    color: '#395726', fontSize: 11, fontWeight: 900,
+    textAlign: 'center',
+  },
+  referralStatLabel: {
+    color: '#6F8656', fontSize: 8, fontWeight: 900,
+    textTransform: 'uppercase',
   },
   connectedBox: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',

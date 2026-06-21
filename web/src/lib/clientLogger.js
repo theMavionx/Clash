@@ -146,7 +146,15 @@ function sanitize(value, depth = 0, seen = new WeakSet()) {
   }
   const out = {};
   for (const [key, child] of Object.entries(value).slice(0, 28)) {
-    out[key] = REDACT_KEY_RE.test(key) ? '[redacted]' : sanitize(child, depth + 1, seen);
+    if (REDACT_KEY_RE.test(key)) {
+      out[key] = '[redacted]';
+    } else if ((key === 'logs' || key === 'simulation_logs') && Array.isArray(child)) {
+      out[key] = child.slice(-80).map((v) => sanitize(v, depth + 1, seen));
+    } else if (key === 'err') {
+      out[key] = sanitize(child, depth - 1, seen);
+    } else {
+      out[key] = sanitize(child, depth + 1, seen);
+    }
   }
   return out;
 }
@@ -203,7 +211,7 @@ function addBreadcrumbInternal(type, data = {}, level = 'info') {
     level,
     type: truncate(type, 80),
     route: getRoute(),
-    data: sanitize(data),
+    data: sanitize(compactClientEventData(type, data, { forBreadcrumb: true })),
   };
   breadcrumbs.push(crumb);
   if (breadcrumbs.length > MAX_BREADCRUMBS) {
@@ -227,9 +235,13 @@ export function reportClientEvent(type, data = {}, opts = {}) {
     const level = opts.level || 'info';
     const source = opts.source || 'client.event';
     const message = opts.message || type || 'client.event';
-    const eventData = sanitizeDeep(data);
-    addBreadcrumbInternal(type, data, level);
-    enqueue(makeEvent(level, [message], source, opts.stack || '', {
+    const isRenderDiagnostic = type === 'godot.render_diagnostic';
+    const eventData = sanitizeDeep(compactClientEventData(type, data));
+    addBreadcrumbInternal(type, eventData, level);
+    const eventMessage = isRenderDiagnostic
+      ? renderDiagnosticMessage(message, eventData)
+      : message;
+    enqueue(makeEvent(level, [eventMessage], source, opts.stack || '', {
       rawPayload: {
         event: {
           type,
@@ -237,9 +249,79 @@ export function reportClientEvent(type, data = {}, opts = {}) {
         },
       },
       context: opts.context || {},
+      minimal: isRenderDiagnostic,
+      breadcrumbLimit: isRenderDiagnostic ? 4 : undefined,
     }));
     if (opts.flush || opts.immediate) flushClientLogs();
   } catch { /* noop */ }
+}
+
+function renderDiagnosticMessage(message, data = {}) {
+  const tag = data?.tag ? ` ${data.tag}` : '';
+  const visible = data?.visible_mesh_count ?? '?';
+  const total = data?.mesh_count ?? '?';
+  const zero = data?.zero_visible_meshes ? ' zero_visible' : '';
+  return `${message || 'godot.render_diagnostic'}${tag} meshes ${visible}/${total}${zero}`;
+}
+
+function compactClientEventData(type, data = {}, opts = {}) {
+  if (type !== 'godot.render_diagnostic' || !data || typeof data !== 'object') return data;
+  const meshes = Array.isArray(data.meshes) ? data.meshes : [];
+  const particles = Array.isArray(data.particles) ? data.particles : [];
+  const sampleLimit = opts.forBreadcrumb ? 2 : 6;
+  return {
+    tag: data.tag || null,
+    root_name: data.root_name || null,
+    root_class: data.root_class || null,
+    root_visible: data.root_visible ?? null,
+    child_count: data.child_count ?? null,
+    mesh_count: data.mesh_count ?? null,
+    visible_mesh_count: data.visible_mesh_count ?? null,
+    particle_count: data.particle_count ?? null,
+    visible_particle_count: data.visible_particle_count ?? null,
+    zero_visible_meshes: Number(data.mesh_count || 0) > 0 && Number(data.visible_mesh_count || 0) === 0,
+    extra: data.extra || null,
+    mesh_samples: meshes.slice(0, sampleLimit).map((m) => ({
+      name: m?.name || null,
+      visible: m?.visible ?? null,
+      mesh_class: m?.mesh_class || null,
+      surface_count: m?.surface_count ?? null,
+      aabb_size: m?.aabb_size || null,
+      extra_cull_margin: m?.extra_cull_margin ?? null,
+      lod_bias: m?.lod_bias ?? null,
+      ignore_occlusion_culling: m?.ignore_occlusion_culling ?? null,
+      materials: Array.isArray(m?.materials)
+        ? m.materials.slice(0, 3).map((mat) => ({
+          source: mat?.source || null,
+          class: mat?.class || null,
+          path: mat?.path || null,
+          shader: mat?.shader || null,
+          transparency: mat?.transparency ?? null,
+          cull_mode: mat?.cull_mode ?? null,
+          shading_mode: mat?.shading_mode ?? null,
+          albedo_texture: compactTextureDiagnostic(mat?.albedo_texture),
+          emission_texture: compactTextureDiagnostic(mat?.emission_texture),
+        }))
+        : [],
+    })),
+    particle_samples: particles.slice(0, sampleLimit).map((p) => ({
+      name: p?.name || null,
+      class: p?.class || null,
+      visible: p?.visible ?? null,
+      emitting: p?.emitting ?? null,
+      amount: p?.amount ?? null,
+    })),
+  };
+}
+
+function compactTextureDiagnostic(texture) {
+  if (!texture || typeof texture !== 'object') return null;
+  return {
+    class: texture.class || null,
+    path: texture.path || null,
+    width: texture.width ?? null,
+    height: texture.height ?? null,
+  };
 }
 
 export function flushClientLogs() {
@@ -412,6 +494,27 @@ function payloadString(payload) {
     const full = JSON.stringify(payload);
     if (full.length <= PAYLOAD_JSON_MAX) return full;
 
+    if (payload?.event?.type === 'godot.render_diagnostic') {
+      const renderPayload = {
+        args: Array.isArray(payload?.args) ? payload.args.slice(0, 2) : payload?.args,
+        context: payload?.context || null,
+        event: payload.event,
+        breadcrumbs: compactBreadcrumbsForPayload(payload?.breadcrumbs || [], 4),
+        payload_compacted: true,
+        original_payload_bytes: full.length,
+      };
+      const renderText = JSON.stringify(renderPayload);
+      if (renderText.length <= PAYLOAD_JSON_MAX) return renderText;
+
+      return JSON.stringify({
+        context: payload?.context || null,
+        event: payload.event,
+        payload_compacted: true,
+        dropped_breadcrumbs: true,
+        original_payload_bytes: full.length,
+      });
+    }
+
     const breadcrumbsList = Array.isArray(payload?.breadcrumbs) ? payload.breadcrumbs : [];
     const breadcrumbsCompact = compactBreadcrumbsForPayload(breadcrumbsList, 40);
     const compact = {
@@ -473,13 +576,25 @@ function enqueue(event) {
 
 function makeEvent(level, args, source, stack, extra = {}) {
   const safeArgs = args.map((arg) => sanitize(arg));
-  const payload = {
-    args: safeArgs,
-    context: currentContext(extra.context || {}),
-    actions: actionsForPayload(),
-    breadcrumbs: breadcrumbs.slice(-MAX_BREADCRUMBS),
-    ...(extra.rawPayload || sanitize(extra.payload || {})),
-  };
+  const context = currentContext(extra.context || {});
+  const extraPayload = extra.rawPayload || sanitize(extra.payload || {});
+  const payload = extra.minimal
+    ? {
+      args: safeArgs,
+      context,
+      breadcrumbs: compactBreadcrumbsForPayload(
+        breadcrumbs,
+        Number.isFinite(extra.breadcrumbLimit) ? extra.breadcrumbLimit : 6,
+      ),
+      ...extraPayload,
+    }
+    : {
+      args: safeArgs,
+      context,
+      actions: actionsForPayload(),
+      breadcrumbs: breadcrumbs.slice(-MAX_BREADCRUMBS),
+      ...extraPayload,
+    };
   return {
     level,
     source,
@@ -835,6 +950,7 @@ export function installClientLogger() {
   installServiceWorkerFreshnessGuard();
 
   window.__clashLogBreadcrumb = addClientBreadcrumb;
+  window.__clashReportClientEvent = reportClientEvent;
   window.__clashSetLogContext = setClientLogContext;
   window.__clashReportLazyChunkError = reportLazyChunkError;
 

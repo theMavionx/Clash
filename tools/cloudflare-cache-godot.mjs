@@ -8,6 +8,7 @@ const ORIGIN_IP = process.env.CLOUDFLARE_ORIGIN_IP || process.env.CF_ORIGIN_IP |
 const CONFIGURE_DNS = process.argv.includes('--configure-dns');
 const WARM_CACHE = process.argv.includes('--warm');
 const RULE_DESCRIPTION = 'Clash Godot runtime CDN cache';
+const MANIFEST_RULE_DESCRIPTION = 'Clash Godot manifest no-cache';
 const ONE_YEAR_SECONDS = 31536000;
 
 if (!TOKEN) {
@@ -104,7 +105,7 @@ function buildGodotCacheRule(existingRule = {}) {
     ...existingRule,
     enabled: true,
     description: RULE_DESCRIPTION,
-    expression: `(http.host eq "${DOMAIN}" and starts_with(http.request.uri.path, "/godot/") and http.request.method in {"GET" "HEAD"})`,
+    expression: `(http.host eq "${DOMAIN}" and starts_with(http.request.uri.path, "/godot/") and http.request.uri.path ne "/godot/godot-runtime-manifest.json" and http.request.method in {"GET" "HEAD"})`,
     action: 'set_cache_settings',
     action_parameters: {
       cache: true,
@@ -123,15 +124,28 @@ function buildGodotCacheRule(existingRule = {}) {
   };
 }
 
+function buildGodotManifestNoCacheRule(existingRule = {}) {
+  return {
+    ...existingRule,
+    enabled: true,
+    description: MANIFEST_RULE_DESCRIPTION,
+    expression: `(http.host eq "${DOMAIN}" and http.request.uri.path eq "/godot/godot-runtime-manifest.json" and http.request.method in {"GET" "HEAD"})`,
+    action: 'set_cache_settings',
+    action_parameters: {
+      cache: false,
+    },
+  };
+}
+
 async function ensureGodotCacheRule(zoneId) {
   const ruleset = await getOrCreateCacheRuleset(zoneId);
   const rules = Array.isArray(ruleset.rules) ? [...ruleset.rules] : [];
-  const idx = rules.findIndex((rule) => rule.description === RULE_DESCRIPTION);
-  if (idx >= 0) {
-    rules[idx] = buildGodotCacheRule(rules[idx]);
-  } else {
-    rules.unshift(buildGodotCacheRule());
-  }
+  const manifestIdx = rules.findIndex((rule) => rule.description === MANIFEST_RULE_DESCRIPTION);
+  const cacheIdx = rules.findIndex((rule) => rule.description === RULE_DESCRIPTION);
+  const manifestRule = buildGodotManifestNoCacheRule(manifestIdx >= 0 ? rules[manifestIdx] : {});
+  const cacheRule = buildGodotCacheRule(cacheIdx >= 0 ? rules[cacheIdx] : {});
+  const rest = rules.filter((_, idx) => idx !== manifestIdx && idx !== cacheIdx);
+  rules.splice(0, rules.length, manifestRule, cacheRule, ...rest);
 
   const updated = await cf(`/zones/${zoneId}/rulesets/${ruleset.id}`, {
     method: 'PUT',
@@ -144,7 +158,9 @@ async function ensureGodotCacheRule(zoneId) {
     }),
   });
 
+  const manifest = updated.result?.rules?.find((item) => item.description === MANIFEST_RULE_DESCRIPTION);
   const rule = updated.result?.rules?.find((item) => item.description === RULE_DESCRIPTION);
+  console.log(`Manifest no-cache rule ready: ${manifest?.id || '(created)'}`);
   console.log(`Cache rule ready: ${rule?.id || '(created)'}`);
 }
 

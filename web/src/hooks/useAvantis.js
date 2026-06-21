@@ -11,6 +11,7 @@ import { encodeFunctionData, formatUnits, formatEther, parseEther } from 'viem';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   TRADING_ADDRESS, TRADING_STORAGE_ADDRESS, USDC_ADDRESS,
   ERC20_ABI, TRADING_ABI, ORDER_TYPE,
@@ -37,7 +38,7 @@ const FUTURES_API = '/api/futures';
 // spinner stuck if the tx was dropped from the mempool.
 const TX_TIMEOUT_MS = 90_000;
 const BALANCE_FETCH_MIN_INTERVAL_MS = 15_000;
-const AVANTIS_POLL_INTERVAL_MS = 10_000;
+const AVANTIS_POLL_INTERVAL_MS = 45_000;
 const AVANTIS_REFERRAL_CACHE_PREFIX = 'clash_avantis_ref_verified:';
 const AVANTIS_REFERRAL_GAS_BLOCK_MS = 90_000;
 const AVANTIS_REFERRAL_GAS_MESSAGE =
@@ -446,12 +447,9 @@ export function useAvantis() {
   useEffect(() => {
     tokenRef.current = player?.token || null;
   }, [player?.token]);
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
-  const registeredEvmWallet = /^0x[0-9a-fA-F]{40}$/.test(registeredWallet)
-    ? registeredWallet.toLowerCase()
-    : null;
+  const registeredEvmWallet = registeredDexWallet(player, 'avantis', 'evm') || null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
-  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
+  const walletMismatch = false;
   const scheduleClaim = useCallback((delayMs = 2500) => {
     const t = setTimeout(() => {
       const fn = claimGoldRef.current;
@@ -984,18 +982,12 @@ export function useAvantis() {
     if (!isReady || !walletClient || !walletAddr) {
       throw new Error('Connect your Base wallet to trade on Avantis');
     }
-    if (walletMismatch) {
-      throw new Error(
-        `Connected wallet ${shortAddress(walletAddr)} does not match this game account (${shortAddress(registeredEvmWallet)}). ` +
-        'Switch wallet or log in with the connected wallet first.'
-      );
-    }
     if (hasReferrer !== true) {
       throw new Error(hasReferrer === null
         ? 'Checking Avantis builder code. Try again in a moment.'
         : 'Approve the Clash builder code before trading on Avantis.');
     }
-  }, [isReady, walletClient, walletAddr, walletMismatch, registeredEvmWallet, hasReferrer]);
+  }, [isReady, walletClient, walletAddr, hasReferrer]);
 
   // ───── Place market order ─────
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage, options = {}) => {
@@ -1519,8 +1511,20 @@ export function useAvantis() {
       refreshSmartWallet();
     };
     tick();
-    const iv = setInterval(tick, AVANTIS_POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      tick();
+    }, AVANTIS_POLL_INTERVAL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') tick();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [walletAddr, isActiveDex, fetchAccount, fetchPositions, fetchOrders, fetchPrices, fetchBalance, refreshSmartWallet]);
 
   // Referral linkage read — runs once per wallet (on-chain state, no polling).
@@ -1543,7 +1547,10 @@ export function useAvantis() {
     // Fire once shortly after mount so a stale "pending claim" from a
     // worker-polled close lands quickly.
     const kickoff = setTimeout(fire, 3000);
-    const iv = setInterval(fire, 30_000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [walletAddr, isActiveDex]);
 

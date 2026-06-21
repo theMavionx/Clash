@@ -3,6 +3,7 @@ import { formatUnits, parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   createHyperliquidExchangeClient,
   createHyperliquidInfoClient,
@@ -32,7 +33,7 @@ import {
   rememberHyperliquidAgent,
 } from '../lib/hyperliquidClient';
 
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 45_000;
 const CLAIM_LOOKBACK_SECONDS = 15 * 60;
 const DEPOSIT_CREDIT_TOLERANCE_USD = 0.01;
 const DEPOSIT_STATUS_MAX_AGE_MS = 10 * 60 * 1000;
@@ -415,10 +416,10 @@ export function useHyperliquid() {
   const tradeInFlightRef = useRef(false);
   const activationInFlightRef = useRef(false);
 
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
+  const registeredWallet = registeredDexWallet(player, 'hyperliquid', 'evm');
   const registeredEvmWallet = isHyperliquidAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
-  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
+  const walletMismatch = false;
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
@@ -792,8 +793,20 @@ export function useHyperliquid() {
       if (walletAddr) fetchAccount();
     };
     tick();
-    const iv = setInterval(tick, POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      tick();
+    }, POLL_INTERVAL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') tick();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex, walletAddr, fetchPrices, fetchAccount]);
 
   const getRewardAuthToken = useCallback(() => (
@@ -938,7 +951,10 @@ export function useHyperliquid() {
       if (typeof claimFn === 'function') await claimFn({ tokenOverride: token, reason: 'poll' });
     };
     const kickoff = setTimeout(fire, 3000);
-    const iv = setInterval(fire, 30_000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [walletAddr, isActiveDex, getRewardAuthToken]);
 
@@ -1229,7 +1245,6 @@ export function useHyperliquid() {
     setLoading(true);
     setError(null);
     try {
-      if (walletMismatch) throw new Error('Connected wallet does not match this game account');
       const market = findMarket(symbol) || (await ensureMarkets()).find(m => m.symbol === hyperliquidSymbol(symbol));
       if (!market) throw new Error(`No Hyperliquid market for ${symbol}`);
       const mark = num(market.mark || market.mid || market.oracle);
@@ -1276,7 +1291,7 @@ export function useHyperliquid() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletMismatch, findMarket, ensureMarkets, tradingExchange, ensurePerpUsdc, ensureBuilderApproved, fetchAccount, syncRewards]);
+  }, [findMarket, ensureMarkets, tradingExchange, ensurePerpUsdc, ensureBuilderApproved, fetchAccount, syncRewards]);
 
   const placeLimitOrder = useCallback(async (symbol, side, limitPrice, collateralUsdc, tif = 'GTC', leverage = 1) => {
     if (tradeInFlightRef.current) return { error: 'Trade already in progress' };
@@ -1284,7 +1299,6 @@ export function useHyperliquid() {
     setLoading(true);
     setError(null);
     try {
-      if (walletMismatch) throw new Error('Connected wallet does not match this game account');
       const market = findMarket(symbol) || (await ensureMarkets()).find(m => m.symbol === hyperliquidSymbol(symbol));
       if (!market) throw new Error(`No Hyperliquid market for ${symbol}`);
       const limit = num(limitPrice);
@@ -1329,7 +1343,7 @@ export function useHyperliquid() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletMismatch, findMarket, ensureMarkets, tradingExchange, ensurePerpUsdc, ensureBuilderApproved, fetchOrders]);
+  }, [findMarket, ensureMarkets, tradingExchange, ensurePerpUsdc, ensureBuilderApproved, fetchOrders]);
 
   const cancelOrder = useCallback(async (symbol, orderId, pairIndex) => {
     setError(null);
@@ -1361,7 +1375,6 @@ export function useHyperliquid() {
     setLoading(true);
     setError(null);
     try {
-      if (walletMismatch) throw new Error('Connected wallet does not match this game account');
       const market = findMarket(symbol) || (await ensureMarkets()).find(m => m.symbol === hyperliquidSymbol(symbol));
       if (!market) throw new Error(`No Hyperliquid market for ${symbol}`);
       const mark = num(market.mark || market.mid || market.oracle);

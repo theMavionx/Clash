@@ -1,6 +1,6 @@
 export const TOURNAMENT_DEXES = [
   'pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid',
-  'risex', 'nado', 'hibachi', 'grvt', 'hotstuff', 'katana', 'gmtrade',
+  'risex', 'nado', 'hibachi', 'grvt', 'hotstuff', 'katana', 'gmtrade', 'flash',
 ];
 
 export const DEX_LABELS = {
@@ -18,6 +18,7 @@ export const DEX_LABELS = {
   hotstuff: 'Hotstuff',
   katana: 'Katana',
   gmtrade: 'GMTrade',
+  flash: 'Flash Trade',
 };
 
 export const PRIZE_PRESETS = [
@@ -33,8 +34,10 @@ export const PRIZE_PRESETS = [
   { id: 'linear', label: 'Linear drop', linear: true },
 ];
 
-export function emptyTournament() {
+export function emptyTournament(eventKind = 'standard') {
+  const kind = eventKind === 'lucky_raider' ? 'lucky_raider' : 'standard';
   return {
+    event_kind: kind,
     name: '',
     description: '',
     dex: 'pacifica',
@@ -68,8 +71,74 @@ export function emptyTournament() {
     points_pnl_weight: 20,
     prize_currency: 'USD',
     prize_tiers: [],
+    mega_config: defaultMegaConfig(false),
+    reward_config: kind === 'lucky_raider' ? rewardConfigPresetLuckyRaider() : defaultRewardConfig(),
     rewards_in_cop: false,
     status: 'active',
+  };
+}
+
+export function emptyLuckyRaiderEvent() {
+  return {
+    ...emptyTournament('lucky_raider'),
+    name: 'Daily Lucky Raider',
+    description: 'Daily raid lottery. Win attacks and trade volume to earn tickets.',
+    dex_scope: 'all',
+    eligible_dexes: [...TOURNAMENT_DEXES],
+    sort_by: 'points',
+    scoring_mode: 'live',
+    prize_tiers: [],
+    mega_config: defaultMegaConfig(false),
+  };
+}
+
+export const MEGA_SECTOR_TEMPLATES = {
+  whale_dolphin_shrimp: [
+    { id: 'whale', name: 'Whale', min_town_hall_level: 3, min_volume_usd: 100000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: defaultRewardConfig() },
+    { id: 'dolphin', name: 'Dolphin', min_town_hall_level: 2, min_volume_usd: 25000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: defaultRewardConfig() },
+    { id: 'shrimp', name: 'Shrimp', min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: defaultRewardConfig() },
+  ],
+  abc: [
+    { id: 'a', name: 'Sector A', min_town_hall_level: 3, min_volume_usd: 100000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: defaultRewardConfig() },
+    { id: 'b', name: 'Sector B', min_town_hall_level: 2, min_volume_usd: 25000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: defaultRewardConfig() },
+    { id: 'c', name: 'Sector C', min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: defaultRewardConfig() },
+  ],
+};
+
+export function defaultMegaConfig(enabled = false, template = 'whale_dolphin_shrimp') {
+  return {
+    enabled: !!enabled,
+    template,
+    sectors: (MEGA_SECTOR_TEMPLATES[template] || MEGA_SECTOR_TEMPLATES.whale_dolphin_shrimp).map((sector) => ({
+      ...sector,
+      dexes: [...(sector.dexes || [])],
+      prize_tiers: normalizePrizeTiers(sector.prize_tiers || []),
+      reward_config: normalizeRewardConfig(sector.reward_config || {}),
+    })),
+  };
+}
+
+export function normalizeMegaConfig(raw = {}) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const template = source.template || 'whale_dolphin_shrimp';
+  const fallback = defaultMegaConfig(!!source.enabled, template);
+  const sectors = Array.isArray(source.sectors) ? source.sectors : fallback.sectors;
+  return {
+    enabled: !!source.enabled,
+    template,
+    sectors: sectors.map((sector, idx) => ({
+      id: String(sector.id || sector.key || `sector_${idx + 1}`).toLowerCase().replace(/[^a-z0-9_-]+/g, '_').slice(0, 32),
+      name: String(sector.name || sector.label || `Sector ${idx + 1}`).slice(0, 40),
+      description: String(sector.description || '').slice(0, 120),
+      min_town_hall_level: Math.max(0, Math.floor(Number(sector.min_town_hall_level ?? sector.min_th ?? 0) || 0)),
+      min_volume_usd: Math.max(0, Number(sector.min_volume_usd ?? sector.min_volume ?? 0) || 0),
+      min_daily_volume_usd: Math.max(0, Number(sector.min_daily_volume_usd ?? sector.daily_volume_usd ?? sector.min_daily_volume ?? 0) || 0),
+      min_trades: Math.max(0, Math.floor(Number(sector.min_trades ?? sector.min_tx ?? 0) || 0)),
+      dex_scope: ['all', 'tournament', 'custom'].includes(String(sector.dex_scope || '').toLowerCase()) ? String(sector.dex_scope).toLowerCase() : 'all',
+      dexes: Array.isArray(sector.dexes) ? sector.dexes.filter((dex) => TOURNAMENT_DEXES.includes(dex)) : [],
+      prize_tiers: normalizePrizeTiers(sector.prize_tiers || []),
+      reward_config: normalizeRewardConfig(sector.reward_config || {}),
+    })).filter((sector) => sector.id && sector.name),
   };
 }
 
@@ -82,6 +151,7 @@ export function tournamentToForm(tournament) {
   return {
     ...base,
     ...tournament,
+    event_kind: tournament.event_kind === 'lucky_raider' || tournament.tournament_kind === 'lucky_raider' ? 'lucky_raider' : 'standard',
     eligible_dexes: eligible,
     dex: tournament.dex || eligible[0] || base.dex,
     dex_scope: tournament.dex_scope || (eligible.length > 1 ? 'custom' : 'single'),
@@ -97,6 +167,8 @@ export function tournamentToForm(tournament) {
     points_volume_weight: Number(tournament.points_volume_weight ?? tournament.points_weights?.volume ?? 60),
     points_pnl_weight: Number(tournament.points_pnl_weight ?? tournament.points_weights?.pnl ?? 20),
     prize_tiers: normalizePrizeTiers(tournament.prize_tiers || []),
+    mega_config: normalizeMegaConfig(tournament.mega_config || {}),
+    reward_config: normalizeRewardConfig(tournament.reward_config || tournament.reward_schedule || {}),
     team_prize_splits: Array.isArray(tournament.team_prize_splits) ? tournament.team_prize_splits : [],
     daily_pool_overrides: tournament.daily_pool_overrides || {},
   };
@@ -134,6 +206,144 @@ export function rewardDefaults(type = 'money') {
   return { type: 'money', label: 'Cash', currency: 'USD', unit: 'USD', pool_amount: 200, winners: 5, preset: 'top5_balanced' };
 }
 
+export function defaultRewardConfig() {
+  return {
+    daily_pools: [],
+    final_pools: [],
+    lucky_daily_raider: {
+      enabled: false,
+      label: 'Lucky Daily Raider',
+      ticket_metric: 'volume',
+      volume_per_ticket_usd: 1000,
+      volume_tickets_per_step: 1,
+      attack_wins_per_ticket: 10,
+      min_attack_wins: 0,
+      winner_count: 1,
+      max_tickets: 20,
+      max_counted_attacks: 20,
+      max_volume_tickets: 0,
+      require_nft: false,
+      required_collections: ['demon_king', 'dragon'],
+      rewards: [],
+      draw_time_utc: '00:05',
+    },
+  };
+}
+
+export function normalizeRewardSchedulePool(raw = {}, fallbackLabel = 'Reward pool') {
+  return {
+    enabled: raw.enabled !== false,
+    label: String(raw.label || raw.name || fallbackLabel).slice(0, 80),
+    top_n: Math.max(1, Math.min(100, Math.floor(Number(raw.top_n || raw.winners || 5) || 5))),
+    rewards: (Array.isArray(raw.rewards) ? raw.rewards : []).map(normalizeReward),
+    payout_preset: raw.payout_preset || raw.preset || 'custom',
+    payouts: Array.isArray(raw.payouts) ? raw.payouts.map((p) => ({
+      rank: Math.max(1, Math.floor(Number(p.rank) || 1)),
+      amount: Math.max(0, Number(p.amount ?? p.amount_usd ?? 0) || 0),
+    })).filter((p) => p.amount > 0) : [],
+    metric: raw.metric || 'points',
+  };
+}
+
+export function normalizeRewardConfig(raw = {}) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const base = defaultRewardConfig();
+  const lucky = source.lucky_daily_raider && typeof source.lucky_daily_raider === 'object'
+    ? source.lucky_daily_raider
+    : {};
+  const collections = Array.isArray(lucky.required_collections)
+    ? lucky.required_collections.filter((item) => ['demon_king', 'dragon'].includes(item))
+    : base.lucky_daily_raider.required_collections;
+  const ticketMetric = ['volume', 'attack_wins', 'attack_wins_plus_volume', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(lucky.ticket_metric)
+    ? lucky.ticket_metric
+    : base.lucky_daily_raider.ticket_metric;
+  const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(lucky.max_tickets || base.lucky_daily_raider.max_tickets) || 20)));
+  return {
+    daily_pools: (Array.isArray(source.daily_pools) ? source.daily_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Daily pool ${idx + 1}`)),
+    final_pools: (Array.isArray(source.final_pools) ? source.final_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Final pool ${idx + 1}`)),
+    lucky_daily_raider: {
+      enabled: !!lucky.enabled,
+      label: String(lucky.label || base.lucky_daily_raider.label).slice(0, 80),
+      ticket_metric: ticketMetric,
+      volume_per_ticket_usd: Math.max(1, Number(lucky.volume_per_ticket_usd || base.lucky_daily_raider.volume_per_ticket_usd) || 1000),
+      volume_tickets_per_step: Math.max(1, Math.min(100000, Math.floor(Number(lucky.volume_tickets_per_step ?? lucky.volume_bonus_tickets_per_step ?? base.lucky_daily_raider.volume_tickets_per_step) || 1))),
+      attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(lucky.attack_wins_per_ticket || base.lucky_daily_raider.attack_wins_per_ticket) || 10))),
+      min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(lucky.min_attack_wins || 0) || 0))),
+      winner_count: Math.max(1, Math.min(100, Math.floor(Number(lucky.winner_count || lucky.winners || 1) || 1))),
+      max_tickets: maxTickets,
+      max_counted_attacks: Math.max(1, Math.min(100000, Math.floor(Number(lucky.max_counted_attacks || lucky.max_attack_tickets || maxTickets) || maxTickets))),
+      max_volume_tickets: Math.max(0, Math.min(100000, Math.floor(Number(lucky.max_volume_tickets ?? lucky.max_volume_bonus_tickets ?? base.lucky_daily_raider.max_volume_tickets) || 0))),
+      require_nft: !!lucky.require_nft,
+      required_collections: collections.length ? collections : ['demon_king', 'dragon'],
+      rewards: (Array.isArray(lucky.rewards) ? lucky.rewards : []).map(normalizeReward),
+      draw_time_utc: String(lucky.draw_time_utc || base.lucky_daily_raider.draw_time_utc).slice(0, 16),
+    },
+  };
+}
+
+export function rewardConfigPreset5000() {
+  return normalizeRewardConfig({
+    daily_pools: [{
+      enabled: true,
+      label: 'Daily Pool',
+      top_n: 5,
+      metric: 'points',
+      rewards: [{ ...rewardDefaults('money'), label: 'Daily cash', pool_amount: 300, winners: 5, preset: 'top5_balanced' }],
+    }],
+    final_pools: [{
+      enabled: true,
+      label: 'Final',
+      top_n: 10,
+      metric: 'points',
+      rewards: [
+        { ...rewardDefaults('money'), label: 'Final cash', pool_amount: 1500, winners: 10, preset: 'top10_balanced' },
+        { ...rewardDefaults('points'), label: 'Points', pool_amount: 1000, winners: 10, preset: 'top10_balanced' },
+      ],
+    }],
+    lucky_daily_raider: {
+      enabled: true,
+      label: 'Lucky Daily Raider',
+      ticket_metric: 'volume',
+      volume_per_ticket_usd: 1000,
+      volume_tickets_per_step: 1,
+      attack_wins_per_ticket: 10,
+      min_attack_wins: 0,
+      winner_count: 1,
+      max_tickets: 20,
+      max_counted_attacks: 20,
+      max_volume_tickets: 0,
+      require_nft: true,
+      required_collections: ['demon_king', 'dragon'],
+      rewards: [{ ...rewardDefaults('money'), label: 'Lucky cash', pool_amount: 50, winners: 1, preset: 'winner_take_all' }],
+      draw_time_utc: '00:05',
+    },
+  });
+}
+
+export function rewardConfigPresetLuckyRaider() {
+  return normalizeRewardConfig({
+    daily_pools: [],
+    final_pools: [],
+    lucky_daily_raider: {
+      enabled: true,
+      label: 'Daily Lucky Raider',
+      ticket_metric: 'attack_wins_plus_volume',
+      volume_per_ticket_usd: 10000,
+      volume_tickets_per_step: 1,
+      attack_wins_per_ticket: 1,
+      min_attack_wins: 0,
+      winner_count: 3,
+      max_tickets: 55,
+      max_counted_attacks: 50,
+      max_volume_tickets: 5,
+      require_nft: false,
+      required_collections: ['demon_king', 'dragon'],
+      rewards: [{ ...rewardDefaults('money'), label: 'CLASH daily prize', currency: 'CLASH', unit: 'CLASH', pool_amount: 100, winners: 3, preset: 'equal' }],
+      draw_time_utc: '00:05',
+    },
+  });
+}
+
 export function normalizePrizeTiers(tiers = []) {
   return (Array.isArray(tiers) ? tiers : []).map((tier) => ({
     volume_usd: Math.max(0, Number(tier.volume_usd) || 0),
@@ -168,6 +378,7 @@ export function formToTournamentBody(form) {
       ? (form.eligible_dexes || []).filter((d) => TOURNAMENT_DEXES.includes(d))
       : [form.dex || 'pacifica'];
   return {
+    event_kind: form.event_kind === 'lucky_raider' ? 'lucky_raider' : 'standard',
     name: String(form.name || '').trim(),
     description: String(form.description || '').slice(0, 500),
     dex: form.dex || eligible[0] || 'pacifica',
@@ -199,7 +410,9 @@ export function formToTournamentBody(form) {
     points_volume_weight: Number(form.points_volume_weight) || 0,
     points_pnl_weight: Number(form.points_pnl_weight) || 0,
     prize_currency: String(form.prize_currency || 'USD').toUpperCase(),
-    prize_tiers: normalizePrizeTiers(form.prize_tiers || []),
+    prize_tiers: form.event_kind === 'lucky_raider' ? [] : normalizePrizeTiers(form.prize_tiers || []),
+    mega_config: form.event_kind === 'lucky_raider' ? defaultMegaConfig(false) : normalizeMegaConfig(form.mega_config || {}),
+    reward_config: normalizeRewardConfig(form.reward_config || {}),
     rewards_in_cop: !!form.rewards_in_cop,
     status: form.status || 'active',
   };
@@ -223,6 +436,14 @@ export function validateTournamentStep(step, form) {
       const total = (form.team_prize_splits || []).reduce((sum, row) => sum + Number(row.share_pct || 0), 0);
       if (Math.abs(total - 100) > 0.01) errors.push(`Team prize split must total 100%. Current total is ${total.toFixed(2)}%.`);
     }
+    const mega = normalizeMegaConfig(form.mega_config || {});
+    if (mega.enabled) {
+      for (const sector of mega.sectors) {
+        if (sector.dex_scope === 'custom' && !sector.dexes.length) {
+          errors.push(`Mega sector "${sector.name}" needs at least one custom DEX.`);
+        }
+      }
+    }
   }
   if (step === 2) {
     const needsPoints = form.scoring_mode === 'daily_pool' || form.sort_by === 'points' || form.mode === 'dex_vs_dex';
@@ -235,6 +456,15 @@ export function validateTournamentStep(step, form) {
         const payoutSum = (reward.payouts || []).reduce((sum, p) => sum + Number(p.amount || 0), 0);
         if (payoutSum > Number(reward.pool_amount || 0) + 0.01) {
           errors.push(`Reward "${reward.label}" payouts exceed its pool.`);
+        }
+      }
+    }
+    const rewardConfig = normalizeRewardConfig(form.reward_config || {});
+    for (const pool of [...rewardConfig.daily_pools, ...rewardConfig.final_pools]) {
+      for (const reward of pool.rewards || []) {
+        const payoutSum = (reward.payouts || []).reduce((sum, p) => sum + Number(p.amount || 0), 0);
+        if (payoutSum > Number(reward.pool_amount || 0) + 0.01) {
+          errors.push(`Reward schedule "${pool.label}" payouts exceed "${reward.label}" pool.`);
         }
       }
     }

@@ -28,6 +28,7 @@ body,
   width: 100%;
   height: 100%;
   min-height: 100%;
+  margin: 0;
   overflow: hidden;
   background: var(--admin-bg);
   color: var(--admin-text);
@@ -548,6 +549,11 @@ button {
   color: #bae6fd;
 }
 
+.admin-badge.purple {
+  background: rgba(88, 28, 135, 0.9);
+  color: #e9d5ff;
+}
+
 .admin-badge.off {
   background: rgba(51, 65, 85, 0.68);
   color: #94a3b8;
@@ -597,6 +603,130 @@ button {
   min-height: 0;
   overflow: auto;
   padding: 16px 18px 24px;
+}
+
+.player-profile {
+  display: grid;
+  gap: 14px;
+}
+
+.player-profile-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.player-profile-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0 8px;
+  border-bottom: 1px solid var(--admin-border-soft);
+}
+
+.player-profile-tab {
+  min-height: 38px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #cbd5e1;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.player-profile-tab.active {
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.24), rgba(14, 116, 144, 0.12));
+  border-color: rgba(56, 189, 248, 0.72);
+  color: #e0f2fe;
+}
+
+.player-profile-content {
+  min-width: 0;
+}
+
+.player-profile-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.player-profile-metric {
+  min-width: 0;
+  border: 1px solid var(--admin-border-soft);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.7);
+  padding: 12px;
+}
+
+.player-profile-metric-value {
+  font-size: 20px;
+  line-height: 1.05;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.player-profile-metric-label {
+  margin-top: 5px;
+  color: var(--admin-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 850;
+}
+
+.player-profile-info {
+  display: grid;
+  gap: 8px;
+}
+
+.player-profile-info-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  padding-bottom: 8px;
+}
+
+.player-profile-info-row span {
+  color: var(--admin-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.player-profile-info-row strong {
+  color: #f8fafc;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.player-profile-table-wrap {
+  max-height: 460px;
+}
+
+.player-profile-table td {
+  overflow-wrap: anywhere;
+}
+
+.player-profile-heatmap {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(28px, 1fr));
+  gap: 5px;
+}
+
+.player-profile-heatmap span {
+  display: grid;
+  place-items: center;
+  min-height: 28px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.18);
+  color: #e0f2fe;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .wizard {
@@ -822,6 +952,15 @@ button {
 }
 
 @media (max-width: 920px) {
+  html,
+  body,
+  #admin-root,
+  .admin-app,
+  .admin-shell {
+    height: auto;
+    min-height: 100%;
+  }
+
   .admin-shell {
     grid-template-columns: 1fr;
   }
@@ -830,6 +969,9 @@ button {
     min-height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--admin-border);
+    position: sticky;
+    top: 0;
+    z-index: 12;
   }
 
   .admin-brand {
@@ -856,5 +998,406 @@ button {
 
   .wizard-steps {
     position: static;
+  }
+}
+
+@media (max-width: 700px) {
+  html,
+  body,
+  #admin-root {
+    overflow: auto;
+  }
+
+  .admin-app {
+    min-height: 100dvh;
+  }
+
+  .admin-shell {
+    display: block;
+    min-height: 100dvh;
+  }
+
+  .admin-main {
+    display: block;
+    min-height: 0;
+  }
+
+  .admin-sidebar {
+    background: rgba(10, 11, 26, 0.94);
+    backdrop-filter: blur(14px);
+  }
+
+  .admin-nav {
+    gap: 6px;
+    padding: 8px;
+    scrollbar-width: none;
+  }
+
+  .admin-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .admin-nav-button {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 5px;
+    min-width: 92px;
+    max-width: 122px;
+    min-height: 48px;
+    padding: 8px;
+    text-align: center;
+    font-size: 11px;
+  }
+
+  .admin-nav-button .admin-card-sub {
+    display: none !important;
+  }
+
+  .admin-nav-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .admin-topbar {
+    position: sticky;
+    top: 64px;
+    z-index: 9;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .admin-title h1 {
+    font-size: 18px;
+  }
+
+  .admin-title p {
+    font-size: 11px;
+  }
+
+  .admin-actions {
+    justify-content: stretch;
+  }
+
+  .admin-actions > * {
+    flex: 1 1 auto;
+  }
+
+  .admin-actions .admin-badge {
+    justify-content: flex-start;
+    white-space: normal;
+  }
+
+  .admin-content {
+    overflow: visible;
+    padding: 12px 10px 24px;
+  }
+
+  .admin-card-head,
+  .admin-toolbar,
+  .earnings-card-head,
+  .admin-drawer-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-card-head,
+  .admin-card-body,
+  .admin-drawer-head,
+  .admin-drawer-body {
+    padding: 12px;
+  }
+
+  .admin-filter-row,
+  .admin-actions {
+    width: 100%;
+  }
+
+  .admin-filter-row > *,
+  .admin-actions .admin-btn,
+  .admin-toolbar .admin-btn,
+  .admin-toolbar .admin-input,
+  .admin-toolbar .admin-select {
+    flex: 1 1 100%;
+  }
+
+  .admin-input,
+  .admin-select,
+  .admin-textarea,
+  .admin-btn,
+  .admin-choice,
+  .wizard-step {
+    min-height: 44px;
+  }
+
+  .admin-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-stat {
+    padding: 10px;
+  }
+
+  .admin-stat-value {
+    font-size: 19px;
+  }
+
+  .earnings-card-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .earnings-card {
+    min-height: 0;
+    padding: 14px;
+  }
+
+  .earnings-currency {
+    text-align: left;
+  }
+
+  .earnings-amount {
+    font-size: 28px;
+  }
+
+  .admin-table-wrap,
+  .admin-table-wrap.compact {
+    max-height: none;
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .admin-table {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .admin-table thead {
+    display: none;
+  }
+
+  .admin-table tbody {
+    display: grid;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .admin-table tr {
+    display: grid;
+    gap: 8px;
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--admin-border);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.88);
+  }
+
+  .admin-table tr:hover td {
+    background: transparent;
+  }
+
+  .admin-table td {
+    display: grid;
+    grid-template-columns: minmax(86px, 34%) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    padding: 0;
+    border: 0;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  .admin-table td::before {
+    content: attr(data-label);
+    color: var(--admin-muted);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .admin-table td:empty {
+    display: none;
+  }
+
+  .admin-table td[colspan] {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-table td[colspan]::before {
+    content: none;
+  }
+
+  .admin-table td .admin-filter-row {
+    justify-content: stretch;
+  }
+
+  .admin-table td .admin-filter-row .admin-btn {
+    flex: 1 1 100%;
+  }
+
+  .admin-wallet-line,
+  .admin-mono,
+  pre.admin-mono {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .admin-drawer-backdrop {
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  .admin-drawer {
+    width: 100vw;
+    height: 100dvh;
+    border-left: 0;
+  }
+
+  .admin-drawer-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #101827;
+  }
+
+  .admin-drawer-body {
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .wizard {
+    display: block;
+  }
+
+  .wizard-steps {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin-bottom: 12px;
+    padding: 8px;
+  }
+
+  .wizard-step {
+    flex: 0 0 106px;
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+    padding: 8px;
+  }
+
+  .wizard-step .admin-card-sub {
+    display: none !important;
+  }
+
+  .wizard-panel {
+    gap: 12px;
+  }
+
+  .wizard-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
+    background: linear-gradient(180deg, rgba(16, 24, 39, 0.8), #101827 34%);
+    padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .wizard-footer .admin-btn {
+    flex: 1 1 0;
+  }
+
+  .daily-pool-preview {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .daily-pool-row,
+  .tier-pager,
+  .payout-grid,
+  .admin-choice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .player-profile-toolbar {
+    align-items: stretch;
+  }
+
+  .player-profile-toolbar .admin-filter-row {
+    width: 100%;
+  }
+
+  .player-profile-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: 0 -12px;
+    padding: 8px 12px;
+    background: #101827;
+  }
+
+  .player-profile-tab {
+    flex: 0 0 auto;
+    min-height: 44px;
+  }
+
+  .player-profile-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .player-profile-info-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .player-profile-table-wrap {
+    max-height: none;
+  }
+
+  .player-profile-heatmap {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .tier-pager {
+    gap: 8px;
+  }
+
+  .tier-pager-center {
+    order: -1;
+  }
+
+  .tier-chip-row {
+    padding-bottom: 6px;
+  }
+}
+
+@media (max-width: 430px) {
+  .admin-nav-button {
+    min-width: 84px;
+    max-width: 104px;
+  }
+
+  .admin-topbar {
+    top: 62px;
+  }
+
+  .admin-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-table td {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .admin-table td::before {
+    font-size: 9px;
   }
 }

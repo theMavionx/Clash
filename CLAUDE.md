@@ -51,7 +51,7 @@ Server definitions in `server/db.js` → `BUILDING_DEFS`.
 Types: Town Hall, Mine, Barn, Port, Sawmill, Turret, Storage, Archer Tower, Tombstone.
 
 ### Troops
-Base class: `scripts/base_troop.gd`. Active individuals: knight, mage, archer, demon king, fire dragon.
+Base class: `scripts/base_troop.gd`. Individual: knight, mage, barbarian, archer, ranger.
 Deployed from ships via `scripts/attack_system.gd`.
 Dual targeting: closest building OR skeleton guard.
 

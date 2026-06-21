@@ -139,7 +139,7 @@ function BasicTradeFlow({
         ?? 0
     ));
     if (accBal > 0) return accBal;
-    if (dex === 'pacifica' || dex === 'hyperliquid' || dex === 'risex' || dex === 'phoenix' || dex === 'nado') return 0;
+    if (dex === 'pacifica' || dex === 'hyperliquid' || dex === 'risex' || dex === 'phoenix' || dex === 'nado' || dex === 'flash') return 0;
     return Number(walletUsdc || 0);
   }, [account, walletUsdc, dex]);
 
@@ -203,7 +203,7 @@ function BasicTradeFlow({
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'gmtrade';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'gmtrade' || dex === 'flash';
       const sideForOpen = pickedDir === 'long'
         ? (isCollateralDex ? 'long' : 'bid')
         : (isCollateralDex ? 'short' : 'ask');

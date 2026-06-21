@@ -13,7 +13,7 @@ import {
   payCustodialOrder,
   releaseCustodialReservation,
 } from '../lib/custodialMarketplace';
-import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
+import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity } from '../lib/nftV3Client';
 import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 import {
   isSolanaMobileWalletAdapter,
@@ -38,11 +38,12 @@ const SORT_OPTIONS = [
   { value: 'price_asc', label: 'Lowest', sub: 'Floor first' },
   { value: 'price_desc', label: 'Highest', sub: 'Top price' },
 ];
-const LEVEL_OPTIONS = [
-  { value: 'all', label: 'All', sub: 'Any level' },
-  { value: '1', label: 'L1', sub: 'Level 1' },
-  { value: '2', label: 'L2', sub: 'Level 2' },
-  { value: '3', label: 'L3', sub: 'Level 3' },
+const RARITY_FILTER_OPTIONS = [
+  { value: 'all', label: 'All', sub: 'Any rarity' },
+  { value: 'common', label: 'Common', sub: 'Blue border' },
+  { value: 'epic', label: 'Epic', sub: 'Purple border' },
+  { value: 'legendary', label: 'Legendary', sub: 'Gold border' },
+  { value: 'unrevealed', label: 'Unrevealed', sub: 'Pending reveal' },
 ];
 function shortAddr(value, head = 5, tail = 4) {
   const s = String(value || '');
@@ -153,7 +154,17 @@ function listingErrorMessage(err, solWallet) {
 }
 
 function orderImage(order) {
-  return nftLevelImageUrl(order?.level || 1, order?.assetId || order?.asset_id || order?.assetChain || 'base');
+  return nftLevelImageUrl(1, order?.assetId || order?.asset_id || order?.assetChain || 'base');
+}
+
+function itemRarityLabel(item) {
+  return nftRarityLabel(item?.rarity, item?.legacyLevel || item?.level || 1);
+}
+
+function itemRarityKey(item) {
+  const rarity = normalizeNftRarity(item?.rarity);
+  if (rarity) return rarity;
+  return Number(item?.legacyLevel || item?.level || 1) > 1 ? 'legendary' : 'unrevealed';
 }
 
 function orderPrice(order) {
@@ -326,7 +337,7 @@ export default function CustodialMarketplacePanel({
   const [purchaseFlow, setPurchaseFlow] = useState(null);
   const [listingFlow, setListingFlow] = useState(null);
   const [browseSort, setBrowseSort] = useState('newest');
-  const [browseLevel, setBrowseLevel] = useState('all');
+  const [browseRarity, setBrowseRarity] = useState('all');
   const [sellWalletModalOpen, setSellWalletModalOpen] = useState(false);
 
   const ready = !!config?.ready;
@@ -388,7 +399,6 @@ export default function CustodialMarketplacePanel({
     try {
       const json = await fetchCustodialListings({
         status: 'active',
-        level: browseLevel,
         sort: browseSort,
         limit: PAGE_SIZE,
       });
@@ -400,7 +410,7 @@ export default function CustodialMarketplacePanel({
     } finally {
       setLoading(false);
     }
-  }, [browseLevel, browseSort]);
+  }, [browseSort]);
 
   const loadOrders = useCallback(async () => {
     if (!sessionToken) { setOrders([]); return; }
@@ -1157,8 +1167,8 @@ export default function CustodialMarketplacePanel({
           compact={compact}
           sort={browseSort}
           setSort={setBrowseSort}
-          level={browseLevel}
-          setLevel={setBrowseLevel}
+          rarity={browseRarity}
+          setRarity={setBrowseRarity}
           onBuy={(order) => {
             addClientBreadcrumb('marketplace.custodial.buy.open', { orderId: order?.id });
             openBuyModal(order);
@@ -1204,13 +1214,21 @@ export default function CustodialMarketplacePanel({
 
       {buyTarget && !purchaseFlow?.open && canUsePortal && createPortal((
         <div style={s.modalOverlay} onClick={busy === 'buy' ? undefined : () => setBuyTarget(null)}>
-          <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+          <div style={{ ...s.modal, ...(compact ? s.modalCompact : null) }} onClick={(e) => e.stopPropagation()}>
             <div style={s.modalHeader}>
               <span style={s.modalTitle}>Buy Demon King</span>
               <button type="button" style={s.closeBtn} onClick={() => setBuyTarget(null)} disabled={busy === 'buy'}>x</button>
             </div>
-            <img src={orderImage(buyTarget)} alt="" style={s.modalImg} />
-            <div style={s.breakdown}>
+            <img
+              src={orderImage(buyTarget)}
+              alt=""
+              style={{
+                ...s.modalImg,
+                ...(compact ? s.modalImgCompact : null),
+                ...nftRarityCardStyle(buyTarget.rarity, buyTarget.legacyLevel || buyTarget.level || 1),
+              }}
+            />
+            <div style={{ ...s.breakdown, ...(compact ? s.breakdownCompact : null) }}>
               <span>Price</span><b>{orderPrice(buyTarget)}</b>
               <span>Pay chain</span>
               <ChipRow
@@ -1504,29 +1522,39 @@ function FilterSelect({ label, value, setValue, options, disabled }) {
   );
 }
 
-function BrowseFilters({ sort, setSort, level, setLevel, loading }) {
+function BrowseFilters({ sort, setSort, rarity, setRarity, loading }) {
   return (
     <div style={s.filterPanel}>
       <FilterSelect label="Sort" value={sort} setValue={setSort} options={SORT_OPTIONS} disabled={loading} />
-      <FilterSelect label="Level" value={level} setValue={setLevel} options={LEVEL_OPTIONS} disabled={loading} />
+      <FilterSelect label="Rarity" value={rarity} setValue={setRarity} options={RARITY_FILTER_OPTIONS} disabled={loading} />
     </div>
   );
 }
 
-function BrowseView({ listings, loading, walletMap, compact, sort, setSort, level, setLevel, onBuy, onOwnListing }) {
+function BrowseView({ listings, loading, walletMap, compact, sort, setSort, rarity, setRarity, onBuy, onOwnListing }) {
+  const visibleListings = useMemo(
+    () => rarity === 'all' ? listings : listings.filter((order) => itemRarityKey(order) === rarity),
+    [listings, rarity],
+  );
   return (
     <div style={s.stack}>
-      <BrowseFilters sort={sort} setSort={setSort} level={level} setLevel={setLevel} loading={loading} />
-      {loading ? <div style={s.meta}>Loading listings...</div> : !listings.length ? <div style={s.empty}>No active listings yet.</div> : (
+      <BrowseFilters sort={sort} setSort={setSort} rarity={rarity} setRarity={setRarity} loading={loading} />
+      {loading ? <div style={s.meta}>Loading listings...</div> : !listings.length ? <div style={s.empty}>No active listings yet.</div> : !visibleListings.length ? <div style={s.empty}>No listings match this rarity.</div> : (
         <div style={compact ? s.gridMobile : s.grid}>
-          {listings.map((order) => {
+          {visibleListings.map((order) => {
             const ownWallet = walletForChain(order.assetChain, walletMap);
             const isOwn = ownWallet && String(order.sellerWallet || '').toLowerCase() === String(ownWallet || '').toLowerCase();
             return (
-              <div key={order.id} style={compact ? s.cardMobile : s.card}>
+              <div
+                key={order.id}
+                style={{
+                  ...(compact ? s.cardMobile : s.card),
+                  ...nftRarityCardStyle(order.rarity, order.legacyLevel || order.level || 1),
+                }}
+              >
                 <div style={compact ? s.imgWrapMobile : s.imgWrap}>
                   <img src={orderImage(order)} alt="" style={s.img} onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
-                  <span style={s.level}>L{order.level || 1}</span>
+                  <span style={{ ...s.level, ...nftRarityBadgeStyle(order.rarity, order.legacyLevel || order.level || 1, { compact: true }) }}>{itemRarityLabel(order)}</span>
                 </div>
                 <div style={s.cardBody}>
                   <div style={s.cardLine}>
@@ -1570,9 +1598,18 @@ function SellView({ ready, config, owned, loading, supportedAssets, walletMap, s
             const key = `${nft.chain}:${id}`;
             const active = selectedAsset === key;
             return (
-              <button key={key} type="button" onClick={() => setSelectedAsset(key)} style={{ ...s.nftPick, ...(active ? s.nftPickActive : null) }}>
-                <img src={nft.imageUrl || nftLevelImageUrl(nft.level || 1, id)} alt="" style={s.nftPickImg} />
-                <span style={s.nftPickChain}>Level {nft.level || 1}</span>
+              <button
+                key={key}
+                type="button"
+                onClick={() => setSelectedAsset(key)}
+                style={{
+                  ...s.nftPick,
+                  ...(active ? s.nftPickActive : null),
+                  ...nftRarityCardStyle(nft.rarity, nft.legacyLevel || nft.level || 1, { active }),
+                }}
+              >
+                <img src={nft.imageUrl || nftLevelImageUrl(1, id)} alt="" style={s.nftPickImg} />
+                <span style={{ ...s.nftPickChain, ...nftRarityBadgeStyle(nft.rarity, nft.legacyLevel || nft.level || 1, { compact: true }) }}>{itemRarityLabel(nft)}</span>
                 <span>{shortAddr(id, 4, 4)}</span>
               </button>
             );
@@ -1674,7 +1711,7 @@ function OrdersView({ orders, loading, walletMap, busy, onCancel, onResumeBuy, o
               : `Purchase in progress${buyerLabel ? ` by ${buyerLabel}` : ''} until ${formatReservationTime(order)}.`)
           : null;
         return (
-          <div key={order.id} style={s.orderRow}>
+          <div key={order.id} style={{ ...s.orderRow, ...nftRarityCardStyle(order.rarity, order.legacyLevel || order.level || 1) }}>
             <img src={orderImage(order)} alt="" style={s.orderImg} />
             <div style={s.orderMain}>
               <b>{orderPrice(order)}</b>
@@ -1783,9 +1820,10 @@ const s = {
   orderActions: { display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'stretch' },
   orderReserved: { color: '#7a5a30', fontWeight: 900 },
   orderError: { color: '#a12a1e', fontWeight: 900 },
-  modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 },
-  modal: { width: 380, maxWidth: '94vw', padding: 12, borderRadius: 14, border: '4px solid #d4c8b0', background: '#fdf8e7', display: 'flex', flexDirection: 'column', gap: 10 },
-  walletModal: { width: 360, maxWidth: '94vw', padding: 12, borderRadius: 14, border: '4px solid #d4c8b0', background: '#fdf8e7', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: '0 18px 50px rgba(0,0,0,0.45)' },
+  modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 10, overflowY: 'auto', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch' },
+  modal: { width: 380, maxWidth: 'calc(100vw - 20px)', maxHeight: 'calc(100dvh - 20px)', padding: 12, borderRadius: 14, border: '4px solid #d4c8b0', background: '#fdf8e7', display: 'flex', flexDirection: 'column', gap: 10, boxSizing: 'border-box', overflowY: 'auto', WebkitOverflowScrolling: 'touch' },
+  modalCompact: { width: 'calc(100vw - 20px)', padding: 8, gap: 8, borderWidth: 3, borderRadius: 12 },
+  walletModal: { width: 360, maxWidth: 'calc(100vw - 20px)', maxHeight: 'calc(100dvh - 20px)', padding: 12, borderRadius: 14, border: '4px solid #d4c8b0', background: '#fdf8e7', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: '0 18px 50px rgba(0,0,0,0.45)', boxSizing: 'border-box', overflowY: 'auto', WebkitOverflowScrolling: 'touch' },
   modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   modalTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21' },
   closeBtn: { width: 24, height: 24, borderRadius: 12, border: '2px solid #fff', background: '#E53935', color: '#fff', fontWeight: 900, cursor: 'pointer' },
@@ -1798,7 +1836,8 @@ const s = {
   walletChoiceName: { fontSize: 13, fontWeight: 900, color: '#5C3A21' },
   walletChoiceStatus: { fontSize: 10, fontWeight: 800, color: '#7a5a30', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   walletChoiceAction: { flex: '0 0 auto', fontSize: 11, fontWeight: 900, color: '#1d6fe0', textTransform: 'uppercase' },
-  modalImg: { width: '100%', aspectRatio: '1 / 1', objectFit: 'cover', borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff' },
+  modalImg: { width: '100%', aspectRatio: '1 / 1', maxHeight: 'min(310px, 42dvh)', objectFit: 'cover', borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff', alignSelf: 'center' },
+  modalImgCompact: { width: 'min(100%, 260px)', maxHeight: '34dvh', borderRadius: 8 },
   progressHead: { display: 'flex', gap: 10, alignItems: 'center', padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff8e6' },
   progressImg: { width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #d4c8b0', background: '#fff' },
   progressMeta: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3, color: '#5C3A21', fontSize: 12, fontWeight: 800 },
@@ -1813,8 +1852,9 @@ const s = {
   progressMessage: { padding: '7px 8px', borderRadius: 8, background: '#fff8e6', color: '#5C3A21', fontSize: 12, fontWeight: 800 },
   progressError: { padding: '7px 8px', borderRadius: 8, background: '#ffe1d8', color: '#9b2d1c', fontSize: 12, fontWeight: 900 },
   progressLinks: { display: 'flex', flexDirection: 'column', gap: 2, color: '#7a5a30', fontSize: 11, fontWeight: 800 },
-  breakdown: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 6, padding: 8, borderRadius: 8, border: '1px solid #d4c8b0', background: '#fff8e6', color: '#5C3A21', fontSize: 12 },
-  deliveryChips: { display: 'flex', gap: 5, flexWrap: 'wrap' },
+  breakdown: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: 6, padding: 8, borderRadius: 8, border: '1px solid #d4c8b0', background: '#fff8e6', color: '#5C3A21', fontSize: 12, minWidth: 0 },
+  breakdownCompact: { gridTemplateColumns: '1fr', gap: 5, padding: 7 },
+  deliveryChips: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(72px, 1fr))', gap: 5, minWidth: 0 },
   chip: { minWidth: 72, minHeight: 34, padding: '4px 8px', borderRadius: 7, border: '2px solid #d4c8b0', background: '#fff6dc', color: '#5C3A21', fontWeight: 900, cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, lineHeight: 1.05 },
   chipLabel: { display: 'block', fontSize: 12, whiteSpace: 'nowrap' },
   chipStatus: { display: 'block', fontSize: 9, color: '#8d6f43', whiteSpace: 'nowrap' },

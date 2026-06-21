@@ -56,14 +56,13 @@ function normalizeLevel(level) {
 
 function token2022MetadataUri({ mint, level, sourceRef }) {
   const url = new URL(`/api/nft/solana/token2022/${mint}`, `${publicBaseUrl()}/`);
-  url.searchParams.set('level', String(normalizeLevel(level)));
   url.searchParams.set('collection', solanaToken2022CollectionId());
   if (sourceRef) url.searchParams.set('src', String(sourceRef).slice(0, 80));
   return url.toString();
 }
 
 function token2022Name(level) {
-  return `Demon King L${normalizeLevel(level)}`;
+  return 'Demon King';
 }
 
 function token2022LooksLikeDemonKing(meta) {

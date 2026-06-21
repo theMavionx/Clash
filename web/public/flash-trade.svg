@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Flash Trade">
+  <rect width="64" height="64" rx="14" fill="#111827"/>
+  <path d="M36 4 14 36h16l-3 24 23-34H34l2-22Z" fill="#facc15"/>
+  <path d="M36 4 27 60l23-34H34l2-22Z" fill="#f59e0b" opacity=".88"/>
+</svg>

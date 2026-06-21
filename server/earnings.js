@@ -1389,6 +1389,11 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
   try {
     fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
     try { fdb.pragma('journal_mode = WAL'); } catch {}
+    const sources = Array.isArray(verifiedSource)
+      ? verifiedSource.map(String).filter(Boolean)
+      : [String(verifiedSource || '')].filter(Boolean);
+    if (!sources.length) throw new Error('missing verified source');
+    const sourceSql = sources.map(() => '?').join(', ');
     const volumeExpr = `
       CASE
         WHEN COALESCE(notional_usd, 0) > 0 THEN notional_usd
@@ -1416,8 +1421,8 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
       FROM trade_history
       WHERE dex = ?
         AND status = 'filled'
-        AND verified_source = ?
-    `).get(dex, verifiedSource) || {};
+        AND verified_source IN (${sourceSql})
+    `).get(dex, ...sources) || {};
     const recent = fdb.prepare(`
       SELECT COUNT(*) AS trades,
              COALESCE(SUM(${volumeExpr}), 0) AS volume_usd,
@@ -1426,19 +1431,19 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
       FROM trade_history
       WHERE dex = ?
         AND status = 'filled'
-        AND verified_source = ?
+        AND verified_source IN (${sourceSql})
         AND created_at > datetime('now', '-24 hours')
-    `).get(dex, verifiedSource) || {};
+    `).get(dex, ...sources) || {};
     const proofs = fdb.prepare(`
       SELECT player_id, symbol, side, amount, price, notional_usd, fee,
              order_id, client_order_id, created_at, proof_json
       FROM trade_history
       WHERE dex = ?
         AND status = 'filled'
-        AND verified_source = ?
+        AND verified_source IN (${sourceSql})
       ORDER BY created_at DESC
       LIMIT 20
-    `).all(dex, verifiedSource).map(row => ({
+    `).all(dex, ...sources).map(row => ({
       player_id: row.player_id,
       symbol: row.symbol,
       side: row.side,
@@ -1575,11 +1580,22 @@ async function fetchKatanaEarnings() {
 async function fetchGmtradeEarnings() {
   return localVerifiedBuilderEarnings({
     dex: 'gmtrade',
-    verifiedSource: 'gmtrade_tx',
+    verifiedSource: ['gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional'],
     currency: 'USDC (GMTrade/Solana)',
     feeBps: GMTRADE_BUILDER_FEE_BPS,
     sourceDetail: 'gmtrade_verified_tx_local_estimate',
     note: `GMTrade stats use confirmed Solana transaction/position proof rows. Exact commission is not indexed yet, so local ${GMTRADE_BUILDER_FEE_BPS}bps is an estimate for comparison.`,
+  });
+}
+
+async function fetchFlashEarnings() {
+  return localVerifiedBuilderEarnings({
+    dex: 'flash',
+    verifiedSource: 'flash_tx',
+    currency: 'USDC (Flash/Solana)',
+    feeBps: FLASH_BUILDER_FEE_BPS,
+    sourceDetail: 'flash_v2_verified_tx_local_estimate',
+    note: `Flash stats use confirmed Solana transaction proof rows built through the Flash Trade API v2 transaction builder. Exact commission is not indexed yet, so local ${FLASH_BUILDER_FEE_BPS}bps is an estimate for comparison.`,
   });
 }
 
@@ -1627,6 +1643,7 @@ const ANALYTICS_DEXES = [
   { key: 'hotstuff', label: 'Hotstuff' },
   { key: 'katana', label: 'Katana Perps' },
   { key: 'gmtrade', label: 'GMTrade' },
+  { key: 'flash', label: 'Flash Trade' },
 ];
 
 const ANALYTICS_WINDOWS = [
@@ -1637,6 +1654,7 @@ const ANALYTICS_WINDOWS = [
 ];
 
 const RISEX_BUILDER_FEE_BPS = Number(process.env.RISEX_BUILDER_FEE_BPS) || 0;
+const FLASH_BUILDER_FEE_BPS = Number(process.env.FLASH_BUILDER_FEE_BPS || process.env.GMTRADE_BUILDER_FEE_BPS) || 0;
 
 function safeNumber(value) {
   const n = Number(value);
@@ -1680,7 +1698,7 @@ function decibelFeeBpsForDate(value) {
 }
 
 function tradeSourceWhereForAnalytics(dex) {
-  if (dex === 'decibel') return "verified_source = 'decibel_fill'";
+  if (dex === 'decibel') return "verified_source IN ('decibel_fill', 'server')";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'grvt') return "verified_source = 'grvt_builder'";
@@ -1689,7 +1707,8 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'hibachi') return "verified_source = 'hibachi_api'";
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
   if (dex === 'katana') return "verified_source = 'katana_api'";
-  if (dex === 'gmtrade') return "verified_source = 'gmtrade_tx'";
+  if (dex === 'gmtrade') return "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
+  if (dex === 'flash') return "verified_source = 'flash_tx'";
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
   if (dex === 'avantis') return "verified_source IN ('worker', 'client')";
@@ -1844,6 +1863,18 @@ function revenueModelForDex(dex, dateForRate = null) {
       builder_fee_pct: bps / 100,
       model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
       source_detail: bps > 0 ? 'local_volume_x_gmtrade_bps' : 'gmtrade_builder_not_configured',
+    };
+  }
+  if (dex === 'flash') {
+    const bps = Math.max(0, FLASH_BUILDER_FEE_BPS);
+    return {
+      configured: bps > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps builder fee estimate` : 'not configured',
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_flash_bps' : 'flash_builder_not_configured',
     };
   }
   if (dex === 'hibachi') {
@@ -2184,12 +2215,20 @@ const CACHE_TTL_MS = 60 * 1000;
 let _cache = null;
 let _cacheAt = 0;
 
+const FAILED_EARNINGS_META = {
+  decibel: {
+    address: DECIBEL_BUILDER_ADDR,
+    subaccount: DECIBEL_BUILDER_SUBACCOUNT,
+    currency: 'USDC (Aptos)',
+  },
+};
+
 async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   const now = Date.now();
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, phx, mon, hl, grvt, nado, hotstuff, hibachi, katana, gmtrade] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, phx, mon, hl, grvt, nado, hotstuff, hibachi, katana, gmtrade, flash] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
@@ -2203,10 +2242,19 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     fetchHibachiEarnings(),
     fetchKatanaEarnings(),
     fetchGmtradeEarnings(),
+    fetchFlashEarnings(),
   ]);
-  const wrap = (label, r) => r.status === 'fulfilled'
-    ? { ok: true, ...r.value }
-    : { ok: false, error: String(r.reason?.message || r.reason).slice(0, 240) };
+  const wrap = (label, r) => {
+    if (r.status === 'fulfilled') return { ok: true, ...r.value };
+    const error = String(r.reason?.message || r.reason).slice(0, 240);
+    return {
+      ok: false,
+      earned_usd: 0,
+      ...(FAILED_EARNINGS_META[label] || {}),
+      error,
+      note: error,
+    };
+  };
 
   const out = {
     pacifica: { ...wrap('pacifica', pac), source: 'pacifica_builder_trades_sum' },
@@ -2222,9 +2270,10 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     hibachi: { ...wrap('hibachi', hibachi), source: 'hibachi_api_activity_builder_fee_unverified' },
     katana: { ...wrap('katana', katana), source: 'katana_verified_fills_local_estimate' },
     gmtrade: { ...wrap('gmtrade', gmtrade), source: 'gmtrade_verified_tx_local_estimate' },
+    flash: { ...wrap('flash', flash), source: 'flash_v2_verified_tx_local_estimate' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','grvt','nado','hotstuff','hibachi','katana','gmtrade'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','grvt','nado','hotstuff','hibachi','katana','gmtrade','flash'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

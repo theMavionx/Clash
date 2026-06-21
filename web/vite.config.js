@@ -7,9 +7,32 @@ function setPerplProxyOrigin(proxyReq) {
   proxyReq.setHeader('referer', 'https://app.perpl.xyz/');
 }
 
+function alchemyKeyFromRpcUrl(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/\/v2\/([^/?#]+)/i);
+    return match?.[1] ? decodeURIComponent(match[1]) : '';
+  } catch {
+    const match = value.match(/\/v2\/([^/?#]+)/i);
+    return match?.[1] ? decodeURIComponent(match[1]) : '';
+  }
+}
+
 const viteEnv = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '');
 const API_PROXY_TARGET = process.env.VITE_API_PROXY || viteEnv.VITE_API_PROXY || '';
 const WS_PROXY_TARGET = process.env.VITE_WS_PROXY || viteEnv.VITE_WS_PROXY || '';
+const BASE_ALCHEMY_KEY = process.env.BASE_ALCHEMY_KEY
+  || viteEnv.BASE_ALCHEMY_KEY
+  || process.env.ALCHEMY_BASE_API_KEY
+  || viteEnv.ALCHEMY_BASE_API_KEY
+  || process.env.VITE_BASE_ALCHEMY_KEY
+  || viteEnv.VITE_BASE_ALCHEMY_KEY
+  || alchemyKeyFromRpcUrl(process.env.BASE_RPC_URL || viteEnv.BASE_RPC_URL)
+  || alchemyKeyFromRpcUrl(process.env.NFT_BASE_RPC_URL || viteEnv.NFT_BASE_RPC_URL)
+  || alchemyKeyFromRpcUrl(process.env.COPRELAUNCH_BASE_RPC_URL || viteEnv.COPRELAUNCH_BASE_RPC_URL)
+  || '';
 const SOLANA_HELIUS_API_KEY = process.env.SOLANA_HELIUS_API_KEY
   || viteEnv.SOLANA_HELIUS_API_KEY
   || process.env.HELIUS_API_KEY
@@ -28,6 +51,11 @@ const SOLANA_ALCHEMY_API_KEY = process.env.SOLANA_ALCHEMY_API_KEY
   || viteEnv.SOLANA_ALCHEMY_API_KEY
   || process.env.ALCHEMY_SOLANA_API_KEY
   || viteEnv.ALCHEMY_SOLANA_API_KEY
+  || process.env.VITE_SOLANA_ALCHEMY_API_KEY
+  || viteEnv.VITE_SOLANA_ALCHEMY_API_KEY
+  || process.env.VITE_ALCHEMY_SOLANA_API_KEY
+  || viteEnv.VITE_ALCHEMY_SOLANA_API_KEY
+  || BASE_ALCHEMY_KEY
   || '';
 const SOLANA_RPC_PROXY_TARGET = SOLANA_ALCHEMY_API_KEY
   ? 'https://solana-mainnet.g.alchemy.com'
@@ -43,13 +71,6 @@ const ARBITRUM_ALCHEMY_KEY = process.env.ARBITRUM_ALCHEMY_KEY
   || viteEnv.ARBITRUM_ALCHEMY_KEY
   || process.env.VITE_ARBITRUM_ALCHEMY_KEY
   || viteEnv.VITE_ARBITRUM_ALCHEMY_KEY
-  || '';
-const BASE_ALCHEMY_KEY = process.env.BASE_ALCHEMY_KEY
-  || viteEnv.BASE_ALCHEMY_KEY
-  || process.env.ALCHEMY_BASE_API_KEY
-  || viteEnv.ALCHEMY_BASE_API_KEY
-  || process.env.VITE_BASE_ALCHEMY_KEY
-  || viteEnv.VITE_BASE_ALCHEMY_KEY
   || '';
 const ETHEREUM_ALCHEMY_KEY = process.env.ETHEREUM_ALCHEMY_KEY
   || viteEnv.ETHEREUM_ALCHEMY_KEY
@@ -68,11 +89,16 @@ const ETHEREUM_ALCHEMY_KEY = process.env.ETHEREUM_ALCHEMY_KEY
 const BASE_RPC_PROXY_TARGET = 'https://mainnet.base.org';
 const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || viteEnv.VITE_FUTURES_PROXY
-  || (API_PROXY_TARGET && !/^https?:\/\/(?:localhost|127\.0\.0\.1):4000\b/i.test(API_PROXY_TARGET)
-    ? API_PROXY_TARGET
-    : 'http://127.0.0.1:3999');
-const FUTURES_PROXY_IS_DIRECT = /^https?:\/\/(?:localhost|127\.0\.0\.1):3999\b/i.test(FUTURES_PROXY_TARGET)
+  || 'http://127.0.0.1:3999';
+const FUTURES_PROXY_IS_DIRECT = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\b/i.test(FUTURES_PROXY_TARGET)
   || /^https?:\/\/[^/]+:3999\b/i.test(FUTURES_PROXY_TARGET);
+
+if (process.env.NODE_ENV !== 'production') {
+  console.log('[vite proxy]', {
+    api: API_PROXY_TARGET || 'http://127.0.0.1:4000',
+    futures: FUTURES_PROXY_TARGET,
+  });
+}
 
 export default defineConfig({
   // Vite 8 swapped the dep optimizer from esbuild to Rolldown and
@@ -112,8 +138,12 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      buffer: 'buffer',
+      buffer: resolve(__dirname, 'node_modules/buffer/index.js'),
+      'node:buffer': resolve(__dirname, 'node_modules/buffer/index.js'),
     },
+  },
+  optimizeDeps: {
+    include: ['buffer'],
   },
   build: {
     rollupOptions: {
@@ -329,7 +359,17 @@ export default defineConfig({
         },
         rewrite: (path) => path.replace(/^\/perpl-ws/, '/ws/v1'),
       },
-      '/api': API_PROXY_TARGET || 'http://127.0.0.1:4000',
+      '/api': {
+        target: API_PROXY_TARGET || 'http://127.0.0.1:4000',
+        changeOrigin: true,
+        proxyTimeout: 30000,
+        timeout: 30000,
+        configure: (proxy) => {
+          proxy.on('error', (err, req) => {
+            console.warn('[vite proxy] /api failed', req?.url, err?.message || err);
+          });
+        },
+      },
       '/ws': {
         target: WS_PROXY_TARGET || 'ws://127.0.0.1:4000',
         ws: true,

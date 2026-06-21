@@ -49,9 +49,9 @@
   "bridgeFeeWei": "100000000000000",
   "bridgeFeeTxHash": "0xc2a8629f2f4a5b9f3da82844555dd974a78c8a29ec87390c30ee490a1a83c632",
   "bridgeFeeUpdatedAt": "2026-05-16T16:13:33.053Z",
-  "baseTokenUri": "https://clashofperps.fun/api/nft/arbitrum/",
-  "baseUriTxHash": "0xa31853f88e530a46c724bc70d5ea8e60aef47dc1a6bf315741881e4769442678",
-  "baseUriUpdatedAt": "2026-05-16T19:44:53.913Z",
+  "baseTokenUri": "https://clashofperps.fun/api/nft/revealed/arbitrum/",
+  "baseUriTxHash": "0xfaa9f6e773bc26e762f124a2cd3fa74b10bdbb51bb43eab749876ea7fb4a7351",
+  "baseUriUpdatedAt": "2026-06-10T20:46:42.044Z",
   "currentMaxSupply": "333",
   "currentMaxSupplyTxHash": "0xa896076e66f50560151e081c52cafea0500094fe69b485635bfc21ad54001754",
   "currentMaxSupplyUpdatedAt": "2026-05-19T09:45:21.237Z"

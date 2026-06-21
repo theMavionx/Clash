@@ -7,7 +7,7 @@ extends Node3D
 @export var sail_duration: float = 3.0
 @export var spawn_distance: float = 4.0
 @export var water_node_path: NodePath = "../Water"
-@export var max_ships: int = 3
+@export var max_ships: int = 5
 @export var troop_spawn_delay: float = 0.2
 @export var troop_scale: float = 0.1
 
@@ -46,12 +46,17 @@ const SHIP_MODELS: Array[String] = [
 	"res://Model/Ship/Ships/ship-pirate-large_3.glb",
 ]
 const SHIP_SCALES: Array[float] = [0.05, 0.05, 0.05]
+const TROOP_SCALE_MULTIPLIERS: Dictionary = {
+	"FireDragon": 0.15,
+}
 
 ## Troop name → {model, script} for spawning combat troops
 const TROOP_DEFS: Dictionary = {
 	"Knight":    {"model": "res://Model/Characters/Model/Knight.glb",      "script": "res://scripts/knight.gd"},
 	"Mage":      {"model": "res://Model/Characters/Model/Mage.glb",        "script": "res://scripts/mage.gd"},
+	"Barbarian": {"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
 	"Archer":    {"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
+	"Ranger":    {"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
 	"DemonKing": {"model": "res://Model/Characters/Model/DemonKing_Body.fbx",   "script": "res://scripts/demon_king.gd"},
 	"FireDragon": {"model": "res://Model/Characters/FireDragon/FireDragon.tscn", "script": "res://scripts/fire_dragon.gd"},
 }
@@ -60,7 +65,9 @@ const TROOP_DEFS: Dictionary = {
 const SHIP_TROOPS = [
 	{"model": "res://Model/Characters/Model/Knight.glb",      "script": "res://scripts/knight.gd"},
 	{"model": "res://Model/Characters/Model/Mage.glb",        "script": "res://scripts/mage.gd"},
+	{"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
 	{"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
+	{"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -584,6 +591,11 @@ func _create_x_marker(pos: Vector3) -> Node3D:
 		anim_player.speed_scale = 0.4
 		anim_player.play("flag|Action")
 
+	BaseTroop.report_render_diagnostic(flag, "asset.pirate_flag_marker", {
+		"asset": "res://Model/flag/pirate_flag_animated.glb",
+		"scale": FLAG_SCALE,
+		"animation": "flag|Action" if anim_player else "",
+	})
 	return flag
 
 
@@ -835,7 +847,8 @@ func _spawn_troop_after_delay(
 	troop_spawn_pos: Vector3,
 	offset: Vector3,
 	building_y: float,
-	bs_ref: Node
+	bs_ref: Node,
+	troop_entry: String = ""
 ) -> void:
 	var ok: bool = await _wait_combat_delay(delay, spawn_generation)
 	if not ok:
@@ -847,9 +860,12 @@ func _spawn_troop_after_delay(
 	if troop.has_method("set_player_troop_levels"):
 		var player_levels: Dictionary = bs_ref.troop_levels if bs_ref and "troop_levels" in bs_ref else {}
 		troop.set_player_troop_levels(player_levels)
+	if troop.has_method("set_nft_rarity"):
+		troop.set_nft_rarity(_troop_entry_rarity(troop_entry))
 	get_tree().current_scene.add_child(troop)
-	troop._spawn_scale = troop_scale
-	troop.scale = Vector3(troop_scale, troop_scale, troop_scale)
+	var final_troop_scale := _scale_for_troop(troop_node_name, troop_scale)
+	troop._spawn_scale = final_troop_scale
+	troop.scale = Vector3(final_troop_scale, final_troop_scale, final_troop_scale)
 	troop.global_position = BaseTroop._clamp_to_island(troop_spawn_pos + offset)
 	troop.global_position.y = building_y
 	if offset == Vector3.ZERO:
@@ -866,6 +882,10 @@ func _spawn_troop_after_delay(
 			troop._play_victory()
 	elif troop.has_method("activate"):
 		troop.activate()
+
+
+static func _scale_for_troop(troop_name: String, base_scale: float) -> float:
+	return base_scale * float(TROOP_SCALE_MULTIPLIERS.get(troop_name, 1.0))
 
 
 ## Returns the deterministic troop spawn position derived from a ship's
@@ -963,7 +983,7 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 				offset = precomputed_offsets[i]
 			else:
 				offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
-		_spawn_troop_after_delay(troop_spawn_delay * i, spawn_generation, m_res, s_res, troop_node_name, ship_idx * 100 + i, lvl, troop_spawn_pos, offset, building_y, bs_ref)
+		_spawn_troop_after_delay(troop_spawn_delay * i, spawn_generation, m_res, s_res, troop_node_name, ship_idx * 100 + i, lvl, troop_spawn_pos, offset, building_y, bs_ref, troop_name)
 
 
 func _spawn_troops_at_pos(troop_names: Array, recorded_levels: Dictionary, spawn_pos: Vector3) -> void:
@@ -1007,7 +1027,7 @@ func _spawn_troops_at_pos(troop_names: Array, recorded_levels: Dictionary, spawn
 		var spawn_generation: int = _combat_generation
 		var troop_node_name: String = "Troop_%d" % (randi() % 99999)
 		var offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
-		_spawn_troop_after_delay(troop_spawn_delay * i, spawn_generation, m_res, s_res, troop_node_name, i, lvl, spawn_pos, offset, building_y, bs_ref)
+		_spawn_troop_after_delay(troop_spawn_delay * i, spawn_generation, m_res, s_res, troop_node_name, i, lvl, spawn_pos, offset, building_y, bs_ref, troop_name)
 
 
 ## Map script path to troop_levels dictionary key
@@ -1039,6 +1059,9 @@ static func _normalize_troop_entry(troop_name: String) -> String:
 
 
 static func _troop_entry_level(troop_name: String, fallback_level: int = 1) -> int:
+	var base: String = _normalize_troop_entry(troop_name)
+	if _is_nft_backed_troop_key(base):
+		return fallback_level
 	var parts: PackedStringArray = str(troop_name).split(":")
 	for part in parts:
 		var text: String = String(part).strip_edges()
@@ -1047,3 +1070,18 @@ static func _troop_entry_level(troop_name: String, fallback_level: int = 1) -> i
 			if parsed >= 1 and parsed <= 4:
 				return parsed
 	return fallback_level
+
+
+static func _is_nft_backed_troop_key(troop_key: String) -> bool:
+	return troop_key == "DemonKing" or troop_key == "FireDragon"
+
+
+static func _troop_entry_rarity(troop_name: String) -> String:
+	var parts: PackedStringArray = str(troop_name).split(":")
+	for part in parts:
+		var text: String = String(part).strip_edges()
+		if text.length() >= 2 and text.substr(0, 1).to_lower() == "r":
+			var rarity: String = text.substr(1).to_lower()
+			if rarity in ["common", "epic", "legendary", "unrevealed"]:
+				return rarity
+	return "common"

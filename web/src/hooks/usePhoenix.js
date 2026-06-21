@@ -5,6 +5,7 @@ import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as
 import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MAX_SUBACCOUNTS, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, buildDepositIxsResolved, buildNormalizedMarketParamsBySymbol, buildWithdrawIxsResolved, computeTraderMarginFromInputs, createPhoenixTraderStateManager, flight, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   asPhoenixArray,
   createPhoenixPublicWsClient,
@@ -40,7 +41,7 @@ import {
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
-const POLL_MS = 10_000;
+const POLL_MS = 45_000;
 const PHOENIX_PRICE_CACHE_MS = 15_000;
 const PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS = 60_000;
 const PHOENIX_MARKET_STATS_WS_FLUSH_MS = 100;
@@ -1603,9 +1604,8 @@ export function usePhoenix() {
   const privyActive = walletSource === 'privy';
   const walletAddr = adapterAddr || privyAddr || null;
   const ownerPk = useMemo(() => walletAddr ? new PublicKey(walletAddr) : null, [walletAddr]);
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
-  const registeredSolanaWallet = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(registeredWallet) ? registeredWallet : null;
-  const walletMismatch = !!(registeredSolanaWallet && walletAddr && registeredSolanaWallet !== walletAddr);
+  const registeredSolanaWallet = registeredDexWallet(player, 'phoenix', 'solana') || null;
+  const walletMismatch = false;
   const walletMismatchMessage = useMemo(() => {
     if (!walletMismatch) return '';
     const connected = shortPhoenixAddress(walletAddr) || 'current wallet';
@@ -5015,13 +5015,24 @@ export function usePhoenix() {
       }
     }
     const runTick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       tick().catch(e => {
         console.warn('[Phoenix] periodic refresh failed', e?.message || e);
       });
     };
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') runTick();
+    };
     runTick();
     const iv = setInterval(runTick, POLL_MS);
-    return () => { cancelled = true; clearInterval(iv); };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [fetchMarkets, fetchPrices, fetchWalletUsdc, isActiveDex, refreshTraderState, walletAddr, walletMismatch]);
 
   useEffect(() => {

@@ -26,7 +26,7 @@ import { createPublicClient, createWalletClient, custom, fallback, http, encodeF
 import { base, arbitrum } from 'viem/chains';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
-import { bridgeInit, bridgeRelay, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
+import { bridgeInit, bridgeRelay, fetchOwnedNfts, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from '../lib/solanaRpc';
 import { sendSolanaTransactionWithRetry } from '../lib/solanaTx';
@@ -250,6 +250,8 @@ export default function NftBridgePanel({
   const { setVisible: setSolanaModalVisible } = useWalletModal();
 
   const [collection, setCollection] = useState('demonking');
+  const isDemonKingCollection = collection === 'demonking';
+  const isRarityCollection = collection === 'demonking' || collection === 'dragon';
   const [sourceChain, setSourceChain] = useState('base');
   const [destChain,   setDestChain]   = useState('solana');
   const [sourceIdInput, setSourceIdInput] = useState('');
@@ -742,6 +744,8 @@ export default function NftBridgePanel({
         ? { hash: relayRes.destTxHash, asset: relayRes.assetAddress }
         : { hash: relayRes.txSig, asset: relayRes.assetAddress },
       level: relayRes.level || relayRes.burned?.level || null,
+      rarity: relayRes.rarity || relayRes.burned?.rarity || null,
+      rarityLabel: relayRes.rarityLabel || null,
     };
   }
 
@@ -777,6 +781,8 @@ export default function NftBridgePanel({
           destTxHash: retryResult.destResult?.hash || null,
           assetAddress: retryResult.destResult?.asset || null,
           level: retryResult.level,
+          rarity: retryResult.rarity,
+          rarityLabel: retryResult.rarityLabel,
         });
       }
       setResult(retryResult);
@@ -887,6 +893,8 @@ export default function NftBridgePanel({
           destTxHash: itemResult.destResult?.hash || null,
           assetAddress: itemResult.destResult?.asset || null,
           level: itemResult.level,
+          rarity: itemResult.rarity,
+          rarityLabel: itemResult.rarityLabel,
         });
         setPendingRelay(null);
         setNotice(null);
@@ -980,8 +988,9 @@ export default function NftBridgePanel({
     const idShort = nftPickerLabel(nft, chainKey, sourceIdInput);
     const level = nft?.level ?? 1;
     const fallbackImage = nftLevelImageUrl(level, rawId, collection);
+    const rarityCardStyle = isRarityCollection ? nftRarityCardStyle(nft?.rarity, isDemonKingCollection ? level : 1) : {};
     return (
-      <div style={localStyles.nftCardLarge}>
+      <div style={{ ...localStyles.nftCardLarge, ...rarityCardStyle }}>
         <div style={localStyles.nftCardLargeImgWrap}>
           {!bridgeCollectionHidden && nft?.imageUrl
             ? <img src={nft.imageUrl} alt="" style={localStyles.nftCardLargeImg}
@@ -1002,8 +1011,8 @@ export default function NftBridgePanel({
             <ChainLogo chain={chainKey} size={14} />
             <span style={localStyles.nftCardLargeSubText}>{chain?.label} - {idShort}</span>
           </span>
-          <span style={localStyles.nftCardLargeLevel}>
-            Level {level} {'★'.repeat(level)}
+          <span style={{ ...localStyles.nftCardLargeLevel, ...(isRarityCollection ? nftRarityBadgeStyle(nft?.rarity, isDemonKingCollection ? level : 1, { compact: true }) : null) }}>
+            {isRarityCollection ? nftRarityLabel(nft?.rarity, isDemonKingCollection ? level : 1) : `Level ${level} ${'★'.repeat(level)}`}
           </span>
         </div>
       </div>
@@ -1016,12 +1025,13 @@ export default function NftBridgePanel({
     const firstLevel = first?.level ?? 1;
     const fallbackImage = nftLevelImageUrl(firstLevel, sourceIdsToBridge[0] || null, collection);
     const count = Math.max(bridgeBatchCount, 1);
+    const rarityCardStyle = isRarityCollection ? nftRarityCardStyle(first?.rarity, isDemonKingCollection ? firstLevel : 1) : {};
     const ids = sourceIdsToBridge.slice(0, 4).map((id) => {
       const nft = (ownedNfts || []).find((token) => nftIdentifier(token) === id);
       return nftPickerLabel(nft, sourceChain, id);
     });
     return (
-      <div style={localStyles.batchCard}>
+      <div style={{ ...localStyles.batchCard, ...rarityCardStyle }}>
         <div style={localStyles.batchThumbStack}>
           <div style={{ ...localStyles.batchThumb, transform: 'translate(10px, 8px)', opacity: 0.35 }} />
           <div style={{ ...localStyles.batchThumb, transform: 'translate(5px, 4px)', opacity: 0.55 }} />
@@ -1155,9 +1165,12 @@ export default function NftBridgePanel({
                     const selected = sourceIdsToBridge.includes(id);
                     const idShort = nftPickerLabel(t, sourceChain);
                     const fallbackImage = nftLevelImageUrl(t.level ?? 1, id, collection);
+                    const rarityCardStyle = isRarityCollection
+                      ? nftRarityCardStyle(t.rarity, isDemonKingCollection ? (t.level ?? 1) : 1, { active: selected })
+                      : {};
                     return (
                       <button key={id} type="button" onClick={() => selectNft(t)}
-                        style={{ ...localStyles.nftCard, ...(selected ? localStyles.nftCardActive : null) }}
+                        style={{ ...localStyles.nftCard, ...(selected ? localStyles.nftCardActive : null), ...rarityCardStyle }}
                         title={id}>
                         {t.imageUrl && (
                           <img src={t.imageUrl} alt={idShort} style={localStyles.nftImg}
@@ -1172,7 +1185,9 @@ export default function NftBridgePanel({
                         )}
                         <div style={localStyles.nftMeta}>
                           <span style={localStyles.nftId} title={id}>{idShort}</span>
-                          <span style={localStyles.nftLevel}>L{t.level ?? 1}</span>
+                          <span style={{ ...localStyles.nftLevel, ...(isRarityCollection ? nftRarityBadgeStyle(t.rarity, isDemonKingCollection ? (t.level ?? 1) : 1, { compact: true }) : null) }}>
+                            {isRarityCollection ? nftRarityLabel(t.rarity, isDemonKingCollection ? (t.level ?? 1) : 1) : `L${t.level ?? 1}`}
+                          </span>
                         </div>
                       </button>
                     );
@@ -1274,7 +1289,7 @@ export default function NftBridgePanel({
 
           <div style={localStyles.bridgeArrowRow}>
             <span style={localStyles.bridgeArrow}>⬇</span>
-            <span style={localStyles.bridgeArrowLabel}>bridge • level preserved</span>
+            <span style={localStyles.bridgeArrowLabel}>bridge • {isRarityCollection ? 'rarity preserved' : 'level preserved'}</span>
           </div>
 
           {bridgeBatchCount > 1
@@ -1372,6 +1387,7 @@ export default function NftBridgePanel({
           container. */}
       {status !== 'idle' && (
         <BridgeStatusModal
+          collection={collection}
           status={status}
           notice={notice}
           result={result}
@@ -1396,13 +1412,15 @@ export default function NftBridgePanel({
 // state with tx hashes. Replaces the inline status blocks that used to
 // pile up under the confirm cards and force the user to scroll.
 function BridgeStatusModal({
-  status, notice, result, pendingRelay, busy,
+  collection, status, notice, result, pendingRelay, busy,
   sourceChain, destChain, batchItems = [],
   onRetry, onAnother, onBackToShop, onClose,
 }) {
   const isFinished = status === 'success' || status === 'error';
   const isWorking  = !isFinished;
   const isBatch = batchItems.length > 1 || result?.batch;
+  const isDemonKingCollection = collection === 'demonking' || result?.collection === 'demonking';
+  const isRarityCollection = isDemonKingCollection || collection === 'dragon' || result?.collection === 'dragon';
   // Map each pipeline step to its current visual state. The "confirming"
   // status covers both server verification AND server-side relay (one
   // network step from the user's point of view), so we collapse steps
@@ -1519,7 +1537,8 @@ function BridgeStatusModal({
                 {result.destResult?.asset && (<>
                   <span>New asset</span><span style={modalStyles.resultMono}>{shortAddr(result.destResult.asset, 8, 6)}</span>
                 </>)}
-                <span>Level</span><span><b>L{result.level || '?'}</b> · preserved</span>
+                <span>{isRarityCollection ? 'Rarity' : 'Level'}</span>
+                <span><b>{isRarityCollection ? nftRarityLabel(result.rarity, isDemonKingCollection ? (result.level || 1) : 1) : `L${result.level || '?'}`}</b> · preserved</span>
               </div>
             </div>
           )}
@@ -1537,7 +1556,7 @@ function BridgeStatusModal({
                 {result.results.map((row, idx) => (
                   <div key={`${row.sourceId || idx}-${row.burnTxHash}`} style={modalStyles.batchResultRow}>
                     <span style={modalStyles.resultMono}>{shortNftRef(row.sourceId || row.sourceRef || String(idx + 1), 5, 4)}</span>
-                    <span>L{row.level || '?'}</span>
+                    <span>{isRarityCollection ? nftRarityLabel(row.rarity, isDemonKingCollection ? (row.level || 1) : 1) : `L${row.level || '?'}`}</span>
                     <span style={modalStyles.resultMono}>{shortAddr(row.destResult?.hash || row.destResult?.asset || '', 6, 4)}</span>
                   </div>
                 ))}

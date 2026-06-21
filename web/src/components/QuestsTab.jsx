@@ -138,6 +138,21 @@ function describeTask(t) {
   }
 }
 
+const QUEST_ELIGIBILITY_BADGES = {
+  soldiers_only: 'Soldiers',
+  demon_king: 'Demon King',
+  dragon: 'Dragon',
+  demon_or_dragon: 'NFT Elite',
+  demon_and_dragon: 'Demon + Dragon',
+};
+
+function questEligibilityBadge(task) {
+  const cfg = task?.eligibility || task?.params?.eligibility || {};
+  const mode = String(cfg.mode || 'all');
+  if (mode === 'all') return '';
+  return String(cfg.label || '').trim() || QUEST_ELIGIBILITY_BADGES[mode] || 'Exclusive';
+}
+
 function QuestCard({ task, onStart, onClaim, loading }) {
   const pct = task.target_value > 0 ? Math.min(1, task.progress_value / task.target_value) : 0;
   const isDone = task.target_value > 0 && task.progress_value >= task.target_value;
@@ -145,13 +160,17 @@ function QuestCard({ task, onStart, onClaim, loading }) {
   const autoRestarted = isClaimed && task.repeatable && Number(task.cooldown_hours || 0) <= 0;
   const canReClaim = isClaimed && task.repeatable && !autoRestarted;
   const showClaimed = isClaimed && !task.repeatable;
+  const exclusiveBadge = questEligibilityBadge(task);
 
   return (
     <div style={S.card}>
       <div style={S.cardHeader}>
         <span style={S.cardTitle}>{task.title}</span>
-        {showClaimed && <span style={S.badgeDone}>Claimed</span>}
-        {task.repeatable && <span style={S.badgeRepeat}>{autoRestarted ? 'Active again' : 'Repeatable'}</span>}
+        <span style={S.badgeRow}>
+          {exclusiveBadge && <span style={S.badgeExclusive}>{exclusiveBadge}</span>}
+          {showClaimed && <span style={S.badgeDone}>Claimed</span>}
+          {task.repeatable && <span style={S.badgeRepeat}>{autoRestarted ? 'Active again' : 'Repeatable'}</span>}
+        </span>
       </div>
       {task.description && <div style={S.cardDesc}>{task.description}</div>}
       <div style={S.cardAuto}>{describeTask(task)}</div>
@@ -241,7 +260,12 @@ function QuestsTab({ markets = [] }) {
     // Poll while mounted; also refetches whenever token changes (e.g. after
     // auto-login completes or the user switches accounts).
     const iv = setInterval(() => fetchTasks(token), 20000);
-    return () => clearInterval(iv);
+    const onTradeReward = () => fetchTasks(token);
+    window.addEventListener('clash:trading-reward-claimed', onTradeReward);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener('clash:trading-reward-claimed', onTradeReward);
+    };
   }, [fetchTasks, token]);
 
   const handleStart = useCallback(async (id) => {
@@ -262,6 +286,23 @@ function QuestsTab({ markets = [] }) {
     if (!token) { setError('Not signed in yet — try again in a moment.'); return; }
     setLoading(true); setError(null);
     try {
+      const refreshResources = async () => {
+        try {
+          const rr = await fetch(`${GAME_API}/resources`, { headers: { 'x-token': token } });
+          if (!rr.ok) return;
+          const resources = await rr.json();
+          const nextResources = {
+            gold: Number(resources.gold || 0),
+            wood: Number(resources.wood || 0),
+            ore: Number(resources.ore || 0),
+          };
+          window.onGodotMessage?.({
+            action: 'resources',
+            data: nextResources,
+          });
+          window.godotBridge?.(JSON.stringify({ action: 'set_resources', data: nextResources }));
+        } catch {}
+      };
       const r = await fetch(`${GAME_API}/tasks/${id}/claim`, {
         method: 'POST',
         headers: { 'x-token': token, 'Content-Type': 'application/json' },
@@ -275,23 +316,8 @@ function QuestsTab({ markets = [] }) {
         };
         if (reward.gold || reward.wood || reward.ore) {
           window.onGodotMessage?.({ action: 'resources_add', data: reward });
-          fetch(`${GAME_API}/resources`, { headers: { 'x-token': token } })
-            .then(rr => rr.ok ? rr.json() : null)
-            .then(resources => {
-              if (!resources) return;
-              const nextResources = {
-                gold: Number(resources.gold || 0),
-                wood: Number(resources.wood || 0),
-                ore: Number(resources.ore || 0),
-              };
-              window.onGodotMessage?.({
-                action: 'resources',
-                data: nextResources,
-              });
-              window.godotBridge?.(JSON.stringify({ action: 'set_resources', data: nextResources }));
-            })
-            .catch(() => {});
         }
+        await refreshResources();
         if (reward.gold > 0) {
           setFlash({
             amount: reward.gold,
@@ -398,6 +424,8 @@ const S = {
     fontWeight: 800, fontSize: 12, border: '2px solid #a3906a', borderRadius: 8, cursor: 'pointer',
   },
   doneLabel: { fontSize: 18, fontWeight: 900, color: '#6ab344' },
+  badgeRow: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' },
+  badgeExclusive: { fontSize: 10, fontWeight: 900, color: '#fff', background: 'linear-gradient(180deg, #8b5cf6 0%, #5b21b6 100%)', padding: '2px 6px', borderRadius: 4, border: '1px solid #4c1d95', textShadow: '1px 1px 0 rgba(0,0,0,0.25)' },
   badgeDone: { fontSize: 10, fontWeight: 800, color: '#4d7a2e', background: '#e8f5d8', padding: '2px 6px', borderRadius: 4, border: '1px solid #6ab344' },
   badgeRepeat: { fontSize: 10, fontWeight: 800, color: '#5C3A21', background: '#fff5cc', padding: '2px 6px', borderRadius: 4, border: '1px solid #e8b830' },
   empty: { textAlign: 'center', padding: 40, color: '#8a7252' },

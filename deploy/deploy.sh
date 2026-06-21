@@ -28,6 +28,7 @@ BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-}"
 BACKUP_SQLITE_TIMEOUT_MIN_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MIN_SECONDS:-600}"
 BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND="${CLASH_BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND:-1}"
 BACKUP_SQLITE_TIMEOUT_MAX_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MAX_SECONDS:-7200}"
+CLOUDFLARE_CACHE_PURGE_ENABLED="${CLOUDFLARE_CACHE_PURGE_ENABLED:-1}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -327,6 +328,7 @@ prepare_shared_runtime() {
                 printf '%s\n' VITE_HOTSTUFF_BROKER_FEE_RATE=0.0001
                 printf '%s\n' VITE_HIBACHI_REFERRAL_URL=https://hibachi.xyz/r/M4S4XNAGP4
                 printf '%s\n' KATANA_PERPS_REFERRAL_CODE=CLASHOFPERPS
+                printf '%s\n' KATANA_PERPS_BUILDER_CODE=B:Px8lQrCA
                 printf '%s\n' VITE_KATANA_PERPS_REFERRAL_CODE=CLASHOFPERPS
                 printf '%s\n' GMTRADE_APP_URL=https://gmtrade.xyz/trade
                 printf '%s\n' GMTRADE_SOLANA_RPC_URL=https://rpc-1.gmtrade.xyz/
@@ -395,6 +397,7 @@ prepare_shared_runtime() {
     ensure_env_default "KATANA_PERPS_API_URL" "https://api-perps.katana.network/v1"
     ensure_env_default "KATANA_PERPS_APP_URL" "https://perps.katana.network"
     ensure_env_default "KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
+    ensure_env_default "KATANA_PERPS_BUILDER_CODE" "B:Px8lQrCA"
     ensure_env_default "VITE_KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
     ensure_env_default "GMTRADE_APP_URL" "https://gmtrade.xyz/trade"
     ensure_env_default "GMTRADE_SOLANA_RPC_URL" "https://rpc-1.gmtrade.xyz/"
@@ -492,6 +495,7 @@ prepare_shared_runtime() {
     set_env_value "VITE_HOTSTUFF_BROKER_FEE_RATE" "0.0001"
     set_env_value "VITE_HIBACHI_REFERRAL_URL" "https://hibachi.xyz/r/M4S4XNAGP4"
     set_env_value "KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
+    set_env_value "KATANA_PERPS_BUILDER_CODE" "B:Px8lQrCA"
     set_env_value "VITE_KATANA_PERPS_REFERRAL_CODE" "CLASHOFPERPS"
     set_env_value "GMTRADE_ENABLE_NODE_SDK_BUILDER" "1"
     set_env_value "GMTRADE_ALLOW_CLIENT_NOTIONAL_REPORTS" "0"
@@ -1058,6 +1062,52 @@ switch_current_release() {
     SWITCHED=1
 }
 
+purge_cloudflare_godot_cache() {
+    if [ "$CLOUDFLARE_CACHE_PURGE_ENABLED" != "1" ]; then
+        log "Cloudflare cache purge skipped by CLOUDFLARE_CACHE_PURGE_ENABLED=$CLOUDFLARE_CACHE_PURGE_ENABLED"
+        return
+    fi
+
+    local cf_token cf_zone_id response success error_message
+    cf_token="${CLOUDFLARE_API_TOKEN:-${CF_API_TOKEN:-${CLASH_CLOUDFLARE_API_TOKEN:-}}}"
+    cf_zone_id="${CLOUDFLARE_ZONE_ID:-${CF_ZONE_ID:-${CLASH_CLOUDFLARE_ZONE_ID:-}}}"
+    if [ -z "$cf_token" ]; then
+        cf_token="$(first_env_file_value CLOUDFLARE_API_TOKEN CF_API_TOKEN CLASH_CLOUDFLARE_API_TOKEN)"
+    fi
+    if [ -z "$cf_zone_id" ]; then
+        cf_zone_id="$(first_env_file_value CLOUDFLARE_ZONE_ID CF_ZONE_ID CLASH_CLOUDFLARE_ZONE_ID)"
+    fi
+
+    if [ -z "$cf_token" ] || [ -z "$cf_zone_id" ]; then
+        log "Cloudflare cache purge skipped: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ZONE_ID in $ENV_FILE."
+        return
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        log "Cloudflare cache purge skipped: curl is not installed."
+        return
+    fi
+
+    log "Purging Cloudflare cache for Godot runtime assets..."
+    response="$(curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/$cf_zone_id/purge_cache" \
+        -H "Authorization: Bearer $cf_token" \
+        -H "Content-Type: application/json" \
+        --data "{\"files\":[\"https://$DOMAIN/godot/Work.pck\",\"https://$DOMAIN/godot/Work.wasm\",\"https://$DOMAIN/godot/Work.js\",\"https://$DOMAIN/godot/godot-runtime-manifest.json\"]}" \
+        2>&1)" || {
+            log "WARNING: Cloudflare cache purge request failed: $response"
+            return
+        }
+
+    success="$(printf '%s' "$response" | node -e "let s=''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => { try { const j = JSON.parse(s); console.log(j.success ? '1' : '0'); } catch { console.log('0'); } });" 2>/dev/null || echo 0)"
+    if [ "$success" = "1" ]; then
+        log "Cloudflare Godot cache purge accepted."
+        return
+    fi
+
+    error_message="$(printf '%s' "$response" | node -e "let s=''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => { try { const j = JSON.parse(s); console.log((j.errors || []).map(e => e.message || e.code).join('; ') || 'unknown error'); } catch { console.log('invalid response'); } });" 2>/dev/null || echo "invalid response")"
+    log "WARNING: Cloudflare cache purge was not accepted: $error_message"
+}
+
 write_nginx_config() {
     log "[8/9] Configuring nginx..."
     if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
@@ -1332,6 +1382,18 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host 1rpc.io;
         proxy_ssl_server_name on;
+        gzip off;
+    }
+    location = /rpc/ink {
+        proxy_pass https://rpc-gel.inkonchain.com/;
+        proxy_http_version 1.1;
+        proxy_set_header Host rpc-gel.inkonchain.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
         gzip off;
     }
 
@@ -1628,7 +1690,7 @@ main() {
     switch_current_release
     write_nginx_config
     restart_services
-    backup_shared_databases
+    purge_cloudflare_godot_cache
     cleanup_old_releases
 
     log "=== Deploy complete ==="

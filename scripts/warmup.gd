@@ -17,11 +17,13 @@ extends Node3D
 ## Placed in Main.tscn — runs once when the island loads, before the first
 ## attack starts.
 
-## WebGL2 shader compile is async and can take 3-8 frames per variant on
-## first compile (browser/driver-dependent). 16 gives real headroom; the
-## nodes are already invisible, so extra frames cost nothing visually.
+## WebGL2 shader compile is async and can take several rendered frames per
+## variant. FireDragon's full breath VFX lives for ~0.8s, so combat warmup
+## must keep the real effect alive long enough for particles/material variants
+## to compile before the first attack starts.
 const HOME_WARMUP_FRAMES: int = 4
-const COMBAT_WARMUP_FRAMES: int = 16
+const COMBAT_WARMUP_FRAMES: int = 80
+const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [8, 48]
 ## Sub-pixel scales (< ~0.005) are frustum-culled by both renderers — the draw
 ## call never reaches the GPU and the pipeline isn't compiled. 0.02 is small
 ## enough to be invisible against the water/sky but big enough to rasterize.
@@ -41,6 +43,9 @@ var _finished_emitted: bool = false
 var _started_ticks: int = 0
 var _last_report_ticks: int = 0
 var _runtime_warmup_nodes: Array[Node] = []
+var _combat_frames_elapsed: int = 0
+var _fire_dragon_warmup_inst: Node = null
+var _fire_dragon_repeat_index: int = 0
 
 
 static func start_combat_warmup(parent: Node) -> Node:
@@ -74,6 +79,9 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	if mode == "combat":
+		_combat_frames_elapsed += 1
+		_process_fire_dragon_prewarm_frames()
 	_frames_left -= 1
 	if mode != "combat":
 		var total: int = HOME_WARMUP_FRAMES if HOME_WARMUP_FRAMES > 0 else 1
@@ -122,6 +130,7 @@ func _spawn_combat_warmup_nodes() -> void:
 	_warmup_magic_orb()
 	_warmup_one_troop_glb()
 	_warmup_demon_king()
+	_warmup_fire_dragon_attack()
 	_warmup_mage_tower()
 	_warmup_flag_glb()
 	_warmup_ship_glbs()
@@ -508,6 +517,161 @@ func _warmup_demon_king() -> void:
 			loaded_anims += 1
 
 
+## FireDragon swaps FBX scenes at runtime for each animation and creates
+## additive fire-breath materials on first attack. Warm the attack clip and
+## those exact material flags before the first Dragon reaches a target.
+func _warmup_fire_dragon_attack() -> void:
+	if AttackSystem._troop_res_cache.is_empty():
+		AttackSystem._preload_combat_resources()
+	var entry: Dictionary = AttackSystem._troop_res_cache.get("FireDragon", {})
+	var model_res: Resource = entry.get("model", null)
+	var script_res: Script = entry.get("script", null)
+	if model_res == null:
+		model_res = ResourceLoader.load("res://Model/Characters/FireDragon/FireDragon.tscn", "PackedScene")
+	if script_res == null:
+		script_res = ResourceLoader.load("res://scripts/fire_dragon.gd", "Script")
+	if model_res == null:
+		print("[WARMUP] FireDragon scene missing - skipped")
+		return
+
+	var inst: Node3D = (model_res as PackedScene).instantiate()
+	inst.name = "WarmupFireDragon"
+	if script_res != null:
+		inst.set_script(script_res)
+	var fire_dragon_scale := AttackSystem._scale_for_troop("FireDragon", 0.1)
+	inst.set("_spawn_scale", fire_dragon_scale)
+	inst.scale = Vector3(fire_dragon_scale, fire_dragon_scale, fire_dragon_scale)
+	_force_shadow_casting(inst)
+	add_child(inst)
+	if inst.has_method("_play_dragon_animation"):
+		inst.call("_play_dragon_animation", "fly_fire_breath_attack_low", true)
+	if inst.has_method("prewarm_fire_breath_vfx"):
+		inst.call("prewarm_fire_breath_vfx")
+	_fire_dragon_warmup_inst = inst
+	_warmup_fire_dragon_breath_materials()
+
+
+func _process_fire_dragon_prewarm_frames() -> void:
+	if _fire_dragon_warmup_inst == null or not is_instance_valid(_fire_dragon_warmup_inst):
+		return
+	if _fire_dragon_repeat_index >= FIRE_DRAGON_PREWARM_REPEAT_FRAMES.size():
+		return
+	var frame_target: int = int(FIRE_DRAGON_PREWARM_REPEAT_FRAMES[_fire_dragon_repeat_index])
+	if _combat_frames_elapsed < frame_target:
+		return
+	if _fire_dragon_warmup_inst.has_method("prewarm_fire_breath_vfx"):
+		_fire_dragon_warmup_inst.call("prewarm_fire_breath_vfx")
+	_fire_dragon_repeat_index += 1
+
+
+func _warmup_fire_dragon_breath_materials() -> void:
+	var breath: Texture2D = ResourceLoader.load("res://Model/Characters/FireDragon/Textures/fx_fire_breath.tga", "Texture2D")
+	if breath == null:
+		print("[WARMUP] FireDragon breath textures incomplete - skipped")
+		return
+
+	var flame_particles := GPUParticles3D.new()
+	flame_particles.name = "WarmupFireDragonFlameParticles"
+	flame_particles.amount = 46
+	flame_particles.lifetime = 0.74
+	flame_particles.one_shot = true
+	flame_particles.explosiveness = 0.48
+	flame_particles.randomness = 0.62
+	flame_particles.fixed_fps = 24
+	flame_particles.interpolate = true
+	flame_particles.local_coords = true
+	flame_particles.draw_order = GPUParticles3D.DRAW_ORDER_REVERSE_LIFETIME
+	var flame_mesh := QuadMesh.new()
+	flame_mesh.size = Vector2(0.13, 0.16)
+	flame_mesh.material = _make_particle_billboard_material(breath, Color(1.0, 0.92, 0.22, 0.84), true)
+	flame_particles.draw_passes = 1
+	flame_particles.set_draw_pass_mesh(0, flame_mesh)
+	var flame_process := ParticleProcessMaterial.new()
+	flame_process.direction = Vector3(0.0, 1.0, 0.0)
+	flame_process.spread = 5.2
+	flame_process.gravity = Vector3.ZERO
+	flame_process.initial_velocity_min = 0.72
+	flame_process.initial_velocity_max = 1.16
+	flame_process.lifetime_randomness = 0.22
+	flame_process.scale_min = 0.32
+	flame_process.scale_max = 1.00
+	flame_process.angle_min = -90.0
+	flame_process.angle_max = 90.0
+	flame_process.angular_velocity_min = -130.0
+	flame_process.angular_velocity_max = 130.0
+	flame_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	flame_process.emission_sphere_radius = 0.03
+	flame_particles.process_material = flame_process
+	add_child(flame_particles)
+	flame_particles.restart()
+
+	var trail_particles := GPUParticles3D.new()
+	trail_particles.name = "WarmupFireDragonTrailParticles"
+	trail_particles.amount = 16
+	trail_particles.lifetime = 0.52
+	trail_particles.one_shot = true
+	trail_particles.explosiveness = 0.86
+	trail_particles.randomness = 0.76
+	trail_particles.fixed_fps = 20
+	trail_particles.interpolate = true
+	trail_particles.local_coords = true
+	trail_particles.draw_order = GPUParticles3D.DRAW_ORDER_REVERSE_LIFETIME
+	var trail_mesh := QuadMesh.new()
+	trail_mesh.size = Vector2(0.10, 0.09)
+	trail_mesh.material = _make_particle_billboard_material(breath, Color(1.0, 0.82, 0.14, 0.46), true)
+	trail_particles.draw_passes = 1
+	trail_particles.set_draw_pass_mesh(0, trail_mesh)
+	var trail_process := ParticleProcessMaterial.new()
+	trail_process.direction = Vector3(0.0, 1.0, 0.0)
+	trail_process.spread = 14.0
+	trail_process.gravity = Vector3.ZERO
+	trail_process.initial_velocity_min = 0.05
+	trail_process.initial_velocity_max = 0.18
+	trail_process.lifetime_randomness = 0.28
+	trail_process.scale_min = 0.38
+	trail_process.scale_max = 1.10
+	trail_process.angle_min = -100.0
+	trail_process.angle_max = 100.0
+	trail_process.angular_velocity_min = -110.0
+	trail_process.angular_velocity_max = 110.0
+	trail_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	trail_process.emission_box_extents = Vector3(0.04, 0.18, 0.03)
+	trail_particles.process_material = trail_process
+	add_child(trail_particles)
+	trail_particles.restart()
+
+	var cpu_particles := CPUParticles3D.new()
+	cpu_particles.name = "WarmupFireDragonCpuParticles"
+	cpu_particles.amount = 16
+	cpu_particles.lifetime = 0.52
+	cpu_particles.one_shot = true
+	cpu_particles.explosiveness = 0.86
+	cpu_particles.randomness = 0.76
+	cpu_particles.local_coords = true
+	cpu_particles.direction = Vector3(0.0, 1.0, 0.0)
+	cpu_particles.spread = 14.0
+	cpu_particles.gravity = Vector3.ZERO
+	cpu_particles.initial_velocity_min = 0.05
+	cpu_particles.initial_velocity_max = 0.18
+	cpu_particles.color = Color(1.0, 0.82, 0.14, 0.46)
+	cpu_particles.scale_amount_min = 0.38
+	cpu_particles.scale_amount_max = 1.10
+	cpu_particles.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	cpu_particles.emission_box_extents = Vector3(0.04, 0.18, 0.03)
+	var cpu_mesh := QuadMesh.new()
+	cpu_mesh.size = Vector2(0.10, 0.09)
+	cpu_mesh.material = _make_particle_billboard_material(breath, Color(1.0, 0.82, 0.14, 0.46), true)
+	cpu_particles.mesh = cpu_mesh
+	add_child(cpu_particles)
+	cpu_particles.restart()
+
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.76, 0.12)
+	light.light_energy = 0.4
+	light.omni_range = 0.5
+	add_child(light)
+
+
 ## Mage Tower is an FBX with runtime-applied albedo/emission textures and a
 ## distinct solid-blue orb material. Warm both the building model pipeline and
 ## the projectile material before the first tower is placed or fires.
@@ -714,9 +878,13 @@ func _clear_runtime_warmup_nodes() -> void:
 ## bs_cannon flash/explosion, turret muzzle flash and fire-bomb explosion.
 ## Kept as one helper so the warmup variants match runtime flag-for-flag.
 static func _make_additive_billboard(tex: Texture2D, color: Color) -> StandardMaterial3D:
+	return _make_additive_material(tex, color, true)
+
+
+static func _make_additive_material(tex: Texture2D, color: Color, billboard: bool) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED if billboard else BaseMaterial3D.BILLBOARD_DISABLED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	mat.no_depth_test = true
@@ -724,6 +892,14 @@ static func _make_additive_billboard(tex: Texture2D, color: Color) -> StandardMa
 	if tex:
 		mat.albedo_texture = tex
 	mat.albedo_color = color
+	return mat
+
+
+static func _make_particle_billboard_material(tex: Texture2D, color: Color, additive: bool) -> StandardMaterial3D:
+	var mat := _make_additive_material(tex, color, true)
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD if additive else BaseMaterial3D.BLEND_MODE_MIX
+	mat.vertex_color_use_as_albedo = true
 	return mat
 
 

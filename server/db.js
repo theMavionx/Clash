@@ -120,6 +120,29 @@ try { db.exec(`ALTER TABLE players ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0`
 try { db.exec(`ALTER TABLE players ADD COLUMN bot_difficulty TEXT`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN bot_variant INTEGER`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN bot_generation TEXT`); } catch {}
+// Account moderation. Banned accounts keep their rows for auditability but
+// cannot authenticate or receive token-bearing login responses.
+try { db.exec(`ALTER TABLE players ADD COLUMN banned_at TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN banned_reason TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN banned_by TEXT`); } catch {}
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS wallet_blacklist (
+      wallet     TEXT PRIMARY KEY,
+      chain_type TEXT,
+      reason     TEXT,
+      player_id  TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_by TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_wallet_blacklist_player
+      ON wallet_blacklist(player_id);
+  `);
+} catch (e) {
+  console.warn('[db] wallet blacklist migration warning:', e.message);
+}
 
 // Unified account identity layer. The legacy `players.wallet` and
 // `players.dex` columns remain for compatibility, but new auth paths should
@@ -223,6 +246,25 @@ try {
     );
     CREATE INDEX IF NOT EXISTS idx_player_nft_wallet_checks_recent
       ON player_nft_wallet_checks(collection, wallet, checked_at DESC);
+
+    CREATE TABLE IF NOT EXISTS nft_rarities (
+      collection    TEXT NOT NULL DEFAULT 'demon_king',
+      chain         TEXT NOT NULL,
+      token_id      TEXT NOT NULL,
+      rarity        TEXT NOT NULL CHECK (rarity IN ('common', 'epic', 'legendary')),
+      legacy_level  INTEGER NOT NULL DEFAULT 1,
+      owner_wallet  TEXT,
+      player_id     TEXT,
+      rarity_source TEXT NOT NULL DEFAULT 'reveal',
+      reveal_seed   TEXT,
+      snapshot_hash TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      revealed_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (collection, chain, token_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_nft_rarities_collection_rarity
+      ON nft_rarities(collection, rarity, updated_at DESC);
 
   `);
 } catch (e) { console.warn('[db] player_nfts migration:', e.message); }
@@ -821,9 +863,10 @@ try {
   db.exec(`
     CREATE TABLE IF NOT EXISTS tournaments (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
       dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
       eligible_dexes TEXT NOT NULL DEFAULT '[]',
       mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -850,6 +893,8 @@ try {
       daily_pool_enabled_at TEXT,
       prize_currency TEXT NOT NULL DEFAULT 'USD',
       prize_tiers    TEXT NOT NULL DEFAULT '[]',
+      mega_config    TEXT NOT NULL DEFAULT '{}',
+      reward_config  TEXT NOT NULL DEFAULT '{}',
       rewards_in_cop INTEGER NOT NULL DEFAULT 0,
       seeker_only  INTEGER NOT NULL DEFAULT 0,
       status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
@@ -858,6 +903,8 @@ try {
     CREATE INDEX IF NOT EXISTS idx_tournaments_dex_status ON tournaments(dex, status);
     CREATE INDEX IF NOT EXISTS idx_tournaments_scope_status ON tournaments(dex_scope, status);
   `);
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'standard'`); } catch {}
+  try { db.exec(`UPDATE tournaments SET event_kind = 'standard' WHERE event_kind IS NULL OR event_kind NOT IN ('standard','lucky_raider')`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN dex_scope TEXT NOT NULL DEFAULT 'single'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN eligible_dexes TEXT NOT NULL DEFAULT '[]'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN mode TEXT NOT NULL DEFAULT 'individual'`); } catch {}
@@ -922,6 +969,9 @@ try {
   } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_currency TEXT NOT NULL DEFAULT 'USD'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_tiers TEXT NOT NULL DEFAULT '[]'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN mega_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN reward_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
+  try { db.exec(`UPDATE tournaments SET reward_config = '{}' WHERE reward_config IS NULL OR reward_config = ''`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN rewards_in_cop INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_gold_boost REAL NOT NULL DEFAULT 1.0`); } catch {}
@@ -943,16 +993,17 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
         db.exec(`
           CREATE TABLE tournaments_new (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
             name         TEXT NOT NULL,
             description  TEXT,
-            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade')),
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
             dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
             eligible_dexes TEXT NOT NULL DEFAULT '[]',
             mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -979,6 +1030,8 @@ try {
             daily_pool_enabled_at TEXT,
             prize_currency TEXT NOT NULL DEFAULT 'USD',
             prize_tiers    TEXT NOT NULL DEFAULT '[]',
+            mega_config    TEXT NOT NULL DEFAULT '{}',
+            reward_config  TEXT NOT NULL DEFAULT '{}',
             rewards_in_cop INTEGER NOT NULL DEFAULT 0,
             seeker_only  INTEGER NOT NULL DEFAULT 0,
             status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
@@ -988,18 +1041,20 @@ try {
             registration_closes_at TEXT
           );
           INSERT INTO tournaments_new (
-            id, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost,
+            id, event_kind, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost,
             shield_hours, freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
             scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
-            prize_currency, prize_tiers, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
+            prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
-            id, name, description,
-            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade') THEN dex ELSE 'pacifica' END,
+            id,
+            CASE WHEN event_kind IN ('standard','lucky_raider') THEN event_kind ELSE 'standard' END,
+            name, description,
+            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END,
             CASE WHEN dex_scope IN ('single','custom','all') THEN dex_scope ELSE 'single' END,
             CASE
               WHEN eligible_dexes IS NOT NULL AND eligible_dexes != '' AND eligible_dexes != '[]' THEN eligible_dexes
-              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade') THEN dex ELSE 'pacifica' END || '"]'
+              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END || '"]'
             END,
             CASE WHEN mode IN ('individual','dex_vs_dex') THEN mode ELSE 'individual' END,
             COALESCE(team_score_by, 'volume_usd'),
@@ -1021,6 +1076,8 @@ try {
             daily_pool_enabled_at,
             COALESCE(prize_currency, 'USD'),
             COALESCE(prize_tiers, '[]'),
+            COALESCE(mega_config, '{}'),
+            COALESCE(reward_config, '{}'),
             COALESCE(rewards_in_cop, 0),
             COALESCE(seeker_only, 0),
             CASE WHEN status IN ('active','ended','draft') THEN status ELSE 'active' END,
@@ -1047,6 +1104,8 @@ try {
 // rebuild failed before adding newer columns, retry the additive columns here
 // so prepared statements below can still compile on old production files.
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN dex_scope TEXT NOT NULL DEFAULT 'single'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'standard'`); } catch {}
+try { db.exec(`UPDATE tournaments SET event_kind = 'standard' WHERE event_kind IS NULL OR event_kind NOT IN ('standard','lucky_raider')`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN eligible_dexes TEXT NOT NULL DEFAULT '[]'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN mode TEXT NOT NULL DEFAULT 'individual'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_score_by TEXT NOT NULL DEFAULT 'volume_usd'`); } catch {}
@@ -1062,6 +1121,9 @@ try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_points REAL NOT NUL
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_growth_pct REAL NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_overrides TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_enabled_at TEXT`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN mega_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN reward_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
+try { db.exec(`UPDATE tournaments SET reward_config = '{}' WHERE reward_config IS NULL OR reward_config = ''`); } catch {}
 try {
   db.exec(`
     UPDATE tournaments
@@ -1181,6 +1243,65 @@ try {
       details_json  TEXT NOT NULL DEFAULT '{}',
       PRIMARY KEY (tournament_id, day_utc)
     );
+
+    CREATE TABLE IF NOT EXISTS tournament_lucky_raider_runs (
+      tournament_id    INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      day_utc          TEXT NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'pending',
+      seed             TEXT NOT NULL DEFAULT '',
+      winner_player_id TEXT,
+      details_json     TEXT NOT NULL DEFAULT '{}',
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (tournament_id, day_utc)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tlr_runs_winner
+      ON tournament_lucky_raider_runs(winner_player_id, tournament_id);
+
+    CREATE TABLE IF NOT EXISTS tournament_lucky_raider_entries (
+      tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      day_utc       TEXT NOT NULL,
+      player_id     TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      volume_usd    REAL NOT NULL DEFAULT 0,
+      tickets       INTEGER NOT NULL DEFAULT 0,
+      eligible      INTEGER NOT NULL DEFAULT 0,
+      reason        TEXT,
+      details_json  TEXT NOT NULL DEFAULT '{}',
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (tournament_id, day_utc, player_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tlr_entries_player
+      ON tournament_lucky_raider_entries(player_id, tournament_id, day_utc);
+
+    CREATE TABLE IF NOT EXISTS tournament_lucky_raider_payouts (
+      id                 TEXT PRIMARY KEY,
+      tournament_id      INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      day_utc            TEXT NOT NULL,
+      place              INTEGER NOT NULL,
+      reward_index       INTEGER NOT NULL DEFAULT 0,
+      player_id          TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      destination_wallet TEXT,
+      reward_label       TEXT NOT NULL DEFAULT '',
+      reward_currency    TEXT NOT NULL DEFAULT '',
+      reward_amount_usd  REAL NOT NULL DEFAULT 0,
+      clash_usd_price    REAL NOT NULL DEFAULT 0,
+      clash_amount       TEXT NOT NULL DEFAULT '',
+      clash_amount_units TEXT NOT NULL DEFAULT '',
+      price_source       TEXT,
+      status             TEXT NOT NULL DEFAULT 'pending',
+      tx_hash            TEXT,
+      error              TEXT,
+      attempts           INTEGER NOT NULL DEFAULT 0,
+      metadata_json      TEXT NOT NULL DEFAULT '{}',
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      paid_at            TEXT,
+      UNIQUE(tournament_id, day_utc, place, reward_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tlr_payouts_status
+      ON tournament_lucky_raider_payouts(status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_tlr_payouts_player
+      ON tournament_lucky_raider_payouts(player_id, tournament_id, day_utc);
   `);
 } catch (e) { console.warn('[db] tournament daily pool migration:', e.message); }
 
@@ -1382,6 +1503,238 @@ try {
     CREATE INDEX IF NOT EXISTS idx_utility_purchases_player ON utility_purchases(player_id, created_at DESC);
   `);
 } catch (e) { console.warn('[db] utility_purchases migration:', e.message); }
+
+// Referral attribution and commission ledger. Revenue events are immutable and
+// idempotent by source_type/source_id so retrying payment redemption, delivery,
+// or trade sync cannot double-credit a referrer.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS referral_codes (
+      player_id  TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      code       TEXT NOT NULL UNIQUE,
+      slug       TEXT NOT NULL UNIQUE,
+      commission_bps INTEGER NOT NULL DEFAULT 1000,
+      manual_enabled INTEGER NOT NULL DEFAULT 0,
+      active     INTEGER NOT NULL DEFAULT 1,
+      note       TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_referral_codes_code
+      ON referral_codes(code, active);
+
+    CREATE TABLE IF NOT EXISTS player_referrals (
+      referred_player_id TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      referrer_player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      code               TEXT NOT NULL,
+      source             TEXT,
+      bound_at           TEXT NOT NULL DEFAULT (datetime('now')),
+      metadata_json      TEXT NOT NULL DEFAULT '{}',
+      CHECK (referred_player_id <> referrer_player_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_referrals_referrer
+      ON player_referrals(referrer_player_id, bound_at DESC);
+
+    CREATE TABLE IF NOT EXISTS referral_events (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      referrer_player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      referred_player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      source_type        TEXT NOT NULL,
+      source_id          TEXT NOT NULL,
+      revenue_kind       TEXT NOT NULL,
+      currency           TEXT NOT NULL DEFAULT 'USD',
+      gross_usd_e6       INTEGER NOT NULL DEFAULT 0,
+      commission_usd_e6  INTEGER NOT NULL DEFAULT 0,
+      commission_bps     INTEGER NOT NULL DEFAULT 1000,
+      status             TEXT NOT NULL DEFAULT 'confirmed',
+      tx_hash            TEXT,
+      metadata_json      TEXT NOT NULL DEFAULT '{}',
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      confirmed_at       TEXT,
+      paid_at            TEXT,
+      payout_id          TEXT,
+      UNIQUE(source_type, source_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_referral_events_referrer
+      ON referral_events(referrer_player_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_referral_events_referred
+      ON referral_events(referred_player_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS referral_payouts (
+      id                 TEXT PRIMARY KEY,
+      referrer_player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      status             TEXT NOT NULL DEFAULT 'requested',
+      currency           TEXT NOT NULL DEFAULT 'USD',
+      amount_usd_e6      INTEGER NOT NULL DEFAULT 0,
+      destination        TEXT,
+      tx_hash            TEXT,
+      note               TEXT,
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      paid_at            TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_referral_payouts_referrer
+      ON referral_payouts(referrer_player_id, status, created_at DESC);
+
+    DROP TRIGGER IF EXISTS trg_referral_utility_purchase;
+    CREATE TRIGGER trg_referral_utility_purchase
+    AFTER INSERT ON utility_purchases
+    WHEN NEW.usd_price_e6 IS NOT NULL
+    BEGIN
+      INSERT OR IGNORE INTO referral_events (
+        referrer_player_id, referred_player_id, source_type, source_id,
+        revenue_kind, currency, gross_usd_e6, commission_usd_e6, commission_bps,
+        status, tx_hash, metadata_json, confirmed_at
+      )
+      SELECT
+        pr.referrer_player_id,
+        NEW.player_id,
+        'utility_purchase',
+        CAST(NEW.id AS TEXT),
+        CASE WHEN NEW.utility LIKE '%nft%' OR NEW.utility LIKE '%demon_king%' THEN 'nft_shop' ELSE 'game_shop' END,
+        'USD',
+        CAST(COALESCE(NULLIF(NEW.usd_price_e6, ''), '0') AS INTEGER),
+        CAST((CAST(COALESCE(NULLIF(NEW.usd_price_e6, ''), '0') AS INTEGER)
+          * COALESCE((SELECT rc.commission_bps FROM referral_codes rc WHERE rc.player_id = pr.referrer_player_id AND rc.active = 1), 1000)
+        ) / 10000 AS INTEGER),
+        COALESCE((SELECT rc.commission_bps FROM referral_codes rc WHERE rc.player_id = pr.referrer_player_id AND rc.active = 1), 1000),
+        'confirmed',
+        NEW.tx_hash,
+        json_object('utility', NEW.utility, 'chain', NEW.chain, 'token', NEW.token, 'payer', NEW.payer),
+        datetime('now')
+      FROM player_referrals pr
+      WHERE pr.referred_player_id = NEW.player_id
+        AND pr.referrer_player_id <> NEW.player_id
+        AND CAST(COALESCE(NULLIF(NEW.usd_price_e6, ''), '0') AS INTEGER) > 0;
+    END;
+
+    DROP TRIGGER IF EXISTS trg_referral_custodial_marketplace_delivered;
+    CREATE TRIGGER trg_referral_custodial_marketplace_delivered
+    AFTER UPDATE OF status ON custodial_marketplace_orders
+    WHEN NEW.status = 'delivered' AND OLD.status <> 'delivered'
+    BEGIN
+      INSERT OR IGNORE INTO referral_events (
+        referrer_player_id, referred_player_id, source_type, source_id,
+        revenue_kind, currency, gross_usd_e6, commission_usd_e6, commission_bps,
+        status, tx_hash, metadata_json, confirmed_at
+      )
+      SELECT
+        pr.referrer_player_id,
+        NEW.buyer_player_id,
+        'custodial_marketplace',
+        NEW.id,
+        'marketplace_fee_royalty',
+        'USD',
+        CAST(COALESCE(NULLIF(NEW.fee_usdc_units, ''), '0') AS INTEGER)
+          + CAST(COALESCE(NULLIF(NEW.royalty_usdc_units, ''), '0') AS INTEGER),
+        CAST((
+          CAST(COALESCE(NULLIF(NEW.fee_usdc_units, ''), '0') AS INTEGER)
+          + CAST(COALESCE(NULLIF(NEW.royalty_usdc_units, ''), '0') AS INTEGER)
+        ) * COALESCE((SELECT rc.commission_bps FROM referral_codes rc WHERE rc.player_id = pr.referrer_player_id AND rc.active = 1), 1000) / 10000 AS INTEGER),
+        COALESCE((SELECT rc.commission_bps FROM referral_codes rc WHERE rc.player_id = pr.referrer_player_id AND rc.active = 1), 1000),
+        'confirmed',
+        NEW.payment_tx_hash,
+        json_object(
+          'asset_chain', NEW.asset_chain,
+          'asset_id', NEW.asset_id,
+          'fee_usdc_units', NEW.fee_usdc_units,
+          'royalty_usdc_units', NEW.royalty_usdc_units,
+          'seller_player_id', NEW.seller_player_id
+        ),
+        datetime('now')
+      FROM player_referrals pr
+      WHERE pr.referred_player_id = NEW.buyer_player_id
+        AND pr.referrer_player_id <> NEW.buyer_player_id
+        AND (
+          CAST(COALESCE(NULLIF(NEW.fee_usdc_units, ''), '0') AS INTEGER)
+          + CAST(COALESCE(NULLIF(NEW.royalty_usdc_units, ''), '0') AS INTEGER)
+        ) > 0;
+    END;
+  `);
+} catch (e) { console.warn('[db] referral migration:', e.message); }
+
+try { db.prepare('ALTER TABLE referral_codes ADD COLUMN commission_bps INTEGER NOT NULL DEFAULT 1000').run(); } catch {}
+try { db.prepare('ALTER TABLE referral_codes ADD COLUMN manual_enabled INTEGER NOT NULL DEFAULT 0').run(); } catch {}
+try { db.prepare('ALTER TABLE referral_codes ADD COLUMN note TEXT').run(); } catch {}
+try { db.prepare('ALTER TABLE referral_events ADD COLUMN commission_bps INTEGER NOT NULL DEFAULT 1000').run(); } catch {}
+try {
+  db.exec(`
+    DROP TRIGGER IF EXISTS trg_referral_utility_purchase;
+    CREATE TRIGGER trg_referral_utility_purchase
+    AFTER INSERT ON utility_purchases
+    WHEN NEW.usd_price_e6 IS NOT NULL
+    BEGIN
+      INSERT OR IGNORE INTO referral_events (
+        referrer_player_id, referred_player_id, source_type, source_id,
+        revenue_kind, currency, gross_usd_e6, commission_usd_e6, commission_bps,
+        status, tx_hash, metadata_json, confirmed_at
+      )
+      SELECT
+        pr.referrer_player_id,
+        NEW.player_id,
+        'utility_purchase',
+        CAST(NEW.id AS TEXT),
+        CASE WHEN NEW.utility LIKE '%nft%' OR NEW.utility LIKE '%demon_king%' THEN 'nft_shop' ELSE 'game_shop' END,
+        'USD',
+        CAST(COALESCE(NULLIF(NEW.usd_price_e6, ''), '0') AS INTEGER),
+        CAST((CAST(COALESCE(NULLIF(NEW.usd_price_e6, ''), '0') AS INTEGER)
+          * COALESCE((SELECT rc.commission_bps FROM referral_codes rc WHERE rc.player_id = pr.referrer_player_id AND rc.active = 1), 1000)
+        ) / 10000 AS INTEGER),
+        COALESCE((SELECT rc.commission_bps FROM referral_codes rc WHERE rc.player_id = pr.referrer_player_id AND rc.active = 1), 1000),
+        'confirmed',
+        NEW.tx_hash,
+        json_object('utility', NEW.utility, 'chain', NEW.chain, 'token', NEW.token, 'payer', NEW.payer),
+        datetime('now')
+      FROM player_referrals pr
+      WHERE pr.referred_player_id = NEW.player_id
+        AND pr.referrer_player_id <> NEW.player_id
+        AND CAST(COALESCE(NULLIF(NEW.usd_price_e6, ''), '0') AS INTEGER) > 0;
+    END;
+
+    DROP TRIGGER IF EXISTS trg_referral_custodial_marketplace_delivered;
+    CREATE TRIGGER trg_referral_custodial_marketplace_delivered
+    AFTER UPDATE OF status ON custodial_marketplace_orders
+    WHEN NEW.status = 'delivered' AND OLD.status <> 'delivered'
+    BEGIN
+      INSERT OR IGNORE INTO referral_events (
+        referrer_player_id, referred_player_id, source_type, source_id,
+        revenue_kind, currency, gross_usd_e6, commission_usd_e6, commission_bps,
+        status, tx_hash, metadata_json, confirmed_at
+      )
+      SELECT
+        pr.referrer_player_id,
+        NEW.buyer_player_id,
+        'custodial_marketplace',
+        NEW.id,
+        'marketplace_fee_royalty',
+        'USD',
+        CAST(COALESCE(NULLIF(NEW.fee_usdc_units, ''), '0') AS INTEGER)
+          + CAST(COALESCE(NULLIF(NEW.royalty_usdc_units, ''), '0') AS INTEGER),
+        CAST((
+          CAST(COALESCE(NULLIF(NEW.fee_usdc_units, ''), '0') AS INTEGER)
+          + CAST(COALESCE(NULLIF(NEW.royalty_usdc_units, ''), '0') AS INTEGER)
+        ) * COALESCE((SELECT rc.commission_bps FROM referral_codes rc WHERE rc.player_id = pr.referrer_player_id AND rc.active = 1), 1000) / 10000 AS INTEGER),
+        COALESCE((SELECT rc.commission_bps FROM referral_codes rc WHERE rc.player_id = pr.referrer_player_id AND rc.active = 1), 1000),
+        'confirmed',
+        NEW.payment_tx_hash,
+        json_object(
+          'asset_chain', NEW.asset_chain,
+          'asset_id', NEW.asset_id,
+          'fee_usdc_units', NEW.fee_usdc_units,
+          'royalty_usdc_units', NEW.royalty_usdc_units,
+          'seller_player_id', NEW.seller_player_id
+        ),
+        datetime('now')
+      FROM player_referrals pr
+      WHERE pr.referred_player_id = NEW.buyer_player_id
+        AND pr.referrer_player_id <> NEW.buyer_player_id
+        AND (
+          CAST(COALESCE(NULLIF(NEW.fee_usdc_units, ''), '0') AS INTEGER)
+          + CAST(COALESCE(NULLIF(NEW.royalty_usdc_units, ''), '0') AS INTEGER)
+        ) > 0;
+    END;
+  `);
+} catch (e) { console.warn('[db] referral trigger migration:', e.message); }
 
 // Server-side recovery for Solana shop purchases. Mobile wallets can submit
 // the transfer successfully and fail to return to the browser before
@@ -1629,6 +1982,48 @@ const stmts = {
   // is now a UNIQUE pair so this returns at most one row.
   getPlayerByWalletAndDex: db.prepare(`SELECT * FROM players WHERE wallet = ? AND dex = ? LIMIT 1`),
   getPlayerById: db.prepare(`SELECT * FROM players WHERE id = ?`),
+  getAdminPlayerByIdentifier: db.prepare(`
+    SELECT * FROM players
+    WHERE id = ? OR name = ? OR lower(name) = lower(?)
+    LIMIT 1
+  `),
+  banPlayerById: db.prepare(`
+    UPDATE players
+    SET banned_at = COALESCE(banned_at, datetime('now')),
+        banned_reason = ?,
+        banned_by = ?
+    WHERE id = ?
+  `),
+  unbanPlayerById: db.prepare(`
+    UPDATE players
+    SET banned_at = NULL,
+        banned_reason = NULL,
+        banned_by = NULL
+    WHERE id = ?
+  `),
+  getWalletBlacklist: db.prepare(`
+    SELECT *
+    FROM wallet_blacklist
+    WHERE lower(wallet) = lower(?)
+    LIMIT 1
+  `),
+  upsertWalletBlacklist: db.prepare(`
+    INSERT INTO wallet_blacklist (wallet, chain_type, reason, player_id, created_by, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(wallet) DO UPDATE SET
+      chain_type = COALESCE(excluded.chain_type, wallet_blacklist.chain_type),
+      reason = COALESCE(NULLIF(excluded.reason, ''), wallet_blacklist.reason),
+      player_id = COALESCE(excluded.player_id, wallet_blacklist.player_id),
+      created_by = COALESCE(excluded.created_by, wallet_blacklist.created_by),
+      updated_at = datetime('now')
+  `),
+  deleteWalletBlacklist: db.prepare(`DELETE FROM wallet_blacklist WHERE lower(wallet) = lower(?)`),
+  listWalletBlacklist: db.prepare(`
+    SELECT *
+    FROM wallet_blacklist
+    ORDER BY updated_at DESC, created_at DESC
+    LIMIT ?
+  `),
   // Heartbeat — fired on every authenticated API call by the auth
   // middleware. Idempotent (single UPDATE), no event sourcing needed.
   // The TEXT column stores ISO-ish "YYYY-MM-DD HH:MM:SS" so SQLite's
@@ -1843,6 +2238,18 @@ const stmts = {
   listPlayerDemonKingNfts: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
            COALESCE((
              SELECT COUNT(*)
                FROM player_nft_battle_win_events e
@@ -1858,6 +2265,18 @@ const stmts = {
   listPlayerDemonKingNftsByWallet: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
            COALESCE((
              SELECT COUNT(*)
                FROM player_nft_battle_win_events e
@@ -1876,6 +2295,18 @@ const stmts = {
   getPlayerDemonKingNft: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
            COALESCE((
              SELECT COUNT(*)
                FROM player_nft_battle_win_events e
@@ -1954,6 +2385,181 @@ const stmts = {
        AND chain = ?
        AND token_id = ?
   `),
+  listPlayerCollectionNfts: db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url,
+           active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = player_nfts.player_id
+                AND e.collection = player_nfts.collection
+                AND e.chain = player_nfts.chain
+                AND e.token_id = player_nfts.token_id
+           ), 0) AS battle_wins
+      FROM player_nfts
+     WHERE player_id = ? AND collection = ? AND active = 1
+     ORDER BY level DESC, chain ASC, CAST(token_id AS INTEGER) ASC
+  `),
+  listPlayerCollectionNftsByWallet: db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url,
+           active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = player_nfts.player_id
+                AND e.collection = player_nfts.collection
+                AND e.chain = player_nfts.chain
+                AND e.token_id = player_nfts.token_id
+           ), 0) AS battle_wins
+      FROM player_nfts
+     WHERE player_id = ?
+       AND collection = ?
+       AND lower(wallet) = lower(?)
+       AND active = 1
+     ORDER BY level DESC, chain ASC, CAST(token_id AS INTEGER) ASC
+  `),
+  getPlayerCollectionNft: db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url,
+           active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = player_nfts.collection
+               AND r.chain = player_nfts.chain
+               AND r.token_id = player_nfts.token_id
+             LIMIT 1) AS rarity_revealed_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = player_nfts.player_id
+                AND e.collection = player_nfts.collection
+                AND e.chain = player_nfts.chain
+                AND e.token_id = player_nfts.token_id
+           ), 0) AS battle_wins
+      FROM player_nfts
+     WHERE player_id = ?
+       AND collection = ?
+       AND chain = ?
+       AND token_id = ?
+       AND active = 1
+     LIMIT 1
+  `),
+  deactivatePlayerCollectionWalletChain: db.prepare(`
+    UPDATE player_nfts
+       SET active = 0, updated_at = datetime('now')
+     WHERE player_id = ?
+       AND collection = ?
+       AND lower(wallet) = lower(?)
+       AND chain = ?
+       AND active = 1
+  `),
+  deactivateCollectionTokenEverywhere: db.prepare(`
+    UPDATE player_nfts
+       SET active = 0, updated_at = datetime('now')
+     WHERE collection = ?
+       AND chain = ?
+       AND token_id = ?
+       AND active = 1
+       AND (player_id != ? OR lower(wallet) != lower(?))
+  `),
+  upsertPlayerCollectionNft: db.prepare(`
+    INSERT INTO player_nfts
+      (player_id, collection, chain, token_id, wallet, level, image_url,
+       active, source, tx_hash, verified_at, last_seen_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now'), datetime('now'))
+    ON CONFLICT(player_id, collection, chain, token_id) DO UPDATE SET
+      wallet = excluded.wallet,
+      level = excluded.level,
+      image_url = COALESCE(excluded.image_url, player_nfts.image_url),
+      active = 1,
+      source = COALESCE(excluded.source, player_nfts.source),
+      tx_hash = COALESCE(excluded.tx_hash, player_nfts.tx_hash),
+      verified_at = datetime('now'),
+      last_seen_at = datetime('now'),
+      updated_at = datetime('now')
+  `),
+  getCollectionNftWalletCheck: db.prepare(`
+    SELECT player_id, collection, wallet, chains, result_count, checked_at
+      FROM player_nft_wallet_checks
+     WHERE player_id = ? AND collection = ? AND lower(wallet) = lower(?)
+     LIMIT 1
+  `),
+  upsertCollectionNftWalletCheck: db.prepare(`
+    INSERT INTO player_nft_wallet_checks
+      (player_id, collection, wallet, chains, result_count, checked_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(player_id, collection, wallet) DO UPDATE SET
+      chains = excluded.chains,
+      result_count = excluded.result_count,
+      checked_at = datetime('now')
+  `),
+  insertCollectionBattleWinEvent: db.prepare(`
+    INSERT OR IGNORE INTO player_nft_battle_win_events
+      (replay_id, player_id, collection, chain, token_id)
+    VALUES (?, ?, ?, ?, ?)
+  `),
+  getCollectionBattleWins: db.prepare(`
+    SELECT COUNT(*) AS wins
+      FROM player_nft_battle_win_events
+     WHERE player_id = ?
+       AND collection = ?
+       AND chain = ?
+       AND token_id = ?
+  `),
+  getNftRarity: db.prepare(`
+    SELECT collection, chain, token_id, rarity, legacy_level, owner_wallet,
+           player_id, rarity_source, reveal_seed, snapshot_hash,
+           metadata_json, revealed_at, updated_at
+      FROM nft_rarities
+     WHERE collection = ? AND chain = ? AND token_id = ?
+     LIMIT 1
+  `),
+  upsertNftRarity: db.prepare(`
+    INSERT INTO nft_rarities
+      (collection, chain, token_id, rarity, legacy_level, owner_wallet,
+       player_id, rarity_source, reveal_seed, snapshot_hash, metadata_json,
+       revealed_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(collection, chain, token_id) DO UPDATE SET
+      rarity = excluded.rarity,
+      legacy_level = excluded.legacy_level,
+      owner_wallet = COALESCE(excluded.owner_wallet, nft_rarities.owner_wallet),
+      player_id = COALESCE(excluded.player_id, nft_rarities.player_id),
+      rarity_source = excluded.rarity_source,
+      reveal_seed = COALESCE(excluded.reveal_seed, nft_rarities.reveal_seed),
+      snapshot_hash = COALESCE(excluded.snapshot_hash, nft_rarities.snapshot_hash),
+      metadata_json = COALESCE(excluded.metadata_json, nft_rarities.metadata_json),
+      updated_at = datetime('now')
+  `),
 
   // Production
   updateLastCollected: db.prepare(`UPDATE buildings SET last_collected_at = ? WHERE id = ? AND player_id = ?`),
@@ -1999,12 +2605,24 @@ const stmts = {
   // battle_session_id from /find-enemy. Idempotent: re-stamping the same
   // row updates surrendered_at to the latest call so the 24h cooldown
   // window restarts (unlikely race, but defensive).
+  getSurrenderSessionById: db.prepare(`
+    SELECT id, attacker_id, defender_id, surrendered_at
+    FROM battle_sessions
+    WHERE id = ? AND attacker_id = ? AND defender_id = ?
+  `),
+  getLatestSurrenderSessionForPair: db.prepare(`
+    SELECT id, attacker_id, defender_id, surrendered_at
+    FROM battle_sessions
+    WHERE attacker_id = ? AND defender_id = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `),
   markSurrenderById: db.prepare(`
     UPDATE battle_sessions
     SET surrendered_at = datetime('now'),
         status = 'cancelled',
         completed_at = COALESCE(completed_at, datetime('now'))
-    WHERE id = ? AND attacker_id = ?
+    WHERE id = ? AND attacker_id = ? AND defender_id = ? AND surrendered_at IS NULL
   `),
   // Surrender stamp by attacker+defender pair — fallback used when the
   // client lost the session id (page reload, sailor abandon). Targets the
@@ -2014,12 +2632,7 @@ const stmts = {
     SET surrendered_at = datetime('now'),
         status = CASE WHEN status = 'active' THEN 'cancelled' ELSE status END,
         completed_at = COALESCE(completed_at, datetime('now'))
-    WHERE id = (
-      SELECT id FROM battle_sessions
-      WHERE attacker_id = ? AND defender_id = ?
-      ORDER BY created_at DESC
-      LIMIT 1
-    )
+    WHERE id = ? AND attacker_id = ? AND defender_id = ? AND surrendered_at IS NULL
   `),
   // Insert-only fallback when no battle_session row exists for this pair
   // (extremely rare — find-enemy always creates one, but guards against
@@ -2105,6 +2718,7 @@ const stmts = {
     WHERE p.player_id = ?
       AND p.left_at IS NULL
       AND t.status = 'active'
+      AND COALESCE(t.event_kind, 'standard') = 'standard'
       AND (
         COALESCE(t.dex_scope, 'single') = 'all'
         OR t.dex = pl.dex
@@ -2116,6 +2730,26 @@ const stmts = {
     ORDER BY t.id DESC
     LIMIT 1
   `),
+  getTournamentByIdForPlayer: db.prepare(`
+    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only, p.team_dex,
+           t.gold_boost, COALESCE(t.seeker_gold_boost, 1.0) AS seeker_gold_boost, t.trophy_boost,
+           COALESCE(pl.is_seeker, 0) AS is_seeker,
+           COALESCE(t.freeze_trophies, 1) AS freeze_trophies, t.sort_by,
+           COALESCE(t.scoring_mode, 'live') AS scoring_mode,
+           COALESCE(t.daily_pool_points, 1000) AS daily_pool_points,
+           t.daily_pool_enabled_at,
+           t.shield_hours, t.start_at, t.end_at, p.joined_at
+    FROM tournament_participants p
+    JOIN players pl ON pl.id = p.player_id
+    JOIN tournaments t ON t.id = p.tournament_id
+    WHERE t.id = ?
+      AND p.player_id = ?
+      AND p.left_at IS NULL
+      AND t.status = 'active'
+      AND (t.end_at IS NULL OR replace(replace(t.end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+    LIMIT 1
+  `),
   getActiveTournamentAttackPolicyForPlayer: db.prepare(`
     SELECT t.id AS tournament_id, t.name, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only,
            COALESCE(t.attack_match_policy, 'all') AS attack_match_policy,
@@ -2125,6 +2759,7 @@ const stmts = {
     JOIN tournaments t ON t.id = p.tournament_id
     WHERE p.player_id = ?
       AND p.left_at IS NULL
+      AND COALESCE(t.event_kind, 'standard') = 'standard'
       AND COALESCE(t.mode, 'individual') = 'dex_vs_dex'
       AND COALESCE(t.attack_match_policy, 'all') != 'all'
       AND t.status = 'active'
@@ -2191,6 +2826,113 @@ const stmts = {
       (tournament_id, day_utc, player_id, category, points, raw_value)
     VALUES (?, ?, ?, ?, ?, ?)
   `),
+  getTournamentLuckyRaiderRun: db.prepare(`
+    SELECT * FROM tournament_lucky_raider_runs
+    WHERE tournament_id = ? AND day_utc = ?
+  `),
+  upsertTournamentLuckyRaiderEntry: db.prepare(`
+    INSERT INTO tournament_lucky_raider_entries (
+      tournament_id, day_utc, player_id, volume_usd, tickets, eligible, reason, details_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(tournament_id, day_utc, player_id) DO UPDATE SET
+      volume_usd = excluded.volume_usd,
+      tickets = excluded.tickets,
+      eligible = excluded.eligible,
+      reason = excluded.reason,
+      details_json = excluded.details_json,
+      updated_at = datetime('now')
+  `),
+  insertTournamentLuckyRaiderRun: db.prepare(`
+    INSERT OR IGNORE INTO tournament_lucky_raider_runs (
+      tournament_id, day_utc, status, seed, winner_player_id, details_json
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `),
+  insertTournamentLuckyRaiderPayout: db.prepare(`
+    INSERT OR IGNORE INTO tournament_lucky_raider_payouts (
+      id, tournament_id, day_utc, place, reward_index, player_id,
+      destination_wallet, reward_label, reward_currency, reward_amount_usd,
+      status, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  getTournamentLuckyRaiderPayout: db.prepare(`
+    SELECT lp.*,
+           p.name AS player_name,
+           t.name AS tournament_name,
+           tp.reward_wallet_evm AS current_destination_wallet
+      FROM tournament_lucky_raider_payouts lp
+      LEFT JOIN players p ON p.id = lp.player_id
+      LEFT JOIN tournaments t ON t.id = lp.tournament_id
+      LEFT JOIN tournament_participants tp
+        ON tp.tournament_id = lp.tournament_id
+       AND tp.player_id = lp.player_id
+     WHERE lp.id = ?
+  `),
+  listPendingTournamentLuckyRaiderPayouts: db.prepare(`
+    SELECT lp.*,
+           p.name AS player_name,
+           t.name AS tournament_name,
+           tp.reward_wallet_evm AS current_destination_wallet
+      FROM tournament_lucky_raider_payouts lp
+      LEFT JOIN players p ON p.id = lp.player_id
+      LEFT JOIN tournaments t ON t.id = lp.tournament_id
+      LEFT JOIN tournament_participants tp
+        ON tp.tournament_id = lp.tournament_id
+       AND tp.player_id = lp.player_id
+     WHERE lp.status IN ('pending', 'failed')
+       AND lp.attempts < ?
+       AND (
+         lp.status = 'pending'
+         OR lp.updated_at <= datetime('now', ?)
+       )
+     ORDER BY lp.created_at ASC, lp.id ASC
+     LIMIT ?
+  `),
+  claimTournamentLuckyRaiderPayout: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET status = 'processing',
+           attempts = attempts + 1,
+           error = NULL,
+           updated_at = datetime('now')
+     WHERE id = ?
+       AND status IN ('pending', 'failed')
+       AND attempts < ?
+  `),
+  updateTournamentLuckyRaiderPayoutDestination: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET destination_wallet = ?,
+           updated_at = datetime('now')
+     WHERE id = ?
+  `),
+  markTournamentLuckyRaiderPayoutPaid: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET status = 'paid',
+           tx_hash = ?,
+           clash_usd_price = ?,
+           clash_amount = ?,
+           clash_amount_units = ?,
+           price_source = ?,
+           error = NULL,
+           paid_at = datetime('now'),
+           updated_at = datetime('now')
+     WHERE id = ?
+  `),
+  markTournamentLuckyRaiderPayoutFailed: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET status = 'failed',
+           error = ?,
+           updated_at = datetime('now')
+     WHERE id = ?
+       AND status = 'processing'
+  `),
+  voidTournamentLuckyRaiderPendingPayouts: db.prepare(`
+    UPDATE tournament_lucky_raider_payouts
+       SET status = 'void',
+           error = ?,
+           updated_at = datetime('now')
+     WHERE tournament_id = ?
+       AND day_utc = ?
+       AND status IN ('pending', 'failed', 'processing')
+  `),
   addTournamentAwardedPoints: db.prepare(`
     UPDATE tournament_participants
        SET awarded_points = awarded_points + ?,
@@ -2216,6 +2958,11 @@ const stmts = {
 function getPlayerActiveTournament(playerId) {
   if (!playerId) return null;
   return stmts.getActiveTournamentForPlayer.get(playerId) || null;
+}
+
+function getPlayerTournamentById(playerId, tournamentId) {
+  if (!playerId || !tournamentId) return null;
+  return stmts.getTournamentByIdForPlayer.get(tournamentId, playerId) || null;
 }
 
 const TOURNAMENT_ATTACK_MATCH_POLICIES = new Set(['all', 'enemy_or_non_participant', 'enemy_only']);
@@ -2335,6 +3082,13 @@ function applyMainTrophyDelta(playerId, delta) {
 
 function applyTrophyDelta(playerId, delta, opts = {}) {
   if (!playerId || !delta) return;
+  if (delta > 0 && opts.source === 'attack_win') {
+    try {
+      recordStandaloneLuckyRaiderAttackWin(playerId, opts.eventId || opts.battleSessionId || opts.battle_session_id || `attack:${playerId}:${Date.now()}`);
+    } catch (e) {
+      console.warn('[lucky-raider attack activity]', e.message);
+    }
+  }
   const t = getPlayerActiveTournament(playerId);
   if (t) {
     const boosted = delta > 0
@@ -2435,8 +3189,68 @@ function utcDayFromSql(value) {
   return utcDayFromMs(sqlDateMs(value) ?? Date.now());
 }
 
+function parseTournamentRewardConfig(value) {
+  let raw = value;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) raw = {};
+    else {
+      try { raw = JSON.parse(text); } catch { raw = {}; }
+    }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) raw = {};
+  const luckyRaw = raw.lucky_daily_raider && typeof raw.lucky_daily_raider === 'object'
+    ? raw.lucky_daily_raider
+    : {};
+  const collections = Array.isArray(luckyRaw.required_collections)
+    ? luckyRaw.required_collections
+    : [];
+  const requiredCollections = collections
+    .map((v) => String(v || '').trim().toLowerCase())
+    .filter((v) => ['demon_king', 'dragon'].includes(v));
+  const ticketMetricRaw = String(luckyRaw.ticket_metric || luckyRaw.metric || 'volume').trim().toLowerCase();
+  const ticketMetric = ['volume', 'attack_wins', 'attack_wins_plus_volume', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(ticketMetricRaw)
+    ? ticketMetricRaw
+    : 'volume';
+  const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20)));
+  return {
+    ...raw,
+    daily_pools: Array.isArray(raw.daily_pools) ? raw.daily_pools : [],
+    final_pools: Array.isArray(raw.final_pools) ? raw.final_pools : [],
+    lucky_daily_raider: {
+      enabled: !!luckyRaw.enabled,
+      label: String(luckyRaw.label || 'Lucky Daily Raider').slice(0, 80),
+      ticket_metric: ticketMetric,
+      volume_per_ticket_usd: Math.max(1, Math.min(10_000_000, Number(luckyRaw.volume_per_ticket_usd || 1000) || 1000)),
+      volume_tickets_per_step: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.volume_tickets_per_step ?? luckyRaw.volume_bonus_tickets_per_step ?? 1) || 1))),
+      attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
+      min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
+      winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
+      max_tickets: maxTickets,
+      max_counted_attacks: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_counted_attacks || luckyRaw.max_attack_tickets || maxTickets) || maxTickets))),
+      max_volume_tickets: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.max_volume_tickets ?? luckyRaw.max_volume_bonus_tickets ?? 0) || 0))),
+      require_nft: !!luckyRaw.require_nft,
+      required_collections: requiredCollections.length ? requiredCollections : ['demon_king', 'dragon'],
+      rewards: Array.isArray(luckyRaw.rewards) ? luckyRaw.rewards : [],
+      draw_time_utc: String(luckyRaw.draw_time_utc || '00:05').slice(0, 16),
+    },
+  };
+}
+
+function tournamentLuckyRaiderConfig(t) {
+  return parseTournamentRewardConfig(t?.reward_config).lucky_daily_raider;
+}
+
+function tournamentHasLuckyRaider(t) {
+  return !!tournamentLuckyRaiderConfig(t).enabled;
+}
+
 function isDailyPoolTournament(t) {
   return String(t?.scoring_mode || 'live').toLowerCase() === 'daily_pool';
+}
+
+function tournamentNeedsDailyActivity(t) {
+  return isDailyPoolTournament(t) || tournamentHasLuckyRaider(t);
 }
 
 function dailyPoolWeights(t) {
@@ -2451,7 +3265,7 @@ function dailyPoolWeights(t) {
 }
 
 function recordTournamentDailyActivity(t, playerId, metrics = {}, opts = {}) {
-  if (!playerId || !isDailyPoolTournament(t)) return false;
+  if (!playerId || !tournamentNeedsDailyActivity(t)) return false;
   const eventId = String(opts.eventId || opts.event_id || '').trim();
   if (!eventId) return false;
   const source = String(opts.source || 'event').trim() || 'event';
@@ -2476,6 +3290,58 @@ function recordTournamentDailyActivity(t, playerId, metrics = {}, opts = {}) {
   return r.changes > 0;
 }
 
+function isTournamentAvailableForPlayerRow(t, player) {
+  if (!t || !player) return false;
+  const dex = String(player.dex || '').toLowerCase();
+  const scope = String(t.dex_scope || 'single').toLowerCase();
+  if (scope === 'all') return true;
+  if (String(t.dex || '').toLowerCase() === dex) return true;
+  return String(t.eligible_dexes || '[]').includes(`"${dex}"`);
+}
+
+function ensurePassiveTournamentParticipant(t, player) {
+  if (!t?.id || !player?.id) return false;
+  db.prepare(`
+    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, last_activity_at)
+    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, NULL, NULL, datetime('now'))
+    ON CONFLICT(tournament_id, player_id) DO UPDATE SET
+      left_at = NULL,
+      last_activity_at = datetime('now')
+  `).run(t.id, player.id);
+  return true;
+}
+
+function recordStandaloneLuckyRaiderAttackWin(playerId, eventId) {
+  if (!playerId || !eventId) return { recorded: 0 };
+  const player = stmts.getPlayerById.get(playerId);
+  if (!player) return { recorded: 0 };
+  const rows = db.prepare(`
+    SELECT *
+    FROM tournaments
+    WHERE status = 'active'
+      AND COALESCE(event_kind, 'standard') = 'lucky_raider'
+      AND (COALESCE(seeker_only, 0) = 0 OR COALESCE(?, 0) = 1)
+      AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+    ORDER BY id DESC
+    LIMIT 20
+  `).all(Number(player.is_seeker || 0));
+  let recorded = 0;
+  for (const t of rows) {
+    if (!isTournamentAvailableForPlayerRow(t, player)) continue;
+    if (!tournamentHasLuckyRaider(t)) continue;
+    ensurePassiveTournamentParticipant(t, player);
+    if (recordTournamentDailyActivity(t, playerId, {}, {
+      source: 'attack_win',
+      eventId: `lucky:${t.id}:${eventId}`,
+      dex: player.dex,
+    })) {
+      recorded++;
+    }
+  }
+  return { recorded };
+}
+
 function safeUsd(v, maxAbs = 10_000_000) {
   const n = Number(v);
   if (!Number.isFinite(n) || Math.abs(n) > maxAbs) return 0;
@@ -2491,7 +3357,9 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
   if (!playerId || !Array.isArray(rows) || rows.length === 0) {
     return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
   }
-  const t = getPlayerActiveTournament(playerId);
+  const t = opts.tournamentId || opts.tournament_id
+    ? getPlayerTournamentById(playerId, opts.tournamentId || opts.tournament_id)
+    : getPlayerActiveTournament(playerId);
   if (!t) return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
 
   const source = String(opts.source || 'trade_history');
@@ -2630,6 +3498,26 @@ function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
   return endDay < yesterday ? endDay : yesterday;
 }
 
+function luckyRaiderDrawTimeMinutes(cfg) {
+  const raw = String(cfg?.draw_time_utc || '00:05').trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return 5;
+  const hours = Math.max(0, Math.min(23, Number(match[1]) || 0));
+  const minutes = Math.max(0, Math.min(59, Number(match[2]) || 0));
+  return hours * 60 + minutes;
+}
+
+function tournamentLastClosedLuckyRaiderDay(t, now = new Date()) {
+  const baseLast = tournamentLastClosedDailyPoolDay(t, now);
+  const cfg = tournamentLuckyRaiderConfig(t);
+  const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const yesterday = previousUtcDay(now);
+  if (baseLast === yesterday && nowMinutes < luckyRaiderDrawTimeMinutes(cfg)) {
+    return addUtcDays(baseLast, -1);
+  }
+  return baseLast;
+}
+
 function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
   const tid = Number(tournamentId);
   const day = normalizeDailyPoolDay(dayInput);
@@ -2707,25 +3595,607 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
   })();
 }
 
+function playerHasTournamentRewardNft(playerId, collections = ['demon_king', 'dragon']) {
+  const allowed = (Array.isArray(collections) ? collections : [])
+    .map((v) => String(v || '').trim().toLowerCase())
+    .filter((v) => ['demon_king', 'dragon'].includes(v));
+  const list = allowed.length ? allowed : ['demon_king', 'dragon'];
+  const placeholders = list.map(() => '?').join(',');
+  const row = db.prepare(`
+    SELECT 1 AS ok
+      FROM player_nfts
+     WHERE player_id = ?
+       AND active = 1
+       AND collection IN (${placeholders})
+     LIMIT 1
+  `).get(playerId, ...list);
+  return !!row;
+}
+
+function weightedLuckyRaiderWinner(entries, seed) {
+  const eligible = (entries || []).filter((entry) => Number(entry.tickets || 0) > 0 && Number(entry.eligible || 0) === 1);
+  const totalTickets = eligible.reduce((sum, entry) => sum + Math.max(0, Math.floor(Number(entry.tickets || 0))), 0);
+  if (totalTickets <= 0) return { winner: null, totalTickets: 0, pick: null };
+  const hex = crypto.createHash('sha256').update(String(seed)).digest('hex');
+  let cursor = Number(BigInt(`0x${hex.slice(0, 15)}`) % BigInt(totalTickets));
+  const pick = cursor;
+  for (const entry of eligible) {
+    const tickets = Math.max(0, Math.floor(Number(entry.tickets || 0)));
+    if (cursor < tickets) return { winner: entry, totalTickets, pick };
+    cursor -= tickets;
+  }
+  return { winner: eligible[eligible.length - 1] || null, totalTickets, pick };
+}
+
+function weightedLuckyRaiderWinners(entries, seed, count = 1) {
+  const targetCount = Math.max(1, Math.min(100, Math.floor(Number(count || 1) || 1)));
+  let remaining = (entries || []).filter((entry) => Number(entry.tickets || 0) > 0 && Number(entry.eligible || 0) === 1);
+  const initialTotalTickets = remaining.reduce((sum, entry) => sum + Math.max(0, Math.floor(Number(entry.tickets || 0))), 0);
+  const winners = [];
+  const picks = [];
+  for (let place = 1; place <= targetCount && remaining.length > 0; place += 1) {
+    const totalTickets = remaining.reduce((sum, entry) => sum + Math.max(0, Math.floor(Number(entry.tickets || 0))), 0);
+    if (totalTickets <= 0) break;
+    const hex = crypto.createHash('sha256').update(`${seed}:${place}`).digest('hex');
+    let cursor = Number(BigInt(`0x${hex.slice(0, 15)}`) % BigInt(totalTickets));
+    const pick = cursor;
+    let selectedIndex = remaining.length - 1;
+    for (let i = 0; i < remaining.length; i += 1) {
+      const tickets = Math.max(0, Math.floor(Number(remaining[i].tickets || 0)));
+      if (cursor < tickets) {
+        selectedIndex = i;
+        break;
+      }
+      cursor -= tickets;
+    }
+    const [winner] = remaining.splice(selectedIndex, 1);
+    winners.push({ ...winner, place });
+    picks.push({ place, pick, total_tickets: totalTickets });
+  }
+  return {
+    winner: winners[0] || null,
+    winners,
+    totalTickets: initialTotalTickets,
+    picks,
+    pick: picks[0]?.pick ?? null,
+  };
+}
+
+function luckyRaiderRewardsForPlace(cfg, place) {
+  const rewards = Array.isArray(cfg?.rewards) ? cfg.rewards : [];
+  return rewards.map((reward) => {
+    const payouts = Array.isArray(reward?.payouts) ? reward.payouts : [];
+    const payout = payouts.find((p) => Number(p.rank) === Number(place));
+    if (!payout || Number(payout.amount || 0) <= 0) return null;
+    return {
+      type: reward.type || 'custom',
+      label: reward.label || reward.name || 'Reward',
+      currency: reward.currency || null,
+      unit: reward.unit || reward.currency || null,
+      amount: Number(payout.amount || 0),
+    };
+  }).filter(Boolean);
+}
+
+function luckyRaiderRewardUsesClashToken(reward) {
+  if (!reward || typeof reward !== 'object') return false;
+  const currency = String(reward.currency || '').trim().toUpperCase();
+  const unit = String(reward.unit || '').trim().toUpperCase();
+  const symbol = String(reward.symbol || reward.token || '').trim().toUpperCase();
+  return [currency, unit, symbol].some((value) => value === 'CLASH' || value === 'COP');
+}
+
+function luckyRaiderPayoutId(tournamentId, day, place, rewardIndex) {
+  return `tlr:${Number(tournamentId)}:${normalizeDailyPoolDay(day)}:${Number(place)}:${Number(rewardIndex)}`;
+}
+
+function queueTournamentLuckyRaiderPayouts(t, dayInput, winners) {
+  const tid = Number(t?.id);
+  const day = normalizeDailyPoolDay(dayInput);
+  if (!Number.isFinite(tid) || tid <= 0 || !Array.isArray(winners) || winners.length === 0) {
+    return { queued: 0, skipped: 0 };
+  }
+  let queued = 0;
+  let skipped = 0;
+  for (const winner of winners) {
+    const rewards = Array.isArray(winner?.rewards) ? winner.rewards : [];
+    const place = Math.max(1, Math.floor(Number(winner?.place || 0) || 0));
+    if (!winner?.player_id || place <= 0) continue;
+    const participant = db.prepare(`
+      SELECT reward_wallet_evm
+        FROM tournament_participants
+       WHERE tournament_id = ? AND player_id = ?
+    `).get(tid, winner.player_id);
+    for (let i = 0; i < rewards.length; i += 1) {
+      const reward = rewards[i];
+      if (!luckyRaiderRewardUsesClashToken(reward)) {
+        skipped += 1;
+        continue;
+      }
+      const amountUsd = Number(reward.amount || 0);
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+        skipped += 1;
+        continue;
+      }
+      const id = luckyRaiderPayoutId(tid, day, place, i);
+      const metadata = {
+        source: 'lucky_raider',
+        tournament_name: t.name || '',
+        player_name: winner.name || '',
+        reward_type: reward.type || 'custom',
+        reward_unit: reward.unit || reward.currency || '',
+        amount_source: 'usd_budget',
+      };
+      const result = stmts.insertTournamentLuckyRaiderPayout.run(
+        id,
+        tid,
+        day,
+        place,
+        i,
+        winner.player_id,
+        participant?.reward_wallet_evm || null,
+        String(reward.label || 'CLASH reward').slice(0, 120),
+        String(reward.currency || reward.unit || 'CLASH').toUpperCase().slice(0, 24),
+        Number(amountUsd.toFixed(6)),
+        'pending',
+        JSON.stringify(metadata)
+      );
+      if (result.changes) queued += 1;
+    }
+  }
+  return { queued, skipped };
+}
+
+function luckyRaiderTicketState(cfg, volume, attackWins) {
+  const metric = String(cfg?.ticket_metric || 'volume').toLowerCase();
+  const rawVolumeSteps = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const volumeTicketsPerStep = Math.max(1, Math.floor(Number(cfg?.volume_tickets_per_step || 1) || 1));
+  const rawVolumeTickets = rawVolumeSteps * volumeTicketsPerStep;
+  const maxVolumeTickets = Math.max(0, Math.floor(Number(cfg?.max_volume_tickets || 0) || 0));
+  const volumeTickets = maxVolumeTickets > 0 ? Math.min(rawVolumeTickets, maxVolumeTickets) : rawVolumeTickets;
+  const attackTickets = Math.floor(Math.max(0, Math.floor(Number(attackWins) || 0)) / Math.max(1, Math.floor(Number(cfg?.attack_wins_per_ticket || 10) || 10)));
+  let ticketsRaw = volumeTickets;
+  if (metric === 'attack_wins') ticketsRaw = attackTickets;
+  else if (metric === 'attack_wins_plus_volume') ticketsRaw = attackTickets + volumeTickets;
+  else if (metric === 'volume_or_attack_wins') ticketsRaw = Math.max(volumeTickets, attackTickets);
+  else if (metric === 'volume_and_attack_wins') ticketsRaw = Math.min(volumeTickets, attackTickets);
+  const minAttackWins = Math.max(0, Math.floor(Number(cfg?.min_attack_wins || 0) || 0));
+  let reason = ticketsRaw > 0 ? 'eligible' : 'below_ticket_threshold';
+  if ((metric === 'attack_wins' || metric === 'volume_and_attack_wins') && attackTickets <= 0) reason = 'attack_wins_below_ticket';
+  else if (metric === 'volume' && volumeTickets <= 0) reason = 'volume_below_ticket';
+  else if (metric === 'attack_wins_plus_volume' && attackTickets <= 0 && volumeTickets <= 0) reason = 'attack_wins_plus_volume_below_ticket';
+  else if (metric === 'volume_or_attack_wins' && volumeTickets <= 0 && attackTickets <= 0) reason = 'volume_or_attack_wins_below_ticket';
+  if (minAttackWins > 0 && Math.max(0, Math.floor(Number(attackWins) || 0)) < minAttackWins) {
+    reason = 'min_attack_wins_not_met';
+    ticketsRaw = 0;
+  }
+  return {
+    ticket_metric: metric,
+    volume_tickets: Math.max(0, volumeTickets),
+    raw_volume_tickets: Math.max(0, rawVolumeTickets),
+    raw_volume_steps: Math.max(0, rawVolumeSteps),
+    volume_tickets_per_step: volumeTicketsPerStep,
+    max_volume_tickets: maxVolumeTickets,
+    attack_win_tickets: Math.max(0, attackTickets),
+    uncapped_tickets: Math.max(0, ticketsRaw),
+    tickets: Math.max(0, Math.min(Math.max(1, Math.floor(Number(cfg?.max_tickets || 20) || 20)), ticketsRaw)),
+    reason,
+  };
+}
+
+function sqlDateStringFromMs(ms) {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function luckyRaiderDayWindow(t, dayInput) {
+  const day = normalizeDailyPoolDay(dayInput);
+  let startMs = Date.parse(`${day}T00:00:00Z`);
+  let endMs = Date.parse(`${addUtcDays(day, 1)}T00:00:00Z`);
+  const tournamentStartMs = sqlDateMs(t?.start_at);
+  const tournamentEndMs = sqlDateMs(t?.end_at);
+  if (Number.isFinite(tournamentStartMs)) startMs = Math.max(startMs, tournamentStartMs);
+  if (Number.isFinite(tournamentEndMs)) endMs = Math.min(endMs, tournamentEndMs);
+  if (!Number.isFinite(startMs)) startMs = Date.parse(`${day}T00:00:00Z`);
+  if (!Number.isFinite(endMs) || endMs < startMs) endMs = startMs;
+  return {
+    day,
+    start_sql: sqlDateStringFromMs(startMs),
+    end_sql: sqlDateStringFromMs(endMs),
+  };
+}
+
+function luckyRaiderMaxCountedAttacks(cfg) {
+  return Math.max(1, Math.floor(Number(cfg?.max_counted_attacks || cfg?.max_tickets || 20) || 20));
+}
+
+function luckyRaiderAttackStatsForPlayer(t, playerId, dayInput, cfgInput = null) {
+  if (!playerId) {
+    return {
+      attack_attempts: 0,
+      attack_wins: 0,
+      attack_surrenders: 0,
+      raw_attack_attempts: 0,
+      raw_attack_wins: 0,
+      raw_attack_surrenders: 0,
+      max_counted_attacks: luckyRaiderMaxCountedAttacks(cfgInput),
+    };
+  }
+  const cfg = cfgInput || tournamentLuckyRaiderConfig(t);
+  const maxCountedAttacks = luckyRaiderMaxCountedAttacks(cfg);
+  const window = luckyRaiderDayWindow(t, dayInput);
+  const row = db.prepare(`
+    WITH events AS (
+      SELECT r.created_at AS event_at,
+             'replay:' || r.id AS event_id,
+             CASE
+               WHEN lower(COALESCE(r.claimed_result, '')) = 'victory'
+                AND lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory')
+               THEN 1 ELSE 0
+             END AS is_win,
+             0 AS is_surrender
+        FROM battle_replays r
+       WHERE r.attacker_id = ?
+         AND r.created_at >= ?
+         AND r.created_at < ?
+         AND lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory')
+      UNION ALL
+      SELECT s.surrendered_at AS event_at,
+             'surrender:' || s.id AS event_id,
+             0 AS is_win,
+             1 AS is_surrender
+        FROM battle_sessions s
+       WHERE s.attacker_id = ?
+         AND s.surrendered_at IS NOT NULL
+         AND s.surrendered_at >= ?
+         AND s.surrendered_at < ?
+    ),
+    ranked AS (
+      SELECT *,
+             ROW_NUMBER() OVER (ORDER BY event_at ASC, event_id ASC) AS rn
+        FROM events
+    ),
+    first_attacks AS (
+      SELECT COUNT(*) AS attack_attempts,
+             COALESCE(SUM(is_win), 0) AS attack_wins,
+             COALESCE(SUM(is_surrender), 0) AS attack_surrenders
+        FROM ranked
+       WHERE rn <= ?
+    ),
+    all_attacks AS (
+      SELECT COUNT(*) AS raw_attack_attempts,
+             COALESCE(SUM(is_win), 0) AS raw_attack_wins,
+             COALESCE(SUM(is_surrender), 0) AS raw_attack_surrenders
+        FROM events
+    )
+    SELECT first_attacks.attack_attempts,
+           first_attacks.attack_wins,
+           first_attacks.attack_surrenders,
+           all_attacks.raw_attack_attempts,
+           all_attacks.raw_attack_wins,
+           all_attacks.raw_attack_surrenders
+      FROM first_attacks, all_attacks
+  `).get(
+    playerId, window.start_sql, window.end_sql,
+    playerId, window.start_sql, window.end_sql,
+    maxCountedAttacks
+  ) || {};
+  return {
+    attack_attempts: Math.max(0, Math.floor(Number(row.attack_attempts || 0) || 0)),
+    attack_wins: Math.max(0, Math.floor(Number(row.attack_wins || 0) || 0)),
+    attack_surrenders: Math.max(0, Math.floor(Number(row.attack_surrenders || 0) || 0)),
+    raw_attack_attempts: Math.max(0, Math.floor(Number(row.raw_attack_attempts || 0) || 0)),
+    raw_attack_wins: Math.max(0, Math.floor(Number(row.raw_attack_wins || 0) || 0)),
+    raw_attack_surrenders: Math.max(0, Math.floor(Number(row.raw_attack_surrenders || 0) || 0)),
+    max_counted_attacks: maxCountedAttacks,
+  };
+}
+
+function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
+  const tid = Number(tournamentId);
+  const day = normalizeDailyPoolDay(dayInput);
+  if (!Number.isFinite(tid) || tid <= 0) return { ok: false, error: 'invalid tournament id' };
+  return db.transaction(() => {
+    const t = db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+    if (!t) return { ok: false, error: 'tournament not found' };
+    const cfg = tournamentLuckyRaiderConfig(t);
+    if (!cfg.enabled) return { ok: true, skipped: true, reason: 'lucky_raider_disabled', tournament_id: tid, day_utc: day };
+    const existing = stmts.getTournamentLuckyRaiderRun.get(tid, day);
+    if (existing && !options.force) {
+      let details = {};
+      try { details = JSON.parse(existing.details_json || '{}'); } catch {}
+      return {
+        ok: true,
+        skipped: true,
+        alreadyProcessed: true,
+        tournament_id: tid,
+        day_utc: day,
+        status: existing.status,
+        winner_player_id: existing.winner_player_id || null,
+        details,
+      };
+    }
+    if (existing && options.force) {
+      db.prepare('DELETE FROM tournament_lucky_raider_runs WHERE tournament_id = ? AND day_utc = ?').run(tid, day);
+      db.prepare('DELETE FROM tournament_lucky_raider_entries WHERE tournament_id = ? AND day_utc = ?').run(tid, day);
+      stmts.voidTournamentLuckyRaiderPendingPayouts.run('voided by forced Lucky Raider rerun', tid, day);
+    }
+
+    const rows = db.prepare(`
+      SELECT tp.player_id,
+             p.name,
+             COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
+             COALESCE(SUM(a.trades_count), 0) AS trades_count
+        FROM tournament_participants tp
+        LEFT JOIN players p ON p.id = tp.player_id
+        LEFT JOIN tournament_daily_activity a
+          ON a.tournament_id = tp.tournament_id
+         AND a.player_id = tp.player_id
+         AND a.day_utc = ?
+       WHERE tp.tournament_id = ?
+         AND tp.left_at IS NULL
+       GROUP BY tp.player_id
+    `).all(day, tid);
+
+    const entries = [];
+    for (const row of rows) {
+      const volume = Math.max(0, safeUsd(row.volume_usd, 1_000_000_000));
+      const attackStats = luckyRaiderAttackStatsForPlayer(t, row.player_id, day, cfg);
+      const attackWins = attackStats.attack_wins;
+      const ticketState = luckyRaiderTicketState(cfg, volume, attackWins);
+      const ticketsRaw = ticketState.uncapped_tickets;
+      const tickets = ticketState.tickets;
+      let eligible = tickets > 0 ? 1 : 0;
+      let reason = tickets > 0 ? 'eligible' : ticketState.reason;
+      let hasNft = false;
+      if (cfg.require_nft) {
+        hasNft = playerHasTournamentRewardNft(row.player_id, cfg.required_collections);
+        if (!hasNft) {
+          eligible = 0;
+          reason = 'missing_required_nft';
+        }
+      }
+      const details = {
+        name: row.name || '',
+        trades_count: Number(row.trades_count || 0) || 0,
+        attack_wins: attackWins,
+        attack_attempts: attackStats.attack_attempts,
+        attack_surrenders: attackStats.attack_surrenders,
+        raw_attack_wins: attackStats.raw_attack_wins,
+        raw_attack_attempts: attackStats.raw_attack_attempts,
+        raw_attack_surrenders: attackStats.raw_attack_surrenders,
+        max_counted_attacks: attackStats.max_counted_attacks,
+        ticket_metric: cfg.ticket_metric,
+        volume_per_ticket_usd: cfg.volume_per_ticket_usd,
+        volume_tickets_per_step: cfg.volume_tickets_per_step,
+        attack_wins_per_ticket: cfg.attack_wins_per_ticket,
+        min_attack_wins: cfg.min_attack_wins,
+        max_tickets: cfg.max_tickets,
+        require_nft: cfg.require_nft,
+        required_collections: cfg.required_collections,
+        has_required_nft: cfg.require_nft ? hasNft : null,
+        volume_tickets: ticketState.volume_tickets,
+        raw_volume_tickets: ticketState.raw_volume_tickets,
+        raw_volume_steps: ticketState.raw_volume_steps,
+        volume_tickets_per_step: ticketState.volume_tickets_per_step,
+        max_volume_tickets: ticketState.max_volume_tickets,
+        attack_win_tickets: ticketState.attack_win_tickets,
+        uncapped_tickets: ticketsRaw,
+      };
+      const entry = {
+        player_id: row.player_id,
+        name: row.name || '',
+        volume_usd: Number(volume.toFixed(2)),
+        attack_wins: attackWins,
+        attack_attempts: attackStats.attack_attempts,
+        attack_surrenders: attackStats.attack_surrenders,
+        raw_attack_wins: attackStats.raw_attack_wins,
+        raw_attack_attempts: attackStats.raw_attack_attempts,
+        raw_attack_surrenders: attackStats.raw_attack_surrenders,
+        tickets,
+        eligible,
+        reason,
+        details,
+      };
+      stmts.upsertTournamentLuckyRaiderEntry.run(
+        tid,
+        day,
+        entry.player_id,
+        entry.volume_usd,
+        entry.tickets,
+        entry.eligible,
+        entry.reason,
+        JSON.stringify(entry.details)
+      );
+      entries.push(entry);
+    }
+
+    const configHash = crypto.createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 16);
+    const seed = `${tid}:${day}:${configHash}`;
+    const pick = weightedLuckyRaiderWinners(entries, seed, cfg.winner_count || 1);
+    const winner = pick.winner || null;
+    const winners = (pick.winners || []).map((entry) => ({
+      place: entry.place,
+      player_id: entry.player_id,
+      name: entry.name,
+      volume_usd: entry.volume_usd,
+      attack_wins: entry.attack_wins,
+      attack_attempts: entry.attack_attempts,
+      raw_attack_wins: entry.raw_attack_wins,
+      raw_attack_attempts: entry.raw_attack_attempts,
+      volume_tickets: entry.details.volume_tickets,
+      raw_volume_tickets: entry.details.raw_volume_tickets,
+      raw_volume_steps: entry.details.raw_volume_steps,
+      volume_tickets_per_step: entry.details.volume_tickets_per_step,
+      attack_win_tickets: entry.details.attack_win_tickets,
+      tickets: entry.tickets,
+      rewards: luckyRaiderRewardsForPlace(cfg, entry.place),
+    }));
+    const details = {
+      config: cfg,
+      config_hash: configHash,
+      players: rows.length,
+      eligible_players: entries.filter((entry) => Number(entry.eligible || 0) === 1 && Number(entry.tickets || 0) > 0).length,
+      total_tickets: pick.totalTickets,
+      pick: pick.pick,
+      picks: pick.picks || [],
+      winner_count: cfg.winner_count || 1,
+      winners,
+      entries: entries.map((entry) => ({
+        player_id: entry.player_id,
+        name: entry.name,
+        volume_usd: entry.volume_usd,
+        attack_wins: entry.attack_wins,
+        attack_attempts: entry.attack_attempts,
+        raw_attack_wins: entry.raw_attack_wins,
+        raw_attack_attempts: entry.raw_attack_attempts,
+        volume_tickets: entry.details.volume_tickets,
+        raw_volume_tickets: entry.details.raw_volume_tickets,
+        raw_volume_steps: entry.details.raw_volume_steps,
+        volume_tickets_per_step: entry.details.volume_tickets_per_step,
+        attack_win_tickets: entry.details.attack_win_tickets,
+        tickets: entry.tickets,
+        eligible: !!entry.eligible,
+        reason: entry.reason,
+      })),
+    };
+    const status = winner ? 'completed' : 'no_entries';
+    stmts.insertTournamentLuckyRaiderRun.run(
+      tid,
+      day,
+      status,
+      seed,
+      winner?.player_id || null,
+      JSON.stringify(details)
+    );
+    const payoutQueue = queueTournamentLuckyRaiderPayouts(t, day, winners);
+    if (payoutQueue.queued || payoutQueue.skipped) {
+      details.payout_queue = payoutQueue;
+      db.prepare(`
+        UPDATE tournament_lucky_raider_runs
+           SET details_json = ?
+         WHERE tournament_id = ? AND day_utc = ?
+      `).run(JSON.stringify(details), tid, day);
+    }
+    return {
+      ok: true,
+      tournament_id: tid,
+      day_utc: day,
+      status,
+      winner_player_id: winner?.player_id || null,
+      winner_name: winner?.name || null,
+      winners,
+      total_tickets: pick.totalTickets,
+      eligible_players: details.eligible_players,
+      entries: entries.length,
+      payout_queue: payoutQueue,
+      details,
+    };
+  })();
+}
+
+function listPendingTournamentLuckyRaiderPayouts(options = {}) {
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(options.limit || 25) || 25)));
+  const maxAttempts = Math.max(1, Math.min(50, Math.floor(Number(options.maxAttempts || 5) || 5)));
+  const retrySeconds = Math.max(0, Math.min(86_400, Math.floor(Number(options.retrySeconds || 300) || 300)));
+  return stmts.listPendingTournamentLuckyRaiderPayouts.all(maxAttempts, `-${retrySeconds} seconds`, limit);
+}
+
+function claimTournamentLuckyRaiderPayout(id, options = {}) {
+  const payoutId = String(id || '').trim();
+  if (!payoutId) return null;
+  const maxAttempts = Math.max(1, Math.min(50, Math.floor(Number(options.maxAttempts || 5) || 5)));
+  return db.transaction(() => {
+    const result = stmts.claimTournamentLuckyRaiderPayout.run(payoutId, maxAttempts);
+    if (!result.changes) return null;
+    return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
+  })();
+}
+
+function updateTournamentLuckyRaiderPayoutDestination(id, wallet) {
+  const payoutId = String(id || '').trim();
+  const destination = String(wallet || '').trim();
+  if (!payoutId || !destination) return null;
+  stmts.updateTournamentLuckyRaiderPayoutDestination.run(destination, payoutId);
+  return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
+}
+
+function isPlayerSolanaWalletLinked(playerId, wallet) {
+  const pid = String(playerId || '').trim();
+  const address = String(wallet || '').trim();
+  if (!pid || !address) return false;
+  if (isWalletBlacklisted(address)) return false;
+  const row = db.prepare(`
+    SELECT 1 AS ok
+    WHERE EXISTS (
+      SELECT 1 FROM player_wallets
+      WHERE player_id = ? AND chain_type = 'solana' AND address = ?
+    )
+    OR EXISTS (
+      SELECT 1 FROM player_dex_accounts
+      WHERE player_id = ? AND chain_type = 'solana' AND wallet_address = ?
+    )
+    OR EXISTS (
+      SELECT 1 FROM players
+      WHERE id = ? AND wallet = ?
+    )
+    LIMIT 1
+  `).get(pid, address, pid, address, pid, address);
+  return !!row;
+}
+
+function markTournamentLuckyRaiderPayoutPaid(id, result = {}) {
+  const payoutId = String(id || '').trim();
+  if (!payoutId) return null;
+  stmts.markTournamentLuckyRaiderPayoutPaid.run(
+    String(result.txHash || result.tx_hash || ''),
+    Number(result.clashUsdPrice || result.clash_usd_price || 0) || 0,
+    String(result.clashAmount || result.clash_amount || ''),
+    String(result.clashAmountUnits || result.clash_amount_units || ''),
+    String(result.priceSource || result.price_source || ''),
+    payoutId
+  );
+  return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
+}
+
+function markTournamentLuckyRaiderPayoutFailed(id, error) {
+  const payoutId = String(id || '').trim();
+  if (!payoutId) return null;
+  const message = String(error?.message || error || 'payout failed').slice(0, 500);
+  stmts.markTournamentLuckyRaiderPayoutFailed.run(message, payoutId);
+  return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
+}
+
 function awardPendingTournamentDailyPools(options = {}) {
   const now = options.now instanceof Date ? options.now : new Date();
   const maxDays = Math.max(1, Math.min(60, Number(options.maxDays || 14)));
   const tournaments = db.prepare(`
     SELECT *
       FROM tournaments
-     WHERE COALESCE(scoring_mode, 'live') = 'daily_pool'
-       AND status IN ('active','ended')
+     WHERE status IN ('active','ended')
   `).all();
   const results = [];
   for (const t of tournaments) {
+    const needsDailyPool = isDailyPoolTournament(t);
+    const needsLucky = tournamentHasLuckyRaider(t);
+    if (!needsDailyPool && !needsLucky) continue;
     const first = tournamentFirstDailyPoolDay(t);
-    const last = tournamentLastClosedDailyPoolDay(t, now);
+    const dailyLast = needsDailyPool ? tournamentLastClosedDailyPoolDay(t, now) : addUtcDays(first, -1);
+    const luckyLast = needsLucky ? tournamentLastClosedLuckyRaiderDay(t, now) : addUtcDays(first, -1);
+    const last = dailyLast > luckyLast ? dailyLast : luckyLast;
     if (first > last) continue;
     let day = first;
     let guard = 0;
     while (day <= last && guard < maxDays) {
-      const run = stmts.getTournamentDailyRun.get(t.id, day);
-      if (!run) results.push(awardTournamentDailyPoolDay(t.id, day));
+      const dayResults = [];
+      if (needsDailyPool && day <= dailyLast) {
+        const run = stmts.getTournamentDailyRun.get(t.id, day);
+        if (!run) dayResults.push(awardTournamentDailyPoolDay(t.id, day));
+      }
+      if (needsLucky && day <= luckyLast) {
+        const luckyRun = stmts.getTournamentLuckyRaiderRun.get(t.id, day);
+        if (!luckyRun) dayResults.push(awardTournamentLuckyRaiderDay(t.id, day));
+      }
+      results.push(...dayResults.filter((result) => result && !result.skipped));
       day = addUtcDays(day, 1);
       guard += 1;
     }
@@ -3141,9 +4611,11 @@ cleanupOldBotTargets();
 const TROOP_DEFS = {
   knight:    { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 },  { gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 }] },
   mage:      { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
+  barbarian: { max_level: 4, cost: [{ gold: 175, wood: 0, ore: 175 }, { gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }] },
   archer:    { max_level: 4, cost: [{ gold: 175, wood: 175, ore: 0 }, { gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }] },
-  demon_king: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
-  fire_dragon: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
+  ranger:    { max_level: 4, cost: [{ gold: 125, wood: 125, ore: 0 }, { gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }] },
+  demon_king: { max_level: 4, cost: [{ gold: 150, wood: 0, ore: 125 }, { gold: 300, wood: 0, ore: 250 }, { gold: 600, wood: 0, ore: 500 }] },
+  fire_dragon: { max_level: 4, cost: [{ gold: 250, wood: 0, ore: 250 }, { gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }] },
 };
 const DISABLED_TROOP_TYPES = new Set();
 const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_TROOP_TYPES.has(troop));
@@ -3544,7 +5016,312 @@ function normalizeLegacyBarracksRows() {
 
 normalizeLegacyBarracksRows();
 
-function registerPlayer(name) {
+function referralSlugBase(name) {
+  const base = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_ -]+/g, '')
+    .replace(/[\s_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 32);
+  return base || 'player';
+}
+
+function normalizeReferralCode(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/[^/]+\/r\//i, '')
+    .replace(/^\/?r\//i, '')
+    .split(/[?#]/)[0]
+    .replace(/[^a-z0-9-]/g, '')
+    .slice(0, 48);
+}
+
+const REFERRAL_SETTINGS_KEY = 'referrals.config';
+
+function clampReferralBps(value, fallback = 1000) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(10000, Math.round(n)));
+}
+
+function getReferralSettings() {
+  let parsed = null;
+  try {
+    const row = db.prepare('SELECT value_json FROM app_settings WHERE key = ?').get(REFERRAL_SETTINGS_KEY);
+    parsed = row ? JSON.parse(row.value_json || '{}') : null;
+  } catch {}
+  const mode = parsed?.mode === 'all' ? 'all' : 'selected';
+  return {
+    mode,
+    default_bps: clampReferralBps(parsed?.default_bps, 1000),
+  };
+}
+
+function setReferralSettings(input = {}) {
+  const next = {
+    mode: input.mode === 'all' ? 'all' : 'selected',
+    default_bps: clampReferralBps(input.default_bps, 1000),
+  };
+  db.prepare(`
+    INSERT INTO app_settings (key, value_json, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET
+      value_json = excluded.value_json,
+      updated_at = datetime('now')
+  `).run(REFERRAL_SETTINGS_KEY, JSON.stringify(next));
+  return next;
+}
+
+function getReferralCodeForPlayer(playerId, { visibleOnly = false } = {}) {
+  const row = db.prepare('SELECT * FROM referral_codes WHERE player_id = ?').get(String(playerId || ''));
+  if (!row || !visibleOnly) return row || null;
+  const settings = getReferralSettings();
+  if (!row.active) return null;
+  if (settings.mode === 'all' || Number(row.manual_enabled || 0) === 1) return row;
+  return null;
+}
+
+function ensureReferralCode(playerOrId, options = {}) {
+  const player = typeof playerOrId === 'object'
+    ? playerOrId
+    : stmts.getPlayerById.get(String(playerOrId || ''));
+  if (!player?.id) return null;
+  const settings = getReferralSettings();
+  const force = !!options.force || settings.mode === 'all';
+  const manualEnabled = options.manualEnabled == null ? (force && settings.mode !== 'all' ? 1 : 0) : (options.manualEnabled ? 1 : 0);
+  const active = options.active == null ? 1 : (options.active ? 1 : 0);
+  const commissionBps = clampReferralBps(options.commissionBps, settings.default_bps);
+  const note = options.note == null ? null : String(options.note).slice(0, 500);
+  const existing = db.prepare('SELECT * FROM referral_codes WHERE player_id = ?').get(player.id);
+  if (existing) {
+    if (options.force || options.update) {
+      const customCode = normalizeReferralCode(options.code);
+      if (customCode && customCode !== existing.code) {
+        const conflict = db.prepare('SELECT player_id FROM referral_codes WHERE lower(code) = lower(?) AND player_id <> ?').get(customCode, player.id);
+        if (conflict) throw new Error('Referral code is already used');
+        db.prepare(`
+          UPDATE referral_codes
+          SET code = ?, slug = ?, commission_bps = ?, manual_enabled = ?, active = ?, note = ?, updated_at = datetime('now')
+          WHERE player_id = ?
+        `).run(customCode, customCode, commissionBps, manualEnabled, active, note, player.id);
+      } else {
+        db.prepare(`
+          UPDATE referral_codes
+          SET commission_bps = ?, manual_enabled = ?, active = ?, note = ?, updated_at = datetime('now')
+          WHERE player_id = ?
+        `).run(commissionBps, manualEnabled, active, note, player.id);
+      }
+      return db.prepare('SELECT * FROM referral_codes WHERE player_id = ?').get(player.id);
+    }
+    return existing;
+  }
+  if (!force) return null;
+
+  const customCode = normalizeReferralCode(options.code);
+  const base = customCode || referralSlugBase(player.name);
+  const shortId = crypto.createHash('sha1').update(String(player.id)).digest('hex').slice(0, 6);
+  for (let i = 0; i < 32; i += 1) {
+    const suffix = i === 0 ? '' : `-${i + 1}`;
+    const room = Math.max(1, 40 - suffix.length);
+    const slug = `${base.slice(0, room)}${suffix}`;
+    const code = customCode && i === 0 ? customCode : (i === 0 ? slug : `${slug}-${shortId}`);
+    try {
+      db.prepare(`
+        INSERT INTO referral_codes (player_id, code, slug, commission_bps, manual_enabled, active, note)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(player.id, code, slug, commissionBps, manualEnabled, active, note);
+      return db.prepare('SELECT * FROM referral_codes WHERE player_id = ?').get(player.id);
+    } catch (e) {
+      if (!/UNIQUE/i.test(String(e?.message || ''))) throw e;
+      if (customCode) throw new Error('Referral code is already used');
+    }
+  }
+  const fallback = `${base.slice(0, 24)}-${shortId}`;
+  db.prepare(`
+    INSERT OR IGNORE INTO referral_codes (player_id, code, slug, commission_bps, manual_enabled, active, note)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(player.id, fallback, fallback, commissionBps, manualEnabled, active, note);
+  return db.prepare('SELECT * FROM referral_codes WHERE player_id = ?').get(player.id);
+}
+
+function issueReferralCodeForPlayer(playerLookup, options = {}) {
+  const lookup = String(playerLookup || '').trim();
+  if (!lookup) throw new Error('Player is required');
+  const player = db.prepare(`
+    SELECT id, name FROM players
+    WHERE id = ? OR lower(name) = lower(?)
+    ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
+    LIMIT 1
+  `).get(lookup, lookup, lookup);
+  if (!player) throw new Error('Player not found');
+  return ensureReferralCode(player, {
+    force: true,
+    update: true,
+    manualEnabled: true,
+    active: options.active == null ? true : !!options.active,
+    code: options.code,
+    commissionBps: options.commissionBps,
+    note: options.note,
+  });
+}
+
+function bindPlayerReferral(referredPlayerId, rawCode, source = 'unknown', metadata = {}) {
+  const code = normalizeReferralCode(rawCode);
+  if (!referredPlayerId || !code) return { bound: false, reason: 'missing_code' };
+  const referred = stmts.getPlayerById.get(String(referredPlayerId));
+  if (!referred) return { bound: false, reason: 'referred_not_found' };
+  const existing = db.prepare('SELECT * FROM player_referrals WHERE referred_player_id = ?').get(referred.id);
+  if (existing) return { bound: false, existing, reason: 'already_bound' };
+  const settings = getReferralSettings();
+  const refCode = db.prepare(`
+    SELECT rc.*, p.name AS referrer_name
+    FROM referral_codes rc
+    JOIN players p ON p.id = rc.player_id
+    WHERE rc.active = 1
+      AND (? = 'all' OR rc.manual_enabled = 1)
+      AND (lower(rc.code) = lower(?) OR lower(rc.slug) = lower(?))
+    LIMIT 1
+  `).get(settings.mode, code, code);
+  if (!refCode) return { bound: false, reason: 'code_not_found' };
+  if (refCode.player_id === referred.id) return { bound: false, reason: 'self_referral' };
+  db.prepare(`
+    INSERT OR IGNORE INTO player_referrals
+      (referred_player_id, referrer_player_id, code, source, metadata_json)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    referred.id,
+    refCode.player_id,
+    refCode.code,
+    String(source || 'unknown').slice(0, 80),
+    JSON.stringify(metadata || {}),
+  );
+  const row = db.prepare('SELECT * FROM player_referrals WHERE referred_player_id = ?').get(referred.id);
+  return { bound: !!row, referral: row, code: refCode };
+}
+
+function usdE6ToNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n / 1_000_000 : 0;
+}
+
+function getReferralSummary(playerId) {
+  const player = stmts.getPlayerById.get(String(playerId || ''));
+  if (!player) return null;
+  const settings = getReferralSettings();
+  const code = settings.mode === 'all'
+    ? ensureReferralCode(player)
+    : getReferralCodeForPlayer(player.id, { visibleOnly: true });
+  if (!code) return null;
+  const bound = db.prepare(`
+    SELECT pr.*, p.name AS referrer_name
+    FROM player_referrals pr
+    JOIN players p ON p.id = pr.referrer_player_id
+    WHERE pr.referred_player_id = ?
+  `).get(player.id) || null;
+  const totals = db.prepare(`
+    SELECT
+      COUNT(*) AS events,
+      COALESCE(SUM(CASE WHEN status IN ('confirmed', 'claimable') THEN commission_usd_e6 ELSE 0 END), 0) AS confirmed_usd_e6,
+      COALESCE(SUM(CASE WHEN status = 'pending' THEN commission_usd_e6 ELSE 0 END), 0) AS pending_usd_e6,
+      COALESCE(SUM(CASE WHEN status = 'paid' THEN commission_usd_e6 ELSE 0 END), 0) AS paid_usd_e6
+    FROM referral_events
+    WHERE referrer_player_id = ?
+  `).get(player.id) || {};
+  const invited = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM player_referrals
+    WHERE referrer_player_id = ?
+  `).get(player.id) || {};
+  const recent = db.prepare(`
+    SELECT e.*, p.name AS referred_name
+    FROM referral_events e
+    JOIN players p ON p.id = e.referred_player_id
+    WHERE e.referrer_player_id = ?
+    ORDER BY e.created_at DESC
+    LIMIT 25
+  `).all(player.id).map((row) => ({
+    id: row.id,
+    referredPlayerId: row.referred_player_id,
+    referredName: row.referred_name,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    revenueKind: row.revenue_kind,
+    status: row.status,
+    grossUsd: usdE6ToNumber(row.gross_usd_e6),
+    commissionUsd: usdE6ToNumber(row.commission_usd_e6),
+    txHash: row.tx_hash || null,
+    createdAt: row.created_at,
+  }));
+  return {
+    code: code?.code || null,
+    slug: code?.slug || null,
+    active: code ? !!code.active : false,
+    manual_enabled: !!code.manual_enabled,
+    rate_bps: clampReferralBps(code?.commission_bps, settings.default_bps),
+    invited_count: Number(invited.count || 0),
+    confirmed_usd: usdE6ToNumber(totals.confirmed_usd_e6),
+    pending_usd: usdE6ToNumber(totals.pending_usd_e6),
+    paid_usd: usdE6ToNumber(totals.paid_usd_e6),
+    events_count: Number(totals.events || 0),
+    referred_by: bound ? {
+      player_id: bound.referrer_player_id,
+      name: bound.referrer_name,
+      code: bound.code,
+      bound_at: bound.bound_at,
+    } : null,
+    recent,
+  };
+}
+
+function recordReferralRevenue({
+  referredPlayerId,
+  sourceType,
+  sourceId,
+  revenueKind,
+  grossUsdE6,
+  status = 'confirmed',
+  currency = 'USD',
+  txHash = null,
+  metadata = {},
+} = {}) {
+  const gross = Math.max(0, Math.trunc(Number(grossUsdE6) || 0));
+  if (!referredPlayerId || !sourceType || !sourceId || gross <= 0) return { changes: 0, reason: 'invalid_input' };
+  const referral = db.prepare('SELECT * FROM player_referrals WHERE referred_player_id = ?').get(String(referredPlayerId));
+  if (!referral || referral.referrer_player_id === referredPlayerId) return { changes: 0, reason: 'no_referrer' };
+  const rateBps = clampReferralBps(
+    db.prepare('SELECT commission_bps FROM referral_codes WHERE player_id = ? AND active = 1').get(referral.referrer_player_id)?.commission_bps,
+    getReferralSettings().default_bps,
+  );
+  const commission = Math.trunc((gross * rateBps) / 10000);
+  if (commission <= 0) return { changes: 0, reason: 'dust' };
+  const info = db.prepare(`
+    INSERT OR IGNORE INTO referral_events (
+      referrer_player_id, referred_player_id, source_type, source_id,
+      revenue_kind, currency, gross_usd_e6, commission_usd_e6, commission_bps,
+      status, tx_hash, metadata_json, confirmed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IN ('confirmed', 'claimable') THEN datetime('now') ELSE NULL END)
+  `).run(
+    referral.referrer_player_id,
+    String(referredPlayerId),
+    String(sourceType),
+    String(sourceId),
+    String(revenueKind || sourceType),
+    String(currency || 'USD').slice(0, 20),
+    gross,
+    commission,
+    rateBps,
+    String(status || 'confirmed'),
+    txHash == null ? null : String(txHash),
+    JSON.stringify(metadata || {}),
+    String(status || 'confirmed'),
+  );
+  return { changes: info.changes || 0, commission_usd_e6: commission, commission_bps: rateBps };
+}
+
+function registerPlayer(name, options = {}) {
   const id = uuidv4();
   const token = uuidv4();
   stmts.createPlayer.run(id, name, token);
@@ -3552,11 +5329,82 @@ function registerPlayer(name) {
   for (const troop of ACTIVE_TROOP_TYPES) {
     stmts.upsertTroopLevel.run(id, troop, 1);
   }
-  return { id, name, token };
+  const player = { id, name, token };
+  if (options.referralCode) {
+    try {
+      bindPlayerReferral(id, options.referralCode, options.referralSource || 'register', options.referralMetadata || {});
+    } catch (e) {
+      console.warn('[referrals] bind on register failed:', e.message);
+    }
+  }
+  return player;
+}
+
+function isPlayerBanned(player) {
+  return !!(player && player.banned_at);
 }
 
 function authenticatePlayer(token) {
-  return stmts.getPlayerByToken.get(token);
+  const player = stmts.getPlayerByToken.get(token);
+  return isPlayerBanned(player) ? null : player;
+}
+
+function getAdminPlayer(identifier) {
+  const key = String(identifier || '').trim();
+  if (!key) return null;
+  return stmts.getAdminPlayerByIdentifier.get(key, key, key) || null;
+}
+
+function banPlayer(identifier, options = {}) {
+  const player = getAdminPlayer(identifier);
+  if (!player) return null;
+  const reason = String(options.reason || 'admin ban').trim().slice(0, 500) || 'admin ban';
+  const bannedBy = String(options.bannedBy || options.banned_by || 'admin').trim().slice(0, 120) || 'admin';
+  stmts.banPlayerById.run(reason, bannedBy, player.id);
+  return stmts.getPlayerById.get(player.id) || null;
+}
+
+function unbanPlayer(identifier) {
+  const player = getAdminPlayer(identifier);
+  if (!player) return null;
+  stmts.unbanPlayerById.run(player.id);
+  return stmts.getPlayerById.get(player.id) || null;
+}
+
+function walletBlacklistKey(wallet) {
+  return String(wallet || '').trim();
+}
+
+function getWalletBlacklist(wallet) {
+  const key = walletBlacklistKey(wallet);
+  if (!key) return null;
+  return stmts.getWalletBlacklist.get(key) || null;
+}
+
+function isWalletBlacklisted(wallet) {
+  return !!getWalletBlacklist(wallet);
+}
+
+function blacklistWallet(wallet, options = {}) {
+  const key = walletBlacklistKey(wallet);
+  if (!key) return null;
+  const chainType = String(options.chainType || options.chain_type || '').trim().toLowerCase() || null;
+  const reason = String(options.reason || 'admin blacklist').trim().slice(0, 500) || 'admin blacklist';
+  const playerId = String(options.playerId || options.player_id || '').trim() || null;
+  const createdBy = String(options.createdBy || options.created_by || 'admin').trim().slice(0, 120) || 'admin';
+  stmts.upsertWalletBlacklist.run(key, chainType, reason, playerId, createdBy);
+  return getWalletBlacklist(key);
+}
+
+function unblacklistWallet(wallet) {
+  const key = walletBlacklistKey(wallet);
+  if (!key) return { changes: 0 };
+  return stmts.deleteWalletBlacklist.run(key);
+}
+
+function listWalletBlacklist(limit = 200) {
+  const n = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 200)));
+  return stmts.listWalletBlacklist.all(n);
 }
 
 function normalizeDemonKingNftLevel(level) {
@@ -3564,15 +5412,61 @@ function normalizeDemonKingNftLevel(level) {
   return [1, 2, 3].includes(n) ? n : 1;
 }
 
+const NFT_RARITY_LABELS = {
+  common: 'Common',
+  epic: 'Epic',
+  legendary: 'Legendary',
+};
+
+function normalizeNftRarity(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(NFT_RARITY_LABELS, text) ? text : null;
+}
+
+function collectionSupportsRarity(collection) {
+  const key = normalizePlayerNftCollection(collection);
+  return key === 'demon_king' || key === 'dragon';
+}
+
+function demonKingLegacyRarityFallback(level) {
+  return normalizeDemonKingNftLevel(level) > 1 ? 'legendary' : null;
+}
+
+function normalizeRarityRow(row, fallbackLevel = 1, fallbackCollection = 'demon_king') {
+  const collection = normalizePlayerNftCollection(row?.collection || fallbackCollection);
+  const rarity = normalizeNftRarity(row?.rarity)
+    || (collection === 'demon_king' ? demonKingLegacyRarityFallback(fallbackLevel) : null);
+  if (!rarity) return null;
+  return {
+    collection,
+    chain: String(row?.chain || '').toLowerCase(),
+    tokenId: String(row?.token_id ?? row?.tokenId ?? ''),
+    rarity,
+    rarityLabel: NFT_RARITY_LABELS[rarity],
+    legacyLevel: normalizeDemonKingNftLevel(row?.legacy_level ?? fallbackLevel),
+    ownerWallet: row?.owner_wallet || null,
+    playerId: row?.player_id || null,
+    source: row?.rarity_source || null,
+    revealedAt: row?.revealed_at || null,
+    updatedAt: row?.updated_at || null,
+  };
+}
+
 function normalizeDemonKingNftRow(row) {
   if (!row) return null;
+  const level = normalizeDemonKingNftLevel(row.level);
+  const rarity = normalizeNftRarity(row.rarity) || demonKingLegacyRarityFallback(level);
   return {
     playerId: row.player_id,
     collection: row.collection || 'demon_king',
     chain: String(row.chain || '').toLowerCase(),
     tokenId: String(row.token_id || ''),
     wallet: row.wallet || '',
-    level: normalizeDemonKingNftLevel(row.level),
+    level,
+    legacyLevel: level,
+    rarity,
+    rarityLabel: rarity ? NFT_RARITY_LABELS[rarity] : 'Unrevealed',
+    rarityRevealedAt: row.rarity_revealed_at || null,
     imageUrl: row.image_url || null,
     active: !!row.active,
     source: row.source || null,
@@ -3594,6 +5488,48 @@ function normalizeDemonKingNftInput(token = {}) {
     tokenId,
     level: normalizeDemonKingNftLevel(token.level),
     imageUrl: token.imageUrl || token.image_url || null,
+  };
+}
+
+function normalizePlayerNftCollection(collection) {
+  const key = String(collection || 'demon_king')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_');
+  if (!key || key === 'demonking' || key === 'demon_king') return 'demon_king';
+  if (key === 'fire_dragon') return 'dragon';
+  return key;
+}
+
+function normalizeCollectionNftRow(row) {
+  if (!row) return null;
+  const collection = normalizePlayerNftCollection(row.collection);
+  const level = normalizeDemonKingNftLevel(row.level);
+  const rarity = collectionSupportsRarity(collection)
+    ? (normalizeNftRarity(row.rarity) || (collection === 'demon_king' ? demonKingLegacyRarityFallback(level) : null))
+    : null;
+  return {
+    playerId: row.player_id,
+    collection,
+    chain: String(row.chain || '').toLowerCase(),
+    tokenId: String(row.token_id || ''),
+    wallet: row.wallet || '',
+    level,
+    legacyLevel: level,
+    ...(collectionSupportsRarity(collection) ? {
+      rarity,
+      rarityLabel: rarity ? NFT_RARITY_LABELS[rarity] : 'Unrevealed',
+      rarityRevealedAt: row.rarity_revealed_at || null,
+    } : {}),
+    imageUrl: row.image_url || null,
+    active: !!row.active,
+    source: row.source || null,
+    txHash: row.tx_hash || null,
+    verifiedAt: row.verified_at || null,
+    lastSeenAt: row.last_seen_at || null,
+    updatedAt: row.updated_at || null,
+    wins: Math.max(0, Number(row.battle_wins || row.wins || 0) || 0),
+    battleWins: Math.max(0, Number(row.battle_wins || row.wins || 0) || 0),
   };
 }
 
@@ -3647,10 +5583,30 @@ function listPlayerDemonKingNfts(playerId, wallet = null) {
   return rows.map(normalizeDemonKingNftRow).filter(Boolean);
 }
 
+function listPlayerCollectionNfts(playerId, collection = 'demon_king', wallet = null) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  if (!playerId || !collectionKey) return [];
+  const rows = wallet
+    ? stmts.listPlayerCollectionNftsByWallet.all(playerId, collectionKey, String(wallet).trim())
+    : stmts.listPlayerCollectionNfts.all(playerId, collectionKey);
+  return rows.map(normalizeCollectionNftRow).filter(Boolean);
+}
+
 function getPlayerDemonKingNft(playerId, chain, tokenId) {
   if (!playerId || !chain || tokenId == null) return null;
   return normalizeDemonKingNftRow(stmts.getPlayerDemonKingNft.get(
     playerId,
+    String(chain).trim().toLowerCase(),
+    String(tokenId).trim()
+  ));
+}
+
+function getPlayerCollectionNft(playerId, collection = 'demon_king', chain, tokenId) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  if (!playerId || !collectionKey || !chain || tokenId == null) return null;
+  return normalizeCollectionNftRow(stmts.getPlayerCollectionNft.get(
+    playerId,
+    collectionKey,
     String(chain).trim().toLowerCase(),
     String(tokenId).trim()
   ));
@@ -3687,6 +5643,40 @@ const _replacePlayerDemonKingNftsTxn = db.transaction((playerId, wallet, tokens,
   );
 });
 
+const _replacePlayerCollectionNftsTxn = db.transaction((playerId, collection, wallet, tokens, options = {}) => {
+  const owner = String(wallet || '').trim();
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const chains = normalizeDemonKingChains(options.chains, tokens);
+  for (const chain of chains) {
+    stmts.deactivatePlayerCollectionWalletChain.run(playerId, collectionKey, owner, chain);
+  }
+
+  for (const rawToken of tokens) {
+    const token = normalizeDemonKingNftInput(rawToken);
+    if (!token) continue;
+    stmts.deactivateCollectionTokenEverywhere.run(collectionKey, token.chain, token.tokenId, playerId, owner);
+    stmts.upsertPlayerCollectionNft.run(
+      playerId,
+      collectionKey,
+      token.chain,
+      token.tokenId,
+      owner,
+      token.level,
+      token.imageUrl,
+      options.source || rawToken.source || 'sync',
+      options.txHash || rawToken.txHash || rawToken.tx_hash || null
+    );
+  }
+
+  stmts.upsertCollectionNftWalletCheck.run(
+    playerId,
+    collectionKey,
+    owner,
+    JSON.stringify(chains),
+    tokens.length
+  );
+});
+
 function replacePlayerDemonKingNfts(playerId, wallet, tokens = [], options = {}) {
   const owner = String(wallet || '').trim();
   if (!playerId || !owner) return [];
@@ -3695,6 +5685,17 @@ function replacePlayerDemonKingNfts(playerId, wallet, tokens = [], options = {})
     : [];
   _replacePlayerDemonKingNftsTxn(playerId, owner, normalized, options);
   return listPlayerDemonKingNfts(playerId, owner);
+}
+
+function replacePlayerCollectionNfts(playerId, collection = 'demon_king', wallet, tokens = [], options = {}) {
+  const owner = String(wallet || '').trim();
+  const collectionKey = normalizePlayerNftCollection(collection);
+  if (!playerId || !collectionKey || !owner) return [];
+  const normalized = Array.isArray(tokens)
+    ? tokens.map(normalizeDemonKingNftInput).filter(Boolean)
+    : [];
+  _replacePlayerCollectionNftsTxn(playerId, collectionKey, owner, normalized, options);
+  return listPlayerCollectionNfts(playerId, collectionKey, owner);
 }
 
 function bindPlayerDemonKingNft(playerId, wallet, token = {}, options = {}) {
@@ -3715,6 +5716,117 @@ function bindPlayerDemonKingNft(playerId, wallet, token = {}, options = {}) {
   return getPlayerDemonKingNft(playerId, normalized.chain, normalized.tokenId);
 }
 
+function bindPlayerCollectionNft(playerId, collection = 'demon_king', wallet, token = {}, options = {}) {
+  const owner = String(wallet || '').trim();
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const normalized = normalizeDemonKingNftInput(token);
+  if (!playerId || !collectionKey || !owner || !normalized) return null;
+  stmts.deactivateCollectionTokenEverywhere.run(collectionKey, normalized.chain, normalized.tokenId, playerId, owner);
+  stmts.upsertPlayerCollectionNft.run(
+    playerId,
+    collectionKey,
+    normalized.chain,
+    normalized.tokenId,
+    owner,
+    normalized.level,
+    normalized.imageUrl,
+    options.source || token.source || 'verified',
+    options.txHash || token.txHash || token.tx_hash || null
+  );
+  return getPlayerCollectionNft(playerId, collectionKey, normalized.chain, normalized.tokenId);
+}
+
+function getNftRarity(collection = 'demon_king', chain, tokenId, options = {}) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const chainKey = String(chain || '').trim().toLowerCase();
+  const tokenText = String(tokenId ?? '').trim();
+  if (!collectionKey || !chainKey || !tokenText) return null;
+  const row = stmts.getNftRarity.get(collectionKey, chainKey, tokenText);
+  if (!row) {
+    if (collectionKey !== 'demon_king') return null;
+    return normalizeRarityRow({
+      collection: collectionKey,
+      chain: chainKey,
+      token_id: tokenText,
+      legacy_level: options.legacyLevel,
+    }, options.legacyLevel, collectionKey);
+  }
+  return normalizeRarityRow(row, options.legacyLevel, collectionKey);
+}
+
+function listNftRarities(collection = 'demon_king', chain, tokenIds = [], options = {}) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const chainKey = String(chain || '').trim().toLowerCase();
+  const ids = (Array.isArray(tokenIds) ? tokenIds : String(tokenIds || '').split(','))
+    .map((id) => String(id ?? '').trim())
+    .filter(Boolean);
+  if (!collectionKey || !chainKey || !ids.length) return {};
+  const uniqueIds = [...new Set(ids)].slice(0, 500);
+  const placeholders = uniqueIds.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT collection, chain, token_id, rarity, legacy_level, owner_wallet,
+           player_id, rarity_source, reveal_seed, snapshot_hash,
+           metadata_json, revealed_at, updated_at
+      FROM nft_rarities
+     WHERE collection = ? AND chain = ? AND token_id IN (${placeholders})
+  `).all(collectionKey, chainKey, ...uniqueIds);
+  const byId = {};
+  for (const row of rows) {
+    const normalized = normalizeRarityRow(row, options.legacyLevels?.[row.token_id], collectionKey);
+    if (normalized?.tokenId) byId[normalized.tokenId] = normalized;
+  }
+  if (collectionKey === 'demon_king' && options.legacyLevels && typeof options.legacyLevels === 'object') {
+    for (const id of uniqueIds) {
+      if (byId[id]) continue;
+      const fallback = normalizeRarityRow({
+        collection: collectionKey,
+        chain: chainKey,
+        token_id: id,
+        legacy_level: options.legacyLevels[id],
+      }, options.legacyLevels[id]);
+      if (fallback) byId[id] = fallback;
+    }
+  }
+  return byId;
+}
+
+function upsertNftRarity({
+  collection = 'demon_king',
+  chain,
+  tokenId,
+  rarity,
+  legacyLevel = 1,
+  ownerWallet = null,
+  playerId = null,
+  source = 'reveal',
+  revealSeed = null,
+  snapshotHash = null,
+  metadata = {},
+} = {}) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const chainKey = String(chain || '').trim().toLowerCase();
+  const tokenText = String(tokenId ?? '').trim();
+  const rarityKey = normalizeNftRarity(rarity);
+  if (!collectionKey || !chainKey || !tokenText || !rarityKey) return null;
+  const metadataJson = (() => {
+    try { return JSON.stringify(metadata || {}); } catch { return '{}'; }
+  })();
+  stmts.upsertNftRarity.run(
+    collectionKey,
+    chainKey,
+    tokenText,
+    rarityKey,
+    normalizeDemonKingNftLevel(legacyLevel),
+    ownerWallet ? String(ownerWallet) : null,
+    playerId ? String(playerId) : null,
+    String(source || 'reveal').slice(0, 80),
+    revealSeed ? String(revealSeed) : null,
+    snapshotHash ? String(snapshotHash) : null,
+    metadataJson,
+  );
+  return getNftRarity(collectionKey, chainKey, tokenText, { legacyLevel });
+}
+
 function getDemonKingNftWalletCheck(playerId, wallet) {
   if (!playerId || !wallet) return null;
   const row = stmts.getDemonKingNftWalletCheck.get(playerId, String(wallet).trim());
@@ -3724,6 +5836,23 @@ function getDemonKingNftWalletCheck(playerId, wallet) {
   return {
     playerId: row.player_id,
     collection: row.collection || 'demon_king',
+    wallet: row.wallet,
+    chains: Array.isArray(chains) ? chains.map((c) => String(c).toLowerCase()) : [],
+    resultCount: Number(row.result_count) || 0,
+    checkedAt: row.checked_at || null,
+  };
+}
+
+function getCollectionNftWalletCheck(playerId, collection = 'demon_king', wallet) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  if (!playerId || !collectionKey || !wallet) return null;
+  const row = stmts.getCollectionNftWalletCheck.get(playerId, collectionKey, String(wallet).trim());
+  if (!row) return null;
+  let chains = [];
+  try { chains = JSON.parse(row.chains || '[]'); } catch { chains = []; }
+  return {
+    playerId: row.player_id,
+    collection: row.collection || collectionKey,
     wallet: row.wallet,
     chains: Array.isArray(chains) ? chains.map((c) => String(c).toLowerCase()) : [],
     resultCount: Number(row.result_count) || 0,
@@ -4216,6 +6345,13 @@ function getDemonKingBattleWins(playerId, chain, tokenId) {
   return Math.max(0, Number(stmts.getDemonKingBattleWins.get(playerId, token.chain, token.tokenId)?.wins || 0) || 0);
 }
 
+function getCollectionBattleWins(playerId, collection = 'demon_king', chain, tokenId) {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const token = normalizeDemonKingBattleToken({ chain, tokenId });
+  if (!playerId || !collectionKey || !token) return 0;
+  return Math.max(0, Number(stmts.getCollectionBattleWins.get(playerId, collectionKey, token.chain, token.tokenId)?.wins || 0) || 0);
+}
+
 function recordDemonKingBattleWinEvents(replayId, playerId, tokens = []) {
   const id = Number(replayId);
   const normalized = normalizeDemonKingBattleTokens(tokens);
@@ -4232,7 +6368,66 @@ function recordDemonKingBattleWinEvents(replayId, playerId, tokens = []) {
   return tx();
 }
 
+function recordCollectionBattleWinEvents(replayId, playerId, collection = 'demon_king', tokens = []) {
+  const id = Number(replayId);
+  const collectionKey = normalizePlayerNftCollection(collection);
+  const normalized = normalizeDemonKingBattleTokens(tokens);
+  if (!Number.isFinite(id) || id <= 0 || !playerId || !collectionKey || !normalized.length) return [];
+  const tx = db.transaction(() => {
+    for (const token of normalized) {
+      stmts.insertCollectionBattleWinEvent.run(id, playerId, collectionKey, token.chain, token.tokenId);
+    }
+    return normalized.map((token) => ({
+      ...token,
+      collection: collectionKey,
+      wins: getCollectionBattleWins(playerId, collectionKey, token.chain, token.tokenId),
+    }));
+  });
+  return tx();
+}
+
+const NFT_BACKED_TROOP_COLLECTIONS = {
+  demon_king: { collection: 'demon_king', label: 'Demon King' },
+  fire_dragon: { collection: 'dragon', label: 'Dragon' },
+};
+
+function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
+  const troopKey = String(troopType || '').trim().toLowerCase();
+  const cfg = NFT_BACKED_TROOP_COLLECTIONS[troopKey];
+  const def = TROOP_DEFS[troopKey];
+  if (!cfg || !def) return null;
+  const levels = stmts.getTroopLevels.all(playerId);
+  const current = levels.find(t => t.troop_type === troopKey);
+  const currentLevel = current ? current.level : 1;
+  const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
+  const token = normalizeDemonKingBattleToken(options);
+  const battleWins = token ? getCollectionBattleWins(playerId, cfg.collection, token.chain, token.tokenId) : 0;
+  const ownedCount = listPlayerCollectionNfts(playerId, cfg.collection).length;
+  return {
+    troop_type: troopKey,
+    collection: cfg.collection,
+    label: cfg.label,
+    current_level: currentLevel,
+    max_level: def.max_level,
+    next_level: nextLevel,
+    owns_nft: ownedCount > 0,
+    owned_nfts: ownedCount,
+    cost: nextLevel ? def.cost[currentLevel - 1] : null,
+    battle_wins: battleWins,
+    wins: battleWins,
+    account_battle_wins: getBattleWins(playerId),
+    required_wins: null,
+    wins_ready: true,
+    requires_nft_upgrade: false,
+    nft_upgrade_price: null,
+    win_scope: token ? `${cfg.collection}_nft` : 'none',
+    nft: token ? { chain: token.chain, token_id: token.tokenId } : null,
+  };
+}
+
 function getDemonKingUpgradeStatus(playerId, options = {}) {
+  const generic = getNftBackedTroopUpgradeStatus(playerId, 'demon_king', options);
+  if (generic) return generic;
   const def = TROOP_DEFS.demon_king;
   const levels = stmts.getTroopLevels.all(playerId);
   const current = levels.find(t => t.troop_type === 'demon_king');
@@ -4251,8 +6446,8 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
     account_battle_wins: getBattleWins(playerId),
     required_wins: requiredWins,
     wins_ready: requiredWins == null || battleWins >= requiredWins,
-    requires_nft_upgrade: nextLevel != null,
-    nft_upgrade_price: 'same_as_purchase',
+    requires_nft_upgrade: false,
+    nft_upgrade_price: null,
     win_scope: token ? 'demon_king_nft' : 'none',
     nft: token ? { chain: token.chain, token_id: token.tokenId } : null,
   };
@@ -4279,52 +6474,13 @@ function upgradeTroop(playerId, troopType, options = {}) {
     return { error: 'Already at max level' };
   }
 
-  if (troopType === 'demon_king') {
-    const newLevel = currentLevel + 1;
-    const requiredWins = demonKingRequiredWins(newLevel);
-    const token = normalizeDemonKingBattleToken({
-      chain: options.nftChain || options.chain,
-      tokenId: options.nftTokenId || options.tokenId || options.token_id,
-    });
-    const battleWins = token ? getDemonKingBattleWins(playerId, token.chain, token.tokenId) : 0;
-    const status = {
-      ...getDemonKingUpgradeStatus(playerId, token || {}),
-      next_level: newLevel,
-      required_wins: requiredWins,
-      battle_wins: battleWins,
-      wins: battleWins,
-      wins_ready: requiredWins == null || battleWins >= requiredWins,
-    };
-    if (requiredWins != null && battleWins < requiredWins) {
-      return {
-        ...status,
-        error: `Demon King level ${newLevel} requires ${requiredWins} battle wins`,
-        code: 'DEMON_KING_WINS_REQUIRED',
-      };
-    }
-    if (!options.nftVerified || Number(options.nftLevel || 0) < newLevel) {
-      return {
-        ...status,
-        error: `Upgrade your Demon King NFT to level ${newLevel} first`,
-        code: 'DEMON_KING_NFT_UPGRADE_REQUIRED',
-        requires_nft_upgrade: true,
-      };
-    }
-    stmts.upsertTroopLevel.run(playerId, troopType, newLevel);
+  const nftCfg = NFT_BACKED_TROOP_COLLECTIONS[troopType];
+  if (nftCfg && listPlayerCollectionNfts(playerId, nftCfg.collection).length === 0) {
     return {
-      troop_type: troopType,
-      level: newLevel,
-      current_level: newLevel,
-      cost: { gold: 0, wood: 0, ore: 0 },
-      battle_wins: battleWins,
-      required_wins: requiredWins,
-      nft: {
-        chain: options.nftChain || null,
-        token_id: options.nftTokenId || null,
-        owner: options.nftOwner || null,
-        level: Number(options.nftLevel || newLevel),
-      },
-      resources: getResources(playerId),
+      ...getNftBackedTroopUpgradeStatus(playerId, troopType),
+      error: `${nftCfg.label} NFT required`,
+      code: 'NFT_TROOP_REQUIRED',
+      status: 403,
     };
   }
 
@@ -5305,26 +7461,66 @@ function findEnemyByName(playerId, rawTargetName) {
   })();
 }
 
-// Stamps the matchmaker cooldown for a surrender. Tries the session id
-// first (precise), then falls back to the most recent attacker/defender
-// session, then inserts a synthetic marker row if no session exists at all.
-// Returns true when a row was actually stamped — useful for the route to
-// confirm the cooldown is now in place.
-function markSurrender(attackerId, defenderId, sessionId = '') {
-  if (!attackerId || !defenderId) return false;
+// Stamps the matchmaker cooldown for a surrender and applies the normal
+// battle-loss trophy penalty once. Retry calls for the same session/pair do
+// not subtract trophies again because surrendered_at is already populated.
+const _markSurrenderTxn = db.transaction((attackerId, defenderId, sessionId = '') => {
+  if (!attackerId || !defenderId) return { ok: false, error: 'missing_player' };
   const sid = normalizeBattleSessionId(sessionId);
-  if (sid) {
-    const r = stmts.markSurrenderById.run(sid, attackerId);
-    try { stmts.markRaidMatchmakingSurrender.run(sid, attackerId); } catch {}
-    if (r.changes > 0) return true;
+  let session = sid ? stmts.getSurrenderSessionById.get(sid, attackerId, defenderId) : null;
+  let synthetic = false;
+  if (!session) {
+    session = stmts.getLatestSurrenderSessionForPair.get(attackerId, defenderId);
   }
-  const pair = stmts.markSurrenderByPair.run(attackerId, defenderId);
-  if (pair.changes > 0) return true;
+  if (!session) {
+    const syntheticId = uuidv4();
+    stmts.insertSurrenderMarker.run(syntheticId, attackerId, defenderId);
+    session = { id: syntheticId, attacker_id: attackerId, defender_id: defenderId, surrendered_at: null };
+    synthetic = true;
+  }
+  if (session.surrendered_at && !synthetic) {
+    return {
+      ok: true,
+      stamped: true,
+      already_surrendered: true,
+      trophy_delta: 0,
+      trophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
+      battle_session_id: session.id,
+    };
+  }
+  const r = synthetic
+    ? { changes: 1 }
+    : (sid && session.id === sid
+      ? stmts.markSurrenderById.run(session.id, attackerId, defenderId)
+      : stmts.markSurrenderByPair.run(session.id, attackerId, defenderId));
+  if (r.changes <= 0) {
+    return {
+      ok: true,
+      stamped: true,
+      already_surrendered: true,
+      trophy_delta: 0,
+      trophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
+      battle_session_id: session.id,
+    };
+  }
+  try { stmts.markRaidMatchmakingSurrender.run(session.id, attackerId); } catch {}
+  applyTrophyDelta(attackerId, -TROPHY_LOSS, { source: 'surrender', eventId: session.id });
+  return {
+    ok: true,
+    stamped: true,
+    already_surrendered: false,
+    trophy_delta: -TROPHY_LOSS,
+    trophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
+    battle_session_id: session.id,
+  };
+});
+
+function markSurrender(attackerId, defenderId, sessionId = '') {
   try {
-    stmts.insertSurrenderMarker.run(uuidv4(), attackerId, defenderId);
-    return true;
-  } catch {
-    return false;
+    return _markSurrenderTxn(attackerId, defenderId, sessionId);
+  } catch (e) {
+    console.warn('[surrender]', e.message);
+    return { ok: false, stamped: false, error: e.message };
   }
 }
 
@@ -5392,14 +7588,35 @@ function getFullPlayerState(playerId) {
   // Auto-repair buildings on login (like Clash of Clans)
   repairAllBuildings(playerId);
   const { token, ...safe } = player;
+  const wallets = db.prepare(`
+    SELECT chain_type, address, label, is_primary, updated_at
+    FROM player_wallets
+    WHERE player_id = ?
+    ORDER BY is_primary DESC, updated_at DESC
+  `).all(playerId);
+  const dexAccounts = db.prepare(`
+    SELECT dex, chain_type, wallet_address, account_id, status, metadata_json, updated_at
+    FROM player_dex_accounts
+    WHERE player_id = ?
+    ORDER BY updated_at DESC
+  `).all(playerId).map((row) => ({
+    ...row,
+    metadata: (() => {
+      try { return JSON.parse(row.metadata_json || '{}'); } catch { return {}; }
+    })(),
+    metadata_json: undefined,
+  }));
   return {
     ...safe,
+    wallets,
+    dex_accounts: dexAccounts,
     buildings: getPlayerBuildings(playerId),
     troop_levels: getTroopLevels(playerId),
     altar_skills: getAltarSkillLevels(playerId),
     resource_caps: getResourceCaps(playerId),
     shop_entitlements: getShopEntitlements(playerId),
     building_unlocks: getBuildingUnlocks(playerId),
+    referral: getReferralSummary(playerId),
   };
 }
 
@@ -5887,6 +8104,22 @@ module.exports = {
   ALTAR_SKILL_DEFS,
   registerPlayer,
   authenticatePlayer,
+  isPlayerBanned,
+  getAdminPlayer,
+  banPlayer,
+  unbanPlayer,
+  getWalletBlacklist,
+  isWalletBlacklisted,
+  blacklistWallet,
+  unblacklistWallet,
+  listWalletBlacklist,
+  ensureReferralCode,
+  issueReferralCodeForPlayer,
+  getReferralSettings,
+  setReferralSettings,
+  bindPlayerReferral,
+  getReferralSummary,
+  recordReferralRevenue,
   createAiAgentKey,
   listAiAgentKeys,
   revokeAiAgentKey,
@@ -5900,7 +8133,18 @@ module.exports = {
   replacePlayerDemonKingNfts,
   bindPlayerDemonKingNft,
   getDemonKingNftWalletCheck,
+  listPlayerCollectionNfts,
+  getPlayerCollectionNft,
+  replacePlayerCollectionNfts,
+  bindPlayerCollectionNft,
+  getCollectionNftWalletCheck,
   markDemonKingNftWalletChecked,
+  NFT_RARITY_LABELS,
+  normalizeNftRarity,
+  collectionSupportsRarity,
+  getNftRarity,
+  listNftRarities,
+  upsertNftRarity,
   getResources,
   addResources,
   recordTradeClaimResult,
@@ -5936,7 +8180,10 @@ module.exports = {
   getBattleWins,
   getDemonKingBattleWins,
   recordDemonKingBattleWinEvents,
+  getCollectionBattleWins,
+  recordCollectionBattleWinEvents,
   getDemonKingUpgradeStatus,
+  getNftBackedTroopUpgradeStatus,
   demonKingRequiredWins,
   getFullPlayerState,
   buyShip,
@@ -5955,9 +8202,17 @@ module.exports = {
   applyGoldReward,
   recordTournamentTrade,
   recordTournamentTradeRows,
+  luckyRaiderAttackStatsForPlayer,
   awardTournamentDailyPoolDay,
+  awardTournamentLuckyRaiderDay,
   awardTournamentFinalDailyPoolDay,
   awardPendingTournamentDailyPools,
+  listPendingTournamentLuckyRaiderPayouts,
+  claimTournamentLuckyRaiderPayout,
+  updateTournamentLuckyRaiderPayoutDestination,
+  isPlayerSolanaWalletLinked,
+  markTournamentLuckyRaiderPayoutPaid,
+  markTournamentLuckyRaiderPayoutFailed,
   seedTournamentDailyPoolBaseline,
   getResourceCaps,
   storeReplay,

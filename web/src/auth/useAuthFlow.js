@@ -45,6 +45,7 @@ import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 const DEX_PICKED_KEY = 'clash_dex_picked';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
 const MANUAL_RECONNECT_KEY = 'clash_manual_reconnect_required';
+const REFERRAL_STORAGE_KEY = 'clash_referral_code_v1';
 // Unified account cache: one wallet resolves to one Clash account, and the
 // chosen venue is a profile setting instead of a separate registration.
 const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_account_cache_v3';
@@ -52,6 +53,8 @@ const ACCOUNT_PROBE_POSITIVE_TTL_MS = 24 * 60 * 60 * 1000;
 const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
 const ACCOUNT_PROBE_TIMEOUT_MS = 10000;
 const ACCOUNT_PROBE_MAX_RETRIES = 3;
+const ACCOUNT_PROBE_UI_WAIT_MS = 4500;
+const MANUAL_RECONNECT_WALLET_WAIT_MS = 8000;
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
 // user isn't authenticated anywhere; keeps the "Joining…" UX intact when
@@ -86,6 +89,63 @@ function writeManualReconnectRequired(v) {
   } catch { /* storage disabled */ }
 }
 
+function canonicalWalletAddress(address) {
+  const raw = String(address || '').trim();
+  if (!raw) return '';
+  if (/^0x[0-9a-fA-F]{40}$/.test(raw)) return raw.toLowerCase();
+  if (/^0x[0-9a-fA-F]{1,64}$/.test(raw)) {
+    return `0x${raw.replace(/^0x/i, '').padStart(64, '0').toLowerCase()}`;
+  }
+  return raw;
+}
+
+function readStoredAuthWallet() {
+  try {
+    const raw = localStorage.getItem(GAME_AUTH_STORAGE_KEY);
+    if (!raw) return '';
+    const parsed = JSON.parse(raw);
+    return canonicalWalletAddress(parsed?.wallet || '');
+  } catch {
+    return '';
+  }
+}
+
+function normalizeReferralCode(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\/?r\//, '')
+    .split(/[?#]/)[0]
+    .replace(/[^a-z0-9-]/g, '')
+    .slice(0, 48);
+}
+
+function readReferralCodeFromLocation() {
+  if (typeof window === 'undefined') return '';
+  try {
+    const url = new URL(window.location.href);
+    const queryCode = url.searchParams.get('ref') || url.searchParams.get('invite') || '';
+    if (queryCode) return normalizeReferralCode(queryCode);
+    const match = url.pathname.match(/\/r\/([^/]+)/i);
+    return normalizeReferralCode(match?.[1] || '');
+  } catch {
+    return '';
+  }
+}
+
+function readStoredReferralCode() {
+  try {
+    const fromUrl = readReferralCodeFromLocation();
+    if (fromUrl) {
+      localStorage.setItem(REFERRAL_STORAGE_KEY, fromUrl);
+      return fromUrl;
+    }
+    return normalizeReferralCode(localStorage.getItem(REFERRAL_STORAGE_KEY) || '');
+  } catch {
+    return readReferralCodeFromLocation();
+  }
+}
+
 function hasStoredGameAuth() {
   try {
     if (window._playerToken) return true;
@@ -102,10 +162,12 @@ function walletCacheKey(wallet, dex) {
   const raw = String(wallet || '').trim();
   const w = raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
   if (!w) return '';
-  // The same EVM wallet can have separate rows per venue. A wallet-only
-  // cache key leaks "missing" or "found" probe results across DEXes and can
-  // send the user into new-account registration while their old DEX row exists.
-  return dex ? `${String(dex).toLowerCase()}:${w}` : w;
+  // Unified account model: one wallet resolves to one Clash account, while
+  // the chosen DEX is a profile/venue setting. Keep this cache wallet-only
+  // so switching venues does not send returning users into the relogin/name
+  // form just because they have not traded on that DEX before.
+  void dex;
+  return w;
 }
 
 function readAccountProbeCache(wallet, dex) {
@@ -170,6 +232,7 @@ export function useAuthFlow() {
 
   const [dexPicked, setDexPickedState] = useState(readDexPicked);
   const [manualReconnectRequired, setManualReconnectRequired] = useState(readManualReconnectRequired);
+  const referralCodeRef = useRef(readStoredReferralCode());
 
   // Refs shared across effects below — declared up-front so the
   // session-reset effect can clear them before the resolver machinery
@@ -232,7 +295,7 @@ export function useAuthFlow() {
   // of silently locking the device to Pacifica.
   useEffect(() => {
     if (!smReady || !isSolanaMobile) return;
-    if (dex !== 'pacifica' && dex !== 'phoenix' && dex !== 'gmtrade') setDex('pacifica');
+    if (dex !== 'pacifica' && dex !== 'phoenix' && dex !== 'gmtrade' && dex !== 'flash') setDex('pacifica');
   }, [smReady, isSolanaMobile, dex, setDex]);
 
   // Saga/Seeker auto-connect: once the page settles, programmatically select
@@ -415,13 +478,41 @@ export function useAuthFlow() {
     // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') return evmContext || privyEvm || null;
     if (dex === 'decibel') return aptosCandidate || null;
-    if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade') {
+    if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') {
       const farcasterSol = solAdapter?.source === 'farcaster' ? solAdapter : null;
       return farcasterSol || privySol || solAdapter || null;
     }
     return privySol || solAdapter || null;
   }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
-  const candidate = manualReconnectRequired ? null : rawCandidate;
+  const storedAuthWallet = useMemo(() => readStoredAuthWallet(), [showRegister, manualReconnectRequired]);
+  const rawCandidateWallet = rawCandidate?.wallet ? canonicalWalletAddress(rawCandidate.wallet) : '';
+  const manualReconnectSatisfied = !!(
+    manualReconnectRequired &&
+    storedAuthWallet &&
+    rawCandidateWallet &&
+    storedAuthWallet === rawCandidateWallet
+  );
+  const candidate = manualReconnectRequired && !manualReconnectSatisfied ? null : rawCandidate;
+  const [manualReconnectWaitExpired, setManualReconnectWaitExpired] = useState(false);
+
+  useEffect(() => {
+    setManualReconnectWaitExpired(false);
+    if (!manualReconnectRequired || manualReconnectSatisfied || rawCandidateWallet || !storedAuthWallet || !dexPicked) {
+      return undefined;
+    }
+    const timer = setTimeout(() => setManualReconnectWaitExpired(true), MANUAL_RECONNECT_WALLET_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [manualReconnectRequired, manualReconnectSatisfied, rawCandidateWallet, storedAuthWallet, dexPicked, dex]);
+
+  useEffect(() => {
+    if (!manualReconnectSatisfied) return;
+    writeManualReconnectRequired(false);
+    setManualReconnectRequired(false);
+    addClientBreadcrumb('auth.manual_reconnect_satisfied', {
+      dex,
+      source: rawCandidate?.source || null,
+    });
+  }, [manualReconnectSatisfied, dex, rawCandidate?.source]);
 
   // Seeker `.skr` handle — only resolves on Saga/Seeker hardware (the hook
   // gates internally), so on every other host this is a free no-op. We feed
@@ -518,7 +609,7 @@ export function useAuthFlow() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: ctrl.signal,
-          body: JSON.stringify({ wallet: candidate.wallet, dex }),
+          body: JSON.stringify({ wallet: candidate.wallet, dex, probeOnly: true }),
         });
         if (r.ok) {
           const data = await r.json();
@@ -585,6 +676,14 @@ export function useAuthFlow() {
   const existingAccountName = candidateWalletKey
     ? probedNameByWallet[candidateWalletKey]
     : undefined;
+  const isFarcasterCandidate = !!fcUser;
+  const [probeWaitExpired, setProbeWaitExpired] = useState(false);
+  useEffect(() => {
+    setProbeWaitExpired(false);
+    if (!candidateWalletKey || existingAccountName !== undefined || isFarcasterCandidate) return undefined;
+    const timer = setTimeout(() => setProbeWaitExpired(true), ACCOUNT_PROBE_UI_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [candidateWalletKey, existingAccountName, isFarcasterCandidate]);
 
   // Boot grace — if FC SDK or Privy is still resolving, don't show the
   // manual-connect screen yet. Also a short timer after dex-pick so we
@@ -624,9 +723,13 @@ export function useAuthFlow() {
   // While the probe is in flight we stay in `auto_connecting` so the UI
   // shows the existing "Joining…" spinner rather than flickering into the
   // name form and then straight back out.
-  const isFarcasterCandidate = !!fcUser;
   const probeInFlight = candidate?.wallet && !isFarcasterCandidate &&
     existingAccountName === undefined;
+  // Do not fall through to the nickname form while the wallet-account probe
+  // is still unknown. The timeout is useful for diagnostics, but it is not
+  // proof that this is a new account; returning users were seeing `need_name`
+  // while `/api/players/login-wallet` was still resolving or retrying.
+  const probeBlockingUi = !!probeInFlight;
   const authDebug = useMemo(() => ({
     dex,
     dexPicked,
@@ -637,6 +740,8 @@ export function useAuthFlow() {
     candidateSource: candidate?.source || null,
     candidateWallet: candidate?.wallet || null,
     probeInFlight: !!probeInFlight,
+    probeBlockingUi: !!probeBlockingUi,
+    probeWaitExpired,
     existingAccountState: existingAccountName === undefined
       ? 'unknown'
       : existingAccountName === null
@@ -650,28 +755,39 @@ export function useAuthFlow() {
     privyReady,
     privyAuthed,
     manualReconnectRequired,
+    manualReconnectSatisfied,
+    manualReconnectWaitExpired,
+    storedAuthWalletPresent: !!storedAuthWallet,
     smReady,
     isInFrame,
     fcLoading,
   }), [
     dex, dexPicked, booting, graceExpired, registering, candidate,
-    probeInFlight, existingAccountName, suggestedName, isFarcasterCandidate,
+    probeInFlight, probeBlockingUi, probeWaitExpired, existingAccountName, suggestedName, isFarcasterCandidate,
     showRegister, readyForRegister, privyEnabled, privyReady, privyAuthed,
-    manualReconnectRequired, smReady, isInFrame, fcLoading,
+    manualReconnectRequired, manualReconnectSatisfied, manualReconnectWaitExpired, storedAuthWallet, smReady, isInFrame, fcLoading,
   ]);
 
   const state = useMemo(() => {
     if (registerError && candidate) return 'need_name';
     if (registering) return 'registering';
     if (booting) return 'booting';
-    if (manualReconnectRequired) return 'manual_connect';
+    if (
+      manualReconnectRequired &&
+      !manualReconnectSatisfied &&
+      storedAuthWallet &&
+      dexPicked &&
+      !rawCandidateWallet &&
+      !manualReconnectWaitExpired
+    ) return 'auto_connecting';
+    if (manualReconnectRequired && !manualReconnectSatisfied) return 'manual_connect';
     if (!candidate && !dexPicked) return 'manual_connect';
     if (!candidate && dexPicked && !graceExpired) return 'auto_connecting';
     // FC fast-path: auto-register with FC handle.
     if (candidate && suggestedName && isFarcasterCandidate) return 'registering';
     // Non-FC: wait for a definitive probe result, including retrying
     // transient network/server failures.
-    if (candidate && probeInFlight) return 'auto_connecting';
+    if (candidate && probeBlockingUi) return 'auto_connecting';
     // Returning user — server already has an account for this wallet;
     // fire register with their stored name (which is auto-derived-safe so
     // Godot's login_by_wallet fast-path takes over and no rename happens).
@@ -681,7 +797,8 @@ export function useAuthFlow() {
     if (!graceExpired) return 'auto_connecting';
     return 'manual_connect';
   }, [registerError, registering, booting, dexPicked, candidate, suggestedName, graceExpired,
-      isFarcasterCandidate, probeInFlight, existingAccountName, manualReconnectRequired]);
+      isFarcasterCandidate, probeBlockingUi, existingAccountName, manualReconnectRequired, manualReconnectSatisfied,
+      storedAuthWallet, rawCandidateWallet, manualReconnectWaitExpired]);
 
   const lastAuthStateLogRef = useRef('');
   useEffect(() => {
@@ -798,6 +915,7 @@ export function useAuthFlow() {
     setRegistering(true);
     setRegisterError('');
     const payload = { name: nameToUse, wallet: candidate.wallet, dex };
+    if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
       // resolver hard-codes 'base' regardless of which DEX is active, so
@@ -895,6 +1013,7 @@ export function useAuthFlow() {
     setRegistering(true);
     setRegisterError('');
     const payload = { name: name.trim(), wallet: candidate.wallet, dex };
+    if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
       payload.chain = dex === 'gmx' ? 'arbitrum'
         : dex === 'monad' ? 'monad'

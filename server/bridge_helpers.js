@@ -439,8 +439,18 @@ function solanaBridgeMemoSecret() {
   return secret;
 }
 
-function solanaBridgeMemoPayload({ asset, owner, collection, level, destinationChainId, destAddress, feeLamports }) {
-  return [
+function normalizeSolanaBridgeMemoRarity(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return ['common', 'epic', 'legendary'].includes(text) ? text : '';
+}
+
+function normalizeSolanaBridgeMemoEdition(value) {
+  const text = String(value ?? '').trim();
+  return /^\d{1,10}$/.test(text) ? text : '';
+}
+
+function solanaBridgeMemoPayload({ asset, owner, collection, level, destinationChainId, destAddress, feeLamports, rarity, edition, tokenIndex }) {
+  const parts = [
     String(asset),
     String(owner),
     String(collection),
@@ -448,7 +458,13 @@ function solanaBridgeMemoPayload({ asset, owner, collection, level, destinationC
     String(destinationChainId),
     String(destAddress),
     String(feeLamports || 0),
-  ].join('|');
+  ];
+  const rarityText = normalizeSolanaBridgeMemoRarity(rarity);
+  const editionText = normalizeSolanaBridgeMemoEdition(edition ?? tokenIndex);
+  if (rarityText || editionText) {
+    parts.push(rarityText || 'unrevealed', editionText || '0');
+  }
+  return parts.join('|');
 }
 
 function signSolanaBridgeMemo(fields) {
@@ -458,6 +474,23 @@ function signSolanaBridgeMemo(fields) {
 
 function buildSolanaBridgeMemo(fields) {
   const sig = signSolanaBridgeMemo(fields);
+  const rarity = normalizeSolanaBridgeMemoRarity(fields.rarity);
+  const edition = normalizeSolanaBridgeMemoEdition(fields.edition ?? fields.tokenIndex);
+  if (rarity || edition) {
+    return [
+      'bridge3',
+      fields.asset,
+      fields.owner,
+      fields.collection,
+      Number(fields.level),
+      String(fields.destinationChainId),
+      fields.destAddress,
+      String(fields.feeLamports || 0),
+      rarity || 'unrevealed',
+      edition || '0',
+      sig,
+    ].join(':');
+  }
   return [
     'bridge2',
     fields.asset,
@@ -473,6 +506,26 @@ function buildSolanaBridgeMemo(fields) {
 
 function parseSolanaBridgeMemo(memoText, opts = {}) {
   const s = String(memoText || '');
+  const v3 = s.match(/^bridge3:([1-9A-HJ-NP-Za-km-z]{32,44}):([1-9A-HJ-NP-Za-km-z]{32,44}):([1-9A-HJ-NP-Za-km-z]{32,44}):([123]):(\d+):([0-9a-zA-Z]{1,90}):(\d+):(common|epic|legendary|unrevealed):(\d{1,10}):([0-9a-fA-F]{64})$/);
+  if (v3) {
+    const [, asset, owner, collection, levelStr, destChainStr, destAddrRaw, feeLamportsStr, rarityRaw, editionRaw, sig] = v3;
+    const fields = {
+      asset,
+      owner,
+      collection,
+      level: Number(levelStr),
+      destinationChainId: BigInt(destChainStr),
+      destAddress: destAddrRaw,
+      feeLamports: BigInt(feeLamportsStr),
+      rarity: normalizeSolanaBridgeMemoRarity(rarityRaw),
+      edition: normalizeSolanaBridgeMemoEdition(editionRaw),
+    };
+    const expected = signSolanaBridgeMemo(fields);
+    const ok = crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(sig.toLowerCase(), 'hex'));
+    if (!ok) return { error: 'bad signed bridge memo' };
+    return fields;
+  }
+
   const v2 = s.match(/^bridge2:([1-9A-HJ-NP-Za-km-z]{32,44}):([1-9A-HJ-NP-Za-km-z]{32,44}):([1-9A-HJ-NP-Za-km-z]{32,44}):([123]):(\d+):([0-9a-zA-Z]{1,90}):(\d+):([0-9a-fA-F]{64})$/);
   if (v2) {
     const [, asset, owner, collection, levelStr, destChainStr, destAddrRaw, feeLamportsStr, sig] = v2;
@@ -559,6 +612,36 @@ function solanaAssetLevel(asset) {
   const text = `${asset?.name || ''} ${asset?.uri || ''} ${asset?.content?.metadata?.name || ''} ${asset?.content?.json_uri || ''}`;
   const match = text.match(/\bL(?:evel)?\s*([123])\b/i);
   return match ? Number(match[1]) : 1;
+}
+
+function solanaAssetAttributes(asset) {
+  return [
+    asset?.attributes?.attributeList,
+    asset?.plugins?.attributes?.attributeList,
+    asset?.content?.metadata?.attributes,
+    asset?.content?.metadata?.properties?.attributes,
+  ].filter(Array.isArray).flat();
+}
+
+function solanaAssetAttributeValue(asset, name) {
+  const needle = String(name || '').trim().toLowerCase();
+  if (!needle) return '';
+  const attr = solanaAssetAttributes(asset).find((x) =>
+    String(x?.key || x?.trait_type || '').trim().toLowerCase() === needle
+  );
+  return attr == null ? '' : String(attr.value ?? '').trim();
+}
+
+function solanaAssetRarity(asset) {
+  return normalizeSolanaBridgeMemoRarity(solanaAssetAttributeValue(asset, 'Rarity'));
+}
+
+function solanaAssetEdition(asset) {
+  const direct = normalizeSolanaBridgeMemoEdition(solanaAssetAttributeValue(asset, 'Edition'));
+  if (direct) return direct;
+  const text = `${asset?.name || ''} ${asset?.uri || ''} ${asset?.content?.metadata?.name || ''} ${asset?.content?.json_uri || ''}`;
+  const hashMatch = text.match(/#\s*(\d{1,10})\b/);
+  return hashMatch ? hashMatch[1] : '';
 }
 
 function solanaAssetUpdateAuthority(asset) {
@@ -758,6 +841,8 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner, opts = {}) {
     collection: selected.collection || dep.collection,
     legacyCollectionless: selected.acceptedLegacyBridge || undefined,
     level: solanaAssetLevel(selected.asset),
+    rarity: solanaAssetRarity(selected.asset),
+    edition: solanaAssetEdition(selected.asset),
   };
 }
 
@@ -886,6 +971,9 @@ async function verifySolanaBurnTx(txSig, opts = {}) {
         owner,
         collection: parsedMemo.legacy ? null : collection,
         level,
+        rarity: parsedMemo.rarity || '',
+        edition: parsedMemo.edition || '',
+        tokenIndex: parsedMemo.edition || '',
         destinationChainId,
         destAddress,
         feeLamports,
@@ -926,6 +1014,9 @@ async function verifySolanaBurnTx(txSig, opts = {}) {
       owner,
       collection: parsedMemo.legacy ? null : collection,
       level,
+      rarity: parsedMemo.rarity || '',
+      edition: parsedMemo.edition || '',
+      tokenIndex: parsedMemo.edition || '',
       destinationChainId,
       destAddress,
       feeLamports,

@@ -3,24 +3,19 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://l8kl4l1b1gla"
-path.s3tc="res://.godot/imported/Skeleton_Mage_skeleton_texture.png-b7922d39d5be380545d9a1e7e725e128.s3tc.ctex"
-path.etc2="res://.godot/imported/Skeleton_Mage_skeleton_texture.png-b7922d39d5be380545d9a1e7e725e128.etc2.ctex"
+path="res://.godot/imported/Skeleton_Mage_skeleton_texture.png-b7922d39d5be380545d9a1e7e725e128.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc", "etc2_astc"],
-"vram_texture": true
-}
-generator_parameters={
-"md5": "661544b1e8ba10b5a0c98b638eae6d0b"
+"vram_texture": false
 }
 
 [deps]
 
 source_file="res://Model/Characters/Skelet/characters/gltf/Skeleton_Mage_skeleton_texture.png"
-dest_files=["res://.godot/imported/Skeleton_Mage_skeleton_texture.png-b7922d39d5be380545d9a1e7e725e128.s3tc.ctex", "res://.godot/imported/Skeleton_Mage_skeleton_texture.png-b7922d39d5be380545d9a1e7e725e128.etc2.ctex"]
+dest_files=["res://.godot/imported/Skeleton_Mage_skeleton_texture.png-b7922d39d5be380545d9a1e7e725e128.ctex"]
 
 [params]
 
-compress/mode=2
+compress/mode=0
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

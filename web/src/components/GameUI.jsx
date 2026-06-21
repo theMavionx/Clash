@@ -15,7 +15,6 @@ import NftGoldBoostButton from './NftGoldBoostButton';
 import FeedbackButton from './FeedbackButton';
 import { useSend, useUI, useSelectedBuilding, useTutorial, usePlayer } from '../hooks/useGodot';
 import { useAgentActions } from '../hooks/useAgentActions';
-import { useLayout } from '../hooks/useIsMobile';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import { useSkrHandle } from '../hooks/useSkrHandle';
 import { getAvailableDexConfigs, isDexAvailableInContext, useDex } from '../contexts/DexContext';
@@ -37,7 +36,6 @@ const FuturesPanel = lazy(lazyWithClientReload(() => import('./FuturesPanel'), '
 const ProfileModal = lazy(lazyWithClientReload(() => import('./ProfileModal'), 'ProfileModal'));
 const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'), 'BattleLogPanel'));
 const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
-const AiChatPanel = lazy(lazyWithClientReload(() => import('./AiChatPanel'), 'AiChatPanel'));
 
 function VenuePickerOverlay({ isSolanaMobile, onPick }) {
   const dexOptions = getAvailableDexConfigs({ isInFrame: false, isSolanaMobile });
@@ -85,7 +83,6 @@ export default function GameUI() {
   const { tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useTutorial();
   const player = usePlayer();
   const { selectedBuilding } = useSelectedBuilding();
-  const { isMobile, actionScale } = useLayout();
   const { isSolanaMobile, ready: solanaMobileReady } = useSolanaMobile();
   const { handle: seekerHandle } = useSkrHandle(player?.wallet);
   const seekerMarkRef = useRef('');
@@ -97,9 +94,7 @@ export default function GameUI() {
   const [showProfile, setShowProfile] = useState(false);
   const [showBattleLog, setShowBattleLog] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
-  const [showAiChat, setShowAiChat] = useState(false);
   const [showVenuePicker, setShowVenuePicker] = useState(false);
-  const canShowAiChatButton = !enemyMode?.active || !!enemyMode?.is_replay;
 
   useEffect(() => {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
@@ -207,11 +202,6 @@ export default function GameUI() {
   }, [enemyMode?.active, setTutorialPhase, tutorialFlags]);
 
   // Pause island when heavy overlay panels are open (futures, shop, barn, profile).
-  // AiChatPanel is intentionally excluded — on desktop it's a non-blocking
-  // sidebar that should leave the game live so the player can keep
-  // building/attacking while chatting with the agent. On mobile the chat
-  // covers the screen but Godot pausing isn't necessary either since
-  // input can't reach the canvas through the panel anyway.
   const barnOpen = showTroops;
   const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard);
   const showFloatingUtilities = !enemyMode?.active && !anyPanelOpen;
@@ -231,9 +221,6 @@ export default function GameUI() {
   useEffect(() => {
     if (showLeaderboard) addClientBreadcrumb('ui.panel_open', { panel: 'leaderboard' });
   }, [showLeaderboard]);
-  useEffect(() => {
-    if (showAiChat) addClientBreadcrumb('ui.panel_open', { panel: 'ai_chat' });
-  }, [showAiChat]);
 
   useEffect(() => {
     if (!solanaMobileReady || !isSolanaMobile) return;
@@ -324,44 +311,6 @@ export default function GameUI() {
           onPick={chooseVenue}
         />
       )}
-      {canShowAiChatButton && (() => {
-        // Mirror ActionButtons sizing so we land cleanly between the
-        // SHOP / TRADE columns regardless of which phone the player has.
-        // btnSize/btnSmall here match ActionButtons.jsx exactly.
-        const baseAnchor = isMobile ? 8 : 12;
-        const baseGap = isMobile ? 8 : 12;
-        const tradeSize = Math.round((isMobile ? 110 : 140) * actionScale);
-        const sideSize = Math.round((isMobile ? 88 : 110) * actionScale);
-        const aiSize = Math.round(54 * actionScale);
-        // Vertical center of the side buttons (SHOP / Tournament etc):
-        //   sideBottom + sideSize/2
-        // Match AI center to it: aiBottom + aiSize/2 = sideBottom + sideSize/2
-        const aiBottom = baseAnchor + Math.round((sideSize - aiSize) / 2);
-        const aiRight = baseAnchor + tradeSize + baseGap;
-        return (
-          <button
-            style={{
-              ...styles.aiChatButton,
-              width: aiSize,
-              height: aiSize,
-              bottom: aiBottom,
-              right: aiRight,
-              top: 'auto',
-              left: 'auto',
-            }}
-            onClick={() => setShowAiChat(true)}
-            title="Open ClashHermes chat"
-            aria-label="Open ClashHermes chat"
-          >
-            <img
-              src="/icons/ai-agent.png"
-              alt=""
-              style={styles.aiChatButtonImg}
-              draggable={false}
-            />
-          </button>
-        );
-      })()}
       <ActionButtons onOpenBattleLog={() => setShowBattleLog(true)} />
       <ErrorToast message={error} />
       <FpsTracker />
@@ -396,9 +345,6 @@ export default function GameUI() {
             <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
           )}
 
-          {showAiChat && (
-            <AiChatPanel onClose={() => setShowAiChat(false)} />
-          )}
         </Suspense>
       </ChunkErrorBoundary>
 
@@ -525,37 +471,5 @@ const styles = {
     inset: 0,
     pointerEvents: 'none',
     zIndex: 5,
-  },
-  // AI chat trigger — anchored to the bottom-right action group via
-  // inline `bottom`/`right` overrides in the render. Brown frame with a
-  // custom AI-agent portrait inside, sized to pair with the 54px
-  // TOURNAMENT / NFT side buttons.
-  aiChatButton: {
-    position: 'fixed',
-    // Size is set inline so it tracks isMobile / matches btnSmall in
-    // ActionButtons. No hard width/height here.
-    pointerEvents: 'auto',
-    zIndex: 20,
-    borderRadius: 14,
-    border: '3px solid #5C3A21',
-    background: '#fff6dc',
-    boxShadow: '0 6px 14px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.5)',
-    padding: 0,
-    overflow: 'hidden',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  aiChatButtonImg: {
-    width: '100%', height: '100%',
-    objectFit: 'cover',
-    display: 'block',
-    // Inner radius matches the button after the 3px border subtraction
-    // so the image hugs the frame cleanly without a visible seam.
-    borderRadius: 11,
-    userSelect: 'none',
-    pointerEvents: 'none',
   },
 };

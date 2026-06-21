@@ -4,6 +4,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { GRVT_CHAIN_ID, ensureGrvtChain } from '../lib/grvtConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   migratePlainLocalStorageCredential,
@@ -14,7 +15,8 @@ import {
 
 const STORAGE_KEY = 'clash_grvt_credentials_v1';
 const ONE_TAP_SIGNER_STORAGE_KEY = 'clash_grvt_one_tap_signer_v1';
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 45_000;
+const WALLET_USDC_POLL_INTERVAL_MS = 120_000;
 const GRVT_REF_URL = 'https://grvt.io/?ref=UERIHL5';
 const GRVT_BUILDER_ACCOUNT_ID = String(import.meta.env.VITE_GRVT_BUILDER_ACCOUNT_ID || '').trim();
   const GRVT_BUILDER_FEE_RATE = String(import.meta.env.VITE_GRVT_BUILDER_FEE_RATE || '0.01').trim();
@@ -334,10 +336,8 @@ export function useGrvt() {
   ), [player?.token]);
   const oneTapSignerAddress = oneTapSigner?.address || null;
   const walletAddr = evmWallet?.address || player?.wallet || oneTapSignerAddress || null;
-  const registeredEvmWallet = player?.wallet || null;
-  const walletMismatch = !!walletAddr
-    && /^0x[a-fA-F0-9]{40}$/.test(String(registeredEvmWallet || ''))
-    && String(registeredEvmWallet).toLowerCase() !== String(walletAddr).toLowerCase();
+  const registeredEvmWallet = registeredDexWallet(player, 'grvt', 'evm') || null;
+  const walletMismatch = false;
   const hasResolvedCredentials = !!(
     credentials?.subAccountId
     && (credentials?.apiKey || (credentials?.cookie && credentials?.accountId))
@@ -634,15 +634,39 @@ export function useGrvt() {
   useEffect(() => {
     if (!isActiveDex) return undefined;
     fetchWalletUsdc();
-    const iv = setInterval(fetchWalletUsdc, POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fetchWalletUsdc();
+    }, WALLET_USDC_POLL_INTERVAL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') fetchWalletUsdc();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [fetchWalletUsdc, isActiveDex]);
 
   useEffect(() => {
     if (!isActiveDex || !hasResolvedCredentials) return undefined;
     fetchAccount();
-    const iv = setInterval(fetchAccount, POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fetchAccount();
+    }, POLL_INTERVAL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') fetchAccount();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex, hasResolvedCredentials, fetchAccount]);
 
   useEffect(() => {
@@ -652,7 +676,10 @@ export function useGrvt() {
       await claimGoldRef.current?.({ reason: 'poll' });
     };
     const kickoff = setTimeout(fire, 3000);
-    const iv = setInterval(fire, 30_000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [isActiveDex, hasResolvedCredentials, token, importFills]);
 

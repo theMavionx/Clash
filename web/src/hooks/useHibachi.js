@@ -11,10 +11,11 @@ import {
   writeEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 
 const STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const LEVERAGE_STORAGE_KEY = 'clash_hibachi_leverage_v1';
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 45_000;
 const HIBACHI_REFERRAL_URL = String(
   import.meta.env.VITE_HIBACHI_REFERRAL_URL || 'https://hibachi.xyz/r/M4S4XNAGP4'
 ).trim();
@@ -204,10 +205,8 @@ export function useHibachi() {
 
   const token = (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null;
   const walletAddr = evmWallet?.address || null;
-  const registeredEvmWallet = player?.wallet || null;
-  const walletMismatch = !!walletAddr
-    && /^0x[a-fA-F0-9]{40}$/.test(String(registeredEvmWallet || ''))
-    && String(registeredEvmWallet).toLowerCase() !== String(walletAddr).toLowerCase();
+  const registeredEvmWallet = registeredDexWallet(player, 'hibachi', 'evm') || null;
+  const walletMismatch = false;
 
   useEffect(() => {
     if (!isActiveDex) return;
@@ -487,11 +486,25 @@ export function useHibachi() {
     if (!isActiveDex || !walletAddr || !credentials) return undefined;
     fetchAccount();
     const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       fetchPrices();
       fetchAccount();
       fetchWalletUsdc();
     }, POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchPrices();
+        fetchAccount();
+        fetchWalletUsdc();
+      }
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex, walletAddr, credentials, fetchAccount, fetchPrices, fetchWalletUsdc]);
 
   useEffect(() => {
@@ -501,7 +514,10 @@ export function useHibachi() {
       await claimGoldRef.current?.({ reason: 'poll' });
     };
     const kickoff = setTimeout(fire, 3000);
-    const iv = setInterval(fire, 30_000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [isActiveDex, walletAddr, credentials, token, importFills]);
 

@@ -15,6 +15,8 @@ import mageImg    from '../assets/units/mage.png';
 import archerImg  from '../assets/units/archer.png';
 import demonKingImg from '../assets/units/demonking.png';
 
+const dragonImg = '/cdn/nft/dragon/1/default.jpg';
+
 // Matches SHIP_TROOPS index order in attack_system.gd — must stay in sync!
 // If SHIP_TROOPS order changes in attack_system.gd, update this array too.
 // zoom/offsetY — per-portrait tweaks to normalize framing across different source images
@@ -23,6 +25,7 @@ const ATTACK_TROOPS = [
   { key: 'mage',      label: 'Mage',      img: mageImg,    zoom: 1.45, offsetY: '15%' },
   { key: 'archer',    label: 'Archer',    img: archerImg },
   { key: 'demonking', label: 'Demon King', img: demonKingImg },
+  { key: 'firedragon', label: 'Dragon', img: dragonImg },
 ];
 
 const RAID_ATTACK_COST_GOLD = 200;
@@ -99,11 +102,14 @@ const TROOP_IMG_MAP = {
   archer: { img: archerImg, label: 'Archer' },
   demonking: { img: demonKingImg, label: 'Demon King' },
   demon_king: { img: demonKingImg, label: 'Demon King' },
+  firedragon: { img: dragonImg, label: 'Dragon' },
+  fire_dragon: { img: dragonImg, label: 'Dragon' },
 };
 
 function normalizeTroopKey(name) {
   const base = String(name || '').split(':')[0].toLowerCase();
   if (base === 'demonking' || base === 'demon_king') return 'demonking';
+  if (base === 'firedragon' || base === 'fire_dragon') return 'firedragon';
   return base;
 }
 

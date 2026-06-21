@@ -15,6 +15,8 @@ const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
 const { MAX_SHIPS } = require('./combat_defs');
+const tradeRecon = require('./trade_reconciliation');
+const luckyRaiderPayouts = require('./lucky_raider_payouts');
 const { broadcastToPlayer, consumePendingAgentEvents } = require('./websocket');
 const {
   solanaToken2022CollectionId,
@@ -121,6 +123,33 @@ function canonicalWalletIdentifier(wallet) {
   return raw;
 }
 
+function walletBlacklistEntry(wallet) {
+  if (!wallet || !isValidWallet(wallet)) return null;
+  return db.getWalletBlacklist(canonicalWalletIdentifier(wallet));
+}
+
+function rejectBlacklistedWallet(req, res, wallet, action) {
+  const entry = walletBlacklistEntry(wallet);
+  if (!entry) return false;
+  console.warn('[security] blocked blacklisted wallet', {
+    action,
+    wallet: canonicalWalletIdentifier(wallet),
+    player: req.player?.name || null,
+    ip: req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || null,
+    ua: String(req.headers['user-agent'] || '').slice(0, 160),
+  });
+  res.status(403).json({ error: 'This wallet is blocked. Contact support.' });
+  return true;
+}
+
+function rejectBannedPlayer(res, player) {
+  res.status(403).json({
+    error: 'This account is banned.',
+    banned_at: player?.banned_at || null,
+    banned_reason: player?.banned_reason || null,
+  });
+}
+
 function upsertUnifiedIdentity(playerId, wallet, opts = {}) {
   if (!playerId || !wallet || !isValidWallet(wallet)) return;
   const chainType = walletChainType(wallet);
@@ -155,18 +184,21 @@ function upsertPlayerDexAccount(playerId, dex, wallet, status = 'ready', metadat
   if (!playerId || !VALID_DEXES.has(dex)) return;
   const chainType = wallet ? walletChainType(wallet) : null;
   const address = wallet && isValidWallet(wallet) ? canonicalWalletIdentifier(wallet) : null;
+  const clearWallet = !!metadata?.__clear_wallet;
+  const cleanMetadata = { ...(metadata || {}) };
+  delete cleanMetadata.__clear_wallet;
   try {
     db.db.prepare(`
       INSERT INTO player_dex_accounts
         (player_id, dex, chain_type, wallet_address, status, metadata_json, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(player_id, dex) DO UPDATE SET
-        chain_type = COALESCE(excluded.chain_type, player_dex_accounts.chain_type),
-        wallet_address = COALESCE(excluded.wallet_address, player_dex_accounts.wallet_address),
+        chain_type = CASE WHEN ? THEN excluded.chain_type ELSE COALESCE(excluded.chain_type, player_dex_accounts.chain_type) END,
+        wallet_address = CASE WHEN ? THEN excluded.wallet_address ELSE COALESCE(excluded.wallet_address, player_dex_accounts.wallet_address) END,
         status = excluded.status,
         metadata_json = excluded.metadata_json,
         updated_at = datetime('now')
-    `).run(playerId, dex, chainType, address, status, JSON.stringify(metadata || {}));
+    `).run(playerId, dex, chainType, address, status, JSON.stringify(cleanMetadata), clearWallet ? 1 : 0, clearWallet ? 1 : 0);
   } catch (e) {
     console.warn('[auth] dex account upsert failed:', e.message);
   }
@@ -409,19 +441,221 @@ function normalizeNftLevel(level) {
   return [1, 2, 3].includes(n) ? n : 1;
 }
 
-function nftImageUrl(req, level) {
-  const lvl = normalizeNftLevel(level);
-  if (level && [1, 2, 3].includes(Number(level))) {
-    return `${nftPublicBase(req)}/api/nft/image/${lvl}`;
-  }
+function nftImageUrl(req) {
   return process.env.NFT_IMAGE_URL || `${nftPublicBase(req)}/api/nft/image`;
 }
 
-function solanaCoreUpgradeMetadataUrl(req, level, sourceRef) {
+function demonKingRarityForMetadata(chainKey, tokenId, legacyLevel = 1) {
+  const rarity = db.getNftRarity?.('demon_king', chainKey, String(tokenId), { legacyLevel });
+  return rarity?.rarity || null;
+}
+
+function demonKingLegacyRarityFallback(level) {
+  return normalizeNftLevel(level) > 1 ? 'legendary' : null;
+}
+
+function demonKingRarityLabel(rarity) {
+  return db.NFT_RARITY_LABELS?.[rarity] || 'Unrevealed';
+}
+
+function demonKingRarityAttributes(rarity) {
+  return [{ trait_type: 'Rarity', value: demonKingRarityLabel(rarity) }];
+}
+
+function nftCollectionUsesRarity(collection) {
+  return ['dragon'].includes(String(collection?.slug || '').toLowerCase());
+}
+
+function nftCollectionRarityForMetadata(collection, chainKey, tokenId) {
+  if (!nftCollectionUsesRarity(collection)) return null;
+  const row = db.getNftRarity?.(collection.slug, chainKey, String(tokenId), { legacyLevel: 1 });
+  return db.normalizeNftRarity?.(row?.rarity) || null;
+}
+
+function nftCollectionRarityAttributes(collection, rarity) {
+  if (!nftCollectionUsesRarity(collection)) return [];
+  return [{ trait_type: 'Rarity', value: demonKingRarityLabel(rarity) }];
+}
+
+function nftCollectionTokenName(collection, chainKey, tokenId) {
+  const idText = `#${tokenId}`;
+  if (String(collection?.slug || '').toLowerCase() === 'dragon' && ['base', 'arbitrum', 'monad', 'ink'].includes(String(chainKey || '').toLowerCase())) {
+    return idText;
+  }
+  return `${collection.name} ${idText}`;
+}
+
+function solanaCoreUpgradeMetadataUrl(req, assetId, sourceRef) {
   const url = new URL('/api/nft/solana/bridged', `${nftPublicBase(req)}/`);
-  url.searchParams.set('level', String(normalizeNftLevel(level)));
+  if (assetId) url.searchParams.set('asset', String(assetId));
   if (sourceRef) url.searchParams.set('src', String(sourceRef).slice(0, 80));
   return url.toString();
+}
+
+function solanaCollectionRarityMetadataUrl(req, collection, assetId) {
+  const url = new URL(`/api/nft/${collection.slug}/solana/bridged`, `${nftPublicBase(req)}/`);
+  if (assetId) url.searchParams.set('asset', String(assetId));
+  return url.toString();
+}
+
+function normalizedSolanaCollectionRarityAttributes({ existing = [], collection, rarity }) {
+  const protectedKeys = new Set(['game', 'collection', 'character', 'chain', 'standard', 'rarity', 'level', 'stars', 'max supply']);
+  const output = [
+    { key: 'Game', value: 'Clash of Perps' },
+    { key: 'Collection', value: collection.name },
+    { key: 'Character', value: collection.character },
+    { key: 'Chain', value: 'Solana' },
+    { key: 'Standard', value: 'Metaplex Core' },
+    { key: 'Rarity', value: demonKingRarityLabel(rarity) },
+    { key: 'Max Supply', value: String(collection.maxSupply) },
+  ];
+  const seen = new Set(output.map((row) => row.key.toLowerCase()));
+  for (const attr of existing || []) {
+    const rawKey = String(attr?.key || attr?.trait_type || '').trim();
+    if (!rawKey) continue;
+    const key = rawKey.toLowerCase();
+    if (protectedKeys.has(key) || seen.has(key)) continue;
+    output.push({ key: rawKey, value: String(attr?.value ?? '') });
+    seen.add(key);
+  }
+  return output.filter((row) => row.key !== 'Rarity' || row.value);
+}
+
+async function syncSolanaCollectionRarityAsset({ req, collection, assetId, owner = '' }) {
+  if (!nftCollectionUsesRarity(collection)) return null;
+  const cleanAsset = String(assetId || '').trim();
+  if (!SOLANA_WALLET_RE.test(cleanAsset)) throw Object.assign(new Error('bad Solana asset id'), { status: 400 });
+  const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
+  if (!rawKey) throw Object.assign(new Error('Solana NFT authority key is not configured'), { status: 503 });
+  const rarity = nftCollectionRarityForMetadata(collection, 'solana', cleanAsset);
+  if (!rarity) throw Object.assign(new Error('Solana NFT rarity is not revealed in DB'), { status: 409 });
+  const dep = nftCollectionDeployment(collection.slug, 'solana');
+  const { parseSolanaSecretKey } = require('./bridge_helpers');
+  const secretBytes = parseSolanaSecretKey(rawKey);
+  const targetUri = solanaCollectionRarityMetadataUrl(req, collection, cleanAsset);
+  return withSolanaRpcFallback(async (rpc) => {
+    const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
+    const { keypairIdentity, publicKey } = await import('@metaplex-foundation/umi');
+    const { base58 } = await import('@metaplex-foundation/umi/serializers');
+    const { mplCore, fetchAsset, fetchCollection, update, updatePlugin, addPlugin } = await import('@metaplex-foundation/mpl-core');
+    const umi = createUmi(rpc).use(mplCore());
+    umi.use(keypairIdentity(umi.eddsa.createKeypairFromSecretKey(secretBytes)));
+    const asset = await fetchAsset(umi, publicKey(cleanAsset));
+    const actualOwner = String(asset?.owner || '');
+    if (owner && actualOwner && actualOwner !== owner) {
+      const err = new Error(`Solana source wallet is not the asset owner (expected ${owner}, on-chain owner ${actualOwner})`);
+      err.status = 403;
+      throw err;
+    }
+    const collectionAddress = String(asset?.updateAuthority?.type || '') === 'Collection'
+      ? String(asset.updateAuthority.address || '')
+      : '';
+    const collectionAccount = collectionAddress ? await fetchCollection(umi, publicKey(collectionAddress)) : undefined;
+    const currentUri = String(asset?.uri || '');
+    const currentName = String(asset?.name || '');
+    let metadataUpdateTxSig = null;
+    if (currentUri !== targetUri || currentName !== collection.name) {
+      const sig = await update(umi, {
+        asset,
+        ...(collectionAccount ? { collection: collectionAccount } : {}),
+        authority: umi.identity,
+        name: collection.name,
+        uri: targetUri,
+      }).sendAndConfirm(umi, {
+        send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+        confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+      });
+      metadataUpdateTxSig = base58.deserialize(sig.signature)[0];
+    }
+
+    const currentAttrs = [
+      asset?.attributes?.attributeList,
+      asset?.plugins?.attributes?.attributeList,
+    ].find(Array.isArray) || [];
+    const pluginPayload = {
+      type: 'Attributes',
+      attributeList: normalizedSolanaCollectionRarityAttributes({ existing: currentAttrs, collection, rarity }),
+    };
+    let attributesUpdateTxSig = null;
+    try {
+      const sig = await updatePlugin(umi, {
+        asset: publicKey(cleanAsset),
+        ...(collectionAddress ? { collection: publicKey(collectionAddress) } : {}),
+        authority: umi.identity,
+        plugin: pluginPayload,
+      }).sendAndConfirm(umi, {
+        send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+        confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+      });
+      attributesUpdateTxSig = base58.deserialize(sig.signature)[0];
+    } catch (err) {
+      if (!/Plugin not found/i.test(String(err?.message || err))) throw err;
+      const sig = await addPlugin(umi, {
+        asset: publicKey(cleanAsset),
+        ...(collectionAddress ? { collection: publicKey(collectionAddress) } : {}),
+        authority: umi.identity,
+        plugin: pluginPayload,
+      }).sendAndConfirm(umi, {
+        send: { skipPreflight: false, commitment: 'processed', maxRetries: 5 },
+        confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+      });
+      attributesUpdateTxSig = base58.deserialize(sig.signature)[0];
+    }
+
+    return {
+      asset: cleanAsset,
+      rarity,
+      uri: targetUri,
+      metadataUpdateTxSig,
+      attributesUpdateTxSig,
+      rpcHost: new URL(rpc).hostname,
+    };
+  }, {
+    urls: solanaRpcUrls([dep?.rpcUrl]),
+    label: `${collection.name} Solana rarity metadata sync`,
+  });
+}
+
+const SOLANA_RARITY_SYNC_RETRY_DELAYS_MS = [0, 750, 1500, 3000, 5000, 8000];
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetrySolanaRaritySync(err) {
+  const status = Number(err?.status || err?.statusCode || 0);
+  if (!status) return true;
+  return [404, 409, 429, 500, 502, 503, 504].includes(status);
+}
+
+async function syncSolanaCollectionRarityAssetWithRetry(options) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < SOLANA_RARITY_SYNC_RETRY_DELAYS_MS.length; attempt += 1) {
+    const delay = SOLANA_RARITY_SYNC_RETRY_DELAYS_MS[attempt];
+    if (delay > 0) {
+      // Fresh Metaplex Core assets can lag behind the mint tx on public RPC/DAS.
+      // Retrying here keeps minted NFTs revealed without a later manual sync job.
+      // eslint-disable-next-line no-await-in-loop
+      await waitMs(delay);
+    }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const sync = await syncSolanaCollectionRarityAsset(options);
+      return sync ? { ...sync, attempts: attempt + 1 } : sync;
+    } catch (err) {
+      lastErr = err;
+      const error = (err?.message || String(err)).slice(0, 240);
+      console.warn('[nft] Solana rarity metadata sync retry failed:', {
+        collection: options?.collection?.slug,
+        asset: options?.assetId,
+        attempt: attempt + 1,
+        retrying: attempt < SOLANA_RARITY_SYNC_RETRY_DELAYS_MS.length - 1 && shouldRetrySolanaRaritySync(err),
+        error,
+      });
+      if (!shouldRetrySolanaRaritySync(err)) break;
+    }
+  }
+  throw lastErr || new Error('Solana rarity metadata sync failed');
 }
 
 async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef }) {
@@ -429,8 +663,10 @@ async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef
   if (!rawKey) throw Object.assign(new Error('Solana NFT authority key is not configured'), { status: 503 });
   const { parseSolanaSecretKey } = require('./bridge_helpers');
   const secretBytes = parseSolanaSecretKey(rawKey);
-  const metadataUri = solanaCoreUpgradeMetadataUrl(req, level, sourceRef);
-  const metadataName = `${process.env.NFT_NAME || 'Demon King'} L${normalizeNftLevel(level)}`;
+  const metadataUri = solanaCoreUpgradeMetadataUrl(req, assetId, sourceRef);
+  const metadataName = process.env.NFT_NAME || 'Demon King';
+  const rarity = demonKingRarityForMetadata('solana', assetId, normalizeNftLevel(level))
+    || demonKingLegacyRarityFallback(level);
   return withSolanaRpcFallback(async (rpc) => {
     const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
     const { keypairIdentity, publicKey } = await import('@metaplex-foundation/umi');
@@ -468,9 +704,10 @@ async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef
     for (const attr of currentAttrs) {
       const key = String(attr?.key || attr?.trait_type || '').trim();
       if (!key) continue;
+      if (['level', 'stars', 'rarity'].includes(key.toLowerCase())) continue;
       attrMap.set(key.toLowerCase(), { key, value: String(attr?.value ?? '') });
     }
-    attrMap.set('level', { key: 'Level', value: String(normalizeNftLevel(level)) });
+    attrMap.set('rarity', { key: 'Rarity', value: demonKingRarityLabel(rarity) });
     if (sourceRef) attrMap.set('sourceref', { key: 'SourceRef', value: String(sourceRef).slice(0, 120) });
     const attrSig = await updatePlugin(umi, {
       asset: publicKey(assetId),
@@ -526,12 +763,15 @@ function attachRoyaltyMetadata(metadata, chain) {
   return metadata;
 }
 
-function nftTokenMetadata(req, chain, tokenId, level) {
+function nftTokenMetadata(req, chain, tokenId, level, rarityOverride = null) {
   const name = process.env.NFT_NAME || 'Demon King';
   const description = process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.';
   const id = Number(tokenId);
   const lvl = normalizeNftLevel(level);
-  const imageUrl = nftImageUrl(req, lvl);
+  const chainKeyByLabel = { Base: 'base', Arbitrum: 'arbitrum', Monad: 'monad', Ink: 'ink', Aptos: 'aptos', Solana: 'solana' };
+  const chainKey = chainKeyByLabel[chain] || String(chain || '').toLowerCase();
+  const rarity = db.normalizeNftRarity?.(rarityOverride) || demonKingRarityForMetadata(chainKey, id, lvl);
+  const imageUrl = nftImageUrl(req);
   return attachRoyaltyMetadata({
     name: `${name} #${id}`,
     symbol: process.env.NFT_SYMBOL || 'DMNK',
@@ -543,8 +783,7 @@ function nftTokenMetadata(req, chain, tokenId, level) {
       { trait_type: 'Character', value: 'Demon King' },
       { trait_type: 'Chain', value: chain },
       { trait_type: 'Edition', value: id },
-      { trait_type: 'Level', value: lvl, display_type: 'number' },
-      { trait_type: 'Stars', value: lvl, display_type: 'number' },
+      ...demonKingRarityAttributes(rarity),
       { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
     properties: {
@@ -702,6 +941,7 @@ function attachCollectionRoyaltyMetadata(metadata, collection, chainKey) {
 }
 
 async function readCollectionNftLevelCached(collection, chainKey, tokenId) {
+  if (nftCollectionUsesRarity(collection)) return 1;
   if (!['base', 'arbitrum', 'monad', 'ink'].includes(chainKey)) return 1;
   const key = `${collection.slug}:${chainKey}:${tokenId}`;
   const hit = _nftLevelCache.get(key);
@@ -971,8 +1211,19 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
     readAppSettingJson(key, null) || collectionDeploymentBaselineSupply(collection),
   );
   const tx = String(body.tx || body.hash || body.signature || '').trim();
-  if (tx && state.confirmedTxs.some((row) => row.tx === tx)) {
-    return { alreadyConfirmed: true, supply: collectionSupplyResponse(collection, state) };
+  if (tx) {
+    const confirmed = state.confirmedTxs.find((row) => row.tx === tx);
+    if (confirmed) {
+      return {
+        alreadyConfirmed: true,
+        supply: collectionSupplyResponse(collection, state),
+        chain: confirmed.chain || body.chain || 'unknown',
+        quantity: confirmed.quantity || body.quantity || 1,
+        tokenIds: Array.isArray(confirmed.tokenIds) ? confirmed.tokenIds : [],
+        reservationId: confirmed.reservationId || body.reservationId || null,
+        tx,
+      };
+    }
   }
   const reservationId = String(body.reservationId || '').trim();
   const idx = state.reservations.findIndex((row) => row.id === reservationId);
@@ -984,6 +1235,13 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
   const [reservation] = state.reservations.splice(idx, 1);
   const quantity = Math.max(1, Math.floor(Number(body.quantity || reservation.quantity || 1)));
   const chain = String(body.chain || reservation.chain || 'unknown').toLowerCase();
+  const previousChainMinted = Math.max(0, Math.floor(Number(state.perChain?.[chain] || 0)));
+  const bodyTokenIds = Array.isArray(body.tokenIds)
+    ? body.tokenIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
+  const mintedTokenIds = bodyTokenIds.length
+    ? bodyTokenIds.slice(0, quantity)
+    : Array.from({ length: quantity }, (_, i) => String(previousChainMinted + i + 1));
   state.minted = Math.min(collection.maxSupply, state.minted + quantity);
   if (NFT_COLLECTION_CHAIN_LABELS[chain]) {
     state.perChain[chain] = Math.max(0, Math.floor(Number(state.perChain[chain] || 0))) + quantity;
@@ -994,14 +1252,97 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
       reservationId,
       chain,
       quantity,
+      tokenIds: mintedTokenIds,
       confirmedAt: new Date().toISOString(),
     });
     state.confirmedTxs = state.confirmedTxs.slice(-200);
   }
   state.updatedAt = new Date().toISOString();
   writeAppSettingJson(key, state);
-  return { alreadyConfirmed: false, supply: collectionSupplyResponse(collection, state) };
+  return {
+    alreadyConfirmed: false,
+    supply: collectionSupplyResponse(collection, state),
+    chain,
+    quantity,
+    tokenIds: mintedTokenIds,
+    buyer: reservation.buyer || null,
+    payment: reservation.payment || null,
+    reservationId,
+    tx,
+  };
 });
+
+function collectionMintRaritySeed(collection) {
+  const envKey = `NFT_${String(collection?.slug || '').toUpperCase()}_RARITY_REVEAL_SEED`;
+  return String(process.env[envKey] || process.env.NFT_RARITY_REVEAL_SEED || '').trim()
+    || `clash-${String(collection?.slug || 'collection')}-rarity-v1`;
+}
+
+function collectionMintRarity(collection, chain, tokenId, entropy = {}) {
+  const seed = collectionMintRaritySeed(collection);
+  const tx = String(entropy.tx || '').trim().toLowerCase();
+  const reservationId = String(entropy.reservationId || '').trim().toLowerCase();
+  const buyer = String(entropy.buyer || '').trim().toLowerCase();
+  const hash = crypto.createHash('sha256')
+    .update([
+      seed,
+      collection?.slug || 'collection',
+      String(chain || '').toLowerCase(),
+      String(tokenId),
+      tx,
+      reservationId,
+      buyer,
+    ].join('|'))
+    .digest('hex');
+  const bucket = Number.parseInt(hash.slice(0, 8), 16) / 0x100000000;
+  if (bucket < 0.10) return 'legendary';
+  if (bucket < 0.40) return 'epic';
+  return 'common';
+}
+
+function recordCollectionMintRarities(collection, confirmResult) {
+  if (!nftCollectionUsesRarity(collection)) return [];
+  const chain = String(confirmResult?.chain || '').toLowerCase();
+  const tokenIds = Array.isArray(confirmResult?.tokenIds) ? confirmResult.tokenIds : [];
+  if (!chain || !tokenIds.length) return [];
+  const rows = [];
+  const seed = collectionMintRaritySeed(collection);
+  for (const tokenId of tokenIds) {
+    const cleanId = String(tokenId || '').trim();
+    if (!cleanId) continue;
+    const rarity = collectionMintRarity(collection, chain, cleanId, {
+      tx: confirmResult.tx,
+      reservationId: confirmResult.reservationId,
+      buyer: confirmResult.buyer,
+    });
+    const entropyHash = crypto.createHash('sha256').update([
+      collection.slug,
+      chain,
+      cleanId,
+      confirmResult.tx || '',
+      confirmResult.reservationId || '',
+      confirmResult.buyer || '',
+    ].join('|')).digest('hex');
+    const row = db.upsertNftRarity?.({
+      collection: collection.slug,
+      chain,
+      tokenId: cleanId,
+      rarity,
+      legacyLevel: 1,
+      ownerWallet: confirmResult.buyer || null,
+      source: 'mint-confirm',
+      revealSeed: seed,
+      snapshotHash: entropyHash,
+      metadata: {
+        tx: confirmResult.tx || null,
+        reservationId: confirmResult.reservationId || null,
+        payment: confirmResult.payment || null,
+      },
+    });
+    if (row) rows.push(row);
+  }
+  return rows;
+}
 
 async function readCollectionGlobalSupply(collection) {
   const authoritative = readCollectionServerSupply(collection);
@@ -1046,10 +1387,17 @@ async function assertCollectionGlobalSupplyAvailable(collection, quantity) {
 function nftCollectionTokenMetadata(req, collection, chainKey, tokenId, level) {
   const lvl = normalizeNftLevel(level);
   const chain = NFT_COLLECTION_CHAIN_LABELS[chainKey] || chainKey;
-  const imageUrl = nftCollectionImageUrl(req, collection, lvl);
+  const usesRarity = nftCollectionUsesRarity(collection);
+  const imageUrl = nftCollectionImageUrl(req, collection, usesRarity ? 1 : lvl);
   const idValue = /^\d+$/.test(String(tokenId)) ? Number(tokenId) : String(tokenId);
+  const rarity = nftCollectionRarityForMetadata(collection, chainKey, tokenId);
+  const rarityAttrs = nftCollectionRarityAttributes(collection, rarity);
+  const levelAttrs = usesRarity ? [] : [
+    { trait_type: 'Level', value: lvl, display_type: 'number' },
+    { trait_type: 'Stars', value: lvl, display_type: 'number' },
+  ];
   return attachCollectionRoyaltyMetadata({
-    name: `${collection.name} #${tokenId}`,
+    name: nftCollectionTokenName(collection, chainKey, tokenId),
     symbol: collection.symbol,
     description: collection.description,
     image: imageUrl,
@@ -1060,13 +1408,13 @@ function nftCollectionTokenMetadata(req, collection, chainKey, tokenId, level) {
       { trait_type: 'Character', value: collection.character },
       { trait_type: 'Chain', value: chain },
       { trait_type: 'Edition', value: idValue },
-      { trait_type: 'Level', value: lvl, display_type: 'number' },
-      { trait_type: 'Stars', value: lvl, display_type: 'number' },
+      ...rarityAttrs,
+      ...levelAttrs,
       { trait_type: 'Max Supply', value: collection.maxSupply },
     ],
     properties: {
       category: 'image',
-      files: [{ uri: imageUrl, type: nftCollectionImageMime(nftCollectionImagePath(collection, lvl)) }],
+      files: [{ uri: imageUrl, type: nftCollectionImageMime(nftCollectionImagePath(collection, usesRarity ? 1 : lvl)) }],
     },
   }, collection, chainKey);
 }
@@ -1144,7 +1492,7 @@ async function sendNftCollectionTokenMetadata(req, res, rawTokenId) {
   }
 
   let level = normalizeNftLevel(req.query.level || 1);
-  if (/^\d+$/.test(tokenId)) {
+  if (!nftCollectionUsesRarity(collection) && /^\d+$/.test(tokenId)) {
     level = await readCollectionNftLevelCached(collection, chainKey, tokenId);
   }
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
@@ -1155,8 +1503,9 @@ function sendSolanaToken2022Metadata(req, res) {
   const mint = String(req.params.mint || '').trim();
   if (!SOLANA_WALLET_RE.test(mint)) return res.status(400).json({ error: 'bad mint' });
   const level = normalizeNftLevel(req.query.level || 1);
-  const imageUrl = nftImageUrl(req, level, mint);
-  const name = `${process.env.NFT_NAME || 'Demon King'} L${level}`;
+  const rarity = demonKingRarityForMetadata('solana', mint, level);
+  const imageUrl = nftImageUrl(req);
+  const name = process.env.NFT_NAME || 'Demon King';
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
   res.json(attachRoyaltyMetadata({
     name,
@@ -1170,8 +1519,7 @@ function sendSolanaToken2022Metadata(req, res) {
       { trait_type: 'Chain', value: 'Solana' },
       { trait_type: 'Standard', value: 'Token-2022' },
       { trait_type: 'Collection', value: solanaToken2022CollectionId() },
-      { trait_type: 'Level', value: level, display_type: 'number' },
-      { trait_type: 'Stars', value: level, display_type: 'number' },
+      ...demonKingRarityAttributes(rarity),
       { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
     properties: {
@@ -1183,11 +1531,13 @@ function sendSolanaToken2022Metadata(req, res) {
 
 function sendSolanaBridgedCoreMetadata(req, res) {
   const level = normalizeNftLevel(req.query.level || 1);
-  const imageUrl = nftImageUrl(req, level);
   const sourceRef = String(req.query.src || '').slice(0, 80);
+  const mint = String(req.query.mint || req.query.asset || '').trim();
+  const rarity = mint ? demonKingRarityForMetadata('solana', mint, level) : demonKingLegacyRarityFallback(level);
+  const imageUrl = nftImageUrl(req);
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
   res.json(attachRoyaltyMetadata({
-    name: `${process.env.NFT_NAME || 'Demon King'} L${level}`,
+    name: process.env.NFT_NAME || 'Demon King',
     symbol: process.env.NFT_SYMBOL || 'DMNK',
     description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
     image: imageUrl,
@@ -1197,8 +1547,7 @@ function sendSolanaBridgedCoreMetadata(req, res) {
       { trait_type: 'Character', value: 'Demon King' },
       { trait_type: 'Chain', value: 'Solana' },
       { trait_type: 'Standard', value: 'Metaplex Core' },
-      { trait_type: 'Level', value: level, display_type: 'number' },
-      { trait_type: 'Stars', value: level, display_type: 'number' },
+      ...demonKingRarityAttributes(rarity),
       ...(sourceRef ? [{ trait_type: 'Bridge Source', value: sourceRef }] : []),
       { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
@@ -1221,7 +1570,7 @@ async function sendNftMetadata(req, res, chain, rawTokenId) {
   if (chainKey) {
     try { level = await readNftLevelCached(chainKey, id); } catch { level = 1; }
   }
-  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'no-cache, max-age=0, must-revalidate');
   res.json(nftTokenMetadata(req, chain, id, level));
 }
 
@@ -1235,6 +1584,7 @@ function readJsonIfExists(file) {
 }
 
 const _aptosNftLevelCache = new Map();
+const _aptosNftRarityCache = new Map();
 
 function nftAptosDeployment() {
   return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'aptos-mainnet.json')) || {};
@@ -1247,6 +1597,16 @@ function parseAptosTokenLevel(tokenProperties) {
     return normalizeNftLevel(raw);
   } catch {
     return 1;
+  }
+}
+
+function parseAptosTokenRarity(tokenProperties) {
+  try {
+    const parsed = typeof tokenProperties === 'string' ? JSON.parse(tokenProperties) : tokenProperties;
+    const raw = parsed?.Rarity?.value ?? parsed?.Rarity ?? parsed?.rarity?.value ?? parsed?.rarity;
+    return db.normalizeNftRarity?.(raw) || null;
+  } catch {
+    return null;
   }
 }
 
@@ -1289,14 +1649,56 @@ async function readAptosNftLevelCached(tokenId) {
   return level;
 }
 
+async function readAptosNftRarityCached(tokenId) {
+  const id = Number(tokenId);
+  const key = `aptos-rarity:${id}`;
+  const hit = _aptosNftRarityCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < 60_000) return hit.rarity;
+
+  let rarity = null;
+  const dep = nftAptosDeployment();
+  if (dep?.collection && id >= 1 && id <= NFT_METADATA_MAX_TOKEN_ID) {
+    try {
+      const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
+      const tokenName = `${process.env.NFT_NAME || 'Demon King'} #${id}`;
+      const query = `query Q($collection:String!, $tokenName:String!) {
+        current_token_datas_v2(
+          where: {collection_id:{_eq:$collection}, token_name:{_eq:$tokenName}},
+          limit: 1
+        ) {
+          token_properties
+        }
+      }`;
+      const headers = { 'content-type': 'application/json' };
+      if (process.env.APTOS_NODE_API_KEY) headers.Authorization = `Bearer ${process.env.APTOS_NODE_API_KEY}`;
+      const r = await fetch(indexerUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ query, variables: { collection: dep.collection, tokenName } }),
+      });
+      const j = await r.json().catch(() => null);
+      const row = j?.data?.current_token_datas_v2?.[0] || null;
+      if (row) rarity = parseAptosTokenRarity(row.token_properties);
+    } catch {
+      rarity = null;
+    }
+  }
+  _aptosNftRarityCache.set(key, { rarity, at: now });
+  return rarity;
+}
+
 async function sendAptosNftMetadata(req, res, rawTokenId) {
   const tokenId = String(rawTokenId || '').replace(/\.json$/i, '');
   if (!/^\d+$/.test(tokenId)) return res.status(400).json({ error: 'bad token id' });
   const id = Number(tokenId);
   if (id < 1 || id > NFT_METADATA_MAX_TOKEN_ID) return res.status(404).json({ error: 'token metadata not found' });
-  const level = await readAptosNftLevelCached(id);
-  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
-  res.json(nftTokenMetadata(req, 'Aptos', id, level));
+  const [level, rarity] = await Promise.all([
+    readAptosNftLevelCached(id),
+    readAptosNftRarityCached(id),
+  ]);
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'no-cache, max-age=0, must-revalidate');
+  res.json(nftTokenMetadata(req, 'Aptos', id, level, rarity));
 }
 
 function sendAptosCollectionMetadata(req, res) {
@@ -1718,14 +2120,6 @@ async function verifyDemonKingNftUpgradeProof(player, proof, nextLevel) {
       return { error: 'Demon King NFT owner mismatch', status: 403 };
     }
     const level = normalizeNftLevel(cached.level);
-    if (level < Number(nextLevel)) {
-      return {
-        error: `Demon King NFT must be upgraded to level ${nextLevel}`,
-        status: 403,
-        nft_level: level,
-        next_level: nextLevel,
-      };
-    }
     return {
       nftVerified: true,
       nftLevel: level,
@@ -1774,15 +2168,7 @@ async function verifyDemonKingNftUpgradeProof(player, proof, nextLevel) {
     if (!linkedMatch) {
       return { error: 'Connect or verify the EVM wallet that owns this Demon King NFT first', status: 403 };
     }
-    const level = Number(tokenLevel || 1);
-    if (level < Number(nextLevel)) {
-      return {
-        error: `Demon King NFT must be upgraded to level ${nextLevel}`,
-        status: 403,
-        nft_level: level,
-        next_level: nextLevel,
-      };
-    }
+    const level = normalizeNftLevel(tokenLevel);
     db.bindPlayerDemonKingNft(player.id, onchainOwner, {
       chain: chainKey,
       tokenId: String(tokenIdRaw),
@@ -1844,10 +2230,28 @@ function parseDemonKingTroopEntry(entry) {
     return { error: 'Demon King NFT tokenId is invalid' };
   }
   let encodedLevel = 1;
-  const levelPart = String(parts[3] || '').trim();
-  const levelMatch = /^L([1-3])$/i.exec(levelPart);
-  if (levelMatch) encodedLevel = Number(levelMatch[1]);
-  return { chainKey, tokenIdRaw, encodedLevel };
+  let rarity = null;
+  for (const rawPart of parts.slice(3)) {
+    const part = String(rawPart || '').trim();
+    const levelMatch = /^L([1-4])$/i.exec(part);
+    if (levelMatch) encodedLevel = Number(levelMatch[1]);
+    const rarityMatch = /^R(common|epic|legendary|unrevealed)$/i.exec(part);
+    if (rarityMatch) rarity = rarityMatch[1].toLowerCase();
+  }
+  return { chainKey, tokenIdRaw, encodedLevel, rarity };
+}
+
+function parseNftBackedTroopEntry(entry, expectedTroop = null) {
+  const raw = String(entry || '').trim();
+  const parts = raw.split(':');
+  const cfg = _nftBackedTroopConfig(parts[0]);
+  if (!cfg || (expectedTroop && cfg.troopName !== _normalizeTroopName(expectedTroop))) {
+    const label = _nftBackedTroopConfig(expectedTroop)?.label || 'NFT troop';
+    return { error: `${label} requires an owned NFT token` };
+  }
+  const parsed = parseDemonKingTroopEntry(`DemonKing:${parts.slice(1).join(':')}`);
+  if (parsed.error) return { error: `${cfg.label} NFT tokenId is invalid` };
+  return { ...parsed, ...cfg };
 }
 
 async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
@@ -1873,13 +2277,15 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       return { error: 'Demon King NFT owner mismatch', status: 403 };
     }
     const level = normalizeNftLevel(cached.level);
+    const rarity = String(cached.rarity || 'common').toLowerCase();
     return {
       nftVerified: true,
       nftLevel: level,
+      nftRarity: rarity,
       nftChain: chainKey,
       nftTokenId: String(tokenIdRaw),
       nftOwner: cachedOwner,
-      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:L${level}`,
+      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:R${rarity}`,
       cached: true,
     };
   }
@@ -1896,13 +2302,15 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       const cachedLinked = linkedWallets.some((wallet) => getAddress(wallet) === cachedOwner);
       if (cachedLinked && (!ownerHint || ownerHint === cachedOwner)) {
         const level = normalizeNftLevel(cached.level);
+        const rarity = String(cached.rarity || 'common').toLowerCase();
         return {
           nftVerified: true,
           nftLevel: level,
+          nftRarity: rarity,
           nftChain: chainKey,
           nftTokenId: String(tokenIdRaw),
           nftOwner: cachedOwner,
-          troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:L${level}`,
+          troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:R${rarity}`,
           cached: true,
         };
       }
@@ -1939,13 +2347,15 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       tokenId: String(tokenIdRaw),
       level,
     }, { source: 'load' });
+    const rarity = String(db.getNftRarity?.('demon_king', chainKey, String(tokenIdRaw), { legacyLevel: level })?.rarity || 'common').toLowerCase();
     return {
       nftVerified: true,
       nftLevel: level,
+      nftRarity: rarity,
       nftChain: chainKey,
       nftTokenId: String(tokenIdRaw),
       nftOwner: onchainOwner,
-      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:L${level}`,
+      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:R${rarity}`,
     };
   } catch (err) {
     return {
@@ -1953,6 +2363,49 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       status: 400,
     };
   }
+}
+
+async function verifyNftBackedTroopLoadToken(player, entry, ownerHintRaw) {
+  const cfg = _nftBackedTroopConfig(entry);
+  if (!cfg) return null;
+  if (cfg.troopName === 'DemonKing') return verifyDemonKingNftLoadToken(player, entry, ownerHintRaw);
+
+  const parsed = parseNftBackedTroopEntry(entry, cfg.troopName);
+  if (parsed.error) return { error: parsed.error, status: 400 };
+  const { chainKey, tokenIdRaw } = parsed;
+  const cached = db.getPlayerCollectionNft(player.id, cfg.collection, chainKey, tokenIdRaw);
+  const { getAddress } = await import('viem');
+  const normalizeOwner = (value) => {
+    if (chainKey === 'aptos') {
+      const text = String(value || '');
+      return APTOS_WALLET_RE.test(text) ? `0x${text.replace(/^0x/i, '').padStart(64, '0').toLowerCase()}` : null;
+    }
+    if (chainKey === 'solana') return SOLANA_WALLET_RE.test(String(value || '')) ? String(value).trim() : null;
+    if (EVM_WALLET_RE.test(String(value || ''))) {
+      try { return getAddress(String(value)); } catch { return null; }
+    }
+    return null;
+  };
+  const ownerHint = ownerHintRaw ? normalizeOwner(ownerHintRaw) : null;
+  if (!cached || !freshDemonKingBinding(cached)) {
+    return { error: `Sync your ${cfg.label} wallet first`, status: 403 };
+  }
+  const cachedOwner = normalizeOwner(cached.wallet);
+  if (!cachedOwner || (ownerHint && ownerHint !== cachedOwner)) {
+    return { error: `${cfg.label} NFT owner mismatch`, status: 403 };
+  }
+  const level = normalizeNftLevel(cached.level);
+  const rarity = String(cached.rarity || 'common').toLowerCase();
+  return {
+    nftVerified: true,
+    nftLevel: level,
+    nftRarity: rarity,
+    nftChain: chainKey,
+    nftTokenId: String(tokenIdRaw),
+    nftOwner: cachedOwner,
+    troopEntry: `${cfg.troopName}:${chainKey}:${tokenIdRaw}:R${rarity}`,
+    cached: true,
+  };
 }
 
 function gameShopDeployment() {
@@ -2316,6 +2769,7 @@ const GAME_SHOP_PRODUCTS = {
     usdPriceE6: '8900000',
     maxQuantity: 1,
     hidden: true,
+    retired: true,
   },
 };
 
@@ -2340,7 +2794,7 @@ function gameShopUsdPriceE6ForPayment(product, { chain = '', payment = '' } = {}
 }
 
 function gameShopProductsForClient() {
-  return Object.values(GAME_SHOP_PRODUCTS).filter((product) => !product.hidden).map((product) => {
+  return Object.values(GAME_SHOP_PRODUCTS).filter((product) => !product.hidden && !product.retired).map((product) => {
     const copDiscountBps = getGameShopCopDiscountBps(product);
     const copUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'base', payment: 'cop' });
     const clashUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'solana', payment: 'clash' });
@@ -2368,6 +2822,10 @@ function gameShopProductsForClient() {
       maxQuantity: product.maxQuantity,
     };
   });
+}
+
+function isRetiredGameShopProduct(product) {
+  return !!(product && (product.retired || product.kind === 'nft_upgrade'));
 }
 
 function skuToBytes32(sku) {
@@ -3956,14 +4414,80 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
     if (!collection) return res.status(404).json({ error: 'collection not found' });
     const chain = String(req.body?.chain || '').toLowerCase();
     if (!NFT_COLLECTION_CHAIN_LABELS[chain]) return res.status(400).json({ error: 'bad chain' });
+    const requestedTokenIds = [
+      ...(Array.isArray(req.body?.tokenIds) ? req.body.tokenIds : []),
+      ...(Array.isArray(req.body?.token_ids) ? req.body.token_ids : []),
+      ...(Array.isArray(req.body?.assets) ? req.body.assets : []),
+      ...(!Array.isArray(req.body?.tokenIds) && req.body?.tokenIds ? [req.body.tokenIds] : []),
+      ...(!Array.isArray(req.body?.token_ids) && req.body?.token_ids ? [req.body.token_ids] : []),
+      ...(!Array.isArray(req.body?.assets) && req.body?.assets ? [req.body.assets] : []),
+      ...(req.body?.asset ? [req.body.asset] : []),
+    ].map((id) => String(id || '').trim()).filter(Boolean);
+    const txHash = String(req.body?.tx || req.body?.hash || req.body?.signature || '').trim();
+    if (nftCollectionUsesRarity(collection) && !txHash) {
+      return res.status(400).json({ error: 'tx hash is required to reveal NFT rarity' });
+    }
     const result = confirmCollectionServerMintTx(collection, {
       reservationId: req.body?.reservationId,
-      tx: req.body?.tx || req.body?.hash || req.body?.signature,
+      tx: txHash,
       chain,
       quantity: req.body?.quantity,
+      tokenIds: requestedTokenIds,
     });
+    const resultTokenIds = Array.isArray(result.tokenIds)
+      ? result.tokenIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+    const rarityTokenIds = Array.from(new Set((resultTokenIds.length ? resultTokenIds : requestedTokenIds)
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)));
+    const resultForRarity = {
+      ...result,
+      chain: result.chain || chain,
+      tokenIds: rarityTokenIds,
+      reservationId: result.reservationId || req.body?.reservationId || null,
+      tx: result.tx || txHash,
+      buyer: result.buyer || req.body?.buyer || req.body?.wallet || null,
+    };
+    const rarities = result.alreadyConfirmed ? [] : recordCollectionMintRarities(collection, resultForRarity);
+    const solanaRaritySync = [];
+    if (chain === 'solana' && nftCollectionUsesRarity(collection) && rarityTokenIds.length) {
+      for (const tokenId of rarityTokenIds) {
+        try {
+          // Direct Solana Candy Machine mints start with the hidden collection URI.
+          // Reveal the Core asset immediately after the tx is confirmed and DB
+          // rarity is assigned, so wallets/scanners see Rarity without a manual
+          // background sync.
+          // eslint-disable-next-line no-await-in-loop
+          const sync = await syncSolanaCollectionRarityAssetWithRetry({
+            req,
+            collection,
+            assetId: tokenId,
+            owner: resultForRarity.buyer || '',
+          });
+          if (sync) solanaRaritySync.push(sync);
+        } catch (syncErr) {
+          const row = {
+            asset: String(tokenId || ''),
+            error: (syncErr?.message || String(syncErr)).slice(0, 240),
+          };
+          solanaRaritySync.push(row);
+          console.warn('[nft] Solana rarity metadata sync failed:', {
+            collection: collection.slug,
+            asset: row.asset,
+            error: row.error,
+          });
+        }
+      }
+    }
     res.set('Cache-Control', 'no-store');
-    return res.json({ ok: true, ...result });
+    return res.json({
+      ok: true,
+      ...result,
+      tokenIds: resultTokenIds.length ? resultTokenIds : rarityTokenIds,
+      rarities,
+      solanaRaritySync,
+      solanaRaritySyncOk: solanaRaritySync.every((row) => !row?.error),
+    });
   } catch (err) {
     const status = err?.status || (/chain|reservation/i.test(err?.message || '') ? 400 : 500);
     return res.status(status).json({ error: (err?.message || 'mint confirm failed').slice(0, 180) });
@@ -4376,6 +4900,25 @@ router.post('/nft/aptos/quote', async (req, res) => {
   }
 });
 
+router.get('/nft/rarities', (req, res) => {
+  const collection = String(req.query.collection || 'demon_king');
+  const chain = String(req.query.chain || '').trim().toLowerCase();
+  const ids = String(req.query.ids || req.query.tokenIds || req.query.token_ids || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .slice(0, 500);
+  if (!chain || !ids.length) return res.status(400).json({ error: 'chain and ids are required' });
+  const rarities = db.listNftRarities?.(collection, chain, ids) || {};
+  res.set('Cache-Control', 'public, max-age=30');
+  res.json({
+    ok: true,
+    collection: String(collection || '').replace(/[-\s]+/g, '_').toLowerCase(),
+    chain,
+    rarities,
+  });
+});
+
 router.get('/nft/image', (req, res) => {
   // Default L1 image when no level is specified (back-compat).
   const lvl1 = NFT_LEVEL_IMAGE_PATHS[1];
@@ -4401,7 +4944,7 @@ router.get('/nft/image/:level', (req, res) => {
 
 router.get('/nft/base/contract', (req, res) => {
   const name = process.env.NFT_NAME || 'Demon King';
-  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'no-cache, max-age=0, must-revalidate');
   res.json({
     name,
     description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
@@ -4412,6 +4955,18 @@ router.get('/nft/base/contract', (req, res) => {
   });
 });
 
+async function sendRevealedDemonKingMetadata(req, res) {
+  const rawChainKey = String(req.params.chain || '').toLowerCase();
+  const chainKey = rawChainKey.replace(/-v\d+$/, '');
+  const labels = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', ink: 'Ink', solana: 'Solana' };
+  if (chainKey === 'aptos') return sendAptosNftMetadata(req, res, req.params.tokenId);
+  const label = labels[chainKey];
+  if (!label) return res.status(404).json({ error: 'token metadata not found' });
+  return sendNftMetadata(req, res, label, req.params.tokenId);
+}
+
+router.get('/nft/revealed/:chain/:tokenId', sendRevealedDemonKingMetadata);
+router.get('/nft/revealed/:chain/:tokenId.json', sendRevealedDemonKingMetadata);
 router.get('/nft/base/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Base', req.params.tokenId); });
 router.get('/nft/base/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Base', req.params.tokenId); });
 router.get('/nft/arbitrum/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Arbitrum', req.params.tokenId); });
@@ -4603,6 +5158,7 @@ router.post('/shop/base/quote', auth, async (req, res) => {
     const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
@@ -4795,6 +5351,7 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
     const sku = bytes32ToSku(purchase.sku);
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     const quantity = Number(purchase.quantity);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
       return res.status(400).json({ error: 'Bad purchase quantity' });
@@ -5130,6 +5687,11 @@ async function verifySolanaShopPurchaseFromTx({
     err.status = 400;
     throw err;
   }
+  if (isRetiredGameShopProduct(product)) {
+    const err = new Error('This shop item is retired');
+    err.status = 410;
+    throw err;
+  }
   const quantity = Number(memoData.qty);
   if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
     const err = new Error('Bad purchase quantity');
@@ -5427,6 +5989,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
     const sku = String(memoData.sku || '');
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
 
     const quantity = Number(memoData.qty);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
@@ -5524,6 +6087,10 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
 });
 
 router.post('/nft/solana/upgrade/redeem', auth, async (req, res) => {
+  return res.status(410).json({
+    error: 'Demon King NFT upgrades are retired. Rarity reveal replaces NFT levels.',
+    code: 'NFT_UPGRADES_RETIRED',
+  });
   try {
     const paymentInfo = await verifySolanaShopPaymentForPlayer(req, { expectedSku: 'demon_king_upgrade' });
     const signature = paymentInfo.signature;
@@ -5693,6 +6260,7 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
@@ -5890,7 +6458,7 @@ async function runSolanaShopReconcileSweep(options = {}) {
       return;
     }
     const product = GAME_SHOP_PRODUCTS[String(quoteIntent.sku || '')];
-    if (!product || product.kind === 'nft_upgrade') {
+    if (!product || isRetiredGameShopProduct(product)) {
       // NFT upgrades need a separate on-chain metadata update after payment.
       // Do not mark those payments consumed from the generic resource worker.
       summary.skipped += 1;
@@ -6090,6 +6658,7 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
     const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
@@ -6267,6 +6836,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     const sku = String(memoData.sku || '');
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     const quantity = Number(memoData.qty);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
       return res.status(400).json({ error: 'Bad purchase quantity' });
@@ -6477,6 +7047,7 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
     const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
@@ -6655,6 +7226,7 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
     const sku = String(memoData.sku || '');
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     const quantity = Number(memoData.qty);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
       return res.status(400).json({ error: 'Bad purchase quantity' });
@@ -6914,6 +7486,26 @@ function getAllPlayersByWalletAnyForm(wallet) {
 const _lastSeenBumpAt = new Map(); // playerId -> Date.now()
 const LAST_SEEN_THROTTLE_MS = 60_000;
 
+router.get('/public/player-stats', (_req, res) => {
+  try {
+    const row = db.db.prepare(`
+      SELECT
+        COUNT(*) AS total_players,
+        COUNT(CASE WHEN last_seen_at > datetime('now', '-5 minutes') THEN 1 END) AS online_players
+      FROM players
+    `).get();
+    res.set('Cache-Control', 'public, max-age=15');
+    res.json({
+      total_players: Number(row?.total_players || 0),
+      online_players: Number(row?.online_players || 0),
+      online_window_seconds: 300,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'player stats unavailable' });
+  }
+});
+
 function auth(req, res, next) {
   const token = req.headers['x-token'];
   if (!token) return res.status(401).json({ error: 'Missing x-token header' });
@@ -6947,6 +7539,67 @@ function agentAuth(req, res, next) {
   if (!session) return res.status(401).json({ error: 'Invalid or missing AI agent key' });
   req.agentSession = session;
   next();
+}
+
+function requestHeaderHost(value) {
+  const raw = String(Array.isArray(value) ? value[0] : value || '').trim();
+  if (!raw) return '';
+  const first = raw.split(',')[0].trim();
+  return first.replace(/:\d+$/, '').toLowerCase();
+}
+
+function urlHeaderHost(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isAllowedFirstPartyHost(host) {
+  const h = String(host || '').toLowerCase();
+  return h === 'clashofperps.fun'
+    || h === 'www.clashofperps.fun'
+    || h === 'localhost'
+    || h === '127.0.0.1'
+    || h === '::1';
+}
+
+function isScriptedHttpClient(req) {
+  const ua = String(req.headers['user-agent'] || '').toLowerCase();
+  return /\b(node|undici|curl|wget|python|axios|got|postman|insomnia|httpie)\b/.test(ua);
+}
+
+function hasFirstPartyBrowserContext(req) {
+  if (isScriptedHttpClient(req)) return false;
+  const requestHost = requestHeaderHost(req.headers['x-forwarded-host'] || req.headers.host);
+  const originHost = urlHeaderHost(req.headers.origin);
+  const refererHost = urlHeaderHost(req.headers.referer);
+  if (originHost) {
+    return originHost === requestHost || isAllowedFirstPartyHost(originHost);
+  }
+  if (refererHost) {
+    return refererHost === requestHost || isAllowedFirstPartyHost(refererHost);
+  }
+  return false;
+}
+
+function requireFirstPartyBrowserContext(req, res, action) {
+  if (hasFirstPartyBrowserContext(req)) return true;
+  console.warn('[security] blocked scripted wallet endpoint', {
+    action,
+    method: req.method,
+    path: req.originalUrl || req.url,
+    player: req.player?.name || null,
+    ip: req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || null,
+    ua: String(req.headers['user-agent'] || '').slice(0, 160),
+    origin: String(req.headers.origin || '').slice(0, 160),
+    referer: String(req.headers.referer || '').slice(0, 160),
+  });
+  res.status(403).json({ error: 'Open Clash in the browser and connect your wallet again.' });
+  return false;
 }
 
 // ==================== CLIENT LOGS (no auth) ====================
@@ -7249,13 +7902,78 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const DEX_REQUIRED_CHAIN = {
+  pacifica: 'solana',
+  phoenix: 'solana',
+  gmtrade: 'solana',
+  flash: 'solana',
+  decibel: 'aptos',
+  avantis: 'evm',
+  gmx: 'evm',
+  monad: 'evm',
+  hyperliquid: 'evm',
+  risex: 'evm',
+  nado: 'evm',
+  hibachi: 'evm',
+  hotstuff: 'evm',
+  grvt: 'evm',
+  katana: 'evm',
+};
 
-function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown') {
+function dexAcceptsWallet(dex, wallet) {
+  const required = DEX_REQUIRED_CHAIN[String(dex || '').toLowerCase()] || null;
+  if (!required || !wallet || !isValidWallet(wallet)) return false;
+  return walletChainType(wallet) === required;
+}
+
+function resolveClaimWalletForDex(player, dex, currentWallet = null) {
+  const normalizedDex = String(dex || '').toLowerCase();
+  if (dexAcceptsWallet(normalizedDex, currentWallet)) return canonicalWalletIdentifier(currentWallet);
+  try {
+    const row = db.db.prepare(`
+      SELECT wallet_address
+      FROM player_dex_accounts
+      WHERE player_id = ? AND dex = ?
+      ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
+      LIMIT 1
+    `).get(player.id, normalizedDex);
+    if (row && dexAcceptsWallet(normalizedDex, row.wallet_address)) {
+      return canonicalWalletIdentifier(row.wallet_address);
+    }
+  } catch {}
+  try {
+    const row = db.db.prepare(
+      'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+    ).get(player.id, normalizedDex);
+    if (row && dexAcceptsWallet(normalizedDex, row.wallet)) {
+      return canonicalWalletIdentifier(row.wallet);
+    }
+  } catch {}
+  try {
+    const chainType = DEX_REQUIRED_CHAIN[normalizedDex] || null;
+    if (chainType) {
+      const row = db.db.prepare(`
+        SELECT address
+        FROM player_wallets
+        WHERE player_id = ? AND chain_type = ?
+        ORDER BY is_primary DESC, updated_at DESC, id DESC
+        LIMIT 1
+      `).get(player.id, chainType);
+      if (row && dexAcceptsWallet(normalizedDex, row.address)) {
+        return canonicalWalletIdentifier(row.address);
+      }
+    }
+  } catch {}
+  return currentWallet;
+}
+
+function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown', opts = {}) {
   if (!player?.id || !VALID_DEXES.has(dex)) return { ok: false, changed: false, conflictResolved: false };
-  const walletToBind = wallet && isValidWallet(wallet)
+  const bindWallet = opts.bindWallet !== false;
+  const walletToBind = bindWallet && wallet && isValidWallet(wallet)
     ? canonicalWalletIdentifier(wallet)
-    : (player.wallet && isValidWallet(player.wallet) ? canonicalWalletIdentifier(player.wallet) : null);
+    : null;
   const runUpdate = () => {
     if (walletToBind) {
       db.db.prepare('UPDATE players SET dex = ?, wallet = ? WHERE id = ?').run(dex, walletToBind, player.id);
@@ -7305,7 +8023,7 @@ function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown'
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -7325,7 +8043,7 @@ const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'pho
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
   if (!VALID_DEXES.has(dex)) {
-    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex", "nado", "hibachi", "hotstuff", "grvt", "katana" or "gmtrade"' });
+    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex", "nado", "hibachi", "hotstuff", "grvt", "katana", "gmtrade" or "flash"' });
   }
   if (dex !== req.player.dex) {
     safelySetPlayerActiveDex(req.player, dex, req.player.wallet, 'set-dex');
@@ -7371,8 +8089,11 @@ function markPlayerSeekerIfPresent(playerId, body) {
 
 router.post('/players/register', (req, res) => {
   const { name, wallet, dex, fid } = req.body;
+  if (wallet && !requireFirstPartyBrowserContext(req, res, 'players.register')) return;
+  if (wallet && rejectBlacklistedWallet(req, res, wallet, 'players.register')) return;
   const requestedDex = VALID_DEXES.has(dex) ? dex : 'pacifica';
   const seekerCapability = normalizeSeekerCapability(req.body || {});
+  const referralCode = String(req.body?.referralCode || req.body?.ref || req.body?.invite || '').trim();
 
   // ── Per-DEX canonical lookup ────────────────────────────────────────
   // Each (wallet, dex) is now its own player row. The user's Avantis
@@ -7402,6 +8123,7 @@ router.post('/players/register', (req, res) => {
     }
 
     if (existing) {
+      if (db.isPlayerBanned(existing)) return rejectBannedPlayer(res, existing);
       // Optional rename on re-login (same as before, scoped to this row).
       const trimmed = normalizePlayerNameInput(name);
       const looksAutoDerived = /^player_[0-9a-f]{4,}$/i.test(trimmed);
@@ -7424,6 +8146,12 @@ router.post('/players/register', (req, res) => {
       if (seekerCapability) {
         db.stmts.markPlayerSeeker.run(seekerCapability.seeker_id, seekerCapability.seeker_source, existing.id);
       }
+      if (referralCode) {
+        db.bindPlayerReferral(existing.id, referralCode, 'register-existing', {
+          wallet: wallet || null,
+          dex: requestedDex,
+        });
+      }
       const state = db.getFullPlayerState(existing.id);
       return res.json({ ...state, token: existing.token });
     }
@@ -7445,7 +8173,11 @@ router.post('/players/register', (req, res) => {
   }
   let result = null;
   try {
-    result = db.registerPlayer(trimmed);
+    result = db.registerPlayer(trimmed, {
+      referralCode,
+      referralSource: 'register-new',
+      referralMetadata: { wallet: wallet || null, dex: requestedDex },
+    });
   } catch (e) {
     if (String(e?.message || '').includes('UNIQUE')) {
       return res.status(409).json({ error: 'Nickname is already taken' });
@@ -7471,6 +8203,33 @@ router.post('/players/register', (req, res) => {
   const state = db.getFullPlayerState(result.id);
   logAuth('Player registered', { name: trimmed, wallet: wallet || null, dex: requestedDex });
   res.json({ ...state, token: result.token });
+});
+
+router.get('/players/referral', auth, (req, res) => {
+  try {
+    res.json({ ok: true, referral: db.getReferralSummary(req.player.id) });
+  } catch (e) {
+    console.warn('[referrals] summary failed:', e.message);
+    res.status(500).json({ error: 'Failed to load referral summary' });
+  }
+});
+
+router.post('/players/referral/bind', auth, (req, res) => {
+  try {
+    const result = db.bindPlayerReferral(req.player.id, req.body?.code || req.body?.ref, 'manual-bind', {
+      ip: req.ip || null,
+    });
+    if (!result.bound && result.reason === 'self_referral') {
+      return res.status(400).json({ error: 'You cannot use your own referral code' });
+    }
+    if (!result.bound && result.reason === 'code_not_found') {
+      return res.status(404).json({ error: 'Referral code not found' });
+    }
+    res.json({ ok: true, ...result, referral: db.getReferralSummary(req.player.id) });
+  } catch (e) {
+    console.warn('[referrals] bind failed:', e.message);
+    res.status(500).json({ error: 'Failed to bind referral code' });
+  }
 });
 
 router.patch('/players/name', auth, (req, res) => {
@@ -8981,6 +9740,8 @@ router.get('/agent-events/pending', auth, (req, res) => {
 router.post('/players/link-wallet', auth, (req, res) => {
   const { wallet } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
+  if (!requireFirstPartyBrowserContext(req, res, 'players.link-wallet')) return;
+  if (rejectBlacklistedWallet(req, res, wallet, 'players.link-wallet')) return;
 
   const current = req.player;
   // Same-DEX collision check. We exclude current.id so a no-op rebind
@@ -9019,12 +9780,24 @@ router.post('/players/link-wallet', auth, (req, res) => {
 router.post('/players/login-wallet', (req, res) => {
   const { wallet, dex } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
+  if (rejectBlacklistedWallet(req, res, wallet, 'players.login-wallet')) return;
 
   let player = VALID_DEXES.has(dex)
     ? getPlayerByWalletAndDexAnyForm(wallet, dex)
     : null;
   if (!player) player = getUnifiedPlayerByWalletAnyForm(wallet);
   if (!player) return res.status(404).json({ error: 'No Clash account found for this wallet' });
+  if (db.isPlayerBanned(player)) return rejectBannedPlayer(res, player);
+  if (req.body?.probeOnly === true) {
+    return res.json({
+      success: true,
+      id: player.id,
+      name: player.name,
+      wallet: player.wallet,
+      dex: player.dex,
+    });
+  }
+  if (!requireFirstPartyBrowserContext(req, res, 'players.login-wallet')) return;
   if (VALID_DEXES.has(dex) && dex !== player.dex) {
     try {
       safelySetPlayerActiveDex(player, dex, wallet, 'login-wallet');
@@ -9158,13 +9931,24 @@ router.post('/players/dex-accounts/:dex/select', auth, (req, res) => {
   const dex = String(req.params.dex || req.body?.dex || '').toLowerCase();
   if (!VALID_DEXES.has(dex)) return res.status(400).json({ error: 'Unsupported DEX' });
   const wallet = String(req.body?.wallet || req.player.wallet || '').trim();
-  if (wallet && isValidWallet(wallet)) {
-    upsertUnifiedIdentity(req.player.id, wallet, { label: req.body?.walletSource || req.body?.source });
+  const venueWallet = dexAcceptsWallet(dex, wallet) ? wallet : '';
+  if (venueWallet && !requireFirstPartyBrowserContext(req, res, 'players.dex-account.select')) return;
+  if (venueWallet && rejectBlacklistedWallet(req, res, venueWallet, 'players.dex-account.select')) return;
+  if (venueWallet) {
+    upsertUnifiedIdentity(req.player.id, venueWallet, { label: req.body?.walletSource || req.body?.source });
   }
-  upsertPlayerDexAccount(req.player.id, dex, wallet && isValidWallet(wallet) ? wallet : req.player.wallet, wallet || req.player.wallet ? 'ready' : 'disconnected', {
-    source: req.body?.walletSource || req.body?.source || 'select-dex',
-  });
-  safelySetPlayerActiveDex(req.player, dex, wallet, 'select-dex');
+  upsertPlayerDexAccount(
+    req.player.id,
+    dex,
+    venueWallet,
+    venueWallet ? 'ready' : 'disconnected',
+    {
+      source: req.body?.walletSource || req.body?.source || 'select-dex',
+      __clear_wallet: !venueWallet,
+      ...(wallet && !venueWallet ? { ignored_wallet: canonicalWalletIdentifier(wallet), ignored_chain_type: walletChainType(wallet) } : {}),
+    },
+  );
+  safelySetPlayerActiveDex(req.player, dex, null, 'select-dex', { bindWallet: false });
   const state = db.getFullPlayerState(req.player.id);
   res.json({ ok: true, dex, player: state });
 });
@@ -9176,9 +9960,34 @@ router.post('/players/dex-accounts/:dex/link', auth, (req, res) => {
   if (!wallet || !isValidWallet(wallet)) {
     return res.status(400).json({ error: 'Valid wallet required' });
   }
+  if (!requireFirstPartyBrowserContext(req, res, 'players.dex-account.link')) return;
+  if (rejectBlacklistedWallet(req, res, wallet, 'players.dex-account.link')) return;
   const chainType = walletChainType(wallet);
-  if (dex === 'gmtrade' && chainType !== 'solana') {
-    return res.status(400).json({ error: 'GMTrade requires a linked Solana wallet' });
+  const requiredChain = DEX_REQUIRED_CHAIN[dex] || null;
+  if (requiredChain && chainType !== requiredChain) {
+    return res.status(400).json({ error: `${dex} requires a linked ${requiredChain} wallet` });
+  }
+  const canonicalWallet = canonicalWalletIdentifier(wallet);
+  const currentDexWallet = db.db.prepare(`
+    SELECT player_id, dex, status
+    FROM player_dex_accounts
+    WHERE player_id = ?
+      AND dex = ?
+      AND chain_type = ?
+      AND wallet_address = ?
+    LIMIT 1
+  `).get(req.player.id, dex, chainType, canonicalWallet);
+  if (currentDexWallet?.status === 'ready') {
+    upsertUnifiedIdentity(req.player.id, wallet, {
+      label: req.body?.walletSource || req.body?.source || `${dex} trading wallet`,
+    });
+    return res.json({
+      ok: true,
+      dex,
+      chain_type: chainType,
+      wallet_address: canonicalWallet,
+      already_linked: true,
+    });
   }
   const existing = getUnifiedPlayerByWalletAnyForm(wallet);
   if (existing && existing.id !== req.player.id) {
@@ -9188,13 +9997,13 @@ router.post('/players/dex-accounts/:dex/link', auth, (req, res) => {
       existing_name: existing.name,
     });
   }
-  const canonicalWallet = canonicalWalletIdentifier(wallet);
   const existingDexWallet = db.db.prepare(`
     SELECT player_id, dex
     FROM player_dex_accounts
     WHERE chain_type = ?
       AND wallet_address = ?
       AND player_id != ?
+      AND status = 'ready'
     LIMIT 1
   `).get(chainType, canonicalWallet, req.player.id);
   if (existingDexWallet) {
@@ -9397,6 +10206,31 @@ function _isSlotFiller(name) {
 function _isDemonKing(name) {
   return _normalizeTroopName(name) === 'DemonKing';
 }
+function _nftBackedTroopConfig(name) {
+  const normalized = _normalizeTroopName(name);
+  if (normalized === 'DemonKing') {
+    return {
+      troopName: 'DemonKing',
+      serverKey: 'demon_king',
+      collection: 'demon_king',
+      collectionSlug: 'demonking',
+      label: 'Demon King',
+    };
+  }
+  if (normalized === 'FireDragon') {
+    return {
+      troopName: 'FireDragon',
+      serverKey: 'fire_dragon',
+      collection: 'dragon',
+      collectionSlug: 'dragon',
+      label: 'Dragon',
+    };
+  }
+  return null;
+}
+function _isNftBackedTroop(name) {
+  return !!_nftBackedTroopConfig(name);
+}
 function _serverTroopKey(name) {
   const normalized = _normalizeTroopName(name);
   if (normalized === 'DemonKing') return 'demon_king';
@@ -9425,14 +10259,19 @@ function _activeTroopError(name) {
 }
 function _canonicalTroopEntry(name) {
   const normalized = _normalizeTroopName(name);
-  if (normalized !== 'DemonKing') return normalized;
+  if (!_isNftBackedTroop(normalized)) return normalized;
   const raw = String(name || '').trim();
-  return raw.startsWith('DemonKing:') ? raw : 'DemonKing';
+  return raw.startsWith(`${normalized}:`) ? raw : normalized;
 }
 function _demonKingEntryKey(name) {
   const parsed = parseDemonKingTroopEntry(name);
   if (parsed.error) return String(name || '');
   return `${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+}
+function _nftBackedEntryKey(name) {
+  const parsed = parseNftBackedTroopEntry(name);
+  if (parsed.error) return String(name || '');
+  return `${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
 }
 function _loadedDemonKingTokenKeys(playerId) {
   const keys = new Set();
@@ -9473,6 +10312,30 @@ function _findLoadedDemonKingToken(playerId, tokenKey, options = {}) {
   }
   return null;
 }
+function _findLoadedNftBackedToken(playerId, tokenKey, options = {}) {
+  const expectedKey = String(tokenKey || '').toLowerCase();
+  if (!expectedKey) return null;
+  const exceptBuildingId = Number(options.exceptBuildingId || 0);
+  const exceptStart = Number.isInteger(options.exceptStart) ? options.exceptStart : null;
+  const exceptEnd = Number.isInteger(options.exceptEnd) ? options.exceptEnd : null;
+  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  for (const port of ports) {
+    let troops = [];
+    try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
+    for (let index = 0; index < troops.length; index++) {
+      const troop = troops[index];
+      if (_isSlotFiller(troop)) continue;
+      if (port.id === exceptBuildingId && exceptStart !== null && exceptEnd !== null && index >= exceptStart && index < exceptEnd) {
+        continue;
+      }
+      const parsed = parseNftBackedTroopEntry(troop);
+      if (parsed.error) continue;
+      const key = `${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+      if (key === expectedKey) return { buildingId: port.id, slot: index };
+    }
+  }
+  return null;
+}
 function _firstDuplicateLoadedDemonKingToken(playerId) {
   const seen = new Map();
   const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
@@ -9487,6 +10350,25 @@ function _firstDuplicateLoadedDemonKingToken(playerId) {
       const key = `${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
       const previous = seen.get(key);
       if (previous) return { key, first: previous, duplicate: { buildingId: port.id, slot: index } };
+      seen.set(key, { buildingId: port.id, slot: index });
+    }
+  }
+  return null;
+}
+function _firstDuplicateLoadedNftBackedToken(playerId) {
+  const seen = new Map();
+  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  for (const port of ports) {
+    let troops = [];
+    try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
+    for (let index = 0; index < troops.length; index++) {
+      const troop = troops[index];
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseNftBackedTroopEntry(troop);
+      if (parsed.error) continue;
+      const key = `${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+      const previous = seen.get(key);
+      if (previous) return { key, label: parsed.label, first: previous, duplicate: { buildingId: port.id, slot: index } };
       seen.set(key, { buildingId: port.id, slot: index });
     }
   }
@@ -9531,6 +10413,41 @@ function _demonKingWinTokensFromActions(actions, playerId) {
     }
   }
   return [...tokens.values()];
+}
+function _nftBackedWinTokensByCollectionFromActions(actions, playerId) {
+  const loadedKeys = new Set();
+  const ports = db.db.prepare('SELECT ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  for (const port of ports) {
+    let troops = [];
+    try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
+    for (const troop of troops) {
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseNftBackedTroopEntry(troop);
+      if (parsed.error) continue;
+      loadedKeys.add(`${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase());
+    }
+  }
+
+  const byCollection = new Map();
+  for (const action of Array.isArray(actions) ? actions : []) {
+    if (action?.type !== 'place_ship') continue;
+    const troops = Array.isArray(action.troops)
+      ? action.troops
+      : (action.troopType ? [action.troopType] : []);
+    for (const troop of troops) {
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseNftBackedTroopEntry(troop);
+      if (parsed.error) continue;
+      const key = `${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+      if (!loadedKeys.has(key)) continue;
+      const rows = byCollection.get(parsed.collection) || new Map();
+      rows.set(key, { chain: parsed.chainKey, tokenId: parsed.tokenIdRaw });
+      byCollection.set(parsed.collection, rows);
+    }
+  }
+  const out = {};
+  for (const [collection, rows] of byCollection.entries()) out[collection] = [...rows.values()];
+  return out;
 }
 function _troopSlotCost(name) {
   return _isHeavyTroop(name) ? 2 : 1;
@@ -9714,10 +10631,9 @@ function _applyCasualties(playerId, casualties) {
   for (const [name, count] of Object.entries(casualties)) {
     if (typeof count !== 'number' || count <= 0) continue;
     const normalized = _normalizeTroopName(name);
-    // Demon King is NFT-backed and reusable. It can die in combat, but it
-    // should not be removed from the saved ship loadout or appear as a paid
-    // reinforcement casualty.
-    if (normalized === 'DemonKing') continue;
+    // NFT-backed troops are reusable. They can die in combat, but they should
+    // not be removed from the saved ship loadout or become paid casualties.
+    if (_isNftBackedTroop(normalized)) continue;
     validCasualties[normalized] = Math.min(
       (validCasualties[normalized] || 0) + count,
       deployed[normalized] || 0
@@ -9762,7 +10678,7 @@ function _paidCasualties(casualties) {
   const out = {};
   for (const [name, count] of Object.entries(casualties || {})) {
     const normalized = _normalizeTroopName(name);
-    if (normalized === 'DemonKing') continue;
+    if (_isNftBackedTroop(normalized)) continue;
     if (typeof count === 'number' && count > 0) out[normalized] = (out[normalized] || 0) + count;
   }
   return out;
@@ -9842,6 +10758,19 @@ router.post('/attack/result', auth, (req, res) => {
   const troopLevelRows = db.getTroopLevels(req.player.id);
   const serverTroopLevels = {};
   for (const row of troopLevelRows) serverTroopLevels[row.troop_type] = row.level;
+  const serverNftRarities = {};
+  for (const act of gameActions) {
+    if (act?.type !== 'place_ship') continue;
+    const troops = Array.isArray(act.troops) ? act.troops : (act.troopType ? [act.troopType] : []);
+    for (const troop of troops) {
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseNftBackedTroopEntry(troop);
+      if (parsed.error) continue;
+      const row = db.getPlayerCollectionNft(req.player.id, parsed.collection, parsed.chainKey, parsed.tokenIdRaw);
+      const rarity = String(row?.rarity || parsed.rarity || 'common').toLowerCase();
+      serverNftRarities[`${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase()] = rarity;
+    }
+  }
   for (const act of gameActions) {
     if (act.type === 'place_ship' && act.troopType && act.troopLevel) {
       const normalizedTroop = _normalizeTroopName(act.troopType);
@@ -9860,6 +10789,7 @@ router.post('/attack/result', auth, (req, res) => {
     gridConfig,
     gridConfigs,
     serverTroopLevels,
+    serverNftRarities,
     defenderAltarLevels: db.getAltarSkillLevels(defender_id),
     debugTrace: BATTLE_DEBUG_TRACE,
   });
@@ -9872,9 +10802,35 @@ router.post('/attack/result', auth, (req, res) => {
   const storedAcceptReason = replayStatus === 'ACCEPTED'
     ? verification.reason
     : `${replayStatus}: ${replayReason}`;
-  const serverResolvedResult = verification.resolvedResult || (
+  const verificationResolvedResult = verification.resolvedResult || (
     (verification.townHallDestroyed || (verification.townHallHpPct ?? 1) <= 0.02) ? 'victory' : 'defeat'
   );
+  const serverResolvedResult = STRICT_BATTLE_REPLAY_VERIFICATION
+    ? verificationResolvedResult
+    : (claimedResult === 'victory' ? 'victory' : verificationResolvedResult);
+  const clientCasualties = (req.body?.casualties && typeof req.body.casualties === 'object')
+    ? req.body.casualties
+    : null;
+  const casualtySource = STRICT_BATTLE_REPLAY_VERIFICATION
+    ? 'server_sim_strict'
+    : (clientCasualties ? 'client_non_strict' : 'missing_client_non_strict');
+  const resolvedCasualties = STRICT_BATTLE_REPLAY_VERIFICATION
+    ? (verification.casualties || {})
+    : (clientCasualties || {});
+  const replayDebug = {
+    ...verification,
+    clientCasualties: clientCasualties || {},
+    resolvedCasualties,
+    casualtySource,
+  };
+  if (!STRICT_BATTLE_REPLAY_VERIFICATION && !clientCasualties) {
+    console.warn('[BATTLE] Missing client casualties in non-strict mode; not applying server-sim casualties', {
+      attacker: req.player.id,
+      defender: defender_id,
+      battleSessionId,
+      simCasualties: verification.casualties || {},
+    });
+  }
 
   logBattle(`${claimedResult}->${serverResolvedResult} ${replayStatus}`, {
     attacker: req.player.id, defender: defender_id,
@@ -9890,6 +10846,7 @@ router.post('/attack/result', auth, (req, res) => {
   console.log(`[BATTLE] Grid:`, JSON.stringify(gridConfig));
   if (gridConfigs) console.log(`[BATTLE] Grids:`, JSON.stringify(gridConfigs));
   console.log(`[BATTLE] TroopLevels:`, JSON.stringify(serverTroopLevels));
+  if (Object.keys(serverNftRarities).length) console.log(`[BATTLE] NftRarities:`, JSON.stringify(serverNftRarities));
   console.log(`[BATTLE] Defender buildings:`, defenderBuildings.length, defenderBuildings.map(b => `${b.type}:lv${b.level}:hp${b.hp}`).join(', '));
   if (BATTLE_DEBUG_TRACE) {
     console.log(`[BATTLE TRACE] events=${verification._traceEvents || 0} dropped=${verification._traceDropped || 0} aliveTroops=${verification._troopsAlive || 0} simDebug=stored`);
@@ -9908,7 +10865,7 @@ router.post('/attack/result', auth, (req, res) => {
     // Debug info logged server-side only — never expose sim internals to client
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
       releaseBattleSession('cancelled');
-      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', replayReason, null, verification);
+      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', replayReason, null, replayDebug);
       console.log('[SIM REJECT]', JSON.stringify(simDebug));
       return res.status(403).json({ error: 'Replay verification failed', reason: verification.reason });
     }
@@ -9917,38 +10874,44 @@ router.post('/attack/result', auth, (req, res) => {
 
   // Victory verified — grant loot
   if (serverResolvedResult === 'victory') {
-    const demonKingWinTokens = _demonKingWinTokensFromActions(gameActions, req.player.id);
+    const nftWinTokensByCollection = _nftBackedWinTokensByCollectionFromActions(gameActions, req.player.id);
     const battleResult = db.battleVictory(req.player.id, defender_id, battleSessionId);
     if (battleResult.error) {
-      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', battleResult.error, null, verification);
+      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', battleResult.error, null, replayDebug);
       return res.status(400).json(battleResult);
     }
-    const replayId = db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', storedAcceptReason, battleResult.loot, verification);
+    const replayId = db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', storedAcceptReason, battleResult.loot, replayDebug);
     let demonKingNftWins = [];
+    let nftTroopWins = {};
     try {
-      demonKingNftWins = db.recordDemonKingBattleWinEvents(replayId, req.player.id, demonKingWinTokens);
+      for (const [collection, tokens] of Object.entries(nftWinTokensByCollection)) {
+        nftTroopWins[collection] = db.recordCollectionBattleWinEvents(replayId, req.player.id, collection, tokens);
+      }
+      demonKingNftWins = nftTroopWins.demon_king || [];
     } catch (err) {
-      console.warn('[BATTLE] Demon King NFT win record failed:', err?.message || err);
+      console.warn('[BATTLE] NFT troop win record failed:', err?.message || err);
     }
     // Apply casualties exactly once from the authoritative replay result.
     // /troop-died is now telemetry-only; mutating ships there caused double
     // removal when the final replay result was submitted.
-    const appliedCasualties = _applyCasualties(req.player.id, verification.casualties);
+    const appliedCasualties = _applyCasualties(req.player.id, resolvedCasualties);
     // Return authoritative post-casualty ship state so client can sync immediately
     return res.json({
       ...battleResult,
       ships: _getShipsPayload(req.player.id),
       casualties: _paidCasualties(appliedCasualties),
       demon_king_nft_wins: demonKingNftWins,
+      nft_troop_wins: nftTroopWins,
     });
   }
 
   // Defeat — attacker loses trophies, defender gains
   const defeatResult = db.battleDefeat(req.player.id, defender_id, battleSessionId);
-  db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, verification);
+  db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, replayDebug);
 
-  // Remove server-simulated casualties from attacker's ships.
-  const appliedCasualties = _applyCasualties(req.player.id, verification.casualties);
+  // Remove resolved casualties from attacker's ships. In non-strict mode this
+  // intentionally uses only the client result; server simulation is diagnostics.
+  const appliedCasualties = _applyCasualties(req.player.id, resolvedCasualties);
 
   res.json({
     success: true,
@@ -9973,33 +10936,20 @@ router.get('/troops/demon_king/upgrade-status', auth, (req, res) => {
   }));
 });
 
+router.get('/troops/:type/upgrade-status', auth, (req, res) => {
+  const type = _serverTroopKey(req.params.type);
+  const status = db.getNftBackedTroopUpgradeStatus(req.player.id, type, {
+    chain: req.query?.chain,
+    tokenId: req.query?.tokenId ?? req.query?.token_id,
+  });
+  if (!status) return res.status(404).json({ error: 'Upgrade status is not available for this troop' });
+  res.json(status);
+});
+
 // Upgrade a troop
 router.post('/troops/:type/upgrade', auth, async (req, res) => {
   const type = _serverTroopKey(req.params.type);
-  let upgradeOptions = {};
-  if (type === 'demon_king') {
-    const proof = {
-      ...(req.body?.nft || {}),
-      ...req.body,
-    };
-    upgradeOptions = {
-      chain: proof.chain,
-      tokenId: proof.tokenId ?? proof.token_id,
-      nftChain: proof.chain,
-      nftTokenId: proof.tokenId ?? proof.token_id,
-    };
-    const status = db.getDemonKingUpgradeStatus(req.player.id, {
-      chain: proof.chain,
-      tokenId: proof.tokenId ?? proof.token_id,
-    });
-    const nextLevel = status.next_level;
-    if (nextLevel && status.wins_ready && proof.chain) {
-      const verified = await verifyDemonKingNftUpgradeProof(req.player, proof, nextLevel);
-      if (verified.error) return res.status(verified.status || 400).json({ ...status, ...verified });
-      upgradeOptions = verified;
-    }
-  }
-  const result = db.upgradeTroop(req.player.id, type, upgradeOptions);
+  const result = db.upgradeTroop(req.player.id, type);
   if (result.error) return res.status(result.status || 400).json(result);
   logEconomy('troop_upgrade', { player: req.player.id, troop: type, level: result.level });
   res.json(result);
@@ -10032,8 +10982,16 @@ router.post('/battle/surrender', auth, (req, res) => {
   if (!defenderId) return res.status(400).json({ error: 'defender_id required' });
   if (defenderId === req.player.id) return res.status(400).json({ error: 'Cannot surrender to yourself' });
   const sessionId = String(req.body?.battle_session_id || req.body?.session_id || '').trim();
-  const stamped = db.markSurrender(req.player.id, defenderId, sessionId);
-  res.json({ ok: true, stamped, cooldown_hours: 24 });
+  const result = db.markSurrender(req.player.id, defenderId, sessionId);
+  if (!result?.ok) return res.status(500).json({ error: result?.error || 'Failed to record surrender' });
+  res.json({
+    ok: true,
+    stamped: !!result.stamped,
+    cooldown_hours: 24,
+    already_surrendered: !!result.already_surrendered,
+    trophy_delta: Number(result.trophy_delta || 0),
+    trophies: Number(result.trophies || 0),
+  });
 });
 
 // Find enemy with closest trophies
@@ -10059,11 +11017,11 @@ router.get('/find-enemy', auth, (req, res) => {
   if (totalTroopsLoaded === 0) {
     return res.status(400).json({ error: 'No troops loaded on your ships. Train troops at the Barn first.' });
   }
-  const duplicateDemonKing = _firstDuplicateLoadedDemonKingToken(req.player.id);
+  const duplicateDemonKing = _firstDuplicateLoadedNftBackedToken(req.player.id);
   if (duplicateDemonKing) {
     return res.status(409).json({
-      error: 'One Demon King NFT is loaded on multiple ships. Unload the duplicate before attacking.',
-      code: 'DEMON_KING_NFT_DUPLICATE_LOADED',
+      error: `One ${duplicateDemonKing.label || 'NFT'} is loaded on multiple ships. Unload the duplicate before attacking.`,
+      code: 'NFT_TROOP_DUPLICATE_LOADED',
     });
   }
 
@@ -10181,7 +11139,7 @@ router.post('/troops/buy', auth, (req, res) => {
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
   const cost = _troopBuyCost(normalizedTroop);
-  if (normalizedTroop === 'DemonKing') {
+  if (_isNftBackedTroop(normalizedTroop)) {
     return res.json({ success: true, troop_name: normalizedTroop, cost: 0, resources: db.getResources(req.player.id), nft_backed: true });
   }
   if (!db.canAfford(req.player.id, cost, 0, 0)) {
@@ -10205,10 +11163,10 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
   const { troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
-  let verifiedDemonKing = null;
-  if (normalizedTroop === 'DemonKing') {
-    verifiedDemonKing = await verifyDemonKingNftLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
-    if (verifiedDemonKing.error) return res.status(verifiedDemonKing.status || 400).json(verifiedDemonKing);
+  let verifiedNftTroop = null;
+  if (_isNftBackedTroop(normalizedTroop)) {
+    verifiedNftTroop = await verifyNftBackedTroopLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
+    if (verifiedNftTroop?.error) return res.status(verifiedNftTroop.status || 400).json(verifiedNftTroop);
   }
 
   const txn = db.db.transaction(() => {
@@ -10221,14 +11179,15 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
     const capacity = _shipCapacityForPort(building);  // 3x capacity: Lv1=3, Lv2=6, Lv3=9
     const slotCost = _troopSlotCost(normalizedTroop);
     if (shipTroops.length + slotCost > capacity) throw { status: 400, error: 'Ship is full' };
-    const troopEntry = verifiedDemonKing?.troopEntry || _canonicalTroopEntry(troop_name);
-    if (normalizedTroop === 'DemonKing') {
-      const loaded = _findLoadedDemonKingToken(req.player.id, _demonKingEntryKey(troopEntry));
+    const troopEntry = verifiedNftTroop?.troopEntry || _canonicalTroopEntry(troop_name);
+    if (_isNftBackedTroop(normalizedTroop)) {
+      const loaded = _findLoadedNftBackedToken(req.player.id, _nftBackedEntryKey(troopEntry));
       if (loaded) {
+        const label = _nftBackedTroopConfig(normalizedTroop)?.label || 'NFT';
         throw {
           status: 409,
-          error: 'This Demon King NFT is already loaded on a ship',
-          code: 'DEMON_KING_NFT_ALREADY_LOADED',
+          error: `This ${label} NFT is already loaded on a ship`,
+          code: 'NFT_TROOP_ALREADY_LOADED',
           building_id: loaded.buildingId,
         };
       }
@@ -10266,10 +11225,10 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     return res.status(400).json({ error: 'Valid integer slot and troop_name required' });
   }
   if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
-  let verifiedDemonKing = null;
-  if (normalizedTroop === 'DemonKing') {
-    verifiedDemonKing = await verifyDemonKingNftLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
-    if (verifiedDemonKing.error) return res.status(verifiedDemonKing.status || 400).json(verifiedDemonKing);
+  let verifiedNftTroop = null;
+  if (_isNftBackedTroop(normalizedTroop)) {
+    verifiedNftTroop = await verifyNftBackedTroopLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
+    if (verifiedNftTroop?.error) return res.status(verifiedNftTroop.status || 400).json(verifiedNftTroop);
   }
 
   const txn = db.db.transaction(() => {
@@ -10286,26 +11245,27 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     if (!span) throw { status: 400, error: 'Not enough ship capacity for this troop' };
     const slotsToReplace = span.end - span.start;
     const replacement = [];
-    const troopEntry = verifiedDemonKing?.troopEntry || _canonicalTroopEntry(troop_name);
+    const troopEntry = verifiedNftTroop?.troopEntry || _canonicalTroopEntry(troop_name);
     _appendTroopSlots(replacement, troopEntry);
-    if (normalizedTroop === 'DemonKing') {
-      const loaded = _findLoadedDemonKingToken(req.player.id, _demonKingEntryKey(troopEntry), {
+    if (_isNftBackedTroop(normalizedTroop)) {
+      const loaded = _findLoadedNftBackedToken(req.player.id, _nftBackedEntryKey(troopEntry), {
         exceptBuildingId: buildingId,
         exceptStart: span.start,
         exceptEnd: span.end,
       });
       if (loaded) {
+        const label = _nftBackedTroopConfig(normalizedTroop)?.label || 'NFT';
         throw {
           status: 409,
-          error: 'This Demon King NFT is already loaded on a ship',
-          code: 'DEMON_KING_NFT_ALREADY_LOADED',
+          error: `This ${label} NFT is already loaded on a ship`,
+          code: 'NFT_TROOP_ALREADY_LOADED',
           building_id: loaded.buildingId,
         };
       }
     }
 
     const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
-    const swapCost = normalizedTroop === 'DemonKing' ? 0 : TROOP_COST;
+    const swapCost = _isNftBackedTroop(normalizedTroop) ? 0 : TROOP_COST;
     if (player.gold < swapCost) throw { status: 400, error: 'Not enough gold' };
 
     if (swapCost > 0) db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(swapCost, req.player.id);
@@ -10424,8 +11384,8 @@ router.post('/troop-died', auth, (req, res) => {
   const { troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!troop_name || !KNOWN_TROOPS.has(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop' });
-  if (normalizedTroop === 'DemonKing') {
-    return res.json({ success: true, recorded: true, removed: null, persistent: true, troop_name: 'DemonKing' });
+  if (_isNftBackedTroop(normalizedTroop)) {
+    return res.json({ success: true, recorded: true, removed: null, persistent: true, troop_name: normalizedTroop });
   }
 
   res.json({
@@ -10461,7 +11421,7 @@ router.get('/casualties', auth, (req, res) => {
       if (portMissing >= missingSlots) break;
       if (_isSlotFiller(t)) continue;
       const normalized = _normalizeTroopName(t);
-      if (normalized === 'DemonKing') continue;
+      if (_isNftBackedTroop(normalized)) continue;
       if (currentCounts[normalized] && currentCounts[normalized] > 0) {
         currentCounts[normalized]--;
       } else {
@@ -10507,7 +11467,7 @@ router.post('/reinforce', auth, (req, res) => {
         if (toAdd.length >= missingSlots) break;
         if (_isSlotFiller(t)) continue;
         const normalized = _normalizeTroopName(t);
-        if (normalized === 'DemonKing') continue;
+        if (_isNftBackedTroop(normalized)) continue;
         if (currentCounts[normalized] && currentCounts[normalized] > 0) {
           currentCounts[normalized]--;
         } else {
@@ -10523,10 +11483,11 @@ router.post('/reinforce', auth, (req, res) => {
     if (totalToRestore === 0) return { cost: 0, restored: 0, ships: [] };
 
     const totalCost = totalToRestore * REINFORCE_COST;
-    const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
-    if (player.gold < totalCost) throw { status: 400, error: `Not enough gold (need ${totalCost})` };
-
-    db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(totalCost, req.player.id);
+    const spent = db.subtractResources(req.player.id, totalCost, 0, 0, {
+      sourceType: 'reinforce',
+      metadata: { restored: totalToRestore, cost_gold: totalCost },
+    });
+    if (spent?.error) throw { status: 400, error: `Not enough gold (need ${totalCost})` };
 
     // Append missing troops to current (preserves swaps, only restores casualties)
     // Cap to ship capacity to prevent overflow from swap+reinforce combo
@@ -10660,6 +11621,7 @@ const GOLD_FIRST_DEPOSIT = 500;
 const GOLD_FIRST_TRADE = 300;
 const GOLD_DAILY_TRADE = 450;
 const GOLD_PER_10_USD_PROFIT = 150; // +150 gold per $10 positive PnL
+const FLASH_REWARD_MIN_NOTIONAL_USD = Math.max(0.01, Math.min(10, Number(process.env.FLASH_REWARD_MIN_NOTIONAL_USD || 1)));
 
 function volumeGoldForDex(dex, usdVolume) {
   const volume = Number(usdVolume);
@@ -11415,30 +12377,6 @@ function futuresDbReadonly() {
   return _futuresDb;
 }
 
-async function importGrvtFillsForClaim(playerId) {
-  try {
-    const futuresDb = require('../server-futures/db');
-    const grvt = require('../server-futures/grvt');
-    const creds = futuresDb.getGrvtCredentials(playerId);
-    if (!creds?.apiKey || !creds?.subAccountId) return null;
-    return await grvt.importFillsForPlayer(playerId, creds, { limit: 100 });
-  } catch (e) {
-    console.warn('[claim-gold grvt] pre-import failed:', e.message);
-    return null;
-  }
-}
-
-async function importHotstuffFillsForClaim(playerId, wallet) {
-  try {
-    const hotstuff = require('../server-futures/hotstuff');
-    if (!hotstuff.isEvmAddress(wallet)) return null;
-    return await hotstuff.importFillsForPlayer(playerId, wallet, { limit: 100 });
-  } catch (e) {
-    console.warn('[claim-gold hotstuff] pre-import failed:', e.message);
-    return null;
-  }
-}
-
 router.post('/trading/claim-gold', auth, async (req, res) => {
   const claimStartedAt = Date.now();
   // Rate limit
@@ -11472,6 +12410,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   const playerDex = VALID_DEXES.has(String(req.player.dex || '').toLowerCase())
     ? String(req.player.dex).toLowerCase()
     : 'pacifica';
+  wallet = resolveClaimWalletForDex(req.player, playerDex, wallet);
   const recordClaimTelemetry = (event = {}) => {
     db.recordTradeClaimResult({
       playerId: req.player.id,
@@ -11523,11 +12462,23 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade') {
-    if (dex === 'grvt') {
-      await importGrvtFillsForClaim(req.player.id);
-    } else if (dex === 'hotstuff') {
-      await importHotstuffFillsForClaim(req.player.id, wallet);
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') {
+    const reconcile = await tradeRecon.reconcileTradesForPlayer(req.player, {
+      dex,
+      wallet,
+      headers: req.headers,
+      reason: 'claim_gold',
+      limit: 100,
+    });
+    if (reconcile.imported || reconcile.adopted || reconcile.updated || reconcile.errors || (reconcile.skipped && reconcile.skipped !== 'cooldown' && reconcile.skipped !== 'worker_indexed')) {
+      console.log(`[claim-gold ${dex}] reconcile player=${req.player.name} ${JSON.stringify({
+        imported: reconcile.imported || 0,
+        adopted: reconcile.adopted || 0,
+        updated: reconcile.updated || 0,
+        checked: reconcile.checked || 0,
+        skipped: reconcile.skipped || null,
+        errors: reconcile.errors || 0,
+      })}`);
     }
     const fdb = futuresDbReadonly();
     if (!fdb) {
@@ -11543,7 +12494,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // had a similar early-rollout risk while we were tuning import timing.
     // If a row has never paid anything, rewind the cursor once so verified
     // rows can be credited under the current rules.
-    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana')
+    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'flash')
       && Number(reward.last_trade_id || 0) > 0
       && Number(reward.total_volume || 0) === 0
       && Number(reward.total_gold || 0) === 0) {
@@ -11555,29 +12506,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let newTrades = [];
     let hyperliquidWalletRowsAvailable = 0;
     const rewardSettleDelaySql = `-${TRADE_REWARD_SETTLE_DELAY_SECONDS} seconds`;
-    const sourceWhere = dex === 'decibel'
-      ? "AND verified_source = 'decibel_fill'"
-      : dex === 'monad'
-        ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
-        : dex === 'hyperliquid'
-          ? "AND verified_source = 'hyperliquid_api'"
-        : dex === 'risex'
-          ? "AND verified_source = 'risex_api'"
-          : dex === 'nado'
-            ? "AND verified_source = 'nado_api'"
-          : dex === 'hibachi'
-            ? "AND verified_source = 'hibachi_api'"
-          : dex === 'hotstuff'
-            ? "AND verified_source = 'hotstuff_api'"
-          : dex === 'grvt'
-            ? "AND verified_source = 'grvt_builder'"
-          : dex === 'katana'
-            ? "AND verified_source = 'katana_api'"
-          : dex === 'gmtrade'
-            ? "AND verified_source = 'gmtrade_tx'"
-          : dex === 'phoenix'
-            ? "AND verified_source IN ('worker', 'tx')"
-        : "AND verified_source = 'worker'";
+    const sourceWhere = tradeRecon.verifiedSourceWhereForDex(dex, { prefix: 'AND ' });
     const hyperliquidWalletPrefix = dex === 'hyperliquid' && EVM_WALLET_RE.test(String(wallet || ''))
       ? `hyperliquid:${String(wallet).toLowerCase()}:%`
       : null;
@@ -11767,7 +12696,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // a sensible micro-trade floor across all four DEXes.
     const SANE_MIN_NOTIONAL = dex === 'gmx'
       ? 0
-      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade') ? 10 : 50;
+      : dex === 'flash'
+        ? FLASH_REWARD_MIN_NOTIONAL_USD
+      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -12301,6 +13232,33 @@ try {
     );
     CREATE INDEX IF NOT EXISTS idx_gold_history_player ON gold_history(player_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_player_trades_player ON player_trades(player_id, created_at);
+    DROP TRIGGER IF EXISTS trg_referral_pacifica_builder_fee;
+    CREATE TRIGGER IF NOT EXISTS trg_referral_pacifica_builder_fee
+    AFTER INSERT ON player_trades
+    WHEN NEW.fee IS NOT NULL
+    BEGIN
+      INSERT OR IGNORE INTO referral_events (
+        referrer_player_id, referred_player_id, source_type, source_id,
+        revenue_kind, currency, gross_usd_e6, commission_usd_e6,
+        status, metadata_json, confirmed_at
+      )
+      SELECT
+        pr.referrer_player_id,
+        NEW.player_id,
+        'pacifica_builder_fee',
+        COALESCE(CAST(NEW.history_id AS TEXT), CAST(NEW.id AS TEXT)),
+        'builder_fee',
+        'USD',
+        CAST(ABS(CAST(COALESCE(NULLIF(NEW.fee, ''), '0') AS REAL)) * 1000000 AS INTEGER),
+        CAST(ABS(CAST(COALESCE(NULLIF(NEW.fee, ''), '0') AS REAL)) * 1000000 * 1000 / 10000 AS INTEGER),
+        'confirmed',
+        json_object('symbol', NEW.symbol, 'price', NEW.price, 'amount', NEW.amount),
+        datetime('now')
+      FROM player_referrals pr
+      WHERE pr.referred_player_id = NEW.player_id
+        AND pr.referrer_player_id <> NEW.player_id
+        AND ABS(CAST(COALESCE(NULLIF(NEW.fee, ''), '0') AS REAL)) > 0;
+    END;
   `);
 } catch { /* non-fatal on first boot */ }
 
@@ -12317,33 +13275,18 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') {
+    await tradeRecon.reconcileTradesForPlayer(req.player, {
+      dex,
+      wallet: req.player.wallet,
+      headers: req.headers,
+      reason: 'stats',
+      limit: 50,
+    });
     const fdb = futuresDbReadonly();
     if (fdb) {
       try {
-        const sourceClause = dex === 'decibel'
-          ? "AND verified_source = 'decibel_fill'"
-          : dex === 'monad'
-            ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
-            : dex === 'hyperliquid'
-              ? "AND verified_source = 'hyperliquid_api'"
-            : dex === 'risex'
-              ? "AND verified_source = 'risex_api'"
-              : dex === 'nado'
-                ? "AND verified_source = 'nado_api'"
-              : dex === 'hibachi'
-                ? "AND verified_source = 'hibachi_api'"
-              : dex === 'hotstuff'
-                ? "AND verified_source = 'hotstuff_api'"
-              : dex === 'grvt'
-                ? "AND verified_source = 'grvt_builder'"
-              : dex === 'katana'
-                ? "AND verified_source = 'katana_api'"
-              : dex === 'gmtrade'
-                ? "AND verified_source = 'gmtrade_tx'"
-              : dex === 'phoenix'
-                ? "AND verified_source IN ('worker', 'tx')"
-            : "AND verified_source = 'worker'";
+        const sourceClause = tradeRecon.verifiedSourceWhereForDex(dex, { prefix: 'AND ' });
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
           FROM trade_history
@@ -12385,7 +13328,18 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const TASK_PROGRESS_REFRESH_TIMEOUT_MS = Math.max(1000, Number(process.env.TASK_PROGRESS_REFRESH_TIMEOUT_MS || 5000));
+
+function withTaskProgressTimeout(promise, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label || 'task progress'} timed out after ${TASK_PROGRESS_REFRESH_TIMEOUT_MS}ms`)), TASK_PROGRESS_REFRESH_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
@@ -12407,7 +13361,10 @@ async function maybeRefreshTaskProgress(player, task, playerTask) {
         ).run(playerTask.snapshot, player.id, task.id);
       }
     }
-    const result = await tasks.verifyTask(player, task, snap);
+    const result = await withTaskProgressTimeout(
+      tasks.verifyTask(player, task, snap),
+      `player=${player?.name || player?.id} task=${task?.id} dex=${dex}`
+    );
     const progress = result.target_value > 0
       ? Math.min(1, result.progress_value / result.target_value)
       : 0;
@@ -12429,35 +13386,17 @@ async function maybeRefreshTaskProgress(player, task, playerTask) {
   }
 }
 
-// Rate-limit tasks endpoints per player (2s)
-const taskRateLimit = new Map();
-setInterval(() => {
-  const cutoff = Date.now() - 60000;
-  for (const [k, v] of taskRateLimit) if (v < cutoff) taskRateLimit.delete(k);
-}, 600000);
-
-// Per-player gate for task endpoints. Default 20ms (was 2000ms — bumped
-// 100× more lenient per user request). The endpoints below pass shorter
-// values (e.g. 500 → 5) which scale with the same factor automatically.
-// SQLite-backed task progress is idempotent so spam is safe.
-function rateGate(playerId, ms = 20) {
-  const effective = Math.max(0, Math.floor(ms / 100));
-  if (effective === 0) return true;
-  const last = taskRateLimit.get(playerId);
-  if (last && Date.now() - last < effective) return false;
-  taskRateLimit.set(playerId, Date.now());
-  return true;
-}
-
 // List active tasks + player progress.
 // This is a read-only hydration endpoint hit by React effects and panel
 // refreshes. It is idempotent, and the browser can legitimately issue two
 // requests in the same tick during reconnect/dev StrictMode, so we do not
-// rate-limit it. Claim/start endpoints below keep their write protections.
+// rate-limit it. Claim/start endpoints are idempotent and DB race-protected.
 router.get('/tasks', auth, async (req, res) => {
   const list = tasks.getActiveTasks();
   const out = [];
   for (const t of list) {
+    const eligibility = tasks.checkTaskEligibility(req.player, t);
+    if (!eligibility.ok) continue;
     let pt = tasks.getPlayerTask(req.player.id, t.id);
     pt = await maybeRefreshTaskProgress(req.player, t, pt);
     out.push({
@@ -12475,6 +13414,7 @@ router.get('/tasks', auth, async (req, res) => {
       progress_value: pt ? pt.progress_value : 0,
       target_value: pt ? pt.target_value : 0,
       claimed_at: pt ? pt.claimed_at : null,
+      eligibility: eligibility.eligibility,
     });
   }
   res.json(out);
@@ -12500,9 +13440,14 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
       ...extra,
     });
   };
-  if (!task || !task.active) {
+  if (!tasks.isTaskLive(task)) {
     recordTaskTelemetry('not_active', { errorReason: 'Task not active' });
     return res.status(404).json({ error: 'Task not active' });
+  }
+  const eligibility = tasks.checkTaskEligibility(req.player, task);
+  if (!eligibility.ok) {
+    recordTaskTelemetry('blocked', { errorReason: eligibility.reason, metadata: { eligibility: eligibility.eligibility, access: eligibility.access } });
+    return res.status(403).json({ error: eligibility.reason || 'Task is not available for this account', eligibility: eligibility.eligibility });
   }
 
   const existing = tasks.getPlayerTask(req.player.id, id);
@@ -12515,7 +13460,7 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
     const check = tasks.canClaim(existing, task);
     if (!check.ok && check.reason && check.reason.startsWith('Cooldown')) {
       console.log(`[task ${id} start] player=${req.player.name} -> COOLDOWN ${check.reason}`);
-      return res.status(429).json({ error: check.reason });
+      return res.status(400).json({ error: check.reason });
     }
   }
 
@@ -12530,9 +13475,6 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
 
 // Claim a task — verifies against Pacifica + battle_replays, pays out on success
 router.post('/tasks/:id/claim', auth, async (req, res) => {
-  if (!rateGate('claim:' + req.player.id, 3000)) {
-    return res.status(429).json({ error: 'slow down' });
-  }
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
   const task = tasks.getTaskById(id);
@@ -12551,7 +13493,12 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       ...extra,
     });
   };
-  if (!task || !task.active) return res.status(404).json({ error: 'Task not active' });
+  if (!tasks.isTaskLive(task)) return res.status(404).json({ error: 'Task not active' });
+  const eligibility = tasks.checkTaskEligibility(req.player, task);
+  if (!eligibility.ok) {
+    recordTaskTelemetry('blocked', { errorReason: eligibility.reason, metadata: { eligibility: eligibility.eligibility, access: eligibility.access } });
+    return res.status(403).json({ error: eligibility.reason || 'Task is not available for this account', eligibility: eligibility.eligibility });
+  }
 
   let pt = tasks.getPlayerTask(req.player.id, id);
   if (!pt) {
@@ -12565,6 +13512,16 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   const claimCheck = tasks.canClaim(pt, task);
   if (!claimCheck.ok) {
     recordTaskTelemetry('blocked', { errorReason: claimCheck.reason });
+    if (claimCheck.reason === 'Already claimed') {
+      return res.json({
+        ok: true,
+        completed: true,
+        already_claimed: true,
+        reward: { gold: 0, wood: 0, ore: 0 },
+        progress_value: pt.progress_value || 0,
+        target_value: pt.target_value || 0,
+      });
+    }
     return res.status(400).json({ error: claimCheck.reason });
   }
 
@@ -12678,7 +13635,15 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       targetValue: result.target_value,
       errorReason: 'Already claimed by parallel request',
     });
-    return res.status(409).json({ error: 'Already claimed by parallel request' });
+    return res.json({
+      ok: true,
+      completed: true,
+      already_claimed: true,
+      raced: true,
+      reward: { gold: 0, wood: 0, ore: 0 },
+      progress_value: result.progress_value,
+      target_value: result.target_value,
+    });
   }
   const paidReward = payoutRes.reward || { gold: task.reward_gold || 0, wood: task.reward_wood || 0, ore: task.reward_ore || 0 };
   console.log(`[task ${id} claim] player=${req.player.name} -> PAID gold=${paidReward.gold||0} wood=${paidReward.wood||0} ore=${paidReward.ore||0} prosperity=${paidReward.prosperity_bonus_pct||0}% (${task.title})`);
@@ -12798,6 +13763,85 @@ function isAdminRequest(req) {
   return !!(ADMIN_KEY && req.headers['x-admin-key'] === ADMIN_KEY);
 }
 
+function adminPlayerPayload(player) {
+  if (!player) return null;
+  return {
+    id: player.id,
+    name: player.name,
+    wallet: player.wallet || null,
+    dex: player.dex || null,
+    banned_at: player.banned_at || null,
+    banned_reason: player.banned_reason || null,
+    banned_by: player.banned_by || null,
+  };
+}
+
+function adminCollectPlayerWallets(player) {
+  if (!player?.id) return [];
+  const seen = new Set();
+  const wallets = [];
+  function add(rawWallet, source) {
+    const text = String(rawWallet || '').trim();
+    if (!text || !isValidWallet(text)) return;
+    const wallet = canonicalWalletIdentifier(text);
+    const key = wallet.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    wallets.push({ wallet, chain_type: walletChainType(wallet), source });
+  }
+  add(player.wallet, 'players.wallet');
+  for (const row of db.db.prepare(`
+    SELECT chain_type, address
+    FROM player_wallets
+    WHERE player_id = ?
+  `).all(player.id)) {
+    add(row.address, `player_wallets.${row.chain_type || 'wallet'}`);
+  }
+  for (const row of db.db.prepare(`
+    SELECT type, identifier
+    FROM player_auth_identities
+    WHERE player_id = ?
+  `).all(player.id)) {
+    add(row.identifier, `player_auth_identities.${row.type || 'identity'}`);
+  }
+  for (const row of db.db.prepare(`
+    SELECT dex, wallet_address
+    FROM player_dex_accounts
+    WHERE player_id = ?
+      AND wallet_address IS NOT NULL
+  `).all(player.id)) {
+    add(row.wallet_address, `player_dex_accounts.${row.dex || 'dex'}`);
+  }
+  return wallets;
+}
+
+router.get('/admin/wallet-blacklist', adminAuth, (req, res) => {
+  res.json({ ok: true, wallets: db.listWalletBlacklist(req.query?.limit) });
+});
+
+router.post('/admin/wallet-blacklist', adminAuth, (req, res) => {
+  const walletInput = String(req.body?.wallet || '').trim();
+  if (!walletInput || !isValidWallet(walletInput)) {
+    return res.status(400).json({ error: 'Valid wallet required' });
+  }
+  const wallet = canonicalWalletIdentifier(walletInput);
+  const row = db.blacklistWallet(wallet, {
+    chainType: walletChainType(wallet),
+    reason: req.body?.reason || 'admin blacklist',
+    playerId: req.body?.player_id || req.body?.playerId || null,
+    createdBy: 'admin',
+  });
+  res.json({ ok: true, wallet: row });
+});
+
+router.delete('/admin/wallet-blacklist/:wallet', adminAuth, (req, res) => {
+  const walletInput = String(req.params.wallet || '').trim();
+  if (!walletInput) return res.status(400).json({ error: 'Wallet required' });
+  const wallet = isValidWallet(walletInput) ? canonicalWalletIdentifier(walletInput) : walletInput;
+  const result = db.unblacklistWallet(wallet);
+  res.json({ ok: true, removed: result.changes || 0 });
+});
+
 router.post('/admin/shop/solana/reconcile', adminAuth, async (req, res) => {
   try {
     const limit = Number(req.body?.limit || req.query?.limit || 100);
@@ -12815,7 +13859,7 @@ router.get('/admin/players', adminAuth, (req, res) => {
     SELECT id, name, trophies, level, gold, wood, ore, wallet, dex,
            futures_mode, tutorial_flags,
            shield_until, last_attacked_by, last_attacked_at, created_at,
-           last_seen_at
+           last_seen_at, banned_at, banned_reason, banned_by
     FROM players
     WHERE COALESCE(is_bot, 0) = 0
     ORDER BY trophies DESC
@@ -12909,6 +13953,7 @@ router.get('/admin/players', adminAuth, (req, res) => {
     return {
       ...p,
       dex: p.dex || null,
+      banned: !!p.banned_at,
       // futures_mode: 'pro' | 'basic' | null. NULL means user has not yet
       // made the first-time selection (haven't opened the futures panel
       // since the feature shipped).
@@ -12934,6 +13979,506 @@ router.get('/admin/players', adminAuth, (req, res) => {
       last_seen_age_sec: lastSeenMs ? Math.floor(ageMs / 1000) : null,
     };
   }));
+});
+
+router.post('/admin/players/:name/ban', adminAuth, (req, res) => {
+  const identifier = String(req.params.name || '').trim();
+  const existing = db.getAdminPlayer(identifier);
+  if (!existing) return res.status(404).json({ error: 'Player not found' });
+  const reason = String(req.body?.reason || 'admin ban').trim().slice(0, 500) || 'admin ban';
+  const banned = db.banPlayer(existing.id, { reason, bannedBy: 'admin' });
+  const blacklistedWallets = [];
+  if (req.body?.blacklist_wallets === true || req.body?.blacklistWallets === true) {
+    for (const item of adminCollectPlayerWallets(existing)) {
+      const row = db.blacklistWallet(item.wallet, {
+        chainType: item.chain_type,
+        reason,
+        playerId: existing.id,
+        createdBy: 'admin-ban',
+      });
+      if (row) blacklistedWallets.push({ ...item, reason: row.reason });
+    }
+  }
+  res.json({
+    ok: true,
+    player: adminPlayerPayload(banned),
+    blacklisted_wallets: blacklistedWallets,
+  });
+});
+
+router.post('/admin/players/:name/unban', adminAuth, (req, res) => {
+  const identifier = String(req.params.name || '').trim();
+  const unbanned = db.unbanPlayer(identifier);
+  if (!unbanned) return res.status(404).json({ error: 'Player not found' });
+  res.json({ ok: true, player: adminPlayerPayload(unbanned) });
+});
+
+function adminProfileSqlMs(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  const parsed = Date.parse(text.includes('T') ? text : `${text.replace(' ', 'T')}Z`);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function adminProfileAgeDays(value) {
+  const ms = adminProfileSqlMs(value);
+  if (!ms) return null;
+  return Math.max(0, (Date.now() - ms) / 86400000);
+}
+
+function adminProfileParseJson(value, fallback = {}) {
+  if (!value) return fallback;
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function adminProfileRedact(value, depth = 0) {
+  if (value === null || value === undefined) return value;
+  if (depth > 4) return '[redacted-depth]';
+  if (Array.isArray(value)) return value.slice(0, 60).map((item) => adminProfileRedact(item, depth + 1));
+  if (typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const k = String(key || '').toLowerCase();
+    if (
+      k.includes('token') ||
+      k.includes('secret') ||
+      k.includes('private') ||
+      k.includes('credential') ||
+      k.includes('authorization') ||
+      k.includes('signature') ||
+      k.includes('password') ||
+      k.includes('encrypted') ||
+      k.includes('api_key') ||
+      k.includes('apikey')
+    ) {
+      out[key] = '[redacted]';
+    } else {
+      out[key] = adminProfileRedact(raw, depth + 1);
+    }
+  }
+  return out;
+}
+
+function adminProfileSafePayload(value) {
+  const parsed = adminProfileParseJson(value, null);
+  if (!parsed) return null;
+  return adminProfileRedact(parsed);
+}
+
+function adminProfileSessions(events) {
+  const sorted = [...(events || [])]
+    .map((event) => ({ ...event, ms: adminProfileSqlMs(event.created_at) }))
+    .filter((event) => event.ms > 0)
+    .sort((a, b) => a.ms - b.ms);
+  const sessions = [];
+  let current = null;
+  const gapMs = 30 * 60 * 1000;
+  for (const event of sorted) {
+    if (!current || event.ms - current.end_ms > gapMs) {
+      current = { start_ms: event.ms, end_ms: event.ms, events: 1 };
+      sessions.push(current);
+    } else {
+      current.end_ms = event.ms;
+      current.events += 1;
+    }
+  }
+  const totalMs = sessions.reduce((sum, session) => sum + Math.max(60_000, session.end_ms - session.start_ms), 0);
+  return {
+    estimated_hours: Number((totalMs / 3600000).toFixed(2)),
+    sessions: sessions.length,
+    avg_session_minutes: sessions.length ? Math.round((totalMs / sessions.length) / 60000) : 0,
+    active_days: new Set(sorted.map((event) => new Date(event.ms).toISOString().slice(0, 10))).size,
+    first_seen: sorted[0]?.created_at || null,
+    last_action: sorted[sorted.length - 1]?.created_at || null,
+    recent_sessions: sessions.slice(-10).reverse().map((session) => ({
+      start_at: new Date(session.start_ms).toISOString().slice(0, 19).replace('T', ' '),
+      end_at: new Date(session.end_ms).toISOString().slice(0, 19).replace('T', ' '),
+      minutes: Math.max(1, Math.round((session.end_ms - session.start_ms) / 60000)),
+      events: session.events,
+    })),
+  };
+}
+
+function adminProfileHeatmap(events) {
+  const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, events: 0 }));
+  const weekdays = Array.from({ length: 7 }, (_, weekday) => ({ weekday, events: 0 }));
+  for (const event of events || []) {
+    const ms = adminProfileSqlMs(event.created_at);
+    if (!ms) continue;
+    const d = new Date(ms);
+    hours[d.getUTCHours()].events += 1;
+    weekdays[d.getUTCDay()].events += 1;
+  }
+  return { hours, weekdays };
+}
+
+function adminProfileTaskParams(row) {
+  return adminProfileRedact(adminProfileParseJson(row?.params, {}));
+}
+
+function adminBuildPlayerProfile(player) {
+  const playerId = player.id;
+  const now = Date.now();
+  const createdAgeDays = adminProfileAgeDays(player.created_at);
+  const lastSeenMs = adminProfileSqlMs(player.last_seen_at);
+  const lastSeenAgeMs = lastSeenMs ? now - lastSeenMs : Infinity;
+
+  const buildings = adminSafeAll(
+    'SELECT id, type, level, grid_x, grid_z, grid_index, hp, max_hp, has_ship, ship_troops, ship_troops_template, created_at FROM buildings WHERE player_id = ? ORDER BY grid_index, type, level DESC, id',
+    [playerId]
+  ).map((row) => ({
+    ...row,
+    ship_troops: adminProfileParseJson(row.ship_troops, []),
+    ship_troops_template: adminProfileParseJson(row.ship_troops_template, []),
+  }));
+  const townHall = buildings.filter((b) => b.type === 'town_hall').sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0] || null;
+  const buildingsByType = Object.values(buildings.reduce((acc, building) => {
+    const key = building.type || 'unknown';
+    if (!acc[key]) acc[key] = { type: key, count: 0, max_level: 0, levels: {} };
+    acc[key].count += 1;
+    acc[key].max_level = Math.max(acc[key].max_level, Number(building.level || 0));
+    acc[key].levels[building.level || 0] = (acc[key].levels[building.level || 0] || 0) + 1;
+    return acc;
+  }, {})).sort((a, b) => a.type.localeCompare(b.type));
+  const duplicateCells = Object.values(buildings.reduce((acc, b) => {
+    const key = `${b.grid_index}:${b.grid_x}:${b.grid_z}`;
+    if (!acc[key]) acc[key] = { key, count: 0, buildings: [] };
+    acc[key].count += 1;
+    acc[key].buildings.push({ id: b.id, type: b.type, level: b.level });
+    return acc;
+  }, {})).filter((entry) => entry.count > 1);
+  const shipBuildings = buildings.filter((b) => Number(b.has_ship || 0) || b.type === 'port');
+  const troopLevels = adminSafeAll('SELECT troop_type, level FROM troop_levels WHERE player_id = ? ORDER BY troop_type', [playerId]);
+  const altarSkills = adminSafeAll('SELECT skill_id, level FROM altar_skill_levels WHERE player_id = ? ORDER BY skill_id', [playerId]);
+  const wallets = adminSafeAll(`
+    SELECT chain_type, address, label, is_primary, created_at, updated_at
+      FROM player_wallets
+     WHERE player_id = ?
+     ORDER BY is_primary DESC, updated_at DESC
+  `, [playerId]);
+  const identities = adminSafeAll(`
+    SELECT type, identifier, verified_at, created_at
+      FROM player_auth_identities
+     WHERE player_id = ?
+     ORDER BY verified_at DESC, created_at DESC
+  `, [playerId]);
+  const dexAccounts = adminSafeAll(`
+    SELECT dex, chain_type, wallet_address, account_id, status, metadata_json, created_at, updated_at
+      FROM player_dex_accounts
+     WHERE player_id = ?
+     ORDER BY updated_at DESC
+  `, [playerId]).map((row) => ({
+    ...row,
+    metadata: adminProfileSafePayload(row.metadata_json),
+    metadata_json: undefined,
+  }));
+  const nfts = adminSafeAll(`
+    SELECT collection, chain, token_id, wallet, level, image_url, active, source, tx_hash, verified_at, last_seen_at, updated_at
+      FROM player_nfts
+     WHERE player_id = ?
+     ORDER BY active DESC, collection, updated_at DESC
+  `, [playerId]);
+  const nftSummary = {
+    active: nfts.filter((n) => Number(n.active || 0) === 1).length,
+    demon_king: nfts.filter((n) => n.collection === 'demon_king' && Number(n.active || 0) === 1).length,
+    dragon: nfts.filter((n) => n.collection === 'dragon' && Number(n.active || 0) === 1).length,
+  };
+  const rewards = adminSafeAll(`
+    SELECT dex, wallet, agent_wallet, total_gold, total_volume, total_pnl_gold, pnl_gold_pool, last_daily, last_trade_id, first_deposit, first_trade
+      FROM trading_rewards
+     WHERE player_id = ?
+     ORDER BY total_volume DESC
+  `, [playerId]);
+  const goldHistory = adminSafeAll(`
+    SELECT amount, reason, created_at
+      FROM gold_history
+     WHERE player_id = ?
+     ORDER BY created_at DESC
+     LIMIT 100
+  `, [playerId]);
+  let futuresTrades = [];
+  try {
+    const fdb = futuresDbReadonly();
+    if (fdb) {
+      futuresTrades = fdb.prepare(`
+        SELECT id, dex, symbol, side, amount, price, notional_usd, pnl, status, verified_source, order_id, created_at
+          FROM trade_history
+         WHERE player_id = ?
+         ORDER BY id DESC
+         LIMIT 120
+      `).all(playerId);
+    }
+  } catch (e) {
+    futuresTrades = [{ error: `futures.db read failed: ${e.message}` }];
+  }
+  const playerTrades = adminSafeAll(`
+    SELECT history_id, symbol, price, amount, fee, created_at
+      FROM player_trades
+     WHERE player_id = ?
+     ORDER BY created_at DESC
+     LIMIT 80
+  `, [playerId]);
+  const taskRows = adminSafeAll(`
+    SELECT pt.task_id, pt.progress, pt.progress_value, pt.target_value, pt.started_at, pt.claimed_at,
+           t.type, t.title, t.reward_gold, t.reward_wood, t.reward_ore, t.repeatable, t.cooldown_hours, t.active, t.params
+      FROM player_tasks pt
+      LEFT JOIN tasks t ON t.id = pt.task_id
+     WHERE pt.player_id = ?
+     ORDER BY COALESCE(pt.claimed_at, pt.started_at) DESC
+     LIMIT 120
+  `, [playerId]).map((row) => ({ ...row, params: adminProfileTaskParams(row) }));
+  const taskClaims = adminSafeAll(`
+    SELECT task_id, task_type, task_title, result, progress_value, target_value, reward_gold, reward_wood, reward_ore, repeatable, cooldown_hours, error_reason, metadata_json, created_at
+      FROM task_claim_events
+     WHERE player_id = ?
+     ORDER BY created_at DESC
+     LIMIT 150
+  `, [playerId]).map((row) => ({ ...row, metadata: adminProfileSafePayload(row.metadata_json), metadata_json: undefined }));
+  const claimSummary = adminSafeGet(`
+    SELECT COUNT(*) AS attempts,
+           COALESCE(SUM(CASE WHEN result = 'claimed' THEN 1 ELSE 0 END), 0) AS claimed,
+           COALESCE(SUM(CASE WHEN result NOT IN ('claimed','already_claimed','cooldown') THEN 1 ELSE 0 END), 0) AS failed,
+           MAX(created_at) AS last_attempt_at
+      FROM task_claim_events
+     WHERE player_id = ?
+  `, [playerId]);
+  const battles = adminSafeAll(`
+    SELECT id, attacker_id, defender_id, claimed_result, verified_result, verification_reason,
+           loot_gold, loot_wood, loot_ore, duration_sec, created_at
+      FROM battle_replays
+     WHERE attacker_id = ? OR defender_id = ?
+     ORDER BY created_at DESC
+     LIMIT 100
+  `, [playerId, playerId]).map((row) => ({
+    ...row,
+    role: row.attacker_id === playerId ? 'attack' : 'defense',
+  }));
+  const battleSummary = adminSafeGet(`
+    SELECT COUNT(*) AS total,
+           COALESCE(SUM(CASE WHEN attacker_id = ? THEN 1 ELSE 0 END), 0) AS attacks,
+           COALESCE(SUM(CASE WHEN defender_id = ? THEN 1 ELSE 0 END), 0) AS defenses,
+           COALESCE(SUM(CASE WHEN attacker_id = ? AND lower(claimed_result) = 'victory' THEN 1 ELSE 0 END), 0) AS attack_wins,
+           COALESCE(SUM(CASE WHEN lower(COALESCE(verified_result, '')) NOT IN ('accepted','victory') THEN 1 ELSE 0 END), 0) AS rejected
+      FROM battle_replays
+     WHERE attacker_id = ? OR defender_id = ?
+  `, [playerId, playerId, playerId, playerId, playerId]);
+  const battleSessions = adminSafeAll(`
+    SELECT id, attacker_id, defender_id, status, reserved_until, surrendered_at, created_at, completed_at
+      FROM battle_sessions
+     WHERE attacker_id = ? OR defender_id = ?
+     ORDER BY created_at DESC
+     LIMIT 80
+  `, [playerId, playerId]).map((row) => ({
+    ...row,
+    role: row.attacker_id === playerId ? 'attack' : 'defense',
+  }));
+  const activityEvents = adminSafeAll(`
+    SELECT event_type, source, created_at
+      FROM player_activity_events
+     WHERE player_id = ?
+       AND created_at > datetime('now', '-90 days')
+     ORDER BY created_at ASC
+     LIMIT 5000
+  `, [playerId]);
+  const clientLogs = adminSafeAll(`
+    SELECT id, level, source, url, ua, message, stack, payload, created_at
+      FROM client_logs
+     WHERE player_id = ?
+     ORDER BY created_at DESC
+     LIMIT 150
+  `, [playerId]).map((row) => ({
+    ...row,
+    payload: adminProfileSafePayload(row.payload),
+  }));
+  const feedback = adminSafeAll(`
+    SELECT id, kind, message, contact_type, contact_value, page_url, ua, viewport, status, created_at, updated_at
+      FROM user_feedback
+     WHERE player_id = ?
+     ORDER BY created_at DESC
+     LIMIT 60
+  `, [playerId]);
+  const supportStats = {
+    recent_errors_24h: clientLogs.filter((log) => ['error', 'warn', 'warning'].includes(String(log.level || '').toLowerCase()) && adminProfileAgeDays(log.created_at) <= 1).length,
+    recent_errors_7d: clientLogs.filter((log) => ['error', 'warn', 'warning'].includes(String(log.level || '').toLowerCase()) && adminProfileAgeDays(log.created_at) <= 7).length,
+    feedback_open: feedback.filter((row) => !['closed', 'resolved', 'done'].includes(String(row.status || '').toLowerCase())).length,
+    latest_url: clientLogs.find((row) => row.url)?.url || feedback.find((row) => row.page_url)?.page_url || null,
+    latest_ua: clientLogs.find((row) => row.ua)?.ua || feedback.find((row) => row.ua)?.ua || null,
+  };
+  const sessionsAll = adminProfileSessions(activityEvents);
+  const activity7d = activityEvents.filter((event) => adminProfileAgeDays(event.created_at) <= 7);
+  const activity30d = activityEvents.filter((event) => adminProfileAgeDays(event.created_at) <= 30);
+  const sessions7d = adminProfileSessions(activity7d);
+  const sessions30d = adminProfileSessions(activity30d);
+  const totalVolume = rewards.reduce((sum, row) => sum + Number(row.total_volume || 0), 0);
+  const totalGold = rewards.reduce((sum, row) => sum + Number(row.total_gold || 0), 0);
+  const futuresVolume = futuresTrades.reduce((sum, row) => sum + Number(row.notional_usd || 0), 0);
+  const recentClaimFailures = taskClaims.filter((row) => String(row.result || '').toLowerCase() !== 'claimed' && adminProfileAgeDays(row.created_at) <= 7).length;
+  const rewardTradeCount = rewards.reduce((sum, row) => sum + Number(row.last_trade_id || 0), 0);
+  const flags = [];
+  if (player.banned_at) flags.push({ key: 'banned', label: 'Banned account', tone: 'red' });
+  if (createdAgeDays !== null && createdAgeDays <= 7 && totalVolume >= 10_000) flags.push({ key: 'new_high_value', label: 'New high value', tone: 'green' });
+  if (!townHall || (Number(battleSummary.total || 0) <= 0 && totalVolume <= 0)) flags.push({ key: 'stuck_onboarding', label: 'Stuck onboarding', tone: 'gold' });
+  if (recentClaimFailures >= 3) flags.push({ key: 'quest_friction', label: 'Quest friction', tone: 'red' });
+  if ((futuresTrades.length || playerTrades.length) > 0 && totalGold <= 0) flags.push({ key: 'trade_credit_gap', label: 'Trade credit gap', tone: 'red' });
+  if (nftSummary.demon_king || nftSummary.dragon) flags.push({ key: 'nft_holder', label: 'NFT holder', tone: 'purple' });
+  if (lastSeenAgeMs > 7 * 86400000 && (Number(battleSummary.total || 0) > 0 || totalVolume > 0)) flags.push({ key: 'at_risk', label: 'At risk', tone: 'red' });
+  if (supportStats.feedback_open > 0 || supportStats.recent_errors_7d >= 5) flags.push({ key: 'support_hot', label: 'Support hot', tone: 'red' });
+
+  return {
+    player: {
+      id: player.id,
+      name: player.name,
+      wallet: player.wallet || null,
+      dex: player.dex || null,
+      futures_mode: player.futures_mode || null,
+      created_at: player.created_at,
+      last_seen_at: player.last_seen_at || null,
+      banned_at: player.banned_at || null,
+      banned_reason: player.banned_reason || null,
+      banned_by: player.banned_by || null,
+      online: lastSeenAgeMs <= 5 * 60 * 1000,
+      last_seen_age_sec: Number.isFinite(lastSeenAgeMs) ? Math.max(0, Math.floor(lastSeenAgeMs / 1000)) : null,
+      resources: { gold: player.gold, wood: player.wood, ore: player.ore },
+      trophies: player.trophies,
+      level: player.level,
+      shield_until: player.shield_until || null,
+      shield_active: player.shield_until && adminProfileSqlMs(player.shield_until) > now,
+      battle_wins: player.battle_wins || 0,
+      is_seeker: Number(player.is_seeker || 0) === 1,
+      seeker_id: player.seeker_id || null,
+      seeker_source: player.seeker_source || null,
+    },
+    overview: {
+      town_hall_level: Number(townHall?.level || 0),
+      buildings_count: buildings.length,
+      wallets_count: wallets.length,
+      dex_accounts_count: dexAccounts.length,
+      active_nfts: nftSummary.active,
+      total_trade_volume: Number(totalVolume.toFixed(2)),
+      total_trade_gold: totalGold,
+      battle_wins: Number(battleSummary.attack_wins || player.battle_wins || 0),
+    },
+    base: {
+      town_hall: townHall,
+      buildings_count: buildings.length,
+      buildings_by_type: buildingsByType,
+      buildings: buildings.slice(0, 300),
+      ships: shipBuildings,
+      troop_levels: troopLevels,
+      altar_skills: altarSkills,
+      diagnostics: {
+        missing_town_hall: !townHall,
+        duplicate_cells: duplicateCells,
+        empty_base: buildings.length === 0,
+        ports: buildings.filter((b) => b.type === 'port').length,
+      },
+    },
+    identity: {
+      primary_login_wallet: player.wallet || wallets.find((w) => Number(w.is_primary || 0) === 1)?.address || null,
+      wallets,
+      identities,
+      dex_accounts: dexAccounts,
+    },
+    activity: {
+      all_time: sessionsAll,
+      last_7d: sessions7d,
+      last_30d: sessions30d,
+      heatmap: adminProfileHeatmap(activity30d),
+      recent_events: activityEvents.slice(-100).reverse(),
+    },
+    trading: {
+      rewards,
+      summary: {
+        total_volume: Number(totalVolume.toFixed(2)),
+        total_gold: totalGold,
+        futures_trade_rows: futuresTrades.length,
+        cached_trade_rows: playerTrades.length,
+        latest_claim_at: goldHistory[0]?.created_at || null,
+      },
+      latest_futures_trades: futuresTrades,
+      latest_cached_trades: playerTrades,
+      gold_history: goldHistory,
+      suspicious: {
+        trades_exist_without_gold: (futuresTrades.length || playerTrades.length) > 0 && totalGold <= 0,
+        futures_volume_without_rewards: futuresVolume > totalVolume + 100,
+        reward_trade_cursor_sum: rewardTradeCount,
+      },
+    },
+    quests: {
+      current: taskRows,
+      claims: taskClaims,
+      summary: {
+        attempts: Number(claimSummary.attempts || 0),
+        claimed: Number(claimSummary.claimed || 0),
+        failed: Number(claimSummary.failed || 0),
+        last_attempt_at: claimSummary.last_attempt_at || null,
+      },
+    },
+    nft: {
+      summary: nftSummary,
+      items: nfts,
+    },
+    battles: {
+      summary: {
+        total: Number(battleSummary.total || 0),
+        attacks: Number(battleSummary.attacks || 0),
+        defenses: Number(battleSummary.defenses || 0),
+        attack_wins: Number(battleSummary.attack_wins || 0),
+        rejected: Number(battleSummary.rejected || 0),
+      },
+      replays: battles,
+      sessions: battleSessions,
+    },
+    support: {
+      stats: supportStats,
+      client_logs: clientLogs,
+      feedback,
+    },
+    marketing: {
+      account_age_days: createdAgeDays === null ? null : Number(createdAgeDays.toFixed(1)),
+      acquisition_wallet_type: walletChainType(player.wallet || wallets[0]?.address || ''),
+      acquisition_dex: player.dex || dexAccounts[0]?.dex || null,
+      retention_score: Math.max(0, Math.min(100, Math.round(
+        (sessions7d.active_days * 12) +
+        (Number(battleSummary.total || 0) > 0 ? 12 : 0) +
+        (totalVolume > 0 ? 18 : 0) +
+        (nftSummary.active > 0 ? 14 : 0) -
+        (lastSeenAgeMs > 7 * 86400000 ? 30 : 0)
+      ))),
+      value_segment: totalVolume >= 100000 ? 'whale' : totalVolume >= 10000 ? 'dolphin' : totalVolume > 0 ? 'trader' : 'non_trader',
+      nft_holder_segment: nftSummary.demon_king && nftSummary.dragon ? 'demon_and_dragon' : nftSummary.dragon ? 'dragon' : nftSummary.demon_king ? 'demon_king' : 'none',
+      trader_segment: totalVolume >= 50000 ? 'high_volume' : totalVolume > 0 ? 'active_trader' : 'not_started',
+      flags,
+    },
+  };
+}
+
+// Read-only Player 360 profile. It intentionally does not expose auth tokens,
+// encrypted credentials, private keys, or raw secret-bearing metadata.
+router.get('/admin/players/:id/profile', adminAuth, (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const player = db.db.prepare(`
+    SELECT id, name, trophies, level, gold, wood, ore, wallet, dex, futures_mode,
+           shield_until, last_attacked_by, last_attacked_at, created_at, last_seen_at,
+           battle_wins, is_seeker, seeker_id, seeker_source,
+           banned_at, banned_reason, banned_by
+      FROM players
+     WHERE id = ? OR name = ? OR lower(name) = lower(?)
+     LIMIT 1
+  `).get(id, id, id);
+  if (!player) return res.status(404).json({ error: 'Player not found' });
+  try {
+    res.json(adminBuildPlayerProfile(player));
+  } catch (e) {
+    console.error('[admin/player-profile] failed:', e);
+    res.status(500).json({ error: 'Player profile failed', details: e.message });
+  }
 });
 
 // One-shot fix: seed a Town Hall for every player who is missing one.
@@ -13777,7 +15322,7 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
       ORDER BY sales DESC, latest_at DESC
     `).all();
 
-    const demonKingLevelSummary = db.db.prepare(`
+    const collectionSummaryStmt = db.db.prepare(`
       SELECT
         COALESCE(COUNT(*), 0) AS total_tokens,
         COALESCE(COUNT(DISTINCT player_id), 0) AS total_players,
@@ -13786,21 +15331,65 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
         COALESCE(SUM(CASE WHEN level >= 3 THEN 1 ELSE 0 END), 0) AS lvl3_tokens,
         COALESCE(COUNT(DISTINCT CASE WHEN level >= 3 THEN player_id END), 0) AS lvl3_players
       FROM player_nfts
-      WHERE collection = 'demon_king'
+      WHERE collection = ?
         AND active = 1
-    `).get() || {};
+    `);
 
-    const demonKingByLevel = db.db.prepare(`
+    const collectionByLevelStmt = db.db.prepare(`
       SELECT level,
              COUNT(*) AS tokens,
              COUNT(DISTINCT player_id) AS players,
              MAX(updated_at) AS latest_at
       FROM player_nfts
-      WHERE collection = 'demon_king'
+      WHERE collection = ?
         AND active = 1
       GROUP BY level
       ORDER BY level ASC
-    `).all();
+    `);
+
+    const collectionByChainStmt = db.db.prepare(`
+      SELECT chain,
+             COUNT(*) AS tokens,
+             COUNT(DISTINCT player_id) AS players,
+             COUNT(DISTINCT wallet) AS wallets,
+             MAX(updated_at) AS latest_at
+      FROM player_nfts
+      WHERE collection = ?
+        AND active = 1
+      GROUP BY chain
+      ORDER BY tokens DESC, chain ASC
+    `);
+
+    const collectionByRarityStmt = db.db.prepare(`
+      SELECT COALESCE(r.rarity, 'unrevealed') AS rarity,
+             COUNT(*) AS tokens,
+             COUNT(DISTINCT n.player_id) AS players,
+             MAX(n.updated_at) AS latest_at
+      FROM player_nfts n
+      LEFT JOIN nft_rarities r
+        ON r.collection = n.collection
+       AND r.chain = n.chain
+       AND r.token_id = n.token_id
+      WHERE n.collection = ?
+        AND n.active = 1
+      GROUP BY COALESCE(r.rarity, 'unrevealed')
+      ORDER BY CASE COALESCE(r.rarity, 'unrevealed')
+        WHEN 'legendary' THEN 1
+        WHEN 'epic' THEN 2
+        WHEN 'common' THEN 3
+        ELSE 4
+      END
+    `);
+
+    const nftCollectionAnalytics = (collection) => ({
+      level_summary: collectionSummaryStmt.get(collection) || {},
+      by_level: collectionByLevelStmt.all(collection),
+      by_chain: collectionByChainStmt.all(collection),
+      by_rarity: collectionByRarityStmt.all(collection),
+    });
+
+    const demonKingAnalytics = nftCollectionAnalytics('demon_king');
+    const dragonAnalytics = nftCollectionAnalytics('dragon');
 
     res.set('Cache-Control', 'no-store');
     res.json({
@@ -13846,8 +15435,14 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
         marketplace_by_token: marketplacePaymentByToken,
       },
       demon_king: {
-        level_summary: demonKingLevelSummary,
-        by_level: demonKingByLevel,
+        ...demonKingAnalytics,
+      },
+      dragon: {
+        ...dragonAnalytics,
+      },
+      collections: {
+        demon_king: demonKingAnalytics,
+        dragon: dragonAnalytics,
       },
     });
   } catch (err) {
@@ -13934,7 +15529,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
   let futuresTrades = [];
   try {
     const fdb = futuresDbReadonly();
-    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado' || player.dex === 'hibachi' || player.dex === 'hotstuff' || player.dex === 'grvt' || player.dex === 'katana' || player.dex === 'gmtrade')) {
+    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado' || player.dex === 'hibachi' || player.dex === 'hotstuff' || player.dex === 'grvt' || player.dex === 'katana' || player.dex === 'gmtrade' || player.dex === 'flash')) {
       futuresTrades = fdb.prepare(
         `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
          FROM trade_history WHERE player_id = ? AND dex = ?
@@ -15324,7 +16919,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   const futuresByPlayer = new Map();
@@ -15332,29 +16927,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   try {
     const fdb = futuresDbReadonly();
     if (fdb) {
-      const sourceWhereForDex = (dex) => dex === 'monad'
-        ? "verified_source IN ('perpl_api', 'perpl_ws')"
-        : dex === 'hyperliquid'
-          ? "verified_source = 'hyperliquid_api'"
-        : dex === 'risex'
-          ? "verified_source = 'risex_api'"
-          : dex === 'nado'
-            ? "verified_source = 'nado_api'"
-          : dex === 'hibachi'
-            ? "verified_source = 'hibachi_api'"
-          : dex === 'hotstuff'
-            ? "verified_source = 'hotstuff_api'"
-          : dex === 'grvt'
-            ? "verified_source = 'grvt_builder'"
-          : dex === 'katana'
-            ? "verified_source = 'katana_api'"
-          : dex === 'gmtrade'
-            ? "verified_source = 'gmtrade_tx'"
-          : dex === 'decibel'
-          ? "verified_source = 'decibel_fill'"
-        : dex === 'phoenix'
-          ? "verified_source IN ('worker', 'tx')"
-          : "verified_source = 'worker'";
+      const sourceWhereForDex = (dex) => tradeRecon.verifiedSourceWhereForDex(dex);
       const nameLookup = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
       for (const dex of ACTIVITY_DEXES) {
         const sourceWhere = sourceWhereForDex(dex);
@@ -15826,6 +17399,33 @@ router.get('/admin/stats', adminAuth, (req, res) => {
 });
 
 // ---------- Admin: Tasks CRUD ----------
+function normalizeTaskScheduleDate(value, field = 'date') {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T');
+  const ms = Date.parse(normalized + (/[zZ]$/u.test(normalized) ? '' : 'Z'));
+  if (!Number.isFinite(ms)) throw new Error(`${field} must be a valid UTC datetime`);
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function normalizeTaskSchedule(startsAt, endsAt) {
+  const starts = normalizeTaskScheduleDate(startsAt, 'starts_at');
+  const ends = normalizeTaskScheduleDate(endsAt, 'ends_at');
+  if (starts && ends && ends <= starts) throw new Error('ends_at must be after starts_at');
+  return { starts_at: starts, ends_at: ends };
+}
+
+function normalizeAdminTaskParams(params) {
+  const out = params && typeof params === 'object' && !Array.isArray(params)
+    ? { ...params }
+    : {};
+  const eligibility = tasks.normalizeTaskEligibility(out.eligibility);
+  if (eligibility.mode === 'all' && !eligibility.label) delete out.eligibility;
+  else out.eligibility = eligibility;
+  if (out.side && !tasks.VALID_SIDES.includes(out.side)) throw new Error('bad side');
+  return out;
+}
+
 router.get('/admin/tasks', adminAuth, (req, res) => {
   const list = tasks.getAllTasks();
   // Per-task aggregate stats
@@ -15840,11 +17440,26 @@ router.get('/admin/tasks', adminAuth, (req, res) => {
             MAX(claimed_at) AS last_claim, MAX(started_at) AS last_start
      FROM player_tasks GROUP BY task_id`
   ).all();
+  const eventRows = db.db.prepare(`
+    SELECT task_id,
+           COUNT(*) AS attempts,
+           COALESCE(SUM(CASE WHEN result = 'paid' THEN 1 ELSE 0 END), 0) AS paid_claims,
+           COUNT(DISTINCT CASE WHEN result = 'paid' THEN player_id ELSE NULL END) AS paid_players,
+           COALESCE(SUM(CASE WHEN result = 'paid' THEN reward_gold ELSE 0 END), 0) AS paid_gold,
+           COALESCE(SUM(CASE WHEN result = 'paid' THEN reward_wood ELSE 0 END), 0) AS paid_wood,
+           COALESCE(SUM(CASE WHEN result = 'paid' THEN reward_ore ELSE 0 END), 0) AS paid_ore,
+           MAX(CASE WHEN result = 'paid' THEN created_at ELSE NULL END) AS last_paid_claim,
+           MAX(created_at) AS last_attempt
+    FROM task_claim_events
+    GROUP BY task_id
+  `).all();
   const startedMap = {}; for (const r of startedRows) startedMap[r.task_id] = r.n;
   const claimedMap = {}; for (const r of claimedRows) claimedMap[r.task_id] = r.n;
   const progMap = {}; for (const r of progressRows) progMap[r.task_id] = r;
+  const eventMap = {}; for (const r of eventRows) eventMap[r.task_id] = r;
   res.json(list.map(t => {
     const p = progMap[t.id] || {};
+    const events = eventMap[t.id] || {};
     const started = startedMap[t.id] || 0;
     const claimed = claimedMap[t.id] || 0;
     return {
@@ -15856,6 +17471,16 @@ router.get('/admin/tasks', adminAuth, (req, res) => {
       avg_progress: p.avg_progress || 0,
       last_claim: p.last_claim || null,
       last_start: p.last_start || null,
+      claim_attempt_count: Number(events.attempts || 0),
+      paid_claim_count: Number(events.paid_claims || 0),
+      paid_player_count: Number(events.paid_players || 0),
+      paid_rewards: {
+        gold: Number(events.paid_gold || 0),
+        wood: Number(events.paid_wood || 0),
+        ore: Number(events.paid_ore || 0),
+      },
+      last_paid_claim: events.last_paid_claim || null,
+      last_claim_attempt: events.last_attempt || null,
     };
   }));
 });
@@ -15863,7 +17488,12 @@ router.get('/admin/tasks', adminAuth, (req, res) => {
 // Overall quest system stats — for the big summary card
 router.get('/admin/tasks-summary', adminAuth, (req, res) => {
   const total = db.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n;
-  const active = db.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE active = 1').get().n;
+  const active = db.db.prepare(`
+    SELECT COUNT(*) AS n FROM tasks
+    WHERE active = 1
+      AND (starts_at IS NULL OR starts_at = '' OR starts_at <= datetime('now'))
+      AND (ends_at IS NULL OR ends_at = '' OR ends_at > datetime('now'))
+  `).get().n;
   const started = db.db.prepare('SELECT COUNT(*) AS n FROM player_tasks').get().n;
   const claimed = db.db.prepare('SELECT COUNT(*) AS n FROM player_tasks WHERE claimed_at IS NOT NULL').get().n;
   const uniquePlayers = db.db.prepare('SELECT COUNT(DISTINCT player_id) AS n FROM player_tasks').get().n;
@@ -15927,11 +17557,70 @@ router.get('/admin/tasks/:id/players', adminAuth, (req, res) => {
     WHERE pt.task_id = ?
     ORDER BY (pt.claimed_at IS NOT NULL) DESC, pt.started_at DESC
   `).all(id);
+  const eventRows = db.db.prepare(`
+    SELECT e.player_id,
+           p.name AS player_name,
+           p.wallet,
+           COUNT(*) AS attempt_count,
+           COALESCE(SUM(CASE WHEN e.result = 'paid' THEN 1 ELSE 0 END), 0) AS paid_claim_count,
+           COALESCE(SUM(CASE WHEN e.result = 'blocked' THEN 1 ELSE 0 END), 0) AS blocked_count,
+           COALESCE(SUM(CASE WHEN e.result = 'not_completed' THEN 1 ELSE 0 END), 0) AS not_completed_count,
+           COALESCE(SUM(CASE WHEN e.result = 'paid' THEN e.reward_gold ELSE 0 END), 0) AS paid_gold,
+           COALESCE(SUM(CASE WHEN e.result = 'paid' THEN e.reward_wood ELSE 0 END), 0) AS paid_wood,
+           COALESCE(SUM(CASE WHEN e.result = 'paid' THEN e.reward_ore ELSE 0 END), 0) AS paid_ore,
+           MAX(CASE WHEN e.result = 'paid' THEN e.created_at ELSE NULL END) AS last_paid_claim,
+           MAX(e.created_at) AS last_attempt
+    FROM task_claim_events e
+    LEFT JOIN players p ON p.id = e.player_id
+    WHERE e.task_id = ?
+    GROUP BY e.player_id
+  `).all(id);
+  const byPlayer = new Map(rows.map(row => [row.player_id, { ...row }]));
+  for (const row of eventRows) {
+    const existing = byPlayer.get(row.player_id) || {
+      player_id: row.player_id,
+      player_name: row.player_name,
+      wallet: row.wallet,
+      progress_value: 0,
+      target_value: 0,
+      started_at: null,
+      claimed_at: null,
+    };
+    byPlayer.set(row.player_id, {
+      ...existing,
+      player_name: existing.player_name || row.player_name,
+      wallet: existing.wallet || row.wallet,
+      attempt_count: Number(row.attempt_count || 0),
+      paid_claim_count: Number(row.paid_claim_count || 0),
+      blocked_count: Number(row.blocked_count || 0),
+      not_completed_count: Number(row.not_completed_count || 0),
+      paid_rewards: {
+        gold: Number(row.paid_gold || 0),
+        wood: Number(row.paid_wood || 0),
+        ore: Number(row.paid_ore || 0),
+      },
+      last_paid_claim: row.last_paid_claim || null,
+      last_attempt: row.last_attempt || null,
+    });
+  }
+  const players = Array.from(byPlayer.values()).sort((a, b) =>
+    (Number(b.paid_claim_count || 0) - Number(a.paid_claim_count || 0))
+    || (Number(b.attempt_count || 0) - Number(a.attempt_count || 0))
+    || String(b.claimed_at || b.started_at || b.last_attempt || '').localeCompare(String(a.claimed_at || a.started_at || a.last_attempt || ''))
+  );
   res.json({
-    task: { id: task.id, title: task.title, type: task.type, repeatable: !!task.repeatable },
-    players: rows,
+    task: {
+      id: task.id,
+      title: task.title,
+      type: task.type,
+      repeatable: !!task.repeatable,
+      eligibility: tasks.normalizeTaskEligibility(tasks.parseParams(task.params).eligibility),
+    },
+    players,
     started: rows.length,
     claimed: rows.filter(r => r.claimed_at).length,
+    attempts: players.reduce((sum, row) => sum + Number(row.attempt_count || 0), 0),
+    paid_claims: players.reduce((sum, row) => sum + Number(row.paid_claim_count || 0), 0),
   });
 });
 
@@ -15939,11 +17628,15 @@ router.post('/admin/tasks', adminAuth, (req, res) => {
   const b = req.body || {};
   if (!tasks.VALID_TYPES.includes(b.type)) return res.status(400).json({ error: 'bad type' });
   if (!b.title || typeof b.title !== 'string') return res.status(400).json({ error: 'title required' });
-  const params = typeof b.params === 'object' && b.params !== null ? b.params : {};
-  if (params.side && !tasks.VALID_SIDES.includes(params.side)) return res.status(400).json({ error: 'bad side' });
+  let params;
+  try { params = normalizeAdminTaskParams(b.params); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+  let schedule;
+  try { schedule = normalizeTaskSchedule(b.starts_at, b.ends_at); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
   const r = db.db.prepare(
-    `INSERT INTO tasks (type, title, description, params, reward_gold, reward_wood, reward_ore, active, repeatable, cooldown_hours, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO tasks (type, title, description, params, reward_gold, reward_wood, reward_ore, active, repeatable, cooldown_hours, sort_order, starts_at, ends_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     b.type,
     b.title.trim(),
@@ -15956,6 +17649,8 @@ router.post('/admin/tasks', adminAuth, (req, res) => {
     b.repeatable ? 1 : 0,
     Number(b.cooldown_hours) || 0,
     Number(b.sort_order) || 0,
+    schedule.starts_at,
+    schedule.ends_at,
   );
   res.json({ id: r.lastInsertRowid });
 });
@@ -15966,7 +17661,18 @@ router.patch('/admin/tasks/:id', adminAuth, (req, res) => {
   const b = req.body || {};
   const existing = tasks.getTaskById(id);
   if (!existing) return res.status(404).json({ error: 'not found' });
-  const params = b.params && typeof b.params === 'object' ? b.params : tasks.parseParams(existing.params);
+  let params;
+  try { params = normalizeAdminTaskParams(b.params && typeof b.params === 'object' ? b.params : tasks.parseParams(existing.params)); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+  let schedule;
+  try {
+    schedule = normalizeTaskSchedule(
+      b.starts_at !== undefined ? b.starts_at : existing.starts_at,
+      b.ends_at !== undefined ? b.ends_at : existing.ends_at,
+    );
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
   const merged = {
     type: tasks.VALID_TYPES.includes(b.type) ? b.type : existing.type,
     title: b.title != null ? String(b.title).trim() : existing.title,
@@ -15979,10 +17685,12 @@ router.patch('/admin/tasks/:id', adminAuth, (req, res) => {
     repeatable: b.repeatable != null ? (b.repeatable ? 1 : 0) : existing.repeatable,
     cooldown_hours: b.cooldown_hours != null ? Number(b.cooldown_hours) : existing.cooldown_hours,
     sort_order: b.sort_order != null ? Number(b.sort_order) : existing.sort_order,
+    starts_at: schedule.starts_at,
+    ends_at: schedule.ends_at,
   };
   db.db.prepare(
-    `UPDATE tasks SET type = ?, title = ?, description = ?, params = ?, reward_gold = ?, reward_wood = ?, reward_ore = ?, active = ?, repeatable = ?, cooldown_hours = ?, sort_order = ? WHERE id = ?`
-  ).run(merged.type, merged.title, merged.description, merged.params, merged.reward_gold, merged.reward_wood, merged.reward_ore, merged.active, merged.repeatable, merged.cooldown_hours, merged.sort_order, id);
+    `UPDATE tasks SET type = ?, title = ?, description = ?, params = ?, reward_gold = ?, reward_wood = ?, reward_ore = ?, active = ?, repeatable = ?, cooldown_hours = ?, sort_order = ?, starts_at = ?, ends_at = ? WHERE id = ?`
+  ).run(merged.type, merged.title, merged.description, merged.params, merged.reward_gold, merged.reward_wood, merged.reward_ore, merged.active, merged.repeatable, merged.cooldown_hours, merged.sort_order, merged.starts_at, merged.ends_at, id);
   res.json({ ok: true });
 });
 
@@ -16061,7 +17769,7 @@ function parseBool(v) {
 const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
 const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
-const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade'];
+const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'];
 const TOURNAMENT_DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -16077,6 +17785,7 @@ const TOURNAMENT_DEX_LABELS = {
   grvt: 'GRVT',
   katana: 'Katana Perps',
   gmtrade: 'GMTrade',
+  flash: 'Flash Trade',
 };
 const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
 const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
@@ -16143,10 +17852,20 @@ function tournamentDexScope(t) {
   return list.length > 1 ? 'custom' : 'single';
 }
 
+function normalizeTournamentEventKind(value) {
+  const raw = String(value || 'standard').trim().toLowerCase();
+  return raw === 'lucky_raider' ? 'lucky_raider' : 'standard';
+}
+
 function tournamentDexLabel(t) {
   const list = tournamentEligibleDexes(t);
   if (tournamentDexScope(t) === 'all' || list.length === TOURNAMENT_DEXES.length) return 'All DEXes';
   return list.map(d => TOURNAMENT_DEX_LABELS[d] || d).join(', ');
+}
+
+function tournamentSingleDex(t) {
+  const list = tournamentEligibleDexes(t);
+  return tournamentDexScope(t) === 'single' && list.length === 1 ? list[0] : null;
 }
 
 function isTournamentForDex(t, dex) {
@@ -16447,10 +18166,24 @@ function applyTournamentPointsScore(rows, t) {
     return rows;
   }
   const w = tournamentPointWeights(t);
+  const maxVolume = rows.reduce((max, r) => Math.max(max, Math.max(0, Number(r.volume_usd) || 0)), 0);
+  const maxTrophies = rows.reduce((max, r) => Math.max(max, Math.max(0, Number(r.trophies) || 0)), 0);
+  const maxPnl = rows.reduce((max, r) => Math.max(max, Math.max(0, Number(r.pnl_usd) || 0)), 0);
+  const maxRawScore = rows.reduce((max, r) => {
+    const rawVolume = Math.max(0, Number(r.volume_usd) || 0) * (w.volume / 100);
+    const rawTrophies = Math.max(0, Number(r.trophies) || 0) * (w.trophies / 100);
+    const rawPnl = Math.max(0, Number(r.pnl_usd) || 0) * (w.pnl / 100);
+    return Math.max(max, rawVolume + rawTrophies + rawPnl);
+  }, 0);
+  const totalWeight = Math.max(1, (Number(w.volume) || 0) + (Number(w.trophies) || 0) + (Number(w.pnl) || 0));
+  const scoreScale = maxRawScore > 0 ? maxRawScore / totalWeight : 1;
   for (const r of rows) {
-    const volumeScore = Math.max(0, Number(r.volume_usd) || 0) * (w.volume / 100);
-    const trophyScore = Math.max(0, Number(r.trophies) || 0) * (w.trophies / 100);
-    const pnlScore = Math.max(0, Number(r.pnl_usd) || 0) * (w.pnl / 100);
+    const volumeValue = Math.max(0, Number(r.volume_usd) || 0);
+    const trophyValue = Math.max(0, Number(r.trophies) || 0);
+    const pnlValue = Math.max(0, Number(r.pnl_usd) || 0);
+    const volumeScore = (maxVolume > 0 ? (volumeValue / maxVolume) * w.volume : 0) * scoreScale;
+    const trophyScore = (maxTrophies > 0 ? (trophyValue / maxTrophies) * w.trophies : 0) * scoreScale;
+    const pnlScore = (maxPnl > 0 ? (pnlValue / maxPnl) * w.pnl : 0) * scoreScale;
     r.volume_score = Number(volumeScore.toFixed(4));
     r.trophy_score = Number(trophyScore.toFixed(4));
     r.pnl_score = Number(pnlScore.toFixed(4));
@@ -16631,6 +18364,57 @@ function normalizeRewardSolanaWallet(v) {
   return SOLANA_REWARD_WALLET_RE.test(s) ? s : null;
 }
 
+function playerOwnsSolanaRewardWallet(playerId, wallet) {
+  const normalized = normalizeRewardSolanaWallet(wallet);
+  if (!playerId || !normalized) return false;
+  const row = db.db.prepare(`
+    SELECT 1 AS ok
+    WHERE EXISTS (
+      SELECT 1 FROM player_wallets
+      WHERE player_id = ? AND chain_type = 'solana' AND address = ?
+    )
+    OR EXISTS (
+      SELECT 1 FROM player_dex_accounts
+      WHERE player_id = ? AND chain_type = 'solana' AND wallet_address = ?
+    )
+    OR EXISTS (
+      SELECT 1 FROM players
+      WHERE id = ? AND wallet = ?
+    )
+    LIMIT 1
+  `).get(playerId, normalized, playerId, normalized, playerId, normalized);
+  return !!row;
+}
+
+function validatePlayerClashRewardWallet(playerId, wallet) {
+  const normalized = normalizeRewardSolanaWallet(wallet);
+  if (!normalized) {
+    return { ok: false, error: 'valid Solana reward wallet required for CLASH rewards' };
+  }
+  if (db.isWalletBlacklisted(normalized)) {
+    return { ok: false, error: 'This reward wallet is blocked. Contact support.' };
+  }
+  if (!playerOwnsSolanaRewardWallet(playerId, normalized)) {
+    return {
+      ok: false,
+      error: 'connect this Solana wallet to your profile before using it for CLASH rewards',
+    };
+  }
+  return { ok: true, wallet: normalized };
+}
+
+function rewardUsesClashToken(reward) {
+  if (!reward || typeof reward !== 'object') return false;
+  const currency = String(reward.currency || '').trim().toUpperCase();
+  const unit = String(reward.unit || '').trim().toUpperCase();
+  const symbol = String(reward.symbol || reward.token || '').trim().toUpperCase();
+  return [currency, unit, symbol].some((value) => value === 'CLASH' || value === 'COP');
+}
+
+function rewardsContainClashToken(rewards) {
+  return Array.isArray(rewards) && rewards.some(rewardUsesClashToken);
+}
+
 function normalizePrizePayouts(input) {
   const arr = Array.isArray(input)
     ? input
@@ -16749,6 +18533,245 @@ function normalizeTournamentPrizeTiers(input, { strict = false } = {}) {
   return tiers.sort((a, b) => a.volume_usd - b.volume_usd);
 }
 
+function normalizeRewardSchedulePool(raw = {}, index = 0, { strict = false, labelPrefix = 'Pool' } = {}) {
+  const rewards = normalizePrizeRewards(Array.isArray(raw.rewards) ? raw.rewards : [], null, { strict });
+  const topN = Math.max(1, Math.min(100, Math.floor(Number(raw.top_n ?? raw.winners ?? 5) || 5)));
+  return {
+    enabled: parseBool(raw.enabled ?? true),
+    label: sanitizePrizeText(raw.label || raw.name || `${labelPrefix} ${index + 1}`, `${labelPrefix} ${index + 1}`),
+    top_n: topN,
+    rewards,
+    payout_preset: sanitizePrizeText(raw.payout_preset || raw.preset || 'custom', 'custom'),
+    payouts: normalizePrizeRewardPayouts(raw.payouts || []),
+    metric: normalizeTournamentTeamMetric(raw.metric || 'points', TOURNAMENT_POINTS_SORT),
+  };
+}
+
+function normalizeRewardSchedulePools(input, opts = {}) {
+  const arr = Array.isArray(input) ? input : [];
+  return arr.map((pool, index) => normalizeRewardSchedulePool(pool, index, opts))
+    .filter((pool) => pool.enabled || pool.rewards.length || pool.payouts.length)
+    .slice(0, 30);
+}
+
+function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
+  let raw = input;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) raw = {};
+    else {
+      try { raw = JSON.parse(text); }
+      catch {
+        if (strict) throw new Error('reward_config must be JSON');
+        raw = {};
+      }
+    }
+  }
+  raw = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const luckyRaw = raw.lucky_daily_raider && typeof raw.lucky_daily_raider === 'object'
+    ? raw.lucky_daily_raider
+    : {};
+  const collections = Array.isArray(luckyRaw.required_collections)
+    ? luckyRaw.required_collections.map((v) => String(v || '').trim().toLowerCase()).filter((v) => ['demon_king', 'dragon'].includes(v))
+    : [];
+  const luckyRewards = normalizePrizeRewards(Array.isArray(luckyRaw.rewards) ? luckyRaw.rewards : [], null, { strict });
+  const ticketMetricRaw = String(luckyRaw.ticket_metric || luckyRaw.metric || 'volume').trim().toLowerCase();
+  const ticketMetric = ['volume', 'attack_wins', 'attack_wins_plus_volume', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(ticketMetricRaw)
+    ? ticketMetricRaw
+    : 'volume';
+  const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20)));
+  return {
+    daily_pools: normalizeRewardSchedulePools(raw.daily_pools, { strict, labelPrefix: 'Daily pool' }),
+    final_pools: normalizeRewardSchedulePools(raw.final_pools, { strict, labelPrefix: 'Final pool' }),
+    lucky_daily_raider: {
+      enabled: parseBool(luckyRaw.enabled),
+      label: sanitizePrizeText(luckyRaw.label || 'Lucky Daily Raider', 'Lucky Daily Raider'),
+      ticket_metric: ticketMetric,
+      volume_per_ticket_usd: Math.max(1, Math.min(10_000_000, sanitizePrizeNumber(luckyRaw.volume_per_ticket_usd, 1000))),
+      volume_tickets_per_step: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.volume_tickets_per_step ?? luckyRaw.volume_bonus_tickets_per_step ?? 1) || 1))),
+      attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
+      min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
+      winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
+      max_tickets: maxTickets,
+      max_counted_attacks: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_counted_attacks || luckyRaw.max_attack_tickets || maxTickets) || maxTickets))),
+      max_volume_tickets: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.max_volume_tickets ?? luckyRaw.max_volume_bonus_tickets ?? 0) || 0))),
+      require_nft: parseBool(luckyRaw.require_nft),
+      required_collections: collections.length ? collections : ['demon_king', 'dragon'],
+      rewards: luckyRewards,
+      draw_time_utc: sanitizePrizeText(luckyRaw.draw_time_utc || '00:05', '00:05').slice(0, 16),
+    },
+  };
+}
+
+function rewardConfigHasContent(config) {
+  const normalized = normalizeTournamentRewardConfig(config || {});
+  return normalized.daily_pools.length > 0
+    || normalized.final_pools.length > 0
+    || !!normalized.lucky_daily_raider.enabled
+    || (normalized.lucky_daily_raider.rewards || []).length > 0;
+}
+
+function rewardConfigUsesClashToken(config) {
+  const normalized = normalizeTournamentRewardConfig(config || {});
+  if (rewardsContainClashToken(normalized.lucky_daily_raider?.rewards)) return true;
+  for (const pool of [...(normalized.daily_pools || []), ...(normalized.final_pools || [])]) {
+    if (rewardsContainClashToken(pool?.rewards)) return true;
+  }
+  return false;
+}
+
+function megaConfigUsesClashToken(megaConfig) {
+  const sectors = Array.isArray(megaConfig?.sectors) ? megaConfig.sectors : [];
+  return sectors.some((sector) => rewardConfigUsesClashToken(sector?.reward_config || {}));
+}
+
+function luckyRaiderTicketState(cfg, volume, attackWins) {
+  const metric = String(cfg?.ticket_metric || 'volume').toLowerCase();
+  const rawVolumeSteps = Math.floor(Math.max(0, Number(volume) || 0) / Math.max(1, Number(cfg?.volume_per_ticket_usd || 1000) || 1000));
+  const volumeTicketsPerStep = Math.max(1, Math.floor(Number(cfg?.volume_tickets_per_step || 1) || 1));
+  const rawVolumeTickets = rawVolumeSteps * volumeTicketsPerStep;
+  const maxVolumeTickets = Math.max(0, Math.floor(Number(cfg?.max_volume_tickets || 0) || 0));
+  const volumeTickets = maxVolumeTickets > 0 ? Math.min(rawVolumeTickets, maxVolumeTickets) : rawVolumeTickets;
+  const attackTickets = Math.floor(Math.max(0, Math.floor(Number(attackWins) || 0)) / Math.max(1, Math.floor(Number(cfg?.attack_wins_per_ticket || 10) || 10)));
+  let uncapped = volumeTickets;
+  if (metric === 'attack_wins') uncapped = attackTickets;
+  else if (metric === 'attack_wins_plus_volume') uncapped = attackTickets + volumeTickets;
+  else if (metric === 'volume_or_attack_wins') uncapped = Math.max(volumeTickets, attackTickets);
+  else if (metric === 'volume_and_attack_wins') uncapped = Math.min(volumeTickets, attackTickets);
+  const minAttackWins = Math.max(0, Math.floor(Number(cfg?.min_attack_wins || 0) || 0));
+  let reason = uncapped > 0 ? 'eligible' : 'below_ticket_threshold';
+  if ((metric === 'attack_wins' || metric === 'volume_and_attack_wins') && attackTickets <= 0) reason = 'attack_wins_below_ticket';
+  else if (metric === 'volume' && volumeTickets <= 0) reason = 'volume_below_ticket';
+  else if (metric === 'attack_wins_plus_volume' && attackTickets <= 0 && volumeTickets <= 0) reason = 'attack_wins_plus_volume_below_ticket';
+  else if (metric === 'volume_or_attack_wins' && volumeTickets <= 0 && attackTickets <= 0) reason = 'volume_or_attack_wins_below_ticket';
+  if (minAttackWins > 0 && Math.max(0, Math.floor(Number(attackWins) || 0)) < minAttackWins) uncapped = 0;
+  if (minAttackWins > 0 && Math.max(0, Math.floor(Number(attackWins) || 0)) < minAttackWins) reason = 'min_attack_wins_not_met';
+  const maxTickets = Math.max(1, Math.floor(Number(cfg?.max_tickets || 20) || 20));
+  return {
+    volume_tickets: Math.max(0, volumeTickets),
+    raw_volume_tickets: Math.max(0, rawVolumeTickets),
+    raw_volume_steps: Math.max(0, rawVolumeSteps),
+    volume_tickets_per_step: volumeTicketsPerStep,
+    max_volume_tickets: maxVolumeTickets,
+    attack_win_tickets: Math.max(0, attackTickets),
+    uncapped_tickets: Math.max(0, uncapped),
+    tickets: Math.max(0, Math.min(maxTickets, uncapped)),
+    reason,
+  };
+}
+
+const DEFAULT_MEGA_SECTORS = [
+  { id: 'whale', name: 'Whale', min_town_hall_level: 3, min_volume_usd: 100000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: {} },
+  { id: 'dolphin', name: 'Dolphin', min_town_hall_level: 2, min_volume_usd: 25000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: {} },
+  { id: 'shrimp', name: 'Shrimp', min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: {} },
+];
+
+function normalizeMegaSectorId(value, fallback) {
+  const raw = String(value || fallback || '').trim().toLowerCase();
+  const clean = raw.replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32);
+  return clean || String(fallback || 'sector').slice(0, 32);
+}
+
+function normalizeMegaSectorNumber(value, fallback = 0, max = 1_000_000_000) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(max, Number(n.toFixed(4))));
+}
+
+function normalizeMegaSector(raw = {}, index = 0, { strict = false } = {}) {
+  const fallback = DEFAULT_MEGA_SECTORS[index] || { id: `sector_${index + 1}`, name: `Sector ${index + 1}` };
+  const id = normalizeMegaSectorId(raw.id || raw.key || raw.slug, fallback.id || `sector_${index + 1}`);
+  const name = sanitizePrizeText(raw.name || raw.label || fallback.name || id, fallback.name || id).slice(0, 40);
+  const dexScopeRaw = String(raw.dex_scope || raw.scope || fallback.dex_scope || 'all').trim().toLowerCase();
+  const dexScope = ['all', 'tournament', 'custom'].includes(dexScopeRaw) ? dexScopeRaw : 'all';
+  const dexes = normalizeTournamentDexList(raw.dexes || raw.eligible_dexes || raw.dex_list || []);
+  if (strict && dexScope === 'custom' && dexes.length === 0) {
+    throw new Error(`mega sector "${name}" custom DEX scope needs at least one DEX`);
+  }
+  const prizeTiers = normalizeTournamentPrizeTiers(raw.prize_tiers || raw.rewards_tiers || raw.tiers || [], { strict });
+  const rewardConfig = normalizeTournamentRewardConfig(raw.reward_config || raw.reward_schedule || {}, { strict });
+  return {
+    id,
+    name,
+    description: sanitizePrizeText(raw.description || raw.hint || '', ''),
+    min_town_hall_level: Math.floor(normalizeMegaSectorNumber(raw.min_town_hall_level ?? raw.min_th ?? raw.town_hall_level, fallback.min_town_hall_level || 0, 20)),
+    min_volume_usd: normalizeMegaSectorNumber(raw.min_volume_usd ?? raw.volume_usd ?? raw.min_volume, fallback.min_volume_usd || 0),
+    min_daily_volume_usd: normalizeMegaSectorNumber(raw.min_daily_volume_usd ?? raw.daily_volume_usd ?? raw.min_daily_volume ?? raw.daily_volume, fallback.min_daily_volume_usd || 0),
+    min_trades: Math.floor(normalizeMegaSectorNumber(raw.min_trades ?? raw.trades ?? raw.min_tx ?? raw.min_transactions, fallback.min_trades || 0, 1_000_000)),
+    dex_scope: dexScope,
+    dexes,
+    prize_tiers: prizeTiers,
+    reward_config: rewardConfig,
+  };
+}
+
+function normalizeTournamentMegaConfig(input, { strict = false } = {}) {
+  let raw = input;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) raw = {};
+    else {
+      try { raw = JSON.parse(trimmed); }
+      catch { throw new Error('mega_config must be JSON'); }
+    }
+  }
+  raw = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const enabled = parseBool(raw.enabled ?? raw.is_mega ?? raw.mega);
+  const template = String(raw.template || '').trim().toLowerCase();
+  const sourceSectors = Array.isArray(raw.sectors)
+    ? raw.sectors
+    : (enabled && template === 'abc'
+      ? [
+        { id: 'a', name: 'Sector A', min_town_hall_level: 3, min_volume_usd: 100000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: {} },
+        { id: 'b', name: 'Sector B', min_town_hall_level: 2, min_volume_usd: 25000, min_daily_volume_usd: 0, min_trades: 1, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: {} },
+        { id: 'c', name: 'Sector C', min_town_hall_level: 1, min_volume_usd: 0, min_daily_volume_usd: 0, min_trades: 0, dex_scope: 'all', dexes: [], prize_tiers: [], reward_config: {} },
+      ]
+      : DEFAULT_MEGA_SECTORS);
+  const seen = new Set();
+  const sectors = [];
+  for (let i = 0; i < sourceSectors.length; i += 1) {
+    const sector = normalizeMegaSector(sourceSectors[i], i, { strict });
+    let id = sector.id;
+    let suffix = 2;
+    while (seen.has(id)) {
+      id = `${sector.id}_${suffix}`;
+      suffix += 1;
+    }
+    sector.id = id;
+    seen.add(id);
+    sectors.push(sector);
+  }
+  return {
+    enabled,
+    template: template || 'whale_dolphin_shrimp',
+    sectors: enabled ? sectors.slice(0, 20) : sectors.slice(0, 20),
+  };
+}
+
+function isMegaTournament(t) {
+  try { return !!normalizeTournamentMegaConfig(t?.mega_config).enabled; }
+  catch { return false; }
+}
+
+function megaSectorDexes(t, sector) {
+  const scope = String(sector?.dex_scope || 'all').toLowerCase();
+  if (scope === 'custom') {
+    const list = normalizeTournamentDexList(sector.dexes || []);
+    return list.length ? list : tournamentEligibleDexes(t);
+  }
+  if (scope === 'tournament') return tournamentEligibleDexes(t);
+  return [...TOURNAMENT_DEXES];
+}
+
+function megaSectorPrizeState(t, sector, totalVolumeUsd) {
+  const proxy = {
+    ...t,
+    prize_tiers: JSON.stringify(normalizeTournamentPrizeTiers(sector?.prize_tiers || [])),
+  };
+  return tournamentPrizeState(proxy, totalVolumeUsd);
+}
+
 function tournamentPrizeRewardsByRank(activeTier) {
   const byRank = new Map();
   for (const reward of activeTier?.rewards || []) {
@@ -16783,6 +18806,331 @@ function tournamentTotalVolumeUsd(tournamentId) {
   }
 }
 
+function tournamentLeaderboardSummary(tournamentId) {
+  if (!tournamentId) {
+    return {
+      players: 0,
+      trades_count: 0,
+      total_volume_usd: 0,
+      pnl_usd: 0,
+      gold: 0,
+      trophies: 0,
+    };
+  }
+  try {
+    const row = db.db.prepare(`
+      SELECT COUNT(*) AS players,
+             COALESCE(SUM(trades_count), 0) AS trades_count,
+             COALESCE(SUM(volume_usd), 0) AS total_volume_usd,
+             COALESCE(SUM(pnl_usd), 0) AS pnl_usd,
+             COALESCE(SUM(gold), 0) AS gold,
+             COALESCE(SUM(trophies), 0) AS trophies
+      FROM tournament_participants
+      WHERE tournament_id = ? AND left_at IS NULL
+    `).get(tournamentId);
+    return {
+      players: Number(row?.players || 0) || 0,
+      trades_count: Number(row?.trades_count || 0) || 0,
+      total_volume_usd: Number(row?.total_volume_usd || 0) || 0,
+      pnl_usd: Number(row?.pnl_usd || 0) || 0,
+      gold: Number(row?.gold || 0) || 0,
+      trophies: Number(row?.trophies || 0) || 0,
+    };
+  } catch {
+    return {
+      players: 0,
+      trades_count: 0,
+      total_volume_usd: 0,
+      pnl_usd: 0,
+      gold: 0,
+      trophies: 0,
+    };
+  }
+}
+
+function tournamentDexBreakdowns(tournamentId) {
+  const byPlayer = new Map();
+  if (!tournamentId) return byPlayer;
+  let rows = [];
+  try {
+    rows = db.db.prepare(`
+      SELECT player_id, dex,
+             COALESCE(SUM(volume_usd), 0) AS volume_usd,
+             COALESCE(SUM(trades_count), 0) AS trades_count,
+             COALESCE(SUM(pnl_usd), 0) AS pnl_usd
+      FROM tournament_trade_credits
+      WHERE tournament_id = ?
+      GROUP BY player_id, dex
+    `).all(tournamentId);
+  } catch {
+    rows = [];
+  }
+  for (const row of rows) {
+    const playerId = row.player_id;
+    const dex = String(row.dex || '').toLowerCase();
+    if (!playerId || !TOURNAMENT_DEXES.includes(dex)) continue;
+    const state = byPlayer.get(playerId) || {
+      by_dex: {},
+      top_dex: null,
+      top_dex_label: null,
+      total_volume_usd: 0,
+      total_trades_count: 0,
+      total_pnl_usd: 0,
+    };
+    const volume = Number(row.volume_usd || 0) || 0;
+    const trades = Number(row.trades_count || 0) || 0;
+    const pnl = Number(row.pnl_usd || 0) || 0;
+    state.by_dex[dex] = {
+      dex,
+      label: TOURNAMENT_DEX_LABELS[dex] || dex,
+      volume_usd: Number(volume.toFixed(2)),
+      trades_count: trades,
+      pnl_usd: Number(pnl.toFixed(2)),
+    };
+    state.total_volume_usd += volume;
+    state.total_trades_count += trades;
+    state.total_pnl_usd += pnl;
+    const currentTop = state.top_dex ? state.by_dex[state.top_dex] : null;
+    if (!currentTop || volume > Number(currentTop.volume_usd || 0)) {
+      state.top_dex = dex;
+      state.top_dex_label = TOURNAMENT_DEX_LABELS[dex] || dex;
+    }
+    byPlayer.set(playerId, state);
+  }
+  for (const state of byPlayer.values()) {
+    state.total_volume_usd = Number(state.total_volume_usd.toFixed(2));
+    state.total_pnl_usd = Number(state.total_pnl_usd.toFixed(2));
+    state.dex_breakdown = Object.values(state.by_dex)
+      .sort((a, b) => Number(b.volume_usd || 0) - Number(a.volume_usd || 0) || a.dex.localeCompare(b.dex));
+  }
+  return byPlayer;
+}
+
+function tournamentDailyDexBreakdowns(tournamentId, dayUtc = tournamentUtcDayString()) {
+  const byPlayer = new Map();
+  if (!tournamentId) return byPlayer;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dayUtc || '')) ? String(dayUtc) : tournamentUtcDayString();
+  const dayStart = `${day} 00:00:00`;
+  const dayEnd = `${day} 23:59:59`;
+  let rows = [];
+  try {
+    rows = db.db.prepare(`
+      SELECT player_id, dex,
+             COALESCE(SUM(volume_usd), 0) AS volume_usd,
+             COALESCE(SUM(trades_count), 0) AS trades_count,
+             COALESCE(SUM(pnl_usd), 0) AS pnl_usd
+      FROM tournament_trade_credits
+      WHERE tournament_id = ?
+        AND replace(replace(credited_at, 'T', ' '), 'Z', '') BETWEEN ? AND ?
+      GROUP BY player_id, dex
+    `).all(tournamentId, dayStart, dayEnd);
+  } catch {
+    rows = [];
+  }
+  for (const row of rows) {
+    const playerId = row.player_id;
+    const dex = String(row.dex || '').toLowerCase();
+    if (!playerId || !TOURNAMENT_DEXES.includes(dex)) continue;
+    const state = byPlayer.get(playerId) || {
+      by_dex: {},
+      total_volume_usd: 0,
+      total_trades_count: 0,
+      total_pnl_usd: 0,
+    };
+    const volume = Number(row.volume_usd || 0) || 0;
+    const trades = Number(row.trades_count || 0) || 0;
+    const pnl = Number(row.pnl_usd || 0) || 0;
+    state.by_dex[dex] = {
+      dex,
+      label: TOURNAMENT_DEX_LABELS[dex] || dex,
+      volume_usd: Number(volume.toFixed(2)),
+      trades_count: trades,
+      pnl_usd: Number(pnl.toFixed(2)),
+    };
+    state.total_volume_usd += volume;
+    state.total_trades_count += trades;
+    state.total_pnl_usd += pnl;
+    byPlayer.set(playerId, state);
+  }
+  for (const state of byPlayer.values()) {
+    state.total_volume_usd = Number(state.total_volume_usd.toFixed(2));
+    state.total_pnl_usd = Number(state.total_pnl_usd.toFixed(2));
+    state.dex_breakdown = Object.values(state.by_dex)
+      .sort((a, b) => Number(b.volume_usd || 0) - Number(a.volume_usd || 0) || a.dex.localeCompare(b.dex));
+  }
+  return byPlayer;
+}
+
+function applyTournamentDexBreakdowns(rows, t, breakdowns = null) {
+  const map = breakdowns || tournamentDexBreakdowns(t?.id);
+  for (const row of rows || []) {
+    const state = map.get(row.player_id);
+    if (!state) {
+      const fallbackDex = String(row.team_dex || row.player_dex || t?.dex || '').toLowerCase();
+      row.dex_breakdown = fallbackDex && TOURNAMENT_DEXES.includes(fallbackDex)
+        ? [{ dex: fallbackDex, label: TOURNAMENT_DEX_LABELS[fallbackDex] || fallbackDex, volume_usd: Number(row.volume_usd || 0) || 0, trades_count: Number(row.trades_count || 0) || 0, pnl_usd: Number(row.pnl_usd || 0) || 0 }]
+        : [];
+      row.top_dex = fallbackDex || null;
+      row.top_dex_label = fallbackDex ? (TOURNAMENT_DEX_LABELS[fallbackDex] || fallbackDex) : null;
+      continue;
+    }
+    row.dex_breakdown = state.dex_breakdown || [];
+    row.top_dex = state.top_dex || null;
+    row.top_dex_label = state.top_dex_label || null;
+  }
+  return rows;
+}
+
+function applyTournamentDailyDexBreakdowns(rows, t, breakdowns = null) {
+  const map = breakdowns || tournamentDailyDexBreakdowns(t?.id);
+  for (const row of rows || []) {
+    const state = map.get(row.player_id);
+    if (!state) {
+      row.daily_dex_breakdown = [];
+      row.daily_volume_usd = 0;
+      row.daily_trades_count = 0;
+      row.daily_pnl_usd = 0;
+      continue;
+    }
+    row.daily_dex_breakdown = state.dex_breakdown || [];
+    row.daily_volume_usd = state.total_volume_usd || 0;
+    row.daily_trades_count = state.total_trades_count || 0;
+    row.daily_pnl_usd = state.total_pnl_usd || 0;
+  }
+  return rows;
+}
+
+function sumDexBreakdownForList(row, dexList) {
+  const allowed = new Set(dexList || []);
+  const breakdown = Array.isArray(row?.dex_breakdown) ? row.dex_breakdown : [];
+  const filtered = allowed.size ? breakdown.filter(item => allowed.has(item.dex)) : breakdown;
+  return filtered.reduce((acc, item) => {
+    acc.volume_usd += Number(item.volume_usd || 0) || 0;
+    acc.trades_count += Number(item.trades_count || 0) || 0;
+    acc.pnl_usd += Number(item.pnl_usd || 0) || 0;
+    return acc;
+  }, { volume_usd: 0, trades_count: 0, pnl_usd: 0 });
+}
+
+function buildMegaTournamentState(rows, t) {
+  const config = normalizeTournamentMegaConfig(t?.mega_config);
+  if (!config.enabled) return null;
+  const rootRewardConfig = normalizeTournamentRewardConfig(t?.reward_config || {});
+  if (!config.sectors.length) {
+    return {
+      enabled: true,
+      sectors: [],
+      sectorless: true,
+      reward_config: rootRewardConfig,
+      summary: tournamentLeaderboardSummary(t?.id),
+    };
+  }
+  const sectors = config.sectors.map((sector, index) => ({
+    ...sector,
+    rank: index + 1,
+    dexes: megaSectorDexes(t, sector),
+    reward_config: rewardConfigHasContent(sector?.reward_config)
+      ? normalizeTournamentRewardConfig(sector.reward_config)
+      : rootRewardConfig,
+    players: [],
+    summary: { players: 0, trades_count: 0, total_volume_usd: 0, daily_volume_usd: 0, pnl_usd: 0, gold: 0, trophies: 0 },
+  }));
+  const unqualified = {
+    id: 'unqualified',
+    name: 'Unqualified',
+    rank: sectors.length + 1,
+    min_town_hall_level: 0,
+    min_volume_usd: 0,
+    min_daily_volume_usd: 0,
+    min_trades: 0,
+    dex_scope: 'all',
+    dexes: [...TOURNAMENT_DEXES],
+    prize_tiers: [],
+    reward_config: rootRewardConfig,
+    players: [],
+    summary: { players: 0, trades_count: 0, total_volume_usd: 0, daily_volume_usd: 0, pnl_usd: 0, gold: 0, trophies: 0 },
+  };
+  for (const row of rows || []) {
+    const townHall = Number(row.town_hall_level || 0) || 0;
+    let assigned = null;
+    let assignedStats = null;
+    let assignedDailyStats = null;
+    for (const sector of sectors) {
+      const stats = sumDexBreakdownForList(row, sector.dexes);
+      const dailyStats = sumDexBreakdownForList({ dex_breakdown: row.daily_dex_breakdown || [] }, sector.dexes);
+      if (townHall >= Number(sector.min_town_hall_level || 0)
+        && stats.volume_usd + 0.0001 >= Number(sector.min_volume_usd || 0)
+        && dailyStats.volume_usd + 0.0001 >= Number(sector.min_daily_volume_usd || 0)
+        && stats.trades_count >= Number(sector.min_trades || 0)) {
+        assigned = sector;
+        assignedStats = stats;
+        assignedDailyStats = dailyStats;
+        break;
+      }
+    }
+    if (!assigned) {
+      assigned = unqualified;
+      assignedStats = sumDexBreakdownForList(row, unqualified.dexes);
+      assignedDailyStats = sumDexBreakdownForList({ dex_breakdown: row.daily_dex_breakdown || [] }, unqualified.dexes);
+    }
+    row.mega_sector_id = assigned.id;
+    row.mega_sector_name = assigned.name;
+    row.mega_sector_rank = assigned.rank;
+    row.mega_sector_volume_usd = Number((assignedStats.volume_usd || 0).toFixed(2));
+    row.mega_sector_daily_volume_usd = Number((assignedDailyStats.volume_usd || 0).toFixed(2));
+    row.mega_sector_trades_count = Number(assignedStats.trades_count || 0);
+    row.mega_sector_pnl_usd = Number((assignedStats.pnl_usd || 0).toFixed(2));
+    assigned.players.push(row);
+    assigned.summary.players += 1;
+    assigned.summary.trades_count += Number(row.mega_sector_trades_count || 0);
+    assigned.summary.total_volume_usd += Number(row.mega_sector_volume_usd || 0);
+    assigned.summary.daily_volume_usd += Number(row.mega_sector_daily_volume_usd || 0);
+    assigned.summary.pnl_usd += Number(row.mega_sector_pnl_usd || 0);
+    assigned.summary.gold += Number(row.gold || 0);
+    assigned.summary.trophies += Number(row.trophies || 0);
+  }
+  const sortRows = (list) => list.sort((a, b) =>
+    (Number(b.score) || 0) - (Number(a.score) || 0)
+    || (Number(b.mega_sector_volume_usd) || 0) - (Number(a.mega_sector_volume_usd) || 0)
+    || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+    || String(a.player_id).localeCompare(String(b.player_id))
+  );
+  for (const sector of [...sectors, unqualified]) {
+    sortRows(sector.players);
+    sector.players.forEach((row, idx) => { row.mega_sector_rank_position = idx + 1; });
+    sector.summary.total_volume_usd = Number(sector.summary.total_volume_usd.toFixed(2));
+    sector.summary.daily_volume_usd = Number(sector.summary.daily_volume_usd.toFixed(2));
+    sector.summary.pnl_usd = Number(sector.summary.pnl_usd.toFixed(2));
+    const prize = megaSectorPrizeState(t, sector, sector.summary.total_volume_usd);
+    sector.prize = prize;
+    const prizeByRank = new Map((prize.payouts || []).map(p => [Number(p.rank), Number(p.amount_usd || 0)]));
+    const prizeRewardsByRank = new Map((prize.rewards_by_rank || []).map(p => [Number(p.rank), Array.isArray(p.rewards) ? p.rewards : []]));
+    for (const row of sector.players) {
+      row.mega_prize_amount = prizeByRank.get(row.mega_sector_rank_position) || 0;
+      row.mega_prize_rewards = prizeRewardsByRank.get(row.mega_sector_rank_position) || [];
+    }
+  }
+  return {
+    enabled: true,
+    sectors: [...sectors, ...(unqualified.players.length ? [unqualified] : [])].map((sector) => ({
+      id: sector.id,
+      name: sector.name,
+      description: sector.description || '',
+      min_town_hall_level: sector.min_town_hall_level,
+      min_volume_usd: sector.min_volume_usd,
+      min_daily_volume_usd: sector.min_daily_volume_usd,
+      min_trades: sector.min_trades,
+      dex_scope: sector.dex_scope,
+      dexes: sector.dexes,
+      dex_labels: (sector.dexes || []).map(d => TOURNAMENT_DEX_LABELS[d] || d),
+      reward_config: sector.reward_config,
+      summary: sector.summary,
+      prize: sector.prize,
+      player_ids: sector.players.map(r => r.player_id),
+    })),
+  };
+}
+
 function tournamentPrizeState(t, totalVolumeUsd = null) {
   const tiers = normalizeTournamentPrizeTiers(t?.prize_tiers);
   const totalVolume = sanitizePrizeNumber(
@@ -16804,6 +19152,234 @@ function tournamentPrizeState(t, totalVolumeUsd = null) {
     payouts: activeTier?.payouts || [],
     rewards: activeTier?.rewards || [],
     rewards_by_rank: Array.from(tournamentPrizeRewardsByRank(activeTier).entries()).map(([rank, rewards]) => ({ rank, rewards })),
+  };
+}
+
+function playerHasTournamentRewardNft(playerId, collections = ['demon_king', 'dragon']) {
+  if (!playerId) return false;
+  const allowed = (Array.isArray(collections) ? collections : [])
+    .map((v) => String(v || '').trim().toLowerCase())
+    .filter((v) => ['demon_king', 'dragon'].includes(v));
+  const list = allowed.length ? allowed : ['demon_king', 'dragon'];
+  const placeholders = list.map(() => '?').join(',');
+  try {
+    const row = db.db.prepare(`
+      SELECT 1 AS ok
+        FROM player_nfts
+       WHERE player_id = ?
+         AND active = 1
+         AND collection IN (${placeholders})
+       LIMIT 1
+    `).get(playerId, ...list);
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+function tournamentLuckyRaiderState(t, viewerId = null) {
+  const cfg = normalizeTournamentRewardConfig(t?.reward_config || {}).lucky_daily_raider;
+  if (!cfg.enabled) return { enabled: false };
+  const tid = Number(t?.id);
+  const today = tournamentUtcDayString();
+  let lastRun = null;
+  let myVolume = 0;
+  let myAttackWins = 0;
+  let myAttackAttempts = 0;
+  let myAttackSurrenders = 0;
+  let myRawAttackWins = 0;
+  let myRawAttackAttempts = 0;
+  let myRawAttackSurrenders = 0;
+  let myTickets = 0;
+  let myVolumeTickets = 0;
+  let myAttackWinTickets = 0;
+  let myEligible = false;
+  let myReason = viewerId ? 'no_volume' : 'anonymous';
+  let hasRequiredNft = null;
+  let lastRunDetails = {};
+  let todayEntries = [];
+  let historyRuns = [];
+  try {
+    lastRun = db.db.prepare(`
+      SELECT r.*, p.name AS winner_name, p.wallet AS winner_wallet
+        FROM tournament_lucky_raider_runs r
+        LEFT JOIN players p ON p.id = r.winner_player_id
+       WHERE r.tournament_id = ?
+       ORDER BY r.day_utc DESC
+       LIMIT 1
+    `).get(tid);
+    try { lastRunDetails = lastRun?.details_json ? JSON.parse(lastRun.details_json) : {}; } catch { lastRunDetails = {}; }
+  } catch {}
+  try {
+    const rows = db.db.prepare(`
+      SELECT tp.player_id,
+             p.name,
+             p.wallet,
+             COALESCE(SUM(a.volume_usd), 0) AS volume_usd
+        FROM tournament_participants tp
+        JOIN players p ON p.id = tp.player_id
+        LEFT JOIN tournament_daily_activity a
+          ON a.tournament_id = tp.tournament_id
+         AND a.player_id = tp.player_id
+         AND a.day_utc = ?
+       WHERE tp.tournament_id = ?
+         AND tp.left_at IS NULL
+       GROUP BY tp.player_id
+    `).all(today, tid);
+    todayEntries = rows.map((row) => {
+      const volume = Math.max(0, Number(row.volume_usd || 0) || 0);
+      const attackStats = typeof db.luckyRaiderAttackStatsForPlayer === 'function'
+        ? db.luckyRaiderAttackStatsForPlayer(t, row.player_id, today, cfg)
+        : { attack_wins: 0, raw_attack_wins: 0, attack_attempts: 0, raw_attack_attempts: 0, attack_surrenders: 0, raw_attack_surrenders: 0 };
+      const attackWins = Math.max(0, Math.floor(Number(attackStats.attack_wins || 0) || 0));
+      const ticketState = luckyRaiderTicketState(cfg, volume, attackWins);
+      const tickets = ticketState.tickets;
+      let reason = tickets > 0 ? 'eligible' : ticketState.reason;
+      let hasNft = null;
+      if (cfg.require_nft) {
+        hasNft = playerHasTournamentRewardNft(row.player_id, cfg.required_collections);
+        if (!hasNft) reason = 'missing_required_nft';
+      }
+      return {
+        player_id: row.player_id,
+        name: row.name || '',
+        wallet: row.wallet || null,
+        volume_usd: Number(volume.toFixed(2)),
+        attack_wins: attackWins,
+        attack_attempts: Math.max(0, Math.floor(Number(attackStats.attack_attempts || 0) || 0)),
+        attack_surrenders: Math.max(0, Math.floor(Number(attackStats.attack_surrenders || 0) || 0)),
+        raw_attack_wins: Math.max(0, Math.floor(Number(attackStats.raw_attack_wins || attackWins) || 0)),
+        raw_attack_attempts: Math.max(0, Math.floor(Number(attackStats.raw_attack_attempts || 0) || 0)),
+        raw_attack_surrenders: Math.max(0, Math.floor(Number(attackStats.raw_attack_surrenders || 0) || 0)),
+        max_counted_attacks: Math.max(0, Math.floor(Number(attackStats.max_counted_attacks || cfg.max_counted_attacks || cfg.max_tickets || 0) || 0)),
+        volume_tickets: ticketState.volume_tickets,
+        raw_volume_tickets: ticketState.raw_volume_tickets,
+        raw_volume_steps: ticketState.raw_volume_steps,
+        volume_tickets_per_step: ticketState.volume_tickets_per_step,
+        max_volume_tickets: ticketState.max_volume_tickets,
+        attack_win_tickets: ticketState.attack_win_tickets,
+        tickets: cfg.require_nft && !hasNft ? 0 : tickets,
+        eligible: tickets > 0 && (!cfg.require_nft || hasNft),
+        reason,
+        has_required_nft: hasNft,
+      };
+    })
+      .sort((a, b) => Number(b.tickets || 0) - Number(a.tickets || 0)
+        || Number(b.attack_wins || 0) - Number(a.attack_wins || 0)
+        || Number(b.volume_usd || 0) - Number(a.volume_usd || 0)
+        || String(a.player_id).localeCompare(String(b.player_id)))
+      .slice(0, 50);
+  } catch {}
+  try {
+    const runs = db.db.prepare(`
+      SELECT *
+        FROM tournament_lucky_raider_runs
+       WHERE tournament_id = ?
+       ORDER BY day_utc DESC
+       LIMIT 14
+    `).all(tid);
+    historyRuns = runs.map((run) => {
+      let details = {};
+      try { details = run.details_json ? JSON.parse(run.details_json) : {}; } catch { details = {}; }
+      return {
+        day_utc: run.day_utc,
+        status: run.status,
+        total_tickets: Number(details.total_tickets || 0) || 0,
+        eligible_players: Number(details.eligible_players || 0) || 0,
+        winner_count: Number(details.winner_count || cfg.winner_count || 1) || 1,
+        winners: Array.isArray(details.winners) ? details.winners : [],
+      };
+    });
+  } catch {}
+  if (viewerId) {
+    try {
+      const entry = db.db.prepare(`
+        SELECT *
+          FROM tournament_lucky_raider_entries
+         WHERE tournament_id = ? AND day_utc = ? AND player_id = ?
+      `).get(tid, today, viewerId);
+      const live = db.db.prepare(`
+        SELECT COALESCE(SUM(volume_usd), 0) AS volume_usd
+          FROM tournament_daily_activity
+         WHERE tournament_id = ? AND day_utc = ? AND player_id = ?
+      `).get(tid, today, viewerId);
+      myVolume = Number(live?.volume_usd ?? entry?.volume_usd ?? 0) || 0;
+      let entryDetails = {};
+      try { entryDetails = entry?.details_json ? JSON.parse(entry.details_json) : {}; } catch {}
+      const attackStats = typeof db.luckyRaiderAttackStatsForPlayer === 'function'
+        ? db.luckyRaiderAttackStatsForPlayer(t, viewerId, today, cfg)
+        : {
+          attack_wins: Number(entryDetails.attack_wins || 0) || 0,
+          raw_attack_wins: Number(entryDetails.raw_attack_wins || entryDetails.attack_wins || 0) || 0,
+          attack_attempts: Number(entryDetails.attack_attempts || 0) || 0,
+          raw_attack_attempts: Number(entryDetails.raw_attack_attempts || 0) || 0,
+          attack_surrenders: Number(entryDetails.attack_surrenders || 0) || 0,
+          raw_attack_surrenders: Number(entryDetails.raw_attack_surrenders || 0) || 0,
+        };
+      myAttackWins = Number(attackStats.attack_wins || 0) || 0;
+      myAttackAttempts = Math.max(0, Math.floor(Number(attackStats.attack_attempts || 0) || 0));
+      myAttackSurrenders = Math.max(0, Math.floor(Number(attackStats.attack_surrenders || 0) || 0));
+      myRawAttackWins = Math.max(0, Math.floor(Number(attackStats.raw_attack_wins || myAttackWins) || 0));
+      myRawAttackAttempts = Math.max(0, Math.floor(Number(attackStats.raw_attack_attempts || 0) || 0));
+      myRawAttackSurrenders = Math.max(0, Math.floor(Number(attackStats.raw_attack_surrenders || 0) || 0));
+      const ticketState = luckyRaiderTicketState(cfg, myVolume, myAttackWins);
+      myVolumeTickets = ticketState.volume_tickets;
+      myAttackWinTickets = ticketState.attack_win_tickets;
+      myTickets = ticketState.tickets;
+      hasRequiredNft = cfg.require_nft ? playerHasTournamentRewardNft(viewerId, cfg.required_collections) : true;
+      myEligible = myTickets > 0 && (!cfg.require_nft || hasRequiredNft);
+      if (myTickets > 0) myReason = !hasRequiredNft ? 'missing_required_nft' : 'eligible';
+      else myReason = ticketState.reason;
+    } catch {}
+  }
+  return {
+    enabled: true,
+    label: cfg.label,
+    ticket_metric: cfg.ticket_metric,
+    volume_per_ticket_usd: cfg.volume_per_ticket_usd,
+    volume_tickets_per_step: cfg.volume_tickets_per_step,
+    attack_wins_per_ticket: cfg.attack_wins_per_ticket,
+    min_attack_wins: cfg.min_attack_wins,
+    winner_count: cfg.winner_count,
+    max_tickets: cfg.max_tickets,
+    max_counted_attacks: cfg.max_counted_attacks,
+    max_volume_tickets: cfg.max_volume_tickets,
+    require_nft: cfg.require_nft,
+    required_collections: cfg.required_collections,
+    rewards: cfg.rewards,
+    draw_time_utc: cfg.draw_time_utc,
+    today_day_utc: today,
+    my_volume_usd: Number(myVolume.toFixed(2)),
+    my_attack_wins: Math.max(0, Math.floor(myAttackWins)),
+    my_attack_attempts: myAttackAttempts,
+    my_attack_surrenders: myAttackSurrenders,
+    my_raw_attack_wins: myRawAttackWins,
+    my_raw_attack_attempts: myRawAttackAttempts,
+    my_raw_attack_surrenders: myRawAttackSurrenders,
+    my_volume_tickets: myVolumeTickets,
+    my_attack_win_tickets: myAttackWinTickets,
+    my_tickets: myTickets,
+    my_eligible: myEligible,
+    my_reason: myReason,
+    has_required_nft: hasRequiredNft,
+    today_entries: todayEntries,
+    history: historyRuns,
+    last_winner: lastRun ? {
+      day_utc: lastRun.day_utc,
+      status: lastRun.status,
+      player_id: lastRun.winner_player_id || null,
+      name: lastRun.winner_name || null,
+      wallet: lastRun.winner_wallet || null,
+    } : null,
+    last_winners: Array.isArray(lastRunDetails.winners) ? lastRunDetails.winners : [],
+  };
+}
+
+function tournamentRewardScheduleState(t, viewerId = null) {
+  const config = normalizeTournamentRewardConfig(t?.reward_config || {});
+  return {
+    ...config,
+    lucky_daily_raider: tournamentLuckyRaiderState(t, viewerId),
   };
 }
 
@@ -16858,6 +19434,18 @@ function canJoinTournament(t, now = nowSql()) {
   return false;
 }
 
+function tournamentRequiresClashRewardWallet(t) {
+  if (!t) return false;
+  if (Number(t.rewards_in_cop || 0)) return true;
+  if (rewardConfigUsesClashToken(t.reward_config || {})) return true;
+  let megaConfig = {};
+  try { megaConfig = normalizeTournamentMegaConfig(t.mega_config); } catch { megaConfig = {}; }
+  if (megaConfigUsesClashToken(megaConfig)) return true;
+  let prizeTiers = [];
+  try { prizeTiers = normalizeTournamentPrizeTiers(t.prize_tiers || []); } catch { prizeTiers = []; }
+  return prizeTiers.some((tier) => rewardsContainClashToken(tier.rewards || []));
+}
+
 function tournamentRowToPublic(t, options = {}) {
   const now = nowSql();
   const phase = tournamentPhase(t, now);
@@ -16871,11 +19459,16 @@ function tournamentRowToPublic(t, options = {}) {
   const teamMemberRewardBy = normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd');
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(t.attack_match_policy, 'all');
   const scoringMode = normalizeTournamentScoringMode(t.scoring_mode, 'live');
+  const rewardConfig = normalizeTournamentRewardConfig(t.reward_config || {});
+  let megaConfig = {};
+  try { megaConfig = normalizeTournamentMegaConfig(t.mega_config); }
+  catch { megaConfig = normalizeTournamentMegaConfig({}); }
   let dailyPoolOverrides = {};
   try { dailyPoolOverrides = normalizeTournamentDailyPoolOverrides(t.daily_pool_overrides); }
   catch { dailyPoolOverrides = {}; }
   return {
     id: t.id,
+    event_kind: normalizeTournamentEventKind(t.event_kind),
     name: t.name,
     description: t.description || '',
     dex: t.dex,
@@ -16896,6 +19489,11 @@ function tournamentRowToPublic(t, options = {}) {
     attack_match_policy_label: tournamentAttackMatchPolicyLabel(attackMatchPolicy),
     scoring_mode: scoringMode,
     scoring_label: scoringMode === 'daily_pool' ? 'Daily points at 00:00 UTC' : 'Live scoring',
+    tournament_kind: normalizeTournamentEventKind(t.event_kind) === 'lucky_raider' ? 'lucky_raider' : (megaConfig.enabled ? 'mega' : 'standard'),
+    is_lucky_raider_event: normalizeTournamentEventKind(t.event_kind) === 'lucky_raider',
+    is_mega: megaConfig.enabled,
+    mega_config: megaConfig,
+    mega_sectors: megaConfig.sectors,
     daily_pool_points: normalizeTournamentDailyPoolPoints(t.daily_pool_points, 1000),
     daily_pool_growth_pct: normalizeTournamentDailyPoolGrowthPct(t.daily_pool_growth_pct, 0),
     daily_pool_overrides: dailyPoolOverrides,
@@ -16923,7 +19521,9 @@ function tournamentRowToPublic(t, options = {}) {
     prize_payouts: prize.payouts,
     prize_rewards: prize.rewards,
     prize_rewards_by_rank: prize.rewards_by_rank,
-    rewards_in_cop: !!Number(t.rewards_in_cop || 0),
+    reward_config: rewardConfig,
+    reward_schedule: tournamentRewardScheduleState(t),
+    rewards_in_cop: tournamentRequiresClashRewardWallet(t),
     status: t.status,
     phase,
     preregistration_enabled: !!Number(t.preregistration_enabled || 0),
@@ -16935,24 +19535,30 @@ function tournamentRowToPublic(t, options = {}) {
 }
 
 function tournamentTradeSourceWhere(dex) {
-  if (dex === 'decibel') return "verified_source = 'decibel_fill'";
-  if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
-  if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
-  if (dex === 'risex') return "verified_source = 'risex_api'";
-  if (dex === 'nado') return "verified_source = 'nado_api'";
-  if (dex === 'hibachi') return "verified_source = 'hibachi_api'";
-  if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
-  if (dex === 'grvt') return "verified_source = 'grvt_builder'";
-  if (dex === 'katana') return "verified_source = 'katana_api'";
-  if (dex === 'gmtrade') return "verified_source = 'gmtrade_tx'";
-  if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
-  if (dex === 'gmx') return "verified_source IN ('worker', 'server')";
-  return "verified_source = 'worker'";
+  return tradeRecon.verifiedSourceWhereForDex(dex);
 }
 
-function syncFuturesTournamentRows(playerId, dex) {
+const FUTURES_TOURNAMENT_SYNC_DEXES = new Set([
+  'avantis',
+  'decibel',
+  'gmx',
+  'monad',
+  'phoenix',
+  'hyperliquid',
+  'risex',
+  'nado',
+  'hibachi',
+  'hotstuff',
+  'grvt',
+  'katana',
+  'gmtrade',
+  'flash',
+]);
+const tournamentParticipantSyncCache = new Map();
+
+function syncFuturesTournamentRows(playerId, dex, opts = {}) {
   const normalizedDex = String(dex || '').toLowerCase();
-  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade'].includes(normalizedDex)) {
+  if (!playerId || !FUTURES_TOURNAMENT_SYNC_DEXES.has(normalizedDex)) {
     return { ok: true, skipped: true };
   }
   const fdb = futuresDbReadonly();
@@ -16968,6 +19574,7 @@ function syncFuturesTournamentRows(playerId, dex) {
       LIMIT 2000
     `).all(playerId, normalizedDex);
     const main = db.recordTournamentTradeRows(playerId, rows, {
+      tournamentId: opts.tournamentId || opts.tournament_id,
       source: 'trade_history',
       dex: normalizedDex,
       count: true,
@@ -16984,6 +19591,59 @@ function syncFuturesTournamentRows(playerId, dex) {
   }
 }
 
+function syncFuturesTournamentParticipants(tournament, opts = {}) {
+  const t = tournament && typeof tournament === 'object'
+    ? tournament
+    : db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(parseInt(tournament, 10));
+  const normalizedDex = String(t?.dex || '').toLowerCase();
+  if (!t?.id || !FUTURES_TOURNAMENT_SYNC_DEXES.has(normalizedDex)) {
+    return { ok: true, skipped: true };
+  }
+  if (opts.liveOnly !== false && tournamentPhase(t) !== 'live') {
+    return { ok: true, skipped: 'not_live' };
+  }
+  const cacheKey = `${t.id}:${normalizedDex}`;
+  const nowMs = Date.now();
+  const cooldownMs = Math.max(5000, Number(process.env.TOURNAMENT_GLOBAL_SYNC_COOLDOWN_MS || 45000));
+  const cachedAt = tournamentParticipantSyncCache.get(cacheKey) || 0;
+  if (!opts.force && nowMs - cachedAt < cooldownMs) {
+    return { ok: true, skipped: 'cooldown' };
+  }
+  tournamentParticipantSyncCache.set(cacheKey, nowMs);
+  const limit = Math.max(1, Math.min(1000, Number(opts.limit || process.env.TOURNAMENT_GLOBAL_SYNC_LIMIT || 500)));
+  const participants = db.db.prepare(`
+    SELECT player_id
+    FROM tournament_participants
+    WHERE tournament_id = ? AND left_at IS NULL
+    ORDER BY last_activity_at DESC, joined_at DESC
+    LIMIT ?
+  `).all(t.id, limit);
+  const summary = {
+    ok: true,
+    tournament_id: t.id,
+    dex: normalizedDex,
+    players: participants.length,
+    rows: 0,
+    inserted: 0,
+    activity_events: 0,
+    failed: 0,
+  };
+  for (const participant of participants) {
+    const result = syncFuturesTournamentRows(participant.player_id, normalizedDex, { tournamentId: t.id });
+    if (!result?.ok) {
+      summary.failed++;
+      continue;
+    }
+    summary.rows += Number(result.rows || 0);
+    summary.inserted += Number(result.main?.inserted || 0);
+    summary.activity_events += Number(result.main?.activity_events || 0);
+  }
+  if (summary.inserted || summary.failed) {
+    console.log('[tournament-sync] participants', JSON.stringify(summary));
+  }
+  return summary;
+}
+
 // List all live tournaments visible to players (active, not yet ended).
 // We show every DEX's tournaments — the client filters/sorts by the
 // player's own DEX. Admin gets full list (incl. drafts) via the admin
@@ -16992,6 +19652,7 @@ router.get('/tournaments', (req, res) => {
   const rows = db.db.prepare(`
     SELECT * FROM tournaments
     WHERE status = 'active'
+      AND COALESCE(event_kind, 'standard') = 'standard'
       AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND (
         replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
@@ -17005,6 +19666,82 @@ router.get('/tournaments', (req, res) => {
   res.json({ tournaments: rows.map(tournamentRowToPublic) });
 });
 
+function ensureLuckyRaiderParticipant(t, player, rewardWallet = null) {
+  if (!t?.id || !player?.id) return null;
+  const normalizedRewardWallet = rewardWallet ? normalizeRewardSolanaWallet(rewardWallet) : null;
+  db.db.prepare(`
+    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, last_activity_at)
+    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, NULL, ?, datetime('now'))
+    ON CONFLICT(tournament_id, player_id) DO UPDATE SET
+      left_at = NULL,
+      reward_wallet_evm = COALESCE(excluded.reward_wallet_evm, tournament_participants.reward_wallet_evm),
+      last_activity_at = datetime('now')
+  `).run(t.id, player.id, normalizedRewardWallet);
+  return db.db.prepare(`
+    SELECT * FROM tournament_participants
+    WHERE tournament_id = ? AND player_id = ?
+  `).get(t.id, player.id);
+}
+
+router.get('/tournaments/lucky-raider', auth, (req, res) => {
+  const dex = req.player.dex;
+  const seekerAccess = isSeekerPlayer(req.player) ? 1 : 0;
+  const rows = db.db.prepare(`
+    SELECT * FROM tournaments
+    WHERE status = 'active'
+      AND COALESCE(event_kind, 'standard') = 'lucky_raider'
+      AND (
+        COALESCE(dex_scope, 'single') = 'all'
+        OR dex = ?
+        OR instr(COALESCE(eligible_dexes, '[]'), '"' || ? || '"') > 0
+      )
+      AND (COALESCE(seeker_only, 0) = 0 OR ? = 1)
+      AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+    ORDER BY id DESC
+    LIMIT 10
+  `).all(dex, dex, seekerAccess);
+  const t = rows.find((row) => {
+    try { return normalizeTournamentRewardConfig(row.reward_config).lucky_daily_raider.enabled; }
+    catch { return false; }
+  });
+  if (!t) {
+    return res.json({ tournament: null, joined: false, phase: null, can_join: false, reward_schedule: null });
+  }
+  const pub = tournamentRowToPublic(t);
+  const needsClashRewardWallet = tournamentRequiresClashRewardWallet(t);
+  let me = db.db.prepare(`
+    SELECT * FROM tournament_participants
+    WHERE tournament_id = ? AND player_id = ?
+  `).get(t.id, req.player.id);
+  const hasValidRewardWallet = !needsClashRewardWallet || playerOwnsSolanaRewardWallet(req.player.id, me?.reward_wallet_evm);
+  if (!needsClashRewardWallet || hasValidRewardWallet) {
+    me = ensureLuckyRaiderParticipant(t, req.player);
+  }
+  const rewardSchedule = tournamentRewardScheduleState(t, req.player.id);
+  return res.json({
+    tournament: { ...pub, reward_schedule: rewardSchedule },
+    joined: !!me && me.left_at === null,
+    phase: pub.phase,
+    can_join: needsClashRewardWallet && !hasValidRewardWallet,
+    needs_reward_wallet: needsClashRewardWallet,
+    has_reward_wallet: hasValidRewardWallet,
+    me: me ? {
+      trophies: me.trophies,
+      gold: me.gold,
+      trades_count: me.trades_count,
+      volume_usd: me.volume_usd,
+      pnl_usd: me.pnl_usd,
+      awarded_points: me.awarded_points || 0,
+      joined_at: me.joined_at,
+      left_at: me.left_at,
+      reward_wallet_evm: me.reward_wallet_evm || null,
+      reward_wallet_solana: me.reward_wallet_evm || null,
+    } : null,
+    reward_schedule: rewardSchedule,
+  });
+});
+
 // Player's current tournament context: the active tournament available to their DEX
 // (if any) plus their participation row. UI uses this to decide whether to
 // show "Join" or "Leave + leaderboard" on the trophy button.
@@ -17014,6 +19751,7 @@ router.get('/tournaments/me', auth, (req, res) => {
   const t = db.db.prepare(`
     SELECT * FROM tournaments
     WHERE status = 'active'
+      AND COALESCE(event_kind, 'standard') = 'standard'
       AND (
         COALESCE(dex_scope, 'single') = 'all'
         OR dex = ?
@@ -17109,6 +19847,7 @@ router.get('/tournaments/history', auth, (req, res) => {
         t.status = 'ended'
         OR (t.end_at IS NOT NULL AND replace(replace(t.end_at, 'T', ' '), ' UTC', '') <= datetime('now'))
       )
+      AND COALESCE(t.event_kind, 'standard') = 'standard'
       AND (
         COALESCE(t.dex_scope, 'single') = 'all'
         OR t.dex = ?
@@ -17177,11 +19916,20 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
     return res.status(400).json({ error: 'pre-registration is closed' });
   }
   if (!canJoinTournament(t, now)) return res.status(400).json({ error: phase === 'live' ? 'registration is closed' : 'tournament is not joinable' });
-  const rewardWallet = Number(t.rewards_in_cop || 0)
-    ? normalizeRewardSolanaWallet(req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm)
+  const needsClashRewardWallet = tournamentRequiresClashRewardWallet(t);
+  let rewardWallet = needsClashRewardWallet
+    ? null
     : normalizeRewardEvmWallet(req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm);
-  if (Number(t.rewards_in_cop || 0) && !rewardWallet) {
-    return res.status(400).json({ error: 'valid Solana reward wallet required for CLASH rewards' });
+  if (needsClashRewardWallet) {
+    if (!requireFirstPartyBrowserContext(req, res, 'tournaments.join.clash-wallet')) return;
+    const validation = validatePlayerClashRewardWallet(
+      req.player.id,
+      req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm,
+    );
+    if (!validation.ok) return res.status(400).json({ error: validation.error });
+    rewardWallet = validation.wallet;
+  } else if (rewardWallet && rejectBlacklistedWallet(req, res, rewardWallet, 'tournaments.join.reward-wallet')) {
+    return;
   }
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.
@@ -17211,22 +19959,35 @@ router.post('/tournaments/:id/reward-wallet', auth, (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
-  if (!Number(t.rewards_in_cop || 0)) {
+  if (!tournamentRequiresClashRewardWallet(t)) {
     return res.status(400).json({ error: 'this tournament does not use CLASH reward addresses' });
   }
+  const rewardWalletInput = req.body?.reward_wallet_solana
+    ?? req.body?.rewardWalletSolana
+    ?? req.body?.reward_wallet_evm
+    ?? req.body?.rewardWalletEvm;
+  if (!requireFirstPartyBrowserContext(req, res, 'tournaments.reward-wallet')) return;
+  const rewardWalletValidation = validatePlayerClashRewardWallet(req.player.id, rewardWalletInput);
+  if (!rewardWalletValidation.ok) return res.status(400).json({ error: rewardWalletValidation.error });
+  const rewardWallet = rewardWalletValidation.wallet;
   const participant = db.db.prepare(`
     SELECT reward_wallet_evm, left_at
     FROM tournament_participants
     WHERE tournament_id = ? AND player_id = ?
   `).get(tid, req.player.id);
+  const isLuckyRaiderEvent = normalizeTournamentEventKind(t.event_kind) === 'lucky_raider';
   if (!participant || participant.left_at !== null) {
+    if (isLuckyRaiderEvent) {
+      const me = ensureLuckyRaiderParticipant(t, req.player, rewardWallet);
+      console.log(`[tournament ${tid} reward-wallet] player=${req.player.name} -> ${rewardWallet}`);
+      return res.json({
+        ok: true,
+        joined: !!me && me.left_at === null,
+        reward_wallet_evm: rewardWallet,
+        reward_wallet_solana: rewardWallet,
+      });
+    }
     return res.status(400).json({ error: 'you are not registered in this tournament' });
-  }
-  const rewardWallet = normalizeRewardSolanaWallet(
-    req.body?.reward_wallet_solana ?? req.body?.rewardWalletSolana ?? req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm,
-  );
-  if (!rewardWallet) {
-    return res.status(400).json({ error: 'valid Solana reward wallet required for CLASH rewards' });
   }
   db.db.prepare(`
     UPDATE tournament_participants
@@ -17524,6 +20285,7 @@ router.get('/tournaments/:id/daily-points', (req, res) => {
   if (!tournamentUsesDailyPool(t)) {
     return res.json({ tournament: tournamentRowToPublic(t), my_player_id: null, days: [] });
   }
+  try { syncFuturesTournamentParticipants(t); } catch {}
 
   let viewer = null;
   const token = req.headers['x-token'];
@@ -17536,7 +20298,7 @@ router.get('/tournaments/:id/daily-points', (req, res) => {
       WHERE tournament_id = ? AND player_id = ?
     `).get(tid, viewer.id);
     if (participant && participant.left_at === null) {
-      try { syncFuturesTournamentRows(viewer.id, viewer.dex); } catch {}
+      try { syncFuturesTournamentRows(viewer.id, viewer.dex, { tournamentId: tid }); } catch {}
     }
   }
 
@@ -17556,12 +20318,31 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
+  try { syncFuturesTournamentParticipants(t); } catch {}
+  let viewer = null;
+  const token = req.headers['x-token'];
+  if (typeof token === 'string' && token.length > 10) {
+    try { viewer = db.authenticatePlayer(token); } catch {}
+  }
+  if (viewer && tournamentPhase(t) === 'live' && isTournamentForDex(t, viewer.dex)) {
+    const participant = db.db.prepare(`
+      SELECT left_at FROM tournament_participants
+      WHERE tournament_id = ? AND player_id = ?
+    `).get(tid, viewer.id);
+    if (participant && participant.left_at === null) {
+      try { syncFuturesTournamentRows(viewer.id, viewer.dex, { tournamentId: tid }); } catch {}
+    }
+  }
   // Whitelist sort columns to defend against future schema drift.
   const sortBy = normalizeTournamentSort(t.sort_by);
   const col = TOURNAMENT_SQL_SORT_COLS[sortBy] || 'tp.pnl_usd';
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
   const includeRewardWallets = isAdminRequest(req);
   const mode = normalizeTournamentMode(t.mode);
+  const singleTournamentDex = tournamentSingleDex(t);
+  const tradingWalletDexSql = singleTournamentDex
+    ? `'${singleTournamentDex}'`
+    : 'COALESCE(tp.team_dex, p.dex, tt.dex)';
   const needsPointsScore = isTournamentPointsSort(sortBy)
     || tournamentUsesDailyPool(t)
     || normalizeTournamentTeamMetric(t.team_score_by, 'volume_usd') === TOURNAMENT_POINTS_SORT
@@ -17569,9 +20350,21 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   const baseSql = `
     SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd, tp.awarded_points,
            tp.team_dex, tp.reward_wallet_evm,
-           p.name, p.wallet, p.dex AS player_dex
+           p.name, p.wallet, p.dex AS player_dex,
+           COALESCE((SELECT MAX(level) FROM buildings b WHERE b.player_id = tp.player_id AND b.type = 'town_hall'), 0) AS town_hall_level,
+           COALESCE(
+             pda.wallet_address,
+             CASE WHEN pda.player_id IS NULL AND p.dex = ${tradingWalletDexSql} THEN p.wallet ELSE NULL END
+           ) AS trading_wallet,
+           pda.account_id AS trading_account_id,
+           pda.chain_type AS trading_chain_type,
+           COALESCE(pda.dex, ${tradingWalletDexSql}) AS trading_dex
     FROM tournament_participants tp
     JOIN players p ON p.id = tp.player_id
+    JOIN tournaments tt ON tt.id = tp.tournament_id
+    LEFT JOIN player_dex_accounts pda
+      ON pda.player_id = tp.player_id
+     AND pda.dex = ${tradingWalletDexSql}
     WHERE tp.tournament_id = ? AND tp.left_at IS NULL
   `;
   let rows;
@@ -17597,8 +20390,29 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     LIMIT ?
     `).all(tid, limit);
   }
+  const dexBreakdowns = tournamentDexBreakdowns(tid);
+  const dailyDexBreakdowns = tournamentDailyDexBreakdowns(tid);
+  applyTournamentDexBreakdowns(rows, t, dexBreakdowns);
+  applyTournamentDailyDexBreakdowns(rows, t, dailyDexBreakdowns);
   const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
+  const summary = tournamentLeaderboardSummary(tid);
   const prize = tournamentPrizeState(t, totalVolumeUsd);
+  let megaState = null;
+  if (isMegaTournament(t)) {
+    const allRows = db.db.prepare(baseSql).all(tid);
+    if (needsPointsScore || isTournamentPointsSort(sortBy) || tournamentUsesDailyPool(t)) applyTournamentPointsScore(allRows, t);
+    applyTournamentDexBreakdowns(allRows, t, dexBreakdowns);
+    applyTournamentDailyDexBreakdowns(allRows, t, dailyDexBreakdowns);
+    megaState = buildMegaTournamentState(allRows, t);
+    if ((megaState?.sectors || []).length > 0) {
+      const ordered = [];
+      for (const sector of megaState.sectors || []) {
+        const ids = new Set(sector.player_ids || []);
+        ordered.push(...allRows.filter(row => ids.has(row.player_id)));
+      }
+      rows = ordered.slice(0, limit);
+    }
+  }
   if (mode === 'dex_vs_dex') {
     teamState = buildTournamentTeamState(rows, t, prize);
     const memberMetric = normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd');
@@ -17618,14 +20432,31 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     tournament: tournamentRowToPublic(t, { totalVolumeUsd }),
     sort_by: sortBy,
     sort_label: tournamentSortLabel(t),
+    summary,
     prize,
+    reward_schedule: tournamentRewardScheduleState(t, viewer?.id || null),
+    mega: megaState,
     teams: teamState,
     leaderboard: rows.map((r, i) => ({
-      rank: i + 1,
+      rank: r.mega_sector_rank_position || i + 1,
+      overall_rank: i + 1,
       player_id: r.player_id,
       name: r.name,
       wallet: r.wallet,
       dex: r.player_dex || r.team_dex || null,
+      top_dex: r.top_dex || null,
+      top_dex_label: r.top_dex_label || null,
+      dex_breakdown: r.dex_breakdown || [],
+      daily_dex_breakdown: r.daily_dex_breakdown || [],
+      daily_volume_usd: r.daily_volume_usd || 0,
+      town_hall_level: Number(r.town_hall_level || 0) || 0,
+      mega_sector_id: r.mega_sector_id || null,
+      mega_sector_name: r.mega_sector_name || null,
+      mega_sector_rank: r.mega_sector_rank || null,
+      mega_sector_rank_position: r.mega_sector_rank_position || null,
+      mega_sector_volume_usd: r.mega_sector_volume_usd || 0,
+      mega_sector_daily_volume_usd: r.mega_sector_daily_volume_usd || 0,
+      mega_sector_trades_count: r.mega_sector_trades_count || 0,
       team_dex: r.team_dex || r.player_dex || null,
       team_label: r.team_label || null,
       team_rank: r.team_rank || null,
@@ -17643,10 +20474,16 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       volume_score: r.volume_score ?? null,
       trophy_score: r.trophy_score ?? null,
       pnl_score: r.pnl_score ?? null,
-      prize_amount: mode === 'dex_vs_dex' ? (r.prize_amount || 0) : (prizeByRank.get(i + 1) || 0),
+      prize_amount: r.mega_sector_id ? (r.mega_prize_amount || 0) : (mode === 'dex_vs_dex' ? (r.prize_amount || 0) : (prizeByRank.get(i + 1) || 0)),
       prize_currency: prize.currency,
-      prize_rewards: mode === 'dex_vs_dex' ? [] : (prizeRewardsByRank.get(i + 1) || []),
-      ...(includeRewardWallets ? { reward_wallet_evm: r.reward_wallet_evm || null } : {}),
+      prize_rewards: r.mega_sector_id ? (r.mega_prize_rewards || []) : (mode === 'dex_vs_dex' ? [] : (prizeRewardsByRank.get(i + 1) || [])),
+      ...(includeRewardWallets ? {
+        reward_wallet_evm: r.reward_wallet_evm || null,
+        trading_wallet: r.trading_wallet || null,
+        trading_account_id: r.trading_account_id || null,
+        trading_chain_type: r.trading_chain_type || null,
+        trading_dex: r.trading_dex || r.team_dex || r.player_dex || null,
+      } : {}),
     })),
   });
 });
@@ -17680,14 +20517,15 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
 // default to 1.0 (no boost), sort_by defaults to raw weighted points.
 router.post('/admin/tournaments', adminAuth, (req, res) => {
   const {
-    name, description, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
+    name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
-    prize_currency, prize_tiers, rewards_in_cop, seeker_only,
+    prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  const eventKind = normalizeTournamentEventKind(event_kind);
   const dexConfig = normalizeTournamentDexConfig(req.body || {});
   const tournamentMode = normalizeTournamentMode(mode);
   const teamScoreBy = normalizeTournamentTeamMetric(team_score_by, 'volume_usd');
@@ -17742,6 +20580,8 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   if (windowError) return res.status(400).json({ error: windowError });
   let pointWeights;
   let prizeTiers;
+  let megaConfig;
+  let rewardConfig;
   let shieldHours;
   try {
     shieldHours = normalizeTournamentShieldHours(shield_hours, null);
@@ -17751,7 +20591,17 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
       points_volume_weight,
       points_pnl_weight,
     }, DEFAULT_TOURNAMENT_POINT_WEIGHTS, { requireTotal: needsPointWeights });
-    prizeTiers = normalizeTournamentPrizeTiers(prize_tiers, { strict: true });
+    prizeTiers = eventKind === 'lucky_raider' ? [] : normalizeTournamentPrizeTiers(prize_tiers, { strict: true });
+    megaConfig = eventKind === 'lucky_raider' ? normalizeTournamentMegaConfig({ enabled: false }, { strict: true }) : normalizeTournamentMegaConfig(mega_config, { strict: true });
+    rewardConfig = normalizeTournamentRewardConfig(reward_config, { strict: true });
+    if (eventKind === 'lucky_raider') {
+      rewardConfig = normalizeTournamentRewardConfig({
+        ...rewardConfig,
+        daily_pools: [],
+        final_pools: [],
+        lucky_daily_raider: { ...rewardConfig.lucky_daily_raider, enabled: true },
+      }, { strict: true });
+    }
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -17766,14 +20616,15 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const prereg = parseBool(preregistration_enabled) ? 1 : 0;
   const r = db.db.prepare(`
     INSERT INTO tournaments (
-      name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
+      event_kind, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
       scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
-      prize_currency, prize_tiers, rewards_in_cop, seeker_only,
+      prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
       shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
+    eventKind,
     name.trim(),
     (description || '').toString().slice(0, 500),
     dexConfig.dex,
@@ -17802,6 +20653,8 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     scoringMode === 'daily_pool' ? nowSql() : null,
     sanitizePrizeCurrency(prize_currency),
     JSON.stringify(prizeTiers),
+    JSON.stringify(megaConfig),
+    JSON.stringify(rewardConfig),
     parseBool(rewards_in_cop) ? 1 : 0,
     parseBool(seeker_only) ? 1 : 0,
     shieldHours,
@@ -17821,13 +20674,14 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'not found' });
   const {
-    name, description, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
+    name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides,
-    prize_currency, prize_tiers, rewards_in_cop, seeker_only,
+    prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
+  const nextEventKind = event_kind !== undefined ? normalizeTournamentEventKind(event_kind) : normalizeTournamentEventKind(t.event_kind);
   const dexConfig = normalizeTournamentDexConfig(req.body || {}, t);
   const tournamentMode = normalizeTournamentMode(mode !== undefined ? mode : t.mode);
   const teamScoreBy = normalizeTournamentTeamMetric(team_score_by !== undefined ? team_score_by : t.team_score_by, 'volume_usd');
@@ -17878,6 +20732,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     || (tournamentMode === 'dex_vs_dex' && (teamScoreBy === TOURNAMENT_POINTS_SORT || teamMemberRewardBy === TOURNAMENT_POINTS_SORT));
   let pointWeights;
   let nextPrizeTiers;
+  let nextMegaConfig;
+  let nextRewardConfig;
   let teamSplits;
   let nextShieldHours;
   try {
@@ -17889,9 +20745,23 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
       points_volume_weight: points_volume_weight !== undefined ? points_volume_weight : t.points_volume_weight,
       points_pnl_weight: points_pnl_weight !== undefined ? points_pnl_weight : t.points_pnl_weight,
     }, fallbackWeights, { requireTotal: needsPointWeights });
-    nextPrizeTiers = prize_tiers !== undefined
+    nextPrizeTiers = nextEventKind === 'lucky_raider' ? [] : (prize_tiers !== undefined
       ? normalizeTournamentPrizeTiers(prize_tiers, { strict: true })
-      : normalizeTournamentPrizeTiers(t.prize_tiers);
+      : normalizeTournamentPrizeTiers(t.prize_tiers));
+    nextMegaConfig = nextEventKind === 'lucky_raider' ? normalizeTournamentMegaConfig({ enabled: false }, { strict: true }) : (mega_config !== undefined
+      ? normalizeTournamentMegaConfig(mega_config, { strict: true })
+      : normalizeTournamentMegaConfig(t.mega_config));
+    nextRewardConfig = reward_config !== undefined
+      ? normalizeTournamentRewardConfig(reward_config, { strict: true })
+      : normalizeTournamentRewardConfig(t.reward_config);
+    if (nextEventKind === 'lucky_raider') {
+      nextRewardConfig = normalizeTournamentRewardConfig({
+        ...nextRewardConfig,
+        daily_pools: [],
+        final_pools: [],
+        lucky_daily_raider: { ...nextRewardConfig.lucky_daily_raider, enabled: true },
+      }, { strict: true });
+    }
     teamSplits = teamPrizeMode === 'custom_split'
       ? normalizeTournamentTeamPrizeSplits(team_prize_splits !== undefined ? team_prize_splits : t.team_prize_splits, tournamentEligibleDexes(dexConfig), { strict: tournamentMode === 'dex_vs_dex' })
       : [];
@@ -17900,6 +20770,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   }
   const next = {
     name: name && typeof name === 'string' ? name.trim() : t.name,
+    event_kind: nextEventKind,
     description: description !== undefined ? String(description).slice(0, 500) : t.description,
     dex: dexConfig.dex,
     dex_scope: dexConfig.dex_scope,
@@ -17932,6 +20803,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
       : null,
     prize_currency: prize_currency !== undefined ? sanitizePrizeCurrency(prize_currency) : sanitizePrizeCurrency(t.prize_currency),
     prize_tiers: nextPrizeTiers,
+    mega_config: nextMegaConfig,
+    reward_config: nextRewardConfig,
     rewards_in_cop: rewards_in_cop !== undefined ? (parseBool(rewards_in_cop) ? 1 : 0) : Number(t.rewards_in_cop || 0),
     seeker_only: seeker_only !== undefined ? (parseBool(seeker_only) ? 1 : 0) : Number(t.seeker_only || 0),
     status: STATUSES.includes(status) ? status : t.status,
@@ -17942,16 +20815,17 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     registration_closes_at: nextRegistrationClosesAt,
   };
   db.db.prepare(`
-    UPDATE tournaments SET name = ?, description = ?, dex = ?, dex_scope = ?, eligible_dexes = ?,
+    UPDATE tournaments SET event_kind = ?, name = ?, description = ?, dex = ?, dex_scope = ?, eligible_dexes = ?,
                             mode = ?, team_score_by = ?, team_prize_mode = ?, team_prize_splits = ?, team_member_reward_by = ?, attack_match_policy = ?,
                             start_at = ?, end_at = ?,
                             gold_boost = ?, seeker_gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
                             scoring_mode = ?, daily_pool_points = ?, daily_pool_growth_pct = ?, daily_pool_overrides = ?, daily_pool_enabled_at = ?,
-                            prize_currency = ?, prize_tiers = ?, rewards_in_cop = ?, seeker_only = ?,
+                            prize_currency = ?, prize_tiers = ?, mega_config = ?, reward_config = ?, rewards_in_cop = ?, seeker_only = ?,
                             freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
   `).run(
+    next.event_kind,
     next.name,
     next.description,
     next.dex,
@@ -17981,6 +20855,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.daily_pool_enabled_at,
     next.prize_currency,
     JSON.stringify(next.prize_tiers),
+    JSON.stringify(next.mega_config),
+    JSON.stringify(next.reward_config),
     next.rewards_in_cop,
     next.seeker_only,
     next.freeze_trophies,
@@ -18121,6 +20997,7 @@ router.get('/admin/tournaments/:id/daily-points', adminAuth, (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
+  try { syncFuturesTournamentParticipants(t, { force: String(req.query.sync || '') === '1' }); } catch {}
   const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 14));
   try {
     const days = db.db.prepare(`
@@ -18292,7 +21169,7 @@ router.delete('/admin/tournaments/:id', adminAuth, (req, res) => {
 
 let tournamentDailyPoolTimer = null;
 
-function runTournamentDailyPoolSweep(label = 'timer') {
+async function runTournamentDailyPoolSweep(label = 'timer') {
   try {
     const result = db.awardPendingTournamentDailyPools({
       maxDays: Math.max(1, Math.min(60, Number(process.env.TOURNAMENT_DAILY_POOL_MAX_DAYS || 14))),
@@ -18300,6 +21177,7 @@ function runTournamentDailyPoolSweep(label = 'timer') {
     if (Number(result?.processed || 0) > 0) {
       console.log(`[tournament daily-pool ${label}] processed=${result.processed}`);
     }
+    await luckyRaiderPayouts.runLuckyRaiderPayoutSweep(`daily-pool:${label}`);
   } catch (err) {
     console.warn('[tournament daily-pool] sweep failed:', err?.message || err);
   }
@@ -18315,6 +21193,7 @@ function startTournamentDailyPoolScheduler() {
 }
 
 startTournamentDailyPoolScheduler();
+luckyRaiderPayouts.startLuckyRaiderPayoutWorker();
 
 // ==================== ENCRYPTED CLIENT DIAGNOSTICS ====================
 //
@@ -18438,6 +21317,340 @@ router.get('/admin/diag/pacifica/summary', adminAuth, (req, res) => {
     ORDER BY n DESC LIMIT 200
   `).all(`-${sinceMin} minutes`);
   res.json({ window_min: sinceMin, rows });
+});
+
+function exactReferralFuturesRows(limit = 5000) {
+  const futuresPath = process.env.CLASH_FUTURES_DB || path.join(__dirname, '..', 'server-futures', 'futures.db');
+  if (!fs.existsSync(futuresPath)) return [];
+  let Sqlite = null;
+  try { Sqlite = require('better-sqlite3'); } catch { return []; }
+  const fdb = new Sqlite(futuresPath, { readonly: true, fileMustExist: true });
+  try {
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    const capped = Math.max(1, Math.min(50_000, Number(limit) || 5000));
+    return fdb.prepare(`
+      SELECT id, player_id, dex, symbol, side, amount, price, notional_usd,
+             fee, order_id, client_order_id, verified_source, proof_json, created_at
+      FROM trade_history
+      WHERE status = 'filled'
+        AND ABS(CAST(COALESCE(NULLIF(fee, ''), '0') AS REAL)) > 0
+        AND (
+          verified_source = 'grvt_builder'
+          OR verified_source = 'nado_api'
+          OR (
+            verified_source = 'hotstuff_api'
+            AND (
+              proof_json LIKE '%"source":"hotstuff_fill_api"%'
+              OR proof_json LIKE '%"source": "hotstuff_fill_api"%'
+            )
+          )
+        )
+      ORDER BY id ASC
+      LIMIT ?
+    `).all(capped);
+  } finally {
+    fdb.close();
+  }
+}
+
+function syncExactReferralFuturesEarnings({ limit = 5000 } = {}) {
+  const rows = exactReferralFuturesRows(limit);
+  let inserted = 0;
+  let skipped = 0;
+  for (const row of rows) {
+    const feeUsd = Math.abs(Number(row.fee || 0));
+    if (!Number.isFinite(feeUsd) || feeUsd <= 0) {
+      skipped += 1;
+      continue;
+    }
+    const result = db.recordReferralRevenue({
+      referredPlayerId: row.player_id,
+      sourceType: 'futures_builder_fee',
+      sourceId: `${row.dex}:${row.id}`,
+      revenueKind: 'builder_fee',
+      grossUsdE6: Math.round(feeUsd * 1_000_000),
+      status: 'confirmed',
+      currency: 'USD',
+      txHash: row.order_id == null ? null : String(row.order_id),
+      metadata: {
+        dex: row.dex,
+        symbol: row.symbol,
+        side: row.side,
+        verified_source: row.verified_source,
+        client_order_id: row.client_order_id,
+        created_at: row.created_at,
+      },
+    });
+    if (result.changes) inserted += 1;
+    else skipped += 1;
+  }
+  return { scanned: rows.length, inserted, skipped };
+}
+
+router.get('/admin/referrals', adminAuth, (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+    const settings = db.getReferralSettings();
+    const rows = db.db.prepare(`
+      WITH invite_counts AS (
+        SELECT referrer_player_id, COUNT(DISTINCT referred_player_id) AS invited_count
+        FROM player_referrals
+        GROUP BY referrer_player_id
+      ),
+      event_totals AS (
+        SELECT
+          referrer_player_id,
+          COALESCE(SUM(CASE WHEN status IN ('confirmed', 'claimable') THEN commission_usd_e6 ELSE 0 END), 0) AS confirmed_usd_e6,
+          COALESCE(SUM(CASE WHEN status = 'pending' THEN commission_usd_e6 ELSE 0 END), 0) AS pending_usd_e6,
+          COALESCE(SUM(CASE WHEN status = 'paid' THEN commission_usd_e6 ELSE 0 END), 0) AS paid_usd_e6,
+          COUNT(id) AS events_count
+        FROM referral_events
+        GROUP BY referrer_player_id
+      )
+      SELECT
+        rc.player_id,
+        p.name AS player_name,
+        rc.code,
+        rc.slug,
+        rc.commission_bps,
+        rc.manual_enabled,
+        rc.active,
+        rc.note,
+        rc.created_at,
+        rc.updated_at,
+        COALESCE(ic.invited_count, 0) AS invited_count,
+        COALESCE(et.confirmed_usd_e6, 0) AS confirmed_usd_e6,
+        COALESCE(et.pending_usd_e6, 0) AS pending_usd_e6,
+        COALESCE(et.paid_usd_e6, 0) AS paid_usd_e6,
+        COALESCE(et.events_count, 0) AS events_count
+      FROM referral_codes rc
+      JOIN players p ON p.id = rc.player_id
+      LEFT JOIN invite_counts ic ON ic.referrer_player_id = rc.player_id
+      LEFT JOIN event_totals et ON et.referrer_player_id = rc.player_id
+      ORDER BY confirmed_usd_e6 DESC, invited_count DESC, rc.created_at DESC
+      LIMIT ?
+    `).all(limit).map((row) => ({
+      ...row,
+      confirmed_usd: Number(row.confirmed_usd_e6 || 0) / 1_000_000,
+      pending_usd: Number(row.pending_usd_e6 || 0) / 1_000_000,
+      paid_usd: Number(row.paid_usd_e6 || 0) / 1_000_000,
+      commission_percent: Number(row.commission_bps || settings.default_bps || 0) / 100,
+      visible: settings.mode === 'all' || Number(row.manual_enabled || 0) === 1,
+      active: !!row.active,
+      manual_enabled: !!row.manual_enabled,
+    }));
+    const recent = db.db.prepare(`
+      SELECT e.*, rp.name AS referrer_name, up.name AS referred_name
+      FROM referral_events e
+      JOIN players rp ON rp.id = e.referrer_player_id
+      JOIN players up ON up.id = e.referred_player_id
+      ORDER BY e.created_at DESC
+      LIMIT 200
+    `).all().map((row) => ({
+      ...row,
+      gross_usd: Number(row.gross_usd_e6 || 0) / 1_000_000,
+      commission_usd: Number(row.commission_usd_e6 || 0) / 1_000_000,
+    }));
+    const referrals = db.db.prepare(`
+      WITH referred_event_totals AS (
+        SELECT
+          referrer_player_id,
+          referred_player_id,
+          COALESCE(SUM(CASE WHEN status IN ('confirmed', 'claimable') THEN commission_usd_e6 ELSE 0 END), 0) AS confirmed_usd_e6,
+          COALESCE(SUM(CASE WHEN status = 'pending' THEN commission_usd_e6 ELSE 0 END), 0) AS pending_usd_e6,
+          COALESCE(SUM(CASE WHEN status = 'paid' THEN commission_usd_e6 ELSE 0 END), 0) AS paid_usd_e6,
+          COUNT(id) AS events_count,
+          MAX(created_at) AS latest_event_at
+        FROM referral_events
+        GROUP BY referrer_player_id, referred_player_id
+      )
+      SELECT
+        pr.referrer_player_id,
+        rp.name AS referrer_name,
+        pr.referred_player_id,
+        up.name AS referred_name,
+        pr.code,
+        pr.source,
+        pr.bound_at,
+        pr.metadata_json,
+        COALESCE(ret.confirmed_usd_e6, 0) AS confirmed_usd_e6,
+        COALESCE(ret.pending_usd_e6, 0) AS pending_usd_e6,
+        COALESCE(ret.paid_usd_e6, 0) AS paid_usd_e6,
+        COALESCE(ret.events_count, 0) AS events_count,
+        ret.latest_event_at
+      FROM player_referrals pr
+      JOIN players rp ON rp.id = pr.referrer_player_id
+      JOIN players up ON up.id = pr.referred_player_id
+      LEFT JOIN referred_event_totals ret
+        ON ret.referrer_player_id = pr.referrer_player_id
+       AND ret.referred_player_id = pr.referred_player_id
+      ORDER BY pr.bound_at DESC
+      LIMIT 1000
+    `).all().map((row) => ({
+      ...row,
+      confirmed_usd: Number(row.confirmed_usd_e6 || 0) / 1_000_000,
+      pending_usd: Number(row.pending_usd_e6 || 0) / 1_000_000,
+      paid_usd: Number(row.paid_usd_e6 || 0) / 1_000_000,
+      metadata: (() => {
+        try { return JSON.parse(row.metadata_json || '{}'); } catch { return {}; }
+      })(),
+    }));
+    const payouts = db.db.prepare(`
+      SELECT rp.*, p.name AS referrer_name
+      FROM referral_payouts rp
+      JOIN players p ON p.id = rp.referrer_player_id
+      ORDER BY rp.created_at DESC
+      LIMIT 100
+    `).all().map((row) => ({
+      ...row,
+      amount_usd: Number(row.amount_usd_e6 || 0) / 1_000_000,
+    }));
+    res.json({ rows, referrals, recent, payouts, settings, rate_bps: settings.default_bps });
+  } catch (e) {
+    console.warn('[referrals] admin list failed:', e.message);
+    res.status(500).json({ error: 'Failed to load referrals' });
+  }
+});
+
+router.post('/admin/referrals/settings', adminAuth, (req, res) => {
+  try {
+    const settings = db.setReferralSettings({
+      mode: req.body?.mode,
+      default_bps: req.body?.default_bps ?? Math.round(Number(req.body?.default_percent || 10) * 100),
+    });
+    res.json({ ok: true, settings });
+  } catch (e) {
+    console.warn('[referrals] settings update failed:', e.message);
+    res.status(500).json({ error: 'Failed to update referral settings' });
+  }
+});
+
+router.post('/admin/referrals/issue', adminAuth, (req, res) => {
+  try {
+    const player = req.body?.player || req.body?.player_id || req.body?.name;
+    const commissionBps = req.body?.commission_bps ?? Math.round(Number(req.body?.commission_percent || 10) * 100);
+    const code = db.issueReferralCodeForPlayer(player, {
+      code: req.body?.code,
+      commissionBps,
+      active: req.body?.active == null ? true : !!req.body.active,
+      note: req.body?.note,
+    });
+    res.json({ ok: true, code: { ...code, active: !!code.active, manual_enabled: !!code.manual_enabled } });
+  } catch (e) {
+    const message = e.message || 'Failed to issue referral code';
+    const status = /not found/i.test(message) ? 404 : (/already used/i.test(message) ? 409 : 500);
+    console.warn('[referrals] issue failed:', message);
+    res.status(status).json({ error: message });
+  }
+});
+
+router.post('/admin/referrals/:playerId/code', adminAuth, (req, res) => {
+  try {
+    const commissionBps = req.body?.commission_bps ?? Math.round(Number(req.body?.commission_percent || 10) * 100);
+    const code = db.issueReferralCodeForPlayer(req.params.playerId, {
+      code: req.body?.code,
+      commissionBps,
+      active: req.body?.active == null ? true : !!req.body.active,
+      note: req.body?.note,
+    });
+    res.json({ ok: true, code: { ...code, active: !!code.active, manual_enabled: !!code.manual_enabled } });
+  } catch (e) {
+    const message = e.message || 'Failed to update referral code';
+    const status = /not found/i.test(message) ? 404 : (/already used/i.test(message) ? 409 : 500);
+    console.warn('[referrals] code update failed:', message);
+    res.status(status).json({ error: message });
+  }
+});
+
+router.post('/admin/referrals/sync-futures', adminAuth, (req, res) => {
+  try {
+    res.json({ ok: true, ...syncExactReferralFuturesEarnings({ limit: req.body?.limit || req.query.limit }) });
+  } catch (e) {
+    console.warn('[referrals] futures sync failed:', e.message);
+    res.status(500).json({ error: 'Failed to sync exact futures referral fees' });
+  }
+});
+
+router.post('/admin/referrals/:playerId/payouts', adminAuth, (req, res) => {
+  try {
+    const playerId = String(req.params.playerId || '').trim();
+    const player = db.db.prepare('SELECT id, name FROM players WHERE id = ?').get(playerId);
+    if (!player) return res.status(404).json({ error: 'Player not found' });
+
+    const destination = req.body?.destination == null ? null : String(req.body.destination).slice(0, 200);
+    const note = req.body?.note == null ? null : String(req.body.note).slice(0, 500);
+    const payout = db.db.transaction(() => {
+      const totals = db.db.prepare(`
+        SELECT COUNT(*) AS events_count, COALESCE(SUM(commission_usd_e6), 0) AS amount_usd_e6
+        FROM referral_events
+        WHERE referrer_player_id = ?
+          AND status IN ('confirmed', 'claimable')
+          AND payout_id IS NULL
+      `).get(playerId);
+      const amount = Number(totals?.amount_usd_e6 || 0);
+      if (amount <= 0) return null;
+
+      const payoutId = `refpay_${crypto.randomUUID()}`;
+      db.db.prepare(`
+        INSERT INTO referral_payouts (id, referrer_player_id, status, amount_usd_e6, destination, note)
+        VALUES (?, ?, 'requested', ?, ?, ?)
+      `).run(payoutId, playerId, amount, destination, note);
+      db.db.prepare(`
+        UPDATE referral_events
+        SET status = 'claimable', payout_id = ?
+        WHERE referrer_player_id = ?
+          AND status IN ('confirmed', 'claimable')
+          AND payout_id IS NULL
+      `).run(payoutId, playerId);
+      return {
+        id: payoutId,
+        referrer_player_id: playerId,
+        referrer_name: player.name,
+        status: 'requested',
+        amount_usd_e6: amount,
+        amount_usd: amount / 1_000_000,
+        events_count: Number(totals?.events_count || 0),
+        destination,
+        note,
+      };
+    })();
+
+    if (!payout) return res.status(400).json({ error: 'No confirmed referral commission to payout' });
+    res.json({ ok: true, payout });
+  } catch (e) {
+    console.warn('[referrals] create payout failed:', e.message);
+    res.status(500).json({ error: 'Failed to create referral payout' });
+  }
+});
+
+router.post('/admin/referrals/payouts/:payoutId/paid', adminAuth, (req, res) => {
+  try {
+    const payoutId = String(req.params.payoutId || '').trim();
+    const txHash = req.body?.txHash == null ? null : String(req.body.txHash).slice(0, 200);
+    const payout = db.db.prepare('SELECT * FROM referral_payouts WHERE id = ?').get(payoutId);
+    if (!payout) return res.status(404).json({ error: 'Payout not found' });
+    if (payout.status === 'paid') {
+      return res.json({ ok: true, payout: { ...payout, amount_usd: Number(payout.amount_usd_e6 || 0) / 1_000_000 } });
+    }
+
+    const updated = db.db.transaction(() => {
+      db.db.prepare(`
+        UPDATE referral_payouts
+        SET status = 'paid', tx_hash = ?, paid_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ?
+      `).run(txHash, payoutId);
+      db.db.prepare(`
+        UPDATE referral_events
+        SET status = 'paid', paid_at = datetime('now')
+        WHERE payout_id = ?
+      `).run(payoutId);
+      return db.db.prepare('SELECT * FROM referral_payouts WHERE id = ?').get(payoutId);
+    })();
+    res.json({ ok: true, payout: { ...updated, amount_usd: Number(updated.amount_usd_e6 || 0) / 1_000_000 } });
+  } catch (e) {
+    console.warn('[referrals] mark payout paid failed:', e.message);
+    res.status(500).json({ error: 'Failed to mark referral payout paid' });
+  }
 });
 
 // Admin: net commission earned per DEX. Reads on-chain balances + Pacifica

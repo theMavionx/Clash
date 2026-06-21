@@ -10,9 +10,11 @@ import {
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 // Pyth Benchmarks serves historical candles in TradingView UDF format for
-// every Pyth feed. Route through our futures backend so browser CORS / 429s
-// do not blank Avantis charts, and repeated requests can be cached server-side.
+// every Pyth feed. Query it directly from the user's browser first so public
+// rate limits are distributed per user/IP. The Clash endpoint is only a
+// fallback for CORS/network failures or transient direct errors.
 const PYTH_HISTORY_API = '/api/futures/pyth/history';
+const PYTH_HISTORY_DIRECT_API = 'https://benchmarks.pyth.network/v1/shims/tradingview/history';
 
 const INTERVALS = [
   { label: '1m', value: '1m', ms: 2 * 60 * 60 * 1000, pyth: '1' },
@@ -336,18 +338,30 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         from: String(fromSec),
         to: String(toSec),
       });
-      try {
-        const r = await fetch(`${PYTH_HISTORY_API}?${params.toString()}`);
+      const read = async (url) => {
+        const r = await fetch(url);
         const json = await r.json().catch(() => null);
         if (!r.ok) {
           return {
             s: 'error',
             errmsg: json?.errmsg || json?.error || `Pyth history ${r.status}`,
+            status: r.status,
           };
         }
         return json || { s: 'error', errmsg: 'empty Pyth history response' };
+      };
+      try {
+        const direct = await read(`${PYTH_HISTORY_DIRECT_API}?${params.toString()}`);
+        if (direct?.s !== 'error') return direct;
+        const proxied = await read(`${PYTH_HISTORY_API}?${params.toString()}`);
+        return proxied?.s === 'error' ? direct : proxied;
       } catch (e) {
-        return { s: 'error', errmsg: e?.message || 'Pyth history request failed' };
+        console.warn('[chart] direct Pyth history failed, trying Clash fallback:', e?.message || e);
+        try {
+          return await read(`${PYTH_HISTORY_API}?${params.toString()}`);
+        } catch {
+          return { s: 'error', errmsg: e?.message || 'Pyth history request failed' };
+        }
       }
     }
 
@@ -396,7 +410,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
             candles = await loadPythCandles(tf, now, start);
           }
           if (cancelled) return;
-        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade') {
+        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash') {
           // These DEXes use Pyth benchmarks for chart candles. The helper
           // keeps retries bounded so rate limits do not cascade.
           candles = await loadPythCandles(tf, now, start);

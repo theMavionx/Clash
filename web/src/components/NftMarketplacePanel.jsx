@@ -21,7 +21,7 @@ import {
   buyMarketplaceListing,
   cancelMarketplaceListing,
   fetchMarketplaceListings,
-  fetchTokenLevels,
+  fetchTokenRarities,
   formatPriceWei,
   isLegacyCopPaymentToken,
   isEthPayment,
@@ -30,14 +30,22 @@ import {
   marketplacePaymentOptions,
   normalizeMarketplaceChain,
   nftImageUrl,
+  nftRarityLabel,
   parsePriceToWei,
   paymentAddressFromId,
   paymentTokenMeta,
 } from '../lib/marketplace';
+import { fetchOwnedNfts, nftRarityBadgeStyle, nftRarityCardStyle, normalizeNftRarity, syncDemonKingNfts } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
-import { syncDemonKingNfts } from '../lib/nftV3Client';
 
 const LISTINGS_PAGE_SIZE = 50;
+const RARITY_FILTER_OPTIONS = [
+  { value: 'all', label: 'All' },
+  { value: 'common', label: 'Common' },
+  { value: 'epic', label: 'Epic' },
+  { value: 'legendary', label: 'Legendary' },
+  { value: 'unrevealed', label: 'Unrevealed' },
+];
 
 function shortAddr(s, head = 6, tail = 4) {
   if (!s) return '';
@@ -53,6 +61,12 @@ function timeUntil(expiresAt) {
   const hrs = Math.floor(sec / 3600);
   if (hrs >= 1) return `${hrs}h`;
   return `${Math.max(1, Math.floor(sec / 60))}m`;
+}
+
+function listingRarityKey(listing, rarity) {
+  const key = normalizeNftRarity(rarity || listing?.rarity);
+  if (key) return key;
+  return Number(listing?.level || 1) > 1 ? 'legendary' : 'unrevealed';
 }
 
 export default function NftMarketplacePanel({
@@ -73,7 +87,8 @@ export default function NftMarketplacePanel({
   const [page, setPage] = useState(0);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState(null);
-  const [levelByTokenId, setLevelByTokenId] = useState({});
+  const [rarityByTokenId, setRarityByTokenId] = useState({});
+  const [rarityFilter, setRarityFilter] = useState('all');
 
   // ── My listings ────────────────────────────────────────────────────
   const [mine, setMine] = useState([]);
@@ -125,12 +140,13 @@ export default function NftMarketplacePanel({
         .filter((row) => !isLegacyCopPaymentToken(row.paymentToken, chainKey));
       setListings(rows);
       setListingsTotal(rows.length);
-      // Enrich with current levels for proper image URLs.
+      // Enrich with revealed rarity. Legacy L2/L3 tokens fall back to Legendary.
       const tokenIds = rows.map((r) => r.tokenId).filter(Boolean);
       if (tokenIds.length) {
         try {
-          const lv = await fetchTokenLevels(tokenIds, chainKey);
-          setLevelByTokenId((prev) => ({ ...prev, ...lv }));
+          const legacyLevels = Object.fromEntries(rows.map((row) => [String(row.tokenId), Number(row.level || 1)]));
+          const rarities = await fetchTokenRarities(tokenIds, chainKey, legacyLevels);
+          setRarityByTokenId((prev) => ({ ...prev, ...rarities }));
         } catch { /* image will fall back to L1 */ }
       }
     } catch (err) {
@@ -156,8 +172,9 @@ export default function NftMarketplacePanel({
       const tokenIds = rows.map((r) => r.tokenId).filter(Boolean);
       if (tokenIds.length) {
         try {
-          const lv = await fetchTokenLevels(tokenIds, chainKey);
-          setLevelByTokenId((prev) => ({ ...prev, ...lv }));
+          const legacyLevels = Object.fromEntries(rows.map((row) => [String(row.tokenId), Number(row.level || 1)]));
+          const rarities = await fetchTokenRarities(tokenIds, chainKey, legacyLevels);
+          setRarityByTokenId((prev) => ({ ...prev, ...rarities }));
         } catch {}
       }
     } catch (err) {
@@ -175,7 +192,7 @@ export default function NftMarketplacePanel({
     setOwnedLoading(true);
     setOwnedError(null);
     try {
-      const ownedJson = await syncDemonKingNfts({ wallet: evmAddress, chains: [chainKey] });
+      const ownedJson = await fetchOwnedNfts({ chain: chainKey, address: evmAddress });
       const tokens = Array.isArray(ownedJson?.tokens) ? ownedJson.tokens : [];
       setOwnedNfts(tokens);
       if (tokens.length === 1 && !pickTokenId) setPickTokenId(tokens[0].tokenId);
@@ -355,7 +372,9 @@ export default function NftMarketplacePanel({
           error={browseError}
           page={page}
           setPage={setPage}
-          levelByTokenId={levelByTokenId}
+          rarityByTokenId={rarityByTokenId}
+          rarityFilter={rarityFilter}
+          setRarityFilter={setRarityFilter}
           onBuy={(listing) => setBuyTarget(listing)}
           ownAddress={evmAddress?.toLowerCase()}
         />
@@ -365,7 +384,7 @@ export default function NftMarketplacePanel({
           listings={mine}
           loading={mineLoading}
           error={mineError}
-          levelByTokenId={levelByTokenId}
+          rarityByTokenId={rarityByTokenId}
           baseReady={baseReady}
           chainLabel={chainLabel}
           busy={busy}
@@ -398,7 +417,8 @@ export default function NftMarketplacePanel({
       {buyTarget && (
         <BuyConfirmModal
           listing={buyTarget}
-          level={levelByTokenId[buyTarget.tokenId] || 1}
+          rarity={rarityByTokenId[buyTarget.tokenId] || buyTarget.rarity || null}
+          legacyLevel={buyTarget.level || 1}
           baseReady={baseReady}
           busy={busy === 'buy'}
           onCancel={() => { if (busy !== 'buy') setBuyTarget(null); }}
@@ -434,13 +454,47 @@ function SubTab({ label, active, onClick }) {
   );
 }
 
-function BrowseView({ listings, total, loading, error, page, setPage, levelByTokenId, onBuy, ownAddress }) {
+function RarityFilter({ value, setValue, disabled }) {
+  return (
+    <div style={s.rarityFilterRow}>
+      {RARITY_FILTER_OPTIONS.map((option) => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            disabled={disabled}
+            onClick={() => setValue(option.value)}
+            style={{
+              ...s.rarityFilterChip,
+              ...(active ? s.rarityFilterChipActive : null),
+              ...(option.value !== 'all' && option.value !== 'unrevealed' ? nftRarityBadgeStyle(option.value, 1, { compact: true }) : null),
+              ...(option.value === 'unrevealed' ? s.rarityFilterChipUnrevealed : null),
+              ...(disabled ? s.rarityFilterChipDisabled : null),
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function BrowseView({ listings, total, loading, error, page, setPage, rarityByTokenId, rarityFilter, setRarityFilter, onBuy, ownAddress }) {
   const showPager = total > LISTINGS_PAGE_SIZE;
   const pages = Math.ceil(total / LISTINGS_PAGE_SIZE);
+  const filteredListings = useMemo(
+    () => rarityFilter === 'all'
+      ? listings
+      : listings.filter((listing) => listingRarityKey(listing, rarityByTokenId[listing.tokenId]) === rarityFilter),
+    [listings, rarityByTokenId, rarityFilter],
+  );
   return (
     <>
+      <RarityFilter value={rarityFilter} setValue={setRarityFilter} disabled={loading} />
       <div style={s.gridMeta}>
-        {loading ? 'Loading listings…' : error ? `Error: ${error}` : `${total} active listing${total === 1 ? '' : 's'}`}
+        {loading ? 'Loading listings…' : error ? `Error: ${error}` : `${filteredListings.length} of ${total} listing${total === 1 ? '' : 's'}`}
       </div>
       {!loading && !error && listings.length === 0 && (
         <div style={s.emptyState}>
@@ -449,12 +503,17 @@ function BrowseView({ listings, total, loading, error, page, setPage, levelByTok
           <span style={s.emptyStateSub}>Be the first — list one of your Demon Kings.</span>
         </div>
       )}
+      {!loading && !error && listings.length > 0 && filteredListings.length === 0 && (
+        <div style={s.emptyState}>
+          <span>No listings match this rarity.</span>
+        </div>
+      )}
       <div style={s.grid}>
-        {listings.map((l) => (
+        {filteredListings.map((l) => (
           <ListingCard
             key={l.tokenId}
             listing={l}
-            level={levelByTokenId[l.tokenId] || 1}
+            rarity={rarityByTokenId[l.tokenId] || l.rarity || null}
             onBuy={() => onBuy(l)}
             isOwn={l.seller?.toLowerCase() === ownAddress}
           />
@@ -471,18 +530,18 @@ function BrowseView({ listings, total, loading, error, page, setPage, levelByTok
   );
 }
 
-function ListingCard({ listing, level, onBuy, isOwn }) {
+function ListingCard({ listing, rarity, onBuy, isOwn }) {
   const expiry = timeUntil(listing.expiresAt);
   return (
-    <div style={s.card}>
+    <div style={{ ...s.card, ...nftRarityCardStyle(rarity, listing.level || 1) }}>
       <div style={s.cardImgWrap}>
         <img
-          src={nftImageUrl(level, listing.tokenId)}
+          src={nftImageUrl(1, listing.tokenId)}
           alt={`Demon King #${listing.tokenId}`}
           style={s.cardImg}
           onError={(e) => { e.currentTarget.style.display = 'none'; }}
         />
-        <div style={s.cardLevelBadge}>L{level} {'★'.repeat(level)}</div>
+        <div style={{ ...s.cardLevelBadge, ...nftRarityBadgeStyle(rarity, listing.level || 1) }}>{nftRarityLabel(rarity, listing.level || 1)}</div>
       </div>
       <div style={s.cardMeta}>
         <span style={s.cardTitle}>#{listing.tokenId}</span>
@@ -504,7 +563,7 @@ function ListingCard({ listing, level, onBuy, isOwn }) {
   );
 }
 
-function MyListingsView({ listings, loading, error, levelByTokenId, baseReady, chainLabel, busy, onCancel }) {
+function MyListingsView({ listings, loading, error, rarityByTokenId, baseReady, chainLabel, busy, onCancel }) {
   if (!baseReady) {
     return (
       <div style={s.emptyState}>
@@ -525,16 +584,16 @@ function MyListingsView({ listings, loading, error, levelByTokenId, baseReady, c
   return (
     <div style={s.grid}>
       {listings.map((l) => {
-        const level = levelByTokenId[l.tokenId] || 1;
+        const rarity = rarityByTokenId[l.tokenId] || l.rarity || null;
         return (
-          <div key={l.tokenId} style={s.card}>
+          <div key={l.tokenId} style={{ ...s.card, ...nftRarityCardStyle(rarity, l.level || 1) }}>
             <div style={s.cardImgWrap}>
               <img
-                src={nftImageUrl(level, l.tokenId)} alt={`#${l.tokenId}`}
+                src={nftImageUrl(1, l.tokenId)} alt={`#${l.tokenId}`}
                 style={s.cardImg}
                 onError={(e) => { e.currentTarget.style.display = 'none'; }}
               />
-              <div style={s.cardLevelBadge}>L{level} {'★'.repeat(level)}</div>
+              <div style={{ ...s.cardLevelBadge, ...nftRarityBadgeStyle(rarity, l.level || 1) }}>{nftRarityLabel(rarity, l.level || 1)}</div>
             </div>
             <div style={s.cardMeta}>
               <span style={s.cardTitle}>#{l.tokenId}</span>
@@ -596,7 +655,11 @@ function ListNewView({
                       key={id}
                       type="button"
                       onClick={() => setPickTokenId(id)}
-                      style={{ ...s.miniCard, ...(active ? s.miniCardActive : null) }}
+                      style={{
+                        ...s.miniCard,
+                        ...(active ? s.miniCardActive : null),
+                        ...nftRarityCardStyle(t.rarity, t.level || 1, { active }),
+                      }}
                       title={id}
                     >
                       {t.imageUrl && (
@@ -605,7 +668,7 @@ function ListNewView({
                       )}
                       <div style={s.miniMeta}>
                         <span style={s.miniId}>#{id}</span>
-                        <span style={s.miniLevel}>L{t.level || 1}</span>
+                        <span style={{ ...s.miniLevel, ...nftRarityBadgeStyle(t.rarity, t.level || 1, { compact: true }) }}>{nftRarityLabel(t.rarity, t.level || 1)}</span>
                       </div>
                     </button>
                   );
@@ -676,7 +739,7 @@ function ListNewView({
   );
 }
 
-function BuyConfirmModal({ listing, level, baseReady, busy, onCancel, onConfirm, onConnectBase, baseLabel }) {
+function BuyConfirmModal({ listing, rarity, legacyLevel = 1, baseReady, busy, onCancel, onConfirm, onConnectBase, baseLabel }) {
   const meta = paymentTokenMeta(listing.paymentToken);
   const tokenAddr = listing.paymentToken;
   return (
@@ -687,13 +750,13 @@ function BuyConfirmModal({ listing, level, baseReady, busy, onCancel, onConfirm,
           <button type="button" onClick={busy ? undefined : onCancel} style={s.modalCloseBtn}>×</button>
         </div>
         <div style={s.modalBody}>
-          <div style={s.modalImgWrap}>
+          <div style={{ ...s.modalImgWrap, ...nftRarityCardStyle(rarity, legacyLevel) }}>
             <img
-              src={nftImageUrl(level, listing.tokenId)} alt=""
+              src={nftImageUrl(1, listing.tokenId)} alt=""
               style={s.modalImg}
               onError={(e) => { e.currentTarget.style.display = 'none'; }}
             />
-            <div style={s.cardLevelBadge}>L{level} {'★'.repeat(level)}</div>
+            <div style={{ ...s.cardLevelBadge, ...nftRarityBadgeStyle(rarity, legacyLevel) }}>{nftRarityLabel(rarity, legacyLevel)}</div>
           </div>
           <div style={s.modalBreakdown}>
             <span>Price</span><span style={{ fontWeight: 800 }}>{formatPriceWei(listing.priceWei, tokenAddr)}</span>
@@ -755,6 +818,19 @@ const s = {
     background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
     cursor: 'pointer', whiteSpace: 'nowrap',
   },
+
+  rarityFilterRow: {
+    display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+    padding: 6, borderRadius: 12, background: '#fff8e6', border: '2px solid #d4c8b0',
+  },
+  rarityFilterChip: {
+    minHeight: 28, padding: '5px 10px', borderRadius: 9, fontSize: 11, fontWeight: 900,
+    background: '#fff6dc', border: '2px solid #d4c8b0', color: '#5C3A21',
+    cursor: 'pointer', fontFamily: 'inherit',
+  },
+  rarityFilterChipActive: { background: '#ffd97a', border: '2px solid #9f8759' },
+  rarityFilterChipUnrevealed: { background: '#f3ead6', color: '#7a5a30', border: '2px solid #c8b99a' },
+  rarityFilterChipDisabled: { opacity: 0.55, cursor: 'not-allowed' },
 
   gridMeta: { fontSize: 12, fontWeight: 700, color: '#7a5a30', letterSpacing: 0.2 },
   emptyState: {
@@ -890,11 +966,12 @@ const s = {
   modalOverlay: {
     position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
     display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50,
+    padding: 10, overflowY: 'auto', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch',
   },
   modalPanel: {
-    width: 360, maxWidth: '94vw', borderRadius: 14, overflow: 'hidden',
+    width: 360, maxWidth: 'calc(100vw - 20px)', maxHeight: 'calc(100dvh - 20px)', borderRadius: 14, overflowY: 'auto',
     background: '#fdf8e7', border: '4px solid #d4c8b0',
-    boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
+    boxShadow: '0 18px 50px rgba(0,0,0,0.45)', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch',
   },
   modalHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -909,7 +986,7 @@ const s = {
   modalBody: { padding: 14, display: 'flex', flexDirection: 'column', gap: 10 },
   modalImgWrap: {
     position: 'relative',
-    width: '100%', aspectRatio: '1 / 1',
+    width: 'min(100%, 310px)', aspectRatio: '1 / 1', maxHeight: '42dvh', alignSelf: 'center',
     borderRadius: 12, overflow: 'hidden',
     background: '#fff', border: '2px solid #d4c8b0',
   },

@@ -7,6 +7,8 @@ extends Node3D
 signal died(guard: Node3D)
 
 const BLADE_SCENE = "res://Model/Characters/Skelet/assets/gltf/Skeleton_Blade.gltf"
+const BODY_TEXTURE = "res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion_skeleton_texture.png"
+const BODY_MESH_PREFIX = "Skeleton_Minion_"
 const HIT_DELAY_RATIO = 0.4
 const ATTACK_ANIM = "Melee_1H_Attack_Chop"
 const CAN_TARGET_GROUND: bool = true
@@ -21,6 +23,7 @@ const ANIM_FILES = [
 
 ## Shared blade scene — cached so every skeleton after the first doesn't re-load.
 static var _blade_scene_res: Resource = null
+static var _web_body_material: StandardMaterial3D = null
 
 const LEVEL_STATS: Dictionary = {
 	1: {"hp": 360, "damage": 38, "atk_speed": 0.86, "move_speed": 0.46, "detection_radius": 0.95},
@@ -140,7 +143,12 @@ func _ready() -> void:
 	add_to_group("skeleton_guards")
 	_setup_animations()
 	_setup_weapon()
+	refresh_web_body_material_fallback()
 	_create_hp_bar()
+	BaseTroop.report_render_diagnostic(self, "guard.skeleton.ready", {
+		"guard_name": name,
+		"level": level,
+	})
 	_record_replay_telemetry("guard_spawn", {})
 	_pick_idle_wait()
 
@@ -677,6 +685,56 @@ func _setup_weapon() -> void:
 		blade.rotation_degrees = Vector3(0, 180, 0)
 		ba.add_child(blade)
 	_blade_attachment = ba
+
+
+func refresh_web_body_material_fallback() -> void:
+	if not OS.has_feature("web"):
+		return
+	var mat: StandardMaterial3D = _get_web_body_material()
+	if mat == null:
+		return
+	var applied_count: int = _apply_web_body_material_recursive(self, mat)
+	if applied_count > 0:
+		BaseTroop.report_render_diagnostic(self, "guard.skeleton.web_body_material", {
+			"guard_name": name,
+			"texture": BODY_TEXTURE,
+			"applied_meshes": applied_count,
+		})
+
+
+static func _get_web_body_material() -> StandardMaterial3D:
+	if _web_body_material != null:
+		return _web_body_material
+	var texture: Texture2D = ResourceLoader.load(BODY_TEXTURE, "Texture2D") as Texture2D
+	if texture == null:
+		push_warning("SkeletonGuard: missing web body texture '%s'" % BODY_TEXTURE)
+		return null
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "WebBody_skeleton_guard"
+	mat.albedo_texture = texture
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	_web_body_material = mat
+	return mat
+
+
+static func _apply_web_body_material_recursive(node: Node, mat: StandardMaterial3D) -> int:
+	var applied_count: int = 0
+	if node is MeshInstance3D:
+		var mesh_instance: MeshInstance3D = node as MeshInstance3D
+		if str(mesh_instance.name).begins_with(BODY_MESH_PREFIX):
+			var mesh: Mesh = mesh_instance.mesh
+			var surface_count: int = mesh.get_surface_count() if mesh != null else 0
+			if surface_count == 0:
+				mesh_instance.material_override = mat
+			else:
+				for surface_index in range(surface_count):
+					mesh_instance.set_surface_override_material(surface_index, mat)
+			applied_count += 1
+	for child in node.get_children():
+		applied_count += _apply_web_body_material_recursive(child, mat)
+	return applied_count
 
 
 # ── HP Bar ────────────────────────────────────────────────────

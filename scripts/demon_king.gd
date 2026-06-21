@@ -1,8 +1,7 @@
 extends BaseTroop
 ## DemonKing — premium heavy melee, occupies 2 ship slots.
-## Designed as a premium 2-slot heavy melee unit that scales from the
-## player's strongest normal troops: L1 is +20%, L2 +30%, L3 +40% over two
-## best troop slots by HP and DPS.
+## NFT-backed 2-slot troop. The player upgrades one shared Demon King troop
+## level; each owned NFT then applies its rarity multiplier.
 ##
 ## Mesh: Model/Characters/Model/DemonKing_Body.fbx — actually a copy of
 ## DemonKing_RunFWD.fbx. We use an anim-FBX as the body because every anim
@@ -40,15 +39,11 @@ const NORMAL_TROOP_STATS: Dictionary = {
 	},
 }
 
-const DEMON_KING_ATK_SPEED_BY_LEVEL: Dictionary = {
-	1: 1.25,
-	2: 1.15,
-	3: 1.05,
-}
-const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL: Dictionary = {
-	1: 1.2,
-	2: 1.3,
-	3: 1.4,
+const NFT_RARITY_MULTIPLIERS: Dictionary = {
+	"common": 1.2,
+	"epic": 1.3,
+	"legendary": 1.5,
+	"unrevealed": 1.2,
 }
 const DEMON_KING_SLOT_COUNT: float = 2.0
 
@@ -90,6 +85,8 @@ const ANIM_NAME_MAP: Dictionary = {
 static var _merged_anim_cache_by_skeleton: Dictionary = {}
 
 var player_troop_levels: Dictionary = {}
+var nft_rarity: String = "common"
+var _manual_tint_variant: bool = false
 
 # Note: DemonKing_albedo.png is the un-masked base; the MaskTint shader uses
 # DemonKing_mask_albedo.png instead, so the plain albedo isn't preloaded here.
@@ -156,13 +153,42 @@ const TINT_PURPLE: Array[Color] = [
 const ACTIVE_PALETTE: Array[Color] = TINT_PURPLE  # default skin — change to TINT_ORANGE/BLUE/PURPLE to swap
 
 
+const TINT_GOLD: Array[Color] = [
+	Color(1.00, 0.96, 0.06),
+	Color(1.00, 0.88, 0.02),
+	Color(1.00, 0.76, 0.00),
+	Color(1.00, 1.00, 0.20),
+	Color(1.00, 0.82, 0.04),
+	Color(1.00, 0.92, 0.10),
+	Color(1.00, 1.00, 0.32),
+	Color(0.98, 0.78, 0.08),
+	Color(1.00, 0.96, 0.42),
+]
+
+const TINT_PALETTES: Dictionary = {
+	"pink": TINT_PINK,
+	"orange": TINT_ORANGE,
+	"blue": TINT_BLUE,
+	"purple": TINT_PURPLE,
+	"gold": TINT_GOLD,
+}
+
+const RARITY_TINT_VARIANTS: Dictionary = {
+	"common": "blue",
+	"unrevealed": "blue",
+	"epic": "purple",
+	"legendary": "gold",
+}
+
+@export_enum("purple", "blue", "gold", "orange", "pink") var tint_variant: String = "blue"
+
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
 ## from the player's current troop levels. Called by BaseTroop._ready().
 func _init_stats() -> void:
 	# Clamp to a valid tier — upgrade_to(lvl) could be handed an out-of-range
 	# level (server desync, bad payload) and dynamic stat calculation stays safe.
-	level = clampi(level, 1, DEMON_KING_ATK_SPEED_BY_LEVEL.size())
-	var s: Dictionary = _compute_dynamic_stats(level, player_troop_levels)
+	level = clampi(level, 1, 4)
+	var s: Dictionary = _compute_dynamic_stats(level, player_troop_levels, nft_rarity)
 	move_speed = 0.38        # 24% slower than Knight (0.50) — heavy boss feel
 	attack_range = 0.32      # 33% greater reach than Knight (0.24) — large hit zone
 	hp = s.hp
@@ -177,48 +203,70 @@ func set_player_troop_levels(levels: Dictionary) -> void:
 	player_troop_levels = levels.duplicate(true) if levels != null else {}
 
 
+func set_nft_rarity(value: String) -> void:
+	nft_rarity = _normalize_rarity(value)
+	if not _manual_tint_variant:
+		tint_variant = _tint_variant_for_rarity(nft_rarity)
+		if is_inside_tree():
+			_apply_demon_albedo(self)
+
+
+func set_tint_variant(value: String) -> void:
+	_manual_tint_variant = true
+	tint_variant = _normalize_tint_variant(value)
+	if is_inside_tree():
+		_apply_demon_albedo(self)
+
+
+static func _normalize_rarity(value: String) -> String:
+	var key: String = str(value).strip_edges().to_lower()
+	return key if NFT_RARITY_MULTIPLIERS.has(key) else "common"
+
+
+static func _normalize_tint_variant(value: String) -> String:
+	var key: String = str(value).strip_edges().to_lower()
+	return key if TINT_PALETTES.has(key) else "purple"
+
+
+static func _tint_variant_for_rarity(value: String) -> String:
+	return RARITY_TINT_VARIANTS.get(_normalize_rarity(value), "blue")
+
+
+static func _palette_for_tint_variant(value: String) -> Array:
+	return TINT_PALETTES.get(_normalize_tint_variant(value), TINT_PURPLE)
+
+
+static func _color_power_for_tint_variant(value: String) -> float:
+	return 2.35 if _normalize_tint_variant(value) == "gold" else 1.0
+
+
 static func _troop_level_from_map(levels: Dictionary, troop_type: String) -> int:
 	var aliases: Array[String] = [
 		troop_type,
 		troop_type.capitalize(),
 		troop_type.replace("_", ""),
 	]
+	if troop_type == "demon_king":
+		aliases.append("DemonKing")
 	for key in aliases:
 		if levels.has(key):
 			return clampi(int(levels[key]), 1, 4)
 	return 1
 
 
-static func _compute_dynamic_stats(demon_level: int, levels: Dictionary) -> Dictionary:
-	var best_hp: float = 0.0
-	var best_dps: float = 0.0
-	for troop_type in NORMAL_TROOP_STATS.keys():
-		var troop_level: int = _troop_level_from_map(levels, troop_type)
-		var stat_by_level: Dictionary = NORMAL_TROOP_STATS[troop_type]
-		var stat: Dictionary = stat_by_level.get(troop_level, stat_by_level[1])
-		best_hp = maxf(best_hp, float(stat.hp))
-		best_dps = maxf(best_dps, float(stat.damage) / maxf(0.01, float(stat.atk_speed)))
-
-	var clamped_level: int = clampi(demon_level, 1, DEMON_KING_ATK_SPEED_BY_LEVEL.size())
-	var atk: float = float(DEMON_KING_ATK_SPEED_BY_LEVEL[clamped_level])
-	var power_mult: float = float(DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL.get(clamped_level, 1.2))
-	var target_hp: float = best_hp * DEMON_KING_SLOT_COUNT * power_mult
-	var target_dps: float = best_dps * DEMON_KING_SLOT_COUNT * power_mult
+static func _compute_dynamic_stats(demon_level: int, levels: Dictionary, rarity: String = "common") -> Dictionary:
+	var clamped_level: int = clampi(demon_level, 1, 4)
+	var troop_level: int = _troop_level_from_map(levels, "demon_king")
+	if not levels.has("demon_king") and not levels.has("DemonKing"):
+		troop_level = clamped_level
+	var stat_by_level: Dictionary = NORMAL_TROOP_STATS["knight"]
+	var stat: Dictionary = stat_by_level.get(troop_level, stat_by_level[1])
+	var power_mult: float = float(NFT_RARITY_MULTIPLIERS.get(_normalize_rarity(rarity), 1.2))
 	return {
-		"hp": int(ceil(target_hp)),
-		"damage": _monotonic_hit_damage(best_dps, clamped_level),
-		"atk_speed": atk,
+		"hp": int(ceil(float(stat.hp) * DEMON_KING_SLOT_COUNT * power_mult)),
+		"damage": int(ceil(float(stat.damage) * DEMON_KING_SLOT_COUNT * power_mult)),
+		"atk_speed": float(stat.atk_speed),
 	}
-
-
-static func _monotonic_hit_damage(best_dps: float, demon_level: int) -> int:
-	var best_damage: int = 0
-	for lvl in range(1, demon_level + 1):
-		var atk: float = float(DEMON_KING_ATK_SPEED_BY_LEVEL[lvl])
-		var power_mult: float = float(DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL.get(lvl, 1.2))
-		var target_dps: float = best_dps * DEMON_KING_SLOT_COUNT * power_mult
-		best_damage = maxi(best_damage, int(ceil(target_dps * atk)))
-	return best_damage
 
 
 ## DemonKing fights bare-handed (no skeleton slot for a weapon).
@@ -428,8 +476,10 @@ func _apply_demon_albedo(root: Node) -> void:
 	mat.set_shader_parameter("mask01", DEMON_MASK_01)
 	mat.set_shader_parameter("mask02", DEMON_MASK_02)
 	mat.set_shader_parameter("mask03", DEMON_MASK_03)
+	var palette: Array = _palette_for_tint_variant(tint_variant)
+	mat.set_shader_parameter("color_power", _color_power_for_tint_variant(tint_variant))
 	for i in 9:
-		mat.set_shader_parameter("color%02d" % (i + 1), ACTIVE_PALETTE[i])
+		mat.set_shader_parameter("color%02d" % (i + 1), palette[i])
 	_assign_material_recursive(root, mat)
 
 

@@ -118,6 +118,37 @@ function sameChainAddress(chain, a, b) {
   return !!left && !!right && left === right;
 }
 
+function cachedPlayerNft(playerId, collection, chain, tokenId) {
+  const normalizedChain = String(chain || '').toLowerCase();
+  const normalizedCollection = String(collection || 'demon_king').toLowerCase();
+  const normalizedTokenId = String(tokenId || '').trim();
+  if (!playerId || !normalizedChain || !normalizedTokenId) return null;
+  return gameDb.db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url, active, source, updated_at
+      FROM player_nfts
+     WHERE player_id = ?
+       AND lower(collection) = ?
+       AND lower(chain) = ?
+       AND token_id = ?
+       AND active = 1
+     ORDER BY updated_at DESC
+     LIMIT 1
+  `).get(String(playerId), normalizedCollection, normalizedChain, normalizedTokenId) || null;
+}
+
+function mergeCachedNftLevel(assetInfo, cached) {
+  if (!cached) return assetInfo;
+  const cachedLevel = Number(cached.level || 0);
+  if (![1, 2, 3].includes(cachedLevel)) return assetInfo;
+  const currentLevel = Number(assetInfo?.level || 1);
+  if (cachedLevel <= currentLevel) return assetInfo;
+  return {
+    ...assetInfo,
+    level: cachedLevel,
+    cachedLevelSource: 'player_nfts',
+  };
+}
+
 function normalizeAssetIdForChain(chain, value, label = 'assetId') {
   const raw = String(value || '').trim();
   if (!raw) throw httpError(400, `${label} required`);
@@ -331,6 +362,101 @@ function getRecoverableCustodiedOrderByAsset(assetChain, assetId, sellerPlayerId
     ORDER BY updated_at DESC
     LIMIT 1
   `).get(assetChain, assetId, sellerPlayerId, sellerWallet) || null;
+}
+
+function playerMarketplaceWallets(player) {
+  const out = { evm: new Set(), solana: new Set(), aptos: new Set() };
+  const add = (chainType, value) => {
+    const type = String(chainType || '').toLowerCase();
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    if (type === 'evm') {
+      const normalized = normalizeAddressForChainSafe('base', raw);
+      if (normalized) out.evm.add(normalized);
+      return;
+    }
+    if (type === 'solana') {
+      const normalized = normalizeAddressForChainSafe('solana', raw);
+      if (normalized) out.solana.add(normalized);
+      return;
+    }
+    if (type === 'aptos') {
+      const normalized = normalizeAddressForChainSafe('aptos', raw);
+      if (normalized) out.aptos.add(normalized);
+    }
+  };
+  const legacyWallet = String(player?.wallet || '').trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(legacyWallet)) add('evm', legacyWallet);
+  else if (/^0x[0-9a-fA-F]{1,64}$/.test(legacyWallet)) add('aptos', legacyWallet);
+  else add('solana', legacyWallet);
+  if (player?.id) {
+    const walletRows = gameDb.db.prepare(`
+      SELECT chain_type, address FROM player_wallets WHERE player_id = ?
+    `).all(String(player.id));
+    for (const row of walletRows) add(row.chain_type, row.address);
+    const dexRows = gameDb.db.prepare(`
+      SELECT chain_type, wallet_address FROM player_dex_accounts
+      WHERE player_id = ? AND wallet_address IS NOT NULL AND LENGTH(wallet_address) > 0
+    `).all(String(player.id));
+    for (const row of dexRows) add(row.chain_type, row.wallet_address);
+  }
+  return out;
+}
+
+function walletSetForChain(wallets, chain) {
+  const key = isEvmChain(chain) ? 'evm' : String(chain || '').toLowerCase();
+  return wallets?.[key] || new Set();
+}
+
+function orderSellerMatchesPlayer(order, player) {
+  if (!order) return false;
+  if (String(order.seller_player_id || '') === String(player?.id || '')) return true;
+  const wallets = walletSetForChain(playerMarketplaceWallets(player), order.asset_chain);
+  for (const wallet of wallets) {
+    if (sameChainAddress(order.asset_chain, order.seller_wallet, wallet)) return true;
+  }
+  return false;
+}
+
+function orderBuyerMatchesPlayer(order, player) {
+  if (!order) return false;
+  if (String(order.buyer_player_id || '') === String(player?.id || '')) return true;
+  const wallets = walletSetForChain(playerMarketplaceWallets(player), order.payment_chain);
+  for (const wallet of wallets) {
+    if (sameChainAddress(order.payment_chain, order.buyer_wallet, wallet)) return true;
+  }
+  return false;
+}
+
+function mineOrdersWhere(player) {
+  const wallets = playerMarketplaceWallets(player);
+  const clauses = ['seller_player_id = ?', 'buyer_player_id = ?'];
+  const params = [player.id, player.id];
+  const evmWallets = Array.from(wallets.evm);
+  if (evmWallets.length) {
+    const placeholders = evmWallets.map(() => '?').join(',');
+    clauses.push(`(asset_chain IN (${Array.from(EVM_CHAINS).map(() => '?').join(',')}) AND lower(seller_wallet) IN (${placeholders}))`);
+    params.push(...Array.from(EVM_CHAINS), ...evmWallets);
+    clauses.push(`(payment_chain IN (${Array.from(EVM_CHAINS).map(() => '?').join(',')}) AND lower(buyer_wallet) IN (${placeholders}))`);
+    params.push(...Array.from(EVM_CHAINS), ...evmWallets);
+  }
+  const solWallets = Array.from(wallets.solana);
+  if (solWallets.length) {
+    const placeholders = solWallets.map(() => '?').join(',');
+    clauses.push(`(asset_chain = 'solana' AND seller_wallet IN (${placeholders}))`);
+    params.push(...solWallets);
+    clauses.push(`(payment_chain = 'solana' AND buyer_wallet IN (${placeholders}))`);
+    params.push(...solWallets);
+  }
+  const aptosWallets = Array.from(wallets.aptos);
+  if (aptosWallets.length) {
+    const placeholders = aptosWallets.map(() => '?').join(',');
+    clauses.push(`(asset_chain = 'aptos' AND lower(seller_wallet) IN (${placeholders}))`);
+    params.push(...aptosWallets);
+    clauses.push(`(payment_chain = 'aptos' AND lower(buyer_wallet) IN (${placeholders}))`);
+    params.push(...aptosWallets);
+  }
+  return { where: clauses.join(' OR '), params };
 }
 
 function cancelAwaitingDepositOrder(order, { actorPlayerId = null, eventType = 'cancelled_before_deposit', data = {} } = {}) {
@@ -628,6 +754,7 @@ function publicOrder(row, { includePrivate = false } = {}) {
   const paymentDecimals = Number(row.payment_decimals || meta.paymentDecimals || 6);
   const buyerPlayerName = includePrivate ? playerNameById(row.buyer_player_id) : null;
   const deliveryAsset = deliveryAssetFromBridge(row);
+  const rarityRow = gameDb.getNftRarity?.('demon_king', row.asset_chain, row.asset_id, { legacyLevel: row.level });
   const out = {
     id: row.id,
     status: row.status,
@@ -640,6 +767,9 @@ function publicOrder(row, { includePrivate = false } = {}) {
     assetStandard: row.asset_standard,
     assetCollection: row.asset_collection,
     level: Number(row.level || 1),
+    legacyLevel: Number(row.level || 1),
+    rarity: rarityRow?.rarity || meta.rarity || (Number(row.level || 1) > 1 ? 'legendary' : null),
+    rarityLabel: rarityRow?.rarityLabel || meta.rarityLabel || (Number(row.level || 1) > 1 ? 'Legendary' : 'Unrevealed'),
     priceUsdcUnits: row.price_usdc_units,
     priceUsdc: formatUnits(row.price_usdc_units, 6),
     feeBps: Number(row.fee_bps || 0),
@@ -1760,7 +1890,7 @@ async function payoutSolanaToken({ to, amount, ctx, order = null }) {
   const baseConfig = paymentConfigs(ctx).solana;
   const config = solanaSellerPayoutTokenConfig(ctx, order, baseConfig);
   const label = String(config.label || config.token || 'token').toUpperCase();
-  const { PublicKey, Transaction } = require('@solana/web3.js');
+  const { Connection, PublicKey, Transaction } = require('@solana/web3.js');
   const {
     ASSOCIATED_TOKEN_PROGRAM_ID,
     TOKEN_PROGRAM_ID,
@@ -1768,7 +1898,6 @@ async function payoutSolanaToken({ to, amount, ctx, order = null }) {
     createTransferCheckedInstruction,
     getAssociatedTokenAddressSync,
   } = require('@solana/spl-token');
-  const conn = solanaConnection();
   const mintPk = new PublicKey(config.tokenAddress);
   const destOwner = new PublicKey(normalizeSolanaPubkey(to, 'Seller payout wallet'));
   const srcAta = getAssociatedTokenAddressSync(mintPk, signer.publicKey, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
@@ -1799,56 +1928,61 @@ async function payoutSolanaToken({ to, amount, ctx, order = null }) {
   const revenueAta = revenueAmount > 0n
     ? getAssociatedTokenAddressSync(mintPk, revenueOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID)
     : null;
-  const [srcInfo, destInfo, revenueInfo, signerLamports, tokenRentLamports] = await Promise.all([
-    conn.getAccountInfo(srcAta, 'confirmed'),
-    conn.getAccountInfo(destAta, 'confirmed'),
-    revenueAta ? conn.getAccountInfo(revenueAta, 'confirmed') : Promise.resolve(null),
-    conn.getBalance(signer.publicKey, 'confirmed'),
-    conn.getMinimumBalanceForRentExemption(165),
-  ]);
-  if (!srcInfo) throw httpError(409, `Solana payout source USDC account is missing for ${signerAddress}`);
-  let sourceUsdc = 0n;
-  try {
-    sourceUsdc = BigInt((await conn.getTokenAccountBalance(srcAta, 'confirmed')).value.amount || '0');
-  } catch {
-    sourceUsdc = 0n;
-  }
-  if (sourceUsdc < requiredSourceAmount) {
-    throw httpError(
-      409,
-      `Solana payout treasury has insufficient ${label}: need ${formatUnits(requiredSourceAmount, config.decimals)}, available ${formatUnits(sourceUsdc, config.decimals)}`
-    );
-  }
-  const rentNeeded = (destInfo ? 0 : tokenRentLamports) + (revenueAta && !revenueInfo ? tokenRentLamports : 0);
-  if (signerLamports < rentNeeded + 10_000) {
-    throw httpError(
-      409,
-      `Solana payout treasury needs SOL for recipient token accounts: need about ${formatUnits(String(rentNeeded + 10_000), 9)} SOL`
-    );
-  }
+  return withSolanaRpcFallback(async (rpc) => {
+    const conn = createSolanaConnection(Connection, rpc, 'confirmed');
+    const [srcInfo, destInfo, revenueInfo, signerLamports, tokenRentLamports] = await Promise.all([
+      conn.getAccountInfo(srcAta, 'confirmed'),
+      conn.getAccountInfo(destAta, 'confirmed'),
+      revenueAta ? conn.getAccountInfo(revenueAta, 'confirmed') : Promise.resolve(null),
+      conn.getBalance(signer.publicKey, 'confirmed'),
+      conn.getMinimumBalanceForRentExemption(165),
+    ]);
+    if (!srcInfo) throw httpError(409, `Solana payout source USDC account is missing for ${signerAddress}`);
+    let sourceUsdc = 0n;
+    try {
+      sourceUsdc = BigInt((await conn.getTokenAccountBalance(srcAta, 'confirmed')).value.amount || '0');
+    } catch (err) {
+      const msg = String(err?.message || err || '');
+      if (/429|too many requests|max usage reached|rate.?limit|timeout|fetch failed|econnreset|etimedout/i.test(msg)) throw err;
+      sourceUsdc = 0n;
+    }
+    if (sourceUsdc < requiredSourceAmount) {
+      throw httpError(
+        409,
+        `Solana payout treasury has insufficient ${label}: need ${formatUnits(requiredSourceAmount, config.decimals)}, available ${formatUnits(sourceUsdc, config.decimals)}`
+      );
+    }
+    const rentNeeded = (destInfo ? 0 : tokenRentLamports) + (revenueAta && !revenueInfo ? tokenRentLamports : 0);
+    if (signerLamports < rentNeeded + 10_000) {
+      throw httpError(
+        409,
+        `Solana payout treasury needs SOL for recipient token accounts: need about ${formatUnits(String(rentNeeded + 10_000), 9)} SOL`
+      );
+    }
 
-  const tx = new Transaction();
-  tx.add(createAssociatedTokenAccountIdempotentInstruction(
-    signer.publicKey,
-    destAta,
-    destOwner,
-    mintPk,
-    TOKEN_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID
-  ));
-  tx.add(createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, sellerAmount, config.decimals, [], TOKEN_PROGRAM_ID));
-  if (revenueAmount > 0n && revenueAta) {
+    const tx = new Transaction();
     tx.add(createAssociatedTokenAccountIdempotentInstruction(
       signer.publicKey,
-      revenueAta,
-      revenueOwner,
+      destAta,
+      destOwner,
       mintPk,
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID
     ));
-    tx.add(createTransferCheckedInstruction(srcAta, mintPk, revenueAta, signer.publicKey, revenueAmount, config.decimals, [], TOKEN_PROGRAM_ID));
-  }
-  return sendAndConfirmFresh(conn, tx, [signer], 'Custodial marketplace seller payout');
+    tx.add(createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, sellerAmount, config.decimals, [], TOKEN_PROGRAM_ID));
+    if (revenueAmount > 0n && revenueAta) {
+      tx.add(createAssociatedTokenAccountIdempotentInstruction(
+        signer.publicKey,
+        revenueAta,
+        revenueOwner,
+        mintPk,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      ));
+      tx.add(createTransferCheckedInstruction(srcAta, mintPk, revenueAta, signer.publicKey, revenueAmount, config.decimals, [], TOKEN_PROGRAM_ID));
+    }
+    return sendAndConfirmFresh(conn, tx, [signer], 'Custodial marketplace seller payout');
+  }, { label: 'Custodial marketplace seller payout' });
 }
 
 async function payoutAptosUsdc({ to, amount, ctx }) {
@@ -1917,6 +2051,16 @@ function requireOrderSeller(order, playerId) {
 function requireOrderBuyer(order, playerId) {
   if (!order) throw httpError(404, 'Order not found');
   if (String(order.buyer_player_id || '') !== String(playerId || '')) throw httpError(403, 'This order belongs to another player');
+}
+
+function requireOrderSellerForPlayer(order, player) {
+  if (!order) throw httpError(404, 'Listing not found');
+  if (!orderSellerMatchesPlayer(order, player)) throw httpError(403, 'This listing belongs to another player');
+}
+
+function requireOrderBuyerForPlayer(order, player) {
+  if (!order) throw httpError(404, 'Order not found');
+  if (!orderBuyerMatchesPlayer(order, player)) throw httpError(403, 'This order belongs to another player');
 }
 
 function canCancelStatus(order) {
@@ -2172,12 +2316,13 @@ function mountCustodialMarketplace(router, ctx = {}) {
   router.get('/marketplace/custodial/orders/mine', auth, (req, res) => {
     try {
       releaseExpiredReservations();
+      const mine = mineOrdersWhere(req.player);
       const rows = gameDb.db.prepare(`
         SELECT * FROM custodial_marketplace_orders
-        WHERE seller_player_id = ? OR buyer_player_id = ?
+        WHERE ${mine.where}
         ORDER BY updated_at DESC
         LIMIT 200
-      `).all(req.player.id, req.player.id);
+      `).all(...mine.params);
       res.set('Cache-Control', 'no-store');
       res.json({ orders: rows.map((r) => publicOrder(r, { includePrivate: true })) });
     } catch (err) {
@@ -2190,8 +2335,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
       releaseExpiredReservations();
       const order = getOrder(req.params.id);
       if (!order) throw httpError(404, 'Order not found');
-      const isParty = String(order.seller_player_id || '') === String(req.player.id || '')
-        || String(order.buyer_player_id || '') === String(req.player.id || '');
+      const isParty = orderSellerMatchesPlayer(order, req.player) || orderBuyerMatchesPlayer(order, req.player);
       if (!isParty) throw httpError(403, 'This order belongs to another player');
       res.set('Cache-Control', 'no-store');
       res.json({ success: true, order: publicOrder(order, { includePrivate: true }) });
@@ -2343,6 +2487,10 @@ function mountCustodialMarketplace(router, ctx = {}) {
           throw err;
         }
       }
+      assetInfo = mergeCachedNftLevel(
+        assetInfo,
+        cachedPlayerNft(req.player.id, 'demon_king', assetChain, assetInfo?.asset || assetId),
+      );
       const id = crypto.randomUUID();
       const metadata = { assetInfo, createdIp: req.ip || null, note: String(req.body?.note || '').slice(0, 200) };
       gameDb.db.transaction(() => {
@@ -2394,7 +2542,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
   router.post('/marketplace/custodial/listings/:id/deposit', auth, async (req, res) => {
     try {
       const order = getOrder(req.params.id);
-      requireOrderSeller(order, req.player.id);
+      requireOrderSellerForPlayer(order, req.player);
       if (order.status === 'active') return res.json({ success: true, alreadyVerified: true, order: publicOrder(order, { includePrivate: true }) });
       if (order.status !== 'awaiting_deposit') throw httpError(409, `Listing is ${order.status}`);
       const txHash = String(req.body?.txHash || req.body?.txSignature || '').trim() || null;
@@ -2409,7 +2557,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
   router.post('/marketplace/custodial/listings/:id/cancel', auth, async (req, res) => {
     try {
       let order = getOrder(req.params.id);
-      requireOrderSeller(order, req.player.id);
+      requireOrderSellerForPlayer(order, req.player);
       if (!canCancelStatus(order)) throw httpError(409, `Listing is ${order.status}`);
       if (order.status === 'awaiting_deposit') {
         try {
@@ -2466,7 +2614,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
       const result = gameDb.db.transaction(() => {
         const order = getOrder(req.params.id);
         if (!order) throw httpError(404, 'Listing not found');
-        if (order.seller_player_id === req.player.id) throw httpError(400, 'You cannot buy your own listing');
+        if (orderSellerMatchesPlayer(order, req.player)) throw httpError(400, 'You cannot buy your own listing');
         const deadline = Number(order.payment_deadline || 0);
         const expiredReservation = order.status === 'reserved' && deadline < nowSec();
         const sameBuyer = order.status === 'reserved'
@@ -2541,7 +2689,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
   router.post('/marketplace/custodial/orders/:id/release-reservation', auth, (req, res) => {
     try {
       const order = getOrder(req.params.id);
-      requireOrderBuyer(order, req.player.id);
+      requireOrderBuyerForPlayer(order, req.player);
       if (order.status !== 'reserved') {
         return res.json({ success: true, alreadyReleased: true, order: publicOrder(order, { includePrivate: true }) });
       }
@@ -2583,7 +2731,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
     try {
       const config = await marketplaceRuntimeConfig(ctx);
       const order = getOrder(req.params.id);
-      requireOrderBuyer(order, req.player.id);
+      requireOrderBuyerForPlayer(order, req.player);
       if (order.status === 'delivered') {
         let finalOrder = order;
         let payoutError = null;

@@ -1,4 +1,5 @@
 import { useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
+import confetti from 'canvas-confetti';
 import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -17,6 +18,7 @@ import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
 import { useKatana } from '../hooks/useKatana';
 import { useGmtrade } from '../hooks/useGmtrade';
+import { useFlash } from '../hooks/useFlash';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -67,6 +69,35 @@ const PHOENIX_FEE_BUFFER_RATE = 0.0001;
 const PHOENIX_DEFAULT_REFERRAL_CODE = 'MVWG4BTW';
 const HOTSTUFF_MARKET_SLIPPAGE_RATE = 0.015;
 const HOTSTUFF_DEFAULT_TAKER_FEE_RATE = 0.00045;
+
+function fireTradeConfetti() {
+  try {
+    const end = Date.now() + 600;
+    const colors = ['#43a047', '#e8b830', '#0EA5E9', '#fdf8e7'];
+    const frame = () => {
+      confetti({
+        particleCount: 4,
+        angle: 60,
+        spread: 55,
+        origin: { x: 0, y: 0.7 },
+        colors,
+        scalar: 0.9,
+      });
+      confetti({
+        particleCount: 4,
+        angle: 120,
+        spread: 55,
+        origin: { x: 1, y: 0.7 },
+        colors,
+        scalar: 0.9,
+      });
+      if (Date.now() < end) requestAnimationFrame(frame);
+    };
+    frame();
+  } catch {
+    // canvas-confetti can fail in restricted wallet/app webviews.
+  }
+}
 const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
 
 function finiteNumber(value) {
@@ -405,8 +436,58 @@ function formatFeeRate(value) {
   return `${(n * 100).toFixed(3)}%`;
 }
 
+function formatPositionLeverageBadge(value) {
+  const n = numOrNull(value);
+  return n && n > 0 ? `${n}x` : '-';
+}
+
+function isFlashPositionLike(pos) {
+  const source = String(pos?.source || '').toLowerCase();
+  return source.includes('flash') || !!pos?._flash || !!pos?.metric?.sizeUsdUi || !!pos?.metric?.collateralUsdUi;
+}
+
+function flashPositionDisplayLeverageStable(pos, posValueUsd, margin) {
+  const sizeUsd = numOrNull(
+    pos?.metric?.sizeUsdUi
+      ?? pos?.metric?.size_usd_ui
+      ?? pos?.sizeUsdUi
+      ?? pos?.size_usd
+      ?? pos?.sizeUsd
+      ?? pos?.notional_usd
+      ?? pos?.notionalUsd
+      ?? pos?.inputUsdUi
+      ?? pos?._flash?.sizeUsdUi
+      ?? pos?._flash?.size_usd_ui
+      ?? pos?._flash?.size_usd
+      ?? pos?._flash?.sizeUsd
+      ?? pos?._flash?.notional_usd
+      ?? pos?._flash?.notionalUsd
+  ) ?? posValueUsd;
+  const collateralUsd = numOrNull(
+    pos?.metric?.collateralUsdUi
+      ?? pos?.metric?.collateral_usd_ui
+      ?? pos?.collateralUsdUi
+      ?? pos?.collateral_usd
+      ?? pos?.collateralUsd
+      ?? pos?.margin
+      ?? pos?._flash?.collateralUsdUi
+      ?? pos?._flash?.collateral_usd_ui
+      ?? pos?._flash?.collateral_usd
+      ?? pos?._flash?.collateralUsd
+      ?? pos?._flash?.margin
+  ) ?? margin;
+  if (collateralUsd > 0 && sizeUsd > 0) {
+    return Math.round((sizeUsd / collateralUsd) * 10) / 10;
+  }
+  const rawLev = displayLeverage(pos?.leverage);
+  return rawLev && rawLev > 0 ? rawLev : null;
+}
+
 function getPositionMetrics(pos, prices, leverageSettings = {}) {
-  const priceRowMark = numOrNull(prices.find(p => p.symbol === pos.symbol)?.mark);
+  const priceRow = prices.find(p => p.symbol === pos.symbol);
+  const priceRowMark = numOrNull(priceRow?.mark ?? priceRow?.mark_price ?? priceRow?.price);
+  const isDust = !!pos?._flashDust;
+  const isFlashPosition = isFlashPositionLike(pos);
   const entryP = numOrNull(pos.entry_price) || 0;
   const markP = numOrNull(pos.mark_price) || priceRowMark || 0;
   const amt = numOrNull(pos.amount) || 0;
@@ -415,20 +496,30 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   const posValueUsd = providedValue && providedValue > 0
     ? providedValue
     : (markP ? amt * markP : amt * entryP);
-  const providedPnl = numOrNull(pos.pnl_usd ?? pos.unrealized_pnl ?? pos.unrealizedPnL ?? pos.pnl);
+  const dustUsd = numOrNull(pos._flashDustUsd ?? pos.inputUsdUi ?? pos.sizeUsdUi ?? pos.size_usd) || posValueUsd || 0;
+  const providedPnl = numOrNull(
+    pos.pnl_usd
+      ?? pos.pnlWithoutFeeUsdUi
+      ?? pos.pnlWithFeeUsdUi
+      ?? pos.unrealized_pnl
+      ?? pos.unrealizedPnL
+      ?? pos.pnl
+  );
   const derivedPnl = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
-  const pnlVal = cleanSignedZero(providedPnl ?? derivedPnl);
+  const pnlVal = isDust ? 0 : cleanSignedZero(providedPnl ?? derivedPnl);
   const rawLev = displayLeverage(pos.leverage);
-  const setLev = rawLev && rawLev > 0
-    ? rawLev
-    : ((margin > 0 && posValueUsd > 0) ? Math.round((posValueUsd / margin) * 10) / 10 : (leverageSettings[pos.symbol] || 1));
+  const collateralLev = margin > 0 && posValueUsd > 0 ? Math.round((posValueUsd / margin) * 10) / 10 : null;
+  const flashLev = isFlashPosition ? flashPositionDisplayLeverageStable(pos, posValueUsd, margin) : null;
+  const setLev = isDust ? null : (isFlashPosition
+    ? (flashLev ?? rawLev ?? collateralLev)
+    : (rawLev && rawLev > 0 ? rawLev : (collateralLev || (leverageSettings[pos.symbol] || 1))));
   const rawProvidedPct = numOrNull(pos.pnl_pct);
   const providedPct = rawProvidedPct === 0 && Math.abs(pnlVal) >= 0.005 ? null : rawProvidedPct;
-  const pnlPct = providedPct ?? (margin > 0
+  const pnlPct = isDust ? 0 : (providedPct ?? (margin > 0
     ? (pnlVal / margin) * 100
-    : (entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0));
+    : (entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0)));
   const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
-  return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor };
+  return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor, isDust, dustUsd };
 }
 
 function isSuccessfulTradeClose(result) {
@@ -464,8 +555,12 @@ function orderTriggerPrice(order) {
       ?? order?.sp
       ?? order?.trigger_price
       ?? order?.triggerPrice
+      ?? order?.triggerPriceUi
+      ?? order?.trigger_price_ui
       ?? order?.trigger_px
       ?? order?.triggerPx
+      ?? order?._raw?.triggerPriceUi
+      ?? order?._raw?.trigger_price_ui
       ?? order?._raw?.trigger_px
       ?? order?._raw?.triggerPx
       ?? order?.price
@@ -513,7 +608,11 @@ function orderMatchesPosition(order, pos) {
   if (orderPosition && posId && orderPosition === posId) return true;
   const orderSymbol = String(order?.symbol || order?.s || '').toUpperCase();
   const posSymbol = String(pos?.symbol || pos?.s || '').toUpperCase();
-  if (orderSymbol && posSymbol && orderSymbol === posSymbol) return true;
+  if (orderSymbol && posSymbol && orderSymbol === posSymbol) {
+    const orderSide = orderPositionSide(order);
+    const posSide = orderPositionSide(pos);
+    return !orderSide || !posSide || orderSide === posSide;
+  }
   const orderPair = order?.pair_index ?? order?.pairIndex ?? order?._raw?.instrument_id;
   const posPair = pos?.pair_index ?? pos?.pairIndex ?? pos?._raw?.instrument_id;
   return orderPair != null && posPair != null && Number(orderPair) === Number(posPair);
@@ -633,11 +732,11 @@ function positionOpenTimeMs(pos) {
 function positionStableKey(pos) {
   const symbol = String(pos?.symbol || pos?.s || '').toUpperCase();
   const side = String(pos?.side || pos?.d || '').toLowerCase();
-  const market = String(pos?.market_addr || pos?.marketAddress || pos?.market || pos?._raw?.marketAddress || '');
+  const market = String(pos?.marketPubkey || pos?.market_pubkey || pos?.market_addr || pos?.marketAddress || pos?.market || pos?._raw?.marketAddress || '');
   const subaccount = pos?._phoenixSubaccountIndex ?? pos?.subaccount_index ?? pos?.subaccountIndex ?? '';
   const pair = pos?.pair_index ?? pos?.pairIndex ?? '';
   const trade = pos?.trade_index ?? pos?.tradeIndex ?? '';
-  const id = pos?.position_id ?? pos?.positionId ?? pos?.id ?? pos?._raw?.key ?? pos?._raw?.positionKey ?? '';
+  const id = pos?.positionKey ?? pos?.position_key ?? pos?.position_id ?? pos?.positionId ?? pos?.id ?? pos?._raw?.key ?? pos?._raw?.positionKey ?? '';
   const parts = [symbol, side, market, subaccount, pair, trade, id];
   return parts.some(Boolean) ? parts.join('|') : '';
 }
@@ -649,7 +748,7 @@ function orderStableKey(order, index) {
   const id = order?.order_id ?? order?.i ?? order?.client_order_id ?? order?.clientOrderId ?? '';
   const pair = order?.pair_index ?? order?.pairIndex ?? '';
   const trade = order?.trade_index ?? order?.tradeIndex ?? '';
-  const price = order?.price ?? order?.ip ?? order?.stop_price ?? order?.sp ?? '';
+  const price = order?.price ?? order?.ip ?? order?.stop_price ?? order?.sp ?? order?.triggerPriceUi ?? order?.trigger_price_ui ?? '';
   const parts = [id, sym, side, type, pair, trade, price];
   return parts.some(part => part !== '' && part != null) ? parts.join('|') : `order:${index}`;
 }
@@ -658,13 +757,16 @@ function orderPositionSide(order) {
   const direction = String(order?.order_direction || order?.orderDirection || '').toLowerCase();
   if (direction.includes('long')) return 'bid';
   if (direction.includes('short')) return 'ask';
-  return order?.side || order?.d || '';
+  const side = String(order?.side || order?.d || order?.sideUi || order?.tradeType || '').trim().toLowerCase();
+  if (side === 'long' || side === 'buy' || side === 'bid') return 'bid';
+  if (side === 'short' || side === 'sell' || side === 'ask') return 'ask';
+  return side;
 }
 
 function orderSideLabel(order) {
   const direction = String(order?.order_direction || order?.orderDirection || '').trim();
   if (direction) return direction;
-  const side = order?.side || order?.d;
+  const side = orderPositionSide(order);
   return side === 'bid' ? 'BUY' : 'SELL';
 }
 
@@ -924,6 +1026,145 @@ const hlGateStyles = {
     color: '#9f8759',
     textAlign: 'center',
     lineHeight: 1.4,
+  },
+};
+
+const FLASH_FUNDING_STEPS = [
+  {
+    id: 'ledger',
+    label: 'Deposit ledger',
+    hint: 'One-time collateral ledger check. Existing wallets skip this without a signature.',
+  },
+  {
+    id: 'basket',
+    label: 'Flash account',
+    hint: 'One-time basket setup. This creates the Flash account that receives deposits.',
+  },
+  {
+    id: 'basket_wait',
+    label: 'Account indexing',
+    hint: 'Waiting until Flash sees the new basket before building the deposit.',
+  },
+  {
+    id: 'deposit',
+    label: 'Deposit USDC',
+    hint: 'Confirm the USDC transfer from your connected Solana wallet.',
+  },
+  {
+    id: 'delegate',
+    label: 'Delegation',
+    hint: 'One-time basket delegation so trading works after funding.',
+  },
+  {
+    id: 'refresh',
+    label: 'Balance update',
+    hint: 'Refreshing Flash account state after the confirmed transactions.',
+  },
+];
+
+function FlashFundingStatusModal({ progress, onClose }) {
+  if (!progress?.open) return null;
+  const steps = progress.steps || {};
+  const completed = !!progress.completed;
+  const errored = progress.status === 'error';
+  const currentStep = progress.currentStep || 'prepare';
+  const currentIndex = FLASH_FUNDING_STEPS.findIndex(step => step.id === currentStep);
+  const statusFor = (step, index) => {
+    const explicit = steps[step.id]?.status;
+    if (explicit) return explicit;
+    if (completed) return 'done';
+    if (errored && (currentStep === step.id || currentStep === 'error')) return 'error';
+    if (currentStep === step.id) return 'active';
+    if (currentIndex > index) return 'done';
+    return 'pending';
+  };
+  const title = errored ? 'Flash deposit needs attention' : completed ? 'Flash deposit sent' : 'Flash deposit in progress';
+  const subtitle = progress.hint || 'Approve wallet prompts in order and keep this window open.';
+  return (
+    <div style={flashFundingModalStyles.overlay} data-nodrag>
+      <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.78}50%{opacity:1}}`}</style>
+      <div style={flashFundingModalStyles.panel}>
+        <div style={hlGateStyles.titleBlock}>
+          <div style={hlGateStyles.kicker}>Flash Trade</div>
+          <div style={hlGateStyles.title}>{title}</div>
+          <div style={hlGateStyles.subtitle}>{subtitle}</div>
+        </div>
+        <ol style={hlGateStyles.stepList}>
+          {FLASH_FUNDING_STEPS.map((step, index) => {
+            const row = steps[step.id] || {};
+            const status = statusFor(step, index);
+            const bubbleStyle = {
+              ...hlGateStyles.stepBubble,
+              ...(hlGateStyles[`stepBubble_${status}`] || null),
+            };
+            const labelStyle = {
+              ...hlGateStyles.stepLabel,
+              ...(hlGateStyles[`stepLabel_${status}`] || null),
+            };
+            return (
+              <li key={step.id} style={hlGateStyles.stepItem}>
+                <span style={bubbleStyle}>
+                  {status === 'active'
+                    ? <span style={hlGateStyles.spinner} />
+                    : status === 'done'
+                      ? 'OK'
+                      : status === 'error'
+                        ? '!'
+                        : index + 1}
+                </span>
+                <span style={hlGateStyles.stepText}>
+                  <span style={labelStyle}>{row.label || step.label}</span>
+                  <span style={hlGateStyles.stepHint}>
+                    {row.hint || step.hint}
+                    {row.skipped ? ' Skipped.' : ''}
+                    {row.signature ? ` Tx ${shortAddr(row.signature)}` : ''}
+                  </span>
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+        {errored && <div style={hlGateStyles.errorBox}>{progress.error || progress.hint || 'Flash deposit failed.'}</div>}
+        {!errored && !completed && <div style={hlGateStyles.workingHint}>Waiting for the current Flash step to finish</div>}
+        <div style={flashFundingModalStyles.footer}>
+          <button type="button" onClick={onClose} style={completed || errored ? hlGateStyles.primaryBtn : hlGateStyles.secondaryBtn}>
+            {completed || errored ? 'Close' : 'Hide'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const flashFundingModalStyles = {
+  overlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 12000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    background: 'rgba(12, 8, 4, 0.45)',
+    fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  panel: {
+    width: 'min(440px, 100%)',
+    maxHeight: 'min(680px, calc(100vh - 28px))',
+    overflowY: 'auto',
+    background: '#fdf8e7',
+    border: '5px solid #d4c8b0',
+    borderRadius: 16,
+    boxShadow: '0 18px 44px rgba(0,0,0,0.36)',
+    padding: 16,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+  footer: {
+    display: 'flex',
+    justifyContent: 'center',
+    gap: 8,
   },
 };
 
@@ -1313,7 +1554,7 @@ const PositionsList = memo(function PositionsList({
   return (
     <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start'}}>
       {positions.map((pos, i) => {
-        const { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor } = getPositionMetrics(pos, prices, leverageSettings);
+        const { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
         const posKey = `${pos.symbol}-${pos.side}`;
         const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
         const tpslBusy = tpslSubmittingPos === posKey;
@@ -1331,20 +1572,20 @@ const PositionsList = memo(function PositionsList({
                     </span>
                   );
                 })()}
-                <span style={{fontSize: 11, fontWeight: 800, color: '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{setLev}x</span>
+                <span style={{fontSize: 11, fontWeight: 800, color: isDust ? '#8a6d2f' : '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                 <span style={{fontSize: 13, fontWeight: 900, color: pos.side === 'bid' ? '#4CAF50' : '#E53935'}}>
                   {pos.side === 'bid' ? 'LONG' : 'SHORT'}
                 </span>
               </div>
             </div>
             <div style={S.row}>
-              <span style={S.detail}>Size: {pos.amount} <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span></span>
+              <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : pos.amount} {!isDust && <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span>}</span>
               <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
             </div>
             <div style={S.row}>
               <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
               <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}}>
-                {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
               </span>
             </div>
             <PositionTpslRow pos={pos} orders={orders} />
@@ -1352,8 +1593,8 @@ const PositionsList = memo(function PositionsList({
             {/* Action buttons. Basic mode hides TP/SL — risk management
                 features are deliberately stripped from the simplified UX. */}
             <div style={{display: 'flex', gap: 6, marginTop: 4}}>
-              <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
-              {!isBasic && (
+              <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
+              {!isDust && !isBasic && (
                 <button style={S.btnBlue} onClick={() => {
                   if (expanded === 'tpsl') {
                     setExpandedPos(null);
@@ -1371,30 +1612,39 @@ const PositionsList = memo(function PositionsList({
             {expanded === 'close' && (
               <div style={S.expandPanel}>
                 <div style={S.row}>
-                  <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>Close {closePct}%</span>
+                  <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
                   <span style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>
-                    {(parseFloat(pos.amount) * closePct / 100).toFixed(6)} {pos.symbol}
+                    {isDust ? `$${dustUsd.toFixed(2)}` : `${(parseFloat(pos.amount) * closePct / 100).toFixed(6)} ${pos.symbol}`}
                   </span>
                 </div>
-                <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
-                <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
-                  <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String((dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closePct / 100), pos.pair_index, pos.trade_index, closePct >= 100)} disabled={loading}>
-                  {loading ? <ClosingButtonLabel /> : `Close ${closePct}%`}
+                {!isDust && (
+                  <>
+                    <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
+                    <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+                  </>
+                )}
+                  <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String((dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * (isDust ? 1 : closePct / 100)), pos.pair_index, pos.trade_index, isDust || closePct >= 100, dex === 'flash' ? { position: pos, inputUsdUi: String((dustUsd || posValueUsd) * (isDust ? 1 : closePct / 100)) } : undefined)} disabled={loading}>
+                  {loading ? <ClosingButtonLabel /> : (isDust ? 'Clean up dust' : `Close ${closePct}%`)}
                 </button>
               </div>
             )}
 
             {/* TP/SL panel — same isBasic gate so the inputs never reach
                 the DOM in Basic mode (and never get accidentally fired). */}
-            {!isBasic && expanded === 'tpsl' && (
+            {!isDust && !isBasic && expanded === 'tpsl' && (
               <div style={{...S.expandPanel, ...S.row}}>
                 <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <button style={S.btnBlue} onClick={async () => {
                   setTpslSubmittingPos(posKey);
                   try {
-                    await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                    const r = await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                    if (r?.error) {
+                      setLocalAlert(r.error);
+                      return;
+                    }
                     setTpPrice(''); setSlPrice(''); setExpandedPos(null);
+                    if (r?.info) setLocalAlert(r.info);
                   } finally {
                     setTpslSubmittingPos((current) => current === posKey ? null : current);
                   }
@@ -1426,12 +1676,11 @@ const BottomPanel = memo(function BottomPanel({
   closePosition, cancelOrder, dex, loading, historyAccountAddr, markets, onClosedPositionSnapshot,
 }) {
   const tpslOrders = Array.isArray(orders) ? orders : filteredOrders;
-  // Avantis has no order-flow history or funding payments exposed via a
-  // public API like Pacifica, so we hide those tabs entirely on that DEX.
+  // Avantis/Flash do not expose funding payments in the trading UI flow.
   const tabs = [
     { id: 'positions', label: `Positions (${filteredPositions.length})` },
     { id: 'orders', label: `Orders (${filteredOrders.length})` },
-    ...(dex === 'avantis' ? [] : [
+    ...(dex === 'avantis' || dex === 'flash' ? [] : [
       { id: 'history', label: 'History' },
       { id: 'funding', label: 'Funding' },
     ]),
@@ -1481,23 +1730,25 @@ const BottomPanel = memo(function BottomPanel({
                   posValueUsd: tblPosValue,
                   pnlPct,
                   pnlColor,
+                  isDust,
+                  dustUsd,
                 } = getPositionMetrics(p, prices, leverageSettings);
                 const { tp, sl } = getPositionTpsl(p, tpslOrders);
                 return (
                   <tr key={positionStableKey(p) || i} style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
                     <td style={{...S.td, color: p.side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
-                    <td style={S.td}>{p.amount} <span style={{color: '#a3906a', fontSize: 11}}>(${tblPosValue.toFixed(2)})</span></td>
+                    <td style={S.td}>{isDust ? 'Dust' : p.amount} <span style={{color: '#a3906a', fontSize: 11}}>(${(isDust ? dustUsd : tblPosValue).toFixed(2)})</span></td>
                     <td style={S.td}>${fmtPrice(entryPrice)}</td>
                     <td style={S.td}>{markPrice ? `$${fmtPrice(markPrice)}` : '—'}</td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}</td>
-                    <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{isDust ? '-' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`}</td>
                     <td style={S.td}>
                       <span style={{color: tp ? '#4CAF50' : '#a3906a', fontWeight: 800}}>TP {tp ? `$${fmtPrice(tp)}` : '-'}</span>
                       <span style={{color: '#a3906a'}}> / </span>
                       <span style={{color: sl ? '#E53935' : '#a3906a', fontWeight: 800}}>SL {sl ? `$${fmtPrice(sl)}` : '-'}</span>
                     </td>
-                    <td style={S.td}>{lev}x</td>
+                    <td style={S.td}>{isDust ? 'Dust' : formatPositionLeverageBadge(lev)}</td>
                     <td style={S.td}>
                       <button
                         style={{...S.tblCloseBtn, opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer'}}
@@ -1506,7 +1757,7 @@ const BottomPanel = memo(function BottomPanel({
                           const snapshot = {
                             symbol: p.symbol,
                             side: p.side === 'bid' ? 'long' : 'short',
-                            leverage: lev,
+                            leverage: isDust ? 0 : lev,
                             entryPrice,
                             exitPrice: markPrice,
                             pnlUsd: pnlVal,
@@ -1520,6 +1771,7 @@ const BottomPanel = memo(function BottomPanel({
                             p.pair_index,
                             p.trade_index,
                             true,
+                            dex === 'flash' ? { position: p, inputUsdUi: String(isDust ? dustUsd : tblPosValue) } : undefined,
                           );
                           if (isSuccessfulTradeClose(result)) onClosedPositionSnapshot?.(snapshot);
                         }}
@@ -1576,7 +1828,7 @@ const BottomPanel = memo(function BottomPanel({
             </table>
           ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
         )}
-        {bottomTab === 'history' && dex !== 'avantis' && (
+        {bottomTab === 'history' && dex !== 'avantis' && dex !== 'flash' && (
           <TradeHistory
             walletAddr={walletAddr}
             accountAddr={historyAccountAddr}
@@ -1585,7 +1837,7 @@ const BottomPanel = memo(function BottomPanel({
             filters={btmFilters}
           />
         )}
-        {bottomTab === 'funding' && dex !== 'avantis' && (
+        {bottomTab === 'funding' && dex !== 'avantis' && dex !== 'flash' && (
           <FundingHistory
             walletAddr={walletAddr}
             accountAddr={historyAccountAddr}
@@ -1611,7 +1863,7 @@ function FuturesPanel() {
     ? 'mainnet'
     : dex === 'grvt'
     ? 'baseConnect'
-    : dex === 'gmtrade'
+    : dex === 'gmtrade' || dex === 'flash'
     ? 'solana'
     : dex === 'katana'
     ? 'katana'
@@ -1656,6 +1908,7 @@ function FuturesPanel() {
   const grvtHook = useGrvt();
   const katanaHook = useKatana();
   const gmtradeHook = useGmtrade();
+  const flashHook = useFlash();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -1686,6 +1939,8 @@ function FuturesPanel() {
     ? katanaHook
     : dex === 'gmtrade'
     ? gmtradeHook
+    : dex === 'flash'
+    ? flashHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, spotUsdc, leverageSettings = {}, marginModes = {}, dataReady, accountReady,
@@ -1712,7 +1967,7 @@ function FuturesPanel() {
   // or a stored player wallet as "connected" unless the hook resolved the
   // address it will actually use for signing.
   const hasWallet = !!walletAddr;
-  const isSolanaDex = dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade';
+  const isSolanaDex = dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash';
   const [solanaWalletGrace, setSolanaWalletGrace] = useState(true);
   useEffect(() => {
     if (!isSolanaDex || hasWallet) {
@@ -1747,6 +2002,24 @@ function FuturesPanel() {
     (privyEnabled && !privyReady) ||
     (privyEnabled && privyAuthed && solanaWalletGrace)
   );
+  const [manualTradingRefreshBusy, setManualTradingRefreshBusy] = useState(false);
+  const refreshTradingSnapshot = useCallback(async () => {
+    if (manualTradingRefreshBusy) return;
+    setManualTradingRefreshBusy(true);
+    try {
+      const calls = [
+        trading?.fetchAccount,
+        trading?.fetchPositions,
+        trading?.fetchOrders,
+        trading?.fetchBalance,
+      ]
+        .filter(fn => typeof fn === 'function')
+        .map(fn => Promise.resolve().then(() => fn()));
+      if (calls.length) await Promise.allSettled(calls);
+    } finally {
+      setManualTradingRefreshBusy(false);
+    }
+  }, [manualTradingRefreshBusy, trading]);
 
   const { isMobile } = useLayout();
   // Drag state — ref-based: zero React re-renders during drag, no listener leaks
@@ -1867,6 +2140,41 @@ function FuturesPanel() {
     const t = setTimeout(() => setLocalAlert(null), 6000);
     return () => clearTimeout(t);
   }, [localAlert]);
+  const [flashFundingProgress, setFlashFundingProgress] = useState(null);
+  const updateFlashFundingProgress = useCallback((event = {}) => {
+    setFlashFundingProgress(prev => {
+      const stepId = event.step || prev?.currentStep || 'prepare';
+      const steps = { ...(prev?.steps || {}) };
+      if (FLASH_FUNDING_STEPS.some(step => step.id === stepId)) {
+        steps[stepId] = {
+          ...(steps[stepId] || {}),
+          status: event.status || steps[stepId]?.status || 'active',
+          label: event.label || steps[stepId]?.label,
+          hint: event.hint || steps[stepId]?.hint,
+          signature: event.signature || steps[stepId]?.signature || '',
+          skipped: event.skipped ?? steps[stepId]?.skipped ?? false,
+        };
+      }
+      return {
+        ...(prev || {}),
+        open: true,
+        amount: event.amount || prev?.amount || '',
+        currentStep: stepId,
+        status: event.status || prev?.status || 'active',
+        label: event.label || prev?.label || '',
+        hint: event.hint || prev?.hint || '',
+        error: event.error || prev?.error || '',
+        completed: event.step === 'complete' || prev?.completed || false,
+        steps,
+      };
+    });
+  }, []);
+  const closeFlashFundingProgress = useCallback(() => {
+    setFlashFundingProgress(null);
+  }, []);
+  useEffect(() => {
+    if (dex !== 'flash') setFlashFundingProgress(null);
+  }, [dex]);
   // Success toast after a trade completes. Small green banner that auto-hides.
   const [successMsg, setSuccessMsg] = useState(null);
   useEffect(() => {
@@ -1880,8 +2188,8 @@ function FuturesPanel() {
     if (error && clearError) clearError();
   }, [clearError, error]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana') return;
-    const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : 'Hyperliquid';
+    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash') return;
+    const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : dex === 'flash' ? 'Flash' : 'Hyperliquid';
     if (oneTapTrading?.enabled) {
       const result = typeof setOneTapTradingEnabled === 'function'
         ? await setOneTapTradingEnabled(false)
@@ -1893,14 +2201,14 @@ function FuturesPanel() {
       setSuccessMsg(`One tap trading disabled. Opening a ${dexLabel} order will ask to enable it again.`);
       return;
     }
-    if (dex === 'katana') {
+    if (dex === 'katana' || dex === 'flash') {
       setReferralLinking(true);
       try {
         const result = typeof setOneTapTradingEnabled === 'function'
           ? await setOneTapTradingEnabled(true)
           : null;
         if (result?.error) setLocalAlert(result.error);
-        else setSuccessMsg('Katana one tap trading enabled.');
+        else setSuccessMsg(`${dexLabel} one tap trading enabled.`);
       } finally {
         setReferralLinking(false);
       }
@@ -2151,7 +2459,7 @@ function FuturesPanel() {
       ?? 0
   ));
   const pacAccountValue = dex === 'gmtrade'
-    ? Math.max(0, Number(walletUsdc || 0))
+    ? Math.max(0, Number(account?.account_equity ?? account?.balance ?? walletUsdc ?? 0))
     : dex === 'hyperliquid'
     ? pacAccountValueBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
     : pacAccountValueBase;
@@ -2160,7 +2468,7 @@ function FuturesPanel() {
   // Avantis doesn't have a signed funding rate — the number here is the
   // borrow-fee % per hour traders pay LPs. Relabel the badge so users
   // don't read it as the Pacifica-style signed periodic funding rate.
-  const fundingLabel = dex === 'avantis' ? 'BORROW/h' : 'FUNDING';
+  const fundingLabel = dex === 'avantis' ? 'BORROW/h' : dex === 'flash' ? 'MARGIN/h' : 'FUNDING';
 
   // Convert USDC amount to token amount, rounded to lot size
   const lotSize = useMemo(() => {
@@ -2311,7 +2619,7 @@ function FuturesPanel() {
   const handleSizePct = useCallback((pct) => {
     clearTradeFeedback();
     setSizePct(pct);
-    if (sizePctMarginBase > 0 && currentPrice) {
+    if (sizePctMarginBase > 0) {
       // Slider now sets MARGIN (a fraction of the wallet balance), not
       // notional. 100% = full balance committed as collateral, which gives
       // a position = balance × leverage (= old "buying power").
@@ -2319,12 +2627,15 @@ function FuturesPanel() {
       const marginVal = (dex === 'phoenix' ? floorUsdCents(rawMarginVal) : rawMarginVal).toFixed(2);
       if (amountInUsdc) {
         setAmount(marginVal);
+        return;
       } else {
+        const sizingPrice = parseFloat(orderSizingPrice || currentPrice);
+        if (!(sizingPrice > 0)) return;
         // Token-input mode: convert margin → token qty via leverage.
         const qty = dex === 'pacifica'
           ? pacificaQtyFromMargin({
               margin: marginVal,
-              price: orderSizingPrice || currentPrice,
+              price: sizingPrice,
               leverage,
               orderType,
               takerFeeRate: pacificaTakerFeeRate,
@@ -2332,11 +2643,11 @@ function FuturesPanel() {
           : dex === 'phoenix'
           ? phoenixQtyFromMargin({
               margin: marginVal,
-              price: orderSizingPrice || currentPrice,
+              price: sizingPrice,
               leverage,
               lotSize,
             })
-          : ((parseFloat(marginVal) * leverage) / parseFloat(orderSizingPrice || currentPrice));
+          : ((parseFloat(marginVal) * leverage) / sizingPrice);
         setAmount(String(qty.toFixed(6)));
       }
     }
@@ -2353,7 +2664,7 @@ function FuturesPanel() {
       setLeverageApi(symbol, v);
       return;
     }
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt' || dex === 'flash') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -2393,7 +2704,7 @@ function FuturesPanel() {
       // Guard against missing/NaN currentPrice (feed blip).
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -2519,6 +2830,13 @@ function FuturesPanel() {
             return;
           }
         }
+        if (dex === 'flash') {
+          const maxMargin = Math.max(0, Number(pacBalance) || 0);
+          if (Number.isFinite(collateralUsdc) && collateralUsdc > maxMargin + 1e-9) {
+            setLocalAlert(`Flash margin max is $${maxMargin.toFixed(2)} USDC. At ${leverage}x that is about $${(maxMargin * leverage).toFixed(2)} position size.`);
+            return;
+          }
+        }
         qty = String(collateralUsdc.toFixed(6));
       } else {
         if (dex === 'hotstuff') {
@@ -2626,6 +2944,15 @@ function FuturesPanel() {
           ? { market_token: currentMarket.market_token || currentMarket.marketToken }
           : {}),
       };
+      if (dex === 'gmtrade') {
+        const gmtradeOrderPrice = orderType === 'limit' ? parseFloat(limitPrice) : tradePrice;
+        if (Number.isFinite(gmtradeOrderPrice) && gmtradeOrderPrice > 0) {
+          tradeOptions.price = gmtradeOrderPrice;
+          if (Number.isFinite(positionUsdc) && positionUsdc > 0) {
+            tradeOptions.token_amount = positionUsdc / gmtradeOrderPrice;
+          }
+        }
+      }
       if (orderType === 'market') {
         // 5th arg (leverage) is only read by useAvantis; usePacifica ignores it.
         result = await placeMarketOrder(symbol, side, qty, '0.5', leverage, tradeOptions);
@@ -2641,6 +2968,9 @@ function FuturesPanel() {
       if (result && !result.error) {
         if (result.status === 'submitted' && result.info) {
           setLocalAlert(result.info);
+        }
+        if (orderType === 'market') {
+          fireTradeConfetti();
         }
         setSuccessMsg(
           dex === 'gmtrade' && result.status === 'submitted'
@@ -2725,7 +3055,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -2859,7 +3189,7 @@ function FuturesPanel() {
                 </svg>
               </button>
             </div>
-            <input type="number" placeholder={amountInUsdc ? '20' : '0.01'} value={amount}
+            <input type="number" placeholder={amountInUsdc ? (dex === 'flash' ? `Max ${pacBalance.toFixed(2)}` : '20') : '0.01'} value={amount}
               onChange={e => { clearTradeFeedback(); setAmount(e.target.value); setSizePct(0); }} style={S.input} />
           </div>
           <div style={{flex: compactMobile ? '0 0 92px' : 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3}}>
@@ -2871,7 +3201,7 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {dex === 'nado' && (
+        {(dex === 'nado' || dex === 'flash') && (
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -2887,13 +3217,13 @@ function FuturesPanel() {
               fontWeight: 900,
               color: oneTapTrading?.enabled ? '#166534' : '#5C3A21',
             }}>
-              One tap{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
+              {dex === 'flash' ? 'Flash one tap' : 'One tap'}{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
             </span>
             <button
               type="button"
               onClick={handleToggleOneTapTrading}
               disabled={referralLinking || loading}
-              title="Nado linked signer"
+              title={dex === 'flash' ? 'Flash delegated session signer' : 'Nado linked signer'}
               style={{
                 ...S.btnSmall,
                 flex: '0 0 auto',
@@ -2905,7 +3235,7 @@ function FuturesPanel() {
                 opacity: (referralLinking || loading) ? 0.7 : 1,
               }}
             >
-              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'OFF'}
+              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : (dex === 'flash' ? 'ENABLE' : 'OFF')}
             </button>
           </div>
         )}
@@ -2939,7 +3269,7 @@ function FuturesPanel() {
               buying power ${maxUsdc.toFixed(0)}
             </span>
           </div>
-          <input type="range" min="0" max="100" step="5" value={sizePct} className="grad-slider"
+          <input type="range" min="0" max="100" step={dex === 'flash' ? '1' : '5'} value={sizePct} className="grad-slider"
             onChange={e => handleSizePct(Number(e.target.value))} style={{...S.slider, '--val': `${sizePct}%`}} />
           <div style={S.sliderLabels}>
             <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
@@ -3176,7 +3506,8 @@ function FuturesPanel() {
   }
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
-  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade') && walletMismatch) {
+  const shouldBlockWalletMismatch = false;
+  if (shouldBlockWalletMismatch && (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -3201,14 +3532,14 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade') ? 'Solana' : 'Base'} wallet
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
             </div>
             <button
               style={{...cartoonBtn('#0EA5E9', '#0284C7'), padding: '14px 28px'}}
-              onClick={() => (dex === 'phoenix' || dex === 'gmtrade') ? openWalletModal(true) : setEvmModalOpen(true)}
+              onClick={() => (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? openWalletModal(true) : setEvmModalOpen(true)}
             >
               SWITCH WALLET
             </button>
@@ -3863,11 +4194,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Connecting Hibachi...' : 'Hibachi setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -4049,11 +4378,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Connecting GRVT...' : 'GRVT setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
             <div style={hlGateStyles.frame}>
@@ -4179,11 +4506,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Checking Katana...' : 'Katana setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
             <div style={hlGateStyles.frame}>
@@ -4380,11 +4705,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>GMTrade setup</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -4476,11 +4799,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Linking Avantis...' : 'Avantis setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -4592,6 +4913,9 @@ function FuturesPanel() {
           }}>
             <div style={S.header} onPointerDown={handlePointerDown}>
               <span style={S.headerTitle}>Hotstuff setup</span>
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
             </div>
             <div style={{
               ...S.body,
@@ -4632,11 +4956,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up Hotstuff...' : 'Hotstuff setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -4769,11 +5091,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up Pacifica...' : 'Pacifica setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -4937,11 +5257,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up Hyperliquid…' : 'Hyperliquid setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -5040,11 +5358,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up RISEx...' : 'RISEx setup'}</span>
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{ ...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7' }}>
             <div style={hlGateStyles.frame}>
@@ -5451,13 +5767,9 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Activating Decibel…' : 'Decibel setup'}</span>
-            {/* Close button is hidden while activation is running so the
-                user can't bail out mid-signature and end up half-set-up. */}
-            {!isRunning && (
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            )}
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{
             ...S.body,
@@ -5710,7 +6022,7 @@ function FuturesPanel() {
       // `align-items` for column flex) gives a clean uniform list.
       <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
         {openedSortedPositions.map((pos, i) => {
-          const { entryP, markP, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor } = getPositionMetrics(pos, prices, leverageSettings);
+          const { entryP, markP, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
           const posKey = `${pos.symbol}-${pos.side}`;
           const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
           const tpslBusy = tpslSubmittingPos === posKey;
@@ -5727,7 +6039,7 @@ function FuturesPanel() {
             const snapshot = {
               symbol: pos.symbol,
               side: pos.side === 'bid' ? 'long' : 'short',
-              leverage: setLev,
+              leverage: isDust ? 0 : setLev,
               entryPrice: entryP,
               exitPrice: markP,
               pnlUsd: pnlVal,
@@ -5740,6 +6052,7 @@ function FuturesPanel() {
                 pos.symbol, pos.side,
                 String(dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)),
                 pos.pair_index, pos.trade_index, true,
+                dex === 'flash' ? { position: pos, inputUsdUi: String(dustUsd || posValueUsd) } : undefined,
               );
               // closePosition returns the API response on success and
               // undefined on error (catches internally + sets `error`).
@@ -5768,7 +6081,7 @@ function FuturesPanel() {
                       fontSize: 11, fontWeight: 800, color: '#a3906a',
                       background: '#fdf8e7', padding: '2px 6px',
                       borderRadius: 5, border: '1px solid #d4c8b0',
-                    }}>{setLev}×</span>
+                    }}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                   </div>
                   <span style={{
                     fontSize: 18, fontWeight: 900, color: pnlColor,
@@ -5788,7 +6101,7 @@ function FuturesPanel() {
                     onClick={handleClose}
                     disabled={loading}
                   >
-                    {loading ? <ClosingButtonLabel text="Closing position..." /> : 'Close position'}
+                    {loading ? <ClosingButtonLabel text="Closing position..." /> : (isDust ? 'Clean up dust' : 'Close position')}
                   </button>
                   <button
                     style={{
@@ -5827,7 +6140,7 @@ function FuturesPanel() {
           const proSnapshot = {
             symbol: pos.symbol,
             side: pos.side === 'bid' ? 'long' : 'short',
-            leverage: setLev,
+            leverage: isDust ? 0 : setLev,
             entryPrice: entryP,
             exitPrice: markP,
             pnlUsd: pnlVal,
@@ -5840,6 +6153,7 @@ function FuturesPanel() {
             const result = await closePosition(
               pos.symbol, pos.side, String(amount),
               pos.pair_index, pos.trade_index, closeFraction >= 1,
+              dex === 'flash' ? { position: pos, inputUsdUi: String((dustUsd || posValueUsd) * closeFraction) } : undefined,
             );
             // closePosition returns the API response on success and undefined
             // on error. Only show the share modal when the close was a FULL
@@ -5862,20 +6176,20 @@ function FuturesPanel() {
                       </span>
                     );
                   })()}
-                  <span style={{fontSize: 11, fontWeight: 800, color: '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{setLev}x</span>
+                  <span style={{fontSize: 11, fontWeight: 800, color: isDust ? '#8a6d2f' : '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                   <span style={{fontSize: 13, fontWeight: 900, color: pos.side === 'bid' ? '#4CAF50' : '#E53935'}}>
                     {pos.side === 'bid' ? 'LONG' : 'SHORT'}
                   </span>
                 </div>
               </div>
               <div style={S.row}>
-                <span style={S.detail}>Size: {pos.amount} <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span></span>
+                <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : pos.amount} {!isDust && <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span>}</span>
                 <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
               </div>
               <div style={S.row}>
                 <span style={S.detail}>Mark: ${fmtPrice(markP)}</span>
                 <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}}>
-                  {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                  {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
                 </span>
               </div>
               {/* Liquidation price row — visible on every venue that ships
@@ -5884,6 +6198,7 @@ function FuturesPanel() {
                   hazard for any leveraged trader. We colour it red as a
                   passive warning when the mark sits within ±10% of liq. */}
               {(() => {
+                if (isDust) return null;
                 const liq = parseFloat(pos.liquidation_price || 0);
                 if (!(liq > 0)) return null;
                 const distPct = markP > 0 ? Math.abs(markP - liq) / markP * 100 : 100;
@@ -5904,8 +6219,8 @@ function FuturesPanel() {
                   Pro too (per-user-request) — same icon as Basic for
                   consistency. */}
               <div style={{display: 'flex', gap: 6, marginTop: 4}}>
-                <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
-                {!isBasic && (
+                <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
+                {!isDust && !isBasic && (
                   <button style={S.btnBlue} onClick={() => {
                     if (expanded === 'tpsl') {
                       setExpandedPos(null);
@@ -5948,29 +6263,38 @@ function FuturesPanel() {
               {expanded === 'close' && (
                 <div style={S.expandPanel}>
                   <div style={S.row}>
-                    <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>Close {closePct}%</span>
+                    <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
                     <span style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>
-                      {(parseFloat(pos.amount) * closePct / 100).toFixed(6)} {pos.symbol}
+                      {isDust ? `$${dustUsd.toFixed(2)}` : `${(parseFloat(pos.amount) * closePct / 100).toFixed(6)} ${pos.symbol}`}
                     </span>
                   </div>
-                  <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
-                  <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
-                  <button style={{...S.btnRed, width: '100%'}} onClick={() => handleProClose(closePct / 100)} disabled={loading}>
-                    {loading ? <ClosingButtonLabel /> : `Close ${closePct}%`}
+                  {!isDust && (
+                    <>
+                      <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
+                      <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+                    </>
+                  )}
+                  <button style={{...S.btnRed, width: '100%'}} onClick={() => handleProClose(isDust ? 1 : closePct / 100)} disabled={loading}>
+                    {loading ? <ClosingButtonLabel /> : (isDust ? 'Clean up dust' : `Close ${closePct}%`)}
                   </button>
                 </div>
               )}
 
               {/* TP/SL panel — gated on Basic mode (button is hidden too). */}
-              {!isBasic && expanded === 'tpsl' && (
+              {!isDust && !isBasic && expanded === 'tpsl' && (
                 <div style={{...S.expandPanel, ...S.row}}>
                   <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <button style={S.btnBlue} onClick={async () => {
                     setTpslSubmittingPos(posKey);
                     try {
-                      await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                      const r = await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                      if (r?.error) {
+                        setLocalAlert(r.error);
+                        return;
+                      }
                       setTpPrice(''); setSlPrice(''); setExpandedPos(null);
+                      if (r?.info) setLocalAlert(r.info);
                     } finally {
                       setTpslSubmittingPos((current) => current === posKey ? null : current);
                     }
@@ -6615,13 +6939,14 @@ function FuturesPanel() {
           const isGmx = dex === 'gmx';
           const isHyperliquid = dex === 'hyperliquid';
           const isGmtrade = dex === 'gmtrade';
+          const isFlash = dex === 'flash';
           const isHibachi = dex === 'hibachi';
-          const accentLight = isGmtrade ? '#14B8A6' : isHibachi ? '#EF4444' : isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
-          const accentDark = isGmtrade ? '#0F766E' : isHibachi ? '#991B1B' : isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
-          const accentBg = isGmtrade ? 'rgba(20,184,166,0.08)' : isHibachi ? 'rgba(239,68,68,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
-          const accentBorder = isGmtrade ? 'rgba(20,184,166,0.35)' : isHibachi ? 'rgba(239,68,68,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
-          const accentBtnBorder = isGmtrade ? '#0F766E' : isHibachi ? '#DC2626' : isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
-          const chainName = isGmtrade ? 'Solana' : isHibachi ? 'Base / Arbitrum' : isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
+          const accentLight = isFlash ? '#4CAF50' : isGmtrade ? '#14B8A6' : isHibachi ? '#EF4444' : isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
+          const accentDark = isFlash ? '#166534' : isGmtrade ? '#0F766E' : isHibachi ? '#991B1B' : isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
+          const accentBg = isFlash ? 'rgba(34,197,94,0.08)' : isGmtrade ? 'rgba(20,184,166,0.08)' : isHibachi ? 'rgba(239,68,68,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
+          const accentBorder = isFlash ? 'rgba(34,197,94,0.30)' : isGmtrade ? 'rgba(20,184,166,0.35)' : isHibachi ? 'rgba(239,68,68,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
+          const accentBtnBorder = isFlash ? '#15803D' : isGmtrade ? '#0F766E' : isHibachi ? '#DC2626' : isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
+          const chainName = (isGmtrade || isFlash) ? 'Solana' : isHibachi ? 'Base / Arbitrum' : isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
           const isDepositing = isHyperliquid && depositStatus?.status === 'depositing';
           const isMovingToPerp = isHyperliquid && depositStatus?.status === 'moving_to_perp';
           const isFundingBusy = isDepositing || isMovingToPerp;
@@ -6636,20 +6961,58 @@ function FuturesPanel() {
             Number.isFinite(hibachiArbitrumUsdc) ? `Arbitrum $${hibachiArbitrumUsdc.toFixed(2)}` : null,
           ].filter(Boolean).join(' / ');
           const walletUsdcText = walletUsdc !== null
-            ? (isHibachi ? `USDC: ${hibachiWalletText || `$${walletUsdc.toFixed(2)}`}` : `${isGmtrade ? 'Solana ' : isHyperliquid ? 'Arbitrum ' : ''}USDC: $${walletUsdc.toFixed(2)}`)
+            ? (isHibachi ? `USDC: ${hibachiWalletText || `$${walletUsdc.toFixed(2)}`}` : `${isGmtrade ? 'Solana wallet ' : isHyperliquid ? 'Arbitrum ' : ''}USDC: $${walletUsdc.toFixed(2)}`)
             : isHibachi && walletUsdcStatus?.status === 'checking'
             ? 'Base / Arbitrum USDC: checking...'
             : null;
           return (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: accentLight}}>{isGmtrade ? 'GMTrade native wallet' : isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
+              <span style={{...S.label, color: accentLight}}>{isFlash ? 'Deposit USDC' : isGmtrade ? 'GMTrade native wallet' : isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
               {isFundingBusy
                 ? <span style={{...S.detail, color: '#15803D'}}>{isMovingToPerp ? 'Moving to trading' : 'Depositing'}{pendingDepositLabel ? ` ${pendingDepositLabel} USDC` : ''}...</span>
-                : walletUsdcText && <span style={S.detail}>{walletUsdcText}</span>}
+                : walletUsdcText && (
+                  <span style={{...S.detail, display: 'inline-flex', alignItems: 'center', gap: 6}}>
+                    {walletUsdcText}
+                    <button
+                      type="button"
+                      data-nodrag
+                      title="Refresh balance and orders"
+                      aria-label="Refresh balance and orders"
+                      aria-busy={manualTradingRefreshBusy}
+                      onClick={refreshTradingSnapshot}
+                      disabled={manualTradingRefreshBusy}
+                      style={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: '50%',
+                        border: `2px solid ${accentBtnBorder}`,
+                        background: manualTradingRefreshBusy ? '#e7dcc2' : '#fff8e6',
+                        color: accentDark,
+                        fontWeight: 900,
+                        cursor: manualTradingRefreshBusy ? 'default' : 'pointer',
+                        lineHeight: 1,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          display: 'inline-block',
+                          animation: manualTradingRefreshBusy ? 'wallet-spin 0.75s linear infinite' : 'none',
+                          transformOrigin: '50% 50%',
+                        }}
+                      >
+                        {'\u21bb'}
+                      </span>
+                    </button>
+                  </span>
+                )}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-              {!isHyperliquid && !isHibachi && (
+              {!isHyperliquid && !isHibachi && !isFlash && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6,
                 background: accentBg,
@@ -6754,6 +7117,89 @@ function FuturesPanel() {
                   </button>
                 </div>
               )}
+              {isFlash && (
+                <div style={{...S.row, paddingTop: 2}}>
+                  <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
+                  {available > 0 && <span style={S.detail}>Max: ${withdrawMax.toFixed(2)}</span>}
+                </div>
+              )}
+              {isFlash && (
+                <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
+                  <input
+                    type="number"
+                    placeholder="Amount"
+                    value={depositAmt}
+                    onChange={e => setDepositAmt(e.target.value)}
+                    style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}}
+                  />
+                  <button
+                    style={{...S.depositBtn, flex: 1.4, whiteSpace: 'nowrap', padding: '8px 4px'}}
+                    onClick={async () => {
+                      const v = parseFloat(depositAmt);
+                      if (!Number.isFinite(v) || v <= 0) {
+                        setLocalAlert('Enter a positive Flash deposit amount');
+                        return;
+                      }
+                      if (walletUsdc !== null && v > walletUsdc + 0.000001) {
+                        setLocalAlert(`Solana wallet has ${walletUsdc.toFixed(2)} USDC`);
+                        return;
+                      }
+                      setFlashFundingProgress({
+                        open: true,
+                        amount: String(v),
+                        currentStep: 'prepare',
+                        status: 'active',
+                        label: 'Preparing Flash funding',
+                        hint: 'Approve the wallet prompts in order. Clash will continue automatically after each signature.',
+                        error: '',
+                        completed: false,
+                        steps: {},
+                      });
+                      const r = await depositToPacifica(depositAmt, { onProgress: updateFlashFundingProgress });
+                      if (!r?.error) {
+                        setDepositAmt('');
+                        setLocalAlert(r?.info || 'Flash v2 deposit sent.');
+                      } else {
+                        setLocalAlert(r.error);
+                      }
+                    }}
+                    disabled={loading}
+                  >
+                    {loading ? '...' : 'Deposit'}
+                  </button>
+                </div>
+              )}
+              {isFlash && (
+                <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
+                  <input
+                    type="number"
+                    placeholder="Amount"
+                    value={withdrawAmt}
+                    onChange={e => setWithdrawAmt(e.target.value)}
+                    style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}}
+                  />
+                  <button
+                    style={{...S.btnPurple, flex: 1.4, whiteSpace: 'nowrap', padding: '8px 4px'}}
+                    onClick={async () => {
+                      const v = parseFloat(withdrawAmt);
+                      if (!Number.isFinite(v) || v <= 0) {
+                        setLocalAlert('Enter a positive Flash withdrawal amount');
+                        return;
+                      }
+                      const r = await withdraw(withdrawAmt);
+                      if (!r?.error) {
+                        setWithdrawAmt('');
+                        setLocalAlert(r?.info || 'Flash v2 withdrawal request sent.');
+                      } else {
+                        setLocalAlert(r.error);
+                      }
+                    }}
+                    disabled={loading}
+                  >
+                    {loading ? '...' : 'Withdraw'}
+                  </button>
+                </div>
+              )}
               {isHyperliquid && (
                 <div style={{
                   display: 'flex',
@@ -6814,6 +7260,8 @@ function FuturesPanel() {
                     : <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Legacy accounts may need one extra move from Spot into the trading balance. Minimum is <b>5 USDC</b>.</>
                   : isGmtrade
                   ? <>Orders are built natively in Clash and signed by your connected <b>Solana wallet</b>. Use the normal Long/Short buttons in the Trade tab; keep <b>USDC</b> collateral and a small <b>SOL</b> gas float in this wallet.</>
+                  : isFlash
+                  ? <>Sends USDC between your connected <b>Solana wallet</b> and Flash. Each action opens a wallet signature; keep a small <b>SOL</b> gas float.</>
                   : isHibachi
                   ? <>Hibachi deposit and withdrawal are not exposed through this Clash API flow. Use the official Hibachi app to manage funds on <b>{chainName}</b>.</>
                   : <>Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.</>}
@@ -7009,6 +7457,8 @@ function FuturesPanel() {
                 ? 'Sends AUSD from your Monad wallet to your Perpl account. Needs a small MON float for gas.'
                 : dex === 'phoenix'
                 ? 'Sends USDC from your Solana wallet to your Phoenix trader account. Needs a small SOL float for gas.'
+                : dex === 'flash'
+                ? 'Sends USDC from your Solana wallet to your Flash account. Needs a small SOL float for gas.'
                 : dex === 'nado'
                 ? 'Approves the selected Ink stablecoin, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
                 : dex === 'hotstuff'
@@ -7034,7 +7484,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'flash' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
@@ -7085,6 +7535,8 @@ function FuturesPanel() {
                 ? 'Withdraws AUSD from Perpl back to your Monad wallet.'
                 : dex === 'phoenix'
                 ? 'Withdraws USDC from your Phoenix trader account back to your Solana wallet.'
+                : dex === 'flash'
+                ? 'Withdraws USDC from your Flash account back to your Solana wallet.'
                 : dex === 'nado'
                 ? 'Withdraws USDt0 from your Nado default subaccount back to your Ink wallet. Nado charges a 1 USDt0 withdrawal fee, so Max subtracts it.'
                 : dex === 'grvt'
@@ -7460,6 +7912,18 @@ function FuturesPanel() {
                 GMTrade
               </span>
             </>
+          ) : dex === 'flash' ? (
+            <>
+              <img
+                src={DEX_CONFIG.flash.logo}
+                alt="Flash Trade"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.flash.colorDark }}>
+                Flash Trade
+              </span>
+            </>
           ) : dex === 'hibachi' ? (
             <>
               <img
@@ -7508,6 +7972,10 @@ function FuturesPanel() {
           />
         )}
       </div>
+      <FlashFundingStatusModal
+        progress={dex === 'flash' ? flashFundingProgress : null}
+        onClose={closeFlashFundingProgress}
+      />
       <ShareTradeModal
         open={!!shareTrade}
         trade={shareTrade}

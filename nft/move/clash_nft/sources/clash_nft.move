@@ -6,8 +6,7 @@
 //     Collection. The resource account's SignerCapability is stored in
 //     Config so `mint_with_quote`, `upgrade_with_quote`, and `bridge_burn`
 //     can sign on its behalf.
-//   - Each minted token carries a `level` property in its PropertyMap
-//     (1, 2, or 3). Default at mint is 1.
+//   - Each minted token carries rarity metadata in its PropertyMap.
 //   - All paid operations require a server-signed ed25519 quote whose
 //     nonce is recorded in `Config.used_nonces` for replay protection.
 //   - `bridge_burn` deletes the token and emits a BridgeBurnEvent that the
@@ -61,6 +60,11 @@ module clash_nft::demon_king {
 
     const MAX_LEVEL: u8 = 3;
     const LEVEL_KEY: vector<u8> = b"level";
+    const LEVEL_TITLE_KEY: vector<u8> = b"Level";
+    const STARS_KEY: vector<u8> = b"stars";
+    const STARS_TITLE_KEY: vector<u8> = b"Stars";
+    const RARITY_KEY: vector<u8> = b"Rarity";
+    const UNREVEALED_RARITY: vector<u8> = b"Unrevealed";
     const RESOURCE_SEED: vector<u8> = b"clash_demon_king::collection";
 
     // ─── Resources ─────────────────────────────────────────────────
@@ -257,6 +261,32 @@ module clash_nft::demon_king {
         }
     }
 
+    public entry fun admin_set_rarity(
+        admin: &signer,
+        token_address: address,
+        rarity: String,
+    ) acquires TokenRefs {
+        assert_admin(admin);
+        set_rarity_property(token_address, rarity);
+    }
+
+    public entry fun admin_set_rarity_batch(
+        admin: &signer,
+        token_addresses: vector<address>,
+        rarities: vector<String>,
+    ) acquires TokenRefs {
+        assert_admin(admin);
+        let len = vector::length(&token_addresses);
+        assert!(len == vector::length(&rarities), error::invalid_argument(E_BAD_QUANTITY));
+        let i = 0;
+        while (i < len) {
+            let token_address = *vector::borrow(&token_addresses, i);
+            let rarity = *vector::borrow(&rarities, i);
+            set_rarity_property(token_address, rarity);
+            i = i + 1;
+        };
+    }
+
     inline fun assert_admin(admin: &signer) {
         assert!(signer::address_of(admin) == @clash_nft, error::permission_denied(E_NOT_ADMIN));
     }
@@ -315,18 +345,14 @@ module clash_nft::demon_king {
                 token_uri,
             );
 
-            // Initialize the token's PropertyMap with level=1, then store
-            // the MutatorRef on the token's own address for later upgrades.
+            // Initialize the token's PropertyMap, then store the MutatorRef
+            // on the token's own address for later metadata updates.
             let property_ctor = property_map::prepare_input(
                 vector::empty<String>(), vector::empty<String>(), vector::empty<vector<u8>>(),
             );
             property_map::init(&token_ctor, property_ctor);
             let mutator_ref = property_map::generate_mutator_ref(&token_ctor);
-            property_map::add_typed<u8>(
-                &mutator_ref,
-                string::utf8(LEVEL_KEY),
-                1u8,
-            );
+            add_initial_rarity(&mutator_ref);
 
             // Persist the MutatorRef so `upgrade_with_quote` can mutate the
             // level later. Stored at the token object's own address.
@@ -415,11 +441,7 @@ module clash_nft::demon_king {
             );
             property_map::init(&token_ctor, property_ctor);
             let mutator_ref = property_map::generate_mutator_ref(&token_ctor);
-            property_map::add_typed<u8>(
-                &mutator_ref,
-                string::utf8(LEVEL_KEY),
-                1u8,
-            );
+            add_initial_rarity(&mutator_ref);
 
             let token_signer = object::generate_signer(&token_ctor);
             move_to(&token_signer, TokenRefs { mutator: mutator_ref, token_index });
@@ -663,13 +685,14 @@ module clash_nft::demon_king {
             token_uri,
         );
 
-        // Initialize PropertyMap with the preserved level (1, 2, or 3).
+        // Initialize PropertyMap. Rarity is reconciled by the server after
+        // the bridge mint is finalized.
         let property_ctor = property_map::prepare_input(
             vector::empty<String>(), vector::empty<String>(), vector::empty<vector<u8>>(),
         );
         property_map::init(&token_ctor, property_ctor);
         let mutator_ref = property_map::generate_mutator_ref(&token_ctor);
-        property_map::add_typed<u8>(&mutator_ref, string::utf8(LEVEL_KEY), level);
+        add_initial_rarity(&mutator_ref);
 
         // Persist MutatorRef for future `upgrade_with_quote` calls.
         let token_signer = object::generate_signer(&token_ctor);
@@ -730,6 +753,47 @@ module clash_nft::demon_king {
 
     fun bcs_u64(value: u64): vector<u8> {
         std::bcs::to_bytes(&value)
+    }
+
+    fun add_initial_rarity(mutator_ref: &property_map::MutatorRef) {
+        property_map::add_typed<String>(
+            mutator_ref,
+            string::utf8(RARITY_KEY),
+            string::utf8(UNREVEALED_RARITY),
+        );
+    }
+
+    fun set_rarity_property(token_address: address, rarity: String) acquires TokenRefs {
+        assert!(exists<TokenRefs>(token_address), error::not_found(E_NOT_INITIALIZED));
+        let refs = borrow_global<TokenRefs>(token_address);
+        let token_obj = object::address_to_object<Token>(token_address);
+
+        let level_key = string::utf8(LEVEL_KEY);
+        if (property_map::contains_key(&token_obj, &level_key)) {
+            property_map::remove(&refs.mutator, &level_key);
+        };
+
+        let level_title_key = string::utf8(LEVEL_TITLE_KEY);
+        if (property_map::contains_key(&token_obj, &level_title_key)) {
+            property_map::remove(&refs.mutator, &level_title_key);
+        };
+
+        let stars_key = string::utf8(STARS_KEY);
+        if (property_map::contains_key(&token_obj, &stars_key)) {
+            property_map::remove(&refs.mutator, &stars_key);
+        };
+
+        let stars_title_key = string::utf8(STARS_TITLE_KEY);
+        if (property_map::contains_key(&token_obj, &stars_title_key)) {
+            property_map::remove(&refs.mutator, &stars_title_key);
+        };
+
+        let rarity_key = string::utf8(RARITY_KEY);
+        if (property_map::contains_key(&token_obj, &rarity_key)) {
+            property_map::update_typed<String>(&refs.mutator, &rarity_key, rarity);
+        } else {
+            property_map::add_typed<String>(&refs.mutator, rarity_key, rarity);
+        };
     }
 
     /// Returns the level stored in the token's PropertyMap, defaulting to 1

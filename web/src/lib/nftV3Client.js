@@ -58,9 +58,122 @@ const ownedNftMemoryCache = new Map();
 const demonKingSyncMemoryCache = new Map();
 const demonKingSyncInflight = new Map();
 
+export const NFT_RARITY_LABELS = {
+  common: 'Common',
+  epic: 'Epic',
+  legendary: 'Legendary',
+};
+
+const NFT_RARITY_CARD_COLORS = {
+  common: {
+    border: '#2F80ED',
+    badgeBg: 'linear-gradient(180deg, #62B0FF 0%, #1769D1 100%)',
+    badgeBorder: '#B9DEFF',
+    badgeColor: '#FFFFFF',
+    glow: 'rgba(47, 128, 237, 0.28)',
+    shadow: 'rgba(47, 128, 237, 0.18)',
+  },
+  epic: {
+    border: '#8B5CF6',
+    badgeBg: 'linear-gradient(180deg, #B56BFF 0%, #6D28D9 100%)',
+    badgeBorder: '#E6D1FF',
+    badgeColor: '#FFFFFF',
+    glow: 'rgba(139, 92, 246, 0.3)',
+    shadow: 'rgba(139, 92, 246, 0.2)',
+  },
+  legendary: {
+    border: '#F2BE37',
+    badgeBg: 'linear-gradient(180deg, #FFE66A 0%, #F4A51C 100%)',
+    badgeBorder: '#FFF2A8',
+    badgeColor: '#4A2A00',
+    glow: 'rgba(242, 190, 55, 0.38)',
+    shadow: 'rgba(168, 107, 26, 0.24)',
+  },
+};
+
 function normalizeNftLevel(level) {
   const n = Number(level);
   return [1, 2, 3].includes(n) ? n : 1;
+}
+
+export function normalizeNftRarity(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(NFT_RARITY_LABELS, key) ? key : null;
+}
+
+function demonKingLegacyRarityFallback(level) {
+  return normalizeNftLevel(level) > 1 ? 'legendary' : null;
+}
+
+function nftCollectionUsesRarity(collection = 'demonking') {
+  const slug = normalizeNftCollectionSlug(collection);
+  return slug === 'demonking' || slug === 'dragon';
+}
+
+function nftCollectionDbRarityKey(collection = 'demonking') {
+  return normalizeNftCollectionSlug(collection) === 'demonking' ? 'demon_king' : normalizeNftCollectionSlug(collection);
+}
+
+export function nftRarityLabel(rarity, legacyLevel = 1) {
+  const key = normalizeNftRarity(rarity) || demonKingLegacyRarityFallback(legacyLevel);
+  return key ? NFT_RARITY_LABELS[key] : 'Unrevealed';
+}
+
+export function nftRarityCardStyle(rarity, legacyLevel = 1, options = {}) {
+  const key = normalizeNftRarity(rarity) || demonKingLegacyRarityFallback(legacyLevel);
+  const colors = key ? NFT_RARITY_CARD_COLORS[key] : null;
+  if (!colors) return {};
+  const active = !!options.active;
+  return {
+    border: `2px solid ${colors.border}`,
+    boxShadow: active
+      ? `0 0 0 2px ${colors.glow}, 0 3px 10px ${colors.shadow}, inset 0 0 0 1px rgba(255,255,255,0.45)`
+      : `0 0 0 2px ${colors.glow}, 0 2px 7px ${colors.shadow}`,
+  };
+}
+
+export function nftRarityBadgeStyle(rarity, legacyLevel = 1, options = {}) {
+  const key = normalizeNftRarity(rarity) || demonKingLegacyRarityFallback(legacyLevel);
+  const colors = key ? NFT_RARITY_CARD_COLORS[key] : null;
+  if (!colors) return {};
+  const compact = !!options.compact;
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    padding: compact ? '1px 5px' : '2px 7px',
+    borderRadius: compact ? 5 : 7,
+    background: colors.badgeBg,
+    border: `1px solid ${colors.badgeBorder}`,
+    color: colors.badgeColor,
+    boxShadow: `0 2px 6px ${colors.shadow}, inset 0 1px 0 rgba(255,255,255,0.45)`,
+    textShadow: key === 'legendary'
+      ? '0 1px 0 rgba(255,255,255,0.45)'
+      : '0 1px 1px rgba(0,0,0,0.4)',
+    fontWeight: 900,
+    lineHeight: 1,
+    whiteSpace: 'nowrap',
+  };
+}
+
+function normalizeCollectionTokenRarity(token, collection = 'demonking') {
+  if (!token || typeof token !== 'object') return token;
+  const collectionSlug = normalizeNftCollectionSlug(collection);
+  const legacyLevel = normalizeNftLevel(token.legacyLevel ?? token.legacy_level ?? token.level);
+  const rarity = normalizeNftRarity(token.rarity)
+    || (collectionSlug === 'demonking' ? demonKingLegacyRarityFallback(legacyLevel) : null);
+  return {
+    ...token,
+    level: collectionSlug === 'demonking' ? legacyLevel : 1,
+    legacyLevel,
+    rarity,
+    rarityLabel: rarity ? NFT_RARITY_LABELS[rarity] : 'Unrevealed',
+  };
+}
+
+function normalizeDemonKingTokenRarity(token) {
+  return normalizeCollectionTokenRarity(token, 'demonking');
 }
 
 export function normalizeNftCollectionSlug(value) {
@@ -81,14 +194,17 @@ export function nftLevelImageUrl(level, id = null, collection = 'demonking') {
     const ext = collectionSlug === 'dragon' ? 'jpg' : (lvl === 3 ? 'jpg' : 'png');
     return `/cdn/nft/${collectionSlug}/${lvl}/default.${ext}`;
   }
+  // Demon King rarity reveal keeps the original artwork for every token.
+  // The old on-chain level is retained as legacy data only.
   if (NFT_USE_TOKEN_IMAGE_PATHS && id != null && id !== '') {
-    return `${NFT_IMAGE_BASE_URL}/${lvl}/${encodeURIComponent(String(id))}.jpg`;
+    return `${NFT_IMAGE_BASE_URL}/1/${encodeURIComponent(String(id))}.jpg`;
   }
-  return `${NFT_IMAGE_BASE_URL}/${lvl}/default.jpg`;
+  return `${NFT_IMAGE_BASE_URL}/1/default.jpg`;
 }
 
 function normalizeNftImageUrl(url, level = 1, id = null, collection = 'demonking') {
   const lvl = normalizeNftLevel(level);
+  const collectionSlug = normalizeNftCollectionSlug(collection);
   const fallback = nftLevelImageUrl(lvl, id, collection);
   const text = String(url || '').trim();
   if (!text) return fallback;
@@ -96,6 +212,12 @@ function normalizeNftImageUrl(url, level = 1, id = null, collection = 'demonking
     const parsed = new URL(text, globalThis?.location?.origin || 'http://localhost');
     const legacyHost = LEGACY_NFT_IMAGE_HOSTS.has(parsed.hostname.toLowerCase());
     if (collectionSlug === 'dragon' && /\/cdn\/nft\/dragon\/[12]\/default\.png$/i.test(parsed.pathname)) {
+      return fallback;
+    }
+    if (collectionSlug === 'demonking' && /\/cdn\/nft\/[23]\//i.test(parsed.pathname)) {
+      return fallback;
+    }
+    if (collectionSlug === 'demonking' && /\/api\/nft\/image\/[23](?:[/?#]|$)/i.test(parsed.pathname)) {
       return fallback;
     }
     if (!legacyHost) return text;
@@ -110,12 +232,84 @@ function normalizeNftPayloadImages(payload, collection = null) {
   if (!payload || typeof payload !== 'object') return payload;
   const collectionSlug = normalizeNftCollectionSlug(collection || payload.collection);
   const tokens = Array.isArray(payload.tokens)
-    ? payload.tokens.map((token) => ({
-        ...token,
-        imageUrl: normalizeNftImageUrl(token?.imageUrl, token?.level, token?.tokenId || token?.id || token?.asset || token?.mint, collectionSlug),
-      }))
+    ? payload.tokens.map((token) => {
+        const normalized = {
+          ...token,
+          imageUrl: normalizeNftImageUrl(token?.imageUrl, token?.level, token?.tokenId || token?.id || token?.asset || token?.mint, collectionSlug),
+        };
+        return nftCollectionUsesRarity(collectionSlug) ? normalizeCollectionTokenRarity(normalized, collectionSlug) : normalized;
+      })
     : payload.tokens;
   return { ...payload, tokens };
+}
+
+function nftTokenLookupId(token) {
+  return String(token?.tokenId || token?.tokenAddress || token?.assetId || token?.asset || token?.mint || token?.id || '').trim();
+}
+
+export async function fetchNftRarities({ collection = 'demonking', chain, tokenIds = [], signal } = {}) {
+  const collectionSlug = normalizeNftCollectionSlug(collection);
+  const chainKey = String(chain || '').trim().toLowerCase();
+  const ids = [...new Set((Array.isArray(tokenIds) ? tokenIds : String(tokenIds || '').split(','))
+    .map((id) => String(id || '').trim())
+    .filter(Boolean))].slice(0, 500);
+  if (!nftCollectionUsesRarity(collectionSlug) || !chainKey || !ids.length) return {};
+  const params = new URLSearchParams({
+    collection: nftCollectionDbRarityKey(collectionSlug),
+    chain: chainKey,
+    ids: ids.join(','),
+  });
+  const res = await fetch(`/api/nft/rarities?${params.toString()}`, {
+    signal,
+    cache: 'no-store',
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `rarities (${res.status})`);
+  const out = {};
+  const rows = json?.rarities && typeof json.rarities === 'object' ? json.rarities : {};
+  Object.entries(rows).forEach(([id, row]) => {
+    const rarity = normalizeNftRarity(row?.rarity);
+    if (!rarity) return;
+    out[String(id)] = {
+      ...row,
+      rarity,
+      rarityLabel: NFT_RARITY_LABELS[rarity],
+    };
+  });
+  return out;
+}
+
+async function enrichDemonKingRarities(payload, collection = 'demonking', signal) {
+  const collectionSlug = normalizeNftCollectionSlug(collection || payload?.collection);
+  if (!nftCollectionUsesRarity(collectionSlug) || !payload || !Array.isArray(payload.tokens) || !payload.tokens.length) {
+    return normalizeNftPayloadImages(payload, collectionSlug);
+  }
+  const normalized = normalizeNftPayloadImages(payload, collectionSlug);
+  const tokens = Array.isArray(normalized.tokens) ? normalized.tokens : [];
+  const chainKey = String(normalized.chain || tokens[0]?.chain || '').trim().toLowerCase();
+  if (!chainKey) return normalized;
+  const ids = tokens.map(nftTokenLookupId).filter(Boolean);
+  if (!ids.length) return normalized;
+  try {
+    const rarities = await fetchNftRarities({ collection: collectionSlug, chain: chainKey, tokenIds: ids, signal });
+    return {
+      ...normalized,
+      tokens: tokens.map((token) => {
+        const id = nftTokenLookupId(token);
+        const rarityRow = id ? rarities[id] : null;
+        return normalizeCollectionTokenRarity({
+          ...token,
+          ...(rarityRow ? {
+            rarity: rarityRow.rarity,
+            rarityLabel: rarityRow.rarityLabel,
+            rarityRevealedAt: rarityRow.revealedAt || rarityRow.revealed_at || null,
+          } : {}),
+        }, collectionSlug);
+      }),
+    };
+  } catch {
+    return normalized;
+  }
 }
 
 const EVM_OWNED_CONFIG = {
@@ -805,8 +999,8 @@ function demonKingPlayerCacheScope(token) {
   return (hash >>> 0).toString(36);
 }
 
-function demonKingSyncCacheKey(wallet, chains, token = null) {
-  return `${DEMON_KING_SYNC_CACHE_PREFIX}${demonKingPlayerCacheScope(token)}:${String(wallet || '').toLowerCase()}:${normalizeDemonKingChains(chains).join(',')}`;
+function demonKingSyncCacheKey(wallet, chains, token = null, collection = 'demonking') {
+  return `${DEMON_KING_SYNC_CACHE_PREFIX}${normalizeNftCollectionSlug(collection)}:${demonKingPlayerCacheScope(token)}:${String(wallet || '').toLowerCase()}:${normalizeDemonKingChains(chains).join(',')}`;
 }
 
 function readDemonKingSyncCache(key) {
@@ -870,6 +1064,82 @@ function isSolanaWalletAddress(value) {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || '').trim());
 }
 
+function pushUniqueWallet(list, value) {
+  const wallet = String(value || '').trim();
+  if (!wallet) return;
+  const key = isEvmWalletAddress(wallet) || (isAptosWalletAddress(wallet) && !isSolanaWalletAddress(wallet))
+    ? wallet.toLowerCase()
+    : wallet;
+  if (list.some((existing) => {
+    const existingText = String(existing || '').trim();
+    const existingKey = isEvmWalletAddress(existingText) || (isAptosWalletAddress(existingText) && !isSolanaWalletAddress(existingText))
+      ? existingText.toLowerCase()
+      : existingText;
+    return existingKey === key;
+  })) return;
+  list.push(wallet);
+}
+
+function addWalletHint(hints, raw) {
+  const wallet = String(raw || '').trim();
+  if (!wallet) return;
+  if (isEvmWalletAddress(wallet)) {
+    if (!hints.evmAddress) hints.evmAddress = wallet;
+    pushUniqueWallet(hints.evmAddresses, wallet);
+    return;
+  }
+  if (isSolanaWalletAddress(wallet)) {
+    if (!hints.solAddress) hints.solAddress = wallet;
+    pushUniqueWallet(hints.solAddresses, wallet);
+    return;
+  }
+  if (isAptosWalletAddress(wallet)) {
+    if (!hints.aptosAddress) hints.aptosAddress = wallet;
+    pushUniqueWallet(hints.aptosAddresses, wallet);
+  }
+}
+
+export function resolveDemonKingPlayerWalletHints(playerState, liveWallets = {}) {
+  const hints = {
+    evmAddress: null,
+    solAddress: null,
+    aptosAddress: null,
+    evmAddresses: [],
+    solAddresses: [],
+    aptosAddresses: [],
+  };
+
+  addWalletHint(hints, liveWallets.evmAddress);
+  addWalletHint(hints, liveWallets.solAddress);
+  addWalletHint(hints, liveWallets.aptosAddress);
+  addWalletHint(hints, playerState?.wallet);
+  addWalletHint(hints, playerState?.nft_gold_boost_wallet);
+
+  (Array.isArray(playerState?.wallets) ? playerState.wallets : []).forEach((row) => {
+    addWalletHint(hints, row?.address || row?.wallet_address || row?.wallet);
+  });
+  (Array.isArray(playerState?.dex_accounts) ? playerState.dex_accounts : []).forEach((row) => {
+    addWalletHint(hints, row?.wallet_address || row?.address || row?.wallet);
+    addWalletHint(hints, row?.metadata?.wallet || row?.metadata?.wallet_address);
+  });
+
+  return hints;
+}
+
+export function resolveDemonKingPlayerInventorySyncTarget({
+  player = null,
+  evmAddress = null,
+  solAddress = null,
+  aptosAddress = null,
+} = {}) {
+  const hints = resolveDemonKingPlayerWalletHints(player, { evmAddress, solAddress, aptosAddress });
+  return resolveDemonKingInventorySyncTarget({
+    evmAddresses: hints.evmAddresses,
+    solAddresses: hints.solAddresses,
+    aptosAddresses: hints.aptosAddresses,
+  });
+}
+
 export function resolveDemonKingConnectedSyncTarget({
   dex = '',
   evmAddress = null,
@@ -899,31 +1169,50 @@ export function resolveDemonKingConnectedSyncTarget({
   const evmChain = DEMON_KING_CHAIN_BY_EVM_CHAIN_ID[Number(evmChainId)];
   const evmTarget = evmChain ? targetForChain(evmChain) : null;
   if (evmTarget) return evmTarget;
+  if (isEvmWalletAddress(evm)) {
+    return { wallet: evm, chains: DEMON_KING_EVM_CHAINS };
+  }
 
-  return targetForChain('solana') || targetForChain('aptos') || targetForChain('base');
+  return targetForChain('solana')
+    || targetForChain('aptos');
 }
 
 export function resolveDemonKingInventorySyncTarget({
   evmAddress = null,
   solAddress = null,
   aptosAddress = null,
+  evmAddresses = [],
+  solAddresses = [],
+  aptosAddresses = [],
 } = {}) {
   const evm = String(evmAddress || '').trim();
   const sol = String(solAddress || '').trim();
   const apt = String(aptosAddress || '').trim();
+  const evmList = [];
+  const solList = [];
+  const aptosList = [];
   const wallets = {};
   const chains = [];
 
-  if (isEvmWalletAddress(evm)) {
-    wallets.evm = evm;
+  [...(Array.isArray(evmAddresses) ? evmAddresses : [evmAddresses]), evm]
+    .forEach((wallet) => { if (isEvmWalletAddress(wallet)) pushUniqueWallet(evmList, wallet); });
+  [...(Array.isArray(solAddresses) ? solAddresses : [solAddresses]), sol]
+    .forEach((wallet) => { if (isSolanaWalletAddress(wallet)) pushUniqueWallet(solList, wallet); });
+  [...(Array.isArray(aptosAddresses) ? aptosAddresses : [aptosAddresses]), apt]
+    .forEach((wallet) => {
+      if (isAptosWalletAddress(wallet) && !isEvmWalletAddress(wallet)) pushUniqueWallet(aptosList, wallet);
+    });
+
+  if (evmList.length) {
+    wallets.evm = evmList;
     chains.push(...DEMON_KING_EVM_CHAINS);
   }
-  if (isSolanaWalletAddress(sol)) {
-    wallets.solana = sol;
+  if (solList.length) {
+    wallets.solana = solList;
     chains.push('solana');
   }
-  if (isAptosWalletAddress(apt) && !isEvmWalletAddress(apt)) {
-    wallets.aptos = apt;
+  if (aptosList.length) {
+    wallets.aptos = aptosList;
     chains.push('aptos');
   }
 
@@ -934,12 +1223,22 @@ export function resolveDemonKingInventorySyncTarget({
 function normalizeDemonKingSyncJobs({ wallet, wallets, chains }) {
   const requested = normalizeDemonKingChains(chains);
   const jobs = [];
+  const seen = new Set();
   const addJob = (walletValue, candidateChains) => {
-    const walletText = String(walletValue || '').trim();
-    if (!walletText) return;
-    const chainList = requested.filter((chain) => candidateChains.includes(chain));
-    if (!chainList.length) return;
-    jobs.push({ wallet: walletText, chains: chainList });
+    const values = Array.isArray(walletValue) ? walletValue : [walletValue];
+    for (const value of values) {
+      const walletText = String(value || '').trim();
+      if (!walletText) continue;
+      const chainList = requested.filter((chain) => candidateChains.includes(chain));
+      if (!chainList.length) continue;
+      const walletKey = isEvmWalletAddress(walletText) || (isAptosWalletAddress(walletText) && !isSolanaWalletAddress(walletText))
+        ? walletText.toLowerCase()
+        : walletText;
+      const key = `${walletKey}:${chainList.join(',')}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      jobs.push({ wallet: walletText, chains: chainList });
+    }
   };
 
   if (wallets && typeof wallets === 'object') {
@@ -957,14 +1256,15 @@ function normalizeDemonKingSyncJobs({ wallet, wallets, chains }) {
   return jobs;
 }
 
-async function syncDemonKingNftWallet({ wallet, chains, force, signal, token }) {
+async function syncDemonKingNftWallet({ wallet, chains, force, signal, token, collection = 'demonking' }) {
   const walletText = String(wallet || '').trim();
   const chainList = normalizeDemonKingChains(chains);
+  const collectionSlug = normalizeNftCollectionSlug(collection);
   if (!walletText || !chainList.length) {
-    return { ok: true, wallet: walletText, chains: chainList, total: 0, tokens: [] };
+    return { ok: true, collection: collectionSlug, wallet: walletText, chains: chainList, total: 0, tokens: [] };
   }
 
-  const cacheKey = demonKingSyncCacheKey(walletText, chainList, token);
+  const cacheKey = demonKingSyncCacheKey(walletText, chainList, token, collectionSlug);
   if (!force) {
     const cached = readDemonKingSyncCache(cacheKey);
     if (cached) return cached;
@@ -972,22 +1272,24 @@ async function syncDemonKingNftWallet({ wallet, chains, force, signal, token }) 
     clearDemonKingNftCache(walletText);
   }
 
-  const inflightKey = `${demonKingPlayerCacheScope(token)}:${String(walletText).toLowerCase()}:${chainList.join(',')}:${force ? 'force' : 'normal'}`;
+  const inflightKey = `${collectionSlug}:${demonKingPlayerCacheScope(token)}:${String(walletText).toLowerCase()}:${chainList.join(',')}:${force ? 'force' : 'normal'}`;
   if (demonKingSyncInflight.has(inflightKey)) return demonKingSyncInflight.get(inflightKey);
 
   const job = (async () => {
-    const res = await fetchWithTimeout('/api/nft/demon-king/sync', {
+    const syncPath = collectionSlug === 'demonking' ? '/api/nft/demon-king/sync' : `/api/nft/${collectionSlug}/sync`;
+    const syncLabel = collectionSlug === 'demonking' ? 'Demon King NFT sync' : `${collectionSlug} NFT sync`;
+    const res = await fetchWithTimeout(syncPath, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-token': token },
       body: JSON.stringify({ wallet: walletText, chains: chainList, force }),
       cache: 'no-store',
-    }, 20_000, 'Demon King NFT sync', signal);
+    }, 20_000, syncLabel, signal);
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json?.error || `Demon King NFT sync failed (${res.status})`);
-    const value = normalizeNftPayloadImages({
+    if (!res.ok) throw new Error(json?.error || `${syncLabel} failed (${res.status})`);
+    const value = await enrichDemonKingRarities({
       ...json,
       tokens: Array.isArray(json?.tokens) ? json.tokens : [],
-    });
+    }, collectionSlug, signal);
     writeDemonKingSyncCache(cacheKey, value);
     try {
       window?.dispatchEvent?.(new CustomEvent('demon-king-nfts:updated', {
@@ -1005,11 +1307,12 @@ async function syncDemonKingNftWallet({ wallet, chains, force, signal, token }) 
   }
 }
 
-export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON_KING_SUPPORTED_CHAINS, force = false, signal } = {}) {
+export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON_KING_SUPPORTED_CHAINS, force = false, signal, collection = 'demonking' } = {}) {
   const jobs = normalizeDemonKingSyncJobs({ wallet, wallets, chains });
   const requestedChains = normalizeDemonKingChains(chains);
+  const collectionSlug = normalizeNftCollectionSlug(collection);
   if (!jobs.length) {
-    return { ok: true, wallet: String(wallet || ''), chains: requestedChains, total: 0, tokens: [] };
+    return { ok: true, collection: collectionSlug, wallet: String(wallet || ''), chains: requestedChains, total: 0, tokens: [] };
   }
 
   const token = typeof window !== 'undefined' ? window._playerToken : null;
@@ -1020,6 +1323,7 @@ export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON
     force,
     signal,
     token,
+    collection: collectionSlug,
   })));
 
   const tokensByKey = new Map();
@@ -1053,13 +1357,14 @@ export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON
 
   const value = normalizeNftPayloadImages({
     ok: true,
+    collection: collectionSlug,
     partial: errors.length > 0,
     wallets: walletsSynced,
     chains: [...chainsSynced],
     total: tokensByKey.size,
     tokens: [...tokensByKey.values()],
     errors,
-  });
+  }, collectionSlug);
   try {
     window?.dispatchEvent?.(new CustomEvent('demon-king-nfts:updated', {
       detail: { wallets: walletsSynced, chains: value.chains, tokens: value.tokens, force },
@@ -1067,6 +1372,8 @@ export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON
   } catch {}
   return value;
 }
+
+export const syncCollectionNfts = syncDemonKingNfts;
 
 function evmRpcUrls(chain) {
   const config = EVM_OWNED_CONFIG[chain];
@@ -1736,9 +2043,10 @@ export async function fetchOwnedNfts({ collection = 'demonking', chain, address,
 
   if (chainKey === 'solana') {
     try {
-      const value = normalizeNftPayloadImages(
+      const value = await enrichDemonKingRarities(
         await fetchOwnedNftsFromServer({ collection: collectionSlug, chain: chainKey, address, signal }),
         collectionSlug,
+        signal,
       );
       writeOwnedCache(key, value);
       return value;
@@ -1759,7 +2067,7 @@ export async function fetchOwnedNfts({ collection = 'demonking', chain, address,
       direct = await fetchOwnedNftsBrowserSolana({ address, signal });
     }
     if (direct && (chainKey !== 'solana' || (direct.tokens || []).length > 0)) {
-      const value = normalizeNftPayloadImages(direct, collectionSlug);
+      const value = await enrichDemonKingRarities(direct, collectionSlug, signal);
       writeOwnedCache(key, value);
       return value;
     }
@@ -1769,7 +2077,11 @@ export async function fetchOwnedNfts({ collection = 'demonking', chain, address,
   }
 
   try {
-    const fallback = normalizeNftPayloadImages(await fetchOwnedNftsFromServer({ collection: collectionSlug, chain: chainKey, address, signal }), collectionSlug);
+    const fallback = await enrichDemonKingRarities(
+      await fetchOwnedNftsFromServer({ collection: collectionSlug, chain: chainKey, address, signal }),
+      collectionSlug,
+      signal,
+    );
     writeOwnedCache(key, fallback);
     return fallback;
   } catch (err) {

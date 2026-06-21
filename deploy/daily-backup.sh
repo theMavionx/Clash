@@ -1,10 +1,8 @@
 #!/bin/bash
 # Daily backup of /opt/clash/shared/ databases + .env.
 #
-# Mirrors backup_shared_databases from deploy.sh but runs on a schedule
-# (independent of deploys) and prunes /opt/clash/shared/backups by both age
-# and count. The same /opt/clash/shared/backups directory is used for both
-# deploy-triggered and scheduled backups, so retention applies uniformly.
+# Runs independently of deploys and prunes /opt/clash/shared/backups by both
+# age and count.
 #
 # Install (one-time, on server as root):
 #   cp /opt/clash/deploy/clash-backup.service /etc/systemd/system/

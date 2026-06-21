@@ -5,7 +5,7 @@
 // e8dfc8 rows. Three states (no tournament / not joined / joined) share the
 // same paper modal so the visual language is consistent across the game.
 import { memo, useEffect, useState, useMemo } from 'react';
-import { useTournament, useTournamentDailyPoints, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
+import { useLuckyRaider, useTournament, useTournamentDailyPoints, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
 import { usePlayer } from '../hooks/useGodot';
 import { useDex } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
@@ -25,11 +25,14 @@ const DEX_LABELS = {
   monad: 'Perpl',
   phoenix: 'Phoenix',
   hyperliquid: 'Hyperliquid',
+  risex: 'RISEx',
   nado: 'Nado',
+  hibachi: 'Hibachi',
   hotstuff: 'Hotstuff',
   grvt: 'GRVT',
   katana: 'Katana',
   gmtrade: 'GMTrade',
+  flash: 'Flash Trade',
 };
 
 function fmtUsd(n) {
@@ -121,6 +124,13 @@ function compactPlayerName(row) {
   return String(row?.player_id || '').slice(0, 8) || 'Player';
 }
 
+function shortWallet(wallet) {
+  const text = String(wallet || '').trim();
+  if (!text) return '';
+  if (text.length <= 14) return text;
+  return `${text.slice(0, 6)}...${text.slice(-4)}`;
+}
+
 function isPointsSort(sortBy) {
   return sortBy === 'points' || sortBy === 'volume_trophies_50_50';
 }
@@ -192,6 +202,288 @@ function featuredMetric(sortKey, row) {
   };
 }
 
+function isMegaTournament(t) {
+  return !!(t?.is_mega || t?.tournament_kind === 'mega' || t?.mega_config?.enabled);
+}
+
+function shouldShowLeaderboardDexBadge(t) {
+  if (isMegaTournament(t)) return true;
+  if (t?.mode === 'dex_vs_dex') return true;
+  if (t?.dex_scope === 'all' || t?.dex_scope === 'custom') return true;
+  const eligible = Array.isArray(t?.eligible_dexes) ? t.eligible_dexes.filter(Boolean) : [];
+  return eligible.length > 1;
+}
+
+function sectorRequirementText(sector) {
+  const parts = [];
+  if (Number(sector?.min_town_hall_level || 0) > 0) parts.push(`TH ${sector.min_town_hall_level}`);
+  if (Number(sector?.min_volume_usd || 0) > 0) parts.push(`${fmtUsdWhole(sector.min_volume_usd)} vol`);
+  if (Number(sector?.min_daily_volume_usd || 0) > 0) parts.push(`${fmtUsdWhole(sector.min_daily_volume_usd)} daily`);
+  if (Number(sector?.min_trades || 0) > 0) parts.push(`${fmt(sector.min_trades)} trades`);
+  return parts.join(' · ') || 'Open';
+}
+
+function dexBreakdownSummary(row) {
+  const list = Array.isArray(row?.dex_breakdown) ? row.dex_breakdown : [];
+  return list.slice(0, 3).map((item) => `${item.label || DEX_LABELS[item.dex] || item.dex}: ${fmtUsdWhole(item.volume_usd)}`).join(' · ');
+}
+
+function rewardScheduleHasContent(schedule) {
+  return !!(
+    (schedule?.daily_pools || []).length
+    || (schedule?.final_pools || []).length
+    || schedule?.lucky_daily_raider?.enabled
+  );
+}
+
+function rewardPoolLine(pool, fallbackCurrency = 'USD') {
+  const rewards = rewardPoolSummary(pool?.rewards || [], fallbackCurrency);
+  const label = pool?.label || 'Reward pool';
+  const top = Number(pool?.top_n || 0) > 0 ? `top ${pool.top_n}` : '';
+  return [label, top, rewards.join(' + ')].filter(Boolean).join(' В· ');
+}
+
+function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
+  if (!rewardScheduleHasContent(schedule)) return null;
+  const lucky = schedule?.lucky_daily_raider || {};
+  const required = (lucky.required_collections || [])
+    .map((item) => item === 'demon_king' ? 'Demon King' : item === 'dragon' ? 'Dragon' : item)
+    .join(' or ');
+  const luckyRewards = rewardPoolSummary(lucky.rewards || [], currency);
+  const ticketMetric = String(lucky.ticket_metric || 'volume');
+  const attackWinsPerTicket = fmt(lucky.attack_wins_per_ticket || 10);
+  const volumePerTicket = fmtUsdWhole(lucky.volume_per_ticket_usd);
+  const volumeTicketsPerStep = Math.max(1, Math.floor(Number(lucky.volume_tickets_per_step || 1) || 1));
+  const maxVolumeTickets = Math.max(0, Math.floor(Number(lucky.max_volume_tickets || 0) || 0));
+  const volumeBonusText = `${volumePerTicket} volume = +${fmt(volumeTicketsPerStep)}${maxVolumeTickets > 0 ? `, max +${fmt(maxVolumeTickets)}` : ''}`;
+  const luckyTicketRule = ticketMetric === 'attack_wins'
+    ? `${attackWinsPerTicket} winning attacks = 1 ticket`
+    : ticketMetric === 'attack_wins_plus_volume'
+      ? `${attackWinsPerTicket} winning attacks = 1 ticket + ${volumeBonusText}`
+    : ticketMetric === 'volume_or_attack_wins'
+      ? `${volumePerTicket} volume OR ${attackWinsPerTicket} winning attacks = 1 ticket`
+      : ticketMetric === 'volume_and_attack_wins'
+        ? `${volumePerTicket} volume AND ${attackWinsPerTicket} winning attacks = 1 ticket`
+        : `${volumePerTicket} volume = 1 ticket`;
+  return (
+    <div style={S.rewardScheduleCard}>
+      <div style={S.rewardScheduleHeader}>
+        <strong>Rewards</strong>
+        {sectorName && <span>{sectorName}</span>}
+      </div>
+      {(schedule.daily_pools || []).filter((pool) => pool.enabled !== false).map((pool, idx) => (
+        <div key={`daily-${idx}`} style={S.rewardScheduleLine}>Daily: {rewardPoolLine(pool, currency)}</div>
+      ))}
+      {(schedule.final_pools || []).filter((pool) => pool.enabled !== false).map((pool, idx) => (
+        <div key={`final-${idx}`} style={S.rewardScheduleLine}>Final: {rewardPoolLine(pool, currency)}</div>
+      ))}
+      {lucky.enabled && (
+        <div style={S.rewardScheduleLucky}>
+          <div><strong>{lucky.label || 'Lucky Daily Raider'}</strong>: {luckyTicketRule}, top {fmt(lucky.winner_count || 1)}, max {fmt(lucky.max_tickets)} tickets</div>
+          {Number(lucky.min_attack_wins || 0) > 0 && <div>Minimum today: {fmt(lucky.min_attack_wins)} winning attacks</div>}
+          {lucky.require_nft && <div>Requires {required || 'Dragon or Demon King'}</div>}
+          {lucky.my_tickets !== undefined && (
+            <div>
+              Today: {fmtUsdWhole(lucky.my_volume_usd || 0)} volume | {luckyAttackSummary(lucky)} | {luckyTicketBreakdown(lucky)}/{fmt(lucky.max_tickets || 0)} tickets
+              {luckyReasonText(lucky.my_reason) ? ` | ${luckyReasonText(lucky.my_reason)}` : ''}
+            </div>
+          )}
+          {luckyRewards.length > 0 && <div>Prize: {luckyRewards.join(' + ')}</div>}
+          {Array.isArray(lucky.last_winners) && lucky.last_winners.length > 0 ? (
+            <div>Last winners: {lucky.last_winners.slice(0, 5).map((winner) => `#${winner.place || '?'} ${winner.name || winner.player_id || 'Player'}`).join(' | ')}</div>
+          ) : lucky.last_winner?.name && <div>Last winner: {lucky.last_winner.name}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function luckyAttackStats(source = {}, lucky = source) {
+  const limit = Math.max(1, Math.floor(Number(source.max_counted_attacks ?? lucky?.max_counted_attacks ?? lucky?.max_tickets ?? 50) || 50));
+  const wins = Math.max(0, Math.floor(Number(source.attack_wins ?? source.my_attack_wins ?? 0) || 0));
+  const attemptsRaw = Number(source.attack_attempts ?? source.my_attack_attempts);
+  const attempts = Math.max(0, Math.floor(Number.isFinite(attemptsRaw) ? attemptsRaw : Math.min(limit, wins)));
+  const losses = Math.max(0, attempts - wins);
+  const surrenders = Math.max(0, Math.floor(Number(source.attack_surrenders ?? source.my_attack_surrenders ?? 0) || 0));
+  const rawAttempts = Math.max(0, Math.floor(Number(source.raw_attack_attempts ?? source.my_raw_attack_attempts ?? attempts) || 0));
+  const rawWins = Math.max(0, Math.floor(Number(source.raw_attack_wins ?? source.my_raw_attack_wins ?? wins) || 0));
+  const rawLosses = Math.max(0, rawAttempts - rawWins);
+  return { limit, wins, attempts, losses, surrenders, rawAttempts, rawWins, rawLosses };
+}
+
+function luckyAttackSummary(source = {}, lucky = source) {
+  const s = luckyAttackStats(source, lucky);
+  return `${fmt(s.wins)} wins / ${fmt(s.losses)} losses from ${fmt(s.attempts)}/${fmt(s.limit)} attacks`;
+}
+
+function luckyTicketStats(source = {}, lucky = source) {
+  const attack = Math.max(0, Math.floor(Number(source.attack_win_tickets ?? source.my_attack_win_tickets ?? 0) || 0));
+  const volume = Math.max(0, Math.floor(Number(source.volume_tickets ?? source.my_volume_tickets ?? 0) || 0));
+  const total = Math.max(0, Math.floor(Number(source.tickets ?? source.my_tickets ?? (attack + volume)) || 0));
+  const maxVolume = Math.max(0, Math.floor(Number(source.max_volume_tickets ?? lucky?.max_volume_tickets ?? 0) || 0));
+  const volumePerTicket = Math.max(1, Number(source.volume_per_ticket_usd ?? lucky?.volume_per_ticket_usd ?? 1000) || 1000);
+  const volumeTicketsPerStep = Math.max(1, Math.floor(Number(source.volume_tickets_per_step ?? lucky?.volume_tickets_per_step ?? 1) || 1));
+  return { attack, volume, total, maxVolume, volumePerTicket, volumeTicketsPerStep };
+}
+
+function luckyVolumeBonusText(lucky) {
+  const s = luckyTicketStats(lucky);
+  return `${fmtUsdWhole(s.volumePerTicket)} volume = +${fmt(s.volumeTicketsPerStep)} bonus ticket${s.volumeTicketsPerStep === 1 ? '' : 's'}${s.maxVolume > 0 ? `, max +${fmt(s.maxVolume)}` : ''}`;
+}
+
+function luckyTicketBreakdown(source = {}, lucky = source) {
+  const metric = String(lucky?.ticket_metric || source.ticket_metric || '').toLowerCase();
+  const s = luckyTicketStats(source, lucky);
+  if (metric === 'attack_wins_plus_volume') return `${fmt(s.attack)} attack + ${fmt(s.volume)} volume = ${fmt(s.total)}`;
+  return fmt(s.total);
+}
+
+function luckyEntryDetail(entry, lucky) {
+  const s = luckyAttackStats(entry, lucky);
+  const parts = [
+    `${fmt(s.wins)}W`,
+    `${fmt(s.losses)}L`,
+    `${fmt(s.attempts)}/${fmt(s.limit)} attacks`,
+  ];
+  if (s.surrenders > 0) parts.push(`${fmt(s.surrenders)} surrender`);
+  return parts.join(' | ');
+}
+
+function luckyWinTicketText(lucky) {
+  const winsPerTicket = Math.max(1, Math.floor(Number(lucky?.attack_wins_per_ticket || 1) || 1));
+  return winsPerTicket === 1 ? '1 win = 1 ticket' : `${fmt(winsPerTicket)} wins = 1 ticket`;
+}
+
+function luckyReasonText(reason) {
+  const key = String(reason || '').trim();
+  if (!key || key === 'eligible') return '';
+  if (key === 'attack_wins_below_ticket') return 'No ticket yet: counted wins are below the ticket requirement';
+  if (key === 'volume_below_ticket') return 'No ticket yet: counted volume is below the ticket requirement';
+  if (key === 'attack_wins_plus_volume_below_ticket') return 'No ticket yet: counted wins and volume are below ticket requirements';
+  if (key === 'volume_or_attack_wins_below_ticket') return 'No ticket yet: counted wins or volume are below ticket requirements';
+  if (key === 'volume_and_attack_wins_below_ticket') return 'No ticket yet: counted wins and volume are below ticket requirements';
+  if (key === 'nft_required') return 'NFT requirement not met';
+  if (key === 'missing_required_nft') return 'NFT requirement not met';
+  if (key === 'min_attack_wins_not_met') return 'Minimum counted wins not met';
+  return key.replace(/_/g, ' ');
+}
+
+function LuckyRaiderPanel({ t, schedule }) {
+  const lucky = schedule?.lucky_daily_raider || {};
+  if (!lucky.enabled) {
+    return (
+      <div style={S.empty}>
+        <div style={S.emptyTitle}>No Daily Lucky Raider</div>
+        <div style={S.emptySub}>This tournament does not have a lucky daily raid draw configured.</div>
+      </div>
+    );
+  }
+  const rewards = rewardPoolSummary(lucky.rewards || [], t?.prize_currency || 'USD');
+  const metric = String(lucky.ticket_metric || 'volume');
+  const winTicketText = luckyWinTicketText(lucky);
+  const volumeBonusText = luckyVolumeBonusText(lucky);
+  const rule = metric === 'attack_wins'
+    ? winTicketText
+    : metric === 'attack_wins_plus_volume'
+      ? `${winTicketText} + ${volumeBonusText}`
+    : metric === 'volume_or_attack_wins'
+      ? `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume OR ${winTicketText}`
+      : metric === 'volume_and_attack_wins'
+        ? `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume AND ${winTicketText}`
+        : `${fmtUsdWhole(lucky.volume_per_ticket_usd)} volume = 1 ticket`;
+  const entries = Array.isArray(lucky.today_entries) ? lucky.today_entries : [];
+  const history = Array.isArray(lucky.history) ? lucky.history : [];
+  const myStats = luckyAttackStats(lucky);
+  const myTickets = luckyTicketStats(lucky);
+  const myRawOverflow = myStats.rawAttempts > myStats.attempts;
+  const myReason = luckyReasonText(lucky.my_reason);
+  return (
+    <>
+      <div style={S.luckyHero}>
+        <div>
+          <div style={S.luckyKicker}>Daily Lucky Raider</div>
+          <div style={S.luckyTitle}>{lucky.label || 'Daily Lucky Raider'}</div>
+          <div style={S.luckySub}>Only your first {fmt(myStats.limit)} attacks each UTC day count. Wins become tickets; losses and surrenders spend an attack and give 0 tickets. Volume can add bonus tickets.</div>
+        </div>
+        <div style={S.luckyPrize}>{rewards.join(' + ') || 'Prize configured by admin'}</div>
+      </div>
+
+      <div style={S.luckyGrid}>
+        <Stat label="Your tickets" value={`${fmt(lucky.my_tickets || 0)} / ${fmt(lucky.max_tickets || 0)}`} />
+        <Stat label="Attack tickets" value={fmt(myTickets.attack)} />
+        <Stat label="Volume tickets" value={`${fmt(myTickets.volume)}${myTickets.maxVolume > 0 ? ` / ${fmt(myTickets.maxVolume)}` : ''}`} />
+        <Stat label="Won / Lost" value={`${fmt(myStats.wins)} / ${fmt(myStats.losses)}`} />
+        <Stat label="Counted attacks" value={`${fmt(myStats.attempts)} / ${fmt(myStats.limit)}`} />
+        <Stat label="Winners" value={fmt(lucky.winner_count || 1)} />
+      </div>
+
+      <div style={S.luckyRuleBox}>
+        <strong>{rule}</strong>
+        <span>First {fmt(myStats.limit)} attacks per UTC day count for attack tickets. Total cap is {fmt(lucky.max_tickets || myStats.limit)} tickets/day.</span>
+        <span>A win gives a ticket; a defeat or surrender spends one of those first {fmt(myStats.limit)} attacks and gives 0 tickets.</span>
+        {metric === 'attack_wins_plus_volume' && (
+          <span>
+            Volume bonus: {volumeBonusText}
+            {myTickets.maxVolume > 0 ? `. ${fmtUsdWhole(Math.ceil(myTickets.maxVolume / myTickets.volumeTicketsPerStep) * myTickets.volumePerTicket)} volume reaches the +${fmt(myTickets.maxVolume)} cap.` : '.'}
+          </span>
+        )}
+        <span>Your counted score: {fmt(myStats.wins)} wins, {fmt(myStats.losses)} losses, {luckyTicketBreakdown(lucky)} tickets.</span>
+        {myStats.surrenders > 0 && <span>Your losses include {fmt(myStats.surrenders)} surrender{myStats.surrenders === 1 ? '' : 's'}.</span>}
+        {myRawOverflow && <span>Total today: {fmt(myStats.rawAttempts)} attacks / {fmt(myStats.rawWins)} wins. Extra attacks after #{fmt(myStats.limit)} do not add tickets.</span>}
+        <span>Draw runs at {lucky.draw_time_utc || '00:05'} UTC.</span>
+        {lucky.require_nft && <span>Requires Dragon or Demon King NFT.</span>}
+        {myReason && <span>Status: {myReason}</span>}
+      </div>
+
+      <div style={S.luckySectionTitle}>Today entries</div>
+      <div style={S.luckyList}>
+        {!entries.length && <div style={S.emptySmall}>No tickets yet today.</div>}
+        {entries.map((entry, idx) => (
+          <div key={entry.player_id || idx} style={S.luckyEntry}>
+            <div style={S.luckyRank}>{idx + 1}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={S.luckyEntryName}>{entry.name || shortWallet(entry.wallet) || 'Player'}</div>
+              <div style={S.luckyEntryMeta}>
+                {luckyEntryDetail(entry, lucky)}
+                {luckyReasonText(entry.reason) ? ` | ${luckyReasonText(entry.reason)}` : ''}
+              </div>
+              {Number(entry.raw_attack_attempts || 0) > Number(entry.attack_attempts || 0) && (
+                <div style={S.luckyEntrySubMeta}>
+                  Total today: {fmt(entry.raw_attack_attempts || 0)} attacks / {fmt(entry.raw_attack_wins || 0)} wins
+                </div>
+              )}
+              {metric === 'attack_wins_plus_volume' && (
+                <div style={S.luckyEntrySubMeta}>
+                  Tickets: {luckyTicketBreakdown(entry, lucky)}
+                </div>
+              )}
+            </div>
+            <div style={S.luckyTickets}>{fmt(entry.tickets || 0)} tickets</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={S.luckySectionTitle}>Draw history</div>
+      <div style={S.luckyList}>
+        {!history.length && <div style={S.emptySmall}>No completed draws yet.</div>}
+        {history.map((run) => (
+          <div key={run.day_utc} style={S.luckyHistoryRow}>
+            <div style={S.luckyHistoryDay}>{fmtDay(run.day_utc)}</div>
+            <div style={S.luckyHistoryMeta}>
+              {run.status} | {fmt(run.eligible_players || 0)} players | {fmt(run.total_tickets || 0)} tickets
+              {Array.isArray(run.winners) && run.winners.length > 0 && (
+                <div style={S.luckyHistoryWinners}>
+                  {run.winners.map((winner) => `#${winner.place || '?'} ${winner.name || 'Player'} (${fmt(winner.tickets || 0)})`).join(' | ')}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function TournamentPanel({ onClose }) {
   // Tab gate: 'active' (default) or 'history'. History shows ended
   // tournaments + their final leaderboards so a finished cup doesn't just
@@ -210,6 +502,12 @@ function TournamentPanel({ onClose }) {
     leave,
     updateRewardWallet,
   } = useTournament({ active: tab === 'active' });
+  const {
+    me: luckyMe,
+    loaded: luckyLoaded,
+    error: luckyError,
+    updateRewardWallet: updateLuckyRewardWallet,
+  } = useLuckyRaider({ active: tab === 'lucky' });
   const { items: history } = useTournamentHistory({ active: tab === 'history' });
   const player = usePlayer();
   const { dex } = useDex();
@@ -222,22 +520,24 @@ function TournamentPanel({ onClose }) {
     () => (history || []).find(t => t.id === pickedHistoryId) || null,
     [history, pickedHistoryId]
   );
-  const t = tab === 'history' ? historyTournament : liveTournament;
+  const luckyTournament = luckyMe?.tournament || null;
+  const t = tab === 'history' ? historyTournament : (tab === 'lucky' ? luckyTournament : liveTournament);
   const isHistory = tab === 'history' && !!historyTournament;
 
-  const joined = !!me?.joined;
-  const myStats = isHistory ? (historyTournament?.me || null) : (me?.me || null);
+  const joined = tab === 'lucky' ? !!luckyMe?.joined : !!me?.joined;
+  const myStats = isHistory ? (historyTournament?.me || null) : (tab === 'lucky' ? (luckyMe?.me || null) : (me?.me || null));
   const needsCopRewardWallet = !!t?.rewards_in_cop;
   const storedRewardWallet = String(myStats?.reward_wallet_evm || '').trim();
   const hasRewardWallet = needsCopRewardWallet
     ? SOLANA_WALLET_RE.test(storedRewardWallet)
     : !!storedRewardWallet;
   const canAddMissingRewardWallet = !isHistory && joined && needsCopRewardWallet && !hasRewardWallet;
+  const canSaveLuckyRewardWallet = tab === 'lucky' && !isHistory && !!t && needsCopRewardWallet && !hasRewardWallet;
   const phase = t?.phase || me?.phase || null;
   const preregistration = !isHistory && phase === 'preregistration';
   const live = !isHistory && phase === 'live';
   const canJoin = !isHistory && !!me?.can_join;
-  const { board } = useTournamentLeaderboard(t?.id, { active: !!t, pollMs: isHistory ? 60000 : 10000 });
+  const { board } = useTournamentLeaderboard(t?.id, { active: !!t && tab !== 'lucky', pollMs: isHistory ? 60000 : 10000 });
   const dailyActive = !!t && isDailyPoolTournament(t);
   const { daily } = useTournamentDailyPoints(t?.id, {
     active: dailyActive,
@@ -254,6 +554,7 @@ function TournamentPanel({ onClose }) {
   const [busy, setBusy] = useState(false);
   const [rewardWalletEvm, setRewardWalletEvm] = useState('');
   const activeInitialLoading = tab === 'active' && !tournamentLoaded && !me;
+  const luckyInitialLoading = tab === 'lucky' && !luckyLoaded && !luckyMe;
   const prizeProgress = useMemo(() => {
     if (!t) return null;
     const prizeState = board?.prize || {};
@@ -278,7 +579,23 @@ function TournamentPanel({ onClose }) {
   }, [board?.prize, t]);
   const activePrizeRewards = rewardPoolSummary(t?.prize_rewards || [], t?.prize_currency || 'USD');
   const nextPrizeRewards = rewardPoolSummary(t?.prize_next_tier?.rewards || [], t?.prize_currency || 'USD');
-
+  const myBoardRow = useMemo(() => {
+    if (!board || !playerId) return null;
+    return (board.leaderboard || []).find(r => r.player_id === playerId) || null;
+  }, [board, playerId]);
+  const megaSectors = useMemo(() => (
+    isMegaTournament(t) && Array.isArray(board?.mega?.sectors) ? board.mega.sectors : []
+  ), [board?.mega?.sectors, t]);
+  const activeRewardSchedule = useMemo(() => {
+    if (!t) return null;
+    if (isMegaTournament(t) && myBoardRow?.mega_sector_id) {
+      const sector = megaSectors.find((item) => item.id === myBoardRow.mega_sector_id);
+      if (sector?.reward_config && rewardScheduleHasContent(sector.reward_config)) {
+        return { schedule: sector.reward_config, sectorName: sector.name };
+      }
+    }
+    return { schedule: board?.reward_schedule || t.reward_schedule || t.reward_config || null, sectorName: null };
+  }, [board?.reward_schedule, megaSectors, myBoardRow?.mega_sector_id, t]);
   useEffect(() => {
     const stored = String(myStats?.reward_wallet_evm || '').trim();
     if (!stored) {
@@ -348,6 +665,18 @@ function TournamentPanel({ onClose }) {
     if (result && result.ok === false) alert(result.error || 'Could not save CLASH reward address');
     setBusy(false);
   };
+  const handleSaveLuckyRewardWallet = async () => {
+    if (!t || busy || !canSaveLuckyRewardWallet) return;
+    const rewardWallet = rewardWalletEvm.trim();
+    if (!SOLANA_WALLET_RE.test(rewardWallet)) {
+      alert('Enter a valid Solana address for CLASH rewards.');
+      return;
+    }
+    setBusy(true);
+    const result = await updateLuckyRewardWallet(t.id, rewardWallet);
+    if (result && result.ok === false) alert(result.error || 'Could not save CLASH reward address');
+    setBusy(false);
+  };
 
   return (
     <>
@@ -378,6 +707,10 @@ function TournamentPanel({ onClose }) {
             style={tab === 'history' ? S.tabActive : S.tab}
             onClick={() => setTab('history')}
           >History</button>
+          <button
+            style={tab === 'lucky' ? S.tabActive : S.tab}
+            onClick={() => { setTab('lucky'); setPickedHistoryId(null); }}
+          >Lucky</button>
         </div>
 
         <div
@@ -466,13 +799,61 @@ function TournamentPanel({ onClose }) {
             </button>
           )}
 
-          {t && (
+          {tab === 'lucky' && luckyInitialLoading && (
+            <div style={S.empty}>
+              <div style={S.emptyTitle}>Loading Lucky Raider...</div>
+              <div style={S.emptySub}>Checking today's tickets and draw history.</div>
+            </div>
+          )}
+
+          {tab === 'lucky' && !luckyInitialLoading && luckyError && !t && (
+            <div style={S.empty}>
+              <div style={S.emptyTitle}>Could not load Lucky Raider</div>
+              <div style={S.emptySub}>{luckyError}</div>
+            </div>
+          )}
+
+          {tab === 'lucky' && !luckyInitialLoading && !luckyError && !t && (
+            <div style={S.empty}>
+              <div style={S.emptyTitle}>No Lucky Raider running</div>
+              <div style={S.emptySub}>There is no standalone daily lucky raid draw right now.</div>
+            </div>
+          )}
+
+          {tab === 'lucky' && t && (
+            <>
+              {canSaveLuckyRewardWallet && (
+                <div style={S.rewardBox}>
+                  <div style={S.rewardLabel}>CLASH Solana reward address</div>
+                  <div style={S.rewardHelp}>Enter the Solana wallet where CLASH prize tokens should be sent. Lucky Raider registration needs this address before your tickets can be finalized for rewards.</div>
+                  <input
+                    style={S.rewardInput}
+                    value={rewardWalletEvm}
+                    onChange={(e) => setRewardWalletEvm(e.target.value)}
+                    placeholder="Solana wallet address"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                  />
+                  <button style={S.rewardSaveBtn} onClick={handleSaveLuckyRewardWallet} disabled={busy}>
+                    {busy ? 'SAVING...' : (joined ? 'SAVE ADDRESS' : 'REGISTER LUCKY RAIDER')}
+                  </button>
+                </div>
+              )}
+              <LuckyRaiderPanel
+                t={t}
+                schedule={luckyMe?.reward_schedule || t.reward_schedule || t.reward_config}
+              />
+            </>
+          )}
+
+          {tab !== 'lucky' && t && (
             <>
               <div style={S.tCard}>
                 <div style={S.tName}>{t.name}</div>
                 {t.description && <div style={S.tDesc}>{t.description}</div>}
                 <div style={S.tagRow}>
                   <span style={S.dexTag}>{dexLabel(t, dex)}</span>
+                  {isMegaTournament(t) && <span style={S.megaTag}>MEGA</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.teamTag}>DEX VS DEX</span>}
                   <span style={S.tag}>Sort: {sortLabel(t)}</span>
                   {isDailyPoolTournament(t) && <span style={S.prizeTag}>{fmt(t.daily_pool_points || 1000)} pts/day at 00:00 UTC</span>}
@@ -514,6 +895,45 @@ function TournamentPanel({ onClose }) {
                     <span>{fmtUsd(prizeProgress.currentVolume)} current</span>
                     <span>{fmtUsd(prizeProgress.nextVolume)} target</span>
                   </div>
+                </div>
+              )}
+
+              {activeRewardSchedule?.schedule && (
+                <RewardScheduleCard
+                  schedule={activeRewardSchedule.schedule}
+                  sectorName={activeRewardSchedule.sectorName}
+                  currency={t.prize_currency || 'USD'}
+                />
+              )}
+
+              {isMegaTournament(t) && megaSectors.length > 0 && (
+                <div style={S.sectorCard}>
+                  <div style={S.sectorHeader}>
+                    <span style={S.sectorTitle}>Mega sectors</span>
+                    {myBoardRow?.mega_sector_name && <span style={S.sectorMine}>You: {myBoardRow.mega_sector_name}</span>}
+                  </div>
+                  <div style={S.sectorGrid}>
+                    {megaSectors.filter((sector) => sector.id !== 'unqualified').map((sector) => {
+                      const mine = myBoardRow?.mega_sector_id === sector.id;
+                      return (
+                        <div key={sector.id} style={mine ? S.sectorTileActive : S.sectorTile}>
+                          <div style={S.sectorTileTop}>
+                            <strong>{sector.name}</strong>
+                            <span>{sector.summary?.players || 0} players</span>
+                          </div>
+                          <div style={S.sectorReq}>{sectorRequirementText(sector)}</div>
+                          <div style={S.sectorReq}>{(sector.dex_labels || []).slice(0, 4).join(', ') || 'All DEXes'}</div>
+                          <div style={S.sectorVolume}>{fmtUsdWhole(sector.summary?.total_volume_usd || 0)} sector vol</div>
+                          {(Number(sector.min_daily_volume_usd || 0) > 0 || Number(sector.summary?.daily_volume_usd || 0) > 0) && (
+                            <div style={S.sectorReq}>{fmtUsdWhole(sector.summary?.daily_volume_usd || 0)} today</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {myBoardRow?.dex_breakdown?.length > 0 && (
+                    <div style={S.dexBreakdownLine}>Your DEX volume: {dexBreakdownSummary(myBoardRow)}</div>
+                  )}
                 </div>
               )}
 
@@ -562,6 +982,8 @@ function TournamentPanel({ onClose }) {
                     {myRank && <span style={S.myCardRank}>#{myRank}</span>}
                   </div>
                   <div style={S.statRow}>
+                    {myBoardRow?.mega_sector_name && <Stat label="Sector" value={myBoardRow.mega_sector_name} />}
+                    {myBoardRow?.top_dex_label && <Stat label="Top DEX" value={myBoardRow.top_dex_label} />}
                     {isPointsSort(t.sort_by) && (
                       <Stat label="Score" value={`${fmtPoints(myStats.score)} pts`} />
                     )}
@@ -603,6 +1025,8 @@ function TournamentPanel({ onClose }) {
                     {myRank && <span style={S.myCardRank}>#{myRank}</span>}
                   </div>
                   <div style={S.statRow}>
+                    {myBoardRow?.mega_sector_name && <Stat label="Sector" value={myBoardRow.mega_sector_name} />}
+                    {myBoardRow?.top_dex_label && <Stat label="Top DEX" value={myBoardRow.top_dex_label} />}
                     {isPointsSort(t.sort_by) && (
                       <Stat label="Score" value={`${fmtPoints(myStats.score)} pts`} />
                     )}
@@ -644,6 +1068,16 @@ function TournamentPanel({ onClose }) {
               )}
 
               <div style={S.lbHeader}>Leaderboard</div>
+              {isMegaTournament(t) && megaSectors.length > 0 && (
+                <div style={S.lbGroupList}>
+                  {megaSectors.map((sector) => (
+                    <div key={sector.id} style={S.lbGroupHeader}>
+                      <span>{sector.name}</span>
+                      <small>{fmtUsdWhole(sector.summary?.total_volume_usd || 0)} vol · {sector.summary?.players || 0} players</small>
+                    </div>
+                  ))}
+                </div>
+              )}
               {t.mode === 'dex_vs_dex' && board?.teams?.teams?.length > 0 && (
                 <div style={S.teamBoard}>
                   {board.teams.teams.map((team) => (
@@ -671,6 +1105,7 @@ function TournamentPanel({ onClose }) {
                   const featuredDisplay = featuredMetric(sortKey, r);
                   const prizeAmount = Number(r.prize_amount || 0);
                   const rankRewards = rankRewardSummary(r.prize_rewards || [], r.prize_currency || t.prize_currency || 'USD');
+                  const topDex = shouldShowLeaderboardDexBadge(t) ? (r.top_dex_label || r.team_label || null) : null;
                   return (
                     <div
                       key={r.player_id}
@@ -692,9 +1127,11 @@ function TournamentPanel({ onClose }) {
                       <div style={S.info}>
                         <span style={{ ...S.name, color: isMe ? '#b45309' : '#5C3A21' }}>
                           {r.name || (r.wallet || '').slice(0, 6) + '…'}{isMe ? ' (you)' : ''}
+                          {topDex && <em style={S.topDexBadge}>{topDex}</em>}
                         </span>
                         <span style={S.subRow}>
                           {r.team_label && <>{r.team_label} | </>}
+                          {isMegaTournament(t) && r.mega_sector_name && <>{r.mega_sector_name} · </>}
                           {fmt(r.trophies)} 🏆 · {r.trades_count} trades · {fmtUsd(r.volume_usd)} vol
                           {rankRewards.length > 0 && <> · <strong style={S.prizeText}>{rankRewards.join(' + ')}</strong></>}
                           {!rankRewards.length && prizeAmount > 0 && <> · <strong style={S.prizeText}>{fmtPrize(prizeAmount)} prize</strong></>}
@@ -922,9 +1359,99 @@ const S = {
   },
   body: { flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', scrollbarWidth: 'none' },
   empty: { textAlign: 'center', padding: 28, color: '#a3906a', fontWeight: 700, fontSize: 13 },
+  emptySmall: { textAlign: 'center', padding: 14, color: '#a3906a', fontWeight: 800, fontSize: 12 },
   emptyIcon: { fontSize: 44, marginBottom: 6 },
   emptyTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21', marginBottom: 4 },
   emptySub: { fontSize: 12, color: '#a3906a', lineHeight: 1.5 },
+
+  luckyHero: {
+    background: 'linear-gradient(135deg, #fef3c7 0%, #fdf8e7 100%)',
+    border: '3px solid #f59e0b',
+    borderRadius: 14,
+    padding: 12,
+    display: 'flex',
+    gap: 10,
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  luckyKicker: {
+    fontSize: 10,
+    fontWeight: 900,
+    color: '#b45309',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  luckyTitle: { fontSize: 18, fontWeight: 900, color: '#5C3A21', marginTop: 2 },
+  luckySub: { fontSize: 12, fontWeight: 700, color: '#7c5a3a', lineHeight: 1.35, marginTop: 3 },
+  luckyPrize: {
+    fontSize: 12,
+    fontWeight: 900,
+    color: '#15803d',
+    background: '#dcfce7',
+    border: '2px solid #22c55e',
+    borderRadius: 10,
+    padding: '6px 8px',
+    textAlign: 'right',
+    maxWidth: 128,
+  },
+  luckyGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 },
+  luckyRuleBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    background: '#e8dfc8',
+    border: '3px solid #d4c8b0',
+    borderRadius: 14,
+    padding: 10,
+    color: '#7c5a3a',
+    fontSize: 12,
+    fontWeight: 800,
+    lineHeight: 1.35,
+  },
+  luckySectionTitle: {
+    fontSize: 12,
+    fontWeight: 900,
+    color: '#5C3A21',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginTop: 2,
+  },
+  luckyList: { display: 'flex', flexDirection: 'column', gap: 6 },
+  luckyEntry: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    background: '#fdf8e7',
+    border: '2px solid #d4c8b0',
+    borderRadius: 12,
+    padding: '8px 9px',
+  },
+  luckyRank: {
+    width: 24,
+    height: 24,
+    borderRadius: '50%',
+    background: '#f59e0b',
+    color: '#fff',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 12,
+    fontWeight: 900,
+    flexShrink: 0,
+  },
+  luckyEntryName: { fontSize: 13, fontWeight: 900, color: '#5C3A21', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  luckyEntryMeta: { fontSize: 10, fontWeight: 800, color: '#a3906a', marginTop: 2 },
+  luckyEntrySubMeta: { fontSize: 9, fontWeight: 800, color: '#7c5a3a', marginTop: 2, opacity: 0.85 },
+  luckyTickets: { fontSize: 12, fontWeight: 900, color: '#b45309', whiteSpace: 'nowrap' },
+  luckyHistoryRow: {
+    background: '#e8dfc8',
+    border: '2px solid #d4c8b0',
+    borderRadius: 12,
+    padding: 9,
+  },
+  luckyHistoryDay: { fontSize: 12, fontWeight: 900, color: '#5C3A21' },
+  luckyHistoryMeta: { fontSize: 11, fontWeight: 800, color: '#7c5a3a', lineHeight: 1.45, marginTop: 3 },
+  luckyHistoryWinners: { color: '#15803d', marginTop: 3 },
 
   tCard: {
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 14, padding: 12,
@@ -940,6 +1467,11 @@ const S = {
   teamTag: {
     fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
     background: '#fee2e2', border: '2px solid #ef4444', color: '#991b1b',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  megaTag: {
+    fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
+    background: '#ede9fe', border: '2px solid #8b5cf6', color: '#5b21b6',
     textTransform: 'uppercase', letterSpacing: 0.4,
   },
   tag: {
@@ -996,6 +1528,39 @@ const S = {
     display: 'flex', justifyContent: 'space-between', gap: 8,
     fontSize: 10, fontWeight: 800, color: '#7c5a3a',
   },
+  rewardScheduleCard: {
+    background: '#fdf8e7', border: '3px solid #d4c8b0', borderRadius: 14,
+    padding: 10, display: 'flex', flexDirection: 'column', gap: 6,
+  },
+  rewardScheduleHeader: {
+    display: 'flex', justifyContent: 'space-between', gap: 8,
+    fontSize: 12, fontWeight: 900, color: '#5C3A21',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  rewardScheduleLine: {
+    fontSize: 11, fontWeight: 900, color: '#5C3A21',
+    background: '#f7edd0', border: '2px solid #d4c8b0', borderRadius: 8,
+    padding: '5px 7px',
+  },
+  rewardScheduleLucky: {
+    fontSize: 10, fontWeight: 800, color: '#7c5a3a',
+    background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 8,
+    padding: '6px 7px', display: 'flex', flexDirection: 'column', gap: 3,
+  },
+  sectorCard: {
+    background: '#fdf8e7', border: '3px solid #d4c8b0', borderRadius: 14,
+    padding: 10, display: 'flex', flexDirection: 'column', gap: 8,
+  },
+  sectorHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  sectorTitle: { fontSize: 12, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase', letterSpacing: 0.5 },
+  sectorMine: { fontSize: 11, fontWeight: 900, color: '#15803d', background: '#dcfce7', border: '2px solid #22c55e', borderRadius: 8, padding: '3px 7px' },
+  sectorGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
+  sectorTile: { background: '#f7edd0', border: '2px solid #d4c8b0', borderRadius: 10, padding: 8 },
+  sectorTileActive: { background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 10, padding: 8 },
+  sectorTileTop: { display: 'flex', justifyContent: 'space-between', gap: 6, fontSize: 11, fontWeight: 900, color: '#5C3A21' },
+  sectorReq: { fontSize: 10, fontWeight: 800, color: '#7c5a3a', marginTop: 3 },
+  sectorVolume: { fontSize: 10, fontWeight: 900, color: '#15803d', marginTop: 4 },
+  dexBreakdownLine: { fontSize: 10, fontWeight: 800, color: '#7c5a3a' },
   teamBoard: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
   teamCard: {
     background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 10, padding: 8,
@@ -1006,11 +1571,19 @@ const S = {
   teamName: { fontSize: 11, fontWeight: 900, color: '#5C3A21' },
   teamMeta: { fontSize: 10, fontWeight: 800, color: '#7c5a3a', marginTop: 2 },
   teamPrize: { fontSize: 10, fontWeight: 900, color: '#15803d', marginTop: 3 },
+  lbGroupList: { display: 'flex', flexDirection: 'column', gap: 5 },
+  lbGroup: { display: 'flex', flexDirection: 'column', gap: 6 },
+  lbGroupHeader: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 9,
+    padding: '6px 8px', fontSize: 11, fontWeight: 900, color: '#5C3A21',
+  },
 
   rewardBox: {
     background: '#fef3c7', border: '3px solid #f59e0b', borderRadius: 14, padding: 10,
   },
   rewardLabel: { fontSize: 11, fontWeight: 900, color: '#7c5a3a', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
+  rewardHelp: { fontSize: 11, fontWeight: 700, color: '#7c5a3a', lineHeight: 1.35, marginBottom: 7 },
   rewardInput: {
     width: '100%', boxSizing: 'border-box', border: '2px solid #d4c8b0', borderRadius: 10,
     background: '#fdf8e7', color: '#5C3A21', fontSize: 12, fontWeight: 800,
@@ -1190,6 +1763,12 @@ const S = {
   },
   info: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 },
   name: { fontSize: 13, fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  topDexBadge: {
+    display: 'inline-block', marginLeft: 6, verticalAlign: 'middle',
+    fontSize: 9, fontStyle: 'normal', fontWeight: 900, color: '#075985',
+    background: '#e0f2fe', border: '1px solid #38bdf8', borderRadius: 6,
+    padding: '1px 5px', textTransform: 'uppercase',
+  },
   subRow: {
     display: 'block', fontSize: 10, fontWeight: 700, color: '#a3906a',
     lineHeight: 1.22, overflowWrap: 'anywhere',

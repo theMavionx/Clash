@@ -377,12 +377,12 @@ func _set_shop_unlocks(data: Dictionary) -> void:
 	if building_unlock_data is Dictionary:
 		var building_unlocks: Dictionary = building_unlock_data
 		for key in building_unlocks.keys():
-			next_unlocks[String(key)] = bool(building_unlocks.get(key, false))
+			next_unlocks[str(key)] = bool(building_unlocks.get(key, false))
 	var shop_entitlement_data: Variant = data.get("shop_entitlements", {})
 	if shop_entitlement_data is Dictionary:
 		var shop_entitlements: Dictionary = shop_entitlement_data
 		for key in shop_entitlements.keys():
-			next_unlocks[String(key)] = bool(shop_entitlements.get(key, false))
+			next_unlocks[str(key)] = bool(shop_entitlements.get(key, false))
 	var altar_data: Variant = data.get("altar", null)
 	if altar_data is Dictionary:
 		var altar_unlock: Dictionary = altar_data
@@ -399,7 +399,7 @@ func _has_required_purchase(building_id: String) -> bool:
 	var def: Dictionary = building_defs.get(building_id, {})
 	if not bool(def.get("requires_purchase", false)):
 		return true
-	var sku: String = String(def.get("shop_sku", building_id))
+	var sku: String = str(def.get("shop_sku", building_id))
 	return bool(shop_unlocks.get(building_id, false)) or bool(shop_unlocks.get(sku, false))
 
 func _can_upgrade_th() -> Dictionary:
@@ -719,6 +719,23 @@ func record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
 			battle_helper.record_replay_telemetry(kind, data)
 			return
 
+
+func record_troop_death_once(troop_name: String, troop_instance: int = 0, replay_order: int = -1) -> bool:
+	if _battle and _battle.has_method("record_troop_death_once"):
+		if _battle.record_troop_death_once(troop_name, troop_instance, replay_order):
+			return true
+	var systems: Array = _building_systems
+	if systems.is_empty() and is_inside_tree():
+		systems = get_tree().get_nodes_in_group("building_systems")
+	for bs_node in systems:
+		if not is_instance_valid(bs_node) or bs_node == self:
+			continue
+		var battle_helper: BSBattle = bs_node.get("_battle")
+		if battle_helper and battle_helper.has_method("record_troop_death_once"):
+			if battle_helper.record_troop_death_once(troop_name, troop_instance, replay_order):
+				return true
+	return false
+
 # ── Ship cannon (proxied to _cannon helper) ──────────────────
 var _ship_cannon_mode: bool:
 	get: return _cannon._ship_cannon_mode if _cannon else false
@@ -747,7 +764,7 @@ const SHIP_DISPLAY_SCALE: float = 0.05
 var barn_panel: PanelContainer
 var barn_vbox: VBoxContainer
 var troop_levels: Dictionary = {
-	"Knight": 1, "Mage": 1, "Archer": 1, "DemonKing": 1, "FireDragon": 1,
+	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1, "DemonKing": 1, "FireDragon": 1,
 }
 var troop_defs: Dictionary = {
 	"Knight": {
@@ -772,6 +789,17 @@ var troop_defs: Dictionary = {
 			4: {"gold": 1000, "ore": 1000},
 		}
 	},
+	"Barbarian": {
+		"display": "Berserk (Melee Bruiser)",
+		"model": "res://Model/Characters/Model/Barbarian.glb",
+		"script": "res://scripts/barbarian.gd",
+		"costs": {
+			1: {"gold": 175, "ore": 175},
+			2: {"gold": 175, "ore": 175},
+			3: {"gold": 350, "ore": 350},
+			4: {"gold": 700, "ore": 700},
+		}
+	},
 	"Archer": {
 		"display": "Archer (Sniper)",
 		"model": "res://Model/Characters/Model/Ranger.glb",
@@ -783,6 +811,17 @@ var troop_defs: Dictionary = {
 			4: {"gold": 700, "wood": 700},
 		}
 	},
+	"Ranger": {
+		"display": "Ranger (Crossbow)",
+		"model": "res://Model/Characters/Model/Rogue_Hooded.glb",
+		"script": "res://scripts/ranger.gd",
+		"costs": {
+			1: {"gold": 125, "wood": 125},
+			2: {"gold": 125, "wood": 125},
+			3: {"gold": 250, "wood": 250},
+			4: {"gold": 500, "wood": 500},
+		}
+	},
 	"DemonKing": {
 		"display": "Demon King (Heavy Boss)",
 		"model": "res://Model/Characters/Model/DemonKing_Body.fbx",
@@ -790,9 +829,10 @@ var troop_defs: Dictionary = {
 		"slot_cost": 2,                # eats two ship slots; trade-off for raw power
 		"buy_cost": 0,                 # NFT-backed; loading is free and reusable
 		"costs": {
-			1: {"gold": 0, "wood": 0, "ore": 0},
-			2: {"gold": 0, "wood": 0, "ore": 0},
-			3: {"gold": 0, "wood": 0, "ore": 0},
+			1: {"gold": 150, "ore": 125},
+			2: {"gold": 300, "ore": 250},
+			3: {"gold": 600, "ore": 500},
+			4: {"gold": 0, "wood": 0, "ore": 0},
 		}
 	},
 	"FireDragon": {
@@ -802,9 +842,10 @@ var troop_defs: Dictionary = {
 		"slot_cost": 2,
 		"buy_cost": 0,
 		"costs": {
-			1: {"gold": 0, "wood": 0, "ore": 0},
-			2: {"gold": 0, "wood": 0, "ore": 0},
-			3: {"gold": 0, "wood": 0, "ore": 0},
+			1: {"gold": 250, "ore": 250},
+			2: {"gold": 500, "ore": 500},
+			3: {"gold": 1000, "ore": 1000},
+			4: {"gold": 0, "wood": 0, "ore": 0},
 		}
 	},
 }
@@ -1054,9 +1095,9 @@ func _collect_building_resource(server_id: int) -> void:
 		return
 	var icon: Control = b.get("_collect_icon")
 	if is_instance_valid(icon):
-		_production._click_collect_icon(icon, b, String(def.get("produces", "gold")))
+		_production._click_collect_icon(icon, b, str(def.get("produces", "gold")))
 	else:
-		_production._collect_and_animate(b, String(def.get("produces", "gold")))
+		_production._collect_and_animate(b, str(def.get("produces", "gold")))
 
 
 func _apply_agent_place_building(payload: Dictionary) -> void:
@@ -1068,7 +1109,7 @@ func _apply_agent_place_building(payload: Dictionary) -> void:
 		if payload.has("resources"):
 			_apply_resources_from_server(payload.resources)
 		return
-	var building_id: String = String(building.get("type", ""))
+	var building_id: String = str(building.get("type", ""))
 	if not building_defs.has(building_id):
 		return
 	var gp := Vector2i(int(building.get("grid_x", 0)), int(building.get("grid_z", 0)))
@@ -1179,13 +1220,13 @@ func _apply_agent_reinforce_ships(payload: Dictionary) -> void:
 
 
 func _apply_agent_upgrade_troop(payload: Dictionary) -> void:
-	var raw_type: String = String(payload.get("troop_type", ""))
+	var raw_type: String = str(payload.get("troop_type", ""))
 	if raw_type == "":
 		return
 	var local_name: String = raw_type.capitalize()
 	for name in troop_levels.keys():
-		if String(name).to_lower() == raw_type.to_lower():
-			local_name = String(name)
+		if str(name).to_lower() == raw_type.to_lower():
+			local_name = str(name)
 			break
 	troop_levels[local_name] = int(payload.get("level", troop_levels.get(local_name, 1)))
 	if payload.has("resources"):
@@ -2115,24 +2156,24 @@ func _server_buildings_signature(server_buildings: Array) -> String:
 	var net = _net
 	var player_key := ""
 	if net:
-		player_key = "%s:%s" % [String(net.player_id), String(net.wallet)]
+		player_key = "%s:%s" % [str(net.player_id), str(net.wallet)]
 	var my_grid_index = _get_grid_index()
 	var parts: Array = []
 	for b in server_buildings:
 		if int(b.get("grid_index", 0)) != my_grid_index:
 			continue
 		parts.append("%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
-			String(b.get("id", "")),
-			String(b.get("type", "")),
-			String(b.get("level", 1)),
-			String(b.get("grid_x", 0)),
-			String(b.get("grid_z", 0)),
-			String(b.get("hp", "")),
-			String(b.get("max_hp", "")),
-			String(b.get("stored", "")),
-			String(b.get("has_ship", "")),
-			String(b.get("ship_troops", "")),
-			String(b.get("grid_index", 0)),
+			str(b.get("id", "")),
+			str(b.get("type", "")),
+			str(b.get("level", 1)),
+			str(b.get("grid_x", 0)),
+			str(b.get("grid_z", 0)),
+			str(b.get("hp", "")),
+			str(b.get("max_hp", "")),
+			str(b.get("stored", "")),
+			str(b.get("has_ship", "")),
+			str(b.get("ship_troops", "")),
+			str(b.get("grid_index", 0)),
 		])
 	parts.sort()
 	return "%s|%s" % [player_key, "|".join(PackedStringArray(parts))]
@@ -2459,6 +2500,10 @@ func _port_display_number_for_building(target: Dictionary) -> int:
 
 func _local_troop_name_from_server(troop_type: String) -> String:
 	match troop_type:
+		"barbarian":
+			return "Barbarian"
+		"ranger":
+			return "Ranger"
 		"demon_king", "demonking":
 			return "DemonKing"
 		"fire_dragon", "firedragon":
@@ -2477,8 +2522,12 @@ func _troop_entry_base_name(troop_name: String) -> String:
 			return "Knight"
 		"mage":
 			return "Mage"
+		"barbarian":
+			return "Barbarian"
 		"archer":
 			return "Archer"
+		"ranger":
+			return "Ranger"
 	return base
 
 
@@ -4437,7 +4486,7 @@ func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> v
 	if not test_mode:
 		return
 	var lvl: int = int(b.get("level", 1))
-	var building_id := String(b.get("id", ""))
+	var building_id := str(b.get("id", ""))
 	var node: Node3D = b.get("node", null)
 	if not is_instance_valid(node):
 		return
@@ -4598,6 +4647,8 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_exi
 		skel.global_position = tomb_pos + _tombstone_skeleton_offset(spawn_index, target_count)
 		skel.global_rotation = Vector3.ZERO
 		_apply_cel_shader(skel)
+		if skel.has_method("refresh_web_body_material_fallback"):
+			skel.refresh_web_body_material_fallback()
 		alive.append(skel)
 	# Reposition every guard to the current target_count layout so that an
 	# upgrade (e.g. L3 circle → L4 diamond) re-anchors existing skeletons
@@ -4983,7 +5034,7 @@ func _refresh_port_panel() -> void:
 			port_vbox.add_child(load_title)
 			var ship_free: int = ship_capacity - ship_troops.size()
 			for troop_name in troop_defs.keys():
-				if troop_name == "DemonKing":
+				if troop_name == "DemonKing" or troop_name == "FireDragon":
 					continue
 				var tlvl = troop_levels.get(troop_name, 0)
 				if tlvl < 1:
@@ -5381,17 +5432,15 @@ func _refresh_barn_panel() -> void:
 			vb.add_child(max_label)
 		else:
 			var next_lvl = lvl + 1
-			var costs = tdef.costs[next_lvl]
+			var costs = tdef.costs.get(lvl, tdef.costs.get(next_lvl, {}))
 			var cost_text = ""
-			if troop_name == "DemonKing":
-				var required_wins := 1000 if next_lvl == 2 else 10000
-				cost_text = "NFT upgrade + %s battle wins" % str(required_wins)
-			else:
-				for res_name in costs:
-					var res_display = res_name.capitalize()
-					if res_name == "ore":
-						res_display = "Ore"
-					cost_text += "%s: %d  " % [res_display, costs[res_name]]
+			for res_name in costs:
+				if int(costs[res_name]) <= 0:
+					continue
+				var res_display = res_name.capitalize()
+				if res_name == "ore":
+					res_display = "Ore"
+				cost_text += "%s: %d  " % [res_display, costs[res_name]]
 
 			var cost_label = Label.new()
 			cost_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
@@ -5401,7 +5450,7 @@ func _refresh_barn_panel() -> void:
 				cost_label.text = "Upgrade to LVL %d: %s" % [next_lvl, cost_text]
 			vb.add_child(cost_label)
 
-			var can_afford = true if troop_name == "DemonKing" else _can_afford(costs)
+			var can_afford = _can_afford(costs)
 			var btn = Button.new()
 			if lvl == 0:
 				btn.text = "Train"
@@ -5439,7 +5488,7 @@ func _refresh_barn_panel() -> void:
 		barn_vbox.add_child(no_ship_lbl)
 	else:
 		for troop_name in troop_defs.keys():
-			if troop_name == "DemonKing":
+			if troop_name == "DemonKing" or troop_name == "FireDragon":
 				continue
 			var lvl2 = troop_levels[troop_name]
 			if lvl2 < 1:
@@ -5549,15 +5598,10 @@ func _upgrade_troop(troop_name: String) -> void:
 		var result = await net.upgrade_troop(troop_name)
 		_server_busy = false
 		if result.has("error"):
-			if troop_name == "DemonKing" and bool(result.get("requires_nft_upgrade", false)):
+			if str(result.get("code", "")) == "NFT_TROOP_REQUIRED":
 				if _bridge:
-					_bridge.send_to_react("demon_king_upgrade_required", result)
-				_show_error("Upgrade Demon King NFT in Battle Shop first.")
-				return
-			if troop_name == "DemonKing" and str(result.get("code", "")) == "DEMON_KING_WINS_REQUIRED":
-				var wins = int(result.get("battle_wins", 0))
-				var required = int(result.get("required_wins", 0))
-				_show_error("Demon King needs %s / %s battle wins." % [str(wins), str(required)])
+					_bridge.send_to_react("nft_troop_required", result)
+				_show_error("Connect the required NFT before upgrading this troop.")
 				return
 			_show_error(str(result.error))
 			return
@@ -5648,7 +5692,9 @@ func _buy_troop(troop_name: String) -> void:
 	troop.set_script(script_res)
 	troop.name = "RecruitTroop_%d" % (randi() % 99999)
 	get_tree().current_scene.add_child(troop)
-	troop.scale = Vector3(0.1, 0.1, 0.1)
+	var recruit_scale := AttackSystem._scale_for_troop(troop_key, 0.1)
+	troop.set("_spawn_scale", recruit_scale)
+	troop.scale = Vector3(recruit_scale, recruit_scale, recruit_scale)
 	troop.global_position = spawn_pos
 	troop.global_position.y = grid_y
 	# Don't activate for combat — just walk to the ship
@@ -5660,6 +5706,7 @@ func _buy_troop(troop_name: String) -> void:
 ## buildings along the way. When it arrives, it disappears (boards the ship).
 func _walk_troop_to_ship(troop: Node3D, target_pos: Vector3) -> void:
 	target_pos.y = grid_y
+	var walk_scale: float = troop.scale.x
 	# Play run animation
 	if troop.has_method("activate"):
 		# BaseTroop — set to RUNNING manually without combat targeting
@@ -5705,7 +5752,7 @@ func _walk_troop_to_ship(troop: Node3D, target_pos: Vector3) -> void:
 			face_target.y = troop.global_position.y
 			troop.look_at(face_target, Vector3.UP)
 			troop.rotate_y(PI)
-		troop.scale = Vector3(0.1, 0.1, 0.1)
+		troop.scale = Vector3(walk_scale, walk_scale, walk_scale)
 		await get_tree().process_frame
 	# Troop was freed externally (e.g. scene change)
 	return

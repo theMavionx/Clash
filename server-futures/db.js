@@ -123,6 +123,17 @@ db.exec(`
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS gmtrade_pending_trade_reports (
+    signature       TEXT PRIMARY KEY,
+    player_id       TEXT NOT NULL,
+    wallet          TEXT NOT NULL,
+    body_json       TEXT NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    first_seen_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
 `);
 
 // ---------- Pre-statement migrations ----------
@@ -209,8 +220,8 @@ const stmts = {
   // partial index) silently drops instead of throwing. Prevents one
   // duplicate report from crashing the request handler.
   addTrade: db.prepare(`
-    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source, pnl, fee, proof_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source, pnl, fee, proof_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
   `),
   recordDecibelOrderProof: db.prepare(`
     INSERT OR IGNORE INTO decibel_order_proofs (
@@ -261,6 +272,40 @@ const stmts = {
        AND verified_source='worker'
        AND client_order_id=?
   `),
+  upgradeDecibelWorkerTradeByOrder: db.prepare(`
+    UPDATE trade_history
+       SET verified_source='decibel_fill',
+           proof_json=COALESCE(?, proof_json),
+           fee=COALESCE(?, fee)
+     WHERE dex='decibel'
+       AND verified_source='worker'
+       AND order_id=?
+  `),
+  upsertPendingGmtradeTradeReport: db.prepare(`
+    INSERT INTO gmtrade_pending_trade_reports
+      (signature, player_id, wallet, body_json, attempts, last_error, updated_at)
+    VALUES (?, ?, ?, ?, 0, NULL, datetime('now'))
+    ON CONFLICT(signature) DO UPDATE SET
+      player_id = excluded.player_id,
+      wallet = excluded.wallet,
+      body_json = excluded.body_json,
+      updated_at = datetime('now')
+  `),
+  listPendingGmtradeTradeReports: db.prepare(`
+    SELECT signature, player_id, wallet, body_json, attempts, last_error, first_seen_at, updated_at
+    FROM gmtrade_pending_trade_reports
+    WHERE player_id = ?
+    ORDER BY first_seen_at ASC
+    LIMIT ?
+  `),
+  markPendingGmtradeTradeReportAttempt: db.prepare(`
+    UPDATE gmtrade_pending_trade_reports
+    SET attempts = attempts + 1,
+        last_error = ?,
+        updated_at = datetime('now')
+    WHERE signature = ?
+  `),
+  deletePendingGmtradeTradeReport: db.prepare('DELETE FROM gmtrade_pending_trade_reports WHERE signature = ?'),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
 };
@@ -310,7 +355,7 @@ function getDeposits(playerId) {
 
 // ---------- Trade Functions ----------
 
-function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0, verifiedSource = 'server', pnl = null, fee = null, proofJson = null }) {
+function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0, verifiedSource = 'server', pnl = null, fee = null, proofJson = null, createdAt = null }) {
   const info = stmts.addTrade.run(
     playerId, symbol, side, orderType,
     amount, price || null,
@@ -318,7 +363,8 @@ function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, c
     status, dex, notional_usd, verifiedSource,
     pnl != null ? String(pnl) : null,
     fee != null ? String(fee) : null,
-    proofJson != null ? String(proofJson) : null
+    proofJson != null ? String(proofJson) : null,
+    createdAt != null ? String(createdAt) : null
   );
   return { id: info.changes ? info.lastInsertRowid : null, changes: info.changes };
 }
@@ -424,8 +470,51 @@ function upgradeDecibelWorkerTradeByClient({ clientOrderId, proofJson = null, fe
   return { changes: info.changes || 0 };
 }
 
+function upgradeDecibelWorkerTradeByOrder({ orderId, proofJson = null, fee = null } = {}) {
+  if (!orderId) return { changes: 0 };
+  const info = stmts.upgradeDecibelWorkerTradeByOrder.run(
+    proofJson == null ? null : String(proofJson),
+    fee == null ? null : String(fee),
+    String(orderId),
+  );
+  return { changes: info.changes || 0 };
+}
+
 function getTrades(playerId) {
   return stmts.getTrades.all(playerId);
+}
+
+function upsertPendingGmtradeTradeReport({ playerId, wallet, signature, body }) {
+  if (!playerId || !wallet || !signature) return { changes: 0 };
+  const safeBody = body && typeof body === 'object' ? body : {};
+  const info = stmts.upsertPendingGmtradeTradeReport.run(
+    String(signature),
+    String(playerId),
+    String(wallet),
+    JSON.stringify(safeBody),
+  );
+  return { changes: info.changes || 0 };
+}
+
+function listPendingGmtradeTradeReports(playerId, limit = 25) {
+  if (!playerId) return [];
+  const n = Math.max(1, Math.min(100, Number(limit) || 25));
+  return stmts.listPendingGmtradeTradeReports.all(String(playerId), n);
+}
+
+function markPendingGmtradeTradeReportAttempt(signature, error = null) {
+  if (!signature) return { changes: 0 };
+  const info = stmts.markPendingGmtradeTradeReportAttempt.run(
+    error == null ? null : String(error).slice(0, 500),
+    String(signature),
+  );
+  return { changes: info.changes || 0 };
+}
+
+function deletePendingGmtradeTradeReport(signature) {
+  if (!signature) return { changes: 0 };
+  const info = stmts.deletePendingGmtradeTradeReport.run(String(signature));
+  return { changes: info.changes || 0 };
 }
 
 // ---------- Exports ----------
@@ -439,9 +528,14 @@ module.exports = {
   getDeposits,
   addTrade,
   getTrades,
+  upsertPendingGmtradeTradeReport,
+  listPendingGmtradeTradeReports,
+  markPendingGmtradeTradeReportAttempt,
+  deletePendingGmtradeTradeReport,
   recordDecibelOrderProof,
   getDecibelOrderProof,
   upgradeDecibelWorkerTradeByClient,
+  upgradeDecibelWorkerTradeByOrder,
 };
 
 // One-time encryption migration: any row where secret_key doesn't start with

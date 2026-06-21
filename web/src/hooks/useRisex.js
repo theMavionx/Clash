@@ -3,6 +3,7 @@ import { formatUnits, parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   RISE_CHAIN_ID,
   RISEX_BRIDGE_CHAIN_BY_ID,
@@ -30,7 +31,7 @@ import {
   risexErrorMessage,
 } from '../lib/risexClient';
 
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 45_000;
 const CLAIM_LOOKBACK_ATTEMPTS = 5;
 
 function parseChainId(value) {
@@ -109,10 +110,10 @@ export function useRisex() {
   const claimGoldRef = useRef(null);
   const importFillsRef = useRef(null);
 
-  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
+  const registeredWallet = registeredDexWallet(player, 'risex', 'evm');
   const registeredEvmWallet = isRisexAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
-  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
+  const walletMismatch = false;
 
   const token = useMemo(() => (
     (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null
@@ -495,8 +496,20 @@ export function useRisex() {
       }
     };
     tick();
-    const iv = setInterval(tick, POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      tick();
+    }, POLL_INTERVAL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') tick();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(iv);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex, walletAddr, fetchPrices, fetchAccount, refreshSignerStatus]);
 
   const activate = useCallback(async (opts = {}) => {
@@ -698,7 +711,10 @@ export function useRisex() {
       await claimGoldRef.current?.({ reason: 'poll' });
     };
     const kickoff = setTimeout(fire, 3000);
-    const iv = setInterval(fire, 30_000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [walletAddr, isActiveDex]);
 

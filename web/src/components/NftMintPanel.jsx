@@ -20,7 +20,7 @@ import { INK_CHAIN_ID, ensureInkChain, inkChain } from '../lib/nadoConfig';
 import { fetchGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
-import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, resolveDemonKingConnectedSyncTarget, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
+import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
@@ -295,6 +295,10 @@ function clampQuantity(value, max = MAX_BATCH_QUANTITY) {
   return Math.max(1, Math.min(hardMax, count));
 }
 
+function pause(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function multiplyRewards(rewards, quantity) {
   if (!rewards) return null;
   const count = clampQuantity(quantity);
@@ -554,7 +558,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const [chainPickerOpen, setChainPickerOpen] = useState(false);
   // Top-level view inside the shop modal. 'shop' shows the NFT/Resources
   // tabs; 'bridge' replaces the body with the cross-chain bridge UI.
-  const [view, setView] = useState(initialView === 'upgrade' ? 'upgrade' : 'shop');
+  const [view, setView] = useState(initialView === 'bridge' ? 'bridge' : 'shop');
   const [evmModalOpen, setEvmModalOpen] = useState(false);
   const [evmModalTargetOverride, setEvmModalTargetOverride] = useState(null);
   const [nftEvmWallet, setNftEvmWallet] = useState(null);
@@ -619,13 +623,12 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     aptos:    !!gameShopConfig?.aptos?.ready    && !!gameShopConfig?.aptos?.saleActive,
   };
   const shopChainReady = !!shopReadiness[shopChain];
-  const demonKingSyncTarget = useMemo(() => resolveDemonKingConnectedSyncTarget({
-    dex,
+  const demonKingSyncTarget = useMemo(() => resolveDemonKingPlayerInventorySyncTarget({
+    player,
     evmAddress,
-    evmChainId,
     solAddress,
     aptosAddress,
-  }), [aptosAddress, dex, evmAddress, evmChainId, solAddress]);
+  }), [aptosAddress, evmAddress, player, solAddress]);
   // Multi-token chains (Solana, Aptos) expose a sub-toggle. EVM-USDC-only
   // chains don't need one. Default to USDC on multi-token chains since
   // most players already have it from the trading flow.
@@ -1271,7 +1274,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               </button>
             ) : <span style={styles.headerSpacer} />}
             <span style={styles.title}>
-              {view === 'bridge' ? 'Bridge NFT' : view === 'upgrade' ? 'Upgrade Demon King' : 'Battle Shop'}
+              {view === 'bridge' ? 'Bridge NFT' : 'Battle Shop'}
             </span>
             <button style={styles.closeBtn} onClick={onClose} aria-label="Close">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
@@ -1288,28 +1291,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               ...(marketplaceFullScroll ? styles.bodyMarketplaceScroll : null),
             }}
           >
-            {view === 'upgrade' ? (
-              <DemonKingUpgradePanel
-                initialRequest={initialUpgradeRequest}
-                dex={dex}
-                evmWallet={evmWallet}
-                evmAddress={evmAddress}
-                solWallet={solWallet}
-                solAddress={solAddress}
-                aptosWallet={aptosWallet}
-                aptosAddress={aptosAddress}
-                evmChainId={evmChainId}
-                onOpenEvmModal={() => setEvmModalOpen(true)}
-                onConnectSolana={handleSolanaReady}
-                onConnectAptos={() => {
-                  try { aptosWallet?.connect?.(); } catch { /* user-cancel */ }
-                }}
-                setNotice={setNotice}
-                setBusy={setBusy}
-                busy={busy}
-                onClose={onClose}
-              />
-            ) : view === 'bridge' ? (
+            {view === 'bridge' ? (
               <NftBridgePanel
                 styles={styles}
                 evmWallet={evmWallet}
@@ -1372,14 +1354,6 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   <path d="M17 17H5l3 3" />
                 </svg>
                 <span>Bridge</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => { setView('upgrade'); setNotice(null); }}
-                style={styles.bridgeMiniBtn}
-                title="Upgrade Demon King NFT"
-              >
-                <span>Upgrade</span>
               </button>
             </div>
             {chainPickerOpen && (
@@ -2935,6 +2909,15 @@ async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotic
         tx: result.signature,
         asset: result.asset,
       });
+      void refreshMintConfig?.({ log: false });
+      if (i < count - 1) {
+        setMintResult?.({
+          quantity: count,
+          progressText: `Minted ${i + 1} of ${count}. Preparing next wallet approval...`,
+          minted: i + 1,
+        });
+        await pause(1200);
+      }
     }
     const result = minted[minted.length - 1] || {};
     setMintResult?.({

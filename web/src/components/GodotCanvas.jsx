@@ -37,6 +37,8 @@ const GODOT_STAGE2_HOLD_PROGRESS = 96;
 const GODOT_STAGE2_MIN_MS = 1100;
 const GODOT_LOADED_HIDE_DELAY_MS = 120;
 const GODOT_ENGINE_READY_EASE_MS = 250;
+const GODOT_UI_READY_FALLBACK_MS = 2500;
+const GODOT_ENGINE_READY_FALLBACK_MS = 8000;
 const LOADING_CLOCK_INTERVAL_MS = 250;
 const MAIN_THREAD_BLOCK_LOG_THRESHOLD_MS = 900;
 const VALIDATE_GODOT_FETCHES = false;
@@ -589,14 +591,15 @@ async function fetchGodotRuntimeAsset(boundFetch, rawUrl, input, init) {
     if (response) {
       reportGodotAssetEvent('godot.asset_query_failed', bustedUrl, response, {
         asset: godotAssetName(cleanUrl),
-        fallback_url: cleanUrl,
       });
     }
+    const retryUrl = new URL(bustedUrl);
+    retryUrl.searchParams.set('retry', String(Date.now()));
     const fallbackStarted = performance.now();
-    const fallbackResponse = await boundFetch(cleanUrl, { ...(init || {}), cache: 'reload' });
+    const fallbackResponse = await boundFetch(retryUrl.href, { ...(init || {}), cache: 'reload' });
     reportGodotAssetEvent(
-      fallbackResponse.ok ? 'godot.asset_fallback_ok' : 'godot.asset_fallback_failed',
-      cleanUrl,
+      fallbackResponse.ok ? 'godot.asset_retry_ok' : 'godot.asset_retry_failed',
+      retryUrl.href,
       fallbackResponse,
       {
         asset: godotAssetName(cleanUrl),
@@ -751,16 +754,17 @@ function loadGodotEngineScript() {
     script.dataset.clashGodotScript = 'true';
     const cleanSrc = `${GODOT_FILES}/Work.js`;
     const bustedSrc = `${cleanSrc}${CACHE_BUST}`;
-    let triedFallback = false;
+    let triedRetry = false;
     script.src = bustedSrc;
     script.onload = resolve;
     script.onerror = () => {
-      if (!triedFallback) {
-        triedFallback = true;
+      if (!triedRetry) {
+        triedRetry = true;
+        const retrySrc = `${bustedSrc}&retry=${encodeURIComponent(Date.now())}`;
         reportGodotAssetError('godot.script_query_failed', bustedSrc, new Error('script load error'), {
-          fallback_url: cleanSrc,
+          retry_url: retrySrc,
         });
-        script.src = cleanSrc;
+        script.src = retrySrc;
         return;
       }
       window.__clashGodotScriptPromise = null;
@@ -992,6 +996,8 @@ function GodotCanvas({ onEngineReady }) {
     let progressRafId = null;
     let loadedTimeoutId = null;
     let stage2DelayId = null;
+    let engineReadyFallbackId = null;
+    let uiReadyFallbackId = null;
     let titleGuardId = null;
     let loadingClockId = null;
     let lastProgressBucket = -1;
@@ -1014,6 +1020,7 @@ function GodotCanvas({ onEngineReady }) {
     let activeLoadingPhaseStartedAt = loaderStartedAt;
     let lastConsoleLoadingPhase = '';
     let lastConsoleLoadingAt = 0;
+    let completeLoadingFromRuntimeReady = null;
 
     const updateLoadingDetailWithSeconds = () => {
       if (disposed) return;
@@ -1171,6 +1178,28 @@ function GodotCanvas({ onEngineReady }) {
     window.addEventListener('error', errHandler);
     window.addEventListener('unhandledrejection', rejectionHandler);
 
+    const godotUiReadyHandler = (event) => {
+      if (disposed || isLoadedStateRef.current) return;
+      const detail = event?.detail || {};
+      if (uiReadyFallbackId) clearTimeout(uiReadyFallbackId);
+      uiReadyFallbackId = window.setTimeout(() => {
+        completeLoadingFromRuntimeReady?.('ui_ready', {
+          ui_ready_reason: detail.reason || null,
+          ui_ready_action: detail.action || null,
+        });
+      }, GODOT_UI_READY_FALLBACK_MS);
+    };
+    const visibilityResumeHandler = () => {
+      if (disposed || isLoadedStateRef.current || document.hidden) return;
+      completeLoadingFromRuntimeReady?.('visibility_resume', {
+        hidden: false,
+        stage_progress: stageProgressStateRef.current,
+        last_progress: lastProgressRef.current.value || 0,
+      });
+    };
+    window.addEventListener('clash-godot-ui-ready', godotUiReadyHandler);
+    document.addEventListener('visibilitychange', visibilityResumeHandler);
+
     const startGodot = () => {
       if (disposed) return;
       const GODOT = window.Engine || window.Godot;
@@ -1252,7 +1281,40 @@ function GodotCanvas({ onEngineReady }) {
       // buildings loaded — we hold at 99% until the signal.
       let stage2StartTime = null;
       let stage2BuildingsDone = false;
+      let stage2ReadyReason = null;
       let engineReadyDone = false;
+      const finishStage2Now = (reason = 'stage2_complete') => {
+        if (disposed || isLoadedStateRef.current) return;
+        stage2BuildingsDone = true;
+        stage2ReadyReason = reason;
+        if (stage2RafId) {
+          cancelAnimationFrame(stage2RafId);
+          stage2RafId = null;
+        }
+        if (progressRafId) {
+          cancelAnimationFrame(progressRafId);
+          progressRafId = null;
+        }
+        if (easeRafId) {
+          cancelAnimationFrame(easeRafId);
+          easeRafId = null;
+        }
+        if (engineReadyFallbackId) {
+          clearTimeout(engineReadyFallbackId);
+          engineReadyFallbackId = null;
+        }
+        if (uiReadyFallbackId) {
+          clearTimeout(uiReadyFallbackId);
+          uiReadyFallbackId = null;
+        }
+        recordLoadingEvent('stage2_complete', {
+          reason,
+          progress_before: lastProgressRef.current.value || 0,
+        });
+        setStage(2);
+        setProgressValue(100);
+        finishLoadingOverlay();
+      };
       const tickStage2 = () => {
         if (disposed || stage2StartTime == null) return;
         const elapsed = Date.now() - stage2StartTime;
@@ -1261,7 +1323,7 @@ function GodotCanvas({ onEngineReady }) {
         const value = GODOT_DOWNLOAD_PROGRESS_WEIGHT + ((target - GODOT_DOWNLOAD_PROGRESS_WEIGHT) * t);
         setProgressValue(value);
         if (stage2BuildingsDone && value >= 100) {
-          finishLoadingOverlay();
+          finishStage2Now(stage2ReadyReason || 'stage2_ramp_complete');
           stage2RafId = null;
           return;
         }
@@ -1278,6 +1340,32 @@ function GodotCanvas({ onEngineReady }) {
         setStage(2);
         setProgressValue(GODOT_DOWNLOAD_PROGRESS_WEIGHT);
         stage2RafId = requestAnimationFrame(tickStage2);
+      };
+
+      completeLoadingFromRuntimeReady = (reason, meta = {}) => {
+        if (disposed || isLoadedStateRef.current || !engineReadyDone) return;
+        if (stage2BuildingsDone && reason !== 'visibility_resume') return;
+        stage2BuildingsDone = true;
+        if (stage2RafId) {
+          cancelAnimationFrame(stage2RafId);
+          stage2RafId = null;
+        }
+        if (engineReadyFallbackId) {
+          clearTimeout(engineReadyFallbackId);
+          engineReadyFallbackId = null;
+        }
+        if (uiReadyFallbackId) {
+          clearTimeout(uiReadyFallbackId);
+          uiReadyFallbackId = null;
+        }
+        const payload = recordLoadingEvent('stage2_complete_without_home_ready', {
+          reason,
+          visibility_state: document.visibilityState || null,
+          progress_before: lastProgressRef.current.value || 0,
+          ...meta,
+        });
+        addClientBreadcrumb('godot.stage2_complete_without_home_ready', payload, 'warning');
+        finishStage2Now(reason || 'runtime_ready');
       };
 
       const handleProgress = (current, total) => {
@@ -1308,6 +1396,25 @@ function GodotCanvas({ onEngineReady }) {
 
       // Godot's stage-2 signals are noisy and fire BEFORE startGame resolves,
       // so we don't use them to drive progress — only log for diagnostics.
+      const completeStage2FromGodot = (reason = 'godot_ready_signal') => {
+        if (disposed) return;
+        if (stage2BuildingsDone && isLoadedStateRef.current) return;
+        addClientBreadcrumb('godot.stage2_complete', { reason });
+        stage2BuildingsDone = true;
+        stage2ReadyReason = reason;
+        if (engineReadyFallbackId) {
+          clearTimeout(engineReadyFallbackId);
+          engineReadyFallbackId = null;
+        }
+        if (uiReadyFallbackId) {
+          clearTimeout(uiReadyFallbackId);
+          uiReadyFallbackId = null;
+        }
+        setStage(2);
+        if (!engineReadyDone) return;
+        finishStage2Now(reason);
+      };
+
       const godotLoadingProgress = (rawPct, phase = 'godot', meta = {}) => {
         const pct = mapGodotLoadingProgress(rawPct, phase);
         if (!Number.isFinite(pct)) return;
@@ -1330,18 +1437,15 @@ function GodotCanvas({ onEngineReady }) {
           progressTarget >= 100 && engineReadyDone ? finishLoadingOverlay : null
         );
         addClientBreadcrumb('godot.loading_phase', payload);
+        if (phase === 'home_ready' || phase === 'ready') {
+          completeStage2FromGodot(phase);
+        }
       };
       window.godotLoadingProgress = godotLoadingProgress;
 
       // Godot signals all buildings placed — mark done; ramp will finish to 100.
       const godotBuildingsLoaded = () => {
-        if (disposed) return;
-        if (stage2BuildingsDone) return;
-        addClientBreadcrumb('godot.stage2_complete');
-        stage2BuildingsDone = true;
-        setStage(2);
-        if (!engineReadyDone) return;
-        animateStageProgress(100, 520, finishLoadingOverlay);
+        completeStage2FromGodot('godotBuildingsLoaded');
       };
       window.godotBuildingsLoaded = godotBuildingsLoaded;
 
@@ -1377,6 +1481,12 @@ function GodotCanvas({ onEngineReady }) {
         setLoadingDetail(loadingPhaseLabel('engine_ready'));
         recordLoadingEvent('engine_ready');
         engineReadyDone = true;
+        if (engineReadyFallbackId) clearTimeout(engineReadyFallbackId);
+        engineReadyFallbackId = window.setTimeout(() => {
+          completeLoadingFromRuntimeReady?.('engine_ready_timeout', {
+            timeout_ms: GODOT_ENGINE_READY_FALLBACK_MS,
+          });
+        }, GODOT_ENGINE_READY_FALLBACK_MS);
         if (restoreGodotFetch) {
           restoreGodotFetch();
           restoreGodotFetch = null;
@@ -1396,7 +1506,7 @@ function GodotCanvas({ onEngineReady }) {
             setStage(2);
             setProgressValue(GODOT_DOWNLOAD_PROGRESS_WEIGHT);
             if (stage2BuildingsDone) {
-              animateStageProgress(100, 520, finishLoadingOverlay);
+              finishStage2Now(stage2ReadyReason || 'engine_ready_after_home_ready');
             } else {
               stage2DelayId = setTimeout(() => startStage2(), 120);
             }
@@ -1462,6 +1572,8 @@ function GodotCanvas({ onEngineReady }) {
       loadedRef.current = false;
       window.removeEventListener('error', errHandler);
       window.removeEventListener('unhandledrejection', rejectionHandler);
+      window.removeEventListener('clash-godot-ui-ready', godotUiReadyHandler);
+      document.removeEventListener('visibilitychange', visibilityResumeHandler);
       window.removeEventListener('pointerdown', webClickHandler, { capture: true });
       contextCanvas?.removeEventListener('webglcontextlost', handleWebglContextLost, false);
       contextCanvas?.removeEventListener('webglcontextrestored', handleWebglContextRestored, false);
@@ -1471,6 +1583,8 @@ function GodotCanvas({ onEngineReady }) {
       if (progressRafId) cancelAnimationFrame(progressRafId);
       if (loadedTimeoutId) clearTimeout(loadedTimeoutId);
       if (stage2DelayId) clearTimeout(stage2DelayId);
+      if (engineReadyFallbackId) clearTimeout(engineReadyFallbackId);
+      if (uiReadyFallbackId) clearTimeout(uiReadyFallbackId);
       if (titleGuardId) clearInterval(titleGuardId);
       if (loadingClockId) clearInterval(loadingClockId);
       if (window.godotLoadingProgress) window.godotLoadingProgress = null;

@@ -47,5 +47,8 @@
   "bridgeFeeTxHash": "0x4a3de2f6051f2b02294d91b7d9a36756f58f19f1899d05e1dc736ba52da15c26",
   "bridgeFeeUpdatedAt": "2026-05-16T16:13:29.509Z",
   "currentMaxSupply": "250",
-  "currentMaxSupplyCheckedAt": "2026-05-19T09:45:18.062Z"
+  "currentMaxSupplyCheckedAt": "2026-05-19T09:45:18.062Z",
+  "baseTokenUri": "https://clashofperps.fun/api/nft/revealed/base-v20260611/",
+  "baseUriTxHash": "0x17b9a8361fc74df9047ac6a9075d23141a6638ae5bf0aedc14071be4b1a8fe29",
+  "baseUriUpdatedAt": "2026-06-10T21:21:19.492Z"
 }

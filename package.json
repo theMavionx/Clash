@@ -10,7 +10,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:mcp-sim": "node tools/ai-agent-mcp-simulation.mjs",
-    "pvp:balance": "node tools/pvp-balance/run.js"
+    "pvp:balance": "node tools/pvp-balance/run.js",
+    "watch:backends": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/watch-backends.ps1",
+    "dev:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/watch-backends.ps1 -WithWeb"
   },
   "repository": {
     "type": "git",

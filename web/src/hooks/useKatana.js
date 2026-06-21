@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
@@ -15,7 +15,6 @@ import {
 const FUTURES_API = '/api/futures';
 const STORAGE_KEY = 'clash_katana_credentials_v1';
 const ONE_TAP_SIGNER_STORAGE_KEY = 'clash_katana_one_tap_signer_v1';
-const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 
 function logKatana(label, payload = undefined) {
   if (typeof window === 'undefined' || window.__CLASH_DEBUG_KATANA !== true) return;
@@ -214,14 +213,10 @@ export function useKatana() {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [goldEarned, setGoldEarned] = useState(null);
   const initialRefreshDoneRef = useRef(false);
 
-  const walletMismatch = useMemo(() => {
-    const registered = normalizeAddress(player?.wallet);
-    const live = normalizeAddress(walletAddr);
-    const registeredEvm = EVM_WALLET_RE.test(registered) ? registered : '';
-    return !!registeredEvm && !!live && registeredEvm !== live;
-  }, [player?.wallet, walletAddr]);
+  const walletMismatch = false;
 
   useEffect(() => {
     if (!isActiveDex) return;
@@ -452,8 +447,20 @@ export function useKatana() {
   useEffect(() => {
     if (!isActiveDex) return;
     refresh();
-    const timer = setInterval(refresh, 15_000);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      refresh();
+    }, 60_000);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') refresh();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(timer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex, refresh]);
 
   const connectKatana = useCallback(async () => {
@@ -587,6 +594,52 @@ export function useKatana() {
     }
   }, [authorizeOneTapSigner]);
 
+  const claimGold = useCallback(async ({ reason = 'katana' } = {}) => {
+    if (!token) return disabled('Missing game session token.');
+    if (!credentials?.apiKey || !credentials?.apiSecret || !credentials?.wallet) {
+      return disabled('Missing Katana credentials.');
+    }
+    try {
+      await fetchJson(`${FUTURES_API}/katana/import-fills`, {
+        method: 'POST',
+        headers: authHeaders(token, credentials),
+        body: JSON.stringify({ wallet: credentials.wallet, limit: 100 }),
+      }).catch((e) => {
+        logKatana('import fills before claim failed', { reason, message: e?.message, status: e?.status });
+        return null;
+      });
+      const res = await fetch('/api/trading/claim-gold', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token, credentials),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ dex: 'katana', wallet: credentials.wallet }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (Number(data?.gold || 0) > 0) {
+        setGoldEarned({
+          amount: data.gold,
+          reason: data.reason || 'Trading rewards',
+          ...data,
+        });
+        if (window.onGodotMessage) {
+          window.onGodotMessage({ action: 'resources_add', data: { gold: data.gold, wood: 0, ore: 0 } });
+        }
+      }
+      try {
+        window.dispatchEvent(new CustomEvent('clash:trading-reward-claimed', {
+          detail: { dex: 'katana', gold: Number(data?.gold || 0), reason },
+        }));
+      } catch {}
+      logKatana('claim-gold result', { reason, status: res.status, gold: data?.gold || 0, detail: data?.reason || data?.error || null });
+      return data;
+    } catch (e) {
+      logKatana('claim-gold failed', { reason, message: e?.message || String(e) });
+      return { error: e?.message || 'Katana gold claim failed' };
+    }
+  }, [credentials, token]);
+
   const signedRequest = useCallback(async (preparePath, submitPath, payload) => {
     if (!token) return disabled('Missing game session token.');
     if (!walletAddr) return disabled('Connect a Katana wallet first.');
@@ -594,6 +647,7 @@ export function useKatana() {
     if (!localStatus.has_credentials) {
       return disabled(`Missing Katana credentials: ${localStatus.missing_fields.join(', ') || 'api_key, api_secret'}`);
     }
+    setLoading(true);
     try {
       const signer = oneTapAuthorized ? oneTapSignerRef.current : null;
       const delegatedKey = signer?.address || '';
@@ -640,12 +694,18 @@ export function useKatana() {
       });
       logKatana('signed request submit result', result);
       await refresh();
+      if (submitPath === '/katana/orders/submit') {
+        window.setTimeout(() => claimGold({ reason: 'order_submit' }).catch(() => null), 2000);
+        window.setTimeout(() => claimGold({ reason: 'order_submit_settle' }).catch(() => null), 7000);
+      }
       return result;
     } catch (e) {
       logKatana('signed request failed', { status: e?.status, message: e?.message, data: e?.data, payload });
       return { error: e?.message || 'Katana signed request failed' };
+    } finally {
+      setLoading(false);
     }
-  }, [credentials, oneTapAuthorized, refresh, signKatanaTypedData, signKatanaTypedDataWithAgent, token, walletAddr]);
+  }, [claimGold, credentials, oneTapAuthorized, refresh, signKatanaTypedData, signKatanaTypedDataWithAgent, token, walletAddr]);
 
   const placeOrder = useCallback((payload) => {
     return signedRequest('/katana/orders/prepare', '/katana/orders/submit', payload);
@@ -861,6 +921,8 @@ export function useKatana() {
     cancelOrder,
     closePosition,
     setTpsl,
-    claimGold: async () => disabled('Katana reward claiming is handled by verified trade import.'),
+    claimGold,
+    goldEarned,
+    clearGoldEarned: () => setGoldEarned(null),
   };
 }

@@ -5,7 +5,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -13,8 +13,12 @@ import stoneIcon from '../assets/resources/stone_bar.png';
 
 import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
+import arbaletImg from '../assets/units/arbalet.png';
 import archerImg from '../assets/units/archer.png';
+import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
+
+const dragonImg = '/cdn/nft/dragon/1/default.jpg';
 
 // Module-level CSS — injected once, not re-parsed on every render
 const UPGRADE_ANIM_CSS = `
@@ -49,14 +53,20 @@ const UNIT_IMAGES = {
   Knight: knightImg,
   Mage: mageImg,
   Archer: archerImg,
+  Ranger: arbaletImg,
+  Barbarian: berserkImg,
   DemonKing: demonKingImg,
+  FireDragon: dragonImg,
 };
 
 const CARD_TROOP_STYLE_MAP = {
   Knight: { scale: 1.8, offsetY: '35%' },
   Mage: { scale: 1.85, offsetY: '45%' },
+  Barbarian: { scale: 1.25, offsetY: '15%' },
   Archer: { scale: 1.25, offsetY: '15%' },
+  Ranger: { scale: 1.25, offsetY: '15%' },
   DemonKing: { scale: 1.35, offsetY: '10%' },
+  FireDragon: { scale: 1.2, offsetY: '8%' },
 };
 
 const RES_ICONS = {
@@ -67,38 +77,15 @@ const RES_ICONS = {
 
 const stopPropagation = (e) => e.stopPropagation();
 
-function isEvmWalletAddress(value) {
-  return /^0x[0-9a-fA-F]{40}$/.test(String(value || '').trim());
-}
-
-function isSolanaWalletAddress(value) {
-  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || '').trim());
-}
-
-function isAptosWalletAddress(value) {
-  const text = String(value || '').trim();
-  return /^0x[0-9a-fA-F]{1,64}$/.test(text) && !isEvmWalletAddress(text);
-}
-
-function linkedDemonKingWalletHints(playerState) {
-  const hints = { evmAddress: null, solAddress: null, aptosAddress: null };
-  const candidates = [
-    playerState?.wallet,
-    playerState?.nft_gold_boost_wallet,
-  ];
-  for (const raw of candidates) {
-    const wallet = String(raw || '').trim();
-    if (!wallet) continue;
-    if (!hints.evmAddress && isEvmWalletAddress(wallet)) hints.evmAddress = wallet;
-    else if (!hints.solAddress && isSolanaWalletAddress(wallet)) hints.solAddress = wallet;
-    else if (!hints.aptosAddress && isAptosWalletAddress(wallet)) hints.aptosAddress = wallet;
-  }
-  return hints;
-}
-
 function demonKingShipEntry(token) {
   if (!token) return 'DemonKing';
-  return `DemonKing:${token.chain}:${token.tokenId}:L${Number(token.level || 1)}`;
+  return `DemonKing:${token.chain}:${token.tokenId}:R${normalizeNftRarity(token.rarity || 'common')}`;
+}
+
+function nftBackedShipEntry(troopName, token) {
+  const normalized = troopName === 'FireDragon' ? 'FireDragon' : 'DemonKing';
+  if (!token) return normalized;
+  return `${normalized}:${token.chain}:${token.tokenId}:R${normalizeNftRarity(token.rarity || 'common')}`;
 }
 
 function shortTokenId(tokenId) {
@@ -212,6 +199,16 @@ const TROOP_STATS = {
     },
     maxStats: { hp: 345, damage: 138, atk_speed: 1.25 }
   },
+  Barbarian: {
+    display: "Barbarian",
+    stats: {
+      1: { hp: 240, damage: 24, atk_speed: 0.6 },
+      2: { hp: 320, damage: 32, atk_speed: 0.55 },
+      3: { hp: 420, damage: 43, atk_speed: 0.5 },
+      4: { hp: 550, damage: 57, atk_speed: 0.46 },
+    },
+    maxStats: { hp: 550, damage: 57, atk_speed: 0.6 }
+  },
   Archer: {
     display: "Archer",
     stats: {
@@ -222,22 +219,78 @@ const TROOP_STATS = {
     },
     maxStats: { hp: 425, damage: 82, atk_speed: 1.05 }
   },
+  Ranger: {
+    display: "Ranger",
+    stats: {
+      1: { hp: 250, damage: 34, atk_speed: 1.0 },
+      2: { hp: 330, damage: 45, atk_speed: 0.92 },
+      3: { hp: 430, damage: 60, atk_speed: 0.83 },
+      4: { hp: 560, damage: 80, atk_speed: 0.76 },
+    },
+    maxStats: { hp: 560, damage: 80, atk_speed: 1.0 }
+  },
   DemonKing: {
     display: "Demon King",
     stats: {
-      1: { hp: 1080, damage: 140, atk_speed: 1.25 },
-      2: { hp: 1170, damage: 139, atk_speed: 1.15 },
-      3: { hp: 1260, damage: 137, atk_speed: 1.05 },
+      1: { hp: 1080, damage: 92, atk_speed: 1.4 },
+      2: { hp: 1440, damage: 120, atk_speed: 1.3 },
+      3: { hp: 1872, damage: 159, atk_speed: 1.2 },
+      4: { hp: 2400, damage: 207, atk_speed: 1.1 },
     },
-    maxStats: { hp: 1260, damage: 137, atk_speed: 1.05 }
+    maxStats: { hp: 2400, damage: 207, atk_speed: 1.1 }
+  },
+  FireDragon: {
+    display: "Dragon",
+    stats: {
+      1: { hp: 360, damage: 140, atk_speed: 1.25 },
+      2: { hp: 480, damage: 178, atk_speed: 1.12 },
+      3: { hp: 636, damage: 250, atk_speed: 1.0 },
+      4: { hp: 828, damage: 332, atk_speed: 0.9 },
+    },
+    maxStats: { hp: 828, damage: 332, atk_speed: 0.9 }
   }
 };
 
-const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Archer', 'DemonKing'];
-const NORMAL_TROOP_NAMES = ['Knight', 'Mage', 'Archer'];
-const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
-const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL = { 1: 1.2, 2: 1.3, 3: 1.4 };
-const DEMON_KING_SLOT_COUNT = 2;
+const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger', 'DemonKing', 'FireDragon'];
+const NFT_TROOP_SLOT_COUNT = 2;
+const NFT_RARITY_MULTIPLIERS = {
+  common: 1.2,
+  epic: 1.3,
+  legendary: 1.5,
+  unrevealed: 1.2,
+};
+const NFT_REFERENCE_TROOPS = {
+  DemonKing: 'Knight',
+  FireDragon: 'Mage',
+};
+const TROOP_LEVEL_KEYS = {
+  Knight: ['Knight', 'knight'],
+  Mage: ['Mage', 'mage'],
+  Barbarian: ['Barbarian', 'barbarian'],
+  Archer: ['Archer', 'archer'],
+  Ranger: ['Ranger', 'ranger'],
+  DemonKing: ['DemonKing', 'demon_king', 'demonking'],
+  FireDragon: ['FireDragon', 'fire_dragon', 'firedragon'],
+};
+
+const NFT_BACKED_TROOPS = {
+  DemonKing: {
+    collection: 'demonking',
+    serverType: 'demon_king',
+    label: 'Demon King',
+    image: demonKingImg,
+  },
+  FireDragon: {
+    collection: 'dragon',
+    serverType: 'fire_dragon',
+    label: 'Dragon',
+    image: dragonImg,
+  },
+};
+
+function nftBackedTroopConfig(name) {
+  return NFT_BACKED_TROOPS[name] || null;
+}
 
 function clampLevel(value, min, max) {
   const n = Number(value);
@@ -246,7 +299,7 @@ function clampLevel(value, min, max) {
 }
 
 function troopLevelFromMap(levels = {}, troopName) {
-  const keys = [troopName, troopName.toLowerCase()];
+  const keys = TROOP_LEVEL_KEYS[troopName] || [troopName, troopName.toLowerCase()];
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(levels, key)) {
       return clampLevel(levels[key], 1, 4);
@@ -255,47 +308,33 @@ function troopLevelFromMap(levels = {}, troopName) {
   return 1;
 }
 
-function computeDemonKingStats(level, troopLevels = {}) {
-  const demonLevel = clampLevel(level, 1, 3);
-  let bestHp = 0;
-  let bestDps = 0;
-  for (const troopName of NORMAL_TROOP_NAMES) {
-    const troopLevel = troopLevelFromMap(troopLevels, troopName);
-    const stats = TROOP_STATS[troopName]?.stats?.[troopLevel] || TROOP_STATS[troopName]?.stats?.[1];
-    if (!stats) continue;
-    bestHp = Math.max(bestHp, Number(stats.hp) || 0);
-    bestDps = Math.max(bestDps, (Number(stats.damage) || 0) / Math.max(0.01, Number(stats.atk_speed) || 1));
-  }
+function rarityMultiplier(rarity) {
+  const key = normalizeNftRarity(rarity || 'common');
+  return NFT_RARITY_MULTIPLIERS[key] || NFT_RARITY_MULTIPLIERS.common;
+}
 
-  const atk_speed = DEMON_KING_ATK_SPEED_BY_LEVEL[demonLevel] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
-  const powerMult = DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[demonLevel] || DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[1];
-  const targetHp = bestHp * DEMON_KING_SLOT_COUNT * powerMult;
-  const targetDps = bestDps * DEMON_KING_SLOT_COUNT * powerMult;
+function computeNftTroopStats(name, level, troopLevels = {}, rarity = 'common') {
+  const referenceName = NFT_REFERENCE_TROOPS[name];
+  const sharedLevel = troopLevelFromMap(troopLevels, name) || clampLevel(level, 1, 4);
+  const stats = TROOP_STATS[referenceName]?.stats?.[sharedLevel] || TROOP_STATS[referenceName]?.stats?.[1];
+  if (!stats) return TROOP_STATS[name]?.stats?.[clampLevel(level, 1, 4)];
+  const mult = rarityMultiplier(rarity);
   return {
-    hp: Math.ceil(targetHp),
-    damage: monotonicDemonKingHitDamage(bestDps, demonLevel),
-    atk_speed,
+    hp: Math.ceil((Number(stats.hp) || 0) * NFT_TROOP_SLOT_COUNT * mult),
+    damage: Math.ceil((Number(stats.damage) || 0) * NFT_TROOP_SLOT_COUNT * mult),
+    atk_speed: Number(stats.atk_speed) || 1,
   };
 }
 
-function monotonicDemonKingHitDamage(bestDps, demonLevel) {
-  let damage = 0;
-  for (let level = 1; level <= demonLevel; level += 1) {
-    const atk_speed = DEMON_KING_ATK_SPEED_BY_LEVEL[level] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
-    const powerMult = DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[level] || DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[1];
-    const targetDps = bestDps * DEMON_KING_SLOT_COUNT * powerMult;
-    damage = Math.max(damage, Math.ceil(targetDps * atk_speed));
-  }
-  return damage;
-}
-
-function getTroopStats(name, level, troopLevels = {}) {
-  if (name === 'DemonKing') return computeDemonKingStats(level, troopLevels);
+function getTroopStats(name, level, troopLevels = {}, rarity = 'common') {
+  if (NFT_REFERENCE_TROOPS[name]) return computeNftTroopStats(name, level, troopLevels, rarity);
   return TROOP_STATS[name]?.stats?.[level];
 }
 
-function getTroopMaxStats(name, troopLevels = {}) {
-  if (name === 'DemonKing') return computeDemonKingStats(3, troopLevels);
+function getTroopMaxStats(name, troopLevels = {}, rarity = 'common') {
+  if (NFT_REFERENCE_TROOPS[name]) {
+    return computeNftTroopStats(name, 4, { ...(troopLevels || {}), [name]: 4 }, rarity);
+  }
   return TROOP_STATS[name]?.maxStats;
 }
 
@@ -328,15 +367,12 @@ function BarnPanel({ building, onClose }) {
     || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
-  const linkedWalletHints = useMemo(
-    () => linkedDemonKingWalletHints(playerState),
-    [playerState?.wallet, playerState?.nft_gold_boost_wallet],
-  );
-  const demonKingSyncTarget = useMemo(() => resolveDemonKingInventorySyncTarget({
-    evmAddress: linkedWalletHints.evmAddress || evmAddress,
-    solAddress: linkedWalletHints.solAddress || solAddress,
-    aptosAddress: linkedWalletHints.aptosAddress || aptosAddress,
-  }), [aptosAddress, evmAddress, linkedWalletHints, solAddress]);
+  const demonKingSyncTarget = useMemo(() => resolveDemonKingPlayerInventorySyncTarget({
+    player: playerState,
+    evmAddress,
+    solAddress,
+    aptosAddress,
+  }), [aptosAddress, evmAddress, playerState, solAddress]);
   const hasDemonKingWallet = !!demonKingSyncTarget;
 
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -350,6 +386,7 @@ function BarnPanel({ building, onClose }) {
   const troopNames = ACTIVE_TROOP_NAMES.filter((name) => troops[name]);
   const safeIndex = troopNames.length ? Math.min(currentIndex, troopNames.length - 1) : 0;
   const currentTroopName = troopNames[safeIndex];
+  const currentNftTroop = nftBackedTroopConfig(currentTroopName);
   const tdef = currentTroopName ? troops[currentTroopName] : null;
   const lvl = currentTroopName ? (troopLevels[currentTroopName] || 1) : 1;
   const prevLvlRef = useRef(lvl);
@@ -361,12 +398,13 @@ function BarnPanel({ building, onClose }) {
   }, [sendToGodot]);
 
   useEffect(() => {
-    if (currentTroopName !== 'DemonKing') return undefined;
+    if (!currentNftTroop) return undefined;
     const controller = new AbortController();
     const token = typeof window !== 'undefined' ? window._playerToken : null;
     setDemonKingLoading(true);
     setDemonKingError(null);
-    const statusPromise = fetch('/api/troops/demon_king/upgrade-status', {
+    const label = currentNftTroop.label;
+    const statusPromise = fetch(`/api/troops/${currentNftTroop.serverType}/upgrade-status`, {
       cache: 'no-store',
       headers: token ? { 'x-token': token } : {},
       signal: controller.signal,
@@ -374,6 +412,7 @@ function BarnPanel({ building, onClose }) {
     const ownedPromise = demonKingSyncTarget
       ? syncDemonKingNfts({
           ...demonKingSyncTarget,
+          collection: currentNftTroop.collection,
           signal: controller.signal,
         }).catch((err) => ({ error: err, tokens: [] }))
       : Promise.resolve({ tokens: [] });
@@ -386,39 +425,36 @@ function BarnPanel({ building, onClose }) {
         (ownedJson?.tokens || []).forEach((item) => {
           const tokenId = String(item.tokenId || item.id || '');
           if (!tokenId) return;
-          const level = Number(item.level || 1);
           tokens.push({
             ...item,
             chain: item.chain || 'base',
             tokenId,
-            level,
-            imageUrl: item.imageUrl || demonKingImg,
+            imageUrl: item.imageUrl || currentNftTroop.image,
           });
         });
         tokens.sort((a, b) => (
-          (b.level || 1) - (a.level || 1)
-          || String(a.chain).localeCompare(String(b.chain))
+          String(a.chain).localeCompare(String(b.chain))
           || String(a.tokenId).localeCompare(String(b.tokenId), undefined, { numeric: true })
         ));
         setDemonKingNfts(tokens);
-        if (ownedJson?.error) setDemonKingError((ownedJson.error?.message || 'Could not load Demon King NFTs').slice(0, 140));
+        if (ownedJson?.error) setDemonKingError((ownedJson.error?.message || `Could not load ${label} NFTs`).slice(0, 140));
         setSelectedDemonKey((prev) => {
-          if (prev && tokens.some((item) => demonKingShipEntry(item) === prev)) return prev;
-          return tokens[0] ? demonKingShipEntry(tokens[0]) : '';
+          if (prev && tokens.some((item) => nftBackedShipEntry(currentTroopName, item) === prev)) return prev;
+          return tokens[0] ? nftBackedShipEntry(currentTroopName, tokens[0]) : '';
         });
       })
       .catch((err) => {
-        if (!controller.signal.aborted) setDemonKingError((err?.message || 'Could not load Demon King NFTs').slice(0, 140));
+        if (!controller.signal.aborted) setDemonKingError((err?.message || `Could not load ${label} NFTs`).slice(0, 140));
       })
       .finally(() => {
         if (!controller.signal.aborted) setDemonKingLoading(false);
       });
     return () => controller.abort();
-  }, [currentTroopName, demonKingSyncTarget]);
+  }, [currentTroopName, currentNftTroop, demonKingSyncTarget]);
 
   useEffect(() => {
-    if (currentTroopName !== 'DemonKing') return undefined;
-    const selectedToken = demonKingNfts.find((token) => demonKingShipEntry(token) === selectedDemonKey) || demonKingNfts[0] || null;
+    if (!currentNftTroop) return undefined;
+    const selectedToken = demonKingNfts.find((token) => nftBackedShipEntry(currentTroopName, token) === selectedDemonKey) || demonKingNfts[0] || null;
     if (!selectedToken?.chain || !selectedToken?.tokenId) return undefined;
 
     const controller = new AbortController();
@@ -427,7 +463,7 @@ function BarnPanel({ building, onClose }) {
       chain: selectedToken.chain,
       tokenId: String(selectedToken.tokenId),
     });
-    fetch(`/api/troops/demon_king/upgrade-status?${params.toString()}`, {
+    fetch(`/api/troops/${currentNftTroop.serverType}/upgrade-status?${params.toString()}`, {
       cache: 'no-store',
       headers: token ? { 'x-token': token } : {},
       signal: controller.signal,
@@ -439,7 +475,7 @@ function BarnPanel({ building, onClose }) {
       .catch(() => {});
 
     return () => controller.abort();
-  }, [currentTroopName, demonKingNfts, selectedDemonKey]);
+  }, [currentTroopName, currentNftTroop, demonKingNfts, selectedDemonKey]);
 
   const handleUpgradeTroop = useCallback((name) => sendToGodot('upgrade_troop', { troop_name: name }), [sendToGodot]);
   
@@ -479,63 +515,44 @@ function BarnPanel({ building, onClose }) {
       .map((key) => Number(key))
       .filter((value) => Number.isFinite(value)),
   );
-  const isDemonKing = currentTroopName === 'DemonKing';
-  const selectedDemonNft = isDemonKing
-    ? demonKingNfts.find((token) => demonKingShipEntry(token) === selectedDemonKey) || demonKingNfts[0] || null
+  const isNftBackedTroop = !!currentNftTroop;
+  const isDemonKingNftTroop = currentNftTroop?.collection === 'demonking' || currentNftTroop?.collection === 'demon_king';
+  const isRarityNftTroop = isDemonKingNftTroop || currentNftTroop?.collection === 'dragon';
+  const selectedDemonNft = isNftBackedTroop
+    ? demonKingNfts.find((token) => nftBackedShipEntry(currentTroopName, token) === selectedDemonKey) || demonKingNfts[0] || null
     : null;
-  const displayLvl = isDemonKing && selectedDemonNft ? Number(selectedDemonNft.level || 1) : lvl;
+  const selectedNftRarity = normalizeNftRarity(selectedDemonNft?.rarity || 'common');
+  const displayLvl = lvl;
   const isMax = displayLvl >= troopMaxLevel;
   // costs key = current level (cost to upgrade FROM that level)
   const nextCost = !isMax && tdef?.costs?.[String(displayLvl)];
-  const stats = getTroopStats(currentTroopName, displayLvl, troopLevels);
-  const maxStats = getTroopMaxStats(currentTroopName, troopLevels);
+  const stats = getTroopStats(currentTroopName, displayLvl, troopLevels, selectedNftRarity);
+  const maxStats = getTroopMaxStats(currentTroopName, troopLevels, selectedNftRarity);
   const displayName = TROOP_STATS[currentTroopName]?.display || tdef?.display || currentTroopName;
   const hasImage = !!UNIT_IMAGES[currentTroopName];
-  const battleWins = Number(demonKingStatus?.battle_wins ?? demonKingStatus?.wins ?? 0);
-  const nextDemonLevel = isDemonKing ? Math.min(3, displayLvl + 1) : null;
-  const requiredDemonWins = isDemonKing && nextDemonLevel && nextDemonLevel <= 3
-    ? (nextDemonLevel === 2 ? 1000 : 10000)
-    : 0;
-  const demonWinsShown = requiredDemonWins ? Math.min(battleWins, requiredDemonWins) : battleWins;
-
-  // Formatting cost string:
-  let costStr = "Lvl Up & Get improved stats";
-  if (isDemonKing && !isMax) {
-    const requiredWins = requiredDemonWins;
-    costStr = `NFT upgrade + ${requiredWins.toLocaleString()} battle wins`;
-  } else if (nextCost) {
-    const parts = [];
-    if (nextCost.gold) parts.push(`${nextCost.gold} Coins`);
-    if (nextCost.wood) parts.push(`${nextCost.wood} Wood`);
-    if (nextCost.ore) parts.push(`${nextCost.ore} Ore`);
-    costStr = "Lvl Up for " + parts.join(', ');
-  }
-
-  // Create a combined string for bottom pill (just to match layout of "SPX held")
-  const totalCostVal = nextCost ? Object.values(nextCost).reduce((a, b) => a + b, 0) : 0;
 
   const sphereSize = mobile ? 100 : 200;
   const sliderW = mobile ? 32 : 48;
   const sliderH = mobile ? 52 : 72;
   const reqBoxSize = mobile ? 60 : 90;
   const handleMainUpgrade = () => {
-    if (!isDemonKing) {
+    if (!isNftBackedTroop) {
       handleUpgradeTroop(currentTroopName);
       return;
     }
-    window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {
-      detail: {
-        view: selectedDemonNft ? 'upgrade' : 'shop',
-        request: {
-          ...(demonKingStatus || {}),
-          chain: selectedDemonNft?.chain,
-          tokenId: selectedDemonNft?.tokenId,
-          owner: selectedDemonNft?.wallet
-            || (selectedDemonNft?.chain === 'solana' ? solAddress : selectedDemonNft?.chain === 'aptos' ? aptosAddress : evmAddress),
-          next_level: Math.min(3, displayLvl + 1),
+    if (!selectedDemonNft) {
+      window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {
+        detail: {
+          view: 'shop',
+          request: {
+            ...(demonKingStatus || {}),
+            collection: currentNftTroop.collection,
+          },
         },
-      },
-    }));
+      }));
+      return;
+    }
+    handleUpgradeTroop(currentTroopName);
   };
 
   return (
@@ -572,14 +589,14 @@ function BarnPanel({ building, onClose }) {
                       LEVEL UP!
                     </div>
                   )}
-                  {isDemonKing ? (
+                  {isNftBackedTroop ? (
                     <img
-                      src={demonKingImg}
-                      alt="Demon King"
+                      src={currentNftTroop.image}
+                      alt={currentNftTroop.label}
                       className={isAnimatingUpgrade ? 'upgrade-anim-char' : ''}
                       style={{
                         ...styles.characterImg,
-                        transform: `translateY(${CARD_TROOP_STYLE_MAP.DemonKing?.offsetY || '10%'}) scale(${CARD_TROOP_STYLE_MAP.DemonKing?.scale || 1.35})`,
+                        transform: `translateY(${CARD_TROOP_STYLE_MAP[currentTroopName]?.offsetY || '10%'}) scale(${CARD_TROOP_STYLE_MAP[currentTroopName]?.scale || 1.35})`,
                       }}
                     />
                   ) : troopNames.map(name => {
@@ -609,19 +626,10 @@ function BarnPanel({ building, onClose }) {
                 <ProgressBar label="Damage Output" value={stats.damage} max={maxStats.damage} gradient="linear-gradient(90deg, #10b981, #34d399)" />
                 <ProgressBar label="Attack Speed" value={stats.atk_speed} max={maxStats.atk_speed} showAsTime={true} gradient="linear-gradient(90deg, #6366f1, #818cf8)" />
                 <ProgressBar label="Level Progress" value={displayLvl} max={troopMaxLevel} gradient="linear-gradient(90deg, #8b5cf6, #a78bfa)" />
-                {isDemonKing && requiredDemonWins > 0 && (
-                  <ProgressBar
-                    label="Battle Wins"
-                    value={demonWinsShown}
-                    max={requiredDemonWins}
-                    valueText={`${demonWinsShown.toLocaleString()} / ${requiredDemonWins.toLocaleString()}`}
-                    gradient="linear-gradient(90deg, #ef4444, #f97316)"
-                  />
-                )}
               </div>
             )}
 
-            {isDemonKing && (
+            {isNftBackedTroop && (
               <div style={styles.demonInventory}>
                 <div style={styles.demonInventoryHeader}>
                   <span>{hasDemonKingWallet ? `${demonKingNfts.length} NFT${demonKingNfts.length === 1 ? '' : 's'} owned` : 'Connect wallet'}</span>
@@ -631,17 +639,22 @@ function BarnPanel({ building, onClose }) {
                 {hasDemonKingWallet && demonKingNfts.length > 0 ? (
                   <div style={styles.demonTokenGrid}>
                     {demonKingNfts.map((token) => {
-                      const key = demonKingShipEntry(token);
-                      const active = key === (selectedDemonKey || demonKingShipEntry(selectedDemonNft));
+                      const key = nftBackedShipEntry(currentTroopName, token);
+                      const active = key === (selectedDemonKey || nftBackedShipEntry(currentTroopName, selectedDemonNft));
                       const tokenLabel = demonKingDisplayLabel(token, demonKingNfts);
+                      const rarityCardStyle = isRarityNftTroop
+                        ? nftRarityCardStyle(token.rarity, 1, { active })
+                        : {};
                       return (
                         <button
                           key={key}
                           type="button"
                           onClick={() => setSelectedDemonKey(key)}
-                          style={{...styles.demonTokenBtn, ...(active ? styles.demonTokenBtnActive : null)}}
+                          style={{...styles.demonTokenBtn, ...(active ? styles.demonTokenBtnActive : null), ...rarityCardStyle}}
                         >
-                          <span>Lv {token.level || 1}</span>
+                          <span style={isRarityNftTroop ? nftRarityBadgeStyle(token.rarity, 1, { compact: true }) : null}>
+                            {isRarityNftTroop ? nftRarityLabel(token.rarity, 1) : 'NFT'}
+                          </span>
                           <span>{tokenLabel}</span>
                         </button>
                       );
@@ -649,7 +662,7 @@ function BarnPanel({ building, onClose }) {
                   </div>
                 ) : (
                   <div style={styles.demonInventoryHint}>
-                    {hasDemonKingWallet ? 'Demon King unlocks when a connected wallet owns at least one NFT.' : 'Open the NFT shop to connect and load your Demon King NFTs.'}
+                    {hasDemonKingWallet ? `${currentNftTroop.label} unlocks when a connected wallet owns at least one NFT.` : `Open the NFT shop to connect and load your ${currentNftTroop.label} NFTs.`}
                   </div>
                 )}
               </div>
@@ -657,11 +670,7 @@ function BarnPanel({ building, onClose }) {
 
             <h3 style={{...styles.sectionTitle, marginTop: mobile ? 10 : 16, fontSize: mobile ? 16 : 20}}>Upgrade Resources</h3>
             <div style={{...styles.reqGrid, ...(mobile ? { flexWrap: 'nowrap', justifyContent: 'center', gap: 8 } : {})}}>
-              {isDemonKing && !isMax ? (
-                <div style={styles.reqBoxMax}>
-                  <span style={{color: '#5C3A21', fontSize: 13, fontWeight: 900, textAlign: 'center'}}>{costStr}</span>
-                </div>
-              ) : nextCost ? Object.entries(nextCost).map(([res, amt]) => {
+              {nextCost ? Object.entries(nextCost).map(([res, amt]) => {
                 if (amt === 0) return null;
                 return (
                   <div key={res} style={{...styles.reqBox, width: reqBoxSize, height: reqBoxSize}}>
@@ -683,7 +692,9 @@ function BarnPanel({ building, onClose }) {
         {!isMax && !building.is_enemy && (
           <div style={{ padding: mobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
             <button style={{...styles.actionBtn, width: '100%', maxWidth: mobile ? '100%' : 240, padding: mobile ? '12px 16px' : '14px 20px', fontSize: mobile ? 14 : 14}} onClick={handleMainUpgrade}>
-              {isDemonKing ? (selectedDemonNft ? `Upgrade NFT ${demonKingDisplayLabel(selectedDemonNft, demonKingNfts)} to Lv` : 'Get Demon King NFT') : 'Upgrade to Lv'} {isDemonKing && !selectedDemonNft ? '' : displayLvl + 1}
+              {isNftBackedTroop
+                ? (selectedDemonNft ? `Upgrade ${currentNftTroop.label} to Lv` : `Get ${currentNftTroop.label} NFT`)
+                : 'Upgrade to Lv'} {isNftBackedTroop && !selectedDemonNft ? '' : displayLvl + 1}
             </button>
           </div>
         )}

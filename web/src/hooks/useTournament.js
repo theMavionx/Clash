@@ -101,33 +101,102 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
   return { me, loading, loaded, error, refresh, join, leave, updateRewardWallet };
 }
 
+export function useLuckyRaider({ active = false, pollMs = 30000 } = {}) {
+  const player = usePlayer();
+  const token = player?.token;
+  const [me, setMe] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(null);
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+
+  const refresh = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    setError(null);
+    const fetchToken = token;
+    try {
+      const res = await fetch('/api/tournaments/lucky-raider', {
+        headers: { 'x-token': fetchToken },
+      });
+      if (!res.ok) throw new Error('failed to load lucky raider');
+      const data = await res.json();
+      if (tokenRef.current !== fetchToken) return;
+      setMe(data);
+      setLoaded(true);
+    } catch (e) {
+      setError(e.message || 'error');
+      setLoaded(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!active) return;
+    if (!token) {
+      setMe(null);
+      setLoading(false);
+      setLoaded(false);
+      return;
+    }
+    setLoaded(false);
+    refresh();
+    const id = setInterval(refresh, pollMs);
+    return () => clearInterval(id);
+  }, [active, token, pollMs, refresh]);
+
+  const updateRewardWallet = useCallback(async (tournamentId, rewardWalletEvm) => {
+    if (!token) return { ok: false, error: 'not authenticated' };
+    const res = await fetch(`/api/tournaments/${tournamentId}/reward-wallet`, {
+      method: 'POST',
+      headers: { 'x-token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reward_wallet_evm: rewardWalletEvm, reward_wallet_solana: rewardWalletEvm }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch {}
+    await refresh();
+    return { ok: res.ok, ...(data || {}) };
+  }, [token, refresh]);
+
+  return { me, loading, loaded, error, refresh, updateRewardWallet };
+}
+
 // Public leaderboard fetcher — separate from the per-player state above
 // because anyone can spectate (even pre-login). Polls every 10s while the
 // panel is open since users want to see their rank update in near-real-time
 // when they trade or battle.
 export function useTournamentLeaderboard(tournamentId, { active = false, pollMs = 10000 } = {}) {
+  const player = usePlayer();
+  const token = player?.token;
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(false);
   const idRef = useRef(tournamentId);
+  const tokenRef = useRef(token);
   idRef.current = tournamentId;
+  tokenRef.current = token;
 
   const refresh = useCallback(async () => {
     if (!tournamentId) return;
     setLoading(true);
     const fetchId = tournamentId;
+    const fetchToken = token;
     try {
-      const res = await fetch(`/api/tournaments/${fetchId}/leaderboard?limit=50`);
+      const res = await fetch(`/api/tournaments/${fetchId}/leaderboard?limit=50`, {
+        headers: fetchToken ? { 'x-token': fetchToken } : {},
+      });
       if (!res.ok) throw new Error('failed');
       const data = await res.json();
       // Stale-response guard for tournament-id swaps.
-      if (idRef.current !== fetchId) return;
+      if (idRef.current !== fetchId || tokenRef.current !== fetchToken) return;
       setBoard(data);
     } catch {
       /* keep last-known board on transient failure */
     } finally {
       setLoading(false);
     }
-  }, [tournamentId]);
+  }, [tournamentId, token]);
 
   useEffect(() => {
     if (!active || !tournamentId) return;

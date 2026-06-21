@@ -8,6 +8,7 @@
 
 const db = require('./db');
 const path = require('path');
+const tradeRecon = require('./trade_reconciliation');
 
 // Lazy read-only handle to server-futures/futures.db (same pattern as
 // routes.js claim-gold). Returns null if server-futures isn't deployed.
@@ -50,6 +51,8 @@ try {
       repeatable INTEGER NOT NULL DEFAULT 0,
       cooldown_hours INTEGER NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL DEFAULT 0,
+      starts_at TEXT,
+      ends_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS player_tasks (
@@ -66,16 +69,31 @@ try {
     CREATE INDEX IF NOT EXISTS idx_player_tasks_player ON player_tasks(player_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_active ON tasks(active) WHERE active = 1;
   `);
+  try { db.db.exec(`ALTER TABLE tasks ADD COLUMN starts_at TEXT`); } catch {}
+  try { db.db.exec(`ALTER TABLE tasks ADD COLUMN ends_at TEXT`); } catch {}
+  try { db.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_schedule ON tasks(active, starts_at, ends_at, sort_order, id)`); } catch {}
 } catch (e) { console.error('tasks schema error', e); }
 
 const VALID_TYPES = ['volume', 'positions', 'combo_volume_attack', 'daily_trade_gold'];
 const VALID_SIDES = ['any', 'long', 'short'];
+const TASK_ELIGIBILITY_MODES = new Set([
+  'all',
+  'soldiers_only',
+  'demon_king',
+  'dragon',
+  'demon_or_dragon',
+  'demon_and_dragon',
+]);
+const TASK_ELIGIBILITY_LABELS = {
+  all: 'Everyone',
+  soldiers_only: 'Soldiers',
+  demon_king: 'Demon King',
+  dragon: 'Dragon',
+  demon_or_dragon: 'NFT Elite',
+  demon_and_dragon: 'Demon + Dragon',
+};
 const TASK_TRADE_SETTLE_DELAY_SECONDS = 0;
 const TASK_START_TRADE_GRACE_MS = Math.max(0, Number(process.env.TASK_START_TRADE_GRACE_MS || 120_000));
-const HOTSTUFF_TASK_IMPORT_MS = Math.max(5_000, Number(process.env.HOTSTUFF_TASK_IMPORT_MS || 15_000));
-const hotstuffTaskImportCache = new Map();
-const GMTRADE_TASK_RECONCILE_MS = Math.max(5_000, Number(process.env.GMTRADE_TASK_RECONCILE_MS || 15_000));
-const gmtradeTaskReconcileCache = new Map();
 const FUTURES_TASK_DEXES = new Set([
   'avantis',
   'decibel',
@@ -90,10 +108,87 @@ const FUTURES_TASK_DEXES = new Set([
   'grvt',
   'katana',
   'gmtrade',
+  'flash',
 ]);
 
 function parseParams(p) {
   try { return typeof p === 'string' ? JSON.parse(p) : (p || {}); } catch { return {}; }
+}
+
+function normalizeTaskEligibility(input) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const mode = TASK_ELIGIBILITY_MODES.has(String(raw.mode || 'all'))
+    ? String(raw.mode || 'all')
+    : 'all';
+  return {
+    mode,
+    label: String(raw.label || '').trim(),
+  };
+}
+
+function taskEligibilityLabel(eligibility) {
+  const cfg = normalizeTaskEligibility(eligibility);
+  return cfg.label || TASK_ELIGIBILITY_LABELS[cfg.mode] || 'Exclusive';
+}
+
+function taskSqlDateMs(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  const parsed = Date.parse(text.includes('T') ? text : `${text.replace(' ', 'T')}Z`);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isTaskLive(task, nowMs = Date.now()) {
+  if (!task || Number(task.active || 0) !== 1) return false;
+  const startsMs = taskSqlDateMs(task.starts_at);
+  const endsMs = taskSqlDateMs(task.ends_at);
+  if (startsMs && startsMs > nowMs) return false;
+  if (endsMs && endsMs <= nowMs) return false;
+  return true;
+}
+
+function playerNftAccess(playerId) {
+  const access = { demon_king: false, dragon: false, has_nft: false };
+  if (!playerId) return access;
+  try {
+    const rows = db.db.prepare(`
+      SELECT LOWER(collection) AS collection, COUNT(*) AS n
+      FROM player_nfts
+      WHERE player_id = ?
+        AND active = 1
+        AND LOWER(collection) IN ('demon_king', 'dragon')
+      GROUP BY LOWER(collection)
+    `).all(playerId);
+    for (const row of rows || []) {
+      if (row.collection === 'demon_king' && Number(row.n || 0) > 0) access.demon_king = true;
+      if (row.collection === 'dragon' && Number(row.n || 0) > 0) access.dragon = true;
+    }
+    access.has_nft = access.demon_king || access.dragon;
+  } catch (e) {
+    console.warn('[tasks] nft eligibility read failed:', e.message);
+  }
+  return access;
+}
+
+function checkTaskEligibility(player, task) {
+  const params = parseParams(task?.params);
+  const eligibility = normalizeTaskEligibility(params.eligibility);
+  if (eligibility.mode === 'all') return { ok: true, eligibility, access: null };
+
+  const access = playerNftAccess(player?.id);
+  let ok = false;
+  if (eligibility.mode === 'soldiers_only') ok = !access.demon_king && !access.dragon;
+  else if (eligibility.mode === 'demon_king') ok = access.demon_king;
+  else if (eligibility.mode === 'dragon') ok = access.dragon;
+  else if (eligibility.mode === 'demon_or_dragon') ok = access.demon_king || access.dragon;
+  else if (eligibility.mode === 'demon_and_dragon') ok = access.demon_king && access.dragon;
+
+  return {
+    ok,
+    eligibility,
+    access,
+    reason: ok ? '' : `Task requires ${taskEligibilityLabel(eligibility)}`,
+  };
 }
 
 const TASK_SYMBOL_ALIASES = {
@@ -111,6 +206,11 @@ const TASK_SYMBOL_ALIASES = {
   BRENTOIL: 'BRENT',
   UKOIL: 'BRENT',
 };
+
+const TASK_QUOTE_TICKERS = new Set([
+  'USD', 'USDC', 'USDT', 'USDE', 'DAI', 'AUSD',
+  'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD',
+]);
 
 function canonicalTaskSymbol(value) {
   const base = String(value || '')
@@ -132,6 +232,11 @@ function taskSymbolVariants(value) {
   const out = new Set([canonicalTaskSymbol(base)]);
   const scaled = base.match(/^(?:1000|10000|1000000|1K|1M)([A-Z][A-Z0-9]{1,})$/);
   if (scaled) out.add(canonicalTaskSymbol(scaled[1]));
+  for (const quote of TASK_QUOTE_TICKERS) {
+    if (base.length > quote.length + 1 && base.endsWith(quote)) {
+      out.add(canonicalTaskSymbol(base.slice(0, -quote.length)));
+    }
+  }
   return [...out].filter(Boolean);
 }
 
@@ -157,6 +262,51 @@ function matchesSide(tradeSide, wantSide) {
   if (wantSide === 'long') return c.isLong && !c.isShort;
   if (wantSide === 'short') return c.isShort && !c.isLong;
   return true;
+}
+
+function paidTaskClaimCount(playerId, taskId) {
+  if (!playerId || !taskId) return 0;
+  try {
+    const row = db.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM task_claim_events
+      WHERE player_id = ? AND task_id = ? AND result = 'paid'
+    `).get(playerId, taskId);
+    return Math.max(0, Number(row?.n || 0) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function normalizeProgressionValues(value) {
+  if (Array.isArray(value)) return value.map(Number).filter(v => Number.isFinite(v) && v > 0);
+  return String(value || '')
+    .split(/[,\n]/u)
+    .map(v => Number(String(v).trim()))
+    .filter(v => Number.isFinite(v) && v > 0);
+}
+
+function progressiveTaskTarget(player, task, baseTarget) {
+  const base = Number(baseTarget) || 0;
+  if (base <= 0 || !task?.repeatable) return base;
+  const params = parseParams(task.params);
+  const cfg = params.repeat_progression || params.progression || {};
+  if (!cfg || cfg.enabled === false) return base;
+  const paidCount = paidTaskClaimCount(player?.id, task?.id);
+  const mode = String(cfg.mode || 'percent').toLowerCase();
+  if (mode === 'manual') {
+    const values = normalizeProgressionValues(cfg.values ?? cfg.targets ?? cfg.value);
+    if (!values.length) return base;
+    return values[Math.min(paidCount, values.length - 1)];
+  }
+  if (mode === 'multiplier') {
+    const multiplier = Number(cfg.multiplier ?? cfg.value);
+    if (!Number.isFinite(multiplier) || multiplier <= 0) return base;
+    return base * Math.pow(multiplier, paidCount);
+  }
+  const pct = Number(cfg.percent ?? cfg.value);
+  if (!Number.isFinite(pct) || pct === 0) return base;
+  return base * Math.pow(1 + pct / 100, paidCount);
 }
 
 function parseTaskTimeMs(value) {
@@ -264,38 +414,6 @@ function isAptosWallet(w) {
   return APTOS_RE.test(padAptos(w));
 }
 
-async function maybeImportHotstuffFills(player, wallet) {
-  if (!player || !isEvmWallet(wallet)) return null;
-  const key = `${player.id}:${String(wallet).toLowerCase()}`;
-  const last = hotstuffTaskImportCache.get(key) || 0;
-  if (Date.now() - last < HOTSTUFF_TASK_IMPORT_MS) return null;
-  hotstuffTaskImportCache.set(key, Date.now());
-  try {
-    const hotstuff = require('../server-futures/hotstuff');
-    return await hotstuff.importFillsForPlayer(player.id, wallet, { limit: 100 });
-  } catch (e) {
-    console.warn(`[tasks hotstuff] fill import failed player=${player.name || player.id}:`, e.message);
-    return null;
-  }
-}
-
-async function maybeReconcileGmtrade(player, wallet) {
-  if (!player || !isSolanaWallet(wallet)) return null;
-  const key = `${player.id}:${wallet}`;
-  const last = gmtradeTaskReconcileCache.get(key) || 0;
-  if (Date.now() - last < GMTRADE_TASK_RECONCILE_MS) return null;
-  gmtradeTaskReconcileCache.set(key, Date.now());
-  try {
-    const futuresDb = require('../server-futures/db');
-    const gmtrade = require('../server-futures/gmtrade');
-    if (typeof gmtrade.reconcilePendingTradeReportsForPlayer !== 'function') return null;
-    return await gmtrade.reconcilePendingTradeReportsForPlayer(futuresDb, player.id, { limit: 50 });
-  } catch (e) {
-    console.warn(`[tasks gmtrade] pending reconcile failed player=${player.name || player.id}:`, e.message);
-    return null;
-  }
-}
-
 // Resolve which wallet to query upstream APIs with. Order:
 //   1. Pacifica AGENT wallet (if bound) — Pacifica's /v1/trades/history
 //      indexes by signer pubkey, and once a user binds an agent every
@@ -338,7 +456,7 @@ function resolveWallet(player) {
 
 function walletMatchesDex(dex, wallet) {
   if (dex === 'decibel') return isAptosWallet(wallet);
-  if (dex === 'phoenix' || dex === 'gmtrade') return isSolanaWallet(wallet);
+  if (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') return isSolanaWallet(wallet);
   if (
     dex === 'avantis' ||
     dex === 'gmx' ||
@@ -378,7 +496,7 @@ function resolveWalletForDex(player, dex) {
   try {
     const chainType = normalizedDex === 'decibel'
       ? 'aptos'
-      : (normalizedDex === 'phoenix' || normalizedDex === 'gmtrade')
+      : (normalizedDex === 'phoenix' || normalizedDex === 'gmtrade' || normalizedDex === 'flash')
         ? 'solana'
         : 'evm';
     const walletRow = db.db.prepare(
@@ -394,18 +512,7 @@ function resolveWalletForDex(player, dex) {
 }
 
 function verifiedSourceWhereForDex(dex) {
-  if (dex === 'decibel') return "AND verified_source IN ('decibel_fill', 'server')";
-  if (dex === 'monad') return "AND verified_source IN ('perpl_api', 'perpl_ws')";
-  if (dex === 'hyperliquid') return "AND verified_source = 'hyperliquid_api'";
-  if (dex === 'risex') return "AND verified_source = 'risex_api'";
-  if (dex === 'nado') return "AND verified_source = 'nado_api'";
-  if (dex === 'hibachi') return "AND verified_source = 'hibachi_api'";
-  if (dex === 'hotstuff') return "AND verified_source = 'hotstuff_api'";
-  if (dex === 'grvt') return "AND verified_source = 'grvt_builder'";
-  if (dex === 'katana') return "AND verified_source = 'katana_api'";
-  if (dex === 'gmtrade') return "AND verified_source = 'gmtrade_tx'";
-  if (dex === 'phoenix') return "AND verified_source IN ('worker', 'tx')";
-  return "AND verified_source = 'worker'";
+  return tradeRecon.verifiedSourceWhereForDex(dex, { prefix: 'AND ' });
 }
 
 function getTaskFuturesDexes(player, requestedDex) {
@@ -433,20 +540,26 @@ function getTaskFuturesDexes(player, requestedDex) {
   return [...out];
 }
 
+function isGmtradeCloseFallbackTrade(trade) {
+  if (String(trade?.dex || '').toLowerCase() !== 'gmtrade') return false;
+  if (String(trade?.verified_source || '') === 'gmtrade_close_tx_client_notional') return true;
+  return classifyTrade(trade?.side).isClose;
+}
+
 async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
   const wallet = resolveWalletForDex(player, dexFilter);
   if (wallet && !walletMatchesDex(dexFilter, wallet)) return [];
-  if (dexFilter === 'hotstuff') {
-    if (!wallet) return [];
-    await maybeImportHotstuffFills(player, wallet);
-  } else if (dexFilter === 'gmtrade') {
-    if (!wallet) return [];
-    await maybeReconcileGmtrade(player, wallet);
-  }
+  await tradeRecon.reconcileTradesForPlayer(player, {
+    dex: dexFilter,
+    wallet,
+    reason: 'tasks',
+    force: opts.forceSync === true,
+  });
   const fdb = futuresDbReadonly();
   if (!fdb) return [];
   try {
     const sourceWhere = verifiedSourceWhereForDex(dexFilter);
+    const statusWhere = "AND status = 'filled'";
     const settleWhere = opts.includeUnsettled
       ? ''
       : "AND created_at <= datetime('now', ?)";
@@ -456,7 +569,8 @@ async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
     const rows = fdb.prepare(`
       SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, verified_source, created_at
       FROM trade_history
-      WHERE player_id = ? AND dex = ? AND status = 'filled'
+      WHERE player_id = ? AND dex = ?
+        ${statusWhere}
         ${sourceWhere}
         ${settleWhere}
       ORDER BY id ASC
@@ -568,7 +682,7 @@ async function fetchWalletTrades(player, opts = {}) {
 //   - pacifica_agents (append-only, capped at 10 by /pacifica/agent).
 const PACIFICA_PAGE_LIMIT = 200;
 const PACIFICA_MAX_PAGES = 8;
-const PACIFICA_FETCH_FANOUT_CAP = 6; // master + up to 5 agents
+const PACIFICA_FETCH_FANOUT_CAP = Math.max(2, Number(process.env.PACIFICA_FETCH_FANOUT_CAP || 11)); // master + capped historical agents
 const PACIFICA_BUILDER_CODE = process.env.PACIFICA_BUILDER_CODE || 'clashofperps';
 const PACIFICA_FETCH_MIN_INTERVAL_MS = Math.max(100, Number(process.env.PACIFICA_FETCH_MIN_INTERVAL_MS || 900));
 const PACIFICA_RATE_LIMIT_COOLDOWN_MS = Math.max(5_000, Number(process.env.PACIFICA_RATE_LIMIT_COOLDOWN_MS || 60_000));
@@ -741,9 +855,10 @@ async function fetchPacificaAllTrades(player, opts = {}) {
 
 async function verifyVolume(player, task, snap) {
   const p = parseParams(task.params);
-  const target = Number(p.target_volume) || 0;
+  const target = progressiveTaskTarget(player, task, Number(p.target_volume) || 0);
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
+  const countClose = !!p.count_close;
   const wallet = resolveWallet(player);
   // Pass `since` so the Pacifica fetch can stop paging once it crosses
   // the snapshot baseline — for an active trader with thousands of
@@ -754,6 +869,7 @@ async function verifyVolume(player, task, snap) {
   let matched = 0;
   for (const t of trades) {
     if (!isAfterTaskSnapshot(snap, t)) continue;
+    if (!countClose && isGmtradeCloseFallbackTrade(t)) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
     // For Avantis rows we stashed notional_usd directly in _notional; for
@@ -770,7 +886,7 @@ async function verifyVolume(player, task, snap) {
 
 async function verifyPositions(player, task, snap) {
   const p = parseParams(task.params);
-  const target = Number(p.target_positions) || 0;
+  const target = progressiveTaskTarget(player, task, Number(p.target_positions) || 0);
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
   const countClose = !!p.count_close; // default: count openings only
@@ -783,6 +899,7 @@ async function verifyPositions(player, task, snap) {
     const orderKey = `${t.dex || player.dex || 'dex'}:${String(t.order_id || t.client_order_id || t.history_id || '')}`;
     if (orderKey && seenOrders.has(orderKey)) continue;
     if (orderKey) seenOrders.add(orderKey);
+    if (!countClose && isGmtradeCloseFallbackTrade(t)) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
     const c = classifyTrade(t.side);
@@ -795,16 +912,18 @@ async function verifyPositions(player, task, snap) {
 
 async function verifyComboVolumeAttack(player, task, snap) {
   const p = parseParams(task.params);
-  const targetVol = Number(p.target_volume) || 0;
+  const targetVol = progressiveTaskTarget(player, task, Number(p.target_volume) || 0);
   const targetWins = Number(p.target_wins) || 0;
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
+  const countClose = !!p.count_close;
 
   const startId = snap.trade_id_start || 0;
   const trades = await fetchWalletTrades(player, { since: startId });
   let vol = 0;
   for (const t of trades) {
     if (!isAfterTaskSnapshot(snap, t)) continue;
+    if (!countClose && isGmtradeCloseFallbackTrade(t)) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
     const notional = Number(t._notional) > 0
@@ -832,7 +951,7 @@ async function verifyComboVolumeAttack(player, task, snap) {
 
 async function verifyDailyTradeGold(player, task, snap) {
   const p = parseParams(task.params);
-  const target = Number(p.target_gold) || 0;
+  const target = progressiveTaskTarget(player, task, Number(p.target_gold) || 0);
   const from = snap.window_from;
   if (!from) return { progress_value: 0, target_value: target, completed: false };
   // Gold from trades is tracked in gold_history with reasons like "N trades", "Daily bonus", "+$X profit", "First deposit!", "First trade!"
@@ -868,7 +987,13 @@ async function verifyTask(player, task, snap) {
 
 // ---------- Helpers ----------
 function getActiveTasks() {
-  return db.db.prepare('SELECT * FROM tasks WHERE active = 1 ORDER BY sort_order ASC, id ASC').all();
+  return db.db.prepare(`
+    SELECT * FROM tasks
+    WHERE active = 1
+      AND (starts_at IS NULL OR starts_at = '' OR starts_at <= datetime('now'))
+      AND (ends_at IS NULL OR ends_at = '' OR ends_at > datetime('now'))
+    ORDER BY sort_order ASC, id ASC
+  `).all();
 }
 
 function getTaskById(id) {
@@ -913,7 +1038,14 @@ function canClaim(playerTask, task) {
 module.exports = {
   VALID_TYPES,
   VALID_SIDES,
+  TASK_ELIGIBILITY_MODES,
+  TASK_ELIGIBILITY_LABELS,
   parseParams,
+  normalizeTaskEligibility,
+  taskEligibilityLabel,
+  isTaskLive,
+  playerNftAccess,
+  checkTaskEligibility,
   buildSnapshot,
   verifyTask,
   getActiveTasks,

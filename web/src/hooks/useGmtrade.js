@@ -4,16 +4,42 @@ import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solan
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { createReconnectingJsonWebSocket } from '../lib/reconnectingWebSocket';
-import { createSolanaConnection, selectFreshSolanaRpcUrl, SOLANA_RPC_URLS, solanaRpcHost } from '../lib/solanaRpc';
+import {
+  createSolanaConnection,
+  SAME_ORIGIN_SOLANA_ALCHEMY_URL,
+  SAME_ORIGIN_SOLANA_RPC_URL,
+  selectFreshSolanaRpcUrl,
+  SOLANA_RPC_URLS,
+  solanaRpcHost,
+} from '../lib/solanaRpc';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
-const POLL_MS = 12_000;
+const POLL_MS = 60_000;
 const REALTIME_RECONNECT_MAX_MS = 15_000;
 const WALLET_USDC_RPC_TIMEOUT_MS = 2_500;
 const GMTRADE_REFERRAL_URL = 'https://gmtrade.xyz/referrals/?ref=gamingperps';
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const GMTRADE_WALLET_BALANCE_RPC_URLS = [
+  ...SOLANA_RPC_URLS.filter((url) => {
+    try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'https://clashofperps.fun';
+      const host = new URL(url, origin).hostname;
+      return host !== 'solana-rpc.publicnode.com' && host !== 'solana.leorpc.com';
+    } catch {
+      return true;
+    }
+  }),
+  SAME_ORIGIN_SOLANA_RPC_URL,
+  SAME_ORIGIN_SOLANA_ALCHEMY_URL,
+].filter((url, index, list) => url && list.indexOf(url) === index);
+const GMTRADE_TX_RPC_URLS = [
+  SAME_ORIGIN_SOLANA_ALCHEMY_URL,
+  SAME_ORIGIN_SOLANA_RPC_URL,
+  ...SOLANA_RPC_URLS,
+].filter((url, index, list) => url && list.indexOf(url) === index);
 
 function playerToken(player) {
   return player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
@@ -25,7 +51,7 @@ async function fetchJson(url, options = {}) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text || null; }
   if (!res.ok) {
-    const err = new Error(data?.error || data?.detail || data?.message || `GMTrade request failed (${res.status})`);
+    const err = new Error(data?.detail || data?.message || data?.error || `GMTrade request failed (${res.status})`);
     err.status = res.status;
     err.data = data;
     throw err;
@@ -247,6 +273,9 @@ function simulationErrorMessage(value) {
   const logText = logs.join('\n');
   const err = value?.err ? JSON.stringify(value.err) : '';
   if (/insufficient funds/i.test(logText)) return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
+  if (/InstructionError/i.test(err) && /"Custom"\s*:\s*1/.test(err)) {
+    return 'GMTrade order setup failed because the wallet appears short on spendable USDC/SOL for this transaction. Reduce margin, close/cancel some orders, or add a little SOL for setup/rent.';
+  }
   return `GMTrade transaction simulation failed${err ? `: ${err}` : ''}`;
 }
 
@@ -262,6 +291,9 @@ function gmtradeUserError(error) {
   }
   if (/Tokenkeg|insufficient funds|custom program error:\s*0x1/i.test(message)) {
     return 'Insufficient GMTrade wallet USDC or SOL gas. Reduce margin or add USDC/SOL to the connected Solana wallet.';
+  }
+  if (/InstructionError.*Custom.*1|Custom[":\s]+1/i.test(message)) {
+    return 'GMTrade order setup failed because the wallet appears short on spendable USDC/SOL for this transaction. Reduce margin, close/cancel some orders, or add a little SOL for setup/rent.';
   }
   return message || 'GMTrade order failed';
 }
@@ -293,11 +325,7 @@ export function useGmtrade() {
   const realtimeWsRef = useRef(null);
   const referralWalletRef = useRef('');
 
-  const walletMismatch = useMemo(() => {
-    const registered = String(player?.wallet || '').trim();
-    const registeredSolana = SOLANA_WALLET_RE.test(registered) ? registered : '';
-    return !!registeredSolana && !!walletAddr && registeredSolana !== walletAddr;
-  }, [player?.wallet, walletAddr]);
+  const walletMismatch = false;
 
   useEffect(() => {
     if (!isActiveDex || !token || !walletAddr || walletMismatch) return;
@@ -385,7 +413,7 @@ export function useGmtrade() {
     setWalletUsdcStatus({ status: 'checking' });
     const owner = new PublicKey(walletAddr);
     const errors = [];
-    for (const rpcUrl of SOLANA_RPC_URLS) {
+    for (const rpcUrl of GMTRADE_WALLET_BALANCE_RPC_URLS) {
       try {
         const conn = createSolanaConnection(Connection, rpcUrl, 'confirmed');
         const tokenAccounts = await withTimeout(
@@ -442,9 +470,14 @@ export function useGmtrade() {
           console.warn('[GMTrade] referral read failed:', referralError?.message || referralError);
         });
       }
-      if (token && walletAddr && !walletMismatch) {
+      if (walletAddr && !walletMismatch) {
         const headers = { 'x-token': token, 'x-dex': 'gmtrade' };
-        const acct = await fetchJson(`${FUTURES_API}/gmtrade/account?address=${encodeURIComponent(walletAddr)}`, { headers });
+        const acct = token
+          ? await fetchJson(`${FUTURES_API}/gmtrade/account?address=${encodeURIComponent(walletAddr)}`, { headers }).catch(async (e) => {
+            if (e?.status !== 401 && e?.status !== 409) throw e;
+            return fetchJson(`${FUTURES_API}/account?dex=gmtrade&address=${encodeURIComponent(walletAddr)}`);
+          })
+          : await fetchJson(`${FUTURES_API}/account?dex=gmtrade&address=${encodeURIComponent(walletAddr)}`);
         rememberReferral(acct);
         setAccount(acct);
         setPositions(rows(acct?.positions));
@@ -469,8 +502,20 @@ export function useGmtrade() {
   useEffect(() => {
     if (!isActiveDex) return undefined;
     refresh();
-    const timer = setInterval(refresh, POLL_MS);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      refresh();
+    }, POLL_MS);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') refresh();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(timer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
+    };
   }, [isActiveDex, refresh]);
 
   useEffect(() => {
@@ -558,6 +603,7 @@ export function useGmtrade() {
     orderType = 'market',
     notionalUsd,
     marginUsd,
+    tokenAmount,
     reduceOnly = false,
   } = {}) => {
     if (!token) return { error: 'Missing game session token' };
@@ -575,6 +621,7 @@ export function useGmtrade() {
           amount,
           leverage,
           price,
+          token_amount: tokenAmount,
           order_type: orderType,
           notional_usd: notionalUsd,
           margin_usd: marginUsd,
@@ -657,7 +704,7 @@ export function useGmtrade() {
   }, [gmtradeLog, token]);
 
   const selectTxConnection = useCallback(async (attempt = 0, trace = '') => {
-    const selection = await selectFreshSolanaRpcUrl(SOLANA_RPC_URLS);
+    const selection = await selectFreshSolanaRpcUrl(GMTRADE_TX_RPC_URLS);
     const selectedUrl = selection?.selected?.url || '';
     if (!selectedUrl && !connection) throw new Error('Solana RPC connection is unavailable');
     const txConnection = selectedUrl
@@ -868,6 +915,7 @@ export function useGmtrade() {
         margin_usd: options?.margin_usd,
         market_token: options?.market_token || options?.marketToken,
         reduce_only: options?.reduce_only === true,
+        token_amount: options?.token_amount ?? options?.tokenAmount,
         order_type: options?.order_type || 'market',
       };
       const trace = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
@@ -966,6 +1014,7 @@ export function useGmtrade() {
             amount: margin,
             leverage,
             price: options?.price,
+            tokenAmount: options?.token_amount ?? options?.tokenAmount,
             orderType: normalizedOrderType,
             notionalUsd: options?.notional_usd,
             marginUsd: options?.margin_usd,
@@ -1058,6 +1107,8 @@ export function useGmtrade() {
       ...options,
       notional_usd: Number.isFinite(notionalUsd) && notionalUsd > 0 ? notionalUsd : options?.notional_usd,
       margin_usd: Number.isFinite(marginUsd) && marginUsd > 0 ? marginUsd : options?.margin_usd,
+      token_amount: Number.isFinite(positionTokenAmount) && positionTokenAmount > 0 ? positionTokenAmount * fraction : options?.token_amount,
+      price: Number(live?.entry_price || live?.mark_price || 0) > 0 ? Number(live.entry_price || live.mark_price) : options?.price,
       collateral_delta_usd: fullCloseCollateralDelta,
       order_type: options?.order_type || 'market',
       reduce_only: true,
@@ -1321,7 +1372,7 @@ export function useGmtrade() {
     connected: !!walletAddr,
     hasWallet: !!walletAddr,
     walletAddr,
-    registeredEvmWallet: player?.wallet || '',
+    registeredEvmWallet: registeredDexWallet(player, 'gmtrade', 'solana') || '',
     walletMismatch,
     markets,
     prices,

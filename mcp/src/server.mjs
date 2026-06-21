@@ -3019,20 +3019,14 @@ async function requireDecibelSession(session, requestedSubaccount = '') {
   const cached = decibelSessionCache.get(cacheKey);
   const requested = requestedSubaccount ? decibel.normalizeAptosAddress(requestedSubaccount) : '';
   if (cached && Date.now() - cached.at < DECIBEL_SESSION_CACHE_MS) {
-    if (requested && requested !== cached.value.subaccount) {
-      return { ok: false, error: 'subaccountAddr must match the registered wallet primary Decibel subaccount.' };
-    }
-    return cached.value;
+    return requested ? { ...cached.value, subaccount: requested } : cached.value;
   }
   const primary = decibel.normalizeAptosAddress(await decibel.getPrimarySubaccountAddr(owner));
-  if (requested && requested !== primary) {
-    return { ok: false, error: 'subaccountAddr must match the registered wallet primary Decibel subaccount.' };
-  }
   const subaccounts = await decibel.fetchUserSubaccounts(owner);
   const value = {
     ok: true,
     owner,
-    subaccount: primary,
+    subaccount: requested || primary,
     subaccounts,
   };
   decibelSessionCache.set(cacheKey, { at: Date.now(), value });
