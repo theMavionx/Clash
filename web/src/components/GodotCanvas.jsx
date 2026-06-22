@@ -904,7 +904,7 @@ const logoStyle = {
 
 const progressWrapperStyle = {
   position: 'absolute',
-  bottom: '4%', // Ще нижче (було 8%)
+  bottom: '4%', // Lower on screen (was 8%)
   width: '100%',
   display: 'flex',
   flexDirection: 'column',

@@ -1,5 +1,6 @@
 import { ExchangeClient, HttpTransport, InfoClient } from '@nktkas/hyperliquid';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { readEncryptedCredential, writeEncryptedCredential } from './encryptedCredentialStorage';
 
 export const HYPERLIQUID_TESTNET = String(import.meta.env.VITE_HYPERLIQUID_TESTNET || '').trim() === '1';
 export const HYPERLIQUID_API_URL = String(import.meta.env.VITE_HYPERLIQUID_API_URL || '').trim();
@@ -147,6 +148,12 @@ function agentFromPrivateKey(privateKey, validUntil = Date.now() + agentTtlMs())
   };
 }
 
+function agentFromStoredRecord(parsed) {
+  if (!isPrivateKey(parsed?.privateKey)) return null;
+  if (Number(parsed?.validUntil || 0) <= Date.now() + AGENT_MIN_VALID_MS) return null;
+  return agentFromPrivateKey(parsed.privateKey, parsed.validUntil);
+}
+
 function persistAgent(owner, record) {
   const payload = JSON.stringify({
     privateKey: record.privateKey,
@@ -159,6 +166,11 @@ function persistAgent(owner, record) {
   if (storage) {
     try { storage.setItem(key, payload); } catch { /* storage disabled */ }
   }
+  writeEncryptedCredential(key, {
+    privateKey: record.privateKey,
+    address: record.address,
+    validUntil: record.validUntil,
+  }).catch(() => {});
 }
 
 function readPersistedAgent(owner) {
@@ -170,10 +182,22 @@ function readPersistedAgent(owner) {
   })();
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
-    if (!isPrivateKey(parsed?.privateKey)) return null;
-    if (Number(parsed?.validUntil || 0) <= Date.now() + AGENT_MIN_VALID_MS) return null;
-    return agentFromPrivateKey(parsed.privateKey, parsed.validUntil);
+    return agentFromStoredRecord(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+/** Fallback when localStorage is blocked (Tracking Prevention / private mode). */
+export async function readHyperliquidAgentAsync(owner) {
+  const sync = readHyperliquidAgent(owner);
+  if (sync) return sync;
+  const key = agentStorageKey(owner);
+  try {
+    const parsed = await readEncryptedCredential(key);
+    const agent = agentFromStoredRecord(parsed);
+    if (agent) persistAgent(owner, agent);
+    return agent;
   } catch {
     return null;
   }

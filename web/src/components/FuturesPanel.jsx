@@ -4069,7 +4069,7 @@ function FuturesPanel() {
                   color: '#C2410C', fontSize: 11, fontWeight: 800,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
-                  <span>PHOENIX В· SOLANA MAINNET</span>
+                  <span>PHOENIX · SOLANA MAINNET</span>
                 </div>
               </>
             ) : (

@@ -153,6 +153,18 @@ export function forgetAvantisSmartWalletDelegate(owner) {
   removeStoredPayload(key);
 }
 
+/** Import delegate key pasted in Bots (same storage as Futures smart wallet). */
+export function importAvantisSmartWalletDelegate(owner, privateKey) {
+  const key = String(owner || '').toLowerCase();
+  if (!isAddress(key)) throw new Error('Connect your Base wallet (0x…).');
+  const raw = String(privateKey || '').trim();
+  const pk = raw.startsWith('0x') ? raw : `0x${raw}`;
+  if (!isPrivateKey(pk)) throw new Error('Invalid Avantis delegate private key (0x + 64 hex).');
+  const record = fromPrivateKey(pk, Date.now() + ttlMs());
+  persist(key, record);
+  return record;
+}
+
 export function createAvantisSmartWalletClient(delegate, rpcUrl = BASE_PRIMARY_RPC_URL) {
   if (!delegate?.privateKey) throw new Error('Avantis Smart Wallet delegate is missing');
   return createWalletClient({

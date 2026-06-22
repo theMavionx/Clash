@@ -190,11 +190,15 @@ export async function readEncryptedCredential(name) {
   }
   const legacyKey = db ? await idbGet(db, KEY_STORE, MASTER_KEY_ID) : null;
   if (legacyKey) {
-    const value = await tryDecrypt(legacyKey);
-    if (localKey) {
-      try { await writeEncryptedCredential(name, value); } catch {}
+    try {
+      const value = await tryDecrypt(legacyKey);
+      if (localKey) {
+        try { await writeEncryptedCredential(name, value); } catch {}
+      }
+      return value;
+    } catch {
+      return null;
     }
-    return value;
   }
   return null;
 }
@@ -218,7 +222,11 @@ export async function migratePlainLocalStorageCredential(localStorageKey, encryp
   try { parsed = JSON.parse(window.localStorage.getItem(localStorageKey) || 'null'); } catch {}
   const normalized = normalize ? normalize(parsed) : parsed;
   if (!normalized) return null;
-  await writeEncryptedCredential(encryptedName, normalized);
+  try {
+    await writeEncryptedCredential(encryptedName, normalized);
+  } catch {
+    return normalized;
+  }
   try { window.localStorage.removeItem(localStorageKey); } catch {}
   return normalized;
 }
