@@ -343,3 +343,67 @@ Time: 2026-06-22 20:01:46 +03:00
 Request:
 
 > так тоді мерджи на основну мейн гілку там все має бути
+
+### UR-2026-06-22-009
+
+Time: 2026-06-22 20:10:16 +03:00
+
+Request:
+
+> кнопку бота тільки поверни бо ми її ховали
+
+### UR-2026-06-22-010
+
+Time: 2026-06-22 20:16:14 +03:00
+
+Request:
+
+> чомусь все йде через локалхост а має йти через інший іп для бота можливо там конфіги не стоять http://62.72.35.202:8080/ сюди має йти
+
+### UR-2026-06-22-011
+
+Time: 2026-06-22 20:27:33 +03:00
+
+Request:
+
+> кнопка має бути поруч трейд а не зверху
+
+### UR-2026-06-22-012
+
+Time: 2026-06-22 20:29:50 +03:00
+
+Request:
+
+> Bot API direct requests reach 62.72.35.202:8080 but return 401 `missing Authorization header`; fix bot auth headers.
+
+### UR-2026-06-22-013
+
+Time: 2026-06-22 20:36:00 +03:00
+
+Request:
+
+> Bot API still returns 401 `unknown or revoked token`; check whether the VPS bot server is running old auth/encryption code.
+
+### UR-2026-06-22-014
+
+Time: 2026-06-22 20:40:06 +03:00
+
+Request:
+
+> спробуй знову підключатися до впс
+
+### UR-2026-06-22-015
+
+Time: 2026-06-22 20:41:09 +03:00
+
+Request:
+
+> Use provided root VPS credentials for 62.72.35.202 and inspect why bot auth still returns 401 unknown/revoked token. Secret value intentionally omitted from this log.
+
+### UR-2026-06-22-016
+
+Time: 2026-06-22 20:45:40 +03:00
+
+Request:
+
+> зроби коміт і пуш цього всього діла на гітхаб

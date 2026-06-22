@@ -19,6 +19,7 @@ import { signTypedDataCompat } from './risexClient';
 import bs58 from 'bs58';
 import { getPhoenixOneTapSession, importPhoenixOneTapSigner, PHOENIX_ONE_TAP_STORAGE_PREFIX } from './phoenixOneTap';
 import { ensureGameExchangeReady, evmWalletsForPlayer, solanaWalletsForPlayer } from './botGameAuth';
+import { botApiUrl, botAuthHeaders } from './botApiClient';
 
 const GRVT_BUILDER_ACCOUNT_ID = String(import.meta.env.VITE_GRVT_BUILDER_ACCOUNT_ID || '').trim();
 const GRVT_BUILDER_FEE_RATE = String(import.meta.env.VITE_GRVT_BUILDER_FEE_RATE || '0.01').trim();
@@ -1297,12 +1298,9 @@ export async function syncGameAccountToPhantom({
     encryptSecret,
   });
 
-  const createRes = await fetch('/api/v1/accounts', {
+  const createRes = await fetch(botApiUrl('/api/v1/accounts'), {
     method: 'POST',
-    headers: {
-      'x-token': token,
-      'content-type': 'application/json',
-    },
+    headers: botAuthHeaders(token, { 'content-type': 'application/json' }),
     body: JSON.stringify({
       exchange: ex,
       sub_account: gathered.subAccount || subAccount || '0',
@@ -1334,9 +1332,9 @@ export async function syncGameAccountToPhantom({
     };
   }
 
-  await fetch(`/api/v1/exchanges/${ex}/enable`, {
+  await fetch(botApiUrl(`/api/v1/exchanges/${ex}/enable`), {
     method: 'POST',
-    headers: { 'x-token': token },
+    headers: botAuthHeaders(token),
   }).catch(() => null);
 
   return { ok: true, exchange: ex, hint: gathered.hint };
@@ -1365,9 +1363,9 @@ export async function syncDirectAccountToPhantom({
   if (!pk) return { ok: false, error: 'Private key missing for direct sync.' };
 
   const secretRef = formatSecretRef(pk, { method: keyTransMethod, encryptSecret });
-  const createRes = await fetch('/api/v1/accounts', {
+  const createRes = await fetch(botApiUrl('/api/v1/accounts'), {
     method: 'POST',
-    headers: { 'x-token': token, 'content-type': 'application/json' },
+    headers: botAuthHeaders(token, { 'content-type': 'application/json' }),
     body: JSON.stringify({
       exchange: ex,
       sub_account: subAccount || '0',
@@ -1395,9 +1393,9 @@ export async function syncDirectAccountToPhantom({
     };
   }
 
-  await fetch(`/api/v1/exchanges/${ex}/enable`, {
+  await fetch(botApiUrl(`/api/v1/exchanges/${ex}/enable`), {
     method: 'POST',
-    headers: { 'x-token': token },
+    headers: botAuthHeaders(token),
   }).catch(() => null);
 
   return { ok: true, exchange: ex, hint };
@@ -1582,8 +1580,8 @@ async function setupAndSyncGameAccountInner({
 export async function probeExchangeBalance(token, exchangeId) {
   if (!token) return { ok: false, error: 'no token' };
   const ex = String(exchangeId || '').toLowerCase();
-  const res = await fetch(`/api/v1/exchanges/${ex}/balance`, {
-    headers: { 'x-token': token },
+  const res = await fetch(botApiUrl(`/api/v1/exchanges/${ex}/balance`), {
+    headers: botAuthHeaders(token),
   }).then((r) => r.json().then((body) => ({ ok: r.ok, status: r.status, body })));
   if (!res.ok || res.body?.success === false) {
     const raw = res.body?.error?.message

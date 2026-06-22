@@ -36,6 +36,7 @@ const FuturesPanel = lazy(lazyWithClientReload(() => import('./FuturesPanel'), '
 const ProfileModal = lazy(lazyWithClientReload(() => import('./ProfileModal'), 'ProfileModal'));
 const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'), 'BattleLogPanel'));
 const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
+const BotsPanel = lazy(lazyWithClientReload(() => import('./BotsPanel'), 'BotsPanel'));
 
 const LOCAL_GUEST_DEFAULT_DEX = 'pacifica';
 
@@ -132,6 +133,7 @@ export default function GameUI() {
   const [showProfile, setShowProfile] = useState(false);
   const [showBattleLog, setShowBattleLog] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showBots, setShowBots] = useState(false);
   const [showVenuePicker, setShowVenuePicker] = useState(false);
 
   useEffect(() => {
@@ -256,7 +258,7 @@ export default function GameUI() {
 
   // Pause island when heavy overlay panels are open (futures, shop, barn, profile).
   const barnOpen = showTroops;
-  const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard);
+  const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard || showBots);
   const showFloatingUtilities = !enemyMode?.active && !anyPanelOpen;
   useEffect(() => {
     sendToGodot('ui_overlay', { active: anyPanelOpen });
@@ -274,6 +276,9 @@ export default function GameUI() {
   useEffect(() => {
     if (showLeaderboard) addClientBreadcrumb('ui.panel_open', { panel: 'leaderboard' });
   }, [showLeaderboard]);
+  useEffect(() => {
+    if (showBots) addClientBreadcrumb('ui.panel_open', { panel: 'bots' });
+  }, [showBots]);
 
   useEffect(() => {
     if (!solanaMobileReady || !isSolanaMobile) return;
@@ -364,7 +369,7 @@ export default function GameUI() {
           onPick={chooseVenue}
         />
       )}
-      <ActionButtons onOpenBattleLog={() => setShowBattleLog(true)} />
+      <ActionButtons onOpenBattleLog={() => setShowBattleLog(true)} onOpenBots={() => setShowBots(true)} />
       <ErrorToast message={error} />
       <FpsTracker />
       <EnemyHeader />
@@ -396,6 +401,10 @@ export default function GameUI() {
 
           {showLeaderboard && (
             <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
+          )}
+
+          {showBots && (
+            <BotsPanel onClose={() => setShowBots(false)} />
           )}
 
         </Suspense>
