@@ -35,20 +35,15 @@ import { ed25519 } from '@noble/curves/ed25519';
 // usePacifica to avoid a circular import.
 import { pacificaNow } from '../lib/pacificaTime';
 import { reportDiag } from '../lib/diagReporter';
+import {
+  decodeAgentSecret,
+  forgetPacificaAgent,
+  readPacificaAgent,
+} from '../lib/pacificaAgentStorage';
+import { bindPacificaAgent as bindPacificaAgentCore } from '../lib/pacificaBind';
 
 const API = 'https://api.pacifica.fi/api/v1';
-// How long we keep an agent wallet stored client-side. Pacifica itself
-// doesn't expire bound agents — this is a self-imposed safety window so
-// a long-abandoned session can't be revived from a stale key.
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const PACIFICA_SIGN_EXPIRY_WINDOW_MS = 30_000;
-
-// localStorage key — namespaced per master wallet so multi-account
-// browsers don't crosstalk. The stored value is JSON:
-//   { agentSecretB58, agentPubkey, master, createdAt }
-function storageKeyFor(master) {
-  return `clash_pacifica_agent:${master}`;
-}
 
 function buildMessage(type, payload, timestamp = pacificaNow()) {
   // Same canonical shape Pacifica uses everywhere: sorted keys, compact
@@ -93,32 +88,26 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
   const [bindError, setBindError] = useState(null);
   const agentRef = useRef(null);
 
-  // Restore from localStorage on mount / wallet change.
+  // Restore from browser storage on mount / wallet change.
   useEffect(() => {
     if (!walletAddr) {
       setAgent(null);
       agentRef.current = null;
       return;
     }
-    try {
-      const raw = localStorage.getItem(storageKeyFor(walletAddr));
-      if (!raw) return;
-      const obj = JSON.parse(raw);
-      if (!obj?.agentSecretB58 || !obj?.agentPubkey) return;
-      // TTL guard
-      if (obj.createdAt && Date.now() - obj.createdAt > SESSION_TTL_MS) {
-        localStorage.removeItem(storageKeyFor(walletAddr));
-        return;
-      }
-      const secret = bs58.decode(obj.agentSecretB58).slice(0, 32);
+    let cancelled = false;
+    readPacificaAgent(walletAddr).then((restored) => {
+      if (cancelled || !restored) return;
+      const secret = decodeAgentSecret(restored.privateKey);
       const next = {
-        agentPubkey: obj.agentPubkey,
-        createdAt: obj.createdAt || Date.now(),
+        agentPubkey: restored.agentPubkey,
+        createdAt: restored.createdAt || Date.now(),
         secret,
       };
       agentRef.current = next;
       setAgent({ agentPubkey: next.agentPubkey, createdAt: next.createdAt });
-    } catch { /* corrupt entry — ignore */ }
+    }).catch(() => {});
+    return () => { cancelled = true; };
   }, [walletAddr]);
 
   // Bind a fresh agent. ONE master-wallet signature.
@@ -128,99 +117,21 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
     setBinding(true);
     setBindError(null);
     try {
-      const { secret, pubkey } = generateAgentKeypair();
-      const agentPubkeyB58 = bs58.encode(pubkey);
-
-      const timestamp = pacificaNow();
-      const message = buildMessage(
-        'bind_agent_wallet',
-        { agent_wallet: agentPubkeyB58 },
-        timestamp,
-      );
-      const msgBytes = new TextEncoder().encode(message);
-      const sigBytes = await masterSign(msgBytes);
-      if (!sigBytes) throw new Error('No signature returned');
-      const signature = bs58.encode(sigBytes);
-
-      const body = {
-        account: walletAddr,
-        agent_wallet: agentPubkeyB58,
-        signature,
-        timestamp,
-        expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS,
-      };
-
-      const res = await fetch(`${API}/agent/bind`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      const result = await bindPacificaAgentCore({
+        walletAddr,
+        masterSign: async (msgBytes) => masterSign(msgBytes),
       });
-      const text = await res.text();
-      let data = null;
-      try { data = JSON.parse(text); } catch { /* non-JSON */ }
-      if (!res.ok || data?.error) {
-        const reason = data?.error || data?.message || text || 'Bind failed';
-        // Bind failures are the upstream cause of every "Invalid
-        // message" leverage/margin issue — if bind itself rejects on
-        // Solflare master sign, that confirms the wallet is fully
-        // incompatible (not just a per-endpoint validator quirk).
-        // Capture the exact signed message + sig so we can diff
-        // canonical-form across wallets.
-        reportDiag({
-          path: 'master',
-          type: 'bind_agent_wallet',
-          endpoint: '/agent/bind',
-          account: walletAddr,
-          agent_pubkey: agentPubkeyB58,
-          status: res.status,
-          error_kind: String(reason).slice(0, 120),
-          signed_message: message,
-          signed_message_length: msgBytes.length,
-          signature_b58: signature,
-          response_text: text,
-          response_body: data,
-        });
-        throw new Error(reason);
+      const restored = await readPacificaAgent(walletAddr);
+      if (restored?.privateKey) {
+        const secret = decodeAgentSecret(restored.privateKey);
+        agentRef.current = {
+          agentPubkey: restored.agentPubkey,
+          createdAt: restored.createdAt || Date.now(),
+          secret,
+        };
+        setAgent({ agentPubkey: restored.agentPubkey, createdAt: restored.createdAt });
       }
-
-      // Persist (encoded). Storing the raw 32-byte secret is sensitive but
-      // (a) it's scoped to this browser, (b) Pacifica agent keys can only
-      // trade — they cannot withdraw or transfer USDC. Worst case if the
-      // browser is compromised: positions opened/closed against the user.
-      // Mitigation lives in Pacifica's permission model + the user's
-      // ability to revoke at any time from Profile.
-      const createdAt = Date.now();
-      const stored = {
-        agentSecretB58: bs58.encode(secret),
-        agentPubkey: agentPubkeyB58,
-        master: walletAddr,
-        createdAt,
-      };
-      try {
-        localStorage.setItem(storageKeyFor(walletAddr), JSON.stringify(stored));
-      } catch { /* storage disabled */ }
-
-      const next = { agentPubkey: agentPubkeyB58, createdAt, secret };
-      agentRef.current = next;
-      setAgent({ agentPubkey: agentPubkeyB58, createdAt });
-
-      // Persist the agent pubkey to our server using the SAME signed
-      // body Pacifica's /agent/bind already accepted. The server
-      // re-verifies the master signature against players.wallet so
-      // a malicious client can't claim a stranger's agent for itself
-      // and farm gold from their trade history. Best-effort — token
-      // race at first-login is fine, the agent will be retried.
-      try {
-        const token = window._playerToken;
-        if (token) {
-          fetch('/api/pacifica/agent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-token': token },
-            body: JSON.stringify(body), // exact bind body: account, agent_wallet, signature, timestamp, expiry_window
-          }).catch(() => { /* non-fatal */ });
-        }
-      } catch { /* non-fatal */ }
-      return { agentPubkey: agentPubkeyB58 };
+      return result;
     } catch (e) {
       setBindError(e?.message || String(e));
       throw e;
@@ -252,9 +163,7 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
   // a separate call so the UI can offer "revoke from server" in addition
   // to "forget locally".
   const forgetLocally = useCallback(() => {
-    if (walletAddr) {
-      try { localStorage.removeItem(storageKeyFor(walletAddr)); } catch { /* noop */ }
-    }
+    if (walletAddr) forgetPacificaAgent(walletAddr);
     agentRef.current = null;
     setAgent(null);
   }, [walletAddr]);

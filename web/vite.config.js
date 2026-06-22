@@ -59,14 +59,25 @@ const SOLANA_ALCHEMY_API_KEY = process.env.SOLANA_ALCHEMY_API_KEY
   || '';
 const SOLANA_RPC_PROXY_TARGET = SOLANA_ALCHEMY_API_KEY
   ? 'https://solana-mainnet.g.alchemy.com'
-  : 'https://mainnet.helius-rpc.com';
+  : SOLANA_HELIUS_API_KEY
+    ? 'https://mainnet.helius-rpc.com'
+    : 'https://solana.leorpc.com';
 const SOLANA_RPC_WS_PROXY_TARGET = SOLANA_ALCHEMY_API_KEY
   ? 'wss://solana-mainnet.g.alchemy.com'
-  : 'wss://mainnet.helius-rpc.com';
+  : SOLANA_HELIUS_API_KEY
+    ? 'wss://mainnet.helius-rpc.com'
+    : 'wss://solana.leorpc.com';
 const solanaProxyRewrite = () => {
   if (SOLANA_ALCHEMY_API_KEY) return `/v2/${SOLANA_ALCHEMY_API_KEY}`;
-  return SOLANA_HELIUS_API_KEY ? `/?api-key=${SOLANA_HELIUS_API_KEY}` : '/?api-key=';
+  if (SOLANA_HELIUS_API_KEY) return `/?api-key=${SOLANA_HELIUS_API_KEY}`;
+  return '/?api_key=FREE';
 };
+const solanaAlchemyProxyTarget = SOLANA_ALCHEMY_API_KEY
+  ? 'https://solana-mainnet.g.alchemy.com'
+  : 'https://solana.leorpc.com';
+const solanaAlchemyProxyRewrite = () => (
+  SOLANA_ALCHEMY_API_KEY ? `/v2/${SOLANA_ALCHEMY_API_KEY}` : '/?api_key=FREE'
+);
 const ARBITRUM_ALCHEMY_KEY = process.env.ARBITRUM_ALCHEMY_KEY
   || viteEnv.ARBITRUM_ALCHEMY_KEY
   || process.env.VITE_ARBITRUM_ALCHEMY_KEY
@@ -92,6 +103,11 @@ const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || 'http://127.0.0.1:3999';
 const FUTURES_PROXY_IS_DIRECT = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\b/i.test(FUTURES_PROXY_TARGET)
   || /^https?:\/\/[^/]+:3999\b/i.test(FUTURES_PROXY_TARGET);
+// Bot/strategy REST + WS must go through the Clash game server so it can
+// validate `x-token` and forward `X-Tenant-Id` to Phantom. Direct :8080
+// bypasses that and every authenticated bot call 401s in local dev.
+const BOT_API_PROXY_TARGET = API_PROXY_TARGET || 'http://127.0.0.1:4000';
+const BOT_WS_PROXY_TARGET = WS_PROXY_TARGET || 'ws://127.0.0.1:4000';
 
 if (process.env.NODE_ENV !== 'production') {
   console.log('[vite proxy]', {
@@ -154,6 +170,9 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
+    port: 5173,
+    strictPort: true,
     headers: {
       // COEP intentionally not set: it strips credentials from cross-origin
       // iframes, which breaks Privy's auth.privy.io embedded-wallet iframe
@@ -161,6 +180,52 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
     proxy: {
+      // ─── Phantom trading bot (via Clash server :4000 → Phantom :8080) ─
+      // BotsPanel sends the game session `x-token`; Clash auth + proxyToBot
+      // attach X-Tenant-Id for Phantom. Must be BEFORE generic '/api'.
+      '/api/v1/bot/ws': {
+        target: BOT_WS_PROXY_TARGET,
+        ws: true,
+        changeOrigin: true,
+      },
+      '/api/v1/strategies': {
+        target: BOT_API_PROXY_TARGET,
+        changeOrigin: true,
+      },
+      '/api/v1/bot': {
+        target: BOT_API_PROXY_TARGET,
+        changeOrigin: true,
+      },
+      '/api/v1/exchanges': {
+        target: BOT_API_PROXY_TARGET,
+        changeOrigin: true,
+      },
+      '/api/v1/orders': {
+        target: BOT_API_PROXY_TARGET,
+        changeOrigin: true,
+      },
+      '/api/v1/analytics': {
+        target: BOT_API_PROXY_TARGET,
+        changeOrigin: true,
+      },
+      '/api/v1/accounts': {
+        target: BOT_API_PROXY_TARGET,
+        changeOrigin: true,
+      },
+      '/api/v1/config': {
+        target: BOT_API_PROXY_TARGET,
+        changeOrigin: true,
+      },
+      '/health': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/ready': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      // ─── End Phantom bot proxies ────────────────────────────────────
+
       // Futures (Avantis / Pacifica custodial) — separate server-futures on :3999.
       // Must be declared BEFORE '/api' because vite matches in insertion order.
       // server-futures mounts its router at `/api`, so the proxy must strip
@@ -193,7 +258,7 @@ export default defineConfig({
       // so the API key NEVER ships in the browser bundle. Set
       // ARBITRUM_ALCHEMY_KEY locally; do not commit provider keys here.
       '/rpc/solana-alchemy-ws': {
-        target: 'wss://solana-mainnet.g.alchemy.com',
+        target: SOLANA_ALCHEMY_API_KEY ? 'wss://solana-mainnet.g.alchemy.com' : 'wss://solana.leorpc.com',
         ws: true,
         changeOrigin: true,
         secure: true,
@@ -203,7 +268,7 @@ export default defineConfig({
             proxyReq.removeHeader('referer');
           });
         },
-        rewrite: () => SOLANA_ALCHEMY_API_KEY ? `/v2/${SOLANA_ALCHEMY_API_KEY}` : '/v2/',
+        rewrite: () => (SOLANA_ALCHEMY_API_KEY ? `/v2/${SOLANA_ALCHEMY_API_KEY}` : '/?api_key=FREE'),
       },
       '/rpc/solana-ws': {
         target: SOLANA_RPC_WS_PROXY_TARGET,
@@ -219,7 +284,7 @@ export default defineConfig({
         rewrite: solanaProxyRewrite,
       },
       '/rpc/solana-alchemy': {
-        target: 'https://solana-mainnet.g.alchemy.com',
+        target: solanaAlchemyProxyTarget,
         changeOrigin: true,
         secure: true,
         configure: (proxy) => {
@@ -228,7 +293,7 @@ export default defineConfig({
             proxyReq.removeHeader('referer');
           });
         },
-        rewrite: () => SOLANA_ALCHEMY_API_KEY ? `/v2/${SOLANA_ALCHEMY_API_KEY}` : '/v2/',
+        rewrite: solanaAlchemyProxyRewrite,
       },
       '/rpc/solana-leorpc': {
         target: 'https://solana.leorpc.com',
@@ -362,6 +427,7 @@ export default defineConfig({
       '/api': {
         target: API_PROXY_TARGET || 'http://127.0.0.1:4000',
         changeOrigin: true,
+        ws: true,
         proxyTimeout: 30000,
         timeout: 30000,
         configure: (proxy) => {

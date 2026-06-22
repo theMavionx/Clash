@@ -1,4 +1,5 @@
 import { Keypair, PublicKey } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { kitInstructionToWeb3 } from './phoenixTx';
 
 export const PHOENIX_ONE_TAP_STORAGE_PREFIX = 'clash:phoenix:one_tap:v1';
@@ -133,6 +134,40 @@ export function markPhoenixOneTapSession(owner, patch = {}) {
 export function clearPhoenixOneTapSession(owner) {
   if (!hasBrowserStorage() || !owner) return;
   window.localStorage.removeItem(storageKey(owner));
+}
+
+/** Import Phoenix one-tap authority secret (base58/hex) for Bots sync. */
+export function importPhoenixOneTapSigner(owner, secretInput) {
+  if (!hasBrowserStorage() || !owner) {
+    throw new Error('Browser storage unavailable');
+  }
+  const normalizedOwner = normalizeOwner(owner);
+  let secretBytes;
+  const raw = String(secretInput || '').trim();
+  try {
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,88}$/.test(raw)) {
+      secretBytes = bs58.decode(raw);
+    } else {
+      const hex = raw.startsWith('0x') ? raw.slice(2) : raw;
+      secretBytes = Uint8Array.from(hex.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
+    }
+    const keypair = Keypair.fromSecretKey(secretBytes);
+    const now = Date.now();
+    writePhoenixOneTapRecord(normalizedOwner, {
+      version: 1,
+      owner: normalizedOwner,
+      publicKey: keypair.publicKey.toBase58(),
+      secretKey: encodeSecret(keypair.secretKey),
+      createdAt: now,
+      expiresAt: now + PHOENIX_ONE_TAP_SESSION_TTL_MS,
+      enabled: true,
+      approved: true,
+      policy: PHOENIX_ONE_TAP_POLICY,
+    });
+    return { owner: normalizedOwner, publicKey: keypair.publicKey.toBase58() };
+  } catch {
+    throw new Error('Invalid Phoenix Solana secret (base58 or hex).');
+  }
 }
 
 export async function getPhoenixOneTapSolLamports(connection, publicKey) {

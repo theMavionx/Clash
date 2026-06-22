@@ -3176,7 +3176,7 @@ function ReferralDetailsDrawer({ referrer, referrals, events, onClose }) {
     return acc;
   }, { confirmed: 0, pending: 0, paid: 0, events: 0 });
   return (
-    <Drawer title={`Referrals В· ${referrer.player_name || referrer.player_id}`} subtitle={`${referrals.length} invited players via /r/${referrer.code || '-'}`} onClose={onClose}>
+    <Drawer title={`Referrals · ${referrer.player_name || referrer.player_id}`} subtitle={`${referrals.length} invited players via /r/${referrer.code || '-'}`} onClose={onClose}>
       <div className="admin-grid">
         <StatsGrid stats={[
           { label: 'Invited', value: num(referrals.length), tone: 'green' },

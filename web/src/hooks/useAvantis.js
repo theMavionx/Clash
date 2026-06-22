@@ -26,9 +26,12 @@ import {
   AVANTIS_SMART_WALLET_MIN_ETH,
   createAvantisSmartWalletClient,
   forgetAvantisSmartWalletDelegate,
-  getOrCreateAvantisSmartWalletDelegate,
   readAvantisSmartWalletDelegate,
 } from '../lib/avantisSmartWallet';
+import {
+  enableAvantisSmartWallet,
+  refreshAvantisSmartWalletStatus,
+} from '../lib/avantisSmartWalletSetup';
 
 const FUTURES_API = '/api/futures';
 
@@ -496,34 +499,7 @@ export function useAvantis() {
       smartWalletRef.current = null;
       return null;
     }
-    const local = readAvantisSmartWalletDelegate(walletAddr);
-    const onchain = await fetchAvantisDelegate(publicClient, walletAddr);
-    const onchainLower = String(onchain || '').toLowerCase();
-    let ethRaw = 0n;
-    if (local?.address) {
-      try {
-        ethRaw = await publicClient.getBalance({ address: local.address });
-      } catch {
-        ethRaw = 0n;
-      }
-    }
-    const next = local ? {
-      address: local.address,
-      validUntil: local.validUntil,
-      onchainDelegate: onchain || null,
-      active: onchainLower === String(local.address).toLowerCase(),
-      eth: Number(formatEther(ethRaw)),
-      ethRaw,
-      needsEth: ethRaw < AVANTIS_SMART_WALLET_MIN_ETH,
-    } : {
-      address: null,
-      validUntil: 0,
-      onchainDelegate: onchain || null,
-      active: false,
-      eth: 0,
-      ethRaw: 0n,
-      needsEth: true,
-    };
+    const next = await refreshAvantisSmartWalletStatus(publicClient, walletAddr);
     setSmartWallet(next);
     smartWalletRef.current = next;
     return next;
@@ -923,32 +899,22 @@ export function useAvantis() {
   // ───── Guards ─────
   const enableSmartWallet = useCallback(async () => {
     if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
-    await ensureChain();
-    const delegate = getOrCreateAvantisSmartWalletDelegate(walletAddr);
-    let hash = null;
-    const current = await fetchAvantisDelegate(publicClient, walletAddr);
-    if (String(current || '').toLowerCase() !== String(delegate.address).toLowerCase()) {
-      hash = await walletClient.writeContract({
-        address: TRADING_ADDRESS,
-        abi: TRADING_ABI,
-        functionName: 'setDelegate',
-        args: [delegate.address],
-      });
-      await waitForReceiptWithTimeout(publicClient, hash);
-    }
-
-    const MAX_UINT256 = (1n << 256n) - 1n;
-    await ensureApproval(MAX_UINT256);
+    const result = await enableAvantisSmartWallet({
+      walletClient,
+      walletAddr,
+      publicClient,
+      ensureChain,
+    });
     const status = await refreshSmartWallet();
     return {
-      tx_hash: hash,
-      address: delegate.address,
+      tx_hash: result.tx_hash,
+      address: result.address,
       active: !!status?.active,
       needs_eth: !!status?.needsEth,
       eth: status?.eth ?? 0,
-      valid_until: delegate.validUntil,
+      valid_until: result.valid_until,
     };
-  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, refreshSmartWallet]);
+  }, [walletClient, walletAddr, publicClient, ensureChain, refreshSmartWallet]);
 
   const revokeSmartWallet = useCallback(async () => {
     if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
