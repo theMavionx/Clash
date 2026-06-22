@@ -3135,14 +3135,14 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss, onCancelPe
   const mintLabel = quantity > 1 ? `${quantity} ${SALE_NFT_NAME}s` : SALE_NFT_NAME;
   return (
     <div style={overlayStyles.root}>
-      {/* Backdrop вЂ” soft cream wash with a moving radial sheen so it feels
+      {/* Backdrop — soft cream wash with a moving radial sheen so it feels
           "alive" during the wait instead of a flat grey curtain. */}
       <div style={overlayStyles.backdrop} className="nft-mint-backdrop" />
 
       {success && (
         <>
           {/* Rotating sunburst behind the card. CSS gradient does the
-              heavy lifting вЂ” no PNG / no extra layer. */}
+              heavy lifting — no PNG / no extra layer. */}
           <div style={overlayStyles.rays} className="nft-mint-rays" />
           {/* Soft ambient pulse that breathes in and out under the rays. */}
           <div style={overlayStyles.successHalo} className="nft-mint-halo" />
@@ -3758,7 +3758,7 @@ const MINT_ANIM_CSS = `
     );
   }
 
-  /* Solana's brand gradient pushed darker (deeper purple в†’ forest green)
+  /* Solana's brand gradient pushed darker (deeper purple → forest green)
      so the ring reads as branded rather than neon. */
   .nft-chain-glow-solana::before {
     background: conic-gradient(
@@ -4982,7 +4982,7 @@ const styles = {
     border: 'none',
     borderRadius: 9,
     // Same parchment colour as the panel so the inner card visually
-    // melts into the background вЂ” only the rotating gradient ring
+    // melts into the background — only the rotating gradient ring
     // remains visible. Padding is dialled down so the ring hugs the
     // text instead of framing a tall empty block.
     background: '#fdf8e7',

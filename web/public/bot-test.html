@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phantom Bot — Test Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22252f;
+    --border: #2a2d3a;
+    --text: #e4e4e7;
+    --text-muted: #71717a;
+    --accent: #3b82f6;
+    --green: #22c55e;
+    --red: #ef4444;
+    --orange: #f59e0b;
+    --purple: #a855f7;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px;
+  }
+  h1 { font-size: 24px; font-weight: 800; margin-bottom: 4px; }
+  .subtitle { color: var(--text-muted); font-size: 13px; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    transition: border-color .2s;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+  }
+  .kpi { font-size: 28px; font-weight: 700; }
+  .kpi-row { display: flex; gap: 8px; align-items: baseline; }
+  .kpi-sub { font-size: 12px; color: var(--text-muted); }
+  .status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+  }
+  .status-dot.live { background: var(--green); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .5; }
+  }
+  .header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .btn {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .btn:hover { background: var(--accent); border-color: var(--accent); }
+  .btn.danger:hover { background: var(--red); border-color: var(--red); }
+  .btn.success { background: var(--green); border-color: var(--green); color: #000; }
+  .btn.success:hover { opacity: .85; }
+  .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  tr:hover td { background: var(--surface2); }
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .tag-running { background: rgba(34,197,94,.15); color: var(--green); }
+  .tag-stopped { background: rgba(239,68,68,.15); color: var(--red); }
+  .tag-configured { background: rgba(245,158,11,.15); color: var(--orange); }
+  .log-box {
+    background: #0d0f14;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    line-height: 1.6;
+  }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid #1a1d25; }
+  .log-time { color: var(--text-muted); }
+  .log-type { font-weight: 600; }
+  .log-type.tick { color: var(--accent); }
+  .log-type.strategy { color: var(--purple); }
+  .log-type.order { color: var(--green); }
+  .log-type.alert { color: var(--orange); }
+  .exchange-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--surface2);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .full-width { grid-column: 1 / -1; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="header-row">
+  <div>
+    <h1>⚡ Phantom Bot — Test Dashboard</h1>
+    <div class="subtitle">
+      <span class="status-dot" id="apiDot"></span>
+      <span id="apiStatus">Connecting...</span>
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      <span class="status-dot" id="wsDot"></span>
+      <span id="wsStatus">WS: Disconnected</span>
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      <span id="lastUpdate">—</span>
+    </div>
+  </div>
+  <div class="btn-group">
+    <button class="btn success" onclick="startAll()">▶ Start All</button>
+    <button class="btn danger" onclick="stopAll()">⏹ Stop All</button>
+    <button class="btn" onclick="refreshAll()">↻ Refresh</button>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="grid">
+  <div class="card">
+    <div class="card-title">Adapters Registered</div>
+    <div class="kpi" id="adapterCount">—</div>
+    <div class="kpi-sub" id="adapterList"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Strategies Running</div>
+    <div class="kpi-row">
+      <div class="kpi" id="runningCount">—</div>
+      <div class="kpi-sub">/ <span id="configuredCount">—</span> configured</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Bot Status</div>
+    <div class="kpi" id="botStatus">—</div>
+    <div class="kpi-sub" id="botUptime"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Total Volume (24h)</div>
+    <div class="kpi" id="totalVolume">$0</div>
+  </div>
+</div>
+
+<!-- Strategies Table -->
+<div class="card full-width" style="margin-bottom:16px">
+  <div class="card-title">Strategy Instances</div>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Type</th>
+        <th>Exchange</th>
+        <th>Symbols</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="strategiesBody">
+      <tr><td colspan="6" style="text-align:center;color:var(--text-muted)">Loading...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Exchanges + WebSocket Log -->
+<div class="two-col" style="margin-bottom:16px">
+  <div class="card">
+    <div class="card-title">Exchange Adapters</div>
+    <table>
+      <thead><tr><th>Exchange</th><th>Type</th><th>Maker Fee</th><th>Taker Fee</th></tr></thead>
+      <tbody id="exchangesBody">
+        <tr><td colspan="4" style="text-align:center;color:var(--text-muted)">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="card-title">WebSocket Live Feed</div>
+    <div class="log-box" id="wsLog">
+      <div style="color:var(--text-muted)">Connecting to ws://localhost:8080/ws ...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = 'http://localhost:8080';
+let ws = null;
+let wsLogEl, runningIds = new Set();
+
+// ─── API helpers ─────────────────────────────────────────────
+async function api(path, opts) {
+  const res = await fetch(API + path, opts);
+  return res.json();
+}
+
+// ─── Fetch & render ──────────────────────────────────────────
+async function fetchHealth() {
+  try {
+    const data = await api('/health');
+    document.getElementById('apiDot').classList.add('live');
+    document.getElementById('apiStatus').textContent = 'API Connected';
+    if (data?.data) {
+      document.getElementById('botUptime').textContent =
+        `Uptime: ${Math.floor(data.data.uptime_secs / 60)}m ${data.data.uptime_secs % 60}s`;
+    }
+  } catch {
+    document.getElementById('apiDot').classList.remove('live');
+    document.getElementById('apiStatus').textContent = 'API Offline';
+  }
+}
+
+async function fetchBotStatus() {
+  try {
+    const data = await api('/api/v1/bot/status');
+    if (data?.data) {
+      const d = data.data;
+      document.getElementById('botStatus').textContent = d.status || 'unknown';
+      document.getElementById('botUptime').textContent =
+        `Orders: ${d.active_orders} | Positions: ${d.active_positions} | Kill: ${d.kill_switch ? 'ON' : 'OFF'}`;
+    }
+  } catch {}
+}
+
+async function fetchExchanges() {
+  try {
+    const data = await api('/api/v1/exchanges');
+    if (!data?.data) return;
+    const list = data.data;
+    document.getElementById('adapterCount').textContent = list.length;
+    document.getElementById('adapterList').textContent =
+      list.map(e => e.name || e.id).join(', ');
+    document.getElementById('exchangesBody').innerHTML = list.map(e => `
+      <tr>
+        <td><span class="exchange-badge">${e.name || e.id}</span></td>
+        <td>${e.dex_type || '—'}</td>
+        <td>${e.maker_fee_bps ?? '—'} bps</td>
+        <td>${e.taker_fee_bps ?? '—'} bps</td>
+      </tr>
+    `).join('');
+  } catch {}
+}
+
+async function fetchStrategies() {
+  try {
+    const data = await api('/api/v1/strategies/instances');
+    if (!data?.data) return;
+    const { running = [], configured = [] } = data.data;
+    runningIds = new Set(running.map(r => r.id));
+    document.getElementById('runningCount').textContent = running.length;
+    document.getElementById('configuredCount').textContent = configured.length;
+
+    const all = [...configured];
+    running.forEach(r => {
+      if (!all.some(c => c.id === r.id)) all.push(r);
+    });
+
+    document.getElementById('strategiesBody').innerHTML = all.map(h => {
+      const isRunning = runningIds.has(h.id);
+      const parts = h.id.split(':');
+      const type = parts[0] || h.kind || '—';
+      const exchange = parts[1] || '—';
+      const symbols = (h.symbols || []).join(', ') || parts.slice(2).join(', ') || '—';
+      const tag = isRunning
+        ? '<span class="tag tag-running">● Running</span>'
+        : '<span class="tag tag-configured">○ Configured</span>';
+      return `<tr>
+        <td style="font-family:monospace;font-size:12px">${h.id}</td>
+        <td>${type}</td>
+        <td><span class="exchange-badge">${exchange}</span></td>
+        <td>${symbols}</td>
+        <td>${tag}</td>
+        <td>
+          ${isRunning
+            ? `<button class="btn danger" onclick="stopStrategy('${h.id}')" style="padding:4px 10px;font-size:11px">Stop</button>`
+            : `<button class="btn success" onclick="startStrategy('${h.id}')" style="padding:4px 10px;font-size:11px">Start</button>`
+          }
+        </td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    console.error('fetchStrategies:', e);
+  }
+}
+
+async function fetchVolume() {
+  try {
+    const data = await api('/api/v1/analytics/volume');
+    if (data?.data) {
+      const vol = Number(data.data.total_volume_usd || 0);
+      document.getElementById('totalVolume').textContent =
+        '$' + vol.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    }
+  } catch {}
+}
+
+// ─── Actions ─────────────────────────────────────────────────
+async function startAll() {
+  await api('/api/v1/strategies/start-all', { method: 'POST' });
+  addLog('strategy', 'Started all strategies');
+  setTimeout(fetchStrategies, 500);
+}
+
+async function stopAll() {
+  await api('/api/v1/strategies/stop-all', { method: 'POST' });
+  addLog('strategy', 'Stopped all strategies');
+  setTimeout(fetchStrategies, 500);
+}
+
+async function startStrategy(id) {
+  await api(`/api/v1/strategies/${encodeURIComponent(id)}/start`, { method: 'POST' });
+  addLog('strategy', `Started: ${id}`);
+  setTimeout(fetchStrategies, 500);
+}
+
+async function stopStrategy(id) {
+  await api(`/api/v1/strategies/${encodeURIComponent(id)}/stop`, { method: 'POST' });
+  addLog('strategy', `Stopped: ${id}`);
+  setTimeout(fetchStrategies, 500);
+}
+
+// ─── WebSocket ───────────────────────────────────────────────
+function connectWs() {
+  wsLogEl = document.getElementById('wsLog');
+  ws = new WebSocket('ws://localhost:8080/ws');
+
+  ws.onopen = () => {
+    document.getElementById('wsDot').classList.add('live');
+    document.getElementById('wsStatus').textContent = 'WS: Connected';
+    addLog('strategy', 'WebSocket connected');
+    ws.send(JSON.stringify({
+      action: 'subscribe',
+      channels: ['ticks', 'orders', 'positions', 'pnl', 'alerts', 'volume_stats', 'strategies']
+    }));
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      const type = msg.type || 'unknown';
+      let detail = '';
+      if (type === 'tick') {
+        const d = msg.data || {};
+        detail = `${d.symbol} mid=${d.mid} bid=${d.bid} ask=${d.ask}`;
+        addLog('tick', detail);
+      } else if (type === 'order_update') {
+        const d = msg.data || {};
+        detail = `${d.exchange}:${d.symbol} ${d.status} size=${d.filled_size}`;
+        addLog('order', detail);
+      } else if (type === 'strategy_started' || type === 'strategy_stopped' || type === 'strategy_error') {
+        detail = `${type}: ${JSON.stringify(msg.data || {})}`;
+        addLog('strategy', detail);
+        fetchStrategies();
+      } else if (type === 'pong') {
+        // ignore pongs
+      } else {
+        detail = JSON.stringify(msg).substring(0, 120);
+        addLog('alert', `${type}: ${detail}`);
+      }
+    } catch {}
+  };
+
+  ws.onclose = () => {
+    document.getElementById('wsDot').classList.remove('live');
+    document.getElementById('wsStatus').textContent = 'WS: Reconnecting...';
+    setTimeout(connectWs, 3000);
+  };
+
+  ws.onerror = () => {};
+}
+
+function addLog(type, text) {
+  if (!wsLogEl) return;
+  const time = new Date().toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">${time}</span> <span class="log-type ${type}">[${type}]</span> ${text}`;
+  wsLogEl.appendChild(entry);
+  // Keep last 200 entries
+  while (wsLogEl.children.length > 200) wsLogEl.removeChild(wsLogEl.firstChild);
+  wsLogEl.scrollTop = wsLogEl.scrollHeight;
+}
+
+// ─── Init ────────────────────────────────────────────────────
+async function refreshAll() {
+  document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  await Promise.all([
+    fetchHealth(),
+    fetchBotStatus(),
+    fetchExchanges(),
+    fetchStrategies(),
+    fetchVolume(),
+  ]);
+}
+
+refreshAll();
+connectWs();
+setInterval(refreshAll, 5000);
+</script>
+</body>
+</html>
