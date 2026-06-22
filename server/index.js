@@ -1326,7 +1326,7 @@ let localToolsPlayer = '';
 const ADMIN_BUILDING_TOOL_DEFS = [
   { type: 'altar', label: 'Altar', max: 1 },
   { type: 'archer_tower', label: 'Archer Tower', max: 5 },
-  { type: 'barn', label: 'Barn', max: 4 },
+  { type: 'barn', label: 'Barn', max: 5 },
   { type: 'mage_tower', label: 'Mage Tower', max: 5 },
   { type: 'mine', label: 'Mine', max: 5 },
   { type: 'mortar', label: 'Mortar', max: 1 },

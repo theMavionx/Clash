@@ -1176,6 +1176,18 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     setShopPurchaseResult(null);
   }, [shopPurchaseResult]);
 
+  const handleCancelShopPurchaseOverlay = useCallback(() => {
+    setShopPurchaseStatus('idle');
+    setShopPurchaseResult(null);
+    setBusy(null);
+    setNotice('Purchase check is still running. If you approved in wallet, wait a moment before buying again.');
+    addClientBreadcrumb('shop.purchase_overlay_cancelled', {
+      dex,
+      chain: shopChain,
+      payment: shopPayment,
+    }, 'warn');
+  }, [dex, shopChain, shopPayment]);
+
   const primaryState = getPrimaryState({
     selected,
     soldOut: SALE_NFT_MINT_SOLD_OUT || SALE_NFT_MINT_LOCKED,
@@ -1226,6 +1238,17 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     setNotice(null);
     onClose?.();
   }, [onClose]);
+
+  const handleCancelMintOverlay = useCallback(() => {
+    setMintStatus('idle');
+    setMintResult(null);
+    setBusy(null);
+    setNotice('Mint check is still running. If you approved in wallet, wait a moment before minting again.');
+    addClientBreadcrumb('nft.mint_overlay_cancelled', {
+      dex,
+      chain: selectedChain,
+    }, 'warn');
+  }, [dex, selectedChain]);
 
   const handleDisconnectEvm = useCallback(() => {
     if (usingLocalEvmWallet) {
@@ -1621,6 +1644,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               result={mintResult}
               chainLabel={SHOP_CHAIN_LABEL[selectedChain] || 'Base'}
               onDismiss={handleDismissSuccess}
+              onCancelPending={handleCancelMintOverlay}
             />
           )}
 
@@ -1629,6 +1653,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               status={shopPurchaseStatus}
               result={shopPurchaseResult}
               onDismiss={handleDismissShopPurchase}
+              onCancelPending={handleCancelShopPurchaseOverlay}
             />
           )}
         </div>
@@ -3103,7 +3128,7 @@ const CONFETTI = [
   { x: 90, y: -40, hue: '#ffd76a', size: 7, delay: 270 },
 ];
 
-function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
+function MintProgressOverlay({ status, result, chainLabel, onDismiss, onCancelPending }) {
   const pending = status === 'pending';
   const success = status === 'success';
   const quantity = clampQuantity(result?.quantity || 1);
@@ -3173,6 +3198,9 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
                 <span className="nft-mint-dots" />
               </span>
               <span style={overlayStyles.hint}>Keep this window open - the tx is propagating.</span>
+              <button type="button" style={overlayStyles.cancelBtn} onClick={onCancelPending}>
+                Cancel wait
+              </button>
             </>
           ) : (
             <>
@@ -3206,7 +3234,7 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
   );
 }
 
-function ShopPurchaseOverlay({ status, result, onDismiss }) {
+function ShopPurchaseOverlay({ status, result, onDismiss, onCancelPending }) {
   const pending = status === 'pending';
   const success = status === 'success';
   const product = result?.product;
@@ -3316,6 +3344,9 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
               <span style={overlayStyles.subtitle}>
                 Confirm in wallet, then waiting for tx<span className="nft-mint-dots" />
               </span>
+              <button type="button" style={overlayStyles.cancelBtn} onClick={onCancelPending}>
+                Cancel wait
+              </button>
               <span style={overlayStyles.hint}>
                 Keep this window open — paying with {paymentLabel} on {chainLabel}.
               </span>
@@ -3528,6 +3559,18 @@ const overlayStyles = {
     cursor: 'pointer',
     textShadow: '0 1px 0 rgba(255,255,255,0.5)',
     boxShadow: '0 4px 10px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.5)',
+  },
+  cancelBtn: {
+    marginTop: 10,
+    padding: '7px 14px',
+    borderRadius: 12,
+    border: '3px solid #9f8759',
+    background: '#fff6dc',
+    color: '#5C3A21',
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: 'pointer',
+    boxShadow: '0 2px 6px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.55)',
   },
   confetti: {
     position: 'absolute',

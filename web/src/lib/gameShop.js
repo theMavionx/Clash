@@ -492,7 +492,7 @@ export async function buySolanaShopItem({
   const [
     { Connection, PublicKey, TransactionInstruction, SystemProgram, ComputeBudgetProgram },
     splToken,
-    { DEFAULT_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_LEORPC_URL, SOLANA_RPC_URLS, createSolanaConnection, selectFreshSolanaRpcUrl },
+    { DEFAULT_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_ALCHEMY_URL, SOLANA_RPC_URLS, createSolanaConnection, selectFreshSolanaRpcUrl },
     { isBlockhashExpiredError, sendSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@solana/web3.js'),
@@ -519,7 +519,7 @@ export async function buySolanaShopItem({
   // / mobile browsers they often fail with CORS/403/closed connections.
   const shopPrimaryRpcUrls = uniqueStrings([
     SAME_ORIGIN_SOLANA_RPC_URL,
-    SAME_ORIGIN_SOLANA_LEORPC_URL,
+    SAME_ORIGIN_SOLANA_ALCHEMY_URL,
   ]);
   const shopRpcUrls = uniqueStrings([
     ...shopPrimaryRpcUrls,

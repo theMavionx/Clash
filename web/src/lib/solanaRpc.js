@@ -6,7 +6,7 @@ const rawBrowserSolanaRpcUrls = (import.meta.env.VITE_SOLANA_BROWSER_RPC_URLS ||
 const allowProxyFallback = envFlag(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC, true);
 const preferProxyRpc = allowProxyFallback
   && envFlag(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC, false);
-const includePublicRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_PUBLIC_RPC, true);
+const includePublicRpcProxy = envFlag(import.meta.env.VITE_SOLANA_ENABLE_PUBLIC_RPC, false);
 // LeoRPC's public "FREE" endpoint frequently fails browser CORS/fetch checks
 // in production client logs. Keep it opt-in only; Alchemy/proxy remains the
 // paid fallback after healthier browser-direct public RPCs.
@@ -77,9 +77,11 @@ function normalizeRpcUrl(url) {
 function isBlockedBrowserSolanaRpcUrl(url) {
   try {
     const host = new URL(url, siteOrigin()).hostname;
-    return host === 'solana.leorpc.com';
+    return host === 'solana.leorpc.com'
+      || host === 'solana-rpc.publicnode.com'
+      || host === 'api.mainnet-beta.solana.com';
   } catch {
-    return /solana\.leorpc\.com/i.test(String(url || ''));
+    return /solana\.leorpc\.com|solana-rpc\.publicnode\.com|api\.mainnet-beta\.solana\.com/i.test(String(url || ''));
   }
 }
 
@@ -134,11 +136,12 @@ export const SOLANA_RPC_URLS = preferProxyRpc
 export const DEFAULT_SOLANA_RPC_URL = SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_RPC_URL;
 
 export const NFT_SOLANA_RPC_URLS = buildRpcFallbackList({
-  publicUrls: [...DIRECT_SOLANA_RPC_URLS, ...PUBLIC_SOLANA_RPC_URLS],
+  publicUrls: DIRECT_SOLANA_RPC_URLS,
   overrideUrls: [
     envProxySolanaRpc,
   ],
   privateUrls: [
+    ...(allowProxyFallback ? [SAME_ORIGIN_SOLANA_RPC_URL] : []),
     ...(allowProxyFallback && includeAlchemyRpcProxy ? [SAME_ORIGIN_SOLANA_ALCHEMY_URL] : []),
   ],
 });

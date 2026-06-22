@@ -42,9 +42,9 @@ var building_defs: Dictionary = {
 		"color": Color(0.6, 0.25, 0.2, 0.5),
 		"height": 0.4,
 		"scene": "res://Model/Barn/1.glb",
-		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
+		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [2000, 3500, 6000, 9500],
+		"hp_levels": [2000, 3500, 6000, 9500, 14000],
 		"cost": {"gold": 140, "wood": 350, "ore": 280},
 		"max_count": 1,
 	},
@@ -215,45 +215,6 @@ var building_defs: Dictionary = {
 		"test_range": 2.90,
 		"test_reload_sec": 1.95,
 	},
-	"mortar": {
-		"name": "Mortar",
-		"cells": Vector2i(2, 2),
-		"footprint_extra": 0.45,
-		"color": Color(0.6, 0.36, 0.18, 0.5),
-		"height": 0.45,
-		"scene": "res://Model/Mortar/mortar_lvl1.fbx",
-		"scenes": [
-			"res://Model/Mortar/mortar_lvl1.fbx",
-			"res://Model/Mortar/mortar_lvl2.fbx",
-			"res://Model/Mortar/mortar_lvl3.fbx",
-			"res://Model/Mortar/mortar_lvl4.fbx",
-		],
-		"model_scale": 0.032,
-		"model_rotation_y": 0.0,
-		"hp_levels": [1700],
-		"cost": {"gold": 600, "wood": 900, "ore": 700},
-		"max_count": 1,
-		"altar_ward_bonus": true,
-		"hp_bar_height": 0.6,
-		"albedo_texture": "res://Model/Mortar/mortar_albedo.png",
-		"emission_texture": "res://Model/Mortar/mortar_emit.png",
-		"construction_scenes": [
-			"res://Model/Mortar/mortar_lvl1_construction.fbx",
-			"res://Model/Mortar/mortar_lvl2_construction.fbx",
-			"res://Model/Mortar/mortar_lvl3_construction.fbx",
-			"res://Model/Mortar/mortar_lvl4_construction.fbx",
-		],
-		"projectile_scenes": [
-			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
-			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
-			"res://Model/Mortar/mortar_lvl3_projectile.fbx",
-			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
-		],
-		"test_damage": 245,
-		"test_damage_levels": [95, 135, 185, 245],
-		"test_range": 2.90,
-		"test_reload_sec": 1.95,
-	},
 	"tombstone": {
 		"name": "Tombstone",
 		"cells": Vector2i(3, 3),
@@ -314,18 +275,18 @@ var resources: Dictionary = {
 # Godot-reported cap was 5K AND Storage unlocks only after TH2, creating a
 # dead-end where a new player could never upgrade Town Hall.
 const TH_BASE_CAPACITY: Dictionary = {
-	1: {"gold": 10000, "wood": 10000, "ore": 10000},
-	2: {"gold": 20000, "wood": 20000, "ore": 20000},
-	3: {"gold": 40000, "wood": 40000, "ore": 40000},
-	4: {"gold": 70000, "wood": 70000, "ore": 70000},
-	5: {"gold": 110000, "wood": 110000, "ore": 110000},
+	1: {"gold": 6000, "wood": 6000, "ore": 6000},
+	2: {"gold": 6000, "wood": 6000, "ore": 6000},
+	3: {"gold": 9000, "wood": 9000, "ore": 9000},
+	4: {"gold": 12000, "wood": 12000, "ore": 12000},
+	5: {"gold": 18000, "wood": 18000, "ore": 18000},
 }
 const STORAGE_CAPACITY: Dictionary = {
-	1: {"gold": 15000, "wood": 15000, "ore": 15000},
-	2: {"gold": 20000, "wood": 20000, "ore": 20000},
-	3: {"gold": 30000, "wood": 30000, "ore": 30000},
-	4: {"gold": 50000, "wood": 50000, "ore": 50000},
-	5: {"gold": 75000, "wood": 75000, "ore": 75000},
+	1: {"gold": 2000, "wood": 2000, "ore": 2000},
+	2: {"gold": 3000, "wood": 3000, "ore": 3000},
+	3: {"gold": 6500, "wood": 6500, "ore": 6500},
+	4: {"gold": 14000, "wood": 14000, "ore": 14000},
+	5: {"gold": 19000, "wood": 19000, "ore": 19000},
 }
 
 func _get_resource_caps() -> Dictionary:
@@ -373,7 +334,7 @@ const TH_MAX_COUNT: Dictionary = {
 	"archer_tower": [1, 2, 3, 3, 3],
 	"tombstone": [0, 1, 3, 3, 3],
 	"turret": [0, 0, 3, 3, 3],
-	"storage": [0, 1, 2, 3, 4],
+	"storage": [0, 1, 2, 3, 3],
 	"mage_tower": [0, 0, 0, 2, 2],
 	"mortar": [0, 0, 0, 0, 1],
 	"town_hall": [1, 1, 1, 1, 1],
@@ -392,6 +353,14 @@ func _get_th_level() -> int:
 			if b.get("id", "") == "town_hall":
 				return b.get("level", 1)
 	return 1
+
+func _get_barn_level() -> int:
+	var level: int = 0
+	for bs in _building_systems:
+		for b in bs.placed_buildings:
+			if b.get("id", "") == "barn":
+				level = maxi(level, int(b.get("level", 0)))
+	return level
 
 func _has_town_hall() -> bool:
 	for bs in _building_systems:
@@ -5465,6 +5434,8 @@ func _refresh_barn_panel() -> void:
 			vb.add_child(max_label)
 		else:
 			var next_lvl = lvl + 1
+			var required_barn_level: int = _required_barn_level_for_troop_level(next_lvl)
+			var barn_ready: bool = bld_level >= required_barn_level
 			var costs = tdef.costs.get(lvl, tdef.costs.get(next_lvl, {}))
 			var cost_text = ""
 			for res_name in costs:
@@ -5479,14 +5450,18 @@ func _refresh_barn_panel() -> void:
 			cost_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 			if lvl == 0:
 				cost_label.text = "Train (LVL 1): %s" % cost_text
+			elif not barn_ready:
+				cost_label.text = "Barn Lv.%d unlocks LVL %d" % [required_barn_level, next_lvl]
 			else:
 				cost_label.text = "Upgrade to LVL %d: %s" % [next_lvl, cost_text]
 			vb.add_child(cost_label)
 
-			var can_afford = _can_afford(costs)
+			var can_afford = barn_ready and _can_afford(costs)
 			var btn = Button.new()
 			if lvl == 0:
 				btn.text = "Train"
+			elif not barn_ready:
+				btn.text = "Upgrade Barn First"
 			else:
 				btn.text = "Upgrade"
 			btn.custom_minimum_size = Vector2(0, 50)
@@ -5582,6 +5557,12 @@ func _get_troop_max_level(troop_name: String) -> int:
 	return max_level
 
 
+func _required_barn_level_for_troop_level(troop_level: int) -> int:
+	if troop_level >= 5:
+		return 5
+	return clampi(troop_level, 1, 4)
+
+
 func _refresh_troop_levels_from_server() -> void:
 	var net = _net
 	if not net or not net.has_token():
@@ -5618,6 +5599,10 @@ func _upgrade_troop(troop_name: String) -> void:
 	if lvl >= _get_troop_max_level(troop_name):
 		return
 	var next_lvl = lvl + 1
+	var required_barn_level: int = _required_barn_level_for_troop_level(next_lvl)
+	if not test_mode and _get_barn_level() < required_barn_level:
+		_show_error("Upgrade Barn to level %d first" % required_barn_level)
+		return
 
 	# Ask server first
 	var net = _net

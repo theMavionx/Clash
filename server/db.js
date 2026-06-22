@@ -2732,7 +2732,10 @@ const stmts = {
   // Tournaments: used by battle paths to detect whether a player is currently
   // joined to an active tournament available to their DEX.
   getActiveTournamentForPlayer: db.prepare(`
-    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only, p.team_dex,
+    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only,
+           COALESCE(t.event_kind, 'standard') AS event_kind,
+           t.reward_config,
+           p.team_dex,
            t.gold_boost, COALESCE(t.seeker_gold_boost, 1.0) AS seeker_gold_boost, t.trophy_boost,
            COALESCE(pl.is_seeker, 0) AS is_seeker,
            COALESCE(t.freeze_trophies, 1) AS freeze_trophies, t.sort_by,
@@ -2759,7 +2762,10 @@ const stmts = {
     LIMIT 1
   `),
   getTournamentByIdForPlayer: db.prepare(`
-    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only, p.team_dex,
+    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only,
+           COALESCE(t.event_kind, 'standard') AS event_kind,
+           t.reward_config,
+           p.team_dex,
            t.gold_boost, COALESCE(t.seeker_gold_boost, 1.0) AS seeker_gold_boost, t.trophy_boost,
            COALESCE(pl.is_seeker, 0) AS is_seeker,
            COALESCE(t.freeze_trophies, 1) AS freeze_trophies, t.sort_by,
@@ -4295,7 +4301,7 @@ const TH_MAX_COUNT = {
   archer_tower: [1, 2, 3, 3, 3],
   tombstone:    [0, 1, 3, 3, 3],  // unlocked at TH2
   turret:       [0, 0, 3, 3, 3],  // unlocked at TH3
-  storage:      [0, 1, 2, 3, 4],  // unlocked at TH2
+  storage:      [0, 1, 2, 3, 3],  // unlocked at TH2
   mage_tower:   [0, 0, 0, 2, 2],  // unlocked at TH4
   mortar:       [0, 0, 0, 0, 1],  // unlocked at TH5
   town_hall:    [1, 1, 1, 1, 1],
@@ -4329,8 +4335,8 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   barn: {
-    size: [4, 3], max_level: 4,
-    hp_levels: [2000, 3500, 6000, 9500],
+    size: [4, 3], max_level: 5,
+    hp_levels: [2000, 3500, 6000, 9500, 14000],
     cost: { gold: 140, wood: 350, ore: 280 },
     max_count: 1,
   },
@@ -4717,11 +4723,6 @@ const TROOP_DEFS = {
 };
 const DISABLED_TROOP_TYPES = new Set(['barbarian', 'ranger']);
 const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_TROOP_TYPES.has(troop));
-const TROOP_LEVEL_TOWN_HALL_REQUIREMENTS = {
-  5: 5,
-  6: 5,
-  7: 5,
-};
 
 function normalizeTroopTypeKey(troopType) {
   const compact = String(troopType || '').trim().toLowerCase().replace(/[\s_-]/g, '');
@@ -4742,24 +4743,26 @@ function isTroopDisabled(troopType) {
   return DISABLED_TROOP_TYPES.has(normalizeTroopTypeKey(troopType));
 }
 
-function getTroopLevelTownHallRequirement(level) {
-  return TROOP_LEVEL_TOWN_HALL_REQUIREMENTS[Number(level)] || 1;
+function getTroopLevelBarnRequirement(level) {
+  const nextLevel = Math.max(1, Math.trunc(Number(level) || 1));
+  if (nextLevel >= 5) return 5;
+  return nextLevel;
 }
 
-function getTroopTownHallGate(playerId, nextLevel) {
-  const currentTownHallLevel = getTownHallLevel(playerId);
+function getTroopBarnGate(playerId, nextLevel) {
+  const currentBarnLevel = getBarnLevel(playerId);
   if (!nextLevel) {
     return {
-      current_town_hall_level: currentTownHallLevel,
-      required_town_hall_level: null,
-      town_hall_ready: true,
+      current_barn_level: currentBarnLevel,
+      required_barn_level: null,
+      barn_ready: true,
     };
   }
-  const requiredTownHallLevel = getTroopLevelTownHallRequirement(nextLevel);
+  const requiredBarnLevel = getTroopLevelBarnRequirement(nextLevel);
   return {
-    current_town_hall_level: currentTownHallLevel,
-    required_town_hall_level: requiredTownHallLevel,
-    town_hall_ready: currentTownHallLevel >= requiredTownHallLevel,
+    current_barn_level: currentBarnLevel,
+    required_barn_level: requiredBarnLevel,
+    barn_ready: currentBarnLevel >= requiredBarnLevel,
   };
 }
 
@@ -6015,20 +6018,20 @@ function markDemonKingNftWalletChecked(playerId, wallet, chains = [], resultCoun
 
 // Base capacity from Town Hall (without any Storage buildings)
 const TH_BASE_CAPACITY = {
-  1: { gold: 10000, wood: 10000, ore: 10000 },
-  2: { gold: 20000, wood: 20000, ore: 20000 },
-  3: { gold: 40000, wood: 40000, ore: 40000 },
-  4: { gold: 70000, wood: 70000, ore: 70000 },
-  5: { gold: 110000, wood: 110000, ore: 110000 },
+  1: { gold: 6000, wood: 6000, ore: 6000 },
+  2: { gold: 6000, wood: 6000, ore: 6000 },
+  3: { gold: 9000, wood: 9000, ore: 9000 },
+  4: { gold: 12000, wood: 12000, ore: 12000 },
+  5: { gold: 18000, wood: 18000, ore: 18000 },
 };
 
 // Additional capacity per Storage building per level
 const STORAGE_CAPACITY = {
-  1: { gold: 15000, wood: 15000, ore: 15000 },
-  2: { gold: 20000, wood: 20000, ore: 20000 },
-  3: { gold: 30000, wood: 30000, ore: 30000 },
-  4: { gold: 50000, wood: 50000, ore: 50000 },
-  5: { gold: 75000, wood: 75000, ore: 75000 },
+  1: { gold: 2000, wood: 2000, ore: 2000 },
+  2: { gold: 3000, wood: 3000, ore: 3000 },
+  3: { gold: 6500, wood: 6500, ore: 6500 },
+  4: { gold: 14000, wood: 14000, ore: 14000 },
+  5: { gold: 19000, wood: 19000, ore: 19000 },
 };
 
 function getResourceCaps(playerId) {
@@ -6238,9 +6241,9 @@ function addResources(playerId, gold = 0, wood = 0, ore = 0, options = {}) {
   if (!current) return null;
   // Cap to storage capacity
   const capsBefore = getResourceCaps(playerId);
-  const newGold = Math.min(capsBefore.gold, Math.max(0, current.gold + gold));
-  const newWood = Math.min(capsBefore.wood, Math.max(0, current.wood + wood));
-  const newOre = Math.min(capsBefore.ore, Math.max(0, current.ore + ore));
+  const newGold = applyResourceDeltaWithCap(current.gold, gold, capsBefore.gold);
+  const newWood = applyResourceDeltaWithCap(current.wood, wood, capsBefore.wood);
+  const newOre = applyResourceDeltaWithCap(current.ore, ore, capsBefore.ore);
   stmts.updateResource.run(newGold, newWood, newOre, playerId);
   const capsAfter = getResourceCaps(playerId);
   const lostGoldToCap = Number(gold) > 0 ? Math.max(0, current.gold + Number(gold) - newGold) : 0;
@@ -6290,12 +6293,31 @@ function canAfford(playerId, gold = 0, wood = 0, ore = 0) {
   return current.gold >= gold && current.wood >= wood && current.ore >= ore;
 }
 
+function applyResourceDeltaWithCap(currentValue, deltaValue, capValue) {
+  const current = Math.max(0, Number(currentValue) || 0);
+  const delta = Number(deltaValue) || 0;
+  const cap = Math.max(0, Number(capValue) || 0);
+  const next = Math.max(0, current + delta);
+  if (delta <= 0) return next;
+  if (current >= cap) return current;
+  return Math.min(cap, next);
+}
+
 function getTownHallLevel(playerId) {
   const buildings = stmts.getBuildings.all(playerId);
   for (const b of buildings) {
     if (b.type === 'town_hall') return b.level;
   }
   return 1;
+}
+
+function getBarnLevel(playerId) {
+  const buildings = stmts.getBuildings.all(playerId);
+  let level = 0;
+  for (const b of buildings) {
+    if (b.type === 'barn') level = Math.max(level, Number(b.level) || 0);
+  }
+  return level;
 }
 
 function hasTownHall(playerId) {
@@ -6541,7 +6563,7 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
   const current = levels.find(t => t.troop_type === troopKey);
   const currentLevel = current ? current.level : 1;
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
-  const thGate = getTroopTownHallGate(playerId, nextLevel);
+  const barnGate = getTroopBarnGate(playerId, nextLevel);
   const token = normalizeDemonKingBattleToken(options);
   const battleWins = token ? getCollectionBattleWins(playerId, cfg.collection, token.chain, token.tokenId) : 0;
   const ownedCount = listPlayerCollectionNfts(playerId, cfg.collection).length;
@@ -6552,9 +6574,12 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
     current_level: currentLevel,
     max_level: def.max_level,
     next_level: nextLevel,
-    current_town_hall_level: thGate.current_town_hall_level,
-    required_town_hall_level: thGate.required_town_hall_level,
-    town_hall_ready: thGate.town_hall_ready,
+    current_barn_level: barnGate.current_barn_level,
+    required_barn_level: barnGate.required_barn_level,
+    barn_ready: barnGate.barn_ready,
+    current_town_hall_level: getTownHallLevel(playerId),
+    required_town_hall_level: null,
+    town_hall_ready: true,
     owns_nft: ownedCount > 0,
     owned_nfts: ownedCount,
     cost: nextLevel ? def.cost[currentLevel - 1] : null,
@@ -6578,7 +6603,7 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
   const current = levels.find(t => t.troop_type === 'demon_king');
   const currentLevel = current ? current.level : 1;
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
-  const thGate = getTroopTownHallGate(playerId, nextLevel);
+  const barnGate = getTroopBarnGate(playerId, nextLevel);
   const requiredWins = nextLevel ? demonKingRequiredWins(nextLevel) : null;
   const token = normalizeDemonKingBattleToken(options);
   const battleWins = token ? getDemonKingBattleWins(playerId, token.chain, token.tokenId) : 0;
@@ -6587,9 +6612,12 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
     current_level: currentLevel,
     max_level: def.max_level,
     next_level: nextLevel,
-    current_town_hall_level: thGate.current_town_hall_level,
-    required_town_hall_level: thGate.required_town_hall_level,
-    town_hall_ready: thGate.town_hall_ready,
+    current_barn_level: barnGate.current_barn_level,
+    required_barn_level: barnGate.required_barn_level,
+    barn_ready: barnGate.barn_ready,
+    current_town_hall_level: getTownHallLevel(playerId),
+    required_town_hall_level: null,
+    town_hall_ready: true,
     battle_wins: battleWins,
     wins: battleWins,
     account_battle_wins: getBattleWins(playerId),
@@ -6625,19 +6653,22 @@ function upgradeTroop(playerId, troopType, options = {}) {
   }
 
   const nextLevel = currentLevel + 1;
-  const thGate = getTroopTownHallGate(playerId, nextLevel);
-  if (!thGate.town_hall_ready) {
+  const barnGate = getTroopBarnGate(playerId, nextLevel);
+  if (!barnGate.barn_ready) {
     return {
-      error: `Town Hall level ${thGate.required_town_hall_level} required for troop level ${nextLevel}`,
-      code: 'TOWN_HALL_LEVEL_REQUIRED',
+      error: `Barn level ${barnGate.required_barn_level} required for troop level ${nextLevel}`,
+      code: 'BARN_LEVEL_REQUIRED',
       status: 403,
       troop_type: troopKey,
       current_level: currentLevel,
       next_level: nextLevel,
       max_level: def.max_level,
-      current_town_hall_level: thGate.current_town_hall_level,
-      required_town_hall_level: thGate.required_town_hall_level,
-      town_hall_ready: false,
+      current_barn_level: barnGate.current_barn_level,
+      required_barn_level: barnGate.required_barn_level,
+      barn_ready: false,
+      current_town_hall_level: getTownHallLevel(playerId),
+      required_town_hall_level: null,
+      town_hall_ready: true,
     };
   }
 

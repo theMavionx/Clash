@@ -15955,7 +15955,7 @@ const ADMIN_TH_MAX_COUNT = {
   tombstone: [0, 1, 3, 3, 3],
   altar: [1, 1, 1, 1, 1],
   turret: [0, 0, 3, 3, 3],
-  storage: [0, 1, 2, 3, 4],
+  storage: [0, 1, 2, 3, 3],
   mage_tower: [0, 0, 0, 2, 2],
   mortar: [0, 0, 0, 0, 1],
   town_hall: [1, 1, 1, 1, 1],
@@ -19776,6 +19776,23 @@ function tournamentParticipantSyncDex(t, participant) {
   return FUTURES_TOURNAMENT_SYNC_DEXES.has(tournamentDex) ? tournamentDex : null;
 }
 
+function tournamentParticipantSyncDexes(t, participant) {
+  const eventKind = normalizeTournamentEventKind(t?.event_kind);
+  let luckyRaiderEnabled = false;
+  try {
+    luckyRaiderEnabled = !!normalizeTournamentRewardConfig(t?.reward_config || {}).lucky_daily_raider.enabled;
+  } catch {
+    luckyRaiderEnabled = false;
+  }
+  if (eventKind === 'lucky_raider' && luckyRaiderEnabled) {
+    const eligible = tournamentEligibleDexes(t)
+      .filter((dex) => FUTURES_TOURNAMENT_SYNC_DEXES.has(dex));
+    if (eligible.length) return eligible;
+  }
+  const single = tournamentParticipantSyncDex(t, participant);
+  return single ? [single] : [];
+}
+
 function syncFuturesTournamentRows(playerId, dex, opts = {}) {
   const normalizedDex = String(dex || '').toLowerCase();
   if (!playerId || !FUTURES_TOURNAMENT_SYNC_DEXES.has(normalizedDex)) {
@@ -19809,6 +19826,39 @@ function syncFuturesTournamentRows(playerId, dex, opts = {}) {
     console.warn(`[tournament-sync ${normalizedDex}] failed for player=${String(playerId).slice(0, 8)}:`, e.message);
     return { ok: false, reason: e.message };
   }
+}
+
+function syncFuturesTournamentRowsForParticipant(playerId, tournament, participant, opts = {}) {
+  const dexes = tournamentParticipantSyncDexes(tournament, participant);
+  const summary = {
+    ok: true,
+    tournament_id: tournament?.id || opts.tournamentId || opts.tournament_id || null,
+    player_id: playerId,
+    dexes,
+    rows: 0,
+    main: { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 },
+    pnl: { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 },
+    failed: 0,
+    errors: [],
+  };
+  for (const dex of dexes) {
+    const result = syncFuturesTournamentRows(playerId, dex, {
+      ...opts,
+      tournamentId: opts.tournamentId || opts.tournament_id || tournament?.id,
+    });
+    if (!result?.ok) {
+      summary.failed++;
+      summary.errors.push({ dex, reason: result?.reason || 'sync failed' });
+      continue;
+    }
+    summary.rows += Number(result.rows || 0);
+    for (const key of ['credited_rows', 'trades_count', 'volume_usd', 'pnl_usd']) {
+      summary.main[key] += Number(result.main?.[key] || 0);
+      summary.pnl[key] += Number(result.pnl?.[key] || 0);
+    }
+  }
+  summary.ok = summary.failed === 0;
+  return summary;
 }
 
 function syncFuturesTournamentParticipants(tournament, opts = {}) {
@@ -19850,28 +19900,30 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
     by_dex: {},
   };
   for (const participant of participants) {
-    const syncDex = tournamentParticipantSyncDex(t, participant);
-    if (!syncDex) {
+    const syncDexes = tournamentParticipantSyncDexes(t, participant);
+    if (!syncDexes.length) {
       summary.skipped++;
       continue;
     }
-    if (!summary.by_dex[syncDex]) summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, activity_events: 0, failed: 0 };
-    summary.by_dex[syncDex].players++;
-    const result = syncFuturesTournamentRows(participant.player_id, syncDex, { tournamentId: t.id });
-    if (!result?.ok) {
-      summary.failed++;
-      summary.by_dex[syncDex].failed++;
-      continue;
+    for (const syncDex of syncDexes) {
+      if (!summary.by_dex[syncDex]) summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, activity_events: 0, failed: 0 };
+      summary.by_dex[syncDex].players++;
+      const result = syncFuturesTournamentRows(participant.player_id, syncDex, { tournamentId: t.id });
+      if (!result?.ok) {
+        summary.failed++;
+        summary.by_dex[syncDex].failed++;
+        continue;
+      }
+      const rows = Number(result.rows || 0);
+      const inserted = Number(result.main?.inserted || result.main?.credited_rows || 0);
+      const activityEvents = Number(result.main?.activity_events || result.main?.credited_rows || 0);
+      summary.rows += rows;
+      summary.inserted += inserted;
+      summary.activity_events += activityEvents;
+      summary.by_dex[syncDex].rows += rows;
+      summary.by_dex[syncDex].inserted += inserted;
+      summary.by_dex[syncDex].activity_events += activityEvents;
     }
-    const rows = Number(result.rows || 0);
-    const inserted = Number(result.main?.inserted || result.main?.credited_rows || 0);
-    const activityEvents = Number(result.main?.activity_events || result.main?.credited_rows || 0);
-    summary.rows += rows;
-    summary.inserted += inserted;
-    summary.activity_events += activityEvents;
-    summary.by_dex[syncDex].rows += rows;
-    summary.by_dex[syncDex].inserted += inserted;
-    summary.by_dex[syncDex].activity_events += activityEvents;
   }
   if (summary.inserted || summary.failed) {
     console.log('[tournament-sync] participants', JSON.stringify(summary));
@@ -19954,7 +20006,10 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
     me = ensureLuckyRaiderParticipant(t, req.player);
   }
   if (me && me.left_at === null && tournamentPhase(t) === 'live' && isTournamentForDex(t, req.player.dex)) {
-    const sync = syncFuturesTournamentRows(req.player.id, req.player.dex, { tournamentId: t.id });
+    const sync = syncFuturesTournamentRowsForParticipant(req.player.id, t, {
+      player_dex: req.player.dex,
+      team_dex: me.team_dex,
+    }, { tournamentId: t.id });
     if (sync?.ok && Number(sync.main?.credited_rows || sync.main?.inserted || 0) > 0) {
       me = db.db.prepare(`
         SELECT * FROM tournament_participants

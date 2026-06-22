@@ -180,6 +180,11 @@ function demonKingDisplayLabel(token, tokens = []) {
 
 const MAX_TROOP_LEVEL = 7;
 
+function requiredBarnLevelForTroopLevel(level) {
+  const nextLevel = Math.max(1, Math.trunc(Number(level) || 1));
+  return nextLevel >= 5 ? 5 : nextLevel;
+}
+
 const TROOP_STATS = {
   Knight: {
     display: "Knight",
@@ -554,6 +559,10 @@ function BarnPanel({ building, onClose }) {
   const selectedNftRarity = normalizeNftRarity(selectedDemonNft?.rarity || 'common');
   const displayLvl = lvl;
   const isMax = displayLvl >= troopMaxLevel;
+  const barnLevel = Math.max(1, Number(building?.level || 1));
+  const nextTroopLevel = isMax ? null : displayLvl + 1;
+  const requiredBarnLevel = nextTroopLevel ? requiredBarnLevelForTroopLevel(nextTroopLevel) : null;
+  const barnReadyForNextLevel = !nextTroopLevel || barnLevel >= requiredBarnLevel;
   // costs key = current level (cost to upgrade FROM that level)
   const nextCost = !isMax && tdef?.costs?.[String(displayLvl)];
   const stats = getTroopStats(currentTroopName, displayLvl, troopLevels, selectedNftRarity);
@@ -566,6 +575,7 @@ function BarnPanel({ building, onClose }) {
   const sliderH = mobile ? 52 : 72;
   const reqBoxSize = mobile ? 60 : 90;
   const handleMainUpgrade = () => {
+    if (!barnReadyForNextLevel) return;
     if (!isNftBackedTroop) {
       handleUpgradeTroop(currentTroopName);
       return;
@@ -699,6 +709,11 @@ function BarnPanel({ building, onClose }) {
             )}
 
             <h3 style={{...styles.sectionTitle, marginTop: mobile ? 10 : 16, fontSize: mobile ? 16 : 20}}>Upgrade Resources</h3>
+            {!barnReadyForNextLevel && (
+              <div style={styles.demonInventoryHint}>
+                Barn Lv {requiredBarnLevel} unlocks troop Lv {nextTroopLevel}. Upgrade the Barn first.
+              </div>
+            )}
             <div style={{...styles.reqGrid, ...(mobile ? { flexWrap: 'nowrap', justifyContent: 'center', gap: 8 } : {})}}>
               {nextCost ? Object.entries(nextCost).map(([res, amt]) => {
                 if (amt === 0) return null;
@@ -721,10 +736,23 @@ function BarnPanel({ building, onClose }) {
         {/* Upgrade button — fixed at bottom, outside scroll area */}
         {!isMax && !building.is_enemy && (
           <div style={{ padding: mobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
-            <button style={{...styles.actionBtn, width: '100%', maxWidth: mobile ? '100%' : 240, padding: mobile ? '12px 16px' : '14px 20px', fontSize: mobile ? 14 : 14}} onClick={handleMainUpgrade}>
-              {isNftBackedTroop
+            <button
+              style={{
+                ...styles.actionBtn,
+                ...(!barnReadyForNextLevel ? styles.actionBtnDisabled : null),
+                width: '100%',
+                maxWidth: mobile ? '100%' : 240,
+                padding: mobile ? '12px 16px' : '14px 20px',
+                fontSize: mobile ? 14 : 14,
+              }}
+              disabled={!barnReadyForNextLevel}
+              onClick={handleMainUpgrade}
+            >
+              {!barnReadyForNextLevel
+                ? `Upgrade Barn to Lv ${requiredBarnLevel}`
+                : isNftBackedTroop
                 ? (selectedDemonNft ? `Upgrade ${currentNftTroop.label} to Lv` : `Get ${currentNftTroop.label} NFT`)
-                : 'Upgrade to Lv'} {isNftBackedTroop && !selectedDemonNft ? '' : displayLvl + 1}
+                : 'Upgrade to Lv'} {!barnReadyForNextLevel || (isNftBackedTroop && !selectedDemonNft) ? '' : displayLvl + 1}
             </button>
           </div>
         )}
@@ -1025,5 +1053,11 @@ const styles = {
     letterSpacing: 1,
     textShadow: '0 2px 2px rgba(0,0,0,0.3)',
     transition: 'transform 0.1s',
+  },
+  actionBtnDisabled: {
+    background: 'linear-gradient(180deg, #a8a29e 0%, #78716c 100%)',
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.25)',
+    cursor: 'not-allowed',
+    opacity: 0.86,
   }
 };

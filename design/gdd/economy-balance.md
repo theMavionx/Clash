@@ -199,8 +199,9 @@ drop. Wood and ore are comfortably covered.
 **2026-06-21 implementation override:** all `TROOP_DEFS` entries now use
 `max_level = 7`. The `cost` array is indexed by *current* level:
 `cost[0]` = Lv1->Lv2, `cost[1]` = Lv2->Lv3, through `cost[5]` = Lv6->Lv7.
-Troop Lv5, Lv6, and Lv7 upgrades require Town Hall Lv5; the server enforces this in
-`upgradeTroop()` with `TOWN_HALL_LEVEL_REQUIRED`.
+Troop upgrade gates now follow Barn level: troop Lv2 requires Barn Lv2, Lv3 requires Barn
+Lv3, Lv4 requires Barn Lv4, and troop Lv5-Lv7 require Barn Lv5. The server enforces this
+in `upgradeTroop()` with `BARN_LEVEL_REQUIRED`.
 
 | Troop | Lv1->2 | Lv2->3 | Lv3->4 | Lv4->5 | Lv5->6 | Lv6->7 | Total Lv1->7 |
 |-------|--------|--------|--------|--------|--------|--------|--------------|
@@ -273,12 +274,20 @@ bonus is only 200G, the volume component matters more than v1.0 intended — a 2
 
 ### 5.3 Player Stockpiles Without Spending
 Resource storage caps prevent infinite accumulation. The cap = Town Hall base capacity +
-the sum of Storage building capacities:
-- **Town Hall base (`TH_BASE_CAPACITY`):** TH1 = 10,000 each; TH2 = 20,000 each; TH3 = 40,000 each.
-- **Each Storage (`STORAGE_CAPACITY`):** Lv1 = +15,000 each; Lv2 = +20,000 each; Lv3 = +30,000 each.
+the sum of Storage building capacities. The current live cap curve is intentionally tight:
+each Storage unlocked by progression is needed to afford the next Town Hall milestone.
 
-At TH3 with 2 maxed Storages, the cap is 40,000 + 2×30,000 = **100,000 of each resource** —
-comfortably above any single purchase, so storage is not a hard gate at end-game.
+| Town Hall | Max Storages | Cap at required Storage level | Next TH max single-resource cost |
+|-----------|--------------|-------------------------------|----------------------------------|
+| TH1 | 0 | 6,000 | 2,400 |
+| TH2 | 1 × Storage Lv2 | 9,000 | 7,000 |
+| TH3 | 2 × Storage Lv3 | 22,000 | 20,000 |
+| TH4 | 3 × Storage Lv4 | 54,000 | 52,000 |
+| TH5 | 3 × Storage Lv5 | 75,000 | n/a |
+
+This means Storage is a real progression gate without creating the old 200k+ dead storage
+surplus. If TH6 is added, it should either introduce the fourth Storage or raise Storage
+Lv5 capacity with a matching TH6 upgrade cost.
 
 ### 5.4 Raiding Income
 Successful raids steal **15%** of the defender's current resources (`LOOT_PERCENT = 0.15`).
@@ -288,11 +297,10 @@ Given the gold shortfall in 4.1, raiding is effectively **required** (not merely
 supplemental) to approach a maxed base in a reasonable timeframe.
 
 ### 5.5 Storage Cap and Town Hall Lv3 Upgrade
-The TH Lv2→3 upgrade costs 5,000G / 20,000W / 18,000O. At TH2 the base cap is 20,000 of
-each resource, which already covers the gold portion without a Storage. The binding
-constraint for TH3 is the **20,000 wood** requirement: a single TH2 base cap (20,000) holds
-exactly that, but the player must also still hold gold and ore simultaneously — so building
-at least one Storage before TH3 is strongly advisable to avoid capping out while saving.
+The TH Lv2->3 upgrade costs 3,000G / 7,000W / 6,000O. At TH2 the base cap is 6,000, so a
+Storage upgraded to Lv2 is required to hold the 7,000 wood cost. The same pattern repeats
+at later tiers: TH3 needs two Lv3 Storages to afford TH4, and TH4 needs three Lv4 Storages
+to afford TH5.
 
 ### 5.6 Production Building Collection Cadence
 Players who collect infrequently hit the storage cap and lose production time. A Lv1 Mine
@@ -372,8 +380,8 @@ PRODUCTION_DEFS = {
   mine:    { resource: 'ore',  rate: [6, 11, 18], max: [200, 400, 800]  },   // per minute
   sawmill: { resource: 'wood', rate: [8, 15, 24], max: [250, 500, 1000] },
 };
-STORAGE_CAPACITY  = { 1: 15000, 2: 20000, 3: 30000 };   // per Storage building, per resource
-TH_BASE_CAPACITY  = { 1: 10000, 2: 20000, 3: 40000 };   // per resource
+STORAGE_CAPACITY  = { 1: 2000, 2: 3000, 3: 6500, 4: 14000, 5: 19000 }; // per Storage
+TH_BASE_CAPACITY  = { 1: 6000, 2: 6000, 3: 9000, 4: 12000, 5: 18000 };
 LOOT_PERCENT      = 0.15;
 SHIP_COST_GOLD    = 500;  // (GDScript: bs_port.gd / building_system.gd)
 ```
