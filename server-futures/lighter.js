@@ -160,10 +160,17 @@ function signerCredentials(input = {}) {
     throw Object.assign(new Error('Lighter api_key_index required'), { status: 400 });
   }
   if (!apiPrivateKey) throw Object.assign(new Error('Lighter api_private_key required'), { status: 400 });
+  const normalizedPrivateKey = apiPrivateKey.replace(/^0x/iu, '');
+  if (!/^[0-9a-f]{80}$/iu.test(normalizedPrivateKey)) {
+    throw Object.assign(
+      new Error('Lighter private key must be a 40-byte hex string. Paste the Private Key, not the API key/id.'),
+      { status: 400 },
+    );
+  }
   return {
     account_index: accountIndex,
     api_key_index: apiKeyIndex,
-    api_private_key: apiPrivateKey,
+    api_private_key: apiPrivateKey.startsWith('0x') ? apiPrivateKey : `0x${apiPrivateKey}`,
   };
 }
 
