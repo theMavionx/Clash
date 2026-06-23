@@ -59,7 +59,7 @@ const MANUAL_RECONNECT_WALLET_WAIT_MS = 8000;
 const WALLET_AUTH_PROOF_TIMEOUT_MS = 20000;
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
-const EVM_AUTH_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const EVM_AUTH_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter']);
 const SOLANA_AUTH_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash']);
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
@@ -1130,7 +1130,7 @@ export function useAuthFlow() {
     const payload = { name: nameToUse, wallet: candidate.wallet };
     if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana') {
+    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
       // resolver hard-codes 'base' regardless of which DEX is active, so
       // trusting candidate.chain would mis-tag GMX/Perpl registrations as
@@ -1146,6 +1146,7 @@ export function useAuthFlow() {
         : authDex === 'hotstuff' ? 'mainnet'
         : authDex === 'grvt' ? 'grvt'
         : authDex === 'katana' ? 'katana'
+        : authDex === 'lighter' ? 'lighter'
         : 'base';
       payload.walletSource = candidate.source;
     }
@@ -1276,7 +1277,7 @@ export function useAuthFlow() {
     const payload = { name: name.trim(), wallet: candidate.wallet };
     if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana') {
+    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
       payload.chain = authDex === 'gmx' ? 'arbitrum'
         : authDex === 'monad' ? 'monad'
         : authDex === 'hyperliquid' ? 'arbitrum'
@@ -1286,6 +1287,7 @@ export function useAuthFlow() {
         : authDex === 'hotstuff' ? 'mainnet'
         : authDex === 'grvt' ? 'grvt'
         : authDex === 'katana' ? 'katana'
+        : authDex === 'lighter' ? 'lighter'
         : 'base';
       payload.walletSource = candidate.source;
     }
