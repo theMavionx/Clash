@@ -22056,4 +22056,59 @@ try {
   console.warn('[nft-v3] failed to mount V3 endpoints:', err?.message || err);
 }
 
+// Proxy all bot & strategy requests to the Phantom backend (port 8080)
+const BOT_URL = process.env.CLASH_BOT_URL || 'http://31.97.72.65:8080';
+const BOT_PROXY_SECRET = String(
+  process.env.CLASH_BOT_PROXY_SECRET
+  || process.env.PHANTOM__AUTH__TRUSTED_PROXY_SECRET
+  || '',
+).trim();
+async function proxyToBot(req, res) {
+  try {
+    const targetUrl = `${BOT_URL}${req.originalUrl}`;
+    const headers = {
+      accept: req.headers.accept || 'application/json',
+      'x-tenant-id': req.player?.id || '',
+    };
+    if (BOT_PROXY_SECRET) {
+      headers['x-proxy-secret'] = BOT_PROXY_SECRET;
+    }
+
+    const options = {
+      method: req.method,
+      headers,
+    };
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body != null) {
+      options.body = JSON.stringify(req.body);
+      headers['content-type'] = 'application/json';
+    }
+    const response = await fetch(targetUrl, options);
+    const bodyText = await response.text();
+    res.status(response.status);
+    for (const [key, value] of response.headers.entries()) {
+      if (['content-encoding', 'transfer-encoding', 'connection'].includes(key.toLowerCase())) continue;
+      res.setHeader(key, value);
+    }
+    res.send(bodyText);
+  } catch (error) {
+    console.error('[bot proxy error]:', error.message, error.cause?.message || '');
+    const detail = error.cause?.message || error.message || 'unknown';
+    res.status(502).json({
+      success: false,
+      error: {
+        code: 'BOT_BACKEND_UNREACHABLE',
+        message: `Bad Gateway connecting to bot backend (${detail})`,
+      },
+    });
+  }
+}
+
+router.use('/v1/strategies', auth, proxyToBot);
+router.use('/v1/bot', auth, proxyToBot);
+router.use('/v1/accounts', auth, proxyToBot);
+router.use('/v1/exchanges', auth, proxyToBot);
+router.use('/v1/orders', auth, proxyToBot);
+router.use('/v1/analytics', auth, proxyToBot);
+router.use('/v1/config', auth, proxyToBot);
+
 module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };

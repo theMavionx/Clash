@@ -108,6 +108,11 @@ const FUTURES_PROXY_IS_DIRECT = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?
 // bypasses that and every authenticated bot call 401s in local dev.
 const BOT_API_PROXY_TARGET = API_PROXY_TARGET || 'http://127.0.0.1:4000';
 const BOT_WS_PROXY_TARGET = WS_PROXY_TARGET || 'ws://127.0.0.1:4000';
+const BOT_DIRECT_PROXY_TARGET = process.env.VITE_BOT_DIRECT_URL
+  || viteEnv.VITE_BOT_DIRECT_URL
+  || process.env.CLASH_BOT_URL
+  || viteEnv.CLASH_BOT_URL
+  || 'http://31.97.72.65:8080';
 
 if (process.env.NODE_ENV !== 'production') {
   console.log('[vite proxy]', {
@@ -217,11 +222,11 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://127.0.0.1:8080',
+        target: BOT_DIRECT_PROXY_TARGET,
         changeOrigin: true,
       },
       '/ready': {
-        target: 'http://127.0.0.1:8080',
+        target: BOT_DIRECT_PROXY_TARGET,
         changeOrigin: true,
       },
       // ─── End Phantom bot proxies ────────────────────────────────────
