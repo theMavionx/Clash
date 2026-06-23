@@ -210,6 +210,11 @@ function normalizeHexInput(value, expectedBytes = 0) {
     if (expectedBytes && bytes.length !== expectedBytes) return '';
     return `0x${Buffer.from(bytes).toString('hex')}`;
   }
+  if (value && typeof value.bcsToBytes === 'function') {
+    const bytes = value.bcsToBytes();
+    if (expectedBytes && bytes.length !== expectedBytes) return '';
+    return `0x${Buffer.from(bytes).toString('hex')}`;
+  }
   if (value && typeof value.toUint8Array === 'function') {
     const bytes = value.toUint8Array();
     if (expectedBytes && bytes.length !== expectedBytes) return '';
@@ -222,6 +227,12 @@ function normalizeHexInput(value, expectedBytes = 0) {
   if (hex.length % 2 !== 0) return '';
   if (expectedBytes && hex.length !== expectedBytes * 2) return '';
   return `0x${hex.toLowerCase()}`;
+}
+
+function hexInputToBytes(value) {
+  const hex = normalizeHexInput(value, 0);
+  if (!hex) return null;
+  return Uint8Array.from(Buffer.from(hex.slice(2), 'hex'));
 }
 
 async function aptosTsSdk() {
@@ -246,9 +257,70 @@ async function aptosTsSdk() {
   return aptosTsSdkPromise;
 }
 
+function deserializeAptosWalletPublicKey(sdk, publicKeyHex) {
+  const bytes = hexInputToBytes(publicKeyHex);
+  if (!bytes) return null;
+  const { AnyPublicKey, Deserializer, Ed25519PublicKey } = sdk;
+  if (bytes.length === 32 && Ed25519PublicKey) {
+    try {
+      return { publicKey: new Ed25519PublicKey(bytes), scheme: 'ed25519' };
+    } catch { /* try unified format */ }
+  }
+  if (AnyPublicKey && Deserializer) {
+    try {
+      return { publicKey: AnyPublicKey.deserialize(new Deserializer(bytes)), scheme: 'any' };
+    } catch { /* invalid unified key */ }
+  }
+  return null;
+}
+
+function deserializeAptosWalletSignature(sdk, signatureHex, scheme) {
+  const bytes = hexInputToBytes(signatureHex);
+  if (!bytes) return null;
+  const { AnySignature, Deserializer, Ed25519Signature } = sdk;
+  if (scheme === 'ed25519' && bytes.length === 64 && Ed25519Signature) {
+    try {
+      return new Ed25519Signature(bytes);
+    } catch { /* try unified format */ }
+  }
+  if (AnySignature && Deserializer) {
+    try {
+      const anySignature = AnySignature.deserialize(new Deserializer(bytes));
+      return scheme === 'ed25519' && anySignature?.signature
+        ? anySignature.signature
+        : anySignature;
+    } catch { /* invalid unified signature */ }
+  }
+  if (bytes.length === 64 && Ed25519Signature) {
+    try {
+      const ed25519Signature = new Ed25519Signature(bytes);
+      if (scheme === 'any' && AnySignature) {
+        try {
+          return new AnySignature(ed25519Signature);
+        } catch { /* fall through to raw signature */ }
+      }
+      return ed25519Signature;
+    } catch { /* invalid raw signature */ }
+  }
+  return null;
+}
+
+function createAptosVerificationConfig(sdk) {
+  const { AptosConfig, Network } = sdk;
+  if (!AptosConfig) return null;
+  try {
+    return new AptosConfig({
+      network: Network?.MAINNET || 'mainnet',
+      fullnode: aptosFullnode().replace(/\/$/, ''),
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
-  const publicKeyHex = normalizeHexInput(proof.public_key || proof.publicKey, 32);
-  const signatureHex = normalizeHexInput(proof.signature, 64);
+  const publicKeyHex = normalizeHexInput(proof.public_key || proof.publicKey, 0);
+  const signatureHex = normalizeHexInput(proof.signature, 0);
   if (!publicKeyHex || !signatureHex) return false;
   const expectedFullMessage = [
     'APTOS',
@@ -271,8 +343,10 @@ async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
     }
   }
   try {
-    const { Ed25519PublicKey, Ed25519Signature } = await aptosTsSdk();
-    const publicKey = new Ed25519PublicKey(publicKeyHex);
+    const sdk = await aptosTsSdk();
+    const decodedPublicKey = deserializeAptosWalletPublicKey(sdk, publicKeyHex);
+    if (!decodedPublicKey?.publicKey) return false;
+    const { publicKey, scheme } = decodedPublicKey;
     const authKey = publicKey.authKey();
     const derivedAddress = authKey.derivedAddress().toStringLong().toLowerCase();
     const normalizedWallet = normalizeAptosWallet(wallet).toLowerCase();
@@ -292,11 +366,22 @@ async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
       }
     }
     if (!walletMatchesPublicKey) return false;
-    const signature = new Ed25519Signature(signatureHex);
-    return publicKey.verifySignature({
-      message: Uint8Array.from(Buffer.from(signedMessage, 'utf8')),
-      signature,
-    });
+    const signature = deserializeAptosWalletSignature(sdk, signatureHex, scheme);
+    if (!signature) return false;
+    const messageBytes = Uint8Array.from(Buffer.from(signedMessage, 'utf8'));
+    try {
+      return publicKey.verifySignature({ message: messageBytes, signature });
+    } catch (syncError) {
+      if (typeof publicKey.verifySignatureAsync !== 'function') throw syncError;
+      const aptosConfig = createAptosVerificationConfig(sdk);
+      if (!aptosConfig) throw syncError;
+      return await publicKey.verifySignatureAsync({
+        aptosConfig,
+        message: messageBytes,
+        signature,
+        options: { throwErrorWithReason: true },
+      });
+    }
   } catch (e) {
     console.warn('[auth] aptos wallet proof verification failed:', e.message);
     return false;
