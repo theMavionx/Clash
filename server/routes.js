@@ -20813,6 +20813,121 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
   });
 });
 
+function luckyRaiderPayoutAdminPayload(query = {}) {
+  const status = String(query.status || 'all').trim().toLowerCase();
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(query.limit || 100) || 100)));
+  const settings = db.getLuckyRaiderPayoutSettings();
+  const config = luckyRaiderPayouts.payoutRuntimeConfig();
+  const rows = db.listTournamentLuckyRaiderPayouts({ status, limit });
+  return {
+    ok: true,
+    settings,
+    config,
+    summary: db.getTournamentLuckyRaiderPayoutSummary(),
+    payouts: rows.map((row) => luckyRaiderPayouts.describeLuckyRaiderPayout(row, { settings })),
+    confirm_phrase: luckyRaiderPayouts.MANUAL_PAYOUT_CONFIRM,
+  };
+}
+
+router.get('/admin/lucky-raider/payouts', adminAuth, (req, res) => {
+  try {
+    res.json(luckyRaiderPayoutAdminPayload(req.query || {}));
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] list failed:', err?.message || err);
+    res.status(500).json({ ok: false, error: 'Failed to load Lucky Raider payouts' });
+  }
+});
+
+router.post('/admin/lucky-raider/payouts/settings', adminAuth, (req, res) => {
+  try {
+    const settings = db.setLuckyRaiderPayoutSettings(req.body || {});
+    res.json({
+      ok: true,
+      settings,
+      config: luckyRaiderPayouts.payoutRuntimeConfig(),
+    });
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] settings failed:', err?.message || err);
+    res.status(500).json({ ok: false, error: 'Failed to save Lucky Raider payout settings' });
+  }
+});
+
+router.post('/admin/lucky-raider/payouts/preview', adminAuth, async (req, res) => {
+  try {
+    const result = await luckyRaiderPayouts.previewPendingLuckyRaiderPayouts({
+      limit: req.body?.limit,
+      maxAttempts: req.body?.max_attempts,
+      retrySeconds: req.body?.retry_seconds,
+      ids: Array.isArray(req.body?.ids) ? req.body.ids : [],
+    });
+    res.json(result);
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] preview failed:', err?.message || err);
+    res.status(500).json({ ok: false, error: (err?.message || 'Preview failed').slice(0, 180) });
+  }
+});
+
+router.post('/admin/lucky-raider/payouts/run', adminAuth, async (req, res) => {
+  try {
+    const confirm = String(req.body?.confirm || '').trim();
+    if (confirm !== luckyRaiderPayouts.MANUAL_PAYOUT_CONFIRM) {
+      return res.status(400).json({ ok: false, error: `Confirmation phrase required: ${luckyRaiderPayouts.MANUAL_PAYOUT_CONFIRM}` });
+    }
+    const result = await luckyRaiderPayouts.processPendingLuckyRaiderPayouts({
+      mode: 'manual',
+      confirm,
+      limit: req.body?.limit,
+      maxAttempts: req.body?.max_attempts,
+      retrySeconds: req.body?.retry_seconds,
+      ids: Array.isArray(req.body?.ids) ? req.body.ids : [],
+    });
+    res.json(result);
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] run failed:', err?.message || err);
+    res.status(500).json({ ok: false, error: (err?.message || 'Payout run failed').slice(0, 180) });
+  }
+});
+
+router.patch('/admin/lucky-raider/payouts/:id/destination', adminAuth, (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    const row = db.getTournamentLuckyRaiderPayout(id);
+    if (!row) return res.status(404).json({ ok: false, error: 'payout not found' });
+    if (!['pending', 'failed'].includes(String(row.status || ''))) {
+      return res.status(409).json({ ok: false, error: 'only pending or failed payout wallets can be changed' });
+    }
+    const wallet = String(req.body?.wallet || '').trim();
+    if (!wallet) return res.status(400).json({ ok: false, error: 'wallet required' });
+    const { PublicKey } = require('@solana/web3.js');
+    const normalized = new PublicKey(wallet).toBase58();
+    if (db.isWalletBlacklisted(normalized)) return res.status(400).json({ ok: false, error: 'wallet is blacklisted' });
+    const metadata = (() => {
+      try { return JSON.parse(row.metadata_json || '{}') || {}; } catch { return {}; }
+    })();
+    const history = Array.isArray(metadata.admin_destination_updates) ? metadata.admin_destination_updates : [];
+    history.push({
+      at: new Date().toISOString(),
+      previous: row.destination_wallet || row.current_destination_wallet || null,
+      next: normalized,
+      note: String(req.body?.note || '').slice(0, 180),
+    });
+    metadata.admin_destination_updates = history.slice(-10);
+    db.db.prepare(`
+      UPDATE tournament_lucky_raider_payouts
+         SET destination_wallet = ?,
+             metadata_json = ?,
+             updated_at = datetime('now')
+       WHERE id = ?
+         AND status IN ('pending', 'failed')
+    `).run(normalized, JSON.stringify(metadata), id);
+    const updated = db.getTournamentLuckyRaiderPayout(id);
+    res.json({ ok: true, payout: luckyRaiderPayouts.describeLuckyRaiderPayout(updated, { settings: db.getLuckyRaiderPayoutSettings() }) });
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] destination update failed:', err?.message || err);
+    res.status(400).json({ ok: false, error: (err?.message || 'Wallet update failed').slice(0, 180) });
+  }
+});
+
 // Create a tournament. start_at defaults to now, end_at is optional, boosts
 // default to 1.0 (no boost), sort_by defaults to raw weighted points.
 router.post('/admin/tournaments', adminAuth, (req, res) => {

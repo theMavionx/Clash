@@ -4139,6 +4139,68 @@ function listPendingTournamentLuckyRaiderPayouts(options = {}) {
   return stmts.listPendingTournamentLuckyRaiderPayouts.all(maxAttempts, `-${retrySeconds} seconds`, limit);
 }
 
+function getTournamentLuckyRaiderPayout(id) {
+  const payoutId = String(id || '').trim();
+  if (!payoutId) return null;
+  return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
+}
+
+function listTournamentLuckyRaiderPayouts(options = {}) {
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(options.limit || 100) || 100)));
+  const status = String(options.status || 'all').trim().toLowerCase();
+  const allowed = new Set(['pending', 'processing', 'failed', 'paid', 'void']);
+  const where = allowed.has(status) ? 'WHERE lp.status = ?' : '';
+  const params = allowed.has(status) ? [status, limit] : [limit];
+  return db.prepare(`
+    SELECT lp.*,
+           p.name AS player_name,
+           t.name AS tournament_name,
+           tp.reward_wallet_evm AS current_destination_wallet
+      FROM tournament_lucky_raider_payouts lp
+      LEFT JOIN players p ON p.id = lp.player_id
+      LEFT JOIN tournaments t ON t.id = lp.tournament_id
+      LEFT JOIN tournament_participants tp
+        ON tp.tournament_id = lp.tournament_id
+       AND tp.player_id = lp.player_id
+     ${where}
+     ORDER BY
+       CASE lp.status
+         WHEN 'failed' THEN 0
+         WHEN 'processing' THEN 1
+         WHEN 'pending' THEN 2
+         WHEN 'paid' THEN 3
+         ELSE 4
+       END,
+       lp.created_at DESC,
+       lp.id DESC
+     LIMIT ?
+  `).all(...params);
+}
+
+function getTournamentLuckyRaiderPayoutSummary() {
+  const rows = db.prepare(`
+    SELECT status,
+           COUNT(*) AS count,
+           COALESCE(SUM(reward_amount_usd), 0) AS reward_usd
+      FROM tournament_lucky_raider_payouts
+     GROUP BY status
+  `).all();
+  const summary = {
+    total: 0,
+    reward_usd: 0,
+    by_status: {},
+  };
+  for (const row of rows) {
+    const status = String(row.status || 'unknown');
+    const count = Number(row.count || 0);
+    const rewardUsd = Number(row.reward_usd || 0);
+    summary.total += count;
+    summary.reward_usd += rewardUsd;
+    summary.by_status[status] = { count, reward_usd: rewardUsd };
+  }
+  return summary;
+}
+
 function claimTournamentLuckyRaiderPayout(id, options = {}) {
   const payoutId = String(id || '').trim();
   if (!payoutId) return null;
@@ -5185,7 +5247,94 @@ function normalizeReferralCode(value) {
     .slice(0, 48);
 }
 
+function parseSettingBool(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return !!fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  return !['0', 'false', 'no', 'off'].includes(String(value).trim().toLowerCase());
+}
+
+function clampSettingInt(value, fallback, min, max) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function readAppSettingJsonValue(key, fallback = null) {
+  try {
+    const row = db.prepare('SELECT value_json FROM app_settings WHERE key = ?').get(String(key || ''));
+    return row ? JSON.parse(row.value_json || '{}') : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeAppSettingJsonValue(key, value) {
+  db.prepare(`
+    INSERT INTO app_settings (key, value_json, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET
+      value_json = excluded.value_json,
+      updated_at = datetime('now')
+  `).run(String(key || ''), JSON.stringify(value || {}));
+  return value;
+}
+
+const LUCKY_RAIDER_PAYOUT_SETTINGS_KEY = 'lucky_raider.payouts';
 const REFERRAL_SETTINGS_KEY = 'referrals.config';
+
+function getLuckyRaiderPayoutSettings() {
+  const parsed = readAppSettingJsonValue(LUCKY_RAIDER_PAYOUT_SETTINGS_KEY, null) || {};
+  const envAutoDefault = parseSettingBool(process.env.LUCKY_RAIDER_AUTO_PAYOUT, false);
+  return {
+    auto_payout_enabled: parseSettingBool(parsed.auto_payout_enabled, envAutoDefault),
+    manual_payout_enabled: parseSettingBool(parsed.manual_payout_enabled, true),
+    wallet_link_required: parseSettingBool(parsed.wallet_link_required, true),
+    max_batch_size: clampSettingInt(
+      parsed.max_batch_size,
+      clampSettingInt(process.env.LUCKY_RAIDER_PAYOUT_BATCH_SIZE, 10, 1, 100),
+      1,
+      100
+    ),
+    max_attempts: clampSettingInt(
+      parsed.max_attempts,
+      clampSettingInt(process.env.LUCKY_RAIDER_PAYOUT_MAX_ATTEMPTS, 5, 1, 50),
+      1,
+      50
+    ),
+    retry_seconds: clampSettingInt(
+      parsed.retry_seconds,
+      clampSettingInt(process.env.LUCKY_RAIDER_PAYOUT_RETRY_SECONDS, 300, 0, 86_400),
+      0,
+      86_400
+    ),
+  };
+}
+
+function setLuckyRaiderPayoutSettings(input = {}) {
+  const current = getLuckyRaiderPayoutSettings();
+  const next = { ...current };
+  if (Object.prototype.hasOwnProperty.call(input, 'auto_payout_enabled')) {
+    next.auto_payout_enabled = parseSettingBool(input.auto_payout_enabled, current.auto_payout_enabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'manual_payout_enabled')) {
+    next.manual_payout_enabled = parseSettingBool(input.manual_payout_enabled, current.manual_payout_enabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'wallet_link_required')) {
+    next.wallet_link_required = parseSettingBool(input.wallet_link_required, current.wallet_link_required);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'max_batch_size')) {
+    next.max_batch_size = clampSettingInt(input.max_batch_size, current.max_batch_size, 1, 100);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'max_attempts')) {
+    next.max_attempts = clampSettingInt(input.max_attempts, current.max_attempts, 1, 50);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'retry_seconds')) {
+    next.retry_seconds = clampSettingInt(input.retry_seconds, current.retry_seconds, 0, 86_400);
+  }
+  writeAppSettingJsonValue(LUCKY_RAIDER_PAYOUT_SETTINGS_KEY, next);
+  return next;
+}
 
 function clampReferralBps(value, fallback = 1000) {
   const n = Number(value);
@@ -8348,6 +8497,8 @@ module.exports = {
   listWalletBlacklist,
   ensureReferralCode,
   issueReferralCodeForPlayer,
+  getLuckyRaiderPayoutSettings,
+  setLuckyRaiderPayoutSettings,
   getReferralSettings,
   setReferralSettings,
   bindPlayerReferral,
@@ -8440,6 +8591,9 @@ module.exports = {
   awardTournamentLuckyRaiderDay,
   awardTournamentFinalDailyPoolDay,
   awardPendingTournamentDailyPools,
+  getTournamentLuckyRaiderPayout,
+  listTournamentLuckyRaiderPayouts,
+  getTournamentLuckyRaiderPayoutSummary,
   listPendingTournamentLuckyRaiderPayouts,
   claimTournamentLuckyRaiderPayout,
   updateTournamentLuckyRaiderPayoutDestination,

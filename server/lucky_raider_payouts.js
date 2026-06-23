@@ -3,10 +3,22 @@ const { deploymentOf, parseSolanaSecretKey } = require('./bridge_helpers');
 const { createSolanaConnection, solanaRpcUrls, withSolanaRpcFallback } = require('./solana_rpc');
 
 const SOLANA_MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+const MANUAL_PAYOUT_CONFIRM = 'PAY_LUCKY_RAIDER_CLASH';
+const PAYOUT_KEY_ENV_CANDIDATES = [
+  'LUCKY_RAIDER_SOLANA_PAYOUT_KEY',
+  'LUCKY_RAIDER_SOLANA_KEY',
+  'CLASH_SOLANA_PAYOUT_KEY',
+  'MARKETPLACE_SOLANA_CUSTODY_KEY',
+  'CUSTODIAL_MARKETPLACE_SOLANA_KEY',
+  'SOLANA_NFT_KEY',
+  'NFT_SOLANA_KEY',
+  'NFT_KEY',
+];
 
 let workerStarted = false;
 let workerRunning = false;
 let keypairCache = undefined;
+let keypairSource = '';
 let priceCache = null;
 const mintInfoCache = new Map();
 
@@ -46,16 +58,16 @@ function fallbackClashDecimals() {
 
 function solanaPayoutKeypair() {
   if (keypairCache !== undefined) return keypairCache;
-  const raw = firstEnv(
-    'LUCKY_RAIDER_SOLANA_PAYOUT_KEY',
-    'LUCKY_RAIDER_SOLANA_KEY',
-    'CLASH_SOLANA_PAYOUT_KEY',
-    'MARKETPLACE_SOLANA_CUSTODY_KEY',
-    'CUSTODIAL_MARKETPLACE_SOLANA_KEY',
-    'SOLANA_NFT_KEY',
-    'NFT_SOLANA_KEY',
-    'NFT_KEY'
-  );
+  let raw = '';
+  keypairSource = '';
+  for (const name of PAYOUT_KEY_ENV_CANDIDATES) {
+    const value = String(process.env[name] || '').trim();
+    if (value) {
+      raw = value;
+      keypairSource = name;
+      break;
+    }
+  }
   if (!raw) {
     keypairCache = null;
     return keypairCache;
@@ -284,7 +296,22 @@ async function sendClashToken({ to, amountUnits, payoutId, memo }) {
   }, { label: 'Lucky Raider CLASH payout' });
 }
 
+function payoutSettings() {
+  if (typeof gameDb.getLuckyRaiderPayoutSettings === 'function') {
+    return gameDb.getLuckyRaiderPayoutSettings();
+  }
+  return {
+    auto_payout_enabled: envFlag('LUCKY_RAIDER_AUTO_PAYOUT', false),
+    manual_payout_enabled: true,
+    wallet_link_required: true,
+    max_batch_size: Math.max(1, Math.min(100, Math.floor(Number(process.env.LUCKY_RAIDER_PAYOUT_BATCH_SIZE || 10) || 10))),
+    max_attempts: Math.max(1, Math.min(50, Math.floor(Number(process.env.LUCKY_RAIDER_PAYOUT_MAX_ATTEMPTS || 5) || 5))),
+    retry_seconds: Math.max(0, Math.min(86_400, Math.floor(Number(process.env.LUCKY_RAIDER_PAYOUT_RETRY_SECONDS || 300) || 300))),
+  };
+}
+
 function payoutRuntimeConfig() {
+  const settings = payoutSettings();
   let signerAddress = null;
   let signerReady = false;
   let signerError = '';
@@ -296,30 +323,125 @@ function payoutRuntimeConfig() {
     signerError = err?.message || String(err);
   }
   const mint = resolveClashMint();
+  const payoutsEnabled = envFlag('LUCKY_RAIDER_PAYOUTS_ENABLED', true);
   return {
-    enabled: envFlag('LUCKY_RAIDER_AUTO_PAYOUT', true),
+    enabled: payoutsEnabled && !!settings.auto_payout_enabled,
+    payoutsEnabled,
+    autoEnabled: payoutsEnabled && !!settings.auto_payout_enabled,
+    manualEnabled: payoutsEnabled && !!settings.manual_payout_enabled,
     workerEnabled: envFlag('LUCKY_RAIDER_PAYOUT_WORKER', true),
+    settings,
     signerReady,
     signerAddress,
+    signerSource: keypairSource || null,
     signerError,
     clashMint: mint || null,
     rpcReady: solanaRpcUrls().length > 0,
   };
 }
 
+function validatePayoutRow(row, options = {}) {
+  const settings = options.settings || payoutSettings();
+  const rawDestination = String(row?.destination_wallet || row?.current_destination_wallet || '').trim();
+  const errors = [];
+  let destination = rawDestination;
+  let walletValid = false;
+  let walletLinked = false;
+  let walletBlacklisted = false;
+  if (!rawDestination) {
+    errors.push('missing_destination_wallet');
+  } else {
+    try {
+      destination = normalizeSolanaPubkey(rawDestination, 'Lucky Raider payout wallet');
+      walletValid = true;
+      walletBlacklisted = typeof gameDb.isWalletBlacklisted === 'function' && gameDb.isWalletBlacklisted(destination);
+      if (walletBlacklisted) errors.push('wallet_blacklisted');
+      walletLinked = typeof gameDb.isPlayerSolanaWalletLinked === 'function'
+        ? gameDb.isPlayerSolanaWalletLinked(row.player_id, destination)
+        : false;
+      if (settings.wallet_link_required && !walletLinked) {
+        errors.push('wallet_not_linked_to_winner');
+      }
+    } catch (err) {
+      errors.push(err?.message || 'invalid_destination_wallet');
+    }
+  }
+  const rewardUsd = Number(row?.reward_amount_usd || 0);
+  if (!Number.isFinite(rewardUsd) || rewardUsd <= 0) errors.push('reward_amount_missing');
+  if (!['pending', 'failed', 'processing', 'paid'].includes(String(row?.status || ''))) {
+    errors.push('unsupported_payout_status');
+  }
+  return {
+    destination,
+    wallet_valid: walletValid,
+    wallet_linked: walletLinked,
+    wallet_blacklisted: walletBlacklisted,
+    wallet_link_required: !!settings.wallet_link_required,
+    sendable: errors.length === 0 && ['pending', 'failed'].includes(String(row?.status || '')),
+    validation_errors: errors,
+  };
+}
+
+function describeLuckyRaiderPayout(row, options = {}) {
+  if (!row) return null;
+  const validation = validatePayoutRow(row, options);
+  return {
+    ...row,
+    destination_wallet: validation.destination || row.destination_wallet || null,
+    reward_amount_usd: Number(row.reward_amount_usd || 0),
+    clash_usd_price: Number(row.clash_usd_price || 0),
+    attempts: Number(row.attempts || 0),
+    wallet_valid: validation.wallet_valid,
+    wallet_linked: validation.wallet_linked,
+    wallet_blacklisted: validation.wallet_blacklisted,
+    wallet_link_required: validation.wallet_link_required,
+    sendable: validation.sendable,
+    validation_errors: validation.validation_errors,
+  };
+}
+
+async function quoteLuckyRaiderPayout(row, options = {}) {
+  const settings = options.settings || payoutSettings();
+  const described = describeLuckyRaiderPayout(row, { settings });
+  if (!described) return null;
+  if (!described.sendable) return { ...described, quote_ok: false };
+  const mint = resolveClashMint();
+  if (!mint) return { ...described, quote_ok: false, quote_error: 'clash_mint_missing' };
+  try {
+    const mintInfo = await resolveMintInfo(mint);
+    const price = await fetchClashUsdPrice(mint);
+    const amountUnits = usdToTokenUnits(described.reward_amount_usd, price.price, mintInfo.decimals);
+    return {
+      ...described,
+      quote_ok: amountUnits > 0n,
+      clash_mint: mintInfo.mint,
+      clash_usd_price: Number(price.price),
+      clash_amount: formatUnits(amountUnits, mintInfo.decimals),
+      clash_amount_units: amountUnits.toString(),
+      price_source: price.source,
+      quote_error: amountUnits > 0n ? null : 'calculated_amount_zero',
+    };
+  } catch (err) {
+    return {
+      ...described,
+      quote_ok: false,
+      quote_error: err?.message || String(err),
+    };
+  }
+}
+
 async function processLuckyRaiderPayout(row, options = {}) {
-  const maxAttempts = Math.max(1, Math.min(50, Math.floor(Number(options.maxAttempts || process.env.LUCKY_RAIDER_PAYOUT_MAX_ATTEMPTS || 5) || 5)));
+  const settings = options.settings || payoutSettings();
+  const maxAttempts = Math.max(1, Math.min(50, Math.floor(Number(options.maxAttempts || settings.max_attempts || process.env.LUCKY_RAIDER_PAYOUT_MAX_ATTEMPTS || 5) || 5)));
   const payout = gameDb.claimTournamentLuckyRaiderPayout(row.id, { maxAttempts });
   if (!payout) return { ok: true, skipped: true, id: row.id, reason: 'not_claimed' };
 
   try {
-    const destination = normalizeSolanaPubkey(
-      payout.destination_wallet || payout.current_destination_wallet || '',
-      'Lucky Raider payout wallet'
-    );
-    if (!gameDb.isPlayerSolanaWalletLinked(payout.player_id, destination)) {
-      throw new Error('Lucky Raider payout wallet is not linked to the winner account');
+    const validation = validatePayoutRow(payout, { settings });
+    if (validation.validation_errors.length) {
+      throw new Error(validation.validation_errors.join(', '));
     }
+    const destination = validation.destination;
     if (destination !== payout.destination_wallet) {
       gameDb.updateTournamentLuckyRaiderPayoutDestination(payout.id, destination);
     }
@@ -351,27 +473,68 @@ async function processLuckyRaiderPayout(row, options = {}) {
 
 async function processPendingLuckyRaiderPayouts(options = {}) {
   const config = payoutRuntimeConfig();
-  if (!config.enabled) return { ok: true, skipped: true, reason: 'auto_payout_disabled', config };
+  const mode = options.mode === 'manual' ? 'manual' : 'auto';
+  if (mode === 'manual' && options.confirm !== MANUAL_PAYOUT_CONFIRM) {
+    return { ok: false, skipped: true, reason: 'manual_confirm_required', config };
+  }
+  if (mode === 'manual' && !config.manualEnabled) return { ok: true, skipped: true, reason: 'manual_payout_disabled', config };
+  if (mode !== 'manual' && !config.autoEnabled) return { ok: true, skipped: true, reason: 'auto_payout_disabled', config };
   if (!config.clashMint) return { ok: true, skipped: true, reason: 'clash_mint_missing', config };
   if (!config.signerReady) return { ok: true, skipped: true, reason: config.signerError || 'signer_missing', config };
   if (!config.rpcReady) return { ok: true, skipped: true, reason: 'solana_rpc_missing', config };
 
-  const rows = gameDb.listPendingTournamentLuckyRaiderPayouts({
-    limit: options.limit || process.env.LUCKY_RAIDER_PAYOUT_BATCH_SIZE || 10,
-    maxAttempts: options.maxAttempts || process.env.LUCKY_RAIDER_PAYOUT_MAX_ATTEMPTS || 5,
-    retrySeconds: options.retrySeconds || process.env.LUCKY_RAIDER_PAYOUT_RETRY_SECONDS || 300,
-  });
+  const ids = Array.isArray(options.ids)
+    ? options.ids.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 100)
+    : [];
+  const listOptions = {
+    limit: options.limit || config.settings.max_batch_size || process.env.LUCKY_RAIDER_PAYOUT_BATCH_SIZE || 10,
+    maxAttempts: options.maxAttempts || config.settings.max_attempts || process.env.LUCKY_RAIDER_PAYOUT_MAX_ATTEMPTS || 5,
+    retrySeconds: options.retrySeconds || config.settings.retry_seconds || process.env.LUCKY_RAIDER_PAYOUT_RETRY_SECONDS || 300,
+  };
+  const rows = ids.length
+    ? ids.map((id) => gameDb.getTournamentLuckyRaiderPayout?.(id)).filter(Boolean)
+    : gameDb.listPendingTournamentLuckyRaiderPayouts(listOptions);
   const results = [];
   for (const row of rows) {
     // eslint-disable-next-line no-await-in-loop
-    results.push(await processLuckyRaiderPayout(row, options));
+    results.push(await processLuckyRaiderPayout(row, { ...options, settings: config.settings }));
   }
   return {
     ok: results.every((r) => r.ok || r.skipped),
+    mode,
     processed: results.length,
     paid: results.filter((r) => r.ok && !r.skipped).length,
     failed: results.filter((r) => r.ok === false).length,
     results,
+    config,
+  };
+}
+
+async function previewPendingLuckyRaiderPayouts(options = {}) {
+  const config = payoutRuntimeConfig();
+  const ids = Array.isArray(options.ids)
+    ? options.ids.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 100)
+    : [];
+  const listOptions = {
+    limit: options.limit || config.settings.max_batch_size || process.env.LUCKY_RAIDER_PAYOUT_BATCH_SIZE || 10,
+    maxAttempts: options.maxAttempts || config.settings.max_attempts || process.env.LUCKY_RAIDER_PAYOUT_MAX_ATTEMPTS || 5,
+    retrySeconds: options.retrySeconds || config.settings.retry_seconds || process.env.LUCKY_RAIDER_PAYOUT_RETRY_SECONDS || 300,
+  };
+  const rows = ids.length
+    ? ids.map((id) => gameDb.getTournamentLuckyRaiderPayout?.(id)).filter(Boolean)
+    : gameDb.listPendingTournamentLuckyRaiderPayouts(listOptions);
+  const payouts = [];
+  for (const row of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    payouts.push(await quoteLuckyRaiderPayout(row, { settings: config.settings }));
+  }
+  return {
+    ok: true,
+    config,
+    scanned: rows.length,
+    sendable: payouts.filter((row) => row?.sendable && row?.quote_ok).length,
+    blocked: payouts.filter((row) => !row?.sendable || row?.quote_ok === false).length,
+    payouts,
   };
 }
 
@@ -402,8 +565,11 @@ function startLuckyRaiderPayoutWorker() {
 }
 
 module.exports = {
+  MANUAL_PAYOUT_CONFIRM,
   fetchClashUsdPrice,
   payoutRuntimeConfig,
+  describeLuckyRaiderPayout,
+  previewPendingLuckyRaiderPayouts,
   processPendingLuckyRaiderPayouts,
   runLuckyRaiderPayoutSweep,
   startLuckyRaiderPayoutWorker,
