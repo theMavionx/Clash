@@ -7801,13 +7801,7 @@ function isLocalDevelopmentRequest(req) {
   return true;
 }
 
-function isScriptedHttpClient(req) {
-  const ua = String(req.headers['user-agent'] || '').toLowerCase();
-  return /\b(node|undici|curl|wget|python|axios|got|postman|insomnia|httpie)\b/.test(ua);
-}
-
 function hasFirstPartyBrowserContext(req) {
-  if (isScriptedHttpClient(req)) return false;
   const requestHost = requestHeaderHost(req.headers['x-forwarded-host'] || req.headers.host);
   const originHost = urlHeaderHost(req.headers.origin);
   const refererHost = urlHeaderHost(req.headers.referer);
@@ -7822,7 +7816,7 @@ function hasFirstPartyBrowserContext(req) {
 
 function requireFirstPartyBrowserContext(req, res, action) {
   if (hasFirstPartyBrowserContext(req)) return true;
-  console.warn('[security] blocked scripted wallet endpoint', {
+  console.warn('[security] blocked wallet endpoint without first-party context', {
     action,
     method: req.method,
     path: req.originalUrl || req.url,
