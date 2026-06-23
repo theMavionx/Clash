@@ -176,7 +176,7 @@ function verifySolanaWalletSignature(wallet, message, signature, encoding = '') 
 
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
-const EVM_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const EVM_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter']);
 const SOLANA_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash']);
 let aptosTsSdkPromise = null;
 
@@ -235,6 +235,13 @@ function hexInputToBytes(value) {
   return Uint8Array.from(Buffer.from(hex.slice(2), 'hex'));
 }
 
+function unwrapBcsLengthPrefixedBytes(bytes, expectedLength) {
+  if (bytes?.length === expectedLength + 1 && bytes[0] === expectedLength) {
+    return bytes.slice(1);
+  }
+  return bytes;
+}
+
 async function aptosTsSdk() {
   if (!aptosTsSdkPromise) {
     aptosTsSdkPromise = Promise.resolve().then(() => {
@@ -261,9 +268,10 @@ function deserializeAptosWalletPublicKey(sdk, publicKeyHex) {
   const bytes = hexInputToBytes(publicKeyHex);
   if (!bytes) return null;
   const { AnyPublicKey, Deserializer, Ed25519PublicKey } = sdk;
-  if (bytes.length === 32 && Ed25519PublicKey) {
+  const rawEd25519Bytes = unwrapBcsLengthPrefixedBytes(bytes, 32);
+  if (rawEd25519Bytes.length === 32 && Ed25519PublicKey) {
     try {
-      return { publicKey: new Ed25519PublicKey(bytes), scheme: 'ed25519' };
+      return { publicKey: new Ed25519PublicKey(rawEd25519Bytes), scheme: 'ed25519' };
     } catch { /* try unified format */ }
   }
   if (AnyPublicKey && Deserializer) {
@@ -278,9 +286,10 @@ function deserializeAptosWalletSignature(sdk, signatureHex, scheme) {
   const bytes = hexInputToBytes(signatureHex);
   if (!bytes) return null;
   const { AnySignature, Deserializer, Ed25519Signature } = sdk;
-  if (scheme === 'ed25519' && bytes.length === 64 && Ed25519Signature) {
+  const rawEd25519Bytes = unwrapBcsLengthPrefixedBytes(bytes, 64);
+  if (scheme === 'ed25519' && rawEd25519Bytes.length === 64 && Ed25519Signature) {
     try {
-      return new Ed25519Signature(bytes);
+      return new Ed25519Signature(rawEd25519Bytes);
     } catch { /* try unified format */ }
   }
   if (AnySignature && Deserializer) {
@@ -291,9 +300,9 @@ function deserializeAptosWalletSignature(sdk, signatureHex, scheme) {
         : anySignature;
     } catch { /* invalid unified signature */ }
   }
-  if (bytes.length === 64 && Ed25519Signature) {
+  if (rawEd25519Bytes.length === 64 && Ed25519Signature) {
     try {
-      const ed25519Signature = new Ed25519Signature(bytes);
+      const ed25519Signature = new Ed25519Signature(rawEd25519Bytes);
       if (scheme === 'any' && AnySignature) {
         try {
           return new AnySignature(ed25519Signature);
@@ -8264,7 +8273,7 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 const DEX_REQUIRED_CHAIN = {
   pacifica: 'solana',
   phoenix: 'solana',
@@ -8281,6 +8290,7 @@ const DEX_REQUIRED_CHAIN = {
   hotstuff: 'evm',
   grvt: 'evm',
   katana: 'evm',
+  lighter: 'evm',
 };
 
 function dexAcceptsWallet(dex, wallet) {
@@ -8385,7 +8395,7 @@ function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown'
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -13693,7 +13703,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 const TASK_PROGRESS_REFRESH_TIMEOUT_MS = Math.max(1000, Number(process.env.TASK_PROGRESS_REFRESH_TIMEOUT_MS || 5000));
 
 function withTaskProgressTimeout(promise, label) {
@@ -17283,7 +17293,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   const futuresByPlayer = new Map();
@@ -18133,7 +18143,7 @@ function parseBool(v) {
 const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
 const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
-const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'];
+const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter'];
 const TOURNAMENT_DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -18150,6 +18160,7 @@ const TOURNAMENT_DEX_LABELS = {
   katana: 'Katana Perps',
   gmtrade: 'GMTrade',
   flash: 'Flash Trade',
+  lighter: 'Lighter',
 };
 const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
 const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
@@ -19890,6 +19901,7 @@ const FUTURES_TOURNAMENT_SYNC_DEXES = new Set([
   'katana',
   'gmtrade',
   'flash',
+  'lighter',
 ]);
 const tournamentParticipantSyncCache = new Map();
 

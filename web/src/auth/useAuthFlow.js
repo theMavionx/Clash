@@ -179,8 +179,8 @@ function signatureToHex(signature) {
   if (!signature) return '';
   if (typeof signature === 'string') return signature.startsWith('0x') ? signature : `0x${signature}`;
   if (signature instanceof Uint8Array || Array.isArray(signature)) return bytesToHex(signature);
-  if (typeof signature.bcsToBytes === 'function') return bytesToHex(signature.bcsToBytes());
   if (typeof signature.toUint8Array === 'function') return bytesToHex(signature.toUint8Array());
+  if (typeof signature.bcsToBytes === 'function') return bytesToHex(signature.bcsToBytes());
   if (typeof signature.toString === 'function') {
     const text = signature.toString();
     return text.startsWith('0x') ? text : `0x${text}`;

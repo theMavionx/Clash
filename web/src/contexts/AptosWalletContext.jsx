@@ -31,8 +31,8 @@ function aptosKeyToHex(value) {
     return text ? (text.startsWith('0x') ? text : `0x${text}`) : null;
   }
   if (raw instanceof Uint8Array || Array.isArray(raw)) return bytesToHex(raw);
-  if (typeof raw.bcsToBytes === 'function') return bytesToHex(raw.bcsToBytes());
   if (typeof raw.toUint8Array === 'function') return bytesToHex(raw.toUint8Array());
+  if (typeof raw.bcsToBytes === 'function') return bytesToHex(raw.bcsToBytes());
   if (typeof raw.toString === 'function') {
     const text = raw.toString().trim();
     return text && text !== '[object Object]' ? (text.startsWith('0x') ? text : `0x${text}`) : null;
