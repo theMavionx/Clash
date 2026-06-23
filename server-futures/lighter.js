@@ -2,6 +2,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { getAddress, isAddressEqual, recoverMessageAddress } = require('viem');
 
 const LIGHTER_API = String(process.env.LIGHTER_API_URL || 'https://mainnet.zklighter.elliot.ai').replace(/\/+$/u, '');
 const LIGHTER_CHAIN_ID = Number(process.env.LIGHTER_CHAIN_ID || 304);
@@ -67,6 +68,80 @@ function redactSignerPayload(payload = {}) {
   return out;
 }
 
+function parseJsonObject(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatApprovalHex(value, width = 16) {
+  const n = BigInt(Number(value) || 0);
+  return `0x${n.toString(16).padStart(width, '0')}`;
+}
+
+function buildApproveIntegratorMessageFromTxInfo(txInfo) {
+  const tx = parseJsonObject(txInfo);
+  if (!tx) return '';
+  const required = [
+    'Nonce',
+    'AccountIndex',
+    'ApiKeyIndex',
+    'IntegratorAccountIndex',
+    'MaxPerpsTakerFee',
+    'MaxPerpsMakerFee',
+    'MaxSpotTakerFee',
+    'MaxSpotMakerFee',
+    'ApprovalExpiry',
+  ];
+  if (required.some(k => tx[k] == null)) return '';
+  return [
+    'Approve Integrator',
+    '',
+    `nonce: ${formatApprovalHex(tx.Nonce)}`,
+    `account index: ${formatApprovalHex(tx.AccountIndex)}`,
+    `api key index: ${formatApprovalHex(tx.ApiKeyIndex)}`,
+    `integrator account index: ${formatApprovalHex(tx.IntegratorAccountIndex)}`,
+    `max perps taker fee: ${formatApprovalHex(tx.MaxPerpsTakerFee)}`,
+    `max perps maker fee: ${formatApprovalHex(tx.MaxPerpsMakerFee)}`,
+    `max spot taker fee: ${formatApprovalHex(tx.MaxSpotTakerFee)}`,
+    `max spot maker fee: ${formatApprovalHex(tx.MaxSpotMakerFee)}`,
+    `approval expiry: ${formatApprovalHex(tx.ApprovalExpiry)}`,
+    `chainId: ${formatApprovalHex(LIGHTER_CHAIN_ID)}`,
+    'Only sign this message for a trusted client!',
+  ].join('\n');
+}
+
+async function verifyL1ApprovalSignature({ accountIndex, txInfo, messageToSign, l1Signature }) {
+  const signature = String(l1Signature || '').trim();
+  if (!signature) throw Object.assign(new Error('Lighter L1 wallet signature required'), { status: 400 });
+  if (!/^0x[0-9a-f]{130}$/iu.test(signature)) {
+    throw Object.assign(new Error('Lighter L1 signature must be a 65-byte 0x hex signature'), { status: 400 });
+  }
+  const message = String(messageToSign || '').trim() || buildApproveIntegratorMessageFromTxInfo(txInfo);
+  if (!message) throw Object.assign(new Error('Lighter approval message is required for L1 signature verification'), { status: 400 });
+  const account = await getAccount({ accountIndex });
+  const owner = String(account?.l1_address || '').trim();
+  if (!owner) throw Object.assign(new Error(`Lighter account ${accountIndex} has no L1 owner address`), { status: 400 });
+  let recovered = '';
+  try {
+    recovered = await recoverMessageAddress({ message, signature });
+  } catch (err) {
+    throw Object.assign(new Error(`Lighter L1 signature is invalid: ${err?.message || err}`), { status: 400 });
+  }
+  if (!isAddressEqual(getAddress(recovered), getAddress(owner))) {
+    throw Object.assign(
+      new Error(`Lighter L1 signature does not match account owner. Signed by ${recovered}, account owner is ${owner}.`),
+      { status: 400 },
+    );
+  }
+  return { owner, recovered, message };
+}
+
 function runSigner(action, payload = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(LIGHTER_PYTHON_BIN, [LIGHTER_SIGNER_SCRIPT], {
@@ -95,8 +170,9 @@ function runSigner(action, payload = {}) {
       try { data = stdout ? JSON.parse(stdout) : null; } catch {}
       if (code !== 0 || !data || data.ok === false) {
         const msg = data?.error || stderr.trim() || stdout.trim() || `signer exited ${code}`;
+        const status = /code=21504|fail to l1 signature|signature|expired|nonce/iu.test(String(msg)) ? 400 : 502;
         return reject(Object.assign(new Error(`Lighter signer ${action} failed: ${msg}`), {
-          status: 502,
+          status,
           data,
           payload: redactSignerPayload({ action, ...payload }),
         }));
@@ -482,6 +558,12 @@ async function prepareIntegratorApproval(input = {}) {
 async function submitIntegratorApproval(input = {}) {
   const creds = signerCredentials(input);
   if (!input.tx_info || input.tx_type == null) throw Object.assign(new Error('Lighter approval tx_info required'), { status: 400 });
+  await verifyL1ApprovalSignature({
+    accountIndex: creds.account_index,
+    txInfo: input.tx_info,
+    messageToSign: input.messageToSign || input.message_to_sign,
+    l1Signature: input.l1Signature || input.l1_signature || '',
+  });
   const result = await runSigner('send_tx', {
     ...creds,
     tx_type: Number(input.tx_type),

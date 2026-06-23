@@ -33,6 +33,15 @@ def _response_payload(value):
 
 def _public_error(exc):
     text = str(exc)
+    body = getattr(exc, "body", None)
+    data = getattr(exc, "data", None)
+    if data is not None:
+        code = getattr(data, "code", None)
+        message = getattr(data, "message", None)
+        if code is not None or message:
+            text = f"code={code} message='{message or ''}'"
+    elif body:
+        text = f"{text} body={body}"
     lower = text.lower()
     if "code=20558" in text or "restricted jurisdiction" in lower:
         return (

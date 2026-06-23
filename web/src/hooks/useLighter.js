@@ -263,7 +263,7 @@ export function useLighter() {
       throw new Error('Lighter API credentials are required before approving integrator fees.');
     }
     const walletClient = typeof evmWallet?.getWalletClient === 'function'
-      ? evmWallet.getWalletClient()
+      ? evmWallet.getWalletClient(1)
       : evmWallet?.walletClient;
     const walletAddr = evmWallet?.address;
     if (!walletClient || !walletAddr) throw new Error('Connect your EVM wallet to approve Lighter integrator fees');
@@ -284,6 +284,7 @@ export function useLighter() {
         tx_type: prepared.tx_type,
         tx_info: prepared.tx_info,
         tx_hash: prepared.tx_hash,
+        message_to_sign: message,
         l1Signature,
       })),
     });
