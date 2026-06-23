@@ -34,6 +34,14 @@ function shortWallet(address) {
   return raw ? `${raw.slice(0, 6)}...${raw.slice(-4)}` : '';
 }
 
+function walletKind(address) {
+  const raw = String(address || '').trim();
+  if (/^0x[a-fA-F0-9]{40}$/.test(raw)) return 'evm';
+  if (/^0x[a-fA-F0-9]{64}$/.test(raw)) return 'aptos';
+  if (raw) return 'solana';
+  return 'unknown';
+}
+
 // Styled to match the project's dominant Clash-of-Clans modal look (parchment
 // body + blue header + yellow action button — see BuildingInfoPanel LT styles
 // for the reference). Previously used the older dark "cartoonPanel" look that
@@ -285,6 +293,61 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
       )}
       <button style={privyEnabled ? S.secondaryBtn : S.primaryBtn} onClick={onOpenWalletModal}>
         <WalletIcon /> CONNECT SOLANA WALLET
+      </button>
+    </div>
+  );
+}
+
+function ConnectLinkedWallet({
+  dex = 'pacifica',
+  wallet,
+  onOpenWalletModal,
+  onOpenEvmModal,
+  onConnectAptos,
+  aptosConnecting,
+  aptosHasProvider,
+  onPrivyLogin,
+  privyEnabled,
+  privyAuthed,
+}) {
+  const cfg = DEX_CONFIG[dex] || DEX_CONFIG.pacifica;
+  const kind = walletKind(wallet);
+  const cta = kind === 'evm'
+    ? 'CONNECT EVM WALLET'
+    : kind === 'aptos'
+      ? (aptosConnecting ? 'CONNECTING...' : (aptosHasProvider ? 'CONNECT APTOS WALLET' : 'INSTALL PETRA'))
+      : kind === 'solana'
+        ? 'CONNECT SOLANA WALLET'
+        : 'CONNECT WALLET';
+  const onClick = kind === 'evm'
+    ? onOpenEvmModal
+    : kind === 'aptos'
+      ? () => {
+          if (!aptosHasProvider) {
+            try { window.open('https://petra.app/', '_blank', 'noopener,noreferrer'); } catch {}
+            return;
+          }
+          onConnectAptos();
+        }
+      : onOpenWalletModal;
+
+  return (
+    <div style={S.bodyStack}>
+      <h3 style={S.sectionTitle}>CONNECT TO {String(cfg.label || 'CLASH').toUpperCase()}</h3>
+      <p style={S.subtle}>
+        Reconnect the wallet linked to this game account to continue. You can connect a separate trading wallet after login if this venue needs another chain.
+      </p>
+      {privyEnabled && (
+        <button style={S.primaryBtn} onClick={onPrivyLogin}>
+          <EmailIcon /> {privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}
+        </button>
+      )}
+      <button
+        style={privyEnabled ? S.secondaryBtn : S.primaryBtn}
+        onClick={onClick}
+        disabled={kind === 'aptos' && aptosConnecting}
+      >
+        <WalletIcon /> {cta}
       </button>
     </div>
   );
@@ -552,6 +615,22 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
+        if (storedAuthRecord?.wallet) {
+          return (
+            <ConnectLinkedWallet
+              dex={dex}
+              wallet={storedAuthRecord.wallet}
+              onOpenWalletModal={openSolanaConnect}
+              onOpenEvmModal={openEvmConnect}
+              onConnectAptos={connectAptos}
+              aptosConnecting={aptos.isConnecting}
+              aptosHasProvider={aptos.hasProvider}
+              onPrivyLogin={actions.loginWithPrivy}
+              privyEnabled={privyEnabled}
+              privyAuthed={privyAuthed}
+            />
+          );
+        }
         if (!dexPicked) {
           return (
             <ConnectAccount
