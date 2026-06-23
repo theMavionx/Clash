@@ -356,7 +356,6 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hotstuff' ? 'HOTSTUFF'
     : dex === 'grvt' ? 'GRVT'
     : dex === 'katana' ? 'KATANA'
-    : dex === 'lighter' ? 'LIGHTER'
     : dex === 'gmtrade' ? 'GMTRADE'
     : dex === 'flash' ? 'FLASH TRADE'
     : 'AVANTIS';
@@ -369,7 +368,6 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hotstuff' ? 'Hotstuff L1'
     : dex === 'grvt' ? 'GRVT Exchange'
     : dex === 'katana' ? 'Katana'
-    : dex === 'lighter' ? 'EVM'
     : dex === 'gmtrade' ? 'Solana'
     : dex === 'flash' ? 'Solana'
     : 'Base';
@@ -566,7 +564,7 @@ function RegisterPanel() {
             />
           );
         }
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -624,7 +622,6 @@ function RegisterPanel() {
     if (dex === 'hotstuff') return 'HOTSTUFF LOGIN';
     if (dex === 'grvt') return 'GRVT LOGIN';
     if (dex === 'katana') return 'KATANA LOGIN';
-    if (dex === 'lighter') return 'LIGHTER LOGIN';
     if (dex === 'gmtrade') return 'GMTRADE LOGIN';
     if (dex === 'flash') return 'FLASH TRADE LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
@@ -648,7 +645,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : dex === 'lighter' ? 'baseConnect' : 'base'}
+        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

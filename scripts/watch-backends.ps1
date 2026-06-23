@@ -13,8 +13,6 @@ $MainDir = Join-Path $Root 'server'
 $FuturesDir = Join-Path $Root 'server-futures'
 $WebDir = Join-Path $Root 'web'
 $LogDir = Join-Path $Root '.local-logs'
-$BundledPython = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-$DefaultLighterPythonBin = if (Test-Path $BundledPython) { $BundledPython } else { 'python' }
 $BotApiProxy = if ($env:VITE_BOT_API_PROXY) { $env:VITE_BOT_API_PROXY } else { 'http://62.72.35.202:8080' }
 $BotWsProxy = if ($env:VITE_BOT_WS_PROXY) {
   $env:VITE_BOT_WS_PROXY
@@ -172,7 +170,6 @@ $services = @(
       GMX_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       HYPERLIQUID_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       HOTSTUFF_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
-      LIGHTER_PYTHON_BIN = $(if ($env:LIGHTER_PYTHON_BIN) { $env:LIGHTER_PYTHON_BIN } else { $DefaultLighterPythonBin })
     } `
     -WatchDirs @($FuturesDir))
 )

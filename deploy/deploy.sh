@@ -266,7 +266,7 @@ copy_db_family() {
 install_system_dependencies() {
     log "[1/9] Installing system dependencies..."
     apt-get update -qq
-    apt-get install -y -qq nginx certbot python3-certbot-nginx curl rsync brotli sqlite3 zstd python3-venv
+    apt-get install -y -qq nginx certbot python3-certbot-nginx curl rsync brotli sqlite3 zstd
 
     if ! command -v node >/dev/null 2>&1; then
         log "Installing Node.js 20..."
@@ -791,17 +791,6 @@ install_release_dependencies() {
         else
             npm install --omit=dev --legacy-peer-deps
         fi
-    fi
-
-    if [ -d "$FUTURES_DIR" ] && [ -f "$FUTURES_DIR/requirements-lighter.txt" ]; then
-        local lighter_venv="$SHARED_DIR/lighter-venv"
-        log "Installing Lighter Python signer dependencies into $lighter_venv"
-        if [ ! -x "$lighter_venv/bin/python" ]; then
-            python3 -m venv "$lighter_venv"
-        fi
-        "$lighter_venv/bin/python" -m pip install --upgrade pip wheel
-        "$lighter_venv/bin/python" -m pip install -r "$FUTURES_DIR/requirements-lighter.txt"
-        set_env_value LIGHTER_PYTHON_BIN "$lighter_venv/bin/python"
     fi
 
     if ! grep -q '^DIAG_SERVER_SECRET_B58=' "$ENV_FILE"; then

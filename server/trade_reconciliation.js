@@ -22,7 +22,6 @@ const FUTURES_REWARD_DEXES = new Set([
   'katana',
   'gmtrade',
   'flash',
-  'lighter',
 ]);
 
 const DEX_REQUIRED_CHAIN = {
@@ -41,7 +40,6 @@ const DEX_REQUIRED_CHAIN = {
   hotstuff: 'evm',
   grvt: 'evm',
   katana: 'evm',
-  lighter: 'evm',
 };
 
 const VERIFIED_SOURCES_BY_DEX = {
@@ -59,7 +57,6 @@ const VERIFIED_SOURCES_BY_DEX = {
   katana: ['katana_api'],
   gmtrade: ['gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional'],
   flash: ['flash_tx'],
-  lighter: ['lighter_integrator'],
 };
 
 const USER_SCOPED_IMPORT_DEXES = new Set([
@@ -71,7 +68,6 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
   'hibachi',
   'katana',
   'grvt',
-  'lighter',
 ]);
 
 const DEFAULT_RECONCILE_COOLDOWN_MS = Math.max(5_000, Number(process.env.TRADE_RECONCILE_COOLDOWN_MS || 30_000));
@@ -355,12 +351,6 @@ function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
     if (!apiKey && !subAccountId && !accountId && !cookie) return null;
     return { apiKey, subAccountId, accountId, cookie };
   }
-  if (dex === 'lighter') {
-    const accountIndex = headerValue(headers, 'x-lighter-account-index') || opts.accountIndex || opts.account_index;
-    const authToken = headerValue(headers, 'x-lighter-auth-token') || opts.authToken || opts.auth_token;
-    if (!accountIndex || !authToken) return null;
-    return { accountIndex, authToken };
-  }
   return null;
 }
 
@@ -417,13 +407,6 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
     if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
     const grvt = require('../server-futures/grvt');
     return { dex, ...(await grvt.importFillsForPlayer(playerId, creds, { limit })) };
-  }
-
-  if (dex === 'lighter') {
-    const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
-    if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
-    const lighter = require('../server-futures/lighter');
-    return { dex, ...(await lighter.importFillsForPlayer(playerId, creds, { limit })) };
   }
 
   if (dex === 'gmtrade') {

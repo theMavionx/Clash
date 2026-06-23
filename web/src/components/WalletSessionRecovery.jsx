@@ -25,14 +25,12 @@ const DEX_WALLET = {
   hotstuff: { kind: 'evm', chain: 'Ethereum', label: 'Hotstuff', cta: 'Reconnect Ethereum wallet', targetChain: 'mainnet' },
   grvt: { kind: 'evm', chain: 'GRVT Exchange', label: 'GRVT', cta: 'Reconnect GRVT wallet', targetChain: 'grvt' },
   katana: { kind: 'evm', chain: 'Katana', label: 'Katana', cta: 'Reconnect Katana wallet', targetChain: 'katana' },
-  lighter: { kind: 'evm', chain: 'Ethereum', label: 'Lighter', cta: 'Reconnect EVM wallet', targetChain: 'mainnet' },
   decibel: { kind: 'aptos', chain: 'Aptos', label: 'Decibel', cta: 'Reconnect Petra wallet' },
   pacifica: { kind: 'solana', chain: 'Solana', label: 'Pacifica', cta: 'Reconnect Solana wallet' },
   phoenix: { kind: 'solana', chain: 'Solana', label: 'Phoenix', cta: 'Reconnect Solana wallet' },
   gmtrade: { kind: 'solana', chain: 'Solana', label: 'GMTrade', cta: 'Reconnect Solana wallet' },
   flash: { kind: 'solana', chain: 'Solana', label: 'Flash Trade', cta: 'Reconnect Solana wallet' },
 };
-const DEFAULT_WALLET_META = { kind: 'evm', chain: 'EVM', label: 'This exchange', cta: 'Reconnect EVM wallet', targetChain: 'base' };
 
 function dexPicked() {
   try { return localStorage.getItem(DEX_PICKED_KEY) === '1'; } catch { return true; }
@@ -54,7 +52,7 @@ export default function WalletSessionRecovery() {
   const [evmModalOpen, setEvmModalOpen] = useState(false);
   const loggedRef = useRef(null);
 
-  const meta = DEX_WALLET[dex] || DEFAULT_WALLET_META;
+  const meta = DEX_WALLET[dex] || DEX_WALLET.pacifica;
   const solAddress = solWallet?.publicKey?.toBase58?.() || null;
   const privySolAddress = (privy.solanaWallets || []).find(w => w?.address)?.address || null;
   const liveWallet = meta.kind === 'evm'
