@@ -256,7 +256,20 @@ async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
     `nonce: ${issuedAt}`,
   ].join('\n');
   const suppliedFullMessage = String(proof.full_message || proof.fullMessage || '').trim();
-  if (suppliedFullMessage && suppliedFullMessage !== expectedFullMessage) return false;
+  const signedMessage = suppliedFullMessage || expectedFullMessage;
+  if (suppliedFullMessage) {
+    const hasExpectedMessage = suppliedFullMessage.includes(`message: ${message}`);
+    const hasExpectedNonce = suppliedFullMessage.includes(`nonce: ${issuedAt}`);
+    if (!hasExpectedMessage || !hasExpectedNonce) {
+      console.warn('[auth] aptos wallet proof fullMessage mismatch:', {
+        hasExpectedMessage,
+        hasExpectedNonce,
+        supplied_len: suppliedFullMessage.length,
+        expected_len: expectedFullMessage.length,
+      });
+      return false;
+    }
+  }
   try {
     const { Ed25519PublicKey, Ed25519Signature } = await aptosTsSdk();
     const publicKey = new Ed25519PublicKey(publicKeyHex);
@@ -264,7 +277,7 @@ async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
     if (derivedAddress !== normalizeAptosWallet(wallet).toLowerCase()) return false;
     const signature = new Ed25519Signature(signatureHex);
     return publicKey.verifySignature({
-      message: Uint8Array.from(Buffer.from(expectedFullMessage, 'utf8')),
+      message: Uint8Array.from(Buffer.from(signedMessage, 'utf8')),
       signature,
     });
   } catch (e) {
@@ -8318,7 +8331,6 @@ function markPlayerSeekerIfPresent(playerId, body) {
 router.post('/players/register', async (req, res) => {
   const { name, wallet, dex, fid } = req.body;
   const localGuestWallet = isLocalGuestWallet(wallet);
-  if (wallet && !requireFirstPartyBrowserContext(req, res, 'players.register')) return;
   if (wallet && rejectBlacklistedWallet(req, res, wallet, 'players.register')) return;
   if (localGuestWallet && !isLocalDevelopmentRequest(req)) {
     return res.status(403).json({ error: 'Local guest mode is only available on localhost.' });
@@ -10038,7 +10050,6 @@ router.post('/players/login-wallet', async (req, res) => {
       dex: player.dex,
     });
   }
-  if (!requireFirstPartyBrowserContext(req, res, 'players.login-wallet')) return;
   const requestedDex = VALID_DEXES.has(dex) ? dex : (player.dex || '');
   const proofDex = VALID_DEXES.has(dex) ? dex : '';
   const authProof = await verifyWalletAuthProof(req, { wallet, dex: proofDex });
