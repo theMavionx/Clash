@@ -176,7 +176,7 @@ function verifySolanaWalletSignature(wallet, message, signature, encoding = '') 
 
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
-const EVM_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const EVM_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter']);
 const SOLANA_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash']);
 let aptosTsSdkPromise = null;
 
@@ -2809,7 +2809,7 @@ const SOLANA_MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 // =====================================================================
 // Multi-chain EVM shop (Base, Arbitrum, Monad). CoP on Base still uses the
 // deployed ClashGameShopV1 quote-signing contract; USDC/native payments use
-// the token/native transfer + server memo + receipt verification
+// the lighter "token/native transfer + server memo + receipt verification"
 // model.
 // =====================================================================
 const GAME_SHOP_EVM_CHAINS = {
@@ -8273,7 +8273,7 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 const DEX_REQUIRED_CHAIN = {
   pacifica: 'solana',
   phoenix: 'solana',
@@ -8290,6 +8290,7 @@ const DEX_REQUIRED_CHAIN = {
   hotstuff: 'evm',
   grvt: 'evm',
   katana: 'evm',
+  lighter: 'evm',
 };
 
 function dexAcceptsWallet(dex, wallet) {
@@ -8394,7 +8395,7 @@ function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown'
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -12836,7 +12837,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter') {
     const reconcile = await tradeRecon.reconcileTradesForPlayer(req.player, {
       dex,
       wallet,
@@ -12868,7 +12869,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // had a similar early-rollout risk while we were tuning import timing.
     // If a row has never paid anything, rewind the cursor once so verified
     // rows can be credited under the current rules.
-    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'flash')
+    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'flash' || dex === 'lighter')
       && Number(reward.last_trade_id || 0) > 0
       && Number(reward.total_volume || 0) === 0
       && Number(reward.total_gold || 0) === 0) {
@@ -13702,7 +13703,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 const TASK_PROGRESS_REFRESH_TIMEOUT_MS = Math.max(1000, Number(process.env.TASK_PROGRESS_REFRESH_TIMEOUT_MS || 5000));
 
 function withTaskProgressTimeout(promise, label) {
@@ -13715,7 +13716,7 @@ function withTaskProgressTimeout(promise, label) {
   });
 }
 
-async function maybeRefreshTaskProgress(player, task, playerTask) {
+async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders = null) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
   const dex = String(player?.dex || '').toLowerCase();
   if (!LIVE_TASK_PROGRESS_DEXES.has(dex)) return playerTask;
@@ -13736,7 +13737,7 @@ async function maybeRefreshTaskProgress(player, task, playerTask) {
       }
     }
     const result = await withTaskProgressTimeout(
-      tasks.verifyTask(player, task, snap),
+      tasks.verifyTask(player, task, snap, { headers: requestHeaders }),
       `player=${player?.name || player?.id} task=${task?.id} dex=${dex}`
     );
     const progress = result.target_value > 0
@@ -13772,7 +13773,7 @@ router.get('/tasks', auth, async (req, res) => {
     const eligibility = tasks.checkTaskEligibility(req.player, t);
     if (!eligibility.ok) continue;
     let pt = tasks.getPlayerTask(req.player.id, t.id);
-    pt = await maybeRefreshTaskProgress(req.player, t, pt);
+    pt = await maybeRefreshTaskProgress(req.player, t, pt, req.headers);
     out.push({
       id: t.id,
       type: t.type,
@@ -13838,7 +13839,7 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
     }
   }
 
-  const snap = await tasks.buildSnapshot(req.player, task);
+  const snap = await tasks.buildSnapshot(req.player, task, { headers: req.headers });
   db.db.prepare(
     `INSERT OR REPLACE INTO player_tasks (player_id, task_id, snapshot, progress, progress_value, target_value, started_at, claimed_at)
      VALUES (?, ?, ?, 0, 0, 0, datetime('now'), NULL)`
@@ -13877,7 +13878,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   let pt = tasks.getPlayerTask(req.player.id, id);
   if (!pt) {
     // auto-start — snapshot taken now, so there's nothing yet to claim
-    const snap = await tasks.buildSnapshot(req.player, task);
+    const snap = await tasks.buildSnapshot(req.player, task, { headers: req.headers });
     db.db.prepare(
       `INSERT INTO player_tasks (player_id, task_id, snapshot) VALUES (?, ?, ?)`
     ).run(req.player.id, id, JSON.stringify(snap));
@@ -13914,7 +13915,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       ).run(pt.snapshot, req.player.id, id);
     }
   }
-  const result = await tasks.verifyTask(req.player, task, snap);
+  const result = await tasks.verifyTask(req.player, task, snap, { headers: req.headers });
 
   // Always update cached progress (progress update is an independent fact,
   // kept outside the payout txn so it lands even if the completion check
@@ -13932,7 +13933,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     });
     return res.json({ ok: false, completed: false, progress_value: result.progress_value, target_value: result.target_value, breakdown: result.breakdown });
   }
-  const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task) : null;
+  const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task, { headers: req.headers }) : null;
   if (nextRepeatableSnapshot) nextRepeatableSnapshot.strict_after_start_id = true;
 
   // Atomic payout: re-check the snapshot inside the transaction so two
@@ -17292,7 +17293,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   const futuresByPlayer = new Map();
@@ -18142,7 +18143,7 @@ function parseBool(v) {
 const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
 const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
-const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'];
+const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter'];
 const TOURNAMENT_DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -18159,6 +18160,7 @@ const TOURNAMENT_DEX_LABELS = {
   katana: 'Katana Perps',
   gmtrade: 'GMTrade',
   flash: 'Flash Trade',
+  lighter: 'Lighter',
 };
 const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
 const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
@@ -19899,6 +19901,7 @@ const FUTURES_TOURNAMENT_SYNC_DEXES = new Set([
   'katana',
   'gmtrade',
   'flash',
+  'lighter',
 ]);
 const tournamentParticipantSyncCache = new Map();
 

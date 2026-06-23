@@ -21,6 +21,7 @@ const grvt = require('./grvt');
 const katana = require('./katana');
 const gmtrade = require('./gmtrade');
 const flash = require('./flash');
+const lighter = require('./lighter');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
 
@@ -604,7 +605,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -1849,6 +1850,7 @@ router.get('/markets', async (req, res) => {
       : dex === 'katana' ? await katana.getMarketInfo()
       : dex === 'gmtrade' ? await gmtrade.getMarketInfo()
       : dex === 'flash' ? await flash.getMarketInfo()
+      : dex === 'lighter' ? await lighter.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -1873,6 +1875,7 @@ router.get('/prices', async (req, res) => {
       : dex === 'katana' ? await katana.getPrices()
       : dex === 'gmtrade' ? await gmtrade.getPrices()
       : dex === 'flash' ? await flash.getPrices()
+      : dex === 'lighter' ? await lighter.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -3797,6 +3800,106 @@ router.post('/grvt/import-fills', auth, async (req, res) => {
   } catch (e) {
     console.warn('[grvt] import-fills failed:', e.message);
     res.status(502).json({ error: 'Failed to import GRVT fills', detail: e.message });
+  }
+});
+
+router.get('/lighter/config', async (_req, res) => {
+  res.json(lighter.config());
+});
+
+router.get('/lighter/account', auth, async (req, res) => {
+  try {
+    const accountIndex = req.query.account_index || req.query.accountIndex;
+    const l1Address = req.query.l1_address || req.query.l1Address || req.query.address;
+    res.json(await lighter.getAccount({ accountIndex, l1Address }));
+  } catch (e) {
+    console.warn('[lighter] account failed:', e.message);
+    res.status(e.status || 502).json({ error: 'Failed to load Lighter account', detail: e.message });
+  }
+});
+
+router.post('/lighter/credentials/check', auth, async (req, res) => {
+  try {
+    res.json(await lighter.checkCredentials(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] credential check failed:', e.message);
+    res.status(e.status || 400).json({ error: 'Failed to verify Lighter API key', detail: e.message });
+  }
+});
+
+router.post('/lighter/auth-token', auth, async (req, res) => {
+  try {
+    res.json(await lighter.createAuthToken(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] auth-token failed:', e.message);
+    res.status(e.status || 400).json({ error: 'Failed to create Lighter auth token', detail: e.message });
+  }
+});
+
+router.post('/lighter/approve-integrator/prepare', auth, async (req, res) => {
+  try {
+    res.json(await lighter.prepareIntegratorApproval(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] approve-integrator prepare failed:', e.message);
+    res.status(e.status || 400).json({ error: 'Failed to prepare Lighter integrator approval', detail: e.message });
+  }
+});
+
+router.post('/lighter/approve-integrator/submit', auth, async (req, res) => {
+  try {
+    res.json(await lighter.submitIntegratorApproval(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] approve-integrator submit failed:', e.message);
+    res.status(e.status || 400).json({ error: 'Failed to submit Lighter integrator approval', detail: e.message });
+  }
+});
+
+router.post('/lighter/orders', auth, async (req, res) => {
+  try {
+    res.json(await lighter.getActiveOrders(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] active orders failed:', e.message);
+    res.status(e.status || 502).json({ error: 'Failed to load Lighter active orders', detail: e.message });
+  }
+});
+
+router.post('/lighter/order', auth, async (req, res) => {
+  try {
+    res.json(await lighter.createOrder(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] order failed:', e.message);
+    res.status(e.status || 400).json({ error: 'Failed to submit Lighter order', detail: e.message });
+  }
+});
+
+router.post('/lighter/order/cancel', auth, async (req, res) => {
+  try {
+    res.json(await lighter.cancelOrder(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] cancel failed:', e.message);
+    res.status(e.status || 400).json({ error: 'Failed to cancel Lighter order', detail: e.message });
+  }
+});
+
+router.post('/lighter/set-leverage', auth, async (req, res) => {
+  try {
+    res.json(await lighter.setLeverage(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] set-leverage failed:', e.message);
+    res.status(e.status || 400).json({ error: 'Failed to update Lighter leverage', detail: e.message });
+  }
+});
+
+router.post('/lighter/import-fills', auth, async (req, res) => {
+  try {
+    const result = await lighter.importFillsForPlayer(req.playerId, req.body || {});
+    if (result.inserted > 0) {
+      console.log(`[lighter] imported ${result.inserted} integrator fill(s) for player=${req.playerName} account=${result.account_index}`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[lighter] import-fills failed:', e.message);
+    res.status(e.status || 502).json({ error: 'Failed to import Lighter fills', detail: e.message });
   }
 });
 

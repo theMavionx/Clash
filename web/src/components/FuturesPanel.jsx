@@ -19,6 +19,7 @@ import { useGrvt } from '../hooks/useGrvt';
 import { useKatana } from '../hooks/useKatana';
 import { useGmtrade } from '../hooks/useGmtrade';
 import { useFlash } from '../hooks/useFlash';
+import { useLighter } from '../hooks/useLighter';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -1909,6 +1910,7 @@ function FuturesPanel() {
   const katanaHook = useKatana();
   const gmtradeHook = useGmtrade();
   const flashHook = useFlash();
+  const lighterHook = useLighter();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -1941,6 +1943,8 @@ function FuturesPanel() {
     ? gmtradeHook
     : dex === 'flash'
     ? flashHook
+    : dex === 'lighter'
+    ? lighterHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, spotUsdc, leverageSettings = {}, marginModes = {}, dataReady, accountReady,
@@ -1950,7 +1954,7 @@ function FuturesPanel() {
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
     closePosition, depositToPacifica, withdraw, activate, disconnect, setTpsl, setMarginMode, moveSpotToPerp, switchToRise, switchToInk,
     // Avantis-only — undefined on the Pacifica branch.
-    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, openReferralJoin, referralCode, referralUrl, walletMismatch, registeredEvmWallet,
+    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, openReferralJoin, approveIntegrator, referralCode, referralUrl, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
     pacAgent, bindAgent, bindingAgent, bindAgentError, forgetAgentLocally, revokeAgentOnServer,
     // Decibel-only — drives the blocking activation modal + gate screen.
@@ -1960,7 +1964,7 @@ function FuturesPanel() {
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
     activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, hotstuffSetupStatus,
-    bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources,
+    bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources, lighterNeedsIntegratorApproval, detectAccount: detectLighterAccount,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
   // The trading hook owns the active signer. Do not treat a detected adapter
@@ -2269,6 +2273,10 @@ function FuturesPanel() {
   const [grvtApiKeyInput, setGrvtApiKeyInput] = useState('');
   const [katanaApiKeyInput, setKatanaApiKeyInput] = useState('');
   const [katanaApiSecretInput, setKatanaApiSecretInput] = useState('');
+  const [lighterAccountIndexInput, setLighterAccountIndexInput] = useState('');
+  const [lighterApiKeyIndexInput, setLighterApiKeyIndexInput] = useState('');
+  const [lighterApiPrivateKeyInput, setLighterApiPrivateKeyInput] = useState('');
+  const [lighterAccountDetectStatus, setLighterAccountDetectStatus] = useState('');
   const [hibachiApiKeyInput, setHibachiApiKeyInput] = useState('');
   const [hibachiAccountIdInput, setHibachiAccountIdInput] = useState('');
   const [hibachiPrivateKeyInput, setHibachiPrivateKeyInput] = useState('');
@@ -2278,6 +2286,30 @@ function FuturesPanel() {
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
+
+  useEffect(() => {
+    if (dex !== 'lighter') return undefined;
+    if (setupVerified === true || lighterNeedsIntegratorApproval) return undefined;
+    if (!hasWallet || !/^0x[a-fA-F0-9]{40}$/.test(String(walletAddr || ''))) return undefined;
+    if (lighterAccountIndexInput.trim()) return undefined;
+    if (typeof detectLighterAccount !== 'function') return undefined;
+    let cancelled = false;
+    setLighterAccountDetectStatus('checking');
+    detectLighterAccount(walletAddr)
+      .then((result) => {
+        if (cancelled) return;
+        if (result?.found && Number.isInteger(Number(result.accountIndex))) {
+          setLighterAccountIndexInput(String(result.accountIndex));
+          setLighterAccountDetectStatus('found');
+        } else {
+          setLighterAccountDetectStatus('not_found');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLighterAccountDetectStatus('error');
+      });
+    return () => { cancelled = true; };
+  }, [detectLighterAccount, dex, hasWallet, lighterAccountIndexInput, lighterNeedsIntegratorApproval, setupVerified, walletAddr]);
 
   const selectPhoenixInviteKind = useCallback((kind) => {
     setPhoenixInviteKind(kind);
@@ -2914,7 +2946,7 @@ function FuturesPanel() {
       // executes against whatever leverage was last persisted (e.g. 40× from
       // a previous session even though the slider shows 20×). Avantis/GMX
       // take leverage per-trade in the place-order call, so no pre-flush.
-      if (dex === 'pacifica' || dex === 'decibel' || dex === 'hotstuff') {
+      if (dex === 'pacifica' || dex === 'decibel' || dex === 'hotstuff' || dex === 'lighter') {
         if (levTimerRef.current) {
           clearTimeout(levTimerRef.current);
           levTimerRef.current = null;
@@ -3055,7 +3087,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -3080,14 +3112,18 @@ function FuturesPanel() {
                 ? 'Katana uses cross margin in this integration'
                 : dex === 'gmtrade'
                 ? 'GMTrade uses isolated collateral per Solana position account'
+                : dex === 'lighter'
+                ? 'Lighter margin mode is managed through the Lighter account settings in this integration'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: ((dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
                   : dex === 'phoenix'
                   ? 'Auto'
                   : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana')
+                  ? 'Cross'
+                  : dex === 'lighter'
                   ? 'Cross'
                   : 'Isolated'}
               </span>
@@ -4170,6 +4206,175 @@ function FuturesPanel() {
           onConnected={handleEvmConnected}
           targetChain={evmConnectChain}
         />
+      </>
+    );
+  }
+
+  // ==================== LIGHTER API KEY GATE ====================
+  if (dex === 'lighter' && hasWallet && setupVerified !== true) {
+    const isRunning = referralLinking || loading;
+    const lighterCanSave = !lighterNeedsIntegratorApproval
+      && lighterAccountIndexInput.trim().length > 0
+      && lighterApiKeyIndexInput.trim().length > 0
+      && lighterApiPrivateKeyInput.trim().length > 0
+      && !isRunning;
+
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Connecting Lighter...' : 'Lighter setup'}</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>Add Lighter API credentials</span>
+                <span style={hlGateStyles.subtitle}>
+                  Create a Lighter API key with index above 3. Clash stores it encrypted in this browser and uses it only to sign your Lighter orders through the Clash integrator.
+                </span>
+              </div>
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_done }}>1</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>EVM wallet connected</span>
+                    <span style={hlGateStyles.stepHint}>{walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)} is used for Lighter setup approval.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...(isRunning ? hlGateStyles.stepBubble_active : hlGateStyles.stepBubble_pending) }}>
+                    {isRunning ? <span style={hlGateStyles.spinner} /> : 2}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...(isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Verify API key</span>
+                    <span style={hlGateStyles.stepHint}>The key is sent transiently to Clash only for signed Lighter requests.</span>
+                  </span>
+                </li>
+              </ol>
+              {!lighterNeedsIntegratorApproval && (
+              <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 12, padding: 12}}>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Your Lighter account index</span>
+                  <input type="number" value={lighterAccountIndexInput} onChange={(e) => {
+                    setLighterAccountDetectStatus('');
+                    setLighterAccountIndexInput(e.target.value);
+                  }} placeholder={lighterAccountDetectStatus === 'checking' ? 'Detecting from wallet...' : 'Auto-detected or enter manually'} disabled={isRunning} style={{...S.input, padding: '10px 12px', fontSize: 14}} />
+                  {lighterAccountDetectStatus && (
+                    <span style={{fontSize: 11, fontWeight: 800, color: lighterAccountDetectStatus === 'found' ? '#2f9e44' : '#9f8759'}}>
+                      {lighterAccountDetectStatus === 'checking'
+                        ? 'Checking your Lighter account from the connected EVM wallet...'
+                        : lighterAccountDetectStatus === 'found'
+                          ? 'Lighter account index detected automatically.'
+                          : lighterAccountDetectStatus === 'not_found'
+                            ? 'No Lighter account was found for this wallet. Enter the account index manually if this wallet has a sub-account.'
+                            : 'Could not auto-detect the account index. You can still enter it manually.'}
+                    </span>
+                  )}
+                </label>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>API key index</span>
+                  <input type="number" value={lighterApiKeyIndexInput} onChange={(e) => setLighterApiKeyIndexInput(e.target.value)} placeholder="Use index > 3" disabled={isRunning} style={{...S.input, padding: '10px 12px', fontSize: 14}} />
+                </label>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>API private key</span>
+                  <input
+                    type="password"
+                    value={lighterApiPrivateKeyInput}
+                    onChange={(e) => setLighterApiPrivateKeyInput(e.target.value)}
+                    placeholder="Paste Lighter API private key"
+                    autoComplete="new-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
+                  The API key is stored only in this browser, encrypted by browser storage. Clash does not write it to the database.
+                </div>
+              </div>
+              )}
+              {lighterNeedsIntegratorApproval && (
+                <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #e0b44c', background: '#fff6d9', borderRadius: 12, padding: 12}}>
+                  Lighter API key is saved. Approve the Clash integrator fee before trading unlocks.
+                </div>
+              )}
+              {lighterNeedsIntegratorApproval && (
+                <button
+                  style={{ ...hlGateStyles.primaryBtn, ...(isRunning ? hlGateStyles.primaryBtnBusy : null) }}
+                  disabled={isRunning}
+                  onClick={async () => {
+                    if (typeof approveIntegrator !== 'function') return;
+                    setReferralLinking(true);
+                    try {
+                      await approveIntegrator();
+                      setSuccessMsg('Lighter setup complete. Clash integrator fee approved.');
+                    } catch (e) {
+                      setLocalAlert(e?.message || String(e));
+                    } finally {
+                      setReferralLinking(false);
+                    }
+                  }}
+                >
+                  {isRunning ? 'Approving...' : 'Approve Clash integrator ->'}
+                </button>
+              )}
+              {!lighterNeedsIntegratorApproval && (
+              <button
+                style={{ ...hlGateStyles.primaryBtn, ...(!lighterCanSave ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={!lighterCanSave}
+                onClick={async () => {
+                  if (!activate) return;
+                  setReferralLinking(true);
+                  try {
+                    const res = await activate({
+                      accountIndex: lighterAccountIndexInput.trim(),
+                      apiKeyIndex: lighterApiKeyIndexInput.trim(),
+                      apiPrivateKey: lighterApiPrivateKeyInput.trim(),
+                    });
+                    if (res?.error) setLocalAlert(res.error);
+                    else {
+                      setLighterApiPrivateKeyInput('');
+                      setSuccessMsg('Lighter API key verified and saved in this browser.');
+                      if (typeof approveIntegrator === 'function') {
+                        try {
+                          await approveIntegrator(res);
+                          setSuccessMsg('Lighter setup complete. Clash integrator fee approved.');
+                        } catch (approveError) {
+                          setLocalAlert(approveError?.message || 'Lighter API key saved. Approve Clash integrator before trading.');
+                        }
+                      }
+                    }
+                  } catch (e) {
+                    setLocalAlert(e?.message || String(e));
+                  } finally {
+                    setReferralLinking(false);
+                  }
+                }}
+              >
+                {isRunning ? 'Connecting...' : 'Add Lighter credentials ->'}
+              </button>
+              )}
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </>
     );
   }
