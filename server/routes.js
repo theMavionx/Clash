@@ -318,6 +318,26 @@ function createAptosVerificationConfig(sdk) {
   }
 }
 
+function aptosAuthKeyCandidates(publicKey) {
+  const keys = new Set();
+  const addAuthKey = (authKey) => {
+    if (!authKey) return;
+    keys.add(String(authKey).toLowerCase());
+    try {
+      keys.add(authKey.derivedAddress().toStringLong().toLowerCase());
+    } catch { /* not all auth-key-like values expose derivedAddress */ }
+  };
+  try {
+    addAuthKey(publicKey.authKey());
+  } catch { /* invalid public key */ }
+  if (publicKey?.publicKey && publicKey.publicKey !== publicKey) {
+    try {
+      addAuthKey(publicKey.publicKey.authKey());
+    } catch { /* inner key may not be an account public key */ }
+  }
+  return keys;
+}
+
 async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
   const publicKeyHex = normalizeHexInput(proof.public_key || proof.publicKey, 0);
   const signatureHex = normalizeHexInput(proof.signature, 0);
@@ -347,17 +367,16 @@ async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
     const decodedPublicKey = deserializeAptosWalletPublicKey(sdk, publicKeyHex);
     if (!decodedPublicKey?.publicKey) return false;
     const { publicKey, scheme } = decodedPublicKey;
-    const authKey = publicKey.authKey();
-    const derivedAddress = authKey.derivedAddress().toStringLong().toLowerCase();
+    const authKeyCandidates = aptosAuthKeyCandidates(publicKey);
     const normalizedWallet = normalizeAptosWallet(wallet).toLowerCase();
-    let walletMatchesPublicKey = derivedAddress === normalizedWallet;
+    let walletMatchesPublicKey = authKeyCandidates.has(normalizedWallet);
     if (!walletMatchesPublicKey) {
       try {
         const r = await fetch(`${aptosFullnode().replace(/\/$/, '')}/accounts/${normalizedWallet}`);
         if (r.ok) {
           const account = await r.json();
           const chainAuthKey = normalizeHexInput(account?.authentication_key || account?.authenticationKey, 32);
-          walletMatchesPublicKey = !!chainAuthKey && chainAuthKey.toLowerCase() === String(authKey).toLowerCase();
+          walletMatchesPublicKey = !!chainAuthKey && authKeyCandidates.has(chainAuthKey.toLowerCase());
         } else {
           console.warn('[auth] aptos wallet auth-key lookup failed:', r.status);
         }
