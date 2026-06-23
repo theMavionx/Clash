@@ -122,25 +122,9 @@ function walletChainTypeForKnownDex(dex) {
 }
 
 function walletChainTypeForDex(wallet, dex) {
-  const dexType = walletChainTypeForKnownDex(dex);
-  if (dexType !== 'unknown') return dexType;
-  return walletAddressChainType(wallet);
-}
-
-function walletDexMismatchMessage(walletType, dexType) {
-  if (walletType === 'evm' && dexType === 'solana') {
-    return 'This is an EVM wallet. Press CHANGE and pick an EVM DEX before continuing.';
-  }
-  if (walletType === 'solana' && dexType === 'evm') {
-    return 'This DEX needs an EVM wallet. Go back and connect an EVM wallet.';
-  }
-  if (walletType === 'aptos' && dexType !== 'aptos') {
-    return 'This is an Aptos wallet. Press CHANGE and pick Decibel before continuing.';
-  }
-  if (dexType === 'aptos' && walletType !== 'aptos') {
-    return 'Decibel needs an Aptos wallet. Go back and connect Petra.';
-  }
-  return 'Connected wallet does not match the selected DEX. Press CHANGE and pick the right DEX.';
+  const walletType = walletAddressChainType(wallet);
+  if (walletType !== 'unknown') return walletType;
+  return walletChainTypeForKnownDex(dex);
 }
 
 function walletAuthMessage({ wallet, dex, issuedAt }) {
@@ -612,11 +596,6 @@ export function useAuthFlow() {
     if (!wallet || String(wallet).startsWith('local_guest_')) return null;
     const issuedAt = new Date().toISOString();
     const canonicalWallet = canonicalWalletAddress(wallet);
-    const walletType = walletAddressChainType(canonicalWallet);
-    const dexType = walletChainTypeForKnownDex(proofDex);
-    if (dexType !== 'unknown' && walletType !== 'unknown' && walletType !== dexType) {
-      throw new Error(walletDexMismatchMessage(walletType, dexType));
-    }
     const chainType = walletChainTypeForDex(canonicalWallet, proofDex);
     const message = walletAuthMessage({ wallet: canonicalWallet, dex: proofDex, issuedAt });
     if (chainType === 'solana') {

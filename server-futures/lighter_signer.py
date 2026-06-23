@@ -111,10 +111,9 @@ async def _main():
         if action == "approve_integrator_prepare":
             client = _client(lighter, payload)
             try:
-                if not hasattr(client, "sign_approve_integrator"):
-                    raise RuntimeError("Installed lighter-sdk does not expose sign_approve_integrator")
-                tx_type, tx_info, tx_hash, err = client.sign_approve_integrator(
-                    None,
+                if not hasattr(client, "signer"):
+                    raise RuntimeError("Installed lighter-sdk does not expose low-level signer")
+                result = client.signer.SignApproveIntegrator(
                     int(payload["integrator_account_index"]),
                     int(payload.get("max_perps_taker_fee") or 0),
                     int(payload.get("max_perps_maker_fee") or 0),
@@ -124,18 +123,17 @@ async def _main():
                     int(payload.get("skip_nonce") or 0),
                     int(payload.get("nonce") or -1),
                     int(payload["api_key_index"]),
+                    client.account_index,
                 )
+                err = decode_and_free(result.err)
+                tx_info = decode_and_free(result.txInfo)
+                tx_hash = decode_and_free(result.txHash)
+                message = decode_and_free(result.messageToSign)
                 if err:
                     raise RuntimeError(err)
-                message = ""
-                try:
-                    parsed = json.loads(tx_info)
-                    message = str(parsed.get("MessageToSign") or parsed.get("messageToSign") or "")
-                except Exception:
-                    message = ""
                 return {
                     "ok": True,
-                    "tx_type": tx_type,
+                    "tx_type": result.txType,
                     "tx_info": tx_info,
                     "tx_hash": tx_hash,
                     "message_to_sign": message,
