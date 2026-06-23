@@ -58,7 +58,6 @@ const ACCOUNT_PROBE_UI_WAIT_MS = 4500;
 const MANUAL_RECONNECT_WALLET_WAIT_MS = 8000;
 const WALLET_AUTH_PROOF_TIMEOUT_MS = 20000;
 const WALLET_AUTH_ACTION = 'wallet-auth';
-const ACCOUNT_WALLET_AUTH_PROOF_ENABLED = import.meta.env.VITE_ACCOUNT_WALLET_AUTH_PROOF === '1';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const EVM_AUTH_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
 const SOLANA_AUTH_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash']);
@@ -610,7 +609,6 @@ export function useAuthFlow() {
   const [manualReconnectWaitExpired, setManualReconnectWaitExpired] = useState(false);
   const createWalletAuthProof = useCallback(async ({ wallet, dex: proofDex, source }) => {
     if (!wallet || String(wallet).startsWith('local_guest_')) return null;
-    if (!ACCOUNT_WALLET_AUTH_PROOF_ENABLED) return null;
     const issuedAt = new Date().toISOString();
     const canonicalWallet = canonicalWalletAddress(wallet);
     const walletType = walletAddressChainType(canonicalWallet);

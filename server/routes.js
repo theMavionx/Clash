@@ -307,11 +307,6 @@ async function verifyWalletAuthProof(req, { wallet, dex }) {
   if (!wallet || isLocalGuestWallet(wallet)) return { ok: true };
   if (!isValidWallet(wallet)) return { ok: false, status: 400, error: 'Valid wallet required' };
   const proof = walletAuthProofFromBody(req.body || {});
-  const authPath = String(req.originalUrl || req.url || '');
-  const optionalAccountAuth = /\/players\/(?:register|login-wallet|link-wallet)(?:\?|$|\/?$)/.test(authPath);
-  if (!proof && optionalAccountAuth) {
-    return { ok: true, skipped: 'account_wallet_proof_optional' };
-  }
   const issuedAt = String(proof.issued_at || proof.issuedAt || '').trim();
   const issuedMs = Date.parse(issuedAt);
   if (!Number.isFinite(issuedMs)) {
