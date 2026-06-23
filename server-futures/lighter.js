@@ -1,4 +1,6 @@
 const { spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const LIGHTER_API = String(process.env.LIGHTER_API_URL || 'https://mainnet.zklighter.elliot.ai').replace(/\/+$/u, '');
@@ -16,7 +18,22 @@ const LIGHTER_BUILDER_FEE_BPS = Math.max(0, Number(
 const LIGHTER_BUILDER_FEE_VALUE = Math.round(LIGHTER_BUILDER_FEE_BPS * 100);
 const LIGHTER_REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(20_000, Number(process.env.LIGHTER_TIMEOUT_MS || 8000)));
 const LIGHTER_PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.LIGHTER_PUBLIC_CACHE_TTL_MS || 12_000)));
-const LIGHTER_PYTHON_BIN = String(process.env.LIGHTER_PYTHON_BIN || process.env.PYTHON || 'python3');
+const LIGHTER_APPROVAL_TTL_DAYS = Math.max(1, Math.min(3650, Number(process.env.LIGHTER_APPROVAL_TTL_DAYS || 365)));
+function defaultPythonBin() {
+  const bundled = path.join(
+    os.homedir(),
+    '.cache',
+    'codex-runtimes',
+    'codex-primary-runtime',
+    'dependencies',
+    'python',
+    process.platform === 'win32' ? 'python.exe' : 'bin/python',
+  );
+  if (fs.existsSync(bundled)) return bundled;
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+const LIGHTER_PYTHON_BIN = String(process.env.LIGHTER_PYTHON_BIN || process.env.PYTHON || defaultPythonBin());
 const LIGHTER_SIGNER_SCRIPT = path.join(__dirname, 'lighter_signer.py');
 const LIGHTER_SIGNER_TIMEOUT_MS = Math.max(5000, Math.min(45_000, Number(process.env.LIGHTER_SIGNER_TIMEOUT_MS || 25_000)));
 
@@ -432,6 +449,10 @@ async function createAuthToken(input = {}) {
 async function prepareIntegratorApproval(input = {}) {
   const creds = signerCredentials(input);
   const maxFee = Math.max(LIGHTER_BUILDER_FEE_VALUE, Number(input.maxFeeValue || 0), 100);
+  const requestedExpiry = Number(input.approvalExpiry ?? input.approval_expiry);
+  const approvalExpiry = Number.isInteger(requestedExpiry) && requestedExpiry > 0
+    ? requestedExpiry
+    : Math.floor(Date.now() / 1000) + Math.round(LIGHTER_APPROVAL_TTL_DAYS * 24 * 60 * 60);
   const result = await runSigner('approve_integrator_prepare', {
     ...creds,
     integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
@@ -439,13 +460,14 @@ async function prepareIntegratorApproval(input = {}) {
     max_perps_maker_fee: maxFee,
     max_spot_taker_fee: 0,
     max_spot_maker_fee: 0,
-    approval_expiry: -1,
+    approval_expiry: approvalExpiry,
   });
   return {
     ok: true,
     integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
     builder_fee_value: LIGHTER_BUILDER_FEE_VALUE,
     max_fee_value: maxFee,
+    approval_expiry: approvalExpiry,
     ...result,
   };
 }
@@ -591,6 +613,7 @@ function config() {
     integratorAccountIndex: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
     builderFeeBps: LIGHTER_BUILDER_FEE_BPS,
     builderFeeValue: LIGHTER_BUILDER_FEE_VALUE,
+    approvalTtlDays: LIGHTER_APPROVAL_TTL_DAYS,
   };
 }
 

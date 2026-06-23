@@ -1964,7 +1964,7 @@ function FuturesPanel() {
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
     activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, hotstuffSetupStatus,
-    bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources, lighterNeedsIntegratorApproval,
+    bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources, lighterNeedsIntegratorApproval, detectAccount: detectLighterAccount,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
   // The trading hook owns the active signer. Do not treat a detected adapter
@@ -2276,6 +2276,7 @@ function FuturesPanel() {
   const [lighterAccountIndexInput, setLighterAccountIndexInput] = useState('');
   const [lighterApiKeyIndexInput, setLighterApiKeyIndexInput] = useState('');
   const [lighterApiPrivateKeyInput, setLighterApiPrivateKeyInput] = useState('');
+  const [lighterAccountDetectStatus, setLighterAccountDetectStatus] = useState('');
   const [hibachiApiKeyInput, setHibachiApiKeyInput] = useState('');
   const [hibachiAccountIdInput, setHibachiAccountIdInput] = useState('');
   const [hibachiPrivateKeyInput, setHibachiPrivateKeyInput] = useState('');
@@ -2285,6 +2286,30 @@ function FuturesPanel() {
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
+
+  useEffect(() => {
+    if (dex !== 'lighter') return undefined;
+    if (setupVerified === true || lighterNeedsIntegratorApproval) return undefined;
+    if (!hasWallet || !/^0x[a-fA-F0-9]{40}$/.test(String(walletAddr || ''))) return undefined;
+    if (lighterAccountIndexInput.trim()) return undefined;
+    if (typeof detectLighterAccount !== 'function') return undefined;
+    let cancelled = false;
+    setLighterAccountDetectStatus('checking');
+    detectLighterAccount(walletAddr)
+      .then((result) => {
+        if (cancelled) return;
+        if (result?.found && Number.isInteger(Number(result.accountIndex))) {
+          setLighterAccountIndexInput(String(result.accountIndex));
+          setLighterAccountDetectStatus('found');
+        } else {
+          setLighterAccountDetectStatus('not_found');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLighterAccountDetectStatus('error');
+      });
+    return () => { cancelled = true; };
+  }, [detectLighterAccount, dex, hasWallet, lighterAccountIndexInput, lighterNeedsIntegratorApproval, setupVerified, walletAddr]);
 
   const selectPhoenixInviteKind = useCallback((kind) => {
     setPhoenixInviteKind(kind);
@@ -4241,7 +4266,21 @@ function FuturesPanel() {
               <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 12, padding: 12}}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
                   <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Your Lighter account index</span>
-                  <input type="number" value={lighterAccountIndexInput} onChange={(e) => setLighterAccountIndexInput(e.target.value)} placeholder="Your account index" disabled={isRunning} style={{...S.input, padding: '10px 12px', fontSize: 14}} />
+                  <input type="number" value={lighterAccountIndexInput} onChange={(e) => {
+                    setLighterAccountDetectStatus('');
+                    setLighterAccountIndexInput(e.target.value);
+                  }} placeholder={lighterAccountDetectStatus === 'checking' ? 'Detecting from wallet...' : 'Auto-detected or enter manually'} disabled={isRunning} style={{...S.input, padding: '10px 12px', fontSize: 14}} />
+                  {lighterAccountDetectStatus && (
+                    <span style={{fontSize: 11, fontWeight: 800, color: lighterAccountDetectStatus === 'found' ? '#2f9e44' : '#9f8759'}}>
+                      {lighterAccountDetectStatus === 'checking'
+                        ? 'Checking your Lighter account from the connected EVM wallet...'
+                        : lighterAccountDetectStatus === 'found'
+                          ? 'Lighter account index detected automatically.'
+                          : lighterAccountDetectStatus === 'not_found'
+                            ? 'No Lighter account was found for this wallet. Enter the account index manually if this wallet has a sub-account.'
+                            : 'Could not auto-detect the account index. You can still enter it manually.'}
+                    </span>
+                  )}
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
                   <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>API key index</span>
@@ -4269,7 +4308,7 @@ function FuturesPanel() {
               )}
               {lighterNeedsIntegratorApproval && (
                 <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #e0b44c', background: '#fff6d9', borderRadius: 12, padding: 12}}>
-                  Lighter API key is saved. Sign one wallet message to approve the Clash integrator fee before trading unlocks.
+                  Lighter API key is saved. Approve the Clash integrator fee before trading unlocks.
                 </div>
               )}
               {lighterNeedsIntegratorApproval && (

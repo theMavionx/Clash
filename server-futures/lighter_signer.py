@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import asyncio
 import json
+import os
 import sys
+import traceback
 
 
 def _reply(payload, code=0):
@@ -29,6 +31,17 @@ def _response_payload(value):
     return value
 
 
+def _public_error(exc):
+    text = str(exc)
+    lower = text.lower()
+    if "code=20558" in text or "restricted jurisdiction" in lower:
+        return (
+            "Lighter is not available from your current region. "
+            "Lighter rejected the request with restricted jurisdiction code 20558."
+        )
+    return text
+
+
 def _client(lighter, payload):
     account_index = int(payload["account_index"])
     api_key_index = int(payload["api_key_index"])
@@ -42,9 +55,23 @@ def _client(lighter, payload):
     )
 
 
+def _read_payload():
+    raw = sys.stdin.buffer.read()
+    if not raw:
+        return {}
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace").lstrip("\ufeff")
+    return json.loads(text or "{}")
+
+
 async def _send_and_close(client, tx):
     try:
-        response = await client.send_tx(tx_type=tx["tx_type"], tx_info=tx["tx_info"])
+        try:
+            response = await client.send_tx(tx_type=tx["tx_type"], tx_info=tx["tx_info"])
+        except Exception as exc:
+            raise RuntimeError(_public_error(exc)) from exc
         return {**tx, "response": _response_payload(response)}
     finally:
         await client.close()
@@ -55,7 +82,7 @@ async def _main():
         import lighter
         from lighter.signer_client import decode_and_free
 
-        payload = json.loads(sys.stdin.read() or "{}")
+        payload = _read_payload()
         action = str(payload.get("action") or "")
 
         if action == "check_client":
@@ -84,7 +111,10 @@ async def _main():
         if action == "approve_integrator_prepare":
             client = _client(lighter, payload)
             try:
-                res = client.signer.SignApproveIntegrator(
+                if not hasattr(client, "sign_approve_integrator"):
+                    raise RuntimeError("Installed lighter-sdk does not expose sign_approve_integrator")
+                tx_type, tx_info, tx_hash, err = client.sign_approve_integrator(
+                    None,
                     int(payload["integrator_account_index"]),
                     int(payload.get("max_perps_taker_fee") or 0),
                     int(payload.get("max_perps_maker_fee") or 0),
@@ -94,17 +124,18 @@ async def _main():
                     int(payload.get("skip_nonce") or 0),
                     int(payload.get("nonce") or -1),
                     int(payload["api_key_index"]),
-                    int(payload["account_index"]),
                 )
-                err = decode_and_free(res.err)
-                tx_info = decode_and_free(res.txInfo)
-                tx_hash = decode_and_free(res.txHash)
-                message = decode_and_free(res.messageToSign)
                 if err:
                     raise RuntimeError(err)
+                message = ""
+                try:
+                    parsed = json.loads(tx_info)
+                    message = str(parsed.get("MessageToSign") or parsed.get("messageToSign") or "")
+                except Exception:
+                    message = ""
                 return {
                     "ok": True,
-                    "tx_type": res.txType,
+                    "tx_type": tx_type,
                     "tx_info": tx_info,
                     "tx_hash": tx_hash,
                     "message_to_sign": message,
@@ -164,7 +195,10 @@ async def _main():
 
         raise ValueError(f"Unsupported action: {action}")
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        payload = {"ok": False, "error": str(exc)}
+        if os.environ.get("LIGHTER_SIGNER_TRACE") == "1":
+            payload["traceback"] = traceback.format_exc()
+        return payload
 
 
 if __name__ == "__main__":
