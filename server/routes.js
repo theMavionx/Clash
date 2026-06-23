@@ -273,8 +273,25 @@ async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
   try {
     const { Ed25519PublicKey, Ed25519Signature } = await aptosTsSdk();
     const publicKey = new Ed25519PublicKey(publicKeyHex);
-    const derivedAddress = publicKey.authKey().derivedAddress().toStringLong().toLowerCase();
-    if (derivedAddress !== normalizeAptosWallet(wallet).toLowerCase()) return false;
+    const authKey = publicKey.authKey();
+    const derivedAddress = authKey.derivedAddress().toStringLong().toLowerCase();
+    const normalizedWallet = normalizeAptosWallet(wallet).toLowerCase();
+    let walletMatchesPublicKey = derivedAddress === normalizedWallet;
+    if (!walletMatchesPublicKey) {
+      try {
+        const r = await fetch(`${aptosFullnode().replace(/\/$/, '')}/accounts/${normalizedWallet}`);
+        if (r.ok) {
+          const account = await r.json();
+          const chainAuthKey = normalizeHexInput(account?.authentication_key || account?.authenticationKey, 32);
+          walletMatchesPublicKey = !!chainAuthKey && chainAuthKey.toLowerCase() === String(authKey).toLowerCase();
+        } else {
+          console.warn('[auth] aptos wallet auth-key lookup failed:', r.status);
+        }
+      } catch (e) {
+        console.warn('[auth] aptos wallet auth-key lookup error:', e.message);
+      }
+    }
+    if (!walletMatchesPublicKey) return false;
     const signature = new Ed25519Signature(signatureHex);
     return publicKey.verifySignature({
       message: Uint8Array.from(Buffer.from(signedMessage, 'utf8')),
