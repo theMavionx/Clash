@@ -344,6 +344,7 @@ function validatePayoutRow(row, options = {}) {
   const settings = options.settings || payoutSettings();
   const rawDestination = String(row?.destination_wallet || row?.current_destination_wallet || '').trim();
   const errors = [];
+  const warnings = [];
   let destination = rawDestination;
   let walletValid = false;
   let walletLinked = false;
@@ -359,8 +360,8 @@ function validatePayoutRow(row, options = {}) {
       walletLinked = typeof gameDb.isPlayerSolanaWalletLinked === 'function'
         ? gameDb.isPlayerSolanaWalletLinked(row.player_id, destination)
         : false;
-      if (settings.wallet_link_required && !walletLinked) {
-        errors.push('wallet_not_linked_to_winner');
+      if (!walletLinked) {
+        warnings.push('wallet_not_linked_to_winner');
       }
     } catch (err) {
       errors.push(err?.message || 'invalid_destination_wallet');
@@ -379,6 +380,7 @@ function validatePayoutRow(row, options = {}) {
     wallet_link_required: !!settings.wallet_link_required,
     sendable: errors.length === 0 && ['pending', 'failed'].includes(String(row?.status || '')),
     validation_errors: errors,
+    validation_warnings: warnings,
   };
 }
 
@@ -397,6 +399,7 @@ function describeLuckyRaiderPayout(row, options = {}) {
     wallet_link_required: validation.wallet_link_required,
     sendable: validation.sendable,
     validation_errors: validation.validation_errors,
+    validation_warnings: validation.validation_warnings,
   };
 }
 

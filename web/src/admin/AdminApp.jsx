@@ -1498,7 +1498,9 @@ function LuckyRaiderPayoutCard({ data, loading, reload }) {
               fmtMaybeUsd(row.reward_amount_usd),
               <span className="admin-mono">{short(row.destination_wallet, 12, 8)}</span>,
               row.quote_ok ? `${num(row.clash_amount)} CLASH` : '-',
-              row.quote_ok ? <span className="admin-badge green">ready</span> : <span className="admin-badge red">{(row.quote_error || row.validation_errors?.[0] || 'blocked').slice(0, 40)}</span>,
+              row.quote_ok
+                ? <span>{row.validation_warnings?.length ? <span className="admin-badge gold">ready with warning</span> : <span className="admin-badge green">ready</span>}</span>
+                : <span className="admin-badge red">{(row.quote_error || row.validation_errors?.[0] || 'blocked').slice(0, 40)}</span>,
             ])}
           />
         )}
@@ -1516,10 +1518,10 @@ function LuckyRaiderPayoutCard({ data, loading, reload }) {
                   <td>
                     {payout.wallet_valid ? <span className="admin-badge green">valid</span> : <span className="admin-badge red">invalid</span>}
                     {' '}
-                    {payout.wallet_linked ? <span className="admin-badge green">linked</span> : <span className="admin-badge">not linked</span>}
+                    {payout.wallet_linked ? <span className="admin-badge green">linked</span> : <span className="admin-badge gold">not linked warning</span>}
                   </td>
                   <td>{statusBadge(payout.status)}<div className="admin-card-sub">attempts {payout.attempts || 0}</div></td>
-                  <td>{payout.tx_hash ? <span className="admin-mono">{short(payout.tx_hash, 12, 8)}</span> : <span className="admin-card-sub">{(payout.error || payout.validation_errors?.join(', ') || '-').slice(0, 120)}</span>}</td>
+                  <td>{payout.tx_hash ? <span className="admin-mono">{short(payout.tx_hash, 12, 8)}</span> : <span className="admin-card-sub">{(payout.error || payout.validation_errors?.join(', ') || payout.validation_warnings?.join(', ') || '-').slice(0, 120)}</span>}</td>
                   <td><div className="admin-filter-row">
                     {['pending', 'failed'].includes(payout.status) && <button className="admin-btn" onClick={() => updateWallet(payout)} disabled={!!busy}>Wallet</button>}
                     {['pending', 'failed'].includes(payout.status) && <button className="admin-btn" onClick={() => previewPending([payout.id])} disabled={!!busy}>Preview</button>}
