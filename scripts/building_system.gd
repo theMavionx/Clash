@@ -671,8 +671,7 @@ const ALTAR_SKILL_DEFS: Dictionary = {
 		"name": "Glory",
 		"title": "Cup Offering",
 		"bonus_label": "bonus trophies on attack win",
-		"bonus_format": "range",
-		"min_bonus": 1,
+		"bonus_format": "flat",
 		"bonuses": [5, 7, 10],
 		"costs": [
 			{"wood": 12000, "ore": 12000, "gold": 3000},
@@ -4168,6 +4167,8 @@ func _format_altar_skill_bonus(def: Dictionary, level: int) -> String:
 		var min_bonus: int = int(def.get("min_bonus", 1))
 		var max_bonus: int = int(bonuses[level - 1])
 		return "+%d-%d %s" % [min_bonus, max_bonus, label]
+	if str(def.get("bonus_format", "")) == "flat":
+		return "+%d %s" % [int(bonuses[level - 1]), label]
 	return "+%d%% %s" % [int(bonuses[level - 1]), label]
 
 

@@ -16,6 +16,11 @@ const uuidv4 = () => crypto.randomUUID();
 
 const DB_PATH = process.env.CLASH_MAIN_DB || path.join(__dirname, 'clash.db');
 
+function raidBotTargetsEnabled() {
+  const raw = String(process.env.CLASH_RAID_BOT_TARGETS_ENABLED || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 const db = new Database(DB_PATH);
 
 // Enable WAL mode for better concurrent read performance
@@ -4788,7 +4793,6 @@ const ALTAR_SKILL_DEFS = {
   glory: {
     max_level: 3,
     bonuses: [5, 7, 10],
-    min_bonus: 1,
     cost: [
       { wood: 12000, ore: 12000, gold: 3000 },
       { wood: 36000, ore: 36000, gold: 9000 },
@@ -6773,14 +6777,12 @@ function applyAltarProsperityResourceBonus(playerId, resources = {}) {
   };
 }
 
-function rollAltarTrophyBonus(playerId) {
+function getAltarTrophyBonus(playerId) {
   const levels = getAltarSkillLevels(playerId);
   const level = Math.max(0, Math.min(ALTAR_SKILL_DEFS.glory.max_level, Number(levels.glory) || 0));
   if (level <= 0) return { level: 0, bonus: 0, min: 0, max: 0 };
-  const max = Number(ALTAR_SKILL_DEFS.glory.bonuses[level - 1]) || 0;
-  const min = Number(ALTAR_SKILL_DEFS.glory.min_bonus) || 1;
-  const bonus = Math.floor(Math.random() * (max - min + 1)) + min;
-  return { level, bonus, min, max };
+  const bonus = Number(ALTAR_SKILL_DEFS.glory.bonuses[level - 1]) || 0;
+  return { level, bonus, min: bonus, max: bonus };
 }
 
 function applyAltarBuildingBonuses(buildings, levels = {}) {
@@ -7262,6 +7264,15 @@ function getRaidRewardProfile(battleSessionId) {
     return { is_bot: false, loot_multiplier: 1, trophy_multiplier: 1, matchmaking: row || null };
   }
   const reason = String(row.selection_reason || '');
+  if (!raidBotTargetsEnabled()) {
+    return {
+      is_bot: true,
+      loot_multiplier: 1,
+      trophy_multiplier: 1,
+      matchmaking: row,
+      reason: reason || 'raid_bot_targets_disabled',
+    };
+  }
   const difficulty = String(row.target_bot_difficulty || row.difficulty_bucket || 'normal');
   const lootKey = Number(row.recovery_level || 0) >= 2
     ? 'recovery_strong'
@@ -7372,7 +7383,8 @@ function findEnemy(playerId) {
   const rawCandidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId, playerId);
   const matchFilter = filterTournamentAttackCandidates(playerId, rawCandidates);
   const liveCandidates = matchFilter.candidates;
-  const includeBots = botCandidatesAllowedForTournament(matchFilter)
+  const includeBots = raidBotTargetsEnabled()
+    && botCandidatesAllowedForTournament(matchFilter)
     && (
       profile.recovery_level > 0
       || liveCandidates.length < MATCHMAKING_CONFIG.minLiveCandidatesBeforeBots
@@ -7983,8 +7995,8 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   // applyTrophyDelta so a tournament-joined player has their main
   // trophies frozen and the delta credited (with boost on positive
   // delta) to their tournament_participants row instead.
-  const trophyBonus = rollAltarTrophyBonus(attackerId);
-  const trophyBase = Math.max(1, Math.round(TROPHY_WIN * rewardProfile.trophy_multiplier));
+  const trophyBonus = getAltarTrophyBonus(attackerId);
+  const trophyBase = TROPHY_WIN;
   const attackerTrophyDelta = trophyBase + trophyBonus.bonus;
   applyTrophyDelta(attackerId, attackerTrophyDelta, { source: 'attack_win', eventId: battleSessionId });
   if (!rewardProfile.is_bot) {

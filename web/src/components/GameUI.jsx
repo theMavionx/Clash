@@ -36,7 +36,10 @@ const FuturesPanel = lazy(lazyWithClientReload(() => import('./FuturesPanel'), '
 const ProfileModal = lazy(lazyWithClientReload(() => import('./ProfileModal'), 'ProfileModal'));
 const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'), 'BattleLogPanel'));
 const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
-const BotsPanel = lazy(lazyWithClientReload(() => import('./BotsPanel'), 'BotsPanel'));
+const MM_BOTS_BUTTON_ENABLED = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_MM_BOTS_BUTTON_ENABLED || ''));
+const BotsPanel = MM_BOTS_BUTTON_ENABLED
+  ? lazy(lazyWithClientReload(() => import('./BotsPanel'), 'BotsPanel'))
+  : null;
 
 const LOCAL_GUEST_DEFAULT_DEX = 'pacifica';
 
@@ -258,7 +261,7 @@ export default function GameUI() {
 
   // Pause island when heavy overlay panels are open (futures, shop, barn, profile).
   const barnOpen = showTroops;
-  const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard || showBots);
+  const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard || (MM_BOTS_BUTTON_ENABLED && showBots));
   const showFloatingUtilities = !enemyMode?.active && !anyPanelOpen;
   useEffect(() => {
     sendToGodot('ui_overlay', { active: anyPanelOpen });
@@ -369,7 +372,10 @@ export default function GameUI() {
           onPick={chooseVenue}
         />
       )}
-      <ActionButtons onOpenBattleLog={() => setShowBattleLog(true)} onOpenBots={() => setShowBots(true)} />
+      <ActionButtons
+        onOpenBattleLog={() => setShowBattleLog(true)}
+        onOpenBots={MM_BOTS_BUTTON_ENABLED ? () => setShowBots(true) : null}
+      />
       <ErrorToast message={error} />
       <FpsTracker />
       <EnemyHeader />
@@ -403,7 +409,7 @@ export default function GameUI() {
             <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
           )}
 
-          {showBots && (
+          {MM_BOTS_BUTTON_ENABLED && BotsPanel && showBots && (
             <BotsPanel onClose={() => setShowBots(false)} />
           )}
 
