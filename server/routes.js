@@ -2870,6 +2870,101 @@ const GAME_SHOP_EVM_CHAINS = {
   },
 };
 
+function firstEnvValue(names) {
+  for (const name of names) {
+    const value = String(process.env[name] || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+function uniqueStrings(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function alchemyEvmRpcUrl(chainKey) {
+  const hosts = {
+    base: 'base-mainnet.g.alchemy.com',
+    arbitrum: 'arb-mainnet.g.alchemy.com',
+  };
+  const host = hosts[chainKey];
+  if (!host) return '';
+  const envKeys = {
+    base: ['GAME_SHOP_BASE_ALCHEMY_KEY', 'BASE_ALCHEMY_KEY', 'ALCHEMY_BASE_API_KEY'],
+    arbitrum: ['GAME_SHOP_ARBITRUM_ALCHEMY_KEY', 'GAME_SHOP_ARB_ALCHEMY_KEY', 'ARBITRUM_ALCHEMY_KEY', 'ALCHEMY_ARBITRUM_API_KEY'],
+  }[chainKey] || [];
+  const key = firstEnvValue(envKeys);
+  return key ? `https://${host}/v2/${encodeURIComponent(key)}` : '';
+}
+
+function gameShopEvmRpcUrls(chainKey) {
+  const spec = GAME_SHOP_EVM_CHAINS[chainKey];
+  if (!spec) return [];
+  const envByChain = {
+    base: ['GAME_SHOP_BASE_RPC_URL', 'BASE_RPC_URL', 'NFT_BASE_RPC_URL'],
+    arbitrum: ['GAME_SHOP_ARB_RPC_URL', 'GAME_SHOP_ARBITRUM_RPC_URL', 'ARBITRUM_RPC_URL', 'NFT_ARBITRUM_RPC_URL'],
+    monad: ['GAME_SHOP_MONAD_RPC_URL', 'MONAD_RPC_URL'],
+    ink: ['GAME_SHOP_INK_RPC_URL', 'INK_RPC_URL', 'NFT_INK_RPC_URL'],
+  };
+  return uniqueStrings([
+    ...((envByChain[chainKey] || []).map((name) => process.env[name])),
+    alchemyEvmRpcUrl(chainKey),
+    spec.rpcUrl?.(),
+  ]);
+}
+
+function evmRpcLabel(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const path = url.pathname.replace(/\/v2\/[^/]+/i, '/v2/<redacted>');
+    return `${url.hostname}${path && path !== '/' ? path : ''}`;
+  } catch {
+    return String(rawUrl || '<unknown>').replace(/\/v2\/[^/?#]+/i, '/v2/<redacted>');
+  }
+}
+
+async function gameShopEvmRpcCall(chainKey, method, params) {
+  const urls = gameShopEvmRpcUrls(chainKey);
+  if (!urls.length) throw new Error(`No ${chainKey} RPC configured`);
+  let lastError = null;
+  let sawNullResult = false;
+  for (let i = 0; i < urls.length; i += 1) {
+    const rpcUrl = urls[i];
+    try {
+      const resp = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok || json?.error) {
+        const detail = json?.error?.message || `${resp.status} ${resp.statusText || 'RPC error'}`;
+        throw new Error(detail);
+      }
+      if (json.result != null) return json.result;
+      sawNullResult = true;
+    } catch (err) {
+      lastError = err;
+      if (i < urls.length - 1) {
+        console.warn(
+          `[shop-evm-rpc] ${chainKey} ${method} failed via ${evmRpcLabel(rpcUrl)}; trying ${evmRpcLabel(urls[i + 1])}:`,
+          String(err?.message || err).slice(0, 180),
+        );
+      }
+    }
+  }
+  if (sawNullResult) return null;
+  throw new Error(`${chainKey} ${method} failed across ${urls.length} RPC endpoint(s): ${String(lastError?.message || lastError || 'unknown error').slice(0, 180)}`);
+}
+
 function evmPaymentSpec(chainKey, paymentKey) {
   const chain = GAME_SHOP_EVM_CHAINS[chainKey];
   if (!chain) return null;
@@ -7219,19 +7314,13 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     if (paymentSpec) amountDecimals = paymentSpec.decimals;
     else amountDecimals = config.usdcDecimals || 18;
 
-    const rpcUrl = GAME_SHOP_EVM_CHAINS[chainKey].rpcUrl();
-
     if (memoKind === 'native') {
       // Native (ETH/MON) transfer — need the tx itself, not just the receipt.
       // Receipt confirms inclusion + status; the value/to live on the tx.
-      const [receiptResp, txResp] = await Promise.all([
-        fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [txHash] }) }),
-        fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_getTransactionByHash', params: [txHash] }) }),
+      const [receipt, txObj] = await Promise.all([
+        gameShopEvmRpcCall(chainKey, 'eth_getTransactionReceipt', [txHash]),
+        gameShopEvmRpcCall(chainKey, 'eth_getTransactionByHash', [txHash]),
       ]);
-      const receipt = (await receiptResp.json().catch(() => ({})))?.result;
-      const txObj = (await txResp.json().catch(() => ({})))?.result;
       if (!receipt || !txObj) return res.status(400).json({ error: 'Tx not found or not confirmed yet' });
       if (receipt.status !== '0x1') return res.status(400).json({ error: 'Tx failed on-chain' });
       const txTo = String(txObj.to || '').toLowerCase();
@@ -7247,12 +7336,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
       txSender = String(txObj.from || receipt.from || '');
     } else {
       // ERC20 (USDC) — Transfer event from sender → treasury.
-      const receiptResp = await fetch(rpcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [txHash] }),
-      });
-      const receipt = (await receiptResp.json().catch(() => ({})))?.result;
+      const receipt = await gameShopEvmRpcCall(chainKey, 'eth_getTransactionReceipt', [txHash]);
       if (!receipt) return res.status(400).json({ error: 'Tx not found or not confirmed yet' });
       if (receipt.status !== '0x1') return res.status(400).json({ error: 'Tx failed on-chain' });
 
@@ -22328,5 +22412,60 @@ try {
 } catch (err) {
   console.warn('[nft-v3] failed to mount V3 endpoints:', err?.message || err);
 }
+
+// Proxy all bot & strategy requests to the Phantom backend (port 8080)
+const BOT_URL = process.env.CLASH_BOT_URL || 'http://127.0.0.1:8080';
+const BOT_PROXY_SECRET = String(
+  process.env.CLASH_BOT_PROXY_SECRET
+  || process.env.PHANTOM__AUTH__TRUSTED_PROXY_SECRET
+  || '',
+).trim();
+async function proxyToBot(req, res) {
+  try {
+    const targetUrl = `${BOT_URL}${req.originalUrl}`;
+    const headers = {
+      accept: req.headers.accept || 'application/json',
+      'x-tenant-id': req.player?.id || '',
+    };
+    if (BOT_PROXY_SECRET) {
+      headers['x-proxy-secret'] = BOT_PROXY_SECRET;
+    }
+
+    const options = {
+      method: req.method,
+      headers,
+    };
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body != null) {
+      options.body = JSON.stringify(req.body);
+      headers['content-type'] = 'application/json';
+    }
+    const response = await fetch(targetUrl, options);
+    const bodyText = await response.text();
+    res.status(response.status);
+    for (const [key, value] of response.headers.entries()) {
+      if (['content-encoding', 'transfer-encoding', 'connection'].includes(key.toLowerCase())) continue;
+      res.setHeader(key, value);
+    }
+    res.send(bodyText);
+  } catch (error) {
+    console.error('[bot proxy error]:', error.message, error.cause?.message || '');
+    const detail = error.cause?.message || error.message || 'unknown';
+    res.status(502).json({
+      success: false,
+      error: {
+        code: 'BOT_BACKEND_UNREACHABLE',
+        message: `Bad Gateway connecting to bot backend (${detail})`,
+      },
+    });
+  }
+}
+
+router.use('/v1/strategies', auth, proxyToBot);
+router.use('/v1/bot', auth, proxyToBot);
+router.use('/v1/accounts', auth, proxyToBot);
+router.use('/v1/exchanges', auth, proxyToBot);
+router.use('/v1/orders', auth, proxyToBot);
+router.use('/v1/analytics', auth, proxyToBot);
+router.use('/v1/config', auth, proxyToBot);
 
 module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };

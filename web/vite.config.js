@@ -103,23 +103,14 @@ const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || 'http://127.0.0.1:3999';
 const FUTURES_PROXY_IS_DIRECT = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\b/i.test(FUTURES_PROXY_TARGET)
   || /^https?:\/\/[^/]+:3999\b/i.test(FUTURES_PROXY_TARGET);
-const DEFAULT_BOT_API_PROXY_TARGET = 'http://62.72.35.202:8080';
-const BOT_API_PROXY_TARGET = process.env.VITE_BOT_API_PROXY
-  || viteEnv.VITE_BOT_API_PROXY
-  || process.env.BOT_API_PROXY
-  || viteEnv.BOT_API_PROXY
-  || DEFAULT_BOT_API_PROXY_TARGET;
-function toWsProxyTarget(raw) {
-  const value = String(raw || '').trim();
-  if (/^https:\/\//i.test(value)) return value.replace(/^https:\/\//i, 'wss://');
-  if (/^http:\/\//i.test(value)) return value.replace(/^http:\/\//i, 'ws://');
-  return value || DEFAULT_BOT_API_PROXY_TARGET.replace(/^http:\/\//i, 'ws://');
-}
-const BOT_WS_PROXY_TARGET = process.env.VITE_BOT_WS_PROXY
-  || viteEnv.VITE_BOT_WS_PROXY
-  || process.env.BOT_WS_PROXY
-  || viteEnv.BOT_WS_PROXY
-  || toWsProxyTarget(BOT_API_PROXY_TARGET);
+// Bot/strategy REST + WS go through Clash :4000 so x-token → X-Tenant-Id reaches Phantom.
+const BOT_API_PROXY_TARGET = API_PROXY_TARGET || 'http://127.0.0.1:4000';
+const BOT_WS_PROXY_TARGET = WS_PROXY_TARGET || 'ws://127.0.0.1:4000';
+const BOT_DIRECT_PROXY_TARGET = process.env.VITE_BOT_DIRECT_URL
+  || viteEnv.VITE_BOT_DIRECT_URL
+  || process.env.CLASH_BOT_URL
+  || viteEnv.CLASH_BOT_URL
+  || 'http://127.0.0.1:8080';
 
 if (process.env.NODE_ENV !== 'production') {
   console.log('[vite proxy]', {
@@ -193,9 +184,9 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
     proxy: {
-      // ─── Phantom trading bot ───────────────────────────────────────────
-      // Must be BEFORE generic '/api', otherwise Vite forwards bot paths to
-      // the Clash game server and `/api/v1/...` returns 404.
+      // ─── Phantom trading bot (via Clash server :4000 → Phantom :8080) ─
+      // BotsPanel uses same-origin /api/v1/*; Clash auth + proxyToBot attach X-Tenant-Id.
+      // Must be BEFORE generic '/api'.
       '/api/v1/bot/ws': {
         target: BOT_WS_PROXY_TARGET,
         ws: true,
@@ -230,11 +221,11 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/health': {
-        target: BOT_API_PROXY_TARGET,
+        target: BOT_DIRECT_PROXY_TARGET,
         changeOrigin: true,
       },
       '/ready': {
-        target: BOT_API_PROXY_TARGET,
+        target: BOT_DIRECT_PROXY_TARGET,
         changeOrigin: true,
       },
       // ─── End Phantom bot proxies ────────────────────────────────────

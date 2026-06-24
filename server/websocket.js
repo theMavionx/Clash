@@ -72,8 +72,8 @@ function flushPendingAgentEvents(playerId, ws, { log = true } = {}) {
   return sent;
 }
 
-function setupWebSocket(server) {
-  const wss = new WebSocket.Server({ server, path: '/ws' });
+function setupWebSocket() {
+  const wss = new WebSocket.Server({ noServer: true });
 
   wss.on('connection', (ws, req) => {
     const clientId = nextClientId++;
