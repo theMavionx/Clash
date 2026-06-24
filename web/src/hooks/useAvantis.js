@@ -185,7 +185,7 @@ function humanPriceValue(...values) {
   return 0;
 }
 
-function normalizePosition(p, markets) {
+function normalizePosition(p, markets, prices = []) {
   // Avantis Core API /user-data.positions shape (confirmed via live probe):
   //   { trader, pairIndex, index, buy, collateral, leverage, openPrice, sl, tp, ... }
   // All numeric fields are strings. Scalings:
@@ -194,7 +194,19 @@ function normalizePosition(p, markets) {
   const pairIdx = p.pairIndex ?? p.pair_index ?? p.trade?.pairIndex;
   const isBuy = asBool(p.buy ?? p.isLong ?? p.trade?.buy ?? false);
   const symbol = p.symbol || pairIndexToSymbol(pairIdx, markets);
+  const priceRow = Array.isArray(prices)
+    ? prices.find(row => String(row?.symbol || '').toUpperCase() === String(symbol || '').toUpperCase())
+    : null;
   const openPrice = contractPriceValue(p.openPrice, p.trade?.openPrice) || humanPriceValue(p.entry_price);
+  const markPrice = humanPriceValue(
+    p.markPrice,
+    p.mark_price,
+    p.currentPrice,
+    p.current_price,
+    p.price,
+    priceRow?.mark,
+    priceRow?.price,
+  );
   const takeProfit = contractPriceValue(p.tp, p.trade?.tp) || humanPriceValue(p.takeProfit, p.take_profit);
   const stopLoss = contractPriceValue(p.sl, p.trade?.sl) || humanPriceValue(p.stopLoss, p.stop_loss);
   const liquidationPrice = contractPriceValue(
@@ -216,15 +228,21 @@ function normalizePosition(p, markets) {
   }
   const leverage = Number(p.leverage ?? p.trade?.leverage ?? 0) / 1e10 || 1;
   const amountBase = openPrice > 0 ? (collateral * leverage) / openPrice : 0;
-  const pnl = Number(p.pnl ?? p.pnlUSD ?? 0);
+  const rawPnl = Number(p.pnl ?? p.pnlUSD ?? p.unrealized_pnl ?? p.unrealised_pnl);
+  const derivedPnl = openPrice > 0 && markPrice > 0 && amountBase > 0
+    ? (markPrice - openPrice) * amountBase * (isBuy ? 1 : -1)
+    : 0;
+  const pnl = Number.isFinite(rawPnl) && Math.abs(rawPnl) > 0.000001 ? rawPnl : derivedPnl;
   return {
     symbol,
     side: isBuy ? 'bid' : 'ask',
     amount: String(amountBase),
     entry_price: String(openPrice || 0),
+    mark_price: String(markPrice || 0),
     margin: String(collateral),
     leverage: String(leverage),
     pnl: String(pnl),
+    pnl_usd: String(pnl),
     take_profit: takeProfit > 0 ? String(takeProfit) : '',
     stop_loss: stopLoss > 0 ? String(stopLoss) : '',
     liquidation_price: liquidationPrice > 0 ? String(liquidationPrice) : '',
@@ -430,6 +448,7 @@ export function useAvantis() {
   ));
   const [smartWallet, setSmartWallet] = useState(null);
   const marketsRef = useRef([]);
+  const pricesRef = useRef([]);
   // Ref-held reference to `claimGold` so early-declared callbacks
   // (placeMarketOrder etc.) can fire a claim after a successful trade
   // without forward-referencing the useCallback. The ref is updated at the
@@ -599,13 +618,21 @@ export function useAvantis() {
       const r = await fetch(`${FUTURES_API}/prices?dex=avantis`);
       const j = await r.json();
       const fresh = normalizePrices(j?.prices || j?.data || j);
+      let nextPrices = fresh;
       setPrices(prev => {
         if (!fresh.length) return prev;
         const byKey = new Map((prev || []).map(p => [p.symbol, p]));
         for (const p of fresh) byKey.set(p.symbol, p);
-        return Array.from(byKey.values());
+        nextPrices = Array.from(byKey.values());
+        pricesRef.current = nextPrices;
+        return nextPrices;
       });
+      if (fresh.length) {
+        pricesRef.current = nextPrices;
+        return nextPrices;
+      }
     } catch {}
+    return pricesRef.current || [];
   }, []);
 
   // ───── Account data (server proxy — read-only by address) ─────
@@ -623,15 +650,16 @@ export function useAvantis() {
   const fetchPositions = useCallback(async () => {
     if (!walletAddr) return;
     try {
+      const freshPrices = await fetchPrices();
       const r = await fetch(`${FUTURES_API}/positions?dex=avantis&address=${walletAddr}`);
       const j = await r.json();
       const raw = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
-      const list = raw.map(p => normalizePosition(p, marketsRef.current));
+      const list = raw.map(p => normalizePosition(p, marketsRef.current, freshPrices || pricesRef.current));
       setPositions(list);
       setDataReady(true);
       window._openPositionsCount = list.length;
     } catch {}
-  }, [walletAddr]);
+  }, [fetchPrices, walletAddr]);
 
   const fetchOrders = useCallback(async () => {
     if (!walletAddr) return;
