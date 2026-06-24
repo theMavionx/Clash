@@ -631,7 +631,13 @@ async function fetchWalletTrades(player, opts = {}) {
   // quest progress for every GMX trade despite the worker indexing them
   // correctly. Adding 'gmx' wires the verifier into the same path.
   if (FUTURES_TASK_DEXES.has(dexFilter)) {
-    const dexes = opts.singleDex ? [dexFilter] : getTaskFuturesDexes(player, opts.dex);
+    // Lighter imports require browser-scoped account auth headers. When a
+    // player has old linked DEX rows, scanning every historical DEX here can
+    // spend seconds in unrelated RPC backfills and make /tasks time out before
+    // the freshly imported Lighter fills are counted.
+    const dexes = opts.singleDex || dexFilter === 'lighter'
+      ? [dexFilter]
+      : getTaskFuturesDexes(player, opts.dex);
     const batches = [];
     for (const dex of dexes) {
       batches.push(await fetchFuturesDexTrades(player, dex, opts));
