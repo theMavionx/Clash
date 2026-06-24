@@ -3770,10 +3770,13 @@ function queueTournamentLuckyRaiderPayouts(t, dayInput, winners) {
     const place = Math.max(1, Math.floor(Number(winner?.place || 0) || 0));
     if (!winner?.player_id || place <= 0) continue;
     const participant = db.prepare(`
-      SELECT reward_wallet_evm
-        FROM tournament_participants
-       WHERE tournament_id = ? AND player_id = ?
+      SELECT tp.reward_wallet_evm,
+             COALESCE(p.is_bot, 0) AS is_bot
+        FROM tournament_participants tp
+        LEFT JOIN players p ON p.id = tp.player_id
+       WHERE tp.tournament_id = ? AND tp.player_id = ?
     `).get(tid, winner.player_id);
+    const winnerIsBot = Number(participant?.is_bot || 0) === 1;
     for (let i = 0; i < rewards.length; i += 1) {
       const reward = rewards[i];
       if (!luckyRaiderRewardUsesClashToken(reward)) {
@@ -3782,6 +3785,10 @@ function queueTournamentLuckyRaiderPayouts(t, dayInput, winners) {
       }
       const amountUsd = Number(reward.amount || 0);
       if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+        skipped += 1;
+        continue;
+      }
+      if (winnerIsBot) {
         skipped += 1;
         continue;
       }
@@ -3991,6 +3998,7 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
     const rows = db.prepare(`
       SELECT tp.player_id,
              p.name,
+             COALESCE(p.is_bot, 0) AS is_bot,
              COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
              COALESCE(SUM(a.trades_count), 0) AS trades_count
         FROM tournament_participants tp
@@ -4024,6 +4032,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       }
       const details = {
         name: row.name || '',
+        is_bot: Number(row.is_bot || 0) === 1,
+        prize_eligible: Number(row.is_bot || 0) !== 1,
         trades_count: Number(row.trades_count || 0) || 0,
         attack_wins: attackWins,
         attack_attempts: attackStats.attack_attempts,
@@ -4052,6 +4062,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       const entry = {
         player_id: row.player_id,
         name: row.name || '',
+        is_bot: Number(row.is_bot || 0) === 1,
+        prize_eligible: Number(row.is_bot || 0) !== 1,
         volume_usd: Number(volume.toFixed(2)),
         attack_wins: attackWins,
         attack_attempts: attackStats.attack_attempts,
@@ -4087,6 +4099,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       place: entry.place,
       player_id: entry.player_id,
       name: entry.name,
+      is_bot: !!entry.is_bot,
+      prize_eligible: !!entry.prize_eligible,
       volume_usd: entry.volume_usd,
       attack_wins: entry.attack_wins,
       attack_attempts: entry.attack_attempts,
@@ -4113,6 +4127,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       entries: entries.map((entry) => ({
         player_id: entry.player_id,
         name: entry.name,
+        is_bot: !!entry.is_bot,
+        prize_eligible: !!entry.prize_eligible,
         volume_usd: entry.volume_usd,
         attack_wins: entry.attack_wins,
         attack_attempts: entry.attack_attempts,
