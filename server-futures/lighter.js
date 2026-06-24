@@ -60,6 +60,19 @@ function normalizeSymbol(value) {
     .replace(/[-/](PERP|USD|USDC)$/iu, '');
 }
 
+function normalizeLighterTimestamp(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  let ms = n;
+  if (n < 10_000_000_000) ms = n * 1000; // seconds
+  else if (n > 10_000_000_000_000) ms = Math.floor(n / 1000); // microseconds
+  const date = new Date(ms);
+  if (!Number.isFinite(date.getTime())) return null;
+  const year = date.getUTCFullYear();
+  if (year < 2020 || year > 2100) return null;
+  return date.toISOString().replace('T', ' ').slice(0, 19);
+}
+
 function redactSignerPayload(payload = {}) {
   const out = { ...payload };
   if (out.api_private_key) out.api_private_key = '[redacted]';
@@ -574,9 +587,11 @@ function isOurIntegratorTrade(trade) {
     || Number(trade?.integrator_taker_fee_collector_index || 0) === collector;
 }
 
-function normalizeTradeForHistory(trade, accountIndex) {
+function normalizeTradeForHistory(trade, accountIndex, marketById = new Map()) {
   const isAsk = Number(trade?.ask_account_id) === Number(accountIndex);
-  const symbol = normalizeSymbol(trade?.symbol || trade?.market_symbol || trade?.market || trade?.market_id);
+  const marketId = Number(trade?.market_id ?? trade?.market_index);
+  const market = Number.isInteger(marketId) ? marketById.get(marketId) : null;
+  const symbol = normalizeSymbol(trade?.symbol || trade?.market_symbol || trade?.market || market?.symbol || trade?.market_id);
   const side = isAsk ? 'SHORT' : 'LONG';
   const notional = num(trade?.usd_amount, Math.abs(num(trade?.size, 0) * num(trade?.price, 0)));
   const pnl = isAsk ? trade?.ask_account_pnl : trade?.bid_account_pnl;
@@ -597,7 +612,7 @@ function normalizeTradeForHistory(trade, accountIndex) {
     pnl: pnl == null ? null : String(pnl),
     fee: String((makerFee + takerFee) / 1_000_000),
     proofJson: JSON.stringify(trade),
-    createdAt: trade?.timestamp ? new Date(Number(trade.timestamp) * 1000).toISOString().replace('T', ' ').slice(0, 19) : null,
+    createdAt: normalizeLighterTimestamp(trade?.timestamp || trade?.transaction_time),
   };
 }
 
@@ -829,6 +844,11 @@ async function importFillsForPlayer(playerId, input = {}) {
   let checked = 0;
   let cursor = String(input.cursor || '');
   let nextCursor = '';
+  const markets = await getMarketInfo().catch((err) => {
+    console.warn('[Lighter] import-fills market map failed:', err?.message || err);
+    return [];
+  });
+  const marketById = new Map(markets.map(m => [Number(m.market_id), m]));
   for (let page = 0; page < maxPages; page += 1) {
     const result = await getTrades({
       accountIndex,
@@ -840,7 +860,7 @@ async function importFillsForPlayer(playerId, input = {}) {
     checked += result.trades.length;
     for (const trade of result.trades) {
       if (!isOurIntegratorTrade(trade)) { skipped += 1; continue; }
-      const row = normalizeTradeForHistory(trade, accountIndex);
+      const row = normalizeTradeForHistory(trade, accountIndex, marketById);
       const saved = db.addTrade(playerId, row);
       if (saved?.changes) inserted += 1;
     }
