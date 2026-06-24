@@ -579,6 +579,25 @@ function orderSideIsAsk(side) {
   return s === 'ask' || s === 'sell' || s === 'short';
 }
 
+function logSignerResult(label, data = {}) {
+  const response = data?.result?.response || data?.response || null;
+  console.log(`[lighter] ${label}`, JSON.stringify({
+    account_index: data.account_index ?? null,
+    market: data.market ?? null,
+    market_id: data.market_id ?? null,
+    side: data.side ?? null,
+    order_type: data.order_type ?? null,
+    base_amount: data.base_amount ?? null,
+    price: data.price ?? null,
+    leverage: data.leverage ?? null,
+    tx_type: data.result?.tx_type ?? data.tx_type ?? null,
+    tx_hash: data.result?.tx_hash ?? data.tx_hash ?? null,
+    response_code: response && typeof response === 'object' ? response.code ?? null : null,
+    response_status: response && typeof response === 'object' ? response.status ?? null : null,
+    response_message: response && typeof response === 'object' ? response.message ?? response.error ?? null : null,
+  }));
+}
+
 async function createOrder(input = {}) {
   const creds = signerCredentials(input);
   const market = await getMarket(input.symbol ?? input.market_id ?? input.marketIndex);
@@ -610,6 +629,16 @@ async function createOrder(input = {}) {
     integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
     integrator_taker_fee: LIGHTER_BUILDER_FEE_VALUE,
     integrator_maker_fee: LIGHTER_BUILDER_FEE_VALUE,
+  });
+  logSignerResult('order submitted', {
+    account_index: creds.account_index,
+    market: market.symbol,
+    market_id: Number(market.market_id),
+    side: isAsk ? 'ask' : 'bid',
+    order_type: isMarket ? 'market' : 'limit',
+    base_amount: decimalFromInteger(baseAmount, market.size_decimals),
+    price: referencePrice,
+    result,
   });
   return {
     ok: true,
@@ -650,6 +679,13 @@ async function setLeverage(input = {}) {
     market_index: Number(market.market_id),
     fraction,
     margin_mode: marginMode,
+  });
+  logSignerResult('leverage updated', {
+    account_index: creds.account_index,
+    market: market.symbol,
+    market_id: Number(market.market_id),
+    leverage: lev,
+    result,
   });
   return { ok: true, status: 'submitted', leverage: lev, margin_mode: marginMode === 0 ? 'cross' : 'isolated', ...result };
 }

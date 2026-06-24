@@ -31,6 +31,29 @@ def _response_payload(value):
     return value
 
 
+def _response_error(payload):
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    code = payload.get("code")
+    status = payload.get("status")
+    message = payload.get("message") or payload.get("error") or payload.get("detail")
+    if code is not None:
+        try:
+            if int(code) not in (0, 200):
+                return f"code={code} message='{message or ''}'"
+        except (TypeError, ValueError):
+            return f"code={code} message='{message or ''}'"
+    if isinstance(status, str) and status.lower() in ("error", "failed", "failure", "rejected"):
+        return f"status={status} message='{message or ''}'"
+    if message and code is None and status is None:
+        lower = str(message).lower()
+        if any(part in lower for part in ("error", "failed", "invalid", "rejected", "insufficient")):
+            return str(message)
+    return None
+
+
 def _public_error(exc):
     text = str(exc)
     body = getattr(exc, "body", None)
@@ -81,7 +104,11 @@ async def _send_and_close(client, tx):
             response = await client.send_tx(tx_type=tx["tx_type"], tx_info=tx["tx_info"])
         except Exception as exc:
             raise RuntimeError(_public_error(exc)) from exc
-        return {**tx, "response": _response_payload(response)}
+        payload = _response_payload(response)
+        response_error = _response_error(payload)
+        if response_error:
+            raise RuntimeError(response_error)
+        return {**tx, "response": payload}
     finally:
         await client.close()
 

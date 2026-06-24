@@ -44,6 +44,7 @@ import TokenIcon from './TokenIcon';
 import GoldRewardToast from './GoldRewardToast';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { setClientActivity } from '../lib/updateCoordinator';
+import { reportClientEvent } from '../lib/clientLogger';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
@@ -2729,7 +2730,33 @@ function FuturesPanel() {
     setTradeBusy(true);
     setTradePhase('preparing');
     setLocalAlert(null);
+    const logLighterTrade = (step, data = {}, level = 'info') => {
+      if (dex !== 'lighter') return;
+      const payload = {
+        step,
+        symbol,
+        side,
+        orderType,
+        amount,
+        amountInUsdc,
+        tokenAmount,
+        positionUsdc: Number.isFinite(positionUsdc) ? positionUsdc : null,
+        leverage,
+        currentPrice,
+        orderSizingPrice,
+        hasWallet,
+        setupVerified,
+        lighterNeedsIntegratorApproval,
+        ...data,
+      };
+      console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info']('[Lighter UI] trade flow', payload);
+      reportClientEvent('lighter.trade_flow', payload, {
+        level,
+        message: `[Lighter UI] trade ${step}`,
+      });
+    };
     try {
+      logLighterTrade('start');
       // Pacifica API: 3rd arg is qty in base token (0.0022 BTC).
       // Avantis & Decibel APIs: 3rd arg is COLLATERAL / margin in USDC.
       // The UI's `amount` (in USDC mode) is the MARGIN the user deposits.
@@ -2884,7 +2911,11 @@ function FuturesPanel() {
         } else {
           qty = amountInUsdc ? tokenAmount : amount;
         }
-        if (!qty || !Number.isFinite(parseFloat(qty)) || parseFloat(qty) <= 0) return;
+        if (!qty || !Number.isFinite(parseFloat(qty)) || parseFloat(qty) <= 0) {
+          logLighterTrade('blocked_invalid_qty', { qty, markPrice, tradePrice }, 'warn');
+          setLocalAlert('Enter a valid amount.');
+          return;
+        }
         if (dex === 'pacifica') {
           const enteredMargin = amountInUsdc ? parseFloat(amount) : null;
           const requiredMargin = amountInUsdc
@@ -2955,6 +2986,7 @@ function FuturesPanel() {
         const serverLevNum = serverLev != null ? Number(serverLev) : NaN;
         const levMatches = Number.isFinite(serverLevNum) && Math.abs(serverLevNum - leverage) < 0.05;
         if (!levMatches) {
+          logLighterTrade('set_leverage_start', { serverLev, serverLevNum, requestedLeverage: leverage });
           // Decibel needs isCross alongside leverage; current production
           // mode is cross margin.
           const levOpts = (() => {
@@ -2962,6 +2994,7 @@ function FuturesPanel() {
             return { isCross: true };
           })();
           const levRes = await setLeverageApi(symbol, leverage, levOpts);
+          logLighterTrade('set_leverage_result', { ok: !!levRes && !levRes.error, result: levRes });
           if (!levRes || levRes.error) {
             setLocalAlert(levRes?.error || 'Could not set leverage. Close any open position on this symbol first.');
             return;
@@ -2987,11 +3020,17 @@ function FuturesPanel() {
       }
       if (orderType === 'market') {
         // 5th arg (leverage) is only read by useAvantis; usePacifica ignores it.
+        logLighterTrade('submit_market_start', { qty });
         result = await placeMarketOrder(symbol, side, qty, '0.5', leverage, tradeOptions);
       } else {
-        if (!limitPrice) return;
+        if (!limitPrice) {
+          logLighterTrade('blocked_missing_limit_price', { qty }, 'warn');
+          return;
+        }
+        logLighterTrade('submit_limit_start', { qty, limitPrice });
         result = await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage, tradeOptions);
       }
+      logLighterTrade('submit_result', { result });
       setTradePhase(null);
       if (result?.error) {
         setLocalAlert(result.error);
@@ -3014,12 +3053,19 @@ function FuturesPanel() {
         setAmount('');
         setSizePct(0);
       }
+    } catch (e) {
+      logLighterTrade('failed_exception', {
+        error: e?.message || String(e),
+        status: e?.status || null,
+        data: e?.data || null,
+      }, 'error');
+      setLocalAlert(e?.message || String(e));
     } finally {
       tradeInFlight.current = false;
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, positions, lotSize]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)

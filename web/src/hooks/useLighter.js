@@ -296,10 +296,40 @@ export function useLighter() {
   const submitOrder = useCallback(async (payload) => {
     if (!token) throw new Error('Login required');
     const creds = ensureCredentials();
-    const result = await fetchJson(`${FUTURES_API}/lighter/order`, {
-      method: 'POST',
-      headers: { ...headers, 'content-type': 'application/json' },
-      body: JSON.stringify(credentialPayload(creds, payload)),
+    const safePayload = {
+      symbol: payload?.symbol,
+      side: payload?.side,
+      orderType: payload?.orderType,
+      amount: payload?.amount,
+      price: payload?.price,
+      leverage: payload?.leverage,
+      reduceOnly: !!payload?.reduceOnly,
+      accountIndex: creds?.accountIndex,
+      apiKeyIndex: creds?.apiKeyIndex,
+    };
+    console.info('[Lighter UI] submit order start', safePayload);
+    let result;
+    try {
+      result = await fetchJson(`${FUTURES_API}/lighter/order`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify(credentialPayload(creds, payload)),
+      });
+    } catch (e) {
+      console.error('[Lighter UI] submit order failed', {
+        ...safePayload,
+        status: e?.status || null,
+        message: e?.message || String(e),
+        data: e?.data || null,
+      });
+      throw e;
+    }
+    console.info('[Lighter UI] submit order result', {
+      ...safePayload,
+      status: result?.status || null,
+      tx_type: result?.tx_type || null,
+      tx_hash: result?.tx_hash || null,
+      response: result?.response || null,
     });
     refresh();
     const syncRewards = () => {
