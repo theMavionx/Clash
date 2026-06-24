@@ -2204,19 +2204,6 @@ function FuturesPanel() {
     setSuccessMsg(null);
     if (error && clearError) clearError();
   }, [clearError, error]);
-  const midPriceValue = useMemo(() => {
-    const bid = Number(topOfBook.bid);
-    const ask = Number(topOfBook.ask);
-    if (Number.isFinite(bid) && bid > 0 && Number.isFinite(ask) && ask > 0) return (bid + ask) / 2;
-    const fallback = Number(currentPrice);
-    return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
-  }, [currentPrice, topOfBook.ask, topOfBook.bid]);
-  const applyMidPrice = useCallback(() => {
-    if (!(midPriceValue > 0)) return;
-    clearTradeFeedback();
-    setOrderType('limit');
-    setLimitPrice(formatLimitInputPrice(midPriceValue));
-  }, [clearTradeFeedback, midPriceValue]);
   const handleToggleOneTapTrading = useCallback(async () => {
     if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash') return;
     const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : dex === 'flash' ? 'Flash' : 'Hyperliquid';
@@ -2556,6 +2543,19 @@ function FuturesPanel() {
     if (orderType === 'limit' && Number(limitPrice) > 0) return Number(limitPrice);
     return Number(currentPrice) || 0;
   }, [orderType, limitPrice, currentPrice]);
+  const midPriceValue = useMemo(() => {
+    const bid = Number(topOfBook.bid);
+    const ask = Number(topOfBook.ask);
+    if (Number.isFinite(bid) && bid > 0 && Number.isFinite(ask) && ask > 0) return (bid + ask) / 2;
+    const fallback = Number(currentPrice);
+    return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+  }, [currentPrice, topOfBook.ask, topOfBook.bid]);
+  const applyMidPrice = useCallback(() => {
+    if (!(midPriceValue > 0)) return;
+    clearTradeFeedback();
+    setOrderType('limit');
+    setLimitPrice(formatLimitInputPrice(midPriceValue));
+  }, [clearTradeFeedback, midPriceValue]);
   const pacificaTakerFeeRate = useMemo(() => {
     const fee = Number(account?.taker_fee);
     return Number.isFinite(fee) && fee > 0 ? fee : PACIFICA_DEFAULT_TAKER_FEE_RATE;
