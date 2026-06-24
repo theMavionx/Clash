@@ -8031,182 +8031,31 @@ function FuturesPanel() {
 
         {/* Powered by DEX footer — switches logo + label per active DEX */}
         <div style={S.pacificaFooter}>
-          {dex === 'avantis' ? (
-            <>
-              <span style={S.pacificaText}>Powered by</span>
-              <img
-                src={DEX_CONFIG.avantis.logo}
-                alt="Avantis"
-                style={{
-                  height: 14, width: 'auto', objectFit: 'contain',
-                  // Tint white SVG to Avantis blue on the light footer bg.
-                  filter: 'brightness(0) saturate(100%) invert(49%) sepia(88%) saturate(1854%) hue-rotate(173deg) brightness(93%) contrast(97%)',
-                }}
-              />
-            </>
-          ) : dex === 'decibel' ? (
-            <>
-              <img
-                src={DEX_CONFIG.decibel.logo}
-                alt="Decibel"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.decibel.colorDark }}>
-                Decibel
-              </span>
-            </>
-          ) : dex === 'gmx' ? (
-            <>
-              <img
-                src={DEX_CONFIG.gmx.logo}
-                alt="GMX"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.gmx.colorDark }}>
-                GMX
-              </span>
-            </>
-          ) : dex === 'monad' ? (
-            <>
-              <img
-                src={DEX_CONFIG.monad.logo}
-                alt="Perpl"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.monad.colorDark }}>
-                Perpl
-              </span>
-            </>
-          ) : dex === 'phoenix' ? (
-            <>
-              <img
-                src={DEX_CONFIG.phoenix.logo}
-                alt="Phoenix"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.phoenix.colorDark }}>
-                Phoenix
-              </span>
-            </>
-          ) : dex === 'hyperliquid' ? (
-            <>
-              <img
-                src={DEX_CONFIG.hyperliquid.logo}
-                alt="Hyperliquid"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.hyperliquid.colorDark }}>
-                Hyperliquid
-              </span>
-            </>
-          ) : dex === 'risex' ? (
-            <>
-              <img
-                src={DEX_CONFIG.risex.logo}
-                alt="RISEx"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.risex.colorDark }}>
-                RISEx
-              </span>
-            </>
-          ) : dex === 'nado' ? (
-            <>
-              <img
-                src={DEX_CONFIG.nado.logo}
-                alt="Nado"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.nado.colorDark }}>
-                Nado
-              </span>
-            </>
-          ) : dex === 'hotstuff' ? (
-            <>
-              <img
-                src={DEX_CONFIG.hotstuff.logo}
-                alt="Hotstuff"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.hotstuff.colorDark }}>
-                Hotstuff
-              </span>
-            </>
-          ) : dex === 'grvt' ? (
-            <>
-              <img
-                src={DEX_CONFIG.grvt.logo}
-                alt="GRVT"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.grvt.colorDark }}>
-                GRVT
-              </span>
-            </>
-          ) : dex === 'katana' ? (
-            <>
-              <img
-                src={DEX_CONFIG.katana.logo}
-                alt="Katana"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.katana.colorDark }}>
-                Katana
-              </span>
-            </>
-          ) : dex === 'gmtrade' ? (
-            <>
-              <img
-                src={DEX_CONFIG.gmtrade.logo}
-                alt="GMTrade"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.gmtrade.colorDark }}>
-                GMTrade
-              </span>
-            </>
-          ) : dex === 'flash' ? (
-            <>
-              <img
-                src={DEX_CONFIG.flash.logo}
-                alt="Flash Trade"
-                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.flash.colorDark }}>
-                Flash Trade
-              </span>
-            </>
-          ) : dex === 'hibachi' ? (
-            <>
-              <img
-                src={DEX_CONFIG.hibachi.logo}
-                alt="Hibachi"
-                style={{ height: 18, width: 'auto', objectFit: 'contain' }}
-              />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.hibachi.colorDark }}>
-                Hibachi
-              </span>
-            </>
-          ) : (
-            <>
-              <img src={pacificaLogo} alt="Pacifica" style={S.pacificaLogo} />
-              <span style={S.pacificaText}>Powered by</span>
-              <span style={S.pacificaBrand}>Pacifica</span>
-            </>
-          )}
+          {(() => {
+            const cfg = DEX_CONFIG[dex] || DEX_CONFIG.pacifica;
+            const brand = cfg.id === 'monad' ? 'Perpl' : cfg.label;
+            const logoFilter = cfg.id === 'avantis'
+              ? 'brightness(0) saturate(100%) invert(49%) sepia(88%) saturate(1854%) hue-rotate(173deg) brightness(93%) contrast(97%)'
+              : 'none';
+            return (
+              <>
+                <img
+                  src={cfg.logo || pacificaLogo}
+                  alt={brand}
+                  style={{
+                    height: cfg.id === 'hibachi' ? 18 : 16,
+                    width: 'auto',
+                    objectFit: 'contain',
+                    filter: logoFilter,
+                  }}
+                />
+                <span style={S.pacificaText}>Powered by</span>
+                <span style={{ ...S.pacificaBrand, color: cfg.colorDark || S.pacificaBrand.color }}>
+                  {brand}
+                </span>
+              </>
+            );
+          })()}
         </div>
 
         {tradeIdeaOpen && (
