@@ -160,9 +160,6 @@ function walletMatchesDex(dex, wallet) {
 function resolveWalletForDex(player, dex, currentWallet = null) {
   if (!player?.id) return currentWallet || null;
   const normalizedDex = String(dex || player.dex || '').toLowerCase();
-  if (currentWallet && walletMatchesDex(normalizedDex, currentWallet)) {
-    return canonicalWallet(currentWallet);
-  }
   try {
     const row = db.db.prepare(`
       SELECT wallet_address
@@ -192,6 +189,9 @@ function resolveWalletForDex(player, dex, currentWallet = null) {
       if (row && walletMatchesDex(normalizedDex, row.address)) return canonicalWallet(row.address);
     }
   } catch {}
+  if (currentWallet && walletMatchesDex(normalizedDex, currentWallet)) {
+    return canonicalWallet(currentWallet);
+  }
   if (walletMatchesDex(normalizedDex, player.wallet)) return canonicalWallet(player.wallet);
   return currentWallet ? canonicalWallet(currentWallet) : null;
 }

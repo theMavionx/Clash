@@ -583,6 +583,7 @@ function ensureMainDb() {
       SELECT wallet_address, chain_type, status
       FROM player_dex_accounts
       WHERE player_id = ? AND dex = ?
+      ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
       LIMIT 1
     `);
   } catch (e) {
@@ -630,7 +631,7 @@ function auth(req, res, next) {
   req.dexWallet = null;
   if (linkedForAsked?.wallet_address) {
     req.dexWallet = String(linkedForAsked.wallet_address || '').trim();
-  } else if ((req.dex === 'gmtrade' || req.dex === 'flash') && playerDexAccountStmt) {
+  } else if ((req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'hotstuff') && playerDexAccountStmt) {
     try {
       const linked = playerDexAccountStmt.get(player.id, req.dex);
       if (linked?.wallet_address) {

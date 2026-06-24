@@ -220,18 +220,39 @@ async function getPositionsByAddress(address) {
     const side = String(p.position_side || '').toUpperCase() === 'SHORT'
       ? 'ask'
       : num(p.size) < 0 ? 'ask' : 'bid';
+    const entryPrice = num(p.entry_price);
+    const pnlUsd = num(p.unrealized_pnl ?? p.upnl, NaN);
+    const rawMark = num(
+      p.mark_price
+        ?? p.markPrice
+        ?? p.mark
+        ?? p.current_price
+        ?? p.currentPrice
+        ?? p.oracle_price
+        ?? p.index_price
+        ?? p.last_price,
+      NaN,
+    );
+    const sideSign = side === 'ask' ? -1 : 1;
+    const impliedMark = Number.isFinite(pnlUsd) && entryPrice > 0 && size > 0
+      ? entryPrice + (pnlUsd / (size * sideSign))
+      : NaN;
+    const markPrice = Number.isFinite(rawMark) && rawMark > 0
+      ? rawMark
+      : (Number.isFinite(impliedMark) && impliedMark > 0 ? impliedMark : '');
+    const margin = num(p.margin);
     return {
       symbol: symbolOf(p.instrument),
       side,
       amount: String(size),
       size_usd: num(p.position_value),
       entry_price: String(p.entry_price || ''),
-      mark_price: '',
+      mark_price: markPrice === '' ? '' : String(markPrice),
       liquidation_price: null,
       margin: String(p.margin || ''),
       leverage: String(p.leverage || 1),
       pnl_usd: String(p.unrealized_pnl ?? p.upnl ?? ''),
-      pnl_pct: 0,
+      pnl_pct: Number.isFinite(pnlUsd) && margin > 0 ? (pnlUsd / margin) * 100 : null,
       pair_index: Number(p.instrument_id),
       trade_index: null,
       is_isolated: hotstuffMarginMode(p) === 'isolated',

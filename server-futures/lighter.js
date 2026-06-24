@@ -398,6 +398,12 @@ function normalizePosition(pos, marketById = new Map()) {
   };
 }
 
+function isOpenLighterPosition(position) {
+  const amount = Math.abs(num(position?.amount, 0));
+  const notional = Math.abs(num(position?.size_usd ?? position?.notional ?? position?.position_value, 0));
+  return amount > 1e-12 && notional > 0.01;
+}
+
 async function getAccount({ accountIndex, l1Address } = {}) {
   const index = Number(accountIndex);
   const hasIndex = Number.isInteger(index) && index >= 0;
@@ -414,6 +420,9 @@ async function getAccount({ accountIndex, l1Address } = {}) {
   const balance = num(acct.available_balance ?? acct.collateral ?? acct.total_asset_value ?? usdc.margin_balance ?? usdc.balance, 0);
   const markets = await getMarketInfo().catch(() => []);
   const marketById = new Map(markets.map(m => [Number(m.market_id), m]));
+  const positions = rows(acct.positions)
+    .map(pos => normalizePosition(pos, marketById))
+    .filter(isOpenLighterPosition);
   return {
     exists: true,
     account_index: acct.account_index ?? acct.index,
@@ -422,7 +431,7 @@ async function getAccount({ accountIndex, l1Address } = {}) {
     account_equity: num(acct.total_asset_value ?? acct.collateral ?? balance, balance),
     available_balance: num(acct.available_balance ?? balance, balance),
     collateral: num(acct.collateral ?? balance, balance),
-    positions: rows(acct.positions).map(pos => normalizePosition(pos, marketById)),
+    positions,
     assets,
     _raw: acct,
   };
@@ -473,15 +482,20 @@ async function getActiveOrders({ accountIndex, authToken } = {}) {
     const marketId = Number(order?.market_id ?? order?.market_index);
     const market = marketById.get(marketId);
     const price = num(order?.price, 0);
+    const triggerPrice = num(order?.trigger_price, 0);
     const size = num(order?.remaining_base_amount ?? order?.base_amount ?? order?.size, 0);
+    const type = lighterOrderTypeName(order?.order_type ?? order?.type);
     return {
       ...order,
       symbol: normalizeSymbol(order?.symbol || market?.symbol || marketId),
       pair_index: marketId,
       order_id: order?.order_index ?? order?.order_id ?? order?.client_order_index,
       side: Number(order?.is_ask) ? 'ask' : 'bid',
-      type: Number(order?.order_type) === 1 ? 'market' : 'limit',
+      type,
+      order_type: type,
       price,
+      trigger_price: triggerPrice || null,
+      trigger_price_ui: triggerPrice || null,
       amount: String(size > 10_000 && market ? decimalFromInteger(size, market.size_decimals) : size),
       reduce_only: !!order?.reduce_only,
       status: order?.status || 'open',
@@ -587,6 +601,35 @@ function orderSideIsAsk(side) {
   return s === 'ask' || s === 'sell' || s === 'short';
 }
 
+const LIGHTER_ORDER_TYPES = Object.freeze({
+  limit: 0,
+  market: 1,
+  stop_loss: 2,
+  stop_loss_limit: 3,
+  take_profit: 4,
+  take_profit_limit: 5,
+});
+
+function normalizeOrderType(input = {}) {
+  const raw = String(input.orderType || input.order_type || '').toLowerCase().replace(/[-\s]+/g, '_');
+  if (raw === 'limit') return { name: 'limit', value: LIGHTER_ORDER_TYPES.limit, trigger: false, limit: true };
+  if (raw === 'stop_loss_limit' || raw === 'sl_limit') return { name: 'stop_loss_limit', value: LIGHTER_ORDER_TYPES.stop_loss_limit, trigger: true, limit: true };
+  if (raw === 'take_profit_limit' || raw === 'tp_limit') return { name: 'take_profit_limit', value: LIGHTER_ORDER_TYPES.take_profit_limit, trigger: true, limit: true };
+  if (raw === 'stop_loss' || raw === 'sl') return { name: 'stop_loss', value: LIGHTER_ORDER_TYPES.stop_loss, trigger: true, limit: false };
+  if (raw === 'take_profit' || raw === 'tp') return { name: 'take_profit', value: LIGHTER_ORDER_TYPES.take_profit, trigger: true, limit: false };
+  return { name: 'market', value: LIGHTER_ORDER_TYPES.market, trigger: false, limit: false };
+}
+
+function lighterOrderTypeName(value) {
+  const n = Number(value);
+  if (n === LIGHTER_ORDER_TYPES.market) return 'market';
+  if (n === LIGHTER_ORDER_TYPES.stop_loss) return 'stop_loss';
+  if (n === LIGHTER_ORDER_TYPES.stop_loss_limit) return 'stop_loss_limit';
+  if (n === LIGHTER_ORDER_TYPES.take_profit) return 'take_profit';
+  if (n === LIGHTER_ORDER_TYPES.take_profit_limit) return 'take_profit_limit';
+  return 'limit';
+}
+
 function logSignerResult(label, data = {}) {
   const response = data?.result?.response || data?.response || null;
   console.log(`[lighter] ${label}`, JSON.stringify({
@@ -611,15 +654,22 @@ async function createOrder(input = {}) {
   const market = await getMarket(input.symbol ?? input.market_id ?? input.marketIndex);
   const baseAmount = integerScale(input.baseAmount ?? input.amount ?? input.qty, market.size_decimals);
   if (!baseAmount) throw Object.assign(new Error('Lighter order amount is too small'), { status: 400 });
-  const isMarket = String(input.orderType || input.order_type || '').toLowerCase() !== 'limit';
+  const orderType = normalizeOrderType(input);
   const isAsk = orderSideIsAsk(input.side);
-  const referencePrice = isMarket ? await getMarketPrice(market) : Number(input.price);
+  const triggerPriceUi = Number(input.triggerPrice ?? input.trigger_price ?? input.stopPrice ?? input.stop_price ?? 0);
+  if (orderType.trigger && (!Number.isFinite(triggerPriceUi) || triggerPriceUi <= 0)) {
+    throw Object.assign(new Error('Lighter trigger price required'), { status: 400 });
+  }
+  const referencePrice = orderType.trigger
+    ? (Number(input.price) > 0 ? Number(input.price) : triggerPriceUi)
+    : (orderType.limit ? Number(input.price) : await getMarketPrice(market));
   if (!Number.isFinite(referencePrice) || referencePrice <= 0) throw Object.assign(new Error('Lighter order price required'), { status: 400 });
-  const slippage = Math.max(0.0005, Math.min(0.05, Number(input.slippage || input.slippagePct || 0.005)));
-  const signerPrice = isMarket
+  const slippage = Math.max(0.0005, Math.min(0.05, Number(input.slippage || input.slippagePct || (orderType.trigger ? 0.01 : 0.005))));
+  const signerPrice = !orderType.limit
     ? referencePrice * (isAsk ? (1 - slippage) : (1 + slippage))
     : referencePrice;
   const price = integerScale(signerPrice, market.price_decimals);
+  const triggerPrice = orderType.trigger ? integerScale(triggerPriceUi, market.price_decimals) : 0;
   const clientOrderIndex = Number.isInteger(Number(input.clientOrderIndex))
     ? Number(input.clientOrderIndex)
     : (Date.now() % 1000000000000) + Math.floor(Math.random() * 1000);
@@ -630,10 +680,11 @@ async function createOrder(input = {}) {
     base_amount: baseAmount,
     price,
     is_ask: isAsk,
-    order_type: isMarket ? 1 : 0,
-    time_in_force: isMarket ? 0 : 1,
+    order_type: orderType.value,
+    time_in_force: orderType.limit ? 1 : 0,
     reduce_only: !!input.reduceOnly || !!input.reduce_only,
-    order_expiry: isMarket ? 0 : -1,
+    trigger_price: triggerPrice,
+    order_expiry: orderType.trigger ? -1 : (orderType.limit ? -1 : 0),
     integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
     integrator_taker_fee: LIGHTER_BUILDER_FEE_VALUE,
     integrator_maker_fee: LIGHTER_BUILDER_FEE_VALUE,
@@ -643,9 +694,10 @@ async function createOrder(input = {}) {
     market: market.symbol,
     market_id: Number(market.market_id),
     side: isAsk ? 'ask' : 'bid',
-    order_type: isMarket ? 'market' : 'limit',
+    order_type: orderType.name,
     base_amount: decimalFromInteger(baseAmount, market.size_decimals),
     price: referencePrice,
+    trigger_price: orderType.trigger ? triggerPriceUi : null,
     result,
   });
   return {
@@ -656,6 +708,9 @@ async function createOrder(input = {}) {
     client_order_index: clientOrderIndex,
     base_amount: decimalFromInteger(baseAmount, market.size_decimals),
     price: referencePrice,
+    trigger_price: orderType.trigger ? triggerPriceUi : null,
+    order_type: orderType.name,
+    reduce_only: !!input.reduceOnly || !!input.reduce_only,
     signer_price: signerPrice,
     builder_fee_value: LIGHTER_BUILDER_FEE_VALUE,
     integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,

@@ -8405,7 +8405,6 @@ function upsertPlayerDexAccountFromLoginWallet(playerId, dex, wallet, status = '
 
 function resolveClaimWalletForDex(player, dex, currentWallet = null) {
   const normalizedDex = String(dex || '').toLowerCase();
-  if (dexAcceptsWallet(normalizedDex, currentWallet)) return canonicalWalletIdentifier(currentWallet);
   try {
     const row = db.db.prepare(`
       SELECT wallet_address
@@ -8441,6 +8440,7 @@ function resolveClaimWalletForDex(player, dex, currentWallet = null) {
       }
     }
   } catch {}
+  if (dexAcceptsWallet(normalizedDex, currentWallet)) return canonicalWalletIdentifier(currentWallet);
   return currentWallet;
 }
 

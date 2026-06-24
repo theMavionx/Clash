@@ -1641,6 +1641,8 @@ const PositionsList = memo(function PositionsList({
                     }
                     setTpPrice(''); setSlPrice(''); setExpandedPos(null);
                     if (r?.info) setLocalAlert(r.info);
+                  } catch (e) {
+                    setLocalAlert(e?.message || String(e));
                   } finally {
                     setTpslSubmittingPos((current) => current === posKey ? null : current);
                   }
@@ -6576,16 +6578,18 @@ function FuturesPanel() {
                     setTpslSubmittingPos(posKey);
                     try {
                       const r = await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
-                      if (r?.error) {
-                        setLocalAlert(r.error);
-                        return;
-                      }
-                      setTpPrice(''); setSlPrice(''); setExpandedPos(null);
-                      if (r?.info) setLocalAlert(r.info);
-                    } finally {
-                      setTpslSubmittingPos((current) => current === posKey ? null : current);
+                    if (r?.error) {
+                      setLocalAlert(r.error);
+                      return;
                     }
-                  }} disabled={tpslBusy || loading || (!tpPrice && !slPrice)}>
+                    setTpPrice(''); setSlPrice(''); setExpandedPos(null);
+                    if (r?.info) setLocalAlert(r.info);
+                  } catch (e) {
+                    setLocalAlert(e?.message || String(e));
+                  } finally {
+                    setTpslSubmittingPos((current) => current === posKey ? null : current);
+                  }
+                }} disabled={tpslBusy || loading || (!tpPrice && !slPrice)}>
                     {tpslBusy ? <ClosingButtonLabel text="Setting..." /> : 'Set'}
                   </button>
                 </div>

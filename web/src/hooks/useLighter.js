@@ -98,6 +98,14 @@ function normalizeSide(side) {
   return s === 'ask' || s === 'short' || s === 'sell' ? 'ask' : 'bid';
 }
 
+function activePositions(list) {
+  return rows(list).filter((pos) => {
+    const amount = Math.abs(Number(pos?.amount ?? pos?.size ?? pos?.position ?? 0));
+    const notional = Math.abs(Number(pos?.size_usd ?? pos?.notional ?? pos?.position_value ?? 0));
+    return Number.isFinite(amount) && amount > 1e-12 && Number.isFinite(notional) && notional > 0.01;
+  });
+}
+
 export function useLighter() {
   const { dex } = useDex();
   const isActiveDex = dex === 'lighter';
@@ -197,6 +205,16 @@ export function useLighter() {
     const timer = window.setInterval(refresh, POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [isActiveDex, refresh]);
+
+  const scheduleRefreshBurst = useCallback(() => {
+    [350, 1600, 4200, 9000].forEach((delay) => {
+      window.setTimeout(() => {
+        refresh().catch((e) => {
+          console.warn('[Lighter] post-order refresh failed:', e?.message || e);
+        });
+      }, delay);
+    });
+  }, [refresh]);
 
   const updateCredentials = useCallback(async (next) => {
     if (!token) throw new Error('Login required');
@@ -309,6 +327,8 @@ export function useLighter() {
     };
     console.info('[Lighter UI] submit order start', safePayload);
     let result;
+    setLoading(true);
+    setError('');
     try {
       result = await fetchJson(`${FUTURES_API}/lighter/order`, {
         method: 'POST',
@@ -322,7 +342,10 @@ export function useLighter() {
         message: e?.message || String(e),
         data: e?.data || null,
       });
+      setError(e?.message || String(e));
       throw e;
+    } finally {
+      setLoading(false);
     }
     console.info('[Lighter UI] submit order result', {
       ...safePayload,
@@ -331,7 +354,7 @@ export function useLighter() {
       tx_hash: result?.tx_hash || null,
       response: result?.response || null,
     });
-    refresh();
+    scheduleRefreshBurst();
     const syncRewards = () => {
       claimGoldRef.current?.({ reason: 'trade' }).catch((e) => {
         console.warn('[Lighter] post-trade claim failed:', e?.message || e);
@@ -340,7 +363,7 @@ export function useLighter() {
     window.setTimeout(syncRewards, 2500);
     window.setTimeout(syncRewards, 8000);
     return result;
-  }, [ensureCredentials, headers, refresh, token]);
+  }, [ensureCredentials, headers, scheduleRefreshBurst, token]);
 
   const placeMarketOrder = useCallback((symbol, side, qty, slippage = '0.5', leverage = 20, options = {}) => (
     submitOrder({
@@ -367,22 +390,65 @@ export function useLighter() {
     })
   ), [submitOrder]);
 
+  const setTpsl = useCallback(async (symbol, closeSide, takeProfit, stopLoss, pairIndex, _tradeIndex, amount) => {
+    const side = normalizeSide(closeSide);
+    const qty = Number(amount);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      throw new Error('Lighter position amount is required for TP/SL.');
+    }
+    const submitTrigger = async (kind, triggerPrice) => {
+      const price = Number(triggerPrice);
+      if (!Number.isFinite(price) || price <= 0) return null;
+      return submitOrder({
+        symbol,
+        marketIndex: pairIndex,
+        side,
+        amount: qty,
+        orderType: kind,
+        triggerPrice: price,
+        reduceOnly: true,
+        slippage: 0.01,
+      });
+    };
+    const results = [];
+    const tp = await submitTrigger('take_profit', takeProfit);
+    if (tp) results.push({ kind: 'take_profit', result: tp });
+    const sl = await submitTrigger('stop_loss', stopLoss);
+    if (sl) results.push({ kind: 'stop_loss', result: sl });
+    if (!results.length) throw new Error('Enter a valid Lighter TP or SL price.');
+    scheduleRefreshBurst();
+    return {
+      ok: true,
+      results,
+      info: results.length === 2 ? 'Lighter TP/SL orders submitted.' : `Lighter ${results[0].kind === 'take_profit' ? 'take profit' : 'stop loss'} order submitted.`,
+    };
+  }, [scheduleRefreshBurst, submitOrder]);
+
   const cancelOrder = useCallback(async (symbolOrOrder, orderId, pairIndex) => {
     if (!token) throw new Error('Login required');
     const creds = ensureCredentials();
     const order = typeof symbolOrOrder === 'object' ? symbolOrOrder : null;
-    const result = await fetchJson(`${FUTURES_API}/lighter/order/cancel`, {
-      method: 'POST',
-      headers: { ...headers, 'content-type': 'application/json' },
-      body: JSON.stringify(credentialPayload(creds, {
-        symbol: order?.symbol || symbolOrOrder,
-        marketIndex: order?.pair_index ?? pairIndex,
-        orderIndex: order?.order_id ?? order?.order_index ?? orderId,
-      })),
-    });
-    refresh();
-    return result;
-  }, [ensureCredentials, headers, refresh, token]);
+    setLoading(true);
+    setError('');
+    try {
+      const result = await fetchJson(`${FUTURES_API}/lighter/order/cancel`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify(credentialPayload(creds, {
+          symbol: order?.symbol || symbolOrOrder,
+          marketIndex: order?.pair_index ?? pairIndex,
+          orderIndex: order?.order_id ?? order?.order_index ?? orderId,
+        })),
+      });
+      scheduleRefreshBurst();
+      return result;
+    } catch (e) {
+      setError(e?.message || String(e));
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, [ensureCredentials, headers, scheduleRefreshBurst, token]);
 
   const setLeverage = useCallback(async (symbol, lev, options = {}) => {
     if (!token) throw new Error('Login required');
@@ -469,7 +535,7 @@ export function useLighter() {
   return {
     walletAddr: evmWallet?.address || (credentials?.accountIndex != null ? `lighter:${credentials.accountIndex}` : ''),
     account,
-    positions: account?.positions || [],
+    positions: activePositions(account?.positions || []),
     orders,
     prices,
     markets,
@@ -501,7 +567,7 @@ export function useLighter() {
     activate: updateCredentials,
     detectAccount,
     disconnect,
-    setTpsl: unsupportedTrading,
+    setTpsl,
     setMarginMode: unsupportedTrading,
     moveSpotToPerp: unsupportedTrading,
     switchToRise: null,

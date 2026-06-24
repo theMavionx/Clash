@@ -480,15 +480,14 @@ function walletMatchesDex(dex, wallet) {
 function resolveWalletForDex(player, dex) {
   if (!player) return null;
   const normalizedDex = String(dex || '').toLowerCase();
-  if (normalizedDex === String(player.dex || '').toLowerCase()) {
-    const current = resolveWallet(player);
-    if (walletMatchesDex(normalizedDex, current)) return current;
-  }
+  const current = normalizedDex === String(player.dex || '').toLowerCase()
+    ? resolveWallet(player)
+    : null;
   try {
     const dexRow = db.db.prepare(
       `SELECT wallet_address FROM player_dex_accounts
        WHERE player_id = ? AND dex = ?
-       ORDER BY updated_at DESC, id DESC
+       ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
        LIMIT 1`
     ).get(player.id, normalizedDex);
     if (dexRow && walletMatchesDex(normalizedDex, dexRow.wallet_address)) return dexRow.wallet_address;
@@ -513,7 +512,9 @@ function resolveWalletForDex(player, dex) {
     ).get(player.id, chainType);
     if (walletRow && walletMatchesDex(normalizedDex, walletRow.address)) return walletRow.address;
   } catch {}
+  if (current && walletMatchesDex(normalizedDex, current)) return current;
   if (walletMatchesDex(normalizedDex, player.wallet)) return player.wallet;
+  if (current && (isSolanaWallet(current) || isEvmWallet(current) || isAptosWallet(current))) return current;
   return null;
 }
 
