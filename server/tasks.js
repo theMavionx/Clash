@@ -555,7 +555,7 @@ function isGmtradeCloseFallbackTrade(trade) {
 
 async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
   const wallet = resolveWalletForDex(player, dexFilter);
-  if (wallet && !walletMatchesDex(dexFilter, wallet)) return [];
+  if (wallet && dexFilter !== 'lighter' && !walletMatchesDex(dexFilter, wallet)) return [];
   await tradeRecon.reconcileTradesForPlayer(player, {
     dex: dexFilter,
     wallet,

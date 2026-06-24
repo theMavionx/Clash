@@ -375,26 +375,37 @@ function normalizePosition(pos, marketById = new Map()) {
   const market = marketById.get(marketId);
   const symbol = normalizeSymbol(pos?.symbol || market?.symbol || marketId);
   const baseDecimals = market?.size_decimals ?? 4;
-  const size = num(pos?.position ?? pos?.size ?? pos?.base_amount, 0);
-  const baseSize = Math.abs(size) > 10_000 ? decimalFromInteger(size, baseDecimals) : Math.abs(size);
+  const rawSize = num(pos?.position ?? pos?.size ?? pos?.base_amount, 0);
+  const sign = num(pos?.sign ?? pos?.position_sign ?? pos?.side_sign, 0);
+  const rawSide = String(pos?.side ?? pos?.position_side ?? pos?.direction ?? '').toLowerCase();
+  const isShort = sign < 0
+    || rawSize < 0
+    || rawSide.includes('short')
+    || rawSide.includes('ask')
+    || rawSide.includes('sell');
+  const baseSize = Math.abs(rawSize) > 10_000 ? decimalFromInteger(rawSize, baseDecimals) : Math.abs(rawSize);
   const entry = num(pos?.avg_entry_price ?? pos?.entry_price ?? pos?.price, 0);
-  const mark = num(pos?.mark_price ?? pos?.index_price ?? entry, entry);
+  const rawMark = num(pos?.mark_price ?? pos?.index_price, NaN);
+  const mark = Number.isFinite(rawMark) && rawMark > 0 ? rawMark : 0;
   const notional = num(pos?.position_value ?? pos?.value ?? pos?.notional, baseSize * mark);
   const pnl = num(pos?.unrealized_pnl ?? pos?.pnl, 0);
+  const leverage = num(pos?.leverage, num(pos?.initial_margin_fraction, 5) > 0 ? (100 / num(pos?.initial_margin_fraction, 5)) : 20) || 20;
+  const margin = num(pos?.allocated_margin ?? pos?.margin ?? pos?.collateral, notional / Math.max(1, leverage));
+  const displayMargin = margin > 0 ? margin : notional / Math.max(1, leverage);
   return {
     ...pos,
     symbol,
     pair_index: marketId,
     market_id: marketId,
-    side: size < 0 || String(pos?.side || '').toLowerCase().includes('short') ? 'ask' : 'bid',
+    side: isShort ? 'ask' : 'bid',
     amount: String(baseSize),
     size_usd: notional,
-    margin: String(num(pos?.margin ?? pos?.collateral, notional / Math.max(1, num(pos?.leverage, 1)))),
+    margin: String(displayMargin),
     entry_price: entry,
-    mark_price: mark,
+    mark_price: mark || null,
     pnl_usd: pnl,
-    pnl_pct: notional > 0 ? (pnl / Math.max(1e-9, notional)) * 100 : 0,
-    leverage: String(num(pos?.leverage, 20) || 20),
+    pnl_pct: displayMargin > 0 ? (pnl / displayMargin) * 100 : 0,
+    leverage: String(leverage),
   };
 }
 

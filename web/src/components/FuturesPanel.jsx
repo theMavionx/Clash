@@ -766,6 +766,22 @@ function orderSideLabel(order) {
   return side === 'bid' ? 'BUY' : 'SELL';
 }
 
+function positionOpenSide(pos) {
+  const sign = Number(pos?.sign ?? pos?.position_sign ?? pos?.side_sign);
+  if (Number.isFinite(sign) && sign < 0) return 'ask';
+  if (Number.isFinite(sign) && sign > 0) return 'bid';
+  const raw = String(pos?.side || pos?.d || pos?.position_side || pos?.direction || '').trim().toLowerCase();
+  if (raw === 'ask' || raw === 'sell' || raw === 'short') return 'ask';
+  if (raw === 'bid' || raw === 'buy' || raw === 'long') return 'bid';
+  const amount = Number(pos?.position ?? pos?.size ?? pos?.base_amount);
+  if (Number.isFinite(amount) && amount < 0) return 'ask';
+  return 'bid';
+}
+
+function positionCloseSide(pos) {
+  return positionOpenSide(pos) === 'bid' ? 'ask' : 'bid';
+}
+
 function isReadOnlyOrder(order) {
   if (order?._phoenixSyntheticTpsl && order?._phoenixCancelableTpsl) return false;
   return !!(order?._readOnly || order?._phoenixSyntheticTpsl);
@@ -1634,7 +1650,7 @@ const PositionsList = memo(function PositionsList({
                 <button style={S.btnBlue} onClick={async () => {
                   setTpslSubmittingPos(posKey);
                   try {
-                    const r = await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                    const r = await setTpsl(pos.symbol, positionCloseSide(pos), tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
                     if (r?.error) {
                       setLocalAlert(r.error);
                       return;
@@ -6577,7 +6593,7 @@ function FuturesPanel() {
                   <button style={S.btnBlue} onClick={async () => {
                     setTpslSubmittingPos(posKey);
                     try {
-                      const r = await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                      const r = await setTpsl(pos.symbol, positionCloseSide(pos), tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
                     if (r?.error) {
                       setLocalAlert(r.error);
                       return;

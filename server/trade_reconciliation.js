@@ -74,6 +74,11 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
   'lighter',
 ]);
 
+const CREDENTIAL_SCOPED_IMPORT_DEXES = new Set([
+  'grvt',
+  'lighter',
+]);
+
 const DEFAULT_RECONCILE_COOLDOWN_MS = Math.max(5_000, Number(process.env.TRADE_RECONCILE_COOLDOWN_MS || 30_000));
 const REASON_COOLDOWNS_MS = {
   claim_gold: Math.max(5_000, Number(process.env.TRADE_RECONCILE_CLAIM_MS || 20_000)),
@@ -370,7 +375,7 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
   if (!USER_SCOPED_IMPORT_DEXES.has(dex)) {
     return { ok: true, skipped: 'worker_indexed', dex };
   }
-  if (dex !== 'grvt' && !walletMatchesDex(dex, wallet)) {
+  if (!CREDENTIAL_SCOPED_IMPORT_DEXES.has(dex) && !walletMatchesDex(dex, wallet)) {
     return { ok: false, skipped: 'wallet_not_compatible', dex };
   }
 
@@ -458,7 +463,7 @@ async function reconcileTradesForPlayer(player, opts = {}) {
   if (!FUTURES_REWARD_DEXES.has(dex)) return { ok: true, skipped: 'not_futures_reward_dex', dex };
   const reason = String(opts.reason || 'generic').toLowerCase();
   const wallet = resolveWalletForDex(player, dex, opts.wallet || null);
-  if (!wallet && dex !== 'grvt') return { ok: false, dex, skipped: 'missing_wallet' };
+  if (!wallet && !CREDENTIAL_SCOPED_IMPORT_DEXES.has(dex)) return { ok: false, dex, skipped: 'missing_wallet' };
   const ms = cooldownMs(reason, dex);
   const cooldown = shouldSkipForCooldown(player.id, dex, wallet || '', reason, ms, opts.force === true);
   if (cooldown) return { ok: true, dex, wallet, ...cooldown };
