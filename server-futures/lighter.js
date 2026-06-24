@@ -170,7 +170,7 @@ function runSigner(action, payload = {}) {
       try { data = stdout ? JSON.parse(stdout) : null; } catch {}
       if (code !== 0 || !data || data.ok === false) {
         const msg = data?.error || stderr.trim() || stdout.trim() || `signer exited ${code}`;
-        const status = /code=21504|fail to l1 signature|signature|expired|nonce/iu.test(String(msg)) ? 400 : 502;
+        const status = /code=\d+|bad request|invalid|fail to l1 signature|signature|expired|expiry|nonce|restricted jurisdiction/iu.test(String(msg)) ? 400 : 502;
         return reject(Object.assign(new Error(`Lighter signer ${action} failed: ${msg}`), {
           status,
           data,
@@ -534,8 +534,8 @@ async function prepareIntegratorApproval(input = {}) {
   const maxFee = Math.max(LIGHTER_BUILDER_FEE_VALUE, Number(input.maxFeeValue || 0), 100);
   const requestedExpiry = Number(input.approvalExpiry ?? input.approval_expiry);
   const approvalExpiry = Number.isInteger(requestedExpiry) && requestedExpiry > 0
-    ? requestedExpiry
-    : Math.floor(Date.now() / 1000) + Math.round(LIGHTER_APPROVAL_TTL_DAYS * 24 * 60 * 60);
+    ? (requestedExpiry < 10_000_000_000 ? requestedExpiry * 1000 : requestedExpiry)
+    : Date.now() + Math.round(LIGHTER_APPROVAL_TTL_DAYS * 24 * 60 * 60 * 1000);
   const result = await runSigner('approve_integrator_prepare', {
     ...creds,
     integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
