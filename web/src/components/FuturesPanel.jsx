@@ -524,12 +524,6 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor, isDust, dustUsd };
 }
 
-function isSuccessfulTradeClose(result) {
-  if (!result || result.error) return false;
-  const status = String(result.status || result.state || result.result?.status || '').toLowerCase();
-  return !/(fail|reject|cancel|error)/u.test(status);
-}
-
 function orderTpslKind(order) {
   const raw = String(
     order?.tpsl
@@ -1675,7 +1669,7 @@ const BottomPanel = memo(function BottomPanel({
   btmSymbols, sortOptionsForTab, hasActiveFilters,
   filteredPositions, filteredOrders, orders, positions,
   prices, walletAddr, dataReady, leverageSettings,
-  closePosition, cancelOrder, dex, loading, historyAccountAddr, markets, onClosedPositionSnapshot,
+  closePosition, cancelOrder, dex, loading, historyAccountAddr, markets,
 }) {
   const tpslOrders = Array.isArray(orders) ? orders : filteredOrders;
   // Avantis/Flash do not expose funding payments in the trading UI flow.
@@ -1756,17 +1750,7 @@ const BottomPanel = memo(function BottomPanel({
                         style={{...S.tblCloseBtn, opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer'}}
                         disabled={loading}
                         onClick={async () => {
-                          const snapshot = {
-                            symbol: p.symbol,
-                            side: p.side === 'bid' ? 'long' : 'short',
-                            leverage: isDust ? 0 : lev,
-                            entryPrice,
-                            exitPrice: markPrice,
-                            pnlUsd: pnlVal,
-                            pnlPct,
-                            isOpen: false,
-                          };
-                          const result = await closePosition(
+                          await closePosition(
                             p.symbol,
                             p.side,
                             dex === 'avantis' ? p.margin : p.amount,
@@ -1775,7 +1759,6 @@ const BottomPanel = memo(function BottomPanel({
                             true,
                             dex === 'flash' ? { position: p, inputUsdUi: String(isDust ? dustUsd : tblPosValue) } : undefined,
                           );
-                          if (isSuccessfulTradeClose(result)) onClosedPositionSnapshot?.(snapshot);
                         }}
                       >{loading ? <ClosingButtonLabel text="" /> : 'Close'}</button>
                     </td>
@@ -2319,8 +2302,9 @@ function FuturesPanel() {
       return prev;
     });
   }, []);
-  // Share-trade modal — shown automatically after a successful close in
-  // Basic mode and on demand via the 📤 button next to open positions.
+  // Share-trade modal — opened only on demand via the share button next to
+  // open positions. Closing a trade should not interrupt the flow with an
+  // automatic image prompt.
   // Holds a SNAPSHOT of the position because the live `positions` array
   // mutates the moment the close confirms, before the user has a chance
   // to share.
@@ -2435,7 +2419,21 @@ function FuturesPanel() {
   const currentPrice = useMemo(() => {
     const priceRow = prices.find(p => p.symbol === symbol);
     const marketRow = markets.find(m => m.symbol === symbol);
-    return firstFinite(priceRow?.mark, priceRow?.mid, marketRow?._mark, marketRow?.mark, marketRow?.mid) || null;
+    return firstFinite(
+      priceRow?.mark,
+      priceRow?.mid,
+      priceRow?.price,
+      priceRow?.last_price,
+      priceRow?.lastPrice,
+      priceRow?.oracle,
+      marketRow?._mark,
+      marketRow?.mark,
+      marketRow?.mid,
+      marketRow?.price,
+      marketRow?.last_price,
+      marketRow?.lastPrice,
+      marketRow?.index_price,
+    ) || null;
   }, [prices, markets, symbol]);
 
   const maxLev = useMemo(() => {
@@ -3422,15 +3420,23 @@ function FuturesPanel() {
             <div style={{
               ...S.levModal,
               ...(isMobile ? {
-                width: 'min(320px, calc(100vw - 28px))',
-                maxWidth: 'calc(100vw - 28px)',
-                maxHeight: 'min(70vh, 390px)',
+                top: 'auto',
+                left: 'max(10px, env(safe-area-inset-left))',
+                right: 'max(10px, env(safe-area-inset-right))',
+                bottom: 'max(12px, env(safe-area-inset-bottom))',
+                transform: 'none',
+                width: 'auto',
+                maxWidth: 420,
+                maxHeight: 'min(62vh, 360px)',
+                margin: '0 auto',
                 padding: 14,
                 borderWidth: 4,
                 borderRadius: 18,
                 gap: 8,
                 boxSizing: 'border-box',
                 overflowY: 'auto',
+                WebkitOverflowScrolling: 'touch',
+                overscrollBehavior: 'contain',
                 scrollbarWidth: 'none',
               } : {}),
             }}>
@@ -3455,7 +3461,10 @@ function FuturesPanel() {
                     .sort((a, b) => a - b)
                     .map(v => (
                       <button key={v} style={{...(leverage === v ? S.levPresetActive : S.levPreset), flex: 'initial', minWidth: 0}}
-                        onClick={() => handleLeverageChange(v)}>{v}x</button>
+                        onClick={() => {
+                          handleLeverageChange(v);
+                          if (isMobile) setShowLeverage(false);
+                        }}>{v}x</button>
                     ));
                 })()}
               </div>
@@ -6274,7 +6283,6 @@ function FuturesPanel() {
             cancelOrder={cancelOrder}
             dex={dex}
             loading={loading}
-            onClosedPositionSnapshot={setShareTrade}
           />
         </div>
       );
@@ -6324,10 +6332,9 @@ function FuturesPanel() {
           // no percentages, no ISO/CROSS badge — those are noise for a
           // first-time trader who just wants "am I winning?".
           if (isBasic) {
-            // Snapshot of the trade — captured fresh each render, used by
-            // both the share button (open) and the auto-modal (close).
-            // Stored as a plain object so it survives the positions[] mutation
-            // that close triggers.
+            // Snapshot of the open trade for the manual share button.
+            // Stored as a plain object so the image generator does not depend
+            // on live positions[] mutating after a close.
             const snapshot = {
               symbol: pos.symbol,
               side: pos.side === 'bid' ? 'long' : 'short',
@@ -6339,18 +6346,12 @@ function FuturesPanel() {
               isOpen: true,
             };
             const handleClose = async () => {
-              const finalSnapshot = { ...snapshot, isOpen: false };
-              const result = await closePosition(
+              await closePosition(
                 pos.symbol, pos.side,
                 String(dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)),
                 pos.pair_index, pos.trade_index, true,
                 dex === 'flash' ? { position: pos, inputUsdUi: String(dustUsd || posValueUsd) } : undefined,
               );
-              // closePosition returns the API response on success and
-              // undefined on error (catches internally + sets `error`).
-              if (isSuccessfulTradeClose(result)) {
-                setShareTrade(finalSnapshot);
-              }
             };
             return (
               <div key={positionStableKey(pos) || i} style={S.posCard}>
@@ -6384,9 +6385,7 @@ function FuturesPanel() {
                 </div>
 
                 {/* Action row: Close (big) + Share (icon-only). Share works
-                    on the OPEN snapshot — the user wants to brag now, before
-                    the trade resolves. After Close, an auto-modal pops up
-                    with the realised result. */}
+                    only when the user explicitly asks for the image. */}
                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                   <button
                     style={{...S.btnRed, flex: 1, padding: '10px'}}
@@ -6425,10 +6424,9 @@ function FuturesPanel() {
             );
           }
 
-          // Pro path — same trade snapshot pattern as Basic, used for both
-          // the share-icon button (open position) and the auto-modal that
-          // pops on a successful close. Captured once per render so a stale
-          // positions[] (post-close) can't blank out the share image.
+          // Pro path — same open-trade snapshot pattern as Basic. Captured
+          // once per render so a later positions[] mutation can't blank out
+          // the image when the user taps Share.
           const proSnapshot = {
             symbol: pos.symbol,
             side: pos.side === 'bid' ? 'long' : 'short',
@@ -6440,20 +6438,12 @@ function FuturesPanel() {
             isOpen: true,
           };
           const handleProClose = async (closeFraction) => {
-            const finalSnapshot = { ...proSnapshot, isOpen: false };
             const amount = (dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closeFraction;
-            const result = await closePosition(
+            await closePosition(
               pos.symbol, pos.side, String(amount),
               pos.pair_index, pos.trade_index, closeFraction >= 1,
               dex === 'flash' ? { position: pos, inputUsdUi: String((dustUsd || posValueUsd) * closeFraction) } : undefined,
             );
-            // closePosition returns the API response on success and undefined
-            // on error. Only show the share modal when the close was a FULL
-            // exit (closeFraction = 1) — partial closes still leave a position
-            // open and showing the modal mid-trade is confusing.
-            if (isSuccessfulTradeClose(result) && closeFraction >= 1) {
-              setShareTrade(finalSnapshot);
-            }
           };
           return (
             <div key={positionStableKey(pos) || i} style={S.posCard}>

@@ -49,11 +49,11 @@ const LOCAL_ALIASES = {
   MATIC: ['POL'],
   RNDR: ['RENDER'],
   RENDER: ['RNDR'],
-  '1000BONK': ['BONK'],
+  '1000BONK': ['KBONK', 'BONK'],
   '1000FLOKI': ['KFLOKI', 'FLOKI'],
   '1000LUNC': ['KLUNC', 'LUNC'],
-  '1000PEPE': ['PEPE', 'KPEPE'],
-  '1000SHIB': ['SHIB', 'KSHIB'],
+  '1000PEPE': ['KPEPE', 'PEPE'],
+  '1000SHIB': ['KSHIB', 'SHIB'],
   '1000SATS': ['MSATS', 'SATS'],
   WTI: ['CL'],
   WTIOIL: ['WTI', 'CL'],
@@ -123,8 +123,8 @@ function uniq(list) {
 
 function localCandidates(sym) {
   const s = canonTokenSymbol(sym);
-  const out = [s];
-  if (LOCAL_ALIASES[s]) out.push(...LOCAL_ALIASES[s]);
+  const aliases = LOCAL_ALIASES[s] || [];
+  const out = aliases.length ? [...aliases, s] : [s];
   return uniq(out);
 }
 

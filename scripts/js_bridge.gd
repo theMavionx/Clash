@@ -346,7 +346,8 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				bs._upgrade_troop(tn)
 		"register":
 			var auth_proof := _auth_proof_from_payload(data)
-			_do_register(data.get("name", ""), data.get("wallet", ""), data.get("dex", ""), int(data.get("fid", 0)), auth_proof)
+			var referral_code := String(data.get("referralCode", data.get("ref", data.get("invite", "")))).strip_edges()
+			_do_register(data.get("name", ""), data.get("wallet", ""), data.get("dex", ""), int(data.get("fid", 0)), auth_proof, referral_code)
 		"set_player_name_client":
 			var net = get_node_or_null("/root/Net")
 			var next_name := String(data.get("name", "")).strip_edges()
@@ -610,7 +611,7 @@ func _auth_proof_from_payload(data: Dictionary) -> Dictionary:
 	return auth_proof
 
 
-func _do_register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0, auth_proof: Dictionary = {}) -> void:
+func _do_register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0, auth_proof: Dictionary = {}, referral_code: String = "") -> void:
 	var net = get_node_or_null("/root/Net")
 	if not net:
 		send_to_react("error", {"message": "Network not available"})
@@ -627,7 +628,7 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "", fi
 	# updates the name on existing accounts when a non-auto-derived name is
 	# provided. Cheaper than two HTTP calls and enables the rename path.
 	var wants_rename: bool = wallet != "" and player_name.length() >= 2 and not is_auto_derived
-	if wallet != "" and not wants_rename:
+	if wallet != "" and not wants_rename and referral_code == "":
 		# Per-DEX accounts: pass `dex` so the server returns the row that
 		# belongs to (wallet, this dex). If no row exists for this dex,
 		# login returns 404 and we fall through to /register below — that
@@ -650,7 +651,7 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "", fi
 		send_to_react("auth_error", {"message": "Name must be at least 2 characters", "stage": "register"})
 		send_to_react("error", {"message": "Name must be at least 2 characters"})
 		return
-	var result = await net.register(player_name, wallet, dex, fid, auth_proof)
+	var result = await net.register(player_name, wallet, dex, fid, auth_proof, referral_code)
 	if result.has("error"):
 		var message := str(result.error)
 		send_to_react("auth_error", {"message": message, "stage": "register"})

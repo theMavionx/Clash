@@ -58,7 +58,8 @@ let marketCacheAt = 0;
 const apiCache = new Map();
 const apiInflight = new Map();
 const flightTxCache = new Map();
-let solanaConnection = null;
+let solanaConnections = null;
+const rpcFallbackWarnAt = new Map();
 let pollCursor = 0;
 
 try {
@@ -112,13 +113,47 @@ function isSolanaSignature(signature) {
   }
 }
 
+function solanaRpcLabel(url) {
+  try {
+    const parsed = new URL(url);
+    const pathLabel = parsed.pathname.replace(/\/v2\/.+$/i, '/v2/<redacted>');
+    return `${parsed.hostname}${pathLabel && pathLabel !== '/' ? pathLabel : ''}`;
+  } catch {
+    return String(url || '<unknown>').replace(/api-key=[^&]+/i, 'api-key=<redacted>');
+  }
+}
+
+function getSolanaConnections() {
+  if (solanaConnections) return solanaConnections;
+
+  const deposit = require('./deposit');
+  let urls = [deposit.RPC_URL].filter(Boolean);
+  let createConnection = null;
+  try {
+    const { Connection } = require('@solana/web3.js');
+    const solanaRpc = require('../server/solana_rpc');
+    createConnection = (url) => solanaRpc.createSolanaConnection(Connection, url, 'confirmed');
+    urls = solanaRpc.solanaRpcUrls([deposit.RPC_URL]);
+  } catch (e) {
+    console.warn('[phoenix-rewards-worker] Solana RPC fallback list unavailable:', e.message);
+  }
+
+  if (deposit.RPC_URL && !urls.includes(deposit.RPC_URL)) urls.unshift(deposit.RPC_URL);
+  urls = Array.from(new Set(urls.filter(Boolean)));
+  if (!urls.length) throw new Error('Solana RPC endpoint is not configured');
+
+  solanaConnections = urls.map((url) => ({
+    url,
+    label: solanaRpcLabel(url),
+    connection: url === deposit.RPC_URL || !createConnection
+      ? deposit.connection
+      : createConnection(url),
+  }));
+  return solanaConnections;
+}
+
 function getSolanaConnection() {
-  if (solanaConnection) return solanaConnection;
-  // Reuse the already-configured Solana RPC selection used by Pacifica
-  // deposits. It resolves Alchemy/Helius/private RPC envs and fails loudly if
-  // production forgot to configure one.
-  solanaConnection = require('./deposit').connection;
-  return solanaConnection;
+  return getSolanaConnections()[0].connection;
 }
 
 function sleep(ms) {
@@ -260,21 +295,59 @@ function collectTxProgramIds(parsedTx) {
   return programs;
 }
 
+function txNotFoundError() {
+  const err = new Error('transaction not found yet');
+  err.code = 'TX_NOT_FOUND';
+  return err;
+}
+
+function solanaRpcErrorMessage(err) {
+  return String(err?.message || err || 'unknown RPC error').replace(/\s+/g, ' ').slice(0, 220);
+}
+
+function warnSolanaRpcFallback(from, to, err) {
+  if (!from || !to) return;
+  const key = `${from.label}->${to.label}:${solanaRpcErrorMessage(err)}`;
+  const now = Date.now();
+  const last = rpcFallbackWarnAt.get(key) || 0;
+  if (now - last < 60_000) return;
+  rpcFallbackWarnAt.set(key, now);
+  console.warn(
+    `[phoenix-rewards-worker] Solana RPC ${from.label} failed; trying ${to.label}:`,
+    solanaRpcErrorMessage(err),
+  );
+  if (rpcFallbackWarnAt.size > 100) {
+    const cutoff = now - 10 * 60_000;
+    for (const [warnKey, at] of rpcFallbackWarnAt) {
+      if (at < cutoff) rpcFallbackWarnAt.delete(warnKey);
+    }
+  }
+}
+
 async function getParsedTransactionWithRetry(signature, attempts = 6, delayMs = 900) {
-  const conn = getSolanaConnection();
+  const candidates = getSolanaConnections();
   let last = null;
+  let lastError = null;
   for (let i = 0; i < attempts; i += 1) {
-    try {
-      last = await conn.getParsedTransaction(signature, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
-      });
-      if (last) return last;
-    } catch (e) {
-      if (i === attempts - 1) throw e;
+    for (let j = 0; j < candidates.length; j += 1) {
+      const candidate = candidates[j];
+      try {
+        last = await candidate.connection.getParsedTransaction(signature, {
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        });
+        if (last) return last;
+        throw txNotFoundError();
+      } catch (e) {
+        lastError = e;
+        if (e?.code !== 'TX_NOT_FOUND') {
+          warnSolanaRpcFallback(candidate, candidates[j + 1], e);
+        }
+      }
     }
     await sleep(delayMs);
   }
+  if (lastError && lastError.code !== 'TX_NOT_FOUND') throw lastError;
   return last;
 }
 
