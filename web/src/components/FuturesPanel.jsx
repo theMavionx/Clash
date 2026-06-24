@@ -3373,17 +3373,31 @@ function FuturesPanel() {
         {showLeverage && (
           <>
             <div style={S.levBackdrop} onClick={() => setShowLeverage(false)} />
-            <div style={S.levModal}>
+            <div style={{
+              ...S.levModal,
+              ...(isMobile ? {
+                width: 'min(320px, calc(100vw - 28px))',
+                maxWidth: 'calc(100vw - 28px)',
+                maxHeight: 'min(70vh, 390px)',
+                padding: 14,
+                borderWidth: 4,
+                borderRadius: 18,
+                gap: 8,
+                boxSizing: 'border-box',
+                overflowY: 'auto',
+                scrollbarWidth: 'none',
+              } : {}),
+            }}>
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                <span style={{fontSize: 16, fontWeight: 900, color: '#5C3A21'}}>Adjust Leverage</span>
+                <span style={{fontSize: isMobile ? 14 : 16, fontWeight: 900, color: '#5C3A21'}}>Adjust Leverage</span>
                 <button style={S.levCloseBtn} onClick={() => setShowLeverage(false)}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
               </div>
-              <div style={{fontSize: 48, fontWeight: 900, color: '#5C3A21', textAlign: 'center', padding: '10px 0'}}>{leverage}x</div>
+              <div style={{fontSize: isMobile ? 34 : 48, fontWeight: 900, color: '#5C3A21', textAlign: 'center', padding: isMobile ? '2px 0' : '10px 0'}}>{leverage}x</div>
               <input type="range" min="1" max={maxLev} value={leverage} className="grad-slider" onChange={e => handleLeverageChange(e.target.value)} style={{...S.slider, '--val': `${maxLev > 1 ? ((leverage - 1) / (maxLev - 1)) * 100 : 0}%`}} />
               <div style={S.sliderLabels}><span>1x</span><span>{Math.floor(maxLev/4)}x</span><span>{Math.floor(maxLev/2)}x</span><span>{Math.floor(maxLev*3/4)}x</span><span>{maxLev}x</span></div>
-              <div style={{display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap'}}>
+              <div style={{display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))', gap: 6, marginTop: 6}}>
                 {/* Presets auto-adapt: always include the pair's own maxLev as
                     a shortcut so users can one-tap the ceiling (e.g. 75x for
                     ETH on Avantis). Coerce maxLev to Number — it arrives as a
@@ -3394,7 +3408,7 @@ function FuturesPanel() {
                     .filter(v => v <= cap)
                     .sort((a, b) => a - b)
                     .map(v => (
-                      <button key={v} style={leverage === v ? S.levPresetActive : S.levPreset}
+                      <button key={v} style={{...(leverage === v ? S.levPresetActive : S.levPreset), flex: 'initial', minWidth: 0}}
                         onClick={() => handleLeverageChange(v)}>{v}x</button>
                     ));
                 })()}
@@ -8569,13 +8583,13 @@ const S = {
     boxShadow: '0 2px 0 #bba882',
   },
   levBackdrop: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 300,
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 10000,
   },
   levModal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
     width: 320, background: '#fdf8e7', border: '6px solid #d4c8b0', borderRadius: 20,
     padding: 20, display: 'flex', flexDirection: 'column', gap: 10,
-    boxShadow: '0 15px 40px rgba(0,0,0,0.4)', zIndex: 301,
+    boxShadow: '0 15px 40px rgba(0,0,0,0.4)', zIndex: 10001,
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   levCloseBtn: {

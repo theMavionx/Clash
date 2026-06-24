@@ -566,7 +566,13 @@ export function useAuthFlow() {
   // Priority (Decibel): Petra (only source — no FC/Privy alternative yet).
   // Priority (Pacifica): Solana adapter (covers FC Solana auto-connect
   //   and external-connected) → Privy Solana.
+  const storedAuthWallet = useMemo(() => readStoredAuthWallet(), [showRegister, manualReconnectRequired]);
   const rawCandidate = useMemo(() => {
+    const candidates = [evmContext, privyEvm, privySol, solAdapter, aptosCandidate].filter(Boolean);
+    if (storedAuthWallet) {
+      const storedMatch = candidates.find(c => c?.wallet && canonicalWalletAddress(c.wallet) === storedAuthWallet);
+      if (storedMatch) return storedMatch;
+    }
     if (!dexPicked) return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
     // Avantis (Base), GMX (Arbitrum), Monad and Hyperliquid all source from the same EVM wallet
     // context. The wallet address is the same on every EVM chain — the chain
@@ -574,15 +580,14 @@ export function useAuthFlow() {
     // for both because the wallet itself is chain-agnostic; only the
     // walletClient transport gets re-bound per-DEX (see EvmWalletContext
     // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') return evmContext || privyEvm || null;
-    if (dex === 'decibel') return aptosCandidate || null;
+    if (EVM_AUTH_DEXES.has(dex)) return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
+    if (dex === 'decibel') return aptosCandidate || evmContext || privyEvm || privySol || solAdapter || null;
     if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') {
       const farcasterSol = solAdapter?.source === 'farcaster' ? solAdapter : null;
-      return farcasterSol || privySol || solAdapter || null;
+      return farcasterSol || privySol || solAdapter || evmContext || privyEvm || aptosCandidate || null;
     }
-    return privySol || solAdapter || null;
-  }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
-  const storedAuthWallet = useMemo(() => readStoredAuthWallet(), [showRegister, manualReconnectRequired]);
+    return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
+  }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol, storedAuthWallet]);
   const rawCandidateWallet = rawCandidate?.wallet ? canonicalWalletAddress(rawCandidate.wallet) : '';
   const manualReconnectSatisfied = !!(
     manualReconnectRequired &&

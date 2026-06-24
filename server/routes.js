@@ -443,7 +443,10 @@ async function verifyWalletAuthProof(req, { wallet, dex }) {
   if (suppliedMessage && suppliedMessage !== expectedMessage) {
     return { ok: false, status: 401, error: 'Wallet signature message mismatch. Connect again.' };
   }
-  const expectedChain = walletChainTypeForDex(wallet, requestedDex);
+  const expectedChain = walletChainType(canonicalWallet);
+  if (!['solana', 'evm', 'aptos'].includes(expectedChain)) {
+    return { ok: false, status: 400, error: 'Supported wallet type required' };
+  }
   const suppliedChain = String(proof.chain_type || proof.chainType || '').toLowerCase();
   if (suppliedChain && suppliedChain !== expectedChain) {
     return { ok: false, status: 401, error: 'Wallet signature chain mismatch. Connect again.' };
@@ -8299,6 +8302,23 @@ function dexAcceptsWallet(dex, wallet) {
   return walletChainType(wallet) === required;
 }
 
+function upsertPlayerDexAccountFromLoginWallet(playerId, dex, wallet, status = 'ready', metadata = {}) {
+  const venueWallet = dexAcceptsWallet(dex, wallet) ? canonicalWalletIdentifier(wallet) : '';
+  const meta = { ...(metadata || {}) };
+  if (!venueWallet && wallet && isValidWallet(wallet)) {
+    meta.__clear_wallet = true;
+    meta.ignored_wallet = canonicalWalletIdentifier(wallet);
+    meta.ignored_chain_type = walletChainType(wallet);
+  }
+  upsertPlayerDexAccount(
+    playerId,
+    dex,
+    venueWallet,
+    venueWallet ? status : 'disconnected',
+    meta,
+  );
+}
+
 function resolveClaimWalletForDex(player, dex, currentWallet = null) {
   const normalizedDex = String(dex || '').toLowerCase();
   if (dexAcceptsWallet(normalizedDex, currentWallet)) return canonicalWalletIdentifier(currentWallet);
@@ -8419,7 +8439,7 @@ router.post('/players/set-dex', auth, (req, res) => {
   }
   if (dex !== req.player.dex) {
     safelySetPlayerActiveDex(req.player, dex, req.player.wallet, 'set-dex');
-    upsertPlayerDexAccount(req.player.id, dex, req.player.wallet, req.player.wallet ? 'ready' : 'disconnected', { source: 'set-dex' });
+    upsertPlayerDexAccountFromLoginWallet(req.player.id, dex, req.player.wallet, 'ready', { source: 'set-dex' });
     logAuth('active dex changed', { player_id: req.player.id, from: req.player.dex, to: dex });
   }
   res.json({ success: true, dex });
@@ -8521,7 +8541,7 @@ router.post('/players/register', async (req, res) => {
       // to the new-row branch above.
       safelySetPlayerActiveDex(existing, requestedDex, wallet, 'register');
       upsertUnifiedIdentity(existing.id, wallet, { label: req.body?.walletSource || req.body?.source });
-      upsertPlayerDexAccount(existing.id, requestedDex, wallet, 'ready', {
+      upsertPlayerDexAccountFromLoginWallet(existing.id, requestedDex, wallet, 'ready', {
         source: req.body?.walletSource || req.body?.source || 'register',
       });
       if (seekerCapability) {
@@ -8571,7 +8591,7 @@ router.post('/players/register', async (req, res) => {
   if (wallet) {
     safelySetPlayerActiveDex(result, requestedDex, wallet, 'register-new');
     upsertUnifiedIdentity(result.id, wallet, { label: req.body?.walletSource || req.body?.source });
-    upsertPlayerDexAccount(result.id, requestedDex, wallet, 'ready', {
+    upsertPlayerDexAccountFromLoginWallet(result.id, requestedDex, wallet, 'ready', {
       source: req.body?.walletSource || req.body?.source || 'register',
     });
   } else {
@@ -10194,7 +10214,7 @@ router.post('/players/login-wallet', async (req, res) => {
   }
   upsertUnifiedIdentity(player.id, wallet, { label: req.body?.walletSource || req.body?.source });
   if (VALID_DEXES.has(dex)) {
-    upsertPlayerDexAccount(player.id, dex, wallet, 'ready', {
+    upsertPlayerDexAccountFromLoginWallet(player.id, dex, wallet, 'ready', {
       source: req.body?.walletSource || req.body?.source || 'login-wallet',
     });
   }
