@@ -644,6 +644,7 @@ var building_panel_cost: Label
 var building_panel_upgrade_btn: Button
 var building_panel_altar_skills: VBoxContainer
 
+# Lv3 costs stay under the TH5 75K storage cap; see design/gdd/economy-balance.md section 5.3.
 const ALTAR_SKILL_DEFS: Dictionary = {
 	"prosperity": {
 		"name": "Prosperity",
@@ -653,7 +654,7 @@ const ALTAR_SKILL_DEFS: Dictionary = {
 		"costs": [
 			{"wood": 10000, "ore": 10000, "gold": 2500},
 			{"wood": 30000, "ore": 30000, "gold": 7500},
-			{"wood": 80000, "ore": 80000, "gold": 20000},
+			{"wood": 70000, "ore": 70000, "gold": 20000},
 		],
 	},
 	"ward": {
@@ -664,7 +665,7 @@ const ALTAR_SKILL_DEFS: Dictionary = {
 		"costs": [
 			{"wood": 15000, "ore": 8000, "gold": 2500},
 			{"wood": 45000, "ore": 25000, "gold": 7500},
-			{"wood": 120000, "ore": 60000, "gold": 20000},
+			{"wood": 70000, "ore": 60000, "gold": 20000},
 		],
 	},
 	"glory": {
@@ -676,7 +677,7 @@ const ALTAR_SKILL_DEFS: Dictionary = {
 		"costs": [
 			{"wood": 12000, "ore": 12000, "gold": 3000},
 			{"wood": 36000, "ore": 36000, "gold": 9000},
-			{"wood": 90000, "ore": 90000, "gold": 24000},
+			{"wood": 70000, "ore": 70000, "gold": 24000},
 		],
 	},
 }

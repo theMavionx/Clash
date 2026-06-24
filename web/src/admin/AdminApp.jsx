@@ -1421,9 +1421,27 @@ function LuckyRaiderPayoutCard({ data, loading, reload }) {
   async function payPending(ids = []) {
     const confirmPhrase = data?.confirm_phrase || 'PAY_LUCKY_RAIDER_CLASH';
     const scope = ids.length ? `${ids.length} selected payout` : `${pendingCount + failedCount} pending/failed payout`;
-    if (!window.confirm(`Send CLASH rewards for ${scope}? This signs real Solana token transfers.`)) return;
+    if (!config.manualEnabled) {
+      setMessage('Manual Lucky Raider payouts are disabled.');
+      return;
+    }
+    if ((pendingCount + failedCount) <= 0 && ids.length === 0) {
+      setMessage('No pending or failed Lucky Raider payouts to send.');
+      return;
+    }
+    if (!window.confirm(`Send CLASH rewards for ${scope}? This signs real Solana token transfers.`)) {
+      setMessage('Lucky Raider payout cancelled before sending.');
+      return;
+    }
     const typed = window.prompt(`Type ${confirmPhrase} to confirm real payout`, '');
-    if (typed !== confirmPhrase) return;
+    if (typed == null) {
+      setMessage(`Lucky Raider payout not sent. Type ${confirmPhrase} to confirm.`);
+      return;
+    }
+    if (typed.trim() !== confirmPhrase) {
+      setMessage(`Confirmation mismatch. Expected ${confirmPhrase}; no payout sent.`);
+      return;
+    }
     await runPayoutAction('Pay Lucky Raider', async () => {
       const result = await adminPost('/admin/lucky-raider/payouts/run', {
         confirm: confirmPhrase,
@@ -1432,7 +1450,16 @@ function LuckyRaiderPayoutCard({ data, loading, reload }) {
         retry_seconds: draft.retry_seconds,
         ids,
       });
-      return { message: `Payout run: ${result.paid || 0} paid, ${result.failed || 0} failed, ${result.processed || 0} processed.` };
+      if (result.skipped || result.reason) {
+        return { message: `Payout skipped: ${result.reason || 'unknown reason'}.` };
+      }
+      const failedReasons = (result.results || [])
+        .filter((row) => row?.ok === false && row?.error)
+        .slice(0, 2)
+        .map((row) => row.error)
+        .join('; ');
+      const suffix = failedReasons ? ` ${failedReasons}` : '';
+      return { message: `Payout run: ${result.paid || 0} paid, ${result.failed || 0} failed, ${result.processed || 0} processed.${suffix}` };
     });
   }
 

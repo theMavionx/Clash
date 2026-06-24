@@ -3700,6 +3700,35 @@ function weightedLuckyRaiderWinners(entries, seed, count = 1) {
   };
 }
 
+const LUCKY_RAIDER_WIN_INTERVAL_DAYS = 3;
+
+function luckyRaiderRecentWinnerIds(dayInput) {
+  const day = normalizeDailyPoolDay(dayInput);
+  const span = LUCKY_RAIDER_WIN_INTERVAL_DAYS - 1;
+  const startDay = addUtcDays(day, -span);
+  const endDay = addUtcDays(day, span);
+  const ids = new Set();
+  const rows = db.prepare(`
+    SELECT winner_player_id, details_json
+      FROM tournament_lucky_raider_runs
+     WHERE status = 'completed'
+       AND day_utc >= ?
+       AND day_utc <= ?
+       AND day_utc != ?
+  `).all(startDay, endDay, day);
+  for (const row of rows) {
+    if (row?.winner_player_id) ids.add(String(row.winner_player_id));
+    try {
+      const details = JSON.parse(row?.details_json || '{}');
+      const winners = Array.isArray(details?.winners) ? details.winners : [];
+      for (const winner of winners) {
+        if (winner?.player_id) ids.add(String(winner.player_id));
+      }
+    } catch {}
+  }
+  return ids;
+}
+
 function luckyRaiderRewardsForPlace(cfg, place) {
   const rewards = Array.isArray(cfg?.rewards) ? cfg.rewards : [];
   return rewards.map((reward) => {
@@ -4050,7 +4079,9 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
 
     const configHash = crypto.createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 16);
     const seed = `${tid}:${day}:${configHash}`;
-    const pick = weightedLuckyRaiderWinners(entries, seed, cfg.winner_count || 1);
+    const recentWinnerIds = luckyRaiderRecentWinnerIds(day);
+    const drawEntries = entries.filter((entry) => !recentWinnerIds.has(String(entry.player_id)));
+    const pick = weightedLuckyRaiderWinners(drawEntries, seed, cfg.winner_count || 1);
     const winner = pick.winner || null;
     const winners = (pick.winners || []).map((entry) => ({
       place: entry.place,
@@ -4833,6 +4864,7 @@ function getTroopBarnGate(playerId, nextLevel) {
   };
 }
 
+// Lv3 costs stay under the TH5 75K storage cap; see design/gdd/economy-balance.md section 5.3.
 const ALTAR_SKILL_DEFS = {
   prosperity: {
     max_level: 3,
@@ -4840,7 +4872,7 @@ const ALTAR_SKILL_DEFS = {
     cost: [
       { wood: 10000, ore: 10000, gold: 2500 },
       { wood: 30000, ore: 30000, gold: 7500 },
-      { wood: 80000, ore: 80000, gold: 20000 },
+      { wood: 70000, ore: 70000, gold: 20000 },
     ],
   },
   ward: {
@@ -4849,7 +4881,7 @@ const ALTAR_SKILL_DEFS = {
     cost: [
       { wood: 15000, ore: 8000, gold: 2500 },
       { wood: 45000, ore: 25000, gold: 7500 },
-      { wood: 120000, ore: 60000, gold: 20000 },
+      { wood: 70000, ore: 60000, gold: 20000 },
     ],
   },
   glory: {
@@ -4858,7 +4890,7 @@ const ALTAR_SKILL_DEFS = {
     cost: [
       { wood: 12000, ore: 12000, gold: 3000 },
       { wood: 36000, ore: 36000, gold: 9000 },
-      { wood: 90000, ore: 90000, gold: 24000 },
+      { wood: 70000, ore: 70000, gold: 24000 },
     ],
   },
 };
