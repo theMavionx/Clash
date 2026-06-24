@@ -57,12 +57,46 @@ function isLocalGuestAuthRecord(raw) {
   }
 }
 
+function isLocalBrowserHost() {
+  if (typeof window === 'undefined') return false;
+  const host = String(window.location?.hostname || '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+}
+
+function urlRequestsLocalGuest() {
+  if (typeof window === 'undefined') return false;
+  try {
+    const value = new URL(window.location.href).searchParams.get('guest');
+    return ['1', 'true', 'new'].includes(String(value || '').toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function localStorageHasLocalGuestMarker() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return !!window.localStorage.getItem('clash.localGuest');
+  } catch {
+    return false;
+  }
+}
+
+function isLocalGuestSession(player = null) {
+  if (!isLocalBrowserHost()) return false;
+  const wallet = String(player?.wallet || '');
+  const name = String(player?.name || player?.player_name || '');
+  return urlRequestsLocalGuest()
+    || localStorageHasLocalGuestMarker()
+    || wallet.startsWith('local_guest_')
+    || name.startsWith('Guest_');
+}
+
 function prepareLocalGuestSession() {
   if (localGuestPreflightDone || typeof window === 'undefined') return;
   localGuestPreflightDone = true;
   try {
-    const localHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
-    if (!localHosts.has(window.location.hostname)) return;
+    if (!isLocalBrowserHost()) return;
     const url = new URL(window.location.href);
     const guest = String(url.searchParams.get('guest') || '').toLowerCase();
     if (guest !== '1' && guest !== 'true' && guest !== 'new') {
@@ -172,7 +206,7 @@ function ClashMigrationNotice() {
   const ui = useUI();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const canShow = !!(ui?.ready && !ui?.showRegister && (player?.token || (typeof window !== 'undefined' ? window._playerToken : null)));
+  const canShow = !!(ui?.ready && !ui?.showRegister && !isLocalGuestSession(player) && (player?.token || (typeof window !== 'undefined' ? window._playerToken : null)));
 
   useEffect(() => {
     if (!canShow) return;
@@ -229,9 +263,14 @@ function ClashMigrationNotice() {
 }
 
 function ClientUpdateNotice() {
+  const suppressForLocalGuest = isLocalGuestSession();
   const [pending, setPending] = useState(() => getPendingClientUpdate());
 
   useEffect(() => {
+    if (suppressForLocalGuest) {
+      setPending(null);
+      return undefined;
+    }
     const onUpdate = (event) => setPending(event?.detail?.update || getPendingClientUpdate());
     window.addEventListener('clash:update-available', onUpdate);
     window.addEventListener('storage', onUpdate);
@@ -239,9 +278,9 @@ function ClientUpdateNotice() {
       window.removeEventListener('clash:update-available', onUpdate);
       window.removeEventListener('storage', onUpdate);
     };
-  }, []);
+  }, [suppressForLocalGuest]);
 
-  if (!pending) return null;
+  if (suppressForLocalGuest || !pending) return null;
 
   const reason = String(pending.reason || '').replace(/_/g, ' ');
   const scope = pending.scope ? String(pending.scope) : 'app';

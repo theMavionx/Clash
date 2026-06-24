@@ -102,6 +102,7 @@ const NAV = [
   { id: 'players', label: 'Players', hint: 'Accounts, resources, tools', icon: 'PL' },
   { id: 'tournaments', label: 'Tournaments', hint: 'Events, rewards, scoring', icon: 'TN' },
   { id: 'replays', label: 'Battle Replays', hint: 'Verification history', icon: 'BR' },
+  { id: 'battle-telemetry', label: 'Battle Telemetry', hint: 'Battle audit timeline', icon: 'BT' },
   { id: 'tasks', label: 'Tasks', hint: 'Quest config and progress', icon: 'TS' },
   { id: 'stats', label: 'Stats', hint: 'Activity and devices', icon: 'ST' },
   { id: 'earnings', label: 'Earnings', hint: 'Revenue analytics', icon: 'ER' },
@@ -118,6 +119,10 @@ const NAV = [
 
 const SIMPLE_LOADERS = {
   replays: () => adminGet('/admin/replays'),
+  'battle-telemetry': () => Promise.all([
+    adminGet('/admin/battle-telemetry?limit=100'),
+    adminGet('/admin/replay-telemetry?limit=50').catch((error) => ({ error: error.message, rows: [], summary: {} })),
+  ]).then(([battleTelemetry, replayTelemetry]) => ({ ...battleTelemetry, replayTelemetry })),
   tasks: () => Promise.all([adminGet('/admin/tasks'), adminGet('/admin/tasks-summary')]).then(([tasks, summary]) => ({ tasks, summary })),
   stats: () => Promise.all([
     adminGet('/admin/stats'),
@@ -153,6 +158,15 @@ const TASK_SIDES = [
   { id: 'long', label: 'Long only' },
   { id: 'short', label: 'Short only' },
 ];
+
+function initialAdminTab() {
+  try {
+    const requested = new URLSearchParams(window.location.search).get('tab') || '';
+    return NAV.some((item) => item.id === requested) ? requested : 'overview';
+  } catch {
+    return 'overview';
+  }
+}
 
 const TASK_ELIGIBILITY_OPTIONS = [
   { id: 'all', label: 'Everyone', badge: 'Everyone' },
@@ -193,7 +207,7 @@ function applyAdminTableLabels(root = document) {
 export default function AdminApp() {
   const [key, setKey] = useState(getStoredAdminKey);
   const [authed, setAuthed] = useState(false);
-  const [active, setActive] = useState('overview');
+  const [active, setActive] = useState(initialAdminTab);
   const [players, setPlayers] = useState([]);
   const [replays, setReplays] = useState([]);
   const [tournaments, setTournaments] = useState([]);
@@ -361,6 +375,7 @@ export default function AdminApp() {
             {active === 'players' && <PlayersPanel players={players} reload={refreshCore} />}
             {active === 'tournaments' && <TournamentsPanel tournaments={tournaments} reload={refreshCore} />}
             {active === 'replays' && <ReplaysPanel replays={replays} />}
+            {active === 'battle-telemetry' && <BattleTelemetryPanel data={simpleData['battle-telemetry']} reload={refreshActive} />}
             {active === 'stats' && <StatsPanel data={simpleData.stats} />}
             {active === 'tasks' && <TasksPanel data={simpleData.tasks} reload={refreshActive} />}
             {active === 'client' && <ClientLogsPanel data={simpleData.client} reload={refreshActive} />}
@@ -373,7 +388,7 @@ export default function AdminApp() {
             {active === 'feedback' && <FeedbackPanel data={simpleData.feedback} />}
             {active === 'ai-reports' && <AiReportsPanel data={simpleData['ai-reports']} reload={refreshActive} />}
             {active === 'elfa' && <ElfaPanel data={simpleData.elfa} />}
-            {!['overview', 'players', 'tournaments', 'replays', 'stats', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'elfa'].includes(active) && (
+            {!['overview', 'players', 'tournaments', 'replays', 'battle-telemetry', 'stats', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'elfa'].includes(active) && (
               <GenericDataPanel id={active} data={simpleData[active]} reload={refreshActive} />
             )}
           </section>
@@ -2550,6 +2565,203 @@ function ReplaysPanel({ replays }) {
   );
 }
 
+function BattleTelemetryPanel({ data, reload }) {
+  const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  if (!data) return <LoadingCard title="Battle Telemetry" />;
+  const events = Array.isArray(data.events) ? data.events : [];
+  const replayTelemetry = data.replayTelemetry || {};
+  const replayRows = Array.isArray(replayTelemetry.rows) ? replayTelemetry.rows : [];
+  const eventTypes = Array.from(new Set(events.map((row) => row.event_type).filter(Boolean)));
+  const rows = events.filter((row) => {
+    const eventOk = filter === 'all' || row.event_type === filter;
+    const hay = `${row.event_type || ''} ${row.battle_session_id || ''} ${row.replay_id || ''} ${row.attacker_id || ''} ${row.defender_id || ''} ${JSON.stringify(row.payload || {})}`.toLowerCase();
+    return eventOk && (!search || hay.includes(search.toLowerCase()));
+  });
+  const counts = data.summary?.event_counts || {};
+  const countText = Object.entries(counts)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(', ');
+  const sessions = buildBattleTelemetrySessions(rows);
+  return (
+    <div className="admin-grid">
+      <StatsGrid stats={[
+        { label: 'Battles shown', value: num(sessions.length), tone: 'green' },
+        { label: 'Events shown', value: num(rows.length), tone: 'blue' },
+        { label: 'Replay uploads', value: num(replayRows.length), tone: 'gold' },
+        { label: 'Latest', value: fmtTime(data.summary?.latest_created_at), tone: 'blue' },
+      ]} />
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Battle Telemetry</div>
+            <div className="admin-card-sub">{countText || 'No battle events recorded yet.'}</div>
+          </div>
+          <button className="admin-btn" onClick={reload}>Reload</button>
+        </div>
+        <div className="admin-card-body">
+          <div className="admin-toolbar">
+            <div className="admin-filter-row">
+              <select className="admin-select" value={filter} onChange={(e) => setFilter(e.target.value)}>
+                <option value="all">All events</option>
+                {eventTypes.map((eventType) => <option key={eventType} value={eventType}>{eventType}</option>)}
+              </select>
+              <input className="admin-input" placeholder="Search session, replay, player, payload" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <span className="admin-help">{rows.length} shown</span>
+          </div>
+        </div>
+      </div>
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Client Replay Telemetry</div>
+            <div className="admin-card-sub">Bounded Godot/React replay diagnostics; server stores a capped event sample and summary only.</div>
+          </div>
+          <span className="admin-badge gold">{replayRows.length} uploads</span>
+        </div>
+        <div className="admin-card-body">
+          {replayTelemetry.error ? <div className="admin-error">{replayTelemetry.error}</div> : null}
+          <div className="admin-table-wrap admin-scroll">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Time</th><th>Session</th><th>Replay</th><th>Player</th><th>Expected</th><th>Elapsed</th><th>Events</th><th>Dropped</th><th>Bytes</th><th>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {replayRows.map((row) => (
+                  <tr key={row.id}>
+                    <td className="admin-mono">{fmtTime(row.created_at)}</td>
+                    <td className="admin-mono">{short(row.battle_session_id, 10, 6)}</td>
+                    <td>{row.replay_label || '-'}</td>
+                    <td>
+                      <strong>{row.player_name || row.attacker_name || 'Unknown'}</strong>
+                      <div className="admin-card-sub admin-mono">{short(row.player_id, 10, 6)}</div>
+                    </td>
+                    <td><span className={'admin-badge ' + (row.expected_result === 'victory' ? 'green' : row.expected_result === 'defeat' ? 'red' : 'blue')}>{row.expected_result || '-'}</span></td>
+                    <td>{Number(row.actual_elapsed || 0).toFixed(1)}s<div className="admin-card-sub">wall {Number(row.actual_wall_elapsed || 0).toFixed(1)}s</div></td>
+                    <td>{num(row.events_recorded || 0)}</td>
+                    <td>{num(row.events_dropped || 0)}</td>
+                    <td>{num(row.summary_bytes || 0)} / {num(row.events_bytes || 0)}</td>
+                    <td>
+                      <details>
+                        <summary className="admin-card-sub">JSON</summary>
+                        <pre className="admin-mono admin-scroll" style={{ maxWidth: 520, maxHeight: 220, whiteSpace: 'pre-wrap' }}>{JSON.stringify(row.summary || {}, null, 2)}</pre>
+                      </details>
+                    </td>
+                  </tr>
+                ))}
+                {!replayRows.length && <tr><td colSpan={10}><span className="admin-help">No client replay uploads yet.</span></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Battle Sessions</div>
+            <div className="admin-card-sub">One row is one battle session; badges inside the timeline are the server events recorded for that battle.</div>
+          </div>
+          <span className="admin-badge green">{sessions.length} battles</span>
+        </div>
+        <div className="admin-card-body">
+          <div className="admin-table-wrap admin-scroll">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Last event</th><th>Battle session</th><th>Timeline</th><th>Players</th><th>Outcome</th><th>Summary</th><th>Events</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.map((session) => {
+                  const outcome = battleTelemetrySessionOutcome(session);
+                  return (
+                    <tr key={session.id}>
+                      <td className="admin-mono">{fmtTime(session.lastAt)}</td>
+                      <td className="admin-mono">{short(session.id, 10, 6)}</td>
+                      <td>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {session.rows.map((row) => (
+                            <span key={row.id} className={'admin-badge ' + battleTelemetryTone(row.event_type)}>{row.event_type}</span>
+                          ))}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="admin-mono">{short(session.attacker_id, 10, 6)}</div>
+                        <div className="admin-card-sub admin-mono">vs {short(session.defender_id, 10, 6)}</div>
+                      </td>
+                      <td>
+                        <span className={'admin-badge ' + outcome.tone}>{outcome.label}</span>
+                        {session.target ? <div className="admin-card-sub">{session.target} target</div> : null}
+                      </td>
+                      <td>{battleTelemetrySessionSummary(session)}</td>
+                      <td>
+                        <details>
+                          <summary className="admin-card-sub">{session.rows.length} events</summary>
+                          <pre className="admin-mono admin-scroll" style={{ maxWidth: 520, maxHeight: 260, whiteSpace: 'pre-wrap' }}>{JSON.stringify(session.rows.map((row) => ({
+                            id: row.id,
+                            event_type: row.event_type,
+                            created_at: row.created_at,
+                            replay_id: row.replay_id,
+                            payload: row.payload || {},
+                          })), null, 2)}</pre>
+                        </details>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!sessions.length && <tr><td colSpan={7}><span className="admin-help">No battle sessions match this filter.</span></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Raw Events</div>
+            <div className="admin-card-sub">Low-level event stream for debugging payloads and ordering.</div>
+          </div>
+          <span className="admin-badge blue">{rows.length} events</span>
+        </div>
+        <div className="admin-card-body">
+          <div className="admin-table-wrap admin-scroll">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Time</th><th>Event</th><th>Session</th><th>Replay</th><th>Attacker</th><th>Defender</th><th>Summary</th><th>Payload</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id}>
+                    <td className="admin-mono">{fmtTime(row.created_at)}</td>
+                    <td><span className={'admin-badge ' + battleTelemetryTone(row.event_type)}>{row.event_type}</span></td>
+                    <td className="admin-mono">{short(row.battle_session_id, 10, 6)}</td>
+                    <td className="admin-mono">{row.replay_id || '-'}</td>
+                    <td className="admin-mono">{short(row.attacker_id, 10, 6)}</td>
+                    <td className="admin-mono">{short(row.defender_id, 10, 6)}</td>
+                    <td>{battleTelemetrySummary(row.payload)}</td>
+                    <td>
+                      <details>
+                        <summary className="admin-card-sub">JSON</summary>
+                        <pre className="admin-mono admin-scroll" style={{ maxWidth: 520, maxHeight: 220, whiteSpace: 'pre-wrap' }}>{JSON.stringify(row.payload || {}, null, 2)}</pre>
+                      </details>
+                    </td>
+                  </tr>
+                ))}
+                {!rows.length && <tr><td colSpan={8}><span className="admin-help">No telemetry rows match this filter.</span></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatsPanel({ data }) {
   if (!data) return <LoadingCard title="Stats" />;
   const dexRows = data.dex?.players_by_dex || [];
@@ -3846,6 +4058,129 @@ function DexBadge({ dex }) {
 
 function chainBadge(chain) {
   return <span className="admin-badge blue">{chain || 'unknown'}</span>;
+}
+
+function battleTelemetryTone(eventType) {
+  const value = String(eventType || '').toLowerCase();
+  if (value.includes('error') || value.includes('rejected')) return 'red';
+  if (['battle_started', 'verification_done', 'reward_applied'].includes(value)) return 'green';
+  if (['result_submitted'].includes(value)) return 'blue';
+  if (['defeat_recorded', 'surrendered'].includes(value)) return 'gold';
+  return 'off';
+}
+
+function battleTelemetrySummary(payload) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const parts = [];
+  if (p.claimed_result) parts.push(`claimed ${p.claimed_result}`);
+  if (p.accepted != null) parts.push(p.accepted ? 'accepted' : 'rejected');
+  if (p.verification_reason) parts.push(String(p.verification_reason).slice(0, 80));
+  if (p.result) parts.push(`result ${p.result}`);
+  if (p.target_is_bot != null) parts.push(p.target_is_bot ? 'bot target' : 'live target');
+  const loot = p.loot && typeof p.loot === 'object' ? p.loot : {};
+  const gold = p.loot_gold ?? p.gold ?? loot.gold;
+  const wood = p.loot_wood ?? p.wood ?? loot.wood;
+  const ore = p.loot_ore ?? p.ore ?? loot.ore;
+  if (gold != null || wood != null || ore != null) parts.push(`loot G:${gold || 0} W:${wood || 0} O:${ore || 0}`);
+  if (p.trophy_delta != null) parts.push(`trophies ${Number(p.trophy_delta) > 0 ? '+' : ''}${p.trophy_delta}`);
+  if (p.duration_sec != null) parts.push(`${Math.round(Number(p.duration_sec) || 0)}s`);
+  if (p.reason && !parts.includes(p.reason)) parts.push(String(p.reason).slice(0, 80));
+  return parts.length ? parts.slice(0, 4).join(' - ') : '-';
+}
+
+function battleTelemetryPayload(row) {
+  return row?.payload && typeof row.payload === 'object' ? row.payload : {};
+}
+
+function battleTelemetryTimeMs(row) {
+  const ms = Date.parse(row?.created_at || '');
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function buildBattleTelemetrySessions(events) {
+  const groups = new Map();
+  events.forEach((row, index) => {
+    const key = row.battle_session_id || `event:${row.id || index}`;
+    const payload = battleTelemetryPayload(row);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        id: key,
+        rows: [],
+        eventTypeSet: new Set(),
+        firstAt: row.created_at,
+        firstAtMs: battleTelemetryTimeMs(row),
+        lastAt: row.created_at,
+        lastAtMs: battleTelemetryTimeMs(row),
+        attacker_id: row.attacker_id,
+        defender_id: row.defender_id,
+        replay_id: row.replay_id,
+        target: null,
+        claimedResult: null,
+        verification: null,
+        verificationReason: null,
+        trophyDelta: null,
+        loot: null,
+        durationSec: null,
+      });
+    }
+    const session = groups.get(key);
+    const timeMs = battleTelemetryTimeMs(row);
+    session.rows.push(row);
+    session.eventTypeSet.add(row.event_type || 'unknown');
+    if (!session.attacker_id && row.attacker_id) session.attacker_id = row.attacker_id;
+    if (!session.defender_id && row.defender_id) session.defender_id = row.defender_id;
+    if (!session.replay_id && row.replay_id) session.replay_id = row.replay_id;
+    if (timeMs <= session.firstAtMs) {
+      session.firstAtMs = timeMs;
+      session.firstAt = row.created_at;
+    }
+    if (timeMs >= session.lastAtMs) {
+      session.lastAtMs = timeMs;
+      session.lastAt = row.created_at;
+    }
+    if (payload.target_is_bot != null) session.target = payload.target_is_bot ? 'bot' : 'live';
+    if (payload.result || payload.claimed_result) session.claimedResult = payload.result || payload.claimed_result;
+    if (payload.accepted != null) session.verification = payload.accepted ? 'accepted' : 'rejected';
+    if (payload.verification_reason) session.verificationReason = String(payload.verification_reason).slice(0, 80);
+    if (payload.trophy_delta != null) session.trophyDelta = Number(payload.trophy_delta) || 0;
+    const loot = payload.loot && typeof payload.loot === 'object' ? payload.loot : {};
+    const gold = payload.loot_gold ?? payload.gold ?? loot.gold;
+    const wood = payload.loot_wood ?? payload.wood ?? loot.wood;
+    const ore = payload.loot_ore ?? payload.ore ?? loot.ore;
+    if (gold != null || wood != null || ore != null) {
+      session.loot = { gold: gold || 0, wood: wood || 0, ore: ore || 0 };
+    }
+    if (payload.duration_sec != null) session.durationSec = Number(payload.duration_sec) || 0;
+  });
+  return Array.from(groups.values()).map((session) => {
+    session.rows.sort((a, b) => (battleTelemetryTimeMs(a) - battleTelemetryTimeMs(b)) || ((a.id || 0) - (b.id || 0)));
+    session.eventTypes = Array.from(session.eventTypeSet);
+    delete session.eventTypeSet;
+    return session;
+  }).sort((a, b) => (b.lastAtMs - a.lastAtMs) || String(b.id).localeCompare(String(a.id)));
+}
+
+function battleTelemetrySessionOutcome(session) {
+  const types = new Set(session.eventTypes || []);
+  if (types.has('telemetry_error')) return { label: 'Error', tone: 'red' };
+  if (types.has('reward_applied')) return { label: 'Victory', tone: 'green' };
+  if (types.has('defeat_recorded')) return { label: 'Defeat', tone: 'gold' };
+  if (types.has('surrendered')) return { label: 'Surrender', tone: 'gold' };
+  if (types.has('verification_done')) return { label: 'Verified', tone: 'blue' };
+  if (types.has('result_submitted')) return { label: 'Submitted', tone: 'blue' };
+  if (types.has('battle_started')) return { label: 'Started', tone: 'green' };
+  return { label: 'In progress', tone: 'off' };
+}
+
+function battleTelemetrySessionSummary(session) {
+  const parts = [];
+  if (session.claimedResult) parts.push(`result ${session.claimedResult}`);
+  if (session.verification) parts.push(session.verification);
+  if (session.verificationReason) parts.push(session.verificationReason);
+  if (session.loot) parts.push(`loot G:${session.loot.gold} W:${session.loot.wood} O:${session.loot.ore}`);
+  if (session.trophyDelta != null) parts.push(`trophies ${session.trophyDelta > 0 ? '+' : ''}${session.trophyDelta}`);
+  if (session.durationSec != null) parts.push(`${Math.round(session.durationSec)}s`);
+  return parts.length ? parts.join(' - ') : '-';
 }
 
 function rarityBadge(rarity) {

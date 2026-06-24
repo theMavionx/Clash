@@ -1,6 +1,6 @@
 # Active Session State
 
-Last updated: 2026-06-18
+Last updated: 2026-06-24
 
 ## Current Focus
 
@@ -17,18 +17,19 @@ The repository is being prepared for faster owner-driven Codex work. Durable con
 
 See `production/active-goals.md`.
 
-Main current goals:
+Current active goal:
 
-1. PvP arena bots and matchmaking targeting a normal player win rate of 55-58%.
-2. Full game balance pass across resources, buildings, troops, defenses, upgrades, and progression.
-3. Agent workflow, memory, hooks, skills, and deployment automation.
-4. Resource building upgrade content for Sawmill, Storage, and Mine.
-5. Mortar functionality and Town Hall 5 expansion with TH5 unlocks.
+- None selected after closing G-001 MVP on 2026-06-24.
 
 ## Git Notes
 
 - Preserve dirty user changes.
 - Do not commit, push, merge, or deploy without explicit user instruction.
+- Check GitHub remote commits at the start of a new work session only: fresh chat/context
+  recovery, owner returning after a meaningful break such as a new day, broad repo/goal
+  startup, or owner explicitly saying they pushed/changed commits on GitHub. Do not run
+  remote freshness checks before every small task in the same active conversation. Local
+  `git status` is still okay whenever needed to protect dirty work.
 - Put balance-related work and balance commits on `codex/balance`.
 - Put new building models, textures, Godot imports, and building asset/content commits
   on `codex/building-assets`.
@@ -46,6 +47,17 @@ Main current goals:
 - If verification finds a bug caused by the current change, fix it and verify again.
 - Do not break existing working systems by default; warn before intentional removals or
   compatibility breaks.
+- Battle telemetry must stay low-overhead: bounded payloads, safe failure handling, and no
+  blocking work that can make battles, rewards, or UI feel laggy.
+- For goal work, prefer opening the local game/admin/browser flow and seeding the verification
+  state for the owner when it is safe and feasible, instead of only giving manual instructions.
+- In step-by-step owner-check mode, every checkpoint update should say the current checkpoint
+  number, estimated total checkpoints, and how many remain. Revise the estimate explicitly if
+  new work appears during verification.
+- Local playtest/admin URLs should open in one Chrome window with tabs. Do not fall back to
+  Firefox/default browser; if Chrome is unavailable, print the URLs.
+- Localhost guest sessions should suppress first-run/tutorial/news/update notices only for local
+  guest inspection, not for production or normal accounts.
 
 ## Next Useful Checkpoint
 
@@ -56,18 +68,38 @@ tools/codex/start-context.cmd -Full
 tools/codex/check-repo.cmd -Mode Quick
 ```
 
-Current execution focus: G-002 Full Game Balance Pass checkpoint complete.
+Current execution focus: none selected.
 
-Completed on 2026-06-18:
+Next useful checkpoint:
 
-1. Added TH4/TH2-TH4 support to `tools/pvp-balance/run.js`.
-2. Tuned TH4 normal/hard bot templates in `server/matchmaking_defs.js`.
-3. Improved TH4 PvP breakability from 22.1% attacker win rate to 57.8%.
-4. Verified mixed TH2-TH4 PvP at 56.9% across 3000 generated battles.
-5. Documented before/after reasoning in `production/reports/g002-full-balance-pass-2026-06-18.md`.
-
-Remaining follow-up:
-
-- Decide target economy max-out pace. Current live server pacing is about 102 days
-  to full TH4 max before raid income, which may be acceptable for monetization but
-  no longer matches the older 4-week economy fantasy.
+- G-001 Backend Battle Telemetry is complete as MVP. Checkpoint count reached 5/5, with
+  0 remaining checkpoints.
+- Latest local owner battle produced one
+  session with four expected events: `battle_started`, `result_submitted`,
+  `verification_done`, and `defeat_recorded`.
+- Latest checkpoint: Battle Telemetry admin UI now groups events into Battle Sessions so one
+  played battle appears as one session timeline, with raw events kept below for debugging.
+- Latest verification: a controlled local victory/reward battle completed through
+  `/attack/result`, replay verification returned `ACCEPTED`, `reward_applied` telemetry was
+  written, and attacker resources changed from `700/1000/1000` to `1600/1750/1600` after
+  loot `900/750/600`.
+- Latest checkpoint: telemetry event contract documented in
+  `production/reports/g001-battle-telemetry-contract-2026-06-24.md`.
+- Latest guardrail check: temporary SQLite test confirmed payload cap, queue cap, bounded flush
+  batches, insert-failure isolation, and post-failure recovery.
+- Latest checkpoint: optional bounded client/Godot replay telemetry ingestion is implemented.
+  Godot sends at most 250 replay events, React trims replay payloads before upload, the server
+  rate-limits/caps replay telemetry, and the admin panel now shows `Client Replay Telemetry`.
+- Latest local smoke: a 300-event replay telemetry upload through the running local stack
+  returned `stored_events: 250`, `dropped_events: 50`, and is visible as `bounded-replay-smoke`
+  in the admin Battle Telemetry tab.
+- Latest live replay check: after `tools\codex\playtest-local.cmd -ExportGodot -NoOpen`, a
+  real stored battle replay was played through the browser `godotBridge` `watch_replay` path.
+  It reached the victory overlay and created `Client Replay Telemetry` row `id = 2`,
+  label `CODEX LIVE REPLAY EXPORT 1782303055987`, with `events_recorded = 120` and
+  `events_dropped = 0`.
+- Note for future browser checks: if a GDScript telemetry change seems missing in the web
+  client, export Godot locally first; the browser uses the last web export, not raw `.gd`
+  files directly.
+- Next owner choice: pick the next active goal/follow-up. Optional telemetry follow-ups should
+  become a new task instead of reopening G-001 MVP.

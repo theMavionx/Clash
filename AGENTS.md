@@ -32,6 +32,9 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 
 - Agents follow user instructions directly
 - Multi-file changes should be explained before applying
+- Ordinary repository file edits do not require separate owner confirmation when they are part
+  of the requested task or checkpoint work, including `.md` docs, reports, rules,
+  active-goal/session files, and local request logs.
 - No commits, pushes, pull-request merges, production deploys, or production database changes
   without explicit owner approval in the current conversation
 - Use Godot MCP tools when available for scene inspection
@@ -42,6 +45,10 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 
 - For feature, gameplay, UI, balance, server, or content changes, the task is not done until
   the agent has run the most relevant local verification it can reasonably run.
+- New functionality must not break existing working behavior. When adding a unit, building,
+  defense, UI flow, backend route, economy value, or telemetry path, verify the new behavior
+  and the closest existing systems that could regress. Existing units and flows must keep
+  working as they did before unless the owner explicitly approved a behavior change.
 - Prefer a real local flow over static inspection when the change affects gameplay or user
   experience: start local services, open the local client, run a replay/simulation, or use
   Godot/live inspection when available.
@@ -92,16 +99,39 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
   `AGENTS.md`, `production/owner-agent-rules.md`, `production/project-story.md`,
   `production/agent-memory.md`, `production/active-goals.md`, and
   `production/session-state/active.md`.
+- Check GitHub remote freshness only at the start of a new work session, not before every
+  small task in an active back-and-forth. A new work session means a fresh chat/context
+  recovery, the owner returning after a meaningful break such as a new day, broad repo/goal
+  startup, or the owner explicitly says they pushed/changed commits on GitHub. Then run
+  `git fetch origin --prune`, check `git status --short --branch`, compare the current branch
+  with `origin/main`, and summarize any new remote commits/authors. Local `git status` checks
+  are still okay whenever needed to protect dirty work. Do not pull, merge, rebase, reset, or
+  discard local work without explicit owner approval.
+- When accepting incoming changes from GitHub, resolve conflicts if they appear and verify that
+  the project still works. Preserve local owner work and intended incoming changes, remove
+  conflict markers, confirm there are no unmerged paths, and run the closest practical local
+  check. If a conflict cannot be resolved safely, stop and report the blocker.
 - For a fresh chat or after context loss, load project memory first:
   `tools/codex/start-context.cmd`
 - If the owner says `Старт`, `Start`, `Start Context`, or `Story`, run the project-start
   workflow and summarize the game, repo state, active goals, and best next action.
 - Treat `production/active-goals.md` as the source of truth for current goals.
 - When starting goal work, update the goal status/checkpoint before broad edits.
+- When the owner starts executing a goal, first offer two modes unless already specified:
+  full goal run to completion with self-verification, or step-by-step execution with owner
+  checks after each meaningful action before continuing. In step-by-step mode, say exactly
+  where and how the owner can verify the work and give feedback.
+- For all goal work, if local game/admin/browser windows can be opened safely, open them and run
+  the needed local action yourself so the owner can inspect a ready state. Do not only describe
+  manual steps when an automated local setup or seeded verification flow is practical.
 - For production deploys, use the `deploy-clash` skill and the existing deploy scripts.
 - Optional local git hooks live in `tools/codex/git-hooks/` and can be installed with
   `tools/codex/install-git-hooks.cmd`.
 - For manual owner playtests, use `tools/codex/playtest-local.cmd`.
+- Local playtest URLs should open in Chrome in one browser window with multiple tabs; do not
+  fall back to Firefox/default browser if Chrome is unavailable.
+- On localhost guest sessions only, suppress first-run/tutorial/news/update notices that block
+  quick inspection. Do not suppress them for production or normal accounts.
 - For local balance verification, use `tools/codex/local-test-balance.cmd`.
 
 ## Branch Discipline

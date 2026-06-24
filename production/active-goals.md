@@ -5,241 +5,122 @@ that a fresh agent can continue the work.
 
 Status legend: `active`, `blocked`, `done`, `paused`.
 
-## G-001 PvP Arena Bots And Matchmaking
+## G-001 Backend Battle Telemetry
 
-- Status: active
+- Status: done
 - Priority: P0
-- Owner intent: normal players should win around 55-58% of PvP arena matches.
-- Core idea: if a player loses too much, match them with an easier bot/opponent; if they win too much, match them with a stronger bot/player.
-- Important constraint: this should feel fair and believable, not like guaranteed wins or fake outcomes.
+- Owner intent: add backend battle telemetry for Clash of Perps so combat outcomes,
+  balance, rewards, and replay validity can be audited from server data instead of
+  only client-side observation.
+- Core idea: every meaningful battle should leave a server-side telemetry trail that
+  explains who fought, what was deployed, what happened, what the final result was,
+  and whether the result looked valid.
+- Important constraint: telemetry must not make client-side battle state authoritative;
+  the backend remains the source of truth for stored battle records, rewards, and audit
+  data.
+- Performance constraint: telemetry must be low-overhead and must not make the game lag.
+  Battle flow, rewards, and UI should continue without waiting on telemetry writes; payloads
+  must stay bounded, and failed/slow telemetry should be skipped or logged instead of blocking
+  the player experience.
+
+Scope:
+
+- Server-side battle/session telemetry model.
+- Battle start, troop deployment, damage/result, reward, trophy, and replay validity
+  events where practical.
+- Persistent SQLite storage or append-only records suitable for admin/debug review.
+- Admin or internal API access for recent battle telemetry.
+- Performance guardrails for event payload size, write frequency, and failure handling.
+- PvP/bot battle metadata: attacker, defender/bot, Town Hall level, matchmaking context,
+  troop composition, base summary, result, duration, resources, trophies, and errors.
+- Local verification path that proves telemetry is written during an actual local battle
+  or focused server simulation.
 
 Key files and docs:
 
-- `server/matchmaking_defs.js`
-- `server/db.js`
-- `server/routes.js`
-- `server/combat_defs.js`
 - `server/combat_session.js`
+- `server/routes.js`
+- `server/db.js`
+- `server/combat_defs.js`
 - `scripts/attack_system.gd`
 - `scripts/bs_battle.gd`
-- `docs/architecture/adr-0011-server-bot-bases-and-recovery-matchmaking.md`
-
-Acceptance criteria:
-
-- Bot/opponent selection is server-authoritative.
-- Matchmaking reacts to recent player performance.
-- Easy/recovery matches exist for losing streaks.
-- Harder matches exist for strong winning streaks.
-- There is enough logging or stored telemetry to audit win-rate behavior.
-- The expected win-rate target is documented near the implementation.
-- Local syntax checks pass.
-
-Next checkpoint:
-
-- Audit the current bot/matchmaking implementation and list what is already working,
-  what is missing, and what needs tuning.
-
-## G-002 Full Game Balance Pass
-
-- Status: active
-- Priority: P0
-- Owner intent: rebalance all tunable game parameters so the game is playable, fair,
-  and still supports monetization.
-- Known concern: Town Hall level 4 may be too hard or impossible to destroy.
-
-Scope:
-
-- Building HP for every level.
-- Building upgrade costs and timings.
-- Resource production: gold, wood, ore.
-- Resource storage and progression pacing.
-- Troop HP, damage, attack speed, range, movement speed, targeting, and costs.
-- Defensive structures: turret, archer tower, tombstone, skeleton guards, and any magic/other defenses.
-- PvP and PvE combat time-to-kill.
-- Early, mid, and late progression pacing.
-- Server/client duplicate constants.
-
-Key files and docs:
-
-- `design/gdd/economy-balance.md`
-- `server/db.js`
-- `server/combat_defs.js`
-- `server/combat_session.js`
-- `scripts/building_system.gd`
-- `scripts/base_troop.gd`
-- `scripts/attack_system.gd`
-
-Acceptance criteria:
-
-- TH4 and other bases are breakable by intended attackers at the intended stage.
-- No single troop, defense, or building level creates an obvious dead end.
-- Resource production, costs, and storage create a reasonable upgrade loop.
-- Defense values and troop values produce readable combat outcomes.
-- Authoritative server values and client display/gameplay values are synchronized.
-- Balance changes are documented with before/after reasoning.
-
-Next checkpoint:
-
-- G-002 implementation checkpoint complete on 2026-06-18. TH4 PvP bot breakability
-  was tuned from 22.1% attacker win rate to 57.8%; mixed TH2-TH4 simulation is
-  56.9% across 3000 generated battles. See
-  `production/reports/g002-full-balance-pass-2026-06-18.md`.
-- Remaining follow-up: decide whether economy max-out should target roughly 4, 8,
-  or 12+ weeks; current live server pacing is about 102 days to full TH4 max before
-  raid income.
-
-## G-003 Agent Workflow, Memory, And Deploy Automation
-
-- Status: active
-- Priority: P1
-- Owner intent: make the repo faster to work with by adding memory, goals, skills,
-  hooks, and deployment helpers.
-
-Scope:
-
-- Fresh-chat startup memory.
-- Active goals file.
-- Goal execution workflow.
-- Deployment workflow.
-- PvP matchmaking skill.
-- Balance pass skill.
-- Local git hooks and check commands.
-
-Acceptance criteria:
-
-- `AGENTS.md` points to memory and goals.
-- A fresh agent can run `tools/codex/start-context.cmd` to load project context.
-- Goal work starts from `production/active-goals.md`.
-- Deploy work has a safe preflight path.
-- Git hooks can be installed locally.
-
-Next checkpoint:
-
-- Validate helper scripts and document how to use them.
-
-## G-004 Resource Building Upgrade Content
-
-- Status: active
-- Priority: P1
-- Branch: `codex/building-assets` for new models, textures, import metadata, visual
-  progression, and test-only building registrations; use `codex/balance` for
-  tuning-only economy/combat values.
-- Owner intent: add proper progression content for resource buildings so upgrades feel
-  visually and mechanically meaningful.
-- Core idea: add or complete upgraded versions for the Sawmill, Storage, and Mine,
-  including new levels, models/visuals, costs, stats, and client/server sync.
-
-Scope:
-
-- New or upgraded Sawmill progression.
-- New or upgraded Storage progression.
-- New or upgraded Mine progression.
-- Upgrade costs, HP, production/storage values, and unlock requirements.
-- Client display data and Godot building definitions.
-- Server authoritative building definitions.
-
-Key files and docs:
-
-- `scripts/building_system.gd`
-- `server/db.js`
-- `web/src/components/BuildingInfoPanel.jsx`
-- `web/src/components/ShopPanel.jsx`
-- `design/gdd/economy-balance.md`
-- `Model/Sawmill/`
-- `Model/Storage/`
-- `Model/Mine/`
-
-Acceptance criteria:
-
-- Sawmill, Storage, and Mine have clear upgrade progression.
-- New levels are not just scaled copies; they have distinct visual/function changes.
-- Server and client agree on costs, HP, production/storage values, and max levels.
-- Existing player data can handle the new/changed levels safely.
-- The changes are included in the full balance pass before production deployment.
-
-Next checkpoint:
-
-- Audit current Sawmill, Storage, and Mine level definitions, available models, and
-  server/client mismatches before adding new levels.
-
-## G-005 Mortar And Town Hall 5 Expansion
-
-- Status: active
-- Priority: P1
-- Branch: `codex/building-assets` for Mortar assets, building models, textures,
-  Godot import metadata, and visual progression; use `codex/balance` for final
-  combat/economy tuning values.
-- Owner intent: make Mortar a real working defense building and add Town Hall 5
-  progression with new unlocks.
-- Core idea: TH5 should feel like a meaningful new tier: it unlocks a new defense
-  building, new resource-building levels, and at least one new magic/defense level.
-
-Scope:
-
-- Make Mortar fully functional, not only a test-only model registration.
-- Add Mortar placement/build flow, unlock rules, HP, cost, range, reload, damage,
-  projectile behavior, splash behavior, targeting rules, and UI/admin support.
-- Add Town Hall level 5 upgrade support across server and client.
-- Add TH5 upgrade costs, HP, upgrade timing, display text, max-level logic, and
-  safe handling for existing player data.
-- Add TH5 unlocks for a new Sawmill level, Mine level, and Storage level.
-- Add a new Mage Tower level for TH5, or audit/complete Mage Tower first if the
-  implementation is currently partial or missing.
-- Add Mortar as the new TH5 building.
-- Keep server authoritative building definitions and Godot/client building
-  definitions synchronized.
-
-Key files and docs:
-
-- `scripts/building_system.gd`
-- `scripts/bs_cannon.gd`
-- `scripts/attack_system.gd`
-- `server/db.js`
-- `server/routes.js`
-- `server/combat_defs.js`
-- `server/combat_session.js`
 - `web/src/admin/AdminApp.jsx`
-- `web/src/components/BuildingInfoPanel.jsx`
-- `web/src/components/ShopPanel.jsx`
-- `Model/Mortar/`
-- `Model/Sawmill/`
-- `Model/Mine/`
-- `Model/Storage/`
+- `production/session-state/active.md`
 
 Acceptance criteria:
 
-- Players can upgrade Town Hall to level 5.
-- TH5 unlock rules are visible and enforced consistently on server and client.
-- Sawmill, Mine, and Storage receive new TH5-appropriate levels.
-- Mage Tower has a new TH5-appropriate level, or the plan clearly documents why
-  Mage Tower must be implemented before it can be leveled.
-- Mortar can be built/unlocked at TH5 and works in actual combat, not only as a
-  static model.
-- TH5 unlocks exactly one Mortar and caps it at level 1 until a later approved
-  progression pass adds higher Mortar levels.
-- TH5 increases Mine, Sawmill, and Storage count limits by one each.
-- Mortar is testable locally through the normal local playtest/admin flow.
-- Mortar and TH5 values are included in the balance pass before production deploy.
-- Local verification covers at least syntax checks, local playtest placement, and
-  a focused combat/balance check for Mortar impact.
+- Backend stores battle telemetry records with stable IDs and timestamps.
+- Telemetry captures battle participants, battle type, troop/building summary, outcome,
+  duration, rewards, trophy changes, and validation/replay status.
+- Telemetry can be queried locally through an admin/internal flow without touching
+  production data.
+- Existing battles continue to work if telemetry write fails; failures are logged and
+  do not break reward/session completion.
+- Telemetry implementation does not add blocking client-side work or unbounded server writes,
+  and local verification checks for obvious battle-flow slowdown or repeated telemetry errors.
+- Local verification confirms telemetry is created for at least one completed battle.
+- Data shape is documented near the implementation or in a short production report.
 
-Next checkpoint:
+Implementation notes:
 
-- Refresh browser/manual playtest for the current reachable max fleet: 3 ships x
-  9 troop slots. Previous 6x15/90-troop stress data is now historical overload
-  data, not the current player maximum.
-- Continue the balance pass for TH4/TH5 because the latest local smoke check has
-  0 invalid replays but still warns that matched TH4/TH5 attacks struggle against
-  heavy defenses.
+- 2026-06-24: first backend-only slice implemented in `server/db.js` and `server/routes.js`.
+  Added durable `battle_telemetry_events` storage, bounded queued writes, and events for
+  `battle_started`, `result_submitted`, `verification_done`, `reward_applied`,
+  `defeat_recorded`, `surrendered`, and `telemetry_error`.
+- Performance guardrails: telemetry payloads are capped at 16 KiB, writes are queued with a
+  max queue size of 500 events, and telemetry failures/overflow log warnings without blocking
+  battle flow.
+- Verification completed so far: syntax/quick repo checks, focused temp-DB write/read test,
+  and temp-DB `findEnemy` integration proving `battle_started` telemetry is created.
+- 2026-06-24: added read-only admin query access at `/admin/battle-telemetry` and a
+  `Battle Telemetry` admin panel with direct `?tab=battle-telemetry` linking.
+- Local verification completed: started local server/web playtest, registered local guest
+  accounts, prepared an attacker through existing admin/player APIs, bought a ship, loaded
+  3 Knights, called `/find-enemy`, then `/battle/surrender`. Confirmed recent telemetry rows
+  through the Vite admin API: `battle_started` and `surrendered` in one battle session.
+- 2026-06-24: owner manually completed one local battle after a clean local reset. Admin
+  telemetry showed one battle session with four expected events: `battle_started`,
+  `result_submitted`, `verification_done`, and `defeat_recorded`.
+- 2026-06-24: improved the admin Battle Telemetry panel so one row can represent one battle
+  session with an event timeline, while raw event rows remain available below for debugging.
+- 2026-06-24: verified the local victory/reward path with a controlled local battle session.
+  Replay verification returned `ACCEPTED`, the session completed, `reward_applied` telemetry
+  was written, attacker trophies increased by +30, and resources changed from `700/1000/1000`
+  to `1600/1750/1600` after loot `900/750/600`.
+- 2026-06-24: documented the telemetry event contract in
+  `production/reports/g001-battle-telemetry-contract-2026-06-24.md`.
+- 2026-06-24: focused guardrail test passed on a temporary SQLite DB: oversized payloads
+  truncate under 16 KiB, the queue accepts 500 and drops overflow, flush batches cap at 50,
+  and an intentional telemetry insert failure does not escape or prevent later telemetry.
+- 2026-06-24: optional client/Godot replay telemetry slice implemented with bounded uploads.
+  Godot now sends replay diagnostics after replay playback with a 250-event cap; React trims
+  replay payloads to 250 events / 128 KiB before posting; the server rate-limits replay
+  telemetry to 20 uploads per player per minute, caps summary JSON at 16 KiB and events JSON
+  at 128 KiB, and exposes read-only `/admin/replay-telemetry` for the admin panel.
+- 2026-06-24: local replay telemetry smoke passed through the running local web/server stack.
+  A 300-event upload returned `stored_events: 250`, `dropped_events: 50`, `events_bytes: 30134`,
+  and appeared in the admin Battle Telemetry panel under `Client Replay Telemetry` as
+  `bounded-replay-smoke`.
+- 2026-06-24: live Godot web replay telemetry path verified after a fresh local Godot export.
+  A real stored battle replay (`battle_replays.id = 3`) was played through the browser
+  `godotBridge` `watch_replay` action. The replay reached the victory overlay and wrote
+  `Client Replay Telemetry` row `id = 2` with label `CODEX LIVE REPLAY EXPORT 1782303055987`,
+  session `e72c9ef7-cfa7-4d33-8f1b-7d8ca32b4b24`, `events_recorded = 120`,
+  `events_dropped = 0`, `summary_bytes = 1622`, and `events_bytes = 42888`.
+- Important verification note: GDScript telemetry changes require a local Godot web export
+  before browser testing. The first browser replay used the previous export, played the replay,
+  but did not emit replay telemetry because the exported Godot build did not yet include the
+  new `REPLAY_TELEMETRY_ENABLED` change.
+- 2026-06-24: MVP closed after final hardening/status checkpoint. All acceptance criteria
+  are covered by local verification: backend events, admin query/UI, failure guardrails,
+  completed battle telemetry, victory/reward telemetry, bounded replay telemetry upload, and
+  live Godot web replay telemetry.
 
-Latest local checkpoint:
+Final status:
 
-- Mortar dead zone is implemented in Godot and the server verifier.
-- Mortar attack radius is reduced by 1.5x and has a minimum range/dead zone.
-- Mortar selection visuals show a white attack radius and red dead zone only
-  while the Mortar is selected.
-- Godot CLI was not available from PATH, so live editor verification still needs
-  a manual local playtest.
+- Complete as MVP. Remaining checkpoints: 0.
+- Future optional improvements should be opened as a new goal or follow-up task, for example
+  aggregated telemetry dashboards, retention policy controls, or deeper balance analytics.
 
 ## Parking Lot
 

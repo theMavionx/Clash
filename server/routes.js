@@ -7986,6 +7986,12 @@ const CLIENT_LOG_BATCH_MAX = 50;
 const CLIENT_LOG_RETENTION_DAYS = 7;
 const CLIENT_LOG_MAX_PER_WINDOW = 3000;  // bumped 30 → 3000 (100×) per user request
 const clientLogBuckets = new Map(); // ip → { count, resetAt }
+const REPLAY_TELEMETRY_WINDOW_MS = 60_000;
+const REPLAY_TELEMETRY_MAX_PER_WINDOW = 20;
+const REPLAY_TELEMETRY_MAX_EVENTS = 250;
+const REPLAY_TELEMETRY_SUMMARY_BYTES = 16 * 1024;
+const REPLAY_TELEMETRY_EVENTS_BYTES = 128 * 1024;
+const replayTelemetryBuckets = new Map(); // playerId -> { count, resetAt }
 const insertClientLog = db.db.prepare(`
   INSERT INTO client_logs
     (player_id, ip, level, source, url, ua, message, stack, payload)
@@ -8018,6 +8024,40 @@ function clampText(v, max) {
   if (v == null) return null;
   const s = typeof v === 'string' ? v : JSON.stringify(v);
   return String(s).slice(0, max);
+}
+
+function jsonByteLength(text) {
+  return Buffer.byteLength(String(text || ''), 'utf8');
+}
+
+function boundedJsonText(value, maxBytes) {
+  let json;
+  try {
+    json = JSON.stringify(value == null ? null : value);
+  } catch (err) {
+    json = JSON.stringify({ serialization_error: err?.message || 'failed to stringify payload' });
+  }
+  const originalBytes = jsonByteLength(json);
+  if (originalBytes <= maxBytes) return json;
+
+  let preview = json.slice(0, Math.max(0, maxBytes - 512));
+  let bounded = JSON.stringify({
+    truncated: true,
+    original_bytes: originalBytes,
+    max_payload_bytes: maxBytes,
+    preview,
+  });
+  while (jsonByteLength(bounded) > maxBytes && preview.length > 0) {
+    preview = preview.slice(0, Math.floor(preview.length * 0.75));
+    bounded = JSON.stringify({
+      truncated: true,
+      original_bytes: originalBytes,
+      max_payload_bytes: maxBytes,
+      preview,
+    });
+  }
+  if (jsonByteLength(bounded) <= maxBytes) return bounded;
+  return JSON.stringify({ truncated: true, original_bytes: originalBytes, max_payload_bytes: maxBytes });
 }
 
 function normalizeClientLevel(v) {
@@ -8098,9 +8138,23 @@ function clientLogRateOk(ip, n) {
   return true;
 }
 
+function replayTelemetryRateOk(playerId) {
+  const now = Date.now();
+  const key = String(playerId || 'anon');
+  const bucket = replayTelemetryBuckets.get(key);
+  if (bucket && bucket.resetAt > now) {
+    if (bucket.count >= REPLAY_TELEMETRY_MAX_PER_WINDOW) return false;
+    bucket.count += 1;
+    return true;
+  }
+  replayTelemetryBuckets.set(key, { count: 1, resetAt: now + REPLAY_TELEMETRY_WINDOW_MS });
+  return true;
+}
+
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of clientLogBuckets) if (v.resetAt < now) clientLogBuckets.delete(k);
+  for (const [k, v] of replayTelemetryBuckets) if (v.resetAt < now) replayTelemetryBuckets.delete(k);
   try { pruneClientLogs.run(`-${CLIENT_LOG_RETENTION_DAYS} days`); } catch {}
 }, 5 * 60_000).unref?.();
 
@@ -8221,6 +8275,9 @@ router.post('/replay-telemetry', (req, res) => {
     }
   } catch {}
   if (!player) return res.status(401).json({ ok: false, error: 'Invalid token' });
+  if (!replayTelemetryRateOk(player.id)) {
+    return res.status(429).json({ ok: false, error: 'Too many replay telemetry uploads' });
+  }
 
   const body = req.body || {};
   try {
@@ -8230,7 +8287,21 @@ router.post('/replay-telemetry', (req, res) => {
     const actualWallElapsed = Number(info.actual_wall_elapsed ?? body.actual_wall_elapsed ?? 0) || 0;
     const battleSessionId = clampText(info.battle_session_id || body.battle_session_id, 128);
     const replayLabel = clampText(info.replay_label || body.replay_label, 128);
-    const summary = body.summary || {};
+    const rawSummary = body.summary && typeof body.summary === 'object' && !Array.isArray(body.summary) ? body.summary : {};
+    const rawEvents = Array.isArray(body.events) ? body.events : [];
+    const events = rawEvents.slice(0, REPLAY_TELEMETRY_MAX_EVENTS);
+    const serverDroppedEvents = Math.max(0, rawEvents.length - events.length);
+    const clientDroppedEvents = Number(rawSummary.events_dropped ?? rawSummary.events_dropped_client ?? 0) || 0;
+    const summary = {
+      ...rawSummary,
+      events_recorded: events.length,
+      events_received: rawEvents.length,
+      events_dropped_client: clientDroppedEvents,
+      events_dropped_server: serverDroppedEvents,
+      max_events: REPLAY_TELEMETRY_MAX_EVENTS,
+    };
+    const summaryJson = boundedJsonText(summary, REPLAY_TELEMETRY_SUMMARY_BYTES);
+    const eventsJson = boundedJsonText(events, REPLAY_TELEMETRY_EVENTS_BYTES);
     insertReplayTelemetry.run(
       player.id,
       battleSessionId,
@@ -8240,8 +8311,8 @@ router.post('/replay-telemetry', (req, res) => {
       expectedDuration,
       actualElapsed,
       actualWallElapsed,
-      clampText(summary, 100_000),
-      clampText(body.events || [], 1_500_000)
+      summaryJson,
+      eventsJson
     );
     const simDiff = actualElapsed - expectedDuration;
     const wallDiff = actualWallElapsed - expectedDuration;
@@ -8258,7 +8329,13 @@ router.post('/replay-telemetry', (req, res) => {
         counts,
       });
     }
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      stored_events: events.length,
+      dropped_events: clientDroppedEvents + serverDroppedEvents,
+      summary_bytes: jsonByteLength(summaryJson),
+      events_bytes: jsonByteLength(eventsJson),
+    });
   } catch (e) {
     console.warn('[replay-telemetry] insert failed:', e.message);
     res.status(500).json({ ok: false });
@@ -11106,6 +11183,45 @@ function _getShipsPayload(playerId) {
   }));
 }
 
+function _battleTelemetryReplaySummary(actions = [], claimedResult = '') {
+  const safeActions = Array.isArray(actions) ? actions : [];
+  const troopCounts = {};
+  let shipCount = 0;
+  let rallyCount = 0;
+  let firstActionT = null;
+  let lastActionT = null;
+  for (const action of safeActions) {
+    const t = Number(action?.t);
+    if (Number.isFinite(t)) {
+      firstActionT = firstActionT == null ? t : Math.min(firstActionT, t);
+      lastActionT = lastActionT == null ? t : Math.max(lastActionT, t);
+    }
+    if (action?.type === 'rally_drop') rallyCount += 1;
+    if (action?.type !== 'place_ship') continue;
+    shipCount += 1;
+    const troops = Array.isArray(action.troops)
+      ? action.troops
+      : (action.troopType ? [action.troopType] : []);
+    for (const troop of troops) {
+      if (_isSlotFiller(troop)) continue;
+      const key = _normalizeTroopName(String(troop || '').split(':')[0] || troop || 'unknown');
+      troopCounts[key] = (troopCounts[key] || 0) + 1;
+    }
+  }
+  return {
+    claimed_result: claimedResult || null,
+    action_count: safeActions.length,
+    ship_count: shipCount,
+    rally_count: rallyCount,
+    troop_counts: troopCounts,
+    first_action_t: firstActionT,
+    last_action_t: lastActionT,
+    action_span_sec: firstActionT != null && lastActionT != null
+      ? Number(Math.max(0, lastActionT - firstActionT).toFixed(3))
+      : null,
+  };
+}
+
 router.post('/attack/result', auth, (req, res) => {
   const { defender_id, actions, result: claimedResult, battle_session_id } = req.body;
   if (!defender_id) return res.status(400).json({ error: 'defender_id required' });
@@ -11127,12 +11243,32 @@ router.post('/attack/result', auth, (req, res) => {
     if (!battleSessionId) return;
     try { db.finishBattleSession(battleSessionId, req.player.id, defender_id, status); } catch {}
   };
+  const telemetryReplaySummary = _battleTelemetryReplaySummary(gameActions, claimedResult);
+  const recordBattleEvent = (eventType, payload = {}, replayId = null) => {
+    db.recordBattleTelemetry(eventType, {
+      battleSessionId,
+      replayId,
+      attackerId: req.player.id,
+      defenderId: defender_id,
+      payload: {
+        ...payload,
+        claimed_result: claimedResult,
+        strict_replay_verification: STRICT_BATTLE_REPLAY_VERIFICATION,
+      },
+    });
+  };
 
   const sessionCheck = db.validateBattleSession(battleSessionId, req.player.id, defender_id);
   if (!sessionCheck.ok) {
+    recordBattleEvent('telemetry_error', {
+      stage: 'session_validation',
+      error: sessionCheck.error,
+      ...telemetryReplaySummary,
+    });
     db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', sessionCheck.error, null, null);
     return res.status(409).json({ error: sessionCheck.error });
   }
+  recordBattleEvent('result_submitted', telemetryReplaySummary);
 
   // Basic validation
   const shipActions = gameActions.filter(a => a.type === 'place_ship');
@@ -11141,6 +11277,11 @@ router.post('/attack/result', auth, (req, res) => {
     replayWarnings.push('No ships deployed');
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
       releaseBattleSession('cancelled');
+      recordBattleEvent('telemetry_error', {
+        stage: 'basic_validation',
+        error: 'No ships deployed',
+        ...telemetryReplaySummary,
+      });
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'No ships', null, null);
       return res.status(403).json({ error: 'No ships deployed' });
     }
@@ -11149,6 +11290,11 @@ router.post('/attack/result', auth, (req, res) => {
     replayWarnings.push(`Too many ships in replay (${shipActions.length})`);
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
       releaseBattleSession('cancelled');
+      recordBattleEvent('telemetry_error', {
+        stage: 'basic_validation',
+        error: 'Too many ships in replay',
+        ...telemetryReplaySummary,
+      });
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'Too many ships', null, null);
       return res.status(403).json({ error: 'Too many ships in replay' });
     }
@@ -11156,6 +11302,12 @@ router.post('/attack/result', auth, (req, res) => {
   const duplicateReplayDemonKing = _firstDuplicateDemonKingTokenInShipActions(gameActions);
   if (duplicateReplayDemonKing) {
     releaseBattleSession('cancelled');
+    recordBattleEvent('telemetry_error', {
+      stage: 'basic_validation',
+      error: 'Duplicate Demon King NFT in replay',
+      duplicate: duplicateReplayDemonKing,
+      ...telemetryReplaySummary,
+    });
     db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'Duplicate Demon King NFT in replay', null, null);
     return res.status(403).json({
       error: 'Each Demon King NFT can only be deployed once per battle',
@@ -11260,6 +11412,25 @@ router.post('/attack/result', auth, (req, res) => {
   if (BATTLE_DEBUG_TRACE) {
     console.log(`[BATTLE TRACE] events=${verification._traceEvents || 0} dropped=${verification._traceDropped || 0} aliveTroops=${verification._troopsAlive || 0} simDebug=stored`);
   }
+  recordBattleEvent('verification_done', {
+    replay_status: replayStatus,
+    replay_reason: replayReason,
+    stored_accept_reason: storedAcceptReason,
+    server_resolved_result: serverResolvedResult,
+    verification_resolved_result: verificationResolvedResult,
+    valid: !!verification.valid,
+    warnings: replayWarnings,
+    town_hall_destroyed: !!verification.townHallDestroyed,
+    town_hall_hp_pct: verification.townHallHpPct ?? null,
+    buildings_destroyed: verification.buildingsDestroyed ?? 0,
+    troops_spawned: verification._troopsSpawned ?? null,
+    troops_alive: verification._troopsAlive ?? null,
+    guards_alive: verification._guardsAlive ?? null,
+    sim_time_sec: verification._simTimeSec ?? null,
+    trace_events: verification._traceEvents ?? null,
+    trace_dropped: verification._traceDropped ?? null,
+    ...telemetryReplaySummary,
+  });
 
   if (!verification.valid) {
     const simDebug = {
@@ -11274,6 +11445,13 @@ router.post('/attack/result', auth, (req, res) => {
     // Debug info logged server-side only — never expose sim internals to client
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
       releaseBattleSession('cancelled');
+      recordBattleEvent('telemetry_error', {
+        stage: 'replay_verification',
+        error: 'Replay verification failed',
+        replay_reason: replayReason,
+        server_resolved_result: serverResolvedResult,
+        ...telemetryReplaySummary,
+      });
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', replayReason, null, replayDebug);
       console.log('[SIM REJECT]', JSON.stringify(simDebug));
       return res.status(403).json({ error: 'Replay verification failed', reason: verification.reason });
@@ -11286,6 +11464,12 @@ router.post('/attack/result', auth, (req, res) => {
     const nftWinTokensByCollection = _nftBackedWinTokensByCollectionFromActions(gameActions, req.player.id);
     const battleResult = db.battleVictory(req.player.id, defender_id, battleSessionId);
     if (battleResult.error) {
+      recordBattleEvent('telemetry_error', {
+        stage: 'reward_apply',
+        error: battleResult.error,
+        server_resolved_result: serverResolvedResult,
+        ...telemetryReplaySummary,
+      });
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', battleResult.error, null, replayDebug);
       return res.status(400).json(battleResult);
     }
@@ -11304,11 +11488,29 @@ router.post('/attack/result', auth, (req, res) => {
     // /troop-died is now telemetry-only; mutating ships there caused double
     // removal when the final replay result was submitted.
     const appliedCasualties = _applyCasualties(req.player.id, resolvedCasualties);
+    const paidCasualties = _paidCasualties(appliedCasualties);
+    recordBattleEvent('reward_applied', {
+      result: 'victory',
+      replay_status: replayStatus,
+      server_resolved_result: serverResolvedResult,
+      loot: battleResult.loot || { gold: 0, wood: 0, ore: 0 },
+      loot_base: battleResult.loot_base || null,
+      altar_prosperity_bonus_pct: battleResult.altar_prosperity_bonus_pct || 0,
+      trophy_base: battleResult.trophy_base,
+      trophy_bonus: battleResult.trophy_bonus || 0,
+      trophy_delta: battleResult.trophy_delta,
+      trophies: battleResult.trophies,
+      target_is_bot: !!battleResult.target_is_bot,
+      loot_multiplier: battleResult.loot_multiplier,
+      casualties: paidCasualties,
+      nft_troop_win_counts: Object.fromEntries(Object.entries(nftTroopWins).map(([collection, wins]) => [collection, Array.isArray(wins) ? wins.length : 0])),
+      ...telemetryReplaySummary,
+    }, replayId);
     // Return authoritative post-casualty ship state so client can sync immediately
     return res.json({
       ...battleResult,
       ships: _getShipsPayload(req.player.id),
-      casualties: _paidCasualties(appliedCasualties),
+      casualties: paidCasualties,
       demon_king_nft_wins: demonKingNftWins,
       nft_troop_wins: nftTroopWins,
     });
@@ -11316,18 +11518,31 @@ router.post('/attack/result', auth, (req, res) => {
 
   // Defeat — attacker loses trophies, defender gains
   const defeatResult = db.battleDefeat(req.player.id, defender_id, battleSessionId);
-  db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, replayDebug);
+  const replayId = db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, replayDebug);
 
   // Remove resolved casualties from attacker's ships. In non-strict mode this
   // intentionally uses only the client result; server simulation is diagnostics.
   const appliedCasualties = _applyCasualties(req.player.id, resolvedCasualties);
+  const paidCasualties = _paidCasualties(appliedCasualties);
+  recordBattleEvent('defeat_recorded', {
+    result: 'defeat',
+    replay_status: replayStatus,
+    server_resolved_result: serverResolvedResult,
+    trophy_delta: defeatResult.trophy_delta,
+    defender_trophy_delta: defeatResult.defender_trophy_delta,
+    trophies: defeatResult.attackerTrophies,
+    defender_trophies: defeatResult.defenderTrophies,
+    target_is_bot: !!defeatResult.target_is_bot,
+    casualties: paidCasualties,
+    ...telemetryReplaySummary,
+  }, replayId);
 
   res.json({
     success: true,
     loot: { gold: 0, wood: 0, ore: 0 },
     trophies: defeatResult.attackerTrophies,
     ships: _getShipsPayload(req.player.id),
-    casualties: _paidCasualties(appliedCasualties),
+    casualties: paidCasualties,
   });
 });
 
@@ -11393,6 +11608,18 @@ router.post('/battle/surrender', auth, (req, res) => {
   const sessionId = String(req.body?.battle_session_id || req.body?.session_id || '').trim();
   const result = db.markSurrender(req.player.id, defenderId, sessionId);
   if (!result?.ok) return res.status(500).json({ error: result?.error || 'Failed to record surrender' });
+  db.recordBattleTelemetry('surrendered', {
+    battleSessionId: result.battle_session_id || sessionId,
+    attackerId: req.player.id,
+    defenderId,
+    payload: {
+      stamped: !!result.stamped,
+      already_surrendered: !!result.already_surrendered,
+      cooldown_hours: 24,
+      trophy_delta: Number(result.trophy_delta || 0),
+      trophies: Number(result.trophies || 0),
+    },
+  });
   res.json({
     ok: true,
     stamped: !!result.stamped,
@@ -15861,6 +16088,97 @@ router.get('/admin/replays', adminAuth, (req, res) => {
     LIMIT 200
   `).all();
   res.json(rows);
+});
+
+router.get('/admin/battle-telemetry', adminAuth, (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 100));
+    const filters = {
+      limit,
+      battleSessionId: req.query.battle_session_id || req.query.battleSessionId || req.query.session || null,
+      attackerId: req.query.attacker_id || req.query.attackerId || req.query.player_id || null,
+      defenderId: req.query.defender_id || req.query.defenderId || null,
+      eventType: req.query.event_type || req.query.eventType || null,
+    };
+    const events = db.listBattleTelemetryEvents(filters).map((row) => {
+      const event = { ...row };
+      delete event.payload_json;
+      return event;
+    });
+    const eventCounts = events.reduce((acc, row) => {
+      const key = row.event_type || 'unknown';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    const sessions = Array.from(new Set(events.map((row) => row.battle_session_id).filter(Boolean)));
+    res.json({
+      events,
+      summary: {
+        returned: events.length,
+        event_counts: eventCounts,
+        sessions: sessions.length,
+        latest_created_at: events[0]?.created_at || null,
+      },
+      filters,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'battle telemetry failed' });
+  }
+});
+
+router.get('/admin/replay-telemetry', adminAuth, (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 50));
+    const battleSessionId = req.query.battle_session_id || req.query.battleSessionId || req.query.session || null;
+    const playerId = req.query.player_id || req.query.playerId || null;
+    const rows = db.db.prepare(`
+      SELECT rt.id, rt.player_id, rt.battle_session_id, rt.replay_label, rt.attacker_name,
+             rt.expected_result, rt.expected_duration, rt.actual_elapsed, rt.actual_wall_elapsed,
+             rt.summary, rt.events, rt.created_at, p.name AS player_name
+      FROM replay_telemetry rt
+      LEFT JOIN players p ON p.id = rt.player_id
+      WHERE (? IS NULL OR rt.battle_session_id = ?)
+        AND (? IS NULL OR rt.player_id = ?)
+      ORDER BY rt.id DESC
+      LIMIT ?
+    `).all(battleSessionId, battleSessionId, playerId, playerId, limit).map((row) => {
+      let summary = {};
+      try { summary = row.summary ? JSON.parse(row.summary) : {}; } catch {}
+      const eventsRecorded = Number(summary.events_recorded ?? 0) || 0;
+      const clientDropped = Number(summary.events_dropped_client ?? summary.events_dropped ?? 0) || 0;
+      const serverDropped = Number(summary.events_dropped_server ?? 0) || 0;
+      return {
+        id: row.id,
+        player_id: row.player_id,
+        player_name: row.player_name,
+        battle_session_id: row.battle_session_id,
+        replay_label: row.replay_label,
+        attacker_name: row.attacker_name,
+        expected_result: row.expected_result,
+        expected_duration: row.expected_duration,
+        actual_elapsed: row.actual_elapsed,
+        actual_wall_elapsed: row.actual_wall_elapsed,
+        events_recorded: eventsRecorded,
+        events_dropped: clientDropped + serverDropped,
+        events_dropped_client: clientDropped,
+        events_dropped_server: serverDropped,
+        summary_bytes: jsonByteLength(row.summary || ''),
+        events_bytes: jsonByteLength(row.events || ''),
+        summary,
+        created_at: row.created_at,
+      };
+    });
+    res.json({
+      rows,
+      summary: {
+        returned: rows.length,
+        latest_created_at: rows[0]?.created_at || null,
+      },
+      filters: { limit, battleSessionId, playerId },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'replay telemetry failed' });
+  }
 });
 
 // Get full details of one replay including actions and verification data

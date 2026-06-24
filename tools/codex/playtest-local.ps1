@@ -148,33 +148,22 @@ function Open-LocalUrls {
 
     $chromePath = Get-ChromePath
     if ($chromePath) {
-        if ($GuestProfileCount -gt 1) {
-            Write-Host "Opening local playtest in Chrome with separate local profiles..."
-            for ($i = 0; $i -lt $Urls.Count; $i++) {
-                $profileName = if ($i -lt $GuestProfileCount) { "chrome-guest-$($i + 1)" } else { "chrome-admin" }
-                $profileDir = Join-Path $LogDir $profileName
-                New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
-                Start-Process -FilePath $chromePath -ArgumentList @(
-                    "--new-window",
-                    "--no-first-run",
-                    "--user-data-dir=$profileDir",
-                    $Urls[$i]
-                )
-                Start-Sleep -Milliseconds 500
-            }
-            return
-        }
-
-        Write-Host "Opening local playtest in Chrome..."
-        Start-Process -FilePath $chromePath -ArgumentList (@("--new-window") + $Urls)
+        $profileDir = Join-Path $LogDir "chrome-local-playtest"
+        New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+        Write-Host "Opening local playtest in one Chrome window with tabs..."
+        # Keep GuestProfileCount for CLI compatibility; owner preference is one Chrome profile/window.
+        [void]$GuestProfileCount
+        Start-Process -FilePath $chromePath -ArgumentList (@(
+            "--new-window",
+            "--no-first-run",
+            "--user-data-dir=$profileDir"
+        ) + $Urls)
         return
     }
 
-    Write-Host "Chrome was not found; opening local playtest with the default browser..."
-    foreach ($url in $Urls) {
-        Start-Process $url
-        Start-Sleep -Milliseconds 500
-    }
+    Write-Warning "Chrome was not found; not opening URLs automatically to avoid using the default browser."
+    Write-Host "Open these URLs in Chrome manually:"
+    foreach ($url in $Urls) { Write-Host "  $url" }
 }
 
 Write-Host "== Clash local manual playtest =="

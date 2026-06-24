@@ -100,7 +100,8 @@ var _replay_prev_physics_ticks: int = -1
 var _replay_prev_max_physics_steps: int = -1
 var _replay_prev_physics_jitter_fix: float = -1.0
 var _returning_home: bool = false
-const REPLAY_TELEMETRY_MAX_EVENTS: int = 2500
+const REPLAY_TELEMETRY_ENABLED: bool = true
+const REPLAY_TELEMETRY_MAX_EVENTS: int = 250
 const REPLAY_SYNC_FPS: int = 60
 const REPLAY_SYNC_MAX_PHYSICS_STEPS: int = 16
 
@@ -492,10 +493,8 @@ func _reconcile_replay_destroyed_building_telemetry() -> void:
 
 
 func _send_replay_telemetry() -> void:
-	# Replay telemetry upload is disabled for now to keep local/mobile sessions
-	# light. Keep the recorder helpers intact so we can re-enable diagnostics
-	# later without touching combat logic.
-	return
+	if not REPLAY_TELEMETRY_ENABLED:
+		return
 	if not bs or not bs._bridge:
 		return
 	_reconcile_replay_destroyed_building_telemetry()

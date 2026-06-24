@@ -13,6 +13,42 @@ const TUTORIAL_FLAG_BASE = 1;
 const TUTORIAL_FLAG_ARMY = 2;
 const TUTORIAL_FLAG_TRADE = 8;
 const TUTORIAL_FLAG_VIDEO = 16;
+const TUTORIAL_FLAGS_ALL_DONE = 0xFF;
+
+function isLocalBrowserHost() {
+  if (typeof window === 'undefined') return false;
+  const host = String(window.location?.hostname || '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+}
+
+function urlRequestsLocalGuest() {
+  if (typeof window === 'undefined') return false;
+  try {
+    const value = new URL(window.location.href).searchParams.get('guest');
+    return ['1', 'true', 'new'].includes(String(value || '').toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function localStorageHasLocalGuestMarker() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return !!window.localStorage.getItem('clash.localGuest');
+  } catch {
+    return false;
+  }
+}
+
+function shouldSuppressLocalGuestGuides(playerLike = null) {
+  if (!isLocalBrowserHost()) return false;
+  const wallet = String(playerLike?.wallet || '');
+  const name = String(playerLike?.name || playerLike?.player_name || '');
+  return urlRequestsLocalGuest()
+    || localStorageHasLocalGuestMarker()
+    || wallet.startsWith('local_guest_')
+    || name.startsWith('Guest_');
+}
 
 function shallowEqualObject(a, b) {
   if (a === b) return true;
@@ -23,7 +59,71 @@ function shallowEqualObject(a, b) {
   return aKeys.every(key => a[key] === b[key]);
 }
 
-const REPLAY_TELEMETRY_ENABLED = false;
+const REPLAY_TELEMETRY_ENABLED = true;
+const REPLAY_TELEMETRY_MAX_EVENTS = 250;
+const REPLAY_TELEMETRY_MAX_BODY_BYTES = 128 * 1024;
+const REPLAY_TELEMETRY_MAX_QUEUE = 5;
+
+function textByteLength(text) {
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(String(text || '')).length;
+  }
+  return String(text || '').length;
+}
+
+function buildReplayTelemetryPayload(data) {
+  const rawEvents = Array.isArray(data?.events) ? data.events : [];
+  const events = rawEvents.slice(0, REPLAY_TELEMETRY_MAX_EVENTS);
+  const rawSummary = data?.summary && typeof data.summary === 'object' && !Array.isArray(data.summary) ? data.summary : {};
+  const replay = data?.replay && typeof data.replay === 'object' && !Array.isArray(data.replay) ? data.replay : {};
+  const summary = {
+    ...rawSummary,
+    events_recorded: events.length,
+    events_sent: events.length,
+    events_dropped_client: Math.max(0, rawEvents.length - events.length) + (Number(rawSummary.events_dropped) || 0),
+    max_events: REPLAY_TELEMETRY_MAX_EVENTS,
+  };
+  const payload = {
+    ...(data || {}),
+    summary,
+    events,
+  };
+  let body = JSON.stringify(payload);
+  while (textByteLength(body) > REPLAY_TELEMETRY_MAX_BODY_BYTES && payload.events.length > 0) {
+    payload.events = payload.events.slice(0, Math.floor(payload.events.length * 0.75));
+    payload.summary = {
+      ...payload.summary,
+      events_sent: payload.events.length,
+      events_dropped_client: Math.max(0, rawEvents.length - payload.events.length) + (Number(rawSummary.events_dropped) || 0),
+      body_trimmed: true,
+    };
+    body = JSON.stringify(payload);
+  }
+  if (textByteLength(body) <= REPLAY_TELEMETRY_MAX_BODY_BYTES) {
+    return { payload, body };
+  }
+  const fallbackPayload = {
+    replay: {
+      battle_session_id: replay.battle_session_id || '',
+      replay_label: replay.replay_label || '',
+      attacker_name: replay.attacker_name || '',
+      expected_result: replay.expected_result || '',
+      expected_duration: Number(replay.expected_duration || 0) || 0,
+      actual_elapsed: Number(replay.actual_elapsed || 0) || 0,
+      actual_wall_elapsed: Number(replay.actual_wall_elapsed || 0) || 0,
+    },
+    summary: {
+      counts: rawSummary.counts && typeof rawSummary.counts === 'object' && !Array.isArray(rawSummary.counts) ? rawSummary.counts : {},
+      events_sent: 0,
+      events_dropped_client: rawEvents.length + (Number(rawSummary.events_dropped) || 0),
+      body_trimmed: true,
+      events_omitted: true,
+      summary_trimmed: true,
+    },
+    events: [],
+  };
+  return { payload: fallbackPayload, body: JSON.stringify(fallbackPayload) };
+}
 
 function isNftBackedTroopName(name) {
   const normalized = String(name || '').trim().toLowerCase().replace(/[_\s-]/g, '');
@@ -62,23 +162,20 @@ function normalizeTroopLevels(payload) {
 }
 
 function postReplayTelemetry(data, tokenOverride = null) {
-  // Replay telemetry upload is intentionally disabled for now. Godot can still
-  // collect local combat diagnostics, but the browser no longer posts the large
-  // event payloads to `/api/replay-telemetry`.
   if (!REPLAY_TELEMETRY_ENABLED) return true;
 
   const token = tokenOverride || window._playerToken;
   if (!token) {
     return false;
   }
-  const body = JSON.stringify(data || {});
+  const { payload, body } = buildReplayTelemetryPayload(data || {});
   fetch('/api/replay-telemetry', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-token': token },
     body,
   }).then((res) => {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    console.info('[replay_telemetry] stored', data?.replay || {}, data?.summary || {}, { bytes: body.length });
+    console.info('[replay_telemetry] stored', payload?.replay || {}, payload?.summary || {}, { bytes: textByteLength(body) });
   }).catch((err) => {
     console.warn('[replay_telemetry] failed', err?.message || err);
   });
@@ -114,7 +211,7 @@ export function GodotProvider({ children }) {
   const [resourceCaps, setResourceCaps] = useState({ gold: 10000, wood: 10000, ore: 10000 });
   const resourceCapsRef = useRef({ gold: 10000, wood: 10000, ore: 10000 });
   const errorTimerRef = useRef(null);
-  const [tutorialFlags, setTutorialFlags] = useState(0xFF); // default all done, server overrides
+  const [tutorialFlags, setTutorialFlags] = useState(TUTORIAL_FLAGS_ALL_DONE); // default all done, server overrides
   const [tutorialPhase, setTutorialPhase] = useState(null); // 'base'|'army'|'attack'|'trade'|'video'|null
   // Remember the token the last fetch was keyed on — re-fetch when it changes
   // (logout→register, account switch, session swap). A boolean "fetched once"
@@ -179,7 +276,7 @@ export function GodotProvider({ children }) {
               window._playerToken = null;
               playerTokenRef.current = null;
               tutorialTokenRef.current = null;
-              setTutorialFlags(0xFF);
+              setTutorialFlags(TUTORIAL_FLAGS_ALL_DONE);
               setTutorialPhase(null);
               break;
             }
@@ -191,29 +288,34 @@ export function GodotProvider({ children }) {
             if (tutorialTokenRef.current !== data.token) {
               tutorialTokenRef.current = data.token;
               const tokenForFetch = data.token;
-              const doFetch = () => {
-                fetch('/api/tutorial', { headers: { 'x-token': tokenForFetch } })
-                  .then(r => { if (!r.ok) throw new Error(); return r.json(); })
-                  .then(res => {
-                    // Stale-response guard: if another token swap happened while
-                    // this was in flight, drop the result.
-                    if (tutorialTokenRef.current !== tokenForFetch) return;
-                    const flags = res.tutorial_flags ?? 0xFF;
-                    setTutorialFlags(flags);
-                    if (!(flags & TUTORIAL_FLAG_BASE)) setTutorialPhase('base');
-                    else if (!(flags & TUTORIAL_FLAG_ARMY)) setTutorialPhase('army');
-                    else if (!(flags & TUTORIAL_FLAG_TRADE)) setTutorialPhase('trade');
-                    else if (!(flags & TUTORIAL_FLAG_VIDEO)) setTutorialPhase('video');
-                    else setTutorialPhase(null);
-                  }).catch(() => {});
-              };
-              // Delay fetch so it doesn't block initial render, but force
-              // firing within 800ms so a busy main thread (Godot startup,
-              // shader compile) can't indefinitely starve the tutorial load
-              // — without the `timeout` option requestIdleCallback may never
-              // fire on slow devices and the overlay would never appear.
-              if (window.requestIdleCallback) window.requestIdleCallback(doFetch, { timeout: 800 });
-              else setTimeout(doFetch, 500);
+              if (shouldSuppressLocalGuestGuides(data)) {
+                setTutorialFlags(TUTORIAL_FLAGS_ALL_DONE);
+                setTutorialPhase(null);
+              } else {
+                const doFetch = () => {
+                  fetch('/api/tutorial', { headers: { 'x-token': tokenForFetch } })
+                    .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+                    .then(res => {
+                      // Stale-response guard: if another token swap happened while
+                      // this was in flight, drop the result.
+                      if (tutorialTokenRef.current !== tokenForFetch) return;
+                      const flags = res.tutorial_flags ?? TUTORIAL_FLAGS_ALL_DONE;
+                      setTutorialFlags(flags);
+                      if (!(flags & TUTORIAL_FLAG_BASE)) setTutorialPhase('base');
+                      else if (!(flags & TUTORIAL_FLAG_ARMY)) setTutorialPhase('army');
+                      else if (!(flags & TUTORIAL_FLAG_TRADE)) setTutorialPhase('trade');
+                      else if (!(flags & TUTORIAL_FLAG_VIDEO)) setTutorialPhase('video');
+                      else setTutorialPhase(null);
+                    }).catch(() => {});
+                };
+                // Delay fetch so it doesn't block initial render, but force
+                // firing within 800ms so a busy main thread (Godot startup,
+                // shader compile) can't indefinitely starve the tutorial load
+                // Without the `timeout` option requestIdleCallback may never
+                // fire on slow devices and the overlay would never appear.
+                if (window.requestIdleCallback) window.requestIdleCallback(doFetch, { timeout: 800 });
+                else setTimeout(doFetch, 500);
+              }
             }
             // Hydrate server-only purchase/entitlement state. Godot's bridge
             // boot payload is intentionally small, so paid utility unlocks
@@ -339,7 +441,7 @@ export function GodotProvider({ children }) {
         case 'replay_telemetry':
           if (!postReplayTelemetry(data, playerTokenRef.current || window._playerToken)) {
             replayTelemetryQueueRef.current.push(data);
-            if (replayTelemetryQueueRef.current.length > 20) replayTelemetryQueueRef.current.shift();
+            if (replayTelemetryQueueRef.current.length > REPLAY_TELEMETRY_MAX_QUEUE) replayTelemetryQueueRef.current.shift();
             console.warn('[replay_telemetry] queued: no player token yet', data?.replay || {});
           }
           break;

@@ -23,6 +23,10 @@ server-futures/gmtrade-builder/target/
 .local-logs/
 server/reports/
 
+# Local Codex request logs; private owner memory, not for GitHub
+production/user-request-log.md
+production/user-request-log*.md
+
 # Environment
 .env
 .env.*

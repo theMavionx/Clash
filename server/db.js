@@ -1513,6 +1513,31 @@ try {
   `);
 } catch (e) { console.warn('[db] raid matchmaking migration:', e.message); }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS battle_telemetry_events (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      battle_session_id TEXT,
+      replay_id         INTEGER,
+      event_type        TEXT NOT NULL,
+      attacker_id       TEXT,
+      defender_id       TEXT,
+      payload_json      TEXT NOT NULL DEFAULT '{}',
+      created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_battle_telemetry_session
+      ON battle_telemetry_events(battle_session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_battle_telemetry_replay
+      ON battle_telemetry_events(replay_id);
+    CREATE INDEX IF NOT EXISTS idx_battle_telemetry_recent
+      ON battle_telemetry_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_battle_telemetry_type_recent
+      ON battle_telemetry_events(event_type, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_battle_telemetry_attacker_recent
+      ON battle_telemetry_events(attacker_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] battle telemetry migration:', e.message); }
+
 // Paid utility purchases. Kept separate from `players.wallet`: a player can
 // be logged in through Aptos/Solana/etc. and still pay from a one-off Base
 // wallet without changing their DEX identity.
@@ -2602,6 +2627,21 @@ const stmts = {
     INSERT INTO battle_replays (attacker_id, defender_id, claimed_result, verified_result, verification_reason, replay_data, buildings_snapshot, loot_gold, loot_wood, loot_ore, sim_th_hp_pct, sim_buildings_destroyed, sim_debug, duration_sec)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
+  insertBattleTelemetryEvent: db.prepare(`
+    INSERT INTO battle_telemetry_events
+      (battle_session_id, replay_id, event_type, attacker_id, defender_id, payload_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `),
+  listBattleTelemetryEvents: db.prepare(`
+    SELECT *
+    FROM battle_telemetry_events
+    WHERE (? IS NULL OR battle_session_id = ?)
+      AND (? IS NULL OR attacker_id = ?)
+      AND (? IS NULL OR defender_id = ?)
+      AND (? IS NULL OR event_type = ?)
+    ORDER BY datetime(created_at) DESC, id DESC
+    LIMIT ?
+  `),
 
   // Repair / Ship / Shield
   repairBuilding: db.prepare(`UPDATE buildings SET hp = max_hp WHERE id = ? AND player_id = ?`),
@@ -2987,6 +3027,132 @@ const stmts = {
      WHERE tournament_id = ? AND player_id = ?
   `),
 };
+
+const BATTLE_TELEMETRY_MAX_PAYLOAD_BYTES = 16 * 1024;
+const BATTLE_TELEMETRY_MAX_QUEUE = 500;
+const BATTLE_TELEMETRY_FLUSH_BATCH = 50;
+let battleTelemetryQueue = [];
+let battleTelemetryFlushScheduled = false;
+let battleTelemetryDropped = 0;
+
+function clampBattleTelemetryText(value, max = 128) {
+  const s = String(value || '').trim();
+  return s ? s.slice(0, max) : null;
+}
+
+function normalizeBattleTelemetryEventType(value) {
+  const eventType = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.:-]+/g, '_')
+    .slice(0, 64);
+  return eventType || 'telemetry_event';
+}
+
+function battleTelemetryPayloadJson(payload) {
+  let json = '{}';
+  try {
+    const body = payload && typeof payload === 'object' ? payload : { value: payload };
+    json = JSON.stringify(body ?? {});
+  } catch (e) {
+    json = JSON.stringify({ serialization_error: e?.message || String(e) });
+  }
+
+  const originalBytes = Buffer.byteLength(json, 'utf8');
+  if (originalBytes <= BATTLE_TELEMETRY_MAX_PAYLOAD_BYTES) return json;
+
+  let preview = json.slice(0, Math.max(0, BATTLE_TELEMETRY_MAX_PAYLOAD_BYTES - 512));
+  let truncated = JSON.stringify({
+    truncated: true,
+    original_bytes: originalBytes,
+    max_payload_bytes: BATTLE_TELEMETRY_MAX_PAYLOAD_BYTES,
+    preview,
+  });
+  while (Buffer.byteLength(truncated, 'utf8') > BATTLE_TELEMETRY_MAX_PAYLOAD_BYTES && preview.length > 0) {
+    preview = preview.slice(0, Math.floor(preview.length * 0.75));
+    truncated = JSON.stringify({
+      truncated: true,
+      original_bytes: originalBytes,
+      max_payload_bytes: BATTLE_TELEMETRY_MAX_PAYLOAD_BYTES,
+      preview,
+    });
+  }
+  return truncated;
+}
+
+function scheduleBattleTelemetryFlush() {
+  if (battleTelemetryFlushScheduled) return;
+  battleTelemetryFlushScheduled = true;
+  const schedule = typeof setImmediate === 'function' ? setImmediate : (fn) => setTimeout(fn, 0);
+  schedule(() => flushBattleTelemetryEvents());
+}
+
+function flushBattleTelemetryEvents(maxBatch = BATTLE_TELEMETRY_FLUSH_BATCH) {
+  battleTelemetryFlushScheduled = false;
+  let flushed = 0;
+  const limit = Math.max(1, Math.min(BATTLE_TELEMETRY_FLUSH_BATCH, Number(maxBatch) || BATTLE_TELEMETRY_FLUSH_BATCH));
+  while (battleTelemetryQueue.length > 0 && flushed < limit) {
+    const ev = battleTelemetryQueue.shift();
+    try {
+      stmts.insertBattleTelemetryEvent.run(
+        ev.battle_session_id,
+        ev.replay_id,
+        ev.event_type,
+        ev.attacker_id,
+        ev.defender_id,
+        ev.payload_json
+      );
+      flushed += 1;
+    } catch (e) {
+      console.warn('[battle-telemetry] insert failed:', e?.message || e);
+    }
+  }
+  if (battleTelemetryQueue.length > 0) scheduleBattleTelemetryFlush();
+  return flushed;
+}
+
+function recordBattleTelemetry(eventType, options = {}) {
+  try {
+    const ev = {
+      battle_session_id: clampBattleTelemetryText(options.battleSessionId ?? options.battle_session_id, 128),
+      replay_id: options.replayId ?? options.replay_id ?? null,
+      event_type: normalizeBattleTelemetryEventType(eventType),
+      attacker_id: clampBattleTelemetryText(options.attackerId ?? options.attacker_id, 128),
+      defender_id: clampBattleTelemetryText(options.defenderId ?? options.defender_id, 128),
+      payload_json: battleTelemetryPayloadJson(options.payload || {}),
+    };
+    if (battleTelemetryQueue.length >= BATTLE_TELEMETRY_MAX_QUEUE) {
+      battleTelemetryDropped += 1;
+      if (battleTelemetryDropped === 1 || battleTelemetryDropped % 100 === 0) {
+        console.warn(`[battle-telemetry] dropped ${battleTelemetryDropped} event(s): queue full`);
+      }
+      return false;
+    }
+    battleTelemetryQueue.push(ev);
+    scheduleBattleTelemetryFlush();
+    return true;
+  } catch (e) {
+    console.warn('[battle-telemetry] enqueue failed:', e?.message || e);
+    return false;
+  }
+}
+
+function listBattleTelemetryEvents(filters = {}) {
+  const sessionId = clampBattleTelemetryText(filters.battleSessionId ?? filters.battle_session_id, 128);
+  const attackerId = clampBattleTelemetryText(filters.attackerId ?? filters.attacker_id, 128);
+  const defenderId = clampBattleTelemetryText(filters.defenderId ?? filters.defender_id, 128);
+  const eventType = filters.eventType || filters.event_type
+    ? normalizeBattleTelemetryEventType(filters.eventType ?? filters.event_type)
+    : null;
+  const limit = Math.max(1, Math.min(500, Math.trunc(Number(filters.limit || 100)) || 100));
+  return stmts.listBattleTelemetryEvents
+    .all(sessionId, sessionId, attackerId, attackerId, defenderId, defenderId, eventType, eventType, limit)
+    .map((row) => {
+      let payload = {};
+      try { payload = row.payload_json ? JSON.parse(row.payload_json) : {}; } catch {}
+      return { ...row, payload };
+    });
+}
 
 // ── Tournament: trophy freeze helper ──────────────────────────────────
 // Returns the active tournament row for `playerId` if the player has
@@ -7693,6 +7859,36 @@ function findEnemy(playerId) {
   } catch (e) {
     console.warn('[matchmaking] failed to record raid match:', e.message);
   }
+  recordBattleTelemetry('battle_started', {
+    battleSessionId: sessionId,
+    attackerId: playerId,
+    defenderId: best.id,
+    payload: {
+      match_type: best.is_bot ? 'bot' : 'live',
+      target_is_bot: !!best.is_bot,
+      target_bot_difficulty: best.bot_difficulty || null,
+      attacker_th: attackPower.town_hall_level,
+      defender_th: repairedBase.town_hall_level,
+      attack_power: attackPower.power,
+      attack_ship_count: attackPower.ship_count,
+      attack_troop_count: attackPower.troop_count,
+      attack_ship_capacity: attackPower.ship_capacity,
+      base_power: repairedBase.power,
+      base_defense_count: repairedBase.defense_count,
+      base_power_ratio: Number(basePowerRatio.toFixed(6)),
+      difficulty_bucket: difficultyBucket,
+      recovery_level: profile.recovery_level,
+      recent_success_rate: profile.success_rate,
+      recent_raid_count: profile.raids,
+      consecutive_losses: profile.consecutive_losses,
+      match_score: Number(best.match_score || 0),
+      live_candidate_count: liveCandidates.length,
+      bot_candidate_count: botCandidates.length,
+      selection_reason: profile.selection_reason,
+      attack_cost_gold: attackCostGold,
+      reserved_until: reservedUntil,
+    },
+  });
   return {
     id: best.id,
     name: best.name,
@@ -7881,6 +8077,31 @@ function findEnemyByName(playerId, rawTargetName) {
       };
     }
     stmts.createBattleSession.run(sessionId, playerId, target.id, reservedUntil);
+    const attackPower = computeAttackPower(playerId);
+    const basePower = computeBasePowerFromBuildings(buildings);
+    recordBattleTelemetry('battle_started', {
+      battleSessionId: sessionId,
+      attackerId: playerId,
+      defenderId: target.id,
+      payload: {
+        match_type: 'named',
+        target_is_bot: false,
+        requested_name: resolved.requested_name,
+        attacker_th: attackPower.town_hall_level,
+        defender_th: basePower.town_hall_level,
+        attack_power: attackPower.power,
+        attack_ship_count: attackPower.ship_count,
+        attack_troop_count: attackPower.troop_count,
+        attack_ship_capacity: attackPower.ship_capacity,
+        base_power: basePower.power,
+        base_defense_count: basePower.defense_count,
+        base_power_ratio: Number((basePower.power / Math.max(1, attackPower.power)).toFixed(6)),
+        normal_attack_cost_gold: normalAttackCostGold,
+        targeted_attack_multiplier: TARGETED_ATTACK_COST_MULTIPLIER,
+        attack_cost_gold: attackCostGold,
+        reserved_until: reservedUntil,
+      },
+    });
     return {
       targeted: true,
       requested_name: resolved.requested_name,
@@ -8135,6 +8356,9 @@ function battleDefeat(attackerId, defenderId, battleSessionId = '') {
   return {
     attackerTrophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
     defenderTrophies: stmts.getPlayerById.get(defenderId)?.trophies || 0,
+    trophy_delta: -TROPHY_LOSS,
+    defender_trophy_delta: defenderIsBot ? 0 : TROPHY_WIN,
+    target_is_bot: defenderIsBot,
   };
 }
 
@@ -8634,6 +8858,9 @@ module.exports = {
   markSurrender,
   validateBattleSession,
   finishBattleSession,
+  recordBattleTelemetry,
+  flushBattleTelemetryEvents,
+  listBattleTelemetryEvents,
   getPlayerMatchmakingStats,
   getGlobalMatchmakingStats,
   // Tournament hooks — exported so server/routes.js claim-gold path and

@@ -30,14 +30,10 @@ toward stronger Town Hall levels and richer island systems.
 
 The source of truth is `production/active-goals.md`.
 
-Current high-level priorities:
+Current high-level priority:
 
-1. PvP arena bots and matchmaking should guide normal players toward about 55-58%
-   win rate without feeling fake.
-2. Full game balance pass across resources, buildings, troops, defenses, upgrades,
-   production, and progression.
-3. Agent workflow improvements: memory, goals, skills, hooks, local checks, and deploy helpers.
-4. Resource building upgrade content for Sawmill, Storage, and Mine.
+1. Add backend battle telemetry for Clash of Perps so battle outcomes, rewards,
+   replay validity, and balance signals can be audited from server-side records.
 
 ## Game Systems
 
