@@ -4017,6 +4017,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       const volume = Math.max(0, safeUsd(row.volume_usd, 1_000_000_000));
       const attackStats = luckyRaiderAttackStatsForPlayer(t, row.player_id, day, cfg);
       const attackWins = attackStats.attack_wins;
+      const attackLosses = Math.max(0, attackStats.attack_attempts - attackWins);
+      const rawAttackLosses = Math.max(0, attackStats.raw_attack_attempts - attackStats.raw_attack_wins);
       const ticketState = luckyRaiderTicketState(cfg, volume, attackWins);
       const ticketsRaw = ticketState.uncapped_tickets;
       const tickets = ticketState.tickets;
@@ -4036,9 +4038,11 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         prize_eligible: Number(row.is_bot || 0) !== 1,
         trades_count: Number(row.trades_count || 0) || 0,
         attack_wins: attackWins,
+        attack_losses: attackLosses,
         attack_attempts: attackStats.attack_attempts,
         attack_surrenders: attackStats.attack_surrenders,
         raw_attack_wins: attackStats.raw_attack_wins,
+        raw_attack_losses: rawAttackLosses,
         raw_attack_attempts: attackStats.raw_attack_attempts,
         raw_attack_surrenders: attackStats.raw_attack_surrenders,
         max_counted_attacks: attackStats.max_counted_attacks,
@@ -4066,9 +4070,11 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         prize_eligible: Number(row.is_bot || 0) !== 1,
         volume_usd: Number(volume.toFixed(2)),
         attack_wins: attackWins,
+        attack_losses: attackLosses,
         attack_attempts: attackStats.attack_attempts,
         attack_surrenders: attackStats.attack_surrenders,
         raw_attack_wins: attackStats.raw_attack_wins,
+        raw_attack_losses: rawAttackLosses,
         raw_attack_attempts: attackStats.raw_attack_attempts,
         raw_attack_surrenders: attackStats.raw_attack_surrenders,
         tickets,
@@ -4103,8 +4109,10 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       prize_eligible: !!entry.prize_eligible,
       volume_usd: entry.volume_usd,
       attack_wins: entry.attack_wins,
+      attack_losses: entry.attack_losses,
       attack_attempts: entry.attack_attempts,
       raw_attack_wins: entry.raw_attack_wins,
+      raw_attack_losses: entry.raw_attack_losses,
       raw_attack_attempts: entry.raw_attack_attempts,
       volume_tickets: entry.details.volume_tickets,
       raw_volume_tickets: entry.details.raw_volume_tickets,
@@ -4131,8 +4139,10 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         prize_eligible: !!entry.prize_eligible,
         volume_usd: entry.volume_usd,
         attack_wins: entry.attack_wins,
+        attack_losses: entry.attack_losses,
         attack_attempts: entry.attack_attempts,
         raw_attack_wins: entry.raw_attack_wins,
+        raw_attack_losses: entry.raw_attack_losses,
         raw_attack_attempts: entry.raw_attack_attempts,
         volume_tickets: entry.details.volume_tickets,
         raw_volume_tickets: entry.details.raw_volume_tickets,

@@ -46,11 +46,17 @@ Options:
   --tournament-id <id>        Lucky Raider tournament id. Default: newest active lucky_raider tournament
   --start-day <YYYY-MM-DD>    First UTC day to seed. Default: today UTC
   --days <n>                  Number of UTC days to seed. Default: 3
-  --bot-count <n>             Visible bot accounts to rotate. Default: winner_count * 6, min 8
-  --target-tickets <n>        Target tickets per featured bot. Default: tournament max_tickets
-  --featured-bots <n>         Max-ticket bots per day. Default: ceil(winner_count * 1.5)
-  --volume-usd <n>            Override volume per featured bot/day
-  --attack-wins <n>           Override accepted victories per featured bot/day
+  --bot-count <n>             Visible bot accounts to rotate. Default: 20
+  --active-bots-min <n>       Random active bots per day minimum. Default: 1
+  --active-bots-max <n>       Random active bots per day maximum. Default: 2
+  --ticket-min <n>            Random target tickets per active bot minimum. Default: 30
+  --ticket-max <n>            Random target tickets per active bot maximum. Default: 52
+  --target-tickets <n>        Fixed target tickets per active bot. Overrides ticket min/max
+  --featured-bots <n>         Fixed active bots per day. Overrides active min/max
+  --volume-usd <n>            Override volume per active bot/day
+  --attack-wins <n>           Override accepted victories per active bot/day
+  --attack-losses <n>         Override non-winning attacks per active bot/day
+  --random-seed <text>        Stable seed for deterministic randomization. Default: tournament id
   --base-level <n>            Bot base town hall level. Default: 4
   --skip-bases                Do not seed bot base buildings
   --apply                     Write changes. Without it, prints a dry-run plan only
@@ -68,10 +74,16 @@ function parseArgs(argv) {
     productionOk: false,
     days: 3,
     botCount: null,
+    activeBotsMin: null,
+    activeBotsMax: null,
+    ticketMin: null,
+    ticketMax: null,
     targetTickets: null,
     featuredBots: null,
     volumeUsd: null,
     attackWins: null,
+    attackLosses: null,
+    randomSeed: null,
     baseLevel: 4,
     skipBases: false,
   };
@@ -92,10 +104,16 @@ function parseArgs(argv) {
     else if (arg === '--start-day') args.startDay = next();
     else if (arg === '--days') args.days = Number(next());
     else if (arg === '--bot-count') args.botCount = Number(next());
+    else if (arg === '--active-bots-min') args.activeBotsMin = Number(next());
+    else if (arg === '--active-bots-max') args.activeBotsMax = Number(next());
+    else if (arg === '--ticket-min') args.ticketMin = Number(next());
+    else if (arg === '--ticket-max') args.ticketMax = Number(next());
     else if (arg === '--target-tickets') args.targetTickets = Number(next());
     else if (arg === '--featured-bots') args.featuredBots = Number(next());
     else if (arg === '--volume-usd') args.volumeUsd = Number(next());
     else if (arg === '--attack-wins') args.attackWins = Number(next());
+    else if (arg === '--attack-losses') args.attackLosses = Number(next());
+    else if (arg === '--random-seed') args.randomSeed = next();
     else if (arg === '--base-level') args.baseLevel = Number(next());
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -143,6 +161,27 @@ function sqlDate(day, seconds = 0) {
 
 function shortHash(value, len = 12) {
   return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, len);
+}
+
+function hashUInt32(value) {
+  const digest = crypto.createHash('sha256').update(String(value)).digest();
+  return digest.readUInt32BE(0);
+}
+
+function clampInt(value, min, max) {
+  const lo = Math.floor(Number(min));
+  const hi = Math.floor(Number(max));
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return lo;
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function randomInt(seed, min, max) {
+  const lo = Math.floor(Number(min));
+  const hi = Math.floor(Number(max));
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return 0;
+  if (hi <= lo) return lo;
+  return lo + (hashUInt32(seed) % (hi - lo + 1));
 }
 
 function parseJsonObject(value, fallback = {}) {
@@ -292,39 +331,126 @@ function buildBots(count, tournamentId) {
   });
 }
 
-function computeSeedPlan(cfg, args) {
-  const targetTickets = Math.max(1, Math.min(cfg.max_tickets, Math.floor(Number(args.targetTickets || cfg.max_tickets) || cfg.max_tickets)));
-  const volumeTicketTarget = cfg.max_volume_tickets > 0
-    ? Math.min(targetTickets, cfg.max_volume_tickets)
-    : targetTickets;
-  const computedVolume = Math.ceil(volumeTicketTarget / cfg.volume_tickets_per_step) * cfg.volume_per_ticket_usd;
-  const needsAttacks = ['attack_wins', 'attack_wins_plus_volume', 'volume_or_attack_wins', 'volume_and_attack_wins'].includes(cfg.ticket_metric);
-  const computedWins = needsAttacks
-    ? Math.min(cfg.max_counted_attacks, Math.max(cfg.attack_wins_per_ticket, targetTickets * cfg.attack_wins_per_ticket))
+function estimatedTickets(cfg, volumeUsd, attackWins) {
+  const volumeSteps = Math.floor(Math.max(0, Number(volumeUsd) || 0) / cfg.volume_per_ticket_usd);
+  const rawVolumeTickets = volumeSteps * cfg.volume_tickets_per_step;
+  const volumeTickets = cfg.max_volume_tickets > 0
+    ? Math.min(rawVolumeTickets, cfg.max_volume_tickets)
+    : rawVolumeTickets;
+  const attackTickets = Math.floor(Math.max(0, Math.floor(Number(attackWins) || 0)) / cfg.attack_wins_per_ticket);
+  let tickets = volumeTickets;
+  if (cfg.ticket_metric === 'attack_wins') tickets = attackTickets;
+  else if (cfg.ticket_metric === 'attack_wins_plus_volume') tickets = attackTickets + volumeTickets;
+  else if (cfg.ticket_metric === 'volume_or_attack_wins') tickets = Math.max(volumeTickets, attackTickets);
+  else if (cfg.ticket_metric === 'volume_and_attack_wins') tickets = Math.min(volumeTickets, attackTickets);
+  return Math.max(0, Math.min(cfg.max_tickets, Math.floor(tickets || 0)));
+}
+
+function volumeUsdForTickets(cfg, ticketCount) {
+  const tickets = Math.max(0, Math.floor(Number(ticketCount) || 0));
+  if (tickets <= 0) return 0;
+  const steps = Math.ceil(tickets / cfg.volume_tickets_per_step);
+  return steps * cfg.volume_per_ticket_usd;
+}
+
+function ticketRange(cfg, args) {
+  if (Number.isFinite(args.targetTickets)) {
+    const fixed = clampInt(args.targetTickets, 1, cfg.max_tickets);
+    return { min: fixed, max: fixed };
+  }
+  const maxDefault = Math.min(52, cfg.max_tickets);
+  const min = clampInt(args.ticketMin ?? 30, 1, cfg.max_tickets);
+  const max = clampInt(args.ticketMax ?? maxDefault, min, cfg.max_tickets);
+  return { min, max };
+}
+
+function activeBotRange(args, botCount) {
+  if (Number.isFinite(args.featuredBots)) {
+    const fixed = clampInt(args.featuredBots, 1, botCount);
+    return { min: fixed, max: fixed };
+  }
+  const min = clampInt(args.activeBotsMin ?? 1, 1, botCount);
+  const max = clampInt(args.activeBotsMax ?? 2, min, botCount);
+  return { min, max };
+}
+
+function pickDailyBots(bots, day, count, seed) {
+  return bots
+    .map((bot) => ({ bot, score: shortHash(`${seed}:pick:${day}:${bot.id}`, 16) }))
+    .sort((a, b) => a.score.localeCompare(b.score))
+    .slice(0, count)
+    .map((entry) => entry.bot);
+}
+
+function computeDailyBotStats(cfg, args, day, bot, slot, seed) {
+  const range = ticketRange(cfg, args);
+  const targetTickets = randomInt(`${seed}:tickets:${day}:${bot.id}:${slot}`, range.min, range.max);
+  const maxAttackTickets = Math.floor(cfg.max_counted_attacks / cfg.attack_wins_per_ticket);
+  const maxVolumeTickets = cfg.max_volume_tickets > 0 ? cfg.max_volume_tickets : targetTickets;
+
+  let volumeTicketGoal = 0;
+  let attackTicketGoal = 0;
+
+  if (cfg.ticket_metric === 'volume') {
+    volumeTicketGoal = targetTickets;
+    attackTicketGoal = randomInt(`${seed}:display-wins:${day}:${bot.id}`, 8, Math.min(35, Math.max(8, maxAttackTickets)));
+  } else if (cfg.ticket_metric === 'attack_wins') {
+    attackTicketGoal = Math.min(targetTickets, maxAttackTickets);
+    volumeTicketGoal = randomInt(`${seed}:display-volume:${day}:${bot.id}`, 0, Math.min(8, maxVolumeTickets));
+  } else if (cfg.ticket_metric === 'volume_or_attack_wins') {
+    attackTicketGoal = Math.min(targetTickets, maxAttackTickets);
+    volumeTicketGoal = randomInt(`${seed}:display-volume:${day}:${bot.id}`, 0, Math.min(targetTickets, maxVolumeTickets));
+  } else if (cfg.ticket_metric === 'volume_and_attack_wins') {
+    attackTicketGoal = Math.min(targetTickets, maxAttackTickets);
+    volumeTicketGoal = Math.min(targetTickets, maxVolumeTickets);
+  } else {
+    const minVolumeToFit = Math.max(0, targetTickets - maxAttackTickets);
+    const volumeMin = Math.min(maxVolumeTickets, Math.max(minVolumeToFit, maxVolumeTickets > 0 ? 1 : 0));
+    const volumeMax = Math.min(maxVolumeTickets, targetTickets);
+    volumeTicketGoal = randomInt(`${seed}:volume-tickets:${day}:${bot.id}`, volumeMin, volumeMax);
+    attackTicketGoal = Math.min(maxAttackTickets, Math.max(0, targetTickets - volumeTicketGoal));
+  }
+
+  let volumeUsd = volumeUsdForTickets(cfg, volumeTicketGoal);
+  let attackWins = attackTicketGoal * cfg.attack_wins_per_ticket;
+  if (Number.isFinite(args.volumeUsd)) volumeUsd = Math.max(0, Number(args.volumeUsd) || 0);
+  if (Number.isFinite(args.attackWins)) attackWins = clampInt(args.attackWins, 0, cfg.max_counted_attacks);
+
+  const maxLosses = Math.max(0, Math.min(12, cfg.max_counted_attacks - attackWins));
+  let attackLosses = maxLosses > 0
+    ? randomInt(`${seed}:losses:${day}:${bot.id}`, 0, maxLosses)
     : 0;
+  if (Number.isFinite(args.attackLosses)) attackLosses = clampInt(args.attackLosses, 0, Math.max(0, cfg.max_counted_attacks - attackWins));
+
+  const tradesCount = Math.max(1, randomInt(`${seed}:trades:${day}:${bot.id}`, 3, 18));
   return {
-    targetTickets,
-    volumeUsd: Math.max(0, Number(args.volumeUsd ?? computedVolume) || 0),
-    attackWins: Math.max(0, Math.floor(Number(args.attackWins ?? computedWins) || 0)),
+    target_tickets: targetTickets,
+    expected_tickets: estimatedTickets(cfg, volumeUsd, attackWins),
+    attack_wins: attackWins,
+    attack_losses: attackLosses,
+    attack_attempts: attackWins + attackLosses,
+    volume_usd: Math.round(volumeUsd * 100) / 100,
+    trades_count: tradesCount,
   };
 }
 
-function ensureParticipant(db, tournament, botId, day, volumeUsd) {
+function ensureParticipant(db, tournament, botId, day, volumeUsd, tradesCount) {
   db.prepare(`
     INSERT INTO tournament_participants (
       tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count,
       volume_usd, pnl_usd, team_dex, reward_wallet_evm, last_activity_at
-    ) VALUES (?, ?, ?, NULL, 0, 0, 0, ?, 0, 'visible_bot', NULL, ?)
+    ) VALUES (?, ?, ?, NULL, 0, 0, ?, ?, 0, 'visible_bot', NULL, ?)
     ON CONFLICT(tournament_id, player_id) DO UPDATE SET
       left_at = NULL,
       team_dex = 'visible_bot',
       reward_wallet_evm = NULL,
+      trades_count = MAX(COALESCE(trades_count, 0), excluded.trades_count),
       volume_usd = MAX(COALESCE(volume_usd, 0), excluded.volume_usd),
       last_activity_at = excluded.last_activity_at
-  `).run(tournament.id, botId, sqlDate(day, 60), volumeUsd, sqlDate(day, 60));
+  `).run(tournament.id, botId, sqlDate(day, 60), tradesCount, volumeUsd, sqlDate(day, 60));
 }
 
-function seedDailyActivity(db, tournamentId, botId, day, volumeUsd) {
+function seedDailyActivity(db, tournamentId, botId, day, volumeUsd, tradesCount) {
   const eventId = `${tournamentId}:${day}:${botId}:visible-bot-volume`;
   db.prepare(`
     INSERT INTO tournament_daily_activity (
@@ -341,46 +467,85 @@ function seedDailyActivity(db, tournamentId, botId, day, volumeUsd) {
     botId,
     ACTIVITY_SOURCE,
     eventId,
-    Math.max(1, Math.ceil(volumeUsd / 5000)),
+    Math.max(1, Math.floor(Number(tradesCount) || 1)),
     volumeUsd,
     sqlDate(day, 120)
   );
 }
 
-function replayExists(db, botId, seedEventId) {
-  return !!db.prepare(`
-    SELECT id
-      FROM battle_replays
+function clearSyntheticDay(db, tournamentId, bots, day) {
+  db.prepare(`
+    DELETE FROM tournament_daily_activity
+     WHERE tournament_id = ?
+       AND day_utc = ?
+       AND source = ?
+  `).run(tournamentId, day, ACTIVITY_SOURCE);
+  for (const bot of bots) {
+    clearSyntheticAttacks(db, bot.id, day);
+  }
+}
+
+function clearSyntheticAttacks(db, botId, day) {
+  return db.prepare(`
+    DELETE FROM battle_replays
      WHERE attacker_id = ?
        AND verification_reason = ?
        AND replay_data LIKE ?
-     LIMIT 1
-  `).get(botId, REPLAY_REASON, `%"seed_event_id":"${seedEventId}"%`);
+  `).run(botId, REPLAY_REASON, `%"seed_event_id":"${botId}:${day}:attack:%`);
 }
 
-function seedAttackWins(db, botId, defenderId, day, attackWins) {
+function seedAttackOutcomes(db, botId, defenderId, day, stats, seed) {
+  clearSyntheticAttacks(db, botId, day);
   const insert = db.prepare(`
     INSERT INTO battle_replays (
       attacker_id, defender_id, claimed_result, verified_result, verification_reason,
       replay_data, buildings_snapshot, loot_gold, loot_wood, loot_ore,
       sim_th_hp_pct, sim_buildings_destroyed, sim_debug, duration_sec, created_at
-    ) VALUES (?, ?, 'victory', 'accepted', ?, ?, '[]', 0, 0, 0, 0, 1, ?, 8.0, ?)
+    ) VALUES (?, ?, ?, 'accepted', ?, ?, '[]', 0, 0, 0, ?, ?, ?, 8.0, ?)
   `);
-  let inserted = 0;
-  for (let i = 0; i < attackWins; i += 1) {
+  const outcomes = [];
+  for (let i = 0; i < stats.attack_wins; i += 1) outcomes.push({ outcome: 'victory', index: i });
+  for (let i = 0; i < stats.attack_losses; i += 1) outcomes.push({ outcome: 'defeat', index: i });
+  outcomes.sort((a, b) => {
+    const aScore = shortHash(`${seed}:outcome:${botId}:${day}:${a.outcome}:${a.index}`, 16);
+    const bScore = shortHash(`${seed}:outcome:${botId}:${day}:${b.outcome}:${b.index}`, 16);
+    return aScore.localeCompare(bScore);
+  });
+  for (let i = 0; i < outcomes.length; i += 1) {
     const seedEventId = `${botId}:${day}:attack:${String(i + 1).padStart(3, '0')}`;
-    if (replayExists(db, botId, seedEventId)) continue;
+    const outcome = outcomes[i].outcome;
+    const isWin = outcome === 'victory';
     const replay = JSON.stringify({
       seed_event_id: seedEventId,
       source: ACTIVITY_SOURCE,
       visible_bot: true,
+      outcome,
       actions: [],
     });
-    const debug = JSON.stringify({ source: ACTIVITY_SOURCE, visible_bot: true });
-    insert.run(botId, defenderId, REPLAY_REASON, replay, debug, sqlDate(day, 180 + i * 30));
-    inserted += 1;
+    const debug = JSON.stringify({
+      source: ACTIVITY_SOURCE,
+      visible_bot: true,
+      outcome,
+      target_tickets: stats.target_tickets,
+      expected_tickets: stats.expected_tickets,
+    });
+    insert.run(
+      botId,
+      defenderId,
+      outcome,
+      REPLAY_REASON,
+      replay,
+      isWin ? 0 : 55,
+      isWin ? 1 : 0,
+      debug,
+      sqlDate(day, 180 + i * 30)
+    );
   }
-  return inserted;
+  return {
+    insertedWins: stats.attack_wins,
+    insertedLosses: stats.attack_losses,
+    insertedAttempts: outcomes.length,
+  };
 }
 
 function main() {
@@ -404,23 +569,27 @@ function main() {
   const tournament = chooseTournament(db, args);
   const cfg = luckyConfig(tournament);
   if (!cfg.enabled) throw new Error(`Tournament #${tournament.id} does not have lucky_daily_raider.enabled=true`);
-  const seedPlan = computeSeedPlan(cfg, args);
-  const featuredBots = Math.max(1, Math.min(50, Math.floor(Number(args.featuredBots || Math.ceil(cfg.winner_count * 1.5)) || 1)));
-  const botCount = Math.max(featuredBots + 2, Math.floor(Number(args.botCount || Math.max(8, cfg.winner_count * 6)) || 8));
+  const botCount = clampInt(args.botCount ?? 20, 1, 200);
   const bots = buildBots(botCount, tournament.id);
-  const defender = {
-    id: `lr-bot-${tournament.id}-defender`,
-    name: `Lucky Bot Defender ${tournament.id}`,
-    token: `lrbot_${shortHash(`${tournament.id}:defender:token`, 24)}`,
-    gold: 75000,
-    wood: 75000,
-    ore: 75000,
-    trophies: 0,
-    level: Math.max(1, Math.min(5, Math.floor(Number(args.baseLevel) || 4))),
-    difficulty: 'lucky_raider_visible_defender',
-    variant: 0,
-  };
+  const activeRange = activeBotRange(args, botCount);
+  const tickets = ticketRange(cfg, args);
+  const randomSeed = String(args.randomSeed || `lucky-raider-${tournament.id}`);
+  const defenderId = `lr-bot-${tournament.id}-synthetic-defender`;
+  const baseLevel = Math.max(1, Math.min(5, Math.floor(Number(args.baseLevel) || 4)));
   const dayList = Array.from({ length: days }, (_, idx) => addUtcDays(startDay, idx));
+  const dailyPlan = dayList.map((day) => {
+    const activeCount = randomInt(`${randomSeed}:active-count:${day}`, activeRange.min, activeRange.max);
+    const activeBots = pickDailyBots(bots, day, activeCount, randomSeed);
+    return {
+      day,
+      active_bot_count: activeCount,
+      bots: activeBots.map((bot, slot) => ({
+        id: bot.id,
+        name: bot.name,
+        ...computeDailyBotStats(cfg, args, day, bot, slot, randomSeed),
+      })),
+    };
+  });
 
   const plan = {
     db: dbPath,
@@ -430,14 +599,14 @@ function main() {
     seed: {
       days: dayList,
       bot_count: botCount,
-      featured_bots_per_day: featuredBots,
-      target_tickets: seedPlan.targetTickets,
-      volume_usd_per_featured_bot: seedPlan.volumeUsd,
-      attack_wins_per_featured_bot: seedPlan.attackWins,
-      base_level: args.skipBases ? null : defender.level,
+      active_bots_per_day: activeRange,
+      ticket_range: tickets,
+      base_level: args.skipBases ? null : baseLevel,
+      random_seed: randomSeed,
       transparent: true,
       prize_ineligible: true,
     },
+    daily_plan: dailyPlan,
   };
 
   console.log(JSON.stringify(plan, null, 2));
@@ -448,25 +617,27 @@ function main() {
   }
 
   const tx = db.transaction(() => {
-    insertOrUpdatePlayer(db, playerColumns, defender);
-    if (!args.skipBases) ensureBotBase(db, defender.id, defender.level);
     for (const bot of bots) {
       insertOrUpdatePlayer(db, playerColumns, bot);
-      if (!args.skipBases) ensureBotBase(db, bot.id, args.baseLevel);
+      if (!args.skipBases) ensureBotBase(db, bot.id, baseLevel);
     }
     let activityRows = 0;
-    let replayRows = 0;
-    for (let dayIndex = 0; dayIndex < dayList.length; dayIndex += 1) {
-      const day = dayList[dayIndex];
-      for (let n = 0; n < featuredBots; n += 1) {
-        const bot = bots[(dayIndex * featuredBots + n) % bots.length];
-        ensureParticipant(db, tournament, bot.id, day, seedPlan.volumeUsd);
-        seedDailyActivity(db, tournament.id, bot.id, day, seedPlan.volumeUsd);
+    let replayWins = 0;
+    let replayLosses = 0;
+    let replayAttempts = 0;
+    for (const dayPlan of dailyPlan) {
+      clearSyntheticDay(db, tournament.id, bots, dayPlan.day);
+      for (const botPlan of dayPlan.bots) {
+        ensureParticipant(db, tournament, botPlan.id, dayPlan.day, botPlan.volume_usd, botPlan.trades_count);
+        seedDailyActivity(db, tournament.id, botPlan.id, dayPlan.day, botPlan.volume_usd, botPlan.trades_count);
         activityRows += 1;
-        replayRows += seedAttackWins(db, bot.id, defender.id, day, seedPlan.attackWins);
+        const seeded = seedAttackOutcomes(db, botPlan.id, defenderId, dayPlan.day, botPlan, randomSeed);
+        replayWins += seeded.insertedWins;
+        replayLosses += seeded.insertedLosses;
+        replayAttempts += seeded.insertedAttempts;
       }
     }
-    return { activityRows, replayRows };
+    return { activityRows, replayWins, replayLosses, replayAttempts };
   });
   const result = tx();
   console.log(JSON.stringify({ ok: true, ...result }, null, 2));
