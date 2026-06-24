@@ -268,6 +268,8 @@ function marketFromOrderBook(row) {
   const priceDecimals = Number(row?.supported_price_decimals || 2);
   const sizeDecimals = Number(row?.supported_size_decimals || 4);
   const lotSize = sizeDecimals >= 0 ? String(1 / (10 ** Math.min(sizeDecimals, 12))) : '0.0001';
+  const lastPrice = num(row?.last_trade_price ?? row?.last_price, 0);
+  const markPrice = num(row?.mark_price ?? row?.index_price ?? lastPrice, lastPrice);
   return {
     symbol,
     base: symbol,
@@ -283,6 +285,12 @@ function marketFromOrderBook(row) {
     size_decimals: sizeDecimals,
     max_leverage: 50,
     funding_rate: 0,
+    price: markPrice,
+    mark: markPrice,
+    mark_price: markPrice,
+    last_price: lastPrice,
+    last_trade_price: lastPrice,
+    index_price: num(row?.index_price ?? markPrice, markPrice),
     taker_fee: num(row?.taker_fee, 0),
     maker_fee: num(row?.maker_fee, 0),
     pyth_symbol: `Crypto.${symbol}/USD`,

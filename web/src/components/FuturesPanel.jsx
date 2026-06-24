@@ -2433,6 +2433,11 @@ function FuturesPanel() {
       marketRow?.last_price,
       marketRow?.lastPrice,
       marketRow?.index_price,
+      marketRow?.last_trade_price,
+      marketRow?._raw?.mark_price,
+      marketRow?._raw?.index_price,
+      marketRow?._raw?.last_price,
+      marketRow?._raw?.last_trade_price,
     ) || null;
   }, [prices, markets, symbol]);
 
