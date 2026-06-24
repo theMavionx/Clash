@@ -204,7 +204,8 @@ function missingExchangesForBot(bot, syncedAccounts) {
 
 const getBotConfigDetails = (id) => {
   const key = String(id || '');
-  if (key.includes('grvt')) return { tradeSize: 750, maxPosition: 15000, preset: 'calm' };
+  if (key.includes('grvt') && key.includes('ping_pong')) return { tradeSize: 10, maxPosition: 100, preset: 'calm' };
+  if (key.includes('grvt')) return { tradeSize: 10, maxPosition: 100, preset: 'calm' };
   if (key.includes('hyperliquid') && key.includes('symmetric_mm')) return { tradeSize: 10, maxPosition: 50, preset: 'aggressive' };
   if (key.includes('pacifica')) return { tradeSize: 50, maxPosition: 50, preset: 'calm' };
   if (key.includes('avantis')) return { tradeSize: 2000, maxPosition: 20000, preset: 'calm' };
@@ -276,7 +277,9 @@ const mapHandleToBot = (handle, runningList, runtime = {}, activeOrdersGlobal = 
       ? (openQuotes > 0
         ? `${openQuotes} quote(s) on exchange · cycle ${cycles}`
           : cycles > 0
-          ? `Bot runs but ${exchange} has 0 quotes — check balance, min $10 notional, leverage`
+          ? (String(exchange).toUpperCase().includes('GRVT')
+            ? `Bot runs but GRVT has 0 quotes — min ~$130/order on GRVT; need ~$15–30 free margin, builder auth, leverage`
+            : `Bot runs but ${exchange} has 0 quotes — check free margin, min notional, leverage`)
           : 'Worker spawned, waiting for first cycle')
       : 'Press ▶ Start — only works if exchange account is ACTIVE',
     isTemplate: !isRunning,
@@ -692,7 +695,7 @@ function BotsPanel({ onClose }) {
                 return;
               }
               const available = parseDecimalField(
-                bal?.data?.equity_usd ?? bal?.data?.available_margin_usd,
+                bal?.data?.available_margin_usd ?? bal?.data?.equity_usd,
               );
               setHlBalanceUsd(available);
             })
@@ -711,7 +714,7 @@ function BotsPanel({ onClose }) {
                 return;
               }
               const available = parseDecimalField(
-                bal?.data?.equity_usd ?? bal?.data?.available_margin_usd,
+                bal?.data?.available_margin_usd ?? bal?.data?.equity_usd,
               );
               setGrvtBalanceUsd(available);
             })
@@ -1631,10 +1634,10 @@ function BotsPanel({ onClose }) {
           <> Hyperliquid: <strong>${hlBalanceUsd.toFixed(2)}</strong>.</>
         )}
         {grvtBalanceUsd != null && (
-          <> GRVT: <strong>${grvtBalanceUsd.toFixed(2)}</strong> (bot sees this balance).</>
+          <> GRVT free margin: <strong>${grvtBalanceUsd.toFixed(2)}</strong> (what the bot uses for quotes).</>
         )}
         {(hlBalanceUsd != null || grvtBalanceUsd != null) && (
-          <> Orders need ≥ trade size + exchange min notional.</>
+          <> GRVT MM needs ~$130 min notional per order (leverage auto-raised). $10–15 accounts are tight — deposit $30+ for reliable quotes.</>
         )}
       </p>
       <div style={S.summaryGrid}>
