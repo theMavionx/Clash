@@ -13,6 +13,16 @@ $MainDir = Join-Path $Root 'server'
 $FuturesDir = Join-Path $Root 'server-futures'
 $WebDir = Join-Path $Root 'web'
 $LogDir = Join-Path $Root '.local-logs'
+$BundledPython = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+$DefaultLighterPythonBin = if (Test-Path $BundledPython) { $BundledPython } else { 'python' }
+$BotApiProxy = if ($env:VITE_BOT_API_PROXY) { $env:VITE_BOT_API_PROXY } else { 'http://62.72.35.202:8080' }
+$BotWsProxy = if ($env:VITE_BOT_WS_PROXY) {
+  $env:VITE_BOT_WS_PROXY
+} elseif ($BotApiProxy -match '^https://') {
+  $BotApiProxy -replace '^https://', 'wss://'
+} else {
+  $BotApiProxy -replace '^http://', 'ws://'
+}
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
@@ -162,6 +172,7 @@ $services = @(
       GMX_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       HYPERLIQUID_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       HOTSTUFF_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
+      LIGHTER_PYTHON_BIN = $(if ($env:LIGHTER_PYTHON_BIN) { $env:LIGHTER_PYTHON_BIN } else { $DefaultLighterPythonBin })
     } `
     -WatchDirs @($FuturesDir))
 )
@@ -177,6 +188,12 @@ if ($WithWeb) {
       VITE_API_PROXY = "http://127.0.0.1:$MainPort"
       VITE_WS_PROXY = "ws://127.0.0.1:$MainPort"
       VITE_FUTURES_PROXY = "http://127.0.0.1:$FuturesPort"
+      VITE_BOT_API_BASE_URL = $BotApiProxy
+      VITE_BOT_WS_BASE_URL = $BotWsProxy
+      VITE_BOT_API_PROXY = $BotApiProxy
+      VITE_BOT_WS_PROXY = $BotWsProxy
+      VITE_CLASH_BOT_URL = $BotApiProxy
+      VITE_CLASH_BOT_WS_URL = $BotWsProxy
     } `
     -WatchDirs @())
 }

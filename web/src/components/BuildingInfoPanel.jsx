@@ -142,8 +142,7 @@ const ALTAR_SKILLS = {
     label: 'Glory',
     title: 'Cup Offering',
     bonus: 'bonus trophies on attack win',
-    bonusType: 'range',
-    minValue: 1,
+    bonusType: 'flat',
     values: [5, 7, 10],
     costs: [
       { wood: 12000, ore: 12000, gold: 3000 },
@@ -159,6 +158,9 @@ function formatAltarSkillBonus(skill, level) {
   const max = Number(skill.values?.[level - 1] || 0);
   if (skill.bonusType === 'range') {
     return `+${Number(skill.minValue || 1)}-${max} ${skill.bonus}`;
+  }
+  if (skill.bonusType === 'flat') {
+    return `+${max} ${skill.bonus}`;
   }
   return `+${max}% ${skill.bonus}`;
 }
@@ -1031,7 +1033,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
                         {level < 3 && <div style={{ ...styles.altarTreeLine, ...(isMobile ? styles.altarTreeLineMobile : null) }} />}
                         <div style={{ ...styles.altarTreeNode, ...(isMobile ? styles.altarTreeNodeMobile : null), ...(unlocked ? styles.altarTreeNodeUnlocked : null), ...(isNext ? styles.altarTreeNodeNext : null) }}>
                           <span style={{ ...styles.altarTreeNodeLevel, ...(isMobile ? styles.altarTreeNodeLevelMobile : null) }}>Lv{level}</span>
-                          <span style={{ ...styles.altarTreeNodeValue, ...(isMobile ? styles.altarTreeNodeValueMobile : null) }}>{active.bonusType === 'range' ? `+${active.minValue}-${active.values[level - 1]}` : `+${active.values[level - 1]}%`}</span>
+                          <span style={{ ...styles.altarTreeNodeValue, ...(isMobile ? styles.altarTreeNodeValueMobile : null) }}>
+                            {active.bonusType === 'range'
+                              ? `+${active.minValue}-${active.values[level - 1]}`
+                              : active.bonusType === 'flat'
+                                ? `+${active.values[level - 1]}`
+                                : `+${active.values[level - 1]}%`}
+                          </span>
                         </div>
                       </div>
                       <div style={{ ...styles.altarTreeNodeInfo, ...(isMobile ? styles.altarTreeNodeInfoMobile : null), ...(unlocked ? styles.altarTreeNodeInfoUnlocked : null) }}>

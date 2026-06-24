@@ -4,9 +4,15 @@ import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 import { usePlayer } from '../hooks/useGodot';
 import GoldRewardToast from './GoldRewardToast';
+import { useDex } from '../contexts/DexContext';
+import { readEncryptedCredential, writeEncryptedCredential } from '../lib/encryptedCredentialStorage';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
+const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
+const LIGHTER_STORAGE_KEY = 'clash_lighter_credentials_v1';
+const LIGHTER_AUTH_TOKEN_DEADLINE_SECONDS = 600;
+const LIGHTER_AUTH_TOKEN_REFRESH_SKEW_MS = 90_000;
 
 const QUOTE_TICKERS = new Set([
   'USD', 'USDC', 'USDT', 'USDE', 'DAI', 'AUSD',
@@ -153,6 +159,55 @@ function questEligibilityBadge(task) {
   return String(cfg.label || '').trim() || QUEST_ELIGIBILITY_BADGES[mode] || 'Exclusive';
 }
 
+function lighterTokenIsFresh(creds) {
+  return !!(
+    creds?.readOnlyToken
+    && Number(creds?.readOnlyTokenExpiresAt || creds?.read_only_token_expires_at || 0) > Date.now() + LIGHTER_AUTH_TOKEN_REFRESH_SKEW_MS
+  );
+}
+
+async function ensureLighterTaskCredentials(creds, baseHeaders) {
+  const accountIndex = Number(creds?.accountIndex ?? creds?.account_index);
+  const apiKeyIndex = Number(creds?.apiKeyIndex ?? creds?.api_key_index);
+  const apiPrivateKey = String(creds?.apiPrivateKey ?? creds?.api_private_key ?? '').trim();
+  if (!Number.isInteger(accountIndex) || accountIndex < 0) return null;
+  if (lighterTokenIsFresh(creds)) {
+    return {
+      accountIndex,
+      authToken: String(creds.readOnlyToken || creds.read_only_token || creds.authToken || '').trim(),
+    };
+  }
+  if (!Number.isInteger(apiKeyIndex) || apiKeyIndex < 0 || !apiPrivateKey) {
+    const existingToken = String(creds?.readOnlyToken || creds?.read_only_token || creds?.authToken || '').trim();
+    return existingToken ? { accountIndex, authToken: existingToken } : null;
+  }
+  const res = await fetch(`${FUTURES_API}/lighter/auth-token`, {
+    method: 'POST',
+    headers: { ...baseHeaders, 'content-type': 'application/json', 'x-dex': 'lighter' },
+    body: JSON.stringify({
+      accountIndex,
+      apiKeyIndex,
+      apiPrivateKey,
+      deadline: LIGHTER_AUTH_TOKEN_DEADLINE_SECONDS,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.auth_token) {
+    const existingToken = String(creds?.readOnlyToken || creds?.read_only_token || creds?.authToken || '').trim();
+    return existingToken ? { accountIndex, authToken: existingToken } : null;
+  }
+  const saved = {
+    ...creds,
+    accountIndex,
+    apiKeyIndex,
+    apiPrivateKey,
+    readOnlyToken: data.auth_token,
+    readOnlyTokenExpiresAt: Date.now() + (LIGHTER_AUTH_TOKEN_DEADLINE_SECONDS * 1000),
+  };
+  await writeEncryptedCredential(LIGHTER_STORAGE_KEY, saved);
+  return { accountIndex, authToken: data.auth_token };
+}
+
 function QuestCard({ task, onStart, onClaim, loading }) {
   const pct = task.target_value > 0 ? Math.min(1, task.progress_value / task.target_value) : 0;
   const isDone = task.target_value > 0 && task.progress_value >= task.target_value;
@@ -237,12 +292,29 @@ function QuestsTab({ markets = [] }) {
   // read was null, the early-return fired, and setLoaded(true) never ran →
   // users saw an infinite "Loading quests…" spinner.
   const player = usePlayer();
+  const { dex } = useDex();
   const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
+
+  const taskHeaders = useCallback(async (tok) => {
+    const base = { 'x-token': tok };
+    if (String(dex || '').toLowerCase() !== 'lighter') return base;
+    try {
+      const creds = await readEncryptedCredential(LIGHTER_STORAGE_KEY);
+      const lighterCreds = await ensureLighterTaskCredentials(creds, base);
+      if (lighterCreds?.authToken) {
+        base['x-lighter-account-index'] = String(lighterCreds.accountIndex);
+        base['x-lighter-auth-token'] = lighterCreds.authToken;
+      }
+    } catch {
+      // Quests should remain usable even if encrypted browser storage is unavailable.
+    }
+    return base;
+  }, [dex]);
 
   const fetchTasks = useCallback(async (tok) => {
     if (!tok) { setLoaded(true); return; }
     try {
-      const r = await fetch(`${GAME_API}/tasks`, { headers: { 'x-token': tok } });
+      const r = await fetch(`${GAME_API}/tasks`, { headers: await taskHeaders(tok) });
       if (!r.ok) throw new Error('status ' + r.status);
       const data = await r.json();
       setTasks(Array.isArray(data) ? data : []);
@@ -253,7 +325,7 @@ function QuestsTab({ markets = [] }) {
       setError('Could not load quests — ' + (e?.message || 'network error'));
     }
     finally { setLoaded(true); }
-  }, []);
+  }, [taskHeaders]);
 
   useEffect(() => {
     fetchTasks(token);
@@ -274,13 +346,13 @@ function QuestsTab({ markets = [] }) {
     try {
       const r = await fetch(`${GAME_API}/tasks/${id}/start`, {
         method: 'POST',
-        headers: { 'x-token': token, 'Content-Type': 'application/json' },
+        headers: { ...(await taskHeaders(token)), 'Content-Type': 'application/json' },
       });
       const j = await r.json();
       if (!r.ok) setError(j.error || 'Failed');
       await fetchTasks(token);
     } finally { setLoading(false); }
-  }, [fetchTasks, token]);
+  }, [fetchTasks, taskHeaders, token]);
 
   const handleClaim = useCallback(async (id) => {
     if (!token) { setError('Not signed in yet — try again in a moment.'); return; }
@@ -305,7 +377,7 @@ function QuestsTab({ markets = [] }) {
       };
       const r = await fetch(`${GAME_API}/tasks/${id}/claim`, {
         method: 'POST',
-        headers: { 'x-token': token, 'Content-Type': 'application/json' },
+        headers: { ...(await taskHeaders(token)), 'Content-Type': 'application/json' },
       });
       const j = await r.json();
       if (j.ok && j.completed) {
@@ -332,7 +404,7 @@ function QuestsTab({ markets = [] }) {
       }
       await fetchTasks(token);
     } finally { setLoading(false); }
-  }, [fetchTasks, token]);
+  }, [fetchTasks, taskHeaders, token]);
 
   const visibleTasks = useMemo(
     () => tasks.filter(t => taskTradableOnMarkets(t, markets)),

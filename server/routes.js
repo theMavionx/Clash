@@ -176,7 +176,7 @@ function verifySolanaWalletSignature(wallet, message, signature, encoding = '') 
 
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
-const EVM_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const EVM_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter']);
 const SOLANA_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash']);
 let aptosTsSdkPromise = null;
 
@@ -210,6 +210,11 @@ function normalizeHexInput(value, expectedBytes = 0) {
     if (expectedBytes && bytes.length !== expectedBytes) return '';
     return `0x${Buffer.from(bytes).toString('hex')}`;
   }
+  if (value && typeof value.bcsToBytes === 'function') {
+    const bytes = value.bcsToBytes();
+    if (expectedBytes && bytes.length !== expectedBytes) return '';
+    return `0x${Buffer.from(bytes).toString('hex')}`;
+  }
   if (value && typeof value.toUint8Array === 'function') {
     const bytes = value.toUint8Array();
     if (expectedBytes && bytes.length !== expectedBytes) return '';
@@ -222,6 +227,19 @@ function normalizeHexInput(value, expectedBytes = 0) {
   if (hex.length % 2 !== 0) return '';
   if (expectedBytes && hex.length !== expectedBytes * 2) return '';
   return `0x${hex.toLowerCase()}`;
+}
+
+function hexInputToBytes(value) {
+  const hex = normalizeHexInput(value, 0);
+  if (!hex) return null;
+  return Uint8Array.from(Buffer.from(hex.slice(2), 'hex'));
+}
+
+function unwrapBcsLengthPrefixedBytes(bytes, expectedLength) {
+  if (bytes?.length === expectedLength + 1 && bytes[0] === expectedLength) {
+    return bytes.slice(1);
+  }
+  return bytes;
 }
 
 async function aptosTsSdk() {
@@ -246,9 +264,92 @@ async function aptosTsSdk() {
   return aptosTsSdkPromise;
 }
 
+function deserializeAptosWalletPublicKey(sdk, publicKeyHex) {
+  const bytes = hexInputToBytes(publicKeyHex);
+  if (!bytes) return null;
+  const { AnyPublicKey, Deserializer, Ed25519PublicKey } = sdk;
+  const rawEd25519Bytes = unwrapBcsLengthPrefixedBytes(bytes, 32);
+  if (rawEd25519Bytes.length === 32 && Ed25519PublicKey) {
+    try {
+      return { publicKey: new Ed25519PublicKey(rawEd25519Bytes), scheme: 'ed25519' };
+    } catch { /* try unified format */ }
+  }
+  if (AnyPublicKey && Deserializer) {
+    try {
+      return { publicKey: AnyPublicKey.deserialize(new Deserializer(bytes)), scheme: 'any' };
+    } catch { /* invalid unified key */ }
+  }
+  return null;
+}
+
+function deserializeAptosWalletSignature(sdk, signatureHex, scheme) {
+  const bytes = hexInputToBytes(signatureHex);
+  if (!bytes) return null;
+  const { AnySignature, Deserializer, Ed25519Signature } = sdk;
+  const rawEd25519Bytes = unwrapBcsLengthPrefixedBytes(bytes, 64);
+  if (scheme === 'ed25519' && rawEd25519Bytes.length === 64 && Ed25519Signature) {
+    try {
+      return new Ed25519Signature(rawEd25519Bytes);
+    } catch { /* try unified format */ }
+  }
+  if (AnySignature && Deserializer) {
+    try {
+      const anySignature = AnySignature.deserialize(new Deserializer(bytes));
+      return scheme === 'ed25519' && anySignature?.signature
+        ? anySignature.signature
+        : anySignature;
+    } catch { /* invalid unified signature */ }
+  }
+  if (rawEd25519Bytes.length === 64 && Ed25519Signature) {
+    try {
+      const ed25519Signature = new Ed25519Signature(rawEd25519Bytes);
+      if (scheme === 'any' && AnySignature) {
+        try {
+          return new AnySignature(ed25519Signature);
+        } catch { /* fall through to raw signature */ }
+      }
+      return ed25519Signature;
+    } catch { /* invalid raw signature */ }
+  }
+  return null;
+}
+
+function createAptosVerificationConfig(sdk) {
+  const { AptosConfig, Network } = sdk;
+  if (!AptosConfig) return null;
+  try {
+    return new AptosConfig({
+      network: Network?.MAINNET || 'mainnet',
+      fullnode: aptosFullnode().replace(/\/$/, ''),
+    });
+  } catch {
+    return null;
+  }
+}
+
+function aptosAuthKeyCandidates(publicKey) {
+  const keys = new Set();
+  const addAuthKey = (authKey) => {
+    if (!authKey) return;
+    keys.add(String(authKey).toLowerCase());
+    try {
+      keys.add(authKey.derivedAddress().toStringLong().toLowerCase());
+    } catch { /* not all auth-key-like values expose derivedAddress */ }
+  };
+  try {
+    addAuthKey(publicKey.authKey());
+  } catch { /* invalid public key */ }
+  if (publicKey?.publicKey && publicKey.publicKey !== publicKey) {
+    try {
+      addAuthKey(publicKey.publicKey.authKey());
+    } catch { /* inner key may not be an account public key */ }
+  }
+  return keys;
+}
+
 async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
-  const publicKeyHex = normalizeHexInput(proof.public_key || proof.publicKey, 32);
-  const signatureHex = normalizeHexInput(proof.signature, 64);
+  const publicKeyHex = normalizeHexInput(proof.public_key || proof.publicKey, 0);
+  const signatureHex = normalizeHexInput(proof.signature, 0);
   if (!publicKeyHex || !signatureHex) return false;
   const expectedFullMessage = [
     'APTOS',
@@ -256,17 +357,59 @@ async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
     `nonce: ${issuedAt}`,
   ].join('\n');
   const suppliedFullMessage = String(proof.full_message || proof.fullMessage || '').trim();
-  if (suppliedFullMessage && suppliedFullMessage !== expectedFullMessage) return false;
+  const signedMessage = suppliedFullMessage || expectedFullMessage;
+  if (suppliedFullMessage) {
+    const hasExpectedMessage = suppliedFullMessage.includes(`message: ${message}`);
+    const hasExpectedNonce = suppliedFullMessage.includes(`nonce: ${issuedAt}`);
+    if (!hasExpectedMessage || !hasExpectedNonce) {
+      console.warn('[auth] aptos wallet proof fullMessage mismatch:', {
+        hasExpectedMessage,
+        hasExpectedNonce,
+        supplied_len: suppliedFullMessage.length,
+        expected_len: expectedFullMessage.length,
+      });
+      return false;
+    }
+  }
   try {
-    const { Ed25519PublicKey, Ed25519Signature } = await aptosTsSdk();
-    const publicKey = new Ed25519PublicKey(publicKeyHex);
-    const derivedAddress = publicKey.authKey().derivedAddress().toStringLong().toLowerCase();
-    if (derivedAddress !== normalizeAptosWallet(wallet).toLowerCase()) return false;
-    const signature = new Ed25519Signature(signatureHex);
-    return publicKey.verifySignature({
-      message: Uint8Array.from(Buffer.from(expectedFullMessage, 'utf8')),
-      signature,
-    });
+    const sdk = await aptosTsSdk();
+    const decodedPublicKey = deserializeAptosWalletPublicKey(sdk, publicKeyHex);
+    if (!decodedPublicKey?.publicKey) return false;
+    const { publicKey, scheme } = decodedPublicKey;
+    const authKeyCandidates = aptosAuthKeyCandidates(publicKey);
+    const normalizedWallet = normalizeAptosWallet(wallet).toLowerCase();
+    let walletMatchesPublicKey = authKeyCandidates.has(normalizedWallet);
+    if (!walletMatchesPublicKey) {
+      try {
+        const r = await fetch(`${aptosFullnode().replace(/\/$/, '')}/accounts/${normalizedWallet}`);
+        if (r.ok) {
+          const account = await r.json();
+          const chainAuthKey = normalizeHexInput(account?.authentication_key || account?.authenticationKey, 32);
+          walletMatchesPublicKey = !!chainAuthKey && authKeyCandidates.has(chainAuthKey.toLowerCase());
+        } else {
+          console.warn('[auth] aptos wallet auth-key lookup failed:', r.status);
+        }
+      } catch (e) {
+        console.warn('[auth] aptos wallet auth-key lookup error:', e.message);
+      }
+    }
+    if (!walletMatchesPublicKey) return false;
+    const signature = deserializeAptosWalletSignature(sdk, signatureHex, scheme);
+    if (!signature) return false;
+    const messageBytes = Uint8Array.from(Buffer.from(signedMessage, 'utf8'));
+    try {
+      return publicKey.verifySignature({ message: messageBytes, signature });
+    } catch (syncError) {
+      if (typeof publicKey.verifySignatureAsync !== 'function') throw syncError;
+      const aptosConfig = createAptosVerificationConfig(sdk);
+      if (!aptosConfig) throw syncError;
+      return await publicKey.verifySignatureAsync({
+        aptosConfig,
+        message: messageBytes,
+        signature,
+        options: { throwErrorWithReason: true },
+      });
+    }
   } catch (e) {
     console.warn('[auth] aptos wallet proof verification failed:', e.message);
     return false;
@@ -300,7 +443,10 @@ async function verifyWalletAuthProof(req, { wallet, dex }) {
   if (suppliedMessage && suppliedMessage !== expectedMessage) {
     return { ok: false, status: 401, error: 'Wallet signature message mismatch. Connect again.' };
   }
-  const expectedChain = walletChainTypeForDex(wallet, requestedDex);
+  const expectedChain = walletChainType(canonicalWallet);
+  if (!['solana', 'evm', 'aptos'].includes(expectedChain)) {
+    return { ok: false, status: 400, error: 'Supported wallet type required' };
+  }
   const suppliedChain = String(proof.chain_type || proof.chainType || '').toLowerCase();
   if (suppliedChain && suppliedChain !== expectedChain) {
     return { ok: false, status: 401, error: 'Wallet signature chain mismatch. Connect again.' };
@@ -7801,13 +7947,7 @@ function isLocalDevelopmentRequest(req) {
   return true;
 }
 
-function isScriptedHttpClient(req) {
-  const ua = String(req.headers['user-agent'] || '').toLowerCase();
-  return /\b(node|undici|curl|wget|python|axios|got|postman|insomnia|httpie)\b/.test(ua);
-}
-
 function hasFirstPartyBrowserContext(req) {
-  if (isScriptedHttpClient(req)) return false;
   const requestHost = requestHeaderHost(req.headers['x-forwarded-host'] || req.headers.host);
   const originHost = urlHeaderHost(req.headers.origin);
   const refererHost = urlHeaderHost(req.headers.referer);
@@ -7822,7 +7962,7 @@ function hasFirstPartyBrowserContext(req) {
 
 function requireFirstPartyBrowserContext(req, res, action) {
   if (hasFirstPartyBrowserContext(req)) return true;
-  console.warn('[security] blocked scripted wallet endpoint', {
+  console.warn('[security] blocked wallet endpoint without first-party context', {
     action,
     method: req.method,
     path: req.originalUrl || req.url,
@@ -8136,7 +8276,7 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 const DEX_REQUIRED_CHAIN = {
   pacifica: 'solana',
   phoenix: 'solana',
@@ -8153,12 +8293,30 @@ const DEX_REQUIRED_CHAIN = {
   hotstuff: 'evm',
   grvt: 'evm',
   katana: 'evm',
+  lighter: 'evm',
 };
 
 function dexAcceptsWallet(dex, wallet) {
   const required = DEX_REQUIRED_CHAIN[String(dex || '').toLowerCase()] || null;
   if (!required || !wallet || !isValidWallet(wallet)) return false;
   return walletChainType(wallet) === required;
+}
+
+function upsertPlayerDexAccountFromLoginWallet(playerId, dex, wallet, status = 'ready', metadata = {}) {
+  const venueWallet = dexAcceptsWallet(dex, wallet) ? canonicalWalletIdentifier(wallet) : '';
+  const meta = { ...(metadata || {}) };
+  if (!venueWallet && wallet && isValidWallet(wallet)) {
+    meta.__clear_wallet = true;
+    meta.ignored_wallet = canonicalWalletIdentifier(wallet);
+    meta.ignored_chain_type = walletChainType(wallet);
+  }
+  upsertPlayerDexAccount(
+    playerId,
+    dex,
+    venueWallet,
+    venueWallet ? status : 'disconnected',
+    meta,
+  );
 }
 
 function resolveClaimWalletForDex(player, dex, currentWallet = null) {
@@ -8257,7 +8415,7 @@ function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown'
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -8281,7 +8439,7 @@ router.post('/players/set-dex', auth, (req, res) => {
   }
   if (dex !== req.player.dex) {
     safelySetPlayerActiveDex(req.player, dex, req.player.wallet, 'set-dex');
-    upsertPlayerDexAccount(req.player.id, dex, req.player.wallet, req.player.wallet ? 'ready' : 'disconnected', { source: 'set-dex' });
+    upsertPlayerDexAccountFromLoginWallet(req.player.id, dex, req.player.wallet, 'ready', { source: 'set-dex' });
     logAuth('active dex changed', { player_id: req.player.id, from: req.player.dex, to: dex });
   }
   res.json({ success: true, dex });
@@ -8324,7 +8482,6 @@ function markPlayerSeekerIfPresent(playerId, body) {
 router.post('/players/register', async (req, res) => {
   const { name, wallet, dex, fid } = req.body;
   const localGuestWallet = isLocalGuestWallet(wallet);
-  if (wallet && !requireFirstPartyBrowserContext(req, res, 'players.register')) return;
   if (wallet && rejectBlacklistedWallet(req, res, wallet, 'players.register')) return;
   if (localGuestWallet && !isLocalDevelopmentRequest(req)) {
     return res.status(403).json({ error: 'Local guest mode is only available on localhost.' });
@@ -8384,7 +8541,7 @@ router.post('/players/register', async (req, res) => {
       // to the new-row branch above.
       safelySetPlayerActiveDex(existing, requestedDex, wallet, 'register');
       upsertUnifiedIdentity(existing.id, wallet, { label: req.body?.walletSource || req.body?.source });
-      upsertPlayerDexAccount(existing.id, requestedDex, wallet, 'ready', {
+      upsertPlayerDexAccountFromLoginWallet(existing.id, requestedDex, wallet, 'ready', {
         source: req.body?.walletSource || req.body?.source || 'register',
       });
       if (seekerCapability) {
@@ -8434,7 +8591,7 @@ router.post('/players/register', async (req, res) => {
   if (wallet) {
     safelySetPlayerActiveDex(result, requestedDex, wallet, 'register-new');
     upsertUnifiedIdentity(result.id, wallet, { label: req.body?.walletSource || req.body?.source });
-    upsertPlayerDexAccount(result.id, requestedDex, wallet, 'ready', {
+    upsertPlayerDexAccountFromLoginWallet(result.id, requestedDex, wallet, 'ready', {
       source: req.body?.walletSource || req.body?.source || 'register',
     });
   } else {
@@ -10044,7 +10201,6 @@ router.post('/players/login-wallet', async (req, res) => {
       dex: player.dex,
     });
   }
-  if (!requireFirstPartyBrowserContext(req, res, 'players.login-wallet')) return;
   const requestedDex = VALID_DEXES.has(dex) ? dex : (player.dex || '');
   const proofDex = VALID_DEXES.has(dex) ? dex : '';
   const authProof = await verifyWalletAuthProof(req, { wallet, dex: proofDex });
@@ -10058,7 +10214,7 @@ router.post('/players/login-wallet', async (req, res) => {
   }
   upsertUnifiedIdentity(player.id, wallet, { label: req.body?.walletSource || req.body?.source });
   if (VALID_DEXES.has(dex)) {
-    upsertPlayerDexAccount(player.id, dex, wallet, 'ready', {
+    upsertPlayerDexAccountFromLoginWallet(player.id, dex, wallet, 'ready', {
       source: req.body?.walletSource || req.body?.source || 'login-wallet',
     });
   }
@@ -12701,7 +12857,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter') {
     const reconcile = await tradeRecon.reconcileTradesForPlayer(req.player, {
       dex,
       wallet,
@@ -12733,7 +12889,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // had a similar early-rollout risk while we were tuning import timing.
     // If a row has never paid anything, rewind the cursor once so verified
     // rows can be credited under the current rules.
-    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'flash')
+    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'flash' || dex === 'lighter')
       && Number(reward.last_trade_id || 0) > 0
       && Number(reward.total_volume || 0) === 0
       && Number(reward.total_gold || 0) === 0) {
@@ -13567,7 +13723,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 const TASK_PROGRESS_REFRESH_TIMEOUT_MS = Math.max(1000, Number(process.env.TASK_PROGRESS_REFRESH_TIMEOUT_MS || 5000));
 
 function withTaskProgressTimeout(promise, label) {
@@ -13580,7 +13736,7 @@ function withTaskProgressTimeout(promise, label) {
   });
 }
 
-async function maybeRefreshTaskProgress(player, task, playerTask) {
+async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders = null) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
   const dex = String(player?.dex || '').toLowerCase();
   if (!LIVE_TASK_PROGRESS_DEXES.has(dex)) return playerTask;
@@ -13601,7 +13757,7 @@ async function maybeRefreshTaskProgress(player, task, playerTask) {
       }
     }
     const result = await withTaskProgressTimeout(
-      tasks.verifyTask(player, task, snap),
+      tasks.verifyTask(player, task, snap, { headers: requestHeaders }),
       `player=${player?.name || player?.id} task=${task?.id} dex=${dex}`
     );
     const progress = result.target_value > 0
@@ -13637,7 +13793,7 @@ router.get('/tasks', auth, async (req, res) => {
     const eligibility = tasks.checkTaskEligibility(req.player, t);
     if (!eligibility.ok) continue;
     let pt = tasks.getPlayerTask(req.player.id, t.id);
-    pt = await maybeRefreshTaskProgress(req.player, t, pt);
+    pt = await maybeRefreshTaskProgress(req.player, t, pt, req.headers);
     out.push({
       id: t.id,
       type: t.type,
@@ -13703,7 +13859,7 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
     }
   }
 
-  const snap = await tasks.buildSnapshot(req.player, task);
+  const snap = await tasks.buildSnapshot(req.player, task, { headers: req.headers });
   db.db.prepare(
     `INSERT OR REPLACE INTO player_tasks (player_id, task_id, snapshot, progress, progress_value, target_value, started_at, claimed_at)
      VALUES (?, ?, ?, 0, 0, 0, datetime('now'), NULL)`
@@ -13742,7 +13898,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   let pt = tasks.getPlayerTask(req.player.id, id);
   if (!pt) {
     // auto-start — snapshot taken now, so there's nothing yet to claim
-    const snap = await tasks.buildSnapshot(req.player, task);
+    const snap = await tasks.buildSnapshot(req.player, task, { headers: req.headers });
     db.db.prepare(
       `INSERT INTO player_tasks (player_id, task_id, snapshot) VALUES (?, ?, ?)`
     ).run(req.player.id, id, JSON.stringify(snap));
@@ -13779,7 +13935,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       ).run(pt.snapshot, req.player.id, id);
     }
   }
-  const result = await tasks.verifyTask(req.player, task, snap);
+  const result = await tasks.verifyTask(req.player, task, snap, { headers: req.headers });
 
   // Always update cached progress (progress update is an independent fact,
   // kept outside the payout txn so it lands even if the completion check
@@ -13797,7 +13953,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     });
     return res.json({ ok: false, completed: false, progress_value: result.progress_value, target_value: result.target_value, breakdown: result.breakdown });
   }
-  const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task) : null;
+  const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task, { headers: req.headers }) : null;
   if (nextRepeatableSnapshot) nextRepeatableSnapshot.strict_after_start_id = true;
 
   // Atomic payout: re-check the snapshot inside the transaction so two
@@ -17157,7 +17313,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   const futuresByPlayer = new Map();
@@ -18007,7 +18163,7 @@ function parseBool(v) {
 const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
 const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
-const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash'];
+const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter'];
 const TOURNAMENT_DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -18024,6 +18180,7 @@ const TOURNAMENT_DEX_LABELS = {
   katana: 'Katana Perps',
   gmtrade: 'GMTrade',
   flash: 'Flash Trade',
+  lighter: 'Lighter',
 };
 const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
 const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
@@ -19764,6 +19921,7 @@ const FUTURES_TOURNAMENT_SYNC_DEXES = new Set([
   'katana',
   'gmtrade',
   'flash',
+  'lighter',
 ]);
 const tournamentParticipantSyncCache = new Map();
 
@@ -20811,6 +20969,121 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
       registered: countMap[t.id]?.players || 0,
     })),
   });
+});
+
+function luckyRaiderPayoutAdminPayload(query = {}) {
+  const status = String(query.status || 'all').trim().toLowerCase();
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(query.limit || 100) || 100)));
+  const settings = db.getLuckyRaiderPayoutSettings();
+  const config = luckyRaiderPayouts.payoutRuntimeConfig();
+  const rows = db.listTournamentLuckyRaiderPayouts({ status, limit });
+  return {
+    ok: true,
+    settings,
+    config,
+    summary: db.getTournamentLuckyRaiderPayoutSummary(),
+    payouts: rows.map((row) => luckyRaiderPayouts.describeLuckyRaiderPayout(row, { settings })),
+    confirm_phrase: luckyRaiderPayouts.MANUAL_PAYOUT_CONFIRM,
+  };
+}
+
+router.get('/admin/lucky-raider/payouts', adminAuth, (req, res) => {
+  try {
+    res.json(luckyRaiderPayoutAdminPayload(req.query || {}));
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] list failed:', err?.message || err);
+    res.status(500).json({ ok: false, error: 'Failed to load Lucky Raider payouts' });
+  }
+});
+
+router.post('/admin/lucky-raider/payouts/settings', adminAuth, (req, res) => {
+  try {
+    const settings = db.setLuckyRaiderPayoutSettings(req.body || {});
+    res.json({
+      ok: true,
+      settings,
+      config: luckyRaiderPayouts.payoutRuntimeConfig(),
+    });
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] settings failed:', err?.message || err);
+    res.status(500).json({ ok: false, error: 'Failed to save Lucky Raider payout settings' });
+  }
+});
+
+router.post('/admin/lucky-raider/payouts/preview', adminAuth, async (req, res) => {
+  try {
+    const result = await luckyRaiderPayouts.previewPendingLuckyRaiderPayouts({
+      limit: req.body?.limit,
+      maxAttempts: req.body?.max_attempts,
+      retrySeconds: req.body?.retry_seconds,
+      ids: Array.isArray(req.body?.ids) ? req.body.ids : [],
+    });
+    res.json(result);
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] preview failed:', err?.message || err);
+    res.status(500).json({ ok: false, error: (err?.message || 'Preview failed').slice(0, 180) });
+  }
+});
+
+router.post('/admin/lucky-raider/payouts/run', adminAuth, async (req, res) => {
+  try {
+    const confirm = String(req.body?.confirm || '').trim();
+    if (confirm !== luckyRaiderPayouts.MANUAL_PAYOUT_CONFIRM) {
+      return res.status(400).json({ ok: false, error: `Confirmation phrase required: ${luckyRaiderPayouts.MANUAL_PAYOUT_CONFIRM}` });
+    }
+    const result = await luckyRaiderPayouts.processPendingLuckyRaiderPayouts({
+      mode: 'manual',
+      confirm,
+      limit: req.body?.limit,
+      maxAttempts: req.body?.max_attempts,
+      retrySeconds: req.body?.retry_seconds,
+      ids: Array.isArray(req.body?.ids) ? req.body.ids : [],
+    });
+    res.json(result);
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] run failed:', err?.message || err);
+    res.status(500).json({ ok: false, error: (err?.message || 'Payout run failed').slice(0, 180) });
+  }
+});
+
+router.patch('/admin/lucky-raider/payouts/:id/destination', adminAuth, (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    const row = db.getTournamentLuckyRaiderPayout(id);
+    if (!row) return res.status(404).json({ ok: false, error: 'payout not found' });
+    if (!['pending', 'failed'].includes(String(row.status || ''))) {
+      return res.status(409).json({ ok: false, error: 'only pending or failed payout wallets can be changed' });
+    }
+    const wallet = String(req.body?.wallet || '').trim();
+    if (!wallet) return res.status(400).json({ ok: false, error: 'wallet required' });
+    const { PublicKey } = require('@solana/web3.js');
+    const normalized = new PublicKey(wallet).toBase58();
+    if (db.isWalletBlacklisted(normalized)) return res.status(400).json({ ok: false, error: 'wallet is blacklisted' });
+    const metadata = (() => {
+      try { return JSON.parse(row.metadata_json || '{}') || {}; } catch { return {}; }
+    })();
+    const history = Array.isArray(metadata.admin_destination_updates) ? metadata.admin_destination_updates : [];
+    history.push({
+      at: new Date().toISOString(),
+      previous: row.destination_wallet || row.current_destination_wallet || null,
+      next: normalized,
+      note: String(req.body?.note || '').slice(0, 180),
+    });
+    metadata.admin_destination_updates = history.slice(-10);
+    db.db.prepare(`
+      UPDATE tournament_lucky_raider_payouts
+         SET destination_wallet = ?,
+             metadata_json = ?,
+             updated_at = datetime('now')
+       WHERE id = ?
+         AND status IN ('pending', 'failed')
+    `).run(normalized, JSON.stringify(metadata), id);
+    const updated = db.getTournamentLuckyRaiderPayout(id);
+    res.json({ ok: true, payout: luckyRaiderPayouts.describeLuckyRaiderPayout(updated, { settings: db.getLuckyRaiderPayoutSettings() }) });
+  } catch (err) {
+    console.warn('[admin lucky-raider payouts] destination update failed:', err?.message || err);
+    res.status(400).json({ ok: false, error: (err?.message || 'Wallet update failed').slice(0, 180) });
+  }
 });
 
 // Create a tournament. start_at defaults to now, end_at is optional, boosts
@@ -22057,7 +22330,7 @@ try {
 }
 
 // Proxy all bot & strategy requests to the Phantom backend (port 8080)
-const BOT_URL = process.env.CLASH_BOT_URL || 'http://31.97.72.65:8080';
+const BOT_URL = process.env.CLASH_BOT_URL || 'http://127.0.0.1:8080';
 const BOT_PROXY_SECRET = String(
   process.env.CLASH_BOT_PROXY_SECRET
   || process.env.PHANTOM__AUTH__TRUSTED_PROXY_SECRET

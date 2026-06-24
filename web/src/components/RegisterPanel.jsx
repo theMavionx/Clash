@@ -34,6 +34,14 @@ function shortWallet(address) {
   return raw ? `${raw.slice(0, 6)}...${raw.slice(-4)}` : '';
 }
 
+function walletKind(address) {
+  const raw = String(address || '').trim();
+  if (/^0x[a-fA-F0-9]{40}$/.test(raw)) return 'evm';
+  if (/^0x[a-fA-F0-9]{64}$/.test(raw)) return 'aptos';
+  if (raw) return 'solana';
+  return 'unknown';
+}
+
 // Styled to match the project's dominant Clash-of-Clans modal look (parchment
 // body + blue header + yellow action button — see BuildingInfoPanel LT styles
 // for the reference). Previously used the older dark "cartoonPanel" look that
@@ -290,6 +298,61 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
   );
 }
 
+function ConnectLinkedWallet({
+  dex = 'pacifica',
+  wallet,
+  onOpenWalletModal,
+  onOpenEvmModal,
+  onConnectAptos,
+  aptosConnecting,
+  aptosHasProvider,
+  onPrivyLogin,
+  privyEnabled,
+  privyAuthed,
+}) {
+  const cfg = DEX_CONFIG[dex] || DEX_CONFIG.pacifica;
+  const kind = walletKind(wallet);
+  const cta = kind === 'evm'
+    ? 'CONNECT EVM WALLET'
+    : kind === 'aptos'
+      ? (aptosConnecting ? 'CONNECTING...' : (aptosHasProvider ? 'CONNECT APTOS WALLET' : 'INSTALL PETRA'))
+      : kind === 'solana'
+        ? 'CONNECT SOLANA WALLET'
+        : 'CONNECT WALLET';
+  const onClick = kind === 'evm'
+    ? onOpenEvmModal
+    : kind === 'aptos'
+      ? () => {
+          if (!aptosHasProvider) {
+            try { window.open('https://petra.app/', '_blank', 'noopener,noreferrer'); } catch {}
+            return;
+          }
+          onConnectAptos();
+        }
+      : onOpenWalletModal;
+
+  return (
+    <div style={S.bodyStack}>
+      <h3 style={S.sectionTitle}>CONNECT TO {String(cfg.label || 'CLASH').toUpperCase()}</h3>
+      <p style={S.subtle}>
+        Reconnect the wallet linked to this game account to continue. You can connect a separate trading wallet after login if this venue needs another chain.
+      </p>
+      {privyEnabled && (
+        <button style={S.primaryBtn} onClick={onPrivyLogin}>
+          <EmailIcon /> {privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}
+        </button>
+      )}
+      <button
+        style={privyEnabled ? S.secondaryBtn : S.primaryBtn}
+        onClick={onClick}
+        disabled={kind === 'aptos' && aptosConnecting}
+      >
+        <WalletIcon /> {cta}
+      </button>
+    </div>
+  );
+}
+
 function ConnectAccount({ onOpenWalletModal, onOpenEvmModal, onConnectAptos, aptosConnecting, aptosHasProvider, onPrivyLogin, privyEnabled, privyAuthed }) {
   return (
     <div style={S.bodyStack}>
@@ -356,6 +419,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hotstuff' ? 'HOTSTUFF'
     : dex === 'grvt' ? 'GRVT'
     : dex === 'katana' ? 'KATANA'
+    : dex === 'lighter' ? 'LIGHTER'
     : dex === 'gmtrade' ? 'GMTRADE'
     : dex === 'flash' ? 'FLASH TRADE'
     : 'AVANTIS';
@@ -368,6 +432,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hotstuff' ? 'Hotstuff L1'
     : dex === 'grvt' ? 'GRVT Exchange'
     : dex === 'katana' ? 'Katana'
+    : dex === 'lighter' ? 'EVM'
     : dex === 'gmtrade' ? 'Solana'
     : dex === 'flash' ? 'Solana'
     : 'Base';
@@ -550,6 +615,22 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
+        if (storedAuthRecord?.wallet) {
+          return (
+            <ConnectLinkedWallet
+              dex={dex}
+              wallet={storedAuthRecord.wallet}
+              onOpenWalletModal={openSolanaConnect}
+              onOpenEvmModal={openEvmConnect}
+              onConnectAptos={connectAptos}
+              aptosConnecting={aptos.isConnecting}
+              aptosHasProvider={aptos.hasProvider}
+              onPrivyLogin={actions.loginWithPrivy}
+              privyEnabled={privyEnabled}
+              privyAuthed={privyAuthed}
+            />
+          );
+        }
         if (!dexPicked) {
           return (
             <ConnectAccount
@@ -564,7 +645,7 @@ function RegisterPanel() {
             />
           );
         }
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -622,6 +703,7 @@ function RegisterPanel() {
     if (dex === 'hotstuff') return 'HOTSTUFF LOGIN';
     if (dex === 'grvt') return 'GRVT LOGIN';
     if (dex === 'katana') return 'KATANA LOGIN';
+    if (dex === 'lighter') return 'LIGHTER LOGIN';
     if (dex === 'gmtrade') return 'GMTRADE LOGIN';
     if (dex === 'flash') return 'FLASH TRADE LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
@@ -645,7 +727,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : 'base'}
+        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : dex === 'lighter' ? 'baseConnect' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

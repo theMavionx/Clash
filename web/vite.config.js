@@ -103,21 +103,20 @@ const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || 'http://127.0.0.1:3999';
 const FUTURES_PROXY_IS_DIRECT = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\b/i.test(FUTURES_PROXY_TARGET)
   || /^https?:\/\/[^/]+:3999\b/i.test(FUTURES_PROXY_TARGET);
-// Bot/strategy REST + WS must go through the Clash game server so it can
-// validate `x-token` and forward `X-Tenant-Id` to Phantom. Direct :8080
-// bypasses that and every authenticated bot call 401s in local dev.
+// Bot/strategy REST + WS go through Clash :4000 so x-token → X-Tenant-Id reaches Phantom.
 const BOT_API_PROXY_TARGET = API_PROXY_TARGET || 'http://127.0.0.1:4000';
 const BOT_WS_PROXY_TARGET = WS_PROXY_TARGET || 'ws://127.0.0.1:4000';
 const BOT_DIRECT_PROXY_TARGET = process.env.VITE_BOT_DIRECT_URL
   || viteEnv.VITE_BOT_DIRECT_URL
   || process.env.CLASH_BOT_URL
   || viteEnv.CLASH_BOT_URL
-  || 'http://31.97.72.65:8080';
+  || 'http://127.0.0.1:8080';
 
 if (process.env.NODE_ENV !== 'production') {
   console.log('[vite proxy]', {
     api: API_PROXY_TARGET || 'http://127.0.0.1:4000',
     futures: FUTURES_PROXY_TARGET,
+    bot: BOT_API_PROXY_TARGET,
   });
 }
 
@@ -186,8 +185,8 @@ export default defineConfig({
     },
     proxy: {
       // ─── Phantom trading bot (via Clash server :4000 → Phantom :8080) ─
-      // BotsPanel sends the game session `x-token`; Clash auth + proxyToBot
-      // attach X-Tenant-Id for Phantom. Must be BEFORE generic '/api'.
+      // BotsPanel uses same-origin /api/v1/*; Clash auth + proxyToBot attach X-Tenant-Id.
+      // Must be BEFORE generic '/api'.
       '/api/v1/bot/ws': {
         target: BOT_WS_PROXY_TARGET,
         ws: true,

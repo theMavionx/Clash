@@ -266,7 +266,7 @@ copy_db_family() {
 install_system_dependencies() {
     log "[1/9] Installing system dependencies..."
     apt-get update -qq
-    apt-get install -y -qq nginx certbot python3-certbot-nginx curl rsync brotli sqlite3 zstd
+    apt-get install -y -qq nginx certbot python3-certbot-nginx curl rsync brotli sqlite3 zstd python3-venv
 
     if ! command -v node >/dev/null 2>&1; then
         log "Installing Node.js 20..."
@@ -461,6 +461,7 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_GAME_API_URL" "http://127.0.0.1:4000/api"
     ensure_env_default "CLASH_BOT_URL" "http://127.0.0.1:8080"
     ensure_env_default "CLASH_BOT_WS_URL" "ws://127.0.0.1:8080"
+    ensure_env_default "VITE_MM_BOTS_BUTTON_ENABLED" "1"
     ensure_env_default "CLASH_MCP_CORS_ORIGINS" "https://$DOMAIN,https://www.$DOMAIN,https://$MCP_DOMAIN"
     ensure_env_default "CLASH_MCP_RATE_WINDOW_MS" "60000"
     ensure_env_default "CLASH_MCP_RATE_LIMIT" "180"
@@ -534,6 +535,7 @@ prepare_shared_runtime() {
     set_env_value "CLASH_GAME_API_URL" "http://127.0.0.1:4000/api"
     set_env_value "CLASH_BOT_URL" "http://127.0.0.1:8080"
     set_env_value "CLASH_BOT_WS_URL" "ws://127.0.0.1:8080"
+    set_env_value "VITE_MM_BOTS_BUTTON_ENABLED" "1"
     set_env_value "CLASH_HERMES_MODEL_CHAIN" "$hermes_model_chain"
     set_env_value "CLASH_HERMES_PRIMARY_MODEL" "$hermes_primary_model"
     set_env_value "CLASH_HERMES_FALLBACK_MODEL" "$hermes_fallback_model"
@@ -795,6 +797,17 @@ install_release_dependencies() {
         else
             npm install --omit=dev --legacy-peer-deps
         fi
+    fi
+
+    if [ -d "$FUTURES_DIR" ] && [ -f "$FUTURES_DIR/requirements-lighter.txt" ]; then
+        local lighter_venv="$SHARED_DIR/lighter-venv"
+        log "Installing Lighter Python signer dependencies into $lighter_venv"
+        if [ ! -x "$lighter_venv/bin/python" ]; then
+            python3 -m venv "$lighter_venv"
+        fi
+        "$lighter_venv/bin/python" -m pip install --upgrade pip wheel
+        "$lighter_venv/bin/python" -m pip install -r "$FUTURES_DIR/requirements-lighter.txt"
+        set_env_value LIGHTER_PYTHON_BIN "$lighter_venv/bin/python"
     fi
 
     if ! grep -q '^DIAG_SERVER_SECRET_B58=' "$ENV_FILE"; then

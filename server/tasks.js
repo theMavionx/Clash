@@ -109,6 +109,7 @@ const FUTURES_TASK_DEXES = new Set([
   'katana',
   'gmtrade',
   'flash',
+  'lighter',
 ]);
 
 function parseParams(p) {
@@ -338,7 +339,7 @@ function isAfterTaskSnapshot(snap, trade) {
 
 // ---------- Snapshots ----------
 // Captured when the player starts (or auto-starts) a task.
-async function buildSnapshot(player, task) {
+async function buildSnapshot(player, task, opts = {}) {
   const p = parseParams(task.params);
   const now = new Date().toISOString();
   const snap = { start_time: now, type: task.type };
@@ -351,7 +352,11 @@ async function buildSnapshot(player, task) {
     // (avoids a zero baseline that would leak ALL past trades).
     // Snapshot only needs the MAX history_id, so first page (200 trades) is
     // enough — pass firstPageOnly to skip multi-page walks.
-    const trades = await fetchWalletTrades(player, { firstPageOnly: true, includeUnsettled: true });
+    const trades = await fetchWalletTrades(player, {
+      firstPageOnly: true,
+      includeUnsettled: true,
+      headers: opts.headers || opts.requestHeaders || null,
+    });
     let baseline = 0;
     for (const t of trades) {
       const id = Number(t.history_id || 0);
@@ -466,7 +471,8 @@ function walletMatchesDex(dex, wallet) {
     dex === 'nado' ||
     dex === 'hibachi' ||
     dex === 'hotstuff' ||
-    dex === 'katana'
+    dex === 'katana' ||
+    dex === 'lighter'
   ) return isEvmWallet(wallet);
   return true;
 }
@@ -554,6 +560,7 @@ async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
     wallet,
     reason: 'tasks',
     force: opts.forceSync === true,
+    headers: opts.headers || opts.requestHeaders || null,
   });
   const fdb = futuresDbReadonly();
   if (!fdb) return [];
@@ -853,7 +860,7 @@ async function fetchPacificaAllTrades(player, opts = {}) {
   return merged;
 }
 
-async function verifyVolume(player, task, snap) {
+async function verifyVolume(player, task, snap, opts = {}) {
   const p = parseParams(task.params);
   const target = progressiveTaskTarget(player, task, Number(p.target_volume) || 0);
   const symbol = p.symbol || 'any';
@@ -864,7 +871,7 @@ async function verifyVolume(player, task, snap) {
   // the snapshot baseline — for an active trader with thousands of
   // trades this avoids walking all of history just to count the last few.
   const startId = snap.trade_id_start || 0;
-  const trades = await fetchWalletTrades(player, { since: startId });
+  const trades = await fetchWalletTrades(player, { since: startId, headers: opts.headers || opts.requestHeaders || null });
   let vol = 0;
   let matched = 0;
   for (const t of trades) {
@@ -884,14 +891,14 @@ async function verifyVolume(player, task, snap) {
   return { progress_value: vol, target_value: target, completed: vol >= target };
 }
 
-async function verifyPositions(player, task, snap) {
+async function verifyPositions(player, task, snap, opts = {}) {
   const p = parseParams(task.params);
   const target = progressiveTaskTarget(player, task, Number(p.target_positions) || 0);
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
   const countClose = !!p.count_close; // default: count openings only
   const startId = snap.trade_id_start || 0;
-  const trades = await fetchWalletTrades(player, { since: startId });
+  const trades = await fetchWalletTrades(player, { since: startId, headers: opts.headers || opts.requestHeaders || null });
   let n = 0;
   const seenOrders = new Set();
   for (const t of trades) {
@@ -910,7 +917,7 @@ async function verifyPositions(player, task, snap) {
   return { progress_value: n, target_value: target, completed: n >= target };
 }
 
-async function verifyComboVolumeAttack(player, task, snap) {
+async function verifyComboVolumeAttack(player, task, snap, opts = {}) {
   const p = parseParams(task.params);
   const targetVol = progressiveTaskTarget(player, task, Number(p.target_volume) || 0);
   const targetWins = Number(p.target_wins) || 0;
@@ -919,7 +926,7 @@ async function verifyComboVolumeAttack(player, task, snap) {
   const countClose = !!p.count_close;
 
   const startId = snap.trade_id_start || 0;
-  const trades = await fetchWalletTrades(player, { since: startId });
+  const trades = await fetchWalletTrades(player, { since: startId, headers: opts.headers || opts.requestHeaders || null });
   let vol = 0;
   for (const t of trades) {
     if (!isAfterTaskSnapshot(snap, t)) continue;
@@ -975,11 +982,11 @@ async function verifyDailyTradeGold(player, task, snap) {
   return { progress_value: sum, target_value: target, completed: sum >= target };
 }
 
-async function verifyTask(player, task, snap) {
+async function verifyTask(player, task, snap, opts = {}) {
   switch (task.type) {
-    case 'volume': return verifyVolume(player, task, snap);
-    case 'positions': return verifyPositions(player, task, snap);
-    case 'combo_volume_attack': return verifyComboVolumeAttack(player, task, snap);
+    case 'volume': return verifyVolume(player, task, snap, opts);
+    case 'positions': return verifyPositions(player, task, snap, opts);
+    case 'combo_volume_attack': return verifyComboVolumeAttack(player, task, snap, opts);
     case 'daily_trade_gold': return verifyDailyTradeGold(player, task, snap);
     default: return { progress_value: 0, target_value: 0, completed: false };
   }

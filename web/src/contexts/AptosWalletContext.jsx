@@ -17,6 +17,29 @@ const AptosWalletContext = createContext(null);
 
 const PETRA_INSTALL_URL = 'https://petra.app/';
 
+function bytesToHex(bytes) {
+  const arr = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || []);
+  return `0x${Array.from(arr, b => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function aptosKeyToHex(value) {
+  if (!value) return null;
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    return text ? (text.startsWith('0x') ? text : `0x${text}`) : null;
+  }
+  if (raw instanceof Uint8Array || Array.isArray(raw)) return bytesToHex(raw);
+  if (typeof raw.toUint8Array === 'function') return bytesToHex(raw.toUint8Array());
+  if (typeof raw.bcsToBytes === 'function') return bytesToHex(raw.bcsToBytes());
+  if (typeof raw.toString === 'function') {
+    const text = raw.toString().trim();
+    return text && text !== '[object Object]' ? (text.startsWith('0x') ? text : `0x${text}`) : null;
+  }
+  return null;
+}
+
 export function AptosWalletProvider({ children }) {
   // Single source of truth from the official adapter. `account` and
   // `wallet` are typed instances — `account.address` is an
@@ -38,9 +61,7 @@ export function AptosWalletProvider({ children }) {
   const address = account?.address
     ? (account.address.toStringLong?.() ?? String(account.address))
     : null;
-  const publicKey = account?.publicKey
-    ? String(Array.isArray(account.publicKey) ? account.publicKey[0] : account.publicKey)
-    : null;
+  const publicKey = aptosKeyToHex(account?.publicKey);
   const chainId = network?.chainId != null ? Number(network.chainId) : null;
   const hasProvider = Array.isArray(wallets) && wallets.length > 0;
 

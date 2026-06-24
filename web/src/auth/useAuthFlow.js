@@ -59,7 +59,7 @@ const MANUAL_RECONNECT_WALLET_WAIT_MS = 8000;
 const WALLET_AUTH_PROOF_TIMEOUT_MS = 20000;
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
-const EVM_AUTH_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana']);
+const EVM_AUTH_DEXES = new Set(['avantis', 'gmx', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter']);
 const SOLANA_AUTH_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash']);
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
@@ -122,25 +122,9 @@ function walletChainTypeForKnownDex(dex) {
 }
 
 function walletChainTypeForDex(wallet, dex) {
-  const dexType = walletChainTypeForKnownDex(dex);
-  if (dexType !== 'unknown') return dexType;
-  return walletAddressChainType(wallet);
-}
-
-function walletDexMismatchMessage(walletType, dexType) {
-  if (walletType === 'evm' && dexType === 'solana') {
-    return 'This is an EVM wallet. Press CHANGE and pick an EVM DEX before continuing.';
-  }
-  if (walletType === 'solana' && dexType === 'evm') {
-    return 'This DEX needs an EVM wallet. Go back and connect an EVM wallet.';
-  }
-  if (walletType === 'aptos' && dexType !== 'aptos') {
-    return 'This is an Aptos wallet. Press CHANGE and pick Decibel before continuing.';
-  }
-  if (dexType === 'aptos' && walletType !== 'aptos') {
-    return 'Decibel needs an Aptos wallet. Go back and connect Petra.';
-  }
-  return 'Connected wallet does not match the selected DEX. Press CHANGE and pick the right DEX.';
+  const walletType = walletAddressChainType(wallet);
+  if (walletType !== 'unknown') return walletType;
+  return walletChainTypeForKnownDex(dex);
 }
 
 function walletAuthMessage({ wallet, dex, issuedAt }) {
@@ -180,6 +164,7 @@ function signatureToHex(signature) {
   if (typeof signature === 'string') return signature.startsWith('0x') ? signature : `0x${signature}`;
   if (signature instanceof Uint8Array || Array.isArray(signature)) return bytesToHex(signature);
   if (typeof signature.toUint8Array === 'function') return bytesToHex(signature.toUint8Array());
+  if (typeof signature.bcsToBytes === 'function') return bytesToHex(signature.bcsToBytes());
   if (typeof signature.toString === 'function') {
     const text = signature.toString();
     return text.startsWith('0x') ? text : `0x${text}`;
@@ -581,7 +566,13 @@ export function useAuthFlow() {
   // Priority (Decibel): Petra (only source — no FC/Privy alternative yet).
   // Priority (Pacifica): Solana adapter (covers FC Solana auto-connect
   //   and external-connected) → Privy Solana.
+  const storedAuthWallet = useMemo(() => readStoredAuthWallet(), [showRegister, manualReconnectRequired]);
   const rawCandidate = useMemo(() => {
+    const candidates = [evmContext, privyEvm, privySol, solAdapter, aptosCandidate].filter(Boolean);
+    if (storedAuthWallet) {
+      const storedMatch = candidates.find(c => c?.wallet && canonicalWalletAddress(c.wallet) === storedAuthWallet);
+      if (storedMatch) return storedMatch;
+    }
     if (!dexPicked) return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
     // Avantis (Base), GMX (Arbitrum), Monad and Hyperliquid all source from the same EVM wallet
     // context. The wallet address is the same on every EVM chain — the chain
@@ -589,15 +580,14 @@ export function useAuthFlow() {
     // for both because the wallet itself is chain-agnostic; only the
     // walletClient transport gets re-bound per-DEX (see EvmWalletContext
     // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') return evmContext || privyEvm || null;
-    if (dex === 'decibel') return aptosCandidate || null;
+    if (EVM_AUTH_DEXES.has(dex)) return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
+    if (dex === 'decibel') return aptosCandidate || evmContext || privyEvm || privySol || solAdapter || null;
     if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') {
       const farcasterSol = solAdapter?.source === 'farcaster' ? solAdapter : null;
-      return farcasterSol || privySol || solAdapter || null;
+      return farcasterSol || privySol || solAdapter || evmContext || privyEvm || aptosCandidate || null;
     }
-    return privySol || solAdapter || null;
-  }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
-  const storedAuthWallet = useMemo(() => readStoredAuthWallet(), [showRegister, manualReconnectRequired]);
+    return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
+  }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol, storedAuthWallet]);
   const rawCandidateWallet = rawCandidate?.wallet ? canonicalWalletAddress(rawCandidate.wallet) : '';
   const manualReconnectSatisfied = !!(
     manualReconnectRequired &&
@@ -611,11 +601,6 @@ export function useAuthFlow() {
     if (!wallet || String(wallet).startsWith('local_guest_')) return null;
     const issuedAt = new Date().toISOString();
     const canonicalWallet = canonicalWalletAddress(wallet);
-    const walletType = walletAddressChainType(canonicalWallet);
-    const dexType = walletChainTypeForKnownDex(proofDex);
-    if (dexType !== 'unknown' && walletType !== 'unknown' && walletType !== dexType) {
-      throw new Error(walletDexMismatchMessage(walletType, dexType));
-    }
     const chainType = walletChainTypeForDex(canonicalWallet, proofDex);
     const message = walletAuthMessage({ wallet: canonicalWallet, dex: proofDex, issuedAt });
     if (chainType === 'solana') {
@@ -1129,7 +1114,7 @@ export function useAuthFlow() {
     const payload = { name: nameToUse, wallet: candidate.wallet };
     if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana') {
+    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
       // resolver hard-codes 'base' regardless of which DEX is active, so
       // trusting candidate.chain would mis-tag GMX/Perpl registrations as
@@ -1145,6 +1130,7 @@ export function useAuthFlow() {
         : authDex === 'hotstuff' ? 'mainnet'
         : authDex === 'grvt' ? 'grvt'
         : authDex === 'katana' ? 'katana'
+        : authDex === 'lighter' ? 'lighter'
         : 'base';
       payload.walletSource = candidate.source;
     }
@@ -1275,7 +1261,7 @@ export function useAuthFlow() {
     const payload = { name: name.trim(), wallet: candidate.wallet };
     if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana') {
+    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
       payload.chain = authDex === 'gmx' ? 'arbitrum'
         : authDex === 'monad' ? 'monad'
         : authDex === 'hyperliquid' ? 'arbitrum'
@@ -1285,6 +1271,7 @@ export function useAuthFlow() {
         : authDex === 'hotstuff' ? 'mainnet'
         : authDex === 'grvt' ? 'grvt'
         : authDex === 'katana' ? 'katana'
+        : authDex === 'lighter' ? 'lighter'
         : 'base';
       payload.walletSource = candidate.source;
     }

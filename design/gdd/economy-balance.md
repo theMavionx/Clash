@@ -289,6 +289,9 @@ This means Storage is a real progression gate without creating the old 200k+ dea
 surplus. If TH6 is added, it should either introduce the fourth Storage or raise Storage
 Lv5 capacity with a matching TH6 upgrade cost.
 
+Altar branch Lv3 costs must also stay below the TH5 single-resource cap. Current Lv3 altar
+skill costs top out at 70,000 wood/ore, leaving a small buffer under the 75,000 cap.
+
 ### 5.4 Raiding Income
 Successful raids steal **15%** of the defender's current resources (`LOOT_PERCENT = 0.15`).
 If a defender holds 5,000G, a raid yields ~750G — roughly two days of trading income.

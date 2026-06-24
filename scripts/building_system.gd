@@ -644,6 +644,7 @@ var building_panel_cost: Label
 var building_panel_upgrade_btn: Button
 var building_panel_altar_skills: VBoxContainer
 
+# Lv3 costs stay under the TH5 75K storage cap; see design/gdd/economy-balance.md section 5.3.
 const ALTAR_SKILL_DEFS: Dictionary = {
 	"prosperity": {
 		"name": "Prosperity",
@@ -653,7 +654,7 @@ const ALTAR_SKILL_DEFS: Dictionary = {
 		"costs": [
 			{"wood": 10000, "ore": 10000, "gold": 2500},
 			{"wood": 30000, "ore": 30000, "gold": 7500},
-			{"wood": 80000, "ore": 80000, "gold": 20000},
+			{"wood": 70000, "ore": 70000, "gold": 20000},
 		],
 	},
 	"ward": {
@@ -664,20 +665,19 @@ const ALTAR_SKILL_DEFS: Dictionary = {
 		"costs": [
 			{"wood": 15000, "ore": 8000, "gold": 2500},
 			{"wood": 45000, "ore": 25000, "gold": 7500},
-			{"wood": 120000, "ore": 60000, "gold": 20000},
+			{"wood": 70000, "ore": 60000, "gold": 20000},
 		],
 	},
 	"glory": {
 		"name": "Glory",
 		"title": "Cup Offering",
 		"bonus_label": "bonus trophies on attack win",
-		"bonus_format": "range",
-		"min_bonus": 1,
+		"bonus_format": "flat",
 		"bonuses": [5, 7, 10],
 		"costs": [
 			{"wood": 12000, "ore": 12000, "gold": 3000},
 			{"wood": 36000, "ore": 36000, "gold": 9000},
-			{"wood": 90000, "ore": 90000, "gold": 24000},
+			{"wood": 70000, "ore": 70000, "gold": 24000},
 		],
 	},
 }
@@ -4168,6 +4168,8 @@ func _format_altar_skill_bonus(def: Dictionary, level: int) -> String:
 		var min_bonus: int = int(def.get("min_bonus", 1))
 		var max_bonus: int = int(bonuses[level - 1])
 		return "+%d-%d %s" % [min_bonus, max_bonus, label]
+	if str(def.get("bonus_format", "")) == "flat":
+		return "+%d %s" % [int(bonuses[level - 1]), label]
 	return "+%d%% %s" % [int(bonuses[level - 1]), label]
 
 

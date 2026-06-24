@@ -1219,6 +1219,8 @@ function TournamentsPanel({ tournaments, reload }) {
   const [viewMode, setViewMode] = useState('tournaments');
   const [editing, setEditing] = useState(null);
   const [leaderboard, setLeaderboard] = useState(null);
+  const [payoutsData, setPayoutsData] = useState(null);
+  const [payoutsLoading, setPayoutsLoading] = useState(false);
   const luckyEvents = tournaments.filter((t) => t.event_kind === 'lucky_raider');
   const normalEvents = tournaments.filter((t) => t.event_kind !== 'lucky_raider');
   const visibleEvents = viewMode === 'lucky_raider' ? luckyEvents : normalEvents;
@@ -1243,6 +1245,22 @@ function TournamentsPanel({ tournaments, reload }) {
     const data = await adminGet(`/tournaments/${tournament.id}/leaderboard?limit=100`);
     setLeaderboard(data);
   }
+
+  async function loadLuckyPayouts() {
+    setPayoutsLoading(true);
+    try {
+      const data = await adminGet('/admin/lucky-raider/payouts?status=all&limit=200');
+      setPayoutsData(data);
+    } finally {
+      setPayoutsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (viewMode !== 'lucky_raider') return;
+    loadLuckyPayouts().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
 
   return (
     <div className="admin-grid">
@@ -1283,6 +1301,13 @@ function TournamentsPanel({ tournaments, reload }) {
               </div>
             </div>
           )}
+          {viewMode === 'lucky_raider' && (
+            <LuckyRaiderPayoutCard
+              data={payoutsData}
+              loading={payoutsLoading}
+              reload={loadLuckyPayouts}
+            />
+          )}
           <div className="admin-toolbar">
             <input className="admin-input" placeholder={viewMode === 'lucky_raider' ? 'Search lucky raider events' : 'Search tournaments'} value={query} onChange={(e) => setQuery(e.target.value)} />
             <span className="admin-help">{filtered.length} shown</span>
@@ -1322,6 +1347,219 @@ function TournamentsPanel({ tournaments, reload }) {
       </div>
       {editing && <TournamentWizard initial={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await reload(); }} />}
       {leaderboard && <LeaderboardDrawer data={leaderboard} onClose={() => setLeaderboard(null)} />}
+    </div>
+  );
+}
+
+function LuckyRaiderPayoutCard({ data, loading, reload }) {
+  const settings = data?.settings || {};
+  const config = data?.config || {};
+  const summary = data?.summary || {};
+  const payouts = data?.payouts || [];
+  const pendingCount = Number(summary.by_status?.pending?.count || 0);
+  const failedCount = Number(summary.by_status?.failed?.count || 0);
+  const paidCount = Number(summary.by_status?.paid?.count || 0);
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [draft, setDraft] = useState({
+    auto_payout_enabled: false,
+    manual_payout_enabled: true,
+    wallet_link_required: true,
+    max_batch_size: 10,
+    max_attempts: 5,
+    retry_seconds: 300,
+  });
+
+  useEffect(() => {
+    if (!data?.settings) return;
+    setDraft({
+      auto_payout_enabled: !!settings.auto_payout_enabled,
+      manual_payout_enabled: !!settings.manual_payout_enabled,
+      wallet_link_required: settings.wallet_link_required !== false,
+      max_batch_size: Number(settings.max_batch_size || 10),
+      max_attempts: Number(settings.max_attempts || 5),
+      retry_seconds: Number(settings.retry_seconds || 300),
+    });
+  }, [data?.settings, settings.auto_payout_enabled, settings.manual_payout_enabled, settings.wallet_link_required, settings.max_batch_size, settings.max_attempts, settings.retry_seconds]);
+
+  async function runPayoutAction(label, fn) {
+    if (busy) return;
+    setBusy(label);
+    setMessage('');
+    try {
+      const result = await fn();
+      setMessage(result?.message || `${label} complete.`);
+      await reload();
+    } catch (err) {
+      setMessage(err.message || `${label} failed.`);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function saveSettings() {
+    await runPayoutAction('Save payout settings', async () => {
+      const result = await adminPost('/admin/lucky-raider/payouts/settings', draft);
+      return { message: `Payout settings saved. Auto ${result.settings?.auto_payout_enabled ? 'on' : 'off'}, wallet check ${result.settings?.wallet_link_required ? 'on' : 'off'}.` };
+    });
+  }
+
+  async function previewPending(ids = []) {
+    await runPayoutAction('Preview payouts', async () => {
+      const result = await adminPost('/admin/lucky-raider/payouts/preview', {
+        limit: draft.max_batch_size,
+        max_attempts: draft.max_attempts,
+        retry_seconds: draft.retry_seconds,
+        ids,
+      });
+      setPreview(result);
+      return { message: `Preview: ${result.sendable || 0} sendable, ${result.blocked || 0} blocked.` };
+    });
+  }
+
+  async function payPending(ids = []) {
+    const confirmPhrase = data?.confirm_phrase || 'PAY_LUCKY_RAIDER_CLASH';
+    const scope = ids.length ? `${ids.length} selected payout` : `${pendingCount + failedCount} pending/failed payout`;
+    if (!config.manualEnabled) {
+      setMessage('Manual Lucky Raider payouts are disabled.');
+      return;
+    }
+    if ((pendingCount + failedCount) <= 0 && ids.length === 0) {
+      setMessage('No pending or failed Lucky Raider payouts to send.');
+      return;
+    }
+    if (!window.confirm(`Send CLASH rewards for ${scope}? This signs real Solana token transfers.`)) {
+      setMessage('Lucky Raider payout cancelled before sending.');
+      return;
+    }
+    const typed = window.prompt(`Type ${confirmPhrase} to confirm real payout`, '');
+    if (typed == null) {
+      setMessage(`Lucky Raider payout not sent. Type ${confirmPhrase} to confirm.`);
+      return;
+    }
+    if (typed.trim() !== confirmPhrase) {
+      setMessage(`Confirmation mismatch. Expected ${confirmPhrase}; no payout sent.`);
+      return;
+    }
+    await runPayoutAction('Pay Lucky Raider', async () => {
+      const result = await adminPost('/admin/lucky-raider/payouts/run', {
+        confirm: confirmPhrase,
+        limit: draft.max_batch_size,
+        max_attempts: draft.max_attempts,
+        retry_seconds: draft.retry_seconds,
+        ids,
+      });
+      if (result.skipped || result.reason) {
+        return { message: `Payout skipped: ${result.reason || 'unknown reason'}.` };
+      }
+      const failedReasons = (result.results || [])
+        .filter((row) => row?.ok === false && row?.error)
+        .slice(0, 2)
+        .map((row) => row.error)
+        .join('; ');
+      const suffix = failedReasons ? ` ${failedReasons}` : '';
+      return { message: `Payout run: ${result.paid || 0} paid, ${result.failed || 0} failed, ${result.processed || 0} processed.${suffix}` };
+    });
+  }
+
+  async function updateWallet(payout) {
+    const next = window.prompt(`Solana payout wallet for ${payout.player_name || payout.player_id}`, payout.destination_wallet || payout.current_destination_wallet || '');
+    if (next == null) return;
+    const note = window.prompt('Audit note for wallet update', 'admin payout wallet correction') || '';
+    await runPayoutAction('Update payout wallet', async () => {
+      const result = await adminPatch(`/admin/lucky-raider/payouts/${encodeURIComponent(payout.id)}/destination`, { wallet: next, note });
+      return { message: `Wallet updated for ${result.payout?.player_name || payout.player_name || payout.player_id}.` };
+    });
+  }
+
+  const statusText = [
+    config.payoutsEnabled ? 'env enabled' : 'env disabled',
+    config.autoEnabled ? 'auto on' : 'auto off',
+    config.manualEnabled ? 'manual on' : 'manual off',
+    config.signerReady ? `signer ${short(config.signerAddress, 8, 5)}` : 'signer missing',
+    config.clashMint ? `mint ${short(config.clashMint, 8, 5)}` : 'mint missing',
+  ].join(' | ');
+
+  return (
+    <div className="admin-card subtle" style={{ marginBottom: 12 }}>
+      <div className="admin-card-head">
+        <div>
+          <div className="admin-card-title">CLASH Reward Payouts</div>
+          <div className="admin-card-sub">{statusText}{config.signerSource ? ` | key ${config.signerSource}` : ''}</div>
+        </div>
+        <div className="admin-filter-row">
+          {message ? <span className={'admin-badge ' + (message.toLowerCase().includes('failed') ? 'red' : 'green')}>{message}</span> : null}
+          <button className="admin-btn" onClick={reload} disabled={loading || !!busy}>{loading ? 'Loading...' : 'Reload'}</button>
+          <button className="admin-btn" onClick={() => previewPending()} disabled={!!busy}>{busy === 'Preview payouts' ? 'Previewing...' : 'Preview pending'}</button>
+          <button className="admin-btn green" onClick={() => payPending()} disabled={!!busy || !config.manualEnabled || (pendingCount + failedCount) <= 0}>Pay pending</button>
+        </div>
+      </div>
+      <div className="admin-card-body admin-grid">
+        <StatsGrid stats={[
+          { label: 'Pending', value: num(pendingCount), tone: pendingCount ? 'gold' : 'green' },
+          { label: 'Failed', value: num(failedCount), tone: failedCount ? 'red' : 'green' },
+          { label: 'Paid', value: num(paidCount), tone: 'green' },
+          { label: 'Reward USD', value: fmtMaybeUsd(summary.reward_usd || 0), tone: 'blue' },
+        ]} />
+        <div className="admin-form-grid three">
+          <label className="admin-field"><span className="admin-label">Auto payout after draw</span><select className="admin-select" value={draft.auto_payout_enabled ? '1' : '0'} onChange={(e) => setDraft((v) => ({ ...v, auto_payout_enabled: e.target.value === '1' }))}><option value="0">Off</option><option value="1">On</option></select></label>
+          <label className="admin-field"><span className="admin-label">Manual payout button</span><select className="admin-select" value={draft.manual_payout_enabled ? '1' : '0'} onChange={(e) => setDraft((v) => ({ ...v, manual_payout_enabled: e.target.value === '1' }))}><option value="0">Off</option><option value="1">On</option></select></label>
+          <label className="admin-field"><span className="admin-label">Require linked wallet</span><select className="admin-select" value={draft.wallet_link_required ? '1' : '0'} onChange={(e) => setDraft((v) => ({ ...v, wallet_link_required: e.target.value === '1' }))}><option value="1">On</option><option value="0">Off</option></select></label>
+          <label className="admin-field"><span className="admin-label">Batch size</span><input className="admin-input" type="number" min="1" max="100" value={draft.max_batch_size} onChange={(e) => setDraft((v) => ({ ...v, max_batch_size: Number(e.target.value || 1) }))} /></label>
+          <label className="admin-field"><span className="admin-label">Max attempts</span><input className="admin-input" type="number" min="1" max="50" value={draft.max_attempts} onChange={(e) => setDraft((v) => ({ ...v, max_attempts: Number(e.target.value || 1) }))} /></label>
+          <label className="admin-field"><span className="admin-label">Retry seconds</span><input className="admin-input" type="number" min="0" max="86400" value={draft.retry_seconds} onChange={(e) => setDraft((v) => ({ ...v, retry_seconds: Number(e.target.value || 0) }))} /></label>
+        </div>
+        <div className="admin-filter-row">
+          <button className="admin-btn primary" onClick={saveSettings} disabled={!!busy}>{busy === 'Save payout settings' ? 'Saving...' : 'Save payout settings'}</button>
+          <span className="admin-help">Auto payout only runs when this switch is on and the env kill switch allows payouts. Manual sends require typed confirmation.</span>
+        </div>
+        {preview && (
+          <CompactTable
+            title="Latest Payout Preview"
+            subtitle={`${preview.sendable || 0} sendable, ${preview.blocked || 0} blocked. No transaction was signed.`}
+            columns={['Player', 'Day', 'Reward', 'Wallet', 'CLASH', 'Status']}
+            rows={(preview.payouts || []).map((row) => [
+              row.player_name || row.player_id,
+              row.day_utc,
+              fmtMaybeUsd(row.reward_amount_usd),
+              <span className="admin-mono">{short(row.destination_wallet, 12, 8)}</span>,
+              row.quote_ok ? `${num(row.clash_amount)} CLASH` : '-',
+              row.quote_ok
+                ? <span>{row.validation_warnings?.length ? <span className="admin-badge gold">ready with warning</span> : <span className="admin-badge green">ready</span>}</span>
+                : <span className="admin-badge red">{(row.quote_error || row.validation_errors?.[0] || 'blocked').slice(0, 40)}</span>,
+            ])}
+          />
+        )}
+        <div className="admin-table-wrap compact admin-scroll">
+          <table className="admin-table">
+            <thead><tr><th>Created</th><th>Player</th><th>Draw</th><th>Reward</th><th>Wallet</th><th>Checks</th><th>Status</th><th>Tx / Error</th><th>Actions</th></tr></thead>
+            <tbody>
+              {payouts.length ? payouts.map((payout) => (
+                <tr key={payout.id}>
+                  <td>{fmtTime(payout.created_at)}<div className="admin-card-sub admin-mono">{short(payout.id, 14, 5)}</div></td>
+                  <td><strong>{payout.player_name || '-'}</strong><div className="admin-card-sub admin-mono">{payout.player_id}</div></td>
+                  <td>{payout.day_utc}<div className="admin-card-sub">#{payout.place} | {payout.tournament_name || `T${payout.tournament_id}`}</div></td>
+                  <td>{fmtMaybeUsd(payout.reward_amount_usd)}<div className="admin-card-sub">{payout.reward_label || payout.reward_currency}</div></td>
+                  <td className="admin-mono">{short(payout.destination_wallet || payout.current_destination_wallet, 14, 8)}</td>
+                  <td>
+                    {payout.wallet_valid ? <span className="admin-badge green">valid</span> : <span className="admin-badge red">invalid</span>}
+                    {' '}
+                    {payout.wallet_linked ? <span className="admin-badge green">linked</span> : <span className="admin-badge gold">not linked warning</span>}
+                  </td>
+                  <td>{statusBadge(payout.status)}<div className="admin-card-sub">attempts {payout.attempts || 0}</div></td>
+                  <td>{payout.tx_hash ? <span className="admin-mono">{short(payout.tx_hash, 12, 8)}</span> : <span className="admin-card-sub">{(payout.error || payout.validation_errors?.join(', ') || payout.validation_warnings?.join(', ') || '-').slice(0, 120)}</span>}</td>
+                  <td><div className="admin-filter-row">
+                    {['pending', 'failed'].includes(payout.status) && <button className="admin-btn" onClick={() => updateWallet(payout)} disabled={!!busy}>Wallet</button>}
+                    {['pending', 'failed'].includes(payout.status) && <button className="admin-btn" onClick={() => previewPending([payout.id])} disabled={!!busy}>Preview</button>}
+                    {['pending', 'failed'].includes(payout.status) && <button className="admin-btn green" onClick={() => payPending([payout.id])} disabled={!!busy || !config.manualEnabled}>Pay</button>}
+                  </div></td>
+                </tr>
+              )) : <tr><td colSpan={9}><span className="admin-help">No Lucky Raider CLASH payouts yet.</span></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

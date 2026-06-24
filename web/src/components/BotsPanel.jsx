@@ -24,6 +24,7 @@ import {
   syncGameAccountToPhantom,
   UNSUPPORTED_GAME_WALLET_EXCHANGES,
 } from '../lib/botGameCredentials';
+import { botApiUrl, botAuthHeaders, botWsUrl } from '../lib/botApiClient';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import { keccak256 } from 'js-sha3';
@@ -651,7 +652,7 @@ function BotsPanel({ onClose }) {
 
   const fetchExchanges = useCallback(() => {
     if (!token) return;
-    fetch('/api/v1/exchanges', { headers: { 'x-token': token } })
+    fetch(botApiUrl('/api/v1/exchanges'), { headers: botAuthHeaders(token) })
       .then((r) => r.json())
       .then((res) => {
         if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
@@ -665,8 +666,8 @@ function BotsPanel({ onClose }) {
 
   const fetchAccounts = useCallback(() => {
     if (!token) return;
-    fetch('/api/v1/accounts', {
-      headers: { 'x-token': token }
+    fetch(botApiUrl('/api/v1/accounts'), {
+      headers: botAuthHeaders(token)
     })
       .then((r) => r.json().then((body) => ({ ok: r.ok, status: r.status, body })))
       .then((res) => {
@@ -679,7 +680,7 @@ function BotsPanel({ onClose }) {
         setSyncedAccounts(rows);
         const hasHl = rows.some((acc) => acc.exchange?.toLowerCase() === 'hyperliquid' && acc.status === 'active');
         if (hasHl) {
-          fetch('/api/v1/exchanges/hyperliquid/balance', { headers: { 'x-token': token } })
+          fetch(botApiUrl('/api/v1/exchanges/hyperliquid/balance'), { headers: botAuthHeaders(token) })
             .then((br) => br.json())
             .then((bal) => {
               if (bal?.success === false) {
@@ -698,7 +699,7 @@ function BotsPanel({ onClose }) {
         }
         const hasGrvt = rows.some((acc) => acc.exchange?.toLowerCase() === 'grvt' && acc.status === 'active');
         if (hasGrvt) {
-          fetch('/api/v1/exchanges/grvt/balance', { headers: { 'x-token': token } })
+          fetch(botApiUrl('/api/v1/exchanges/grvt/balance'), { headers: botAuthHeaders(token) })
             .then((br) => br.json())
             .then((bal) => {
               if (bal?.success === false) {
@@ -754,12 +755,9 @@ function BotsPanel({ onClose }) {
       }
     }
 
-    fetch('/api/v1/accounts', {
+    fetch(botApiUrl('/api/v1/accounts'), {
       method: 'POST',
-      headers: {
-        'x-token': token,
-        'content-type': 'application/json'
-      },
+      headers: botAuthHeaders(token, { 'content-type': 'application/json' }),
       body: JSON.stringify({
         exchange: newAccExchange,
         sub_account: newAccSubId,
@@ -774,9 +772,9 @@ function BotsPanel({ onClose }) {
           setNotice('Account synced successfully!');
           setNewAccPrivateKey('');
           fetchAccounts();
-          fetch(`/api/v1/exchanges/${newAccExchange}/enable`, {
+          fetch(botApiUrl(`/api/v1/exchanges/${newAccExchange}/enable`), {
             method: 'POST',
-            headers: { 'x-token': token }
+            headers: botAuthHeaders(token)
           }).then(() => fetchAccounts());
         } else {
           setNotice(`Failed to sync account: ${res.error?.message || 'unknown error'}`);
@@ -1222,10 +1220,10 @@ function BotsPanel({ onClose }) {
 
   const toggleExchangeActive = useCallback((exchangeId, active) => {
     if (!token) return;
-    const endpoint = `/api/v1/exchanges/${exchangeId}/${active ? 'enable' : 'disable'}`;
+    const endpoint = botApiUrl(`/api/v1/exchanges/${exchangeId}/${active ? 'enable' : 'disable'}`);
     fetch(endpoint, {
       method: 'POST',
-      headers: { 'x-token': token }
+      headers: botAuthHeaders(token)
     })
       .then((r) => r.json())
       .then(() => {
@@ -1245,7 +1243,7 @@ function BotsPanel({ onClose }) {
 
   const fetchOrderHistory = useCallback(() => {
     if (!token) return;
-    fetch('/api/v1/orders/history', { headers: { 'x-token': token } })
+    fetch(botApiUrl('/api/v1/orders/history'), { headers: botAuthHeaders(token) })
       .then((r) => r.json())
       .then((res) => {
         const rows = res?.data?.orders;
@@ -1266,13 +1264,13 @@ function BotsPanel({ onClose }) {
 
   const fetchInstances = useCallback(() => {
     if (!token) return;
-    fetch('/api/v1/strategies/instances', {
-      headers: { 'x-token': token }
+    fetch(botApiUrl('/api/v1/strategies/instances'), {
+      headers: botAuthHeaders(token)
     })
       .then((r) => r.json())
       .then((res) => {
         if (!res?.success || !res.data) {
-          setNotice(formatApiError(res?.error, 'Could not load bot strategies. Restart Clash server (:4000) and Phantom (:8080).'));
+          setNotice(formatApiError(res?.error, 'Could not load bot strategies. Check the configured bot API is reachable.'));
           return;
         }
         const {
@@ -1311,7 +1309,7 @@ function BotsPanel({ onClose }) {
       })
       .catch((err) => {
         console.error('fetch instances failed:', err);
-        setNotice('Cannot reach bot API — check Clash (:4000) and Phantom (:8080) are running.');
+        setNotice('Cannot reach bot API — check the configured bot endpoint is reachable.');
       });
   }, [token]);
 
@@ -1341,9 +1339,9 @@ function BotsPanel({ onClose }) {
         return;
       }
     }
-    fetch(`/api/v1/strategies/${encodeURIComponent(id)}/start`, {
+    fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(id)}/start`), {
       method: 'POST',
-      headers: { 'x-token': token }
+      headers: botAuthHeaders(token)
     })
       .then((r) => r.json())
       .then((res) => {
@@ -1357,15 +1355,15 @@ function BotsPanel({ onClose }) {
       })
       .catch((err) => {
         console.error('start bot failed:', err);
-        setNotice('Network error starting bot — is Clash server (:4000) up?');
+        setNotice('Network error starting bot — check the configured bot endpoint.');
       });
   }, [token, fetchInstances, syncedAccounts, appendHistory, authorizeGrvtBuilder]);
 
   const handleStopBot = useCallback((id) => {
     if (!token) return;
-    fetch(`/api/v1/strategies/${encodeURIComponent(id)}/stop`, {
+    fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(id)}/stop`), {
       method: 'POST',
-      headers: { 'x-token': token }
+      headers: botAuthHeaders(token)
     })
       .then((r) => r.json())
       .then((res) => {
@@ -1379,7 +1377,7 @@ function BotsPanel({ onClose }) {
       })
       .catch((err) => {
         console.error('stop bot failed:', err);
-        setNotice('Network error stopping bot — is Clash server (:4000) up?');
+        setNotice('Network error stopping bot — check the configured bot endpoint.');
       });
   }, [token, fetchInstances, appendHistory]);
 
@@ -1403,12 +1401,9 @@ function BotsPanel({ onClose }) {
     }
     const spreadBps = preset === 'aggressive' ? 4 : 8;
 
-    fetch(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/config`, {
+    fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/config`), {
       method: 'PUT',
-      headers: {
-        'x-token': token,
-        'content-type': 'application/json'
-      },
+      headers: botAuthHeaders(token, { 'content-type': 'application/json' }),
       body: JSON.stringify({
         order_size_usd: String(tradeSize),
         position_size_usd: String(maxPosition),
@@ -1421,9 +1416,9 @@ function BotsPanel({ onClose }) {
         if (!cfgRes?.success) {
           throw new Error(formatApiError(cfgRes?.error, 'config save failed'));
         }
-        return fetch(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/start`, {
+        return fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/start`), {
           method: 'POST',
-          headers: { 'x-token': token }
+          headers: botAuthHeaders(token)
         }).then((r) => r.json()).then((startRes) => ({ cfgRes, startRes }));
       })
       .then(({ cfgRes, startRes: res }) => {
@@ -1476,8 +1471,11 @@ function BotsPanel({ onClose }) {
       fetchOrderHistory();
     }, 5000);
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/bot/ws?token=${encodeURIComponent(token)}`;
+    const wsParams = new URLSearchParams({
+      token,
+      authorization: `Bearer ${token}`,
+    });
+    const wsUrl = `${botWsUrl('/api/v1/bot/ws')}?${wsParams.toString()}`;
     let ws;
     let reconnectTimer;
 

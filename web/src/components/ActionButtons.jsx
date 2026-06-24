@@ -511,6 +511,20 @@ const NftMintIcon = ({ size = 50 }) => (
 );
 
 // ── Shield icon for defense log ───────────────────────────────────────────
+const BotIcon = ({ size = 50 }) => (
+  <svg width={size} height={size} viewBox="0 0 64 64" fill="none" style={{ filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.4))' }}>
+    <path d="M32 8v7" stroke="#5C3A21" strokeWidth="3" strokeLinecap="round" />
+    <circle cx="32" cy="7" r="4" fill="#FFD700" stroke="#5C3A21" strokeWidth="2" />
+    <rect x="12" y="16" width="40" height="34" rx="10" fill="#FDF8E7" stroke="#5C3A21" strokeWidth="3" />
+    <path d="M16 27h32" stroke="#D4C8B0" strokeWidth="3" />
+    <circle cx="24" cy="32" r="5" fill="#1E88E5" stroke="#15567f" strokeWidth="1.5" />
+    <circle cx="40" cy="32" r="5" fill="#43A047" stroke="#2E7D32" strokeWidth="1.5" />
+    <path d="M24 43h16" stroke="#5C3A21" strokeWidth="3" strokeLinecap="round" />
+    <path d="M7 30v8M57 30v8" stroke="#5C3A21" strokeWidth="3" strokeLinecap="round" />
+    <rect x="20" y="50" width="24" height="5" rx="2.5" fill="#D4C8B0" stroke="#5C3A21" strokeWidth="2" />
+  </svg>
+);
+
 const ShieldIcon = ({ size = 60 }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
     <path d="M32 6 L54 16 L54 32 Q54 50 32 58 Q10 50 10 32 L10 16 Z" fill="#3b7dd8" stroke="#1a3a6a" strokeWidth="2.5"/>
@@ -521,7 +535,7 @@ const ShieldIcon = ({ size = 60 }) => (
   </svg>
 );
 
-function ActionButtons({ onOpenBattleLog }) {
+function ActionButtons({ onOpenBattleLog, onOpenBots }) {
   const { sendToGodot, setFuturesOpen } = useSend();
   const { enemyMode, cannonMode, rallyMode, selectedTroopIdx, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer } = useUI();
   const player = usePlayer();
@@ -691,6 +705,19 @@ function ActionButtons({ onOpenBattleLog }) {
       <NftMintIcon size={mobile ? 38 : 50} />
     </CustomBtn>
   );
+  const botsButton = (
+    <CustomBtn
+      onClick={onOpenBots}
+      width={btnSmall}
+      height={btnSmall}
+      data-tutorial="bots-btn"
+      title="Open trading bots"
+      aria-label="Open trading bots"
+    >
+      <BotIcon size={mobile ? 38 : 50} />
+      <span style={{ ...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11 }}>BOT</span>
+    </CustomBtn>
+  );
 
   return (
     <>
@@ -714,58 +741,63 @@ function ActionButtons({ onOpenBattleLog }) {
         {shopButton}
       </div>
       <div style={{ ...styles.wrapRight, ...(mobile ? { bottom: 8, right: 8 } : {}) }}>
-        {pendingCasualties && (
-          <CustomBtn onClick={() => {
-            // Snapshot the token value at click time AND the player_id so a
-            // stale response (user switched account mid-flight) is dropped
-            // before it can paint another player's casualty list into the
-            // REINFORCE modal. Without this, clicking Reinforce then rapidly
-            // switching account left the callback free to set Bob's
-            // serverCasualties from Alice's data.
-            const fetchToken = token;
-            const fetchPlayerId = player?.player_id;
-            if (!fetchToken) { setLoadingCasualties(false); return; }
-            setLoadingCasualties(true);
-            fetch('/api/casualties', { headers: { 'x-token': fetchToken } })
-              .then(r => r.ok ? r.json() : null)
-              .then(data => {
-                if (!data) return;
-                // Stale-response guard: if the player_id changed while this
-                // fetch was in flight, drop the result rather than show
-                // the old account's data to the new one.
-                if (player?.player_id !== fetchPlayerId) return;
-                if (data.total > 0) {
-                  setServerCasualties(data);
-                  setShowReinforce(true);
-                } else {
-                  setPendingCasualties(null);
-                }
-              })
-              .catch(() => { /* don't show modal on network error */ })
-              .finally(() => setLoadingCasualties(false));
-          }} width={btnSmall} height={btnSmall}>
-            <div style={styles.notificationBadgeSmall}>!</div>
-            <svg width={mobile ? 44 : 56} height={mobile ? 44 : 56} viewBox="0 0 64 64" fill="none">
-              <path d="M32 8L40 20H24L32 8Z" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
-              <rect x="28" y="20" width="8" height="28" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
-              <rect x="20" y="28" width="24" height="8" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
-              <circle cx="32" cy="52" r="6" fill="#4CAF50" stroke="#2E7D32" strokeWidth="2"/>
-              <path d="M29 52L31 54L35 50" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
+        <div style={styles.rightUtilityStack}>
+          {pendingCasualties && (
+            <CustomBtn onClick={() => {
+              // Snapshot the token value at click time AND the player_id so a
+              // stale response (user switched account mid-flight) is dropped
+              // before it can paint another player's casualty list into the
+              // REINFORCE modal. Without this, clicking Reinforce then rapidly
+              // switching account left the callback free to set Bob's
+              // serverCasualties from Alice's data.
+              const fetchToken = token;
+              const fetchPlayerId = player?.player_id;
+              if (!fetchToken) { setLoadingCasualties(false); return; }
+              setLoadingCasualties(true);
+              fetch('/api/casualties', { headers: { 'x-token': fetchToken } })
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                  if (!data) return;
+                  // Stale-response guard: if the player_id changed while this
+                  // fetch was in flight, drop the result rather than show
+                  // the old account's data to the new one.
+                  if (player?.player_id !== fetchPlayerId) return;
+                  if (data.total > 0) {
+                    setServerCasualties(data);
+                    setShowReinforce(true);
+                  } else {
+                    setPendingCasualties(null);
+                  }
+                })
+                .catch(() => { /* don't show modal on network error */ })
+                .finally(() => setLoadingCasualties(false));
+            }} width={btnSmall} height={btnSmall}>
+              <div style={styles.notificationBadgeSmall}>!</div>
+              <svg width={mobile ? 44 : 56} height={mobile ? 44 : 56} viewBox="0 0 64 64" fill="none">
+                <path d="M32 8L40 20H24L32 8Z" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
+                <rect x="28" y="20" width="8" height="28" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
+                <rect x="20" y="28" width="24" height="8" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
+                <circle cx="32" cy="52" r="6" fill="#4CAF50" stroke="#2E7D32" strokeWidth="2"/>
+                <path d="M29 52L31 54L35 50" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
+            </CustomBtn>
+          )}
+          {/* NFT mint stays in the right-side stack on desktop; mobile uses
+              the old battle-log slot above ATTACK. */}
+          {!mobile && nftMintButton}
+          <CustomBtn onClick={() => setShowTournament(true)} width={btnSmall} height={btnSmall} data-tutorial="tournament-btn">
+            <CrossedSwordsIcon size={mobile ? 38 : 50} />
           </CustomBtn>
-        )}
-        {/* NFT mint stays in the right-side stack on desktop; mobile uses
-            the old battle-log slot above ATTACK. */}
-        {!mobile && nftMintButton}
-        <CustomBtn onClick={() => setShowTournament(true)} width={btnSmall} height={btnSmall} data-tutorial="tournament-btn">
-          <CrossedSwordsIcon size={mobile ? 38 : 50} />
-        </CustomBtn>
-        <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize} data-tutorial="trade-btn">
-          {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
-          <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />
-          <span style={styles.btnLabel}>TRADE</span>
-        </CustomBtn>
+        </div>
+        <div style={styles.tradeButtonRow}>
+          {onOpenBots && botsButton}
+          <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize} data-tutorial="trade-btn">
+            {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
+            <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />
+            <span style={styles.btnLabel}>TRADE</span>
+          </CustomBtn>
+        </div>
       </div>
       {showTournament && <TournamentPanel onClose={() => setShowTournament(false)} />}
       {showNftMint && (
@@ -1189,6 +1221,19 @@ const base = { position: 'fixed', bottom: 12, display: 'flex', pointerEvents: 'a
 const styles = {
   wrapLeft:  { ...base, left: 12, flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   wrapRight: { ...base, right: 12, flexDirection: 'column', alignItems: 'flex-end', gap: 12 },
+  rightUtilityStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 12,
+  },
+  tradeButtonRow: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+    gap: 10,
+  },
   mobileBattleLogWrap: {
     position: 'fixed',
     top: 'calc(env(safe-area-inset-top, 0px) + 86px)',

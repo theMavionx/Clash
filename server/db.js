@@ -16,6 +16,11 @@ const uuidv4 = () => crypto.randomUUID();
 
 const DB_PATH = process.env.CLASH_MAIN_DB || path.join(__dirname, 'clash.db');
 
+function raidBotTargetsEnabled() {
+  const raw = String(process.env.CLASH_RAID_BOT_TARGETS_ENABLED || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 const db = new Database(DB_PATH);
 
 // Enable WAL mode for better concurrent read performance
@@ -3695,6 +3700,35 @@ function weightedLuckyRaiderWinners(entries, seed, count = 1) {
   };
 }
 
+const LUCKY_RAIDER_WIN_INTERVAL_DAYS = 3;
+
+function luckyRaiderRecentWinnerIds(dayInput) {
+  const day = normalizeDailyPoolDay(dayInput);
+  const span = LUCKY_RAIDER_WIN_INTERVAL_DAYS - 1;
+  const startDay = addUtcDays(day, -span);
+  const endDay = addUtcDays(day, span);
+  const ids = new Set();
+  const rows = db.prepare(`
+    SELECT winner_player_id, details_json
+      FROM tournament_lucky_raider_runs
+     WHERE status = 'completed'
+       AND day_utc >= ?
+       AND day_utc <= ?
+       AND day_utc != ?
+  `).all(startDay, endDay, day);
+  for (const row of rows) {
+    if (row?.winner_player_id) ids.add(String(row.winner_player_id));
+    try {
+      const details = JSON.parse(row?.details_json || '{}');
+      const winners = Array.isArray(details?.winners) ? details.winners : [];
+      for (const winner of winners) {
+        if (winner?.player_id) ids.add(String(winner.player_id));
+      }
+    } catch {}
+  }
+  return ids;
+}
+
 function luckyRaiderRewardsForPlace(cfg, place) {
   const rewards = Array.isArray(cfg?.rewards) ? cfg.rewards : [];
   return rewards.map((reward) => {
@@ -3736,10 +3770,13 @@ function queueTournamentLuckyRaiderPayouts(t, dayInput, winners) {
     const place = Math.max(1, Math.floor(Number(winner?.place || 0) || 0));
     if (!winner?.player_id || place <= 0) continue;
     const participant = db.prepare(`
-      SELECT reward_wallet_evm
-        FROM tournament_participants
-       WHERE tournament_id = ? AND player_id = ?
+      SELECT tp.reward_wallet_evm,
+             COALESCE(p.is_bot, 0) AS is_bot
+        FROM tournament_participants tp
+        LEFT JOIN players p ON p.id = tp.player_id
+       WHERE tp.tournament_id = ? AND tp.player_id = ?
     `).get(tid, winner.player_id);
+    const winnerIsBot = Number(participant?.is_bot || 0) === 1;
     for (let i = 0; i < rewards.length; i += 1) {
       const reward = rewards[i];
       if (!luckyRaiderRewardUsesClashToken(reward)) {
@@ -3748,6 +3785,10 @@ function queueTournamentLuckyRaiderPayouts(t, dayInput, winners) {
       }
       const amountUsd = Number(reward.amount || 0);
       if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+        skipped += 1;
+        continue;
+      }
+      if (winnerIsBot) {
         skipped += 1;
         continue;
       }
@@ -3957,6 +3998,7 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
     const rows = db.prepare(`
       SELECT tp.player_id,
              p.name,
+             COALESCE(p.is_bot, 0) AS is_bot,
              COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
              COALESCE(SUM(a.trades_count), 0) AS trades_count
         FROM tournament_participants tp
@@ -3975,6 +4017,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       const volume = Math.max(0, safeUsd(row.volume_usd, 1_000_000_000));
       const attackStats = luckyRaiderAttackStatsForPlayer(t, row.player_id, day, cfg);
       const attackWins = attackStats.attack_wins;
+      const attackLosses = Math.max(0, attackStats.attack_attempts - attackWins);
+      const rawAttackLosses = Math.max(0, attackStats.raw_attack_attempts - attackStats.raw_attack_wins);
       const ticketState = luckyRaiderTicketState(cfg, volume, attackWins);
       const ticketsRaw = ticketState.uncapped_tickets;
       const tickets = ticketState.tickets;
@@ -3990,11 +4034,15 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       }
       const details = {
         name: row.name || '',
+        is_bot: Number(row.is_bot || 0) === 1,
+        prize_eligible: Number(row.is_bot || 0) !== 1,
         trades_count: Number(row.trades_count || 0) || 0,
         attack_wins: attackWins,
+        attack_losses: attackLosses,
         attack_attempts: attackStats.attack_attempts,
         attack_surrenders: attackStats.attack_surrenders,
         raw_attack_wins: attackStats.raw_attack_wins,
+        raw_attack_losses: rawAttackLosses,
         raw_attack_attempts: attackStats.raw_attack_attempts,
         raw_attack_surrenders: attackStats.raw_attack_surrenders,
         max_counted_attacks: attackStats.max_counted_attacks,
@@ -4018,11 +4066,15 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       const entry = {
         player_id: row.player_id,
         name: row.name || '',
+        is_bot: Number(row.is_bot || 0) === 1,
+        prize_eligible: Number(row.is_bot || 0) !== 1,
         volume_usd: Number(volume.toFixed(2)),
         attack_wins: attackWins,
+        attack_losses: attackLosses,
         attack_attempts: attackStats.attack_attempts,
         attack_surrenders: attackStats.attack_surrenders,
         raw_attack_wins: attackStats.raw_attack_wins,
+        raw_attack_losses: rawAttackLosses,
         raw_attack_attempts: attackStats.raw_attack_attempts,
         raw_attack_surrenders: attackStats.raw_attack_surrenders,
         tickets,
@@ -4045,16 +4097,22 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
 
     const configHash = crypto.createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 16);
     const seed = `${tid}:${day}:${configHash}`;
-    const pick = weightedLuckyRaiderWinners(entries, seed, cfg.winner_count || 1);
+    const recentWinnerIds = luckyRaiderRecentWinnerIds(day);
+    const drawEntries = entries.filter((entry) => !recentWinnerIds.has(String(entry.player_id)));
+    const pick = weightedLuckyRaiderWinners(drawEntries, seed, cfg.winner_count || 1);
     const winner = pick.winner || null;
     const winners = (pick.winners || []).map((entry) => ({
       place: entry.place,
       player_id: entry.player_id,
       name: entry.name,
+      is_bot: !!entry.is_bot,
+      prize_eligible: !!entry.prize_eligible,
       volume_usd: entry.volume_usd,
       attack_wins: entry.attack_wins,
+      attack_losses: entry.attack_losses,
       attack_attempts: entry.attack_attempts,
       raw_attack_wins: entry.raw_attack_wins,
+      raw_attack_losses: entry.raw_attack_losses,
       raw_attack_attempts: entry.raw_attack_attempts,
       volume_tickets: entry.details.volume_tickets,
       raw_volume_tickets: entry.details.raw_volume_tickets,
@@ -4077,10 +4135,14 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       entries: entries.map((entry) => ({
         player_id: entry.player_id,
         name: entry.name,
+        is_bot: !!entry.is_bot,
+        prize_eligible: !!entry.prize_eligible,
         volume_usd: entry.volume_usd,
         attack_wins: entry.attack_wins,
+        attack_losses: entry.attack_losses,
         attack_attempts: entry.attack_attempts,
         raw_attack_wins: entry.raw_attack_wins,
+        raw_attack_losses: entry.raw_attack_losses,
         raw_attack_attempts: entry.raw_attack_attempts,
         volume_tickets: entry.details.volume_tickets,
         raw_volume_tickets: entry.details.raw_volume_tickets,
@@ -4132,6 +4194,68 @@ function listPendingTournamentLuckyRaiderPayouts(options = {}) {
   const maxAttempts = Math.max(1, Math.min(50, Math.floor(Number(options.maxAttempts || 5) || 5)));
   const retrySeconds = Math.max(0, Math.min(86_400, Math.floor(Number(options.retrySeconds || 300) || 300)));
   return stmts.listPendingTournamentLuckyRaiderPayouts.all(maxAttempts, `-${retrySeconds} seconds`, limit);
+}
+
+function getTournamentLuckyRaiderPayout(id) {
+  const payoutId = String(id || '').trim();
+  if (!payoutId) return null;
+  return stmts.getTournamentLuckyRaiderPayout.get(payoutId) || null;
+}
+
+function listTournamentLuckyRaiderPayouts(options = {}) {
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(options.limit || 100) || 100)));
+  const status = String(options.status || 'all').trim().toLowerCase();
+  const allowed = new Set(['pending', 'processing', 'failed', 'paid', 'void']);
+  const where = allowed.has(status) ? 'WHERE lp.status = ?' : '';
+  const params = allowed.has(status) ? [status, limit] : [limit];
+  return db.prepare(`
+    SELECT lp.*,
+           p.name AS player_name,
+           t.name AS tournament_name,
+           tp.reward_wallet_evm AS current_destination_wallet
+      FROM tournament_lucky_raider_payouts lp
+      LEFT JOIN players p ON p.id = lp.player_id
+      LEFT JOIN tournaments t ON t.id = lp.tournament_id
+      LEFT JOIN tournament_participants tp
+        ON tp.tournament_id = lp.tournament_id
+       AND tp.player_id = lp.player_id
+     ${where}
+     ORDER BY
+       CASE lp.status
+         WHEN 'failed' THEN 0
+         WHEN 'processing' THEN 1
+         WHEN 'pending' THEN 2
+         WHEN 'paid' THEN 3
+         ELSE 4
+       END,
+       lp.created_at DESC,
+       lp.id DESC
+     LIMIT ?
+  `).all(...params);
+}
+
+function getTournamentLuckyRaiderPayoutSummary() {
+  const rows = db.prepare(`
+    SELECT status,
+           COUNT(*) AS count,
+           COALESCE(SUM(reward_amount_usd), 0) AS reward_usd
+      FROM tournament_lucky_raider_payouts
+     GROUP BY status
+  `).all();
+  const summary = {
+    total: 0,
+    reward_usd: 0,
+    by_status: {},
+  };
+  for (const row of rows) {
+    const status = String(row.status || 'unknown');
+    const count = Number(row.count || 0);
+    const rewardUsd = Number(row.reward_usd || 0);
+    summary.total += count;
+    summary.reward_usd += rewardUsd;
+    summary.by_status[status] = { count, reward_usd: rewardUsd };
+  }
+  return summary;
 }
 
 function claimTournamentLuckyRaiderPayout(id, options = {}) {
@@ -4766,6 +4890,7 @@ function getTroopBarnGate(playerId, nextLevel) {
   };
 }
 
+// Lv3 costs stay under the TH5 75K storage cap; see design/gdd/economy-balance.md section 5.3.
 const ALTAR_SKILL_DEFS = {
   prosperity: {
     max_level: 3,
@@ -4773,7 +4898,7 @@ const ALTAR_SKILL_DEFS = {
     cost: [
       { wood: 10000, ore: 10000, gold: 2500 },
       { wood: 30000, ore: 30000, gold: 7500 },
-      { wood: 80000, ore: 80000, gold: 20000 },
+      { wood: 70000, ore: 70000, gold: 20000 },
     ],
   },
   ward: {
@@ -4782,17 +4907,16 @@ const ALTAR_SKILL_DEFS = {
     cost: [
       { wood: 15000, ore: 8000, gold: 2500 },
       { wood: 45000, ore: 25000, gold: 7500 },
-      { wood: 120000, ore: 60000, gold: 20000 },
+      { wood: 70000, ore: 60000, gold: 20000 },
     ],
   },
   glory: {
     max_level: 3,
     bonuses: [5, 7, 10],
-    min_bonus: 1,
     cost: [
       { wood: 12000, ore: 12000, gold: 3000 },
       { wood: 36000, ore: 36000, gold: 9000 },
-      { wood: 90000, ore: 90000, gold: 24000 },
+      { wood: 70000, ore: 70000, gold: 24000 },
     ],
   },
 };
@@ -5181,7 +5305,94 @@ function normalizeReferralCode(value) {
     .slice(0, 48);
 }
 
+function parseSettingBool(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return !!fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  return !['0', 'false', 'no', 'off'].includes(String(value).trim().toLowerCase());
+}
+
+function clampSettingInt(value, fallback, min, max) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function readAppSettingJsonValue(key, fallback = null) {
+  try {
+    const row = db.prepare('SELECT value_json FROM app_settings WHERE key = ?').get(String(key || ''));
+    return row ? JSON.parse(row.value_json || '{}') : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeAppSettingJsonValue(key, value) {
+  db.prepare(`
+    INSERT INTO app_settings (key, value_json, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET
+      value_json = excluded.value_json,
+      updated_at = datetime('now')
+  `).run(String(key || ''), JSON.stringify(value || {}));
+  return value;
+}
+
+const LUCKY_RAIDER_PAYOUT_SETTINGS_KEY = 'lucky_raider.payouts';
 const REFERRAL_SETTINGS_KEY = 'referrals.config';
+
+function getLuckyRaiderPayoutSettings() {
+  const parsed = readAppSettingJsonValue(LUCKY_RAIDER_PAYOUT_SETTINGS_KEY, null) || {};
+  const envAutoDefault = parseSettingBool(process.env.LUCKY_RAIDER_AUTO_PAYOUT, false);
+  return {
+    auto_payout_enabled: parseSettingBool(parsed.auto_payout_enabled, envAutoDefault),
+    manual_payout_enabled: parseSettingBool(parsed.manual_payout_enabled, true),
+    wallet_link_required: parseSettingBool(parsed.wallet_link_required, true),
+    max_batch_size: clampSettingInt(
+      parsed.max_batch_size,
+      clampSettingInt(process.env.LUCKY_RAIDER_PAYOUT_BATCH_SIZE, 10, 1, 100),
+      1,
+      100
+    ),
+    max_attempts: clampSettingInt(
+      parsed.max_attempts,
+      clampSettingInt(process.env.LUCKY_RAIDER_PAYOUT_MAX_ATTEMPTS, 5, 1, 50),
+      1,
+      50
+    ),
+    retry_seconds: clampSettingInt(
+      parsed.retry_seconds,
+      clampSettingInt(process.env.LUCKY_RAIDER_PAYOUT_RETRY_SECONDS, 300, 0, 86_400),
+      0,
+      86_400
+    ),
+  };
+}
+
+function setLuckyRaiderPayoutSettings(input = {}) {
+  const current = getLuckyRaiderPayoutSettings();
+  const next = { ...current };
+  if (Object.prototype.hasOwnProperty.call(input, 'auto_payout_enabled')) {
+    next.auto_payout_enabled = parseSettingBool(input.auto_payout_enabled, current.auto_payout_enabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'manual_payout_enabled')) {
+    next.manual_payout_enabled = parseSettingBool(input.manual_payout_enabled, current.manual_payout_enabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'wallet_link_required')) {
+    next.wallet_link_required = parseSettingBool(input.wallet_link_required, current.wallet_link_required);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'max_batch_size')) {
+    next.max_batch_size = clampSettingInt(input.max_batch_size, current.max_batch_size, 1, 100);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'max_attempts')) {
+    next.max_attempts = clampSettingInt(input.max_attempts, current.max_attempts, 1, 50);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'retry_seconds')) {
+    next.retry_seconds = clampSettingInt(input.retry_seconds, current.retry_seconds, 0, 86_400);
+  }
+  writeAppSettingJsonValue(LUCKY_RAIDER_PAYOUT_SETTINGS_KEY, next);
+  return next;
+}
 
 function clampReferralBps(value, fallback = 1000) {
   const n = Number(value);
@@ -6773,14 +6984,12 @@ function applyAltarProsperityResourceBonus(playerId, resources = {}) {
   };
 }
 
-function rollAltarTrophyBonus(playerId) {
+function getAltarTrophyBonus(playerId) {
   const levels = getAltarSkillLevels(playerId);
   const level = Math.max(0, Math.min(ALTAR_SKILL_DEFS.glory.max_level, Number(levels.glory) || 0));
   if (level <= 0) return { level: 0, bonus: 0, min: 0, max: 0 };
-  const max = Number(ALTAR_SKILL_DEFS.glory.bonuses[level - 1]) || 0;
-  const min = Number(ALTAR_SKILL_DEFS.glory.min_bonus) || 1;
-  const bonus = Math.floor(Math.random() * (max - min + 1)) + min;
-  return { level, bonus, min, max };
+  const bonus = Number(ALTAR_SKILL_DEFS.glory.bonuses[level - 1]) || 0;
+  return { level, bonus, min: bonus, max: bonus };
 }
 
 function applyAltarBuildingBonuses(buildings, levels = {}) {
@@ -7262,6 +7471,15 @@ function getRaidRewardProfile(battleSessionId) {
     return { is_bot: false, loot_multiplier: 1, trophy_multiplier: 1, matchmaking: row || null };
   }
   const reason = String(row.selection_reason || '');
+  if (!raidBotTargetsEnabled()) {
+    return {
+      is_bot: true,
+      loot_multiplier: 1,
+      trophy_multiplier: 1,
+      matchmaking: row,
+      reason: reason || 'raid_bot_targets_disabled',
+    };
+  }
   const difficulty = String(row.target_bot_difficulty || row.difficulty_bucket || 'normal');
   const lootKey = Number(row.recovery_level || 0) >= 2
     ? 'recovery_strong'
@@ -7372,7 +7590,8 @@ function findEnemy(playerId) {
   const rawCandidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId, playerId);
   const matchFilter = filterTournamentAttackCandidates(playerId, rawCandidates);
   const liveCandidates = matchFilter.candidates;
-  const includeBots = botCandidatesAllowedForTournament(matchFilter)
+  const includeBots = raidBotTargetsEnabled()
+    && botCandidatesAllowedForTournament(matchFilter)
     && (
       profile.recovery_level > 0
       || liveCandidates.length < MATCHMAKING_CONFIG.minLiveCandidatesBeforeBots
@@ -7983,8 +8202,8 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   // applyTrophyDelta so a tournament-joined player has their main
   // trophies frozen and the delta credited (with boost on positive
   // delta) to their tournament_participants row instead.
-  const trophyBonus = rollAltarTrophyBonus(attackerId);
-  const trophyBase = Math.max(1, Math.round(TROPHY_WIN * rewardProfile.trophy_multiplier));
+  const trophyBonus = getAltarTrophyBonus(attackerId);
+  const trophyBase = TROPHY_WIN;
   const attackerTrophyDelta = trophyBase + trophyBonus.bonus;
   applyTrophyDelta(attackerId, attackerTrophyDelta, { source: 'attack_win', eventId: battleSessionId });
   if (!rewardProfile.is_bot) {
@@ -8336,6 +8555,8 @@ module.exports = {
   listWalletBlacklist,
   ensureReferralCode,
   issueReferralCodeForPlayer,
+  getLuckyRaiderPayoutSettings,
+  setLuckyRaiderPayoutSettings,
   getReferralSettings,
   setReferralSettings,
   bindPlayerReferral,
@@ -8428,6 +8649,9 @@ module.exports = {
   awardTournamentLuckyRaiderDay,
   awardTournamentFinalDailyPoolDay,
   awardPendingTournamentDailyPools,
+  getTournamentLuckyRaiderPayout,
+  listTournamentLuckyRaiderPayouts,
+  getTournamentLuckyRaiderPayoutSummary,
   listPendingTournamentLuckyRaiderPayouts,
   claimTournamentLuckyRaiderPayout,
   updateTournamentLuckyRaiderPayoutDestination,
