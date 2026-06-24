@@ -1272,6 +1272,16 @@ const HIBACHI_BUILDER_FEE_BPS = Math.max(0, Number(
   || process.env.VITE_HIBACHI_BUILDER_FEE_BPS
   || 0,
 )) || 0;
+const LIGHTER_INTEGRATOR_ACCOUNT_INDEX = Number(
+  process.env.LIGHTER_INTEGRATOR_ACCOUNT_INDEX
+  || process.env.VITE_LIGHTER_INTEGRATOR_ACCOUNT_INDEX
+  || 730898,
+);
+const LIGHTER_BUILDER_FEE_BPS = Math.max(0, Number(
+  process.env.LIGHTER_BUILDER_FEE_BPS
+  || process.env.VITE_LIGHTER_BUILDER_FEE_BPS
+  || 1,
+)) || 1;
 
 function readHotstuffLocalStats() {
   const Db = loadSqlite();
@@ -1625,6 +1635,47 @@ async function fetchHibachiEarnings() {
   };
 }
 
+async function fetchLighterEarnings() {
+  const collector = Number.isFinite(LIGHTER_INTEGRATOR_ACCOUNT_INDEX)
+    ? Math.trunc(LIGHTER_INTEGRATOR_ACCOUNT_INDEX)
+    : 0;
+  const proofWhere = `
+    json_valid(COALESCE(proof_json, ''))
+    AND (
+      CAST(COALESCE(json_extract(proof_json, '$.integrator_maker_fee_collector_index'), 0) AS INTEGER) = ${collector}
+      OR CAST(COALESCE(json_extract(proof_json, '$.integrator_taker_fee_collector_index'), 0) AS INTEGER) = ${collector}
+    )
+    AND (
+      CAST(COALESCE(json_extract(proof_json, '$.integrator_maker_fee'), 0) AS REAL) > 0
+      OR CAST(COALESCE(json_extract(proof_json, '$.integrator_taker_fee'), 0) AS REAL) > 0
+    )
+  `;
+  const local = readVerifiedFuturesDexStats('lighter', 'lighter_integrator', { earnedFeeWhere: proofWhere });
+  const estimated = local.volume_usd * (LIGHTER_BUILDER_FEE_BPS / 10000);
+  return {
+    earned_usd: local.earned_usd,
+    currency: 'USDC (Lighter)',
+    address: collector || null,
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    earned_24h_usd: local.earned_24h_usd,
+    fee_usd: local.fee_usd,
+    fee_24h_usd: local.fee_24h_usd,
+    estimated_fee_usd: roundUsd(estimated),
+    builder_fee_bps: LIGHTER_BUILDER_FEE_BPS,
+    builder_fee_pct: LIGHTER_BUILDER_FEE_BPS / 100,
+    integrator_account_index: collector,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    model: 'lighter_local_integrator_fee_exact',
+    source_detail: 'lighter_integrator_fills_fee_sum',
+    note: `Exact local Lighter integrator fee sum from imported fills where proof_json has collector index ${collector}. Local ${LIGHTER_BUILDER_FEE_BPS}bps volume estimate is shown only for comparison.`,
+  };
+}
+
 // Revenue analytics for admin: fast local stats by time window and by
 // tournament. Exact cumulative readers above stay authoritative where a DEX
 // exposes them; this section focuses on comparable volume x rate reporting.
@@ -1644,6 +1695,7 @@ const ANALYTICS_DEXES = [
   { key: 'katana', label: 'Katana Perps' },
   { key: 'gmtrade', label: 'GMTrade' },
   { key: 'flash', label: 'Flash Trade' },
+  { key: 'lighter', label: 'Lighter' },
 ];
 
 const ANALYTICS_WINDOWS = [
@@ -1709,6 +1761,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'katana') return "verified_source = 'katana_api'";
   if (dex === 'gmtrade') return "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
   if (dex === 'flash') return "verified_source = 'flash_tx'";
+  if (dex === 'lighter') return "verified_source = 'lighter_integrator'";
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
   if (dex === 'avantis') return "verified_source IN ('worker', 'client')";
@@ -1875,6 +1928,19 @@ function revenueModelForDex(dex, dateForRate = null) {
       builder_fee_pct: bps / 100,
       model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
       source_detail: bps > 0 ? 'local_volume_x_flash_bps' : 'flash_builder_not_configured',
+    };
+  }
+  if (dex === 'lighter') {
+    const bps = Math.max(0, LIGHTER_BUILDER_FEE_BPS);
+    return {
+      configured: bps > 0 && LIGHTER_INTEGRATOR_ACCOUNT_INDEX > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps integrator fee` : 'integrator fee not configured',
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_lighter_bps' : 'lighter_integrator_not_configured',
     };
   }
   if (dex === 'hibachi') {
@@ -2228,7 +2294,7 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, phx, mon, hl, grvt, nado, hotstuff, hibachi, katana, gmtrade, flash] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, phx, mon, hl, grvt, nado, hotstuff, hibachi, katana, gmtrade, flash, lighter] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
@@ -2243,6 +2309,7 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     fetchKatanaEarnings(),
     fetchGmtradeEarnings(),
     fetchFlashEarnings(),
+    fetchLighterEarnings(),
   ]);
   const wrap = (label, r) => {
     if (r.status === 'fulfilled') return { ok: true, ...r.value };
@@ -2271,9 +2338,10 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     katana: { ...wrap('katana', katana), source: 'katana_verified_fills_local_estimate' },
     gmtrade: { ...wrap('gmtrade', gmtrade), source: 'gmtrade_verified_tx_local_estimate' },
     flash: { ...wrap('flash', flash), source: 'flash_v2_verified_tx_local_estimate' },
+    lighter: { ...wrap('lighter', lighter), source: 'lighter_integrator_fills_fee_sum' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','grvt','nado','hotstuff','hibachi','katana','gmtrade','flash'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','grvt','nado','hotstuff','hibachi','katana','gmtrade','flash','lighter'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

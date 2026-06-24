@@ -399,6 +399,15 @@ const fmtPrice = (p) => {
   return `0.0${subscriptN(zeros)}${String(sig).padStart(3, '0')}`;
 };
 
+function formatLimitInputPrice(value) {
+  const price = Number(value);
+  if (!Number.isFinite(price) || price <= 0) return '';
+  if (price >= 1000) return String(Math.round(price));
+  if (price >= 1) return String(Number(price.toFixed(4)));
+  if (price >= 0.01) return String(Number(price.toFixed(6)));
+  return String(Number(price.toFixed(10)));
+}
+
 function fmtAmount(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return String(value ?? '');
@@ -2066,6 +2075,8 @@ function FuturesPanel() {
   const [showLeverage, setShowLeverage] = useState(false);
   const [orderType, setOrderType] = useState('market');
   const [limitPrice, setLimitPrice] = useState('');
+  const [orderBookStep, setOrderBookStep] = useState(0.01);
+  const [topOfBook, setTopOfBook] = useState({ bid: null, ask: null });
   const [showSymbolPicker, setShowSymbolPicker] = useState(false);
   const [tradeIdeaOpen, setTradeIdeaOpen] = useState(false);
   const [walletCopied, setWalletCopied] = useState(false);
@@ -2193,6 +2204,12 @@ function FuturesPanel() {
     setSuccessMsg(null);
     if (error && clearError) clearError();
   }, [clearError, error]);
+  const applyMidPrice = useCallback(() => {
+    if (!(midPriceValue > 0)) return;
+    clearTradeFeedback();
+    setOrderType('limit');
+    setLimitPrice(formatLimitInputPrice(midPriceValue));
+  }, [clearTradeFeedback, midPriceValue]);
   const handleToggleOneTapTrading = useCallback(async () => {
     if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash') return;
     const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : dex === 'flash' ? 'Flash' : 'Hyperliquid';
@@ -2532,6 +2549,13 @@ function FuturesPanel() {
     if (orderType === 'limit' && Number(limitPrice) > 0) return Number(limitPrice);
     return Number(currentPrice) || 0;
   }, [orderType, limitPrice, currentPrice]);
+  const midPriceValue = useMemo(() => {
+    const bid = Number(topOfBook.bid);
+    const ask = Number(topOfBook.ask);
+    if (Number.isFinite(bid) && bid > 0 && Number.isFinite(ask) && ask > 0) return (bid + ask) / 2;
+    const fallback = Number(currentPrice);
+    return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+  }, [currentPrice, topOfBook.ask, topOfBook.bid]);
   const pacificaTakerFeeRate = useMemo(() => {
     const fee = Number(account?.taker_fee);
     return Number.isFinite(fee) && fee > 0 ? fee : PACIFICA_DEFAULT_TAKER_FEE_RATE;
@@ -3269,7 +3293,18 @@ function FuturesPanel() {
 
         {orderType === 'limit' && (
           <div style={{display: 'flex', flexDirection: 'column', gap: 3}}>
-            <span style={S.label}>Limit Price</span>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8}}>
+              <span style={S.label}>Limit Price</span>
+              <button
+                type="button"
+                style={{...S.midPriceBtn, opacity: midPriceValue > 0 ? 1 : 0.5}}
+                disabled={!(midPriceValue > 0)}
+                onClick={applyMidPrice}
+                title="Use the mid price between best bid and ask"
+              >
+                Mid
+              </button>
+            </div>
             <input
               type="number"
               placeholder={currentPrice || '0'}
@@ -6270,7 +6305,13 @@ function FuturesPanel() {
                       its own SDK (no public order book), Decibel pushes
                       orderbook via WebSocket and we don't render that yet —
                       gate strictly to Pacifica until those are wired. */}
-                  <OrderBook symbol={symbol} dex={dex} />
+                  <OrderBook
+                    symbol={symbol}
+                    dex={dex}
+                    priceStep={orderBookStep}
+                    onPriceStepChange={setOrderBookStep}
+                    onTopOfBookChange={setTopOfBook}
+                  />
                 </div>
                 {/* Drag handle: orderbook ↔ controls */}
                 <div style={S.dragHandleV} onMouseDown={dragOb} />
@@ -8525,6 +8566,18 @@ const S = {
     padding: '2px 8px', background: '#d4c8b0', border: '2px solid #bba882', borderRadius: 6,
     fontSize: 10, fontWeight: 800, color: '#5C3A21', cursor: 'pointer', textTransform: 'uppercase',
     display: 'flex', alignItems: 'center',
+  },
+  midPriceBtn: {
+    padding: '2px 9px',
+    background: '#fdf8e7',
+    border: '2px solid #bba882',
+    borderRadius: 6,
+    fontSize: 10,
+    fontWeight: 900,
+    color: '#5C3A21',
+    cursor: 'pointer',
+    textTransform: 'uppercase',
+    lineHeight: 1.2,
   },
   levBtn: {
     width: '100%', background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,

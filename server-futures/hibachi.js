@@ -90,15 +90,22 @@ function credentials(input = {}) {
 
 function signPayload(privateKey, payload) {
   const key = String(privateKey || '').trim();
-  const hex = key.startsWith('0x') ? key.slice(2) : key;
-  if (/^[0-9a-fA-F]{64}$/.test(hex)) {
-    const hash = crypto.createHash('sha256').update(payload).digest();
-    const sig = secp256k1.sign(hash, hex, { lowS: true });
-    const compact = Buffer.from(sig.toCompactRawBytes());
-    const recovery = Buffer.from([Number(sig.recovery || 0)]);
-    return Buffer.concat([compact, recovery]).toString('hex');
+  const hex = key.replace(/^0x/iu, '').replace(/\s+/gu, '');
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new Error('Hibachi API private key must be a 32-byte secp256k1 hex key');
   }
-  return crypto.createHmac('sha256', privateKey).update(payload).digest('hex');
+  const hash = crypto.createHash('sha256').update(payload).digest();
+  const sig = secp256k1.sign(hash, hex, { lowS: true });
+  const recoveryId = Number(sig.recovery);
+  if (!Number.isInteger(recoveryId) || recoveryId < 0 || recoveryId > 3) {
+    throw new Error('Hibachi signer did not produce a valid secp256k1 recovery id');
+  }
+  const compact = Buffer.from(sig.toCompactRawBytes());
+  const signature = Buffer.concat([compact, Buffer.from([recoveryId])]);
+  if (signature.length !== 65) {
+    throw new Error(`Hibachi signer produced ${signature.length}-byte signature, expected 65 bytes`);
+  }
+  return signature.toString('hex');
 }
 
 function decimalText(value, fallback = '0') {

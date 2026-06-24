@@ -8519,7 +8519,7 @@ const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'pho
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
   if (!VALID_DEXES.has(dex)) {
-    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex", "nado", "hibachi", "hotstuff", "grvt", "katana", "gmtrade" or "flash"' });
+    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex", "nado", "hibachi", "hotstuff", "grvt", "katana", "gmtrade", "flash" or "lighter"' });
   }
   if (dex !== req.player.dex) {
     safelySetPlayerActiveDex(req.player, dex, req.player.wallet, 'set-dex');
@@ -13177,7 +13177,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       ? 0
       : dex === 'flash'
         ? FLASH_REWARD_MIN_NOTIONAL_USD
-      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') ? 10 : 50;
+      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -13754,7 +13754,7 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter') {
     await tradeRecon.reconcileTradesForPlayer(req.player, {
       dex,
       wallet: req.player.wallet,
@@ -16008,7 +16008,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
   let futuresTrades = [];
   try {
     const fdb = futuresDbReadonly();
-    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado' || player.dex === 'hibachi' || player.dex === 'hotstuff' || player.dex === 'grvt' || player.dex === 'katana' || player.dex === 'gmtrade' || player.dex === 'flash')) {
+    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado' || player.dex === 'hibachi' || player.dex === 'hotstuff' || player.dex === 'grvt' || player.dex === 'katana' || player.dex === 'gmtrade' || player.dex === 'flash' || player.dex === 'lighter')) {
       futuresTrades = fdb.prepare(
         `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
          FROM trade_history WHERE player_id = ? AND dex = ?
@@ -22029,6 +22029,7 @@ function exactReferralFuturesRows(limit = 5000) {
         AND (
           verified_source = 'grvt_builder'
           OR verified_source = 'nado_api'
+          OR verified_source = 'lighter_integrator'
           OR (
             verified_source = 'hotstuff_api'
             AND (

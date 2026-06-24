@@ -1,5 +1,51 @@
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useEffect, useMemo, useRef } from 'react';
 import { createPhoenixPublicWsClient, phoenixSymbol } from '../lib/phoenixClient';
+
+const PRICE_STEPS = [0.01, 0.02, 0.1, 1];
+
+function decimalsForStep(step) {
+  const n = Number(step);
+  if (!Number.isFinite(n) || n <= 0) return 2;
+  const text = String(n);
+  if (text.includes('e-')) return Number(text.split('e-')[1] || 2);
+  const [, decimals = ''] = text.split('.');
+  return decimals.length;
+}
+
+function formatStep(step) {
+  return Number(step).toFixed(decimalsForStep(step));
+}
+
+function formatBookPrice(price, step) {
+  const n = Number(price);
+  if (!Number.isFinite(n)) return '-';
+  const decimals = decimalsForStep(step);
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+function aggregateLevels(levels, side, step) {
+  const numericStep = Number(step);
+  if (!Number.isFinite(numericStep) || numericStep <= 0) return levels;
+  const decimals = decimalsForStep(numericStep);
+  const grouped = new Map();
+  for (const level of Array.isArray(levels) ? levels : []) {
+    const price = Number(level.price);
+    const amount = Number(level.amount);
+    if (!Number.isFinite(price) || !Number.isFinite(amount)) continue;
+    const bucket = Math.round(price / numericStep) * numericStep;
+    const key = bucket.toFixed(decimals + 2);
+    const prev = grouped.get(key) || { price: bucket, amount: 0, count: 0 };
+    prev.amount += amount;
+    prev.count += Number(level.count || 1);
+    grouped.set(key, prev);
+  }
+  return Array.from(grouped.values())
+    .sort((a, b) => side === 'ask' ? a.price - b.price : b.price - a.price)
+    .slice(0, 12);
+}
 
 function normalizePhoenixLevel(level, index) {
   const price = Array.isArray(level) ? level[0] : level?.price ?? level?.p;
@@ -25,7 +71,7 @@ function normalizePhoenixBook(update) {
   };
 }
 
-function OrderBook({ symbol = 'BTC', dex = 'pacifica' }) {
+function OrderBook({ symbol = 'BTC', dex = 'pacifica', priceStep = 0.01, onPriceStepChange, onTopOfBookChange }) {
   const [book, setBook] = useState({ bids: [], asks: [] });
   const wsRef = useRef(null);
 
@@ -114,23 +160,51 @@ function OrderBook({ symbol = 'BTC', dex = 'pacifica' }) {
     };
   }, [symbol, dex]);
 
-  const maxBidAmt = Math.max(...book.bids.map(b => b.amount), 1);
-  const maxAskAmt = Math.max(...book.asks.map(a => a.amount), 1);
+  useEffect(() => {
+    if (typeof onTopOfBookChange !== 'function') return;
+    onTopOfBookChange({
+      bid: book.bids[0]?.price ?? null,
+      ask: book.asks[0]?.price ?? null,
+    });
+  }, [book, onTopOfBookChange]);
+
+  const displayBook = useMemo(() => ({
+    bids: aggregateLevels(book.bids, 'bid', priceStep),
+    asks: aggregateLevels(book.asks, 'ask', priceStep),
+  }), [book, priceStep]);
+
+  const maxBidAmt = Math.max(...displayBook.bids.map(b => b.amount), 1);
+  const maxAskAmt = Math.max(...displayBook.asks.map(a => a.amount), 1);
+  const spreadDisplay = book.asks[0] && book.bids[0]
+    ? formatBookPrice(book.asks[0].price - book.bids[0].price, priceStep)
+    : '-';
   const spread = book.asks[0] && book.bids[0] ? (book.asks[0].price - book.bids[0].price).toFixed(2) : '—';
 
   return (
     <div style={S.container}>
       <div style={S.header}>
         <span style={S.title}>Order Book</span>
-        <span style={S.spread}>Spread: ${spread}</span>
+        <div style={S.headerRight}>
+          <span style={S.spread}>Spread: ${spreadDisplay || spread}</span>
+          <select
+            value={String(priceStep)}
+            onChange={(event) => onPriceStepChange?.(Number(event.target.value))}
+            style={S.stepSelect}
+            title="Order book price step"
+          >
+            {PRICE_STEPS.map(step => (
+              <option key={step} value={step}>{formatStep(step)}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Asks (reversed — lowest at bottom, pushed down) */}
       <div style={S.sideAsks}>
-        {[...book.asks].reverse().map((a) => (
-          <div key={a.price} style={S.row}>
+        {[...displayBook.asks].reverse().map((a) => (
+          <div key={`${a.price}:${a.amount}`} style={S.row}>
             <div style={{...S.bar, ...S.barAsk, width: `${(a.amount / maxAskAmt) * 100}%`}} />
-            <span style={S.price}>{a.price.toLocaleString()}</span>
+            <span style={S.price}>{formatBookPrice(a.price, priceStep)}</span>
             <span style={S.amount}>{a.amount.toFixed(4)}</span>
           </div>
         ))}
@@ -145,10 +219,10 @@ function OrderBook({ symbol = 'BTC', dex = 'pacifica' }) {
 
       {/* Bids */}
       <div style={S.sideBids}>
-        {book.bids.map((b) => (
-          <div key={b.price} style={S.row}>
+        {displayBook.bids.map((b) => (
+          <div key={`${b.price}:${b.amount}`} style={S.row}>
             <div style={{...S.bar, ...S.barBid, width: `${(b.amount / maxBidAmt) * 100}%`}} />
-            <span style={{...S.price, color: '#4CAF50'}}>{b.price.toLocaleString()}</span>
+            <span style={{...S.price, color: '#4CAF50'}}>{formatBookPrice(b.price, priceStep)}</span>
             <span style={S.amount}>{b.amount.toFixed(4)}</span>
           </div>
         ))}
@@ -171,6 +245,19 @@ const S = {
   },
   title: { fontSize: 12, fontWeight: 800, color: '#5C3A21', textTransform: 'uppercase' },
   spread: { fontSize: 10, fontWeight: 700, color: '#a3906a' },
+  headerRight: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 },
+  stepSelect: {
+    height: 24,
+    minWidth: 54,
+    background: '#fdf8e7',
+    border: '2px solid #d4c8b0',
+    borderRadius: 6,
+    color: '#5C3A21',
+    fontSize: 10,
+    fontWeight: 900,
+    outline: 'none',
+    cursor: 'pointer',
+  },
   sideAsks: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', overflow: 'hidden' },
   sideBids: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', overflow: 'hidden' },
   row: {

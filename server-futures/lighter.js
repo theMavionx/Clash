@@ -263,13 +263,50 @@ function decimalFromInteger(value, decimals) {
   return Number.isFinite(n) ? n / (10 ** d) : 0;
 }
 
-function marketFromOrderBook(row) {
+function buildFundingRateMaps(fundingRows = []) {
+  const byId = new Map();
+  const bySymbol = new Map();
+  for (const row of Array.isArray(fundingRows) ? fundingRows : []) {
+    const rate = num(row?.rate ?? row?.funding_rate, NaN);
+    if (!Number.isFinite(rate)) continue;
+    const exchange = String(row?.exchange || '').toLowerCase();
+    const sourceRank = exchange === 'lighter' ? 2 : 1;
+    const entry = { rate, source: exchange || 'unknown', rank: sourceRank };
+    const marketId = Number(row?.market_id ?? row?.market_index);
+    if (Number.isInteger(marketId) && marketId >= 0) {
+      const prev = byId.get(marketId);
+      if (!prev || entry.rank >= prev.rank) byId.set(marketId, entry);
+    }
+    const symbol = normalizeSymbol(row?.symbol);
+    if (symbol) {
+      const prev = bySymbol.get(symbol);
+      if (!prev || entry.rank >= prev.rank) bySymbol.set(symbol, entry);
+    }
+  }
+  return { byId, bySymbol };
+}
+
+async function getFundingRateMaps() {
+  const data = await request('/api/v1/funding-rates');
+  return buildFundingRateMaps(rows(data, 'funding_rates'));
+}
+
+function fundingForOrderBook(row, fundingMaps) {
+  const marketId = Number(row?.market_id ?? row?.market_index);
+  const symbol = normalizeSymbol(row?.symbol);
+  const matched = (Number.isInteger(marketId) ? fundingMaps?.byId?.get(marketId) : null)
+    || (symbol ? fundingMaps?.bySymbol?.get(symbol) : null);
+  return matched || { rate: 0, source: null };
+}
+
+function marketFromOrderBook(row, fundingMaps = null) {
   const symbol = normalizeSymbol(row?.symbol);
   const priceDecimals = Number(row?.supported_price_decimals || 2);
   const sizeDecimals = Number(row?.supported_size_decimals || 4);
   const lotSize = sizeDecimals >= 0 ? String(1 / (10 ** Math.min(sizeDecimals, 12))) : '0.0001';
   const lastPrice = num(row?.last_trade_price ?? row?.last_price, 0);
   const markPrice = num(row?.mark_price ?? row?.index_price ?? lastPrice, lastPrice);
+  const funding = fundingForOrderBook(row, fundingMaps);
   return {
     symbol,
     base: symbol,
@@ -284,7 +321,9 @@ function marketFromOrderBook(row) {
     price_decimals: priceDecimals,
     size_decimals: sizeDecimals,
     max_leverage: 50,
-    funding_rate: 0,
+    funding_rate: funding.rate,
+    next_funding_rate: funding.rate,
+    funding_rate_source: funding.source ? `lighter_funding_rates:${funding.source}` : null,
     price: markPrice,
     mark: markPrice,
     mark_price: markPrice,
@@ -307,15 +346,27 @@ async function getOrderBooks(filter = 'perp') {
 }
 
 async function getMarketInfo() {
-  const orderBooks = await getOrderBooks('perp');
+  const [orderBooks, fundingMaps] = await Promise.all([
+    getOrderBooks('perp'),
+    getFundingRateMaps().catch((err) => {
+      console.warn('[Lighter] funding-rates read failed:', err?.message || err);
+      return buildFundingRateMaps([]);
+    }),
+  ]);
   return orderBooks
     .filter(row => row?.status === 'active' && row?.market_type === 'perp')
-    .map(marketFromOrderBook)
+    .map(row => marketFromOrderBook(row, fundingMaps))
     .filter(row => row.symbol);
 }
 
 async function getPrices() {
-  const orderBooks = await getOrderBooks('perp');
+  const [orderBooks, fundingMaps] = await Promise.all([
+    getOrderBooks('perp'),
+    getFundingRateMaps().catch((err) => {
+      console.warn('[Lighter] funding-rates read failed:', err?.message || err);
+      return buildFundingRateMaps([]);
+    }),
+  ]);
   const out = {};
   for (const row of orderBooks) {
     const symbol = normalizeSymbol(row?.symbol);
@@ -327,10 +378,13 @@ async function getPrices() {
       NaN,
     );
     if (!symbol || !Number.isFinite(price) || price <= 0) continue;
+    const funding = fundingForOrderBook(row, fundingMaps);
     out[symbol] = {
       symbol,
       price,
-      funding_rate: num(row?.funding_rate, 0),
+      funding_rate: funding.rate,
+      next_funding_rate: funding.rate,
+      funding_rate_source: funding.source ? `lighter_funding_rates:${funding.source}` : null,
       change_24h: num(row?.daily_price_change, 0),
       volume_24h: num(row?.daily_quote_token_volume, 0),
     };

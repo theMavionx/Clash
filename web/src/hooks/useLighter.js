@@ -485,6 +485,29 @@ export function useLighter() {
     if (!token) throw new Error('Login required');
     if (!credentials?.accountIndex) throw new Error('Lighter account index required');
     const readCredentials = await refreshReadOnlyToken(credentials);
+    try {
+      const importResult = await fetchJson(`${FUTURES_API}/lighter/import-fills`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          accountIndex: readCredentials.accountIndex,
+          authToken: readCredentials.readOnlyToken || '',
+          limit: 100,
+        }),
+      });
+      if (importResult?.inserted || importResult?.skipped_not_ours || importResult?.trades_checked) {
+        console.info('[Lighter] import-fills before claim', {
+          reason,
+          account_index: importResult.account_index,
+          inserted: importResult.inserted || 0,
+          checked: importResult.trades_checked || 0,
+          skipped_not_ours: importResult.skipped_not_ours || 0,
+          integrator_account_index: importResult.integrator_account_index || null,
+        });
+      }
+    } catch (e) {
+      console.warn('[Lighter] import-fills before claim failed:', e?.message || e);
+    }
     const res = await fetch('/api/trading/claim-gold', {
       method: 'POST',
       headers: {
