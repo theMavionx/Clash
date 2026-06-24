@@ -212,7 +212,9 @@ load_vite_env_for_build() {
     # start with VITE_. Release copies intentionally exclude .env files, so
     # production-only public config (Privy app id, Aptos/Arbitrum API keys)
     # must be lifted from /opt/clash/shared/.env before npm run build.
-    unset VITE_HELIUS_API_KEY VITE_SOLANA_HELIUS_API_KEY VITE_SOLANA_TATUM_API_KEY VITE_TATUM_API_KEY VITE_SOLANA_ALCHEMY_API_KEY VITE_ALCHEMY_SOLANA_API_KEY
+    unset VITE_HELIUS_API_KEY VITE_SOLANA_HELIUS_API_KEY VITE_SOLANA_TATUM_API_KEY VITE_TATUM_API_KEY VITE_SOLANA_ALCHEMY_API_KEY VITE_ALCHEMY_SOLANA_API_KEY \
+        VITE_BOT_API_BASE_URL VITE_CLASH_BOT_URL VITE_BOT_API_PROXY \
+        VITE_BOT_WS_BASE_URL VITE_CLASH_BOT_WS_URL VITE_BOT_WS_PROXY VITE_BOT_DIRECT_URL
     [ -f "$ENV_FILE" ] || return 0
 
     local count=0
@@ -228,7 +230,7 @@ load_vite_env_for_build() {
         case "$key" in
             VITE_*)
                 case "$key" in
-                    VITE_HELIUS_API_KEY|VITE_SOLANA_HELIUS_API_KEY|VITE_SOLANA_TATUM_API_KEY|VITE_TATUM_API_KEY|VITE_SOLANA_ALCHEMY_API_KEY|VITE_ALCHEMY_SOLANA_API_KEY|VITE_SOLANA_PRE_SIGN_SIMULATION)
+                    VITE_HELIUS_API_KEY|VITE_SOLANA_HELIUS_API_KEY|VITE_SOLANA_TATUM_API_KEY|VITE_TATUM_API_KEY|VITE_SOLANA_ALCHEMY_API_KEY|VITE_ALCHEMY_SOLANA_API_KEY|VITE_SOLANA_PRE_SIGN_SIMULATION|VITE_BOT_API_BASE_URL|VITE_CLASH_BOT_URL|VITE_BOT_API_PROXY|VITE_BOT_WS_BASE_URL|VITE_CLASH_BOT_WS_URL|VITE_BOT_WS_PROXY|VITE_BOT_DIRECT_URL)
                         continue
                         ;;
                 esac
@@ -1417,6 +1419,20 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header Accept-Encoding "";
         gzip off;
+    }
+
+    # Bot dashboard WS — must upgrade before the generic /api/ block.
+    location = /api/v1/bot/ws {
+        proxy_pass http://127.0.0.1:4000/api/v1/bot/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 
     location /api/ {

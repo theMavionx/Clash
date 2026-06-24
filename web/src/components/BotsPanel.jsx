@@ -203,12 +203,13 @@ function missingExchangesForBot(bot, syncedAccounts) {
 }
 
 const getBotConfigDetails = (id) => {
-  if (id.includes('grvt')) return { tradeSize: 750, maxPosition: 15000, preset: 'calm' };
-  if (id.includes('hyperliquid') && id.includes('symmetric_mm')) return { tradeSize: 10, maxPosition: 50, preset: 'aggressive' };
-  if (id.includes('pacifica')) return { tradeSize: 50, maxPosition: 50, preset: 'calm' };
-  if (id.includes('avantis')) return { tradeSize: 2000, maxPosition: 20000, preset: 'calm' };
-  if (id.includes('avantis')) return { tradeSize: 1500, maxPosition: 15000, preset: 'calm' };
-  if (id.includes('mock')) return { tradeSize: 50, maxPosition: 500, preset: 'calm' };
+  const key = String(id || '');
+  if (key.includes('grvt')) return { tradeSize: 750, maxPosition: 15000, preset: 'calm' };
+  if (key.includes('hyperliquid') && key.includes('symmetric_mm')) return { tradeSize: 10, maxPosition: 50, preset: 'aggressive' };
+  if (key.includes('pacifica')) return { tradeSize: 50, maxPosition: 50, preset: 'calm' };
+  if (key.includes('avantis')) return { tradeSize: 2000, maxPosition: 20000, preset: 'calm' };
+  if (key.includes('avantis')) return { tradeSize: 1500, maxPosition: 15000, preset: 'calm' };
+  if (key.includes('mock')) return { tradeSize: 50, maxPosition: 500, preset: 'calm' };
   return { tradeSize: 200, maxPosition: 2000, preset: 'calm' };
 };
 
@@ -250,7 +251,9 @@ const mapHandleToBot = (handle, runningList, runtime = {}, activeOrdersGlobal = 
   const rt = runtime[handle.id] || {};
   const cycles = Number(rt.cycles) || 0;
   const openQuotes = Number(rt.open_quotes) || 0;
-  const market = handle.symbols.map(s => s.toUpperCase()).join(', ');
+  const market = (Array.isArray(handle.symbols) ? handle.symbols : [])
+    .map((s) => String(s).toUpperCase())
+    .join(', ');
   const exchange = getExchangeName(handle.id);
   return {
     id: handle.id,
@@ -1480,7 +1483,14 @@ function BotsPanel({ onClose }) {
     let reconnectTimer;
 
     const connectWs = () => {
-      ws = new WebSocket(wsUrl);
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (err) {
+        console.warn('[bot-ws] connect failed:', err);
+        setWsConnected(false);
+        reconnectTimer = setTimeout(connectWs, 3000);
+        return;
+      }
 
       ws.onopen = () => {
         setWsConnected(true);

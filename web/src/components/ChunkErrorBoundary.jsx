@@ -49,7 +49,10 @@ export default class ChunkErrorBoundary extends Component {
       }
       forceReload();
     };
-    return this.props.fallback || (
+    if (this.props.fallback !== undefined) {
+      return this.props.fallback;
+    }
+    return (
       <div style={styles.box}>
         <div style={styles.title}>Error loading game UI</div>
         <button
