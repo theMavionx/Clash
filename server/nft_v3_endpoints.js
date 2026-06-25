@@ -2886,7 +2886,7 @@ function mountNftV3Endpoints(router, ctx) {
     ],
   }];
 
-  const BRIDGE_FEE_USD_E6 = BigInt(process.env.NFT_BRIDGE_FEE_USD_E6 || '200000'); // $0.20
+  const BRIDGE_FEE_USD_E6 = BigInt(process.env.NFT_BRIDGE_FEE_USD_E6 || '1000000'); // $1.00
   const BRIDGE_NATIVE = {
     base:     { asset: 'eth', symbol: 'ETH', decimals: 18, explicitEnv: ['NFT_BRIDGE_BASE_FEE_WEI', 'NFT_BRIDGE_EVM_FEE_WEI'] },
     arbitrum: { asset: 'eth', symbol: 'ETH', decimals: 18, explicitEnv: ['NFT_BRIDGE_ARBITRUM_FEE_WEI', 'NFT_BRIDGE_EVM_FEE_WEI'] },
@@ -2930,7 +2930,7 @@ function mountNftV3Endpoints(router, ctx) {
       };
     }
 
-    if (EVM_CHAINS.has(sourceChain) && sourceContract) {
+    if (process.env.NFT_BRIDGE_USE_CONTRACT_FEE === '1' && EVM_CHAINS.has(sourceChain) && sourceContract) {
       try {
         const { createPublicClient, getAddress, http } = await import('viem');
         const client = createPublicClient({ transport: http(evmRpc(sourceChain, process.env)) });
