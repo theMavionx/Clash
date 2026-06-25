@@ -8692,7 +8692,8 @@ router.post('/players/register', async (req, res) => {
 
 router.get('/players/referral', auth, (req, res) => {
   try {
-    res.json({ ok: true, referral: db.getReferralSummary(req.player.id) });
+    const sync = maybeSyncReferralFuturesEarnings({ limit: 100000 });
+    res.json({ ok: true, referral: db.getReferralSummary(req.player.id), referral_sync: sync });
   } catch (e) {
     console.warn('[referrals] summary failed:', e.message);
     res.status(500).json({ error: 'Failed to load referral summary' });
@@ -22011,7 +22012,63 @@ router.get('/admin/diag/pacifica/summary', adminAuth, (req, res) => {
   res.json({ window_min: sinceMin, rows });
 });
 
-function exactReferralFuturesRows(limit = 5000) {
+const REFERRAL_FUTURES_AUTO_SYNC_COOLDOWN_MS = 2 * 60 * 1000;
+let referralFuturesAutoSyncLastMs = 0;
+let referralFuturesAutoSyncLastResult = null;
+
+function referralNumberEnv(...names) {
+  for (const name of names) {
+    const value = Number(process.env[name]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+function referralFuturesEstimateBps(dex) {
+  const d = String(dex || '').toLowerCase();
+  if (d === 'katana') return referralNumberEnv('KATANA_BUILDER_FEE_BPS', 'VITE_KATANA_BUILDER_FEE_BPS');
+  if (d === 'gmtrade') return referralNumberEnv('GMTRADE_BUILDER_FEE_BPS', 'VITE_GMTRADE_BUILDER_FEE_BPS');
+  if (d === 'flash') return referralNumberEnv('FLASH_BUILDER_FEE_BPS', 'VITE_FLASH_BUILDER_FEE_BPS', 'GMTRADE_BUILDER_FEE_BPS', 'VITE_GMTRADE_BUILDER_FEE_BPS');
+  return 0;
+}
+
+function referralFuturesProof(row) {
+  try {
+    const raw = String(row?.proof_json || '').trim();
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function referralFuturesNotional(row) {
+  const direct = Math.abs(Number(row?.notional_usd || 0));
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const amount = Math.abs(Number(row?.amount || 0));
+  const price = Math.abs(Number(row?.price || 0));
+  const fallback = amount * price;
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+}
+
+function referralFuturesGrossUsd(row) {
+  const dex = String(row?.dex || '').toLowerCase();
+  const feeUsd = Math.abs(Number(row?.fee || 0));
+  if (['grvt', 'nado', 'hotstuff', 'lighter'].includes(dex)) {
+    return Number.isFinite(feeUsd) && feeUsd > 0 ? feeUsd : 0;
+  }
+  if (dex === 'decibel') {
+    const proof = referralFuturesProof(row);
+    const bps = Number(proof?.builder_fee_bps ?? proof?.order_proof_json?.builder_fee_bps ?? 0);
+    const notional = referralFuturesNotional(row);
+    return Number.isFinite(bps) && bps > 0 && notional > 0 ? notional * (bps / 10000) : 0;
+  }
+  const estimatedBps = referralFuturesEstimateBps(dex);
+  const notional = referralFuturesNotional(row);
+  return estimatedBps > 0 && notional > 0 ? notional * (estimatedBps / 10000) : 0;
+}
+
+function futuresRowsForReferralSync(limit = 5000, { exact = true } = {}) {
   const futuresPath = process.env.CLASH_FUTURES_DB || path.join(__dirname, '..', 'server-futures', 'futures.db');
   if (!fs.existsSync(futuresPath)) return [];
   let Sqlite = null;
@@ -22019,15 +22076,15 @@ function exactReferralFuturesRows(limit = 5000) {
   const fdb = new Sqlite(futuresPath, { readonly: true, fileMustExist: true });
   try {
     try { fdb.pragma('journal_mode = WAL'); } catch {}
-    const capped = Math.max(1, Math.min(50_000, Number(limit) || 5000));
-    return fdb.prepare(`
-      SELECT id, player_id, dex, symbol, side, amount, price, notional_usd,
-             fee, order_id, client_order_id, verified_source, proof_json, created_at
-      FROM trade_history
-      WHERE status = 'filled'
-        AND ABS(CAST(COALESCE(NULLIF(fee, ''), '0') AS REAL)) > 0
+    const capped = Math.max(1, Math.min(100_000, Number(limit) || 5000));
+    const where = exact ? `
         AND (
-          verified_source = 'grvt_builder'
+          (
+            verified_source IN ('decibel_fill', 'server')
+            AND json_valid(COALESCE(proof_json, ''))
+            AND COALESCE(CAST(json_extract(proof_json, '$.builder_fee_bps') AS REAL), 0) > 0
+          )
+          OR verified_source = 'grvt_builder'
           OR verified_source = 'nado_api'
           OR verified_source = 'lighter_integrator'
           OR (
@@ -22038,7 +22095,20 @@ function exactReferralFuturesRows(limit = 5000) {
             )
           )
         )
-      ORDER BY id ASC
+      ` : `
+        AND (
+          verified_source = 'katana_api'
+          OR verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')
+          OR verified_source = 'flash_tx'
+        )
+      `;
+    return fdb.prepare(`
+      SELECT id, player_id, dex, symbol, side, amount, price, notional_usd,
+             fee, order_id, client_order_id, verified_source, proof_json, created_at
+      FROM trade_history
+      WHERE status = 'filled'
+        ${where}
+      ORDER BY id DESC
       LIMIT ?
     `).all(capped);
   } finally {
@@ -22047,22 +22117,25 @@ function exactReferralFuturesRows(limit = 5000) {
 }
 
 function syncExactReferralFuturesEarnings({ limit = 5000 } = {}) {
-  const rows = exactReferralFuturesRows(limit);
+  const rows = futuresRowsForReferralSync(limit, { exact: true });
+  const pendingRows = futuresRowsForReferralSync(limit, { exact: false });
   let inserted = 0;
+  let upgraded = 0;
+  let pending = 0;
   let skipped = 0;
-  for (const row of rows) {
-    const feeUsd = Math.abs(Number(row.fee || 0));
-    if (!Number.isFinite(feeUsd) || feeUsd <= 0) {
+  const syncRow = (row, status) => {
+    const grossUsd = referralFuturesGrossUsd(row);
+    if (!Number.isFinite(grossUsd) || grossUsd <= 0) {
       skipped += 1;
-      continue;
+      return;
     }
     const result = db.recordReferralRevenue({
       referredPlayerId: row.player_id,
       sourceType: 'futures_builder_fee',
       sourceId: `${row.dex}:${row.id}`,
       revenueKind: 'builder_fee',
-      grossUsdE6: Math.round(feeUsd * 1_000_000),
-      status: 'confirmed',
+      grossUsdE6: Math.round(grossUsd * 1_000_000),
+      status,
       currency: 'USD',
       txHash: row.order_id == null ? null : String(row.order_id),
       metadata: {
@@ -22072,16 +22145,34 @@ function syncExactReferralFuturesEarnings({ limit = 5000 } = {}) {
         verified_source: row.verified_source,
         client_order_id: row.client_order_id,
         created_at: row.created_at,
+        attribution: status === 'confirmed' ? 'exact_or_builder_proof' : 'verified_volume_estimate',
+        fee: row.fee,
+        notional_usd: row.notional_usd,
       },
     });
-    if (result.changes) inserted += 1;
+    if (result.upgraded) upgraded += 1;
+    else if (result.changes && status === 'pending') pending += 1;
+    else if (result.changes) inserted += 1;
     else skipped += 1;
   }
-  return { scanned: rows.length, inserted, skipped };
+  for (const row of rows) syncRow(row, 'confirmed');
+  for (const row of pendingRows) syncRow(row, 'pending');
+  return { scanned: rows.length + pendingRows.length, exact_scanned: rows.length, estimate_scanned: pendingRows.length, inserted, upgraded, pending, skipped };
+}
+
+function maybeSyncReferralFuturesEarnings({ force = false, limit = 100000 } = {}) {
+  const now = Date.now();
+  if (!force && referralFuturesAutoSyncLastResult && now - referralFuturesAutoSyncLastMs < REFERRAL_FUTURES_AUTO_SYNC_COOLDOWN_MS) {
+    return { ...referralFuturesAutoSyncLastResult, cached: true };
+  }
+  referralFuturesAutoSyncLastMs = now;
+  referralFuturesAutoSyncLastResult = syncExactReferralFuturesEarnings({ limit });
+  return { ...referralFuturesAutoSyncLastResult, cached: false };
 }
 
 router.get('/admin/referrals', adminAuth, (req, res) => {
   try {
+    const sync = maybeSyncReferralFuturesEarnings({ limit: 100000 });
     const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
     const settings = db.getReferralSettings();
     const rows = db.db.prepare(`
@@ -22198,7 +22289,7 @@ router.get('/admin/referrals', adminAuth, (req, res) => {
       ...row,
       amount_usd: Number(row.amount_usd_e6 || 0) / 1_000_000,
     }));
-    res.json({ rows, referrals, recent, payouts, settings, rate_bps: settings.default_bps });
+    res.json({ rows, referrals, recent, payouts, settings, rate_bps: settings.default_bps, sync });
   } catch (e) {
     console.warn('[referrals] admin list failed:', e.message);
     res.status(500).json({ error: 'Failed to load referrals' });
@@ -22257,7 +22348,7 @@ router.post('/admin/referrals/:playerId/code', adminAuth, (req, res) => {
 
 router.post('/admin/referrals/sync-futures', adminAuth, (req, res) => {
   try {
-    res.json({ ok: true, ...syncExactReferralFuturesEarnings({ limit: req.body?.limit || req.query.limit }) });
+    res.json({ ok: true, ...maybeSyncReferralFuturesEarnings({ force: true, limit: req.body?.limit || req.query.limit || 100000 }) });
   } catch (e) {
     console.warn('[referrals] futures sync failed:', e.message);
     res.status(500).json({ error: 'Failed to sync exact futures referral fees' });

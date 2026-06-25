@@ -5671,7 +5671,33 @@ function recordReferralRevenue({
     JSON.stringify(metadata || {}),
     String(status || 'confirmed'),
   );
-  return { changes: info.changes || 0, commission_usd_e6: commission, commission_bps: rateBps };
+  if (!info.changes && String(status || 'confirmed') === 'confirmed') {
+    const upgrade = db.prepare(`
+      UPDATE referral_events
+      SET gross_usd_e6 = ?,
+          commission_usd_e6 = ?,
+          commission_bps = ?,
+          status = 'confirmed',
+          tx_hash = COALESCE(?, tx_hash),
+          metadata_json = ?,
+          confirmed_at = COALESCE(confirmed_at, datetime('now'))
+      WHERE source_type = ?
+        AND source_id = ?
+        AND status = 'pending'
+    `).run(
+      gross,
+      commission,
+      rateBps,
+      txHash == null ? null : String(txHash),
+      JSON.stringify(metadata || {}),
+      String(sourceType),
+      String(sourceId),
+    );
+    if (upgrade.changes) {
+      return { changes: 0, upgraded: upgrade.changes || 0, commission_usd_e6: commission, commission_bps: rateBps };
+    }
+  }
+  return { changes: info.changes || 0, upgraded: 0, commission_usd_e6: commission, commission_bps: rateBps };
 }
 
 function registerPlayer(name, options = {}) {
