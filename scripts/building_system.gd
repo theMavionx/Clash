@@ -3102,19 +3102,31 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	# Ship cannon mode (enemy island only)
+	if is_viewing_enemy and event is InputEventScreenTouch and event.pressed:
+		var touch := event as InputEventScreenTouch
+		if _ship_cannon_mode:
+			var touch_bdata: Dictionary = _find_ship_cannon_target_from_screen(touch.position)
+			if touch_bdata.size() > 0:
+				_fire_ship_cannon(touch_bdata)
+				get_viewport().set_input_as_handled()
+				return
+			_exit_ship_cannon_mode()
+			get_viewport().set_input_as_handled()
+			return
+		elif _check_ship_cannon_click(touch.position):
+			_enter_ship_cannon_mode()
+			get_viewport().set_input_as_handled()
+			return
+
 	if is_viewing_enemy and event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if _ship_cannon_mode:
 				# Already in cannon mode — try to fire at a building first
-				for bs in _building_systems:
-					var local_hit = bs._get_mouse_local()
-					if local_hit != Vector3.INF:
-						var gp = bs._local_to_grid(local_hit)
-						var bdata = bs._find_building_at(gp)
-						if bdata.size() > 0:
-							_fire_ship_cannon(bdata)
-							get_viewport().set_input_as_handled()
-							return
+				var bdata: Dictionary = _find_ship_cannon_target_from_mouse()
+				if bdata.size() > 0:
+					_fire_ship_cannon(bdata)
+					get_viewport().set_input_as_handled()
+					return
 				# No building hit — exit cannon mode
 				_exit_ship_cannon_mode()
 				get_viewport().set_input_as_handled()
@@ -3126,15 +3138,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 		if event.button_index == MOUSE_BUTTON_RIGHT and _ship_cannon_mode:
 			# Right click — fire at building (search ALL building systems)
-			for bs in _building_systems:
-				var local_hit = bs._get_mouse_local()
-				if local_hit != Vector3.INF:
-					var gp = bs._local_to_grid(local_hit)
-					var bdata = bs._find_building_at(gp)
-					if bdata.size() > 0:
-						_fire_ship_cannon(bdata)
-						get_viewport().set_input_as_handled()
-						return
+			var right_bdata: Dictionary = _find_ship_cannon_target_from_mouse()
+			if right_bdata.size() > 0:
+				_fire_ship_cannon(right_bdata)
+				get_viewport().set_input_as_handled()
+				return
 			get_viewport().set_input_as_handled()
 			return
 
@@ -3195,12 +3203,15 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _get_mouse_local() -> Vector3:
+	return _get_screen_local(get_viewport().get_mouse_position())
+
+
+func _get_screen_local(screen_pos: Vector2) -> Vector3:
 	var camera = BaseTroop._get_camera_cached()
 	if camera == null:
 		return Vector3.INF
-	var mouse = get_viewport().get_mouse_position()
-	var from = camera.project_ray_origin(mouse)
-	var dir = camera.project_ray_normal(mouse)
+	var from = camera.project_ray_origin(screen_pos)
+	var dir = camera.project_ray_normal(screen_pos)
 
 	if abs(dir.y) < 0.001:
 		return Vector3.INF
@@ -3517,6 +3528,65 @@ func _find_building_at(gp: Vector2i) -> Dictionary:
 		if gp.x >= bp.x and gp.x < bp.x + def.cells.x and gp.y >= bp.y and gp.y < bp.y + def.cells.y:
 			return b
 	return {}
+
+
+func _is_local_inside_grid(local_pos: Vector3) -> bool:
+	return local_pos.x >= -grid_extent_x * 0.5 \
+		and local_pos.x <= grid_extent_x * 0.5 \
+		and local_pos.z >= -grid_extent_z * 0.5 \
+		and local_pos.z <= grid_extent_z * 0.5
+
+
+func _find_nearest_building_to_local(local_pos: Vector3) -> Dictionary:
+	var nearest: Dictionary = {}
+	var nearest_dist_sq: float = INF
+	for b in placed_buildings:
+		if int(b.get("hp", 0)) <= 0:
+			continue
+		var node: Node3D = b.get("node", null) as Node3D
+		if not is_instance_valid(node):
+			continue
+		var node_local: Vector3 = to_local(node.global_position)
+		var dx: float = node_local.x - local_pos.x
+		var dz: float = node_local.z - local_pos.z
+		var dist_sq: float = dx * dx + dz * dz
+		if dist_sq < nearest_dist_sq:
+			nearest_dist_sq = dist_sq
+			nearest = b
+	return nearest
+
+
+func _find_ship_cannon_target_from_mouse() -> Dictionary:
+	return _find_ship_cannon_target_from_screen(get_viewport().get_mouse_position())
+
+
+func _find_ship_cannon_target_from_screen(screen_pos: Vector2) -> Dictionary:
+	var nearest: Dictionary = {}
+	var nearest_dist_sq: float = INF
+	for bs_node in _building_systems:
+		if not is_instance_valid(bs_node):
+			continue
+		var local_hit: Vector3 = bs_node._get_screen_local(screen_pos)
+		if local_hit == Vector3.INF or not bs_node._is_local_inside_grid(local_hit):
+			continue
+		var gp: Vector2i = bs_node._local_to_grid(local_hit)
+		var direct: Dictionary = bs_node._find_building_at(gp)
+		if direct.size() > 0:
+			return direct
+		var candidate: Dictionary = bs_node._find_nearest_building_to_local(local_hit)
+		if candidate.size() == 0:
+			continue
+		var candidate_node: Node3D = candidate.get("node", null) as Node3D
+		if not is_instance_valid(candidate_node):
+			continue
+		var candidate_local: Vector3 = bs_node.to_local(candidate_node.global_position)
+		var dx: float = candidate_local.x - local_hit.x
+		var dz: float = candidate_local.z - local_hit.z
+		var dist_sq: float = dx * dx + dz * dz
+		if dist_sq < nearest_dist_sq:
+			nearest_dist_sq = dist_sq
+			nearest = candidate
+	return nearest
 
 func _select_building(b: Dictionary) -> void:
 	_set_mortar_range_visuals_for_selected(false)
@@ -6106,11 +6176,6 @@ func _start_move(b: Dictionary) -> void:
 		return
 	if not test_mode and _block_without_server("move building"):
 		return
-	# Port with a docked ship cannot be moved
-	if b.get("id") == "port":
-		var pnode = b.get("node", null)
-		if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
-			return
 	# Cancel any ongoing move on other building systems
 	for bs in _building_systems:
 		if bs != self and bs._is_moving:
@@ -6120,6 +6185,7 @@ func _start_move(b: Dictionary) -> void:
 	_move_last_grid_step_gp = _move_source_gp
 	_move_source_pos = b["node"].position
 	var def = building_defs[b.id]
+	_despawn_port_ship_for_move(b)
 	# Free grid cells temporarily so validity check works while dragging
 	_set_grid_occupied(b.grid_pos, def.cells, false)
 	_hide_move_arrows()
@@ -6224,6 +6290,8 @@ func _confirm_move() -> void:
 			else:
 				skel.tombstone_pos = tomb_world
 				skel.global_rotation = Vector3.ZERO
+	if b.id == "port":
+		_respawn_port_ship_after_move(b)
 	_play_building_move_sfx()
 	_end_move()
 	_select_building(b)
@@ -6244,6 +6312,8 @@ func _cancel_move(reselect: bool = true) -> void:
 				for skel in b["skeletons"]:
 					if is_instance_valid(skel):
 						skel.tombstone_pos = tomb_world
+			if b.id == "port":
+				_respawn_port_ship_after_move(b)
 	_end_move()
 	if reselect and b.size() > 0:
 		_select_building(b)
@@ -6258,6 +6328,33 @@ func _end_move() -> void:
 	if _move_indicator and is_instance_valid(_move_indicator):
 		_move_indicator.queue_free()
 	_move_indicator = null
+
+
+func _despawn_port_ship_for_move(b: Dictionary) -> void:
+	if b.get("id", "") != "port":
+		return
+	var pnode: Node3D = b.get("node", null) as Node3D
+	if not is_instance_valid(pnode):
+		return
+	_hide_ship_panel()
+	if not pnode.has_meta("ship_node"):
+		return
+	var ship_node: Node = pnode.get_meta("ship_node", null)
+	if is_instance_valid(ship_node):
+		ship_node.queue_free()
+	pnode.remove_meta("ship_node")
+
+
+func _respawn_port_ship_after_move(b: Dictionary) -> void:
+	if b.get("id", "") != "port":
+		return
+	var pnode: Node3D = b.get("node", null) as Node3D
+	if not is_instance_valid(pnode) or not pnode.has_meta("has_ship"):
+		return
+	if pnode.has_meta("ship_node") and is_instance_valid(pnode.get_meta("ship_node", null)):
+		return
+	_spawn_port_ship(b)
+	_refresh_port_number_labels()
 
 
 ## Shared materials for the range indicator — two distinct pipeline variants

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, createContext, useContext, useMemo, createElement } from 'react';
+import { setClientActivity } from '../lib/updateCoordinator';
 
 // Separate contexts so components only re-render when their slice changes
 const SendContext = createContext(null);
@@ -305,11 +306,13 @@ export function GodotProvider({ children }) {
           break;
         case 'enemy_mode':
           setEnemyMode(data);
+          setClientActivity({ critical_action: !!data.active });
           if (data.active) {
+            setFleetInfo(null);
             setCannonEnergy({ energy: 10, nextCost: 1, rallyNextCost: 1 }); setBattleResult(null);
             setRallyMode(false);
           }
-          if (!data.active) { setSelectedBuilding(null); setCannonMode(false); setRallyMode(false); setSelectedTroopIdx(0); setBattleTimer(null); }
+          if (!data.active) { setSelectedBuilding(null); setCannonMode(false); setRallyMode(false); setSelectedTroopIdx(0); setBattleTimer(null); setFleetInfo(null); }
           break;
         case 'troop_idx_changed':
           setSelectedTroopIdx(data.idx ?? 0);
@@ -323,6 +326,8 @@ export function GodotProvider({ children }) {
         case 'battle_result':
           setBattleResult(data);
           setBattleTimer(null);
+          setFleetInfo(null);
+          setClientActivity({ critical_action: false });
           if (Object.prototype.hasOwnProperty.call(data || {}, 'trophies')) {
             setPlayerState(prev => {
               if (!prev || prev.trophies === data.trophies) return prev;

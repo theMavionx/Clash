@@ -1882,9 +1882,6 @@ func check_defeat(delta: float) -> void:
 		return
 
 	# No troops alive and no ships sailing — check if all ships have been placed
-	if not _had_troops:
-		return  # battle hasn't started yet
-
 	var fleet_size: int = mini(_saved_fleet.size(), MAX_REPLAY_SHIPS)
 	var total_launched: int = 0
 	if attack_system:
@@ -1894,11 +1891,13 @@ func check_defeat(delta: float) -> void:
 		_skeleton_respawn_timer = 0.0
 		return
 
-	# Grace period before declaring defeat (gives time for last troops to spawn)
+	# Grace period before declaring defeat. Also prevents a soft-lock when
+	# every ship was launched but no troop node ever spawned.
 	_skeleton_respawn_timer += delta
 	if _skeleton_respawn_timer < 3.0:
 		return
 
+	var had_any_troops: bool = _had_troops
 	_had_troops = false
 	_skeleton_respawn_timer = 0.0
 
@@ -1906,6 +1905,7 @@ func check_defeat(delta: float) -> void:
 	var net_def: Node = bs._net
 	var def_id: String = enemy_info.get("id", "")
 	var defeat_casualties: Dictionary = _actual_battle_casualties()
+	var defeat_reason: String = "All troops lost" if had_any_troops else "No troops deployed"
 	if net_def and net_def.has_token() and def_id != "" and not _victory_declared:
 		_victory_declared = true  # prevent double-submission
 		_record_battle_end("defeat")
@@ -1924,7 +1924,7 @@ func check_defeat(delta: float) -> void:
 	var bridge_def: Node = bs._bridge
 	if bridge_def:
 		_flush_troop_deaths_once(defeat_casualties)
-		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": "All troops lost", "casualties": defeat_casualties})
+		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": defeat_reason, "casualties": defeat_casualties})
 
 
 ## Forces a defeat — used when battle timer expires.
