@@ -24,7 +24,7 @@ export default memo(GoldRewardToast);
 const S = {
   toast: {
     position: 'fixed',
-    top: 'max(14px, env(safe-area-inset-top))',
+    top: 'calc(env(safe-area-inset-top, 0px) + 72px)',
     left: '50%',
     transform: 'translateX(-50%)',
     width: 'min(440px, calc(100vw - 24px))',
