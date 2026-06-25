@@ -444,3 +444,10 @@ Request:
 
 - Time: 2026-06-23 18:36:22 +03:00
 - Request: "якщо не повний то тоді роби на пайтоні в мене на пк тестуй щоб все працювало"
+### UR-2026-06-25-001
+
+Time: 2026-06-25 14:19:53 +03:00
+
+Request:
+
+> виправ і коміт деплой всіх змін  My in-game name is player_61b667. I minted a dragon NFT, but it's not showing up in the game.

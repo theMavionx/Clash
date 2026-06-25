@@ -39,6 +39,7 @@ const normalizeBridgeCollectionSlug = normalizeBridgeCollectionSlugValue;
 // wallet inspection, and public Base RPC rate-limits us into failure.
 // Module-scoped so the cache survives multiple mount calls.
 const _ownedNftCache = new Map();
+const BRIDGE_EVM_CHAIN_KEYS = new Set(['base', 'arbitrum', 'monad', 'ink']);
 
 // In-memory rate limit per IP. Production should swap for redis or
 // rate-limiter-flexible.
@@ -243,6 +244,104 @@ function preserveBridgeRarity({
 
 function preserveDemonKingBridgeRarity(options = {}) {
   return preserveBridgeRarity(options);
+}
+
+function bridgeWalletChainType(chain) {
+  const chainKey = String(chain || '').trim().toLowerCase();
+  if (BRIDGE_EVM_CHAIN_KEYS.has(chainKey)) return 'evm';
+  if (chainKey === 'solana' || chainKey === 'aptos') return chainKey;
+  return null;
+}
+
+function bridgeBurnOwnerAddress(sourceChain, burned = {}) {
+  const sourceKey = String(sourceChain || '').trim().toLowerCase();
+  if (BRIDGE_EVM_CHAIN_KEYS.has(sourceKey) || sourceKey === 'aptos') return String(burned.owner || '').trim();
+  if (sourceKey === 'solana') return String(burned.owner || burned.sourceOwner || burned.wallet || '').trim();
+  return '';
+}
+
+function bridgeAddressEquals(chainType, a, b) {
+  const left = String(a || '').trim();
+  const right = String(b || '').trim();
+  if (!left || !right) return false;
+  return chainType === 'solana'
+    ? left === right
+    : left.toLowerCase() === right.toLowerCase();
+}
+
+function playerHasBridgeSourceWallet(player, sourceChain, burned = {}) {
+  const chainType = bridgeWalletChainType(sourceChain);
+  const owner = bridgeBurnOwnerAddress(sourceChain, burned);
+  if (!player?.id || !chainType || !owner) return false;
+  if (bridgeAddressEquals(chainType, player.wallet, owner)) return true;
+  try {
+    const row = chainType === 'solana'
+      ? gameDb.db?.prepare(`
+          SELECT 1 AS ok
+            FROM player_wallets
+           WHERE player_id = ?
+             AND chain_type = ?
+             AND address = ?
+           LIMIT 1
+        `).get(player.id, chainType, owner)
+      : gameDb.db?.prepare(`
+          SELECT 1 AS ok
+            FROM player_wallets
+           WHERE player_id = ?
+             AND chain_type = ?
+             AND lower(address) = lower(?)
+           LIMIT 1
+        `).get(player.id, chainType, owner);
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+function bindBridgeDestinationNftToPlayer({
+  player,
+  collectionSlug,
+  sourceChain,
+  destChain,
+  destAddress,
+  burned = {},
+  tokenId,
+  txHash = null,
+  source = 'bridge-relay',
+} = {}) {
+  const tokenIdText = String(tokenId || '').trim();
+  const owner = String(destAddress || '').trim();
+  if (!player?.id || !tokenIdText || !owner) return { ok: false, skipped: 'missing_player_or_token' };
+  if (!playerHasBridgeSourceWallet(player, sourceChain, burned)) {
+    return { ok: false, skipped: 'source_wallet_not_linked' };
+  }
+  const collectionKey = rarityCollectionDbKey(collectionSlug);
+  const level = normalizeNftLevel(burned.level);
+  try {
+    const token = gameDb.bindPlayerCollectionNft?.(player.id, collectionKey, owner, {
+      chain: destChain,
+      tokenId: tokenIdText,
+      level,
+      imageUrl: collectionLevelImageUrl(collectionSlug, level, tokenIdText),
+    }, { source, txHash });
+    return token ? { ok: true, token } : { ok: false, skipped: 'bind_failed' };
+  } catch (err) {
+    console.warn('[nft-bridge] player inventory bind failed:', err?.message || err);
+    return { ok: false, skipped: 'bind_error', error: (err?.message || String(err)).slice(0, 180) };
+  }
+}
+
+function mergePlayerCollectionTokens(...lists) {
+  const byKey = new Map();
+  for (const list of lists) {
+    for (const token of Array.isArray(list) ? list : []) {
+      const chain = String(token?.chain || '').trim().toLowerCase();
+      const tokenId = String(token?.tokenId || token?.token_id || token?.tokenAddress || token?.asset || token?.mint || token?.id || '').trim();
+      if (!chain || !tokenId) continue;
+      byKey.set(`${chain}:${tokenId}`, { ...token, chain, tokenId });
+    }
+  }
+  return [...byKey.values()];
 }
 
 function aptosMintedEventFromTx(tx) {
@@ -1680,8 +1779,10 @@ function mountNftV3Endpoints(router, ctx) {
 
       const wallet = walletByChain.get(syncChains[0]);
       const force = req.body?.force === true || String(req.body?.force || req.query?.force || '') === '1';
-      const cachedTokens = gameDb.listPlayerCollectionNfts(player.id, collectionSlug, wallet)
+      const cachedWalletTokens = gameDb.listPlayerCollectionNfts(player.id, collectionSlug, wallet)
         .filter((token) => syncChains.includes(token.chain));
+      const cachedPlayerTokens = gameDb.listPlayerCollectionNfts(player.id, collectionSlug);
+      const cachedTokens = mergePlayerCollectionTokens(cachedWalletTokens, cachedPlayerTokens);
       const check = gameDb.getCollectionNftWalletCheck(player.id, collectionSlug, wallet);
 
       if (!force && walletCheckCovers(check, syncChains)) {
@@ -1772,6 +1873,8 @@ function mountNftV3Endpoints(router, ctx) {
           standard: scanned.standard || token.standard,
         };
       });
+      const allActiveTokens = gameDb.listPlayerCollectionNfts(player.id, collectionSlug);
+      const mergedResponseTokens = mergePlayerCollectionTokens(allActiveTokens, responseTokens);
       const nextCheck = gameDb.getCollectionNftWalletCheck(player.id, collectionSlug, wallet);
       res.set('Cache-Control', 'private, no-store');
       return res.json({
@@ -1783,8 +1886,8 @@ function mountNftV3Endpoints(router, ctx) {
         wallet,
         chains: syncChains,
         checkedAt: nextCheck?.checkedAt || null,
-        total: responseTokens.length,
-        tokens: responseTokens,
+        total: mergedResponseTokens.length,
+        tokens: mergedResponseTokens,
         errors,
       });
     } catch (err) {
@@ -3595,6 +3698,7 @@ function mountNftV3Endpoints(router, ctx) {
 
       const collection = bridgeCollectionFromReq(req);
       if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking, voidspore, or dragon.' });
+      const player = playerFromUpgradeRequest(req);
       const collectionSlug = collection.slug;
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
@@ -3714,6 +3818,19 @@ function mountNftV3Endpoints(router, ctx) {
           const [assetAddress, txSig] = String(prior.dest_tx_or_asset).includes('@')
             ? String(prior.dest_tx_or_asset).split('@')
             : [null, prior.dest_tx_or_asset];
+          const playerBind = assetAddress
+            ? bindBridgeDestinationNftToPlayer({
+                player,
+                collectionSlug,
+                sourceChain,
+                destChain,
+                destAddress: prior.dest_address,
+                burned,
+                tokenId: assetAddress,
+                txHash: txSig,
+                source: 'bridge-relay-existing',
+              })
+            : null;
           return res.json({
             collection: collectionSlug,
             mode: 'relay-existing',
@@ -3725,6 +3842,7 @@ function mountNftV3Endpoints(router, ctx) {
             level: prior.level,
             destTxHash: txSig,
             assetAddress,
+            playerBind,
             note: 'Bridge was already completed; returning the recorded destination result.',
           });
         }
@@ -3747,6 +3865,17 @@ function mountNftV3Endpoints(router, ctx) {
           else if (destChain === 'solana') {
             const recovered = await recoverSolanaBridgeMintRecord(sourceRef, collectionSlug);
             if (recovered) {
+              const playerBind = bindBridgeDestinationNftToPlayer({
+                player,
+                collectionSlug,
+                sourceChain,
+                destChain,
+                destAddress: prior.dest_address,
+                burned,
+                tokenId: recovered.assetAddress,
+                txHash: recovered.txSig,
+                source: 'bridge-relay-recovered',
+              });
               return res.json({
                 collection: collectionSlug,
                 mode: 'relay-existing',
@@ -3758,6 +3887,7 @@ function mountNftV3Endpoints(router, ctx) {
                 level: recovered.level || prior.level || burned.level,
                 destTxHash: recovered.txSig,
                 assetAddress: recovered.assetAddress,
+                playerBind,
                 note: 'Recovered an already-minted Solana bridge asset from collection metadata.',
               });
             }
@@ -3870,6 +4000,17 @@ function mountNftV3Endpoints(router, ctx) {
             destTx: hash,
           });
           const rarityRow = rarityRows[0] || null;
+          const playerBind = bindBridgeDestinationNftToPlayer({
+            player,
+            collectionSlug,
+            sourceChain,
+            destChain,
+            destAddress: getAddress(destAddress),
+            burned,
+            tokenId: evmDestTokenId,
+            txHash: hash,
+            source: 'bridge-relay',
+          });
           try {
             bridgeDb?.prepare(`UPDATE used_bridge_refs SET dest_tx_or_asset = ?
               WHERE source_ref = ? AND dest_chain = ?`).run(hash, sourceRef, destChain);
@@ -3883,6 +4024,7 @@ function mountNftV3Endpoints(router, ctx) {
             tokenId: evmDestTokenId,
             rarity: rarityRow?.rarity || null,
             rarityLabel: rarityRow?.rarityLabel || null,
+            playerBind,
             destTxHash: hash, gasUsed: rcp.gasUsed?.toString?.() || null,
           });
         }
@@ -3942,6 +4084,17 @@ function mountNftV3Endpoints(router, ctx) {
             destTx: submitted.hash,
           });
           const rarityRow = rarityRows[0] || null;
+          const playerBind = bindBridgeDestinationNftToPlayer({
+            player,
+            collectionSlug,
+            sourceChain,
+            destChain,
+            destAddress,
+            burned,
+            tokenId: aptosDestTokenAddress || aptosDestTokenIndex,
+            txHash: submitted.hash,
+            source: 'bridge-relay',
+          });
           let rarityOnchainTxHash = null;
           if (collectionUsesRarity(collectionSlug) && aptosDestTokenAddress && rarityRow?.rarityLabel) {
             try {
@@ -3974,6 +4127,7 @@ function mountNftV3Endpoints(router, ctx) {
             tokenAddress: aptosDestTokenAddress,
             rarity: rarityRow?.rarity || null,
             rarityLabel: rarityRow?.rarityLabel || null,
+            playerBind,
             destTxHash: submitted.hash,
             rarityOnchainTxHash,
           });
@@ -4005,6 +4159,17 @@ function mountNftV3Endpoints(router, ctx) {
             destTx: mintRes.txSig,
           });
           const rarityRow = rarityRows[0] || null;
+          const playerBind = bindBridgeDestinationNftToPlayer({
+            player,
+            collectionSlug,
+            sourceChain,
+            destChain,
+            destAddress,
+            burned,
+            tokenId: mintRes.assetAddress,
+            txHash: mintRes.txSig,
+            source: 'bridge-relay',
+          });
           return res.json({
             collection: collectionSlug,
             mode: 'relay-solana', sourceChain, destChain,
@@ -4012,6 +4177,7 @@ function mountNftV3Endpoints(router, ctx) {
             destAddress, level: burned.level,
             rarity: rarityRow?.rarity || null,
             rarityLabel: rarityRow?.rarityLabel || null,
+            playerBind,
             assetAddress: mintRes.assetAddress, tokenAccount: mintRes.tokenAccount || null,
             standard: mintRes.standard || 'mpl-core', txSig: mintRes.txSig,
           });

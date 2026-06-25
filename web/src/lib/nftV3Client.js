@@ -228,6 +228,12 @@ function normalizeNftImageUrl(url, level = 1, id = null, collection = 'demonking
   }
 }
 
+function playerTokenHeaders(base = {}) {
+  const headers = { ...base };
+  if (typeof window !== 'undefined' && window._playerToken) headers['x-token'] = window._playerToken;
+  return headers;
+}
+
 function normalizeNftPayloadImages(payload, collection = null) {
   if (!payload || typeof payload !== 'object') return payload;
   const collectionSlug = normalizeNftCollectionSlug(collection || payload.collection);
@@ -737,7 +743,7 @@ export async function bridgeInit({
   batchTotal,
 }) {
   const r = await fetch('/api/bridge/init', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: playerTokenHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify({
       collection: normalizeNftCollectionSlug(collection),
       sourceChain,
@@ -759,7 +765,7 @@ export async function bridgeInit({
 
 export async function bridgeConfirm({ collection = 'demonking', sourceChain, destChain, burnTxHash, destAddress }) {
   const r = await fetch('/api/bridge/confirm', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: playerTokenHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify({ collection: normalizeNftCollectionSlug(collection), sourceChain, destChain, burnTxHash, destAddress }),
   });
   const j = await r.json();
@@ -772,7 +778,7 @@ export async function bridgeConfirm({ collection = 'demonking', sourceChain, des
 // wallet-drop / out-of-gas / dismissed-prompt risk between burn and mint.
 export async function bridgeRelay({ collection = 'demonking', sourceChain, destChain, burnTxHash, destAddress, batchId, batchIndex, batchTotal }) {
   const r = await fetch('/api/bridge/relay', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: playerTokenHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify({ collection: normalizeNftCollectionSlug(collection), sourceChain, destChain, burnTxHash, destAddress, batchId, batchIndex, batchTotal }),
   });
   const j = await r.json();
