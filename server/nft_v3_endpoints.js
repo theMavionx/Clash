@@ -4240,6 +4240,39 @@ function mountNftV3Endpoints(router, ctx) {
     if (!rawKey) throw new Error('Solana authority key missing (SOLANA_NFT_KEY / NFT_SOLANA_KEY / NFT_KEY)');
     const secretBytes = parseSolanaSecretKey(rawKey);
 
+    async function waitForSolanaSignatureSuccess(rpc, signature, label = 'Solana bridge mint') {
+      const { Connection } = require('@solana/web3.js');
+      const connection = createSolanaConnection(Connection, rpc, 'confirmed');
+      let lastStatus = null;
+      for (let i = 0; i < 24; i++) {
+        const statuses = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+        const status = statuses?.value?.[0] || null;
+        if (status) {
+          lastStatus = status;
+          if (status.err) {
+            throw new Error(`${label} failed on-chain (${signature}): ${JSON.stringify(status.err)}`);
+          }
+          if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+            return status;
+          }
+        }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      try {
+        const tx = await connection.getTransaction(signature, {
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        });
+        if (tx?.meta?.err) {
+          throw new Error(`${label} failed on-chain (${signature}): ${JSON.stringify(tx.meta.err)}`);
+        }
+        if (tx) return tx;
+      } catch (err) {
+        if (/failed on-chain/i.test(String(err?.message || err))) throw err;
+      }
+      throw new Error(`${label} was not confirmed successfully (${signature}); last status: ${JSON.stringify(lastStatus)}`);
+    }
+
     // Resilient submission. Shared Solana RPC providers can return
     // "block height exceeded" on `sendAndConfirm` under load, so we:
     //   - send with skipPreflight + processed commitment for speed
@@ -4302,6 +4335,7 @@ function mountNftV3Endpoints(router, ctx) {
             confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
           });
           const txSig = base58.deserialize(sig.signature)[0];
+          await waitForSolanaSignatureSuccess(rpc, txSig, 'Solana bridge mint');
           return { assetAddress: asset.publicKey.toString(), txSig, standard: 'mpl-core' };
         } catch (err) {
           lastErr = err;
@@ -4317,10 +4351,11 @@ function mountNftV3Endpoints(router, ctx) {
               await new Promise(r => setTimeout(r, 2000));
               const s = await conn.getSignatureStatuses([probeSig]);
               const v = s?.value?.[0];
+              if (v?.err) break;
               if (v?.confirmationStatus === 'confirmed' || v?.confirmationStatus === 'finalized') {
+                await waitForSolanaSignatureSuccess(rpc, probeSig, 'Solana bridge mint recovery');
                 return { assetAddress: asset.publicKey.toString(), txSig: probeSig, standard: 'mpl-core' };
               }
-              if (v?.err) break;
             }
           }
           if (!/block height|expired|already.*processed/i.test(msg) || attempt === 3) throw err;

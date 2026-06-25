@@ -459,3 +459,35 @@ Time: 2026-06-25 14:50:27 +03:00
 Request:
 
 > i might have type in the wrong api key. how do i re-type the api key
+
+### UR-2026-06-25-003
+
+Time: 2026-06-25 15:12:01 +03:00
+
+Request:
+
+> I bridged my Dragon NFT, but now I cannot find it. Could you please check what the current status is? I performed the bridge between Base and Solana. той же грпавець
+
+### UR-2026-06-25-004
+
+Time: 2026-06-25 15:19:16 +03:00
+
+Request:
+
+> додай у модалку з вибором токенів для трейдингу щоб вони сортувалися за обємом або популярністю чи що там кожна біржа дає нам перевір всі біржі та імпленментй сам протестуй кожну з них кожен запит якщо блокує іп використовуй впс наш сервер
+
+### UR-2026-06-25-005
+
+Time: 2026-06-25 15:40:05 +03:00
+
+Request:
+
+> пріві пацифіка zaika нік глянь логи клієнськф
+
+### UR-2026-06-25-006
+
+Time: 2026-06-25 15:49:10 +03:00
+
+Request:
+
+> тоді для пріві зроби правило з тільки платними рпс

@@ -9,7 +9,7 @@ import { riseChain } from '../lib/risexConfig';
 import { inkChain } from '../lib/nadoConfig';
 import { grvtChain } from '../lib/grvtConfig';
 import { katanaChain } from '../lib/katanaConfig';
-import { DEFAULT_SOLANA_RPC_URL, solanaWsUrl } from '../lib/solanaRpc';
+import { DEFAULT_PRIVY_SOLANA_RPC_URL, solanaWsUrl } from '../lib/solanaRpc';
 // Perpl (Monad mainnet) is too new to ship in viem/chains, so we define it
 // locally in monadConfig and import the same object both here (Privy's
 // supportedChains list) and in EvmWalletContext (chain switch helper).
@@ -23,7 +23,7 @@ import { DEFAULT_SOLANA_RPC_URL, solanaWsUrl } from '../lib/solanaRpc';
 // children without wrapping them, so every Privy hook downstream warns.
 // Adding Monad here is fine when appId is set.)
 
-const SOLANA_RPC_HTTP = DEFAULT_SOLANA_RPC_URL;
+const SOLANA_RPC_HTTP = DEFAULT_PRIVY_SOLANA_RPC_URL;
 const SOLANA_RPC_WS = solanaWsUrl(SOLANA_RPC_HTTP);
 const solanaWalletConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });
 const OPTIONAL_PRIVY_DEFAULT = {

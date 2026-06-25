@@ -151,6 +151,119 @@ function marketChange24h(priceRow) {
   return mark != null && yest != null && yest > 0 ? ((mark - yest) / yest) * 100 : 0;
 }
 
+function sumObjectNumbers(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  let total = 0;
+  let found = false;
+  for (const item of Object.values(value)) {
+    const n = finiteNumber(item);
+    if (n == null) continue;
+    total += Math.abs(n);
+    found = true;
+  }
+  return found ? total : null;
+}
+
+function marketVolume24h(row = {}) {
+  const raw = row?._raw || {};
+  const volume = firstFinite(
+    row.volume_24h,
+    row.volume24h,
+    row.volume24H,
+    row.quote_volume_24h,
+    row.quoteVolume24h,
+    row.daily_volume,
+    row.dailyVolume,
+    row.turnover_24h,
+    row.turnover24h,
+    row.turnover,
+    row.notional_volume_24h,
+    row.volumeUsd24h,
+    row.volume_usd_24h,
+    row.daily_quote_token_volume,
+    row.dailyQuoteTokenVolume,
+    raw.volume_24h,
+    raw.volume24h,
+    raw.quote_volume_24h,
+    raw.daily_volume,
+    raw.dailyVolume,
+    raw.turnover_24h,
+    raw.turnover,
+    raw.notional_volume_24h,
+    raw.volumeUsd24h,
+    raw.volume_usd_24h,
+    raw.daily_quote_token_volume,
+    raw.dailyQuoteTokenVolume,
+  );
+  if (volume != null && volume > 0) return volume;
+  const baseVolume = firstFinite(
+    row.daily_base_token_volume,
+    row.dailyBaseTokenVolume,
+    raw.daily_base_token_volume,
+    raw.dailyBaseTokenVolume,
+  );
+  const mark = firstFinite(row.mark, row._mark, row.mid, row.oracle, row.price, row.last_price, raw.mark, raw.price, raw.last_trade_price);
+  return baseVolume != null && baseVolume > 0 && mark != null && mark > 0 ? baseVolume * mark : 0;
+}
+
+function marketOpenInterest(row = {}) {
+  const raw = row?._raw || {};
+  const oi = firstFinite(
+    row.open_interest,
+    row.openInterest,
+    row.oi,
+    row.open_interest_usd,
+    row.openInterestUsd,
+    raw.open_interest,
+    raw.openInterest,
+    raw.oi,
+    raw.open_interest_usd,
+    raw.openInterestUsd,
+  );
+  if (oi != null && oi > 0) return oi;
+  return sumObjectNumbers(row.openInterest) || sumObjectNumbers(raw.openInterest) || 0;
+}
+
+function popularSymbolRank(symbol) {
+  const base = baseSymbolForIcon(null, symbol).toUpperCase();
+  const index = POPULAR_SYMBOLS.indexOf(base);
+  return index >= 0 ? (POPULAR_SYMBOLS.length - index) : 0;
+}
+
+function marketActivity(row = {}) {
+  const volume = marketVolume24h(row);
+  const openInterest = marketOpenInterest(row);
+  const popularity = popularSymbolRank(row.symbol || row.base || row.pair || '');
+  const score = volume > 0
+    ? 2_000_000_000_000 + volume
+    : openInterest > 0
+      ? 1_000_000_000_000 + openInterest
+      : popularity * 1_000_000;
+  return {
+    volume,
+    openInterest,
+    popularity,
+    score,
+    label: volume > 0
+      ? `$${formatCompactNumber(volume)}`
+      : openInterest > 0
+        ? `OI ${formatCompactNumber(openInterest)}`
+        : popularity > 0
+          ? 'Popular'
+          : '—',
+  };
+}
+
+function formatCompactNumber(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(n >= 10_000_000_000 ? 0 : 1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}K`;
+  if (n >= 1) return n.toFixed(0);
+  return '<1';
+}
+
 function shortAddr(value) {
   const text = String(value || '');
   return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text;
@@ -1468,6 +1581,7 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
       const priceData = { ...m, ...(p || {}) };
       const mark = firstFinite(priceData.mark, priceData._mark, priceData.mid, priceData.oracle) || 0;
       const change = marketChange24h(priceData);
+      const activity = marketActivity(priceData);
       return {
         symbol: m.symbol,
         // Prefer the human-readable pair ("USD/JPY") when present; falls back
@@ -1477,9 +1591,14 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
         maxLev: m.max_leverage,
         mark,
         change,
+        activity,
       };
     }).filter(r => !search || r.label.toLowerCase().includes(search.toLowerCase()))
-      .sort((a, b) => a.label.localeCompare(b.label));
+      .sort((a, b) => {
+        const byActivity = (b.activity?.score || 0) - (a.activity?.score || 0);
+        if (Math.abs(byActivity) > 1e-9) return byActivity;
+        return a.label.localeCompare(b.label);
+      });
   }, [markets, prices, search]);
 
   return (
@@ -1495,11 +1614,13 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
         <table style={{width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 12, fontFamily: '"Inter","Segoe UI",sans-serif'}}>
           <colgroup>
             <col style={{width: 'auto'}} />
-            <col style={{width: '72px'}} />
+            <col style={{width: '70px'}} />
+            <col style={{width: '68px'}} />
             <col style={{width: '56px'}} />
           </colgroup>
           <thead><tr>
             <th style={SP.th}>Symbol</th>
+            <th style={{...SP.th, textAlign: 'right'}}>Activity</th>
             <th style={{...SP.th, textAlign: 'right'}}>Price</th>
             <th style={{...SP.th, textAlign: 'right'}}>24h</th>
           </tr></thead>
@@ -1527,6 +1648,18 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
                     );
                   })()}
                 </div>
+              </td>
+              <td
+                title={r.activity?.volume > 0
+                  ? `24h volume ${r.activity.label}`
+                  : r.activity?.openInterest > 0
+                    ? `Open interest ${formatCompactNumber(r.activity.openInterest)}`
+                    : r.activity?.popularity > 0
+                      ? 'Popular market fallback'
+                      : 'No venue activity metric'}
+                style={{...SP.td, textAlign: 'right', fontWeight: 800, fontFamily: 'monospace', color: r.activity?.volume > 0 ? '#7b5a22' : '#9b8a6a', fontSize: 10, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip'}}
+              >
+                {r.activity?.label || '—'}
               </td>
               <td style={{...SP.td, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip'}}>
                 {r.mark > 0 ? fmtPrice(r.mark) : '—'}

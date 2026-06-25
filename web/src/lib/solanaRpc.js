@@ -135,6 +135,29 @@ export const SOLANA_RPC_URLS = preferProxyRpc
 
 export const DEFAULT_SOLANA_RPC_URL = SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_RPC_URL;
 
+const rawPrivySolanaRpc = (import.meta.env.VITE_PRIVY_SOLANA_RPC_URL || '').trim();
+const rawPrivySolanaRpcUrls = (import.meta.env.VITE_PRIVY_SOLANA_RPC_URLS || '').trim();
+const PRIVY_SOLANA_OVERRIDE_URLS = [
+  rawPrivySolanaRpc ? normalizeRpcUrl(rawPrivySolanaRpc) : '',
+  ...splitRpcUrls(rawPrivySolanaRpcUrls).map(normalizeRpcUrl),
+].filter((url) => url && !isBlockedBrowserSolanaRpcUrl(url));
+
+// Privy embedded Solana wallets should never use public/free browser RPCs.
+// Keep Alchemy first because /rpc/solana currently points at the Helius key and
+// can return quota 429s, while /rpc/solana-alchemy is the paid healthy fallback.
+export const PRIVY_SOLANA_RPC_URLS = buildRpcFallbackList({
+  publicUrls: [],
+  overrideUrls: PRIVY_SOLANA_OVERRIDE_URLS,
+  privateUrls: [
+    SAME_ORIGIN_SOLANA_ALCHEMY_URL,
+    envProxySolanaRpc,
+    SAME_ORIGIN_SOLANA_RPC_URL,
+  ],
+  includePublic: false,
+});
+
+export const DEFAULT_PRIVY_SOLANA_RPC_URL = PRIVY_SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_ALCHEMY_URL;
+
 export const NFT_SOLANA_RPC_URLS = buildRpcFallbackList({
   publicUrls: DIRECT_SOLANA_RPC_URLS,
   overrideUrls: [

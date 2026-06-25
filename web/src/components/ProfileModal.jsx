@@ -12,9 +12,11 @@ import { usePhoenix } from '../hooks/usePhoenix';
 import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useRisex } from '../hooks/useRisex';
 import { useNado } from '../hooks/useNado';
+import { useHibachi } from '../hooks/useHibachi';
 import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
 import { useKatana } from '../hooks/useKatana';
+import { useLighter } from '../hooks/useLighter';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -68,7 +70,7 @@ function ProfileModal({ onClose }) {
   const { publicKey, connected, disconnect, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
-  const { dex } = useDex();
+  const { dex, setDex } = useDex();
   const { mode: futuresMode, setMode: setFuturesMode } = useFuturesMode();
   const { address: evmAddress, disconnect: evmDisconnect, setExternalProvider: setEvmProvider } = useEvmWallet();
   const { address: aptosAddress, disconnect: aptosDisconnect, connect: aptosConnect } = useAptosWallet();
@@ -81,9 +83,11 @@ function ProfileModal({ onClose }) {
   const hyperliquidHook = useHyperliquid();
   const risexHook = useRisex();
   const nadoHook = useNado();
+  const hibachiHook = useHibachi();
   const hotstuffHook = useHotstuff();
   const grvtHook = useGrvt();
   const katanaHook = useKatana();
+  const lighterHook = useLighter();
   const tradingHook = dex === 'avantis'
     ? avantisHook
     : dex === 'decibel'
@@ -100,12 +104,16 @@ function ProfileModal({ onClose }) {
     ? risexHook
     : dex === 'nado'
     ? nadoHook
+    : dex === 'hibachi'
+    ? hibachiHook
     : dex === 'hotstuff'
     ? hotstuffHook
     : dex === 'grvt'
     ? grvtHook
     : dex === 'katana'
     ? katanaHook
+    : dex === 'lighter'
+    ? lighterHook
     : pacificaHook;
   const { account, walletAddr } = tradingHook;
   const [tradingStats, setTradingStats] = useState(null);
@@ -127,6 +135,8 @@ function ProfileModal({ onClose }) {
   const [walletActionError, setWalletActionError] = useState('');
   const [walletActionBusy, setWalletActionBusy] = useState('');
   const [referralSummary, setReferralSummary] = useState(player?.referral || null);
+  const [credentialAction, setCredentialAction] = useState('');
+  const [credentialMessage, setCredentialMessage] = useState('');
 
   useEffect(() => {
     if (!editingName) setNameDraft(currentName);
@@ -148,7 +158,7 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana')
+  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
@@ -157,7 +167,7 @@ function ProfileModal({ onClose }) {
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
   const activeWallet = liveWallet || linkedWallet;
-  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana')
+  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
@@ -533,6 +543,127 @@ function ProfileModal({ onClose }) {
     const n = Number(value || 0);
     return `$${n.toFixed(n >= 10 ? 2 : 4)}`;
   }, []);
+
+  const credentialDexes = useMemo(() => ([
+    {
+      id: 'hibachi',
+      label: 'Hibachi',
+      details: 'API key, account id, private key',
+      hook: hibachiHook,
+      walletLabel: 'EVM wallet',
+    },
+    {
+      id: 'grvt',
+      label: 'GRVT',
+      details: 'API key, sub-account auto-detect',
+      hook: grvtHook,
+      walletLabel: 'GRVT EVM wallet',
+    },
+    {
+      id: 'katana',
+      label: 'Katana',
+      details: 'API key, API secret, delegated signer',
+      hook: katanaHook,
+      walletLabel: 'Katana EVM wallet',
+    },
+    {
+      id: 'lighter',
+      label: 'Lighter',
+      details: 'account index, API key index, private key',
+      hook: lighterHook,
+      walletLabel: 'EVM wallet',
+    },
+  ]), [grvtHook, hibachiHook, katanaHook, lighterHook]);
+
+  const switchToCredentialDex = useCallback((dexId) => {
+    setDex(dexId);
+    try {
+      localStorage.setItem('clash_dex_picked', '1');
+      window.dispatchEvent(new CustomEvent('clash-dex-switched-from-profile', { detail: { dex: dexId } }));
+    } catch { /* noop */ }
+    setCredentialMessage('Switched DEX. Reopen profile after the trading panel finishes loading to change API credentials.');
+  }, [setDex]);
+
+  const promptCredentialInput = useCallback((dexId) => {
+    if (typeof window === 'undefined') return null;
+    if (dexId === 'hibachi') {
+      const apiKey = window.prompt('Hibachi API key', '');
+      if (apiKey == null) return null;
+      const accountId = window.prompt('Hibachi account id', '');
+      if (accountId == null) return null;
+      const privateKey = window.prompt('Hibachi API private key', '');
+      if (privateKey == null) return null;
+      return { apiKey, accountId, privateKey };
+    }
+    if (dexId === 'grvt') {
+      const apiKey = window.prompt('GRVT API key', '');
+      if (apiKey == null) return null;
+      const subAccountId = window.prompt('GRVT sub-account id (optional; leave blank to auto-detect)', '');
+      if (subAccountId == null) return null;
+      const fundingAccountAddress = window.prompt('GRVT funding account address (optional)', '');
+      if (fundingAccountAddress == null) return null;
+      return { apiKey, subAccountId, fundingAccountAddress };
+    }
+    if (dexId === 'katana') {
+      const apiKey = window.prompt('Katana API key', '');
+      if (apiKey == null) return null;
+      const apiSecret = window.prompt('Katana API secret', '');
+      if (apiSecret == null) return null;
+      return { apiKey, apiSecret };
+    }
+    if (dexId === 'lighter') {
+      const accountIndex = window.prompt('Lighter account index', '');
+      if (accountIndex == null) return null;
+      const apiKeyIndex = window.prompt('Lighter API key index', '');
+      if (apiKeyIndex == null) return null;
+      const apiPrivateKey = window.prompt('Lighter API private key', '');
+      if (apiPrivateKey == null) return null;
+      return { accountIndex, apiKeyIndex, apiPrivateKey };
+    }
+    return null;
+  }, []);
+
+  const changeCredentialDex = useCallback(async (row) => {
+    if (!row?.id || !row?.hook?.activate || credentialAction) return;
+    if (dex !== row.id) {
+      switchToCredentialDex(row.id);
+      return;
+    }
+    const input = row.id === 'hibachi' ? null : promptCredentialInput(row.id);
+    if (row.id !== 'hibachi' && !input) return;
+    setCredentialAction(`${row.id}:change`);
+    setCredentialMessage('');
+    try {
+      const result = await row.hook.activate(input);
+      if (result?.error) throw new Error(result.error);
+      setCredentialMessage(`${row.label} API credentials saved.`);
+    } catch (e) {
+      setCredentialMessage(e?.message || `Failed to save ${row.label} credentials.`);
+    } finally {
+      setCredentialAction('');
+    }
+  }, [credentialAction, dex, promptCredentialInput, switchToCredentialDex]);
+
+  const clearCredentialDex = useCallback(async (row) => {
+    if (!row?.id || !row?.hook?.disconnect || credentialAction) return;
+    if (typeof window !== 'undefined' && !window.confirm(`Clear saved ${row.label} API credentials from this browser?`)) return;
+    setCredentialAction(`${row.id}:clear`);
+    setCredentialMessage('');
+    try {
+      await row.hook.disconnect();
+      setCredentialMessage(`${row.label} API credentials cleared from this browser.`);
+    } catch (e) {
+      setCredentialMessage(e?.message || `Failed to clear ${row.label} credentials.`);
+    } finally {
+      setCredentialAction('');
+    }
+  }, [credentialAction]);
+
+  const credentialStatusText = useCallback((row) => {
+    if (dex !== row.id) return 'Switch to manage';
+    if (row.hook?.setupVerified || row.hook?.accountReady || row.hook?.isReady) return 'Saved';
+    return 'Not ready';
+  }, [dex]);
 
   return (
     <>
@@ -929,6 +1060,11 @@ function ProfileModal({ onClose }) {
               style={{...cartoonBtn('#00B8D9', '#075985'), width: '100%', textAlign: 'center', padding: '14px'}}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT INK WALLET</button>
+          ) : dex === 'hibachi' ? (
+            <button
+              style={{...cartoonBtn('#111827', '#374151'), width: '100%', textAlign: 'center', padding: '14px'}}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT HIBACHI WALLET</button>
           ) : dex === 'hotstuff' ? (
             <button
               style={{...cartoonBtn('#EF4444', '#991B1B'), width: '100%', textAlign: 'center', padding: '14px'}}
@@ -944,6 +1080,11 @@ function ProfileModal({ onClose }) {
               style={{...cartoonBtn('#F04438', '#991B1B'), width: '100%', textAlign: 'center', padding: '14px'}}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT KATANA WALLET</button>
+          ) : dex === 'lighter' ? (
+            <button
+              style={{...cartoonBtn('#22A7F0', '#0369A1'), width: '100%', textAlign: 'center', padding: '14px'}}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT LIGHTER WALLET</button>
           ) : (
             <button
               style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}
@@ -960,7 +1101,7 @@ function ProfileModal({ onClose }) {
                 <button
                   style={S.walletRepairBtn}
                   onClick={() => {
-                    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana') setEvmModalOpen(true);
+                    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') setEvmModalOpen(true);
                     else if (dex === 'decibel') aptosConnect?.();
                     else openSolanaConnect();
                   }}
@@ -969,6 +1110,66 @@ function ProfileModal({ onClose }) {
                 </button>
                 <button style={S.walletRepairLogout} onClick={handleDisconnect}>Log out</button>
               </div>
+            </div>
+          )}
+
+          {token && (
+            <div style={S.credentialsBox}>
+              <div style={S.credentialsHead}>
+                <div>
+                  <div style={S.walletListTitle}>DEX API credentials</div>
+                  <div style={S.credentialsHint}>Stored encrypted in this browser. Secrets are never displayed here.</div>
+                </div>
+              </div>
+              {credentialMessage && <div style={S.credentialsMessage}>{credentialMessage}</div>}
+              {credentialDexes.map((row) => {
+                const isActive = dex === row.id;
+                const cfg = DEX_CONFIG[row.id] || {};
+                const statusText = credentialStatusText(row);
+                const changing = credentialAction === `${row.id}:change`;
+                const clearing = credentialAction === `${row.id}:clear`;
+                return (
+                  <div key={row.id} style={S.credentialRow}>
+                    <div style={S.credentialMain}>
+                      {cfg.logo && (
+                        <img
+                          src={cfg.logo}
+                          alt=""
+                          style={S.credentialLogo}
+                        />
+                      )}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={S.credentialTitleLine}>
+                          <span style={S.credentialName}>{row.label}</span>
+                          <span style={isActive ? S.credentialActiveChip : S.credentialIdleChip}>{statusText}</span>
+                        </div>
+                        <div style={S.credentialSub}>{row.details}</div>
+                        {!isActive && <div style={S.credentialSub}>Switch to {row.label} to verify credentials against its API.</div>}
+                      </div>
+                    </div>
+                    <div style={S.credentialActions}>
+                      <button
+                        type="button"
+                        style={S.credentialPrimaryBtn}
+                        disabled={!!credentialAction}
+                        onClick={() => changeCredentialDex(row)}
+                      >
+                        {changing ? '...' : isActive ? 'Change' : 'Switch'}
+                      </button>
+                      {isActive && (
+                        <button
+                          type="button"
+                          style={S.credentialClearBtn}
+                          disabled={!!credentialAction}
+                          onClick={() => clearCredentialDex(row)}
+                        >
+                          {clearing ? '...' : 'Clear'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -1141,7 +1342,7 @@ function ProfileModal({ onClose }) {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'hibachi' || dex === 'lighter' ? 'mainnet' : 'base'}
         onConnected={handleEvmConnected}
       />
     </>
@@ -1374,6 +1575,67 @@ const S = {
     padding: '8px 10px', borderRadius: 9, cursor: 'pointer',
     background: 'linear-gradient(180deg, #ef5350 0%, #d32f2f 100%)',
     border: '2px solid #8b2a2a', color: '#fff', fontSize: 11, fontWeight: 900,
+  },
+  credentialsBox: {
+    display: 'flex', flexDirection: 'column', gap: 8,
+    padding: '10px 12px', borderRadius: 12,
+    background: '#e8dfc8', border: '2px solid #d4c8b0',
+  },
+  credentialsHead: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+  },
+  credentialsHint: {
+    marginTop: 2, color: '#77573d', fontSize: 10, fontWeight: 800, lineHeight: 1.25,
+  },
+  credentialsMessage: {
+    padding: '6px 8px', borderRadius: 8,
+    background: 'rgba(14,165,233,0.1)', border: '1px solid rgba(2,132,199,0.28)',
+    color: '#0369A1', fontSize: 11, fontWeight: 900, lineHeight: 1.25,
+  },
+  credentialRow: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
+    alignItems: 'center', padding: '8px 9px', borderRadius: 10,
+    background: 'rgba(255,255,255,0.42)', border: '1px solid rgba(92,58,33,0.18)',
+  },
+  credentialMain: {
+    display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
+  },
+  credentialLogo: {
+    width: 24, height: 24, objectFit: 'contain', borderRadius: 6, flexShrink: 0,
+    background: 'rgba(255,255,255,0.5)',
+  },
+  credentialTitleLine: {
+    display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0,
+  },
+  credentialName: {
+    color: '#5C3A21', fontSize: 12, fontWeight: 900,
+  },
+  credentialSub: {
+    color: '#77573d', fontSize: 10, fontWeight: 800, lineHeight: 1.2, marginTop: 2,
+  },
+  credentialActiveChip: {
+    padding: '2px 7px', borderRadius: 999,
+    background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(46,125,50,0.45)',
+    color: '#2E7D32', fontSize: 8, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.35,
+  },
+  credentialIdleChip: {
+    padding: '2px 7px', borderRadius: 999,
+    background: 'rgba(163,144,106,0.16)', border: '1px solid rgba(163,144,106,0.45)',
+    color: '#77573d', fontSize: 8, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.35,
+  },
+  credentialActions: {
+    display: 'flex', alignItems: 'center', gap: 5,
+  },
+  credentialPrimaryBtn: {
+    height: 30, padding: '0 10px', borderRadius: 8, cursor: 'pointer',
+    background: 'linear-gradient(180deg, #0EA5E9 0%, #0369A1 100%)',
+    border: '2px solid #025b8d', color: '#fff', fontSize: 10, fontWeight: 900,
+    textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+  },
+  credentialClearBtn: {
+    height: 30, padding: '0 8px', borderRadius: 8, cursor: 'pointer',
+    background: '#f4e8d1', border: '2px solid #c9b590',
+    color: '#77573d', fontSize: 10, fontWeight: 900,
   },
   aiBox: {
     display: 'flex', flexDirection: 'column', gap: 8,
