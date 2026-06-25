@@ -2571,6 +2571,20 @@ function freshDemonKingBinding(row) {
   return Date.now() - sqliteDateMs(row.verifiedAt) <= DEMON_KING_BOUND_NFT_TTL_MS;
 }
 
+function trustedServerBoundNft(row) {
+  if (!row) return false;
+  if (row.active === false || row.active === 0) return false;
+  const source = String(row.source || '').trim().toLowerCase();
+  if (!source) return false;
+  return source === 'mint-confirm'
+    || source === 'bridge-preserve'
+    || source.startsWith('bridge-relay');
+}
+
+function freshNftLoadBinding(row) {
+  return freshDemonKingBinding(row) || trustedServerBoundNft(row);
+}
+
 function parseDemonKingTroopEntry(entry) {
   const raw = String(entry || '').trim();
   const parts = raw.split(':');
@@ -2630,12 +2644,25 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
         : (SOLANA_WALLET_RE.test(String(value || '')) ? String(value).trim() : null)
     );
     const ownerHint = ownerHintRaw ? normalizeOwner(ownerHintRaw) : null;
-    if (!cached || !freshDemonKingBinding(cached)) {
+    if (!cached || !freshNftLoadBinding(cached)) {
       return { error: `Sync your ${chainKey === 'aptos' ? 'Aptos' : 'Solana'} Demon King wallet first`, status: 403 };
     }
     const cachedOwner = normalizeOwner(cached.wallet);
-    if (!cachedOwner || (ownerHint && ownerHint !== cachedOwner)) {
+    if (!cachedOwner) {
       return { error: 'Demon King NFT owner mismatch', status: 403 };
+    }
+    if (ownerHint && ownerHint !== cachedOwner) {
+      if (!trustedServerBoundNft(cached)) {
+        return { error: 'Demon King NFT owner mismatch', status: 403 };
+      }
+      console.warn('[nft-load] cached Demon King owner hint mismatch ignored for server-bound NFT', {
+        player_id: player?.id,
+        chain: chainKey,
+        token_id: String(tokenIdRaw),
+        owner_hint: ownerHint,
+        cached_owner: cachedOwner,
+        source: cached.source || null,
+      });
     }
     const level = normalizeNftLevel(cached.level);
     const rarity = String(cached.rarity || 'common').toLowerCase();
@@ -2748,12 +2775,27 @@ async function verifyNftBackedTroopLoadToken(player, entry, ownerHintRaw) {
     return null;
   };
   const ownerHint = ownerHintRaw ? normalizeOwner(ownerHintRaw) : null;
-  if (!cached || !freshDemonKingBinding(cached)) {
+  if (!cached || !freshNftLoadBinding(cached)) {
     return { error: `Sync your ${cfg.label} wallet first`, status: 403 };
   }
   const cachedOwner = normalizeOwner(cached.wallet);
-  if (!cachedOwner || (ownerHint && ownerHint !== cachedOwner)) {
+  if (!cachedOwner) {
     return { error: `${cfg.label} NFT owner mismatch`, status: 403 };
+  }
+  if (ownerHint && ownerHint !== cachedOwner) {
+    if (!trustedServerBoundNft(cached)) {
+      return { error: `${cfg.label} NFT owner mismatch`, status: 403 };
+    }
+    console.warn('[nft-load] cached NFT owner hint mismatch ignored for server-bound NFT', {
+      player_id: player?.id,
+      collection: cfg.collection,
+      troop: cfg.troopName,
+      chain: chainKey,
+      token_id: String(tokenIdRaw),
+      owner_hint: ownerHint,
+      cached_owner: cachedOwner,
+      source: cached.source || null,
+    });
   }
   const level = normalizeNftLevel(cached.level);
   const rarity = String(cached.rarity || 'common').toLowerCase();
