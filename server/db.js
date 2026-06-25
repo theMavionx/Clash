@@ -6712,9 +6712,6 @@ function removeBuilding(playerId, buildingId) {
 function moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex = null) {
   const building = stmts.getBuildingById.get(buildingId, playerId);
   if (!building) return { error: 'Building not found' };
-  if (building.type === 'port' && building.has_ship) {
-    return { error: 'Cannot move a port with a docked ship' };
-  }
   const nextGridIndex = gridIndex == null ? (building.grid_index || 0) : Number(gridIndex);
   const placement = canPlaceBuildingAt(playerId, building.type, gridX, gridZ, nextGridIndex, buildingId);
   if (!placement.ok) return { error: placement.error, blockers: placement.blockers };
