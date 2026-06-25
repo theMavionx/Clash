@@ -148,9 +148,14 @@ function credentials(input = {}) {
 
 function signPayload(privateKey, payload) {
   const key = String(privateKey || '').trim();
-  const hex = key.replace(/^0x/iu, '').replace(/\s+/gu, '');
+  const compactKey = key.replace(/\s+/gu, '');
+  const hex = compactKey.replace(/^0x/iu, '');
+  const looksLikeHexSigner = /^0x/iu.test(compactKey) || /^[0-9a-fA-F]{64}$/.test(hex);
+  if (!looksLikeHexSigner) {
+    return crypto.createHmac('sha256', key).update(payload).digest('hex');
+  }
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
-    throw new Error('Hibachi API private key must be a 32-byte secp256k1 hex key');
+    throw new Error('Hibachi API private key must be a 32-byte secp256k1 hex key or a Hibachi HMAC key');
   }
   const hash = crypto.createHash('sha256').update(payload).digest();
   const sig = secp256k1.sign(hash, hex, { lowS: true });
