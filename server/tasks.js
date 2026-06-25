@@ -555,10 +555,16 @@ function isGmtradeCloseFallbackTrade(trade) {
 
 async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
   const wallet = resolveWalletForDex(player, dexFilter);
-  if (wallet && dexFilter !== 'lighter' && !walletMatchesDex(dexFilter, wallet)) return [];
+  const walletCompatible = !wallet || dexFilter === 'lighter' || walletMatchesDex(dexFilter, wallet);
+  const reconcileWallet = walletCompatible ? wallet : null;
+  if (wallet && !walletCompatible) {
+    console.warn(
+      `[tasks] ${dexFilter} wallet mismatch for player=${player?.name || player?.id}; reading verified futures rows without wallet reconcile`
+    );
+  }
   await tradeRecon.reconcileTradesForPlayer(player, {
     dex: dexFilter,
-    wallet,
+    wallet: reconcileWallet,
     reason: 'tasks',
     force: opts.forceSync === true,
     headers: opts.headers || opts.requestHeaders || null,

@@ -75,6 +75,8 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
 ]);
 
 const CREDENTIAL_SCOPED_IMPORT_DEXES = new Set([
+  'hibachi',
+  'katana',
   'grvt',
   'lighter',
 ]);
