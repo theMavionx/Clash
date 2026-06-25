@@ -416,6 +416,39 @@ export function useLighter() {
     const sl = await submitTrigger('stop_loss', stopLoss);
     if (sl) results.push({ kind: 'stop_loss', result: sl });
     if (!results.length) throw new Error('Enter a valid Lighter TP or SL price.');
+    setAccount((prev) => {
+      if (!prev || !Array.isArray(prev.positions)) return prev;
+      const tpValue = Number(takeProfit);
+      const slValue = Number(stopLoss);
+      const hasTp = Number.isFinite(tpValue) && tpValue > 0;
+      const hasSl = Number.isFinite(slValue) && slValue > 0;
+      if (!hasTp && !hasSl) return prev;
+      const targetSymbol = String(symbol || '').toUpperCase();
+      const nextPositions = prev.positions.map((position) => {
+        const samePair = pairIndex != null
+          && position?.pair_index != null
+          && Number(position.pair_index) === Number(pairIndex);
+        const sameSymbol = targetSymbol
+          && String(position?.symbol || '').toUpperCase() === targetSymbol;
+        if (!samePair && !sameSymbol) return position;
+        return {
+          ...position,
+          ...(hasTp ? {
+            take_profit_price: String(tpValue),
+            take_profit: String(tpValue),
+            tp_trigger_price: String(tpValue),
+            tp: String(tpValue),
+          } : {}),
+          ...(hasSl ? {
+            stop_loss_price: String(slValue),
+            stop_loss: String(slValue),
+            sl_trigger_price: String(slValue),
+            sl: String(slValue),
+          } : {}),
+        };
+      });
+      return { ...prev, positions: nextPositions };
+    });
     scheduleRefreshBurst();
     return {
       ok: true,

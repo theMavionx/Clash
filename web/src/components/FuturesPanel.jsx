@@ -554,6 +554,25 @@ function orderTpslKind(order) {
   return '';
 }
 
+function orderReduceOnlyLike(order) {
+  const rawType = String(
+    order?.type
+      || order?.kind
+      || order?.order_type
+      || order?.ot
+      || order?._raw?.kind_name
+      || order?._raw?.type
+      || '',
+  ).toLowerCase();
+  return order?.reduce_only === true
+    || order?.reduceOnly === true
+    || order?._raw?.reduce_only === true
+    || order?._raw?.reduceOnly === true
+    || order?._raw?.ro === true
+    || !!orderTpslKind(order)
+    || rawType.includes('decrease');
+}
+
 function orderTriggerPrice(order) {
   return numOrNull(
     order?.stop_price
@@ -657,7 +676,8 @@ function orderMatchesPosition(order, pos) {
   if (orderSymbol && posSymbol && orderSymbol === posSymbol) {
     const orderSide = orderPositionSide(order);
     const posSide = orderPositionSide(pos);
-    return !orderSide || !posSide || orderSide === posSide;
+    if (!orderSide || !posSide || orderSide === posSide) return true;
+    return orderReduceOnlyLike(order) && orderSide === positionCloseSide(pos);
   }
   const orderPair = order?.pair_index ?? order?.pairIndex ?? order?._raw?.instrument_id;
   const posPair = pos?.pair_index ?? pos?.pairIndex ?? pos?._raw?.instrument_id;
@@ -667,11 +687,7 @@ function orderMatchesPosition(order, pos) {
 function inferTpslKindFromPosition(order, pos, triggerPrice) {
   const explicit = orderTpslKind(order);
   if (explicit) return explicit;
-  const rawType = String(order?.type || order?.kind || order?._raw?.kind_name || '').toLowerCase();
-  const isReduceOnly = order?.reduce_only === true
-    || order?._raw?.reduce_only === true
-    || order?._raw?.ro === true
-    || rawType.includes('decrease');
+  const isReduceOnly = orderReduceOnlyLike(order);
   if (!isReduceOnly || !(triggerPrice > 0)) return '';
   const reference = numOrNull(pos?.mark_price ?? pos?.entry_price ?? pos?.open_price ?? pos?.price);
   if (!(reference > 0)) return '';
@@ -1611,7 +1627,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
 // ==================== POSITIONS LIST (mobile/tab card view) ====================
 const PositionsList = memo(function PositionsList({
   positions, orders, prices, dataReady, leverageSettings, marginModes, loading, error,
-  closePosition, setTpsl, clearError, isBasic, dex,
+  closePosition, setTpsl, clearError, isBasic, dex, setLocalAlert = () => {}, setSuccessMsg = () => {},
 }) {
   const [expandedPos, setExpandedPos] = useState(null);
   const [closePct, setClosePct] = useState(100);
@@ -1722,7 +1738,7 @@ const PositionsList = memo(function PositionsList({
                       return;
                     }
                     setTpPrice(''); setSlPrice(''); setExpandedPos(null);
-                    if (r?.info) setLocalAlert(r.info);
+                    if (r?.info) setSuccessMsg(r.info);
                   } catch (e) {
                     setLocalAlert(e?.message || String(e));
                   } finally {
@@ -3132,19 +3148,17 @@ function FuturesPanel() {
         return;
       }
       if (result && !result.error) {
-        if (result.status === 'submitted' && result.info) {
-          setLocalAlert(result.info);
-        }
         if (orderType === 'market') {
           fireTradeConfetti();
         }
-        setSuccessMsg(
-          dex === 'gmtrade' && result.status === 'submitted'
+        const successText = result.status === 'submitted' && result.info
+          ? result.info
+          : dex === 'gmtrade' && result.status === 'submitted'
             ? `${side.toUpperCase()} ${symbol} submitted`
             : orderType === 'market'
             ? `${side.toUpperCase()} ${symbol} opened`
-            : `${side.toUpperCase()} ${symbol} limit placed`
-        );
+            : `${side.toUpperCase()} ${symbol} limit placed`;
+        setSuccessMsg(successText);
         setAmount('');
         setSizePct(0);
       }
@@ -6670,7 +6684,7 @@ function FuturesPanel() {
                       return;
                     }
                     setTpPrice(''); setSlPrice(''); setExpandedPos(null);
-                    if (r?.info) setLocalAlert(r.info);
+                    if (r?.info) setSuccessMsg(r.info);
                   } catch (e) {
                     setLocalAlert(e?.message || String(e));
                   } finally {
