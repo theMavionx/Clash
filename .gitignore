@@ -16,6 +16,7 @@ server-futures/*.db
 server-futures/*.db-wal
 server-futures/*.db-shm
 server-futures/server.log
+server-futures/phoenix-proxy-cache.json
 server-futures/gmtrade-builder/target/
 
 # Local runtime logs
