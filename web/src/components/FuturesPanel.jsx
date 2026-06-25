@@ -6463,22 +6463,20 @@ function FuturesPanel() {
     if (fullscreen) {
       if (isMobile) {
         return (
-          <div style={{display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden'}}>
+          <div style={{display: 'flex', flexDirection: 'column', flex: '0 0 auto', minHeight: '100%', overflow: 'visible'}}>
             {renderSymbolBar()}
             {/* Top: chart */}
-            <div style={{flex: '0 1 clamp(220px, 38vh, 360px)', position: 'relative', minHeight: 180}}>
+            <div style={{flex: '0 0 clamp(220px, 38vh, 360px)', position: 'relative', minHeight: 180}}>
               <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
               {fundingBadge}
             </div>
 
             {/* Bottom: Trade controls */}
             <div style={{
-              flex: '1 1 auto',
-              minHeight: 0,
-              overflowY: 'auto',
-              overflowX: 'hidden',
+              flex: '0 0 auto',
+              minHeight: 'auto',
+              overflow: 'visible',
               WebkitOverflowScrolling: 'touch',
-              overscrollBehavior: 'contain',
               paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
               background: '#e8dfc8',
               borderTop: '2px solid #d4c8b0',
@@ -8343,7 +8341,14 @@ function FuturesPanel() {
           </div>
         )}
         <div className="futures-panel-body" style={S.body}>
-          <div key={activeTab} style={{animation: 'fadeIn 0.25s ease-out', display: 'flex', flexDirection: 'column', gap: 10, height: '100%', minHeight: 0}}>
+          <div key={activeTab} style={{
+            animation: 'fadeIn 0.25s ease-out',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            height: activeTab === 'Trade' && fullscreen && isMobile ? 'auto' : '100%',
+            minHeight: activeTab === 'Trade' && fullscreen && isMobile ? '100%' : 0,
+          }}>
             {renderContent()}
           </div>
         </div>
