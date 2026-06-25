@@ -8243,7 +8243,6 @@ function FuturesPanel() {
             amount={typeof goldEarned === 'number' ? goldEarned : goldEarned.amount}
             reason={typeof goldEarned === 'number' ? 'Trading rewards' : (goldEarned.reason || 'Trading rewards')}
             onClose={() => clearGoldEarned()}
-            style={S.goldPopupPosition}
           />
         )}
       </div>
@@ -8738,9 +8737,6 @@ const S = {
     width: 26, height: 26, borderRadius: '50%', background: '#E53935', border: '2px solid #fff',
     color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 13, fontWeight: 900, padding: 0,
-  },
-  goldPopupPosition: {
-    position: 'absolute', bottom: 12, left: 12, right: 12,
   },
   // Bottom panel (fullscreen)
   bottomPanel: {

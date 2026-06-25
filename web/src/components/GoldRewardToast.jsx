@@ -23,6 +23,12 @@ export default memo(GoldRewardToast);
 
 const S = {
   toast: {
+    position: 'fixed',
+    top: 'max(14px, env(safe-area-inset-top))',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    width: 'min(440px, calc(100vw - 24px))',
+    zIndex: 10000,
     background: 'linear-gradient(135deg, #FFD700 0%, #FFA000 100%)',
     border: '3px solid #E65100',
     borderRadius: 14,

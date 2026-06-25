@@ -503,7 +503,6 @@ function QuestsTab({ markets = [] }) {
           amount={flash.amount}
           reason={flash.reason || 'Quest reward'}
           onClose={() => setFlash(null)}
-          style={S.flash}
         />
       )}
       {error && <div style={S.error} onClick={() => setError(null)}>{error}</div>}
@@ -562,7 +561,6 @@ const S = {
   emptyIcon: { fontSize: 48, marginBottom: 10 },
   emptyTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21', marginBottom: 6 },
   emptyDesc: { fontSize: 12, fontWeight: 600 },
-  flash: { marginBottom: 0 },
   error: { background: '#fee', border: '2px solid #c33', color: '#c33', padding: 8, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', textAlign: 'center' },
 };
 

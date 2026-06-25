@@ -25,6 +25,7 @@ const HIBACHI_PUBLIC_PROXY_URL = String(
 const HIBACHI_AUTH_PROXY_URL = String(
   import.meta.env.VITE_HIBACHI_AUTH_PROXY_URL || HIBACHI_PUBLIC_PROXY_URL
 ).replace(/\/+$/u, '');
+const HIBACHI_VISIBLE_MARKET_CATEGORIES = new Set(['crypto']);
 const ERC20_BALANCE_ABI = [
   { type: 'function', name: 'balanceOf', stateMutability: 'view',
     inputs: [{ name: 'account', type: 'address' }],
@@ -218,10 +219,15 @@ function hibachiCanTradeMarket(accountCategory, marketCategory) {
   return accountCategory === marketCategory;
 }
 
+function hibachiIsVisibleMarket(market) {
+  return HIBACHI_VISIBLE_MARKET_CATEGORIES.has(hibachiMarketCategory(market));
+}
+
 function filterMarketsForHibachiAccount(rows, account) {
   const accountCategory = hibachiAccountCategory(account);
-  if (!accountCategory) return Array.isArray(rows) ? rows : [];
-  return (Array.isArray(rows) ? rows : []).filter(m => hibachiCanTradeMarket(accountCategory, hibachiMarketCategory(m)));
+  const visible = (Array.isArray(rows) ? rows : []).filter(hibachiIsVisibleMarket);
+  if (!accountCategory) return visible;
+  return visible.filter(m => hibachiCanTradeMarket(accountCategory, hibachiMarketCategory(m)));
 }
 
 function hibachiIncompatibleMarketMessage(symbol, market, account) {

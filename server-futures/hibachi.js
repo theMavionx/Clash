@@ -7,6 +7,7 @@ const HIBACHI_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.en
 const HIBACHI_MAX_FEES_PERCENT = String(process.env.HIBACHI_MAX_FEES_PERCENT || '0.001');
 const HIBACHI_REWARD_MIN_NOTIONAL_USD = Math.max(0, Number(process.env.HIBACHI_REWARD_MIN_NOTIONAL_USD || 10));
 const HIBACHI_IP_BLOCKED_MESSAGE = 'Hibachi is not available from your IP address. Try a supported network or IP region.';
+const HIBACHI_VISIBLE_MARKET_CATEGORIES = new Set(['crypto']);
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -79,6 +80,10 @@ function hibachiCanTradeCategory(accountCategory, contractCategory) {
   if (!accountCategory || !contractCategory) return true;
   if (accountCategory === 'all' || contractCategory === 'all') return true;
   return accountCategory === contractCategory;
+}
+
+function hibachiIsVisibleMarketCategory(category) {
+  return HIBACHI_VISIBLE_MARKET_CATEGORIES.has(normalizeHibachiCategory(category));
 }
 
 function rows(payload) {
@@ -375,7 +380,11 @@ async function getMarketInfo() {
       _raw: m,
     };
   }));
-  const data = enriched.filter(m => m.symbol && Number.isFinite(m.market_id));
+  const data = enriched.filter(m => (
+    m.symbol
+    && Number.isFinite(m.market_id)
+    && hibachiIsVisibleMarketCategory(m.category)
+  ));
   return { success: true, data };
 }
 
@@ -503,6 +512,9 @@ async function placeOrder(credsInput, args = {}) {
   const account = await getAccount(creds);
   const accountCategory = hibachiAccountCategory(account?._raw || account);
   const contractCategory = hibachiContractCategory(contract);
+  if (!hibachiIsVisibleMarketCategory(contractCategory)) {
+    throw new Error(`Hibachi ${hibachiDisplayCategory(contractCategory)} markets are temporarily hidden in Clash. Choose a Crypto market.`);
+  }
   if (!hibachiCanTradeCategory(accountCategory, contractCategory)) {
     throw new Error(
       `Hibachi account ${creds.accountId} (${hibachiDisplayCategory(accountCategory)}) cannot trade ${symbol} (${hibachiDisplayCategory(contractCategory)}). Switch to a ${hibachiDisplayCategory(contractCategory)} Hibachi account or choose a ${hibachiDisplayCategory(accountCategory)} market.`,
