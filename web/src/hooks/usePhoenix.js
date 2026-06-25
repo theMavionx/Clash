@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { LAMPORTS_PER_SOL, PublicKey, SystemProgram } from '@solana/web3.js';
+import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, VersionedTransaction } from '@solana/web3.js';
 import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
 import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MAX_SUBACCOUNTS, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, buildDepositIxsResolved, buildNormalizedMarketParamsBySymbol, buildWithdrawIxsResolved, computeTraderMarginFromInputs, createPhoenixTraderStateManager, flight, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
@@ -123,6 +123,55 @@ function isLighthouseAssertionError(error) {
 
 function isPhoenixTraderNotFoundError(error) {
   return /404|Trader not found|no trader|not registered|does not exist/i.test(String(error?.message || error || ''));
+}
+
+function toPhoenixTxBytes(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  return null;
+}
+
+async function signPhoenixReferralActivationTx(context, signers = {}) {
+  const unsignedBytes = toPhoenixTxBytes(context?.unsignedTransactionBytes);
+  if (!unsignedBytes?.length) {
+    throw new Error('Phoenix referral activation transaction is empty');
+  }
+
+  if (signers.keypair?.publicKey && signers.keypair?.secretKey) {
+    const tx = VersionedTransaction.deserialize(unsignedBytes);
+    tx.sign([signers.keypair]);
+    return tx.serialize();
+  }
+
+  if (signers.privyActive && signers.privySignTx && signers.privyWalletObj) {
+    const result = await signers.privySignTx({
+      transaction: unsignedBytes,
+      wallet: signers.privyWalletObj,
+    });
+    const signedBytes = toPhoenixTxBytes(result?.signedTransaction || result);
+    if (!signedBytes?.length) throw new Error('Privy did not return a signed Phoenix referral transaction');
+    return signedBytes;
+  }
+
+  const adapterSignTransaction = signers.signTransaction || signers.solWallet?.signTransaction;
+  if (adapterSignTransaction) {
+    const tx = VersionedTransaction.deserialize(unsignedBytes);
+    const signed = await adapterSignTransaction(tx);
+    return signed.serialize();
+  }
+
+  if (signers.solWallet?.signAllTransactions) {
+    const tx = VersionedTransaction.deserialize(unsignedBytes);
+    const [signed] = await signers.solWallet.signAllTransactions([tx]);
+    if (!signed) throw new Error('Wallet did not return a signed Phoenix referral transaction');
+    return signed.serialize();
+  }
+
+  throw new Error('Phoenix referral activation requires wallet transaction signing. Connect a Solana wallet that supports signTransaction.');
 }
 
 function phoenixFailedProgramId(error) {
@@ -1981,20 +2030,28 @@ export function usePhoenix() {
     ))
   ), [readPhoenixRestFallback]);
 
-  const activateInviteCodeWithFallback = useCallback((authority, code) => (
-    readPhoenixRestFallback('invite-activate', restClient => (
-      restClient.api.invite().activateInvite({ authority, code })
-    ))
-  ), [readPhoenixRestFallback]);
-
-  const activateInviteReferralWithFallback = useCallback((authority, referralCode) => (
-    readPhoenixRestFallback('invite-activate-referral', restClient => (
-      restClient.api.invite().activateInviteWithReferral({
-        authority,
-        referral_code: referralCode,
-      })
-    ))
-  ), [readPhoenixRestFallback]);
+  const activateReferralTxWithFallback = useCallback((authority, referralCode, options = {}) => (
+    readPhoenixRestFallback('referral-activate-tx', async (restClient) => {
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      const built = await restClient.api.invite().buildActivateReferralTxRequest({
+        referralCode,
+        traderAuthority: authority,
+        traderPdaIndex: 0,
+        traderSubaccountIndex: 0,
+        recentBlockhash: blockhash,
+        lastValidBlockHeight: BigInt(lastValidBlockHeight || 0),
+        signTransaction: (_transaction, context) => signPhoenixReferralActivationTx(context, {
+          keypair: options?.keypair || null,
+          signTransaction,
+          solWallet,
+          privyActive,
+          privySignTx,
+          privyWalletObj,
+        }),
+      });
+      return restClient.api.invite().activateReferralTx(built.request);
+    })
+  ), [connection, privyActive, privySignTx, privyWalletObj, readPhoenixRestFallback, signTransaction, solWallet]);
 
   const sendIxs = useCallback((instructions, label = 'phoenix', options = {}) => {
     if (!ownerPk) throw new Error('Wallet not connected');
@@ -3409,33 +3466,50 @@ export function usePhoenix() {
       try {
         if (!traderRegisteredRef.current) {
           const check = await checkInviteStatus();
-          if (!check?.whitelisted) {
-            if (inviteCode) {
-              if (inviteKind === 'referral') {
-                await activateInviteReferralWithFallback(walletAddr, inviteCode);
-              } else {
-                await activateInviteCodeWithFallback(walletAddr, inviteCode);
-              }
-              cachePhoenixAccess(walletAddr, { source: 'activate_invite', codeUsed: inviteCode, inviteKind });
-              setInviteStatus({ checking: false, whitelisted: true, codeUsed: inviteCode, inviteKind });
-            } else {
-              clearPhoenixAccess(walletAddr);
-              setInviteStatus(prev => ({
-                ...prev,
-                checking: false,
-                whitelisted: false,
-              }));
-              throw new Error('Phoenix access code required');
-            }
+          const needsActivation = !check?.whitelisted;
+          if (needsActivation && !inviteCode) {
+            clearPhoenixAccess(walletAddr);
+            setInviteStatus(prev => ({
+              ...prev,
+              checking: false,
+              whitelisted: false,
+            }));
+            throw new Error('Phoenix referral code required');
+          }
+          if (needsActivation && inviteCode && inviteKind !== 'referral') {
+            throw new Error('Phoenix access-code activation is deprecated. Use a referral code or onboard in the Phoenix app.');
           } else {
             cachePhoenixAccess(walletAddr, { source: 'activate_check', codeUsed: check?.invite_code_used || null });
           }
           const registerClient = await getTransactionClient(false);
-          const ix = await registerClient.ixs.buildRegisterTrader({
-            authority: walletAddr,
-            marginType: MarginType.Cross || 'cross',
-          });
-          await sendIxs(ix, 'phoenix.register');
+          try {
+            const ix = await registerClient.ixs.buildRegisterTrader({
+              authority: walletAddr,
+              marginType: MarginType.Cross || 'cross',
+              traderPdaIndex: 0,
+              traderSubaccountIndex: 0,
+            });
+            await sendIxs(ix, 'phoenix.register');
+          } catch (registerError) {
+            const text = registerError?.message || String(registerError || '');
+            if (!/already|exists|initialized/i.test(text)) throw registerError;
+          }
+          if (needsActivation && inviteCode && inviteKind === 'referral') {
+            const activation = await activateReferralTxWithFallback(walletAddr, inviteCode);
+            cachePhoenixAccess(walletAddr, {
+              source: 'activate_referral_tx',
+              codeUsed: activation?.referral_code || inviteCode,
+              inviteKind,
+              status: activation?.status || null,
+            });
+            setInviteStatus({
+              checking: false,
+              whitelisted: true,
+              codeUsed: activation?.referral_code || inviteCode,
+              inviteKind,
+              activationStatus: activation?.status || null,
+            });
+          }
           traderRegisteredRef.current = true;
           setTraderRegistered(true);
           cachePhoenixSetup(walletAddr, { source: 'register' });
@@ -3487,7 +3561,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activateInviteCodeWithFallback, activateInviteReferralWithFallback, checkInviteStatus, getTransactionClient, runOnce, sendIxs, waitForTraderState, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [activateReferralTxWithFallback, checkInviteStatus, getTransactionClient, runOnce, sendIxs, waitForTraderState, walletAddr, walletMismatch, walletMismatchMessage]);
 
   const setOneTapTradingEnabled = useCallback(async (nextEnabled) => {
     if (PHOENIX_ONE_TAP_DISABLED) {
@@ -3636,51 +3710,16 @@ export function usePhoenix() {
           error: embeddedInviteCheck?.error || null,
           candidate_count: inviteCandidates.length,
         }, embeddedInviteCheck?.error ? 'warn' : 'info');
-        if (!embeddedInviteCheck?.whitelisted) {
-          let activated = false;
-          let lastInviteError = null;
-          for (const candidate of inviteCandidates) {
-            try {
-              if (candidate.kind === 'access') {
-                await activateInviteCodeWithFallback(session.publicKey, candidate.code);
-              } else {
-                await activateInviteReferralWithFallback(session.publicKey, candidate.code);
-              }
-              activated = true;
-              reportPhoenixOneTapEvent('embedded_invite_activated', {
-                owner: shortPhoenixAddress(walletAddr),
-                owner_full: walletAddr,
-                session: shortPhoenixAddress(session.publicKey),
-                session_full: phoenixAddressText(session.publicKey),
-                invite_kind: candidate.kind,
-                invite_code: candidate.code,
-              }, 'info');
-              break;
-            } catch (inviteError) {
-              lastInviteError = inviteError;
-              reportPhoenixOneTapEvent('embedded_invite_activate_failed', {
-                owner: shortPhoenixAddress(walletAddr),
-                owner_full: walletAddr,
-                session: shortPhoenixAddress(session.publicKey),
-                session_full: phoenixAddressText(session.publicKey),
-                invite_kind: candidate.kind,
-                invite_code: candidate.code,
-                message: inviteError?.message || String(inviteError || ''),
-              }, 'warn');
-            }
-          }
-          if (!activated) {
-            throw new Error(lastInviteError?.message || 'Phoenix one tap account could not get trading access');
-          }
-          embeddedInviteCheck = await checkInviteWalletWithFallback(session.publicKey).catch(error => ({
-            error: error?.message || String(error || ''),
-          }));
-        }
+        const embeddedReferralCandidates = embeddedInviteCheck?.whitelisted
+          ? []
+          : inviteCandidates.filter(candidate => candidate.kind === 'referral');
         let registerSignature = null;
         try {
           const registerIx = await orderClient.ixs.buildRegisterTrader({
             authority: session.publicKey,
             marginType: MarginType.Cross || 'cross',
+            traderPdaIndex: 0,
+            traderSubaccountIndex: 0,
           });
           reportPhoenixOneTapEvent('embedded_register_build', {
             owner: shortPhoenixAddress(walletAddr),
@@ -3709,6 +3748,45 @@ export function usePhoenix() {
             session_full: phoenixAddressText(session.publicKey),
             ...phoenixErrorDebug(registerError),
           }, 'info');
+        }
+        if (!embeddedInviteCheck?.whitelisted && embeddedReferralCandidates.length) {
+          let activated = false;
+          let lastInviteError = null;
+          for (const candidate of embeddedReferralCandidates) {
+            try {
+              const activation = await activateReferralTxWithFallback(session.publicKey, candidate.code, {
+                keypair: session.keypair,
+              });
+              activated = true;
+              reportPhoenixOneTapEvent('embedded_invite_activated', {
+                owner: shortPhoenixAddress(walletAddr),
+                owner_full: walletAddr,
+                session: shortPhoenixAddress(session.publicKey),
+                session_full: phoenixAddressText(session.publicKey),
+                invite_kind: candidate.kind,
+                invite_code: activation?.referral_code || candidate.code,
+                status: activation?.status || null,
+              }, 'info');
+              break;
+            } catch (inviteError) {
+              lastInviteError = inviteError;
+              reportPhoenixOneTapEvent('embedded_invite_activate_failed', {
+                owner: shortPhoenixAddress(walletAddr),
+                owner_full: walletAddr,
+                session: shortPhoenixAddress(session.publicKey),
+                session_full: phoenixAddressText(session.publicKey),
+                invite_kind: candidate.kind,
+                invite_code: candidate.code,
+                message: inviteError?.message || String(inviteError || ''),
+              }, 'warn');
+            }
+          }
+          if (!activated) {
+            throw new Error(lastInviteError?.message || 'Phoenix one tap account could not get trading access');
+          }
+          embeddedInviteCheck = await checkInviteWalletWithFallback(session.publicKey).catch(error => ({
+            error: error?.message || String(error || ''),
+          }));
         }
         let accessSummary = null;
         let accessState = null;
@@ -3833,7 +3911,7 @@ export function usePhoenix() {
     } finally {
       setLoading(false);
     }
-  }, [activateInviteCodeWithFallback, activateInviteReferralWithFallback, checkInviteWalletWithFallback, collectOneTapDelegationSubaccounts, connection, getTraderStateViewWithFallback, getTransactionClient, inviteStatus, ownerPk, refreshOneTapTradingState, refreshTraderState, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [activateReferralTxWithFallback, checkInviteWalletWithFallback, collectOneTapDelegationSubaccounts, connection, getTraderStateViewWithFallback, getTransactionClient, inviteStatus, ownerPk, refreshOneTapTradingState, refreshTraderState, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || walletMismatch || traderRegistered) return undefined;

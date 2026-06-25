@@ -607,6 +607,47 @@ function formatOrderPrice(price) {
   return safe > 0 ? `$${fmtPrice(safe)}` : 'Market';
 }
 
+function orderPriceDetailLabel(order, type = '') {
+  const rawType = String(type || order?.order_type || order?.type || order?.ot || '').toLowerCase();
+  const hasExplicitTrigger = order?.trigger_price != null
+    || order?.triggerPrice != null
+    || order?.triggerPriceUi != null
+    || order?.trigger_price_ui != null
+    || order?.stop_price != null
+    || order?.sp != null
+    || order?._raw?.triggerPrice != null
+    || order?._raw?.trigger_price != null
+    || order?._raw?.triggerPriceUi != null
+    || order?._raw?.trigger_price_ui != null;
+  if (hasExplicitTrigger || rawType.includes('trigger') || rawType.includes('stop')) return 'Trigger';
+  if (rawType.includes('limit')) return 'Limit';
+  return 'Price';
+}
+
+function orderDisplayLeverage(order) {
+  const direct = displayLeverage(order?.leverage);
+  if (direct) return direct;
+  const raw = numOrNull(order?._raw?.leverage ?? order?._raw?.trade?.leverage);
+  if (raw != null && raw > 10_000) {
+    const scaled = raw / 1e10;
+    return Number.isFinite(scaled) && scaled > 0 ? Math.round(scaled * 10) / 10 : null;
+  }
+  return displayLeverage(raw);
+}
+
+function orderUsdValue(...values) {
+  for (const value of values) {
+    const n = numOrNull(value);
+    if (n != null && n > 0) return n;
+  }
+  return null;
+}
+
+function formatOrderUsd(value) {
+  const n = numOrNull(value);
+  return n != null && n > 0 ? `$${fmtAmount(n)}` : null;
+}
+
 function orderMatchesPosition(order, pos) {
   const orderPosition = String(order?.position || order?.position_id || order?.positionId || order?._raw?.position || '').trim();
   const posId = String(pos?.position_id || pos?.positionId || pos?.id || pos?._raw?.position || pos?._raw?.key || '').trim();
@@ -1521,6 +1562,16 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
         const rawAmt = o.initial_amount || o.amount || o.a;
         const amt = parseFloat(rawAmt || 0) > 0 ? fmtAmount(rawAmt) : 'Full position';
         const type = orderDisplayType(o, positions);
+        const priceLabel = orderPriceDetailLabel(o, type);
+        const leverageValue = orderDisplayLeverage(o);
+        const marginUsd = orderUsdValue(o.margin, o.margin_usd, o.marginUsd, o.collateral_usd, o.collateralUsd);
+        const notionalUsd = orderUsdValue(
+          o.notional_usd,
+          o.notionalUsd,
+          o.position_size_usd,
+          o.positionSizeUsd,
+          marginUsd != null && leverageValue != null ? marginUsd * leverageValue : null,
+        );
         const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
         const sideLabel = orderSideLabel(o);
         const isTP = type.includes('TAKE') || type.includes('TP');
@@ -1540,9 +1591,15 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
                 <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
               )}
             </div>
-            <div style={S.row}>
-              <span style={S.detail}>Price: {formatOrderPrice(price)}</span>
-              <span style={S.detail}>Amount: {amt}</span>
+            <div style={{...S.row, justifyContent: 'flex-start', flexWrap: 'wrap', gap: '4px 10px'}}>
+              <span style={S.detail}>{priceLabel}: {formatOrderPrice(price)}</span>
+              {marginUsd != null ? (
+                <span style={S.detail}>Margin: {formatOrderUsd(marginUsd)}</span>
+              ) : (
+                <span style={S.detail}>Amount: {amt}</span>
+              )}
+              {notionalUsd != null ? <span style={S.detail}>Size: {formatOrderUsd(notionalUsd)}</span> : null}
+              {leverageValue != null ? <span style={S.detail}>Lev: {leverageValue}x</span> : null}
             </div>
           </div>
         );
@@ -2281,7 +2338,7 @@ function FuturesPanel() {
   const [nadoDepositAsset, setNadoDepositAsset] = useState('usdt0');
   const [perplAccessCode, setPerplAccessCode] = useState('');
   const [phoenixInviteCode, setPhoenixInviteCode] = useState(PHOENIX_DEFAULT_REFERRAL_CODE);
-  const [phoenixInviteKind, setPhoenixInviteKind] = useState('referral');
+  const phoenixInviteKind = 'referral';
   const [risexInviteCode, setRisexInviteCode] = useState('');
   const [grvtApiKeyInput, setGrvtApiKeyInput] = useState('');
   const [katanaApiKeyInput, setKatanaApiKeyInput] = useState('');
@@ -2324,13 +2381,6 @@ function FuturesPanel() {
     return () => { cancelled = true; };
   }, [detectLighterAccount, dex, hasWallet, lighterAccountIndexInput, lighterNeedsIntegratorApproval, setupVerified, walletAddr]);
 
-  const selectPhoenixInviteKind = useCallback((kind) => {
-    setPhoenixInviteKind(kind);
-    setPhoenixInviteCode(prev => {
-      if (kind === 'access' && prev.trim() === PHOENIX_DEFAULT_REFERRAL_CODE) return '';
-      return prev;
-    });
-  }, []);
   // Share-trade modal — opened only on demand via the share button next to
   // open positions. Closing a trade should not interrupt the flow with an
   // automatic image prompt.
@@ -5933,7 +5983,7 @@ function FuturesPanel() {
                 ? (restoringPhoenixSetup ? 'This wallet has a cached Phoenix account. Loading live state now.' : 'Checking live Phoenix trader state before asking for a code.')
                 : whitelisted
                 ? 'This wallet is allowlisted. Create the on-chain trader account, then deposit USDC to trade.'
-                : 'Phoenix requires a referral or access code before the trader account can be created.'}
+                : 'Clash creates the Phoenix trader account first, then applies your referral code with a wallet signature.'}
             </div>
             {checkingInvite ? (
               <div style={{width: '100%', maxWidth: 360, minHeight: 108, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10}}>
@@ -5953,29 +6003,9 @@ function FuturesPanel() {
               </div>
             ) : !whitelisted && (
               <div style={{width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 8}}>
-                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8}}>
-                  {[
-                    ['referral', 'Referral code'],
-                    ['access', 'Access code'],
-                  ].map(([kind, label]) => (
-                    <button
-                      key={kind}
-                      type="button"
-                      onClick={() => selectPhoenixInviteKind(kind)}
-                      style={{
-                        ...S.btnSmall,
-                        background: phoenixInviteKind === kind ? DEX_CONFIG.phoenix.color : '#F7EBD2',
-                        border: `2px solid ${phoenixInviteKind === kind ? DEX_CONFIG.phoenix.borderColor : '#D4C8B0'}`,
-                        color: phoenixInviteKind === kind ? '#fff' : '#5C3A21',
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
                 <input
                   type="text"
-                  placeholder={phoenixInviteKind === 'referral' ? 'Referral code' : 'Access code'}
+                  placeholder="Referral code"
                   value={phoenixInviteCode}
                   onChange={e => setPhoenixInviteCode(e.target.value)}
                   autoCapitalize="none"
@@ -6004,7 +6034,7 @@ function FuturesPanel() {
                   inviteCode,
                   inviteKind: phoenixInviteKind,
                 });
-                if (ok && phoenixInviteKind === 'access') setPhoenixInviteCode('');
+                if (ok) setPhoenixInviteCode(inviteCode || PHOENIX_DEFAULT_REFERRAL_CODE);
               }}
             >
               {loading || checkingInvite ? 'PLEASE WAIT...' : whitelisted ? 'CREATE ACCOUNT' : 'ACTIVATE PHOENIX'}
@@ -6697,6 +6727,16 @@ function FuturesPanel() {
           const rawAmt = o.initial_amount || o.amount || o.a;
           const amt = parseFloat(rawAmt || 0) > 0 ? fmtAmount(rawAmt) : 'Full position';
           const type = orderDisplayType(o, positions);
+          const priceLabel = orderPriceDetailLabel(o, type);
+          const leverageValue = orderDisplayLeverage(o);
+          const marginUsd = orderUsdValue(o.margin, o.margin_usd, o.marginUsd, o.collateral_usd, o.collateralUsd);
+          const notionalUsd = orderUsdValue(
+            o.notional_usd,
+            o.notionalUsd,
+            o.position_size_usd,
+            o.positionSizeUsd,
+            marginUsd != null && leverageValue != null ? marginUsd * leverageValue : null,
+          );
           const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
           const sideLabel = orderSideLabel(o);
           const isTP = type.includes('TAKE') || type.includes('TP');
@@ -6723,9 +6763,15 @@ function FuturesPanel() {
                   </button>
                 )}
               </div>
-              <div style={S.row}>
-                <span style={S.detail}>Price: {formatOrderPrice(price)}</span>
-                <span style={S.detail}>Amount: {amt}</span>
+              <div style={{...S.row, justifyContent: 'flex-start', flexWrap: 'wrap', gap: '4px 10px'}}>
+                <span style={S.detail}>{priceLabel}: {formatOrderPrice(price)}</span>
+                {marginUsd != null ? (
+                  <span style={S.detail}>Margin: {formatOrderUsd(marginUsd)}</span>
+                ) : (
+                  <span style={S.detail}>Amount: {amt}</span>
+                )}
+                {notionalUsd != null ? <span style={S.detail}>Size: {formatOrderUsd(notionalUsd)}</span> : null}
+                {leverageValue != null ? <span style={S.detail}>Lev: {leverageValue}x</span> : null}
               </div>
             </div>
           );

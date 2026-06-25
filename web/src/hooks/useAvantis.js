@@ -185,6 +185,26 @@ function humanPriceValue(...values) {
   return 0;
 }
 
+function scaledOrHumanPriceValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') continue;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    return n > 1_000_000_000 ? n / 1e10 : n;
+  }
+  return 0;
+}
+
+function scaledOrHumanLeverageValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') continue;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    return n > 10_000 ? n / 1e10 : n;
+  }
+  return 1;
+}
+
 function normalizePosition(p, markets, prices = []) {
   // Avantis Core API /user-data.positions shape (confirmed via live probe):
   //   { trader, pairIndex, index, buy, collateral, leverage, openPrice, sl, tp, ... }
@@ -258,9 +278,19 @@ function normalizeOrder(o, markets) {
   //   { trader, pairIndex, index, buy, collateral, leverage, openPrice, ... }
   // Same flat scaling as positions: collateral raw 1e6, prices/leverage 1e10.
   const pairIdx = o.pairIndex ?? o.pair_index ?? o.trade?.pairIndex;
-  const isBuy = asBool(o.buy ?? o.trade?.buy ?? false);
+  const isBuy = asBool(o.buy ?? o.isLong ?? o.trade?.buy ?? o.trade?.isLong ?? false);
   const symbol = o.symbol || pairIndexToSymbol(pairIdx, markets);
-  const openPrice = contractPriceValue(o.openPrice, o.trade?.openPrice) || humanPriceValue(o.price);
+  const openPrice = scaledOrHumanPriceValue(
+    o.openPrice,
+    o.trade?.openPrice,
+    o.triggerPrice,
+    o.trade?.triggerPrice,
+    o.limitPrice,
+    o.trade?.limitPrice,
+    o.price,
+    o.trigger_price,
+    o.limit_price,
+  );
   const takeProfit = contractPriceValue(o.tp, o.trade?.tp) || humanPriceValue(o.takeProfit, o.take_profit);
   const stopLoss = contractPriceValue(o.sl, o.trade?.sl) || humanPriceValue(o.stopLoss, o.stop_loss);
   let collateral = 0;
@@ -271,12 +301,21 @@ function normalizeOrder(o, markets) {
   } else if (o.trade?.positionSizeUSDC !== undefined) {
     collateral = Number(o.trade.positionSizeUSDC) / 1e6;
   }
-  const leverage = Number(o.leverage ?? o.trade?.leverage ?? 0) / 1e10 || 1;
+  const leverage = scaledOrHumanLeverageValue(o.leverage, o.trade?.leverage);
+  const notionalUsd = collateral * leverage;
+  const amountBase = openPrice > 0 ? notionalUsd / openPrice : 0;
   return {
     symbol,
     side: isBuy ? 'bid' : 'ask',
+    order_direction: isBuy ? 'LONG' : 'SHORT',
     amount: String(collateral),
+    margin: String(collateral),
+    notional_usd: String(notionalUsd),
+    initial_amount: amountBase > 0 ? String(amountBase) : String(collateral),
+    base_amount: amountBase > 0 ? String(amountBase) : '',
     price: String(openPrice),
+    trigger_price: String(openPrice),
+    open_price: String(openPrice),
     leverage: String(leverage),
     order_type: 'LIMIT',
     tif: 'GTC',
