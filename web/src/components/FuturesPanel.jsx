@@ -4498,8 +4498,32 @@ function FuturesPanel() {
               </div>
               )}
               {lighterNeedsIntegratorApproval && (
-                <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #e0b44c', background: '#fff6d9', borderRadius: 12, padding: 12}}>
-                  Lighter API key is saved. Approve the Clash integrator fee before trading unlocks.
+                <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #e0b44c', background: '#fff6d9', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
+                  <span>Lighter API key is saved. Approve the Clash integrator fee before trading unlocks.</span>
+                  <button
+                    type="button"
+                    style={{ ...hlGateStyles.secondaryBtn, padding: '9px 12px', fontSize: 12, alignSelf: 'stretch' }}
+                    disabled={isRunning}
+                    onClick={async () => {
+                      if (typeof disconnect !== 'function') return;
+                      setReferralLinking(true);
+                      try {
+                        await disconnect();
+                        setLighterAccountIndexInput('');
+                        setLighterApiKeyIndexInput('');
+                        setLighterApiPrivateKeyInput('');
+                        setLighterAccountDetectStatus('');
+                        setLocalAlert('');
+                        setSuccessMsg('Saved Lighter API key removed. Paste the correct API key again.');
+                      } catch (e) {
+                        setLocalAlert(e?.message || 'Could not remove saved Lighter API key.');
+                      } finally {
+                        setReferralLinking(false);
+                      }
+                    }}
+                  >
+                    Wrong key? Re-enter API key
+                  </button>
                 </div>
               )}
               {lighterNeedsIntegratorApproval && (

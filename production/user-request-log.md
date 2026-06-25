@@ -451,3 +451,11 @@ Time: 2026-06-25 14:19:53 +03:00
 Request:
 
 > виправ і коміт деплой всіх змін  My in-game name is player_61b667. I minted a dragon NFT, but it's not showing up in the game.
+
+### UR-2026-06-25-002
+
+Time: 2026-06-25 14:50:27 +03:00
+
+Request:
+
+> i might have type in the wrong api key. how do i re-type the api key
