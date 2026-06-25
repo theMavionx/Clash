@@ -11,6 +11,7 @@ import { readEncryptedCredential, writeEncryptedCredential } from '../lib/encryp
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
 const LIGHTER_STORAGE_KEY = 'clash_lighter_credentials_v1';
+const HIBACHI_STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const LIGHTER_AUTH_TOKEN_DEADLINE_SECONDS = 600;
 const LIGHTER_AUTH_TOKEN_REFRESH_SKEW_MS = 90_000;
 
@@ -159,6 +160,40 @@ function questEligibilityBadge(task) {
   return String(cfg.label || '').trim() || QUEST_ELIGIBILITY_BADGES[mode] || 'Exclusive';
 }
 
+function questProgressRatio(task) {
+  const target = Number(task?.target_value || 0);
+  if (target <= 0) return 0;
+  const value = Number(task?.progress_value || 0);
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value / target));
+}
+
+function questSortRank(task) {
+  const ratio = questProgressRatio(task);
+  const isDone = Number(task?.target_value || 0) > 0 && Number(task?.progress_value || 0) >= Number(task?.target_value || 0);
+  const isClaimed = !!task?.claimed_at;
+  const isOneTimeClaimed = isClaimed && !task?.repeatable;
+  if (isOneTimeClaimed) return 4;
+  if (isDone && !isClaimed) return 0;
+  if (isDone && task?.repeatable) return 0;
+  if (task?.started) return 1;
+  if (ratio > 0) return 2;
+  return 3;
+}
+
+function sortQuestsForClaiming(list) {
+  return [...(list || [])].sort((a, b) => {
+    const rankDiff = questSortRank(a) - questSortRank(b);
+    if (rankDiff) return rankDiff;
+    const progressDiff = questProgressRatio(b) - questProgressRatio(a);
+    if (Math.abs(progressDiff) > 0.000001) return progressDiff;
+    const rewardA = Number(a?.reward_gold || 0) + Number(a?.reward_wood || 0) + Number(a?.reward_ore || 0);
+    const rewardB = Number(b?.reward_gold || 0) + Number(b?.reward_wood || 0) + Number(b?.reward_ore || 0);
+    if (rewardA !== rewardB) return rewardB - rewardA;
+    return Number(a?.sort_order ?? a?.id ?? 0) - Number(b?.sort_order ?? b?.id ?? 0);
+  });
+}
+
 function lighterTokenIsFresh(creds) {
   return !!(
     creds?.readOnlyToken
@@ -206,6 +241,15 @@ async function ensureLighterTaskCredentials(creds, baseHeaders) {
   };
   await writeEncryptedCredential(LIGHTER_STORAGE_KEY, saved);
   return { accountIndex, authToken: data.auth_token };
+}
+
+function normalizeHibachiTaskCredentials(creds) {
+  if (!creds?.apiKey || !creds?.accountId || !creds?.privateKey) return null;
+  return {
+    apiKey: String(creds.apiKey),
+    accountId: String(creds.accountId),
+    privateKey: String(creds.privateKey),
+  };
 }
 
 function QuestCard({ task, onStart, onClaim, loading }) {
@@ -297,7 +341,21 @@ function QuestsTab({ markets = [] }) {
 
   const taskHeaders = useCallback(async (tok) => {
     const base = { 'x-token': tok };
-    if (String(dex || '').toLowerCase() !== 'lighter') return base;
+    const activeDex = String(dex || '').toLowerCase();
+    if (activeDex === 'hibachi') {
+      try {
+        const creds = normalizeHibachiTaskCredentials(await readEncryptedCredential(HIBACHI_STORAGE_KEY));
+        if (creds) {
+          base['x-hibachi-api-key'] = creds.apiKey;
+          base['x-hibachi-account-id'] = creds.accountId;
+          base['x-hibachi-private-key'] = creds.privateKey;
+        }
+      } catch {
+        // Quests should remain usable even if encrypted browser storage is unavailable.
+      }
+      return base;
+    }
+    if (activeDex !== 'lighter') return base;
     try {
       const creds = await readEncryptedCredential(LIGHTER_STORAGE_KEY);
       const lighterCreds = await ensureLighterTaskCredentials(creds, base);
@@ -407,7 +465,7 @@ function QuestsTab({ markets = [] }) {
   }, [fetchTasks, taskHeaders, token]);
 
   const visibleTasks = useMemo(
-    () => tasks.filter(t => taskTradableOnMarkets(t, markets)),
+    () => sortQuestsForClaiming(tasks.filter(t => taskTradableOnMarkets(t, markets))),
     [tasks, markets],
   );
 

@@ -161,6 +161,76 @@ function isHibachiIpBlocked(error) {
     );
 }
 
+function normalizeHibachiCategory(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const upper = text.replace(/[\s_-]+/gu, '').toUpperCase();
+  if (upper.includes('CRYPTO')) return 'crypto';
+  if (upper === 'FX' || upper.includes('FOREX') || upper.startsWith('FX')) return 'fx';
+  if (upper.includes('EQUITY') || upper.includes('STOCK')) return 'equity';
+  if (upper.includes('COMMOD')) return 'commodity';
+  if (upper.includes('INDEX') || upper.includes('INDICES')) return 'index';
+  if (upper.includes('ALL') || upper.includes('MULTI') || upper.includes('ANY')) return 'all';
+  return upper.toLowerCase();
+}
+
+function hibachiDisplayCategory(value) {
+  const normalized = normalizeHibachiCategory(value);
+  if (!normalized) return '';
+  if (normalized === 'fx') return 'Fx';
+  if (normalized === 'all') return 'All';
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function hibachiAccountCategory(account = {}) {
+  const row = account || {};
+  return normalizeHibachiCategory(
+    row.account_category
+      ?? row.accountCategory
+      ?? row.category
+      ?? row.account_type
+      ?? row.accountType
+      ?? row.type
+      ?? row._raw?.accountCategory
+      ?? row._raw?.account_category
+      ?? row._raw?.category
+      ?? row._raw?.accountType
+      ?? row._raw?.account_type
+      ?? row._raw?.type,
+  );
+}
+
+function hibachiMarketCategory(market = {}) {
+  const row = market || {};
+  return normalizeHibachiCategory(
+    row.category
+      ?? row.market_category
+      ?? row._hibachi?.contract?.category
+      ?? row._hibachi?.info?.category
+      ?? row._raw?.contract?.category
+      ?? row._raw?.info?.category,
+  );
+}
+
+function hibachiCanTradeMarket(accountCategory, marketCategory) {
+  if (!accountCategory || !marketCategory) return true;
+  if (accountCategory === 'all' || marketCategory === 'all') return true;
+  return accountCategory === marketCategory;
+}
+
+function filterMarketsForHibachiAccount(rows, account) {
+  const accountCategory = hibachiAccountCategory(account);
+  if (!accountCategory) return Array.isArray(rows) ? rows : [];
+  return (Array.isArray(rows) ? rows : []).filter(m => hibachiCanTradeMarket(accountCategory, hibachiMarketCategory(m)));
+}
+
+function hibachiIncompatibleMarketMessage(symbol, market, account) {
+  const accountCategory = hibachiAccountCategory(account);
+  const marketCategory = hibachiMarketCategory(market);
+  if (!accountCategory || !marketCategory || hibachiCanTradeMarket(accountCategory, marketCategory)) return '';
+  return `Hibachi ${hibachiDisplayCategory(accountCategory)} account cannot trade ${symbolOf(symbol)} (${hibachiDisplayCategory(marketCategory)}). Choose a ${hibachiDisplayCategory(accountCategory)} market or switch Hibachi account.`;
+}
+
 function canUsePublicProxyFallback() {
   if (typeof window === 'undefined') return false;
   return window.location.hostname !== 'clashofperps.fun'
@@ -195,6 +265,8 @@ export function useHibachi() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
+  const allMarketsRef = useRef([]);
+  const allPricesRef = useRef([]);
   const marketsRef = useRef([]);
   const leverageSettingsRef = useRef(leverageSettings);
   const claimGoldRef = useRef(null);
@@ -313,25 +385,36 @@ export function useHibachi() {
     try {
       const payload = await fetchHibachiPublicJson('/api/futures/markets?dex=hibachi');
       const rows = normalizeEnvelope(payload);
-      marketsRef.current = rows;
-      setMarkets(rows);
-      return rows;
+      allMarketsRef.current = rows;
+      const filtered = filterMarketsForHibachiAccount(rows, account);
+      marketsRef.current = filtered;
+      setMarkets(filtered);
+      return filtered;
     } catch (e) {
       const msg = hibachiErrorMessage(e);
       console.warn('[useHibachi] markets:', msg);
       setError(msg);
       return [];
     }
-  }, [fetchHibachiPublicJson]);
+  }, [account, fetchHibachiPublicJson]);
+
+  useEffect(() => {
+    const filtered = filterMarketsForHibachiAccount(allMarketsRef.current, account);
+    marketsRef.current = filtered;
+    setMarkets(filtered);
+    setPrices(filterMarketsForHibachiAccount(allPricesRef.current, account));
+  }, [account]);
 
   const fetchPrices = useCallback(async () => {
     try {
       const payload = await fetchHibachiPublicJson('/api/futures/prices?dex=hibachi');
-      setPrices(normalizeEnvelope(payload));
+      const rows = normalizeEnvelope(payload);
+      allPricesRef.current = rows;
+      setPrices(filterMarketsForHibachiAccount(rows, account));
     } catch (e) {
       console.warn('[useHibachi] prices:', e?.message || e);
     }
-  }, [fetchHibachiPublicJson]);
+  }, [account, fetchHibachiPublicJson]);
 
   const authedPost = useCallback(async (path, body = {}) => {
     if (!walletAddr) throw new Error('Connect EVM wallet first');
@@ -402,6 +485,17 @@ export function useHibachi() {
     const target = symbolOf(symbol);
     return (marketsRef.current || []).find(m => symbolOf(m.symbol || m.market_name) === target) || null;
   }, []);
+
+  const findAnyMarket = useCallback((symbol) => {
+    const target = symbolOf(symbol);
+    return (allMarketsRef.current || []).find(m => symbolOf(m.symbol || m.market_name) === target) || null;
+  }, []);
+
+  const assertMarketTradable = useCallback((symbol, market) => {
+    const candidate = market || findAnyMarket(symbol);
+    const message = candidate ? hibachiIncompatibleMarketMessage(symbol, candidate, account) : '';
+    if (message) throw new Error(message);
+  }, [account, findAnyMarket]);
 
   const refreshServerResources = useCallback(async () => {
     if (!token) return null;
@@ -578,6 +672,12 @@ export function useHibachi() {
         await fetchMarkets();
         market = findMarket(symbol);
       }
+      if (!market) {
+        const anyMarket = findAnyMarket(symbol);
+        assertMarketTradable(symbol, anyMarket);
+        throw new Error(`No Hibachi market for ${symbolOf(symbol)}`);
+      }
+      assertMarketTradable(symbol, market);
       const mark = num(market?.mark || market?.mid || prices.find(p => p.symbol === symbolOf(symbol))?.mark);
       const qty = mark > 0 ? (num(amount) * Math.max(1, num(leverage, 1))) / mark : 0;
       const result = await authedPost('/api/futures/hibachi/order', {
@@ -596,7 +696,7 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [findMarket, fetchMarkets, prices, authedPost, fetchAccount, syncRewards]);
+  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, prices, authedPost, fetchAccount, syncRewards]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     setLoading(true);
@@ -609,6 +709,12 @@ export function useHibachi() {
         await fetchMarkets();
         market = findMarket(symbol);
       }
+      if (!market) {
+        const anyMarket = findAnyMarket(symbol);
+        assertMarketTradable(symbol, anyMarket);
+        throw new Error(`No Hibachi market for ${symbolOf(symbol)}`);
+      }
+      assertMarketTradable(symbol, market);
       const qty = (num(amount) * Math.max(1, num(leverage, 1))) / limit;
       const result = await authedPost('/api/futures/hibachi/order', {
         symbol: market?.market_name || `${symbolOf(symbol)}/USDT-P`,
@@ -626,7 +732,7 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [findMarket, fetchMarkets, authedPost, fetchOrders]);
+  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, authedPost, fetchOrders]);
 
   const closePosition = useCallback(async (symbol, side, amountBase) => {
     setLoading(true);
@@ -676,6 +782,7 @@ export function useHibachi() {
       const qty = num(amountBase);
       if (!(qty > 0)) throw new Error('Hibachi TP/SL requires an open position size');
       const marketSymbol = `${symbolOf(symbol)}/USDT-P`;
+      assertMarketTradable(symbol, findAnyMarket(symbol));
       const requests = [];
       const isClosingLong = side === 'ask';
       if (num(tpPrice) > 0) {
@@ -711,7 +818,7 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [authedPost, fetchOrders]);
+  }, [assertMarketTradable, findAnyMarket, authedPost, fetchOrders]);
 
   const openOfficialApp = useCallback(() => {
     try { window.open(HIBACHI_REFERRAL_URL || 'https://hibachi.xyz/', '_blank', 'noopener,noreferrer'); } catch {}

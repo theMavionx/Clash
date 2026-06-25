@@ -23,6 +23,64 @@ function symbolOf(value) {
     .replace(/\/USD[TC]?$/u, '');
 }
 
+function normalizeHibachiCategory(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const upper = text.replace(/[\s_-]+/gu, '').toUpperCase();
+  if (upper.includes('CRYPTO')) return 'crypto';
+  if (upper === 'FX' || upper.includes('FOREX') || upper.startsWith('FX')) return 'fx';
+  if (upper.includes('EQUITY') || upper.includes('STOCK')) return 'equity';
+  if (upper.includes('COMMOD')) return 'commodity';
+  if (upper.includes('INDEX') || upper.includes('INDICES')) return 'index';
+  if (upper.includes('ALL') || upper.includes('MULTI') || upper.includes('ANY')) return 'all';
+  return upper.toLowerCase();
+}
+
+function hibachiDisplayCategory(value) {
+  const normalized = normalizeHibachiCategory(value);
+  if (!normalized) return '';
+  if (normalized === 'fx') return 'Fx';
+  if (normalized === 'all') return 'All';
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function hibachiContractCategory(contract = {}, info = {}) {
+  return normalizeHibachiCategory(
+    contract.category
+      ?? contract.contractCategory
+      ?? contract.contract_category
+      ?? contract.assetClass
+      ?? contract.asset_class
+      ?? info.category
+      ?? info.assetClass
+      ?? info.asset_class,
+  );
+}
+
+function hibachiAccountCategory(account = {}) {
+  return normalizeHibachiCategory(
+    account.accountCategory
+      ?? account.account_category
+      ?? account.category
+      ?? account.accountType
+      ?? account.account_type
+      ?? account.type
+      ?? account.productCategory
+      ?? account.product_category
+      ?? account.tradingCategory
+      ?? account.trading_category
+      ?? account.account?.category
+      ?? account.account?.accountType
+      ?? account.account?.account_type,
+  );
+}
+
+function hibachiCanTradeCategory(accountCategory, contractCategory) {
+  if (!accountCategory || !contractCategory) return true;
+  if (accountCategory === 'all' || contractCategory === 'all') return true;
+  return accountCategory === contractCategory;
+}
+
 function rows(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.data)) return payload.data;
@@ -285,6 +343,7 @@ async function getMarketInfo() {
     const symbol = symbolOf(c.symbol || info.symbol || priceInfo.symbol);
     const mark = num(info.markPrice || info.priceLatest || priceInfo.markPrice || priceInfo.tradePrice || priceInfo.spotPrice || c.markPrice);
     const initialMarginRate = num(c.initialMarginRate, 0.1);
+    const category = hibachiContractCategory(c, info);
     return {
       symbol,
       base: symbol,
@@ -292,6 +351,9 @@ async function getMarketInfo() {
       market_name: c.symbol || `${symbol}/USDT-P`,
       market_id: Number(c.id),
       pair_index: Number(c.id),
+      category,
+      market_category: category,
+      category_label: hibachiDisplayCategory(category),
       lot_size: String(c.stepSize || c.minOrderSize || ''),
       tick_size: String(c.tickSize || ''),
       min_order_size: String(c.minOrderSize || ''),
@@ -325,6 +387,9 @@ async function getPrices() {
       open_interest: String(m.open_interest || 0),
       volume_24h: m.volume_24h || 0,
       funding_rate: m.funding_rate || 0,
+      category: m.category || '',
+      market_category: m.market_category || m.category || '',
+      category_label: m.category_label || hibachiDisplayCategory(m.category),
     })),
   };
 }
@@ -350,6 +415,7 @@ async function getAccount(credsInput) {
     ?? j?.vip_level
     ?? null;
   const marginUsed = accountMarginUsed(j);
+  const accountCategory = hibachiAccountCategory(j);
   return {
     balance: String(j?.balance ?? 0),
     usdc: String(j?.balance ?? 0),
@@ -359,6 +425,9 @@ async function getAccount(credsInput) {
     total_margin_used: String(marginUsed),
     positions_count: Array.isArray(j?.positions) ? j.positions.length : 0,
     orders_count: 0,
+    account_category: accountCategory,
+    category: accountCategory,
+    category_label: hibachiDisplayCategory(accountCategory),
     fee_level: feeLevel,
     maker_fee: num(j?.tradeMakerFeeRate),
     taker_fee: num(j?.tradeTakerFeeRate),
@@ -426,6 +495,14 @@ async function placeOrder(credsInput, args = {}) {
     : `${symbolOf(args.symbol)}/USDT-P`;
   const contract = bySymbol.get(symbol);
   if (!contract) throw new Error(`No Hibachi market for ${symbol}`);
+  const account = await getAccount(creds);
+  const accountCategory = hibachiAccountCategory(account?._raw || account);
+  const contractCategory = hibachiContractCategory(contract);
+  if (!hibachiCanTradeCategory(accountCategory, contractCategory)) {
+    throw new Error(
+      `Hibachi account ${creds.accountId} (${hibachiDisplayCategory(accountCategory)}) cannot trade ${symbol} (${hibachiDisplayCategory(contractCategory)}). Switch to a ${hibachiDisplayCategory(contractCategory)} Hibachi account or choose a ${hibachiDisplayCategory(accountCategory)} market.`,
+    );
+  }
   const side = String(args.side || '').toLowerCase();
   const hibachiSide = side === 'ask' || side === 'short' || side === 'sell' ? 'ASK' : 'BID';
   const quantity = decimalText(args.quantity || args.amount || 0);

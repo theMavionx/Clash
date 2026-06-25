@@ -24,8 +24,11 @@ const flash = require('./flash');
 const lighter = require('./lighter');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
+const { Keypair, PublicKey, VersionedTransaction } = require('@solana/web3.js');
+const bs58Module = require('bs58');
 
 const router = express.Router();
+const bs58 = bs58Module.default || bs58Module;
 
 const PYTH_BENCHMARKS = 'https://benchmarks.pyth.network/v1/shims/tradingview';
 const PYTH_HISTORY_CACHE_TTL_MS = 60_000;
@@ -40,14 +43,149 @@ const PHOENIX_PROXY_TRADER_STATE_STALE_MS = phoenixProxyDurationEnv('PHOENIX_PRO
 const PHOENIX_PROXY_ERROR_COOLDOWN_MS = phoenixProxyDurationEnv('PHOENIX_PROXY_ERROR_COOLDOWN_MS', 15_000, 1000);
 const PHOENIX_PROXY_DISK_CACHE_FILE = process.env.PHOENIX_PROXY_CACHE_FILE
   || path.join(path.dirname(process.env.CLASH_FUTURES_DB || path.join(__dirname, 'futures.db')), 'phoenix-proxy-cache.json');
+const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
+const PHOENIX_REFERRAL_FEE_PAYER_KEY_RAW = process.env.PHOENIX_REFERRAL_FEE_PAYER_KEY
+  || process.env.PHOENIX_ACTIVATION_FEE_PAYER_KEY
+  || process.env.PHOENIX_FEE_PAYER_KEY
+  // Safe fallback: the endpoint signs only validated Phoenix referral
+  // activation transactions where this key is fee payer and is not passed
+  // into the Phoenix instruction. It cannot sign arbitrary transfers.
+  || process.env.NFT_KEY
+  || '';
+const PHOENIX_REFERRAL_SIGN_WINDOW_MS = Math.max(60_000, Number(process.env.PHOENIX_REFERRAL_SIGN_WINDOW_MS || 60 * 60_000));
+const PHOENIX_REFERRAL_SIGN_MAX_PER_AUTHORITY = Math.max(1, Number(process.env.PHOENIX_REFERRAL_SIGN_MAX_PER_AUTHORITY || 24));
+const PHOENIX_REFERRAL_SIGN_MAX_PER_IP = Math.max(1, Number(process.env.PHOENIX_REFERRAL_SIGN_MAX_PER_IP || 240));
 const phoenixProxyCache = new Map();
 const phoenixProxyInflight = new Map();
+const phoenixReferralSignRate = new Map();
 let phoenixProxyDiskCacheLoaded = false;
 let phoenixProxyDiskCacheFlushTimer = null;
+let phoenixReferralFeePayerState = null;
 const basePublicClient = createPublicClient({
   chain: base,
   transport: http(avantis.BASE_RPC),
 });
+
+function decodePhoenixReferralFeePayerSecret(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  let payload = text;
+  if (fs.existsSync(text) && fs.statSync(text).isFile()) {
+    payload = fs.readFileSync(text, 'utf8').trim();
+  }
+  let bytes;
+  if (payload.startsWith('[')) {
+    bytes = Uint8Array.from(JSON.parse(payload).map(Number));
+  } else if (/^\d+(?:\s*,\s*\d+)+$/.test(payload)) {
+    bytes = Uint8Array.from(payload.split(',').map((value) => Number(value.trim())));
+  } else {
+    bytes = bs58.decode(payload);
+  }
+  if (bytes.length !== 64) {
+    throw new Error(`expected 64-byte Solana secret key, got ${bytes.length} bytes`);
+  }
+  return Keypair.fromSecretKey(bytes);
+}
+
+function getPhoenixReferralFeePayerState() {
+  if (phoenixReferralFeePayerState) return phoenixReferralFeePayerState;
+  try {
+    const keypair = decodePhoenixReferralFeePayerSecret(PHOENIX_REFERRAL_FEE_PAYER_KEY_RAW);
+    phoenixReferralFeePayerState = keypair
+      ? { enabled: true, keypair, publicKey: keypair.publicKey.toBase58() }
+      : { enabled: false, keypair: null, publicKey: null, reason: 'not_configured' };
+  } catch (e) {
+    console.warn('[phoenix/referral-fee-payer] disabled:', e.message);
+    phoenixReferralFeePayerState = { enabled: false, keypair: null, publicKey: null, reason: 'invalid_key' };
+  }
+  return phoenixReferralFeePayerState;
+}
+
+function phoenixReferralRateKey(kind, value) {
+  return `${kind}:${String(value || '').trim().toLowerCase()}`;
+}
+
+function checkPhoenixReferralSignRate(req, traderAuthority) {
+  const now = Date.now();
+  const forwardedIp = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const ip = forwardedIp || req.ip || req.socket?.remoteAddress || 'unknown';
+  const checks = [
+    [phoenixReferralRateKey('ip', ip), PHOENIX_REFERRAL_SIGN_MAX_PER_IP],
+    [phoenixReferralRateKey('authority', traderAuthority), PHOENIX_REFERRAL_SIGN_MAX_PER_AUTHORITY],
+  ];
+  for (const [key, limit] of checks) {
+    const bucket = phoenixReferralSignRate.get(key);
+    if (!bucket || now >= bucket.resetAt) {
+      phoenixReferralSignRate.set(key, { count: 1, resetAt: now + PHOENIX_REFERRAL_SIGN_WINDOW_MS });
+      continue;
+    }
+    if (bucket.count >= limit) {
+      const err = new Error('Phoenix referral activation signing rate limit exceeded');
+      err.status = 429;
+      err.retryAfter = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+      throw err;
+    }
+    bucket.count += 1;
+  }
+  if (phoenixReferralSignRate.size > 2000) {
+    for (const [key, bucket] of phoenixReferralSignRate) {
+      if (now >= bucket.resetAt) phoenixReferralSignRate.delete(key);
+    }
+  }
+}
+
+function decodePhoenixReferralTxBase64(value) {
+  const text = String(value || '').trim();
+  if (!text || text.length > 4096 || !/^[A-Za-z0-9+/=]+$/.test(text)) {
+    throw new Error('valid base64 transaction required');
+  }
+  return Buffer.from(text, 'base64');
+}
+
+function isNonzeroSignature(sig) {
+  return Array.from(sig || []).some((byte) => byte !== 0);
+}
+
+function validatePhoenixReferralActivationTx(transactionBase64, traderAuthority, feePayer) {
+  const authority = new PublicKey(String(traderAuthority || '').trim());
+  const bytes = decodePhoenixReferralTxBase64(transactionBase64);
+  const tx = VersionedTransaction.deserialize(bytes);
+  if (tx.version !== 0) throw new Error('Phoenix referral transaction must be v0');
+  const keys = tx.message.staticAccountKeys || [];
+  const requiredSignatures = Number(tx.message.header?.numRequiredSignatures || 0);
+  const instructions = tx.message.compiledInstructions || [];
+  if (instructions.length !== 1) throw new Error('Phoenix referral transaction must have exactly one instruction');
+  if (!keys[0] || !keys[0].equals(feePayer.publicKey)) {
+    throw new Error('Phoenix referral transaction fee payer mismatch');
+  }
+  if (requiredSignatures < 3) {
+    throw new Error('Phoenix referral transaction must require fee payer, onboarder, and trader signatures');
+  }
+  const authorityIndex = keys.findIndex((key, index) => index < requiredSignatures && key.equals(authority));
+  if (authorityIndex < 1) {
+    throw new Error('Phoenix referral transaction trader authority signer mismatch');
+  }
+  const ix = instructions[0];
+  const programId = keys[ix.programIdIndex];
+  if (!programId || programId.toBase58() !== PHOENIX_PROGRAM_ID) {
+    throw new Error('Phoenix referral transaction program mismatch');
+  }
+  if ((ix.accountKeyIndexes || []).includes(0)) {
+    throw new Error('Phoenix referral transaction may not pass fee payer into the instruction');
+  }
+  if ((ix.accountKeyIndexes || []).length !== 9 || ix.accountKeyIndexes[ix.accountKeyIndexes.length - 1] !== authorityIndex) {
+    throw new Error('Phoenix referral transaction account layout mismatch');
+  }
+  if (!ix.data || ix.data.length !== 24) {
+    throw new Error('Phoenix referral transaction instruction data mismatch');
+  }
+  return { tx, authorityIndex, feePayerIndex: 0 };
+}
+
+function signedPhoenixReferralTxBase64(tx, feePayer) {
+  tx.sign([feePayer]);
+  return Buffer.from(tx.serialize()).toString('base64');
+}
 
 function phoenixProxyDurationEnv(name, fallbackMs, minMs) {
   const n = Number(process.env[name] || fallbackMs);
@@ -1972,6 +2110,63 @@ router.get('/pyth/history', async (req, res) => {
     res.set('X-Pyth-Cache', 'error');
     if (e.status === 429) res.set('Retry-After', '10');
     return res.status(e.status === 429 ? 429 : 200).json(data);
+  }
+});
+
+router.get('/phoenix/referral/fee-payer', (req, res) => {
+  const state = getPhoenixReferralFeePayerState();
+  res.set('Cache-Control', state.enabled ? 'private, max-age=60' : 'no-store');
+  return res.json({
+    enabled: !!state.enabled,
+    feePayer: state.publicKey || null,
+    reason: state.enabled ? null : state.reason,
+  });
+});
+
+router.post('/phoenix/referral/presign', (req, res) => {
+  const state = getPhoenixReferralFeePayerState();
+  if (!state.enabled) {
+    return res.status(503).json({ error: 'Phoenix referral fee payer is not configured', reason: state.reason });
+  }
+  try {
+    const traderAuthority = String(req.body?.traderAuthority || '').trim();
+    checkPhoenixReferralSignRate(req, traderAuthority);
+    const { tx } = validatePhoenixReferralActivationTx(req.body?.transaction, traderAuthority, state.keypair);
+    const transaction = signedPhoenixReferralTxBase64(tx, state.keypair);
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      transaction,
+      feePayer: state.publicKey,
+    });
+  } catch (e) {
+    const status = Number.isInteger(e.status) ? e.status : 400;
+    if (e.retryAfter) res.set('Retry-After', String(e.retryAfter));
+    return res.status(status).json({ error: e.message || 'Phoenix referral presign failed' });
+  }
+});
+
+router.post('/phoenix/referral/finalize', (req, res) => {
+  const state = getPhoenixReferralFeePayerState();
+  if (!state.enabled) {
+    return res.status(503).json({ error: 'Phoenix referral fee payer is not configured', reason: state.reason });
+  }
+  try {
+    const traderAuthority = String(req.body?.traderAuthority || '').trim();
+    checkPhoenixReferralSignRate(req, traderAuthority);
+    const { tx, authorityIndex } = validatePhoenixReferralActivationTx(req.body?.transaction, traderAuthority, state.keypair);
+    if (!isNonzeroSignature(tx.signatures?.[authorityIndex])) {
+      return res.status(400).json({ error: 'Phoenix referral transaction is missing trader authority signature' });
+    }
+    const transaction = signedPhoenixReferralTxBase64(tx, state.keypair);
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      transaction,
+      feePayer: state.publicKey,
+    });
+  } catch (e) {
+    const status = Number.isInteger(e.status) ? e.status : 400;
+    if (e.retryAfter) res.set('Retry-After', String(e.retryAfter));
+    return res.status(status).json({ error: e.message || 'Phoenix referral finalize failed' });
   }
 });
 
