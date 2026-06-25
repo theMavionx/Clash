@@ -646,6 +646,13 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor, isDust, dustUsd };
 }
 
+function formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd) {
+  if (isDust) return `$${Number(dustUsd || 0).toFixed(2)}`;
+  const amount = (numOrNull(pos?.amount) || 0) * (Number(closePct) || 0) / 100;
+  const usd = (numOrNull(posValueUsd) || 0) * (Number(closePct) || 0) / 100;
+  return `${amount.toFixed(6)} ${pos?.symbol || ''} ($${usd.toFixed(2)})`;
+}
+
 function orderTpslKind(order) {
   const raw = String(
     order?.tpsl
@@ -1841,7 +1848,7 @@ const PositionsList = memo(function PositionsList({
                 <div style={S.row}>
                   <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
                   <span style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>
-                    {isDust ? `$${dustUsd.toFixed(2)}` : `${(parseFloat(pos.amount) * closePct / 100).toFixed(6)} ${pos.symbol}`}
+                    {formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd)}
                   </span>
                 </div>
                 {!isDust && (
@@ -6810,7 +6817,7 @@ function FuturesPanel() {
                   <div style={S.row}>
                     <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
                     <span style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>
-                      {isDust ? `$${dustUsd.toFixed(2)}` : `${(parseFloat(pos.amount) * closePct / 100).toFixed(6)} ${pos.symbol}`}
+                      {formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd)}
                     </span>
                   </div>
                   {!isDust && (

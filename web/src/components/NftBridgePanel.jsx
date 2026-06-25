@@ -102,6 +102,17 @@ function bridgeReadTransport(chainKey) {
   return http();
 }
 
+function isBridgeRpcHttpClientError(err) {
+  const text = String(err?.shortMessage || err?.details || err?.message || err || '').toLowerCase();
+  return text.includes('rpc endpoint returned http client error')
+    || text.includes('http client error')
+    || text.includes('no backend is currently healthy')
+    || text.includes('503')
+    || text.includes('bad gateway')
+    || text.includes('timeout')
+    || text.includes('network error');
+}
+
 function publicKeyString(value) {
   if (!value) return '';
   if (typeof value === 'string') return value;
@@ -466,15 +477,58 @@ export default function NftBridgePanel({
       const walletClient = createWalletClient({
         account: evmAddress, chain: viemChain(sourceChain), transport: custom(tradingEvmWallet.provider),
       });
-      const hash = await walletClient.writeContract({
-        address: getAddress(initRes.sourceContract),
-        abi: V3_BURN_ABI, functionName: 'bridgeBurn',
-        args: [tokenId, destChainId],
-        value: bridgeFeeValue,
-      });
+      const sourceContract = getAddress(initRes.sourceContract);
+      let hash = null;
+      try {
+        hash = await walletClient.writeContract({
+          address: sourceContract,
+          abi: V3_BURN_ABI, functionName: 'bridgeBurn',
+          args: [tokenId, destChainId],
+          value: bridgeFeeValue,
+        });
+      } catch (err) {
+        if (!isBridgeRpcHttpClientError(err)) throw err;
+        addClientBreadcrumb('bridge.evm_burn_rpc_fallback', {
+          sourceChain,
+          contract: sourceContract,
+          error: String(err?.shortMessage || err?.message || err || '').slice(0, 240),
+        });
+        const fallbackPublicClient = createPublicClient({ chain: viemChain(sourceChain), transport: bridgeReadTransport(sourceChain) });
+        const data = encodeFunctionData({
+          abi: V3_BURN_ABI,
+          functionName: 'bridgeBurn',
+          args: [tokenId, destChainId],
+        });
+        let gas;
+        try {
+          gas = await fallbackPublicClient.estimateGas({
+            account: evmAddress,
+            to: sourceContract,
+            data,
+            value: bridgeFeeValue,
+          });
+        } catch (estimateErr) {
+          addClientBreadcrumb('bridge.evm_burn_fallback_estimate_failed', {
+            sourceChain,
+            error: String(estimateErr?.shortMessage || estimateErr?.message || estimateErr || '').slice(0, 240),
+          });
+        }
+        hash = await walletClient.sendTransaction({
+          to: sourceContract,
+          data,
+          value: bridgeFeeValue,
+          ...(gas ? { gas } : {}),
+        });
+      }
       const publicClient = tradingEvmWallet.getPublicClient?.(EVM_CHAIN_IDS[sourceChain])
         || createPublicClient({ chain: viemChain(sourceChain), transport: bridgeReadTransport(sourceChain) });
-      await publicClient.waitForTransactionReceipt({ hash, confirmations: 2 });
+      try {
+        await publicClient.waitForTransactionReceipt({ hash, confirmations: 2 });
+      } catch (err) {
+        if (!isBridgeRpcHttpClientError(err)) throw err;
+        const fallbackPublicClient = createPublicClient({ chain: viemChain(sourceChain), transport: bridgeReadTransport(sourceChain) });
+        await fallbackPublicClient.waitForTransactionReceipt({ hash, confirmations: 2 });
+      }
       return hash;
     }
     if (kind === 'aptos') {

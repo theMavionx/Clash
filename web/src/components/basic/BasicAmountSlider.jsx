@@ -16,6 +16,16 @@ function fmtUsd(n) {
   return v.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
+function parseAmountInput(value) {
+  const normalized = String(value || '')
+    .trim()
+    .replace(',', '.')
+    .replace(/[^\d.]/g, '');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 // Cash-counter ticker — animates between values rather than snapping. Uses
 // requestAnimationFrame so dragging feels buttery.
 function MoneyTicker({ value }) {
@@ -46,6 +56,9 @@ const THUMB = 28; // visual diameter of the draggable thumb in px
 function BasicAmountSlider({ direction, balance, onPick, onBack }) {
   const max = Math.max(0, Number(balance) || 0);
   const [amount, setAmount] = useState(() => Math.min(max, 10));
+  const [isEditingAmount, setIsEditingAmount] = useState(false);
+  const [amountDraft, setAmountDraft] = useState('');
+  const amountInputRef = useRef(null);
   const pct = max > 0 ? Math.min(1, amount / max) : 0;
   const directionColor = direction === 'long' ? colors.long : colors.short;
 
@@ -95,10 +108,35 @@ function BasicAmountSlider({ direction, balance, onPick, onBack }) {
   const setPct = useCallback((p) => {
     const next = Math.round((max * p) * 100) / 100;
     setAmount(next);
+    setIsEditingAmount(false);
+    setAmountDraft('');
     // Smoothly animate the thumb to the new position so chip-clicks feel
     // alive instead of snapping jerkily.
     fmAnimate(x, p * dragMax, { type: 'spring', stiffness: 400, damping: 32 });
   }, [max, dragMax, x]);
+
+  useEffect(() => {
+    if (!isEditingAmount) return;
+    const id = requestAnimationFrame(() => {
+      amountInputRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isEditingAmount]);
+
+  const commitAmountDraft = useCallback(() => {
+    const parsed = parseAmountInput(amountDraft);
+    if (parsed !== null) {
+      const next = Math.round(Math.max(0, Math.min(max, parsed)) * 100) / 100;
+      setAmount(next);
+    }
+    setIsEditingAmount(false);
+    setAmountDraft('');
+  }, [amountDraft, max]);
+
+  const cancelAmountDraft = useCallback(() => {
+    setIsEditingAmount(false);
+    setAmountDraft('');
+  }, []);
 
   // Track click: jump thumb to the clicked position. Touch + mouse via
   // pointer events.
@@ -124,7 +162,43 @@ function BasicAmountSlider({ direction, balance, onPick, onBack }) {
         animate={{ scale: 1, opacity: 1 }}
         style={{ ...S.bigUsd, color: directionColor }}
       >
-        <MoneyTicker value={amount} />
+        {isEditingAmount ? (
+          <span style={S.amountEditWrap}>
+            <span style={S.amountPrefix}>$</span>
+            <input
+              ref={amountInputRef}
+              value={amountDraft}
+              onChange={(e) => setAmountDraft(e.target.value)}
+              onBlur={commitAmountDraft}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitAmountDraft();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  cancelAmountDraft();
+                }
+              }}
+              inputMode="decimal"
+              type="text"
+              placeholder="0"
+              aria-label="Trade amount in US dollars"
+              style={{ ...S.amountInput, color: directionColor }}
+            />
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setAmountDraft('');
+              setIsEditingAmount(true);
+            }}
+            aria-label={`Edit trade amount, current amount $${fmtUsd(amount)}`}
+            style={{ ...S.amountButton, color: directionColor }}
+          >
+            <MoneyTicker value={amount} />
+          </button>
+        )}
       </motion.div>
       <div style={S.pctLabel}>
         {Math.round(pct * 100)}% of ${fmtUsd(max)} balance
@@ -212,6 +286,49 @@ const S = {
     fontVariantNumeric: 'tabular-nums',
     margin: '2px 0 0',
     lineHeight: 1,
+  },
+  amountButton: {
+    display: 'inline-flex',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    gap: 0,
+    minWidth: 170,
+    minHeight: 54,
+    padding: '0 8px',
+    border: 'none',
+    background: 'transparent',
+    font: 'inherit',
+    fontWeight: 900,
+    lineHeight: 1,
+    cursor: 'text',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  amountEditWrap: {
+    display: 'inline-flex',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    minWidth: 170,
+    minHeight: 54,
+  },
+  amountPrefix: {
+    font: 'inherit',
+    fontWeight: 900,
+    color: 'inherit',
+    lineHeight: 1,
+  },
+  amountInput: {
+    width: 150,
+    minWidth: 0,
+    border: 'none',
+    outline: 'none',
+    background: 'transparent',
+    font: 'inherit',
+    fontWeight: 900,
+    lineHeight: 1,
+    textAlign: 'left',
+    fontVariantNumeric: 'tabular-nums',
+    padding: 0,
+    margin: 0,
   },
   pctLabel: {
     fontSize: 11, fontWeight: 700, color: colors.inkFaint,

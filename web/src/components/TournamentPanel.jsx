@@ -511,6 +511,9 @@ function TournamentPanel({ onClose }) {
   const { items: history } = useTournamentHistory({ active: tab === 'history' });
   const player = usePlayer();
   const { dex } = useDex();
+  const [busy, setBusy] = useState(false);
+  const [rewardWalletEvm, setRewardWalletEvm] = useState('');
+  const [rewardWalletEditing, setRewardWalletEditing] = useState(false);
 
   // When the History tab is active and the user clicks a row, swap the
   // leaderboard pointer to that ended tournament. Otherwise the active
@@ -531,8 +534,8 @@ function TournamentPanel({ onClose }) {
   const hasRewardWallet = needsCopRewardWallet
     ? SOLANA_WALLET_RE.test(storedRewardWallet)
     : !!storedRewardWallet;
-  const canAddMissingRewardWallet = !isHistory && joined && needsCopRewardWallet && !hasRewardWallet;
-  const canSaveLuckyRewardWallet = tab === 'lucky' && !isHistory && !!t && needsCopRewardWallet && !hasRewardWallet;
+  const canManageRewardWallet = !isHistory && !!t && needsCopRewardWallet && (joined || tab === 'lucky');
+  const canSaveLuckyRewardWallet = tab === 'lucky' && canManageRewardWallet && (!hasRewardWallet || rewardWalletEditing);
   const phase = t?.phase || me?.phase || null;
   const preregistration = !isHistory && phase === 'preregistration';
   const live = !isHistory && phase === 'live';
@@ -551,8 +554,6 @@ function TournamentPanel({ onClose }) {
   }, [dailyDays, pickedDailyDay]);
   const playerId = player?.player_id || player?.id;
   const dailyMyPlayerId = daily?.my_player_id || playerId;
-  const [busy, setBusy] = useState(false);
-  const [rewardWalletEvm, setRewardWalletEvm] = useState('');
   const activeInitialLoading = tab === 'active' && !tournamentLoaded && !me;
   const luckyInitialLoading = tab === 'lucky' && !luckyLoaded && !luckyMe;
   const prizeProgress = useMemo(() => {
@@ -610,6 +611,10 @@ function TournamentPanel({ onClose }) {
   }, [myStats?.reward_wallet_evm, needsCopRewardWallet]);
 
   useEffect(() => {
+    setRewardWalletEditing(false);
+  }, [tab, t?.id]);
+
+  useEffect(() => {
     if (!dailyActive) {
       setPickedDailyDay(null);
       return;
@@ -654,7 +659,7 @@ function TournamentPanel({ onClose }) {
     setBusy(false);
   };
   const handleSaveRewardWallet = async () => {
-    if (!t || busy || !canAddMissingRewardWallet) return;
+    if (!t || busy || tab === 'lucky' || !canManageRewardWallet) return;
     const rewardWallet = rewardWalletEvm.trim();
     if (!SOLANA_WALLET_RE.test(rewardWallet)) {
       alert('Enter a valid Solana address for CLASH rewards.');
@@ -663,6 +668,7 @@ function TournamentPanel({ onClose }) {
     setBusy(true);
     const result = await updateRewardWallet(t.id, rewardWallet);
     if (result && result.ok === false) alert(result.error || 'Could not save CLASH reward address');
+    else setRewardWalletEditing(false);
     setBusy(false);
   };
   const handleSaveLuckyRewardWallet = async () => {
@@ -675,7 +681,70 @@ function TournamentPanel({ onClose }) {
     setBusy(true);
     const result = await updateLuckyRewardWallet(t.id, rewardWallet);
     if (result && result.ok === false) alert(result.error || 'Could not save CLASH reward address');
+    else setRewardWalletEditing(false);
     setBusy(false);
+  };
+
+  const renderRewardWalletControl = ({ lucky = false } = {}) => {
+    if (!canManageRewardWallet) return null;
+    const editing = !hasRewardWallet || rewardWalletEditing;
+    const saveHandler = lucky ? handleSaveLuckyRewardWallet : handleSaveRewardWallet;
+    const help = lucky
+      ? 'This Solana wallet receives CLASH rewards if your Lucky Raider tickets win.'
+      : 'This Solana wallet receives CLASH tournament rewards.';
+    if (!editing) {
+      return (
+        <div style={S.rewardBox}>
+          <div style={S.rewardHeaderRow}>
+            <div>
+              <div style={S.rewardLabel}>CLASH Solana reward address</div>
+              <div style={S.rewardCurrent}>{shortWallet(storedRewardWallet)}</div>
+            </div>
+            <button
+              type="button"
+              style={S.rewardChangeBtn}
+              onClick={() => setRewardWalletEditing(true)}
+              disabled={busy}
+            >
+              Change
+            </button>
+          </div>
+          <div style={S.rewardHelp}>{help}</div>
+        </div>
+      );
+    }
+    return (
+      <div style={S.rewardBox}>
+        <div style={S.rewardLabel}>CLASH Solana reward address</div>
+        <div style={S.rewardHelp}>{help}</div>
+        <input
+          style={S.rewardInput}
+          value={rewardWalletEvm}
+          onChange={(e) => setRewardWalletEvm(e.target.value)}
+          placeholder="Solana wallet address"
+          autoCapitalize="none"
+          spellCheck={false}
+        />
+        <div style={S.rewardActionRow}>
+          {hasRewardWallet && (
+            <button
+              type="button"
+              style={S.rewardCancelBtn}
+              onClick={() => {
+                setRewardWalletEvm(storedRewardWallet);
+                setRewardWalletEditing(false);
+              }}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          )}
+          <button style={S.rewardSaveBtn} onClick={saveHandler} disabled={busy}>
+            {busy ? 'SAVING...' : (lucky && !joined ? 'REGISTER LUCKY RAIDER' : 'SAVE ADDRESS')}
+          </button>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -822,23 +891,7 @@ function TournamentPanel({ onClose }) {
 
           {tab === 'lucky' && t && (
             <>
-              {canSaveLuckyRewardWallet && (
-                <div style={S.rewardBox}>
-                  <div style={S.rewardLabel}>CLASH Solana reward address</div>
-                  <div style={S.rewardHelp}>Enter the Solana wallet where CLASH prize tokens should be sent. Lucky Raider registration needs this address before your tickets can be finalized for rewards.</div>
-                  <input
-                    style={S.rewardInput}
-                    value={rewardWalletEvm}
-                    onChange={(e) => setRewardWalletEvm(e.target.value)}
-                    placeholder="Solana wallet address"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                  />
-                  <button style={S.rewardSaveBtn} onClick={handleSaveLuckyRewardWallet} disabled={busy}>
-                    {busy ? 'SAVING...' : (joined ? 'SAVE ADDRESS' : 'REGISTER LUCKY RAIDER')}
-                  </button>
-                </div>
-              )}
+              {renderRewardWalletControl({ lucky: true })}
               <LuckyRaiderPanel
                 t={t}
                 schedule={luckyMe?.reward_schedule || t.reward_schedule || t.reward_config}
@@ -881,6 +934,8 @@ function TournamentPanel({ onClose }) {
                   {t.end_at && <span style={S.tag}>{isHistory ? 'Ended' : 'Ends'} {fmtDate(t.end_at)}</span>}
                 </div>
               </div>
+
+              {joined && renderRewardWalletControl()}
 
               {prizeProgress && (
                 <div style={S.prizeProgress}>
@@ -956,23 +1011,6 @@ function TournamentPanel({ onClose }) {
                     {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? 'REGISTRATION CLOSED' : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
                   </button>
                 </>
-              )}
-
-              {canAddMissingRewardWallet && (
-                <div style={S.rewardBox}>
-                  <div style={S.rewardLabel}>CLASH Solana reward address</div>
-                  <input
-                    style={S.rewardInput}
-                    value={rewardWalletEvm}
-                    onChange={(e) => setRewardWalletEvm(e.target.value)}
-                    placeholder="Solana wallet address"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                  />
-                  <button style={S.rewardSaveBtn} onClick={handleSaveRewardWallet} disabled={busy}>
-                    {busy ? 'SAVING...' : 'SAVE ADDRESS'}
-                  </button>
-                </div>
               )}
 
               {isHistory && myStats && (
@@ -1584,15 +1622,36 @@ const S = {
   rewardBox: {
     background: '#fef3c7', border: '3px solid #f59e0b', borderRadius: 14, padding: 10,
   },
+  rewardHeaderRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+  },
   rewardLabel: { fontSize: 11, fontWeight: 900, color: '#7c5a3a', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
   rewardHelp: { fontSize: 11, fontWeight: 700, color: '#7c5a3a', lineHeight: 1.35, marginBottom: 7 },
+  rewardCurrent: {
+    fontSize: 13, fontWeight: 900, color: '#5C3A21',
+    background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 9,
+    padding: '5px 8px', overflowWrap: 'anywhere',
+  },
   rewardInput: {
     width: '100%', boxSizing: 'border-box', border: '2px solid #d4c8b0', borderRadius: 10,
     background: '#fdf8e7', color: '#5C3A21', fontSize: 12, fontWeight: 800,
     padding: '8px 10px', outline: 'none',
   },
+  rewardActionRow: {
+    display: 'flex', gap: 8, marginTop: 8,
+  },
+  rewardChangeBtn: {
+    padding: '7px 10px', borderRadius: 9,
+    background: '#e0f2fe', border: '2px solid #38bdf8', color: '#075985',
+    fontSize: 11, fontWeight: 900, cursor: 'pointer', textTransform: 'uppercase',
+  },
+  rewardCancelBtn: {
+    flex: 1, padding: '8px 12px', borderRadius: 10,
+    background: '#fdf8e7', border: '2px solid #bba882', color: '#7c5a3a',
+    fontSize: 12, fontWeight: 900, cursor: 'pointer', textTransform: 'uppercase',
+  },
   rewardSaveBtn: {
-    width: '100%', marginTop: 8, padding: '8px 12px', borderRadius: 10,
+    flex: 1, padding: '8px 12px', borderRadius: 10,
     background: 'linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%)',
     border: '2px solid #2E7D32', color: '#fff', fontSize: 12, fontWeight: 900,
     letterSpacing: 0.5, cursor: 'pointer', textTransform: 'uppercase',
