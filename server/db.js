@@ -915,6 +915,7 @@ try {
       trophy_boost REAL NOT NULL DEFAULT 1.0,
       shield_hours REAL,
       freeze_trophies INTEGER NOT NULL DEFAULT 1,
+      min_town_hall_level INTEGER NOT NULL DEFAULT 0,
       sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50')),
       points_trophy_weight REAL NOT NULL DEFAULT 0,
       points_volume_weight REAL NOT NULL DEFAULT 0,
@@ -964,6 +965,8 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_opens_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_closes_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN freeze_trophies INTEGER NOT NULL DEFAULT 1`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN min_town_hall_level INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`UPDATE tournaments SET min_town_hall_level = 0 WHERE min_town_hall_level IS NULL OR min_town_hall_level < 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_trophy_weight REAL NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_volume_weight REAL NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_pnl_weight REAL NOT NULL DEFAULT 0`); } catch {}
@@ -3263,6 +3266,7 @@ function parseTournamentRewardConfig(value) {
       volume_per_ticket_usd: Math.max(1, Math.min(10_000_000, Number(luckyRaw.volume_per_ticket_usd || 1000) || 1000)),
       volume_tickets_per_step: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.volume_tickets_per_step ?? luckyRaw.volume_bonus_tickets_per_step ?? 1) || 1))),
       attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
+      min_town_hall_level: Math.max(0, Math.min(20, Math.floor(Number(luckyRaw.min_town_hall_level ?? luckyRaw.min_th ?? 0) || 0))),
       min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
       winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
       max_tickets: maxTickets,
@@ -4025,6 +4029,12 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       let eligible = tickets > 0 ? 1 : 0;
       let reason = tickets > 0 ? 'eligible' : ticketState.reason;
       let hasNft = false;
+      const townHallLevel = getTownHallLevel(row.player_id);
+      const minTownHallLevel = Math.max(0, Math.floor(Number(cfg.min_town_hall_level || 0) || 0));
+      if (minTownHallLevel > 0 && townHallLevel < minTownHallLevel) {
+        eligible = 0;
+        reason = 'town_hall_requirement_not_met';
+      }
       if (cfg.require_nft) {
         hasNft = playerHasTournamentRewardNft(row.player_id, cfg.required_collections);
         if (!hasNft) {
@@ -4037,6 +4047,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         is_bot: Number(row.is_bot || 0) === 1,
         prize_eligible: Number(row.is_bot || 0) !== 1,
         trades_count: Number(row.trades_count || 0) || 0,
+        town_hall_level: townHallLevel,
+        min_town_hall_level: minTownHallLevel,
         attack_wins: attackWins,
         attack_losses: attackLosses,
         attack_attempts: attackStats.attack_attempts,
@@ -4050,6 +4062,7 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         volume_per_ticket_usd: cfg.volume_per_ticket_usd,
         volume_tickets_per_step: cfg.volume_tickets_per_step,
         attack_wins_per_ticket: cfg.attack_wins_per_ticket,
+        min_town_hall_level: minTownHallLevel,
         min_attack_wins: cfg.min_attack_wins,
         max_tickets: cfg.max_tickets,
         require_nft: cfg.require_nft,
@@ -4069,6 +4082,8 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
         is_bot: Number(row.is_bot || 0) === 1,
         prize_eligible: Number(row.is_bot || 0) !== 1,
         volume_usd: Number(volume.toFixed(2)),
+        town_hall_level: townHallLevel,
+        min_town_hall_level: minTownHallLevel,
         attack_wins: attackWins,
         attack_losses: attackLosses,
         attack_attempts: attackStats.attack_attempts,

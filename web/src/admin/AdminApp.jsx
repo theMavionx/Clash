@@ -1718,6 +1718,9 @@ function TournamentEligibilityStep({ form, update }) {
             <label className="admin-field"><span className="admin-label">Primary DEX</span><select className="admin-select" value={form.dex} onChange={(e) => update({ dex: e.target.value, eligible_dexes: [e.target.value] })}>{TOURNAMENT_DEXES.map((d) => <option key={d} value={d}>{DEX_LABELS[d]}</option>)}</select></label>
             <label className="admin-field"><span className="admin-label">Mode</span><select className="admin-select" value={form.mode} onChange={(e) => update({ mode: e.target.value, dex_scope: e.target.value === 'dex_vs_dex' ? 'custom' : form.dex_scope })}><option value="individual">Individual</option><option value="dex_vs_dex">DEX vs DEX</option></select></label>
           </div>
+          <div className="admin-form-grid three">
+            <NumberField label="Min Town Hall" value={form.min_town_hall_level || 0} onChange={(v) => update({ min_town_hall_level: v })} />
+          </div>
           {form.dex_scope === 'custom' && (
             <div className="admin-choice-grid">
               {TOURNAMENT_DEXES.map((d) => (
@@ -2230,10 +2233,11 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
             </div>
             <div className="admin-form-grid three">
               <NumberField label="Min winning attacks" value={config.lucky_daily_raider.min_attack_wins || 0} onChange={(v) => updateLucky({ min_attack_wins: v })} />
+              <NumberField label="Min Town Hall" value={config.lucky_daily_raider.min_town_hall_level || 0} onChange={(v) => updateLucky({ min_town_hall_level: v })} />
               <NumberField label="Winner places" value={config.lucky_daily_raider.winner_count || 1} onChange={(v) => updateLucky({ winner_count: v })} />
-              <NumberField label="Max tickets" value={config.lucky_daily_raider.max_tickets} onChange={(v) => updateLucky({ max_tickets: v })} />
             </div>
             <div className="admin-form-grid three">
+              <NumberField label="Max tickets" value={config.lucky_daily_raider.max_tickets} onChange={(v) => updateLucky({ max_tickets: v })} />
               <NumberField label="Max counted attacks" value={config.lucky_daily_raider.max_counted_attacks || config.lucky_daily_raider.max_tickets || 50} onChange={(v) => updateLucky({ max_counted_attacks: v })} />
               <NumberField label="Volume tickets per step" value={config.lucky_daily_raider.volume_tickets_per_step || 1} onChange={(v) => updateLucky({ volume_tickets_per_step: v })} />
               <NumberField label="Max volume tickets" value={config.lucky_daily_raider.max_volume_tickets || 0} onChange={(v) => updateLucky({ max_volume_tickets: v })} />

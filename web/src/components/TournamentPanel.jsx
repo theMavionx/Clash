@@ -280,6 +280,7 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
       {lucky.enabled && (
         <div style={S.rewardScheduleLucky}>
           <div><strong>{lucky.label || 'Lucky Daily Raider'}</strong>: {luckyTicketRule}, top {fmt(lucky.winner_count || 1)}, max {fmt(lucky.max_tickets)} tickets</div>
+          {Number(lucky.min_town_hall_level || 0) > 0 && <div>Requires Town Hall level {fmt(lucky.min_town_hall_level)}+</div>}
           {Number(lucky.min_attack_wins || 0) > 0 && <div>Minimum today: {fmt(lucky.min_attack_wins)} winning attacks</div>}
           {lucky.require_nft && <div>Requires {required || 'Dragon or Demon King'}</div>}
           {lucky.my_tickets !== undefined && (
@@ -364,6 +365,7 @@ function luckyReasonText(reason) {
   if (key === 'volume_and_attack_wins_below_ticket') return 'No ticket yet: counted wins and volume are below ticket requirements';
   if (key === 'nft_required') return 'NFT requirement not met';
   if (key === 'missing_required_nft') return 'NFT requirement not met';
+  if (key === 'town_hall_requirement_not_met') return 'Town Hall requirement not met';
   if (key === 'min_attack_wins_not_met') return 'Minimum counted wins not met';
   return key.replace(/_/g, ' ');
 }
@@ -431,6 +433,7 @@ function LuckyRaiderPanel({ t, schedule }) {
         {myStats.surrenders > 0 && <span>Your losses include {fmt(myStats.surrenders)} surrender{myStats.surrenders === 1 ? '' : 's'}.</span>}
         {myRawOverflow && <span>Total today: {fmt(myStats.rawAttempts)} attacks / {fmt(myStats.rawWins)} wins. Extra attacks after #{fmt(myStats.limit)} do not add tickets.</span>}
         <span>Draw runs at {lucky.draw_time_utc || '00:05'} UTC.</span>
+        {Number(lucky.min_town_hall_level || 0) > 0 && <span>Requires Town Hall level {fmt(lucky.min_town_hall_level)}+.</span>}
         {lucky.require_nft && <span>Requires Dragon or Demon King NFT.</span>}
         {myReason && <span>Status: {myReason}</span>}
       </div>
@@ -540,6 +543,8 @@ function TournamentPanel({ onClose }) {
   const preregistration = !isHistory && phase === 'preregistration';
   const live = !isHistory && phase === 'live';
   const canJoin = !isHistory && !!me?.can_join;
+  const joinBlockedByTownHall = !isHistory && me?.can_join_reason === 'town_hall_requirement_not_met';
+  const joinTownHallRequirement = me?.town_hall_requirement || null;
   const { board } = useTournamentLeaderboard(t?.id, { active: !!t && tab !== 'lucky', pollMs: isHistory ? 60000 : 10000 });
   const dailyActive = !!t && isDailyPoolTournament(t);
   const { daily } = useTournamentDailyPoints(t?.id, {
@@ -1008,8 +1013,13 @@ function TournamentPanel({ onClose }) {
                     </div>
                   )}
                   <button style={{ ...S.joinBtn, opacity: canJoin ? 1 : 0.6 }} onClick={handleJoin} disabled={busy || !canJoin}>
-                    {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? 'REGISTRATION CLOSED' : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
+                    {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? (joinBlockedByTownHall ? `TH ${joinTownHallRequirement?.required || t.min_town_hall_level} REQUIRED` : 'REGISTRATION CLOSED') : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
                   </button>
+                  {joinBlockedByTownHall && (
+                    <div style={S.rewardHint}>
+                      Requires Town Hall level {fmt(joinTownHallRequirement?.required || t.min_town_hall_level || 0)}. Your level: {fmt(joinTownHallRequirement?.current || 0)}.
+                    </div>
+                  )}
                 </>
               )}
 
@@ -1627,6 +1637,7 @@ const S = {
   },
   rewardLabel: { fontSize: 11, fontWeight: 900, color: '#7c5a3a', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
   rewardHelp: { fontSize: 11, fontWeight: 700, color: '#7c5a3a', lineHeight: 1.35, marginBottom: 7 },
+  rewardHint: { fontSize: 11, fontWeight: 800, color: '#b45309', textAlign: 'center', marginTop: 6 },
   rewardCurrent: {
     fontSize: 13, fontWeight: 900, color: '#5C3A21',
     background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 9,

@@ -19043,6 +19043,7 @@ function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
       volume_per_ticket_usd: Math.max(1, Math.min(10_000_000, sanitizePrizeNumber(luckyRaw.volume_per_ticket_usd, 1000))),
       volume_tickets_per_step: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.volume_tickets_per_step ?? luckyRaw.volume_bonus_tickets_per_step ?? 1) || 1))),
       attack_wins_per_ticket: Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.attack_wins_per_ticket || 10) || 10))),
+      min_town_hall_level: Math.max(0, Math.min(20, Math.floor(Number(luckyRaw.min_town_hall_level ?? luckyRaw.min_th ?? 0) || 0))),
       min_attack_wins: Math.max(0, Math.min(100000, Math.floor(Number(luckyRaw.min_attack_wins || 0) || 0))),
       winner_count: Math.max(1, Math.min(100, Math.floor(Number(luckyRaw.winner_count || luckyRaw.winners || 1) || 1))),
       max_tickets: maxTickets,
@@ -19630,6 +19631,20 @@ function playerHasTournamentRewardNft(playerId, collections = ['demon_king', 'dr
   }
 }
 
+function playerTownHallLevel(playerId) {
+  if (!playerId) return 0;
+  try {
+    const row = db.db.prepare(`
+      SELECT COALESCE(MAX(level), 0) AS town_hall_level
+        FROM buildings
+       WHERE player_id = ? AND type = 'town_hall'
+    `).get(playerId);
+    return Math.max(0, Math.floor(Number(row?.town_hall_level || 0) || 0));
+  } catch {
+    return 0;
+  }
+}
+
 function tournamentLuckyRaiderState(t, viewerId = null) {
   const cfg = normalizeTournamentRewardConfig(t?.reward_config || {}).lucky_daily_raider;
   if (!cfg.enabled) return { enabled: false };
@@ -19689,6 +19704,9 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
       const tickets = ticketState.tickets;
       let reason = tickets > 0 ? 'eligible' : ticketState.reason;
       let hasNft = null;
+      const townHallLevel = playerTownHallLevel(row.player_id);
+      const minTownHallLevel = Math.max(0, Math.floor(Number(cfg.min_town_hall_level || 0) || 0));
+      if (minTownHallLevel > 0 && townHallLevel < minTownHallLevel) reason = 'town_hall_requirement_not_met';
       if (cfg.require_nft) {
         hasNft = playerHasTournamentRewardNft(row.player_id, cfg.required_collections);
         if (!hasNft) reason = 'missing_required_nft';
@@ -19698,6 +19716,8 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
         name: row.name || '',
         wallet: row.wallet || null,
         volume_usd: Number(volume.toFixed(2)),
+        town_hall_level: townHallLevel,
+        min_town_hall_level: minTownHallLevel,
         attack_wins: attackWins,
         attack_attempts: Math.max(0, Math.floor(Number(attackStats.attack_attempts || 0) || 0)),
         attack_surrenders: Math.max(0, Math.floor(Number(attackStats.attack_surrenders || 0) || 0)),
@@ -19711,8 +19731,8 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
         volume_tickets_per_step: ticketState.volume_tickets_per_step,
         max_volume_tickets: ticketState.max_volume_tickets,
         attack_win_tickets: ticketState.attack_win_tickets,
-        tickets: cfg.require_nft && !hasNft ? 0 : tickets,
-        eligible: tickets > 0 && (!cfg.require_nft || hasNft),
+        tickets: (minTownHallLevel > 0 && townHallLevel < minTownHallLevel) || (cfg.require_nft && !hasNft) ? 0 : tickets,
+        eligible: tickets > 0 && (minTownHallLevel <= 0 || townHallLevel >= minTownHallLevel) && (!cfg.require_nft || hasNft),
         reason,
         has_required_nft: hasNft,
       };
@@ -19779,9 +19799,15 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
       myVolumeTickets = ticketState.volume_tickets;
       myAttackWinTickets = ticketState.attack_win_tickets;
       myTickets = ticketState.tickets;
+      const myTownHallLevel = playerTownHallLevel(viewerId);
+      const minTownHallLevel = Math.max(0, Math.floor(Number(cfg.min_town_hall_level || 0) || 0));
       hasRequiredNft = cfg.require_nft ? playerHasTournamentRewardNft(viewerId, cfg.required_collections) : true;
-      myEligible = myTickets > 0 && (!cfg.require_nft || hasRequiredNft);
-      if (myTickets > 0) myReason = !hasRequiredNft ? 'missing_required_nft' : 'eligible';
+      const hasRequiredTownHall = minTownHallLevel <= 0 || myTownHallLevel >= minTownHallLevel;
+      myEligible = myTickets > 0 && hasRequiredTownHall && (!cfg.require_nft || hasRequiredNft);
+      if (!hasRequiredTownHall) {
+        myTickets = 0;
+        myReason = 'town_hall_requirement_not_met';
+      } else if (myTickets > 0) myReason = !hasRequiredNft ? 'missing_required_nft' : 'eligible';
       else myReason = ticketState.reason;
     } catch {}
   }
@@ -19792,6 +19818,7 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
     volume_per_ticket_usd: cfg.volume_per_ticket_usd,
     volume_tickets_per_step: cfg.volume_tickets_per_step,
     attack_wins_per_ticket: cfg.attack_wins_per_ticket,
+    min_town_hall_level: cfg.min_town_hall_level,
     min_attack_wins: cfg.min_attack_wins,
     winner_count: cfg.winner_count,
     max_tickets: cfg.max_tickets,
@@ -19887,6 +19914,17 @@ function canJoinTournament(t, now = nowSql()) {
   return false;
 }
 
+function tournamentTownHallRequirement(t) {
+  return Math.max(0, Math.min(20, Math.floor(Number(t?.min_town_hall_level || 0) || 0)));
+}
+
+function playerMeetsTournamentTownHallRequirement(t, playerId) {
+  const required = tournamentTownHallRequirement(t);
+  if (required <= 0) return { ok: true, required, current: playerTownHallLevel(playerId) };
+  const current = playerTownHallLevel(playerId);
+  return { ok: current >= required, required, current };
+}
+
 function tournamentRequiresClashRewardWallet(t) {
   if (!t) return false;
   if (Number(t.rewards_in_cop || 0)) return true;
@@ -19942,6 +19980,7 @@ function tournamentRowToPublic(t, options = {}) {
     attack_match_policy_label: tournamentAttackMatchPolicyLabel(attackMatchPolicy),
     scoring_mode: scoringMode,
     scoring_label: scoringMode === 'daily_pool' ? 'Daily points at 00:00 UTC' : 'Live scoring',
+    min_town_hall_level: tournamentTownHallRequirement(t),
     tournament_kind: normalizeTournamentEventKind(t.event_kind) === 'lucky_raider' ? 'lucky_raider' : (megaConfig.enabled ? 'mega' : 'standard'),
     is_lucky_raider_event: normalizeTournamentEventKind(t.event_kind) === 'lucky_raider',
     is_mega: megaConfig.enabled,
@@ -20336,11 +20375,14 @@ router.get('/tournaments/me', auth, (req, res) => {
     `).all(t.id), t);
     comboMeScore = scored.find(s => s.player_id === req.player.id) || null;
   }
+  const thRequirement = playerMeetsTournamentTownHallRequirement(t, req.player.id);
   res.json({
     tournament: pub,
     joined: !!(me && me.left_at === null),
     phase: pub.phase,
-    can_join: pub.can_join,
+    can_join: pub.can_join && thRequirement.ok,
+    can_join_reason: thRequirement.ok ? null : 'town_hall_requirement_not_met',
+    town_hall_requirement: thRequirement,
     me: me ? {
       trophies: me.trophies,
       gold: me.gold,
@@ -20459,6 +20501,15 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
     return res.status(400).json({ error: 'pre-registration is closed' });
   }
   if (!canJoinTournament(t, now)) return res.status(400).json({ error: phase === 'live' ? 'registration is closed' : 'tournament is not joinable' });
+  const thRequirement = playerMeetsTournamentTownHallRequirement(t, req.player.id);
+  if (!thRequirement.ok) {
+    return res.status(403).json({
+      error: `Town Hall level ${thRequirement.required} required`,
+      reason: 'town_hall_requirement_not_met',
+      current_town_hall_level: thRequirement.current,
+      required_town_hall_level: thRequirement.required,
+    });
+  }
   const needsClashRewardWallet = tournamentRequiresClashRewardWallet(t);
   let rewardWallet = needsClashRewardWallet
     ? null
@@ -21177,6 +21228,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const {
     name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
+    min_town_hall_level,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
@@ -21214,6 +21266,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const sgb = normalizeTournamentBoost(seeker_gold_boost, 1);
   const tb = normalizeTournamentBoost(trophy_boost, 1);
   const freeze = freeze_trophies === undefined ? 1 : (parseBool(freeze_trophies) ? 1 : 0);
+  const minTownHallLevel = Math.max(0, Math.min(20, Math.floor(Number(min_town_hall_level || 0) || 0)));
   let startIso, endIso, registrationOpenIso, registrationCloseIso, dailyPoolEnabledIso;
   try {
     startIso = start_at && typeof start_at === 'string'
@@ -21281,9 +21334,9 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
       points_trophy_weight, points_volume_weight, points_pnl_weight,
       scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
       prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
-      shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
+      shield_hours, freeze_trophies, min_town_hall_level, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     eventKind,
     name.trim(),
@@ -21320,6 +21373,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     parseBool(seeker_only) ? 1 : 0,
     shieldHours,
     freeze,
+    minTownHallLevel,
     prereg,
     registrationOpenIso,
     registrationCloseIso
@@ -21337,6 +21391,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const {
     name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
+    min_town_hall_level,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
@@ -21454,6 +21509,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     freeze_trophies: freeze_trophies !== undefined
       ? (parseBool(freeze_trophies) ? 1 : 0)
       : Number(t.freeze_trophies ?? 1),
+    min_town_hall_level: min_town_hall_level !== undefined
+      ? Math.max(0, Math.min(20, Math.floor(Number(min_town_hall_level || 0) || 0)))
+      : tournamentTownHallRequirement(t),
     sort_by: nextSortBy,
     points_trophy_weight: pointWeights.trophies,
     points_volume_weight: pointWeights.volume,
@@ -21486,7 +21544,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
                             scoring_mode = ?, daily_pool_points = ?, daily_pool_growth_pct = ?, daily_pool_overrides = ?, daily_pool_enabled_at = ?,
                             prize_currency = ?, prize_tiers = ?, mega_config = ?, reward_config = ?, rewards_in_cop = ?, seeker_only = ?,
-                            freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
+                            freeze_trophies = ?, min_town_hall_level = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
   `).run(
     next.event_kind,
@@ -21524,6 +21582,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.rewards_in_cop,
     next.seeker_only,
     next.freeze_trophies,
+    next.min_town_hall_level,
     next.preregistration_enabled,
     next.registration_opens_at,
     next.registration_closes_at,
