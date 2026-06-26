@@ -4,6 +4,7 @@ import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 import { usePlayer } from '../hooks/useGodot';
 import GoldRewardToast from './GoldRewardToast';
+import { GOLD_REWARD_PANEL_TOAST_STYLE } from './goldRewardToastStyles';
 import { useDex } from '../contexts/DexContext';
 import { readEncryptedCredential, writeEncryptedCredential } from '../lib/encryptedCredentialStorage';
 
@@ -503,6 +504,7 @@ function QuestsTab({ markets = [] }) {
           amount={flash.amount}
           reason={flash.reason || 'Quest reward'}
           onClose={() => setFlash(null)}
+          style={GOLD_REWARD_PANEL_TOAST_STYLE}
         />
       )}
       {error && <div style={S.error} onClick={() => setError(null)}>{error}</div>}

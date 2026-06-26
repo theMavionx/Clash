@@ -43,6 +43,7 @@ import { useElfaSignals } from '../hooks/useElfaSignals';
 import FilterPopup from './FilterPopup';
 import TokenIcon from './TokenIcon';
 import GoldRewardToast from './GoldRewardToast';
+import { GOLD_REWARD_PANEL_TOAST_STYLE } from './goldRewardToastStyles';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { setClientActivity } from '../lib/updateCoordinator';
 import { reportClientEvent } from '../lib/clientLogger';
@@ -8514,7 +8515,7 @@ function FuturesPanel() {
             amount={typeof goldEarned === 'number' ? goldEarned : goldEarned.amount}
             reason={typeof goldEarned === 'number' ? 'Trading rewards' : (goldEarned.reason || 'Trading rewards')}
             onClose={() => clearGoldEarned()}
-            style={S.goldToastInPanel}
+            style={GOLD_REWARD_PANEL_TOAST_STYLE}
           />
         )}
       </div>
@@ -8758,18 +8759,6 @@ const S = {
     padding: '6px 12px', borderTop: '3px solid #d4c8b0',
     background: 'linear-gradient(90deg, #e8dfc8 0%, #fdf8e7 50%, #e8dfc8 100%)',
     flexShrink: 0,
-  },
-  goldToastInPanel: {
-    position: 'absolute',
-    left: 10,
-    right: 10,
-    bottom: 34,
-    width: 'auto',
-    maxWidth: 'none',
-    transform: 'none',
-    zIndex: 30,
-    borderRadius: 10,
-    padding: '10px 12px',
   },
   pacificaLogo: { width: 20, height: 20, objectFit: 'contain', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.2))' },
   pacificaText: { fontSize: 10, fontWeight: 700, color: '#a3906a', letterSpacing: '0.05em', textTransform: 'uppercase' },
