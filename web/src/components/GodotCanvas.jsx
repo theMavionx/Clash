@@ -12,6 +12,20 @@ const uiClickSrc = '/audio/UaClick.mp3';
 const LOADING_MUSIC_VOLUME = 0.42;
 const LOADING_MUSIC_FADE_MS = 1600;
 
+function clampMediaVolume(value, fallback = 1) {
+  const numeric = Number(value);
+  const fallbackNumeric = Number(fallback);
+  const safe = Number.isFinite(numeric)
+    ? numeric
+    : (Number.isFinite(fallbackNumeric) ? fallbackNumeric : 1);
+  return Math.max(0, Math.min(1, safe));
+}
+
+function setMediaVolume(audio, value, fallback = 1) {
+  if (!audio) return;
+  audio.volume = clampMediaVolume(value, fallback);
+}
+
 const GODOT_FILES = '/godot'; // Path to exported Godot files
 const GODOT_BUILD_TOKEN = String(
   import.meta.env.VITE_BUILD_ID ||
@@ -146,12 +160,12 @@ function createWebLoadingAudio() {
   const loading = new Audio(loadingMusicSrc);
   loading.loop = true;
   loading.preload = 'auto';
-  loading.volume = LOADING_MUSIC_VOLUME;
+  setMediaVolume(loading, LOADING_MUSIC_VOLUME);
 
   const clickPool = Array.from({ length: 4 }, () => {
     const audio = new Audio(uiClickSrc);
     audio.preload = 'auto';
-    audio.volume = 0.65;
+    setMediaVolume(audio, 0.65);
     return audio;
   });
   let clickIdx = 0;
@@ -168,7 +182,7 @@ function createWebLoadingAudio() {
       cancelAnimationFrame(loadingFadeRaf);
       loadingFadeRaf = null;
     }
-    loading.volume = LOADING_MUSIC_VOLUME;
+    setMediaVolume(loading, LOADING_MUSIC_VOLUME);
     const promise = loading.play();
     if (promise?.catch) {
       promise.catch(() => {
@@ -201,15 +215,15 @@ function createWebLoadingAudio() {
       if (immediate || loading.paused || loading.volume <= 0.001) {
         loading.pause();
         loading.currentTime = 0;
-        loading.volume = LOADING_MUSIC_VOLUME;
+        setMediaVolume(loading, LOADING_MUSIC_VOLUME);
         return;
       }
-      const fromVolume = loading.volume;
+      const fromVolume = clampMediaVolume(loading.volume, 0);
       const startedAt = performance.now();
       const fade = (now) => {
         if (disposed) return;
         const t = Math.min(1, (now - startedAt) / LOADING_MUSIC_FADE_MS);
-        loading.volume = fromVolume * (1 - t);
+        setMediaVolume(loading, fromVolume * (1 - t), 0);
         if (t < 1) {
           loadingFadeRaf = requestAnimationFrame(fade);
           return;
@@ -217,7 +231,7 @@ function createWebLoadingAudio() {
         loadingFadeRaf = null;
         loading.pause();
         loading.currentTime = 0;
-        loading.volume = LOADING_MUSIC_VOLUME;
+        setMediaVolume(loading, LOADING_MUSIC_VOLUME);
       };
       loadingFadeRaf = requestAnimationFrame(fade);
     },
@@ -229,7 +243,7 @@ function createWebLoadingAudio() {
       }
       loading.pause();
       loading.currentTime = 0;
-      loading.volume = LOADING_MUSIC_VOLUME;
+      setMediaVolume(loading, LOADING_MUSIC_VOLUME);
     },
     playClick() {
       if (!canPlaySound()) return;
@@ -300,12 +314,12 @@ function createGodotWebMusic() {
       stopNow();
       return;
     }
-    const fromVolume = audio.volume;
+    const fromVolume = clampMediaVolume(audio.volume, 0);
     const startedAt = performance.now();
     const tick = (now) => {
       if (disposed) return;
       const t = Math.min(1, (now - startedAt) / fadeMs);
-      audio.volume = fromVolume * (1 - t);
+      setMediaVolume(audio, fromVolume * (1 - t), 0);
       if (t < 1) {
         state.fading = requestAnimationFrame(tick);
         return;
@@ -334,7 +348,7 @@ function createGodotWebMusic() {
 
     const audio = state.audio;
     audio.loop = Boolean(wanted.loop);
-    audio.volume = Number.isFinite(wanted.volume) ? wanted.volume : 0.34;
+    setMediaVolume(audio, wanted.volume, 0.34);
     const promise = audio.play();
     if (promise?.catch) {
       promise.catch((err) => {
@@ -390,7 +404,7 @@ function createGodotWebMusic() {
         id: String(payload.id || payload.src || channel),
         src: String(payload.src || ''),
         loop: Boolean(payload.loop),
-        volume: Number(payload.volume),
+        volume: clampMediaVolume(payload.volume, 0.34),
       };
       if (state.fading) {
         cancelAnimationFrame(state.fading);

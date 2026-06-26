@@ -541,3 +541,11 @@ Request:
 > А вот еще увидел что. У меня склад 3 лвл. Всех чуваков можно апгрейдить на 3 лвл Но дракона и демона можно на 4 лвл Не знаю такая ли была задумка но как будто не логично виправ
 >
 > це гравець nea
+
+### UR-2026-06-26-005
+
+Time: 2026-06-26 14:49:18 +03:00
+
+Request:
+
+> Uncaught IndexSizeError: Failed to set the 'volume' property on 'HTMLMediaElement': The volume provided (1.23424) is outside the range [0, 1].
