@@ -6,7 +6,7 @@
 // same paper modal so the visual language is consistent across the game.
 import { memo, useEffect, useState, useMemo } from 'react';
 import { useLuckyRaider, useTournament, useTournamentDailyPoints, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
-import { usePlayer } from '../hooks/useGodot';
+import { useBuildingDefs, usePlayer } from '../hooks/useGodot';
 import { useDex } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
@@ -131,6 +131,38 @@ function shortWallet(wallet) {
   return `${text.slice(0, 6)}...${text.slice(-4)}`;
 }
 
+function playerTownHallLevel(player, buildingDefs) {
+  return Number(
+    buildingDefs?.th_level
+    || player?.town_hall_level
+    || player?.buildings?.town_hall?.level
+    || 0,
+  ) || 0;
+}
+
+function TownHallRequirementBlock({ required, current, blocked = false, compact = false }) {
+  const req = Math.max(0, Math.floor(Number(required || 0) || 0));
+  if (req <= 0) return null;
+  const cur = Math.max(0, Math.floor(Number(current || 0) || 0));
+  const known = cur > 0;
+  const ok = known ? cur >= req : !blocked;
+  const style = {
+    ...S.townHallReq,
+    ...(ok ? S.townHallReqOk : S.townHallReqBlocked),
+    ...(compact ? S.townHallReqCompact : null),
+  };
+  return (
+    <div style={style}>
+      <div style={S.townHallReqTop}>
+        <span style={S.townHallReqTitle}>Town Hall requirement</span>
+        <span style={ok ? S.townHallReqBadgeOk : S.townHallReqBadgeBlocked}>{ok ? 'OK' : 'LOCKED'}</span>
+      </div>
+      <div style={S.townHallReqText}>Requires Town Hall level {fmt(req)}+</div>
+      {known && <div style={S.townHallReqSub}>Your level: {fmt(cur)}</div>}
+    </div>
+  );
+}
+
 function isPointsSort(sortBy) {
   return sortBy === 'points' || sortBy === 'volume_trophies_50_50';
 }
@@ -243,7 +275,7 @@ function rewardPoolLine(pool, fallbackCurrency = 'USD') {
   return [label, top, rewards.join(' + ')].filter(Boolean).join(' В· ');
 }
 
-function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
+function RewardScheduleCard({ schedule, sectorName, currency = 'USD', currentTownHallLevel = 0 }) {
   if (!rewardScheduleHasContent(schedule)) return null;
   const lucky = schedule?.lucky_daily_raider || {};
   const required = (lucky.required_collections || [])
@@ -280,7 +312,12 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD' }) {
       {lucky.enabled && (
         <div style={S.rewardScheduleLucky}>
           <div><strong>{lucky.label || 'Lucky Daily Raider'}</strong>: {luckyTicketRule}, top {fmt(lucky.winner_count || 1)}, max {fmt(lucky.max_tickets)} tickets</div>
-          {Number(lucky.min_town_hall_level || 0) > 0 && <div>Requires Town Hall level {fmt(lucky.min_town_hall_level)}+</div>}
+          <TownHallRequirementBlock
+            required={lucky.min_town_hall_level}
+            current={lucky.town_hall_level || lucky.my_town_hall_level || currentTownHallLevel}
+            blocked={String(lucky.my_reason || '') === 'town_hall_requirement_not_met'}
+            compact
+          />
           {Number(lucky.min_attack_wins || 0) > 0 && <div>Minimum today: {fmt(lucky.min_attack_wins)} winning attacks</div>}
           {lucky.require_nft && <div>Requires {required || 'Dragon or Demon King'}</div>}
           {lucky.my_tickets !== undefined && (
@@ -370,7 +407,7 @@ function luckyReasonText(reason) {
   return key.replace(/_/g, ' ');
 }
 
-function LuckyRaiderPanel({ t, schedule }) {
+function LuckyRaiderPanel({ t, schedule, currentTownHallLevel = 0 }) {
   const lucky = schedule?.lucky_daily_raider || {};
   if (!lucky.enabled) {
     return (
@@ -399,6 +436,8 @@ function LuckyRaiderPanel({ t, schedule }) {
   const myTickets = luckyTicketStats(lucky);
   const myRawOverflow = myStats.rawAttempts > myStats.attempts;
   const myReason = luckyReasonText(lucky.my_reason);
+  const luckyTownHallLevel = Number(lucky.town_hall_level || lucky.my_town_hall_level || currentTownHallLevel || 0) || 0;
+  const blockedByTownHall = String(lucky.my_reason || '') === 'town_hall_requirement_not_met';
   return (
     <>
       <div style={S.luckyHero}>
@@ -433,7 +472,7 @@ function LuckyRaiderPanel({ t, schedule }) {
         {myStats.surrenders > 0 && <span>Your losses include {fmt(myStats.surrenders)} surrender{myStats.surrenders === 1 ? '' : 's'}.</span>}
         {myRawOverflow && <span>Total today: {fmt(myStats.rawAttempts)} attacks / {fmt(myStats.rawWins)} wins. Extra attacks after #{fmt(myStats.limit)} do not add tickets.</span>}
         <span>Draw runs at {lucky.draw_time_utc || '00:05'} UTC.</span>
-        {Number(lucky.min_town_hall_level || 0) > 0 && <span>Requires Town Hall level {fmt(lucky.min_town_hall_level)}+.</span>}
+        <TownHallRequirementBlock required={lucky.min_town_hall_level} current={luckyTownHallLevel} blocked={blockedByTownHall} />
         {lucky.require_nft && <span>Requires Dragon or Demon King NFT.</span>}
         {myReason && <span>Status: {myReason}</span>}
       </div>
@@ -513,6 +552,7 @@ function TournamentPanel({ onClose }) {
   } = useLuckyRaider({ active: tab === 'lucky' });
   const { items: history } = useTournamentHistory({ active: tab === 'history' });
   const player = usePlayer();
+  const { buildingDefs } = useBuildingDefs();
   const { dex } = useDex();
   const [busy, setBusy] = useState(false);
   const [rewardWalletEvm, setRewardWalletEvm] = useState('');
@@ -545,6 +585,7 @@ function TournamentPanel({ onClose }) {
   const canJoin = !isHistory && !!me?.can_join;
   const joinBlockedByTownHall = !isHistory && me?.can_join_reason === 'town_hall_requirement_not_met';
   const joinTownHallRequirement = me?.town_hall_requirement || null;
+  const currentTownHallLevel = Number(joinTownHallRequirement?.current || playerTownHallLevel(player, buildingDefs) || 0) || 0;
   const { board } = useTournamentLeaderboard(t?.id, { active: !!t && tab !== 'lucky', pollMs: isHistory ? 60000 : 10000 });
   const dailyActive = !!t && isDailyPoolTournament(t);
   const { daily } = useTournamentDailyPoints(t?.id, {
@@ -900,6 +941,7 @@ function TournamentPanel({ onClose }) {
               <LuckyRaiderPanel
                 t={t}
                 schedule={luckyMe?.reward_schedule || t.reward_schedule || t.reward_config}
+                currentTownHallLevel={currentTownHallLevel}
               />
             </>
           )}
@@ -963,6 +1005,7 @@ function TournamentPanel({ onClose }) {
                   schedule={activeRewardSchedule.schedule}
                   sectorName={activeRewardSchedule.sectorName}
                   currency={t.prize_currency || 'USD'}
+                  currentTownHallLevel={currentTownHallLevel}
                 />
               )}
 
@@ -1016,9 +1059,11 @@ function TournamentPanel({ onClose }) {
                     {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? (joinBlockedByTownHall ? `TH ${joinTownHallRequirement?.required || t.min_town_hall_level} REQUIRED` : 'REGISTRATION CLOSED') : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
                   </button>
                   {joinBlockedByTownHall && (
-                    <div style={S.rewardHint}>
-                      Requires Town Hall level {fmt(joinTownHallRequirement?.required || t.min_town_hall_level || 0)}. Your level: {fmt(joinTownHallRequirement?.current || 0)}.
-                    </div>
+                    <TownHallRequirementBlock
+                      required={joinTownHallRequirement?.required || t.min_town_hall_level || 0}
+                      current={joinTownHallRequirement?.current || currentTownHallLevel}
+                      blocked
+                    />
                   )}
                 </>
               )}
@@ -1638,6 +1683,65 @@ const S = {
   rewardLabel: { fontSize: 11, fontWeight: 900, color: '#7c5a3a', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
   rewardHelp: { fontSize: 11, fontWeight: 700, color: '#7c5a3a', lineHeight: 1.35, marginBottom: 7 },
   rewardHint: { fontSize: 11, fontWeight: 800, color: '#b45309', textAlign: 'center', marginTop: 6 },
+  townHallReq: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+    border: '3px solid #22c55e',
+    borderRadius: 12,
+    padding: '8px 10px',
+    background: '#ecfdf5',
+    color: '#14532d',
+    fontWeight: 900,
+    lineHeight: 1.25,
+  },
+  townHallReqCompact: {
+    padding: '6px 7px',
+    borderWidth: 2,
+    borderRadius: 8,
+  },
+  townHallReqOk: {
+    background: '#dcfce7',
+    borderColor: '#22c55e',
+    color: '#14532d',
+  },
+  townHallReqBlocked: {
+    background: '#fee2e2',
+    borderColor: '#ef4444',
+    color: '#991b1b',
+  },
+  townHallReqTop: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  townHallReqTitle: {
+    fontSize: 10,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+    letterSpacing: 0.45,
+  },
+  townHallReqBadgeOk: {
+    fontSize: 9,
+    fontWeight: 900,
+    padding: '2px 6px',
+    borderRadius: 999,
+    background: '#16a34a',
+    color: '#fff',
+    whiteSpace: 'nowrap',
+  },
+  townHallReqBadgeBlocked: {
+    fontSize: 9,
+    fontWeight: 900,
+    padding: '2px 6px',
+    borderRadius: 999,
+    background: '#dc2626',
+    color: '#fff',
+    whiteSpace: 'nowrap',
+  },
+  townHallReqText: { fontSize: 12, fontWeight: 900 },
+  townHallReqSub: { fontSize: 10, fontWeight: 800, opacity: 0.82 },
   rewardCurrent: {
     fontSize: 13, fontWeight: 900, color: '#5C3A21',
     background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 9,
