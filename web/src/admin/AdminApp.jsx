@@ -1316,7 +1316,7 @@ function TournamentsPanel({ tournaments, reload }) {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>ID</th><th>Name</th><th>DEX</th><th>Mode</th><th>Phase</th><th>Players</th><th>Window</th><th>Prize</th><th>Actions</th>
+                  <th>ID</th><th>Name</th><th>DEX</th><th>Mode</th><th>Requirements</th><th>Phase</th><th>Players</th><th>Window</th><th>Prize</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1326,6 +1326,15 @@ function TournamentsPanel({ tournaments, reload }) {
                     <td><strong>{t.name}</strong><div className="admin-card-sub">{t.description}</div></td>
                     <td>{t.dex_scope === 'all' ? <span className="admin-badge gold">All DEXes</span> : <DexBadge dex={t.dex} />}</td>
                     <td>{t.event_kind === 'lucky_raider' ? 'Lucky Raider' : (t.mode === 'dex_vs_dex' ? 'DEX vs DEX' : 'Individual')}</td>
+                    <td>
+                      {(() => {
+                        const luckyMinTh = t.event_kind === 'lucky_raider'
+                          ? normalizeRewardConfig(t.reward_config || {}).lucky_daily_raider.min_town_hall_level
+                          : 0;
+                        const minTh = Number(luckyMinTh || t.min_town_hall_level || 0);
+                        return minTh > 0 ? <span className="admin-badge gold">TH {minTh}+</span> : <span className="admin-card-sub">Any TH</span>;
+                      })()}
+                    </td>
                     <td><span className={'admin-badge ' + (t.status === 'active' ? 'green' : t.status === 'draft' ? 'gold' : 'off')}>{t.phase || t.status}</span></td>
                     <td>{t.participants || 0}<div className="admin-card-sub">{t.registered || 0} registered</div></td>
                     <td className="admin-mono">{fmtTime(t.start_at)}<br />{fmtTime(t.end_at)}</td>
@@ -1659,6 +1668,28 @@ function TournamentWizard({ initial, onClose, onSaved }) {
 }
 
 function TournamentScheduleStep({ form, update }) {
+  const isLuckyRaider = form.event_kind === 'lucky_raider';
+  function updateTownHallRequirement(value) {
+    const minTownHallLevel = Math.max(0, Math.min(20, Math.floor(Number(value || 0) || 0)));
+    if (!isLuckyRaider) {
+      update({ min_town_hall_level: minTownHallLevel });
+      return;
+    }
+    const rewardConfig = normalizeRewardConfig(form.reward_config || {});
+    update({
+      min_town_hall_level: minTownHallLevel,
+      reward_config: {
+        ...rewardConfig,
+        lucky_daily_raider: {
+          ...rewardConfig.lucky_daily_raider,
+          min_town_hall_level: minTownHallLevel,
+        },
+      },
+    });
+  }
+  const displayedMinTownHall = isLuckyRaider
+    ? (normalizeRewardConfig(form.reward_config || {}).lucky_daily_raider.min_town_hall_level || form.min_town_hall_level || 0)
+    : (form.min_town_hall_level || 0);
   return (
     <div className="admin-card">
       <div className="admin-card-head"><div><div className="admin-card-title">Schedule and Identity</div><div className="admin-card-sub">Start here because every other choice depends on whether this is a draft, live event, or scheduled campaign.</div></div></div>
@@ -1674,6 +1705,22 @@ function TournamentScheduleStep({ form, update }) {
           <label className="admin-field"><span className="admin-label">Pre-registration</span><select className="admin-select" value={form.preregistration_enabled ? '1' : '0'} onChange={(e) => update({ preregistration_enabled: e.target.value === '1' })}><option value="0">Disabled</option><option value="1">Enabled</option></select></label>
           <DateTimeField label="Registration opens" value={form.registration_opens_at} onChange={(value) => update({ registration_opens_at: value })} />
           <DateTimeField label="Registration closes" value={form.registration_closes_at} onChange={(value) => update({ registration_closes_at: value })} />
+        </div>
+        <div className="admin-card nested-card">
+          <div className="admin-card-head">
+            <div>
+              <div className="admin-card-title">Town Hall Requirement</div>
+              <div className="admin-card-sub">
+                {isLuckyRaider
+                  ? 'Minimum Town Hall level required to receive Daily Lucky Raider tickets.'
+                  : 'Minimum Town Hall level required to register or join this tournament.'}
+              </div>
+            </div>
+          </div>
+          <div className="admin-card-body admin-form-grid three">
+            <NumberField label="Min Town Hall level" value={displayedMinTownHall} onChange={updateTownHallRequirement} />
+            <div className="admin-help">Set 0 to allow every Town Hall level.</div>
+          </div>
         </div>
       </div>
     </div>

@@ -1105,6 +1105,13 @@ function rowClientOrderId(row) {
   return value == null ? '' : String(value);
 }
 
+function rowOrderId(row) {
+  const direct = row?.order_id ?? row?.orderId ?? row?.orderID ?? row?.id;
+  const vec = optionVecValue(row?.order_id);
+  const value = vec ?? direct;
+  return value == null ? '' : String(value);
+}
+
 function rowMarketAddr(row) {
   const raw = row?.market || row?.market_addr || row?.marketAddr || row?.market_address || '';
   const normalized = normalizeAptosAddress(raw);
@@ -1159,6 +1166,18 @@ function findMatchingOpenOrder(openOrders, expected) {
   }) || null;
 }
 
+function findMatchingTradeFill(trades, expected) {
+  const expectedClientId = String(expected?.clientOrderId || '');
+  const expectedOrderId = String(expected?.orderId || '');
+  return (Array.isArray(trades) ? trades : []).find((row) => {
+    const rowClientId = rowClientOrderId(row);
+    const rowOrder = rowOrderId(row);
+    if (expectedClientId && rowClientId && rowClientId === expectedClientId) return true;
+    if (expectedOrderId && rowOrder && rowOrder === expectedOrderId) return true;
+    return false;
+  }) || null;
+}
+
 function summarizePosition(row) {
   if (!row) return null;
   return {
@@ -1192,6 +1211,21 @@ function summarizeOrder(row) {
   };
 }
 
+function summarizeTradeFill(row) {
+  if (!row) return null;
+  const size = Math.abs(Number(row?.size ?? row?.filled_size ?? row?.base_size ?? 0));
+  const price = Number(row?.price ?? row?.fill_price ?? row?.avg_price ?? 0);
+  return {
+    order_id: rowOrderId(row) || null,
+    client_order_id: rowClientOrderId(row) || null,
+    symbol: symbolFromMarket(row),
+    size: Number.isFinite(size) ? size : null,
+    price: Number.isFinite(price) && price > 0 ? price : null,
+    notional_usd: Number.isFinite(size) && Number.isFinite(price) ? size * price : null,
+    market: rowMarketAddr(row) || null,
+  };
+}
+
 function orderEventLooksUnfilledIoc(event) {
   if (!event || String(event.timeInForce || '').toUpperCase() !== 'IOC') return false;
   if (event.origSize == null || event.remainingSize == null) return false;
@@ -1221,20 +1255,31 @@ function orderEventMatchesExpected(event, expected = {}) {
 
 function orderEventHasFill(event) {
   if (!event) return false;
-  try {
-    if (event.sizeDelta != null && BigInt(String(event.sizeDelta)) !== 0n) return true;
-  } catch {
-    // Keep checking other fields.
-  }
+  let hasSizeState = false;
+  let unfilledIoc = false;
   try {
     if (event.origSize != null && event.remainingSize != null) {
+      hasSizeState = true;
       const orig = BigInt(String(event.origSize));
       const remaining = BigInt(String(event.remainingSize));
       if (orig > 0n && remaining < orig) return true;
+      unfilledIoc = orig > 0n
+        && remaining === orig
+        && String(event.timeInForce || '').toUpperCase() === 'IOC';
     }
   } catch {
-    // Keep checking status text.
+    hasSizeState = false;
+    unfilledIoc = false;
   }
+
+  if (unfilledIoc) return false;
+
+  try {
+    if (!hasSizeState && event.sizeDelta != null && BigInt(String(event.sizeDelta)) !== 0n) return true;
+  } catch {
+    // Keep checking other fields.
+  }
+
   const text = `${event.status || ''} ${event.details || ''}`.toLowerCase();
   return /\b(fill|filled|match|matched|execute|executed|partial)\b/.test(text);
 }
@@ -1262,6 +1307,7 @@ function verifyPlacedOrderFromTxEvents(orderEvents = [], expected = {}, isMarket
 
   const unfilledIoc = matching.find(orderEventLooksUnfilledIoc);
   if (unfilledIoc) {
+    if (isMarket && !orderEventLooksRejected(unfilledIoc)) return null;
     return {
       verified: false,
       reason: 'Decibel acknowledged the IOC order transaction, but the order did not fill.',
@@ -1307,6 +1353,7 @@ async function waitForPlacedOrderEffect(options = {}) {
     symbol: options.symbol,
     side: String(options.side || '').toLowerCase(),
     clientOrderId: options.clientOrderId,
+    orderId: options.orderId || options.txResult?.orderId || options.txResult?.order_id,
     reduceOnly: !!options.reduceOnly,
   };
   const isMarket = String(options.orderType || options.order_type || '').toLowerCase() === 'market';
@@ -1314,23 +1361,43 @@ async function waitForPlacedOrderEffect(options = {}) {
   const attempts = Math.max(1, Math.min(12, Number(options.attempts || 6)));
   const delayMs = Math.max(100, Math.min(5000, Number(options.delayMs || 900)));
   const orderEvents = Array.isArray(options.txResult?.orderEvents) ? options.txResult.orderEvents : [];
+  const hasUnfilledIocAck = isMarket && orderEvents.some((event) => (
+    orderEventMatchesExpected(event, expected)
+    && orderEventLooksUnfilledIoc(event)
+    && !orderEventLooksRejected(event)
+  ));
   let lastPositions = [];
   let lastOpenOrders = [];
+  let lastTradeFills = [];
 
   const eventVerification = verifyPlacedOrderFromTxEvents(orderEvents, expected, isMarket);
   if (eventVerification) return eventVerification;
 
   for (let i = 0; i < attempts; i += 1) {
     if (i > 0) await sleep(delayMs);
-    const [positions, openOrders] = await Promise.all([
+    const [positions, openOrders, tradeFills] = await Promise.all([
       fetchAccountPositions(subaccountAddr),
       fetchOpenOrders(subaccountAddr, { limit: 25 }),
+      isMarket ? fetchTradeHistory(subaccountAddr, { limit: 100, sortDir: 'DESC' }) : Promise.resolve([]),
     ]);
     lastPositions = positions;
     lastOpenOrders = openOrders;
+    lastTradeFills = tradeFills;
+
+    if (isMarket) {
+      const tradeFill = findMatchingTradeFill(tradeFills, expected);
+      if (tradeFill) {
+        return {
+          verified: true,
+          effect: 'trade_history_fill',
+          attempts: i + 1,
+          trade_fill: summarizeTradeFill(tradeFill),
+        };
+      }
+    }
 
     const position = findMatchingPosition(positions, expected);
-    if (!reduceOnly && position) {
+    if (!reduceOnly && position && !(hasUnfilledIocAck && expected.clientOrderId)) {
       return {
         verified: true,
         effect: 'position',
@@ -1361,13 +1428,14 @@ async function waitForPlacedOrderEffect(options = {}) {
   return {
     verified: false,
     reason: unfilledIoc
-      ? 'Decibel acknowledged the IOC order transaction, but the order did not fill and no matching position was found.'
+      ? 'Decibel acknowledged the IOC order transaction, but no matching fill was found before timeout.'
       : 'No matching Decibel position or open order was found after transaction confirmation.',
     attempts,
     order_events: orderEvents,
     last_seen: {
       positions: lastPositions.map(summarizePosition).slice(0, 10),
       open_orders: lastOpenOrders.map(summarizeOrder).slice(0, 10),
+      trade_fills: lastTradeFills.map(summarizeTradeFill).slice(0, 10),
     },
   };
 }

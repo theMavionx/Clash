@@ -411,6 +411,14 @@ export function formToTournamentBody(form) {
     : form.dex_scope === 'custom'
       ? (form.eligible_dexes || []).filter((d) => TOURNAMENT_DEXES.includes(d))
       : [form.dex || 'pacifica'];
+  const minTownHallLevel = Math.max(0, Math.floor(Number(form.min_town_hall_level || 0) || 0));
+  const rewardConfig = normalizeRewardConfig(form.reward_config || {});
+  if (form.event_kind === 'lucky_raider') {
+    rewardConfig.lucky_daily_raider.min_town_hall_level = Math.max(
+      Number(rewardConfig.lucky_daily_raider.min_town_hall_level || 0),
+      minTownHallLevel,
+    );
+  }
   return {
     event_kind: form.event_kind === 'lucky_raider' ? 'lucky_raider' : 'standard',
     name: String(form.name || '').trim(),
@@ -434,7 +442,7 @@ export function formToTournamentBody(form) {
     trophy_boost: Number(form.trophy_boost) || 1,
     shield_hours: form.shield_hours === '' || form.shield_hours == null ? null : Number(form.shield_hours),
     freeze_trophies: !!form.freeze_trophies,
-    min_town_hall_level: Math.max(0, Math.floor(Number(form.min_town_hall_level || 0) || 0)),
+    min_town_hall_level: minTownHallLevel,
     seeker_only: !!form.seeker_only,
     sort_by: form.sort_by || 'points',
     scoring_mode: form.scoring_mode || 'live',
@@ -448,7 +456,7 @@ export function formToTournamentBody(form) {
     prize_currency: String(form.prize_currency || 'USD').toUpperCase(),
     prize_tiers: form.event_kind === 'lucky_raider' ? [] : normalizePrizeTiers(form.prize_tiers || []),
     mega_config: form.event_kind === 'lucky_raider' ? defaultMegaConfig(false) : normalizeMegaConfig(form.mega_config || {}),
-    reward_config: normalizeRewardConfig(form.reward_config || {}),
+    reward_config: rewardConfig,
     rewards_in_cop: !!form.rewards_in_cop,
     status: form.status || 'active',
   };

@@ -604,6 +604,11 @@ export function useLighter() {
     connected: !!credentials?.accountIndex,
     setupVerified: credentials?.accountIndex ? credentials.integratorApproved === true : false,
     lighterNeedsIntegratorApproval: !!(credentials?.accountIndex && credentials.integratorApproved !== true),
+    lighterCredentials: credentials ? {
+      accountIndex: credentials.accountIndex,
+      apiKeyIndex: credentials.apiKeyIndex,
+      integratorApproved: credentials.integratorApproved === true,
+    } : null,
     loading,
     error,
     clearError: () => setError(''),

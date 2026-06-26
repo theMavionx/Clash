@@ -258,6 +258,170 @@ function createWebLoadingAudio() {
   };
 }
 
+function createGodotWebMusic() {
+  if (typeof Audio === 'undefined') {
+    return {
+      handle: () => {},
+      dispose: () => {},
+    };
+  }
+
+  const channels = new Map();
+  let enabled = readSoundEnabled();
+  let disposed = false;
+
+  const getChannel = (name) => {
+    const key = String(name || 'main');
+    if (!channels.has(key)) {
+      channels.set(key, {
+        audio: null,
+        wanted: null,
+        fading: null,
+      });
+    }
+    return channels.get(key);
+  };
+
+  const stopChannel = (name, fadeMs = 500) => {
+    const state = getChannel(name);
+    state.wanted = null;
+    if (state.fading) {
+      cancelAnimationFrame(state.fading);
+      state.fading = null;
+    }
+    const audio = state.audio;
+    if (!audio) return;
+    const stopNow = () => {
+      audio.pause();
+      audio.currentTime = 0;
+      state.audio = null;
+    };
+    if (!fadeMs || audio.paused || audio.volume <= 0.001) {
+      stopNow();
+      return;
+    }
+    const fromVolume = audio.volume;
+    const startedAt = performance.now();
+    const tick = (now) => {
+      if (disposed) return;
+      const t = Math.min(1, (now - startedAt) / fadeMs);
+      audio.volume = fromVolume * (1 - t);
+      if (t < 1) {
+        state.fading = requestAnimationFrame(tick);
+        return;
+      }
+      state.fading = null;
+      stopNow();
+    };
+    state.fading = requestAnimationFrame(tick);
+  };
+
+  const tryPlay = (state) => {
+    if (disposed || !enabled || !readSoundEnabled() || !state?.wanted) return;
+    const wanted = state.wanted;
+    if (!wanted.src) return;
+
+    if (!state.audio || state.audio.dataset?.musicId !== wanted.id || state.audio.src !== new URL(wanted.src, window.location.href).href) {
+      if (state.audio) {
+        state.audio.pause();
+        state.audio.src = '';
+      }
+      const audio = new Audio(wanted.src);
+      audio.preload = 'none';
+      audio.dataset.musicId = wanted.id || '';
+      state.audio = audio;
+    }
+
+    const audio = state.audio;
+    audio.loop = Boolean(wanted.loop);
+    audio.volume = Number.isFinite(wanted.volume) ? wanted.volume : 0.34;
+    const promise = audio.play();
+    if (promise?.catch) {
+      promise.catch((err) => {
+        reportClientEvent('godot.web_music_play_blocked', {
+          channel: wanted.channel,
+          id: wanted.id,
+          src: wanted.src,
+          message: err?.message || String(err || ''),
+          name: err?.name || null,
+        }, {
+          level: 'warn',
+          source: 'godot.audio',
+          message: `Web music play blocked: ${wanted.id || wanted.src}`,
+        });
+      });
+    }
+  };
+
+  const retryWanted = () => {
+    if (disposed || !enabled || !readSoundEnabled()) return;
+    for (const state of channels.values()) tryPlay(state);
+  };
+
+  const handle = (payload = {}) => {
+    if (disposed || !payload || typeof payload !== 'object') return;
+    const action = String(payload.action || '');
+    const channel = String(payload.channel || 'main');
+
+    if (action === 'set_enabled') {
+      enabled = Boolean(payload.enabled);
+      if (!enabled || !readSoundEnabled()) {
+        for (const key of channels.keys()) stopChannel(key, 120);
+        return;
+      }
+      retryWanted();
+      return;
+    }
+
+    if (action === 'stop') {
+      stopChannel(channel, Number(payload.fade_ms || 500));
+      return;
+    }
+
+    if (action === 'retry') {
+      retryWanted();
+      return;
+    }
+
+    if (action === 'play') {
+      const state = getChannel(channel);
+      state.wanted = {
+        channel,
+        id: String(payload.id || payload.src || channel),
+        src: String(payload.src || ''),
+        loop: Boolean(payload.loop),
+        volume: Number(payload.volume),
+      };
+      if (state.fading) {
+        cancelAnimationFrame(state.fading);
+        state.fading = null;
+      }
+      tryPlay(state);
+    }
+  };
+
+  const onGesture = () => retryWanted();
+  window.addEventListener('pointerdown', onGesture, { capture: true });
+  window.addEventListener('keydown', onGesture, { capture: true });
+
+  return {
+    handle,
+    dispose() {
+      disposed = true;
+      window.removeEventListener('pointerdown', onGesture, { capture: true });
+      window.removeEventListener('keydown', onGesture, { capture: true });
+      for (const state of channels.values()) {
+        if (state.fading) cancelAnimationFrame(state.fading);
+        if (state.audio) {
+          state.audio.pause();
+          state.audio.src = '';
+        }
+      }
+      channels.clear();
+    },
+  };
+}
+
 function shouldPlayWebClick(target) {
   if (!(target instanceof Element)) return false;
   if (target.closest('[data-no-web-click-sound="true"]')) return false;
@@ -972,13 +1136,21 @@ function GodotCanvas({ onEngineReady }) {
     if (loadedRef.current) return;
     loadedRef.current = true;
     const webAudio = createWebLoadingAudio();
+    const webMusic = createGodotWebMusic();
+    const previousGodotMusic = window.clashGodotMusic;
     webAudioRef.current = webAudio;
+    window.clashGodotMusic = webMusic.handle;
     webAudio.startLoading();
     lastProgressRef.current = { value: 0, time: Date.now() };
 
     if (isCrawlerUserAgent()) {
       webAudio.stopLoading(true);
       webAudio.dispose();
+      webMusic.dispose();
+      if (window.clashGodotMusic === webMusic.handle) {
+        if (previousGodotMusic) window.clashGodotMusic = previousGodotMusic;
+        else window.clashGodotMusic = null;
+      }
       if (webAudioRef.current === webAudio) webAudioRef.current = null;
       setGodotSkipped(true);
       setIsLoaded(true);
@@ -1593,8 +1765,13 @@ function GodotCanvas({ onEngineReady }) {
       if (loadingClockId) clearInterval(loadingClockId);
       if (window.godotLoadingProgress) window.godotLoadingProgress = null;
       if (window.godotBuildingsLoaded) window.godotBuildingsLoaded = null;
+      if (window.clashGodotMusic === webMusic.handle) {
+        if (previousGodotMusic) window.clashGodotMusic = previousGodotMusic;
+        else window.clashGodotMusic = null;
+      }
       if (restoreGodotFetch) restoreGodotFetch();
       webAudio.dispose();
+      webMusic.dispose();
       if (webAudioRef.current === webAudio) webAudioRef.current = null;
       try { engine?.requestQuit?.(); } catch { /* best-effort cleanup */ }
     };

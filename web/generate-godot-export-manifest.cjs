@@ -13,6 +13,20 @@ const scanExts = new Set(['.gd', '.tscn', '.tres', '.gdshader']);
 const sceneExts = new Set(['.glb', '.gltf', '.fbx']);
 const textureExts = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const sourceRefPattern = /["'](res:\/\/[^"']+)["']/g;
+// Long music is played by React/HTMLAudio on web. Keeping these tracks in the
+// Godot web export manifest makes some browsers decode large audio buffers
+// during startup, which can stall the loader for minutes on memory-constrained
+// Brave/Chrome sessions.
+const webHtmlAudioResources = new Set([
+  'res://Musik/base/loading_the_game.mp3',
+  'res://Musik/base/base_theme.mp3',
+  'res://Musik/base/Abient.mp3',
+  'res://Musik/fight/comfort_before_attack.ogg',
+  'res://Musik/fight/fight_1.mp3',
+  'res://Musik/fight/fight_2.wav',
+  'res://Musik/fight/result.mp3',
+  'res://Musik/demon_king/demon_king_theme.mp3',
+]);
 // Roots where every script must be force-included regardless of whether the
 // scanner saw it referenced as a string. Required because GDScript resolves
 // `class_name`, `extends Foo`, and `Foo.new()` *without* a `res://` string,
@@ -197,6 +211,7 @@ for (const file of files) {
     if (resPath.startsWith('res://.godot/')) continue;
     if (resPath.startsWith('res://addons/godot_mcp/')) continue;
     for (const expanded of expandPattern(resPath)) {
+      if (webHtmlAudioResources.has(expanded)) continue;
       if (existsAsResource(expanded)) refs.add(expanded);
     }
   }

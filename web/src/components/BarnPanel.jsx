@@ -320,6 +320,18 @@ function nftBackedTroopConfig(name) {
   return NFT_BACKED_TROOPS[name] || null;
 }
 
+function upgradeStatusMatchesTroop(status, nftTroopConfig) {
+  if (!status || !nftTroopConfig?.serverType) return false;
+  const rawType = String(status.troop_type || status.troopType || '').trim().toLowerCase().replace(/[\s-]/g, '_');
+  return rawType === nftTroopConfig.serverType;
+}
+
+function positiveIntOrNull(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.trunc(n);
+}
+
 function clampLevel(value, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n)) return min;
@@ -553,16 +565,36 @@ function BarnPanel({ building, onClose }) {
   const isNftBackedTroop = !!currentNftTroop;
   const isDemonKingNftTroop = currentNftTroop?.collection === 'demonking' || currentNftTroop?.collection === 'demon_king';
   const isRarityNftTroop = isDemonKingNftTroop || currentNftTroop?.collection === 'dragon';
+  const authoritativeNftStatus = upgradeStatusMatchesTroop(demonKingStatus, currentNftTroop)
+    ? demonKingStatus
+    : null;
   const selectedDemonNft = isNftBackedTroop
     ? demonKingNfts.find((token) => nftBackedShipEntry(currentTroopName, token) === selectedDemonKey) || demonKingNfts[0] || null
     : null;
   const selectedNftRarity = normalizeNftRarity(selectedDemonNft?.rarity || 'common');
-  const displayLvl = lvl;
+  const statusCurrentLevel = positiveIntOrNull(authoritativeNftStatus?.current_level ?? authoritativeNftStatus?.currentLevel);
+  const displayLvl = statusCurrentLevel ? clampLevel(statusCurrentLevel, 1, troopMaxLevel) : lvl;
   const isMax = displayLvl >= troopMaxLevel;
-  const barnLevel = Math.max(1, Number(building?.level || 1));
-  const nextTroopLevel = isMax ? null : displayLvl + 1;
-  const requiredBarnLevel = nextTroopLevel ? requiredBarnLevelForTroopLevel(nextTroopLevel) : null;
-  const barnReadyForNextLevel = !nextTroopLevel || barnLevel >= requiredBarnLevel;
+  const localBarnLevel = Math.max(1, Number(building?.level || 1));
+  const statusBarnLevel = positiveIntOrNull(authoritativeNftStatus?.current_barn_level ?? authoritativeNftStatus?.currentBarnLevel);
+  const barnLevel = statusBarnLevel || localBarnLevel;
+  const hasStatusNextLevel = !!authoritativeNftStatus && (
+    Object.prototype.hasOwnProperty.call(authoritativeNftStatus, 'next_level')
+    || Object.prototype.hasOwnProperty.call(authoritativeNftStatus, 'nextLevel')
+  );
+  const statusNextLevel = hasStatusNextLevel
+    ? positiveIntOrNull(authoritativeNftStatus.next_level ?? authoritativeNftStatus.nextLevel)
+    : null;
+  const nextTroopLevel = isMax ? null : (hasStatusNextLevel ? statusNextLevel : displayLvl + 1);
+  const statusRequiredBarnLevel = positiveIntOrNull(authoritativeNftStatus?.required_barn_level ?? authoritativeNftStatus?.requiredBarnLevel);
+  const requiredBarnLevel = nextTroopLevel
+    ? (statusRequiredBarnLevel || requiredBarnLevelForTroopLevel(nextTroopLevel))
+    : null;
+  const barnReadyForNextLevel = !nextTroopLevel || (
+    typeof authoritativeNftStatus?.barn_ready === 'boolean'
+      ? authoritativeNftStatus.barn_ready
+      : barnLevel >= requiredBarnLevel
+  );
   // costs key = current level (cost to upgrade FROM that level)
   const nextCost = !isMax && tdef?.costs?.[String(displayLvl)];
   const stats = getTroopStats(currentTroopName, displayLvl, troopLevels, selectedNftRarity);
@@ -752,7 +784,7 @@ function BarnPanel({ building, onClose }) {
                 ? `Upgrade Barn to Lv ${requiredBarnLevel}`
                 : isNftBackedTroop
                 ? (selectedDemonNft ? `Upgrade ${currentNftTroop.label} to Lv` : `Get ${currentNftTroop.label} NFT`)
-                : 'Upgrade to Lv'} {!barnReadyForNextLevel || (isNftBackedTroop && !selectedDemonNft) ? '' : displayLvl + 1}
+                : 'Upgrade to Lv'} {!barnReadyForNextLevel || (isNftBackedTroop && !selectedDemonNft) ? '' : nextTroopLevel}
             </button>
           </div>
         )}

@@ -28,6 +28,19 @@ const BASE_AMBIENT_VOLUME_DB := MUSIC_VOLUME_DB - 6.0
 const SFX_VOLUME_DB := -3.0
 const FADE_SECONDS := 1.25
 const SILENT_VOLUME_DB := -45.0
+const WEB_LOADING_TRACK := "/audio/loading_the_game.mp3"
+const WEB_BASE_TRACK := "/audio/base_theme.mp3"
+const WEB_BASE_AMBIENT_TRACK := "/audio/Abient.mp3"
+const WEB_PRE_ATTACK_TRACK := "/audio/comfort_before_attack.ogg"
+const WEB_FIGHT_TRACKS := [
+	"/audio/fight_1.mp3",
+]
+const WEB_RESULT_TRACK := "/audio/result.mp3"
+const WEB_MAIN_MUSIC_VOLUME := 0.34
+const WEB_AMBIENT_VOLUME := 0.16
+const WEB_PRE_ATTACK_VOLUME := 0.26
+const WEB_FIGHT_VOLUME := 0.36
+const WEB_RESULT_VOLUME := 0.34
 
 var _music_players: Array[AudioStreamPlayer] = []
 var _active_music_player_idx: int = 0
@@ -67,7 +80,10 @@ func _ready() -> void:
 		player.volume_db = SFX_VOLUME_DB
 		add_child(player)
 		_sfx_players.append(player)
-	play_loading()
+	if OS.has_feature("web"):
+		_sync_web_sound_enabled()
+	else:
+		play_loading()
 	WebLoadLogger.report("autoload_audio_ready_done")
 
 
@@ -92,6 +108,11 @@ func _exit_tree() -> void:
 func play_loading() -> void:
 	if not _music_enabled:
 		return
+	if OS.has_feature("web"):
+		_current_state = "loading"
+		_current_track_path = LOADING_TRACK
+		_current_track_loop = true
+		return
 	_stop_base_ambient()
 	_play_state("loading", LOADING_TRACK, false)
 
@@ -99,12 +120,22 @@ func play_loading() -> void:
 func play_base() -> void:
 	if not _music_enabled:
 		return
+	if OS.has_feature("web"):
+		_set_current_music_state("base", BASE_TRACK, true)
+		_play_web_music("main", "base", WEB_BASE_TRACK, true, WEB_MAIN_MUSIC_VOLUME)
+		_play_web_music("ambient", "base_ambient", WEB_BASE_AMBIENT_TRACK, true, WEB_AMBIENT_VOLUME)
+		return
 	_play_state("base", BASE_TRACK, true)
 	_play_base_ambient()
 
 
 func play_pre_attack() -> void:
 	if not _music_enabled:
+		return
+	if OS.has_feature("web"):
+		_set_current_music_state("pre_attack", PRE_ATTACK_TRACK, true)
+		_stop_web_music("ambient")
+		_play_web_music("main", "pre_attack", WEB_PRE_ATTACK_TRACK, true, WEB_PRE_ATTACK_VOLUME)
 		return
 	_stop_base_ambient()
 	_play_state("pre_attack", PRE_ATTACK_TRACK, true)
@@ -115,6 +146,14 @@ func play_fight() -> void:
 		return
 	if _current_state == "fight":
 		return
+	if OS.has_feature("web"):
+		_stop_web_music("ambient")
+		var web_fight_track := _pick_web_fight_track()
+		if web_fight_track == "":
+			return
+		_set_current_music_state("fight", FIGHT_TRACKS[0] if not FIGHT_TRACKS.is_empty() else "", true)
+		_play_web_music("main", "fight", web_fight_track, true, WEB_FIGHT_VOLUME)
+		return
 	_stop_base_ambient()
 	var fight_track := _pick_fight_track()
 	if fight_track == "":
@@ -124,6 +163,11 @@ func play_fight() -> void:
 
 func play_result() -> void:
 	if not _music_enabled:
+		return
+	if OS.has_feature("web"):
+		_set_current_music_state("result", RESULT_TRACK, false)
+		_stop_web_music("ambient")
+		_play_web_music("main", "result", WEB_RESULT_TRACK, false, WEB_RESULT_VOLUME)
 		return
 	_stop_base_ambient()
 	_play_state("result", RESULT_TRACK, false)
@@ -140,6 +184,7 @@ func set_music_enabled(enabled: bool) -> void:
 		stop_music()
 	else:
 		_apply_master_mute()
+		_sync_web_sound_enabled()
 	if _music_enabled and _current_state == "":
 		play_base()
 	elif _music_enabled:
@@ -153,6 +198,7 @@ func is_music_enabled() -> bool:
 func set_sound_enabled(enabled: bool) -> void:
 	_sound_enabled = enabled
 	_apply_master_mute()
+	_sync_web_sound_enabled()
 	if _sound_enabled and _music_enabled:
 		_restart_current_music()
 
@@ -207,6 +253,10 @@ func stop_music() -> void:
 	_current_state = ""
 	_current_track_path = ""
 	_current_track_loop = false
+	if OS.has_feature("web"):
+		_stop_web_music("main")
+		_stop_web_music("ambient")
+		return
 	if _fade_tween and _fade_tween.is_valid():
 		_fade_tween.kill()
 	_fade_tween = create_tween()
@@ -232,9 +282,7 @@ func _play_state(state: String, path: String, loop: bool) -> void:
 		push_warning("AudioManager: missing track %s" % path)
 		return
 	_set_stream_loop(stream, loop)
-	_current_state = state
-	_current_track_path = path
-	_current_track_loop = loop
+	_set_current_music_state(state, path, loop)
 	_fade_to_stream(stream)
 
 
@@ -243,6 +291,13 @@ func _pick_fight_track() -> String:
 		push_warning("AudioManager: no fight tracks configured")
 		return ""
 	return FIGHT_TRACKS.pick_random()
+
+
+func _pick_web_fight_track() -> String:
+	if WEB_FIGHT_TRACKS.is_empty():
+		push_warning("AudioManager: no web fight tracks configured")
+		return ""
+	return WEB_FIGHT_TRACKS.pick_random()
 
 
 func _play_base_ambient() -> void:
@@ -350,6 +405,10 @@ func _wake_music_after_user_gesture() -> void:
 	if not _music_enabled or not _sound_enabled:
 		return
 	_apply_master_mute()
+	if OS.has_feature("web"):
+		_sync_web_sound_enabled()
+		_retry_web_music()
+		return
 	var active_player := _get_active_music_player()
 	if active_player == null or active_player.stream == null or not active_player.playing:
 		_restart_current_music()
@@ -357,6 +416,21 @@ func _wake_music_after_user_gesture() -> void:
 
 func _restart_current_music() -> void:
 	if _current_track_path == "":
+		return
+	if OS.has_feature("web"):
+		match _current_state:
+			"base":
+				_play_web_music("main", "base", WEB_BASE_TRACK, true, WEB_MAIN_MUSIC_VOLUME)
+				_play_web_music("ambient", "base_ambient", WEB_BASE_AMBIENT_TRACK, true, WEB_AMBIENT_VOLUME)
+			"pre_attack":
+				_stop_web_music("ambient")
+				_play_web_music("main", "pre_attack", WEB_PRE_ATTACK_TRACK, true, WEB_PRE_ATTACK_VOLUME)
+			"fight":
+				_stop_web_music("ambient")
+				_play_web_music("main", "fight", WEB_FIGHT_TRACKS[0] if not WEB_FIGHT_TRACKS.is_empty() else "", true, WEB_FIGHT_VOLUME)
+			"result":
+				_stop_web_music("ambient")
+				_play_web_music("main", "result", WEB_RESULT_TRACK, false, WEB_RESULT_VOLUME)
 		return
 	var stream: AudioStream = load(_current_track_path) as AudioStream
 	if stream == null:
@@ -389,3 +463,52 @@ func _set_stream_loop(stream: AudioStream, loop: bool) -> void:
 		stream.loop = loop
 	elif stream is AudioStreamWAV:
 		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD if loop else AudioStreamWAV.LOOP_DISABLED
+
+
+func _set_current_music_state(state: String, path: String, loop: bool) -> void:
+	_current_state = state
+	_current_track_path = path
+	_current_track_loop = loop
+
+
+func _play_web_music(channel: String, music_id: String, src: String, loop: bool, volume: float) -> void:
+	if not OS.has_feature("web") or src == "":
+		return
+	var payload := {
+		"action": "play",
+		"channel": channel,
+		"id": music_id,
+		"src": src,
+		"loop": loop,
+		"volume": volume,
+	}
+	_eval_web_music(payload)
+
+
+func _stop_web_music(channel: String) -> void:
+	if not OS.has_feature("web"):
+		return
+	_eval_web_music({
+		"action": "stop",
+		"channel": channel,
+	})
+
+
+func _retry_web_music() -> void:
+	if not OS.has_feature("web"):
+		return
+	_eval_web_music({"action": "retry"})
+
+
+func _sync_web_sound_enabled() -> void:
+	if not OS.has_feature("web"):
+		return
+	_eval_web_music({
+		"action": "set_enabled",
+		"enabled": _music_enabled and _sound_enabled,
+	})
+
+
+func _eval_web_music(payload: Dictionary) -> void:
+	var json := JSON.stringify(payload)
+	JavaScriptBridge.eval("if(window.clashGodotMusic) window.clashGodotMusic(%s);" % json)

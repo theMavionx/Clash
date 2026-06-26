@@ -11,7 +11,7 @@ function GoldRewardToast({ amount, reason = 'Trading rewards', onClose, style })
       <span style={S.amount}>+{value.toLocaleString()} Gold</span>
       <span style={S.reason}>{reason}</span>
       {onClose && (
-        <button style={S.closeBtn} onClick={onClose} aria-label="Close gold reward">
+        <button type="button" style={S.closeBtn} onClick={onClose} aria-label="Close gold reward">
           x
         </button>
       )}
@@ -36,6 +36,7 @@ const S = {
     display: 'flex',
     alignItems: 'center',
     gap: 10,
+    minWidth: 0,
     boxShadow: '0 6px 20px rgba(255,160,0,0.4)',
     animation: 'fadeIn 0.3s ease-out',
     pointerEvents: 'auto',
@@ -54,6 +55,7 @@ const S = {
     color: '#5C3A21',
     textShadow: '0 1px 0 rgba(255,255,255,0.5)',
     whiteSpace: 'nowrap',
+    flexShrink: 0,
   },
   reason: {
     fontSize: 11,
@@ -79,6 +81,7 @@ const S = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
     marginLeft: 4,
     padding: 0,
     lineHeight: 1,

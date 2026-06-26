@@ -1752,6 +1752,7 @@ function recordCollectionMintRarities(collection, confirmResult) {
       rarity,
       legacyLevel: 1,
       ownerWallet: confirmResult.buyer || null,
+      playerId: confirmResult.playerId || null,
       source: 'mint-confirm',
       revealSeed: seed,
       snapshotHash: entropyHash,
@@ -5007,8 +5008,13 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
       tx: result.tx || txHash,
       buyer: result.buyer || req.body?.buyer || req.body?.wallet || null,
     };
-    const rarities = result.alreadyConfirmed ? [] : recordCollectionMintRarities(collection, resultForRarity);
-    const playerForMint = playerFromOptionalToken(req);
+    const playerForMint = playerFromOptionalToken(req)
+      || (resultForRarity.buyer ? getUnifiedPlayerByWalletAnyForm(resultForRarity.buyer) : null);
+    const resultForRarityWithPlayer = {
+      ...resultForRarity,
+      playerId: playerForMint?.id || null,
+    };
+    const rarities = result.alreadyConfirmed ? [] : recordCollectionMintRarities(collection, resultForRarityWithPlayer);
     const playerInventoryTokens = bindMintedCollectionNftsToPlayer({
       req,
       collection,
@@ -5055,6 +5061,7 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
       tokenIds: resultTokenIds.length ? resultTokenIds : rarityTokenIds,
       rarities,
       playerInventoryTokens,
+      playerBound: !!playerForMint?.id,
       solanaRaritySync,
       solanaRaritySyncOk: solanaRaritySync.every((row) => !row?.error),
     });

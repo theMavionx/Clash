@@ -1763,10 +1763,11 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
       symbol: orderPayload.symbol,
       side,
       clientOrderId: orderPayload.clientOrderId,
+      orderId: result?.orderId || result?.order_id,
       orderType,
       reduceOnly: !!orderPayload.isReduceOnly,
       txResult: result,
-      attempts: 6,
+      attempts: orderType === 'market' ? 10 : 6,
       delayMs: 900,
     });
     if (!verification.verified) {

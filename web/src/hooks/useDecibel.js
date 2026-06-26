@@ -1763,6 +1763,15 @@ export function useDecibel() {
 
       const txHash = assertWriteSuccess(result, 'Market order');
       const dedup = `decibel:open:${address.toLowerCase()}:${market.market_name}:${result?.orderId || Date.now()}`;
+      const requestedNotional = collateral * lev;
+      const filledNotional = Number(result?.verification?.trade_fill?.notional_usd);
+      const hasFilledNotional = Number.isFinite(filledNotional) && filledNotional > 0;
+      const formatUsd = (value) => `$${Number(value).toFixed(Number(value) >= 100 ? 0 : 2)}`;
+      const fillInfo = hasFilledNotional
+        ? Math.abs(filledNotional - requestedNotional) / Math.max(requestedNotional, 1) > 0.03
+          ? `${(isBuy ? 'LONG' : 'SHORT')} ${symbol} filled ${formatUsd(filledNotional)} of ~${formatUsd(requestedNotional)}`
+          : `${(isBuy ? 'LONG' : 'SHORT')} ${symbol} opened ${formatUsd(filledNotional)}`
+        : null;
       void reportTrade({
         tx_hash: txHash, symbol, side: isBuy ? 'long' : 'short',
         amount: collateral, leverage: lev, order_type: 'market',
@@ -1773,7 +1782,7 @@ export function useDecibel() {
       fetchAccount({ force: true });
       fetchBalance();
       scheduleClaim();
-      return { tx_hash: txHash, status: 'submitted' };
+      return { tx_hash: txHash, status: 'submitted', info: fillInfo || undefined, filled_notional_usd: hasFilledNotional ? filledNotional : undefined };
     } catch (e) {
       const msg = decodeTradeError(e, 'Trade failed');
       setError(msg.slice(0, 300));

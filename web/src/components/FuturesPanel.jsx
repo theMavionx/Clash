@@ -2192,7 +2192,7 @@ function FuturesPanel() {
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
     activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, hotstuffSetupStatus,
-    bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources, lighterNeedsIntegratorApproval, detectAccount: detectLighterAccount,
+    bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources, lighterNeedsIntegratorApproval, lighterCredentials, detectAccount: detectLighterAccount,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
   // The trading hook owns the active signer. Do not treat a detected adapter
@@ -2507,6 +2507,7 @@ function FuturesPanel() {
   const [lighterApiKeyIndexInput, setLighterApiKeyIndexInput] = useState('');
   const [lighterApiPrivateKeyInput, setLighterApiPrivateKeyInput] = useState('');
   const [lighterAccountDetectStatus, setLighterAccountDetectStatus] = useState('');
+  const [lighterCredentialFormOpen, setLighterCredentialFormOpen] = useState(false);
   const [hibachiApiKeyInput, setHibachiApiKeyInput] = useState('');
   const [hibachiAccountIdInput, setHibachiAccountIdInput] = useState('');
   const [hibachiPrivateKeyInput, setHibachiPrivateKeyInput] = useState('');
@@ -4591,7 +4592,8 @@ function FuturesPanel() {
   // ==================== LIGHTER API KEY GATE ====================
   if (dex === 'lighter' && hasWallet && setupVerified !== true) {
     const isRunning = referralLinking || loading;
-    const lighterCanSave = !lighterNeedsIntegratorApproval
+    const showLighterCredentialForm = !lighterNeedsIntegratorApproval || lighterCredentialFormOpen;
+    const lighterCanSave = showLighterCredentialForm
       && lighterAccountIndexInput.trim().length > 0
       && lighterApiKeyIndexInput.trim().length > 0
       && lighterApiPrivateKeyInput.trim().length > 0
@@ -4640,7 +4642,7 @@ function FuturesPanel() {
                   </span>
                 </li>
               </ol>
-              {!lighterNeedsIntegratorApproval && (
+              {showLighterCredentialForm && (
               <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 12, padding: 12}}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
                   <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Your Lighter account index</span>
@@ -4691,26 +4693,32 @@ function FuturesPanel() {
                     type="button"
                     style={{ ...hlGateStyles.secondaryBtn, padding: '9px 12px', fontSize: 12, alignSelf: 'stretch' }}
                     disabled={isRunning}
-                    onClick={async () => {
-                      if (typeof disconnect !== 'function') return;
-                      setReferralLinking(true);
-                      try {
-                        await disconnect();
-                        setLighterAccountIndexInput('');
-                        setLighterApiKeyIndexInput('');
-                        setLighterApiPrivateKeyInput('');
-                        setLighterAccountDetectStatus('');
-                        setLocalAlert('');
-                        setSuccessMsg('Saved Lighter API key removed. Paste the correct API key again.');
-                      } catch (e) {
-                        setLocalAlert(e?.message || 'Could not remove saved Lighter API key.');
-                      } finally {
-                        setReferralLinking(false);
-                      }
+                    onClick={() => {
+                      setLighterCredentialFormOpen(true);
+                      setLighterAccountIndexInput(String(lighterCredentials?.accountIndex ?? lighterAccountIndexInput ?? ''));
+                      setLighterApiKeyIndexInput(String(lighterCredentials?.apiKeyIndex ?? lighterApiKeyIndexInput ?? ''));
+                      setLighterApiPrivateKeyInput('');
+                      setLighterAccountDetectStatus('');
+                      setLocalAlert('');
+                      setSuccessMsg('Paste the replacement Lighter API private key and save it.');
                     }}
                   >
-                    Wrong key? Re-enter API key
+                    Change API key
                   </button>
+                  {lighterCredentialFormOpen && (
+                    <button
+                      type="button"
+                      style={{ ...hlGateStyles.secondaryBtn, padding: '9px 12px', fontSize: 12, alignSelf: 'stretch', background: '#fffaf0' }}
+                      disabled={isRunning}
+                      onClick={() => {
+                        setLighterCredentialFormOpen(false);
+                        setLighterApiPrivateKeyInput('');
+                        setLocalAlert('');
+                      }}
+                    >
+                      Cancel key change
+                    </button>
+                  )}
                 </div>
               )}
               {lighterNeedsIntegratorApproval && (
@@ -4733,7 +4741,7 @@ function FuturesPanel() {
                   {isRunning ? 'Approving...' : 'Approve Clash integrator ->'}
                 </button>
               )}
-              {!lighterNeedsIntegratorApproval && (
+              {showLighterCredentialForm && (
               <button
                 style={{ ...hlGateStyles.primaryBtn, ...(!lighterCanSave ? hlGateStyles.primaryBtnBusy : null) }}
                 disabled={!lighterCanSave}
@@ -4749,6 +4757,7 @@ function FuturesPanel() {
                     if (res?.error) setLocalAlert(res.error);
                     else {
                       setLighterApiPrivateKeyInput('');
+                      setLighterCredentialFormOpen(false);
                       setSuccessMsg('Lighter API key verified and saved in this browser.');
                       if (typeof approveIntegrator === 'function') {
                         try {
@@ -7243,6 +7252,51 @@ function FuturesPanel() {
           </div>
         )}
 
+        {dex === 'lighter' && lighterCredentials?.accountIndex != null && (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={{...S.label, color: '#0284C7'}}>Lighter API</span>
+              <button
+                style={{
+                  ...S.btnSmall,
+                  padding: '6px 10px',
+                  fontSize: 10,
+                  background: '#EFF6FF',
+                  color: '#075985',
+                  border: '2px solid #38BDF8',
+                  whiteSpace: 'nowrap',
+                }}
+                onClick={async () => {
+                  try {
+                    await disconnect?.();
+                  } catch {}
+                  setLighterCredentialFormOpen(true);
+                  setLighterAccountIndexInput(String(lighterCredentials.accountIndex ?? ''));
+                  setLighterApiKeyIndexInput(String(lighterCredentials.apiKeyIndex ?? ''));
+                  setLighterApiPrivateKeyInput('');
+                  setLighterAccountDetectStatus('');
+                  setLocalAlert('Paste the replacement Lighter API key.');
+                }}
+              >
+                CHANGE API
+              </button>
+            </div>
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
+              <div style={{background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 10, fontWeight: 900, color: '#9f8759', textTransform: 'uppercase'}}>Account index</div>
+                <div style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{lighterCredentials.accountIndex}</div>
+              </div>
+              <div style={{background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 10, fontWeight: 900, color: '#9f8759', textTransform: 'uppercase'}}>API key index</div>
+                <div style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{lighterCredentials.apiKeyIndex ?? '-'}</div>
+              </div>
+            </div>
+            <div style={{fontSize: 10, fontWeight: 800, color: '#9f8759', lineHeight: 1.35}}>
+              Stored encrypted in this browser only. Changing the key removes the saved approval and asks you to approve the Clash integrator again.
+            </div>
+          </div>
+        )}
+
         {/* Wallet USDC */}
         {showWalletBalanceCard && (
         <div style={S.fullCard}>
@@ -8460,6 +8514,7 @@ function FuturesPanel() {
             amount={typeof goldEarned === 'number' ? goldEarned : goldEarned.amount}
             reason={typeof goldEarned === 'number' ? 'Trading rewards' : (goldEarned.reason || 'Trading rewards')}
             onClose={() => clearGoldEarned()}
+            style={S.goldToastInPanel}
           />
         )}
       </div>
@@ -8703,6 +8758,18 @@ const S = {
     padding: '6px 12px', borderTop: '3px solid #d4c8b0',
     background: 'linear-gradient(90deg, #e8dfc8 0%, #fdf8e7 50%, #e8dfc8 100%)',
     flexShrink: 0,
+  },
+  goldToastInPanel: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    bottom: 34,
+    width: 'auto',
+    maxWidth: 'none',
+    transform: 'none',
+    zIndex: 30,
+    borderRadius: 10,
+    padding: '10px 12px',
   },
   pacificaLogo: { width: 20, height: 20, objectFit: 'contain', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.2))' },
   pacificaText: { fontSize: 10, fontWeight: 700, color: '#a3906a', letterSpacing: '0.05em', textTransform: 'uppercase' },
