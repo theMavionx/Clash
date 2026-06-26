@@ -27,6 +27,7 @@
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "got": "^11.8.6",
+    "graphql": "^16.14.2",
     "magic-trade-client": "^0.2.0",
     "tweetnacl": "^1.0.3",
     "uuid": "^13.0.0",
