@@ -2243,6 +2243,17 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
               <NumberField label="Max volume tickets" value={config.lucky_daily_raider.max_volume_tickets || 0} onChange={(v) => updateLucky({ max_volume_tickets: v })} />
             </div>
             <div className="admin-help">Volume bonus is configurable: $ volume step grants N volume tickets, capped by Max volume tickets. Set Max volume tickets to 0 or use a non-volume ticket rule to disable the trading bonus.</div>
+            <label className="admin-field">
+              <span className="admin-label">Manual winners</span>
+              <textarea
+                className="admin-textarea"
+                rows={4}
+                placeholder={'Optional override for the next daily draw. One player per line: nickname, player_id, login wallet, linked wallet, or trading wallet.'}
+                value={(config.lucky_daily_raider.manual_winners || []).join('\n')}
+                onChange={(e) => updateLucky({ manual_winners: e.target.value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean) })}
+              />
+              <span className="admin-card-sub">If filled, the 00:05 UTC draw uses these players in this order. Clear this field to return to weighted random winners.</span>
+            </label>
             <div className="admin-form-grid three">
               <label className="admin-field"><span className="admin-label">NFT required</span><select className="admin-select" value={config.lucky_daily_raider.require_nft ? '1' : '0'} onChange={(e) => updateLucky({ require_nft: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
             </div>
@@ -3107,6 +3118,7 @@ function EarningsPanel({ data, reload }) {
         { label: 'Exact earned', value: fmtMaybeUsd(exactTotalUsd), tone: 'gold' },
         { label: 'Exact sources', value: num(exactEarningsRows.length), tone: 'green' },
         { label: '30d local volume', value: fmtMaybeUsd(windowD30.total_volume_usd ?? earnings.volume_30d_usd), tone: 'blue' },
+        { label: 'All local volume', value: fmtMaybeUsd(windowAll.total_volume_usd ?? earnings.volume_all_usd), tone: 'blue' },
         { label: '30d local trades', value: num(windowD30.total_trades || 0), tone: 'blue' },
       ]} />
       <div className="earnings-card-grid">

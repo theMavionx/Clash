@@ -17,6 +17,7 @@ const SHOW_AFTER_MS = 1200;
 const DEX_WALLET = {
   avantis: { kind: 'evm', chain: 'Base', label: 'Avantis', cta: 'Reconnect Base wallet', targetChain: 'base' },
   gmx: { kind: 'evm', chain: 'Arbitrum', label: 'GMX', cta: 'Reconnect Arbitrum wallet', targetChain: 'arbitrum' },
+  ostium: { kind: 'evm', chain: 'Arbitrum', label: 'Ostium', cta: 'Reconnect Arbitrum wallet', targetChain: 'arbitrum' },
   monad: { kind: 'evm', chain: 'Monad', label: 'Perpl', cta: 'Reconnect Monad wallet', targetChain: 'monad' },
   hyperliquid: { kind: 'evm', chain: 'Arbitrum', label: 'Hyperliquid', cta: 'Reconnect Arbitrum wallet', targetChain: 'arbitrum' },
   risex: { kind: 'evm', chain: 'RISE', label: 'RISEx', cta: 'Reconnect RISE wallet', targetChain: 'rise' },

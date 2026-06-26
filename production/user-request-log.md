@@ -507,3 +507,27 @@ Time: 2026-06-25 22:18:07 +03:00
 Request:
 
 > крч загрузилась игра и ниче делать не могу короблей нет вот только что, еще в бою) як бачиш кораблі деплойд
+
+### UR-2026-06-26-001
+
+Time: 2026-06-26 09:45:17 +03:00
+
+Request:
+
+> Ostium Builder SDK Documentation: • Docs: https://docs.ostium.com/developer/sdk/overview • Builder Set Up: https://docs.ostium.com/developer/builders/overview • NPM: https://www.npmjs.com/package/@ostium/builder-sdk інтегруй остіум оцей і відразу з білдер комісіями - склади для початку план for ostium: 0xB36402e87a86206D3a114a98B53f31362291fe1B
+
+### UR-2026-06-26-002
+
+Time: 2026-06-26 09:58:53 +03:00
+
+Request:
+
+> що builder fee applies on open, not on close. тоді став  в двічі більше бпс 2 роби все
+
+### UR-2026-06-26-003
+
+Time: 2026-06-26 10:50:06 +03:00
+
+Request:
+
+> ось лого остіум

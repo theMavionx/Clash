@@ -11,6 +11,7 @@ const FUTURES_REWARD_DEXES = new Set([
   'avantis',
   'decibel',
   'gmx',
+  'ostium',
   'monad',
   'phoenix',
   'hyperliquid',
@@ -33,6 +34,7 @@ const DEX_REQUIRED_CHAIN = {
   decibel: 'aptos',
   avantis: 'evm',
   gmx: 'evm',
+  ostium: 'evm',
   monad: 'evm',
   hyperliquid: 'evm',
   risex: 'evm',
@@ -48,6 +50,7 @@ const VERIFIED_SOURCES_BY_DEX = {
   avantis: ['worker'],
   decibel: ['decibel_fill', 'server'],
   gmx: ['worker', 'server'],
+  ostium: ['ostium_api'],
   monad: ['perpl_api', 'perpl_ws'],
   phoenix: ['worker', 'tx'],
   hyperliquid: ['hyperliquid_api'],
@@ -64,6 +67,7 @@ const VERIFIED_SOURCES_BY_DEX = {
 
 const USER_SCOPED_IMPORT_DEXES = new Set([
   'decibel',
+  'ostium',
   'gmtrade',
   'hotstuff',
   'nado',
@@ -393,6 +397,11 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
     const hotstuff = require('../server-futures/hotstuff');
     if (!hotstuff.isEvmAddress(wallet)) return { ok: false, skipped: 'invalid_evm_wallet', dex };
     return { dex, ...(await hotstuff.importFillsForPlayer(playerId, wallet, { limit })) };
+  }
+  if (dex === 'ostium') {
+    const ostium = require('../server-futures/ostium');
+    if (!ostium.isEvmAddress(wallet)) return { ok: false, skipped: 'invalid_evm_wallet', dex };
+    return { dex, ...(await ostium.importFillsForPlayer(playerId, wallet, { limit })) };
   }
 
   if (dex === 'nado') {

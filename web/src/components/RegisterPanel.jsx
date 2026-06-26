@@ -101,6 +101,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                 {cfg.chain} · {
                   cfg.id === 'avantis' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
+                  cfg.id === 'ostium' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'risex' ? 'SELF-CUSTODY · RISE' :
                   cfg.id === 'nado' ? 'SELF-CUSTODY · INK' :
@@ -411,6 +412,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
   // chain; we just ensureChain(targetId) before each tx. So one panel,
   // venue labels.
   const venue = dex === 'gmx' ? 'GMX'
+    : dex === 'ostium' ? 'OSTIUM'
     : dex === 'monad' ? 'PERPL'
     : dex === 'hyperliquid' ? 'HYPERLIQUID'
     : dex === 'risex' ? 'RISEX'
@@ -423,7 +425,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'gmtrade' ? 'GMTRADE'
     : dex === 'flash' ? 'FLASH TRADE'
     : 'AVANTIS';
-  const chainName = dex === 'gmx' ? 'Arbitrum'
+  const chainName = dex === 'gmx' || dex === 'ostium' ? 'Arbitrum'
     : dex === 'monad' ? 'Monad'
     : dex === 'hyperliquid' ? 'EVM'
     : dex === 'risex' ? 'RISE'
@@ -574,6 +576,7 @@ function RegisterPanel() {
                   dex === 'avantis' ? 'Avantis' :
                   dex === 'decibel' ? 'Decibel' :
                   dex === 'gmx' ? 'GMX' :
+                  dex === 'ostium' ? 'Ostium' :
                   dex === 'monad' ? 'Perpl' :
                   dex === 'hyperliquid' ? 'Hyperliquid' :
                   dex === 'risex' ? 'RISEx' :
@@ -645,7 +648,7 @@ function RegisterPanel() {
             />
           );
         }
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -695,6 +698,7 @@ function RegisterPanel() {
     if (dex === 'avantis') return 'AVANTIS LOGIN';
     if (dex === 'decibel') return 'DECIBEL LOGIN';
     if (dex === 'gmx') return 'GMX LOGIN';
+    if (dex === 'ostium') return 'OSTIUM LOGIN';
     if (dex === 'monad') return 'PERPL LOGIN';
     if (dex === 'hyperliquid') return 'HYPERLIQUID LOGIN';
     if (dex === 'risex') return 'RISEX LOGIN';
@@ -727,7 +731,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : dex === 'lighter' ? 'baseConnect' : 'base'}
+        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : dex === 'lighter' ? 'baseConnect' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

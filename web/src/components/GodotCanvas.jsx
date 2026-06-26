@@ -1411,6 +1411,10 @@ function GodotCanvas({ onEngineReady }) {
           uiReadyFallbackId = null;
         }
         setStage(2);
+        if (reason === 'home_ready' || reason === 'ready' || reason === 'godotBuildingsLoaded') {
+          finishStage2Now(reason);
+          return;
+        }
         if (!engineReadyDone) return;
         finishStage2Now(reason);
       };

@@ -1,5 +1,5 @@
 export const TOURNAMENT_DEXES = [
-  'pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid',
+  'pacifica', 'avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid',
   'risex', 'nado', 'hibachi', 'grvt', 'hotstuff', 'katana', 'gmtrade', 'flash', 'lighter',
 ];
 
@@ -8,6 +8,7 @@ export const DEX_LABELS = {
   avantis: 'Avantis',
   decibel: 'Decibel',
   gmx: 'GMX',
+  ostium: 'Ostium',
   monad: 'Perpl',
   phoenix: 'Phoenix',
   hyperliquid: 'Hyperliquid',
@@ -232,6 +233,7 @@ export function defaultRewardConfig() {
       required_collections: ['demon_king', 'dragon'],
       rewards: [],
       draw_time_utc: '00:05',
+      manual_winners: [],
     },
   };
 }
@@ -264,6 +266,7 @@ export function normalizeRewardConfig(raw = {}) {
     ? lucky.ticket_metric
     : base.lucky_daily_raider.ticket_metric;
   const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(lucky.max_tickets || base.lucky_daily_raider.max_tickets) || 20)));
+  const manualWinners = normalizeLuckyRaiderManualWinners(lucky.manual_winners ?? lucky.manual_winner_ids ?? lucky.manual_winners_text);
   return {
     daily_pools: (Array.isArray(source.daily_pools) ? source.daily_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Daily pool ${idx + 1}`)),
     final_pools: (Array.isArray(source.final_pools) ? source.final_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Final pool ${idx + 1}`)),
@@ -284,8 +287,30 @@ export function normalizeRewardConfig(raw = {}) {
       required_collections: collections.length ? collections : ['demon_king', 'dragon'],
       rewards: (Array.isArray(lucky.rewards) ? lucky.rewards : []).map(normalizeReward),
       draw_time_utc: String(lucky.draw_time_utc || base.lucky_daily_raider.draw_time_utc).slice(0, 16),
+      manual_winners: manualWinners,
     },
   };
+}
+
+export function normalizeLuckyRaiderManualWinners(value) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value || '').split(/\r?\n|,/);
+  const seen = new Set();
+  const winners = [];
+  for (const item of rawItems) {
+    const raw = typeof item === 'object' && item
+      ? String(item.player_id || item.id || item.name || item.wallet || item.identifier || '').trim()
+      : String(item || '').trim();
+    const identifier = raw.replace(/^@+/, '').trim();
+    if (!identifier) continue;
+    const key = identifier.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    winners.push(identifier.slice(0, 160));
+    if (winners.length >= 100) break;
+  }
+  return winners;
 }
 
 export function rewardConfigPreset5000() {

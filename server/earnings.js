@@ -264,6 +264,16 @@ const GMX_AFFILIATE = (process.env.GMX_AFFILIATE_ADDR ||
   '0x412A02Ba415e5969596E6f0A35f9439760a3468F').toLowerCase();
 const GMX_AVG_FEE_BPS = Number(process.env.GMX_AVG_FEE_BPS) || 5; // 0.05%/side
 const GMX_AFFILIATE_SHARE_BPS = Number(process.env.GMX_AFFILIATE_SHARE_BPS) || 500; // 5% of fees
+const OSTIUM_BUILDER_ADDRESS = String(
+  process.env.OSTIUM_BUILDER_ADDRESS
+  || process.env.VITE_OSTIUM_BUILDER_ADDRESS
+  || '0xB36402e87a86206D3a114a98B53f31362291fe1B',
+).trim();
+const OSTIUM_BUILDER_FEE_BPS = Math.max(0, Number(
+  process.env.OSTIUM_BUILDER_FEE_BPS
+  || process.env.VITE_OSTIUM_BUILDER_FEE_BPS
+  || 2,
+));
 
 async function fetchGmxEarnings() {
   // 1. Tier index for our affiliate wallet — referrerTiers(address).
@@ -322,6 +332,17 @@ async function fetchGmxEarnings() {
 // HTTPS call each, except Pacifica which paginates) but cumulatively
 // 4–10s if Pacifica has a lot of trades. Cache aggressively — a 60 s
 // staleness window is fine for an internal dashboard.
+async function fetchOstiumEarnings() {
+  return localVerifiedBuilderEarnings({
+    dex: 'ostium',
+    verifiedSource: 'ostium_api',
+    currency: 'USDC (Arbitrum)',
+    feeBps: OSTIUM_BUILDER_FEE_BPS,
+    sourceDetail: 'ostium_verified_fills_local_estimate',
+    note: `Ostium stats use filled rows imported from the Ostium SDK. Builder fee applies on open only; local ${OSTIUM_BUILDER_FEE_BPS}bps volume estimate is shown from stored Ostium fills.`,
+  });
+}
+
 // Fallback matches the deploy.sh default (1 bps = 0.01%). Production
 // always has DECIBEL_BUILDER_FEE_BPS set via env so this fallback only
 // fires in fresh local checkouts.
@@ -1684,6 +1705,7 @@ const ANALYTICS_DEXES = [
   { key: 'decibel', label: 'Decibel' },
   { key: 'avantis', label: 'Avantis' },
   { key: 'gmx', label: 'GMX' },
+  { key: 'ostium', label: 'Ostium' },
   { key: 'phoenix', label: 'Phoenix' },
   { key: 'monad', label: 'Perpl' },
   { key: 'hyperliquid', label: 'Hyperliquid' },
@@ -1764,6 +1786,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'lighter') return "verified_source = 'lighter_integrator'";
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
+  if (dex === 'ostium') return "verified_source = 'ostium_api'";
   if (dex === 'avantis') return "verified_source IN ('worker', 'client')";
   return "verified_source = 'worker'";
 }
@@ -1846,6 +1869,18 @@ function revenueModelForDex(dex, dateForRate = null) {
       rebate_bps: GMX_AFFILIATE_SHARE_BPS,
       model: 'volume_x_fee_x_rebate',
       source_detail: 'local_volume_x_gmx_rate',
+    };
+  }
+  if (dex === 'ostium') {
+    const bps = Math.max(0, OSTIUM_BUILDER_FEE_BPS);
+    return {
+      configured: /^0x[0-9a-fA-F]{40}$/.test(OSTIUM_BUILDER_ADDRESS) && bps > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps builder fee` : 'not configured',
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_ostium_bps' : 'ostium_builder_not_configured',
     };
   }
   if (dex === 'monad') {
@@ -2294,11 +2329,12 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, phx, mon, hl, grvt, nado, hotstuff, hibachi, katana, gmtrade, flash, lighter] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, ostium, phx, mon, hl, grvt, nado, hotstuff, hibachi, katana, gmtrade, flash, lighter] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
     fetchGmxEarnings(),
+    fetchOstiumEarnings(),
     fetchPhoenixEarnings({ mainDb }),
     fetchPerplEarnings(),
     fetchHyperliquidEarnings(),
@@ -2328,6 +2364,7 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     decibel:  { ...wrap('decibel',  dec), source: 'decibel_account_overview_fee_income' },
     avantis:  { ...wrap('avantis',  avt), source: 'avantis_volume_x_rate' },
     gmx:      { ...wrap('gmx',      gmx), source: 'gmx_volume_x_rate' },
+    ostium:   { ...wrap('ostium',   ostium), source: 'ostium_verified_fills_local_estimate' },
     phoenix:  { ...wrap('phoenix',  phx), source: 'phoenix_flight_collateral_transfers' },
     monad:    { ...wrap('monad',    mon), source: 'perpl_builder_fee_not_configured' },
     hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_referral_builder_rewards' },
@@ -2341,7 +2378,7 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     lighter: { ...wrap('lighter', lighter), source: 'lighter_integrator_fills_fee_sum' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','grvt','nado','hotstuff','hibachi','katana','gmtrade','flash','lighter'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','ostium','phoenix','monad','hyperliquid','grvt','nado','hotstuff','hibachi','katana','gmtrade','flash','lighter'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

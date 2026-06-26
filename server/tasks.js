@@ -465,6 +465,7 @@ function walletMatchesDex(dex, wallet) {
   if (
     dex === 'avantis' ||
     dex === 'gmx' ||
+    dex === 'ostium' ||
     dex === 'monad' ||
     dex === 'hyperliquid' ||
     dex === 'risex' ||

@@ -219,7 +219,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'nado' ? 'Nado ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'nado' ? 'Nado ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}funding payments</div>;
   }
 

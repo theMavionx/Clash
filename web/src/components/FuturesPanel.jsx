@@ -20,6 +20,7 @@ import { useKatana } from '../hooks/useKatana';
 import { useGmtrade } from '../hooks/useGmtrade';
 import { useFlash } from '../hooks/useFlash';
 import { useLighter } from '../hooks/useLighter';
+import { useOstium } from '../hooks/useOstium';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -2082,7 +2083,7 @@ function FuturesPanel() {
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
   const { dex } = useDex();
-  const evmConnectChain = dex === 'gmx' || dex === 'hyperliquid'
+  const evmConnectChain = dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium'
     ? 'arbitrum'
     : dex === 'hotstuff'
     ? 'mainnet'
@@ -2135,6 +2136,7 @@ function FuturesPanel() {
   const gmtradeHook = useGmtrade();
   const flashHook = useFlash();
   const lighterHook = useLighter();
+  const ostiumHook = useOstium();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -2145,6 +2147,8 @@ function FuturesPanel() {
     ? decibelHook
     : dex === 'gmx'
     ? gmxHook
+    : dex === 'ostium'
+    ? ostiumHook
     : dex === 'monad'
     ? monadHook
     : dex === 'phoenix'
@@ -2351,7 +2355,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
+    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -2948,7 +2952,7 @@ function FuturesPanel() {
       setLeverageApi(symbol, v);
       return;
     }
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt' || dex === 'flash') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt' || dex === 'flash') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -3014,7 +3018,7 @@ function FuturesPanel() {
       // Guard against missing/NaN currentPrice (feed blip).
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -3382,13 +3386,15 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
               style={{...S.marginSwapBtn, padding: '6px 10px', fontSize: 12, gap: 4, cursor: 'default', opacity: 0.85}}
               title={dex === 'gmx'
                 ? 'GMX V2 uses isolated margin per position (no cross mode)'
+                : dex === 'ostium'
+                ? 'Ostium uses isolated collateral per trade in this integration'
                 : dex === 'decibel'
                 ? 'Decibel currently uses cross margin; isolated margin is not available yet'
                 : dex === 'monad'
@@ -3874,7 +3880,7 @@ function FuturesPanel() {
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
   const shouldBlockWalletMismatch = false;
-  if (shouldBlockWalletMismatch && (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') && walletMismatch) {
+  if (shouldBlockWalletMismatch && (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -3899,7 +3905,7 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? 'Solana' : 'Base'} wallet
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
@@ -4140,6 +4146,47 @@ function FuturesPanel() {
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>AVANTIS · BASE MAINNET</span>
+                </div>
+              </>
+            ) : dex === 'ostium' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #111827 0%, #374151 100%)',
+                  border: '4px solid #F97316',
+                  boxShadow: '0 5px 0 #9A3412, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 30, fontWeight: 900, color: '#fff',
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>OST</div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Arbitrum wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  Ostium is non-custodial on Arbitrum. Your wallet signs each trade, with Clash builder fees applied only when opening a position.
+                </div>
+                {renderPrivyEmailButton('#111827', '#374151')}
+                <button
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#111827', privyEnabled ? '#6B573E' : '#374151'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#9A3412', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>OSTIUM · ARBITRUM MAINNET</span>
                 </div>
               </>
             ) : dex === 'gmx' ? (
@@ -7523,18 +7570,19 @@ function FuturesPanel() {
           </>
         )}
 
-        {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'gmtrade') ? (() => {
+        {(dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'gmtrade') ? (() => {
           const isGmx = dex === 'gmx';
+          const isOstium = dex === 'ostium';
           const isHyperliquid = dex === 'hyperliquid';
           const isGmtrade = dex === 'gmtrade';
           const isFlash = dex === 'flash';
           const isHibachi = dex === 'hibachi';
-          const accentLight = isFlash ? '#4CAF50' : isGmtrade ? '#14B8A6' : isHibachi ? '#EF4444' : isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
-          const accentDark = isFlash ? '#166534' : isGmtrade ? '#0F766E' : isHibachi ? '#991B1B' : isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
-          const accentBg = isFlash ? 'rgba(34,197,94,0.08)' : isGmtrade ? 'rgba(20,184,166,0.08)' : isHibachi ? 'rgba(239,68,68,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
-          const accentBorder = isFlash ? 'rgba(34,197,94,0.30)' : isGmtrade ? 'rgba(20,184,166,0.35)' : isHibachi ? 'rgba(239,68,68,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
-          const accentBtnBorder = isFlash ? '#15803D' : isGmtrade ? '#0F766E' : isHibachi ? '#DC2626' : isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
-          const chainName = (isGmtrade || isFlash) ? 'Solana' : isHibachi ? 'Base / Arbitrum' : isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
+          const accentLight = isFlash ? '#4CAF50' : isGmtrade ? '#14B8A6' : isHibachi ? '#EF4444' : isOstium ? '#111827' : isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
+          const accentDark = isFlash ? '#166534' : isGmtrade ? '#0F766E' : isHibachi ? '#991B1B' : isOstium ? '#9A3412' : isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
+          const accentBg = isFlash ? 'rgba(34,197,94,0.08)' : isGmtrade ? 'rgba(20,184,166,0.08)' : isHibachi ? 'rgba(239,68,68,0.08)' : isOstium ? 'rgba(249,115,22,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
+          const accentBorder = isFlash ? 'rgba(34,197,94,0.30)' : isGmtrade ? 'rgba(20,184,166,0.35)' : isHibachi ? 'rgba(239,68,68,0.35)' : isOstium ? 'rgba(249,115,22,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
+          const accentBtnBorder = isFlash ? '#15803D' : isGmtrade ? '#0F766E' : isHibachi ? '#DC2626' : isOstium ? '#F97316' : isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
+          const chainName = (isGmtrade || isFlash) ? 'Solana' : isHibachi ? 'Base / Arbitrum' : isHyperliquid || isGmx || isOstium ? 'Arbitrum' : 'Base';
           const isDepositing = isHyperliquid && depositStatus?.status === 'depositing';
           const isMovingToPerp = isHyperliquid && depositStatus?.status === 'moving_to_perp';
           const isFundingBusy = isDepositing || isMovingToPerp;
@@ -8072,7 +8120,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'flash' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'flash' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>

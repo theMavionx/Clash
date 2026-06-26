@@ -587,6 +587,21 @@ function isOurIntegratorTrade(trade) {
     || Number(trade?.integrator_taker_fee_collector_index || 0) === collector;
 }
 
+function lighterIntegratorFeeUsd(trade) {
+  const collector = LIGHTER_INTEGRATOR_ACCOUNT_INDEX;
+  const notional = num(trade?.usd_amount, Math.abs(num(trade?.size, 0) * num(trade?.price, 0)));
+  if (!Number.isFinite(notional) || notional <= 0) return 0;
+  let feeValue = 0;
+  if (Number(trade?.integrator_maker_fee_collector_index || 0) === collector) {
+    feeValue += num(trade?.integrator_maker_fee, 0);
+  }
+  if (Number(trade?.integrator_taker_fee_collector_index || 0) === collector) {
+    feeValue += num(trade?.integrator_taker_fee, 0);
+  }
+  if (!Number.isFinite(feeValue) || feeValue <= 0) return 0;
+  return notional * feeValue / 1_000_000;
+}
+
 function normalizeTradeForHistory(trade, accountIndex, marketById = new Map()) {
   const isAsk = Number(trade?.ask_account_id) === Number(accountIndex);
   const marketId = Number(trade?.market_id ?? trade?.market_index);
@@ -595,8 +610,7 @@ function normalizeTradeForHistory(trade, accountIndex, marketById = new Map()) {
   const side = isAsk ? 'SHORT' : 'LONG';
   const notional = num(trade?.usd_amount, Math.abs(num(trade?.size, 0) * num(trade?.price, 0)));
   const pnl = isAsk ? trade?.ask_account_pnl : trade?.bid_account_pnl;
-  const makerFee = num(trade?.integrator_maker_fee, 0);
-  const takerFee = num(trade?.integrator_taker_fee, 0);
+  const integratorFeeUsd = lighterIntegratorFeeUsd(trade);
   return {
     symbol: symbol || `M${trade?.market_id ?? ''}`,
     side,
@@ -610,7 +624,7 @@ function normalizeTradeForHistory(trade, accountIndex, marketById = new Map()) {
     notional_usd: notional,
     verifiedSource: 'lighter_integrator',
     pnl: pnl == null ? null : String(pnl),
-    fee: String((makerFee + takerFee) / 1_000_000),
+    fee: String(integratorFeeUsd),
     proofJson: JSON.stringify(trade),
     createdAt: normalizeLighterTimestamp(trade?.timestamp || trade?.transaction_time),
   };

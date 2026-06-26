@@ -899,7 +899,7 @@ try {
       event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
       dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
       eligible_dexes TEXT NOT NULL DEFAULT '[]',
       mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -1029,7 +1029,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'ostium'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -1039,7 +1039,7 @@ try {
             event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
             name         TEXT NOT NULL,
             description  TEXT,
-            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
             dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
             eligible_dexes TEXT NOT NULL DEFAULT '[]',
             mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -1086,11 +1086,11 @@ try {
             id,
             CASE WHEN event_kind IN ('standard','lucky_raider') THEN event_kind ELSE 'standard' END,
             name, description,
-            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END,
+            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END,
             CASE WHEN dex_scope IN ('single','custom','all') THEN dex_scope ELSE 'single' END,
             CASE
               WHEN eligible_dexes IS NOT NULL AND eligible_dexes != '' AND eligible_dexes != '[]' THEN eligible_dexes
-              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END || '"]'
+              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END || '"]'
             END,
             CASE WHEN mode IN ('individual','dex_vs_dex') THEN mode ELSE 'individual' END,
             COALESCE(team_score_by, 'volume_usd'),
@@ -3255,6 +3255,7 @@ function parseTournamentRewardConfig(value) {
     ? ticketMetricRaw
     : 'volume';
   const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20)));
+  const manualWinners = normalizeLuckyRaiderManualWinners(luckyRaw.manual_winners ?? luckyRaw.manual_winner_ids ?? luckyRaw.manual_winners_text);
   return {
     ...raw,
     daily_pools: Array.isArray(raw.daily_pools) ? raw.daily_pools : [],
@@ -3276,8 +3277,33 @@ function parseTournamentRewardConfig(value) {
       required_collections: requiredCollections.length ? requiredCollections : ['demon_king', 'dragon'],
       rewards: Array.isArray(luckyRaw.rewards) ? luckyRaw.rewards : [],
       draw_time_utc: String(luckyRaw.draw_time_utc || '00:05').slice(0, 16),
+      manual_winners: manualWinners,
     },
   };
+}
+
+function normalizeLuckyRaiderManualWinners(value) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value || '')
+      .split(/\r?\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const seen = new Set();
+  const winners = [];
+  for (const item of rawItems) {
+    const raw = typeof item === 'object' && item
+      ? String(item.player_id || item.id || item.name || item.wallet || item.identifier || '').trim()
+      : String(item || '').trim();
+    const identifier = raw.replace(/^@+/, '').trim();
+    if (!identifier) continue;
+    const key = identifier.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    winners.push(identifier.slice(0, 160));
+    if (winners.length >= 100) break;
+  }
+  return winners;
 }
 
 function tournamentLuckyRaiderConfig(t) {
@@ -3704,6 +3730,104 @@ function weightedLuckyRaiderWinners(entries, seed, count = 1) {
   };
 }
 
+function resolveLuckyRaiderManualWinners(cfg, entries, count = 1) {
+  const identifiers = normalizeLuckyRaiderManualWinners(cfg?.manual_winners || []);
+  const targetCount = Math.max(1, Math.min(100, Math.floor(Number(count || 1) || 1)));
+  if (!identifiers.length) return null;
+  const byPlayerId = new Map((entries || []).map((entry) => [String(entry.player_id || '').toLowerCase(), entry]));
+  const byName = new Map((entries || []).filter((entry) => entry.name).map((entry) => [String(entry.name).toLowerCase(), entry]));
+  const winners = [];
+  const unresolved = [];
+  const seen = new Set();
+  const lookupPlayer = db.prepare(`
+    SELECT p.id AS player_id,
+           p.name,
+           COALESCE(p.is_bot, 0) AS is_bot
+      FROM players p
+     WHERE lower(p.id) = lower(?)
+        OR lower(p.name) = lower(?)
+        OR lower(COALESCE(p.wallet, '')) = lower(?)
+        OR EXISTS (
+          SELECT 1 FROM player_wallets pw
+           WHERE pw.player_id = p.id
+             AND lower(pw.address) = lower(?)
+        )
+        OR EXISTS (
+          SELECT 1 FROM player_dex_accounts pda
+           WHERE pda.player_id = p.id
+             AND lower(COALESCE(pda.wallet_address, '')) = lower(?)
+        )
+     ORDER BY COALESCE(p.trophies, 0) DESC, p.created_at ASC
+     LIMIT 1
+  `);
+  for (const identifier of identifiers) {
+    if (winners.length >= targetCount) break;
+    const key = String(identifier || '').toLowerCase();
+    let entry = byPlayerId.get(key) || byName.get(key) || null;
+    if (!entry) {
+      const player = lookupPlayer.get(identifier, identifier, identifier, identifier, identifier);
+      if (!player?.player_id) {
+        unresolved.push(identifier);
+        continue;
+      }
+      const playerKey = String(player.player_id).toLowerCase();
+      entry = byPlayerId.get(playerKey) || {
+        player_id: player.player_id,
+        name: player.name || '',
+        is_bot: Number(player.is_bot || 0) === 1,
+        prize_eligible: Number(player.is_bot || 0) !== 1,
+        volume_usd: 0,
+        town_hall_level: getTownHallLevel(player.player_id),
+        min_town_hall_level: Math.max(0, Math.floor(Number(cfg?.min_town_hall_level || 0) || 0)),
+        attack_wins: 0,
+        attack_losses: 0,
+        attack_attempts: 0,
+        raw_attack_wins: 0,
+        raw_attack_losses: 0,
+        raw_attack_attempts: 0,
+        tickets: 1,
+        eligible: 1,
+        reason: 'manual_winner',
+        details: {
+          manual_winner: true,
+          manual_identifier: identifier,
+          volume_tickets: 0,
+          raw_volume_tickets: 0,
+          raw_volume_steps: 0,
+          volume_tickets_per_step: Math.max(1, Math.floor(Number(cfg?.volume_tickets_per_step || 1) || 1)),
+          attack_win_tickets: 0,
+        },
+      };
+    }
+    const playerKey = String(entry.player_id || '').toLowerCase();
+    if (!playerKey || seen.has(playerKey)) continue;
+    seen.add(playerKey);
+    winners.push({
+      ...entry,
+      place: winners.length + 1,
+      manual_override: true,
+      reason: entry.reason === 'manual_winner' ? entry.reason : 'manual_override',
+      tickets: Math.max(1, Math.floor(Number(entry.tickets || 0) || 0)),
+      eligible: 1,
+      details: {
+        ...(entry.details || {}),
+        manual_winner: true,
+        manual_identifier: identifier,
+      },
+    });
+  }
+  const totalTickets = winners.reduce((sum, entry) => sum + Math.max(1, Math.floor(Number(entry.tickets || 0) || 0)), 0);
+  return {
+    winner: winners[0] || null,
+    winners,
+    totalTickets,
+    picks: winners.map((entry) => ({ place: entry.place, pick: 'manual', total_tickets: totalTickets })),
+    pick: winners.length ? 'manual' : null,
+    manual: true,
+    unresolved,
+  };
+}
+
 const LUCKY_RAIDER_WIN_INTERVAL_DAYS = 3;
 
 function luckyRaiderRecentWinnerIds(dayInput) {
@@ -4114,7 +4238,10 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
     const seed = `${tid}:${day}:${configHash}`;
     const recentWinnerIds = luckyRaiderRecentWinnerIds(day);
     const drawEntries = entries.filter((entry) => !recentWinnerIds.has(String(entry.player_id)));
-    const pick = weightedLuckyRaiderWinners(drawEntries, seed, cfg.winner_count || 1);
+    const manualPick = resolveLuckyRaiderManualWinners(cfg, entries, cfg.winner_count || 1);
+    const pick = manualPick?.winners?.length
+      ? manualPick
+      : weightedLuckyRaiderWinners(drawEntries, seed, cfg.winner_count || 1);
     const winner = pick.winner || null;
     const winners = (pick.winners || []).map((entry) => ({
       place: entry.place,
@@ -4145,6 +4272,9 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       total_tickets: pick.totalTickets,
       pick: pick.pick,
       picks: pick.picks || [],
+      manual_override: !!pick.manual,
+      manual_winners: cfg.manual_winners || [],
+      manual_unresolved: pick.unresolved || [],
       winner_count: cfg.winner_count || 1,
       winners,
       entries: entries.map((entry) => ({

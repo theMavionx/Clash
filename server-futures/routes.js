@@ -22,6 +22,7 @@ const katana = require('./katana');
 const gmtrade = require('./gmtrade');
 const flash = require('./flash');
 const lighter = require('./lighter');
+const ostium = require('./ostium');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
 const { Keypair, PublicKey, VersionedTransaction } = require('@solana/web3.js');
@@ -744,7 +745,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -846,7 +847,7 @@ function flashBodyWallet(req) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -876,7 +877,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -909,6 +910,14 @@ router.get('/account', async (req, res) => {
         return res.status(400).json({ error: 'address query param required (0x...)' });
       }
       const info = await gmx.getAccountByAddress(address);
+      return res.json(info);
+    }
+    if (dex === 'ostium') {
+      const address = String(req.query.address || '').trim();
+      if (!ostium.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required (0x...)' });
+      }
+      const info = await ostium.getAccountByAddress(address);
       return res.json(info);
     }
     if (dex === 'hyperliquid') {
@@ -1980,6 +1989,7 @@ router.get('/markets', async (req, res) => {
   try {
     const info = dex === 'avantis' ? await avantis.getMarketInfo()
       : dex === 'gmx' ? await gmx.getMarketInfo()
+      : dex === 'ostium' ? await ostium.getMarketInfo()
       : dex === 'hyperliquid' ? await hyperliquid.getMarketInfo()
       : dex === 'risex' ? await risex.getMarketInfo()
       : dex === 'nado' ? await nado.getMarketInfo()
@@ -2005,6 +2015,7 @@ router.get('/prices', async (req, res) => {
   try {
     const prices = dex === 'avantis' ? await avantis.getPrices()
       : dex === 'gmx' ? await gmx.getPrices()
+      : dex === 'ostium' ? await ostium.getPrices()
       : dex === 'hyperliquid' ? await hyperliquid.getPrices()
       : dex === 'risex' ? await risex.getPrices()
       : dex === 'nado' ? await nado.getPrices()
@@ -2208,6 +2219,14 @@ router.get('/positions', async (req, res) => {
       const positions = await gmx.getPositionsByAddress(address);
       return res.json(positions);
     }
+    if (dex === 'ostium') {
+      const address = String(req.query.address || '').trim();
+      if (!ostium.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const positions = await ostium.getPositionsByAddress(address);
+      return res.json(positions);
+    }
     if (dex === 'hyperliquid') {
       const address = String(req.query.address || '').trim();
       if (!hyperliquid.isEvmAddress(address)) {
@@ -2302,6 +2321,14 @@ router.get('/orders', async (req, res) => {
       const orders = await gmx.getOrdersByAddress(address);
       return res.json(orders);
     }
+    if (dex === 'ostium') {
+      const address = String(req.query.address || '').trim();
+      if (!ostium.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const orders = await ostium.getOrdersByAddress(address);
+      return res.json(orders);
+    }
     if (dex === 'hyperliquid') {
       const address = String(req.query.address || '').trim();
       if (!hyperliquid.isEvmAddress(address)) {
@@ -2379,7 +2406,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -3999,6 +4026,60 @@ router.post('/grvt/import-fills', auth, async (req, res) => {
   }
 });
 
+function requireOstiumOwner(req, res) {
+  if (req.dex !== 'ostium') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to ostium before calling Ostium endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'ostium',
+    });
+    return null;
+  }
+  const account = ostium.normalizeAddress(req.body?.account || req.query?.account || req.query?.address);
+  if (!account) {
+    res.status(400).json({ error: 'account required (0x...)' });
+    return null;
+  }
+  return { account };
+}
+
+router.get('/ostium/config', (_req, res) => {
+  res.json(ostium.config());
+});
+
+router.get('/ostium/trade-history', auth, async (req, res) => {
+  try {
+    const verified = requireOstiumOwner(req, res);
+    if (!verified) return;
+    const rows = await ostium.getAccountTradeHistory(verified.account, {
+      limit: req.query?.limit,
+    });
+    res.json(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    console.warn('[ostium] trade-history failed:', e.message);
+    res.status(502).json({ error: 'Failed to load Ostium trade history', detail: e.message });
+  }
+});
+
+router.post('/ostium/import-fills', auth, async (req, res) => {
+  try {
+    const verified = requireOstiumOwner(req, res);
+    if (!verified) return;
+    const result = await ostium.importFillsForPlayer(req.playerId, verified.account, {
+      attempts: req.body?.attempts,
+      delayMs: req.body?.delay_ms,
+      limit: req.body?.limit,
+    });
+    if (result.imported > 0) {
+      console.log(`[ostium] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${verified.account.slice(0, 10)}...`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[ostium] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import Ostium fills', detail: e.message });
+  }
+});
+
 router.get('/lighter/config', async (_req, res) => {
   res.json(lighter.config());
 });
@@ -4693,7 +4774,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
+  if (req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);
