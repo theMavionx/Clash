@@ -12233,7 +12233,12 @@ function volumeGoldForDex(dex, usdVolume) {
 }
 
 function sqliteUtcMs(value) {
-  const ms = Date.parse(`${String(value || '').replace(' ', 'T')}Z`);
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  const normalized = raw.includes('T')
+    ? raw
+    : `${raw.replace(' ', 'T')}Z`;
+  const ms = Date.parse(normalized);
   return Number.isFinite(ms) ? ms : 0;
 }
 
@@ -13134,7 +13139,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           FROM trade_history
           WHERE dex = ? AND status = 'filled'
             ${sourceWhere}
-            AND created_at <= datetime('now', ?)
+            AND datetime(created_at) <= datetime('now', ?)
             AND id > ?
             AND (
               player_id = ?
@@ -13148,7 +13153,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           FROM trade_history
           WHERE player_id = ? AND dex = ? AND status = 'filled'
             ${sourceWhere}
-            AND created_at <= datetime('now', ?)
+            AND datetime(created_at) <= datetime('now', ?)
             AND id > ?
           ORDER BY id ASC
         `).all(req.player.id, dex, rewardSettleDelaySql, reward.last_trade_id || 0);
@@ -13166,7 +13171,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           FROM trade_history
           WHERE dex = ? AND status = 'filled'
             ${sourceWhere}
-            AND created_at > datetime('now', ?)
+            AND datetime(created_at) > datetime('now', ?)
             AND id > ?
             AND (
               player_id = ?
@@ -13179,7 +13184,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           FROM trade_history
           WHERE player_id = ? AND dex = ? AND status = 'filled'
             ${sourceWhere}
-            AND created_at > datetime('now', ?)
+            AND datetime(created_at) > datetime('now', ?)
             AND id > ?
         `).get(req.player.id, dex, rewardSettleDelaySql, reward.last_trade_id || 0) || settlingTrades;
       }

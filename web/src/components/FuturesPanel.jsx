@@ -655,6 +655,12 @@ function formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd) {
   return `${amount.toFixed(6)} ${pos?.symbol || ''} ($${usd.toFixed(2)})`;
 }
 
+function formatPositionAmount(amount) {
+  const value = numOrNull(amount);
+  if (value == null) return amount ?? '';
+  return value.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
+}
+
 function orderTpslKind(order) {
   const raw = String(
     order?.tpsl
@@ -1815,7 +1821,7 @@ const PositionsList = memo(function PositionsList({
               </div>
             </div>
             <div style={S.row}>
-              <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : pos.amount} {!isDust && <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span>}</span>
+              <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : (pos.amount_display || formatPositionAmount(pos.amount))} {!isDust && <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span>}</span>
               <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
             </div>
             <div style={S.row}>
@@ -6799,7 +6805,7 @@ function FuturesPanel() {
                 </div>
               </div>
               <div style={S.row}>
-                <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : pos.amount} {!isDust && <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span>}</span>
+                <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : (pos.amount_display || formatPositionAmount(pos.amount))} {!isDust && <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span>}</span>
                 <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
               </div>
               <div style={S.row}>

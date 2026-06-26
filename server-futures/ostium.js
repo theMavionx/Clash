@@ -33,6 +33,8 @@ const OSTIUM_BUILDER_API_URL = String(process.env.OSTIUM_BUILDER_API_URL || '').
 let readClient = null;
 let marketCache = { at: 0, rows: [], pairById: new Map() };
 let priceCache = { at: 0, rows: [] };
+const positionsCache = new Map();
+const ordersCache = new Map();
 const CACHE_TTL_MS = 15_000;
 const STALE_CACHE_TTL_MS = 10 * 60_000;
 
@@ -54,6 +56,12 @@ function normalizeAddress(addr) {
 function num(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function trimNumber(value, decimals = 6) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  return n.toFixed(decimals).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
 }
 
 function sideToPanel(side) {
@@ -336,11 +344,23 @@ function normalizePosition(row, marketsById = new Map()) {
   const collateral = num(position?.collateralUsed || position?.collateral || position?.margin, 0);
   const entry = num(position?.entryPx || position?.entryPrice, 0);
   const amount = entry > 0 ? sizeUsd / entry : Math.abs(num(position?.szi || position?.size, 0));
+  const side = sideToPanel(position?.side ?? position?.buy);
+  const stableId = [
+    'ostium',
+    String(symbol || '').toUpperCase(),
+    side,
+    pairId ?? '',
+    position?.idx ?? row?.idx ?? 0,
+    position?.pid ?? row?.pid ?? '',
+  ].join(':');
   return {
     dex: 'ostium',
+    id: stableId,
+    position_id: stableId,
     symbol,
-    side: sideToPanel(position?.side ?? position?.buy),
+    side,
     amount,
+    amount_display: trimNumber(amount, 6),
     size_usd: sizeUsd,
     entry_price: entry,
     mark_price: num(position?.midPx || market?.mark, 0),
@@ -367,10 +387,16 @@ async function getPositionsByAddress(address) {
     const [client, context] = await Promise.all([getReadClient(), getMarketContext()]);
     const payload = await client.getOpenPositions({ user: account });
     const rows = Array.isArray(payload?.pairPositions) ? payload.pairPositions : [];
-    return rows.map(row => normalizePosition(row, context.pairById));
+    const normalized = rows.map(row => normalizePosition(row, context.pairById));
+    positionsCache.set(account, { at: Date.now(), rows: normalized });
+    return normalized;
   } catch (e) {
     if (isTransientReadError(e)) {
       console.warn('[ostium] positions read degraded:', e.message || e);
+      const cached = positionsCache.get(account);
+      if (cached && Date.now() - cached.at <= STALE_CACHE_TTL_MS) {
+        return cached.rows.map(row => ({ ...row, stale_read: true }));
+      }
       return [];
     }
     throw e;
@@ -408,10 +434,16 @@ async function getOrdersByAddress(address) {
   try {
     const [client, context] = await Promise.all([getReadClient(), getMarketContext()]);
     const rows = await client.getOpenOrders({ user: account });
-    return (Array.isArray(rows) ? rows : []).map(row => normalizeOrder(row, context.pairById));
+    const normalized = (Array.isArray(rows) ? rows : []).map(row => normalizeOrder(row, context.pairById));
+    ordersCache.set(account, { at: Date.now(), rows: normalized });
+    return normalized;
   } catch (e) {
     if (isTransientReadError(e)) {
       console.warn('[ostium] orders read degraded:', e.message || e);
+      const cached = ordersCache.get(account);
+      if (cached && Date.now() - cached.at <= STALE_CACHE_TTL_MS) {
+        return cached.rows.map(row => ({ ...row, stale_read: true }));
+      }
       return [];
     }
     throw e;

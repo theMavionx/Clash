@@ -577,7 +577,7 @@ async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
     const statusWhere = "AND status = 'filled'";
     const settleWhere = opts.includeUnsettled
       ? ''
-      : "AND created_at <= datetime('now', ?)";
+      : "AND datetime(created_at) <= datetime('now', ?)";
     const settleParams = opts.includeUnsettled
       ? []
       : [`-${TASK_TRADE_SETTLE_DELAY_SECONDS} seconds`];
