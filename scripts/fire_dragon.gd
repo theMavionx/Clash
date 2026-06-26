@@ -462,16 +462,7 @@ func _activate_fire_breath_vfx_slot(slot: Dictionary, holder_name: String, mouth
 
 
 func _use_cpu_fire_particles() -> bool:
-	if not OS.has_feature("web"):
-		return false
-	var user_agent := ""
-	if ClassDB.class_exists("JavaScriptBridge"):
-		var result = JavaScriptBridge.eval("navigator.userAgent || ''", true)
-		user_agent = str(result).to_lower()
-	return user_agent.find("android") != -1 \
-		or user_agent.find("iphone") != -1 \
-		or user_agent.find("ipad") != -1 \
-		or user_agent.find("mobile") != -1
+	return OS.has_feature("web")
 
 
 func _make_fire_particle_entry(holder: Node3D, node_name: String, texture: Texture2D, color: Color, use_cpu_particles: bool) -> Dictionary:

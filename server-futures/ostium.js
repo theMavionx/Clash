@@ -23,6 +23,8 @@ const OSTIUM_RPC_URL = String(
   process.env.OSTIUM_ARBITRUM_RPC_URL
   || process.env.ARBITRUM_RPC_URL
   || process.env.ARB_RPC_URL
+  || process.env.VITE_OSTIUM_ARBITRUM_RPC_URL
+  || process.env.VITE_ARBITRUM_RPC_URL
   || '',
 ).trim();
 const OSTIUM_SUBGRAPH_URL = String(process.env.OSTIUM_SUBGRAPH_URL || '').trim();
@@ -69,12 +71,30 @@ function actionToOrderType(value) {
 }
 
 function createClientParams(extra = {}) {
+  const rpcUrl = normalizeServerRpcUrl(OSTIUM_RPC_URL);
   return {
-    ...(OSTIUM_RPC_URL ? { rpcUrl: OSTIUM_RPC_URL } : {}),
+    ...(rpcUrl ? { rpcUrl } : {}),
     ...(OSTIUM_SUBGRAPH_URL ? { subgraphUrl: OSTIUM_SUBGRAPH_URL } : {}),
     ...(OSTIUM_BUILDER_API_URL ? { builderApiUrl: OSTIUM_BUILDER_API_URL } : {}),
     ...extra,
   };
+}
+
+function normalizeServerRpcUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) {
+    const origin = String(
+      process.env.OSTIUM_RPC_ORIGIN
+      || process.env.CLASH_PUBLIC_ORIGIN
+      || process.env.PUBLIC_ORIGIN
+      || process.env.PUBLIC_URL
+      || 'https://clashofperps.fun',
+    ).replace(/\/+$/u, '');
+    return `${origin}${raw}`;
+  }
+  return '';
 }
 
 async function getReadClient() {
@@ -377,7 +397,7 @@ function config() {
     chain_id: OSTIUM_CHAIN_ID,
     builder_address: OSTIUM_BUILDER_ADDRESS,
     builder_fee_bps: OSTIUM_BUILDER_FEE_BPS,
-    rpc_configured: !!OSTIUM_RPC_URL,
+    rpc_configured: !!normalizeServerRpcUrl(OSTIUM_RPC_URL),
     subgraph_configured: !!OSTIUM_SUBGRAPH_URL,
     builder_api_configured: !!OSTIUM_BUILDER_API_URL,
   };

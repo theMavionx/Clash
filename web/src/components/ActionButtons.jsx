@@ -5,6 +5,7 @@ import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
 import chartIcon from '../assets/resources/chart.png';
 import goldIcon from '../assets/resources/gold_bar.png';
+import mmBotIcon from '../assets/resources/mm-bot-icon.png';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import shipImg from '../assets/buildings/shipsmall.png';
 import TournamentPanel from './TournamentPanel';
@@ -511,20 +512,6 @@ const NftMintIcon = ({ size = 50 }) => (
 );
 
 // ── Shield icon for defense log ───────────────────────────────────────────
-const BotIcon = ({ size = 50 }) => (
-  <svg width={size} height={size} viewBox="0 0 64 64" fill="none" style={{ filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.4))' }}>
-    <path d="M32 8v7" stroke="#5C3A21" strokeWidth="3" strokeLinecap="round" />
-    <circle cx="32" cy="7" r="4" fill="#FFD700" stroke="#5C3A21" strokeWidth="2" />
-    <rect x="12" y="16" width="40" height="34" rx="10" fill="#FDF8E7" stroke="#5C3A21" strokeWidth="3" />
-    <path d="M16 27h32" stroke="#D4C8B0" strokeWidth="3" />
-    <circle cx="24" cy="32" r="5" fill="#1E88E5" stroke="#15567f" strokeWidth="1.5" />
-    <circle cx="40" cy="32" r="5" fill="#43A047" stroke="#2E7D32" strokeWidth="1.5" />
-    <path d="M24 43h16" stroke="#5C3A21" strokeWidth="3" strokeLinecap="round" />
-    <path d="M7 30v8M57 30v8" stroke="#5C3A21" strokeWidth="3" strokeLinecap="round" />
-    <rect x="20" y="50" width="24" height="5" rx="2.5" fill="#D4C8B0" stroke="#5C3A21" strokeWidth="2" />
-  </svg>
-);
-
 const ShieldIcon = ({ size = 60 }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
     <path d="M32 6 L54 16 L54 32 Q54 50 32 58 Q10 50 10 32 L10 16 Z" fill="#3b7dd8" stroke="#1a3a6a" strokeWidth="2.5"/>
@@ -714,7 +701,12 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
       title="Open trading bots"
       aria-label="Open trading bots"
     >
-      <BotIcon size={mobile ? 38 : 50} />
+      <img
+        src={mmBotIcon}
+        alt=""
+        aria-hidden="true"
+        style={{ ...styles.botIconImg, ...(mobile ? styles.botIconImgMobile : {}) }}
+      />
       <span style={{ ...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11 }}>BOT</span>
     </CustomBtn>
   );
@@ -1294,6 +1286,19 @@ const styles = {
     width: 110, height: 110, objectFit: 'contain',
     filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
     transform: 'translateY(-10px)', marginBottom: 2,
+  },
+  botIconImg: {
+    width: 58,
+    height: 58,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
+    transform: 'translateY(-7px)',
+    pointerEvents: 'none',
+  },
+  botIconImgMobile: {
+    width: 44,
+    height: 44,
+    transform: 'translateY(-5px)',
   },
   btnLabel: {
     position: 'absolute', bottom: 28, left: 0, right: 0,

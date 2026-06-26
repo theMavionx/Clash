@@ -572,6 +572,11 @@ func _warmup_fire_dragon_breath_materials() -> void:
 		print("[WARMUP] FireDragon breath textures incomplete - skipped")
 		return
 
+	if OS.has_feature("web"):
+		_spawn_warmup_fire_dragon_cpu_particles(breath)
+		_spawn_warmup_fire_dragon_light()
+		return
+
 	var flame_particles := GPUParticles3D.new()
 	flame_particles.name = "WarmupFireDragonFlameParticles"
 	flame_particles.amount = 46
@@ -642,6 +647,11 @@ func _warmup_fire_dragon_breath_materials() -> void:
 	add_child(trail_particles)
 	trail_particles.restart()
 
+	_spawn_warmup_fire_dragon_cpu_particles(breath)
+	_spawn_warmup_fire_dragon_light()
+
+
+func _spawn_warmup_fire_dragon_cpu_particles(breath: Texture2D) -> void:
 	var cpu_particles := CPUParticles3D.new()
 	cpu_particles.name = "WarmupFireDragonCpuParticles"
 	cpu_particles.amount = 16
@@ -667,6 +677,8 @@ func _warmup_fire_dragon_breath_materials() -> void:
 	add_child(cpu_particles)
 	cpu_particles.restart()
 
+
+func _spawn_warmup_fire_dragon_light() -> void:
 	var light := OmniLight3D.new()
 	light.light_color = Color(1.0, 0.76, 0.12)
 	light.light_energy = 0.4

@@ -103,6 +103,56 @@ const DEFAULT_HISTORY = [
 ];
 
 const STEPS = ['strategy', 'risk', 'review'];
+const PRO_STEPS = ['strategy', 'pro'];
+
+const PRO_REFERENCE_MODES = [
+  { id: 'mid', label: 'Mid Price' },
+  { id: 'grid', label: 'Grid' },
+  { id: 'dgrid', label: 'DGrid' },
+  { id: 'rgrid', label: 'RGrid' },
+  { id: 'blend', label: 'Blend' },
+  { id: 'signal', label: 'Signal' },
+];
+
+const PRO_PARTICIPATION_MODES = [
+  { id: 'aggressive', label: 'Aggressive', detail: '~5 min', tone: '#ff4d5d' },
+  { id: 'normal', label: 'Normal', detail: '~10 min', tone: '#c7b98b' },
+  { id: 'passive', label: 'Passive', detail: '~30 min', tone: '#00d084' },
+];
+
+const PRO_BIAS_MODES = [
+  { id: 'short', label: 'Short', tone: '#ff4d5d' },
+  { id: 'neutral', label: 'Neutral', tone: '#fff4c4' },
+  { id: 'long', label: 'Long', tone: '#00d084' },
+];
+
+const DEFAULT_PRO_BOT_CONFIG = {
+  accountId: '',
+  pairId: '',
+  marginUsd: '',
+  volumeUsd: '',
+  participation: 'normal',
+  durationMinutes: 10,
+  referenceMode: 'mid',
+  bias: 'neutral',
+  spreadBps: 1,
+  stopLossPct: 25,
+  takeProfitPct: 100,
+};
+
+const DELTA_STOP_LOSS_OPTIONS = [50, 75, 90, 0];
+
+const DEFAULT_DELTA_NEUTRAL_CONFIG = {
+  longAccountId: '',
+  shortAccountId: '',
+  longPairId: '',
+  shortPairId: '',
+  notionalUsd: '',
+  twapMinutes: 60,
+  positionMinutes: '',
+  stopLossPct: 90,
+  participation: '-',
+};
 
 function money(value) {
   const n = Number(value);
@@ -313,11 +363,11 @@ function RobotButtonMark({ size = 48 }) {
   );
 }
 
-function StepDots({ activeStep }) {
-  const index = Math.max(0, STEPS.indexOf(activeStep));
+function StepDots({ activeStep, steps = STEPS }) {
+  const index = Math.max(0, steps.indexOf(activeStep));
   return (
     <div style={shared.stepDots}>
-      {STEPS.map((step, i) => (
+      {steps.map((step, i) => (
         <div
           key={step}
           style={{
@@ -543,6 +593,9 @@ function BotsPanel({ onClose }) {
   const [tradeSize, setTradeSize] = useState(20);
   const [maxPosition, setMaxPosition] = useState(200);
   const [preset, setPreset] = useState('calm');
+  const [launchMode, setLaunchMode] = useState('basic');
+  const [proBotConfig, setProBotConfig] = useState(DEFAULT_PRO_BOT_CONFIG);
+  const [deltaNeutralConfig, setDeltaNeutralConfig] = useState(DEFAULT_DELTA_NEUTRAL_CONFIG);
   const [notice, setNotice] = useState('');
   const [totalPnl, setTotalPnl] = useState(0);
   const [fillsCount, setFillsCount] = useState(0);
@@ -619,6 +672,89 @@ function BotsPanel({ onClose }) {
     });
   }, [instancesForSelectedType, syncedAccounts]);
 
+  const proAccountOptions = useMemo(() => {
+    return syncedAccounts
+      .filter((acc) => acc.status === 'active')
+      .map((acc) => ({
+        id: String(acc.id || `${acc.exchange || 'account'}:${acc.sub_account || acc.subAccount || '0'}`),
+        label: `${String(acc.exchange || 'Account').toUpperCase()} ${acc.label || `#${acc.sub_account ?? acc.subAccount ?? '0'}`}`,
+        wallet: acc.wallet || acc.wallet_address || acc.address || '',
+        exchange: String(acc.exchange || '').toLowerCase(),
+      }));
+  }, [syncedAccounts]);
+
+  const proPairOptions = useMemo(() => {
+    const source = filteredInstances.length > 0 ? filteredInstances : instancesForSelectedType;
+    return source.map((inst) => ({
+      id: inst.id,
+      label: `${getExchangeName(inst.id)} ${Array.isArray(inst.symbols) ? inst.symbols.join(', ') : ''}`.trim(),
+    }));
+  }, [filteredInstances, instancesForSelectedType]);
+
+  const deltaNeutralPairOptions = useMemo(() => {
+    const source = filteredInstances.length > 0 ? filteredInstances : instancesForSelectedType;
+    return source
+      .filter((inst) => parseStrategyInstanceId(inst.id).kind === 'delta_neutral')
+      .map((inst) => {
+        const parsed = parseStrategyInstanceId(inst.id);
+        const symbol = inst.symbols?.[0] || parsed.symbols[0] || 'BTC:PERP-USDC';
+        const longExchange = parsed.exchanges[0] || 'long';
+        const shortExchange = parsed.exchanges[1] || 'short';
+        return {
+          id: inst.id,
+          symbol,
+          longExchange,
+          shortExchange,
+          label: `${symbol} - ${longExchange.toUpperCase()} / ${shortExchange.toUpperCase()}`,
+          longLabel: `${symbol} on ${longExchange.toUpperCase()}`,
+          shortLabel: `${symbol} on ${shortExchange.toUpperCase()}`,
+        };
+      });
+  }, [filteredInstances, instancesForSelectedType]);
+
+  useEffect(() => {
+    setProBotConfig((prev) => {
+      const nextAccount = prev.accountId || proAccountOptions[0]?.id || '';
+      const nextPair = prev.pairId || selectedInstanceId || proPairOptions[0]?.id || '';
+      if (nextAccount === prev.accountId && nextPair === prev.pairId) return prev;
+      return { ...prev, accountId: nextAccount, pairId: nextPair };
+    });
+  }, [proAccountOptions, proPairOptions, selectedInstanceId]);
+
+  useEffect(() => {
+    if (selectedType !== 'delta_neutral') return;
+    const activePairId = selectedInstanceId || deltaNeutralPairOptions[0]?.id || '';
+    const parsed = parseStrategyInstanceId(activePairId);
+    const longExchange = parsed.exchanges[0]?.toLowerCase() || '';
+    const shortExchange = parsed.exchanges[1]?.toLowerCase() || '';
+    const longAccount = proAccountOptions.find((account) => account.exchange === longExchange)?.id
+      || proAccountOptions[0]?.id
+      || '';
+    const shortAccount = proAccountOptions.find((account) => account.exchange === shortExchange)?.id
+      || proAccountOptions.find((account) => account.id !== longAccount)?.id
+      || longAccount
+      || '';
+
+    setDeltaNeutralConfig((prev) => {
+      const next = {
+        ...prev,
+        longAccountId: prev.longAccountId || longAccount,
+        shortAccountId: prev.shortAccountId || shortAccount,
+        longPairId: activePairId,
+        shortPairId: activePairId,
+      };
+      if (
+        next.longAccountId === prev.longAccountId
+        && next.shortAccountId === prev.shortAccountId
+        && next.longPairId === prev.longPairId
+        && next.shortPairId === prev.shortPairId
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [deltaNeutralPairOptions, proAccountOptions, selectedInstanceId, selectedType]);
+
   useEffect(() => {
     if (instancesForSelectedType.length > 0) {
       const preferred = filteredInstances.find((inst) => inst.id === selectedInstanceId)
@@ -647,6 +783,9 @@ function BotsPanel({ onClose }) {
     setTradeSize(20);
     setMaxPosition(200);
     setPreset('calm');
+    setLaunchMode('basic');
+    setProBotConfig(DEFAULT_PRO_BOT_CONFIG);
+    setDeltaNeutralConfig(DEFAULT_DELTA_NEUTRAL_CONFIG);
     setSelectedInstanceId('');
   }, []);
 
@@ -1450,6 +1589,30 @@ function BotsPanel({ onClose }) {
       });
   }, [selectedInstanceId, token, tradeSize, maxPosition, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder]);
 
+  const updateProBotConfig = useCallback((patch) => {
+    setProBotConfig((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const previewProBot = useCallback(() => {
+    const pair = proPairOptions.find((item) => item.id === proBotConfig.pairId)?.label
+      || getExchangeName(selectedInstanceId)
+      || 'selected market';
+    setNotice(`Pro MM bot mock configured for ${pair}. API launch wiring is not enabled yet.`);
+    setView('dashboard');
+  }, [proBotConfig.pairId, proPairOptions, selectedInstanceId]);
+
+  const updateDeltaNeutralConfig = useCallback((patch) => {
+    setDeltaNeutralConfig((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const previewDeltaNeutralBot = useCallback(() => {
+    const pair = deltaNeutralPairOptions.find((item) => item.id === deltaNeutralConfig.longPairId)?.label
+      || getExchangeName(selectedInstanceId)
+      || 'selected hedge pair';
+    setNotice(`Delta Neutral Pro mock configured for ${pair}. API launch wiring is not enabled yet.`);
+    setView('dashboard');
+  }, [deltaNeutralConfig.longPairId, deltaNeutralPairOptions, selectedInstanceId]);
+
   // Real-time WebSocket updates via Clash game backend mediator
   const [wsConnected, setWsConnected] = useState(false);
 
@@ -1609,13 +1772,14 @@ function BotsPanel({ onClose }) {
   }, [token, fetchInstances, fetchAccounts, fetchExchanges, fetchOrderHistory]);
 
   const goBack = useCallback(() => {
-    const index = STEPS.indexOf(step);
+    const steps = launchMode === 'pro' ? PRO_STEPS : STEPS;
+    const index = steps.indexOf(step);
     if (index <= 0) {
       setView('dashboard');
       return;
     }
-    setStep(STEPS[index - 1]);
-  }, [step]);
+    setStep(steps[index - 1]);
+  }, [launchMode, step]);
 
   const renderDashboard = () => (
     <>
@@ -1663,7 +1827,7 @@ function BotsPanel({ onClose }) {
           <span style={S.metricLabel}>Fills Today</span>
           <strong style={S.summaryValue}>{totalFills}</strong>
         </div>
-        <div style={{ ...S.summaryCard, borderColor: wsConnected ? '#43A047' : '#E53935' }}>
+        <div style={{ ...S.summaryCard, border: `3px solid ${wsConnected ? '#43A047' : '#E53935'}` }}>
           <span style={S.metricLabel}>Live Feed</span>
           <strong style={{ ...S.summaryValue, fontSize: 12, color: wsConnected ? '#43A047' : '#E53935' }}>
             {wsConnected ? '● Connected' : '○ Polling (WS offline)'}
@@ -2386,6 +2550,229 @@ function BotsPanel({ onClose }) {
     </>
   );
 
+  const renderDeltaNeutralPro = () => {
+    const selectedPair = deltaNeutralPairOptions.find((item) => item.id === deltaNeutralConfig.longPairId)
+      || deltaNeutralPairOptions[0];
+    const notional = Number(deltaNeutralConfig.notionalUsd) || 0;
+    const reserve = notional > 0 ? notional / 2 : 0.013163;
+    const feeEstimate = notional > 0 ? Math.max(notional * 0.0004, 0.01) : null;
+    const stopLabel = Number(deltaNeutralConfig.stopLossPct) <= 0
+      ? 'No limit'
+      : `${deltaNeutralConfig.stopLossPct}%`;
+
+    return (
+      <div style={S.deltaShell}>
+        <div className="bots-delta-grid" style={S.deltaGrid}>
+          <div style={S.deltaTradePanel}>
+            <span style={S.deltaSectionLabel}>Accounts and Pairs</span>
+            <div className="bots-delta-leg-grid" style={S.deltaLegGrid}>
+              <div style={S.deltaLegCard}>
+                <strong style={{ ...S.deltaLegTitle, color: '#00d084' }}>Long</strong>
+                <select
+                  value={deltaNeutralConfig.longAccountId}
+                  onChange={(event) => updateDeltaNeutralConfig({ longAccountId: event.target.value })}
+                  style={S.proSelect}
+                >
+                  {proAccountOptions.length > 0 ? proAccountOptions.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.label}{account.wallet ? ` - ${account.wallet.slice(0, 6)}...${account.wallet.slice(-4)}` : ''}
+                    </option>
+                  )) : (
+                    <option value="">No active account</option>
+                  )}
+                </select>
+                <div style={S.deltaPairRow}>
+                  <select
+                    value={deltaNeutralConfig.longPairId}
+                    onChange={(event) => {
+                      updateDeltaNeutralConfig({ longPairId: event.target.value, shortPairId: event.target.value });
+                      setSelectedInstanceId(event.target.value);
+                    }}
+                    style={S.deltaPairSelect}
+                  >
+                    {deltaNeutralPairOptions.length > 0 ? deltaNeutralPairOptions.map((pair) => (
+                      <option key={pair.id} value={pair.id}>{pair.longLabel}</option>
+                    )) : (
+                      <option value="">No hedge pair</option>
+                    )}
+                  </select>
+                  <span style={S.proMiniTag}>1x</span>
+                </div>
+              </div>
+
+              <div style={S.deltaSwapMark}>{"<->"}</div>
+
+              <div style={S.deltaLegCard}>
+                <strong style={{ ...S.deltaLegTitle, color: '#ff4d5d' }}>Short</strong>
+                <select
+                  value={deltaNeutralConfig.shortAccountId}
+                  onChange={(event) => updateDeltaNeutralConfig({ shortAccountId: event.target.value })}
+                  style={S.proSelect}
+                >
+                  {proAccountOptions.length > 0 ? proAccountOptions.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.label}{account.wallet ? ` - ${account.wallet.slice(0, 6)}...${account.wallet.slice(-4)}` : ''}
+                    </option>
+                  )) : (
+                    <option value="">No active account</option>
+                  )}
+                </select>
+                <div style={S.deltaPairRow}>
+                  <select
+                    value={deltaNeutralConfig.shortPairId}
+                    onChange={(event) => {
+                      updateDeltaNeutralConfig({ shortPairId: event.target.value, longPairId: event.target.value });
+                      setSelectedInstanceId(event.target.value);
+                    }}
+                    style={S.deltaPairSelect}
+                  >
+                    {deltaNeutralPairOptions.length > 0 ? deltaNeutralPairOptions.map((pair) => (
+                      <option key={pair.id} value={pair.id}>{pair.shortLabel}</option>
+                    )) : (
+                      <option value="">No hedge pair</option>
+                    )}
+                  </select>
+                  <span style={S.proMiniTag}>1x</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bots-delta-input-grid" style={S.deltaInputGrid}>
+              <label style={S.proField}>
+                <span style={S.proLabel}>Notional</span>
+                <div style={S.proMoneyInputWrap}>
+                  <span style={S.proDollar}>$</span>
+                  <input
+                    value={deltaNeutralConfig.notionalUsd}
+                    onChange={(event) => updateDeltaNeutralConfig({ notionalUsd: event.target.value })}
+                    placeholder="0"
+                    inputMode="decimal"
+                    style={S.proMoneyInput}
+                  />
+                </div>
+              </label>
+              <label style={S.proField}>
+                <span style={S.proLabelRow}>
+                  <span>TWAP Duration</span>
+                  <span>10 - 1440 min</span>
+                </span>
+                <div style={S.proNumberUnit}>
+                  <input
+                    type="number"
+                    min="10"
+                    max="1440"
+                    value={deltaNeutralConfig.twapMinutes}
+                    onChange={(event) => updateDeltaNeutralConfig({ twapMinutes: event.target.value })}
+                    style={S.proNumberInput}
+                  />
+                  <span>min</span>
+                </div>
+              </label>
+              <label style={S.proField}>
+                <span style={S.proLabel}>Position Duration</span>
+                <div style={S.proNumberUnit}>
+                  <input
+                    value={deltaNeutralConfig.positionMinutes}
+                    onChange={(event) => updateDeltaNeutralConfig({ positionMinutes: event.target.value })}
+                    placeholder="Infinity"
+                    inputMode="numeric"
+                    style={S.proNumberInput}
+                  />
+                  <span>min</span>
+                </div>
+              </label>
+            </div>
+
+            <div style={S.proField}>
+              <span style={S.proLabel}>Stop Loss</span>
+              <div className="bots-delta-stop-grid" style={S.deltaStopGrid}>
+                {DELTA_STOP_LOSS_OPTIONS.map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    style={{
+                      ...S.deltaStopButton,
+                      ...(Number(deltaNeutralConfig.stopLossPct) === value ? S.deltaStopActive : {}),
+                    }}
+                    onClick={() => updateDeltaNeutralConfig({ stopLossPct: value })}
+                  >
+                    {value <= 0 ? 'No limit' : `${value}%`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={S.deltaStartRow}>
+              <button type="button" style={S.deltaStartButton} onClick={previewDeltaNeutralBot}>
+                Start Mock Hedge
+              </button>
+              <button type="button" style={S.deltaIconButton} aria-label="Schedule mock hedge">O</button>
+              <button type="button" style={S.deltaIconButton} aria-label="Swap hedge sides">{"<->"}</button>
+            </div>
+          </div>
+
+          <div style={S.deltaSidePanel}>
+            <div style={S.deltaAnalysisCard}>
+              <div style={S.deltaPanelTitle}>Pre-Trade Analytics</div>
+              <div style={S.deltaAnalysisSection}>
+                <span style={{ ...S.deltaSideTitle, color: '#00d084' }}>Long Side</span>
+                <div style={S.deltaMetricRow}><span>Inventory (1x)</span><strong>${reserve.toFixed(6)}</strong></div>
+                <div style={S.deltaMetricRow}><span>Target Amount</span><strong>{notional > 0 ? money(notional / 2) : '-'}</strong></div>
+                <div style={S.deltaMetricRow}><span>Estimated Fees</span><strong>{feeEstimate ? `$${feeEstimate.toFixed(2)}` : '-'}</strong></div>
+                <div style={S.deltaMetricRow}><span>POV Long</span><strong>-</strong></div>
+                <div style={S.deltaMetricRow}>
+                  <span>External Funding Rate / 1h</span>
+                  <strong style={{ color: '#ff4d5d' }}>-0.0000%</strong>
+                </div>
+              </div>
+              <div style={S.deltaDivider} />
+              <div style={S.deltaAnalysisSection}>
+                <span style={{ ...S.deltaSideTitle, color: '#ff4d5d' }}>Short Side</span>
+                <div style={S.deltaMetricRow}><span>Inventory (1x)</span><strong>${reserve.toFixed(6)}</strong></div>
+                <div style={S.deltaMetricRow}><span>Target Amount</span><strong>{notional > 0 ? money(notional / 2) : '-'}</strong></div>
+                <div style={S.deltaMetricRow}><span>Estimated Fees</span><strong>{feeEstimate ? `$${feeEstimate.toFixed(2)}` : '-'}</strong></div>
+                <div style={S.deltaMetricRow}><span>POV Short</span><strong>-</strong></div>
+                <div style={S.deltaMetricRow}>
+                  <span>External Funding Rate / 1h</span>
+                  <strong style={{ color: '#00d084' }}>0.0013%</strong>
+                </div>
+              </div>
+              <div style={S.deltaDivider} />
+              <div style={S.deltaAnalysisSection}>
+                <span style={S.deltaSideTitle}>Net Position</span>
+                <div style={S.deltaMetricRow}>
+                  <span>Net External Funding Rate / 1h</span>
+                  <strong style={{ color: '#00d084' }}>0.0012%</strong>
+                </div>
+              </div>
+            </div>
+
+            <div style={S.deltaConfigCard}>
+              <div style={S.deltaPanelTitle}>Configuration</div>
+              <div style={S.deltaMetricRow}><span>TWAP Duration</span><strong>{deltaNeutralConfig.twapMinutes || 0} min</strong></div>
+              <div style={S.deltaMetricRow}><span>Participation Share</span><strong>{deltaNeutralConfig.participation}</strong></div>
+              <div style={S.deltaMetricRow}><span>Position Duration</span><strong>{deltaNeutralConfig.positionMinutes || 'No limit'}</strong></div>
+              <div style={S.deltaMetricRow}><span>Stop Loss</span><strong>{stopLabel}</strong></div>
+              <div style={S.deltaMetricRow}><span>Pair</span><strong>{selectedPair?.label || '-'}</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bots-delta-tabs" style={S.deltaTabs}>
+          {['Positions', 'Orders', 'History', 'Scheduled'].map((tab, index) => (
+            <button
+              key={tab}
+              type="button"
+              style={{ ...S.deltaTabButton, ...(index === 0 ? S.deltaTabActive : {}) }}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const renderLaunch = () => (
     <div style={S.launchShell}>
       <div style={S.launchHeader}>
@@ -2394,8 +2781,34 @@ function BotsPanel({ onClose }) {
             <polyline points="15 18 9 12 15 6" />
           </svg>
         </button>
-        <StepDots activeStep={step} />
+        <StepDots activeStep={step} steps={launchMode === 'pro' ? PRO_STEPS : STEPS} />
         <div style={shared.spacer36} />
+      </div>
+
+      <div style={S.modeSwitchCard}>
+        <div>
+          <span style={S.label}>Bot Setup Mode</span>
+          <p style={S.modeSwitchCopy}>Basic keeps the current launch flow. Pro is a mock advanced console for the selected strategy.</p>
+        </div>
+        <div style={S.modeSwitch}>
+          {[
+            ['basic', 'Basic'],
+            ['pro', 'Pro'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              style={{ ...S.modeSwitchButton, ...(launchMode === id ? S.modeSwitchActive : {}) }}
+              onClick={() => {
+                setLaunchMode(id);
+                if (id === 'pro' && step !== 'strategy') setStep('pro');
+                if (id === 'basic' && step === 'pro') setStep('risk');
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {step === 'strategy' && (
@@ -2411,7 +2824,7 @@ function BotsPanel({ onClose }) {
                 <button
                   key={bot.id}
                   type="button"
-                  style={{ ...S.strategyCard, ...(active ? { borderColor: bot.accent, boxShadow: `0 0 0 3px ${bot.accent}22, 0 4px 0 #d4c8b0` } : {}) }}
+                  style={{ ...S.strategyCard, ...(active ? { border: `3px solid ${bot.accent}`, boxShadow: `0 0 0 3px ${bot.accent}22, 0 4px 0 #d4c8b0` } : {}) }}
                   onClick={() => setSelectedType(bot.id)}
                 >
                   <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
@@ -2508,9 +2921,210 @@ function BotsPanel({ onClose }) {
               opacity: (selectedInstanceId && filteredInstances.length > 0) ? 1 : 0.6,
               cursor: (selectedInstanceId && filteredInstances.length > 0) ? 'pointer' : 'not-allowed',
             }}
-            onClick={() => setStep('risk')}
+            onClick={() => setStep(launchMode === 'pro' ? 'pro' : 'risk')}
           >
-            Continue
+            {launchMode === 'pro' ? 'Open Pro Setup' : 'Continue'}
+          </button>
+        </div>
+      )}
+
+      {step === 'pro' && selectedType === 'delta_neutral' && renderDeltaNeutralPro()}
+
+      {step === 'pro' && selectedType !== 'delta_neutral' && (
+        <div style={S.proShell}>
+          <div className="bots-pro-top-grid" style={S.proTopGrid}>
+            <label style={S.proFieldWide}>
+              <span style={S.proLabel}>Account</span>
+              <select
+                value={proBotConfig.accountId}
+                onChange={(event) => updateProBotConfig({ accountId: event.target.value })}
+                style={S.proSelect}
+              >
+                {proAccountOptions.length > 0 ? proAccountOptions.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.label}{account.wallet ? ` · ${account.wallet.slice(0, 6)}...${account.wallet.slice(-4)}` : ''}
+                  </option>
+                )) : (
+                  <option value="">No active account</option>
+                )}
+              </select>
+            </label>
+            <label style={S.proField}>
+              <span style={S.proLabel}>Pair</span>
+              <select
+                value={proBotConfig.pairId}
+                onChange={(event) => {
+                  updateProBotConfig({ pairId: event.target.value });
+                  setSelectedInstanceId(event.target.value);
+                }}
+                style={S.proSelect}
+              >
+                {proPairOptions.length > 0 ? proPairOptions.map((pair) => (
+                  <option key={pair.id} value={pair.id}>{pair.label}</option>
+                )) : (
+                  <option value="">No active pair</option>
+                )}
+              </select>
+            </label>
+            <button type="button" style={S.proPresetButton}>
+              Presets
+              <span style={S.proChevron}>v</span>
+            </button>
+          </div>
+
+          <div className="bots-pro-two-col" style={S.proTwoCol}>
+            <label style={S.proField}>
+              <span style={S.proLabel}>Margin</span>
+              <div style={S.proMoneyInputWrap}>
+                <span style={S.proDollar}>$</span>
+                <input
+                  value={proBotConfig.marginUsd}
+                  onChange={(event) => updateProBotConfig({ marginUsd: event.target.value })}
+                  placeholder="0"
+                  inputMode="decimal"
+                  style={S.proMoneyInput}
+                />
+                <span style={S.proMiniTag}>1x</span>
+              </div>
+            </label>
+            <label style={S.proField}>
+              <span style={S.proLabel}>Volume</span>
+              <div style={S.proMoneyInputWrap}>
+                <span style={S.proDollar}>$</span>
+                <input
+                  value={proBotConfig.volumeUsd}
+                  onChange={(event) => updateProBotConfig({ volumeUsd: event.target.value })}
+                  placeholder="0"
+                  inputMode="decimal"
+                  style={S.proMoneyInput}
+                />
+              </div>
+            </label>
+          </div>
+
+          <div className="bots-pro-two-col" style={S.proTwoCol}>
+            <div style={S.proField}>
+              <span style={S.proLabel}>Participation Share</span>
+              <div style={S.proSegmentGrid}>
+                {PRO_PARTICIPATION_MODES.map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    style={{
+                      ...S.proSegmentButton,
+                      ...(proBotConfig.participation === mode.id ? S.proSegmentActive : {}),
+                    }}
+                    onClick={() => updateProBotConfig({ participation: mode.id })}
+                  >
+                    <strong style={{ color: mode.tone }}>{mode.label}</strong>
+                    <span>{mode.detail}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label style={S.proField}>
+              <span style={S.proLabelRow}>
+                <span>Duration</span>
+                <span>5 mins - 5 hours</span>
+              </span>
+              <div style={S.proNumberUnit}>
+                <input
+                  type="number"
+                  min="5"
+                  max="300"
+                  value={proBotConfig.durationMinutes}
+                  onChange={(event) => updateProBotConfig({ durationMinutes: event.target.value })}
+                  style={S.proNumberInput}
+                />
+                <span>minutes</span>
+              </div>
+            </label>
+          </div>
+
+          <div style={S.proField}>
+            <span style={S.proLabel}>Reference Price</span>
+            <div className="bots-pro-reference-grid" style={S.proReferenceGrid}>
+              {PRO_REFERENCE_MODES.map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  style={{
+                    ...S.proReferenceButton,
+                    ...(proBotConfig.referenceMode === mode.id ? S.proReferenceActive : {}),
+                  }}
+                  onClick={() => updateProBotConfig({ referenceMode: mode.id })}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bots-pro-two-col" style={S.proTwoCol}>
+            <div style={S.proField}>
+              <span style={S.proLabel}>Directional Bias</span>
+              <div style={S.proBiasGrid}>
+                {PRO_BIAS_MODES.map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    style={{
+                      ...S.proBiasButton,
+                      ...(proBotConfig.bias === mode.id ? S.proBiasActive : {}),
+                    }}
+                    onClick={() => updateProBotConfig({ bias: mode.id })}
+                  >
+                    <span style={{ color: mode.tone }}>{mode.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label style={S.proField}>
+              <span style={S.proLabel}>Spread <strong>+{proBotConfig.spreadBps} bps</strong></span>
+              <input
+                className="bots-pro-range green"
+                type="range"
+                min="1"
+                max="50"
+                value={proBotConfig.spreadBps}
+                onChange={(event) => updateProBotConfig({ spreadBps: Number(event.target.value) })}
+              />
+            </label>
+          </div>
+
+          <div className="bots-pro-two-col" style={S.proTwoCol}>
+            <label style={S.proField}>
+              <span style={S.proLabelRow}>
+                <span>Stop Loss</span>
+                <strong>{proBotConfig.stopLossPct}%</strong>
+              </span>
+              <input
+                className="bots-pro-range yellow"
+                type="range"
+                min="0"
+                max="100"
+                value={proBotConfig.stopLossPct}
+                onChange={(event) => updateProBotConfig({ stopLossPct: Number(event.target.value) })}
+              />
+            </label>
+            <label style={S.proField}>
+              <span style={S.proLabelRow}>
+                <span>Take Profit</span>
+                <strong>{Number(proBotConfig.takeProfitPct) >= 100 ? 'No limit' : `${proBotConfig.takeProfitPct}%`}</strong>
+              </span>
+              <input
+                className="bots-pro-range yellow"
+                type="range"
+                min="0"
+                max="100"
+                value={proBotConfig.takeProfitPct}
+                onChange={(event) => updateProBotConfig({ takeProfitPct: Number(event.target.value) })}
+              />
+            </label>
+          </div>
+
+          <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.nextButton }} onClick={previewProBot}>
+            Save Pro Mock
           </button>
         </div>
       )}
@@ -2628,6 +3242,38 @@ const STYLE = `
   }
   .bots-range::-webkit-slider-thumb {
     box-shadow: 0 2px 0 rgba(0,0,0,0.28);
+  }
+  .bots-pro-range {
+    width: 100%;
+    height: 22px;
+    margin: 0;
+    cursor: pointer;
+    background: transparent;
+  }
+  .bots-pro-range.green {
+    accent-color: #00d084;
+  }
+  .bots-pro-range.yellow {
+    accent-color: #ffc928;
+  }
+  .bots-pro-range::-webkit-slider-thumb {
+    box-shadow: 0 0 0 4px rgba(0,208,132,0.14), 0 2px 0 rgba(0,0,0,0.45);
+  }
+  @media (max-width: 680px) {
+    .bots-pro-top-grid,
+    .bots-pro-two-col,
+    .bots-delta-grid,
+    .bots-delta-leg-grid,
+    .bots-delta-input-grid {
+      grid-template-columns: 1fr !important;
+    }
+    .bots-pro-reference-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    .bots-delta-stop-grid,
+    .bots-delta-tabs {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
   }
 `;
 
@@ -2801,7 +3447,7 @@ const S = {
   },
   segmentActive: {
     background: '#fdf8e7',
-    borderColor: '#bba882',
+    border: '2px solid #bba882',
     color: '#5C3A21',
     boxShadow: '0 2px 0 #bba882',
   },
@@ -3112,6 +3758,457 @@ const S = {
     flexShrink: 0,
     padding: 0,
   },
+  modeSwitchCard: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gap: 10,
+    alignItems: 'center',
+    background: '#e8dfc8',
+    border: '3px solid #d4c8b0',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
+  },
+  modeSwitchCopy: {
+    margin: '3px 0 0',
+    color: '#77573d',
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1.35,
+  },
+  modeSwitch: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 4,
+    padding: 4,
+    background: '#d4c8b0',
+    border: '2px solid #bba882',
+    borderRadius: 12,
+    minWidth: 150,
+  },
+  modeSwitchButton: {
+    border: '2px solid transparent',
+    background: 'transparent',
+    borderRadius: 8,
+    color: '#77573d',
+    fontSize: 12,
+    fontWeight: 900,
+    padding: '7px 10px',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  modeSwitchActive: {
+    background: '#fdf8e7',
+    border: '2px solid #43A047',
+    color: '#2E7D32',
+    boxShadow: '0 2px 0 #bba882',
+  },
+  proShell: {
+    background: 'linear-gradient(180deg, #15191f 0%, #10141a 100%)',
+    border: '2px solid #3b424d',
+    borderRadius: 12,
+    padding: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.03)',
+    color: '#d6e2ee',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+  },
+  proTopGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(220px, 1.35fr) minmax(180px, 1fr) 132px',
+    gap: 10,
+    alignItems: 'end',
+  },
+  proTwoCol: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 10,
+  },
+  proField: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+    minWidth: 0,
+  },
+  proFieldWide: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+    minWidth: 0,
+  },
+  proLabel: {
+    color: '#b9c7d4',
+    fontSize: 12,
+    fontWeight: 800,
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  proLabelRow: {
+    color: '#b9c7d4',
+    fontSize: 12,
+    fontWeight: 800,
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  proSelect: {
+    minHeight: 54,
+    background: '#1b2027',
+    border: '1px solid #4c5563',
+    color: '#e7f3ff',
+    fontSize: 13,
+    fontWeight: 800,
+    padding: '0 13px',
+    borderRadius: 0,
+    outline: 'none',
+    fontFamily: 'inherit',
+    width: '100%',
+  },
+  proPresetButton: {
+    minHeight: 54,
+    background: '#1b2027',
+    border: '1px solid #4c5563',
+    color: '#c6d2df',
+    fontSize: 13,
+    fontWeight: 800,
+    padding: '0 14px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  proChevron: {
+    color: '#93a3b5',
+    fontWeight: 900,
+  },
+  proMoneyInputWrap: {
+    minHeight: 72,
+    border: '1px solid #343b47',
+    background: '#15191f',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 9,
+    padding: '0 10px',
+  },
+  proDollar: {
+    color: '#8e98a6',
+    fontSize: 26,
+    fontWeight: 500,
+  },
+  proMoneyInput: {
+    flex: 1,
+    minWidth: 0,
+    border: 0,
+    outline: 0,
+    background: 'transparent',
+    color: '#e7f3ff',
+    fontSize: 28,
+    fontWeight: 500,
+    fontFamily: 'inherit',
+  },
+  proMiniTag: {
+    border: '1px solid #00d084',
+    color: '#00d084',
+    fontSize: 12,
+    fontWeight: 900,
+    padding: '5px 8px',
+  },
+  proNumberUnit: {
+    minHeight: 54,
+    border: '1px solid #343b47',
+    background: '#15191f',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    alignItems: 'center',
+    gap: 10,
+    padding: '0 12px',
+    color: '#b9c7d4',
+    fontSize: 12,
+    fontWeight: 800,
+  },
+  proNumberInput: {
+    minWidth: 0,
+    border: 0,
+    outline: 0,
+    background: 'transparent',
+    color: '#e7f3ff',
+    fontSize: 18,
+    fontWeight: 700,
+    fontFamily: 'inherit',
+  },
+  proSegmentGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    border: '1px solid #343b47',
+  },
+  proSegmentButton: {
+    minHeight: 58,
+    background: '#15191f',
+    border: 0,
+    borderRight: '1px solid #343b47',
+    color: '#c6d2df',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    fontFamily: 'inherit',
+    fontSize: 12,
+    fontWeight: 800,
+  },
+  proSegmentActive: {
+    background: '#332d22',
+    boxShadow: 'inset 0 -2px 0 rgba(255,201,40,0.45)',
+  },
+  proReferenceGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
+    border: '1px solid #343b47',
+  },
+  proReferenceButton: {
+    minHeight: 40,
+    border: 0,
+    borderRight: '1px solid #343b47',
+    background: '#15191f',
+    color: '#ff9f43',
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  proReferenceActive: {
+    background: '#353941',
+    color: '#fff',
+  },
+  proBiasGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    border: '1px solid #343b47',
+  },
+  proBiasButton: {
+    minHeight: 40,
+    border: 0,
+    borderRight: '1px solid #343b47',
+    background: '#15191f',
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  proBiasActive: {
+    background: '#463d26',
+    boxShadow: 'inset 0 -2px 0 rgba(255,201,40,0.45)',
+  },
+  deltaShell: {
+    background: 'linear-gradient(180deg, #15191f 0%, #10141a 100%)',
+    border: '2px solid #3b424d',
+    borderRadius: 12,
+    padding: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 14,
+    color: '#d6e2ee',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.03)',
+  },
+  deltaGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 2.2fr) minmax(260px, 0.95fr)',
+    gap: 14,
+    alignItems: 'start',
+  },
+  deltaTradePanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    minWidth: 0,
+  },
+  deltaSectionLabel: {
+    color: '#d6e2ee',
+    fontSize: 13,
+    fontWeight: 800,
+  },
+  deltaLegGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) 44px minmax(0, 1fr)',
+    gap: 10,
+    alignItems: 'center',
+  },
+  deltaLegCard: {
+    border: '1px solid #4c5563',
+    background: '#1b2027',
+    padding: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+    minWidth: 0,
+  },
+  deltaLegTitle: {
+    fontSize: 18,
+    fontWeight: 900,
+    letterSpacing: 0,
+  },
+  deltaSwapMark: {
+    color: '#ffc928',
+    fontSize: 17,
+    fontWeight: 900,
+    textAlign: 'center',
+  },
+  deltaPairRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gap: 10,
+    alignItems: 'center',
+    minHeight: 58,
+  },
+  deltaPairSelect: {
+    minHeight: 58,
+    background: '#15191f',
+    border: '1px solid #4c5563',
+    color: '#e7f3ff',
+    fontSize: 17,
+    fontWeight: 900,
+    padding: '0 13px',
+    borderRadius: 0,
+    outline: 'none',
+    fontFamily: 'inherit',
+    width: '100%',
+  },
+  deltaInputGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)',
+    gap: 10,
+  },
+  deltaStopGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+    border: '1px solid #343b47',
+  },
+  deltaStopButton: {
+    minHeight: 40,
+    border: 0,
+    borderRight: '1px solid #343b47',
+    background: '#15191f',
+    color: '#e7f3ff',
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  deltaStopActive: {
+    background: '#4b4022',
+    color: '#fff',
+    boxShadow: 'inset 0 -2px 0 #ffc928',
+  },
+  deltaStartRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) 60px 60px',
+    gap: 8,
+  },
+  deltaStartButton: {
+    minHeight: 56,
+    border: '1px solid #343b47',
+    background: '#15191f',
+    color: '#8e98a6',
+    fontSize: 14,
+    fontWeight: 900,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  deltaIconButton: {
+    minHeight: 56,
+    border: '1px solid #343b47',
+    background: '#15191f',
+    color: '#c6d2df',
+    fontSize: 18,
+    fontWeight: 900,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  deltaSidePanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    minWidth: 0,
+  },
+  deltaAnalysisCard: {
+    border: '1px solid #3b424d',
+    background: '#15191f',
+    padding: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 9,
+  },
+  deltaConfigCard: {
+    border: '1px solid #3b424d',
+    background: '#15191f',
+    padding: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+  },
+  deltaPanelTitle: {
+    color: '#d6e2ee',
+    fontSize: 13,
+    fontWeight: 900,
+  },
+  deltaAnalysisSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  deltaSideTitle: {
+    color: '#d6e2ee',
+    fontSize: 11,
+    fontWeight: 900,
+  },
+  deltaMetricRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gap: 10,
+    alignItems: 'baseline',
+    color: '#c6d2df',
+    fontSize: 12,
+    fontWeight: 700,
+    borderBottom: '1px dashed rgba(198,210,223,0.25)',
+    paddingBottom: 3,
+  },
+  deltaDivider: {
+    height: 1,
+    background: '#343b47',
+  },
+  deltaTabs: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+    borderTop: '1px solid #343b47',
+    paddingTop: 14,
+    gap: 8,
+  },
+  deltaTabButton: {
+    minHeight: 52,
+    border: '1px solid transparent',
+    borderBottom: '3px solid transparent',
+    background: 'transparent',
+    color: '#c6d2df',
+    fontSize: 16,
+    fontWeight: 900,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  deltaTabActive: {
+    border: '1px solid #343b47',
+    borderBottom: '3px solid #ffc928',
+    color: '#ffc928',
+    background: '#15191f',
+  },
   stepPage: {
     flex: 1,
     minHeight: 0,
@@ -3225,7 +4322,7 @@ const S = {
   },
   presetActive: {
     background: '#fdf8e7',
-    borderColor: '#1E88E5',
+    border: '2px solid #1E88E5',
     color: '#1565C0',
     boxShadow: '0 2px 0 #bba882',
   },
