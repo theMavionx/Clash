@@ -1581,6 +1581,7 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
         chain: confirmed.chain || body.chain || 'unknown',
         quantity: confirmed.quantity || body.quantity || 1,
         tokenIds: Array.isArray(confirmed.tokenIds) ? confirmed.tokenIds : [],
+        buyer: confirmed.buyer || body.buyer || body.wallet || null,
         reservationId: confirmed.reservationId || body.reservationId || null,
         tx,
       };
@@ -1614,6 +1615,7 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
       chain,
       quantity,
       tokenIds: mintedTokenIds,
+      buyer: reservation.buyer || body.buyer || body.wallet || null,
       confirmedAt: new Date().toISOString(),
     });
     state.confirmedTxs = state.confirmedTxs.slice(-200);
@@ -1632,6 +1634,65 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
     tx,
   };
 });
+
+function playerFromOptionalToken(req) {
+  const token = String(
+    req.get?.('x-token')
+    || req.get?.('x-player-token')
+    || req.body?.playerToken
+    || req.body?.token
+    || ''
+  ).trim();
+  if (!token) return null;
+  try { return db.stmts.getPlayerByToken.get(token) || null; } catch { return null; }
+}
+
+function linkSecondaryWalletToPlayer(playerId, wallet, label = 'NFT mint wallet') {
+  if (!playerId || !wallet || !isStorableAuthWallet(wallet)) return;
+  const chainType = walletChainType(wallet);
+  const identifier = canonicalWalletIdentifier(wallet);
+  try {
+    db.db.prepare(`
+      INSERT INTO player_wallets (player_id, chain_type, address, label, is_primary, updated_at)
+      VALUES (?, ?, ?, ?, 0, datetime('now'))
+      ON CONFLICT(chain_type, address) DO UPDATE SET
+        player_id = excluded.player_id,
+        label = COALESCE(player_wallets.label, excluded.label),
+        updated_at = datetime('now')
+    `).run(playerId, chainType, identifier, label);
+  } catch (e) {
+    console.warn('[nft] secondary wallet link failed:', e.message);
+  }
+}
+
+function bindMintedCollectionNftsToPlayer({ req, collection, player, chain, owner, tokenIds, txHash }) {
+  if (!player?.id || !collection?.slug || !chain || !owner || !Array.isArray(tokenIds) || !tokenIds.length) return [];
+  linkSecondaryWalletToPlayer(player.id, owner);
+  const imageUrl = nftCollectionImageUrl(req, collection, 1);
+  const bound = [];
+  for (const tokenId of tokenIds) {
+    const tokenIdText = String(tokenId || '').trim();
+    if (!tokenIdText) continue;
+    try {
+      const token = db.bindPlayerCollectionNft(player.id, collection.slug, owner, {
+        chain,
+        tokenId: tokenIdText,
+        level: 1,
+        imageUrl,
+      }, { source: 'mint-confirm', txHash });
+      if (token) bound.push(token);
+    } catch (e) {
+      console.warn('[nft] minted NFT player bind failed:', {
+        player_id: player.id,
+        collection: collection.slug,
+        chain,
+        token_id: tokenIdText,
+        error: e?.message || String(e),
+      });
+    }
+  }
+  return bound;
+}
 
 function collectionMintRaritySeed(collection) {
   const envKey = `NFT_${String(collection?.slug || '').toUpperCase()}_RARITY_REVEAL_SEED`;
@@ -4947,6 +5008,16 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
       buyer: result.buyer || req.body?.buyer || req.body?.wallet || null,
     };
     const rarities = result.alreadyConfirmed ? [] : recordCollectionMintRarities(collection, resultForRarity);
+    const playerForMint = playerFromOptionalToken(req);
+    const playerInventoryTokens = bindMintedCollectionNftsToPlayer({
+      req,
+      collection,
+      player: playerForMint,
+      chain,
+      owner: resultForRarity.buyer,
+      tokenIds: rarityTokenIds,
+      txHash: resultForRarity.tx || txHash,
+    });
     const solanaRaritySync = [];
     if (chain === 'solana' && nftCollectionUsesRarity(collection) && rarityTokenIds.length) {
       for (const tokenId of rarityTokenIds) {
@@ -4983,6 +5054,7 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
       ...result,
       tokenIds: resultTokenIds.length ? resultTokenIds : rarityTokenIds,
       rarities,
+      playerInventoryTokens,
       solanaRaritySync,
       solanaRaritySyncOk: solanaRaritySync.every((row) => !row?.error),
     });

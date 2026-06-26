@@ -60,12 +60,14 @@ export async function reserveNftMint({ collection = NFT_SALE_COLLECTION, chain, 
   return json;
 }
 
-export async function confirmNftMint({ collection = NFT_SALE_COLLECTION, chain, reservationId, tx, quantity = 1, tokenIds = [], asset = null }) {
+export async function confirmNftMint({ collection = NFT_SALE_COLLECTION, chain, reservationId, tx, quantity = 1, tokenIds = [], asset = null, buyer = null }) {
   if (!reservationId) return null;
+  const headers = { 'Content-Type': 'application/json' };
+  if (typeof window !== 'undefined' && window._playerToken) headers['x-token'] = window._playerToken;
   const response = await fetch(`${nftCollectionPath(collection)}/mint/confirm`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chain, reservationId, tx, quantity, tokenIds, asset }),
+    headers,
+    body: JSON.stringify({ chain, reservationId, tx, quantity, tokenIds, asset, buyer }),
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(json?.error || `NFT confirm failed (${response.status})`);
@@ -431,6 +433,7 @@ export async function mintSolanaNft({ solWallet, config, payment, collection = N
     tx,
     quantity: 1,
     asset: assetAddress,
+    buyer: address,
   }).catch((err) => {
     console.warn('[nft] mint confirm failed', err?.message || err);
     return { ok: false, error: err?.message || String(err) };

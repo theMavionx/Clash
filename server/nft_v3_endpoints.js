@@ -926,6 +926,19 @@ function playerLinkedDemonKingWallet(player, chainKey, wallet, getAddress) {
     player?.wallet,
     player?.nft_gold_boost_wallet,
   ].filter(Boolean);
+  try {
+    const rows = gameDb.db.prepare(`
+      SELECT address
+        FROM player_wallets
+       WHERE player_id = ?
+         AND chain_type = ?
+    `).all(player?.id, chainKey === 'aptos' ? 'aptos' : chainKey === 'solana' ? 'solana' : 'evm');
+    for (const row of rows || []) {
+      if (row?.address) candidates.push(row.address);
+    }
+  } catch {
+    // Older DBs may not have the unified wallet table during local migrations.
+  }
   if (DEMON_KING_EVM_CHAINS.includes(chainKey)) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(String(wallet || ''))) return false;
     let expected = null;
