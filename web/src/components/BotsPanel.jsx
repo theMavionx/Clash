@@ -3385,11 +3385,6 @@ const S = {
     flexDirection: 'column',
     boxSizing: 'border-box',
   },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 900,
-    color: '#5C3A21',
-  },
   sectionDesc: {
     fontSize: 12,
     fontWeight: 700,
