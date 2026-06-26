@@ -115,15 +115,15 @@ const PRO_REFERENCE_MODES = [
 ];
 
 const PRO_PARTICIPATION_MODES = [
-  { id: 'aggressive', label: 'Aggressive', detail: '~5 min', tone: '#ff4d5d' },
-  { id: 'normal', label: 'Normal', detail: '~10 min', tone: '#c7b98b' },
-  { id: 'passive', label: 'Passive', detail: '~30 min', tone: '#00d084' },
+  { id: 'aggressive', label: 'Aggressive', detail: '~5 min', tone: '#C62828' },
+  { id: 'normal', label: 'Normal', detail: '~10 min', tone: '#5C3A21' },
+  { id: 'passive', label: 'Passive', detail: '~30 min', tone: '#2E7D32' },
 ];
 
 const PRO_BIAS_MODES = [
-  { id: 'short', label: 'Short', tone: '#ff4d5d' },
-  { id: 'neutral', label: 'Neutral', tone: '#fff4c4' },
-  { id: 'long', label: 'Long', tone: '#00d084' },
+  { id: 'short', label: 'Short', tone: '#C62828' },
+  { id: 'neutral', label: 'Neutral', tone: '#8B6500' },
+  { id: 'long', label: 'Long', tone: '#2E7D32' },
 ];
 
 const DEFAULT_PRO_BOT_CONFIG = {
@@ -2567,7 +2567,7 @@ function BotsPanel({ onClose }) {
             <span style={S.deltaSectionLabel}>Accounts and Pairs</span>
             <div className="bots-delta-leg-grid" style={S.deltaLegGrid}>
               <div style={S.deltaLegCard}>
-                <strong style={{ ...S.deltaLegTitle, color: '#00d084' }}>Long</strong>
+                <strong style={{ ...S.deltaLegTitle, color: '#2E7D32' }}>Long</strong>
                 <select
                   value={deltaNeutralConfig.longAccountId}
                   onChange={(event) => updateDeltaNeutralConfig({ longAccountId: event.target.value })}
@@ -2603,7 +2603,7 @@ function BotsPanel({ onClose }) {
               <div style={S.deltaSwapMark}>{"<->"}</div>
 
               <div style={S.deltaLegCard}>
-                <strong style={{ ...S.deltaLegTitle, color: '#ff4d5d' }}>Short</strong>
+                <strong style={{ ...S.deltaLegTitle, color: '#C62828' }}>Short</strong>
                 <select
                   value={deltaNeutralConfig.shortAccountId}
                   onChange={(event) => updateDeltaNeutralConfig({ shortAccountId: event.target.value })}
@@ -2715,26 +2715,26 @@ function BotsPanel({ onClose }) {
             <div style={S.deltaAnalysisCard}>
               <div style={S.deltaPanelTitle}>Pre-Trade Analytics</div>
               <div style={S.deltaAnalysisSection}>
-                <span style={{ ...S.deltaSideTitle, color: '#00d084' }}>Long Side</span>
+                <span style={{ ...S.deltaSideTitle, color: '#2E7D32' }}>Long Side</span>
                 <div style={S.deltaMetricRow}><span>Inventory (1x)</span><strong>${reserve.toFixed(6)}</strong></div>
                 <div style={S.deltaMetricRow}><span>Target Amount</span><strong>{notional > 0 ? money(notional / 2) : '-'}</strong></div>
                 <div style={S.deltaMetricRow}><span>Estimated Fees</span><strong>{feeEstimate ? `$${feeEstimate.toFixed(2)}` : '-'}</strong></div>
                 <div style={S.deltaMetricRow}><span>POV Long</span><strong>-</strong></div>
                 <div style={S.deltaMetricRow}>
                   <span>External Funding Rate / 1h</span>
-                  <strong style={{ color: '#ff4d5d' }}>-0.0000%</strong>
+                  <strong style={{ color: '#C62828' }}>-0.0000%</strong>
                 </div>
               </div>
               <div style={S.deltaDivider} />
               <div style={S.deltaAnalysisSection}>
-                <span style={{ ...S.deltaSideTitle, color: '#ff4d5d' }}>Short Side</span>
+                <span style={{ ...S.deltaSideTitle, color: '#C62828' }}>Short Side</span>
                 <div style={S.deltaMetricRow}><span>Inventory (1x)</span><strong>${reserve.toFixed(6)}</strong></div>
                 <div style={S.deltaMetricRow}><span>Target Amount</span><strong>{notional > 0 ? money(notional / 2) : '-'}</strong></div>
                 <div style={S.deltaMetricRow}><span>Estimated Fees</span><strong>{feeEstimate ? `$${feeEstimate.toFixed(2)}` : '-'}</strong></div>
                 <div style={S.deltaMetricRow}><span>POV Short</span><strong>-</strong></div>
                 <div style={S.deltaMetricRow}>
                   <span>External Funding Rate / 1h</span>
-                  <strong style={{ color: '#00d084' }}>0.0013%</strong>
+                  <strong style={{ color: '#2E7D32' }}>0.0013%</strong>
                 </div>
               </div>
               <div style={S.deltaDivider} />
@@ -2742,7 +2742,7 @@ function BotsPanel({ onClose }) {
                 <span style={S.deltaSideTitle}>Net Position</span>
                 <div style={S.deltaMetricRow}>
                   <span>Net External Funding Rate / 1h</span>
-                  <strong style={{ color: '#00d084' }}>0.0012%</strong>
+                  <strong style={{ color: '#2E7D32' }}>0.0012%</strong>
                 </div>
               </div>
             </div>
@@ -3251,13 +3251,13 @@ const STYLE = `
     background: transparent;
   }
   .bots-pro-range.green {
-    accent-color: #00d084;
+    accent-color: #43A047;
   }
   .bots-pro-range.yellow {
-    accent-color: #ffc928;
+    accent-color: #E8B830;
   }
   .bots-pro-range::-webkit-slider-thumb {
-    box-shadow: 0 0 0 4px rgba(0,208,132,0.14), 0 2px 0 rgba(0,0,0,0.45);
+    box-shadow: 0 0 0 4px rgba(232,184,48,0.22), 0 2px 0 rgba(92,58,33,0.28);
   }
   @media (max-width: 680px) {
     .bots-pro-top-grid,
@@ -3804,15 +3804,15 @@ const S = {
     boxShadow: '0 2px 0 #bba882',
   },
   proShell: {
-    background: 'linear-gradient(180deg, #15191f 0%, #10141a 100%)',
-    border: '2px solid #3b424d',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
+    border: '3px solid #d4c8b0',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
     gap: 12,
-    boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.03)',
-    color: '#d6e2ee',
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 0 rgba(92,58,33,0.12)',
+    color: '#5C3A21',
     overflowY: 'auto',
     overflowX: 'hidden',
   },
@@ -3840,39 +3840,40 @@ const S = {
     minWidth: 0,
   },
   proLabel: {
-    color: '#b9c7d4',
+    color: '#5C3A21',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 900,
     display: 'flex',
     justifyContent: 'space-between',
     gap: 8,
   },
   proLabelRow: {
-    color: '#b9c7d4',
+    color: '#5C3A21',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 900,
     display: 'flex',
     justifyContent: 'space-between',
     gap: 8,
   },
   proSelect: {
     minHeight: 54,
-    background: '#1b2027',
-    border: '1px solid #4c5563',
-    color: '#e7f3ff',
+    background: '#fdf8e7',
+    border: '2px solid #d4c8b0',
+    color: '#5C3A21',
     fontSize: 13,
     fontWeight: 800,
     padding: '0 13px',
-    borderRadius: 0,
+    borderRadius: 10,
     outline: 'none',
     fontFamily: 'inherit',
     width: '100%',
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
   },
   proPresetButton: {
     minHeight: 54,
-    background: '#1b2027',
-    border: '1px solid #4c5563',
-    color: '#c6d2df',
+    background: '#fdf8e7',
+    border: '2px solid #d4c8b0',
+    color: '#5C3A21',
     fontSize: 13,
     fontWeight: 800,
     padding: '0 14px',
@@ -3882,22 +3883,26 @@ const S = {
     gap: 10,
     cursor: 'pointer',
     fontFamily: 'inherit',
+    borderRadius: 10,
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
   },
   proChevron: {
-    color: '#93a3b5',
+    color: '#8b7655',
     fontWeight: 900,
   },
   proMoneyInputWrap: {
     minHeight: 72,
-    border: '1px solid #343b47',
-    background: '#15191f',
+    border: '2px solid #d4c8b0',
+    background: '#fdf8e7',
     display: 'flex',
     alignItems: 'center',
     gap: 9,
     padding: '0 10px',
+    borderRadius: 12,
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
   },
   proDollar: {
-    color: '#8e98a6',
+    color: '#a3906a',
     fontSize: 26,
     fontWeight: 500,
   },
@@ -3907,37 +3912,41 @@ const S = {
     border: 0,
     outline: 0,
     background: 'transparent',
-    color: '#e7f3ff',
+    color: '#5C3A21',
     fontSize: 28,
     fontWeight: 500,
     fontFamily: 'inherit',
   },
   proMiniTag: {
-    border: '1px solid #00d084',
-    color: '#00d084',
+    border: '2px solid #43A047',
+    color: '#2E7D32',
     fontSize: 12,
     fontWeight: 900,
     padding: '5px 8px',
+    borderRadius: 6,
+    background: 'rgba(67,160,71,0.12)',
   },
   proNumberUnit: {
     minHeight: 54,
-    border: '1px solid #343b47',
-    background: '#15191f',
+    border: '2px solid #d4c8b0',
+    background: '#fdf8e7',
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) auto',
     alignItems: 'center',
     gap: 10,
     padding: '0 12px',
-    color: '#b9c7d4',
+    color: '#77573d',
     fontSize: 12,
     fontWeight: 800,
+    borderRadius: 10,
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
   },
   proNumberInput: {
     minWidth: 0,
     border: 0,
     outline: 0,
     background: 'transparent',
-    color: '#e7f3ff',
+    color: '#5C3A21',
     fontSize: 18,
     fontWeight: 700,
     fontFamily: 'inherit',
@@ -3945,14 +3954,16 @@ const S = {
   proSegmentGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    border: '1px solid #343b47',
+    border: '2px solid #d4c8b0',
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   proSegmentButton: {
     minHeight: 58,
-    background: '#15191f',
+    background: '#fdf8e7',
     border: 0,
-    borderRight: '1px solid #343b47',
-    color: '#c6d2df',
+    borderRight: '2px solid #d4c8b0',
+    color: '#77573d',
     cursor: 'pointer',
     display: 'flex',
     flexDirection: 'column',
@@ -3964,60 +3975,66 @@ const S = {
     fontWeight: 800,
   },
   proSegmentActive: {
-    background: '#332d22',
-    boxShadow: 'inset 0 -2px 0 rgba(255,201,40,0.45)',
+    background: 'linear-gradient(180deg, #fff2a8 0%, #e8b830 100%)',
+    color: '#5C3A21',
+    boxShadow: 'inset 0 -3px 0 rgba(92,58,33,0.22)',
   },
   proReferenceGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-    border: '1px solid #343b47',
+    border: '2px solid #d4c8b0',
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   proReferenceButton: {
     minHeight: 40,
     border: 0,
-    borderRight: '1px solid #343b47',
-    background: '#15191f',
-    color: '#ff9f43',
+    borderRight: '2px solid #d4c8b0',
+    background: '#fdf8e7',
+    color: '#8B6500',
     fontSize: 12,
     fontWeight: 900,
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
   proReferenceActive: {
-    background: '#353941',
-    color: '#fff',
+    background: 'linear-gradient(180deg, #5bb6e6 0%, #2c83ba 100%)',
+    color: '#fff7df',
+    textShadow: '0 1px 0 rgba(0,0,0,0.25)',
   },
   proBiasGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    border: '1px solid #343b47',
+    border: '2px solid #d4c8b0',
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   proBiasButton: {
     minHeight: 40,
     border: 0,
-    borderRight: '1px solid #343b47',
-    background: '#15191f',
+    borderRight: '2px solid #d4c8b0',
+    background: '#fdf8e7',
     fontSize: 12,
     fontWeight: 900,
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
   proBiasActive: {
-    background: '#463d26',
-    boxShadow: 'inset 0 -2px 0 rgba(255,201,40,0.45)',
+    background: 'linear-gradient(180deg, #fff2a8 0%, #e8b830 100%)',
+    boxShadow: 'inset 0 -3px 0 rgba(92,58,33,0.22)',
   },
   deltaShell: {
-    background: 'linear-gradient(180deg, #15191f 0%, #10141a 100%)',
-    border: '2px solid #3b424d',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
+    border: '3px solid #d4c8b0',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
     gap: 14,
-    color: '#d6e2ee',
+    color: '#5C3A21',
     overflowY: 'auto',
     overflowX: 'hidden',
-    boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.03)',
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 0 rgba(92,58,33,0.12)',
   },
   deltaGrid: {
     display: 'grid',
@@ -4032,9 +4049,9 @@ const S = {
     minWidth: 0,
   },
   deltaSectionLabel: {
-    color: '#d6e2ee',
+    color: '#5C3A21',
     fontSize: 13,
-    fontWeight: 800,
+    fontWeight: 900,
   },
   deltaLegGrid: {
     display: 'grid',
@@ -4043,13 +4060,15 @@ const S = {
     alignItems: 'center',
   },
   deltaLegCard: {
-    border: '1px solid #4c5563',
-    background: '#1b2027',
+    border: '2px solid #d4c8b0',
+    background: '#fdf8e7',
+    borderRadius: 12,
     padding: 10,
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
     minWidth: 0,
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
   },
   deltaLegTitle: {
     fontSize: 18,
@@ -4057,7 +4076,7 @@ const S = {
     letterSpacing: 0,
   },
   deltaSwapMark: {
-    color: '#ffc928',
+    color: '#8B6500',
     fontSize: 17,
     fontWeight: 900,
     textAlign: 'center',
@@ -4071,13 +4090,13 @@ const S = {
   },
   deltaPairSelect: {
     minHeight: 58,
-    background: '#15191f',
-    border: '1px solid #4c5563',
-    color: '#e7f3ff',
+    background: '#fffaf0',
+    border: '2px solid #d4c8b0',
+    color: '#5C3A21',
     fontSize: 17,
     fontWeight: 900,
     padding: '0 13px',
-    borderRadius: 0,
+    borderRadius: 10,
     outline: 'none',
     fontFamily: 'inherit',
     width: '100%',
@@ -4090,23 +4109,25 @@ const S = {
   deltaStopGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-    border: '1px solid #343b47',
+    border: '2px solid #d4c8b0',
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   deltaStopButton: {
     minHeight: 40,
     border: 0,
-    borderRight: '1px solid #343b47',
-    background: '#15191f',
-    color: '#e7f3ff',
+    borderRight: '2px solid #d4c8b0',
+    background: '#fdf8e7',
+    color: '#5C3A21',
     fontSize: 12,
     fontWeight: 900,
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
   deltaStopActive: {
-    background: '#4b4022',
-    color: '#fff',
-    boxShadow: 'inset 0 -2px 0 #ffc928',
+    background: 'linear-gradient(180deg, #fff2a8 0%, #e8b830 100%)',
+    color: '#5C3A21',
+    boxShadow: 'inset 0 -3px 0 rgba(92,58,33,0.22)',
   },
   deltaStartRow: {
     display: 'grid',
@@ -4115,23 +4136,28 @@ const S = {
   },
   deltaStartButton: {
     minHeight: 56,
-    border: '1px solid #343b47',
-    background: '#15191f',
-    color: '#8e98a6',
+    border: '3px solid #2E7D32',
+    background: 'linear-gradient(180deg, #78d66b 0%, #43A047 100%)',
+    color: '#fff7df',
     fontSize: 14,
     fontWeight: 900,
     cursor: 'pointer',
     fontFamily: 'inherit',
+    borderRadius: 12,
+    textShadow: '0 2px 0 rgba(0,0,0,0.25)',
+    boxShadow: '0 4px 0 #1b5e20, 0 8px 12px rgba(0,0,0,0.18)',
   },
   deltaIconButton: {
     minHeight: 56,
-    border: '1px solid #343b47',
-    background: '#15191f',
-    color: '#c6d2df',
+    border: '2px solid #d4c8b0',
+    background: '#fdf8e7',
+    color: '#5C3A21',
     fontSize: 18,
     fontWeight: 900,
     cursor: 'pointer',
     fontFamily: 'inherit',
+    borderRadius: 12,
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
   },
   deltaSidePanel: {
     display: 'flex',
@@ -4140,23 +4166,27 @@ const S = {
     minWidth: 0,
   },
   deltaAnalysisCard: {
-    border: '1px solid #3b424d',
-    background: '#15191f',
+    border: '2px solid #d4c8b0',
+    background: '#fdf8e7',
+    borderRadius: 12,
     padding: 10,
     display: 'flex',
     flexDirection: 'column',
     gap: 9,
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
   },
   deltaConfigCard: {
-    border: '1px solid #3b424d',
-    background: '#15191f',
+    border: '2px solid #d4c8b0',
+    background: '#fdf8e7',
+    borderRadius: 12,
     padding: 10,
     display: 'flex',
     flexDirection: 'column',
     gap: 7,
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
   },
   deltaPanelTitle: {
-    color: '#d6e2ee',
+    color: '#5C3A21',
     fontSize: 13,
     fontWeight: 900,
   },
@@ -4166,7 +4196,7 @@ const S = {
     gap: 6,
   },
   deltaSideTitle: {
-    color: '#d6e2ee',
+    color: '#5C3A21',
     fontSize: 11,
     fontWeight: 900,
   },
@@ -4175,39 +4205,40 @@ const S = {
     gridTemplateColumns: 'minmax(0, 1fr) auto',
     gap: 10,
     alignItems: 'baseline',
-    color: '#c6d2df',
+    color: '#77573d',
     fontSize: 12,
     fontWeight: 700,
-    borderBottom: '1px dashed rgba(198,210,223,0.25)',
+    borderBottom: '1px dashed rgba(92,58,33,0.22)',
     paddingBottom: 3,
   },
   deltaDivider: {
     height: 1,
-    background: '#343b47',
+    background: '#d4c8b0',
   },
   deltaTabs: {
     display: 'grid',
     gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-    borderTop: '1px solid #343b47',
+    borderTop: '2px solid #d4c8b0',
     paddingTop: 14,
     gap: 8,
   },
   deltaTabButton: {
     minHeight: 52,
-    border: '1px solid transparent',
+    border: '2px solid transparent',
     borderBottom: '3px solid transparent',
     background: 'transparent',
-    color: '#c6d2df',
+    color: '#77573d',
     fontSize: 16,
     fontWeight: 900,
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
   deltaTabActive: {
-    border: '1px solid #343b47',
-    borderBottom: '3px solid #ffc928',
-    color: '#ffc928',
-    background: '#15191f',
+    border: '2px solid #d4c8b0',
+    borderBottom: '3px solid #E8B830',
+    color: '#5C3A21',
+    background: '#fdf8e7',
+    borderRadius: 12,
   },
   stepPage: {
     flex: 1,

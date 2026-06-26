@@ -133,6 +133,7 @@ function BasicTradeFlow({
       account?.available_to_spend                  // Pacifica unified margin
         ?? account?.usdc_cross_withdrawable_balance // Decibel
         ?? account?.usdcAvailable                   // Avantis
+        ?? account?.usdc_balance                    // Ostium self-custody wallet balance
         ?? account?.usdc                            // GMX
         ?? account?.perp_equity_balance             // Decibel fallback
         ?? account?.balance                         // last-resort

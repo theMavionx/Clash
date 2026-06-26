@@ -34,6 +34,7 @@ let readClient = null;
 let marketCache = { at: 0, rows: [], pairById: new Map() };
 let priceCache = { at: 0, rows: [] };
 const CACHE_TTL_MS = 15_000;
+const STALE_CACHE_TTL_MS = 10 * 60_000;
 
 function clampBuilderFee(value) {
   const fee = Number(value);
@@ -95,6 +96,65 @@ function normalizeServerRpcUrl(value) {
     return `${origin}${raw}`;
   }
   return '';
+}
+
+function isTransientReadError(error) {
+  const text = String(error?.message || error || '');
+  const status = Number(error?.status || error?.response?.status || 0);
+  return status === 429
+    || status === 502
+    || status === 503
+    || /429|too many requests|rate limit|timeout|fetch failed|econnreset|temporar/i.test(text);
+}
+
+function pairSymbolFromFeed(item) {
+  const from = String(item?.from || '').trim().toUpperCase();
+  if (!from) return '';
+  const mapped = {
+    CL: 'WTI',
+    HG: 'XCU',
+    SPX: 'US500',
+    NDX: 'US100',
+    DJI: 'US30',
+    DAX: 'GER40',
+    FTSE: 'UK100',
+    HSI: 'HK50',
+    NIK: 'JP225',
+  };
+  return mapped[from] || from;
+}
+
+async function getBuilderPriceRowsFallback() {
+  const base = (OSTIUM_BUILDER_API_URL || 'https://builder.ostium.io').replace(/\/+$/u, '');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(`${base}/v1/prices`, {
+      signal: controller.signal,
+      headers: { accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Ostium live prices returned ${res.status}`);
+    const payload = await res.json();
+    const items = Array.isArray(payload?.prices) ? payload.prices : [];
+    return items.map((item, index) => {
+      const symbol = pairSymbolFromFeed(item);
+      const mark = num(item?.mid || item?.ask || item?.bid, 0);
+      if (!symbol || mark <= 0) return null;
+      return {
+        symbol,
+        mark: String(mark),
+        oracle: String(mark),
+        bid: String(num(item?.bid, mark)),
+        ask: String(num(item?.ask, mark)),
+        volume_24h: 0,
+        open_interest: '0',
+        pair_index: index,
+        fallback_source: 'ostium_builder_prices',
+      };
+    }).filter(Boolean);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function getReadClient() {
@@ -177,7 +237,15 @@ async function getPairsFresh() {
 
 async function getMarketContext() {
   if (Date.now() - marketCache.at < CACHE_TTL_MS && marketCache.rows.length) return marketCache;
-  return getPairsFresh();
+  try {
+    return await getPairsFresh();
+  } catch (e) {
+    if (marketCache.rows.length && Date.now() - marketCache.at < STALE_CACHE_TTL_MS && isTransientReadError(e)) {
+      console.warn('[ostium] using stale market cache after read error:', e.message || e);
+      return marketCache;
+    }
+    throw e;
+  }
 }
 
 async function getMarketInfo() {
@@ -187,26 +255,41 @@ async function getMarketInfo() {
 
 async function getPrices() {
   if (Date.now() - priceCache.at < CACHE_TTL_MS && priceCache.rows.length) return priceCache.rows;
-  const [client, context] = await Promise.all([getReadClient(), getMarketContext()]);
-  const payload = await client.getAllPrices();
-  const prices = payload?.prices && typeof payload.prices === 'object' ? payload.prices : {};
-  const rows = Object.entries(prices).map(([pairId, price]) => {
-    const market = context.pairById.get(String(pairId));
-    if (!market) return null;
-    const mark = num(price?.mid || price?.midPx || price?.ask || price?.bid, market.mark);
-    return {
-      symbol: market.symbol,
-      mark: String(mark),
-      oracle: String(mark),
-      bid: String(num(price?.bid, mark)),
-      ask: String(num(price?.ask, mark)),
-      volume_24h: 0,
-      open_interest: String(market.open_interest || 0),
-      pair_index: Number(pairId),
-    };
-  }).filter(Boolean);
-  priceCache = { at: Date.now(), rows };
-  return rows;
+  try {
+    const [client, context] = await Promise.all([getReadClient(), getMarketContext()]);
+    const payload = await client.getAllPrices();
+    const prices = payload?.prices && typeof payload.prices === 'object' ? payload.prices : {};
+    const rows = Object.entries(prices).map(([pairId, price]) => {
+      const market = context.pairById.get(String(pairId));
+      if (!market) return null;
+      const mark = num(price?.mid || price?.midPx || price?.ask || price?.bid, market.mark);
+      return {
+        symbol: market.symbol,
+        mark: String(mark),
+        oracle: String(mark),
+        bid: String(num(price?.bid, mark)),
+        ask: String(num(price?.ask, mark)),
+        volume_24h: 0,
+        open_interest: String(market.open_interest || 0),
+        pair_index: Number(pairId),
+      };
+    }).filter(Boolean);
+    priceCache = { at: Date.now(), rows };
+    return rows;
+  } catch (e) {
+    if (priceCache.rows.length && Date.now() - priceCache.at < STALE_CACHE_TTL_MS && isTransientReadError(e)) {
+      console.warn('[ostium] using stale price cache after read error:', e.message || e);
+      return priceCache.rows;
+    }
+    if (isTransientReadError(e)) {
+      const rows = await getBuilderPriceRowsFallback();
+      if (rows.length) {
+        priceCache = { at: Date.now(), rows };
+        return rows;
+      }
+    }
+    throw e;
+  }
 }
 
 async function getAccountByAddress(address) {
@@ -219,14 +302,21 @@ async function getAccountByAddress(address) {
     client.getOpenOrders({ user: account }).catch(() => []),
   ]);
   const margin = positions?.marginSummary || {};
+  const walletUsdc = num(balances?.usdc, 0);
+  const accountEquity = Math.max(num(margin.accountValue, 0), walletUsdc);
   return {
     address: account,
-    equity: num(margin.accountValue, 0),
-    available_to_spend: num(margin.totalWithdrawable, 0),
+    equity: accountEquity,
+    account_equity: accountEquity,
+    available_to_spend: walletUsdc,
+    available_to_withdraw: walletUsdc,
+    free_margin: walletUsdc,
     margin_used: num(margin.totalCollateralUsed, 0),
+    total_margin_used: num(margin.totalCollateralUsed, 0),
     total_position_notional: num(margin.totalNtlPos, 0),
     unrealized_pnl: num(margin.totalRawPnlUsd, 0),
-    usdc_balance: num(balances?.usdc, 0),
+    usdc_balance: walletUsdc,
+    wallet_usdc: walletUsdc,
     eth_balance: num(balances?.eth, 0),
     allowance: balances?.allowance ?? null,
     positions_count: Array.isArray(positions?.pairPositions) ? positions.pairPositions.length : 0,
@@ -273,10 +363,18 @@ function normalizePosition(row, marketsById = new Map()) {
 async function getPositionsByAddress(address) {
   const account = normalizeAddress(address);
   if (!account) throw new Error('valid EVM address required');
-  const [client, context] = await Promise.all([getReadClient(), getMarketContext()]);
-  const payload = await client.getOpenPositions({ user: account });
-  const rows = Array.isArray(payload?.pairPositions) ? payload.pairPositions : [];
-  return rows.map(row => normalizePosition(row, context.pairById));
+  try {
+    const [client, context] = await Promise.all([getReadClient(), getMarketContext()]);
+    const payload = await client.getOpenPositions({ user: account });
+    const rows = Array.isArray(payload?.pairPositions) ? payload.pairPositions : [];
+    return rows.map(row => normalizePosition(row, context.pairById));
+  } catch (e) {
+    if (isTransientReadError(e)) {
+      console.warn('[ostium] positions read degraded:', e.message || e);
+      return [];
+    }
+    throw e;
+  }
 }
 
 function normalizeOrder(order, marketsById = new Map()) {
@@ -307,9 +405,17 @@ function normalizeOrder(order, marketsById = new Map()) {
 async function getOrdersByAddress(address) {
   const account = normalizeAddress(address);
   if (!account) throw new Error('valid EVM address required');
-  const [client, context] = await Promise.all([getReadClient(), getMarketContext()]);
-  const rows = await client.getOpenOrders({ user: account });
-  return (Array.isArray(rows) ? rows : []).map(row => normalizeOrder(row, context.pairById));
+  try {
+    const [client, context] = await Promise.all([getReadClient(), getMarketContext()]);
+    const rows = await client.getOpenOrders({ user: account });
+    return (Array.isArray(rows) ? rows : []).map(row => normalizeOrder(row, context.pairById));
+  } catch (e) {
+    if (isTransientReadError(e)) {
+      console.warn('[ostium] orders read degraded:', e.message || e);
+      return [];
+    }
+    throw e;
+  }
 }
 
 function normalizeFillForDb(fill, marketsById = new Map()) {
@@ -367,9 +473,19 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   let lastRows = [];
   let imported = 0;
   let volume = 0;
+  let lastError = null;
   const context = await getMarketContext();
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const rows = await getAccountTradeHistory(account, { limit: opts.limit || OSTIUM_FILL_LOOKBACK_LIMIT });
+    let rows;
+    try {
+      rows = await getAccountTradeHistory(account, { limit: opts.limit || OSTIUM_FILL_LOOKBACK_LIMIT });
+      lastError = null;
+    } catch (e) {
+      lastError = e;
+      if (attempt >= attempts - 1) break;
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      continue;
+    }
     lastRows = Array.isArray(rows) ? rows : [];
     for (const fill of lastRows) {
       const row = normalizeFillForDb(fill, context.pairById);
@@ -388,6 +504,8 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
     rows: lastRows.length,
     volume_usd: volume,
     wallet: account,
+    ok: !lastError,
+    warning: lastError ? String(lastError.message || lastError).slice(0, 300) : null,
   };
 }
 

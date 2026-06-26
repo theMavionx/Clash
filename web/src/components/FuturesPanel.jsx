@@ -2714,12 +2714,15 @@ function FuturesPanel() {
     account?.available_to_spend            // Pacifica unified margin (preferred)
       ?? account?.usdc_cross_withdrawable_balance // Decibel
       ?? account?.usdcAvailable                   // Avantis variant
+      ?? account?.usdc_balance                    // Ostium self-custody wallet balance
       ?? account?.usdc                            // GMX
       ?? account?.balance                         // last-resort
       ?? 0
   ));
   const pacBalance = dex === 'gmtrade'
     ? Math.max(0, Number(walletUsdc || 0))
+    : dex === 'ostium'
+    ? Math.max(0, Number(account?.usdc_balance ?? walletUsdc ?? 0))
     : dex === 'hyperliquid'
     ? pacBalanceBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
     : pacBalanceBase;
@@ -2730,6 +2733,8 @@ function FuturesPanel() {
   const pacAccountValueBase = Math.max(0, parseFloat(
     account?.account_equity                // Pacifica unified
       ?? account?.perp_equity_balance      // Decibel
+      ?? account?.equity                   // Ostium margin summary when positions exist
+      ?? account?.usdc_balance             // Ostium self-custody wallet balance
       ?? account?.usdc                     // GMX (acts as equity for cross-margin spec)
       ?? account?.usdcAvailable            // Avantis fallback
       ?? account?.balance                  // last-resort
@@ -2737,6 +2742,8 @@ function FuturesPanel() {
   ));
   const pacAccountValue = dex === 'gmtrade'
     ? Math.max(0, Number(account?.account_equity ?? account?.balance ?? walletUsdc ?? 0))
+    : dex === 'ostium'
+    ? Math.max(0, Number(account?.equity ?? account?.usdc_balance ?? walletUsdc ?? 0))
     : dex === 'hyperliquid'
     ? pacAccountValueBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
     : pacAccountValueBase;
@@ -7041,6 +7048,11 @@ function FuturesPanel() {
       equity = perpEquity || (cross + isol);
       available = cross + isol;
       marginUsed = Math.max(0, totalMargin || maintMargin);
+    } else if (dex === 'ostium') {
+      const walletBalance = Number(account?.usdc_balance ?? walletUsdc ?? 0);
+      equity = Math.max(0, Number(account?.equity || 0), Number.isFinite(walletBalance) ? walletBalance : 0);
+      available = Math.max(0, Number.isFinite(walletBalance) ? walletBalance : 0);
+      marginUsed = parseFloat(account?.margin_used ?? 0);
     } else if (dex === 'grvt') {
       equity = parseFloat(account?.account_equity ?? account?.total_account_value ?? account?.equity ?? account?.balance ?? account?.usdc ?? 0);
       available = parseFloat(account?.available_to_withdraw ?? account?.available_to_spend ?? account?.available_balance ?? account?.usdc ?? 0);
