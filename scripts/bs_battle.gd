@@ -652,7 +652,7 @@ func _on_find_pressed() -> void:
 	if not net or not net.has_token():
 		print("Not logged in")
 		return
-	var latest_resources = await net.get_resources()
+	var latest_resources: Variant = await net.get_resources()
 	if latest_resources is Dictionary and not latest_resources.has("error"):
 		bs._apply_resources_from_server(latest_resources)
 	var attack_cost: int = _get_attack_cost_gold()
@@ -675,7 +675,7 @@ func _on_find_pressed() -> void:
 		var troop = ht.get("node")
 		if not is_instance_valid(troop) or not troop.visible:
 			continue
-		var port_pos = bs._find_nearest_port_with_ship(troop.global_position)
+		var port_pos: Vector3 = bs._find_nearest_port_with_ship(troop.global_position)
 		if port_pos == Vector3.INF:
 			troop.visible = false
 			continue
@@ -701,7 +701,7 @@ func _on_find_pressed() -> void:
 	var bridge2 = bs._bridge
 	if bridge2:
 		bridge2.send_to_react("cloud_transition", {"visible": true})
-	var cloud = bs._get_or_create_cloud()
+	var cloud: Node = bs._get_or_create_cloud()
 	cloud.close()
 	await cloud.close_finished
 	var combat_warmup: Node = _start_hidden_combat_warmup()
@@ -714,6 +714,91 @@ func _on_find_pressed() -> void:
 		bs.find_button.text = "Find Enemy"
 	if result.has("error"):
 		print("Find enemy error: ", result.error)
+		_find_in_progress = false
+		if audio and audio.has_method("play_base"):
+			audio.play_base()
+		cloud.reveal()
+		await cloud.reveal_finished
+		if bridge2:
+			bridge2.send_to_react("cloud_transition", {"visible": false})
+			bridge2.send_to_react("error", {"message": result.error})
+		_restore_ships_and_troops()
+		return
+	if result.has("attacker_resources") and result.attacker_resources is Dictionary:
+		bs._apply_resources_from_server(result.attacker_resources)
+	enemy_info = result
+	_switch_to_enemy_island_after_sail()
+
+func _on_revenge_pressed(source_battle_id: int) -> void:
+	if is_viewing_enemy or _find_in_progress:
+		return
+	if source_battle_id <= 0:
+		return
+	var net: Node = bs._net
+	if not net or not net.has_token():
+		print("Not logged in")
+		return
+	var latest_resources: Variant = await net.get_resources()
+	if latest_resources is Dictionary and not latest_resources.has("error"):
+		bs._apply_resources_from_server(latest_resources)
+	var attack_cost: int = _get_attack_cost_gold()
+	if int(bs.resources.get("gold", 0)) < attack_cost:
+		var bridge0: Node = bs._bridge
+		if bridge0:
+			bridge0.send_to_react("error", {"message": "Need %d gold to revenge" % attack_cost})
+		return
+	var audio: Node = bs.get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_pre_attack"):
+		audio.play_pre_attack()
+	_find_in_progress = true
+	_saved_fleet = await bs._build_fleet()
+	if bs.find_button:
+		bs.find_button.disabled = true
+		bs.find_button.text = "Boarding..."
+	var pending_count: int = 0
+	for ht in bs._home_troops:
+		var troop: Node = ht.get("node")
+		if not is_instance_valid(troop) or not troop.visible:
+			continue
+		var port_pos: Vector3 = bs._find_nearest_port_with_ship(troop.global_position)
+		if port_pos == Vector3.INF:
+			troop.visible = false
+			continue
+		if troop.has_method("board_ship"):
+			pending_count += 1
+			troop.board_ship(port_pos)
+			troop.boarded.connect(func():
+				pending_count -= 1
+			, CONNECT_ONE_SHOT)
+		else:
+			troop.visible = false
+	var wait_timer: float = 0.0
+	while pending_count > 0 and wait_timer < 6.0:
+		await bs.get_tree().process_frame
+		wait_timer += bs.get_process_delta_time()
+	for ht in bs._home_troops:
+		var troop: Node = ht.get("node")
+		if is_instance_valid(troop):
+			troop.visible = false
+	if bs.find_button:
+		bs.find_button.text = "Sailing..."
+	await _sail_ships_away()
+	var bridge2: Node = bs._bridge
+	if bridge2:
+		bridge2.send_to_react("cloud_transition", {"visible": true})
+	var cloud: Node = bs._get_or_create_cloud()
+	cloud.close()
+	await cloud.close_finished
+	var combat_warmup: Node = _start_hidden_combat_warmup()
+	await _await_hidden_combat_warmup(combat_warmup)
+	if bs.find_button:
+		bs.find_button.text = "Revenge..."
+	var result: Dictionary = await net.start_revenge(source_battle_id)
+	if bs.find_button:
+		bs.find_button.disabled = false
+		bs.find_button.text = "Find Enemy"
+	if result.has("error"):
+		print("Revenge error: ", result.error)
 		_find_in_progress = false
 		if audio and audio.has_method("play_base"):
 			audio.play_base()
@@ -788,7 +873,7 @@ func _restore_ships_and_troops() -> void:
 	if bs._ship_base_node:
 		bs._ship_base_node.visible = true
 	for ht in bs._home_troops:
-		var troop = ht.get("node")
+		var troop: Node = ht.get("node")
 		if is_instance_valid(troop):
 			troop.visible = true
 			troop.set_process(true)

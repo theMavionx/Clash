@@ -61,6 +61,9 @@ function BattleLogPanel({ onClose }) {
   const token = player?.token || null;
   const [battles, setBattles] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [revengeTargets, setRevengeTargets] = useState([]);
+  const [revengeLoading, setRevengeLoading] = useState(true);
+  const [revengeMessage, setRevengeMessage] = useState('');
   const [expanded, setExpanded] = useState(null);
   const [filter, setFilter] = useState('all'); // 'all' | 'attack' | 'defense'
 
@@ -87,28 +90,67 @@ function BattleLogPanel({ onClose }) {
     }, 100);
   }, [sendToGodot, onClose]);
 
+  const handleRevenge = useCallback((target) => {
+    if (!target?.can_revenge) {
+      setRevengeMessage(target?.reason === 'shield_active'
+        ? 'This player is protected by shield.'
+        : 'Revenge already used for this attack.');
+      return;
+    }
+    onClose();
+    setTimeout(() => {
+      sendToGodot('revenge_attack', { battle_id: target.battle_id });
+    }, 100);
+  }, [sendToGodot, onClose]);
+
   // Fetch battle log keyed on the reactive token. If an account-switch
   // happens while this panel is open, the cleanup flag prevents the old
   // account's response from landing on the new user's UI; the token
   // dependency re-runs the effect under the new identity.
   useEffect(() => {
-    if (!token) { setBattles([]); setLoading(false); return; }
+    if (!token) {
+      setBattles([]);
+      setRevengeTargets([]);
+      setLoading(false);
+      setRevengeLoading(false);
+      return;
+    }
     let cancelled = false;
+    setLoading(true);
+    setRevengeLoading(true);
+    setRevengeMessage('');
     (async () => {
       try {
-        const r = await fetch('/api/battle-log', { headers: { 'x-token': token } });
+        const [r, revengeRes] = await Promise.all([
+          fetch('/api/battle-log', { headers: { 'x-token': token } }),
+          fetch('/api/revenge-targets', { headers: { 'x-token': token } }),
+        ]);
         if (cancelled) return;
-        if (!r.ok) { setBattles([]); setLoading(false); return; }
-        const data = await r.json();
-        if (cancelled) return;
-        setBattles(Array.isArray(data) ? data : []);
+        if (r.ok) {
+          const data = await r.json();
+          if (!cancelled) setBattles(Array.isArray(data) ? data : []);
+        } else {
+          setBattles([]);
+        }
+        if (revengeRes.ok) {
+          const revengeData = await revengeRes.json();
+          if (!cancelled) setRevengeTargets(Array.isArray(revengeData?.targets) ? revengeData.targets : []);
+        } else {
+          setRevengeTargets([]);
+        }
       } catch { /* network error — fall through to loading=false */ }
-      finally { if (!cancelled) setLoading(false); }
+      finally {
+        if (!cancelled) {
+          setLoading(false);
+          setRevengeLoading(false);
+        }
+      }
     })();
     return () => { cancelled = true; };
   }, [token]);
 
   const filtered = filter === 'all' ? battles : battles.filter(b => b.side === filter);
+  const showRevenge = filter === 'all' || filter === 'defense';
 
   return (
     <>
@@ -133,6 +175,49 @@ function BattleLogPanel({ onClose }) {
         </div>
 
         <div style={S.body}>
+          {showRevenge && (
+            <div style={S.revengeSection}>
+              <div style={S.revengeHeader}>
+                <span style={S.revengeTitle}>Revenge</span>
+                <span style={S.revengeSub}>Last 3 attackers</span>
+              </div>
+              {revengeMessage && <div style={S.revengeMessage}>{revengeMessage}</div>}
+              {revengeLoading && <div style={S.revengeEmpty}>Checking attackers...</div>}
+              {!revengeLoading && revengeTargets.length === 0 && (
+                <div style={S.revengeEmpty}>No recent attackers</div>
+              )}
+              {!revengeLoading && revengeTargets.map((target) => {
+                const disabled = !target.can_revenge;
+                const reason = target.reason === 'shield_active'
+                  ? `Shield ${target.shield_remaining_minutes || 1}m`
+                  : target.reason === 'revenge_used'
+                    ? 'Used'
+                    : '';
+                const lootTotal = (target.loot?.gold || 0) + (target.loot?.wood || 0) + (target.loot?.ore || 0);
+                return (
+                  <div key={target.battle_id} style={S.revengeCard(disabled)}>
+                    <div style={S.revengeInfo}>
+                      <strong>{target.name}</strong>
+                      <span>{timeAgo(target.attacked_at)} · {fmt(target.trophies)} trophies</span>
+                      {lootTotal > 0 && <small>Stole {fmt(lootTotal)} resources</small>}
+                    </div>
+                    <button
+                      type="button"
+                      style={S.revengeBtn(disabled)}
+                      disabled={disabled}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRevenge(target);
+                      }}
+                    >
+                      {disabled ? reason : 'Revenge'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {loading && <div style={S.empty}>Loading...</div>}
           {!loading && filtered.length === 0 && (
             <div style={S.empty}>No battles yet</div>
@@ -278,6 +363,62 @@ const S = {
     flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
     overflowY: 'auto', scrollbarWidth: 'none',
   },
+  revengeSection: {
+    background: '#fff7df',
+    border: '3px solid #c9b889',
+    borderRadius: 14,
+    padding: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  revengeHeader: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
+  revengeTitle: { fontSize: 15, fontWeight: 950, color: '#5C3A21' },
+  revengeSub: { fontSize: 10, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase' },
+  revengeMessage: {
+    background: '#f8d6ca',
+    border: '2px solid #d8715b',
+    color: '#9b2c21',
+    borderRadius: 8,
+    padding: '6px 8px',
+    fontSize: 11,
+    fontWeight: 900,
+  },
+  revengeEmpty: { padding: 10, textAlign: 'center', color: '#a3906a', fontSize: 12, fontWeight: 800 },
+  revengeCard: (disabled) => ({
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    padding: '8px 9px',
+    borderRadius: 10,
+    background: disabled ? '#e7deca' : '#f2dfb8',
+    border: `2px solid ${disabled ? '#c9b889' : '#b78335'}`,
+    opacity: disabled ? 0.82 : 1,
+  }),
+  revengeInfo: {
+    minWidth: 0,
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 1,
+    color: '#5C3A21',
+    fontSize: 12,
+  },
+  revengeBtn: (disabled) => ({
+    minWidth: 82,
+    height: 34,
+    borderRadius: 9,
+    border: `2px solid ${disabled ? '#9d9278' : '#8d421e'}`,
+    background: disabled
+      ? 'linear-gradient(180deg, #d2c6ad 0%, #b6a78a 100%)'
+      : 'linear-gradient(180deg, #ffb13d 0%, #e65f1c 100%)',
+    color: disabled ? '#6f6047' : '#fff',
+    fontSize: 11,
+    fontWeight: 950,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    textShadow: disabled ? 'none' : '0 1px 1px rgba(0,0,0,0.35)',
+  }),
   empty: { textAlign: 'center', padding: 40, color: '#a3906a', fontWeight: 700, fontSize: 14 },
   card: {
     background: '#e8dfc8',

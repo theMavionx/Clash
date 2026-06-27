@@ -474,6 +474,9 @@ func upgrade_altar_skill(skill_id: String) -> Dictionary:
 func find_enemy() -> Dictionary:
 	return await _http_get("/find-enemy")
 
+func start_revenge(source_battle_id: int) -> Dictionary:
+	return await _http_post("/revenge/start", {"battle_id": source_battle_id})
+
 # ── Trophies ──────────────────────────────────────────────────
 
 func get_trophies() -> Dictionary:

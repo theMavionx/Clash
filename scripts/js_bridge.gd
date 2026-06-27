@@ -310,6 +310,9 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"find_enemy":
 			if bs:
 				bs._on_find_pressed()
+		"revenge_attack":
+			if bs and bs._battle and bs._battle.has_method("_on_revenge_pressed"):
+				bs._battle._on_revenge_pressed(int(data.get("battle_id", 0)))
 		"attack":
 			if bs:
 				bs._on_attack_pressed()
