@@ -156,6 +156,30 @@ async function ethCall(rpcUrl, to, data) {
   return r?.result || '0x';
 }
 
+async function ethRpc(rpcUrl, method, params = [], timeoutMs = 10_000) {
+  const r = await fetchJson(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  }, timeoutMs);
+  if (r?.error) throw new Error(`${method}: ${r.error.message || r.error}`);
+  return r?.result;
+}
+
+function evmTopicAddress(address) {
+  const hex = String(address || '').trim().replace(/^0x/u, '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/u.test(hex)) throw new Error('invalid EVM topic address');
+  return `0x${hex.padStart(64, '0')}`;
+}
+
+function unitsToUsd(raw, decimals = 6) {
+  try {
+    return Number(BigInt(raw || '0x0')) / (10 ** decimals);
+  } catch {
+    return 0;
+  }
+}
+
 // ── Avantis (Base) ────────────────────────────────────────────────────────
 // Avantis publishes neither a per-referrer earnings endpoint nor a public
 // pendingRewards view. So we compute earnings the same way Avantis does
@@ -227,18 +251,21 @@ async function fetchAvantisEarnings() {
     }
   }
 
-  // 3. Estimate: volume × fee_per_side × rebate_share.
+  // 3. Estimate only. Avantis does not expose an exact public commission
+  // payout endpoint or on-chain claimable balance for our referral account.
   const earned = volume * (AVANTIS_AVG_FEE_BPS / 10000) * (AVANTIS_REBATE_BPS / 10000);
   return {
-    earned_usd: earned,
+    earned_usd: 0,
     address: owner,
     currency: 'USDC (Base)',
     volume_usd: volume,
     trades,
+    estimated_fee_usd: roundUsd(earned),
     rebate_pct: AVANTIS_REBATE_BPS / 100,
     fee_per_side_pct: AVANTIS_AVG_FEE_BPS / 100,
-    note: `Modelled: volume × ${AVANTIS_AVG_FEE_BPS}bps fee × ${AVANTIS_REBATE_BPS}bps rebate. On-chain tier1 rebate = ${AVANTIS_REBATE_BPS / 100}%.`,
-    source_detail: 'volume_x_rate',
+    model: 'avantis_onchain_code_owner_estimate_only',
+    note: `On-chain code owner is verified, but exact Avantis commission payout is not publicly readable here. Modelled volume × ${AVANTIS_AVG_FEE_BPS}bps fee × ${AVANTIS_REBATE_BPS}bps rebate is shown only in estimated_fee_usd.`,
+    source_detail: 'avantis_code_owner_onchain_estimate_only',
   };
 }
 
@@ -274,6 +301,43 @@ const OSTIUM_BUILDER_FEE_BPS = Math.max(0, Number(
   || process.env.VITE_OSTIUM_BUILDER_FEE_BPS
   || 2,
 ));
+const ARBITRUM_NATIVE_USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
+const ARBITRUM_LEGACY_USDCE = '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8';
+const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+const OSTIUM_EARNINGS_FROM_BLOCK = Math.max(0, Number(process.env.OSTIUM_EARNINGS_FROM_BLOCK || 0));
+const OSTIUM_EARNINGS_LOG_BLOCKS = Math.max(
+  10_000,
+  Math.min(1_000_000, Number(process.env.OSTIUM_EARNINGS_LOG_BLOCKS || 200_000)),
+);
+
+async function readErc20Balance(rpcUrl, token, owner, decimals = 6) {
+  const data = `0x70a08231${evmTopicAddress(owner).slice(2)}`;
+  const raw = await ethCall(rpcUrl, token, data);
+  return unitsToUsd(raw, decimals);
+}
+
+async function sumIncomingErc20Transfers(rpcUrl, token, owner, fromBlock, latestBlock, decimals = 6) {
+  if (!fromBlock || fromBlock < 1 || latestBlock < fromBlock) {
+    return { enabled: false, amount: 0, transfers: 0, from_block: null, to_block: latestBlock };
+  }
+  let amount = 0;
+  let transfers = 0;
+  const toTopic = evmTopicAddress(owner);
+  for (let start = fromBlock; start <= latestBlock; start += OSTIUM_EARNINGS_LOG_BLOCKS) {
+    const end = Math.min(latestBlock, start + OSTIUM_EARNINGS_LOG_BLOCKS - 1);
+    const logs = await ethRpc(rpcUrl, 'eth_getLogs', [{
+      address: token,
+      fromBlock: `0x${start.toString(16)}`,
+      toBlock: `0x${end.toString(16)}`,
+      topics: [ERC20_TRANSFER_TOPIC, null, toTopic],
+    }], 20_000);
+    for (const log of Array.isArray(logs) ? logs : []) {
+      amount += unitsToUsd(log?.data, decimals);
+      transfers += 1;
+    }
+  }
+  return { enabled: true, amount, transfers, from_block: fromBlock, to_block: latestBlock };
+}
 
 async function fetchGmxEarnings() {
   // 1. Tier index for our affiliate wallet — referrerTiers(address).
@@ -311,19 +375,22 @@ async function fetchGmxEarnings() {
     } finally { fdb.close(); }
   }
 
-  // 4. Earnings = volume × fee_per_side × affiliate_share.
+  // 4. Estimate only. Exact GMX affiliate earnings are not the same as wallet
+  // balance and the local volume model must not be counted as earned.
   const earned = volume * (GMX_AVG_FEE_BPS / 10000) * (affiliateShareBps / 10000);
   return {
-    earned_usd: earned,
+    earned_usd: 0,
     address: GMX_AFFILIATE,
     currency: 'USDC (Arbitrum)',
     volume_usd: volume,
     trades,
     tier: tierIdx,
+    estimated_fee_usd: roundUsd(earned),
     rebate_pct: affiliateShareBps / 100,
     fee_per_side_pct: GMX_AVG_FEE_BPS / 100,
-    note: `Modelled: volume × ${GMX_AVG_FEE_BPS}bps fee × ${affiliateShareBps}bps rebate (tier ${tierIdx}: totalRebate=${totalRebate}/10000, discountShare=${discountShare}/10000).`,
-    source_detail: 'volume_x_rate',
+    model: 'gmx_onchain_tier_estimate_only',
+    note: `On-chain referral tier is verified, but exact GMX commission payout is not counted from the local model. Estimated volume × ${GMX_AVG_FEE_BPS}bps fee × ${affiliateShareBps}bps rebate is shown only in estimated_fee_usd.`,
+    source_detail: 'gmx_referral_tier_onchain_estimate_only',
   };
 }
 
@@ -333,14 +400,61 @@ async function fetchGmxEarnings() {
 // 4–10s if Pacifica has a lot of trades. Cache aggressively — a 60 s
 // staleness window is fine for an internal dashboard.
 async function fetchOstiumEarnings() {
-  return localVerifiedBuilderEarnings({
-    dex: 'ostium',
-    verifiedSource: 'ostium_api',
+  const local = readVerifiedFuturesDexStats('ostium', 'ostium_api');
+  const estimated = local.volume_usd * (Math.max(0, OSTIUM_BUILDER_FEE_BPS) / 10000);
+  const rpcUrl = process.env.OSTIUM_ARBITRUM_RPC_URL
+    || process.env.ARBITRUM_RPC_URL
+    || process.env.ARB_RPC_URL
+    || process.env.VITE_OSTIUM_ARBITRUM_RPC_URL
+    || process.env.VITE_ARBITRUM_RPC_URL
+    || ARBITRUM_RPC;
+  if (!/^0x[0-9a-fA-F]{40}$/u.test(OSTIUM_BUILDER_ADDRESS)) {
+    return {
+      ...local,
+      earned_usd: 0,
+      currency: 'USDC (Arbitrum)',
+      address: OSTIUM_BUILDER_ADDRESS || null,
+      estimated_fee_usd: roundUsd(estimated),
+      builder_fee_bps: OSTIUM_BUILDER_FEE_BPS,
+      builder_fee_pct: OSTIUM_BUILDER_FEE_BPS / 100,
+      model: 'ostium_onchain_balance_unavailable',
+      source_detail: 'ostium_builder_address_invalid',
+      note: 'Ostium builder address is not a valid EVM address, so exact on-chain USDC balance cannot be read.',
+    };
+  }
+
+  const latestHex = await ethRpc(rpcUrl, 'eth_blockNumber');
+  const latestBlock = Number(BigInt(latestHex || '0x0'));
+  const [nativeBalance, legacyBalance, nativeIncoming, legacyIncoming] = await Promise.all([
+    readErc20Balance(rpcUrl, ARBITRUM_NATIVE_USDC, OSTIUM_BUILDER_ADDRESS, 6),
+    readErc20Balance(rpcUrl, ARBITRUM_LEGACY_USDCE, OSTIUM_BUILDER_ADDRESS, 6),
+    sumIncomingErc20Transfers(rpcUrl, ARBITRUM_NATIVE_USDC, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6),
+    sumIncomingErc20Transfers(rpcUrl, ARBITRUM_LEGACY_USDCE, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6),
+  ]);
+  const onchainBalance = nativeBalance + legacyBalance;
+  const incomingAmount = nativeIncoming.amount + legacyIncoming.amount;
+  const incomingTransfers = nativeIncoming.transfers + legacyIncoming.transfers;
+  return {
+    ...local,
+    earned_usd: roundUsd(onchainBalance),
+    earned_24h_usd: 0,
     currency: 'USDC (Arbitrum)',
-    feeBps: OSTIUM_BUILDER_FEE_BPS,
-    sourceDetail: 'ostium_verified_fills_local_estimate',
-    note: `Ostium stats use filled rows imported from the Ostium SDK. Builder fee applies on open only; local ${OSTIUM_BUILDER_FEE_BPS}bps volume estimate is shown from stored Ostium fills.`,
-  });
+    address: OSTIUM_BUILDER_ADDRESS,
+    chain_id: 42161,
+    onchain_usdc_balance: roundUsd(nativeBalance),
+    onchain_usdce_balance: roundUsd(legacyBalance),
+    onchain_total_balance_usd: roundUsd(onchainBalance),
+    onchain_incoming_usd: nativeIncoming.enabled || legacyIncoming.enabled ? roundUsd(incomingAmount) : null,
+    onchain_incoming_transfers: nativeIncoming.enabled || legacyIncoming.enabled ? incomingTransfers : null,
+    onchain_from_block: OSTIUM_EARNINGS_FROM_BLOCK || null,
+    onchain_latest_block: latestBlock,
+    estimated_fee_usd: roundUsd(estimated),
+    builder_fee_bps: OSTIUM_BUILDER_FEE_BPS,
+    builder_fee_pct: OSTIUM_BUILDER_FEE_BPS / 100,
+    model: 'ostium_onchain_usdc_balance',
+    source_detail: 'arbitrum_usdc_balance_of_builder',
+    note: `Exact on-chain current USDC + USDC.e balance of the Ostium builder address. Local ${OSTIUM_BUILDER_FEE_BPS}bps estimate from imported Ostium fills is shown only for comparison and is not counted as earned. Set OSTIUM_EARNINGS_FROM_BLOCK to also scan incoming Transfer logs.`,
+  };
 }
 
 // Fallback matches the deploy.sh default (1 bps = 0.01%). Production
@@ -1603,8 +1717,9 @@ async function fetchKatanaEarnings() {
     verifiedSource: 'katana_api',
     currency: 'USDC (Katana)',
     feeBps: KATANA_BUILDER_FEE_BPS,
-    sourceDetail: 'katana_verified_fills_local_estimate',
-    note: `Katana stats use filled rows verified by the Katana API. Exact Clash commission is shown only if imported rows carry an exact fee proof; otherwise local ${KATANA_BUILDER_FEE_BPS}bps is an estimate for comparison.`,
+    proofSource: 'katana_builder_fee_exact',
+    sourceDetail: 'katana_builder_fee_exact_or_estimate',
+    note: `Katana earned_usd counts only imported fills with an explicit builderFee/builder_fee proof. Plain Katana trade fees are not counted as Clash earnings; local ${KATANA_BUILDER_FEE_BPS}bps remains only estimated_fee_usd.`,
   });
 }
 
@@ -2362,9 +2477,9 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   const out = {
     pacifica: { ...wrap('pacifica', pac), source: 'pacifica_builder_trades_sum' },
     decibel:  { ...wrap('decibel',  dec), source: 'decibel_account_overview_fee_income' },
-    avantis:  { ...wrap('avantis',  avt), source: 'avantis_volume_x_rate' },
-    gmx:      { ...wrap('gmx',      gmx), source: 'gmx_volume_x_rate' },
-    ostium:   { ...wrap('ostium',   ostium), source: 'ostium_verified_fills_local_estimate' },
+    avantis:  { ...wrap('avantis',  avt), source: 'avantis_code_owner_onchain_estimate_only' },
+    gmx:      { ...wrap('gmx',      gmx), source: 'gmx_referral_tier_onchain_estimate_only' },
+    ostium:   { ...wrap('ostium',   ostium), source: 'arbitrum_usdc_balance_of_builder' },
     phoenix:  { ...wrap('phoenix',  phx), source: 'phoenix_flight_collateral_transfers' },
     monad:    { ...wrap('monad',    mon), source: 'perpl_builder_fee_not_configured' },
     hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_referral_builder_rewards' },
@@ -2372,7 +2487,7 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
     nado: { ...wrap('nado', nado), source: 'nado_indexer_match_builder_fee' },
     hotstuff: { ...wrap('hotstuff', hotstuff), source: 'hotstuff_api_fills_broker_fee' },
     hibachi: { ...wrap('hibachi', hibachi), source: 'hibachi_api_activity_builder_fee_unverified' },
-    katana: { ...wrap('katana', katana), source: 'katana_verified_fills_local_estimate' },
+    katana: { ...wrap('katana', katana), source: 'katana_builder_fee_exact_or_estimate' },
     gmtrade: { ...wrap('gmtrade', gmtrade), source: 'gmtrade_verified_tx_local_estimate' },
     flash: { ...wrap('flash', flash), source: 'flash_v2_verified_tx_local_estimate' },
     lighter: { ...wrap('lighter', lighter), source: 'lighter_integrator_fills_fee_sum' },

@@ -555,6 +555,14 @@ function cleanSignedZero(value) {
   return Math.abs(n) < 0.005 ? 0 : n;
 }
 
+function signedMetricDirection(pnlVal, pnlPct) {
+  const usd = Number(pnlVal || 0);
+  if (Math.abs(usd) >= 0.005) return usd < 0 ? -1 : 1;
+  const pct = Number(pnlPct || 0);
+  if (Math.abs(pct) >= 0.005) return pct < 0 ? -1 : 1;
+  return 1;
+}
+
 function formatFeeRate(value) {
   if (value == null || value === '') return '—';
   const n = Number(value);
@@ -640,12 +648,14 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     ? (flashLev ?? rawLev ?? collateralLev)
     : (rawLev && rawLev > 0 ? rawLev : (collateralLev || (leverageSettings[pos.symbol] || 1))));
   const rawProvidedPct = numOrNull(pos.pnl_pct);
-  const providedPct = rawProvidedPct === 0 && Math.abs(pnlVal) >= 0.005 ? null : rawProvidedPct;
-  const pnlPct = isDust ? 0 : (providedPct ?? (margin > 0
-    ? (pnlVal / margin) * 100
-    : (entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0)));
-  const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
-  return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor, isDust, dustUsd };
+  const pricePct = entryP && markP
+    ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1))
+    : null;
+  const providedPct = rawProvidedPct === 0 && pricePct != null && Math.abs(pricePct) >= 0.005 ? null : rawProvidedPct;
+  const pnlPct = isDust ? 0 : (providedPct ?? (pricePct ?? (margin > 0 ? (pnlVal / margin) * 100 : 0)));
+  const pnlDirection = isDust ? 1 : signedMetricDirection(pnlVal, pnlPct);
+  const pnlColor = pnlDirection >= 0 ? '#4CAF50' : '#E53935';
+  return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd };
 }
 
 function formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd) {
@@ -1796,7 +1806,7 @@ const PositionsList = memo(function PositionsList({
   return (
     <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start'}}>
       {positions.map((pos, i) => {
-        const { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
+        const { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
         const posKey = `${pos.symbol}-${pos.side}`;
         const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
         const tpslBusy = tpslSubmittingPos === posKey;
@@ -1827,7 +1837,7 @@ const PositionsList = memo(function PositionsList({
             <div style={S.row}>
               <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
               <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}}>
-                {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
+                {pnlDirection >= 0 ? '+' : ''}${pnlVal.toFixed(2)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
               </span>
             </div>
             <PositionTpslRow pos={pos} orders={orders} />
@@ -1973,6 +1983,7 @@ const BottomPanel = memo(function BottomPanel({
                   setLev: lev,
                   posValueUsd: tblPosValue,
                   pnlPct,
+                  pnlDirection,
                   pnlColor,
                   isDust,
                   dustUsd,
@@ -1985,7 +1996,7 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>{isDust ? 'Dust' : p.amount} <span style={{color: '#a3906a', fontSize: 11}}>(${(isDust ? dustUsd : tblPosValue).toFixed(2)})</span></td>
                     <td style={S.td}>${fmtPrice(entryPrice)}</td>
                     <td style={S.td}>{markPrice ? `$${fmtPrice(markPrice)}` : '—'}</td>
-                    <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}</td>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlDirection >= 0 ? '+' : ''}${pnlVal.toFixed(2)}</td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{isDust ? '-' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`}</td>
                     <td style={S.td}>
                       <span style={{color: tp ? '#4CAF50' : '#a3906a', fontWeight: 800}}>TP {tp ? `$${fmtPrice(tp)}` : '-'}</span>
@@ -3307,10 +3318,10 @@ function FuturesPanel() {
         return;
       }
       if (result && !result.error) {
-        if (orderType === 'market') {
+        if (orderType === 'market' && result.status !== 'submitted') {
           fireTradeConfetti();
         }
-        const successText = result.status === 'submitted' && result.info
+        const successText = result.info
           ? result.info
           : dex === 'gmtrade' && result.status === 'submitted'
             ? `${side.toUpperCase()} ${symbol} submitted`
@@ -6662,7 +6673,7 @@ function FuturesPanel() {
       // `align-items` for column flex) gives a clean uniform list.
       <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
         {openedSortedPositions.map((pos, i) => {
-          const { entryP, markP, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
+          const { entryP, markP, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
           const posKey = `${pos.symbol}-${pos.side}`;
           const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
           const tpslBusy = tpslSubmittingPos === posKey;
@@ -6720,7 +6731,7 @@ function FuturesPanel() {
                     fontSize: 18, fontWeight: 900, color: pnlColor,
                     fontVariantNumeric: 'tabular-nums',
                   }}>
-                    {pnlVal >= 0 ? '+' : '−'}${Math.abs(pnlVal).toFixed(2)}
+                    {pnlDirection >= 0 ? '+' : (Math.abs(pnlVal) >= 0.005 ? '-' : '')}${Math.abs(pnlVal).toFixed(2)}
                   </span>
                 </div>
 
@@ -6811,7 +6822,7 @@ function FuturesPanel() {
               <div style={S.row}>
                 <span style={S.detail}>Mark: ${fmtPrice(markP)}</span>
                 <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}}>
-                  {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
+                  {pnlDirection >= 0 ? '+' : ''}${pnlVal.toFixed(2)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
                 </span>
               </div>
               {/* Liquidation price row — visible on every venue that ships

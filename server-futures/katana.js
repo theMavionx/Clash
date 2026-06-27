@@ -436,6 +436,7 @@ function normalizeFill(wallet, fill) {
   const fillId = String(valueOf(fill, 'fillId', 'fill_id', 'tradeId', 'trade_id', 'id', 'executionId') || '').trim();
   const orderId = String(valueOf(fill, 'orderId', 'order_id') || '').trim();
   const clientOrderId = String(valueOf(fill, 'clientOrderId', 'client_order_id') || '').trim();
+  const builderFee = valueOf(fill, 'builderFee', 'builder_fee');
   const key = `katana:${String(wallet || '').toLowerCase()}:${fillId || orderId || clientOrderId || `${market}:${side}:${quantity}:${price}`}`;
   const timestamp = valueOf(fill, 'createdAt', 'created_at', 'timestamp', 'time', 'filledAt', 'filled_at');
   const tsMs = typeof timestamp === 'number'
@@ -453,13 +454,15 @@ function normalizeFill(wallet, fill) {
     dex: 'katana',
     notional_usd: notional,
     verifiedSource: 'katana_api',
-    fee: valueOf(fill, 'builderFee', 'builder_fee', 'fee') != null ? String(valueOf(fill, 'builderFee', 'builder_fee', 'fee')) : null,
+    fee: builderFee != null ? String(builderFee) : null,
     proofJson: JSON.stringify({
-      source: 'katana_fill_api',
+      source: builderFee != null ? 'katana_builder_fee_exact' : 'katana_fill_api',
       wallet: String(wallet || '').toLowerCase(),
       fill_id: fillId || null,
       order_id: orderId || null,
       client_order_id: clientOrderId || null,
+      builder_code: KATANA_BUILDER_CODE,
+      builder_fee: builderFee != null ? String(builderFee) : null,
       raw: fill,
     }),
     createdAt: Number.isFinite(tsMs) ? new Date(tsMs).toISOString() : null,
