@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { secp256k1 } = require('@noble/curves/secp256k1');
+const { createReconnectingJsonWebSocket } = require('./reconnecting-json-websocket');
 
 const HIBACHI_API = String(process.env.HIBACHI_API_URL || 'https://api.hibachi.xyz').replace(/\/+$/u, '');
 const HIBACHI_DATA_API = String(process.env.HIBACHI_DATA_API_URL || 'https://data-api.hibachi.xyz').replace(/\/+$/u, '');
@@ -8,6 +9,14 @@ const HIBACHI_MAX_FEES_PERCENT = String(process.env.HIBACHI_MAX_FEES_PERCENT || 
 const HIBACHI_REWARD_MIN_NOTIONAL_USD = Math.max(0, Number(process.env.HIBACHI_REWARD_MIN_NOTIONAL_USD || 10));
 const HIBACHI_IP_BLOCKED_MESSAGE = 'Hibachi is not available from your IP address. Try a supported network or IP region.';
 const HIBACHI_VISIBLE_MARKET_CATEGORIES = new Set(['crypto']);
+const HIBACHI_PRIVATE_READ_CACHE_MS = Math.max(250, Math.min(5_000, Number(process.env.HIBACHI_PRIVATE_READ_CACHE_MS || 2_500)));
+const HIBACHI_PRIVATE_READ_STALE_MS = Math.max(1_000, Math.min(60_000, Number(process.env.HIBACHI_PRIVATE_READ_STALE_MS || 30_000)));
+const HIBACHI_PRIVATE_READ_MAX_ENTRIES = 500;
+const HIBACHI_WS_ENABLED = String(process.env.HIBACHI_WS_ENABLED || 'true').toLowerCase() !== 'false';
+const HIBACHI_WS_CONNECT_TIMEOUT_MS = Math.max(1_000, Math.min(10_000, Number(process.env.HIBACHI_WS_CONNECT_TIMEOUT_MS || 4_000)));
+const HIBACHI_WS_SNAPSHOT_WAIT_MS = Math.max(250, Math.min(5_000, Number(process.env.HIBACHI_WS_SNAPSHOT_WAIT_MS || 2_000)));
+const HIBACHI_WS_SNAPSHOT_MAX_AGE_MS = Math.max(1_000, Math.min(120_000, Number(process.env.HIBACHI_WS_SNAPSHOT_MAX_AGE_MS || 45_000)));
+const HIBACHI_WS_IDLE_CLOSE_MS = Math.max(15_000, Math.min(10 * 60_000, Number(process.env.HIBACHI_WS_IDLE_CLOSE_MS || 120_000)));
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -94,6 +103,411 @@ function rows(payload) {
   if (Array.isArray(payload?.trades)) return payload.trades;
   if (Array.isArray(payload?.orders)) return payload.orders;
   return [];
+}
+
+const privateReadCache = new Map();
+
+function privateReadCacheKey(path, creds = {}) {
+  const identity = crypto
+    .createHash('sha256')
+    .update(`${creds.accountId || ''}:${creds.apiKey || ''}`)
+    .digest('hex')
+    .slice(0, 24);
+  return `${identity}:${path}`;
+}
+
+function isRetryableReadError(error) {
+  const status = Number(error?.status);
+  if ([408, 425, 429, 500, 502, 503, 504].includes(status)) return true;
+  return /rate limited|timeout|timed out|aborted|econn|socket|fetch failed/i.test(String(error?.message || ''));
+}
+
+function prunePrivateReadCache(now = Date.now()) {
+  if (privateReadCache.size <= HIBACHI_PRIVATE_READ_MAX_ENTRIES) return;
+  for (const [key, entry] of privateReadCache) {
+    if (privateReadCache.size <= HIBACHI_PRIVATE_READ_MAX_ENTRIES) break;
+    if (!entry?.promise && (!entry?.at || now - entry.at > HIBACHI_PRIVATE_READ_STALE_MS)) {
+      privateReadCache.delete(key);
+    }
+  }
+  for (const [key, entry] of privateReadCache) {
+    if (privateReadCache.size <= HIBACHI_PRIVATE_READ_MAX_ENTRIES) break;
+    if (!entry?.promise) privateReadCache.delete(key);
+  }
+}
+
+const accountStreams = new Map();
+const tradeStreams = new Map();
+
+function hibachiWsUrl(path, creds) {
+  const base = HIBACHI_API.replace(/^http:/iu, 'ws:').replace(/^https:/iu, 'wss:');
+  const params = new URLSearchParams({
+    accountId: String(creds.accountId),
+    hibachiClient: 'ClashOfPerps/1.0',
+  });
+  return `${base}${path}?${params.toString()}`;
+}
+
+function wait(ms, value = null) {
+  return new Promise(resolve => setTimeout(() => resolve(value), ms));
+}
+
+function accountStreamKey(creds) {
+  return privateReadCacheKey('__ws_account__', creds);
+}
+
+function tradeStreamKey(creds) {
+  return privateReadCacheKey('__ws_trade__', creds);
+}
+
+function fullAccountSnapshot(payload) {
+  return payload?.result?.accountSnapshot
+    || payload?.accountSnapshot
+    || payload?.account_snapshot
+    || payload?.data?.accountSnapshot
+    || payload?.data?.account_snapshot
+    || null;
+}
+
+function normalizeWsAccountSnapshot(snapshot = {}) {
+  const positions = rows(snapshot.positions || snapshot.position || snapshot.account_positions);
+  return {
+    ...snapshot,
+    accountId: snapshot.accountId ?? snapshot.account_id,
+    account_id: snapshot.account_id ?? snapshot.accountId,
+    balance: snapshot.balance ?? snapshot.accountBalance ?? snapshot.account_balance ?? 0,
+    maximalWithdraw: snapshot.maximalWithdraw ?? snapshot.maximal_withdraw ?? snapshot.balance ?? 0,
+    positions,
+  };
+}
+
+function positionKey(position = {}) {
+  const symbol = symbolOf(position.symbol || position.market || position.marketSymbol);
+  const direction = String(position.direction || position.side || '').toUpperCase();
+  const side = direction.includes('SHORT') || direction === 'ASK' || direction === 'SELL' ? 'short' : 'long';
+  return `${symbol}:${side}`;
+}
+
+function mergePositionUpdate(positions, update) {
+  const next = Array.isArray(positions) ? positions.slice() : [];
+  const key = positionKey(update);
+  const quantity = Math.abs(num(update?.quantity ?? update?.amount ?? update?.size));
+  const index = next.findIndex(item => positionKey(item) === key);
+  if (quantity <= 0) {
+    if (index >= 0) next.splice(index, 1);
+    return next;
+  }
+  if (index >= 0) next[index] = { ...next[index], ...update };
+  else next.push(update);
+  return next;
+}
+
+function applyAccountStreamMessage(snapshot, message) {
+  const full = fullAccountSnapshot(message);
+  if (full) return normalizeWsAccountSnapshot(full);
+
+  const next = snapshot ? { ...snapshot, positions: rows(snapshot.positions).slice() } : null;
+  if (!next) return null;
+
+  const topic = String(message?.topic || message?.event || message?.type || '').toLowerCase();
+  const data = message?.data || message?.result || message?.params || message;
+  if (/balance/.test(topic) || data?.balance != null || data?.accountBalance != null || data?.account_balance != null) {
+    next.balance = data.balance ?? data.accountBalance ?? data.account_balance ?? next.balance;
+    next.maximalWithdraw = data.maximalWithdraw ?? data.maximal_withdraw ?? next.maximalWithdraw ?? next.balance;
+  }
+  if (/position/.test(topic) || data?.position || data?.positions || data?.symbol) {
+    const updates = rows(data?.positions || data?.position || data);
+    if (updates.length > 0) {
+      for (const update of updates) next.positions = mergePositionUpdate(next.positions, update);
+    }
+  }
+  return next;
+}
+
+function logHibachiWs(kind, creds, details = {}) {
+  const account = creds?.accountId || details.accountId || '?';
+  const message = details.message || details.status || '';
+  const suffix = message ? `: ${message}` : '';
+  const meta = Object.entries(details)
+    .filter(([key]) => !['message', 'apiKey'].includes(key))
+    .map(([key, value]) => `${key}=${value}`)
+    .join(' ');
+  const line = `[hibachi-ws] ${kind} account=${account}${suffix}${meta ? ` ${meta}` : ''}`;
+  if (/error|failed|fallback|stale|timeout|closed/i.test(kind)) console.warn(line);
+  else console.log(line);
+}
+
+class HibachiAccountStream {
+  constructor(creds) {
+    this.creds = { accountId: creds.accountId, apiKey: creds.apiKey };
+    this.messageId = 0;
+    this.listenKey = null;
+    this.snapshot = null;
+    this.snapshotAt = 0;
+    this.idleTimer = null;
+    this.lastTouch = Date.now();
+    this.lastError = null;
+    this.waiters = [];
+    this.client = createReconnectingJsonWebSocket({
+      name: 'hibachi-account',
+      getUrl: () => hibachiWsUrl('/ws/account', this.creds),
+      headers: () => ({ Authorization: this.creds.apiKey }),
+      reconnectMinMs: 1000,
+      reconnectMaxMs: 60_000,
+      handshakeTimeoutMs: HIBACHI_WS_CONNECT_TIMEOUT_MS,
+      pingIntervalMs: 15_000,
+      pongTimeoutMs: HIBACHI_WS_CONNECT_TIMEOUT_MS,
+      pingMessage: () => {
+        if (!this.listenKey) return null;
+        return {
+          id: this.nextMessageId(),
+          method: 'stream.ping',
+          params: { accountId: this.creds.accountId, listenKey: this.listenKey },
+          timestamp: Math.floor(Date.now() / 1000),
+        };
+      },
+      isPong: msg => msg?.status === 200 && !msg?.result,
+      onOpen: (_event, api) => {
+        this.listenKey = null;
+        api.sendJson({
+          id: this.nextMessageId(),
+          method: 'stream.start',
+          params: { accountId: this.creds.accountId },
+          timestamp: Math.floor(Date.now() / 1000),
+        });
+      },
+      onMessage: msg => this.handleMessage(msg),
+      onClose: event => {
+        this.lastError = new Error(`Hibachi account WS closed ${event?.code || ''} ${event?.reason || ''}`.trim());
+      },
+      onError: event => {
+        this.lastError = event instanceof Error ? event : new Error(event?.message || 'Hibachi account WS error');
+      },
+      onStatus: status => {
+        if (['open', 'reconnecting', 'stale', 'error'].includes(status.status)) {
+          logHibachiWs(`account_${status.status}`, this.creds, status);
+        }
+      },
+    });
+  }
+
+  freshSnapshot(maxAgeMs = HIBACHI_WS_SNAPSHOT_MAX_AGE_MS) {
+    if (!this.snapshot || !this.snapshotAt) return null;
+    return Date.now() - this.snapshotAt <= maxAgeMs ? this.snapshot : null;
+  }
+
+  markStale() {
+    this.snapshotAt = 0;
+  }
+
+  touch() {
+    this.lastTouch = Date.now();
+    clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      if (Date.now() - this.lastTouch >= HIBACHI_WS_IDLE_CLOSE_MS) this.close();
+    }, HIBACHI_WS_IDLE_CLOSE_MS + 500);
+    if (this.idleTimer.unref) this.idleTimer.unref();
+  }
+
+  nextMessageId() {
+    this.messageId += 1;
+    return this.messageId;
+  }
+
+  async ensureStarted() {
+    this.touch();
+    const fresh = this.freshSnapshot();
+    if (fresh) return fresh;
+    if (!HIBACHI_WS_ENABLED) return null;
+    this.client.connect();
+    await this.waitForSnapshot(HIBACHI_WS_SNAPSHOT_WAIT_MS);
+    const latest = this.freshSnapshot();
+    if (!latest && !this.snapshot) this.client.close();
+    return latest;
+  }
+
+  waitForSnapshot(timeoutMs) {
+    const fresh = this.freshSnapshot();
+    if (fresh) return Promise.resolve(fresh);
+    return new Promise(resolve => {
+      let done = false;
+      const finish = value => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const index = this.waiters.indexOf(finish);
+        if (index >= 0) this.waiters.splice(index, 1);
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      this.waiters.push(finish);
+    });
+  }
+
+  handleMessage(message) {
+    if (!message || typeof message !== 'object') return;
+    const full = fullAccountSnapshot(message);
+    if (full) {
+      this.listenKey = message?.result?.listenKey || message?.listenKey || this.listenKey;
+      this.snapshot = normalizeWsAccountSnapshot(full);
+      this.snapshotAt = Date.now();
+      this.resolveWaiters(this.snapshot);
+      return;
+    }
+    const next = applyAccountStreamMessage(this.snapshot, message);
+    if (next) {
+      this.snapshot = normalizeWsAccountSnapshot(next);
+      this.snapshotAt = Date.now();
+      this.resolveWaiters(this.snapshot);
+    }
+  }
+
+  resolveWaiters(value) {
+    const waiters = this.waiters.splice(0);
+    for (const resolve of waiters) {
+      try { resolve(value); } catch {}
+    }
+  }
+
+  close(clearSnapshot = true) {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    this.client.close();
+    this.listenKey = null;
+    this.resolveWaiters(null);
+    if (clearSnapshot) {
+      this.snapshot = null;
+      this.snapshotAt = 0;
+    }
+  }
+}
+
+function accountStream(creds) {
+  const key = accountStreamKey(creds);
+  let stream = accountStreams.get(key);
+  if (!stream) {
+    stream = new HibachiAccountStream(creds);
+    accountStreams.set(key, stream);
+  }
+  return stream;
+}
+
+class HibachiTradeStream {
+  constructor(creds) {
+    this.creds = { accountId: creds.accountId, apiKey: creds.apiKey };
+    this.messageId = Math.floor(Math.random() * 1_000_000);
+    this.pending = new Map();
+    this.idleTimer = null;
+    this.lastTouch = Date.now();
+    this.client = createReconnectingJsonWebSocket({
+      name: 'hibachi-trade',
+      getUrl: () => hibachiWsUrl('/ws/trade', this.creds),
+      headers: () => ({ Authorization: this.creds.apiKey }),
+      reconnectMinMs: 1000,
+      reconnectMaxMs: 60_000,
+      handshakeTimeoutMs: HIBACHI_WS_CONNECT_TIMEOUT_MS,
+      pingIntervalMs: 0,
+      onMessage: msg => this.handleMessage(msg),
+      onClose: event => this.handleClose(new Error(`Hibachi trade WS closed ${event?.code || ''} ${event?.reason || ''}`.trim())),
+      onError: event => this.handleClose(event instanceof Error ? event : new Error(event?.message || 'Hibachi trade WS error')),
+      onStatus: status => {
+        if (['open', 'reconnecting', 'stale', 'error'].includes(status.status)) {
+          logHibachiWs(`trade_${status.status}`, this.creds, status);
+        }
+      },
+    });
+  }
+
+  touch() {
+    this.lastTouch = Date.now();
+    clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      if (Date.now() - this.lastTouch >= HIBACHI_WS_IDLE_CLOSE_MS) this.close();
+    }, HIBACHI_WS_IDLE_CLOSE_MS + 500);
+    if (this.idleTimer.unref) this.idleTimer.unref();
+  }
+
+  nextMessageId() {
+    this.messageId += 1;
+    return this.messageId;
+  }
+
+  async ensureOpen() {
+    this.touch();
+    if (this.client.readyState() === 1) return true;
+    if (!HIBACHI_WS_ENABLED) throw new Error('Hibachi WS disabled');
+    this.client.connect();
+    const deadline = Date.now() + HIBACHI_WS_CONNECT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (this.client.readyState() === 1) return true;
+      await wait(50);
+    }
+    this.client.close();
+    throw new Error('Hibachi trade WS connect timed out');
+  }
+
+  handleMessage(message) {
+    if (!message?.id) return;
+    const pending = this.pending.get(Number(message.id));
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    this.pending.delete(Number(message.id));
+    if (message.error) {
+      const err = new Error(message.error?.message || message.error || 'Hibachi trade WS error');
+      err.status = message.status || null;
+      pending.reject(err);
+      return;
+    }
+    pending.resolve(message);
+  }
+
+  handleClose(error = null) {
+    const pending = Array.from(this.pending.values());
+    this.pending.clear();
+    for (const item of pending) {
+      clearTimeout(item.timeout);
+      item.reject(error || new Error('Hibachi trade WS closed'));
+    }
+    this.ws = null;
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+  }
+
+  async rpc(method, params = {}) {
+    await this.ensureOpen();
+    const id = this.nextMessageId();
+    const payload = { id, method, params: { accountId: this.creds.accountId, ...params } };
+    let pendingTimeout = null;
+    const response = new Promise((resolve, reject) => {
+      pendingTimeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Hibachi trade WS ${method} timed out`));
+      }, HIBACHI_WS_CONNECT_TIMEOUT_MS);
+      if (pendingTimeout.unref) pendingTimeout.unref();
+      this.pending.set(id, { resolve, reject, timeout: pendingTimeout });
+    });
+    if (!this.client.sendJson(payload)) {
+      this.pending.delete(id);
+      clearTimeout(pendingTimeout);
+      throw new Error('Hibachi trade WS is not open');
+    }
+    return response;
+  }
+
+  close() {
+    this.handleClose();
+    this.client.close();
+  }
+}
+
+function tradeStream(creds) {
+  const key = tradeStreamKey(creds);
+  let stream = tradeStreams.get(key);
+  if (!stream) {
+    stream = new HibachiTradeStream(creds);
+    tradeStreams.set(key, stream);
+  }
+  return stream;
 }
 
 async function request(base, method, path, { apiKey, body } = {}) {
@@ -412,13 +826,63 @@ async function authedGet(path, creds) {
   return request(HIBACHI_API, 'GET', path, { apiKey: creds.apiKey });
 }
 
+async function cachedAuthedGet(path, creds, opts = {}) {
+  const ttlMs = Math.max(0, Number(opts.ttlMs ?? HIBACHI_PRIVATE_READ_CACHE_MS));
+  const staleMs = Math.max(ttlMs, Number(opts.staleMs ?? HIBACHI_PRIVATE_READ_STALE_MS));
+  const key = privateReadCacheKey(path, creds);
+  const now = Date.now();
+  const cached = privateReadCache.get(key);
+  if (cached?.payload !== undefined && now - cached.at < ttlMs) return cached.payload;
+  if (cached?.promise) return cached.promise;
+
+  const promise = authedGet(path, creds).then((payload) => {
+    privateReadCache.set(key, { payload, at: Date.now() });
+    prunePrivateReadCache();
+    return payload;
+  }, (error) => {
+    const latest = privateReadCache.get(key) || cached;
+    if (
+      isRetryableReadError(error)
+      && latest?.payload !== undefined
+      && latest?.at
+      && Date.now() - latest.at < staleMs
+    ) {
+      console.warn(`[hibachi] using stale private read for ${path}: ${error.message}`);
+      privateReadCache.set(key, { payload: latest.payload, at: latest.at });
+      return latest.payload;
+    }
+    if (latest?.payload !== undefined) privateReadCache.set(key, { payload: latest.payload, at: latest.at });
+    else privateReadCache.delete(key);
+    throw error;
+  });
+  privateReadCache.set(key, { ...(cached || {}), promise });
+  return promise;
+}
+
 async function authedSend(method, path, body, creds) {
   return request(HIBACHI_API, method, path, { apiKey: creds.apiKey, body });
 }
 
+function accountInfoPath(creds) {
+  return `/trade/account/info?accountId=${encodeURIComponent(creds.accountId)}`;
+}
+
+async function getAccountInfo(creds) {
+  if (HIBACHI_WS_ENABLED) {
+    try {
+      const snapshot = await accountStream(creds).ensureStarted();
+      if (snapshot) return snapshot;
+      logHibachiWs('account_fallback_rest', creds, { message: 'snapshot unavailable' });
+    } catch (e) {
+      logHibachiWs('account_fallback_rest', creds, { message: e.message || String(e) });
+    }
+  }
+  return cachedAuthedGet(accountInfoPath(creds), creds);
+}
+
 async function getAccount(credsInput) {
   const creds = credentials(credsInput);
-  const j = await authedGet(`/trade/account/info?accountId=${encodeURIComponent(creds.accountId)}`, creds);
+  const j = await getAccountInfo(creds);
   const feeLevel = j?.feeLevel
     ?? j?.fee_level
     ?? j?.feeTier
@@ -451,7 +915,7 @@ async function getAccount(credsInput) {
 
 async function getPositions(credsInput) {
   const creds = credentials(credsInput);
-  const j = await authedGet(`/trade/account/info?accountId=${encodeURIComponent(creds.accountId)}`, creds);
+  const j = await getAccountInfo(creds);
   return rows(j?.positions).map(p => {
     const amount = Math.abs(num(p.quantity));
     if (!p?.symbol || amount <= 0) return null;
@@ -482,7 +946,18 @@ async function getPositions(credsInput) {
 
 async function getOrders(credsInput) {
   const creds = credentials(credsInput);
-  const j = await authedGet(`/trade/orders?accountId=${encodeURIComponent(creds.accountId)}`, creds);
+  let j = null;
+  if (HIBACHI_WS_ENABLED) {
+    try {
+      const response = await tradeStream(creds).rpc('orders.status');
+      j = response?.result || response;
+    } catch (e) {
+      logHibachiWs('orders_fallback_rest', creds, { message: e.message || String(e) });
+    }
+  }
+  if (j == null) {
+    j = await cachedAuthedGet(`/trade/orders?accountId=${encodeURIComponent(creds.accountId)}`, creds);
+  }
   return rows(j?.orders || j).map(o => ({
     symbol: symbolOf(o.symbol),
     side: String(o.side || '').toUpperCase() === 'ASK' ? 'ask' : 'bid',
@@ -552,7 +1027,9 @@ async function placeOrder(credsInput, args = {}) {
     ...(triggerPrice != null ? { triggerPrice, triggerDirection } : {}),
     ...(orderFlags ? { orderFlags } : {}),
   };
-  return authedSend('POST', '/trade/order', body, creds);
+  const result = await authedSend('POST', '/trade/order', body, creds);
+  accountStream(creds).markStale();
+  return result;
 }
 
 async function cancelOrder(credsInput, { orderId, nonce } = {}) {
@@ -567,7 +1044,9 @@ async function cancelOrder(credsInput, { orderId, nonce } = {}) {
     signature: signPayload(creds.privateKey, buf),
     ...(id != null ? { orderId: String(id) } : { nonce: String(n) }),
   };
-  return authedSend('DELETE', '/trade/order', body, creds);
+  const result = await authedSend('DELETE', '/trade/order', body, creds);
+  accountStream(creds).markStale();
+  return result;
 }
 
 function normalizeTrade(accountId, trade) {
@@ -597,7 +1076,10 @@ function normalizeTrade(accountId, trade) {
 
 async function getAccountTradeHistory(credsInput, { limit = HIBACHI_FILL_LOOKBACK_LIMIT } = {}) {
   const creds = credentials(credsInput);
-  const j = await authedGet(`/trade/account/trades?accountId=${encodeURIComponent(creds.accountId)}`, creds);
+  const j = await cachedAuthedGet(`/trade/account/trades?accountId=${encodeURIComponent(creds.accountId)}`, creds, {
+    ttlMs: 1_500,
+    staleMs: 15_000,
+  });
   return rows(j?.trades || j)
     .slice(0, Math.max(1, Math.min(250, Number(limit) || HIBACHI_FILL_LOOKBACK_LIMIT)))
     .map(t => normalizeTrade(creds.accountId, t))
@@ -607,7 +1089,23 @@ async function getAccountTradeHistory(credsInput, { limit = HIBACHI_FILL_LOOKBAC
 async function importFillsForPlayer(playerId, credsInput, opts = {}) {
   const creds = credentials(credsInput);
   const db = require('./db');
-  const fills = await getAccountTradeHistory(creds, opts).catch(() => []);
+  let fills = [];
+  try {
+    fills = await getAccountTradeHistory(creds, opts);
+  } catch (e) {
+    console.warn('[hibachi] trade history import read failed:', e.message);
+    return {
+      ok: false,
+      imported: 0,
+      adopted: 0,
+      skipped: 0,
+      total: 0,
+      status: e.status || null,
+      retryable: isRetryableReadError(e),
+      error: e.message || 'Hibachi trade history unavailable',
+      attribution: 'hibachi_api_no_builder_code',
+    };
+  }
   let imported = 0;
   let adopted = 0;
   let skipped = 0;

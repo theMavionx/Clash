@@ -1971,7 +1971,12 @@ router.post('/decibel/leverage', auth, async (req, res) => {
 // ==================== MARKET DATA ====================
 
 function hibachiErrorStatus(error, fallback = 502) {
-  return hibachi.isIpBlockedError?.(error) ? 403 : fallback;
+  if (hibachi.isIpBlockedError?.(error)) return 403;
+  const upstreamStatus = Number(error?.status);
+  if (Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600) {
+    return upstreamStatus;
+  }
+  return fallback;
 }
 
 function hibachiErrorBody(error, fallbackError) {
@@ -1982,7 +1987,7 @@ function hibachiErrorBody(error, fallbackError) {
       detail: error.message,
     };
   }
-  return { error: fallbackError, detail: error?.message };
+  return { error: fallbackError, detail: error?.message, status: error?.status || null };
 }
 
 router.get('/markets', async (req, res) => {

@@ -253,6 +253,36 @@ function hibachiProxyPath(path, baseUrl = HIBACHI_PUBLIC_PROXY_URL) {
   return `${baseUrl}${fallbackPath}`;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isTransientHibachiError(error) {
+  const status = Number(error?.status);
+  if ([408, 425, 429, 500, 502, 503, 504].includes(status)) return true;
+  return /rate limited|timeout|timed out|gateway|temporarily|network|fetch failed/i.test(
+    String(error?.detail || error?.error || error?.message || '')
+  );
+}
+
+function hibachiPositionAmount(position) {
+  return Math.abs(num(position?.amount ?? position?.quantity ?? position?.size, 0));
+}
+
+function normalizedHibachiSide(side) {
+  return String(side || '').toLowerCase() === 'ask' ? 'ask' : 'bid';
+}
+
+function findHibachiPosition(rows, symbol, side) {
+  const targetSymbol = symbolOf(symbol);
+  const targetSide = normalizedHibachiSide(side);
+  return (Array.isArray(rows) ? rows : []).find(pos => (
+    symbolOf(pos?.symbol) === targetSymbol
+    && normalizedHibachiSide(pos?.side) === targetSide
+    && hibachiPositionAmount(pos) > 0
+  )) || null;
+}
+
 export function useHibachi() {
   const { dex } = useDex();
   const isActiveDex = dex === 'hibachi';
@@ -276,10 +306,20 @@ export function useHibachi() {
   const marketsRef = useRef([]);
   const leverageSettingsRef = useRef(leverageSettings);
   const claimGoldRef = useRef(null);
+  const accountRef = useRef(null);
+  const positionsRef = useRef([]);
+  const ordersRef = useRef([]);
+  const dataReadyRef = useRef(false);
+  const fetchAccountPromiseRef = useRef(null);
 
   useEffect(() => {
     leverageSettingsRef.current = leverageSettings;
   }, [leverageSettings]);
+
+  useEffect(() => { accountRef.current = account; }, [account]);
+  useEffect(() => { positionsRef.current = positions; }, [positions]);
+  useEffect(() => { ordersRef.current = orders; }, [orders]);
+  useEffect(() => { dataReadyRef.current = dataReady; }, [dataReady]);
 
   const token = (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null;
   const walletAddr = evmWallet?.address || null;
@@ -436,33 +476,77 @@ export function useHibachi() {
     });
   }, [walletAddr, credentials, token, fetchJson, authHeaders, credentialBody]);
 
-  const fetchAccount = useCallback(async () => {
+  const fetchPositionsOnly = useCallback(async () => {
+    const pos = await authedPost('/api/futures/hibachi/positions');
+    const enriched = enrichPositions(pos, leverageSettingsRef.current);
+    positionsRef.current = enriched;
+    setPositions(enriched);
+    return enriched;
+  }, [authedPost]);
+
+  const fetchAccount = useCallback(async ({ quiet = false } = {}) => {
     if (!walletAddr || !credentials || !token) {
+      accountRef.current = null;
+      positionsRef.current = [];
+      ordersRef.current = [];
+      dataReadyRef.current = false;
       setAccount(null);
       setPositions([]);
       setOrders([]);
       setDataReady(false);
       return null;
     }
-    try {
-      const [acct, pos, ord] = await Promise.all([
+    if (fetchAccountPromiseRef.current) return fetchAccountPromiseRef.current;
+    const run = (async () => {
+      const results = await Promise.allSettled([
         authedPost('/api/futures/hibachi/account'),
-        authedPost('/api/futures/hibachi/positions'),
+        fetchPositionsOnly(),
         authedPost('/api/futures/hibachi/orders'),
       ]);
-      setAccount(acct || null);
-      setPositions(enrichPositions(pos, leverageSettingsRef.current));
-      setOrders(Array.isArray(ord) ? ord : []);
-      setDataReady(true);
-      return acct;
-    } catch (e) {
-      const msg = hibachiErrorMessage(e);
-      console.warn('[useHibachi] account:', msg);
-      setError(msg);
-      setDataReady(false);
-      return null;
-    }
-  }, [walletAddr, credentials, token, authedPost]);
+      const [acctResult, posResult, ordResult] = results;
+      const fresh = [];
+
+      if (acctResult.status === 'fulfilled') {
+        const nextAccount = acctResult.value || null;
+        accountRef.current = nextAccount;
+        setAccount(nextAccount);
+        fresh.push('account');
+      }
+      if (posResult.status === 'fulfilled') {
+        fresh.push('positions');
+      }
+      if (ordResult.status === 'fulfilled') {
+        const nextOrders = Array.isArray(ordResult.value) ? ordResult.value : [];
+        ordersRef.current = nextOrders;
+        setOrders(nextOrders);
+        fresh.push('orders');
+      }
+
+      const rejected = results.find(r => r.status === 'rejected');
+      const hasAnyData = fresh.length > 0 || accountRef.current || positionsRef.current.length || ordersRef.current.length;
+      if (hasAnyData) {
+        dataReadyRef.current = true;
+        setDataReady(true);
+      }
+      if (rejected) {
+        const msg = hibachiErrorMessage(rejected.reason);
+        console.warn('[useHibachi] account refresh:', msg);
+        if (!quiet && (!hasAnyData || !isTransientHibachiError(rejected.reason))) setError(msg);
+        if (!hasAnyData && !isTransientHibachiError(rejected.reason)) {
+          dataReadyRef.current = false;
+          setDataReady(false);
+        }
+      } else {
+        setError(null);
+      }
+      if (!hasAnyData && rejected) return null;
+      return accountRef.current;
+    })().finally(() => {
+      fetchAccountPromiseRef.current = null;
+    });
+    fetchAccountPromiseRef.current = run;
+    return run;
+  }, [walletAddr, credentials, token, authedPost, fetchPositionsOnly]);
 
   const setLeverage = useCallback(async (symbol, value) => {
     const sym = symbolOf(symbol);
@@ -479,7 +563,9 @@ export function useHibachi() {
   const fetchOrders = useCallback(async () => {
     try {
       const ord = await authedPost('/api/futures/hibachi/orders');
-      setOrders(Array.isArray(ord) ? ord : []);
+      const nextOrders = Array.isArray(ord) ? ord : [];
+      ordersRef.current = nextOrders;
+      setOrders(nextOrders);
       return ord;
     } catch (e) {
       console.warn('[useHibachi] orders:', e?.message || e);
@@ -557,6 +643,28 @@ export function useHibachi() {
   }, [credentials, token, walletAddr, refreshServerResources]);
 
   claimGoldRef.current = claimGold;
+
+  const waitForMarketPosition = useCallback(async (symbol, side, baselineAmount = 0) => {
+    const targetSymbol = symbolOf(symbol);
+    const targetSide = normalizedHibachiSide(side);
+    const deadline = Date.now() + 22_000;
+    let lastError = null;
+    for (let attempt = 0; Date.now() < deadline && attempt < 12; attempt += 1) {
+      if (attempt > 0) await sleep(attempt < 4 ? 1_000 : 1_800);
+      try {
+        const latest = await fetchPositionsOnly();
+        const match = findHibachiPosition(latest, targetSymbol, targetSide);
+        if (match && hibachiPositionAmount(match) > baselineAmount + 1e-9) return match;
+      } catch (e) {
+        lastError = e;
+        if (!isTransientHibachiError(e)) throw e;
+      }
+    }
+    if (lastError) {
+      console.warn('[useHibachi] position wait timed out after transient errors:', hibachiErrorMessage(lastError));
+    }
+    return null;
+  }, [fetchPositionsOnly]);
 
   const syncRewards = useCallback((label = 'trade') => {
     if (!walletAddr || !credentials || !token) return;
@@ -686,15 +794,24 @@ export function useHibachi() {
       assertMarketTradable(symbol, market);
       const mark = num(market?.mark || market?.mid || prices.find(p => p.symbol === symbolOf(symbol))?.mark);
       const qty = mark > 0 ? (num(amount) * Math.max(1, num(leverage, 1))) / mark : 0;
+      const marketSymbol = market?.market_name || `${symbolOf(symbol)}/USDT-P`;
+      const beforePosition = findHibachiPosition(positionsRef.current, marketSymbol, side);
+      const beforeAmount = hibachiPositionAmount(beforePosition);
       const result = await authedPost('/api/futures/hibachi/order', {
-        symbol: market?.market_name || `${symbolOf(symbol)}/USDT-P`,
+        symbol: marketSymbol,
         side,
         quantity: qty,
         orderType: 'market',
       });
-      await fetchAccount();
+      const visiblePosition = await waitForMarketPosition(marketSymbol, side, beforeAmount);
+      await fetchAccount({ quiet: true });
       syncRewards('market order');
-      return { success: true, raw: result, order_id: result?.orderId || result?.result?.orderId };
+      return {
+        success: true,
+        raw: result,
+        order_id: result?.orderId || result?.result?.orderId,
+        ...(visiblePosition ? {} : { status: 'submitted', info: `${side.toUpperCase()} ${symbolOf(symbol)} submitted. Hibachi position is still updating.` }),
+      };
     } catch (e) {
       const msg = hibachiErrorMessage(e, 'Hibachi market order failed');
       setError(msg);
@@ -702,7 +819,7 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, prices, authedPost, fetchAccount, syncRewards]);
+  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, prices, authedPost, fetchAccount, syncRewards, waitForMarketPosition]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     setLoading(true);
@@ -752,7 +869,7 @@ export function useHibachi() {
         orderType: 'market',
         reduceOnly: true,
       });
-      await fetchAccount();
+      await fetchAccount({ quiet: true });
       syncRewards('close');
       return { success: true, raw: result, order_id: result?.orderId || result?.result?.orderId };
     } catch (e) {
