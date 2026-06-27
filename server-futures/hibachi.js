@@ -16,6 +16,10 @@ const HIBACHI_VISIBLE_MARKET_CATEGORIES = new Set(['crypto']);
 const HIBACHI_PRIVATE_READ_CACHE_MS = Math.max(250, Math.min(5_000, Number(process.env.HIBACHI_PRIVATE_READ_CACHE_MS || 2_500)));
 const HIBACHI_PRIVATE_READ_STALE_MS = Math.max(1_000, Math.min(60_000, Number(process.env.HIBACHI_PRIVATE_READ_STALE_MS || 30_000)));
 const HIBACHI_PRIVATE_READ_MAX_ENTRIES = 500;
+const HIBACHI_REST_RATE_LIMIT_WINDOW_MS = Math.max(1_000, Math.min(60_000, Number(process.env.HIBACHI_REST_RATE_LIMIT_WINDOW_MS || 10_000)));
+const HIBACHI_REST_RATE_LIMIT_MAX = Math.max(10, Math.min(1_000, Number(process.env.HIBACHI_REST_RATE_LIMIT_MAX || 280)));
+const HIBACHI_REST_RATE_LIMIT_QUEUE_MAX = Math.max(10, Math.min(5_000, Number(process.env.HIBACHI_REST_RATE_LIMIT_QUEUE_MAX || 1_000)));
+const HIBACHI_REST_RATE_LIMIT_WAIT_MS = Math.max(1_000, Math.min(60_000, Number(process.env.HIBACHI_REST_RATE_LIMIT_WAIT_MS || 12_000)));
 const HIBACHI_WS_ENABLED = String(process.env.HIBACHI_WS_ENABLED || 'true').toLowerCase() !== 'false';
 const HIBACHI_WS_CONNECT_TIMEOUT_MS = Math.max(1_000, Math.min(10_000, Number(process.env.HIBACHI_WS_CONNECT_TIMEOUT_MS || 4_000)));
 const HIBACHI_WS_SNAPSHOT_WAIT_MS = Math.max(250, Math.min(5_000, Number(process.env.HIBACHI_WS_SNAPSHOT_WAIT_MS || 2_000)));
@@ -738,7 +742,87 @@ function tradeStream(creds) {
   return stream;
 }
 
+const restRateGate = {
+  timestamps: [],
+  queue: [],
+  timer: null,
+};
+
+function pruneRestRateGate(now = Date.now()) {
+  const cutoff = now - HIBACHI_REST_RATE_LIMIT_WINDOW_MS;
+  while (restRateGate.timestamps.length && restRateGate.timestamps[0] <= cutoff) {
+    restRateGate.timestamps.shift();
+  }
+}
+
+function nextRestRateGateDelay(now = Date.now()) {
+  pruneRestRateGate(now);
+  if (restRateGate.timestamps.length < HIBACHI_REST_RATE_LIMIT_MAX) return 0;
+  const oldest = restRateGate.timestamps[0] || now;
+  return Math.max(25, oldest + HIBACHI_REST_RATE_LIMIT_WINDOW_MS - now + 5);
+}
+
+function scheduleRestRateGateDrain(delayMs = 0) {
+  if (restRateGate.timer) return;
+  restRateGate.timer = setTimeout(() => {
+    restRateGate.timer = null;
+    drainRestRateGate();
+  }, Math.max(0, delayMs));
+  if (restRateGate.timer.unref) restRateGate.timer.unref();
+}
+
+function drainRestRateGate() {
+  const now = Date.now();
+  pruneRestRateGate(now);
+  while (
+    restRateGate.queue.length
+    && restRateGate.timestamps.length < HIBACHI_REST_RATE_LIMIT_MAX
+  ) {
+    const item = restRateGate.queue.shift();
+    clearTimeout(item.timeout);
+    restRateGate.timestamps.push(Date.now());
+    item.resolve();
+  }
+  if (restRateGate.queue.length) scheduleRestRateGateDrain(nextRestRateGateDelay());
+}
+
+async function acquireRestRateSlot(path = '') {
+  const now = Date.now();
+  pruneRestRateGate(now);
+  if (restRateGate.timestamps.length < HIBACHI_REST_RATE_LIMIT_MAX) {
+    restRateGate.timestamps.push(now);
+    return;
+  }
+  if (restRateGate.queue.length >= HIBACHI_REST_RATE_LIMIT_QUEUE_MAX) {
+    const err = new Error('Hibachi REST queue is full; retry shortly.');
+    err.status = 429;
+    err.path = path;
+    err.localRateLimited = true;
+    throw err;
+  }
+  await new Promise((resolve, reject) => {
+    const item = {
+      resolve,
+      reject,
+      timeout: null,
+    };
+    item.timeout = setTimeout(() => {
+      const index = restRateGate.queue.indexOf(item);
+      if (index >= 0) restRateGate.queue.splice(index, 1);
+      const err = new Error('Hibachi REST queue timed out; retry shortly.');
+      err.status = 429;
+      err.path = path;
+      err.localRateLimited = true;
+      reject(err);
+    }, HIBACHI_REST_RATE_LIMIT_WAIT_MS);
+    if (item.timeout.unref) item.timeout.unref();
+    restRateGate.queue.push(item);
+    scheduleRestRateGateDrain(nextRestRateGateDelay());
+  });
+}
+
 async function request(base, method, path, { apiKey, body } = {}) {
+  await acquireRestRateSlot(path);
   const headers = {
     accept: 'application/json',
     'Hibachi-Client': 'ClashOfPerps/1.0',
@@ -1203,7 +1287,7 @@ async function getAccountInfo(creds, opts = {}) {
     }
   }
   const payload = await cachedAuthedGet(accountInfoPath(creds), creds, forceLive
-    ? { forceLive: true, allowStale: false, ttlMs: 0 }
+    ? { forceLive: true, allowStale: opts.allowStale !== false && opts.allow_stale !== false, ttlMs: 0 }
     : {});
   if (forceLive && HIBACHI_WS_ENABLED) {
     const hasPositions = rows(payload?.positions).length > 0;
@@ -1214,9 +1298,7 @@ async function getAccountInfo(creds, opts = {}) {
   return payload;
 }
 
-async function getAccount(credsInput, opts = {}) {
-  const creds = credentials(credsInput);
-  const j = await getAccountInfo(creds, opts);
+function formatAccount(j = {}) {
   const feeLevel = j?.feeLevel
     ?? j?.fee_level
     ?? j?.feeTier
@@ -1250,9 +1332,7 @@ async function getAccount(credsInput, opts = {}) {
   };
 }
 
-async function getPositions(credsInput, opts = {}) {
-  const creds = credentials(credsInput);
-  const j = await getAccountInfo(creds, opts);
+function formatPositionsFromAccountInfo(j = {}) {
   return rows(j?.positions).map(p => {
     const amount = positionQuantity(p);
     const rawSymbol = positionSymbol(p);
@@ -1285,24 +1365,20 @@ async function getPositions(credsInput, opts = {}) {
   }).filter(Boolean);
 }
 
-async function getOrders(credsInput, opts = {}) {
+async function getAccount(credsInput, opts = {}) {
   const creds = credentials(credsInput);
-  let j = null;
-  const forceLive = Boolean(opts.forceLive || opts.force_live);
-  if (!forceLive && HIBACHI_WS_ENABLED) {
-    try {
-      const response = await tradeStream(creds).rpc('orders.status');
-      j = response?.result || response;
-    } catch (e) {
-      logHibachiWs('orders_fallback_rest', creds, { message: e.message || String(e) });
-    }
-  }
-  if (j == null) {
-    j = await cachedAuthedGet(ordersPath(creds), creds, forceLive
-      ? { forceLive: true, allowStale: false, ttlMs: 0 }
-      : {});
-  }
-  return rows(j?.orders || j).map(o => ({
+  const j = await getAccountInfo(creds, opts);
+  return formatAccount(j);
+}
+
+async function getPositions(credsInput, opts = {}) {
+  const creds = credentials(credsInput);
+  const j = await getAccountInfo(creds, opts);
+  return formatPositionsFromAccountInfo(j);
+}
+
+function formatOrders(payload) {
+  return rows(payload?.orders || payload).map(o => ({
     symbol: symbolOf(o.symbol),
     side: String(o.side || '').toUpperCase() === 'ASK' ? 'ask' : 'bid',
     amount: String(o.availableQuantity || o.totalQuantity || ''),
@@ -1319,6 +1395,50 @@ async function getOrders(credsInput, opts = {}) {
     client_order_id: null,
     _raw: o,
   }));
+}
+
+async function getOrders(credsInput, opts = {}) {
+  const creds = credentials(credsInput);
+  let j = null;
+  const forceLive = Boolean(opts.forceLive || opts.force_live);
+  if (!forceLive && HIBACHI_WS_ENABLED) {
+    try {
+      const response = await tradeStream(creds).rpc('orders.status');
+      j = response?.result || response;
+    } catch (e) {
+      logHibachiWs('orders_fallback_rest', creds, { message: e.message || String(e) });
+    }
+  }
+  if (j == null) {
+    j = await cachedAuthedGet(ordersPath(creds), creds, forceLive
+      ? { forceLive: true, allowStale: opts.allowStale !== false && opts.allow_stale !== false, ttlMs: 0 }
+      : {});
+  }
+  return formatOrders(j);
+}
+
+async function getSnapshot(credsInput, opts = {}) {
+  const creds = credentials(credsInput);
+  const results = await Promise.allSettled([
+    getAccountInfo(creds, opts),
+    getOrders(creds, opts),
+  ]);
+  const [accountResult, ordersResult] = results;
+  if (accountResult.status === 'rejected') throw accountResult.reason;
+  const rawAccount = accountResult.value || {};
+  const orders = ordersResult.status === 'fulfilled' ? ordersResult.value : [];
+  if (ordersResult.status === 'rejected' && !isRetryableReadError(ordersResult.reason)) {
+    throw ordersResult.reason;
+  }
+  return {
+    account: formatAccount(rawAccount),
+    positions: formatPositionsFromAccountInfo(rawAccount),
+    orders,
+    partial: ordersResult.status === 'rejected',
+    warnings: ordersResult.status === 'rejected'
+      ? [{ source: 'orders', message: ordersResult.reason?.message || 'Hibachi orders unavailable', status: ordersResult.reason?.status || null }]
+      : [],
+  };
 }
 
 async function placeOrder(credsInput, args = {}) {
@@ -1683,6 +1803,7 @@ module.exports = {
   isIpBlockedError,
   getMarketInfo,
   getPrices,
+  getSnapshot,
   getAccount,
   getPositions,
   getOrders,

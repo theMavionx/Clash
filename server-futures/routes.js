@@ -3581,8 +3581,20 @@ function hibachiReadOpts(req) {
   return {
     forceLive: hibachiForceLive(req),
     acceptEmptySnapshot: req.body?.accept_empty_snapshot === true || req.body?.acceptEmptySnapshot === true,
+    allowStale: req.body?.allow_stale !== false && req.body?.allowStale !== false,
   };
 }
+
+router.post('/hibachi/snapshot', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    res.json(await hibachi.getSnapshot(creds, hibachiReadOpts(req)));
+  } catch (e) {
+    console.warn('[hibachi] snapshot failed:', e.message);
+    res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to load Hibachi snapshot'));
+  }
+});
 
 router.post('/hibachi/account', auth, async (req, res) => {
   try {

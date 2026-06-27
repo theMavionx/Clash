@@ -28,9 +28,9 @@ const HIBACHI_AUTH_PROXY_URL = String(
 const HIBACHI_DIRECT_API_URL = String(
   import.meta.env.VITE_HIBACHI_DIRECT_API_URL || 'https://api.hibachi.xyz'
 ).replace(/\/+$/u, '');
-const HIBACHI_DIRECT_BROWSER_PROBE_ENABLED = String(
-  import.meta.env.VITE_HIBACHI_DIRECT_BROWSER_PROBE ?? '1'
-) !== '0';
+const HIBACHI_DIRECT_BROWSER_PROBE_ENV = String(
+  import.meta.env.VITE_HIBACHI_DIRECT_BROWSER_PROBE || ''
+).trim().toLowerCase();
 const HIBACHI_DIRECT_BROWSER_PROBE_TTL_MS = 60_000;
 const HIBACHI_DIRECT_BROWSER_PROBE_TIMEOUT_MS = 6_000;
 const HIBACHI_VISIBLE_MARKET_CATEGORIES = new Set(['crypto']);
@@ -369,6 +369,16 @@ function isTransientHibachiError(error) {
   );
 }
 
+function hibachiDirectBrowserProbeEnabled() {
+  if (HIBACHI_DIRECT_BROWSER_PROBE_ENV === '1' || HIBACHI_DIRECT_BROWSER_PROBE_ENV === 'true') return true;
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem('clash_hibachi_direct_probe') === '1';
+  } catch {
+    return false;
+  }
+}
+
 function summarizeHibachiPayload(payload) {
   if (Array.isArray(payload)) return { type: 'array', length: payload.length };
   if (!payload || typeof payload !== 'object') return { type: typeof payload };
@@ -525,7 +535,7 @@ export function useHibachi() {
   }, []);
 
   const runDirectBrowserProbe = useCallback(async (reason = 'manual') => {
-    if (!HIBACHI_DIRECT_BROWSER_PROBE_ENABLED || typeof window === 'undefined') return null;
+    if (!hibachiDirectBrowserProbeEnabled() || typeof window === 'undefined') return null;
     const now = Date.now();
     const cached = directBrowserProbeRef.current || {};
     if (cached.result && now - cached.at < HIBACHI_DIRECT_BROWSER_PROBE_TTL_MS) return cached.result;
@@ -687,7 +697,7 @@ export function useHibachi() {
     if (!walletAddr) throw new Error('Connect EVM wallet first');
     if (!credentials) throw new Error('Connect Hibachi API credentials first');
     if (!token) throw new Error('Game session is not ready');
-    if (/\/hibachi\/(?:account|positions|orders|import-fills|trade-history|order\/status)$/u.test(path)) {
+    if (/\/hibachi\/(?:snapshot|account|positions|orders|import-fills|trade-history|order\/status)$/u.test(path)) {
       runDirectBrowserProbe('private-read').catch((e) => {
         console.warn('[useHibachi] direct browser probe crashed:', e?.message || e);
       });
@@ -752,31 +762,58 @@ export function useHibachi() {
         force_live: true,
         ...(acceptEmptySnapshot ? { accept_empty_snapshot: true } : {}),
       } : {};
-      const results = await Promise.allSettled([
-        authedPost('/api/futures/hibachi/account', liveBody),
-        fetchPositionsOnly({ forceLive, preserveExistingOnEmpty: preservePositionsOnEmpty, acceptEmptySnapshot }),
-        authedPost('/api/futures/hibachi/orders', liveBody),
-      ]);
-      const [acctResult, posResult, ordResult] = results;
       const fresh = [];
-
-      if (acctResult.status === 'fulfilled') {
-        const nextAccount = acctResult.value || null;
-        accountRef.current = nextAccount;
-        setAccount(nextAccount);
-        fresh.push('account');
-      }
-      if (posResult.status === 'fulfilled') {
+      let rejected = null;
+      try {
+        const snapshot = await authedPost('/api/futures/hibachi/snapshot', liveBody);
+        const nextAccount = snapshot?.account || null;
+        const nextPositions = enrichPositions(snapshot?.positions, leverageSettingsRef.current);
+        const nextOrders = Array.isArray(snapshot?.orders) ? snapshot.orders : [];
+        if (nextAccount) {
+          accountRef.current = nextAccount;
+          setAccount(nextAccount);
+          fresh.push('account');
+        }
+        if (!(preservePositionsOnEmpty && nextPositions.length === 0 && positionsRef.current.length > 0)) {
+          applyPositions(nextPositions);
+        }
         fresh.push('positions');
-      }
-      if (ordResult.status === 'fulfilled') {
-        const nextOrders = Array.isArray(ordResult.value) ? ordResult.value : [];
-        ordersRef.current = nextOrders;
-        setOrders(nextOrders);
+        if (!(snapshot?.partial && nextOrders.length === 0 && ordersRef.current.length > 0)) {
+          ordersRef.current = nextOrders;
+          setOrders(nextOrders);
+        }
         fresh.push('orders');
+        if (snapshot?.partial || (Array.isArray(snapshot?.warnings) && snapshot.warnings.length)) {
+          console.warn('[useHibachi] snapshot partial:', snapshot.warnings || []);
+        }
+      } catch (snapshotError) {
+        if (Number(snapshotError?.status) !== 404) {
+          rejected = { status: 'rejected', reason: snapshotError };
+        } else {
+          const results = await Promise.allSettled([
+            authedPost('/api/futures/hibachi/account', liveBody),
+            fetchPositionsOnly({ forceLive, preserveExistingOnEmpty: preservePositionsOnEmpty, acceptEmptySnapshot }),
+            authedPost('/api/futures/hibachi/orders', liveBody),
+          ]);
+          const [acctResult, posResult, ordResult] = results;
+          if (acctResult.status === 'fulfilled') {
+            const nextAccount = acctResult.value || null;
+            accountRef.current = nextAccount;
+            setAccount(nextAccount);
+            fresh.push('account');
+          }
+          if (posResult.status === 'fulfilled') {
+            fresh.push('positions');
+          }
+          if (ordResult.status === 'fulfilled') {
+            const nextOrders = Array.isArray(ordResult.value) ? ordResult.value : [];
+            ordersRef.current = nextOrders;
+            setOrders(nextOrders);
+            fresh.push('orders');
+          }
+          rejected = results.find(r => r.status === 'rejected') || null;
+        }
       }
-
-      const rejected = results.find(r => r.status === 'rejected');
       const hasAnyData = fresh.length > 0 || accountRef.current || positionsRef.current.length || ordersRef.current.length;
       if (hasAnyData) {
         dataReadyRef.current = true;
@@ -800,7 +837,7 @@ export function useHibachi() {
     });
     if (!forceLive) fetchAccountPromiseRef.current = run;
     return run;
-  }, [walletAddr, credentials, token, authedPost, fetchPositionsOnly]);
+  }, [walletAddr, credentials, token, authedPost, fetchPositionsOnly, applyPositions]);
 
   const schedulePositionReconcile = useCallback(({ acceptEmptySnapshot = false } = {}) => {
     const run = () => fetchAccount({
@@ -941,20 +978,9 @@ export function useHibachi() {
     }
   }, [token]);
 
-  const importFills = useCallback(async () => {
-    if (!walletAddr || !credentials || !token) return null;
-    try {
-      return await authedPost('/api/futures/hibachi/import-fills');
-    } catch (e) {
-      console.warn('[useHibachi] import-fills:', e?.message || e);
-      return null;
-    }
-  }, [walletAddr, credentials, token, authedPost]);
-
   const claimGold = useCallback(async ({ reason = 'poll', forceReconcile = false } = {}) => {
     if (!walletAddr || !credentials || !token) return null;
     try {
-      await importFills();
       const res = await fetch('/api/trading/claim-gold', {
         method: 'POST',
         headers: {
@@ -982,7 +1008,7 @@ export function useHibachi() {
       console.warn('[useHibachi] claim-gold:', e?.message || e);
       return null;
     }
-  }, [credentials, importFills, token, walletAddr, refreshServerResources]);
+  }, [credentials, token, walletAddr, refreshServerResources]);
 
   claimGoldRef.current = claimGold;
 
@@ -1001,7 +1027,7 @@ export function useHibachi() {
     };
     clearRewardSyncTimers();
     for (const delayMs of [0, 12_000, 30_000, 60_000]) {
-      const timer = setTimeout(() => run(delayMs >= 30_000), delayMs);
+      const timer = setTimeout(() => run(delayMs >= 60_000), delayMs);
       rewardSyncTimersRef.current.push(timer);
     }
   }, [walletAddr, credentials, token, refreshServerResources, clearRewardSyncTimers]);
