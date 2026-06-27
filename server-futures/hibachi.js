@@ -254,6 +254,65 @@ function positionNotional(position = {}) {
   );
 }
 
+function positionEntryPrice(position = {}) {
+  return num(
+    position.openPrice
+      ?? position.open_price
+      ?? position.entryPrice
+      ?? position.entry_price
+      ?? position.averageEntryPrice
+      ?? position.average_entry_price
+      ?? position.avgEntryPrice
+      ?? position.avg_entry_price,
+  );
+}
+
+function positionMarkPrice(position = {}) {
+  return num(
+    position.markPrice
+      ?? position.mark_price
+      ?? position.marketPrice
+      ?? position.market_price
+      ?? position.oraclePrice
+      ?? position.oracle_price
+      ?? position.indexPrice
+      ?? position.index_price,
+  );
+}
+
+function explicitPositionPnl(position = {}) {
+  const direct = position.pnl_usd
+    ?? position.pnlUsd
+    ?? position.pnl
+    ?? position.unrealizedPnl
+    ?? position.unrealized_pnl
+    ?? position.unrealisedPnl
+    ?? position.unrealised_pnl
+    ?? position.uPnl;
+  if (direct !== undefined && direct !== null && direct !== '') return num(direct);
+
+  const trading = position.unrealizedTradingPnl ?? position.unrealized_trading_pnl;
+  const funding = position.unrealizedFundingPnl ?? position.unrealized_funding_pnl;
+  if (trading !== undefined || funding !== undefined) return num(trading) + num(funding);
+
+  return null;
+}
+
+function derivedPositionPnl(position = {}, amount = positionQuantity(position), side = positionSide(position)) {
+  const entry = positionEntryPrice(position);
+  const mark = positionMarkPrice(position);
+  if (!(entry > 0) || !(mark > 0) || !(amount > 0)) return null;
+  const direction = side === 'ask' ? -1 : 1;
+  return (mark - entry) * amount * direction;
+}
+
+function positionPnl(position = {}, amount = positionQuantity(position), side = positionSide(position)) {
+  const explicit = explicitPositionPnl(position);
+  const derived = derivedPositionPnl(position, amount, side);
+  if (derived != null && (explicit == null || Math.abs(explicit) < 1e-12)) return derived;
+  return explicit ?? derived ?? 0;
+}
+
 function mergePositionUpdate(positions, update) {
   const next = Array.isArray(positions) ? positions.slice() : [];
   const key = positionKey(update);
@@ -1028,14 +1087,16 @@ async function getPositions(credsInput, opts = {}) {
     const notional = positionNotional(p);
     const rawLeverage = num(p.leverage ?? p.positionLeverage ?? p.initialLeverage);
     const margin = positionMargin(p);
-    const pnlUsd = num(p.unrealizedTradingPnl) + num(p.unrealizedFundingPnl);
+    const entryPrice = positionEntryPrice(p);
+    const markPrice = positionMarkPrice(p);
+    const pnlUsd = positionPnl(p, amount, side);
     return {
       symbol: symbolOf(rawSymbol),
       side,
       amount: String(amount),
       size_usd: notional,
-      entry_price: String(p.openPrice ?? p.entryPrice ?? p.averageEntryPrice ?? p.avgEntryPrice ?? ''),
-      mark_price: String(p.markPrice ?? p.marketPrice ?? p.oraclePrice ?? ''),
+      entry_price: entryPrice > 0 ? String(entryPrice) : '',
+      mark_price: markPrice > 0 ? String(markPrice) : '',
       liquidation_price: null,
       margin: margin > 0 ? String(margin) : '',
       leverage: rawLeverage > 0 ? String(rawLeverage) : '',

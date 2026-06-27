@@ -103,6 +103,14 @@ function writeLeverageSettings(settings) {
   window.localStorage.setItem(LEVERAGE_STORAGE_KEY, JSON.stringify(settings || {}));
 }
 
+function derivedPositionPnl(pos) {
+  const entry = num(pos?.entry_price, 0);
+  const mark = num(pos?.mark_price, 0);
+  const amount = Math.abs(num(pos?.amount, 0));
+  if (!(entry > 0) || !(mark > 0) || !(amount > 0)) return null;
+  return (mark - entry) * amount * (pos?.side === 'ask' ? -1 : 1);
+}
+
 function enrichPositions(rows, leverageSettings = {}) {
   return (Array.isArray(rows) ? rows : []).map((pos) => {
     const sym = symbolOf(pos?.symbol);
@@ -112,7 +120,11 @@ function enrichPositions(rows, leverageSettings = {}) {
     const sizeUsd = num(pos?.size_usd, 0);
     const apiMargin = num(pos?.margin, 0);
     const margin = apiMargin > 0 ? apiMargin : (sizeUsd > 0 && leverage > 0 ? sizeUsd / leverage : 0);
-    const pnlUsd = num(pos?.pnl_usd, 0);
+    const apiPnl = num(pos?.pnl_usd, NaN);
+    const derivedPnl = derivedPositionPnl(pos);
+    const pnlUsd = derivedPnl != null && (!Number.isFinite(apiPnl) || Math.abs(apiPnl) < 1e-12)
+      ? derivedPnl
+      : (Number.isFinite(apiPnl) ? apiPnl : 0);
     const apiPct = num(pos?.pnl_pct, NaN);
     const pnlPct = Number.isFinite(apiPct) && !(apiPct === 0 && Math.abs(pnlUsd) >= 0.005)
       ? apiPct
@@ -122,6 +134,7 @@ function enrichPositions(rows, leverageSettings = {}) {
       symbol: sym || pos?.symbol,
       leverage: String(leverage),
       margin: margin > 0 ? String(margin) : (pos?.margin ?? ''),
+      pnl_usd: String(pnlUsd),
       pnl_pct: pnlPct,
     };
   });
