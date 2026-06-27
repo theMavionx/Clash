@@ -19161,6 +19161,7 @@ function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
     ? ticketMetricRaw
     : 'volume';
   const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20)));
+  const manualWinners = normalizeLuckyRaiderManualWinners(luckyRaw.manual_winners ?? luckyRaw.manual_winner_ids ?? luckyRaw.manual_winners_text);
   return {
     daily_pools: normalizeRewardSchedulePools(raw.daily_pools, { strict, labelPrefix: 'Daily pool' }),
     final_pools: normalizeRewardSchedulePools(raw.final_pools, { strict, labelPrefix: 'Final pool' }),
@@ -19181,8 +19182,33 @@ function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
       required_collections: collections.length ? collections : ['demon_king', 'dragon'],
       rewards: luckyRewards,
       draw_time_utc: sanitizePrizeText(luckyRaw.draw_time_utc || '00:05', '00:05').slice(0, 16),
+      manual_winners: manualWinners,
     },
   };
+}
+
+function normalizeLuckyRaiderManualWinners(value) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value || '')
+      .split(/\r?\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const seen = new Set();
+  const winners = [];
+  for (const item of rawItems) {
+    const raw = typeof item === 'object' && item
+      ? String(item.player_id || item.id || item.name || item.wallet || item.identifier || '').trim()
+      : String(item || '').trim();
+    const identifier = raw.replace(/^@+/, '').trim();
+    if (!identifier) continue;
+    const key = identifier.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    winners.push(identifier.slice(0, 160));
+    if (winners.length >= 100) break;
+  }
+  return winners;
 }
 
 function rewardConfigHasContent(config) {

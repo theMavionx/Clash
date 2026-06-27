@@ -343,6 +343,7 @@ function QuestsTab({ markets = [] }) {
   const taskHeaders = useCallback(async (tok) => {
     const base = { 'x-token': tok };
     const activeDex = String(dex || '').toLowerCase();
+    if (activeDex) base['x-dex'] = activeDex;
     if (activeDex === 'hibachi') {
       try {
         const creds = normalizeHibachiTaskCredentials(await readEncryptedCredential(HIBACHI_STORAGE_KEY));

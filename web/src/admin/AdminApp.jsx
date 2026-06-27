@@ -12,6 +12,7 @@ import {
   fmtUsd,
   formToTournamentBody,
   normalizeMegaConfig,
+  normalizeLuckyRaiderManualWinners,
   normalizeReward,
   normalizeRewardConfig,
   rewardConfigPreset5000,
@@ -2192,6 +2193,7 @@ function TournamentRewardsStep({ form, update }) {
 
 function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subtitle = '', allowPreset = false, luckyOnly = false }) {
   const config = normalizeRewardConfig(value || {});
+  const [manualWinnerDraft, setManualWinnerDraft] = useState('');
   function setConfig(next) {
     onChange(normalizeRewardConfig(next));
   }
@@ -2211,6 +2213,28 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
   }
   function updateLucky(patch) {
     setConfig({ ...config, lucky_daily_raider: { ...config.lucky_daily_raider, ...patch } });
+  }
+  function setManualWinners(next) {
+    updateLucky({ manual_winners: normalizeLuckyRaiderManualWinners(next) });
+  }
+  function addManualWinner() {
+    const next = normalizeLuckyRaiderManualWinners([...(config.lucky_daily_raider.manual_winners || []), manualWinnerDraft]);
+    if (!next.length || next.length === (config.lucky_daily_raider.manual_winners || []).length) {
+      setManualWinnerDraft('');
+      return;
+    }
+    updateLucky({ manual_winners: next });
+    setManualWinnerDraft('');
+  }
+  function removeManualWinner(index) {
+    setManualWinners((config.lucky_daily_raider.manual_winners || []).filter((_, idx) => idx !== index));
+  }
+  function moveManualWinner(index, direction) {
+    const next = [...(config.lucky_daily_raider.manual_winners || [])];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    setManualWinners(next);
   }
   return (
     <div className="admin-card">
@@ -2290,17 +2314,61 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
               <NumberField label="Max volume tickets" value={config.lucky_daily_raider.max_volume_tickets || 0} onChange={(v) => updateLucky({ max_volume_tickets: v })} />
             </div>
             <div className="admin-help">Volume bonus is configurable: $ volume step grants N volume tickets, capped by Max volume tickets. Set Max volume tickets to 0 or use a non-volume ticket rule to disable the trading bonus.</div>
-            <label className="admin-field">
-              <span className="admin-label">Manual winners</span>
-              <textarea
-                className="admin-textarea"
-                rows={4}
-                placeholder={'Optional override for the next daily draw. One player per line: nickname, player_id, login wallet, linked wallet, or trading wallet.'}
-                value={(config.lucky_daily_raider.manual_winners || []).join('\n')}
-                onChange={(e) => updateLucky({ manual_winners: e.target.value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean) })}
-              />
-              <span className="admin-card-sub">If filled, the 00:05 UTC draw uses these players in this order. Clear this field to return to weighted random winners.</span>
-            </label>
+            <div className="admin-card nested-card manual-winners-card">
+              <div className="admin-card-head">
+                <div>
+                  <div className="admin-card-title">Reserved winners</div>
+                  <div className="admin-card-sub">Optional override for the next daily draw. Reserved winners fill places first, then remaining places are picked by weighted random.</div>
+                </div>
+                {!!(config.lucky_daily_raider.manual_winners || []).length && (
+                  <button className="admin-btn danger" onClick={() => setManualWinners([])}>Clear</button>
+                )}
+              </div>
+              <div className="admin-card-body admin-grid">
+                <div className="admin-filter-row manual-winner-add">
+                  <input
+                    className="admin-input"
+                    value={manualWinnerDraft}
+                    onChange={(e) => setManualWinnerDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addManualWinner();
+                      }
+                    }}
+                    placeholder="Nickname, player_id, login wallet, linked wallet, or trading wallet"
+                  />
+                  <button className="admin-btn primary" onClick={addManualWinner}>Add reserved winner</button>
+                </div>
+                <div className="manual-winner-list">
+                  {(config.lucky_daily_raider.manual_winners || []).map((winner, index) => (
+                    <div className="manual-winner-row" key={`${winner}-${index}`}>
+                      <div className="manual-winner-place">#{index + 1}</div>
+                      <div className="manual-winner-name">{winner}</div>
+                      <div className="manual-winner-actions">
+                        <button className="admin-btn" onClick={() => moveManualWinner(index, -1)} disabled={index === 0}>Up</button>
+                        <button className="admin-btn" onClick={() => moveManualWinner(index, 1)} disabled={index >= (config.lucky_daily_raider.manual_winners || []).length - 1}>Down</button>
+                        <button className="admin-btn danger" onClick={() => removeManualWinner(index)}>Remove</button>
+                      </div>
+                    </div>
+                  ))}
+                  {!(config.lucky_daily_raider.manual_winners || []).length && (
+                    <div className="admin-help">No reserved winners. The draw will use weighted random for all winner places.</div>
+                  )}
+                </div>
+                <label className="admin-field">
+                  <span className="admin-label">Bulk edit</span>
+                  <textarea
+                    className="admin-textarea"
+                    rows={3}
+                    placeholder={'One player per line. Example:\ngggg1\nSmartDrop'}
+                    value={(config.lucky_daily_raider.manual_winners || []).join('\n')}
+                    onChange={(e) => setManualWinners(e.target.value)}
+                  />
+                  <span className="admin-card-sub">Save the tournament after editing. If a reserved winner cannot be resolved, the run stores it in manual_unresolved and fills the place randomly.</span>
+                </label>
+              </div>
+            </div>
             <div className="admin-form-grid three">
               <label className="admin-field"><span className="admin-label">NFT required</span><select className="admin-select" value={config.lucky_daily_raider.require_nft ? '1' : '0'} onChange={(e) => updateLucky({ require_nft: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
             </div>

@@ -98,6 +98,7 @@ const FUTURES_TASK_DEXES = new Set([
   'avantis',
   'decibel',
   'gmx',
+  'ostium',
   'monad',
   'phoenix',
   'hyperliquid',
@@ -114,6 +115,14 @@ const FUTURES_TASK_DEXES = new Set([
 
 function parseParams(p) {
   try { return typeof p === 'string' ? JSON.parse(p) : (p || {}); } catch { return {}; }
+}
+
+function requestedTaskDex(opts = {}) {
+  const direct = String(opts.dex || '').trim().toLowerCase();
+  if (direct) return direct;
+  const headers = opts.headers || opts.requestHeaders || {};
+  if (!headers || typeof headers !== 'object') return '';
+  return String(headers['x-dex'] || headers['X-Dex'] || headers['x-clash-dex'] || '').trim().toLowerCase();
 }
 
 function normalizeTaskEligibility(input) {
@@ -364,7 +373,7 @@ async function buildSnapshot(player, task, opts = {}) {
     }
     let baselineSource = trades.length > 0 ? 'fetched_trades' : 'none';
     if (baseline === 0) {
-      const dex = String(player.dex || 'pacifica').toLowerCase();
+      const dex = requestedTaskDex(opts) || String(player.dex || 'pacifica').toLowerCase();
       const reward = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ? AND dex = ?').get(player.id, dex);
       baseline = reward ? reward.last_trade_id : 0;
       baselineSource = reward ? 'trading_rewards.last_trade_id' : 'zero_default';
@@ -622,7 +631,7 @@ async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
 // so verifiers don't need to branch.
 async function fetchWalletTrades(player, opts = {}) {
   if (!player) return [];
-  const dexFilter = String(opts.dex || player.dex || 'pacifica').toLowerCase();
+  const dexFilter = String(requestedTaskDex(opts) || player.dex || 'pacifica').toLowerCase();
   const wallet = resolveWallet(player);
   if (!wallet && dexFilter !== 'grvt' && dexFilter !== 'account' && !FUTURES_TASK_DEXES.has(dexFilter)) return [];
 

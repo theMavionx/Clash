@@ -341,6 +341,58 @@ button {
   line-height: 1.4;
 }
 
+.manual-winners-card {
+  margin-top: 4px;
+}
+
+.manual-winner-add {
+  align-items: stretch;
+}
+
+.manual-winner-add .admin-input {
+  flex: 1 1 280px;
+}
+
+.manual-winner-list {
+  display: grid;
+  gap: 8px;
+}
+
+.manual-winner-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.7);
+}
+
+.manual-winner-place {
+  min-height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(255, 215, 0, 0.16);
+  color: #fde68a;
+  font-weight: 900;
+}
+
+.manual-winner-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #f8fafc;
+  font-weight: 800;
+}
+
+.manual-winner-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .admin-btn {
   min-height: 36px;
   border-radius: 8px;
@@ -1120,6 +1172,24 @@ button {
   .admin-toolbar .admin-input,
   .admin-toolbar .admin-select {
     flex: 1 1 100%;
+  }
+
+  .manual-winner-add .admin-btn,
+  .manual-winner-add .admin-input {
+    width: 100%;
+  }
+
+  .manual-winner-row {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .manual-winner-actions {
+    grid-column: 1 / -1;
+    justify-content: stretch;
+  }
+
+  .manual-winner-actions .admin-btn {
+    flex: 1 1 92px;
   }
 
   .admin-input,

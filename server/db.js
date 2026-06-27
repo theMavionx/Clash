@@ -4237,11 +4237,63 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
     const configHash = crypto.createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 16);
     const seed = `${tid}:${day}:${configHash}`;
     const recentWinnerIds = luckyRaiderRecentWinnerIds(day);
-    const drawEntries = entries.filter((entry) => !recentWinnerIds.has(String(entry.player_id)));
-    const manualPick = resolveLuckyRaiderManualWinners(cfg, entries, cfg.winner_count || 1);
-    const pick = manualPick?.winners?.length
-      ? manualPick
-      : weightedLuckyRaiderWinners(drawEntries, seed, cfg.winner_count || 1);
+    const targetWinnerCount = Math.max(1, Math.min(100, Math.floor(Number(cfg.winner_count || 1) || 1)));
+    const eligibleTotalTickets = entries
+      .filter((entry) => Number(entry.tickets || 0) > 0 && Number(entry.eligible || 0) === 1)
+      .reduce((sum, entry) => sum + Math.max(0, Math.floor(Number(entry.tickets || 0))), 0);
+    const manualPick = resolveLuckyRaiderManualWinners(cfg, entries, targetWinnerCount);
+    let pick = null;
+    if (manualPick?.winners?.length) {
+      const manualWinners = manualPick.winners.slice(0, targetWinnerCount).map((entry, index) => ({
+        ...entry,
+        place: index + 1,
+      }));
+      const manualIds = new Set(manualWinners.map((entry) => String(entry.player_id || '')));
+      const remainingCount = Math.max(0, targetWinnerCount - manualWinners.length);
+      const randomEntries = entries.filter((entry) => (
+        Number(entry.tickets || 0) > 0
+        && Number(entry.eligible || 0) === 1
+        && !manualIds.has(String(entry.player_id || ''))
+        && !recentWinnerIds.has(String(entry.player_id || ''))
+      ));
+      const randomPick = remainingCount > 0
+        ? weightedLuckyRaiderWinners(randomEntries, seed, remainingCount)
+        : { winners: [], picks: [], totalTickets: 0 };
+      const randomWinners = (randomPick.winners || []).map((entry, index) => ({
+        ...entry,
+        place: manualWinners.length + index + 1,
+      }));
+      pick = {
+        winner: manualWinners[0] || randomWinners[0] || null,
+        winners: [...manualWinners, ...randomWinners],
+        totalTickets: eligibleTotalTickets,
+        picks: [
+          ...manualWinners.map((entry) => ({ place: entry.place, pick: 'manual', total_tickets: eligibleTotalTickets })),
+          ...(randomPick.picks || []).map((item, index) => ({
+            ...item,
+            place: manualWinners.length + index + 1,
+          })),
+        ],
+        pick: 'manual',
+        manual: true,
+        manual_applied: manualWinners.map((entry) => ({
+          place: entry.place,
+          player_id: entry.player_id,
+          name: entry.name,
+          tickets: entry.tickets,
+        })),
+        manual_unresolved: manualPick.unresolved || [],
+        random_fill: randomWinners.length,
+        random_total_tickets: randomPick.totalTickets || 0,
+      };
+    } else {
+      const drawEntries = entries.filter((entry) => !recentWinnerIds.has(String(entry.player_id)));
+      const randomPick = weightedLuckyRaiderWinners(drawEntries, seed, targetWinnerCount);
+      pick = {
+        ...randomPick,
+        manual_unresolved: manualPick?.unresolved || [],
+      };
+    }
     const winner = pick.winner || null;
     const winners = (pick.winners || []).map((entry) => ({
       place: entry.place,
@@ -4273,9 +4325,12 @@ function awardTournamentLuckyRaiderDay(tournamentId, dayInput, options = {}) {
       pick: pick.pick,
       picks: pick.picks || [],
       manual_override: !!pick.manual,
+      manual_applied: pick.manual_applied || [],
       manual_winners: cfg.manual_winners || [],
-      manual_unresolved: pick.unresolved || [],
-      winner_count: cfg.winner_count || 1,
+      manual_unresolved: pick.manual_unresolved || pick.unresolved || [],
+      random_fill: pick.random_fill || 0,
+      random_total_tickets: pick.random_total_tickets || null,
+      winner_count: targetWinnerCount,
       winners,
       entries: entries.map((entry) => ({
         player_id: entry.player_id,
