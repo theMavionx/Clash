@@ -1646,6 +1646,16 @@ router.post('/katana/orders/submit', auth, async (req, res) => {
         || '',
       );
       const computedNotional = orderNotional || Math.abs(Number(amount) * Number(price)) || 0;
+      const builderFee = rawFills.find(fill => fill?.builderFee != null || fill?.builder_fee != null)?.builderFee
+        ?? rawFills.find(fill => fill?.builderFee != null || fill?.builder_fee != null)?.builder_fee
+        ?? rawOrder.builderFee
+        ?? rawOrder.builder_fee
+        ?? result.builderFee
+        ?? result.builder_fee
+        ?? null;
+      const exactBuilderFee = builderFee != null && String(builderFee).trim() !== ''
+        ? String(builderFee)
+        : null;
       db.addTrade(req.playerId, {
         symbol: result.symbol || params.symbol || params.market,
         side: result.side || params.side,
@@ -1658,7 +1668,12 @@ router.post('/katana/orders/submit', auth, async (req, res) => {
         dex: 'katana',
         notional_usd: computedNotional,
         verifiedSource: 'katana_api',
-        proofJson: JSON.stringify({ source: 'katana_perps_sdk', order: result._raw || result }),
+        fee: exactBuilderFee,
+        proofJson: JSON.stringify({
+          source: exactBuilderFee ? 'katana_builder_fee_exact' : 'katana_perps_sdk',
+          builder_fee: exactBuilderFee,
+          order: result._raw || result,
+        }),
       });
     } catch (dbErr) {
       console.warn('[katana] trade log failed:', dbErr.message);
@@ -3556,11 +3571,24 @@ function requireHibachiOwner(req, res) {
   }
 }
 
+function hibachiForceLive(req) {
+  return req.body?.force_live === true
+    || req.body?.forceLive === true
+    || req.headers['x-hibachi-force-live'] === '1';
+}
+
+function hibachiReadOpts(req) {
+  return {
+    forceLive: hibachiForceLive(req),
+    acceptEmptySnapshot: req.body?.accept_empty_snapshot === true || req.body?.acceptEmptySnapshot === true,
+  };
+}
+
 router.post('/hibachi/account', auth, async (req, res) => {
   try {
     const creds = requireHibachiOwner(req, res);
     if (!creds) return;
-    res.json(await hibachi.getAccount(creds));
+    res.json(await hibachi.getAccount(creds, hibachiReadOpts(req)));
   } catch (e) {
     console.warn('[hibachi] account failed:', e.message);
     res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to load Hibachi account'));
@@ -3571,7 +3599,7 @@ router.post('/hibachi/positions', auth, async (req, res) => {
   try {
     const creds = requireHibachiOwner(req, res);
     if (!creds) return;
-    res.json(await hibachi.getPositions(creds));
+    res.json(await hibachi.getPositions(creds, hibachiReadOpts(req)));
   } catch (e) {
     console.warn('[hibachi] positions failed:', e.message);
     res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to load Hibachi positions'));
@@ -3582,7 +3610,7 @@ router.post('/hibachi/orders', auth, async (req, res) => {
   try {
     const creds = requireHibachiOwner(req, res);
     if (!creds) return;
-    res.json(await hibachi.getOrders(creds));
+    res.json(await hibachi.getOrders(creds, hibachiReadOpts(req)));
   } catch (e) {
     console.warn('[hibachi] orders failed:', e.message);
     res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to load Hibachi orders'));

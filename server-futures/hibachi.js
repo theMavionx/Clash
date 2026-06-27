@@ -116,6 +116,10 @@ function privateReadCacheKey(path, creds = {}) {
   return `${identity}:${path}`;
 }
 
+function deletePrivateReadCache(path, creds = {}) {
+  privateReadCache.delete(privateReadCacheKey(path, creds));
+}
+
 function isRetryableReadError(error) {
   const status = Number(error?.status);
   if ([408, 425, 429, 500, 502, 503, 504].includes(status)) return true;
@@ -182,16 +186,78 @@ function normalizeWsAccountSnapshot(snapshot = {}) {
 }
 
 function positionKey(position = {}) {
-  const symbol = symbolOf(position.symbol || position.market || position.marketSymbol);
-  const direction = String(position.direction || position.side || '').toUpperCase();
-  const side = direction.includes('SHORT') || direction === 'ASK' || direction === 'SELL' ? 'short' : 'long';
+  const symbol = symbolOf(positionSymbol(position));
+  const side = positionSide(position) === 'ask' ? 'short' : 'long';
   return `${symbol}:${side}`;
+}
+
+function positionSymbol(position = {}) {
+  return position.symbol
+    ?? position.market
+    ?? position.marketSymbol
+    ?? position.market_symbol
+    ?? position.contractSymbol
+    ?? position.contract_symbol
+    ?? position.contract?.symbol
+    ?? position.info?.symbol
+    ?? '';
+}
+
+function positionQuantity(position = {}) {
+  return Math.abs(num(
+    position.quantity
+      ?? position.amount
+      ?? position.size
+      ?? position.positionSize
+      ?? position.position_size
+      ?? position.openQuantity
+      ?? position.open_quantity
+      ?? position.netQuantity
+      ?? position.net_quantity
+      ?? position.contractQuantity
+      ?? position.contract_quantity,
+  ));
+}
+
+function positionSide(position = {}) {
+  const text = String(
+    position.direction
+      ?? position.side
+      ?? position.positionSide
+      ?? position.position_side
+      ?? position.orderSide
+      ?? position.order_side
+      ?? '',
+  ).trim().toUpperCase();
+  if (/(SHORT|ASK|SELL)/u.test(text)) return 'ask';
+  if (/(LONG|BID|BUY)/u.test(text)) return 'bid';
+  const signed = num(
+    position.signedQuantity
+      ?? position.signed_quantity
+      ?? position.netQuantity
+      ?? position.net_quantity
+      ?? position.quantity,
+    NaN,
+  );
+  return Number.isFinite(signed) && signed < 0 ? 'ask' : 'bid';
+}
+
+function positionNotional(position = {}) {
+  return num(
+    position.notionalValue
+      ?? position.notional
+      ?? position.positionNotional
+      ?? position.position_notional
+      ?? position.value
+      ?? position.usdValue
+      ?? position.usd_value,
+  );
 }
 
 function mergePositionUpdate(positions, update) {
   const next = Array.isArray(positions) ? positions.slice() : [];
   const key = positionKey(update);
-  const quantity = Math.abs(num(update?.quantity ?? update?.amount ?? update?.size));
+  const quantity = positionQuantity(update);
   const index = next.findIndex(item => positionKey(item) === key);
   if (quantity <= 0) {
     if (index >= 0) next.splice(index, 1);
@@ -296,8 +362,19 @@ class HibachiAccountStream {
     return Date.now() - this.snapshotAt <= maxAgeMs ? this.snapshot : null;
   }
 
-  markStale() {
+  markStale({ clearSnapshot = false } = {}) {
     this.snapshotAt = 0;
+    if (clearSnapshot) {
+      this.snapshot = null;
+      this.resolveWaiters(null);
+    }
+  }
+
+  replaceSnapshot(snapshot) {
+    if (!snapshot) return;
+    this.snapshot = normalizeWsAccountSnapshot(snapshot);
+    this.snapshotAt = Date.now();
+    this.resolveWaiters(this.snapshot);
   }
 
   touch() {
@@ -643,7 +720,7 @@ function positionMargin(position = {}) {
       ?? position.marginUsed,
   );
   if (directMargin > 0) return directMargin;
-  const notional = num(position.notionalValue ?? position.notional ?? position.positionNotional);
+  const notional = positionNotional(position);
   const leverage = num(position.leverage ?? position.positionLeverage ?? position.initialLeverage);
   return notional > 0 && leverage > 0 ? notional / leverage : 0;
 }
@@ -829,11 +906,13 @@ async function authedGet(path, creds) {
 async function cachedAuthedGet(path, creds, opts = {}) {
   const ttlMs = Math.max(0, Number(opts.ttlMs ?? HIBACHI_PRIVATE_READ_CACHE_MS));
   const staleMs = Math.max(ttlMs, Number(opts.staleMs ?? HIBACHI_PRIVATE_READ_STALE_MS));
+  const bypassCache = Boolean(opts.forceLive || opts.bypassCache);
+  const allowStale = opts.allowStale !== false;
   const key = privateReadCacheKey(path, creds);
   const now = Date.now();
   const cached = privateReadCache.get(key);
-  if (cached?.payload !== undefined && now - cached.at < ttlMs) return cached.payload;
-  if (cached?.promise) return cached.promise;
+  if (!bypassCache && cached?.payload !== undefined && now - cached.at < ttlMs) return cached.payload;
+  if (!bypassCache && cached?.promise) return cached.promise;
 
   const promise = authedGet(path, creds).then((payload) => {
     privateReadCache.set(key, { payload, at: Date.now() });
@@ -842,7 +921,8 @@ async function cachedAuthedGet(path, creds, opts = {}) {
   }, (error) => {
     const latest = privateReadCache.get(key) || cached;
     if (
-      isRetryableReadError(error)
+      allowStale
+      && isRetryableReadError(error)
       && latest?.payload !== undefined
       && latest?.at
       && Date.now() - latest.at < staleMs
@@ -867,8 +947,23 @@ function accountInfoPath(creds) {
   return `/trade/account/info?accountId=${encodeURIComponent(creds.accountId)}`;
 }
 
-async function getAccountInfo(creds) {
-  if (HIBACHI_WS_ENABLED) {
+function ordersPath(creds) {
+  return `/trade/orders?accountId=${encodeURIComponent(creds.accountId)}`;
+}
+
+function tradesPath(creds) {
+  return `/trade/account/trades?accountId=${encodeURIComponent(creds.accountId)}`;
+}
+
+function invalidatePrivateReadsAfterMutation(creds) {
+  deletePrivateReadCache(accountInfoPath(creds), creds);
+  deletePrivateReadCache(ordersPath(creds), creds);
+  deletePrivateReadCache(tradesPath(creds), creds);
+}
+
+async function getAccountInfo(creds, opts = {}) {
+  const forceLive = Boolean(opts.forceLive || opts.force_live);
+  if (!forceLive && HIBACHI_WS_ENABLED) {
     try {
       const snapshot = await accountStream(creds).ensureStarted();
       if (snapshot) return snapshot;
@@ -877,12 +972,21 @@ async function getAccountInfo(creds) {
       logHibachiWs('account_fallback_rest', creds, { message: e.message || String(e) });
     }
   }
-  return cachedAuthedGet(accountInfoPath(creds), creds);
+  const payload = await cachedAuthedGet(accountInfoPath(creds), creds, forceLive
+    ? { forceLive: true, allowStale: false, ttlMs: 0 }
+    : {});
+  if (forceLive && HIBACHI_WS_ENABLED) {
+    const hasPositions = rows(payload?.positions).length > 0;
+    if (hasPositions || opts.acceptEmptySnapshot || opts.accept_empty_snapshot) {
+      accountStream(creds).replaceSnapshot(payload);
+    }
+  }
+  return payload;
 }
 
-async function getAccount(credsInput) {
+async function getAccount(credsInput, opts = {}) {
   const creds = credentials(credsInput);
-  const j = await getAccountInfo(creds);
+  const j = await getAccountInfo(creds, opts);
   const feeLevel = j?.feeLevel
     ?? j?.fee_level
     ?? j?.feeTier
@@ -913,24 +1017,25 @@ async function getAccount(credsInput) {
   };
 }
 
-async function getPositions(credsInput) {
+async function getPositions(credsInput, opts = {}) {
   const creds = credentials(credsInput);
-  const j = await getAccountInfo(creds);
+  const j = await getAccountInfo(creds, opts);
   return rows(j?.positions).map(p => {
-    const amount = Math.abs(num(p.quantity));
-    if (!p?.symbol || amount <= 0) return null;
-    const side = String(p.direction || '').toUpperCase().includes('SHORT') ? 'ask' : 'bid';
-    const notional = num(p.notionalValue);
+    const amount = positionQuantity(p);
+    const rawSymbol = positionSymbol(p);
+    if (!rawSymbol || amount <= 0) return null;
+    const side = positionSide(p);
+    const notional = positionNotional(p);
     const rawLeverage = num(p.leverage ?? p.positionLeverage ?? p.initialLeverage);
     const margin = positionMargin(p);
     const pnlUsd = num(p.unrealizedTradingPnl) + num(p.unrealizedFundingPnl);
     return {
-      symbol: symbolOf(p.symbol),
+      symbol: symbolOf(rawSymbol),
       side,
       amount: String(amount),
       size_usd: notional,
-      entry_price: String(p.openPrice || ''),
-      mark_price: String(p.markPrice || ''),
+      entry_price: String(p.openPrice ?? p.entryPrice ?? p.averageEntryPrice ?? p.avgEntryPrice ?? ''),
+      mark_price: String(p.markPrice ?? p.marketPrice ?? p.oraclePrice ?? ''),
       liquidation_price: null,
       margin: margin > 0 ? String(margin) : '',
       leverage: rawLeverage > 0 ? String(rawLeverage) : '',
@@ -944,10 +1049,11 @@ async function getPositions(credsInput) {
   }).filter(Boolean);
 }
 
-async function getOrders(credsInput) {
+async function getOrders(credsInput, opts = {}) {
   const creds = credentials(credsInput);
   let j = null;
-  if (HIBACHI_WS_ENABLED) {
+  const forceLive = Boolean(opts.forceLive || opts.force_live);
+  if (!forceLive && HIBACHI_WS_ENABLED) {
     try {
       const response = await tradeStream(creds).rpc('orders.status');
       j = response?.result || response;
@@ -956,7 +1062,9 @@ async function getOrders(credsInput) {
     }
   }
   if (j == null) {
-    j = await cachedAuthedGet(`/trade/orders?accountId=${encodeURIComponent(creds.accountId)}`, creds);
+    j = await cachedAuthedGet(ordersPath(creds), creds, forceLive
+      ? { forceLive: true, allowStale: false, ttlMs: 0 }
+      : {});
   }
   return rows(j?.orders || j).map(o => ({
     symbol: symbolOf(o.symbol),
@@ -1028,7 +1136,8 @@ async function placeOrder(credsInput, args = {}) {
     ...(orderFlags ? { orderFlags } : {}),
   };
   const result = await authedSend('POST', '/trade/order', body, creds);
-  accountStream(creds).markStale();
+  invalidatePrivateReadsAfterMutation(creds);
+  accountStream(creds).markStale({ clearSnapshot: true });
   return result;
 }
 
@@ -1045,7 +1154,8 @@ async function cancelOrder(credsInput, { orderId, nonce } = {}) {
     ...(id != null ? { orderId: String(id) } : { nonce: String(n) }),
   };
   const result = await authedSend('DELETE', '/trade/order', body, creds);
-  accountStream(creds).markStale();
+  invalidatePrivateReadsAfterMutation(creds);
+  accountStream(creds).markStale({ clearSnapshot: true });
   return result;
 }
 
@@ -1076,7 +1186,7 @@ function normalizeTrade(accountId, trade) {
 
 async function getAccountTradeHistory(credsInput, { limit = HIBACHI_FILL_LOOKBACK_LIMIT } = {}) {
   const creds = credentials(credsInput);
-  const j = await cachedAuthedGet(`/trade/account/trades?accountId=${encodeURIComponent(creds.accountId)}`, creds, {
+  const j = await cachedAuthedGet(tradesPath(creds), creds, {
     ttlMs: 1_500,
     staleMs: 15_000,
   });

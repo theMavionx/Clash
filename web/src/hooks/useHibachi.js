@@ -253,10 +253,6 @@ function hibachiProxyPath(path, baseUrl = HIBACHI_PUBLIC_PROXY_URL) {
   return `${baseUrl}${fallbackPath}`;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 function isTransientHibachiError(error) {
   const status = Number(error?.status);
   if ([408, 425, 429, 500, 502, 503, 504].includes(status)) return true;
@@ -281,6 +277,53 @@ function findHibachiPosition(rows, symbol, side) {
     && normalizedHibachiSide(pos?.side) === targetSide
     && hibachiPositionAmount(pos) > 0
   )) || null;
+}
+
+function upsertHibachiPosition(rows, nextPosition) {
+  const next = Array.isArray(rows) ? rows.slice() : [];
+  const keySymbol = symbolOf(nextPosition?.symbol);
+  const keySide = normalizedHibachiSide(nextPosition?.side);
+  const index = next.findIndex(pos => symbolOf(pos?.symbol) === keySymbol && normalizedHibachiSide(pos?.side) === keySide);
+  if (hibachiPositionAmount(nextPosition) <= 0) {
+    if (index >= 0) next.splice(index, 1);
+    return next;
+  }
+  if (index >= 0) next[index] = { ...next[index], ...nextPosition };
+  else next.push(nextPosition);
+  return next;
+}
+
+function mergeHibachiPendingPositions(liveRows, pendingRows) {
+  const now = Date.now();
+  let next = Array.isArray(liveRows) ? liveRows.slice() : [];
+  const unresolved = [];
+  for (const pending of Array.isArray(pendingRows) ? pendingRows : []) {
+    if (!pending || Number(pending.expires_at || 0) <= now) continue;
+    const targetSymbol = symbolOf(pending.symbol);
+    const targetSide = normalizedHibachiSide(pending.side);
+    const match = findHibachiPosition(next, targetSymbol, targetSide);
+    const liveAmount = hibachiPositionAmount(match);
+    const pendingAmount = hibachiPositionAmount(pending);
+    const tolerance = Math.max(1e-9, Math.max(liveAmount, pendingAmount) * 0.0025);
+
+    if (pending.mode === 'close') {
+      const targetAmount = Math.max(0, num(pending.target_amount));
+      if (liveAmount <= targetAmount + tolerance) continue;
+      unresolved.push(pending);
+      next = upsertHibachiPosition(next, {
+        ...(match || {}),
+        ...pending,
+        amount: String(targetAmount),
+        pending_sync: true,
+      });
+      continue;
+    }
+
+    if (match && liveAmount + tolerance >= pendingAmount) continue;
+    unresolved.push(pending);
+    next = upsertHibachiPosition(next, { ...pending, pending_sync: true });
+  }
+  return { positions: next, pending: unresolved };
 }
 
 export function useHibachi() {
@@ -308,6 +351,7 @@ export function useHibachi() {
   const claimGoldRef = useRef(null);
   const accountRef = useRef(null);
   const positionsRef = useRef([]);
+  const pendingPositionsRef = useRef([]);
   const ordersRef = useRef([]);
   const dataReadyRef = useRef(false);
   const fetchAccountPromiseRef = useRef(null);
@@ -476,18 +520,60 @@ export function useHibachi() {
     });
   }, [walletAddr, credentials, token, fetchJson, authHeaders, credentialBody]);
 
-  const fetchPositionsOnly = useCallback(async () => {
-    const pos = await authedPost('/api/futures/hibachi/positions');
-    const enriched = enrichPositions(pos, leverageSettingsRef.current);
-    positionsRef.current = enriched;
-    setPositions(enriched);
-    return enriched;
-  }, [authedPost]);
+  const applyPositions = useCallback((nextPositions) => {
+    const merged = mergeHibachiPendingPositions(nextPositions, pendingPositionsRef.current);
+    pendingPositionsRef.current = merged.pending;
+    positionsRef.current = merged.positions;
+    setPositions(merged.positions);
+    return merged.positions;
+  }, []);
 
-  const fetchAccount = useCallback(async ({ quiet = false } = {}) => {
+  const addPendingPosition = useCallback((pending) => {
+    const row = {
+      ...pending,
+      pending_sync: true,
+      expires_at: Date.now() + 120_000,
+    };
+    pendingPositionsRef.current = [
+      ...pendingPositionsRef.current.filter(item => !(
+        symbolOf(item?.symbol) === symbolOf(row.symbol)
+        && normalizedHibachiSide(item?.side) === normalizedHibachiSide(row.side)
+      )),
+      row,
+    ];
+    return applyPositions(positionsRef.current);
+  }, [applyPositions]);
+
+  const fetchPositionsOnly = useCallback(async ({
+    forceLive = false,
+    applyState = true,
+    preserveExistingOnEmpty = false,
+    acceptEmptySnapshot = false,
+  } = {}) => {
+    const pos = await authedPost('/api/futures/hibachi/positions', forceLive ? {
+      force_live: true,
+      ...(acceptEmptySnapshot ? { accept_empty_snapshot: true } : {}),
+    } : {});
+    const enriched = enrichPositions(pos, leverageSettingsRef.current);
+    if (applyState) {
+      if (preserveExistingOnEmpty && enriched.length === 0 && positionsRef.current.length > 0) {
+        return positionsRef.current;
+      }
+      applyPositions(enriched);
+    }
+    return enriched;
+  }, [authedPost, applyPositions]);
+
+  const fetchAccount = useCallback(async ({
+    quiet = false,
+    forceLive = false,
+    preservePositionsOnEmpty = false,
+    acceptEmptySnapshot = false,
+  } = {}) => {
     if (!walletAddr || !credentials || !token) {
       accountRef.current = null;
       positionsRef.current = [];
+      pendingPositionsRef.current = [];
       ordersRef.current = [];
       dataReadyRef.current = false;
       setAccount(null);
@@ -496,12 +582,16 @@ export function useHibachi() {
       setDataReady(false);
       return null;
     }
-    if (fetchAccountPromiseRef.current) return fetchAccountPromiseRef.current;
+    if (!forceLive && fetchAccountPromiseRef.current) return fetchAccountPromiseRef.current;
     const run = (async () => {
+      const liveBody = forceLive ? {
+        force_live: true,
+        ...(acceptEmptySnapshot ? { accept_empty_snapshot: true } : {}),
+      } : {};
       const results = await Promise.allSettled([
-        authedPost('/api/futures/hibachi/account'),
-        fetchPositionsOnly(),
-        authedPost('/api/futures/hibachi/orders'),
+        authedPost('/api/futures/hibachi/account', liveBody),
+        fetchPositionsOnly({ forceLive, preserveExistingOnEmpty: preservePositionsOnEmpty, acceptEmptySnapshot }),
+        authedPost('/api/futures/hibachi/orders', liveBody),
       ]);
       const [acctResult, posResult, ordResult] = results;
       const fresh = [];
@@ -542,11 +632,25 @@ export function useHibachi() {
       if (!hasAnyData && rejected) return null;
       return accountRef.current;
     })().finally(() => {
-      fetchAccountPromiseRef.current = null;
+      if (!forceLive) fetchAccountPromiseRef.current = null;
     });
-    fetchAccountPromiseRef.current = run;
+    if (!forceLive) fetchAccountPromiseRef.current = run;
     return run;
   }, [walletAddr, credentials, token, authedPost, fetchPositionsOnly]);
+
+  const schedulePositionReconcile = useCallback(({ acceptEmptySnapshot = false } = {}) => {
+    const run = () => fetchAccount({
+      quiet: true,
+      forceLive: true,
+      preservePositionsOnEmpty: !acceptEmptySnapshot,
+      acceptEmptySnapshot,
+    }).catch((e) => {
+      console.warn('[useHibachi] position reconcile:', hibachiErrorMessage(e));
+    });
+    for (const delay of [1_200, 4_000, 12_000, 30_000, 60_000, 110_000]) {
+      setTimeout(run, delay);
+    }
+  }, [fetchAccount]);
 
   const setLeverage = useCallback(async (symbol, value) => {
     const sym = symbolOf(symbol);
@@ -643,28 +747,6 @@ export function useHibachi() {
   }, [credentials, token, walletAddr, refreshServerResources]);
 
   claimGoldRef.current = claimGold;
-
-  const waitForMarketPosition = useCallback(async (symbol, side, baselineAmount = 0) => {
-    const targetSymbol = symbolOf(symbol);
-    const targetSide = normalizedHibachiSide(side);
-    const deadline = Date.now() + 22_000;
-    let lastError = null;
-    for (let attempt = 0; Date.now() < deadline && attempt < 12; attempt += 1) {
-      if (attempt > 0) await sleep(attempt < 4 ? 1_000 : 1_800);
-      try {
-        const latest = await fetchPositionsOnly();
-        const match = findHibachiPosition(latest, targetSymbol, targetSide);
-        if (match && hibachiPositionAmount(match) > baselineAmount + 1e-9) return match;
-      } catch (e) {
-        lastError = e;
-        if (!isTransientHibachiError(e)) throw e;
-      }
-    }
-    if (lastError) {
-      console.warn('[useHibachi] position wait timed out after transient errors:', hibachiErrorMessage(lastError));
-    }
-    return null;
-  }, [fetchPositionsOnly]);
 
   const syncRewards = useCallback((label = 'trade') => {
     if (!walletAddr || !credentials || !token) return;
@@ -770,6 +852,7 @@ export function useHibachi() {
 
   const disconnect = useCallback(async () => {
     await clearCredentials();
+    pendingPositionsRef.current = [];
     setCredentials(null);
     setAccount(null);
     setPositions([]);
@@ -803,14 +886,32 @@ export function useHibachi() {
         quantity: qty,
         orderType: 'market',
       });
-      const visiblePosition = await waitForMarketPosition(marketSymbol, side, beforeAmount);
-      await fetchAccount({ quiet: true });
+      const normalizedSide = normalizedHibachiSide(side);
+      const nextAmount = Math.max(beforeAmount, 0) + Math.max(qty, 0);
+      const sizeUsd = num(amount) * Math.max(1, num(leverage, 1));
+      const margin = num(amount);
+      addPendingPosition({
+        ...(beforePosition || {}),
+        mode: 'open',
+        symbol: symbolOf(marketSymbol),
+        side: normalizedSide,
+        amount: String(nextAmount),
+        size_usd: sizeUsd,
+        entry_price: String(mark || beforePosition?.entry_price || ''),
+        mark_price: String(mark || beforePosition?.mark_price || ''),
+        leverage: String(Math.max(1, num(leverage, 1))),
+        margin: margin > 0 ? String(margin) : (beforePosition?.margin || ''),
+        pnl_usd: '0',
+        pnl_pct: 0,
+      });
+      schedulePositionReconcile({ acceptEmptySnapshot: false });
       syncRewards('market order');
       return {
         success: true,
         raw: result,
         order_id: result?.orderId || result?.result?.orderId,
-        ...(visiblePosition ? {} : { status: 'submitted', info: `${side.toUpperCase()} ${symbolOf(symbol)} submitted. Hibachi position is still updating.` }),
+        status: 'submitted',
+        info: `${side.toUpperCase()} ${symbolOf(symbol)} accepted. Syncing Hibachi position.`,
       };
     } catch (e) {
       const msg = hibachiErrorMessage(e, 'Hibachi market order failed');
@@ -819,7 +920,7 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, prices, authedPost, fetchAccount, syncRewards, waitForMarketPosition]);
+  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, prices, authedPost, syncRewards, addPendingPosition, schedulePositionReconcile]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     setLoading(true);
@@ -862,16 +963,35 @@ export function useHibachi() {
     setError(null);
     try {
       const closeSide = String(side || '').toLowerCase() === 'ask' ? 'bid' : 'ask';
+      const marketSymbol = `${symbolOf(symbol)}/USDT-P`;
+      const beforePosition = findHibachiPosition(positionsRef.current, marketSymbol, side);
+      const beforeAmount = hibachiPositionAmount(beforePosition);
+      const closeAmount = num(amountBase);
+      const targetAmount = Math.max(0, beforeAmount - closeAmount);
       const result = await authedPost('/api/futures/hibachi/order', {
-        symbol: `${symbolOf(symbol)}/USDT-P`,
+        symbol: marketSymbol,
         side: closeSide,
         quantity: amountBase,
         orderType: 'market',
         reduceOnly: true,
       });
-      await fetchAccount({ quiet: true });
+      addPendingPosition({
+        ...(beforePosition || {}),
+        mode: 'close',
+        symbol: symbolOf(marketSymbol),
+        side,
+        amount: String(targetAmount),
+        target_amount: String(targetAmount),
+      });
+      schedulePositionReconcile({ acceptEmptySnapshot: true });
       syncRewards('close');
-      return { success: true, raw: result, order_id: result?.orderId || result?.result?.orderId };
+      return {
+        success: true,
+        raw: result,
+        order_id: result?.orderId || result?.result?.orderId,
+        status: 'submitted',
+        info: `${symbolOf(symbol)} close accepted. Syncing Hibachi position.`,
+      };
     } catch (e) {
       const msg = hibachiErrorMessage(e, 'Hibachi close failed');
       setError(msg);
@@ -879,7 +999,7 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [authedPost, fetchAccount, syncRewards]);
+  }, [authedPost, syncRewards, addPendingPosition, schedulePositionReconcile]);
 
   const cancelOrder = useCallback(async (_symbol, orderId) => {
     setLoading(true);
