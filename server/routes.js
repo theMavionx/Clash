@@ -11610,16 +11610,18 @@ router.post('/battle/surrender', auth, (req, res) => {
   });
 });
 
-function validateAttackReadyForPlayer(playerId) {
-  _sanitizeDisabledShipTroopsForPlayer(playerId);
-  const buildings = db.getPlayerBuildings(playerId);
+// Find enemy with closest trophies
+router.get('/find-enemy', auth, (req, res) => {
+  // Pre-flight: player must have a port with a ship loaded with troops
+  _sanitizeDisabledShipTroopsForPlayer(req.player.id);
+  const buildings = db.getPlayerBuildings(req.player.id);
   const ports = buildings.filter(b => b.type === 'port');
   if (ports.length === 0) {
-    return { status: 400, error: 'You need a Port to attack. Build one first.' };
+    return res.status(400).json({ error: 'You need a Port to attack. Build one first.' });
   }
   const portsWithShips = ports.filter(p => p.has_ship === 1);
   if (portsWithShips.length === 0) {
-    return { status: 400, error: 'You need a Ship to attack. Buy one at your Port.' };
+    return res.status(400).json({ error: 'You need a Ship to attack. Buy one at your Port.' });
   }
   let totalTroopsLoaded = 0;
   for (const p of portsWithShips) {
@@ -11629,56 +11631,15 @@ function validateAttackReadyForPlayer(playerId) {
     } catch {}
   }
   if (totalTroopsLoaded === 0) {
-    return { status: 400, error: 'No troops loaded on your ships. Train troops at the Barn first.' };
+    return res.status(400).json({ error: 'No troops loaded on your ships. Train troops at the Barn first.' });
   }
-  const duplicateDemonKing = _firstDuplicateLoadedNftBackedToken(playerId);
+  const duplicateDemonKing = _firstDuplicateLoadedNftBackedToken(req.player.id);
   if (duplicateDemonKing) {
-    return {
-      status: 409,
+    return res.status(409).json({
       error: `One ${duplicateDemonKing.label || 'NFT'} is loaded on multiple ships. Unload the duplicate before attacking.`,
       code: 'NFT_TROOP_DUPLICATE_LOADED',
-    };
-  }
-  return null;
-}
-
-router.get('/revenge-targets', auth, (req, res) => {
-  const result = db.listRevengeTargets(req.player.id);
-  if (result.error) return res.status(result.status || 400).json(result);
-  res.json(result);
-});
-
-router.post('/revenge/start', auth, (req, res) => {
-  const readiness = validateAttackReadyForPlayer(req.player.id);
-  if (readiness) return res.status(readiness.status || 400).json(readiness);
-
-  const sourceBattleId = req.body?.battle_id || req.body?.source_battle_id || req.body?.sourceBattleId;
-  const result = db.startRevengeBattle(req.player.id, sourceBattleId);
-  if (result.error) {
-    logBattle('revenge failed', {
-      player: req.player.id,
-      source_battle_id: sourceBattleId,
-      error: result.error,
-      reason: result.reason || null,
     });
-    return res.status(result.status || 400).json(result);
   }
-  logBattle('revenge_start', {
-    attacker: req.player.id,
-    defender: result.id,
-    name: result.name,
-    source_battle_id: result.source_battle_id,
-    battle_session_id: result.battle_session_id,
-    attack_cost_gold: result.attack_cost_gold,
-  });
-  res.json(result);
-});
-
-// Find enemy with closest trophies
-router.get('/find-enemy', auth, (req, res) => {
-  // Pre-flight: player must have a port with a ship loaded with troops
-  const readiness = validateAttackReadyForPlayer(req.player.id);
-  if (readiness) return res.status(readiness.status || 400).json(readiness);
 
   const result = db.findEnemy(req.player.id);
   if (result.error) {
