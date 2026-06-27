@@ -4101,9 +4101,52 @@ function emptyTaskForm() {
   };
 }
 
+function adminTaskParamSymbol(params) {
+  const p = params && typeof params === 'object' ? params : {};
+  const candidates = [
+    p.symbol,
+    p.ticker,
+    p.market,
+    p.asset,
+    p.base,
+    p.token,
+    p.pair,
+    Array.isArray(p.symbols) ? p.symbols[0] : '',
+  ];
+  for (const value of candidates) {
+    const text = String(value || '').trim();
+    if (!text || text === '*' || text.toLowerCase() === 'any') continue;
+    let base = text
+      .toUpperCase()
+      .replace(/^\$/, '')
+      .trim()
+      .split(/\s+/)[0]
+      .split(/[-/]/)[0]
+    if (base.includes('.')) {
+      const parts = base.split('.').filter(Boolean);
+      base = parts[parts.length - 1] || base;
+    }
+    base = base.replace(/[^A-Z0-9]/g, '');
+    const quotes = ['USDC', 'USDT', 'USDE', 'USD', 'DAI', 'AUSD'];
+    for (const quote of quotes) {
+      if (base.length > quote.length + 1 && base.endsWith(quote)) {
+        const withoutQuote = base.slice(0, -quote.length);
+        const scaled = withoutQuote.match(/^(?:1000|10000|1000000|1K|1M)([A-Z][A-Z0-9]{1,})$/);
+        return scaled ? scaled[1] : withoutQuote;
+      }
+    }
+    const scaled = base.match(/^(?:1000|10000|1000000|1K|1M)([A-Z][A-Z0-9]{1,})$/);
+    if (scaled) return scaled[1];
+    return base;
+  }
+  return 'any';
+}
+
 function taskToForm(task) {
   const params = { ...(task.params || {}) };
   params.eligibility = normalizeTaskEligibilityConfig(params);
+  params.symbol = adminTaskParamSymbol(params);
+  params.side = String(params.side || 'any').toLowerCase();
   return {
     ...emptyTaskForm(),
     ...task,
@@ -4133,6 +4176,8 @@ function setTaskPrimaryTarget(form, value) {
 function taskFormToBody(form) {
   const params = { ...(form.params || {}) };
   params.eligibility = normalizeTaskEligibilityConfig(params);
+  params.symbol = adminTaskParamSymbol(params);
+  params.side = String(params.side || 'any').toLowerCase();
   if (form.type === 'volume' && params.target_volume == null) params.target_volume = Number(params.target || 0) || 0;
   if (form.type === 'positions' && params.target_positions == null) params.target_positions = Number(params.target || 0) || 0;
   if (form.type === 'combo_volume_attack') {

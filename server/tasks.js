@@ -222,29 +222,63 @@ const TASK_QUOTE_TICKERS = new Set([
   'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD',
 ]);
 
-function canonicalTaskSymbol(value) {
-  const base = String(value || '')
+function taskSymbolBase(value) {
+  let base = String(value || '')
     .toUpperCase()
     .replace(/^\$/, '')
-    .split(/[-/]/)[0]
-    .replace(/[^A-Z0-9]/g, '');
+    .trim()
+    .split(/\s+/)[0]
+    .split(/[-/]/)[0];
+  if (base.includes('.')) {
+    const parts = base.split('.').filter(Boolean);
+    base = parts[parts.length - 1] || base;
+  }
+  return base.replace(/[^A-Z0-9]/g, '');
+}
+
+function canonicalTaskSymbol(value) {
+  const base = taskSymbolBase(value);
   if (!base) return '';
   return TASK_SYMBOL_ALIASES[base] || base;
 }
 
+function taskParamSymbol(params) {
+  const p = params && typeof params === 'object' ? params : {};
+  const candidates = [
+    p.symbol,
+    p.ticker,
+    p.market,
+    p.asset,
+    p.base,
+    p.token,
+    p.pair,
+    Array.isArray(p.symbols) ? p.symbols[0] : '',
+  ];
+  for (const value of candidates) {
+    const text = String(value || '').trim();
+    if (!text || text === '*' || text.toLowerCase() === 'any') continue;
+    const full = canonicalTaskSymbol(text);
+    const variants = taskSymbolVariants(text);
+    const canonical = variants
+      .filter(Boolean)
+      .sort((a, b) => a.length - b.length)[0] || full;
+    if (canonical) return canonical;
+  }
+  return 'any';
+}
+
 function taskSymbolVariants(value) {
-  const base = String(value || '')
-    .toUpperCase()
-    .replace(/^\$/, '')
-    .split(/[-/]/)[0]
-    .replace(/[^A-Z0-9]/g, '');
+  const base = taskSymbolBase(value);
   if (!base) return [];
   const out = new Set([canonicalTaskSymbol(base)]);
   const scaled = base.match(/^(?:1000|10000|1000000|1K|1M)([A-Z][A-Z0-9]{1,})$/);
   if (scaled) out.add(canonicalTaskSymbol(scaled[1]));
   for (const quote of TASK_QUOTE_TICKERS) {
     if (base.length > quote.length + 1 && base.endsWith(quote)) {
-      out.add(canonicalTaskSymbol(base.slice(0, -quote.length)));
+      const withoutQuote = canonicalTaskSymbol(base.slice(0, -quote.length));
+      out.add(withoutQuote);
+      const strippedScaled = withoutQuote.match(/^(?:1000|10000|1000000|1K|1M)([A-Z][A-Z0-9]{1,})$/);
+      if (strippedScaled) out.add(canonicalTaskSymbol(strippedScaled[1]));
     }
   }
   return [...out].filter(Boolean);
@@ -886,7 +920,7 @@ async function fetchPacificaAllTrades(player, opts = {}) {
 async function verifyVolume(player, task, snap, opts = {}) {
   const p = parseParams(task.params);
   const target = progressiveTaskTarget(player, task, Number(p.target_volume) || 0);
-  const symbol = p.symbol || 'any';
+  const symbol = taskParamSymbol(p);
   const side = p.side || 'any';
   const countClose = !!p.count_close;
   const wallet = resolveWallet(player);
@@ -917,7 +951,7 @@ async function verifyVolume(player, task, snap, opts = {}) {
 async function verifyPositions(player, task, snap, opts = {}) {
   const p = parseParams(task.params);
   const target = progressiveTaskTarget(player, task, Number(p.target_positions) || 0);
-  const symbol = p.symbol || 'any';
+  const symbol = taskParamSymbol(p);
   const side = p.side || 'any';
   const countClose = !!p.count_close; // default: count openings only
   const startId = snap.trade_id_start || 0;
@@ -944,7 +978,7 @@ async function verifyComboVolumeAttack(player, task, snap, opts = {}) {
   const p = parseParams(task.params);
   const targetVol = progressiveTaskTarget(player, task, Number(p.target_volume) || 0);
   const targetWins = Number(p.target_wins) || 0;
-  const symbol = p.symbol || 'any';
+  const symbol = taskParamSymbol(p);
   const side = p.side || 'any';
   const countClose = !!p.count_close;
 
@@ -1073,6 +1107,7 @@ module.exports = {
   parseParams,
   normalizeTaskEligibility,
   taskEligibilityLabel,
+  taskParamSymbol,
   isTaskLive,
   playerNftAccess,
   checkTaskEligibility,

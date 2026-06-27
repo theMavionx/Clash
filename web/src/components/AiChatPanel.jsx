@@ -804,21 +804,6 @@ const HERMES_CHAT_CSS = `
    mounted simultaneously). */
 @keyframes hermesRingSpin { to { transform: rotate(360deg); } }
 .hermes-step-spinner { animation: hermesRingSpin 0.9s linear infinite; }
-/* Confetti burst on a successful AI top-up. Each shard gets its own
-   rotation + translation via custom properties set inline (--tx/--ty/--rot)
-   so we can scatter 16 shards from one keyframe block. */
-@keyframes hermesConfettiBurst {
-  0%   { transform: translate(0, 0) rotate(0deg); opacity: 0; }
-  10%  { opacity: 1; }
-  100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)); opacity: 0; }
-}
-.hermes-confetti-shard {
-  position: absolute; top: 50%; left: 50%;
-  width: 8px; height: 14px;
-  border-radius: 2px;
-  animation: hermesConfettiBurst 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  pointer-events: none;
-}
 `;
 
 function formatQuotaLine(quota) {
@@ -1179,7 +1164,7 @@ function AiChatPanel({ onClose }) {
   const [shopNotice, setShopNotice] = useState('');
   // Bridge-style purchase modal — drives a 3-step rail (sign → confirm
   // → credit) on top of the shop while a buy is in flight, then flips
-  // to success + confetti when the server credits messages.
+  // to success when the server credits messages.
   // Shape: { status, product, granted, pass, error }.
   //   status ∈ 'signing'|'confirming'|'crediting'|'success'|'error'
   const [topUpFlow, setTopUpFlow] = useState(null);
@@ -2953,9 +2938,9 @@ function AiChatPanel({ onClose }) {
 // ── Top-up progress modal ────────────────────────────────────────────
 // Bridge-modal pattern adapted for AI message purchases. Step rail
 // (sign → confirm → credit) sits on top of the shop while a buy is in
-// flight; flips to a success card with a confetti burst when the
-// server credits messages, or to an error card with the failure
-// reason. zIndex 320 so it sits above both chat (80) and shop (90).
+// flight; flips to a success card when the server credits messages,
+// or to an error card with the failure reason. zIndex 320 so it sits
+// above both chat (80) and shop (90).
 function fmtJobTime(value) {
   if (!value) return 'not scheduled';
   const d = new Date(`${String(value).replace(' ', 'T')}Z`);
@@ -3130,26 +3115,6 @@ function AiTopUpStatusModal({ flow, paymentLabel, onClose, onRetry }) {
     : status === 'error' ? 'Purchase failed'
     : 'Processing your purchase…';
 
-  // Deterministic confetti — 18 shards in alternating brand colors,
-  // each with a unique angle/distance so the burst looks scattered
-  // rather than mechanical. CSS vars feed the keyframe.
-  const CONFETTI_COLORS = ['#ffd76a', '#c2851b', '#91df7d', '#3b9b41', '#04DF83', '#5C3A21'];
-  const confetti = [];
-  if (status === 'success') {
-    for (let i = 0; i < 18; i++) {
-      const ang = (Math.PI * 2 * i) / 18 + (i * 0.31);
-      const dist = 90 + (i % 4) * 18;
-      confetti.push({
-        key: i,
-        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
-        tx: Math.cos(ang) * dist + 'px',
-        ty: Math.sin(ang) * dist + 'px',
-        rot: ((i * 53) % 720 - 360) + 'deg',
-        delay: (i * 22) + 'ms',
-      });
-    }
-  }
-
   return (
     <div
       style={topUpStyles.overlay}
@@ -3195,25 +3160,8 @@ function AiTopUpStatusModal({ flow, paymentLabel, onClose, onRetry }) {
 
           {status === 'success' && (
             <div style={topUpStyles.successBox}>
-              {/* Confetti container — absolute-positioned shards burst
-                  out from the center of this card on mount. */}
-              <div style={topUpStyles.confettiLayer} aria-hidden="true">
-                {confetti.map((c) => (
-                  <span
-                    key={c.key}
-                    className="hermes-confetti-shard"
-                    style={{
-                      background: c.color,
-                      animationDelay: c.delay,
-                      '--tx': c.tx,
-                      '--ty': c.ty,
-                      '--rot': c.rot,
-                    }}
-                  />
-                ))}
-              </div>
               <div style={topUpStyles.successHeadline}>
-                {pass ? '🎉 Lifetime AI Pass active' : `🎉 ${granted} AI messages added`}
+                {pass ? 'Lifetime AI Pass active' : `${granted} AI messages added`}
               </div>
               <div style={topUpStyles.successSub}>
                 {pass
@@ -5102,14 +5050,6 @@ const topUpStyles = {
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     gap: 4, overflow: 'visible',
     textAlign: 'center',
-  },
-  // Confetti layer fills the success box and lets shards burst out of
-  // its bounds. `overflow: visible` on the parent keeps shards from
-  // being clipped by the rounded corners.
-  confettiLayer: {
-    position: 'absolute', inset: 0,
-    pointerEvents: 'none',
-    overflow: 'visible',
   },
   successHeadline: {
     fontSize: 16, fontWeight: 900, color: '#1B5E20',

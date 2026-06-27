@@ -37,6 +37,28 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function firstPresent(...values) {
+  return values.find(value => value !== undefined && value !== null && value !== '');
+}
+
+function hibachiFreeCollateral(account = {}) {
+  return Math.max(0, num(firstPresent(
+    account.available_to_spend,
+    account.availableToSpend,
+    account.available_to_withdraw,
+    account.availableToWithdraw,
+    account.maximalWithdraw,
+    account.maximal_withdraw,
+    account.availableBalance,
+    account.available_balance,
+    account.freeCollateral,
+    account.free_collateral,
+    account.usdc,
+    account.balance,
+    0,
+  )));
+}
+
 function symbolOf(value) {
   return String(value || '')
     .trim()
@@ -130,6 +152,32 @@ function hibachiOrderResultStatus(result) {
 
 function hibachiOrderResultRejected(result) {
   return /reject|cancel|fail|error/u.test(hibachiOrderResultStatus(result));
+}
+
+function hibachiOrderResultId(result) {
+  const value = firstPresent(
+    result?.orderId,
+    result?.order_id,
+    result?.id,
+    result?.result?.orderId,
+    result?.result?.order_id,
+    result?.result?.id,
+  );
+  return value == null ? '' : String(value);
+}
+
+function hibachiOrderResultNonce(result) {
+  const value = firstPresent(
+    result?._clash_nonce,
+    result?.nonce,
+    result?.result?.nonce,
+  );
+  return value == null ? '' : String(value);
+}
+
+function hibachiTerminalRejected(status) {
+  const text = String(status?.status || status || '').toLowerCase();
+  return /reject|cancel|fail|error/u.test(text);
 }
 
 function derivedPositionPnl(pos) {
@@ -354,6 +402,7 @@ export function useHibachi() {
   const marketsRef = useRef([]);
   const leverageSettingsRef = useRef(leverageSettings);
   const claimGoldRef = useRef(null);
+  const rewardSyncTimersRef = useRef([]);
   const accountRef = useRef(null);
   const positionsRef = useRef([]);
   const ordersRef = useRef([]);
@@ -686,9 +735,11 @@ export function useHibachi() {
     return { success: true };
   }, []);
 
-  const fetchOrders = useCallback(async () => {
+  const fetchOrders = useCallback(async (opts = {}) => {
     try {
-      const ord = await authedPost('/api/futures/hibachi/orders');
+      const ord = await authedPost('/api/futures/hibachi/orders', {
+        force_live: opts.forceLive === true,
+      });
       const nextOrders = Array.isArray(ord) ? ord : [];
       ordersRef.current = nextOrders;
       setOrders(nextOrders);
@@ -697,6 +748,32 @@ export function useHibachi() {
       console.warn('[useHibachi] orders:', e?.message || e);
       return [];
     }
+  }, [authedPost]);
+
+  const waitForLimitOrderStatus = useCallback(async ({ orderId, nonce }) => {
+    const id = String(orderId || '').trim();
+    const n = String(nonce || '').trim();
+    if (!id && !n) return { status: 'submitted', found: false };
+    const startTime = Date.now() - 2 * 60_000;
+    let last = null;
+    for (const delayMs of [700, 1_500, 3_000, 5_000]) {
+      await waitMs(delayMs);
+      try {
+        const status = await authedPost('/api/futures/hibachi/order/status', {
+          orderId: id || undefined,
+          nonce: n || undefined,
+          startTime,
+          endTime: Date.now() + 30_000,
+        });
+        last = status;
+        const text = String(status?.status || '').toLowerCase();
+        if (hibachiTerminalRejected(text) || text === 'open' || text === 'filled') return status;
+      } catch (e) {
+        if (!isTransientHibachiError(e)) throw e;
+        console.warn('[useHibachi] limit order status:', e?.message || e);
+      }
+    }
+    return last || { status: 'submitted', found: false };
   }, [authedPost]);
 
   const findMarket = useCallback((symbol) => {
@@ -745,7 +822,7 @@ export function useHibachi() {
     }
   }, [walletAddr, credentials, token, authedPost]);
 
-  const claimGold = useCallback(async ({ reason = 'poll' } = {}) => {
+  const claimGold = useCallback(async ({ reason = 'poll', forceReconcile = false } = {}) => {
     if (!walletAddr || !credentials || !token) return null;
     try {
       await importFills();
@@ -756,7 +833,12 @@ export function useHibachi() {
           'x-token': token,
           ...hibachiCredentialHeaders(credentials),
         },
-        body: JSON.stringify({ wallet: walletAddr, dex: 'hibachi' }),
+        body: JSON.stringify({
+          wallet: walletAddr,
+          dex: 'hibachi',
+          reason,
+          force_reconcile: forceReconcile === true,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return data;
@@ -775,17 +857,27 @@ export function useHibachi() {
 
   claimGoldRef.current = claimGold;
 
+  const clearRewardSyncTimers = useCallback(() => {
+    rewardSyncTimersRef.current.forEach(clearTimeout);
+    rewardSyncTimersRef.current = [];
+  }, []);
+
   const syncRewards = useCallback((label = 'trade') => {
     if (!walletAddr || !credentials || !token) return;
-    const run = async () => {
-      const claimed = await claimGoldRef.current?.({ reason: label });
+    const run = async (forceReconcile = false) => {
+      const claimed = await claimGoldRef.current?.({ reason: label, forceReconcile });
       if (Number(claimed?.gold || 0) > 0) {
         await refreshServerResources();
       }
     };
-    run();
-    setTimeout(run, 12_000);
-  }, [walletAddr, credentials, token, refreshServerResources]);
+    clearRewardSyncTimers();
+    for (const delayMs of [0, 12_000, 30_000, 60_000]) {
+      const timer = setTimeout(() => run(delayMs >= 30_000), delayMs);
+      rewardSyncTimersRef.current.push(timer);
+    }
+  }, [walletAddr, credentials, token, refreshServerResources, clearRewardSyncTimers]);
+
+  useEffect(() => clearRewardSyncTimers, [clearRewardSyncTimers]);
 
   useEffect(() => {
     if (!isActiveDex) return;
@@ -900,7 +992,12 @@ export function useHibachi() {
       }
       assertMarketTradable(symbol, market);
       const mark = num(market?.mark || market?.mid || prices.find(p => p.symbol === symbolOf(symbol))?.mark);
-      const qty = mark > 0 ? (num(amount) * Math.max(1, num(leverage, 1))) / mark : 0;
+      const requestedMargin = num(amount);
+      const freeCollateral = hibachiFreeCollateral(accountRef.current);
+      if (accountRef.current && requestedMargin > freeCollateral + 1e-6) {
+        throw new Error(`Hibachi free balance is $${freeCollateral.toFixed(2)}. Reduce margin before opening a new position.`);
+      }
+      const qty = mark > 0 ? (requestedMargin * Math.max(1, num(leverage, 1))) / mark : 0;
       const marketSymbol = market?.market_name || `${symbolOf(symbol)}/USDT-P`;
       const beforePosition = findHibachiPosition(positionsRef.current, marketSymbol, side);
       const beforeAmount = hibachiPositionAmount(beforePosition);
@@ -923,7 +1020,7 @@ export function useHibachi() {
         closeMode: false,
       });
       schedulePositionReconcile({ acceptEmptySnapshot: false });
-      if (confirmed.confirmed) syncRewards('market order');
+      syncRewards('market order');
       return {
         success: true,
         raw: result,
@@ -959,16 +1056,41 @@ export function useHibachi() {
         throw new Error(`No Hibachi market for ${symbolOf(symbol)}`);
       }
       assertMarketTradable(symbol, market);
-      const qty = (num(amount) * Math.max(1, num(leverage, 1))) / limit;
+      const requestedMargin = num(amount);
+      const freeCollateral = hibachiFreeCollateral(accountRef.current);
+      if (accountRef.current && requestedMargin > freeCollateral + 1e-6) {
+        throw new Error(`Hibachi free balance is $${freeCollateral.toFixed(2)}. Reduce margin before placing a new order.`);
+      }
+      const qty = (requestedMargin * Math.max(1, num(leverage, 1))) / limit;
+      const marketSymbol = market?.market_name || `${symbolOf(symbol)}/USDT-P`;
       const result = await authedPost('/api/futures/hibachi/order', {
-        symbol: market?.market_name || `${symbolOf(symbol)}/USDT-P`,
+        symbol: marketSymbol,
         side,
         quantity: qty,
         price: limit,
         orderType: 'limit',
       });
-      await fetchOrders();
-      return { success: true, raw: result, order_id: result?.orderId || result?.result?.orderId };
+      if (hibachiOrderResultRejected(result)) {
+        throw new Error(`Hibachi rejected the limit order (${hibachiOrderResultStatus(result) || 'rejected'}).`);
+      }
+      const orderId = hibachiOrderResultId(result);
+      const nonce = hibachiOrderResultNonce(result);
+      const orderStatus = await waitForLimitOrderStatus({ orderId, nonce });
+      await fetchOrders({ forceLive: true });
+      if (hibachiTerminalRejected(orderStatus)) {
+        const reason = orderStatus?.reason ? `: ${orderStatus.reason}` : '';
+        throw new Error(`Hibachi rejected the limit order${reason}`);
+      }
+      if (String(orderStatus?.status || '').toLowerCase() === 'filled') syncRewards('limit fill');
+      return {
+        success: true,
+        raw: result,
+        order_id: orderId || result?.orderId || result?.result?.orderId,
+        status: String(orderStatus?.status || '').toLowerCase() === 'open' ? 'open' : 'submitted',
+        info: String(orderStatus?.status || '').toLowerCase() === 'open'
+          ? `${side.toUpperCase()} ${symbolOf(symbol)} limit placed.`
+          : `${side.toUpperCase()} ${symbolOf(symbol)} limit submitted. Waiting for Hibachi confirmation.`,
+      };
     } catch (e) {
       const msg = hibachiErrorMessage(e, 'Hibachi limit order failed');
       setError(msg);
@@ -976,7 +1098,7 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, authedPost, fetchOrders]);
+  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, authedPost, fetchOrders, waitForLimitOrderStatus, syncRewards]);
 
   const closePosition = useCallback(async (symbol, side, amountBase) => {
     setLoading(true);
@@ -1006,7 +1128,7 @@ export function useHibachi() {
         closeMode: true,
       });
       schedulePositionReconcile({ acceptEmptySnapshot: true });
-      if (confirmed.confirmed) syncRewards('close');
+      syncRewards('close');
       return {
         success: true,
         raw: result,

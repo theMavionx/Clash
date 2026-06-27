@@ -115,6 +115,10 @@ function rows(payload) {
   return [];
 }
 
+function firstPresent(...values) {
+  return values.find(value => value !== undefined && value !== null && value !== '');
+}
+
 const privateReadCache = new Map();
 
 function privateReadCacheKey(path, creds = {}) {
@@ -196,8 +200,19 @@ function normalizeWsAccountSnapshot(snapshot = {}) {
     ...snapshot,
     accountId: snapshot.accountId ?? snapshot.account_id,
     account_id: snapshot.account_id ?? snapshot.accountId,
-    balance: snapshot.balance ?? snapshot.accountBalance ?? snapshot.account_balance ?? 0,
-    maximalWithdraw: snapshot.maximalWithdraw ?? snapshot.maximal_withdraw ?? snapshot.balance ?? 0,
+    balance: firstPresent(snapshot.balance, snapshot.accountBalance, snapshot.account_balance, snapshot.accountEquity, snapshot.account_equity, snapshot.equity, 0),
+    maximalWithdraw: firstPresent(
+      snapshot.maximalWithdraw,
+      snapshot.maximal_withdraw,
+      snapshot.availableToWithdraw,
+      snapshot.available_to_withdraw,
+      snapshot.availableToSpend,
+      snapshot.available_to_spend,
+      snapshot.availableBalance,
+      snapshot.available_balance,
+      snapshot.freeCollateral,
+      snapshot.free_collateral,
+    ),
     positions,
   };
 }
@@ -402,8 +417,20 @@ function applyAccountStreamMessage(snapshot, message) {
   const topic = String(message?.topic || message?.event || message?.type || '').toLowerCase();
   const data = message?.data || message?.result || message?.params || message;
   if (/balance/.test(topic) || data?.balance != null || data?.accountBalance != null || data?.account_balance != null) {
-    next.balance = data.balance ?? data.accountBalance ?? data.account_balance ?? next.balance;
-    next.maximalWithdraw = data.maximalWithdraw ?? data.maximal_withdraw ?? next.maximalWithdraw ?? next.balance;
+    next.balance = firstPresent(data.balance, data.accountBalance, data.account_balance, data.accountEquity, data.account_equity, data.equity, next.balance);
+    next.maximalWithdraw = firstPresent(
+      data.maximalWithdraw,
+      data.maximal_withdraw,
+      data.availableToWithdraw,
+      data.available_to_withdraw,
+      data.availableToSpend,
+      data.available_to_spend,
+      data.availableBalance,
+      data.available_balance,
+      data.freeCollateral,
+      data.free_collateral,
+      next.maximalWithdraw,
+    );
   }
   if (/position/.test(topic) || data?.position || data?.positions || data?.symbol) {
     const updates = rows(data?.positions || data?.position || data);
@@ -849,6 +876,19 @@ function positionMargin(position = {}) {
   return notional > 0 && leverage > 0 ? notional / leverage : 0;
 }
 
+function accountEquity(account = {}) {
+  return Math.max(0, num(firstPresent(
+    account.balance,
+    account.accountBalance,
+    account.account_balance,
+    account.accountEquity,
+    account.account_equity,
+    account.equity,
+    account.usdc,
+    0,
+  )));
+}
+
 function accountMarginUsed(account = {}) {
   const directMargin = num(
     account.totalMarginUsed
@@ -864,8 +904,19 @@ function accountMarginUsed(account = {}) {
   );
   if (directMargin > 0) return directMargin;
 
-  const equity = num(account.balance ?? account.accountEquity ?? account.equity);
-  const rawWithdrawable = account.maximalWithdraw ?? account.availableToWithdraw;
+  const equity = accountEquity(account);
+  const rawWithdrawable = firstPresent(
+    account.maximalWithdraw,
+    account.maximal_withdraw,
+    account.availableToWithdraw,
+    account.available_to_withdraw,
+    account.availableToSpend,
+    account.available_to_spend,
+    account.availableBalance,
+    account.available_balance,
+    account.freeCollateral,
+    account.free_collateral,
+  );
   const hasWithdrawable = rawWithdrawable !== undefined && rawWithdrawable !== null && rawWithdrawable !== '';
   const withdrawable = num(rawWithdrawable);
   if (hasWithdrawable && equity > 0 && withdrawable >= 0 && equity >= withdrawable) {
@@ -875,6 +926,27 @@ function accountMarginUsed(account = {}) {
   const positions = rows(account.positions);
   const positionSum = positions.reduce((sum, p) => sum + positionMargin(p), 0);
   return positionSum > 0 ? positionSum : 0;
+}
+
+function accountFreeCollateral(account = {}) {
+  const explicitFree = firstPresent(
+    account.maximalWithdraw,
+    account.maximal_withdraw,
+    account.availableToWithdraw,
+    account.available_to_withdraw,
+    account.availableToSpend,
+    account.available_to_spend,
+    account.availableBalance,
+    account.available_balance,
+    account.freeCollateral,
+    account.free_collateral,
+  );
+  if (explicitFree !== undefined) return Math.max(0, num(explicitFree));
+
+  const equity = accountEquity(account);
+  const marginUsed = accountMarginUsed(account);
+  if (equity > 0 && marginUsed > 0) return Math.max(0, equity - marginUsed);
+  return equity;
 }
 
 function priceBytes(price, contract) {
@@ -1089,6 +1161,30 @@ function ordersHistoryPath(creds, { startTime, endTime, cursorOrderId } = {}) {
   return `/trade/orders/history?${params.toString()}`;
 }
 
+function orderIdentifier(order = {}) {
+  const value = firstPresent(
+    order.orderId,
+    order.order_id,
+    order.id,
+    order.clientOrderId,
+    order.client_order_id,
+    order.nonce,
+  );
+  return value == null ? '' : String(value);
+}
+
+function rawOrderStatus(order = {}) {
+  return String(firstPresent(
+    order.status,
+    order.orderStatus,
+    order.order_status,
+    order.state,
+    order.orderState,
+    order.order_state,
+    '',
+  )).toLowerCase();
+}
+
 function invalidatePrivateReadsAfterMutation(creds) {
   deletePrivateReadCache(accountInfoPath(creds), creds);
   deletePrivateReadCache(ordersPath(creds), creds);
@@ -1131,13 +1227,16 @@ async function getAccount(credsInput, opts = {}) {
     ?? j?.vip_level
     ?? null;
   const marginUsed = accountMarginUsed(j);
+  const equity = accountEquity(j);
+  const freeCollateral = accountFreeCollateral(j);
   const accountCategory = hibachiAccountCategory(j);
   return {
-    balance: String(j?.balance ?? 0),
-    usdc: String(j?.balance ?? 0),
-    account_equity: String(j?.balance ?? 0),
-    available_to_spend: String(j?.balance ?? 0),
-    available_to_withdraw: String(j?.maximalWithdraw ?? j?.balance ?? 0),
+    balance: String(freeCollateral),
+    usdc: String(freeCollateral),
+    account_equity: String(equity),
+    raw_balance: String(equity),
+    available_to_spend: String(freeCollateral),
+    available_to_withdraw: String(freeCollateral),
     total_margin_used: String(marginUsed),
     positions_count: Array.isArray(j?.positions) ? j.positions.length : 0,
     orders_count: 0,
@@ -1211,6 +1310,7 @@ async function getOrders(credsInput, opts = {}) {
     price: String(o.triggerPrice || o.price || ''),
     stop_price: o.triggerPrice ? String(o.triggerPrice) : null,
     order_id: o.orderId,
+    status: rawOrderStatus(o) || 'open',
     order_type: String(o.orderType || '').toLowerCase(),
     tif: null,
     reduce_only: String(o.orderFlags || '').includes('REDUCE_ONLY'),
@@ -1275,7 +1375,58 @@ async function placeOrder(credsInput, args = {}) {
   const result = await authedSend('POST', '/trade/order', body, creds);
   invalidatePrivateReadsAfterMutation(creds);
   accountStream(creds).markStale({ clearSnapshot: true });
-  return result;
+  return result && typeof result === 'object'
+    ? { ...result, _clash_nonce: String(nonce) }
+    : result;
+}
+
+async function getOrderStatus(credsInput, { orderId, nonce, startTime, endTime } = {}) {
+  const creds = credentials(credsInput);
+  const wanted = String(firstPresent(orderId, nonce, '')).trim();
+  if (!wanted) throw new Error('Hibachi orderId or nonce required');
+
+  const openOrders = await getOrders(creds, { forceLive: true });
+  const open = openOrders.find(o => String(o.order_id || '') === wanted || String(o._raw?.nonce || '') === wanted);
+  if (open) {
+    return {
+      found: true,
+      status: 'open',
+      order_id: String(open.order_id || wanted),
+      source: 'open_orders',
+      order: open,
+    };
+  }
+
+  const endMs = Number.isFinite(Number(endTime)) ? Number(endTime) : Date.now() + 30_000;
+  const startMs = Number.isFinite(Number(startTime)) ? Number(startTime) : endMs - 10 * 60_000;
+  const j = await cachedAuthedGet(ordersHistoryPath(creds, { startTime: startMs, endTime: endMs }), creds, {
+    forceLive: true,
+    allowStale: false,
+    ttlMs: 0,
+  });
+  const history = rows(j?.orders || j);
+  const terminal = history.find(o => orderIdentifier(o) === wanted || String(o?.nonce || '') === wanted);
+  if (!terminal) {
+    return { found: false, status: 'not_found', order_id: wanted, source: 'orders_history' };
+  }
+
+  const rawStatus = rawOrderStatus(terminal);
+  const status = /reject/u.test(rawStatus)
+    ? 'rejected'
+    : /cancel/u.test(rawStatus)
+      ? 'cancelled'
+      : /fill/u.test(rawStatus)
+        ? 'filled'
+        : (rawStatus || 'terminal');
+  return {
+    found: true,
+    status,
+    raw_status: rawStatus,
+    order_id: orderIdentifier(terminal) || wanted,
+    source: 'orders_history',
+    reason: firstPresent(terminal.reason, terminal.rejectReason, terminal.reject_reason, terminal.message, terminal.error, null),
+    order: terminal,
+  };
 }
 
 async function cancelOrder(credsInput, { orderId, nonce } = {}) {
@@ -1535,6 +1686,7 @@ module.exports = {
   getAccount,
   getPositions,
   getOrders,
+  getOrderStatus,
   placeOrder,
   cancelOrder,
   getAccountTradeHistory,

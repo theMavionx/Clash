@@ -13070,12 +13070,14 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
   if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter') {
+    const forceHibachiCatchup = dex === 'hibachi' && req.body?.force_reconcile === true;
     const reconcile = await tradeRecon.reconcileTradesForPlayer(req.player, {
       dex,
       wallet,
       headers: req.headers,
       reason: 'claim_gold',
-      limit: 100,
+      limit: dex === 'hibachi' ? 250 : 100,
+      force: forceHibachiCatchup,
     });
     if (reconcile.imported || reconcile.adopted || reconcile.updated || reconcile.errors || (reconcile.skipped && reconcile.skipped !== 'cooldown' && reconcile.skipped !== 'worker_indexed')) {
       console.log(`[claim-gold ${dex}] reconcile player=${req.player.name} ${JSON.stringify({
@@ -18028,6 +18030,10 @@ function normalizeAdminTaskParams(params) {
   const eligibility = tasks.normalizeTaskEligibility(out.eligibility);
   if (eligibility.mode === 'all' && !eligibility.label) delete out.eligibility;
   else out.eligibility = eligibility;
+  const symbol = tasks.taskParamSymbol(out);
+  if (symbol && symbol !== 'any') out.symbol = symbol;
+  else out.symbol = 'any';
+  out.side = String(out.side || 'any').trim().toLowerCase();
   if (out.side && !tasks.VALID_SIDES.includes(out.side)) throw new Error('bad side');
   return out;
 }

@@ -108,9 +108,26 @@ function marketTickerSet(markets) {
 }
 
 function taskSymbol(task) {
-  const s = task?.params?.symbol;
-  if (!s || s === '*' || String(s).toLowerCase() === 'any') return '';
-  return String(s).toUpperCase();
+  const p = task?.params || {};
+  const candidates = [
+    p.symbol,
+    p.ticker,
+    p.market,
+    p.asset,
+    p.base,
+    p.token,
+    p.pair,
+    Array.isArray(p.symbols) ? p.symbols[0] : '',
+  ];
+  for (const value of candidates) {
+    const raw = String(value || '').trim();
+    if (!raw || raw === '*' || raw.toLowerCase() === 'any') continue;
+    const canonical = extractTickerCandidates(raw)
+      .filter(Boolean)
+      .sort((a, b) => a.length - b.length)[0] || raw.toUpperCase().replace(/^\$/, '');
+    if (canonical) return canonical;
+  }
+  return '';
 }
 
 function taskTradableOnMarkets(task, markets) {
@@ -131,8 +148,9 @@ function fmtVal(v, type) {
 
 function describeTask(t) {
   const p = t.params || {};
-  const sym = (p.symbol && p.symbol !== 'ANY' && p.symbol !== 'any') ? p.symbol.toUpperCase() : 'any token';
-  const side = p.side && p.side !== 'any' ? p.side.toUpperCase() : '';
+  const taskSym = taskSymbol(t);
+  const sym = taskSym || 'any token';
+  const side = p.side && String(p.side).toLowerCase() !== 'any' ? String(p.side).toUpperCase() : '';
   switch (t.type) {
     case 'volume':
       return `Trade $${Number(p.target_volume || 0).toLocaleString()} volume on ${sym}${side ? ' (' + side + ')' : ''}`;

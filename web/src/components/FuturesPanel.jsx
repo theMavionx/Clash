@@ -1,5 +1,4 @@
 import { useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
-import confetti from 'canvas-confetti';
 import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -74,34 +73,6 @@ const PHOENIX_DEFAULT_REFERRAL_CODE = 'MVWG4BTW';
 const HOTSTUFF_MARKET_SLIPPAGE_RATE = 0.015;
 const HOTSTUFF_DEFAULT_TAKER_FEE_RATE = 0.00045;
 
-function fireTradeConfetti() {
-  try {
-    const end = Date.now() + 600;
-    const colors = ['#43a047', '#e8b830', '#0EA5E9', '#fdf8e7'];
-    const frame = () => {
-      confetti({
-        particleCount: 4,
-        angle: 60,
-        spread: 55,
-        origin: { x: 0, y: 0.7 },
-        colors,
-        scalar: 0.9,
-      });
-      confetti({
-        particleCount: 4,
-        angle: 120,
-        spread: 55,
-        origin: { x: 1, y: 0.7 },
-        colors,
-        scalar: 0.9,
-      });
-      if (Date.now() < end) requestAnimationFrame(frame);
-    };
-    frame();
-  } catch {
-    // canvas-confetti can fail in restricted wallet/app webviews.
-  }
-}
 const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
 
 function finiteNumber(value) {
@@ -3318,9 +3289,6 @@ function FuturesPanel() {
         return;
       }
       if (result && !result.error) {
-        if (orderType === 'market' && result.status !== 'submitted') {
-          fireTradeConfetti();
-        }
         const successText = result.info
           ? result.info
           : dex === 'gmtrade' && result.status === 'submitted'

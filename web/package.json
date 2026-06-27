@@ -53,7 +53,6 @@
     "bignumber.js": "10.0.2",
     "bs58": "^6.0.0",
     "buffer": "^6.0.3",
-    "canvas-confetti": "^1.9.4",
     "framer-motion": "^12.38.0",
     "got": "^15.0.3",
     "js-sha3": "^0.8.0",

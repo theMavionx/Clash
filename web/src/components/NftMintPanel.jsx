@@ -568,7 +568,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const [mintConfig, setMintConfig] = useState(null);
   const [gameShopConfig, setGameShopConfig] = useState(null);
   // Overlay state machine: idle = normal panel, pending = signing/waiting
-  // for tx confirmation, success = celebration animation. Failure resets
+  // for tx confirmation, success = success animation. Failure resets
   // to idle and surfaces the message through `notice` like before so the
   // user can retry without reopening the modal.
   const [mintStatus, setMintStatus] = useState('idle');
@@ -3112,22 +3112,6 @@ function ChainSupplySide({ label, supply, align }) {
   );
 }
 
-// Confetti placement: a small handful of gold/orange/red shards burst out
-// from the centre on success. Positions/delays are deterministic so the
-// motion reads as designed rather than random noise.
-const CONFETTI = [
-  { x: -130, y: -80, hue: '#ffd76a', size: 12, delay: 0 },
-  { x: 120, y: -100, hue: '#ff7a3a', size: 9, delay: 60 },
-  { x: -90, y: 110, hue: '#e53935', size: 11, delay: 120 },
-  { x: 140, y: 90, hue: '#ffe88a', size: 8, delay: 30 },
-  { x: -160, y: 30, hue: '#ff9a35', size: 10, delay: 90 },
-  { x: 160, y: 10, hue: '#ffd76a', size: 9, delay: 150 },
-  { x: -40, y: -130, hue: '#ffe88a', size: 7, delay: 180 },
-  { x: 50, y: 130, hue: '#e53935', size: 8, delay: 210 },
-  { x: -110, y: -20, hue: '#ff7a3a', size: 6, delay: 240 },
-  { x: 90, y: -40, hue: '#ffd76a', size: 7, delay: 270 },
-];
-
 function MintProgressOverlay({ status, result, chainLabel, onDismiss, onCancelPending }) {
   const pending = status === 'pending';
   const success = status === 'success';
@@ -3146,21 +3130,6 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss, onCancelPe
           <div style={overlayStyles.rays} className="nft-mint-rays" />
           {/* Soft ambient pulse that breathes in and out under the rays. */}
           <div style={overlayStyles.successHalo} className="nft-mint-halo" />
-          {CONFETTI.map((bit, i) => (
-            <span
-              key={i}
-              style={{
-                ...overlayStyles.confetti,
-                background: bit.hue,
-                width: bit.size,
-                height: bit.size,
-                '--tx': `${bit.x}px`,
-                '--ty': `${bit.y}px`,
-                animationDelay: `${bit.delay}ms`,
-              }}
-              className="nft-mint-confetti"
-            />
-          ))}
         </>
       )}
 
@@ -3281,21 +3250,6 @@ function ShopPurchaseOverlay({ status, result, onDismiss, onCancelPending }) {
         <>
           <div style={overlayStyles.rays} className="nft-mint-rays" />
           <div style={overlayStyles.successHalo} className="nft-mint-halo" />
-          {CONFETTI.map((bit, i) => (
-            <span
-              key={i}
-              style={{
-                ...overlayStyles.confetti,
-                background: bit.hue,
-                width: bit.size,
-                height: bit.size,
-                '--tx': `${bit.x}px`,
-                '--ty': `${bit.y}px`,
-                animationDelay: `${bit.delay}ms`,
-              }}
-              className="nft-mint-confetti"
-            />
-          ))}
         </>
       )}
 
@@ -3572,15 +3526,6 @@ const overlayStyles = {
     cursor: 'pointer',
     boxShadow: '0 2px 6px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.55)',
   },
-  confetti: {
-    position: 'absolute',
-    top: '50%', left: '50%',
-    borderRadius: 3,
-    transform: 'translate(-50%, -50%)',
-    boxShadow: '0 0 6px rgba(0,0,0,0.25)',
-    opacity: 0,
-    zIndex: 3,
-  },
 };
 
 const MINT_ANIM_CSS = `
@@ -3685,14 +3630,6 @@ const MINT_ANIM_CSS = `
     50%      { transform: scale(1.12); opacity: 1; }
   }
   .nft-mint-halo { animation: nft-mint-halo-pulse 2.4s ease-in-out infinite; }
-
-  /* Confetti shards fly out from centre with a small downward tail. */
-  @keyframes nft-mint-confetti-fly {
-    0%   { transform: translate(-50%, -50%) scale(0.4) rotate(0deg);                    opacity: 0; }
-    10%  { opacity: 1; }
-    100% { transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scale(1) rotate(540deg); opacity: 0; }
-  }
-  .nft-mint-confetti { animation: nft-mint-confetti-fly 1.6s cubic-bezier(0.22, 0.8, 0.4, 1) forwards; }
 
   /* Bare variants — same motion as the framed card animations but without the
      glowing brown box-shadow keyframes that would otherwise re-introduce the

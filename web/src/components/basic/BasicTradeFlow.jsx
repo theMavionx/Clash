@@ -11,7 +11,6 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 // eslint-disable-next-line no-unused-vars -- used as JSX namespace (`motion.div`), false positive
 import { motion, AnimatePresence } from 'framer-motion';
-import confetti from 'canvas-confetti';
 import BasicTokenPicker from './BasicTokenPicker';
 import BasicDirectionPicker from './BasicDirectionPicker';
 import BasicAmountSlider from './BasicAmountSlider';
@@ -66,24 +65,6 @@ const variants = {
   center: { x: 0, opacity: 1 },
   exit: (dir) => ({ x: dir > 0 ? -60 : 60, opacity: 0 }),
 };
-
-function fireConfetti() {
-  try {
-    const end = Date.now() + 600;
-    const colors_ = ['#43a047', '#e8b830', '#0EA5E9', '#fdf8e7'];
-    (function frame() {
-      confetti({
-        particleCount: 4, angle: 60, spread: 55, origin: { x: 0, y: 0.7 },
-        colors: colors_, scalar: 0.9,
-      });
-      confetti({
-        particleCount: 4, angle: 120, spread: 55, origin: { x: 1, y: 0.7 },
-        colors: colors_, scalar: 0.9,
-      });
-      if (Date.now() < end) requestAnimationFrame(frame);
-    })();
-  } catch { /* canvas-confetti can fail in restricted iframes — silent fall-through */ }
-}
 
 function BasicTradeFlow({
   markets, prices, account, walletUsdc,
@@ -364,20 +345,14 @@ function BasicTradeFlow({
         setSubmitting(false);
         return;
       }
-      // Success: confetti + auto-route to Positions.
-      fireConfetti();
       setSubmitting(false);
-      // Route after a beat so the confetti is visible.
-      setTimeout(() => {
-        if (setActiveTab) setActiveTab('Positions');
-        // Reset flow for next trade.
-        setStep('token');
-        setPickedToken(null);
-        setPickedDir(null);
-        setPickedAmount(0);
-        setPickedLev(2);
-        submittedRef.current = false;
-      }, 1100);
+      if (setActiveTab) setActiveTab('Positions');
+      setStep('token');
+      setPickedToken(null);
+      setPickedDir(null);
+      setPickedAmount(0);
+      setPickedLev(2);
+      submittedRef.current = false;
     } catch (e) {
       setErrorMsg(e?.message || 'Trade failed');
       submittedRef.current = false;

@@ -3628,6 +3628,17 @@ router.post('/hibachi/order', auth, async (req, res) => {
   }
 });
 
+router.post('/hibachi/order/status', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    res.json(await hibachi.getOrderStatus(creds, req.body || {}));
+  } catch (e) {
+    console.warn('[hibachi] order status failed:', e.message);
+    res.status(hibachiErrorStatus(e, 400)).json(hibachi.isIpBlockedError?.(e) ? hibachiErrorBody(e, 'Failed to load Hibachi order status') : { error: e.message || 'Failed to load Hibachi order status' });
+  }
+});
+
 router.post('/hibachi/order/cancel', auth, async (req, res) => {
   try {
     const creds = requireHibachiOwner(req, res);
