@@ -25,6 +25,14 @@ const HIBACHI_PUBLIC_PROXY_URL = String(
 const HIBACHI_AUTH_PROXY_URL = String(
   import.meta.env.VITE_HIBACHI_AUTH_PROXY_URL || HIBACHI_PUBLIC_PROXY_URL
 ).replace(/\/+$/u, '');
+const HIBACHI_DIRECT_API_URL = String(
+  import.meta.env.VITE_HIBACHI_DIRECT_API_URL || 'https://api.hibachi.xyz'
+).replace(/\/+$/u, '');
+const HIBACHI_DIRECT_BROWSER_PROBE_ENABLED = String(
+  import.meta.env.VITE_HIBACHI_DIRECT_BROWSER_PROBE ?? '1'
+) !== '0';
+const HIBACHI_DIRECT_BROWSER_PROBE_TTL_MS = 60_000;
+const HIBACHI_DIRECT_BROWSER_PROBE_TIMEOUT_MS = 6_000;
 const HIBACHI_VISIBLE_MARKET_CATEGORIES = new Set(['crypto']);
 const ERC20_BALANCE_ABI = [
   { type: 'function', name: 'balanceOf', stateMutability: 'view',
@@ -361,6 +369,62 @@ function isTransientHibachiError(error) {
   );
 }
 
+function summarizeHibachiPayload(payload) {
+  if (Array.isArray(payload)) return { type: 'array', length: payload.length };
+  if (!payload || typeof payload !== 'object') return { type: typeof payload };
+  const keys = Object.keys(payload).slice(0, 10);
+  const counts = {};
+  for (const key of keys) {
+    if (Array.isArray(payload[key])) counts[key] = payload[key].length;
+  }
+  return { type: 'object', keys, counts };
+}
+
+async function fetchHibachiDirectProbe(path, { label, apiKey = '', timeoutMs = HIBACHI_DIRECT_BROWSER_PROBE_TIMEOUT_MS } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  try {
+    const res = await fetch(`${HIBACHI_DIRECT_API_URL}${path}`, {
+      method: 'GET',
+      mode: 'cors',
+      cache: 'no-store',
+      credentials: 'omit',
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        ...(apiKey ? { Authorization: apiKey } : {}),
+      },
+    });
+    const contentType = res.headers.get('content-type') || '';
+    const text = await res.text().catch(() => '');
+    let payload = null;
+    if (text && contentType.toLowerCase().includes('json')) {
+      try { payload = JSON.parse(text); } catch {}
+    }
+    return {
+      label,
+      ok: res.ok,
+      status: res.status,
+      ms: Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt),
+      content_type: contentType || null,
+      payload: summarizeHibachiPayload(payload),
+      error: res.ok ? null : String(payload?.message || payload?.error || text || `HTTP ${res.status}`).slice(0, 220),
+    };
+  } catch (e) {
+    return {
+      label,
+      ok: false,
+      status: null,
+      ms: Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt),
+      network_or_cors_error: true,
+      error: e?.name === 'AbortError' ? 'timeout' : String(e?.message || e || 'fetch failed').slice(0, 220),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function hibachiPositionAmount(position) {
   return Math.abs(num(position?.amount ?? position?.quantity ?? position?.size, 0));
 }
@@ -408,6 +472,7 @@ export function useHibachi() {
   const ordersRef = useRef([]);
   const dataReadyRef = useRef(false);
   const fetchAccountPromiseRef = useRef(null);
+  const directBrowserProbeRef = useRef({ at: 0, promise: null, result: null });
 
   useEffect(() => {
     leverageSettingsRef.current = leverageSettings;
@@ -459,7 +524,66 @@ export function useHibachi() {
     return data;
   }, []);
 
+  const runDirectBrowserProbe = useCallback(async (reason = 'manual') => {
+    if (!HIBACHI_DIRECT_BROWSER_PROBE_ENABLED || typeof window === 'undefined') return null;
+    const now = Date.now();
+    const cached = directBrowserProbeRef.current || {};
+    if (cached.result && now - cached.at < HIBACHI_DIRECT_BROWSER_PROBE_TTL_MS) return cached.result;
+    if (cached.promise) return cached.promise;
+
+    const tests = [
+      { label: 'public:exchange-info', path: '/market/exchange-info', public: true },
+      { label: 'public:btc-price', path: '/market/data/prices?symbol=BTC%2FUSDT-P', public: true },
+    ];
+    if (credentials?.apiKey && credentials?.accountId) {
+      const accountId = encodeURIComponent(String(credentials.accountId));
+      tests.push(
+        { label: 'private:account-info', path: `/trade/account/info?accountId=${accountId}`, private: true },
+        { label: 'private:orders', path: `/trade/orders?accountId=${accountId}`, private: true },
+      );
+    }
+
+    const promise = (async () => {
+      const results = await Promise.all(tests.map(test => fetchHibachiDirectProbe(test.path, {
+        label: test.label,
+        apiKey: test.private ? credentials?.apiKey : '',
+      })));
+      const publicResults = results.filter(r => r.label.startsWith('public:'));
+      const privateResults = results.filter(r => r.label.startsWith('private:'));
+      const summary = {
+        reason,
+        api: HIBACHI_DIRECT_API_URL,
+        host: window.location.hostname,
+        public_ok: publicResults.length > 0 && publicResults.every(r => r.ok),
+        private_ok: privateResults.length ? privateResults.every(r => r.ok) : null,
+        using_proxy_fallback: results.some(r => !r.ok),
+        results,
+      };
+      if (summary.using_proxy_fallback) {
+        console.warn('[useHibachi] direct browser Hibachi probe failed; using Clash proxy fallback', summary);
+      } else {
+        console.info('[useHibachi] direct browser Hibachi probe ok', summary);
+      }
+      directBrowserProbeRef.current = { at: Date.now(), result: summary, promise: null };
+      return summary;
+    })();
+    directBrowserProbeRef.current = { ...cached, promise };
+    try {
+      return await promise;
+    } finally {
+      if (directBrowserProbeRef.current?.promise === promise) {
+        directBrowserProbeRef.current = {
+          ...directBrowserProbeRef.current,
+          promise: null,
+        };
+      }
+    }
+  }, [credentials?.apiKey, credentials?.accountId]);
+
   const fetchHibachiPublicJson = useCallback(async (path) => {
+    runDirectBrowserProbe('public-read').catch((e) => {
+      console.warn('[useHibachi] direct browser probe crashed:', e?.message || e);
+    });
     if (canUsePublicProxyFallback() && shouldPreferPublicProxy()) {
       return fetchJson(hibachiProxyPath(path));
     }
@@ -469,7 +593,7 @@ export function useHibachi() {
       if (!isHibachiIpBlocked(e) || !canUsePublicProxyFallback()) throw e;
       return fetchJson(hibachiProxyPath(path));
     }
-  }, [fetchJson]);
+  }, [fetchJson, runDirectBrowserProbe]);
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
@@ -563,6 +687,11 @@ export function useHibachi() {
     if (!walletAddr) throw new Error('Connect EVM wallet first');
     if (!credentials) throw new Error('Connect Hibachi API credentials first');
     if (!token) throw new Error('Game session is not ready');
+    if (/\/hibachi\/(?:account|positions|orders|import-fills|trade-history|order\/status)$/u.test(path)) {
+      runDirectBrowserProbe('private-read').catch((e) => {
+        console.warn('[useHibachi] direct browser probe crashed:', e?.message || e);
+      });
+    }
     const requestPath = shouldPreferPublicProxy() && canUsePublicProxyFallback()
       ? hibachiProxyPath(path, HIBACHI_AUTH_PROXY_URL)
       : path;
@@ -571,7 +700,7 @@ export function useHibachi() {
       headers: authHeaders(),
       body: JSON.stringify(credentialBody(body)),
     });
-  }, [walletAddr, credentials, token, fetchJson, authHeaders, credentialBody]);
+  }, [walletAddr, credentials, token, fetchJson, authHeaders, credentialBody, runDirectBrowserProbe]);
 
   const applyPositions = useCallback((nextPositions) => {
     const rows = Array.isArray(nextPositions) ? nextPositions : [];

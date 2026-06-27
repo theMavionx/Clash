@@ -138,7 +138,7 @@ function BattleLogPanel({ onClose }) {
         } else {
           setRevengeTargets([]);
         }
-      } catch { /* network error — fall through to loading=false */ }
+      } catch { /* network error; fall through to loading=false */ }
       finally {
         if (!cancelled) {
           setLoading(false);
@@ -150,7 +150,11 @@ function BattleLogPanel({ onClose }) {
   }, [token]);
 
   const filtered = filter === 'all' ? battles : battles.filter(b => b.side === filter);
-  const showRevenge = filter === 'all' || filter === 'defense';
+  const getRevengeTargetForBattle = useCallback((battle) => {
+    if (!battle || battle.side !== 'defense') return null;
+    const battleId = Number(battle.id);
+    return revengeTargets.find((target) => Number(target.battle_id) === battleId) || null;
+  }, [revengeTargets]);
 
   return (
     <>
@@ -175,49 +179,6 @@ function BattleLogPanel({ onClose }) {
         </div>
 
         <div style={S.body}>
-          {showRevenge && (
-            <div style={S.revengeSection}>
-              <div style={S.revengeHeader}>
-                <span style={S.revengeTitle}>Revenge</span>
-                <span style={S.revengeSub}>Last 3 attackers</span>
-              </div>
-              {revengeMessage && <div style={S.revengeMessage}>{revengeMessage}</div>}
-              {revengeLoading && <div style={S.revengeEmpty}>Checking attackers...</div>}
-              {!revengeLoading && revengeTargets.length === 0 && (
-                <div style={S.revengeEmpty}>No recent attackers</div>
-              )}
-              {!revengeLoading && revengeTargets.map((target) => {
-                const disabled = !target.can_revenge;
-                const reason = target.reason === 'shield_active'
-                  ? `Shield ${target.shield_remaining_minutes || 1}m`
-                  : target.reason === 'revenge_used'
-                    ? 'Used'
-                    : '';
-                const lootTotal = (target.loot?.gold || 0) + (target.loot?.wood || 0) + (target.loot?.ore || 0);
-                return (
-                  <div key={target.battle_id} style={S.revengeCard(disabled)}>
-                    <div style={S.revengeInfo}>
-                      <strong>{target.name}</strong>
-                      <span>{timeAgo(target.attacked_at)} · {fmt(target.trophies)} trophies</span>
-                      {lootTotal > 0 && <small>Stole {fmt(lootTotal)} resources</small>}
-                    </div>
-                    <button
-                      type="button"
-                      style={S.revengeBtn(disabled)}
-                      disabled={disabled}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRevenge(target);
-                      }}
-                    >
-                      {disabled ? reason : 'Revenge'}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
           {loading && <div style={S.empty}>Loading...</div>}
           {!loading && filtered.length === 0 && (
             <div style={S.empty}>No battles yet</div>
@@ -229,6 +190,17 @@ function BattleLogPanel({ onClose }) {
             const isExpanded = expanded === b.id;
             const totalLoot = (b.loot?.gold || 0) + (b.loot?.wood || 0) + (b.loot?.ore || 0);
             const thDmg = b.th_hp_pct != null ? Math.round((1 - b.th_hp_pct) * 100) : null;
+            const revengeTarget = getRevengeTargetForBattle(b);
+            const revengeDisabled = revengeLoading || !revengeTarget?.can_revenge;
+            const revengeLabel = revengeLoading
+              ? 'Checking...'
+              : revengeTarget?.reason === 'shield_active'
+                ? `Shield ${revengeTarget.shield_remaining_minutes || 1}m`
+                : revengeTarget?.reason === 'revenge_used'
+                  ? 'Used'
+                  : revengeTarget
+                    ? 'Revenge'
+                    : '';
 
             // Badge logic
             let badgeText, badgeDesc;
@@ -311,12 +283,30 @@ function BattleLogPanel({ onClose }) {
                       );
                     })()}
                     {b.replay_data && b.buildings_snapshot && (
-                      <button
-                        style={S.watchBtn}
-                        onClick={(e) => { e.stopPropagation(); handleWatchReplay(b); }}
-                      >
-                        Watch Replay
-                      </button>
+                      <div style={S.actionRow}>
+                        <button
+                          style={S.watchBtn}
+                          onClick={(e) => { e.stopPropagation(); handleWatchReplay(b); }}
+                        >
+                          Watch Replay
+                        </button>
+                        {!isAttack && revengeLabel && (
+                          <button
+                            type="button"
+                            style={S.revengeBtn(revengeDisabled)}
+                            disabled={revengeDisabled}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRevenge(revengeTarget);
+                            }}
+                          >
+                            {revengeLabel}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {!isAttack && revengeMessage && revengeTarget && (
+                      <div style={S.revengeMessage}>{revengeMessage}</div>
                     )}
                   </div>
                 )}
@@ -363,18 +353,6 @@ const S = {
     flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
     overflowY: 'auto', scrollbarWidth: 'none',
   },
-  revengeSection: {
-    background: '#fff7df',
-    border: '3px solid #c9b889',
-    borderRadius: 14,
-    padding: 10,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  },
-  revengeHeader: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
-  revengeTitle: { fontSize: 15, fontWeight: 950, color: '#5C3A21' },
-  revengeSub: { fontSize: 10, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase' },
   revengeMessage: {
     background: '#f8d6ca',
     border: '2px solid #d8715b',
@@ -384,30 +362,9 @@ const S = {
     fontSize: 11,
     fontWeight: 900,
   },
-  revengeEmpty: { padding: 10, textAlign: 'center', color: '#a3906a', fontSize: 12, fontWeight: 800 },
-  revengeCard: (disabled) => ({
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    padding: '8px 9px',
-    borderRadius: 10,
-    background: disabled ? '#e7deca' : '#f2dfb8',
-    border: `2px solid ${disabled ? '#c9b889' : '#b78335'}`,
-    opacity: disabled ? 0.82 : 1,
-  }),
-  revengeInfo: {
-    minWidth: 0,
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 1,
-    color: '#5C3A21',
-    fontSize: 12,
-  },
   revengeBtn: (disabled) => ({
-    minWidth: 82,
-    height: 34,
+    flex: '0 0 112px',
+    height: 42,
     borderRadius: 9,
     border: `2px solid ${disabled ? '#9d9278' : '#8d421e'}`,
     background: disabled
@@ -449,8 +406,16 @@ const S = {
   detailRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   detailLabel: { fontSize: 12, fontWeight: 700, color: '#77573d' },
   detailVal: { fontSize: 12, fontWeight: 900, color: '#5C3A21' },
+  actionRow: {
+    marginTop: 6,
+    display: 'flex',
+    gap: 8,
+    alignItems: 'stretch',
+  },
   watchBtn: {
-    marginTop: 6, width: '100%', padding: '8px 0',
+    flex: 1,
+    minWidth: 0,
+    padding: '8px 0',
     background: 'linear-gradient(180deg, #74c4ff 0%, #3ba4f4 100%)',
     border: '2px solid #1a6fb5', borderRadius: 8,
     color: '#fff', fontSize: 13, fontWeight: 900, cursor: 'pointer',
