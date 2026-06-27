@@ -1380,6 +1380,23 @@ try {
   `);
 } catch (e) { console.warn('[db] player_nft_battle_win_events migration:', e.message); }
 try { db.exec(`ALTER TABLE battle_replays ADD COLUMN sim_debug TEXT`); } catch {}
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS battle_revenge_uses (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      defender_id       TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      attacker_id       TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      source_battle_id  INTEGER NOT NULL REFERENCES battle_replays(id) ON DELETE CASCADE,
+      revenge_session_id TEXT,
+      revenge_battle_id INTEGER,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(defender_id, source_battle_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_battle_revenge_uses_defender
+      ON battle_revenge_uses(defender_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] battle_revenge_uses migration:', e.message); }
 try {
   db.exec(`
     UPDATE players
@@ -2604,6 +2621,64 @@ const stmts = {
   insertReplay: db.prepare(`
     INSERT INTO battle_replays (attacker_id, defender_id, claimed_result, verified_result, verification_reason, replay_data, buildings_snapshot, loot_gold, loot_wood, loot_ore, sim_th_hp_pct, sim_buildings_destroyed, sim_debug, duration_sec)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  listRevengeTargets: db.prepare(`
+    SELECT
+      r.id AS battle_id,
+      r.attacker_id,
+      r.defender_id,
+      r.claimed_result,
+      r.verified_result,
+      r.loot_gold,
+      r.loot_wood,
+      r.loot_ore,
+      r.sim_buildings_destroyed,
+      r.duration_sec,
+      r.created_at,
+      p.name AS attacker_name,
+      p.trophies AS attacker_trophies,
+      p.level AS attacker_level,
+      p.shield_until AS attacker_shield_until,
+      u.id AS revenge_use_id,
+      u.revenge_session_id,
+      u.revenge_battle_id,
+      u.created_at AS revenge_used_at
+    FROM battle_replays r
+    JOIN players p ON p.id = r.attacker_id
+    LEFT JOIN battle_revenge_uses u
+      ON u.defender_id = r.defender_id
+     AND u.source_battle_id = r.id
+    WHERE r.defender_id = ?
+      AND r.attacker_id != ?
+      AND COALESCE(p.is_bot, 0) = 0
+      AND r.verified_result = 'accepted'
+    ORDER BY r.created_at DESC, r.id DESC
+    LIMIT 3
+  `),
+  getRevengeSourceBattle: db.prepare(`
+    SELECT r.*, p.name AS attacker_name, p.trophies AS attacker_trophies,
+           p.level AS attacker_level, p.shield_until AS attacker_shield_until,
+           p.is_bot AS attacker_is_bot
+    FROM battle_replays r
+    JOIN players p ON p.id = r.attacker_id
+    WHERE r.id = ? AND r.defender_id = ?
+    LIMIT 1
+  `),
+  getRevengeUse: db.prepare(`
+    SELECT *
+    FROM battle_revenge_uses
+    WHERE defender_id = ? AND source_battle_id = ?
+    LIMIT 1
+  `),
+  insertRevengeUse: db.prepare(`
+    INSERT INTO battle_revenge_uses
+      (defender_id, attacker_id, source_battle_id, revenge_session_id)
+    VALUES (?, ?, ?, ?)
+  `),
+  linkRevengeBattleBySession: db.prepare(`
+    UPDATE battle_revenge_uses
+    SET revenge_battle_id = COALESCE(revenge_battle_id, ?)
+    WHERE defender_id = ? AND attacker_id = ? AND revenge_session_id = ?
   `),
 
   // Repair / Ship / Shield
@@ -8124,6 +8199,153 @@ function findEnemyByName(playerId, rawTargetName) {
   })();
 }
 
+function revengeTargetPayload(row) {
+  if (!row) return null;
+  const shield = battleShieldInfo({ shield_until: row.attacker_shield_until });
+  const used = !!row.revenge_use_id;
+  const canRevenge = !shield && !used;
+  return {
+    battle_id: row.battle_id,
+    player_id: row.attacker_id,
+    name: row.attacker_name || 'Unknown',
+    trophies: Number(row.attacker_trophies || 0),
+    level: Number(row.attacker_level || 1),
+    attacked_at: row.created_at,
+    result: row.claimed_result,
+    loot: {
+      gold: Number(row.loot_gold || 0),
+      wood: Number(row.loot_wood || 0),
+      ore: Number(row.loot_ore || 0),
+    },
+    buildings_destroyed: Number(row.sim_buildings_destroyed || 0),
+    duration_sec: Number(row.duration_sec || 0),
+    shield_active: !!shield,
+    shield_until: shield?.shield_until || null,
+    shield_remaining_minutes: shield?.remaining_minutes || 0,
+    revenge_used: used,
+    revenge_used_at: row.revenge_used_at || null,
+    can_revenge: canRevenge,
+    reason: canRevenge ? null : (used ? 'revenge_used' : 'shield_active'),
+  };
+}
+
+function listRevengeTargets(playerId) {
+  const player = stmts.getPlayerById.get(playerId);
+  if (!player) return { error: 'Player not found' };
+  return {
+    targets: stmts.listRevengeTargets.all(playerId, playerId).map(revengeTargetPayload),
+  };
+}
+
+function startRevengeBattle(playerId, sourceBattleId) {
+  const player = stmts.getPlayerById.get(playerId);
+  if (!player) return { error: 'Player not found' };
+  const battleId = Number(sourceBattleId);
+  if (!Number.isInteger(battleId) || battleId <= 0) return { error: 'source battle id required', status: 400 };
+
+  return db.transaction(() => {
+    stmts.expireBattleSessions.run();
+    const recentTargets = stmts.listRevengeTargets.all(playerId, playerId);
+    const recent = recentTargets.find((row) => Number(row.battle_id) === battleId);
+    if (!recent) {
+      return { error: 'Revenge is only available against your last 3 attackers.', status: 403 };
+    }
+    if (recent.revenge_use_id) {
+      return { error: 'Revenge already used for this attack.', status: 409, reason: 'revenge_used' };
+    }
+
+    const source = stmts.getRevengeSourceBattle.get(battleId, playerId);
+    if (!source) return { error: 'Revenge source battle not found.', status: 404 };
+    const target = stmts.getPlayerById.get(source.attacker_id);
+    if (!target || Number(target.is_bot || 0) === 1) return { error: 'Revenge target is no longer available.', status: 404 };
+    if (target.id === playerId) return { error: 'Cannot attack yourself.', status: 400 };
+
+    const shield = battleShieldInfo(target);
+    if (shield) {
+      return {
+        error: `${target.name} is protected by shield for about ${shield.remaining_hours}h.`,
+        status: 409,
+        reason: 'shield_active',
+        shield,
+        target: publicBattleTarget(target),
+      };
+    }
+
+    const activeReservation = stmts.getActiveBattleReservationForDefender.get(target.id);
+    if (activeReservation && activeReservation.attacker_id !== playerId) {
+      return {
+        error: `${target.name} is already reserved for another active battle. Try again in a few minutes.`,
+        status: 409,
+        reason: 'target_reserved',
+        reserved_until: activeReservation.reserved_until,
+        target: publicBattleTarget(target),
+      };
+    }
+
+    const hasTownHall = stmts.getBuildings.all(target.id).some((b) => b.type === 'town_hall');
+    if (!hasTownHall) {
+      return { error: `${target.name} does not have an attackable base yet.`, status: 400, target: publicBattleTarget(target) };
+    }
+
+    const alreadyUsed = stmts.getRevengeUse.get(playerId, battleId);
+    if (alreadyUsed) {
+      return { error: 'Revenge already used for this attack.', status: 409, reason: 'revenge_used' };
+    }
+
+    const attackCostGold = getAttackCost(playerId);
+    if (!canAfford(playerId, attackCostGold, 0, 0)) {
+      return {
+        error: `Not enough gold to revenge. Need ${attackCostGold} gold.`,
+        status: 400,
+        attack_cost_gold: attackCostGold,
+        resources: getResources(playerId),
+      };
+    }
+
+    stmts.cancelBattleSessionsForAttacker.run(playerId);
+    repairAllBuildings(target.id);
+    const buildings = getPlayerBuildings(target.id);
+    const resources = getResources(target.id);
+    const sessionId = uuidv4();
+    const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
+    const attackerResources = subtractResources(playerId, attackCostGold, 0, 0, {
+      sourceType: 'attack_cost',
+      metadata: {
+        match_type: 'revenge',
+        defender_id: target.id,
+        source_battle_id: battleId,
+        battle_session_id: sessionId,
+      },
+    });
+    if (attackerResources?.error) {
+      return {
+        error: 'Not enough gold to revenge',
+        status: 400,
+        attack_cost_gold: attackCostGold,
+        resources: getResources(playerId),
+      };
+    }
+    stmts.createBattleSession.run(sessionId, playerId, target.id, reservedUntil);
+    stmts.insertRevengeUse.run(playerId, target.id, battleId, sessionId);
+
+    return {
+      revenge: true,
+      source_battle_id: battleId,
+      id: target.id,
+      name: target.name,
+      trophies: target.trophies,
+      level: target.level,
+      buildings,
+      resources,
+      attacker_resources: attackerResources,
+      attack_cost_gold: attackCostGold,
+      battle_session_id: sessionId,
+      battle_session_expires_at: reservedUntil,
+      grid_config: CANONICAL_GRID_CONFIG,
+    };
+  })();
+}
+
 // Stamps the matchmaker cooldown for a surrender and applies the normal
 // battle-loss trophy penalty once. Retry calls for the same session/pair do
 // not subtract trophies again because surrendered_at is already populated.
@@ -8615,8 +8837,13 @@ function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, clai
     simResult?.townHallHpPct ?? null, simResult?.buildingsDestroyed ?? 0,
     replaySimDebug(simResult), duration
   );
+  const replayId = Number(info?.lastInsertRowid || 0) || null;
+  const sessionId = battleSessionIdFromReplayData(replayData);
+  if (replayId && sessionId) {
+    try { stmts.linkRevengeBattleBySession.run(replayId, attackerId, defenderId, sessionId); } catch {}
+  }
   completeRaidMatchmakingFromReplay(replayData, claimedResult, verifiedResult, reason, loot, simResult, duration);
-  return Number(info?.lastInsertRowid || 0) || null;
+  return replayId;
 }
 
 function getPlayerMatchmakingStats(playerId) {
@@ -8838,6 +9065,8 @@ module.exports = {
   findEnemy,
   inspectEnemyByName,
   findEnemyByName,
+  listRevengeTargets,
+  startRevengeBattle,
   collectResources,
   getProductionStatus,
   recalculateTrophies,
