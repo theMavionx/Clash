@@ -27,6 +27,7 @@ import {
 } from '../lib/hotstuffConfig';
 import {
   migratePlainLocalStorageCredential,
+  removeEncryptedCredential,
   readEncryptedCredential,
   writeEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
@@ -228,6 +229,13 @@ async function saveStoredAgent(owner, privateKey, validUntil = Date.now() + AGEN
 
 async function newStoredAgent(owner) {
   return saveStoredAgent(owner, generatePrivateKey(), Date.now() + AGENT_VALIDITY_MS);
+}
+
+async function clearStoredAgent(owner) {
+  if (!owner || typeof window === 'undefined') return;
+  const key = agentStorageKey(owner);
+  await removeEncryptedCredential(key);
+  try { window.localStorage.removeItem(key); } catch {}
 }
 
 function agentStillValid(row) {
@@ -756,6 +764,20 @@ export function useHotstuff() {
     return { success: true, agentAddress: agent.address };
   }, [ensureTradingAgent, exchange, hasHotstuffAccount, hsWalletAddr, info, switchChain, walletClient]);
 
+  const disconnect = useCallback(async () => {
+    if (!hsWalletAddr) throw new Error('Connect your Hotstuff EVM wallet first');
+    await clearStoredAgent(hsWalletAddr);
+    agentRegistrationCacheRef.current = { wallet: null, agent: null, at: 0 };
+    setSetupStatus(prev => ({
+      ...prev,
+      agentReady: false,
+      agentAddress: null,
+    }));
+    setSetupVerified(false);
+    setPositions([]);
+    setOrders([]);
+  }, [hsWalletAddr]);
+
   const openReferralJoin = useCallback(() => {
     if (!HOTSTUFF_REFERRAL_URL) return;
     window.open(HOTSTUFF_REFERRAL_URL, '_blank', 'noopener,noreferrer');
@@ -1224,6 +1246,7 @@ export function useHotstuff() {
     depositToPacifica: null,
     withdraw: null,
     activate,
+    disconnect,
     openReferralJoin,
     referralCode: HOTSTUFF_REFERRAL_CODE,
     referralUrl: HOTSTUFF_REFERRAL_URL,

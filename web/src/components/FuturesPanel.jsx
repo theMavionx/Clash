@@ -7250,6 +7250,38 @@ function FuturesPanel() {
           </div>
         )}
 
+        {dex === 'hotstuff' && setupVerified === true && (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={{...S.label, color: '#9A3412'}}>Hotstuff agent</span>
+              <button
+                style={{
+                  ...S.btnSmall,
+                  padding: '6px 10px',
+                  fontSize: 10,
+                  background: '#fff8e6',
+                  color: '#9A3412',
+                  border: '2px solid #F97316',
+                  whiteSpace: 'nowrap',
+                }}
+                onClick={async () => {
+                  try {
+                    await disconnect?.();
+                    setLocalAlert('Hotstuff browser trading agent cleared. Set up Hotstuff again to trade.');
+                  } catch (e) {
+                    setLocalAlert(e?.message || 'Failed to clear Hotstuff browser trading agent.');
+                  }
+                }}
+              >
+                CLEAR AGENT
+              </button>
+            </div>
+            <div style={{fontSize: 10, fontWeight: 800, color: '#9f8759', lineHeight: 1.35}}>
+              Stored encrypted in this browser. Clearing it only removes the local Hotstuff order signer; your Hotstuff account and funds stay unchanged.
+            </div>
+          </div>
+        )}
+
         {dex === 'lighter' && lighterCredentials?.accountIndex != null && (
           <div style={S.fullCard}>
             <div style={S.row}>

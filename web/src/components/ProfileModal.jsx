@@ -557,6 +557,13 @@ function ProfileModal({ onClose }) {
       walletLabel: 'EVM wallet',
     },
     {
+      id: 'hotstuff',
+      label: 'Hotstuff',
+      details: 'browser trading agent',
+      hook: hotstuffHook,
+      walletLabel: 'Ethereum wallet',
+    },
+    {
       id: 'grvt',
       label: 'GRVT',
       details: 'API key, sub-account auto-detect',
@@ -577,7 +584,7 @@ function ProfileModal({ onClose }) {
       hook: lighterHook,
       walletLabel: 'EVM wallet',
     },
-  ]), [grvtHook, hibachiHook, katanaHook, lighterHook]);
+  ]), [grvtHook, hibachiHook, hotstuffHook, katanaHook, lighterHook]);
 
   const switchToCredentialDex = useCallback((dexId) => {
     setDex(dexId);
@@ -633,8 +640,9 @@ function ProfileModal({ onClose }) {
       switchToCredentialDex(row.id);
       return;
     }
-    const input = row.id === 'hibachi' ? null : promptCredentialInput(row.id);
-    if (row.id !== 'hibachi' && !input) return;
+    const needsPrompt = row.id !== 'hibachi' && row.id !== 'hotstuff';
+    const input = needsPrompt ? promptCredentialInput(row.id) : null;
+    if (needsPrompt && !input) return;
     setCredentialAction(`${row.id}:change`);
     setCredentialMessage('');
     try {
