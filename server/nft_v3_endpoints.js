@@ -331,6 +331,71 @@ function bindBridgeDestinationNftToPlayer({
   }
 }
 
+function bridgeSourceTokenIds(sourceChain, burned = {}) {
+  const chain = String(sourceChain || '').trim().toLowerCase();
+  const ids = new Set();
+  const primary = bridgeSourceTokenId(chain, burned);
+  if (primary) ids.add(String(primary).trim());
+  if (chain === 'evm' || BRIDGE_EVM_CHAIN_KEYS.has(chain)) {
+    if (burned.tokenId != null) ids.add(String(burned.tokenId).trim());
+  } else if (chain === 'aptos') {
+    if (burned.tokenAddress) ids.add(String(burned.tokenAddress).trim());
+    if (burned.tokenIndex != null) ids.add(String(burned.tokenIndex).trim());
+  } else if (chain === 'solana') {
+    if (burned.asset) ids.add(String(burned.asset).trim());
+    if (burned.tokenIndex) ids.add(String(burned.tokenIndex).trim());
+    if (burned.edition) ids.add(String(burned.edition).trim());
+  }
+  return [...ids].filter(Boolean);
+}
+
+function deactivateBridgeSourceNftFromPlayerInventory({
+  collectionSlug,
+  sourceChain,
+  burned = {},
+  txHash = null,
+  source = 'bridge-source-burn',
+  sourceRef = null,
+} = {}) {
+  const collectionKey = rarityCollectionDbKey(collectionSlug);
+  const chain = String(sourceChain || '').trim().toLowerCase();
+  const tokenIds = bridgeSourceTokenIds(chain, burned);
+  if (!collectionKey || !chain || tokenIds.length === 0) {
+    return { ok: false, skipped: 'missing_source_token', changes: 0 };
+  }
+  try {
+    const stmt = gameDb.db.prepare(`
+      UPDATE player_nfts
+         SET active = 0,
+             source = ?,
+             tx_hash = COALESCE(?, tx_hash),
+             updated_at = datetime('now')
+       WHERE collection = ?
+         AND chain = ?
+         AND token_id = ?
+         AND active = 1
+    `);
+    let changes = 0;
+    for (const tokenId of tokenIds) {
+      const info = stmt.run(source, txHash, collectionKey, chain, tokenId);
+      changes += Number(info?.changes || 0);
+    }
+    if (changes > 0) {
+      console.log('[nft-bridge] deactivated source NFT inventory', {
+        collection: collectionKey,
+        chain,
+        tokenIds,
+        changes,
+        sourceRef,
+      });
+    }
+    return { ok: true, collection: collectionKey, chain, tokenIds, changes };
+  } catch (err) {
+    console.warn('[nft-bridge] source inventory deactivate failed:', err?.message || err);
+    return { ok: false, skipped: 'db_error', error: (err?.message || String(err)).slice(0, 180), changes: 0 };
+  }
+}
+
 function mergePlayerCollectionTokens(...lists) {
   const byKey = new Map();
   for (const list of lists) {
@@ -1447,6 +1512,171 @@ async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
   return listOwnedAptosCollectionNfts('demonking', ownerRaw, options);
 }
 
+let nftOwnershipSyncTimer = null;
+let nftOwnershipSyncStartupTimer = null;
+let nftOwnershipSyncRunning = false;
+
+function intEnvClamped(name, fallback, min, max) {
+  const n = Number(process.env[name]);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function playerNftCollectionSlug(collection) {
+  const key = String(collection || '').trim().toLowerCase();
+  if (key === 'demon_king') return 'demonking';
+  if (key === 'dragon') return 'dragon';
+  return normalizeBridgeCollectionSlugValue(key);
+}
+
+function dueNftOwnershipSyncGroups({ limit = 50, minAgeHours = 20 } = {}) {
+  try {
+    return gameDb.db.prepare(`
+      SELECT n.player_id,
+             n.collection,
+             n.wallet,
+             GROUP_CONCAT(DISTINCT n.chain) AS chains,
+             COALESCE(MAX(c.checked_at), '1970-01-01 00:00:00') AS checked_at
+        FROM player_nfts n
+        LEFT JOIN player_nft_wallet_checks c
+          ON c.player_id = n.player_id
+         AND c.collection = n.collection
+         AND lower(c.wallet) = lower(n.wallet)
+       WHERE n.active = 1
+         AND n.collection IN ('demon_king', 'dragon')
+         AND TRIM(COALESCE(n.wallet, '')) != ''
+       GROUP BY n.player_id, n.collection, lower(n.wallet)
+      HAVING COALESCE(MAX(c.checked_at), '1970-01-01 00:00:00') < datetime('now', '-' || ? || ' hours')
+          OR SUM(CASE
+                WHEN c.chains IS NULL THEN 1
+                WHEN instr(c.chains, '"' || n.chain || '"') = 0 THEN 1
+                ELSE 0
+              END) > 0
+       ORDER BY checked_at ASC
+       LIMIT ?
+    `).all(Math.max(1, Math.floor(minAgeHours)), Math.max(1, Math.floor(limit)));
+  } catch (err) {
+    console.warn('[nft-ownership-sync] due group query failed:', err?.message || err);
+    return [];
+  }
+}
+
+async function syncNftOwnershipGroup(group = {}) {
+  const playerId = String(group.player_id || '').trim();
+  const collectionKey = String(group.collection || '').trim().toLowerCase();
+  const collectionSlug = playerNftCollectionSlug(collectionKey);
+  const wallet = String(group.wallet || '').trim();
+  const chains = String(group.chains || '')
+    .split(',')
+    .map((chain) => chain.trim().toLowerCase())
+    .filter(Boolean);
+  if (!playerId || !collectionSlug || !wallet || chains.length === 0) {
+    return { skipped: 'invalid_group' };
+  }
+
+  const tokens = [];
+  const successfulChains = [];
+  const errors = [];
+  for (const chain of chains) {
+    try {
+      const body = DEMON_KING_EVM_CHAINS.includes(chain)
+        ? await listOwnedEvmCollectionNfts(collectionSlug, chain, wallet, { force: true })
+        : chain === 'solana'
+          ? await listOwnedSolanaCollectionNfts(collectionSlug, wallet, { force: true })
+          : chain === 'aptos'
+            ? await listOwnedAptosCollectionNfts(collectionSlug, wallet, { force: true })
+            : null;
+      if (!body) continue;
+      successfulChains.push(chain);
+      for (const token of body.tokens || []) {
+        const tokenId = String(token.tokenId || token.tokenAddress || token.asset || token.mint || token.id || '').trim();
+        if (!tokenId) continue;
+        const level = normalizeNftLevel(token.level);
+        tokens.push({
+          ...token,
+          collection: collectionSlug,
+          chain,
+          tokenId,
+          level,
+          imageUrl: token.imageUrl || collectionLevelImageUrl(collectionSlug, level, tokenId),
+        });
+      }
+    } catch (err) {
+      errors.push({ chain, error: (err?.message || String(err)).slice(0, 180) });
+    }
+  }
+  if (!successfulChains.length) {
+    return { playerId, collection: collectionKey, wallet, skipped: 'all_chains_failed', errors };
+  }
+  const beforeCount = gameDb.listPlayerCollectionNfts(playerId, collectionKey, wallet)
+    .filter((token) => successfulChains.includes(token.chain)).length;
+  const after = gameDb.replacePlayerCollectionNfts(playerId, collectionKey, wallet, tokens, {
+    chains: successfulChains,
+    source: 'daily-ownership-sync',
+  }).filter((token) => successfulChains.includes(token.chain));
+  return {
+    playerId,
+    collection: collectionKey,
+    wallet,
+    chains: successfulChains,
+    before: beforeCount,
+    after: after.length,
+    removed: Math.max(0, beforeCount - after.length),
+    errors,
+  };
+}
+
+async function runNftOwnershipBackgroundSync(label = 'timer', options = {}) {
+  if (process.env.NFT_OWNERSHIP_DAILY_SYNC === '0') return { skipped: 'disabled' };
+  if (nftOwnershipSyncRunning) return { skipped: 'already-running' };
+  nftOwnershipSyncRunning = true;
+  try {
+    const limit = options.limit || intEnvClamped('NFT_OWNERSHIP_SYNC_LIMIT', 75, 1, 500);
+    const minAgeHours = options.minAgeHours || intEnvClamped('NFT_OWNERSHIP_SYNC_MIN_AGE_HOURS', 20, 1, 168);
+    const groups = dueNftOwnershipSyncGroups({ limit, minAgeHours });
+    let synced = 0;
+    let removed = 0;
+    let failed = 0;
+    for (const group of groups) {
+      const result = await syncNftOwnershipGroup(group);
+      if (result?.skipped === 'all_chains_failed') failed += 1;
+      else if (!result?.skipped) {
+        synced += 1;
+        removed += Number(result.removed || 0);
+      }
+    }
+    if (groups.length || removed || failed) {
+      console.log(`[nft-ownership-sync ${label}] groups=${groups.length} synced=${synced} removed=${removed} failed=${failed}`);
+    }
+    return { groups: groups.length, synced, removed, failed };
+  } catch (err) {
+    console.warn('[nft-ownership-sync] sweep failed:', err?.message || err);
+    return { error: err?.message || String(err) };
+  } finally {
+    nftOwnershipSyncRunning = false;
+  }
+}
+
+function startNftOwnershipDailySyncScheduler() {
+  if (process.env.NFT_OWNERSHIP_DAILY_SYNC === '0') return;
+  if (nftOwnershipSyncTimer || nftOwnershipSyncStartupTimer) return;
+  const intervalMs = intEnvClamped('NFT_OWNERSHIP_SYNC_INTERVAL_MS', 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+  const startupDelayMs = intEnvClamped('NFT_OWNERSHIP_SYNC_STARTUP_DELAY_MS', 10 * 60 * 1000, 10_000, 24 * 60 * 60 * 1000);
+  const tick = (label) => {
+    runNftOwnershipBackgroundSync(label).catch((err) => {
+      console.warn('[nft-ownership-sync] async sweep failed:', err?.message || err);
+    });
+  };
+  nftOwnershipSyncStartupTimer = setTimeout(() => {
+    nftOwnershipSyncStartupTimer = null;
+    tick('startup');
+  }, startupDelayMs);
+  nftOwnershipSyncStartupTimer.unref?.();
+  nftOwnershipSyncTimer = setInterval(() => tick('interval'), intervalMs);
+  nftOwnershipSyncTimer.unref?.();
+  console.log(`[nft-ownership-sync] scheduled interval=${intervalMs}ms startupDelay=${startupDelayMs}ms`);
+}
+
 async function listOwnedSolanaDemonKingNfts(ownerRaw, options = {}) {
   const { deploymentOf } = require('./bridge_helpers');
   const dep = deploymentOf('solana');
@@ -1584,6 +1814,7 @@ function mountNftV3Endpoints(router, ctx) {
   const upgradeLimit  = makeRateLimiter(10);
   const bridgeLimit   = makeRateLimiter(Number(process.env.NFT_BRIDGE_RATE_LIMIT_PER_MIN || 20));
   const readLimit     = makeRateLimiter(60);
+  startNftOwnershipDailySyncScheduler();
 
   router.post('/nft/demon-king/sync', async (req, res) => {
     try {
@@ -3410,6 +3641,14 @@ function mountNftV3Endpoints(router, ctx) {
         : { asset: burned.asset };
       sourceRefParams.collection = collectionSlug;
       const sourceRef = await buildSourceRef(sourceChain, sourceRefParams);
+      deactivateBridgeSourceNftFromPlayerInventory({
+        collectionSlug,
+        sourceChain,
+        burned,
+        txHash: burnTxHash,
+        source: 'bridge-confirm-burn',
+        sourceRef,
+      });
 
       // Refuse re-issuing receipts/mints for an already-consumed (sourceRef,
       // destChain) pair. Defence-in-depth — EVM/Aptos destination contracts
@@ -3824,6 +4063,14 @@ function mountNftV3Endpoints(router, ctx) {
         : { asset: burned.asset };
       sourceRefParams.collection = collectionSlug;
       const sourceRef = await buildSourceRef(sourceChain, sourceRefParams);
+      deactivateBridgeSourceNftFromPlayerInventory({
+        collectionSlug,
+        sourceChain,
+        burned,
+        txHash: burnTxHash,
+        source: 'bridge-relay-burn',
+        sourceRef,
+      });
 
       const prior = findUsedBridgeRef(sourceRef, destChain);
       if (prior) {

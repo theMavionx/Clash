@@ -638,3 +638,29 @@ Time: 2026-06-27 12:47:42 +03:00
 Request:
 
 > коміт деплой всіх змін на прод
+
+### UR-2026-06-29-001
+
+Time: 2026-06-29 11:37:47 +03:00
+
+Request:
+
+> треба виправити цю проблему для драконів і демон кінгів Demon King Persists After Being Sold
+> If a player owns multiple Demon Kings and has already assigned them to their ships, those Demon Kings remain attached to the ships even after the NFTs are sold or transferred to another wallet. They do not disappear from the player's fleet.
+> The game should validate ownership before every battle. If a Demon King has been sold or transferred, it should be automatically removed from the player's fleet.
+
+### UR-2026-06-29-002
+
+Time: 2026-06-29 12:05:00 +03:00
+
+Request:
+
+> стій я думаю треба якось оптимізувати то все діло перед кожною битвою тупо постійно палити рпс запити краще це робити раз в день і плюс при лістингу і при бріджі я не знаю типу того щоб не палити багато рпс запитів
+
+### UR-2026-06-29-003
+
+Time: 2026-06-29 12:17:00 +03:00
+
+Request:
+
+> коміт деплой на прод потім після цих змін

@@ -10889,6 +10889,89 @@ function _nftBackedEntryKey(name) {
   if (parsed.error) return String(name || '');
   return `${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
 }
+function _nftBackedKeyFromParsed(parsed) {
+  if (!parsed || parsed.error) return '';
+  return `${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+}
+function _activeNftBackedTokenKeysForPlayer(playerId) {
+  const keys = new Set();
+  const configs = [
+    _nftBackedTroopConfig('DemonKing'),
+    _nftBackedTroopConfig('FireDragon'),
+  ].filter(Boolean);
+  for (const cfg of configs) {
+    const rows = db.listPlayerCollectionNfts(playerId, cfg.collection) || [];
+    for (const row of rows) {
+      const collection = String(row.collection || cfg.collection || '').trim().toLowerCase();
+      const chain = String(row.chain || '').trim().toLowerCase();
+      const tokenId = String(row.tokenId ?? row.token_id ?? '').trim();
+      if (collection && chain && tokenId) keys.add(`${collection}:${chain}:${tokenId}`.toLowerCase());
+    }
+  }
+  for (const key of _custodiedMarketplaceNftKeysForSeller(playerId)) keys.delete(key);
+  return keys;
+}
+function _custodiedMarketplaceNftKeysForSeller(playerId) {
+  const keys = new Set();
+  if (!playerId) return keys;
+  let rows = [];
+  try {
+    rows = db.db.prepare(`
+      SELECT asset_chain, asset_id, asset_collection, metadata_json
+        FROM custodial_marketplace_orders
+       WHERE seller_player_id = ?
+         AND status IN ('active', 'reserved', 'paid')
+    `).all(playerId);
+  } catch {
+    return keys;
+  }
+  for (const row of rows) {
+    const chain = String(row.asset_chain || '').trim().toLowerCase();
+    const tokenId = String(row.asset_id || '').trim();
+    if (!chain || !tokenId) continue;
+    const collection = _marketplaceOrderNftCollectionKey(row);
+    if (collection) {
+      keys.add(`${collection}:${chain}:${tokenId}`.toLowerCase());
+    } else {
+      keys.add(`demon_king:${chain}:${tokenId}`.toLowerCase());
+      keys.add(`dragon:${chain}:${tokenId}`.toLowerCase());
+    }
+  }
+  return keys;
+}
+function _marketplaceOrderNftCollectionKey(order = {}) {
+  const meta = (() => {
+    try { return order.metadata_json ? JSON.parse(order.metadata_json) : {}; } catch { return {}; }
+  })();
+  const textCandidates = [
+    order.asset_collection,
+    meta.collection,
+    meta.collectionSlug,
+    meta.assetCollectionSlug,
+    meta.assetInfo?.collectionSlug,
+    meta.assetInfo?.collectionKey,
+    meta.assetInfo?.collectionName,
+    meta.assetInfo?.name,
+  ].filter(Boolean);
+  for (const candidate of textCandidates) {
+    const text = String(candidate || '').toLowerCase();
+    if (text.includes('dragon')) return 'dragon';
+    if (text.includes('demon')) return 'demon_king';
+  }
+
+  const chain = String(order.asset_chain || '').trim().toLowerCase();
+  const onChainCollection = String(order.asset_collection || meta.assetInfo?.collection || '').trim();
+  if (!chain || !onChainCollection) return null;
+  try {
+    const { deploymentOf } = require('./bridge_helpers');
+    for (const [slug, collection] of [['dragon', 'dragon'], ['demonking', 'demon_king']]) {
+      const dep = deploymentOf(chain, slug) || {};
+      const candidates = [dep.proxy, dep.nft, dep.contract, dep.collection, dep.candyMachine].filter(Boolean);
+      if (candidates.some((value) => String(value || '').toLowerCase() === onChainCollection.toLowerCase())) return collection;
+    }
+  } catch {}
+  return null;
+}
 function _loadedDemonKingTokenKeys(playerId) {
   const keys = new Set();
   const ports = db.db.prepare('SELECT ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
@@ -10900,6 +10983,21 @@ function _loadedDemonKingTokenKeys(playerId) {
       const parsed = parseDemonKingTroopEntry(troop);
       if (parsed.error) continue;
       keys.add(`${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase());
+    }
+  }
+  return keys;
+}
+function _loadedNftBackedTokenKeys(playerId) {
+  const keys = new Set();
+  const ports = db.db.prepare('SELECT ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  for (const port of ports) {
+    let troops = [];
+    try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
+    for (const troop of troops) {
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseNftBackedTroopEntry(troop);
+      if (parsed.error) continue;
+      keys.add(_nftBackedKeyFromParsed(parsed));
     }
   }
   return keys;
@@ -11006,6 +11104,67 @@ function _firstDuplicateDemonKingTokenInShipActions(actions = []) {
       const previous = seen.get(key);
       const current = { shipIndex: action.ship_index ?? action.shipIndex ?? null, troopIndex: index };
       if (previous) return { key, first: previous, duplicate: current };
+      seen.set(key, current);
+    }
+  }
+  return null;
+}
+function _firstNftBackedReplayIssue(actions = [], playerId) {
+  const activeKeys = _activeNftBackedTokenKeysForPlayer(playerId);
+  const loadedKeys = _loadedNftBackedTokenKeys(playerId);
+  const seen = new Map();
+  for (const action of Array.isArray(actions) ? actions : []) {
+    if (action?.type !== 'place_ship') continue;
+    const troops = Array.isArray(action.troops)
+      ? action.troops
+      : (action.troopType ? [action.troopType] : []);
+    for (let index = 0; index < troops.length; index++) {
+      const troop = troops[index];
+      if (_isSlotFiller(troop)) continue;
+      const cfg = _nftBackedTroopConfig(troop);
+      if (!cfg) continue;
+      const current = { shipIndex: action.ship_index ?? action.shipIndex ?? null, troopIndex: index };
+      const parsed = parseNftBackedTroopEntry(troop, cfg.troopName);
+      if (parsed.error) {
+        return {
+          type: 'invalid',
+          label: cfg.label,
+          troop,
+          current,
+          error: parsed.error,
+        };
+      }
+      const key = _nftBackedKeyFromParsed(parsed);
+      if (!activeKeys.has(key)) {
+        return {
+          type: 'not_owned',
+          label: parsed.label,
+          key,
+          chain: parsed.chainKey,
+          tokenId: parsed.tokenIdRaw,
+          current,
+        };
+      }
+      if (!loadedKeys.has(key)) {
+        return {
+          type: 'not_loaded',
+          label: parsed.label,
+          key,
+          chain: parsed.chainKey,
+          tokenId: parsed.tokenIdRaw,
+          current,
+        };
+      }
+      const previous = seen.get(key);
+      if (previous) {
+        return {
+          type: 'duplicate',
+          label: parsed.label,
+          key,
+          first: previous,
+          duplicate: current,
+        };
+      }
       seen.set(key, current);
     }
   }
@@ -11147,16 +11306,58 @@ function _shipTroopsMatch(a, b) {
   return true;
 }
 
-function _filterDisabledTroopEntries(troops) {
+function _filterUnavailableTroopEntries(troops, activeNftKeys = null, options = {}) {
   if (!Array.isArray(troops)) return [];
+  const nftKeys = activeNftKeys instanceof Set ? activeNftKeys : null;
+  const removed = Array.isArray(options.removed) ? options.removed : null;
   const out = [];
-  for (const troop of troops) {
-    if (_isSlotFiller(troop)) {
-      if (out.length > 0 && _troopSlotCost(out[out.length - 1]) > 1) out.push(troop);
+  for (let index = 0; index < troops.length; index++) {
+    const troop = troops[index];
+    if (_isSlotFiller(troop)) continue;
+
+    const skipReservedFillers = () => {
+      const slots = _troopSlotCost(troop);
+      for (let offset = 1; offset < slots && index + 1 < troops.length && _isSlotFiller(troops[index + 1]); offset++) {
+        index += 1;
+      }
+    };
+
+    if (_isDisabledTroopName(troop)) {
+      if (removed) {
+        removed.push({
+          troop: _normalizeTroopName(troop),
+          reason: 'disabled',
+        });
+      }
+      skipReservedFillers();
       continue;
     }
-    if (_isDisabledTroopName(troop)) continue;
-    out.push(troop);
+
+    const cfg = _nftBackedTroopConfig(troop);
+    if (cfg) {
+      const parsed = parseNftBackedTroopEntry(troop, cfg.troopName);
+      const key = _nftBackedKeyFromParsed(parsed);
+      if (parsed.error || (nftKeys && !nftKeys.has(key))) {
+        if (removed) {
+          removed.push({
+            troop: cfg.troopName,
+            label: cfg.label,
+            collection: parsed.collection || cfg.collection,
+            chain: parsed.chainKey || null,
+            tokenId: parsed.tokenIdRaw || null,
+            reason: parsed.error ? 'invalid_nft_entry' : 'not_owned',
+          });
+        }
+        skipReservedFillers();
+        continue;
+      }
+    }
+
+    _appendTroopSlots(out, troop);
+    const slots = _troopSlotCost(troop);
+    for (let offset = 1; offset < slots && index + 1 < troops.length && _isSlotFiller(troops[index + 1]); offset++) {
+      index += 1;
+    }
   }
   return out;
 }
@@ -11166,6 +11367,8 @@ function _sanitizeDisabledShipTroopsForPlayer(playerId) {
     'SELECT id, ship_troops, ship_troops_template FROM buildings WHERE player_id = ? AND type = ?'
   ).all(playerId, 'port');
   let changed = 0;
+  const activeNftKeys = _activeNftBackedTokenKeysForPlayer(playerId);
+  const removedNftTroops = [];
 
   for (const port of ports) {
     let current = [];
@@ -11173,8 +11376,8 @@ function _sanitizeDisabledShipTroopsForPlayer(playerId) {
     try { current = JSON.parse(port.ship_troops || '[]'); } catch { current = []; }
     try { template = JSON.parse(port.ship_troops_template || '[]'); } catch { template = []; }
 
-    const nextCurrent = _filterDisabledTroopEntries(current);
-    const nextTemplate = _filterDisabledTroopEntries(template);
+    const nextCurrent = _filterUnavailableTroopEntries(current, activeNftKeys, { removed: removedNftTroops });
+    const nextTemplate = _filterUnavailableTroopEntries(template, activeNftKeys, { removed: removedNftTroops });
     if (
       JSON.stringify(current) === JSON.stringify(nextCurrent)
       && JSON.stringify(template) === JSON.stringify(nextTemplate)
@@ -11185,6 +11388,19 @@ function _sanitizeDisabledShipTroopsForPlayer(playerId) {
     db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?')
       .run(JSON.stringify(nextCurrent), JSON.stringify(nextTemplate), port.id);
     changed += 1;
+  }
+
+  if (removedNftTroops.length > 0) {
+    const byReason = removedNftTroops.reduce((acc, item) => {
+      const key = `${item.label || item.troop || 'troop'}:${item.reason || 'removed'}`;
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    console.warn('[battle] pruned unavailable ship troops', {
+      player_id: playerId,
+      ports_changed: changed,
+      removed: byReason,
+    });
   }
 
   return changed;
@@ -11360,13 +11576,33 @@ router.post('/attack/result', auth, (req, res) => {
       return res.status(403).json({ error: 'Too many ships in replay' });
     }
   }
-  const duplicateReplayDemonKing = _firstDuplicateDemonKingTokenInShipActions(gameActions);
-  if (duplicateReplayDemonKing) {
+  _sanitizeDisabledShipTroopsForPlayer(req.player.id);
+  const nftReplayIssue = _firstNftBackedReplayIssue(gameActions, req.player.id);
+  if (nftReplayIssue) {
     releaseBattleSession('cancelled');
-    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'Duplicate Demon King NFT in replay', null, null);
+    const label = nftReplayIssue.label || 'NFT troop';
+    const reason = nftReplayIssue.type === 'duplicate'
+      ? `Duplicate ${label} NFT in replay`
+      : nftReplayIssue.type === 'not_owned'
+        ? `${label} NFT is not owned by the attacker`
+        : nftReplayIssue.type === 'not_loaded'
+          ? `${label} NFT is not loaded on attacker ships`
+          : `${label} NFT replay entry is invalid`;
+    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', reason, null, null);
     return res.status(403).json({
-      error: 'Each Demon King NFT can only be deployed once per battle',
-      code: 'DEMON_KING_NFT_DUPLICATE_REPLAY',
+      error: nftReplayIssue.type === 'duplicate'
+        ? `Each ${label} NFT can only be deployed once per battle`
+        : nftReplayIssue.type === 'not_loaded'
+          ? `This ${label} is not loaded on your ships. Refresh your fleet and try again.`
+        : `This ${label} is no longer available on your account. Refresh your fleet and try again.`,
+      code: nftReplayIssue.type === 'duplicate'
+        ? 'NFT_TROOP_DUPLICATE_REPLAY'
+        : nftReplayIssue.type === 'not_loaded'
+          ? 'NFT_TROOP_NOT_LOADED_REPLAY'
+          : 'NFT_TROOP_NOT_OWNED_REPLAY',
+      troop: label,
+      chain: nftReplayIssue.chain || null,
+      tokenId: nftReplayIssue.tokenId || null,
     });
   }
 

@@ -9,6 +9,7 @@ const {
   buildSolanaBridgeMemo,
   deploymentOf,
   getSolanaBridgeAssetInfo,
+  normalizeBridgeCollectionSlug,
   normalizeAptosAddress,
   parseSolanaSecretKey,
   solanaConnection,
@@ -147,6 +148,102 @@ function mergeCachedNftLevel(assetInfo, cached) {
     level: cachedLevel,
     cachedLevelSource: 'player_nfts',
   };
+}
+
+function marketplaceCollectionDbKey(order = {}) {
+  const chain = String(order.asset_chain || '').toLowerCase();
+  const meta = safeJsonParse(order.metadata_json, {});
+  const textCandidates = [
+    order.collection,
+    order.collection_slug,
+    order.collectionSlug,
+    order.asset_collection_slug,
+    meta.collection,
+    meta.collectionSlug,
+    meta.assetCollectionSlug,
+    meta.assetInfo?.collectionSlug,
+    meta.assetInfo?.collectionKey,
+    meta.assetInfo?.collectionName,
+    meta.assetInfo?.name,
+  ].filter(Boolean);
+  for (const candidate of textCandidates) {
+    const text = String(candidate || '').toLowerCase();
+    if (text.includes('dragon')) return 'dragon';
+    const slug = normalizeBridgeCollectionSlug(candidate);
+    if (slug === 'dragon') return 'dragon';
+    if (slug === 'demonking') return 'demon_king';
+  }
+
+  const onChainCollection = String(order.asset_collection || meta.assetInfo?.collection || '').trim();
+  if (onChainCollection && chain) {
+    for (const slug of ['dragon', 'demonking']) {
+      const dep = deploymentOf(chain, slug) || {};
+      const candidates = [
+        dep.proxy,
+        dep.nft,
+        dep.contract,
+        dep.collection,
+        dep.candyMachine,
+      ].filter(Boolean);
+      if (candidates.some((value) => sameChainAddress(chain, value, onChainCollection))) {
+        return slug === 'dragon' ? 'dragon' : 'demon_king';
+      }
+    }
+  }
+
+  return 'demon_king';
+}
+
+function marketplaceAssetImageUrl(order = {}) {
+  const meta = safeJsonParse(order.metadata_json, {});
+  return meta.assetInfo?.imageUrl || meta.assetInfo?.image || meta.imageUrl || null;
+}
+
+function deactivateMarketplaceAssetFromPlayerInventory(order = {}) {
+  const collection = marketplaceCollectionDbKey(order);
+  const chain = String(order.asset_chain || '').toLowerCase();
+  const tokenId = String(order.asset_id || '').trim();
+  if (!collection || !chain || !tokenId) return 0;
+  const info = gameDb.db.prepare(`
+    UPDATE player_nfts
+       SET active = 0,
+           updated_at = datetime('now')
+     WHERE collection = ?
+       AND chain = ?
+       AND token_id = ?
+       AND active = 1
+  `).run(collection, chain, tokenId);
+  return Number(info?.changes || 0);
+}
+
+function bindMarketplaceAssetToPlayer(order = {}, playerId, wallet, source, txHash = null, ref = {}) {
+  const owner = String(wallet || '').trim();
+  const id = String(playerId || '').trim();
+  const chain = String(ref.chain || order.asset_chain || '').toLowerCase();
+  const tokenId = String(ref.tokenId || order.asset_id || '').trim();
+  if (!id || !owner || !chain || !tokenId) return null;
+  const collection = marketplaceCollectionDbKey(order);
+  try {
+    return gameDb.bindPlayerCollectionNft(id, collection, owner, {
+      chain,
+      tokenId,
+      level: Number(order.level || 1),
+      imageUrl: marketplaceAssetImageUrl(order),
+    }, {
+      source,
+      txHash,
+    });
+  } catch (err) {
+    console.warn('[custodial-marketplace] failed to bind delivered NFT inventory', {
+      order_id: order.id,
+      player_id: id,
+      collection,
+      chain,
+      token_id: tokenId,
+      error: err?.message || String(err),
+    });
+    return null;
+  }
 }
 
 function normalizeAssetIdForChain(chain, value, label = 'assetId') {
@@ -495,7 +592,19 @@ function markOrderDepositVerified(order, { actorPlayerId = null, txHash = null, 
              updated_at = datetime('now')
        WHERE id = ? AND status = 'awaiting_deposit'
     `).run(txHash, order.id);
+    const deactivated = deactivateMarketplaceAssetFromPlayerInventory(order);
     insertEvent(order.id, eventType, { actorPlayerId, txHash, data: { vault: order.vault_address } });
+    if (deactivated > 0) {
+      insertEvent(order.id, 'inventory_deactivated_for_listing', {
+        actorPlayerId,
+        data: {
+          collection: marketplaceCollectionDbKey(order),
+          chain: order.asset_chain,
+          assetId: order.asset_id,
+          rows: deactivated,
+        },
+      });
+    }
   })();
   return getOrder(order.id);
 }
@@ -571,6 +680,12 @@ function recoverCustodiedListing(order, {
       JSON.stringify(metadata || {}),
       order.id,
     );
+    const inventoryOrder = {
+      ...order,
+      asset_collection: assetInfo.collection || order.asset_collection,
+      metadata_json: JSON.stringify(metadata || {}),
+    };
+    const deactivated = deactivateMarketplaceAssetFromPlayerInventory(inventoryOrder);
     insertEvent(order.id, 'listing_recovered_from_cancelled_deposit', {
       actorPlayerId,
       data: {
@@ -581,6 +696,17 @@ function recoverCustodiedListing(order, {
         vault: vault.address,
       },
     });
+    if (deactivated > 0) {
+      insertEvent(order.id, 'inventory_deactivated_for_listing', {
+        actorPlayerId,
+        data: {
+          collection: marketplaceCollectionDbKey(inventoryOrder),
+          chain: order.asset_chain,
+          assetId: order.asset_id,
+          rows: deactivated,
+        },
+      });
+    }
   })();
   return getOrder(order.id);
 }
@@ -1840,12 +1966,13 @@ async function maybeAutoDeliver(order, ctx, actorPlayerId) {
   const destChain = String(fresh.buyer_dest_chain || sourceChain).toLowerCase();
   let txHash;
   let mode;
+  let bridged = null;
   if (sourceChain === destChain) {
     txHash = await transferAssetSameChain(fresh, fresh.buyer_dest_address, ctx);
     mode = `auto_${sourceChain}_transfer`;
   } else {
     if (process.env.CUSTODIAL_MARKETPLACE_AUTO_BRIDGE === '0') return fresh;
-    const bridged = await bridgeAssetToDestination(fresh, ctx);
+    bridged = await bridgeAssetToDestination(fresh, ctx);
     txHash = bridged.deliveryTxHash;
     mode = `auto_bridge_${sourceChain}_to_${destChain}`;
   }
@@ -1861,6 +1988,27 @@ async function maybeAutoDeliver(order, ctx, actorPlayerId) {
   insertEvent(fresh.id, 'delivered', { actorPlayerId, txHash, data: { mode, sourceChain, destChain } });
   const afterDelivery = getOrder(fresh.id);
   rememberBuyerDeliveryWallet(afterDelivery);
+  const deliveryAsset = deliveryAssetFromBridge(afterDelivery);
+  const deliveryTokenId = sourceChain === destChain
+    ? afterDelivery.asset_id
+    : (
+        bridged?.relay?.assetAddress
+        || bridged?.relay?.tokenAddress
+        || bridged?.relay?.tokenId
+        || deliveryAsset?.assetId
+        || null
+      );
+  bindMarketplaceAssetToPlayer(
+    afterDelivery,
+    afterDelivery.buyer_player_id,
+    afterDelivery.buyer_dest_address,
+    'marketplace-delivery',
+    txHash,
+    {
+      chain: destChain,
+      tokenId: deliveryTokenId,
+    },
+  );
   if (ctx.config?.autoPayoutEnabled) {
     const payout = await maybeAutoPayoutBestEffort(afterDelivery, ctx, actorPlayerId);
     return payout.order;
@@ -2489,7 +2637,16 @@ function mountCustodialMarketplace(router, ctx = {}) {
       }
       assetInfo = mergeCachedNftLevel(
         assetInfo,
-        cachedPlayerNft(req.player.id, 'demon_king', assetChain, assetInfo?.asset || assetId),
+        cachedPlayerNft(
+          req.player.id,
+          marketplaceCollectionDbKey({
+            asset_chain: assetChain,
+            asset_collection: assetInfo?.collection || null,
+            metadata_json: JSON.stringify({ assetInfo }),
+          }),
+          assetChain,
+          assetInfo?.asset || assetId,
+        ),
       );
       const id = crypto.randomUUID();
       const metadata = { assetInfo, createdIp: req.ip || null, note: String(req.body?.note || '').slice(0, 200) };
@@ -2588,6 +2745,8 @@ function mountCustodialMarketplace(router, ctx = {}) {
         `).run(txHash, order.id);
         insertEvent(order.id, 'cancelled_returned', { actorPlayerId: req.player.id, txHash });
       })();
+      const returnedOrder = getOrder(order.id);
+      bindMarketplaceAssetToPlayer(returnedOrder, returnedOrder.seller_player_id, returnedOrder.seller_wallet, 'marketplace-cancel-return', txHash);
       res.json({ success: true, order: publicOrder(getOrder(order.id), { includePrivate: true }) });
     } catch (err) {
       res.status(err?.status || 500).json({ error: (err?.message || 'cancel failed').slice(0, 240) });
