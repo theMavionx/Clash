@@ -39,6 +39,86 @@ function envFirst(env, keys) {
   return '';
 }
 
+function splitRpcUrls(value) {
+  return String(value || '')
+    .split(/[,\s]+/)
+    .map((url) => url.trim())
+    .filter(Boolean);
+}
+
+function publicOrigin(env) {
+  return String(
+    env.CLASH_PUBLIC_ORIGIN
+    || env.PUBLIC_ORIGIN
+    || env.PUBLIC_URL
+    || env.APP_PUBLIC_URL
+    || 'https://clashofperps.fun',
+  ).replace(/\/+$/, '');
+}
+
+function normalizeRpcUrl(env, value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) return `${publicOrigin(env)}${raw}`;
+  return '';
+}
+
+function maskRpcUrl(url) {
+  return String(url || '')
+    .replace(/(api-key=)[^&]+/ig, '$1***')
+    .replace(/(\/v2\/)[^/?#]+/ig, '$1***')
+    .replace(/([?&](?:key|token)=)[^&]+/ig, '$1***');
+}
+
+function solanaRpcCandidates(env, deployment) {
+  const alchemyKey = env.SOLANA_ALCHEMY_API_KEY
+    || env.ALCHEMY_SOLANA_API_KEY
+    || env.VITE_SOLANA_ALCHEMY_API_KEY
+    || env.VITE_ALCHEMY_SOLANA_API_KEY;
+  const heliusKey = env.SOLANA_HELIUS_API_KEY
+    || env.HELIUS_API_KEY
+    || env.NFT_SOLANA_HELIUS_API_KEY
+    || env.VITE_HELIUS_API_KEY
+    || env.VITE_SOLANA_HELIUS_API_KEY;
+  const candidates = [
+    ...splitRpcUrls(env.NFT_SOLANA_RPC_URLS),
+    ...splitRpcUrls(env.SOLANA_RPC_URLS),
+    env.NFT_SOLANA_RPC_URL,
+    env.SOLANA_RPC_URL,
+    env.VITE_SOLANA_RPC_URL,
+    alchemyKey ? `https://solana-mainnet.g.alchemy.com/v2/${encodeURIComponent(alchemyKey)}` : '',
+    heliusKey ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusKey)}` : '',
+    '/rpc/solana-alchemy',
+    '/rpc/solana',
+    deployment.rpcUrl,
+    'https://solana-rpc.publicnode.com',
+    'https://api.mainnet-beta.solana.com',
+  ].map((url) => normalizeRpcUrl(env, url));
+  const seen = new Set();
+  return candidates.filter((url) => {
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+}
+
+async function selectSolanaPaymentSyncRpc(env, deployment, mint, fallbackDecimals) {
+  const candidates = solanaRpcCandidates(env, deployment);
+  let lastError = null;
+  for (const rpcUrl of candidates) {
+    const connection = new Connection(rpcUrl, 'confirmed');
+    try {
+      const mintInfo = await solanaTokenProgramAndDecimals(connection, mint, fallbackDecimals);
+      return { rpcUrl, connection, ...mintInfo };
+    } catch (err) {
+      lastError = err;
+      console.warn(`[solana-payment-sync] RPC failed ${maskRpcUrl(rpcUrl)}: ${err?.message || err}`);
+    }
+  }
+  throw lastError || new Error('No Solana RPC candidate is available');
+}
+
 function bpsDifference(oldValue, newValue) {
   const oldUnits = BigInt(oldValue || '0');
   const newUnits = BigInt(newValue || '0');
@@ -148,8 +228,6 @@ async function main() {
   const group = deployment.paymentGroups?.[paymentLabel] || deployment.groups?.[paymentLabel] || null;
   if (!group) throw new Error(`Missing ${paymentLabel} payment group in ${deploymentFile}`);
 
-  const rpcUrl = env.NFT_SOLANA_RPC_URL || env.SOLANA_RPC_URL || env.VITE_SOLANA_RPC_URL || deployment.rpcUrl || 'https://solana-rpc.publicnode.com';
-  const connection = new Connection(rpcUrl, 'confirmed');
   const mint = new PublicKey(group.mint);
   const targetUsd = argValue('usd-price')
     || envFirst(env, [
@@ -161,7 +239,12 @@ async function main() {
     || deployment.usdPrice
     || '10';
   const fallbackDecimals = Number(group.decimals || env[`${solanaPrefix}_${paymentKey}_DECIMALS`] || env.NFT_SOLANA_SPL_DECIMALS || 6);
-  const { tokenProgram, decimals } = await solanaTokenProgramAndDecimals(connection, mint, fallbackDecimals);
+  const {
+    rpcUrl,
+    connection,
+    tokenProgram,
+    decimals,
+  } = await selectSolanaPaymentSyncRpc(env, deployment, mint, fallbackDecimals);
   const price = await fetchSolanaTokenUsdPrice(env, mint.toBase58(), paymentLabel);
   const nextUnits = usdToNativeUnits(targetUsd, price.priceUsd, decimals);
   const nextAmount = nextUnits.toString();
@@ -177,6 +260,7 @@ async function main() {
       targetUsd,
       priceUsd: price.priceUsd,
       source: price.source,
+      rpcUrl: maskRpcUrl(rpcUrl),
       oldAmountUi: group.amountUi || unitsToDecimalString(BigInt(group.amount || '0'), Number(group.decimals || decimals)),
       nextAmountUi,
       changeBps,
@@ -224,6 +308,7 @@ async function main() {
       targetUsd,
       priceUsd: price.priceUsd,
       source: price.source,
+      rpcUrl: maskRpcUrl(rpcUrl),
       oldAmountUi: group.amountUi || unitsToDecimalString(BigInt(group.amount || '0'), Number(group.decimals || decimals)),
       nextAmountUi,
       changeBps,
@@ -253,6 +338,7 @@ async function main() {
     targetUsd,
     priceUsd: price.priceUsd,
     source: price.source,
+    rpcUrl: maskRpcUrl(rpcUrl),
     oldAmountUi: group.amountUi || unitsToDecimalString(BigInt(group.amount || '0'), Number(group.decimals || decimals)),
     nextAmountUi,
     changeBps,
