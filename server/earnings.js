@@ -180,6 +180,43 @@ function unitsToUsd(raw, decimals = 6) {
   }
 }
 
+function normalizeServerRpcUrl(value, fallbackOrigin = null) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) {
+    const origin = String(
+      fallbackOrigin
+      || process.env.EARNINGS_RPC_ORIGIN
+      || process.env.CLASH_PUBLIC_ORIGIN
+      || process.env.PUBLIC_ORIGIN
+      || process.env.PUBLIC_URL
+      || 'https://clashofperps.fun',
+    ).replace(/\/+$/u, '');
+    return `${origin}${raw}`;
+  }
+  return '';
+}
+
+function splitRpcList(value) {
+  return String(value || '')
+    .split(/[,\s]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function rpcCandidates(...values) {
+  const seen = new Set();
+  const urls = [];
+  for (const value of values.flatMap((item) => Array.isArray(item) ? item : [item])) {
+    const url = normalizeServerRpcUrl(value);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    urls.push(url);
+  }
+  return urls;
+}
+
 // ── Avantis (Base) ────────────────────────────────────────────────────────
 // Avantis publishes neither a per-referrer earnings endpoint nor a public
 // pendingRewards view. So we compute earnings the same way Avantis does
@@ -204,7 +241,7 @@ function loadSqlite() {
   return _BetterSQLite3;
 }
 
-const BASE_RPC = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+const BASE_RPC = rpcCandidates(process.env.BASE_RPC_URL, 'https://mainnet.base.org')[0];
 const AVANTIS_REFERRAL = '0x1A110bBA13A1f16cCa4b79758BD39290f29De82D';
 const AVANTIS_CODE_BYTES32 =
   '0x' + Buffer.from('clashofperps', 'utf8').toString('hex').padEnd(64, '0');
@@ -285,7 +322,7 @@ async function fetchAvantisEarnings() {
 // rejected binds happen). Using local volume × on-chain rate gives a
 // closer read on what we COULD earn on this volume; the subgraph remained
 // stuck at 0 even with thousands in volume.
-const ARBITRUM_RPC = process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc';
+const ARBITRUM_RPC = rpcCandidates(process.env.ARBITRUM_RPC_URL, 'https://arb1.arbitrum.io/rpc')[0];
 const GMX_REFERRAL_STORAGE = '0xe6fab3F0c7199b0d34d7FbE83394fc0e0D06e99d';
 const GMX_AFFILIATE = (process.env.GMX_AFFILIATE_ADDR ||
   '0x412A02Ba415e5969596E6f0A35f9439760a3468F').toLowerCase();
@@ -402,12 +439,20 @@ async function fetchGmxEarnings() {
 async function fetchOstiumEarnings() {
   const local = readVerifiedFuturesDexStats('ostium', 'ostium_api');
   const estimated = local.volume_usd * (Math.max(0, OSTIUM_BUILDER_FEE_BPS) / 10000);
-  const rpcUrl = process.env.OSTIUM_ARBITRUM_RPC_URL
-    || process.env.ARBITRUM_RPC_URL
-    || process.env.ARB_RPC_URL
-    || process.env.VITE_OSTIUM_ARBITRUM_RPC_URL
-    || process.env.VITE_ARBITRUM_RPC_URL
-    || ARBITRUM_RPC;
+  const rpcUrls = rpcCandidates(
+    splitRpcList(process.env.OSTIUM_ARBITRUM_RPC_URLS),
+    splitRpcList(process.env.ARBITRUM_RPC_URLS),
+    process.env.OSTIUM_ARBITRUM_RPC_URL,
+    process.env.ARBITRUM_RPC_URL,
+    process.env.ARB_RPC_URL,
+    process.env.VITE_OSTIUM_ARBITRUM_RPC_URL,
+    process.env.VITE_ARBITRUM_RPC_URL,
+    '/rpc/arb-alchemy',
+    ARBITRUM_RPC,
+    'https://arb1.arbitrum.io/rpc',
+    'https://arbitrum-one.publicnode.com',
+    'https://arbitrum.llamarpc.com',
+  );
   if (!/^0x[0-9a-fA-F]{40}$/u.test(OSTIUM_BUILDER_ADDRESS)) {
     return {
       ...local,
@@ -423,38 +468,49 @@ async function fetchOstiumEarnings() {
     };
   }
 
-  const latestHex = await ethRpc(rpcUrl, 'eth_blockNumber');
-  const latestBlock = Number(BigInt(latestHex || '0x0'));
-  const [nativeBalance, legacyBalance, nativeIncoming, legacyIncoming] = await Promise.all([
-    readErc20Balance(rpcUrl, ARBITRUM_NATIVE_USDC, OSTIUM_BUILDER_ADDRESS, 6),
-    readErc20Balance(rpcUrl, ARBITRUM_LEGACY_USDCE, OSTIUM_BUILDER_ADDRESS, 6),
-    sumIncomingErc20Transfers(rpcUrl, ARBITRUM_NATIVE_USDC, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6),
-    sumIncomingErc20Transfers(rpcUrl, ARBITRUM_LEGACY_USDCE, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6),
-  ]);
-  const onchainBalance = nativeBalance + legacyBalance;
-  const incomingAmount = nativeIncoming.amount + legacyIncoming.amount;
-  const incomingTransfers = nativeIncoming.transfers + legacyIncoming.transfers;
-  return {
-    ...local,
-    earned_usd: roundUsd(onchainBalance),
-    earned_24h_usd: 0,
-    currency: 'USDC (Arbitrum)',
-    address: OSTIUM_BUILDER_ADDRESS,
-    chain_id: 42161,
-    onchain_usdc_balance: roundUsd(nativeBalance),
-    onchain_usdce_balance: roundUsd(legacyBalance),
-    onchain_total_balance_usd: roundUsd(onchainBalance),
-    onchain_incoming_usd: nativeIncoming.enabled || legacyIncoming.enabled ? roundUsd(incomingAmount) : null,
-    onchain_incoming_transfers: nativeIncoming.enabled || legacyIncoming.enabled ? incomingTransfers : null,
-    onchain_from_block: OSTIUM_EARNINGS_FROM_BLOCK || null,
-    onchain_latest_block: latestBlock,
-    estimated_fee_usd: roundUsd(estimated),
-    builder_fee_bps: OSTIUM_BUILDER_FEE_BPS,
-    builder_fee_pct: OSTIUM_BUILDER_FEE_BPS / 100,
-    model: 'ostium_onchain_usdc_balance',
-    source_detail: 'arbitrum_usdc_balance_of_builder',
-    note: `Exact on-chain current USDC + USDC.e balance of the Ostium builder address. Local ${OSTIUM_BUILDER_FEE_BPS}bps estimate from imported Ostium fills is shown only for comparison and is not counted as earned. Set OSTIUM_EARNINGS_FROM_BLOCK to also scan incoming Transfer logs.`,
-  };
+  let lastError = null;
+  for (const rpcUrl of rpcUrls) {
+    try {
+      const latestHex = await ethRpc(rpcUrl, 'eth_blockNumber');
+      const latestBlock = Number(BigInt(latestHex || '0x0'));
+      const [nativeBalance, legacyBalance, nativeIncoming, legacyIncoming] = await Promise.all([
+        readErc20Balance(rpcUrl, ARBITRUM_NATIVE_USDC, OSTIUM_BUILDER_ADDRESS, 6),
+        readErc20Balance(rpcUrl, ARBITRUM_LEGACY_USDCE, OSTIUM_BUILDER_ADDRESS, 6),
+        sumIncomingErc20Transfers(rpcUrl, ARBITRUM_NATIVE_USDC, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6),
+        sumIncomingErc20Transfers(rpcUrl, ARBITRUM_LEGACY_USDCE, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6),
+      ]);
+      const onchainBalance = nativeBalance + legacyBalance;
+      const incomingAmount = nativeIncoming.amount + legacyIncoming.amount;
+      const incomingTransfers = nativeIncoming.transfers + legacyIncoming.transfers;
+      return {
+        ...local,
+        earned_usd: roundUsd(onchainBalance),
+        earned_24h_usd: 0,
+        currency: 'USDC (Arbitrum)',
+        address: OSTIUM_BUILDER_ADDRESS,
+        chain_id: 42161,
+        onchain_usdc_balance: roundUsd(nativeBalance),
+        onchain_usdce_balance: roundUsd(legacyBalance),
+        onchain_total_balance_usd: roundUsd(onchainBalance),
+        onchain_incoming_usd: nativeIncoming.enabled || legacyIncoming.enabled ? roundUsd(incomingAmount) : null,
+        onchain_incoming_transfers: nativeIncoming.enabled || legacyIncoming.enabled ? incomingTransfers : null,
+        onchain_from_block: OSTIUM_EARNINGS_FROM_BLOCK || null,
+        onchain_latest_block: latestBlock,
+        rpc_url: rpcUrl.replace(/([?&](?:api[_-]?key|key|token)=)[^&]+/ig, '$1***'),
+        rpc_fallbacks: rpcUrls.length,
+        estimated_fee_usd: roundUsd(estimated),
+        builder_fee_bps: OSTIUM_BUILDER_FEE_BPS,
+        builder_fee_pct: OSTIUM_BUILDER_FEE_BPS / 100,
+        model: 'ostium_onchain_usdc_balance',
+        source_detail: 'arbitrum_usdc_balance_of_builder',
+        note: `Exact on-chain current USDC + USDC.e balance of the Ostium builder address. Local ${OSTIUM_BUILDER_FEE_BPS}bps estimate from imported Ostium fills is shown only for comparison and is not counted as earned. Set OSTIUM_EARNINGS_FROM_BLOCK to also scan incoming Transfer logs.`,
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error('No Ostium Arbitrum RPC configured');
 }
 
 // Fallback matches the deploy.sh default (1 bps = 0.01%). Production

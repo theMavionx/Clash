@@ -1676,6 +1676,11 @@ restart_services() {
     if [ "${payment_sync_enabled:-1}" != "0" ] \
         && [ -n "$payment_sync_key" ] \
         && [ -f "$CURRENT_LINK/nft/scripts/watch-solana-payments.mjs" ]; then
+        log "Running Solana payment sync once before starting watcher..."
+        env HOME=/root \
+            NFT_SOLANA_PAYMENT_SYNC_RUN_ONCE=1 \
+            node --env-file="$ENV_FILE" "$CURRENT_LINK/nft/scripts/watch-solana-payments.mjs" \
+            || log "WARNING: one-shot Solana payment sync failed; watcher will still be started."
         pm2_root start node \
             --name clash-solana-payment-sync \
             --cwd "$CURRENT_LINK/nft" \
