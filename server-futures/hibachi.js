@@ -290,8 +290,19 @@ function positionNotional(position = {}) {
   );
 }
 
-function positionEntryPrice(position = {}) {
+function positionEntryNotional(position = {}) {
   return num(
+    position.entryNotional
+      ?? position.entry_notional
+      ?? position.openNotional
+      ?? position.open_notional
+      ?? position.initialNotional
+      ?? position.initial_notional,
+  );
+}
+
+function positionEntryPrice(position = {}) {
+  const explicit = num(
     position.openPrice
       ?? position.open_price
       ?? position.entryPrice
@@ -301,10 +312,14 @@ function positionEntryPrice(position = {}) {
       ?? position.avgEntryPrice
       ?? position.avg_entry_price,
   );
+  if (explicit > 0) return explicit;
+  const entryNotional = positionEntryNotional(position);
+  const amount = positionQuantity(position);
+  return entryNotional > 0 && amount > 0 ? entryNotional / amount : 0;
 }
 
 function positionMarkPrice(position = {}) {
-  return num(
+  const explicit = num(
     position.markPrice
       ?? position.mark_price
       ?? position.marketPrice
@@ -314,6 +329,10 @@ function positionMarkPrice(position = {}) {
       ?? position.indexPrice
       ?? position.index_price,
   );
+  if (explicit > 0) return explicit;
+  const notional = positionNotional(position);
+  const amount = positionQuantity(position);
+  return notional > 0 && amount > 0 ? notional / amount : 0;
 }
 
 function explicitPositionPnl(position = {}) {
@@ -335,6 +354,12 @@ function explicitPositionPnl(position = {}) {
 }
 
 function derivedPositionPnl(position = {}, amount = positionQuantity(position), side = positionSide(position)) {
+  const notional = positionNotional(position);
+  const entryNotional = positionEntryNotional(position);
+  if (notional > 0 && entryNotional > 0) {
+    const direction = side === 'ask' ? -1 : 1;
+    return (notional - entryNotional) * direction;
+  }
   const entry = positionEntryPrice(position);
   const mark = positionMarkPrice(position);
   if (!(entry > 0) || !(mark > 0) || !(amount > 0)) return null;
@@ -345,7 +370,7 @@ function derivedPositionPnl(position = {}, amount = positionQuantity(position), 
 function positionPnl(position = {}, amount = positionQuantity(position), side = positionSide(position)) {
   const explicit = explicitPositionPnl(position);
   const derived = derivedPositionPnl(position, amount, side);
-  if (derived != null && (explicit == null || Math.abs(explicit) < 1e-12)) return derived;
+  if (derived != null && (explicit == null || (Math.abs(explicit) < 0.005 && Math.abs(derived) >= 0.005))) return derived;
   return explicit ?? derived ?? 0;
 }
 
