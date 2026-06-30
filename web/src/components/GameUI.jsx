@@ -36,12 +36,50 @@ const FuturesPanel = lazy(lazyWithClientReload(() => import('./FuturesPanel'), '
 const ProfileModal = lazy(lazyWithClientReload(() => import('./ProfileModal'), 'ProfileModal'));
 const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'), 'BattleLogPanel'));
 const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
-const MM_BOTS_BUTTON_ENABLED = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_MM_BOTS_BUTTON_ENABLED || ''));
-const BotsPanel = MM_BOTS_BUTTON_ENABLED
+const MM_BOTS_BUTTON_CONFIGURED = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_MM_BOTS_BUTTON_ENABLED || ''));
+const MM_BOTS_BUTTON_ALLOW_ALL = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_MM_BOTS_BUTTON_ALLOW_ALL || ''));
+
+function parseMmBotsWhitelistEnv(...values) {
+  const out = new Set();
+  for (const value of values) {
+    String(value || '')
+      .split(/[,;\n\r]+/)
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean)
+      .forEach((part) => out.add(part));
+  }
+  return out;
+}
+
+const MM_BOTS_BUTTON_WHITELIST = parseMmBotsWhitelistEnv(
+  import.meta.env.VITE_MM_BOTS_BUTTON_WHITELIST,
+  import.meta.env.VITE_MM_BOTS_BUTTON_WHITELIST_NAMES,
+  import.meta.env.VITE_MM_BOTS_BUTTON_WHITELIST_WALLETS,
+  import.meta.env.VITE_MM_BOTS_WHITELIST,
+  import.meta.env.VITE_MM_BOT_WHITELIST,
+);
+const MM_BOTS_BUTTON_MAY_RENDER = MM_BOTS_BUTTON_CONFIGURED
+  || MM_BOTS_BUTTON_ALLOW_ALL
+  || MM_BOTS_BUTTON_WHITELIST.size > 0;
+const BotsPanel = MM_BOTS_BUTTON_MAY_RENDER
   ? lazy(lazyWithClientReload(() => import('./BotsPanel'), 'BotsPanel'))
   : null;
 
 const LOCAL_GUEST_DEFAULT_DEX = 'pacifica';
+
+function playerCanUseMmBots(player) {
+  if (!MM_BOTS_BUTTON_MAY_RENDER) return false;
+  if (MM_BOTS_BUTTON_ALLOW_ALL) return true;
+  if (MM_BOTS_BUTTON_WHITELIST.size === 0) return false;
+  const candidates = [
+    player?.name,
+    player?.player_name,
+    player?.username,
+    player?.display_name,
+    player?.wallet,
+  ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+  return candidates.some((value) => MM_BOTS_BUTTON_WHITELIST.has(value));
+}
 
 function isLocalBrowserHost() {
   if (typeof window === 'undefined') return false;
@@ -138,6 +176,7 @@ export default function GameUI() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showBots, setShowBots] = useState(false);
   const [showVenuePicker, setShowVenuePicker] = useState(false);
+  const canUseMmBots = playerCanUseMmBots(player);
 
   useEffect(() => {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
@@ -213,6 +252,10 @@ export default function GameUI() {
   }, [selectedBuilding]);
 
   useEffect(() => {
+    if (!canUseMmBots && showBots) setShowBots(false);
+  }, [canUseMmBots, showBots]);
+
+  useEffect(() => {
     if (!ready) return;
     sendToGodot('set_sound_enabled', { enabled: readSoundEnabled() });
   }, [ready, sendToGodot]);
@@ -261,7 +304,7 @@ export default function GameUI() {
 
   // Pause island when heavy overlay panels are open (futures, shop, barn, profile).
   const barnOpen = showTroops;
-  const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard || (MM_BOTS_BUTTON_ENABLED && showBots));
+  const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard || (canUseMmBots && showBots));
   const showFloatingUtilities = !enemyMode?.active && !anyPanelOpen;
   useEffect(() => {
     sendToGodot('ui_overlay', { active: anyPanelOpen });
@@ -374,7 +417,7 @@ export default function GameUI() {
       )}
       <ActionButtons
         onOpenBattleLog={() => setShowBattleLog(true)}
-        onOpenBots={MM_BOTS_BUTTON_ENABLED ? () => setShowBots(true) : null}
+        onOpenBots={canUseMmBots ? () => setShowBots(true) : null}
       />
       <ErrorToast message={error} />
       <FpsTracker />
@@ -409,7 +452,7 @@ export default function GameUI() {
             <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
           )}
 
-          {MM_BOTS_BUTTON_ENABLED && BotsPanel && showBots && (
+          {canUseMmBots && BotsPanel && showBots && (
             <BotsPanel onClose={() => setShowBots(false)} />
           )}
 

@@ -87,6 +87,33 @@ function rows(payload) {
   return [];
 }
 
+function flashSessionLabel(session) {
+  const text = String(session || '').trim();
+  if (!text) return 'unknown session';
+  return text.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+}
+
+function flashSessionAllowsTrade(session) {
+  const key = String(session || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (!key) return true;
+  return key === 'regular' || key === 'open' || key === 'active';
+}
+
+function flashMarketUnavailableMessage(symbol, market = {}) {
+  const marketSession = market.market_session || market.marketSession || market.session || '';
+  if (market.trade_init_allowed === false || market.tradeInitAllowed === false) {
+    return `${normalizeSymbol(symbol)} is not accepting new Flash positions right now.`;
+  }
+  return `${normalizeSymbol(symbol)} is not open for Flash trading right now (${flashSessionLabel(market.market_status || marketSession)}).`;
+}
+
+function flashMarketCanOpen(market = {}) {
+  if (!market || typeof market !== 'object') return true;
+  if (market.is_market_open === false || market.isMarketOpen === false) return false;
+  if (market.trade_init_allowed === false || market.tradeInitAllowed === false) return false;
+  return flashSessionAllowsTrade(market.market_session || market.marketSession || market.session || '');
+}
+
 function solanaAddress(wallet) {
   return wallet?.publicKey?.toBase58?.() || '';
 }
@@ -905,6 +932,9 @@ function flashUserError(error) {
   }
   if (/insufficient|custom program error:\s*0x1/i.test(message)) {
     return 'Insufficient USDC/SOL for the Flash trade or transaction fees.';
+  }
+  if (/6022|MaxInitLeverage|initial leverage/i.test(message)) {
+    return 'Flash rejected this order because leverage is above the market initial leverage cap. Lower leverage and retry.';
   }
   return message || 'Flash order failed';
 }
@@ -1987,6 +2017,15 @@ export function useFlash() {
     const leverage = Number(lev || 1);
     const amount = Number(options?.collateral_delta_usd ?? options?.collateralDeltaUsd ?? qty ?? 0);
     if (!Number.isFinite(amount) || amount <= 0) return { error: 'Enter a Flash collateral amount before placing the order' };
+    const wantedSymbol = normalizeSymbol(symbol);
+    const market = markets.find(row => normalizeSymbol(row?.symbol) === wantedSymbol);
+    if (market && !flashMarketCanOpen(market)) {
+      return { error: flashMarketUnavailableMessage(wantedSymbol, market) };
+    }
+    const maxInitialLeverage = Number(market?.max_initial_leverage || market?.maxInitialLeverage || market?.max_leverage || market?.maxLeverage || 0);
+    if (Number.isFinite(maxInitialLeverage) && maxInitialLeverage > 0 && leverage > maxInitialLeverage + 1e-9) {
+      return { error: `${wantedSymbol} max initial leverage on Flash is ${maxInitialLeverage}x. Lower leverage and retry.` };
+    }
     setActionLoading(true);
     try {
       const { params: sessionParams, session: oneTapSession } = await oneTapTradeParams();
@@ -2041,7 +2080,7 @@ export function useFlash() {
     } finally {
       setActionLoading(false);
     }
-  }, [ensureFlashBasketDelegated, oneTapTradeParams, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [ensureFlashBasketDelegated, markets, oneTapTradeParams, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, qty, _tif, lev = 1, options = {}) => (
     placeMarketOrder(symbol, side, qty, '0.5', lev, {

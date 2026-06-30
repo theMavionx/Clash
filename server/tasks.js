@@ -395,11 +395,16 @@ async function buildSnapshot(player, task, opts = {}) {
     // (avoids a zero baseline that would leak ALL past trades).
     // Snapshot only needs the MAX history_id, so first page (200 trades) is
     // enough — pass firstPageOnly to skip multi-page walks.
-    const trades = await fetchWalletTrades(player, {
-      firstPageOnly: true,
-      includeUnsettled: true,
-      headers: opts.headers || opts.requestHeaders || null,
-    });
+    let trades = [];
+    try {
+      trades = await fetchWalletTrades(player, {
+        firstPageOnly: true,
+        includeUnsettled: true,
+        headers: opts.headers || opts.requestHeaders || null,
+      });
+    } catch (e) {
+      console.warn(`[tasks] snapshot trade fetch failed task=${task.id} player=${player.name} dex=${player.dex}:`, e.message);
+    }
     let baseline = 0;
     for (const t of trades) {
       const id = Number(t.history_id || 0);
@@ -685,7 +690,8 @@ async function fetchWalletTrades(player, opts = {}) {
     // player has old linked DEX rows, scanning every historical DEX here can
     // spend seconds in unrelated RPC backfills and make /tasks time out before
     // the freshly imported Lighter fills are counted.
-    const dexes = opts.singleDex || dexFilter === 'lighter'
+    const forcedDex = requestedTaskDex(opts);
+    const dexes = opts.singleDex || dexFilter === 'lighter' || forcedDex
       ? [dexFilter]
       : getTaskFuturesDexes(player, opts.dex);
     const batches = [];
@@ -754,6 +760,16 @@ const PACIFICA_FETCH_CACHE_MS = Math.max(0, Number(process.env.PACIFICA_FETCH_CA
 let pacificaNextFetchAt = 0;
 let pacificaCooldownUntil = 0;
 const pacificaFetchCache = new Map();
+const pacificaAllTradesInflight = new Map();
+
+class PacificaFetchError extends Error {
+  constructor(message, code = 'PACIFICA_FETCH_FAILED') {
+    super(message);
+    this.name = 'PacificaFetchError';
+    this.code = code;
+    this.retryable = code === 'PACIFICA_RATE_LIMIT';
+  }
+}
 
 async function pacePacificaFetch() {
   const now = Date.now();
@@ -832,7 +848,7 @@ async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA
     if (r.status === 429) {
       pacificaCooldownUntil = Date.now() + PACIFICA_RATE_LIMIT_COOLDOWN_MS;
       console.warn(`[pacifica fetch] ${label} page=${page} rate limited (429) — backing off this run`);
-      break;
+      throw new PacificaFetchError('Pacifica trade history is rate limited. Wait a minute and retry.', 'PACIFICA_RATE_LIMIT');
     }
     if (!r.ok) {
       const snippet = bodyText.length > 120 ? `${bodyText.slice(0, 120)}…` : bodyText;
@@ -870,7 +886,7 @@ async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA
   return collected;
 }
 
-async function fetchPacificaAllTrades(player, opts = {}) {
+async function fetchPacificaAllTradesUncached(player, opts = {}) {
   const since = Number(opts.since) || 0;
   const maxPages = opts.firstPageOnly ? 1 : PACIFICA_MAX_PAGES;
   const master = isSolanaWallet(player.wallet) ? player.wallet : null;
@@ -915,6 +931,25 @@ async function fetchPacificaAllTrades(player, opts = {}) {
   merged.sort((a, b) => Number(a.history_id || 0) - Number(b.history_id || 0));
   console.log(`[pacifica fetch] player=${player.name} merged=${merged.length} from ${queryList.length} accounts (master=${master ? 'yes' : 'no'}, agents=${agents.length})`);
   return merged;
+}
+
+async function fetchPacificaAllTrades(player, opts = {}) {
+  const since = Number(opts.since) || 0;
+  const maxPages = opts.firstPageOnly ? 1 : PACIFICA_MAX_PAGES;
+  const inflightKey = `${player?.id || player?.wallet || 'unknown'}:${since}:${maxPages}`;
+  const pending = pacificaAllTradesInflight.get(inflightKey);
+  if (pending) {
+    const rows = await pending;
+    return rows.map(row => ({ ...row }));
+  }
+  const run = fetchPacificaAllTradesUncached(player, opts);
+  pacificaAllTradesInflight.set(inflightKey, run);
+  try {
+    const rows = await run;
+    return rows.map(row => ({ ...row }));
+  } finally {
+    pacificaAllTradesInflight.delete(inflightKey);
+  }
 }
 
 async function verifyVolume(player, task, snap, opts = {}) {

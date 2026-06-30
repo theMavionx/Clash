@@ -48,6 +48,34 @@ function flashSolanaRpcUrls() {
   ].filter(Boolean)));
 }
 
+function normalizeFlashSession(value) {
+  return String(value || '').trim();
+}
+
+function flashSessionAllowsTrade(session) {
+  const key = normalizeFlashSession(session).toLowerCase().replace(/[\s_-]+/g, '');
+  if (!key) return true;
+  return key === 'regular' || key === 'open' || key === 'active';
+}
+
+function flashSessionLabel(session) {
+  const text = normalizeFlashSession(session);
+  if (!text) return 'unknown session';
+  return text.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+}
+
+function flashLeverageFromRaw(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round((n / 10_000) * 100) / 100;
+}
+
+function flashUsdFromRaw(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n / 1_000_000;
+}
+
 async function withFlashSolanaRpc(label, task) {
   const urls = flashSolanaRpcUrls();
   let lastError = null;
@@ -315,6 +343,10 @@ async function getTokens() {
   return request('/v2/tokens');
 }
 
+async function getRawCustodies() {
+  return request('/v2/raw/custodies');
+}
+
 async function getPrices() {
   const [prices, fundingRates] = await Promise.all([
     request('/v2/prices'),
@@ -338,27 +370,72 @@ async function getPrices() {
 }
 
 async function getMarketInfo() {
-  const [tokens, prices] = await Promise.allSettled([getTokens(), getPrices()]);
+  const [tokens, prices, custodies] = await Promise.allSettled([getTokens(), getPrices(), getRawCustodies()]);
   const priceMap = new Map((prices.status === 'fulfilled' ? prices.value : []).map(p => [p.symbol, p]));
+  const custodyByMint = new Map((custodies.status === 'fulfilled' && Array.isArray(custodies.value) ? custodies.value : [])
+    .map(row => [String(row?.account?.tokenMint || row?.tokenMint || '').trim(), row?.account || row])
+    .filter(([mint]) => mint));
   return (tokens.status === 'fulfilled' && Array.isArray(tokens.value) ? tokens.value : []).map(t => {
     const symbol = normalizeToken(t.symbol);
+    const price = priceMap.get(symbol) || {};
+    const custody = custodyByMint.get(String(t.mintKey || '').trim()) || {};
+    const pricing = custody.pricing || {};
+    const maxInitialLeverage = flashLeverageFromRaw(pricing.maxInitialLeverage);
+    const maxMaintenanceLeverage = flashLeverageFromRaw(pricing.maxLeverage);
+    const minInitialLeverage = flashLeverageFromRaw(pricing.minInitialLeverage);
+    const minCollateralUsd = flashUsdFromRaw(pricing.minCollateralUsd);
+    const marketSession = normalizeFlashSession(price.market_session);
+    const tradeInitAllowed = custody.permissions?.tradeInit !== false && t.permissions?.tradeInit !== false;
+    const sessionOpen = flashSessionAllowsTrade(marketSession);
     return {
       symbol,
       name: symbol,
       base: symbol,
       quote: 'USDC',
-      price: priceMap.get(symbol)?.price || 0,
-      funding_rate: priceMap.get(symbol)?.funding_rate || 0,
-      funding_rate_raw: priceMap.get(symbol)?.funding_rate_raw ?? null,
-      funding_rate_source: priceMap.get(symbol)?.funding_rate_source || null,
+      price: price.price || 0,
+      funding_rate: price.funding_rate || 0,
+      funding_rate_raw: price.funding_rate_raw ?? null,
+      funding_rate_source: price.funding_rate_source || null,
       funding_label: 'MARGIN/h',
-      max_leverage: 100,
+      max_leverage: maxInitialLeverage ? Math.min(100, maxInitialLeverage) : 100,
+      max_initial_leverage: maxInitialLeverage,
+      max_maintenance_leverage: maxMaintenanceLeverage,
+      min_initial_leverage: minInitialLeverage,
+      min_collateral_usd: minCollateralUsd,
       min_order_size: 1,
       tick_size: symbol === 'BTC' ? '0.1' : '0.01',
+      market_session: marketSession || null,
+      market_status: sessionOpen ? 'open' : flashSessionLabel(marketSession),
+      trade_init_allowed: tradeInitAllowed,
+      is_market_open: sessionOpen && tradeInitAllowed,
       token: t,
       source: 'flash_v2',
     };
   });
+}
+
+async function assertFlashMarketCanOpen(symbol, leverage) {
+  const wantedSymbol = normalizeToken(symbol);
+  const markets = await getMarketInfo();
+  const market = markets.find(row => row.symbol === wantedSymbol);
+  if (!market) return;
+  if (market.is_market_open === false) {
+    const reason = market.trade_init_allowed === false
+      ? 'new positions are disabled'
+      : `market session is ${market.market_status || flashSessionLabel(market.market_session)}`;
+    throw Object.assign(new Error(`${wantedSymbol} is not open for Flash trading right now (${reason}).`), {
+      status: 400,
+      data: { symbol: wantedSymbol, market_session: market.market_session, market_status: market.market_status },
+    });
+  }
+  const maxInitial = Number(market.max_initial_leverage || market.max_leverage || 0);
+  const requestedLeverage = Number(leverage || 1);
+  if (Number.isFinite(maxInitial) && maxInitial > 0 && Number.isFinite(requestedLeverage) && requestedLeverage > maxInitial + 1e-9) {
+    throw Object.assign(new Error(`${wantedSymbol} max initial leverage on Flash is ${maxInitial}x. Lower leverage and retry.`), {
+      status: 400,
+      data: { symbol: wantedSymbol, requested_leverage: requestedLeverage, max_initial_leverage: maxInitial },
+    });
+  }
 }
 
 async function getFundingRates() {
@@ -767,6 +844,7 @@ async function buildOpenPositionTx(body, owner) {
     orderType: String(body.orderType || body.order_type || 'MARKET').toUpperCase(),
     slippagePercentage: String(body.slippagePercentage || body.slippage_percentage || body.slippage || '0.5'),
   };
+  await assertFlashMarketCanOpen(payload.outputTokenSymbol, payload.leverage);
   if (body.limitPrice || body.limit_price || body.price) payload.limitPrice = String(body.limitPrice || body.limit_price || body.price);
   if (body.takeProfit || body.take_profit) payload.takeProfit = String(body.takeProfit || body.take_profit);
   if (body.stopLoss || body.stop_loss) payload.stopLoss = String(body.stopLoss || body.stop_loss);

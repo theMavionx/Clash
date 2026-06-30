@@ -475,10 +475,10 @@ function QuestsTab({ markets = [] }) {
           });
           setTimeout(() => setFlash(null), 2500);
         }
-      } else if (j.ok === false) {
-        setError('Not completed yet');
       } else if (!r.ok) {
         setError(j.error || 'Failed');
+      } else if (j.ok === false) {
+        setError(j.retryable && j.error ? j.error : 'Not completed yet');
       }
       await fetchTasks(token);
     } finally { setLoading(false); }

@@ -66,14 +66,42 @@ function slippagePercentToBps(value) {
   return Math.max(1, Math.min(500, Math.round(n * 100)));
 }
 
+function formatEthAmount(valueWei) {
+  try {
+    const text = formatEther(valueWei || 0n);
+    const n = Number(text);
+    if (!Number.isFinite(n)) return text;
+    return n.toFixed(6).replace(/0+$/u, '').replace(/\.$/u, '') || '0';
+  } catch {
+    return '0';
+  }
+}
+
+function gasWithBuffer(value, fallback = 30_000n, bufferBps = 2_000n) {
+  const gas = typeof value === 'bigint' && value > 0n ? value : fallback;
+  return (gas * (10_000n + bufferBps) + 9_999n) / 10_000n;
+}
+
+function isGasLimitTooLowError(text) {
+  return /gas required exceeds allowance\s*\(21000\)|intrinsic gas too low|out of gas|gas limit/i.test(String(text || ''));
+}
+
+function isGasFundingError(text) {
+  return /insufficient funds|insufficient.*gas|gas.*balance|native token balance/i.test(String(text || ''));
+}
+
 function errorMessage(error, fallback = 'Ostium request failed') {
   const chain = [error, error?.cause, error?.cause?.cause].filter(Boolean);
   for (const item of chain) {
     const text = item?.shortMessage || item?.reason || item?.details || item?.message;
     if (!text) continue;
+    if (item?.code === 'WRONG_EVM_CHAIN') return String(text).slice(0, 300);
     if (/user rejected|denied|rejected the request/i.test(text)) return 'Signature cancelled';
-    if (/insufficient funds|gas.*balance/i.test(text)) return 'Insufficient ETH on Arbitrum for gas';
-    if (/allowance/i.test(text)) return 'USDC allowance is not ready. Approve USDC and retry.';
+    if (isGasLimitTooLowError(text)) return 'Ostium setup used too low gas. Reload and retry; Clash will send an explicit Arbitrum gas limit.';
+    if (isGasFundingError(text)) return 'Not enough ETH on Arbitrum for Ostium one tap gas top-up.';
+    if (/usdc.*allowance|allowance.*usdc|approve.*usdc|insufficient allowance|erc20.*allowance/i.test(text)) {
+      return 'USDC allowance is not ready. Approve USDC and retry.';
+    }
     const minCollateral = String(text).match(/collateral\s+([0-9.]+)\s+below minimum\s+([0-9.]+)/i);
     if (minCollateral) return `Ostium minimum margin is ${minCollateral[2]} USDC. Your margin is ${minCollateral[1]} USDC.`;
     return String(text).slice(0, 300);
@@ -223,28 +251,67 @@ export function useOstium() {
     }));
   }, [walletAddr]);
 
+  const requireOstiumWalletClient = useCallback(async () => {
+    if (typeof ensureChain === 'function') await ensureChain(OSTIUM_CHAIN_ID);
+    const walletClient = typeof getWalletClient === 'function' ? getWalletClient(OSTIUM_CHAIN_ID) : null;
+    if (!walletClient?.sendTransaction) {
+      throw new Error('Connect an Arbitrum-capable EVM wallet first.');
+    }
+    return walletClient;
+  }, [ensureChain, getWalletClient]);
+
+  const estimateWalletTxGas = useCallback(async ({ account, to, data, value = 0n, label = 'ostium.tx', fallback = 180_000n }) => {
+    const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
+    if (!publicClient?.estimateGas) return gasWithBuffer(fallback, fallback);
+    try {
+      const estimated = await publicClient.estimateGas({
+        account,
+        to,
+        ...(data ? { data } : {}),
+        value,
+      });
+      return gasWithBuffer(estimated, fallback);
+    } catch (e) {
+      console.warn(`[useOstium] ${label} gas estimate failed:`, e?.message || e);
+      return gasWithBuffer(fallback, fallback);
+    }
+  }, [getPublicClient]);
+
   const sendBuiltTx = useCallback(async (tx, label = 'ostium.tx') => {
     if (!walletAddr) throw new Error('Connect your EVM wallet first');
     if (tx?.kind !== 'eoa') throw new Error('Ostium returned a non-EOA transaction. This integration supports EOA wallet signing only.');
     if (tx?.from && String(tx.from).toLowerCase() !== String(walletAddr).toLowerCase()) {
       throw new Error('Ostium transaction signer does not match connected wallet');
     }
-    if (typeof ensureChain === 'function') await ensureChain(OSTIUM_CHAIN_ID);
-    const walletClient = typeof getWalletClient === 'function'
-      ? (getWalletClient(OSTIUM_CHAIN_ID) || getWalletClient())
-      : null;
-    if (!walletClient?.sendTransaction) throw new Error('EVM wallet transaction signer is not ready');
+    const walletClient = await requireOstiumWalletClient();
+    const value = tx.value || 0n;
+    const gas = await estimateWalletTxGas({
+      account: walletAddr,
+      to: tx.to,
+      data: tx.data,
+      value,
+      label,
+      fallback: tx?.data ? 180_000n : 30_000n,
+    });
+    console.info('[useOstium] wallet tx send', {
+      label,
+      to: tx.to,
+      hasData: Boolean(tx.data),
+      valueEth: formatEthAmount(value),
+      gas: gas.toString(),
+    });
     const hash = await walletClient.sendTransaction({
       account: walletAddr,
       to: tx.to,
       data: tx.data,
-      value: tx.value || 0n,
+      value,
+      gas,
     });
     const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
     const receipt = await waitForReceipt(publicClient, hash);
     if (receipt?.status && receipt.status !== 'success') throw new Error(`${label} reverted`);
     return { txHash: hash, receipt };
-  }, [ensureChain, getPublicClient, getWalletClient, walletAddr]);
+  }, [estimateWalletTxGas, getPublicClient, requireOstiumWalletClient, walletAddr]);
 
   const waitForSubmittedTx = useCallback(async (result, label = 'ostium.delegate_tx') => {
     const hash = result?.txHash || result?.hash;
@@ -294,17 +361,50 @@ export function useOstium() {
     const target = DELEGATE_GAS_TARGET_WEI > DELEGATE_GAS_MIN_WEI ? DELEGATE_GAS_TARGET_WEI : DELEGATE_GAS_MIN_WEI;
     const amount = current == null ? target : target - current;
     if (amount <= 0n) return { skipped: true, balanceWei: current, balanceEth: formatEther(current || 0n) };
-    if (typeof ensureChain === 'function') await ensureChain(OSTIUM_CHAIN_ID);
-    const walletClient = typeof getWalletClient === 'function'
-      ? (getWalletClient(OSTIUM_CHAIN_ID) || getWalletClient())
+    const walletClient = await requireOstiumWalletClient();
+    const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
+    const walletBalance = publicClient?.getBalance
+      ? await publicClient.getBalance({ address: walletAddr }).catch(() => null)
       : null;
-    if (!walletClient?.sendTransaction) throw new Error('EVM wallet transaction signer is not ready');
+    let gasCost = 0n;
+    let gasLimit = gasWithBuffer(30_000n, 30_000n);
+    if (publicClient?.estimateGas && publicClient?.getGasPrice) {
+      const [estimatedGas, gasPrice] = await Promise.all([
+        publicClient.estimateGas({
+          account: walletAddr,
+          to: delegateAddress,
+          value: amount,
+        }).catch((e) => {
+          console.warn('[useOstium] delegate gas top-up estimate failed:', e?.message || e);
+          return 30_000n;
+        }),
+        publicClient.getGasPrice().catch(() => 0n),
+      ]);
+      gasLimit = gasWithBuffer(estimatedGas, 30_000n);
+      gasCost = gasLimit * gasPrice;
+    }
+    const required = amount + gasCost;
+    if (walletBalance != null && walletBalance < required) {
+      const err = new Error(`Need ${formatEthAmount(required)} ETH on Arbitrum for Ostium one tap gas top-up. Your Arbitrum ETH balance is ${formatEthAmount(walletBalance)} ETH.`);
+      err.code = 'OSTIUM_DELEGATE_GAS_INSUFFICIENT';
+      err.requiredWei = required;
+      err.balanceWei = walletBalance;
+      throw err;
+    }
+    console.info('[useOstium] delegate gas top-up', {
+      delegate: delegateAddress,
+      amountEth: formatEthAmount(amount),
+      walletEth: walletBalance == null ? null : formatEthAmount(walletBalance),
+      estimatedGasEth: formatEthAmount(gasCost),
+      requiredEth: formatEthAmount(required),
+      gas: gasLimit.toString(),
+    });
     const hash = await walletClient.sendTransaction({
       account: walletAddr,
       to: delegateAddress,
       value: amount,
+      gas: gasLimit,
     });
-    const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
     const receipt = await waitForReceipt(publicClient, hash);
     if (receipt?.status && receipt.status !== 'success') throw new Error('Ostium delegate gas top-up reverted');
     return {
@@ -314,7 +414,7 @@ export function useOstium() {
       balanceWei: current == null ? null : current + amount,
       balanceEth: current == null ? null : formatEther(current + amount),
     };
-  }, [delegateGasBalance, ensureChain, getPublicClient, getWalletClient, walletAddr]);
+  }, [delegateGasBalance, getPublicClient, requireOstiumWalletClient, walletAddr]);
 
   const ensureMaxAllowance = useCallback(async (client) => {
     const allowance = await client.checkUsdcAllowance(OSTIUM_MAX_ALLOWANCE_CHECK_USD);

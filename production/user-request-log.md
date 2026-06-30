@@ -714,3 +714,44 @@ Time: 2026-06-30 14:31:00 +03:00
 Request:
 
 > тут щось криво остіум показує як бачиш також кнопку з ван тап трейдингом перенеси як в пацифіки стоїть там єрдер відкривається зробити також нормальний вивід помилок clientLogger-Da-DYVx8.js:1 [useOstium] delegated path failed, falling back to wallet signature: Trade validation failed: Collateral 2.24 below minimum 5
+
+### UR-2026-06-30-007
+
+Time: 2026-06-30 16:25:00 +03:00
+
+Request:
+
+> остіум ван тап чомусь у гравця не працює
+
+### UR-2026-06-30-008
+
+Time: 2026-06-30 22:48:56 +03:00
+
+Request:
+
+> ми там додавали кнопку мм бот вимкни її для всіх а доступ по вайт листу через нік або гаманець і в цих гравців типу щоб вона зявлялася
+
+### UR-2026-06-30-009
+
+Time: 2026-06-30 22:59:23 +03:00
+
+Request:
+
+> ostium still doesn't work after I topped up $10 of eth
+
+### UR-2026-06-30-010
+
+Time: 2026-06-30 23:09:25 +03:00
+
+Request:
+
+> btc quest doesnt work on flashtrade
+> cannot trade SPCX on flashtrade
+
+### UR-2026-06-30-011
+
+Time: 2026-06-30 23:44:43 +03:00
+
+Request:
+
+> коміт деплой на прод

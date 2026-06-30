@@ -228,6 +228,27 @@ function marketActivity(row = {}) {
   };
 }
 
+function flashMarketSessionLabel(session) {
+  const text = String(session || '').trim();
+  if (!text) return 'unknown session';
+  return text.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+}
+
+function flashMarketClosedReason(market = {}) {
+  if (!market || typeof market !== 'object') return '';
+  if (market.trade_init_allowed === false || market.tradeInitAllowed === false) {
+    return 'new positions are disabled';
+  }
+  if (market.is_market_open === false || market.isMarketOpen === false) {
+    return `market session is ${flashMarketSessionLabel(market.market_status || market.market_session || market.marketSession || market.session)}`;
+  }
+  const sessionKey = String(market.market_session || market.marketSession || market.session || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (sessionKey && !['regular', 'open', 'active'].includes(sessionKey)) {
+    return `market session is ${flashMarketSessionLabel(market.market_session || market.marketSession || market.session)}`;
+  }
+  return '';
+}
+
 function formatCompactNumber(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return '0';
@@ -2686,8 +2707,16 @@ function FuturesPanel() {
   }, [prices, markets, symbol]);
 
   const maxLev = useMemo(() => {
-    return markets.find(m => m.symbol === symbol)?.max_leverage || 100;
+    const raw = markets.find(m => m.symbol === symbol)?.max_leverage;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : 100;
   }, [markets, symbol]);
+  useEffect(() => {
+    setLeverage((lev) => {
+      const current = Number(lev) || 1;
+      return current > maxLev ? maxLev : current;
+    });
+  }, [maxLev]);
 
   // Trader-facing balance for the Pro panel slider / max-size calc / deposit
   // CTA. Each DEX exposes the field under a different name; keep the legacy
@@ -2751,6 +2780,7 @@ function FuturesPanel() {
     ? pacAccountValueBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
     : pacAccountValueBase;
   const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol), [markets, symbol]);
+  const flashMarketBlockReason = dex === 'flash' ? flashMarketClosedReason(currentMarket) : '';
   const fr = currentMarket ? parseFloat(currentMarket.funding_rate || 0) : 0;
   // Avantis doesn't have a signed funding rate — the number here is the
   // borrow-fee % per hour traders pay LPs. Relabel the badge so users
@@ -3031,6 +3061,14 @@ function FuturesPanel() {
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
       const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+      if (dex === 'flash' && flashMarketBlockReason) {
+        setLocalAlert(`${symbol} is not open for Flash trading right now (${flashMarketBlockReason}).`);
+        return;
+      }
+      if (dex === 'flash' && Number(leverage) > Number(maxLev) + 1e-9) {
+        setLocalAlert(`${symbol} max initial leverage on Flash is ${maxLev}x. Lower leverage and retry.`);
+        return;
+      }
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -3331,7 +3369,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, maxLev]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -3345,6 +3383,7 @@ function FuturesPanel() {
   const vol24h = curPriceData ? parseFloat(curPriceData.volume_24h || 0) : 0;
   const oi = curPriceData ? parseFloat(curPriceData.open_interest || 0) : 0;
   const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
+  const tradeButtonBlocked = dex === 'flash' && !!flashMarketBlockReason;
   const tradeButtonBusy = loading || tradeBusy || tradePhase != null;
   useEffect(() => {
     setClientActivity({
@@ -3700,7 +3739,13 @@ function FuturesPanel() {
           const subtitle = enabled
             ? `Delegate ${oneTapTrading?.signer ? shortAddr(oneTapTrading.signer) : 'ready'} - browser signs Ostium orders.`
             : oneTapTrading?.enabled
-              ? 'Finish delegate approval, allowance, and gas top-up before one tap is ready.'
+              ? oneTapTrading?.delegateReady === false
+                ? 'Approve the Ostium delegate on Arbitrum.'
+                : oneTapTrading?.allowanceReady === false
+                  ? 'Approve USDC allowance for Ostium on Arbitrum.'
+                  : oneTapTrading?.gasReady === false
+                    ? 'Add a small ETH gas top-up to the browser delegate on Arbitrum.'
+                    : 'Finish the remaining Ostium one tap setup step.'
               : 'One wallet setup, then browser delegate signs Ostium orders.';
           return (
             <div style={{
@@ -3817,6 +3862,11 @@ function FuturesPanel() {
           </>
         )}
 
+        {tradeButtonBlocked && (
+          <div style={S.errorBar}>
+            <span style={S.errorText}>{symbol} is not open for Flash trading right now ({flashMarketBlockReason}).</span>
+          </div>
+        )}
         {error && (
           <div style={S.errorBar} onClick={clearError}>
             <span style={S.errorText}>{humanizeTradeError(error)}</span>
@@ -3836,10 +3886,10 @@ function FuturesPanel() {
         )}
 
         <div style={S.row}>
-          <button style={{...cartoonBtn('#4CAF50','#2E7D32'), ...S.tradeBtn}} onClick={() => handleTrade('bid')} disabled={tradeButtonBusy}>
+          <button style={{...cartoonBtn('#4CAF50','#2E7D32'), ...S.tradeBtn}} onClick={() => handleTrade('bid')} disabled={tradeButtonBusy || tradeButtonBlocked}>
             <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'LONG'}</span>
           </button>
-          <button style={{...cartoonBtn('#E53935','#B71C1C'), ...S.tradeBtn}} onClick={() => handleTrade('ask')} disabled={tradeButtonBusy}>
+          <button style={{...cartoonBtn('#E53935','#B71C1C'), ...S.tradeBtn}} onClick={() => handleTrade('ask')} disabled={tradeButtonBusy || tradeButtonBlocked}>
             <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'SHORT'}</span>
           </button>
         </div>

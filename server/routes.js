@@ -14424,7 +14424,27 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       ).run(pt.snapshot, req.player.id, id);
     }
   }
-  const result = await tasks.verifyTask(req.player, task, snap, { headers: req.headers });
+  let result;
+  try {
+    result = await tasks.verifyTask(req.player, task, snap, { headers: req.headers });
+  } catch (e) {
+    if (e?.code === 'PACIFICA_RATE_LIMIT') {
+      const retryMessage = e.message || 'Pacifica trade history is rate limited. Wait a minute and retry.';
+      console.warn(`[task ${id} claim] player=${req.player.name} -> RETRYABLE ${retryMessage}`);
+      recordTaskTelemetry('retryable_error', {
+        errorReason: retryMessage,
+        metadata: { code: e.code, retryable: true, dex: req.player.dex || null },
+      });
+      return res.status(503).json({
+        ok: false,
+        retryable: true,
+        error: retryMessage,
+        progress_value: pt.progress_value || 0,
+        target_value: pt.target_value || 0,
+      });
+    }
+    throw e;
+  }
 
   // Always update cached progress (progress update is an independent fact,
   // kept outside the payout txn so it lands even if the completion check
