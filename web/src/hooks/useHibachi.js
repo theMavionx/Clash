@@ -221,9 +221,12 @@ function enrichPositions(rows, leverageSettings = {}) {
       : (derivedPnl ?? 0);
     const derivedPct = derivedPositionPnlPct(pos, leverage, margin, sizeUsd);
     const apiPct = num(pos?.pnl_pct, NaN);
-    const pnlPct = Number.isFinite(apiPct)
+    const hibachiMarginPct = margin > 0 && Number.isFinite(pnlUsd)
+      ? (pnlUsd / margin) * 100
+      : null;
+    const pnlPct = hibachiMarginPct ?? (Number.isFinite(apiPct)
       ? apiPct
-      : (derivedPct ?? (margin > 0 ? (pnlUsd / margin) * 100 : 0));
+      : (derivedPct ?? 0));
     return {
       ...pos,
       source: pos?.source || 'hibachi',

@@ -337,6 +337,11 @@ function positionMarkPrice(position = {}) {
 }
 
 function explicitPositionPnl(position = {}) {
+  // Hibachi's UI position PnL is the trading PnL. Funding is shown separately
+  // and should not flip or dampen the card PnL value.
+  const trading = position.unrealizedTradingPnl ?? position.unrealized_trading_pnl;
+  if (trading !== undefined && trading !== null && trading !== '') return num(trading);
+
   const direct = position.pnl_usd
     ?? position.pnlUsd
     ?? position.pnl
@@ -346,10 +351,6 @@ function explicitPositionPnl(position = {}) {
     ?? position.unrealised_pnl
     ?? position.uPnl;
   if (direct !== undefined && direct !== null && direct !== '') return num(direct);
-
-  const trading = position.unrealizedTradingPnl ?? position.unrealized_trading_pnl;
-  const funding = position.unrealizedFundingPnl ?? position.unrealized_funding_pnl;
-  if (trading !== undefined || funding !== undefined) return num(trading) + num(funding);
 
   return null;
 }
@@ -416,11 +417,14 @@ function priceDerivedPositionPnlPct(
 }
 
 function positionPnlPct(position = {}, opts = {}) {
-  const explicit = explicitPositionPnlPct(position);
-  if (explicit != null) return explicit;
   const pnlUsd = Number(opts.pnlUsd);
   const margin = Number(opts.margin);
+  // Hibachi UI reports position PnL percent against allocated margin, not
+  // against notional/raw price movement. Prefer that formula whenever both
+  // values are known, even if the payload also includes a raw percent field.
   if (Number.isFinite(pnlUsd) && margin > 0) return (pnlUsd / margin) * 100;
+  const explicit = explicitPositionPnlPct(position);
+  if (explicit != null) return explicit;
   const derived = priceDerivedPositionPnlPct(position, opts);
   if (derived != null) return derived;
   return margin > 0 && Number.isFinite(pnlUsd) ? (pnlUsd / margin) * 100 : null;
@@ -973,7 +977,7 @@ function normalizeOrderFlags(args = {}) {
   return null;
 }
 
-function positionMargin(position = {}) {
+function positionMargin(position = {}, context = {}) {
   const directMargin = num(
     position.margin
       ?? position.positionMargin
@@ -984,6 +988,14 @@ function positionMargin(position = {}) {
       ?? position.marginUsed,
   );
   if (directMargin > 0) return directMargin;
+
+  const accountMargin = num(context.accountMargin, 0);
+  const totalBasis = num(context.totalBasis, 0);
+  const positionBasis = positionEntryNotional(position) || positionNotional(position);
+  if (accountMargin > 0 && totalBasis > 0 && positionBasis > 0) {
+    return accountMargin * (positionBasis / totalBasis);
+  }
+
   const notional = positionNotional(position);
   const leverage = num(position.leverage ?? position.positionLeverage ?? position.initialLeverage);
   return notional > 0 && leverage > 0 ? notional / leverage : 0;
@@ -1384,18 +1396,28 @@ function formatAccount(j = {}) {
 }
 
 function formatPositionsFromAccountInfo(j = {}) {
-  return rows(j?.positions).map(p => {
+  const positionRows = rows(j?.positions);
+  const accountMargin = accountMarginUsed(j);
+  const totalBasis = positionRows.reduce((sum, p) => {
+    const basis = positionEntryNotional(p) || positionNotional(p);
+    return sum + (basis > 0 ? basis : 0);
+  }, 0);
+
+  return positionRows.map(p => {
     const amount = positionQuantity(p);
     const rawSymbol = positionSymbol(p);
     if (!rawSymbol || amount <= 0) return null;
     const side = positionSide(p);
     const notional = positionNotional(p);
     const rawLeverage = num(p.leverage ?? p.positionLeverage ?? p.initialLeverage);
-    const margin = positionMargin(p);
+    const margin = positionMargin(p, { accountMargin, totalBasis });
+    const leverage = rawLeverage > 0
+      ? rawLeverage
+      : (margin > 0 && notional > 0 ? notional / margin : 0);
     const entryPrice = positionEntryPrice(p);
     const markPrice = positionMarkPrice(p);
     const pnlUsd = positionPnl(p, amount, side);
-    const pnlPct = positionPnlPct(p, { pnlUsd, margin, notional, leverage: rawLeverage, amount, side });
+    const pnlPct = positionPnlPct(p, { pnlUsd, margin, notional, leverage, amount, side });
     return {
       symbol: symbolOf(rawSymbol),
       side,
@@ -1405,7 +1427,7 @@ function formatPositionsFromAccountInfo(j = {}) {
       mark_price: markPrice > 0 ? String(markPrice) : '',
       liquidation_price: null,
       margin: margin > 0 ? String(margin) : '',
-      leverage: rawLeverage > 0 ? String(rawLeverage) : '',
+      leverage: leverage > 0 ? String(leverage) : '',
       pnl_usd: String(pnlUsd),
       pnl_pct: pnlPct,
       pnl_source: hasExplicitPositionPnl(p) ? 'hibachi_api' : 'derived_fallback',
