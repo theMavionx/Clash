@@ -72,6 +72,7 @@ const PHOENIX_FEE_BUFFER_RATE = 0.0001;
 const PHOENIX_DEFAULT_REFERRAL_CODE = 'MVWG4BTW';
 const HOTSTUFF_MARKET_SLIPPAGE_RATE = 0.015;
 const HOTSTUFF_DEFAULT_TAKER_FEE_RATE = 0.00045;
+const OSTIUM_MIN_MARGIN_USD = 5;
 
 const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
 
@@ -612,16 +613,19 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   );
   const isHibachiPosition = String(pos?.source || '').toLowerCase() === 'hibachi'
     || String(pos?.pnl_source || '').toLowerCase() === 'hibachi_api';
+  const isOstiumPosition = String(pos?.dex || '').toLowerCase() === 'ostium'
+    || String(pos?.source || '').toLowerCase() === 'ostium'
+    || String(pos?.pnl_source || '').toLowerCase() === 'ostium_api';
   const derivedPnl = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
-  const pnlVal = isDust ? 0 : cleanSignedZero(isHibachiPosition ? (providedPnl ?? 0) : (providedPnl ?? derivedPnl));
+  const pnlVal = isDust ? 0 : cleanSignedZero((isHibachiPosition || isOstiumPosition) ? (providedPnl ?? 0) : (providedPnl ?? derivedPnl));
   const rawLev = displayLeverage(pos.leverage);
   const collateralLev = margin > 0 && posValueUsd > 0 ? Math.round((posValueUsd / margin) * 10) / 10 : null;
   const flashLev = isFlashPosition ? flashPositionDisplayLeverageStable(pos, posValueUsd, margin) : null;
   const setLev = isDust ? null : (isFlashPosition
     ? (flashLev ?? rawLev ?? collateralLev)
     : (rawLev && rawLev > 0 ? rawLev : (collateralLev || (leverageSettings[pos.symbol] || 1))));
-  const rawProvidedPct = numOrNull(pos.pnl_pct);
-  const preserveProvidedPct = isHibachiPosition;
+  const rawProvidedPct = numOrNull(pos.pnl_pct ?? (pos.return_on_equity != null ? Number(pos.return_on_equity) * 100 : null));
+  const preserveProvidedPct = isHibachiPosition || isOstiumPosition;
   const pricePct = entryP && markP
     ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1))
     : null;
@@ -632,7 +636,7 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     : null;
   const pctMargin = hibachiInitialMargin && hibachiInitialMargin > 0 ? hibachiInitialMargin : margin;
   const marginPct = pctMargin > 0 ? (pnlVal / pctMargin) * 100 : null;
-  const pnlPct = isDust ? 0 : (isHibachiPosition
+  const pnlPct = isDust ? 0 : (preserveProvidedPct
     ? (rawProvidedPct ?? 0)
     : (providedPct ?? (pricePct ?? (marginPct ?? 0))));
   const pnlDirection = isDust ? 1 : signedMetricDirection(pnlVal, pnlPct);
@@ -3058,6 +3062,10 @@ function FuturesPanel() {
         let collateralUsdc = amountInUsdc
           ? parseFloat(amount)
           : (tradePrice > 0 ? (parseFloat(tokenAmount) * tradePrice) / leverage : 0);
+        if (dex === 'ostium' && (!Number.isFinite(collateralUsdc) || collateralUsdc < OSTIUM_MIN_MARGIN_USD)) {
+          setLocalAlert(`Ostium minimum margin is ${OSTIUM_MIN_MARGIN_USD} USDC. Increase margin before signing.`);
+          return;
+        }
         if (dex === 'phoenix') {
           const reserve = phoenixMarginReserveDetails({
             balance: pacBalance,
@@ -3678,6 +3686,65 @@ function FuturesPanel() {
                   borderStyle: 'solid',
                   borderColor: enabled ? '#15803D' : '#b58b2a',
                   opacity: (busy || loading) ? 0.7 : 1,
+                }}
+              >
+                {busy ? '...' : enabled ? 'ON' : 'ENABLE'}
+              </button>
+            </div>
+          );
+        })()}
+
+        {dex === 'ostium' && (() => {
+          const enabled = !!oneTapTrading?.approved;
+          const busy = !!referralLinking || !!loading;
+          const subtitle = enabled
+            ? `Delegate ${oneTapTrading?.signer ? shortAddr(oneTapTrading.signer) : 'ready'} - browser signs Ostium orders.`
+            : oneTapTrading?.enabled
+              ? 'Finish delegate approval, allowance, and gas top-up before one tap is ready.'
+              : 'One wallet setup, then browser delegate signs Ostium orders.';
+          return (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              background: enabled ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
+              borderWidth: 1,
+              borderStyle: 'solid',
+              borderColor: enabled ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.30)',
+              borderRadius: 8,
+              padding: '7px 9px',
+            }}>
+              <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
+                <span style={{fontSize: 11, fontWeight: 900, color: enabled ? '#166534' : '#7C2D12'}}>
+                  Ostium one tap trading
+                </span>
+                <span style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: '#8a7252',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {subtitle}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleToggleOneTapTrading}
+                disabled={busy}
+                style={{
+                  ...S.btnSmall,
+                  flex: '0 0 auto',
+                  minWidth: 72,
+                  padding: '5px 10px',
+                  background: enabled ? '#16A34A' : '#fff6dc',
+                  color: enabled ? '#fff' : '#5C3A21',
+                  borderWidth: 2,
+                  borderStyle: 'solid',
+                  borderColor: enabled ? '#15803D' : '#F97316',
+                  opacity: busy ? 0.7 : 1,
                 }}
               >
                 {busy ? '...' : enabled ? 'ON' : 'ENABLE'}
@@ -7807,45 +7874,6 @@ function FuturesPanel() {
                       setLocalAlert('Enter the correct Hibachi API credentials.');
                     }}
                   >EDIT API</button>
-                </div>
-              )}
-              {isOstium && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  background: oneTapTrading?.approved ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
-                  border: `1px solid ${oneTapTrading?.approved ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.35)'}`,
-                  borderRadius: 8,
-                  padding: '7px 9px',
-                }}>
-                  <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
-                    <span style={{fontSize: 11, fontWeight: 900, color: oneTapTrading?.approved ? '#166534' : '#9A3412'}}>
-                      Ostium one tap {oneTapTrading?.approved ? 'ready' : oneTapTrading?.enabled ? 'needs setup' : 'off'}
-                    </span>
-                    <span style={{fontSize: 10, fontWeight: 800, color: '#8a7252', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
-                      {oneTapTrading?.signer
-                        ? `Delegate ${oneTapTrading.signer.slice(0, 6)}...${oneTapTrading.signer.slice(-4)}${oneTapTrading?.gasBalanceEth ? ` | gas ${Number(oneTapTrading.gasBalanceEth).toFixed(5)} ETH` : ''}`
-                        : 'Creates an encrypted browser delegate and funds a small ETH gas float.'}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleToggleOneTapTrading}
-                    disabled={loading || referralLinking}
-                    style={{
-                      ...S.btnSmall,
-                      minWidth: 74,
-                      padding: '5px 10px',
-                      background: oneTapTrading?.approved ? '#16A34A' : '#fff6dc',
-                      color: oneTapTrading?.approved ? '#fff' : '#5C3A21',
-                      border: `2px solid ${oneTapTrading?.approved ? '#15803D' : '#F97316'}`,
-                      opacity: loading || referralLinking ? 0.7 : 1,
-                    }}
-                  >
-                    {loading || referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'ENABLE'}
-                  </button>
                 </div>
               )}
               {isHyperliquid && (

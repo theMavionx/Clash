@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatEther, parseEther } from 'viem';
-import { CancelOrderType, OrderType, OstiumClient } from '@ostium/builder-sdk';
+import { CancelOrderType, MIN_OPEN_SIZE_USD, OrderType, OstiumClient } from '@ostium/builder-sdk';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
@@ -74,9 +74,21 @@ function errorMessage(error, fallback = 'Ostium request failed') {
     if (/user rejected|denied|rejected the request/i.test(text)) return 'Signature cancelled';
     if (/insufficient funds|gas.*balance/i.test(text)) return 'Insufficient ETH on Arbitrum for gas';
     if (/allowance/i.test(text)) return 'USDC allowance is not ready. Approve USDC and retry.';
+    const minCollateral = String(text).match(/collateral\s+([0-9.]+)\s+below minimum\s+([0-9.]+)/i);
+    if (minCollateral) return `Ostium minimum margin is ${minCollateral[2]} USDC. Your margin is ${minCollateral[1]} USDC.`;
     return String(text).slice(0, 300);
   }
   return fallback;
+}
+
+function isOstiumValidationError(error) {
+  const chain = [error, error?.cause, error?.cause?.cause].filter(Boolean);
+  return chain.some((item) => {
+    const code = String(item?.code || item?.name || '').toLowerCase();
+    const text = String(item?.shortMessage || item?.reason || item?.details || item?.message || '').toLowerCase();
+    return code.includes('validation')
+      || /validation failed|below minimum|exceeds maximum|invalid collateral|invalid leverage|invalid price|invalid pair|invalid amount/.test(text);
+  });
 }
 
 function findBySymbol(rows, symbol) {
@@ -421,6 +433,7 @@ export function useOstium() {
     } catch (delegateError) {
       const text = String(delegateError?.message || delegateError || '');
       if (/user rejected|denied|cancelled/i.test(text)) throw delegateError;
+      if (isOstiumValidationError(delegateError)) throw delegateError;
       console.warn('[useOstium] delegated path failed, falling back to wallet signature:', text);
       const selfClient = await createBuildClient();
       if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
@@ -703,6 +716,9 @@ export function useOstium() {
     const lev = Number(leverage);
     const entryPrice = Number(price || market.mark || market.mid || market.oracle);
     if (!Number.isFinite(collateral) || collateral <= 0) throw new Error('Enter a valid margin amount');
+    if (collateral < MIN_OPEN_SIZE_USD) {
+      throw new Error(`Ostium minimum margin is ${MIN_OPEN_SIZE_USD} USDC. Increase margin before signing.`);
+    }
     if (!Number.isFinite(lev) || lev <= 0) throw new Error('Enter a valid leverage');
     if (!Number.isFinite(entryPrice) || entryPrice <= 0) throw new Error('Ostium price is not available yet');
     const overnight = Number(market.overnight_max_leverage || market.overnightMaxLeverage || 0);

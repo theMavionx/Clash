@@ -65,6 +65,16 @@ function trimNumber(value, decimals = 6) {
 }
 
 function sideToPanel(side) {
+  if (typeof side === 'boolean') return side ? 'bid' : 'ask';
+  const s = String(side || '').toLowerCase();
+  if (s === 'long' || s === 'buy' || s === 'bid' || s === 'b' || s === 'true') return 'bid';
+  if (s === 'short' || s === 'sell' || s === 'ask' || s === 's' || s === 'false') return 'ask';
+  const n = Number(side);
+  if (Number.isFinite(n)) return n >= 0 ? 'bid' : 'ask';
+  return 'bid';
+}
+
+function legacySideToPanelForClientOrderId(side) {
   const s = String(side || '').toLowerCase();
   if (s === 'long' || s === 'buy' || s === 'bid' || s === 'true') return 'bid';
   if (s === 'short' || s === 'sell' || s === 'ask' || s === 'false') return 'ask';
@@ -345,6 +355,8 @@ function normalizePosition(row, marketsById = new Map()) {
   const entry = num(position?.entryPx || position?.entryPrice, 0);
   const amount = entry > 0 ? sizeUsd / entry : Math.abs(num(position?.szi || position?.size, 0));
   const side = sideToPanel(position?.side ?? position?.buy);
+  const pnlUsd = num(position?.unrealizedPnl || position?.rawPnlUsd || position?.pnl, 0);
+  const returnOnEquity = num(position?.returnOnEquity, 0);
   const stableId = [
     'ostium',
     String(symbol || '').toUpperCase(),
@@ -367,11 +379,15 @@ function normalizePosition(row, marketsById = new Map()) {
     liquidation_price: num(position?.liquidationPx || position?.liquidationPrice, 0),
     margin: collateral,
     leverage: num(position?.leverage, collateral > 0 ? sizeUsd / collateral : 0),
-    pnl_usd: num(position?.unrealizedPnl || position?.rawPnlUsd || position?.pnl, 0),
-    return_on_equity: num(position?.returnOnEquity, 0),
+    pnl_usd: pnlUsd,
+    pnl_source: 'ostium_api',
+    pnl_pct: returnOnEquity * 100,
+    pnl_pct_source: 'ostium_return_on_equity',
+    return_on_equity: returnOnEquity,
     take_profit: position?.tpPx || null,
     stop_loss: position?.slPx || null,
     is_isolated: true,
+    raw_side: position?.side ?? position?.buy ?? null,
     pair_index: Number(pairId),
     trade_index: Number(position?.idx ?? row?.idx ?? 0),
     idx: Number(position?.idx ?? row?.idx ?? 0),
@@ -456,6 +472,7 @@ function normalizeFillForDb(fill, marketsById = new Map()) {
   const symbol = symbolOf(fill) || market?.symbol || `PAIR${pairId}`;
   const notional = Math.abs(num(fill?.ntl || fill?.notional || fill?.sizeUsd, 0));
   const side = sideToPanel(fill?.side ?? fill?.buy);
+  const legacySide = legacySideToPanelForClientOrderId(fill?.side ?? fill?.buy);
   const orderId = fill?.orderId ?? fill?.idx ?? fill?.id ?? null;
   const txHash = fill?.txHash || fill?.initiatedTx || fill?.transactionHash || null;
   const timestampSeconds = Number(fill?.timestamp || fill?.time || fill?.executedAt || 0);
@@ -470,8 +487,8 @@ function normalizeFillForDb(fill, marketsById = new Map()) {
     price: fill?.price || fill?.px || fill?.entryPx || null,
     orderId,
     clientOrderId: txHash
-      ? `ostium:${txHash}:${orderId || pairId || 'fill'}:${side}`
-      : `ostium:${String(fill?.trader || '').toLowerCase()}:${pairId}:${orderId}:${createdAt || ''}:${side}`,
+      ? `ostium:${txHash}:${orderId || pairId || 'fill'}:${legacySide}`
+      : `ostium:${String(fill?.trader || '').toLowerCase()}:${pairId}:${orderId}:${createdAt || ''}:${legacySide}`,
     status: 'filled',
     dex: 'ostium',
     notional_usd: notional,
