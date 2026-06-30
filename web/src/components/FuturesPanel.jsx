@@ -610,8 +610,10 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
       ?? pos.unrealizedPnL
       ?? pos.pnl
   );
+  const isHibachiPosition = String(pos?.source || '').toLowerCase() === 'hibachi'
+    || String(pos?.pnl_source || '').toLowerCase() === 'hibachi_api';
   const derivedPnl = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
-  const pnlVal = isDust ? 0 : cleanSignedZero(providedPnl ?? derivedPnl);
+  const pnlVal = isDust ? 0 : cleanSignedZero(isHibachiPosition ? (providedPnl ?? 0) : (providedPnl ?? derivedPnl));
   const rawLev = displayLeverage(pos.leverage);
   const collateralLev = margin > 0 && posValueUsd > 0 ? Math.round((posValueUsd / margin) * 10) / 10 : null;
   const flashLev = isFlashPosition ? flashPositionDisplayLeverageStable(pos, posValueUsd, margin) : null;
@@ -619,8 +621,6 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     ? (flashLev ?? rawLev ?? collateralLev)
     : (rawLev && rawLev > 0 ? rawLev : (collateralLev || (leverageSettings[pos.symbol] || 1))));
   const rawProvidedPct = numOrNull(pos.pnl_pct);
-  const isHibachiPosition = String(pos?.source || '').toLowerCase() === 'hibachi'
-    || String(pos?.pnl_source || '').toLowerCase() === 'hibachi_api';
   const preserveProvidedPct = isHibachiPosition;
   const pricePct = entryP && markP
     ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1))
@@ -632,8 +632,8 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     : null;
   const pctMargin = hibachiInitialMargin && hibachiInitialMargin > 0 ? hibachiInitialMargin : margin;
   const marginPct = pctMargin > 0 ? (pnlVal / pctMargin) * 100 : null;
-  const pnlPct = isDust ? 0 : (isHibachiPosition && marginPct != null
-    ? marginPct
+  const pnlPct = isDust ? 0 : (isHibachiPosition
+    ? (rawProvidedPct ?? 0)
     : (providedPct ?? (pricePct ?? (marginPct ?? 0))));
   const pnlDirection = isDust ? 1 : signedMetricDirection(pnlVal, pnlPct);
   const pnlColor = pnlDirection >= 0 ? '#4CAF50' : '#E53935';
@@ -2422,8 +2422,8 @@ function FuturesPanel() {
     if (error && clearError) clearError();
   }, [clearError, error]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash') return;
-    const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : dex === 'flash' ? 'Flash' : 'Hyperliquid';
+    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash' && dex !== 'ostium') return;
+    const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : dex === 'flash' ? 'Flash' : dex === 'ostium' ? 'Ostium' : 'Hyperliquid';
     if (oneTapTrading?.enabled) {
       const result = typeof setOneTapTradingEnabled === 'function'
         ? await setOneTapTradingEnabled(false)
@@ -2435,7 +2435,7 @@ function FuturesPanel() {
       setSuccessMsg(`One tap trading disabled. Opening a ${dexLabel} order will ask to enable it again.`);
       return;
     }
-    if (dex === 'katana' || dex === 'flash') {
+    if (dex === 'katana' || dex === 'flash' || dex === 'ostium') {
       setReferralLinking(true);
       try {
         const result = typeof setOneTapTradingEnabled === 'function'
@@ -4172,7 +4172,7 @@ function FuturesPanel() {
                   color: '#8a7252', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
-                  Ostium is non-custodial on Arbitrum. Your wallet signs each trade, with Clash builder fees applied only when opening a position.
+                  Ostium is non-custodial on Arbitrum. Clash can use a browser-only delegate for one tap trading; USDC stays in your wallet.
                 </div>
                 {renderPrivyEmailButton('#111827', '#374151')}
                 <button
@@ -7809,6 +7809,45 @@ function FuturesPanel() {
                   >EDIT API</button>
                 </div>
               )}
+              {isOstium && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  background: oneTapTrading?.approved ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
+                  border: `1px solid ${oneTapTrading?.approved ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.35)'}`,
+                  borderRadius: 8,
+                  padding: '7px 9px',
+                }}>
+                  <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
+                    <span style={{fontSize: 11, fontWeight: 900, color: oneTapTrading?.approved ? '#166534' : '#9A3412'}}>
+                      Ostium one tap {oneTapTrading?.approved ? 'ready' : oneTapTrading?.enabled ? 'needs setup' : 'off'}
+                    </span>
+                    <span style={{fontSize: 10, fontWeight: 800, color: '#8a7252', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                      {oneTapTrading?.signer
+                        ? `Delegate ${oneTapTrading.signer.slice(0, 6)}...${oneTapTrading.signer.slice(-4)}${oneTapTrading?.gasBalanceEth ? ` | gas ${Number(oneTapTrading.gasBalanceEth).toFixed(5)} ETH` : ''}`
+                        : 'Creates an encrypted browser delegate and funds a small ETH gas float.'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleToggleOneTapTrading}
+                    disabled={loading || referralLinking}
+                    style={{
+                      ...S.btnSmall,
+                      minWidth: 74,
+                      padding: '5px 10px',
+                      background: oneTapTrading?.approved ? '#16A34A' : '#fff6dc',
+                      color: oneTapTrading?.approved ? '#fff' : '#5C3A21',
+                      border: `2px solid ${oneTapTrading?.approved ? '#15803D' : '#F97316'}`,
+                      opacity: loading || referralLinking ? 0.7 : 1,
+                    }}
+                  >
+                    {loading || referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'ENABLE'}
+                  </button>
+                </div>
+              )}
               {isHyperliquid && (
                 <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
                   <input
@@ -7995,6 +8034,8 @@ function FuturesPanel() {
                   ? <>Sends USDC between your connected <b>Solana wallet</b> and Flash. Each action opens a wallet signature; keep a small <b>SOL</b> gas float.</>
                   : isHibachi
                   ? <>Hibachi deposit and withdrawal are not exposed through this Clash API flow. Use the official Hibachi app to manage funds on <b>{chainName}</b>.</>
+                  : isOstium
+                  ? <>USDC stays in your <b>Arbitrum wallet</b>. One-time setup approves Ostium USDC spending and registers a browser-only delegate. The delegate pays trade gas from a small ETH float; Clash does not sponsor gas.</>
                   : <>Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.</>}
               </span>
             </div>

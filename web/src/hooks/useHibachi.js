@@ -188,23 +188,6 @@ function hibachiTerminalRejected(status) {
   return /reject|cancel|fail|error/u.test(text);
 }
 
-function derivedPositionPnl(pos) {
-  const entry = num(pos?.entry_price, 0);
-  const mark = num(pos?.mark_price, 0);
-  const amount = Math.abs(num(pos?.amount, 0));
-  if (!(entry > 0) || !(mark > 0) || !(amount > 0)) return null;
-  return (mark - entry) * amount * (pos?.side === 'ask' ? -1 : 1);
-}
-
-function derivedPositionPnlPct(pos, leverage = 1, margin = 0, sizeUsd = 0) {
-  const entry = num(pos?.entry_price, 0);
-  const mark = num(pos?.mark_price, 0);
-  if (!(entry > 0) || !(mark > 0)) return null;
-  const direction = pos?.side === 'ask' ? -1 : 1;
-  const effectiveLeverage = leverage > 0 ? leverage : (margin > 0 && sizeUsd > 0 ? sizeUsd / margin : 1);
-  return ((mark - entry) / entry) * 100 * direction * Math.max(1, effectiveLeverage || 1);
-}
-
 function enrichPositions(rows, leverageSettings = {}) {
   return (Array.isArray(rows) ? rows : []).map((pos) => {
     const sym = symbolOf(pos?.symbol);
@@ -218,27 +201,17 @@ function enrichPositions(rows, leverageSettings = {}) {
     const margin = hibachiInitialMargin > 0
       ? hibachiInitialMargin
       : (apiMargin > 0 ? apiMargin : (sizeUsd > 0 && leverage > 0 ? sizeUsd / leverage : 0));
-    const apiPnl = num(pos?.pnl_usd, NaN);
-    const derivedPnl = derivedPositionPnl(pos);
-    const pnlUsd = Number.isFinite(apiPnl)
-      ? apiPnl
-      : (derivedPnl ?? 0);
-    const derivedPct = derivedPositionPnlPct(pos, leverage, margin, sizeUsd);
-    const apiPct = num(pos?.pnl_pct, NaN);
-    const hibachiMarginPct = margin > 0 && Number.isFinite(pnlUsd)
-      ? (pnlUsd / margin) * 100
-      : null;
-    const pnlPct = hibachiMarginPct ?? (Number.isFinite(apiPct)
-      ? apiPct
-      : (derivedPct ?? 0));
+    const apiPnl = firstPresent(pos?.pnl_usd, pos?.unrealized_pnl_usd, pos?.unrealizedPnlUsd, pos?.pnl);
+    const apiPct = firstPresent(pos?.pnl_pct, pos?.unrealized_pnl_pct, pos?.unrealizedPnlPct, pos?.roi_pct, pos?.roi);
     return {
       ...pos,
       source: pos?.source || 'hibachi',
+      pnl_source: pos?.pnl_source || 'hibachi_api',
       symbol: sym || pos?.symbol,
       leverage: String(leverage),
       margin: margin > 0 ? String(margin) : (pos?.margin ?? ''),
-      pnl_usd: String(pnlUsd),
-      pnl_pct: pnlPct,
+      pnl_usd: apiPnl == null ? pos?.pnl_usd : apiPnl,
+      pnl_pct: apiPct == null ? pos?.pnl_pct : apiPct,
     };
   });
 }

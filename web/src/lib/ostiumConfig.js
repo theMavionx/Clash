@@ -25,6 +25,18 @@ export const OSTIUM_RPC_URL = (
 
 export const OSTIUM_SUBGRAPH_URL = import.meta.env.VITE_OSTIUM_SUBGRAPH_URL || '';
 export const OSTIUM_BUILDER_API_URL = import.meta.env.VITE_OSTIUM_BUILDER_API_URL || '';
+export const OSTIUM_DELEGATE_MIN_ETH = (
+  import.meta.env.VITE_OSTIUM_DELEGATE_MIN_ETH
+  || '0.00005'
+);
+export const OSTIUM_DELEGATE_TARGET_ETH = (
+  import.meta.env.VITE_OSTIUM_DELEGATE_TARGET_ETH
+  || '0.00030'
+);
+export const OSTIUM_MAX_ALLOWANCE_CHECK_USD = (
+  import.meta.env.VITE_OSTIUM_MAX_ALLOWANCE_CHECK_USD
+  || '1000000000'
+);
 
 export function ostiumClientConfig(extra = {}) {
   return {
