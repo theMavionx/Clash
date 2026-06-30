@@ -212,8 +212,12 @@ function enrichPositions(rows, leverageSettings = {}) {
     const apiLev = num(pos?.leverage, 0);
     const leverage = apiLev > 1 ? apiLev : (storedLev > 1 ? storedLev : 20);
     const sizeUsd = num(pos?.size_usd, 0);
+    const entryNotional = num(pos?.entry_notional, 0);
     const apiMargin = num(pos?.margin, 0);
-    const margin = apiMargin > 0 ? apiMargin : (sizeUsd > 0 && leverage > 0 ? sizeUsd / leverage : 0);
+    const hibachiInitialMargin = entryNotional > 0 && leverage > 0 ? entryNotional / leverage : 0;
+    const margin = hibachiInitialMargin > 0
+      ? hibachiInitialMargin
+      : (apiMargin > 0 ? apiMargin : (sizeUsd > 0 && leverage > 0 ? sizeUsd / leverage : 0));
     const apiPnl = num(pos?.pnl_usd, NaN);
     const derivedPnl = derivedPositionPnl(pos);
     const pnlUsd = Number.isFinite(apiPnl)

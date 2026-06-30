@@ -1001,6 +1001,25 @@ function positionMargin(position = {}, context = {}) {
   return notional > 0 && leverage > 0 ? notional / leverage : 0;
 }
 
+function hibachiPositionInitialMargin(position = {}, { fallbackMargin = 0, leverage = 0 } = {}) {
+  const direct = num(
+    position.margin
+      ?? position.positionMargin
+      ?? position.initialMargin
+      ?? position.openMargin
+      ?? position.collateral
+      ?? position.usedMargin
+      ?? position.marginUsed,
+  );
+  if (direct > 0) return direct;
+  const entryNotional = positionEntryNotional(position);
+  const effectiveLeverage = num(leverage);
+  if (entryNotional > 0 && effectiveLeverage > 0) {
+    return entryNotional / effectiveLeverage;
+  }
+  return num(fallbackMargin, 0);
+}
+
 function accountEquity(account = {}) {
   return Math.max(0, num(firstPresent(
     account.balance,
@@ -1410,10 +1429,11 @@ function formatPositionsFromAccountInfo(j = {}) {
     const side = positionSide(p);
     const notional = positionNotional(p);
     const rawLeverage = num(p.leverage ?? p.positionLeverage ?? p.initialLeverage);
-    const margin = positionMargin(p, { accountMargin, totalBasis });
+    const allocatedMargin = positionMargin(p, { accountMargin, totalBasis });
     const leverage = rawLeverage > 0
       ? rawLeverage
-      : (margin > 0 && notional > 0 ? notional / margin : 0);
+      : (allocatedMargin > 0 && notional > 0 ? Math.round((notional / allocatedMargin) * 10) / 10 : 0);
+    const margin = hibachiPositionInitialMargin(p, { fallbackMargin: allocatedMargin, leverage });
     const entryPrice = positionEntryPrice(p);
     const markPrice = positionMarkPrice(p);
     const pnlUsd = positionPnl(p, amount, side);

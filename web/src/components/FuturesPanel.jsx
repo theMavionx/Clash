@@ -626,7 +626,12 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1))
     : null;
   const providedPct = !preserveProvidedPct && rawProvidedPct === 0 && pricePct != null && Math.abs(pricePct) >= 0.005 ? null : rawProvidedPct;
-  const marginPct = margin > 0 ? (pnlVal / margin) * 100 : null;
+  const entryNotional = numOrNull(pos.entry_notional);
+  const hibachiInitialMargin = isHibachiPosition && entryNotional && entryNotional > 0 && setLev && setLev > 0
+    ? entryNotional / setLev
+    : null;
+  const pctMargin = hibachiInitialMargin && hibachiInitialMargin > 0 ? hibachiInitialMargin : margin;
+  const marginPct = pctMargin > 0 ? (pnlVal / pctMargin) * 100 : null;
   const pnlPct = isDust ? 0 : (isHibachiPosition && marginPct != null
     ? marginPct
     : (providedPct ?? (pricePct ?? (marginPct ?? 0))));
