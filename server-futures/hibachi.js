@@ -21,6 +21,7 @@ const HIBACHI_REST_RATE_LIMIT_MAX = Math.max(10, Math.min(1_000, Number(process.
 const HIBACHI_REST_RATE_LIMIT_QUEUE_MAX = Math.max(10, Math.min(5_000, Number(process.env.HIBACHI_REST_RATE_LIMIT_QUEUE_MAX || 1_000)));
 const HIBACHI_REST_RATE_LIMIT_WAIT_MS = Math.max(1_000, Math.min(60_000, Number(process.env.HIBACHI_REST_RATE_LIMIT_WAIT_MS || 12_000)));
 const HIBACHI_WS_ENABLED = String(process.env.HIBACHI_WS_ENABLED || 'true').toLowerCase() !== 'false';
+const HIBACHI_ACCOUNT_INFO_REST_FIRST = String(process.env.HIBACHI_ACCOUNT_INFO_REST_FIRST || 'true').toLowerCase() !== 'false';
 const HIBACHI_WS_CONNECT_TIMEOUT_MS = Math.max(1_000, Math.min(10_000, Number(process.env.HIBACHI_WS_CONNECT_TIMEOUT_MS || 4_000)));
 const HIBACHI_WS_SNAPSHOT_WAIT_MS = Math.max(250, Math.min(5_000, Number(process.env.HIBACHI_WS_SNAPSHOT_WAIT_MS || 2_000)));
 const HIBACHI_WS_SNAPSHOT_MAX_AGE_MS = Math.max(1_000, Math.min(120_000, Number(process.env.HIBACHI_WS_SNAPSHOT_MAX_AGE_MS || 45_000)));
@@ -353,6 +354,10 @@ function explicitPositionPnl(position = {}) {
   return null;
 }
 
+function hasExplicitPositionPnl(position = {}) {
+  return explicitPositionPnl(position) !== null;
+}
+
 function derivedPositionPnl(position = {}, amount = positionQuantity(position), side = positionSide(position)) {
   const notional = positionNotional(position);
   const entryNotional = positionEntryNotional(position);
@@ -369,9 +374,8 @@ function derivedPositionPnl(position = {}, amount = positionQuantity(position), 
 
 function positionPnl(position = {}, amount = positionQuantity(position), side = positionSide(position)) {
   const explicit = explicitPositionPnl(position);
-  const derived = derivedPositionPnl(position, amount, side);
-  if (derived != null && (explicit == null || (Math.abs(explicit) < 0.005 && Math.abs(derived) >= 0.005))) return derived;
-  return explicit ?? derived ?? 0;
+  if (explicit !== null) return explicit;
+  return derivedPositionPnl(position, amount, side) ?? 0;
 }
 
 function explicitPositionPnlPct(position = {}) {
@@ -416,7 +420,7 @@ function positionPnlPct(position = {}, opts = {}) {
   if (explicit != null) return explicit;
   const pnlUsd = Number(opts.pnlUsd);
   const margin = Number(opts.margin);
-  if (Number.isFinite(pnlUsd) && Math.abs(pnlUsd) >= 0.005 && margin > 0) return (pnlUsd / margin) * 100;
+  if (Number.isFinite(pnlUsd) && margin > 0) return (pnlUsd / margin) * 100;
   const derived = priceDerivedPositionPnlPct(position, opts);
   if (derived != null) return derived;
   return margin > 0 && Number.isFinite(pnlUsd) ? (pnlUsd / margin) * 100 : null;
@@ -1302,6 +1306,37 @@ function invalidatePrivateReadsAfterMutation(creds) {
 
 async function getAccountInfo(creds, opts = {}) {
   const forceLive = Boolean(opts.forceLive || opts.force_live);
+  const readRest = async () => {
+    const payload = await cachedAuthedGet(accountInfoPath(creds), creds, forceLive
+      ? { forceLive: true, allowStale: opts.allowStale !== false && opts.allow_stale !== false, ttlMs: 0 }
+      : {});
+    if (HIBACHI_WS_ENABLED) {
+      const hasPositions = rows(payload?.positions).length > 0;
+      if (hasPositions || opts.acceptEmptySnapshot || opts.accept_empty_snapshot) {
+        accountStream(creds).replaceSnapshot(payload);
+      }
+    }
+    return payload;
+  };
+
+  if (forceLive || HIBACHI_ACCOUNT_INFO_REST_FIRST) {
+    try {
+      return await readRest();
+    } catch (e) {
+      if (forceLive || !HIBACHI_WS_ENABLED) throw e;
+      try {
+        const snapshot = await accountStream(creds).ensureStarted();
+        if (snapshot) {
+          logHibachiWs('account_fallback_ws', creds, { message: e.message || String(e) });
+          return snapshot;
+        }
+      } catch (wsError) {
+        logHibachiWs('account_ws_failed_after_rest', creds, { message: wsError.message || String(wsError) });
+      }
+      throw e;
+    }
+  }
+
   if (!forceLive && HIBACHI_WS_ENABLED) {
     try {
       const snapshot = await accountStream(creds).ensureStarted();
@@ -1311,16 +1346,7 @@ async function getAccountInfo(creds, opts = {}) {
       logHibachiWs('account_fallback_rest', creds, { message: e.message || String(e) });
     }
   }
-  const payload = await cachedAuthedGet(accountInfoPath(creds), creds, forceLive
-    ? { forceLive: true, allowStale: opts.allowStale !== false && opts.allow_stale !== false, ttlMs: 0 }
-    : {});
-  if (forceLive && HIBACHI_WS_ENABLED) {
-    const hasPositions = rows(payload?.positions).length > 0;
-    if (hasPositions || opts.acceptEmptySnapshot || opts.accept_empty_snapshot) {
-      accountStream(creds).replaceSnapshot(payload);
-    }
-  }
-  return payload;
+  return readRest();
 }
 
 function formatAccount(j = {}) {
@@ -1382,6 +1408,12 @@ function formatPositionsFromAccountInfo(j = {}) {
       leverage: rawLeverage > 0 ? String(rawLeverage) : '',
       pnl_usd: String(pnlUsd),
       pnl_pct: pnlPct,
+      pnl_source: hasExplicitPositionPnl(p) ? 'hibachi_api' : 'derived_fallback',
+      source: 'hibachi',
+      unrealized_trading_pnl: p.unrealizedTradingPnl ?? p.unrealized_trading_pnl ?? null,
+      unrealized_funding_pnl: p.unrealizedFundingPnl ?? p.unrealized_funding_pnl ?? null,
+      entry_notional: positionEntryNotional(p) || null,
+      notional_value: notional || null,
       pair_index: null,
       trade_index: null,
       is_isolated: false,

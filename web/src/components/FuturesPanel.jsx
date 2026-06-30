@@ -619,10 +619,12 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     ? (flashLev ?? rawLev ?? collateralLev)
     : (rawLev && rawLev > 0 ? rawLev : (collateralLev || (leverageSettings[pos.symbol] || 1))));
   const rawProvidedPct = numOrNull(pos.pnl_pct);
+  const preserveProvidedPct = String(pos?.source || '').toLowerCase() === 'hibachi'
+    || String(pos?.pnl_source || '').toLowerCase() === 'hibachi_api';
   const pricePct = entryP && markP
     ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1))
     : null;
-  const providedPct = rawProvidedPct === 0 && pricePct != null && Math.abs(pricePct) >= 0.005 ? null : rawProvidedPct;
+  const providedPct = !preserveProvidedPct && rawProvidedPct === 0 && pricePct != null && Math.abs(pricePct) >= 0.005 ? null : rawProvidedPct;
   const pnlPct = isDust ? 0 : (providedPct ?? (pricePct ?? (margin > 0 ? (pnlVal / margin) * 100 : 0)));
   const pnlDirection = isDust ? 1 : signedMetricDirection(pnlVal, pnlPct);
   const pnlColor = pnlDirection >= 0 ? '#4CAF50' : '#E53935';

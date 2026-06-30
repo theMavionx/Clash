@@ -216,16 +216,17 @@ function enrichPositions(rows, leverageSettings = {}) {
     const margin = apiMargin > 0 ? apiMargin : (sizeUsd > 0 && leverage > 0 ? sizeUsd / leverage : 0);
     const apiPnl = num(pos?.pnl_usd, NaN);
     const derivedPnl = derivedPositionPnl(pos);
-    const pnlUsd = derivedPnl != null && (!Number.isFinite(apiPnl) || Math.abs(apiPnl) < 1e-12)
-      ? derivedPnl
-      : (Number.isFinite(apiPnl) ? apiPnl : 0);
+    const pnlUsd = Number.isFinite(apiPnl)
+      ? apiPnl
+      : (derivedPnl ?? 0);
     const derivedPct = derivedPositionPnlPct(pos, leverage, margin, sizeUsd);
     const apiPct = num(pos?.pnl_pct, NaN);
-    const pnlPct = Number.isFinite(apiPct) && !(apiPct === 0 && derivedPct != null && Math.abs(derivedPct) >= 0.005)
+    const pnlPct = Number.isFinite(apiPct)
       ? apiPct
       : (derivedPct ?? (margin > 0 ? (pnlUsd / margin) * 100 : 0));
     return {
       ...pos,
+      source: pos?.source || 'hibachi',
       symbol: sym || pos?.symbol,
       leverage: String(leverage),
       margin: margin > 0 ? String(margin) : (pos?.margin ?? ''),
