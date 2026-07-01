@@ -59,6 +59,33 @@ const FLASH_ONE_TAP_DISABLED = {
   required: FLASH_REQUIRE_ONE_TAP_TRADING,
 };
 
+const FLASH_PROGRAM_ERROR_MESSAGES = {
+  6020: 'Flash rejected the order because price moved beyond the allowed slippage. Refresh the quote and try again.',
+  6021: 'Flash rejected the order because leverage is above the market leverage cap. Lower leverage and retry.',
+  6022: 'Flash rejected this order because leverage is above the market initial leverage cap. Lower leverage and retry.',
+  6023: 'Flash rejected the order because leverage is below the market minimum.',
+  6031: 'Flash does not allow this action for the market right now.',
+  6033: 'This Flash market is in close-only mode. You can close positions, but not open new ones.',
+  6034: 'Flash rejected the order because collateral is below the market minimum. Increase margin and retry.',
+  6046: 'Flash rejected this wallet for access rules on this market.',
+  6049: 'Flash rejected the stop-loss price. Check the SL level and retry.',
+  6050: 'Flash rejected the take-profit price. Check the TP level and retry.',
+  6051: 'Flash rejected the order because market exposure limit was reached.',
+  6054: 'Flash rejected the order because the open-order limit was reached.',
+  6057: 'Flash rejected the limit price. Check the price and retry.',
+  6064: 'Flash rejected the order because initial leverage is below the market minimum.',
+  6065: 'Flash rejected the order because the position size is too small.',
+  6078: 'Insufficient Flash balance for this operation.',
+  6079: 'Insufficient Flash available balance. Deposited funds minus open positions/orders are not enough for this trade. Reduce margin or close/cancel existing exposure.',
+  6081: 'Flash rejected the order because the account has too many open orders.',
+  6083: 'Flash could not find this order. Refresh positions/orders and try again.',
+  6084: 'Flash rejected the order because the limit price condition is not met.',
+  6085: 'Flash rejected the order because collateral is insufficient for the position.',
+  6086: 'Flash rejected the order because max position size was exceeded.',
+  6087: 'Flash rejected the order because max exposure was exceeded.',
+  6090: 'Flash rejected the order because the trigger price condition is not met.',
+};
+
 function playerToken(player) {
   return player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
 }
@@ -778,6 +805,18 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
   };
 }
 
+function flashAvailableBalanceFromAccount(acct = {}) {
+  const value = finiteNumberOrNull(
+    acct.available_to_spend
+    ?? acct.availableToSpend
+    ?? acct.free_margin
+    ?? acct.available_to_withdraw
+    ?? acct.availableToWithdraw
+    ?? acct.withdrawable
+  );
+  return value == null ? null : Math.max(0, value);
+}
+
 function flashWsUrl(apiUrl, owner) {
   const base = String(apiUrl || 'https://flashapi.trade').replace(/\/+$/, '');
   const wsBase = base.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
@@ -834,11 +873,58 @@ function flashSimulationLogs(value) {
   return Array.isArray(value?.logs) ? value.logs.slice(-12) : [];
 }
 
+function flashCustomErrorCode(value) {
+  if (value == null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const hex = value.match(/custom program error:\s*0x([0-9a-f]+)/i);
+    if (hex?.[1]) return parseInt(hex[1], 16);
+    const custom = value.match(/\bCustom["']?\s*[:=]\s*(\d{4,})\b/i);
+    if (custom?.[1]) return Number(custom[1]);
+    const flashCode = value.match(/\b(60\d{2}|61\d{2})\b/);
+    return flashCode?.[1] ? Number(flashCode[1]) : null;
+  }
+  if (Array.isArray(value)) {
+    if (value.length >= 2) {
+      const nested = flashCustomErrorCode(value[1]);
+      if (nested != null) return nested;
+    }
+    for (const item of value) {
+      const code = flashCustomErrorCode(item);
+      if (code != null) return code;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    if (Number.isFinite(Number(value.code)) && Number(value.code) > 0) return Number(value.code);
+    if (Number.isFinite(Number(value.Custom))) return Number(value.Custom);
+    if (Number.isFinite(Number(value.custom))) return Number(value.custom);
+    if (value.InstructionError) return flashCustomErrorCode(value.InstructionError);
+    if (value.instructionError) return flashCustomErrorCode(value.instructionError);
+    for (const key of ['program_error', 'err', 'error', 'message', 'data']) {
+      const code = flashCustomErrorCode(value[key]);
+      if (code != null) return code;
+    }
+  }
+  return null;
+}
+
+function flashProgramErrorMessage(err, fallback = 'Flash transaction failed', logs = [], status = null) {
+  const serverProgramError = status?.program_error || status?.programError || null;
+  const code = flashCustomErrorCode(serverProgramError) ?? flashCustomErrorCode(err) ?? flashCustomErrorCode(logs);
+  if (code != null) {
+    const serverMessage = serverProgramError?.message || serverProgramError?.msg || status?.error_message || status?.errorMessage || '';
+    const message = FLASH_PROGRAM_ERROR_MESSAGES[code] || serverMessage || `Flash program error ${code}`;
+    return `${fallback}: ${message} (code ${code})`;
+  }
+  const programError = logs.find(line => /custom program error|error|failed/i.test(String(line || '')));
+  return `${fallback}${err ? `: ${JSON.stringify(err)}` : ''}${programError ? ` (${programError})` : ''}`;
+}
+
 function flashSimulationErrorMessage(value, fallback = 'Flash transaction simulation failed') {
   const err = value?.err;
   const logs = flashSimulationLogs(value);
-  const programError = logs.find(line => /custom program error|error|failed/i.test(String(line || '')));
-  return `${fallback}${err ? `: ${JSON.stringify(err)}` : ''}${programError ? ` (${programError})` : ''}`;
+  return flashProgramErrorMessage(err, fallback, logs, value);
 }
 
 async function simulateUnsignedLegacyTransaction(connection, tx, label = 'Flash transaction') {
@@ -945,6 +1031,11 @@ function isFlashMissingDelegationError(error) {
 
 function flashUserError(error) {
   const message = String(error?.message || error?.data?.detail || error?.data?.error || error || '');
+  const flashCode = flashCustomErrorCode(error?.data?.program_error || error?.data?.err || error?.data || message);
+  if (flashCode != null) {
+    const decoded = flashProgramErrorMessage(error?.data?.err || error?.data || message, '', error?.data?.logs || [], error?.data || null);
+    return decoded.replace(/^Flash transaction failed:\s*/i, '').replace(/^:\s*/, '') || message;
+  }
   if (isWalletBlockedOrRejected(error)) {
     return 'Wallet rejected or blocked the Flash transaction. Review the wallet prompt and try again.';
   }
@@ -1350,18 +1441,24 @@ export function useFlash() {
   const confirmSignature = useCallback(async (signature, txConnection = null, options = {}) => {
     const preferBackend = options?.preferBackend === true;
     const acceptProcessed = options?.acceptProcessed === true;
+    const loadBackendStatus = async () => fetchJson(`${FUTURES_API}/flash/tx-status?signature=${encodeURIComponent(signature)}`, {
+      headers: { 'x-token': token, 'x-dex': 'flash' },
+    }).catch(() => null);
+    const throwFlashTxError = (err, status = null) => {
+      const error = new Error(flashProgramErrorMessage(err, 'Flash transaction failed', status?.logs || [], status));
+      error.data = status || { err };
+      throw error;
+    };
     const checkBackendStatus = async () => {
-      const status = await fetchJson(`${FUTURES_API}/flash/tx-status?signature=${encodeURIComponent(signature)}`, {
-        headers: { 'x-token': token, 'x-dex': 'flash' },
-      }).catch(() => null);
-      if (status?.err) throw new Error(`Flash transaction failed: ${JSON.stringify(status.err)}`);
+      const status = await loadBackendStatus();
+      if (status?.err) throwFlashTxError(status.err, status);
       return status?.found && !status?.err;
     };
     const checkRpcStatus = async () => {
       if (!txConnection?.getSignatureStatuses) return false;
       const rpcStatus = await txConnection.getSignatureStatuses([signature], { searchTransactionHistory: true }).catch(() => null);
       const value = rpcStatus?.value?.[0];
-      if (value?.err) throw new Error(`Flash transaction failed: ${JSON.stringify(value.err)}`);
+      if (value?.err) throwFlashTxError(value.err, await loadBackendStatus());
       if (acceptProcessed && value) return true;
       return value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized';
     };
@@ -2005,6 +2102,22 @@ export function useFlash() {
     }
     setActionLoading(true);
     try {
+      const requestedMargin = Number(amount);
+      if (Number.isFinite(requestedMargin) && requestedMargin > 0 && accountOwner) {
+        const latestAccount = await fetchJson(`${FUTURES_API}/flash/account?address=${encodeURIComponent(accountOwner)}`, {
+          headers: { 'x-token': token, 'x-dex': 'flash' },
+        }).catch((e) => {
+          console.warn('[Flash] latest balance gate failed:', e?.message || e);
+          return null;
+        });
+        const latestAvailable = flashAvailableBalanceFromAccount(latestAccount);
+        if (latestAvailable != null && requestedMargin > latestAvailable + 1e-6) {
+          window.setTimeout(() => refresh().catch(() => null), 0);
+          return {
+            error: `Insufficient Flash available balance. Requested $${requestedMargin.toFixed(2)} margin, available $${latestAvailable.toFixed(2)} after open positions/orders. Reduce margin or close/cancel existing exposure.`,
+          };
+        }
+      }
       const { params: sessionParams, session: oneTapSession } = await oneTapTradeParams();
       await ensureFlashBasketDelegated();
       const request = {

@@ -76,6 +76,10 @@ aptos-test-wallet.txt
 backups/
 .tmp/
 
+# Local Flash live-test harness. It can load wallet secrets from env and must
+# stay out of commits.
+tools/flash/
+
 # Aptos CLI binary downloaded locally for Move publishing (~130MB)
 tools/aptos-cli/
 

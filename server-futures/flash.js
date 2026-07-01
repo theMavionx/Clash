@@ -35,6 +35,85 @@ const FLASH_DUST_COLLATERAL_USD = Math.max(0, Math.min(0.05, Number(process.env.
 
 let cache = new Map();
 
+const FLASH_PROGRAM_ERROR_BY_CODE = (() => {
+  try {
+    // The Magic Trade IDL is the authoritative source for Flash program errors.
+    // Keep this runtime lookup server-side so error decoding tracks SDK updates.
+    // eslint-disable-next-line global-require, import/no-dynamic-require
+    const idl = require('magic-trade-client/dist/idl/magic_trade.json');
+    return new Map((Array.isArray(idl?.errors) ? idl.errors : []).map(row => [
+      Number(row.code),
+      { code: Number(row.code), name: row.name, msg: row.msg || '' },
+    ]).filter(([code]) => Number.isFinite(code)));
+  } catch {
+    return new Map();
+  }
+})();
+
+function extractFlashCustomErrorCode(value) {
+  if (value == null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const hex = value.match(/custom program error:\s*0x([0-9a-f]+)/i);
+    if (hex?.[1]) return parseInt(hex[1], 16);
+    const custom = value.match(/\bCustom["']?\s*[:=]\s*(\d{4,})\b/i);
+    if (custom?.[1]) return Number(custom[1]);
+    const flashCode = value.match(/\b(60\d{2}|61\d{2})\b/);
+    return flashCode?.[1] ? Number(flashCode[1]) : null;
+  }
+  if (Array.isArray(value)) {
+    if (value.length >= 2) {
+      const nested = extractFlashCustomErrorCode(value[1]);
+      if (nested != null) return nested;
+    }
+    for (const item of value) {
+      const code = extractFlashCustomErrorCode(item);
+      if (code != null) return code;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    if (Number.isFinite(Number(value.code)) && Number(value.code) > 0) return Number(value.code);
+    if (Number.isFinite(Number(value.Custom))) return Number(value.Custom);
+    if (Number.isFinite(Number(value.custom))) return Number(value.custom);
+    if (value.InstructionError) return extractFlashCustomErrorCode(value.InstructionError);
+    if (value.instructionError) return extractFlashCustomErrorCode(value.instructionError);
+    for (const key of ['err', 'error', 'message', 'data']) {
+      const code = extractFlashCustomErrorCode(value[key]);
+      if (code != null) return code;
+    }
+  }
+  return null;
+}
+
+function decodeFlashProgramError(err, logs = []) {
+  const code = extractFlashCustomErrorCode(err) ?? extractFlashCustomErrorCode(logs);
+  if (code == null) return null;
+  const def = FLASH_PROGRAM_ERROR_BY_CODE.get(code) || { code, name: '', msg: '' };
+  return {
+    code,
+    name: def.name || '',
+    message: def.msg || def.name || `Flash program error ${code}`,
+  };
+}
+
+function redactRpcUrl(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    for (const key of [...url.searchParams.keys()]) {
+      if (/key|token|secret|pass|auth/i.test(key)) url.searchParams.set(key, '[redacted]');
+    }
+    url.pathname = url.pathname.replace(/\/v2\/[^/?#]+/i, '/v2/[redacted]');
+    return url.toString();
+  } catch {
+    return text
+      .replace(/([?&][^=]*(?:key|token|secret|pass|auth)[^=]*=)[^&#\s]+/ig, '$1[redacted]')
+      .replace(/\/v2\/[^/?#\s]+/ig, '/v2/[redacted]');
+  }
+}
+
 function isSolanaAddress(addr) {
   const text = String(addr || '').trim();
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) return false;
@@ -110,7 +189,7 @@ async function withFlashSolanaRpc(label, task) {
       return await task(rpcUrl, ctrl.signal);
     } catch (e) {
       lastError = e;
-      console.warn(`[flash] ${label} RPC failed on ${rpcUrl}:`, e?.message || e);
+      console.warn(`[flash] ${label} RPC failed on ${redactRpcUrl(rpcUrl)}:`, e?.message || e);
     } finally {
       clearTimeout(timer);
     }
@@ -170,7 +249,7 @@ async function flashJsonRpcRequest(rpcUrl, label, method, params, signal) {
   if (!res.ok || data?.error) {
     const err = new Error(data?.error?.message || (text ? text.slice(0, 400) : `HTTP ${res.status}`));
     err.status = res.ok ? 502 : res.status;
-    err.rpc_url = rpcUrl;
+    err.rpc_url = redactRpcUrl(rpcUrl);
     throw err;
   }
   return data?.result;
@@ -373,7 +452,7 @@ async function submitSignedTransaction(rawBase64, options = {}) {
     }
     return {
       signature: data.result,
-      endpoint,
+      endpoint: redactRpcUrl(endpoint),
       submitted_ms: Date.now() - startedAt,
       tx: {
         version: tx.version,
@@ -936,6 +1015,10 @@ function decodeFlashBasket(data, expectedOwner = '') {
   };
 }
 
+function isFlashBasketLayoutDecodeError(error) {
+  return /Flash (basket )?account (data is truncated|has invalid layout|owner mismatch)/i.test(String(error?.message || error || ''));
+}
+
 function decodeUserDepositLedger(data, expectedOwner = '') {
   const bytes = Buffer.from(data || []);
   const discriminator = accountDiscriminator('UserDepositLedger');
@@ -1005,13 +1088,13 @@ async function getFlashUserDepositLedger(owner, ledgerPubkey, programId = FLASH_
       if (read?.ledger) {
         return {
           ...read,
-          rpc_url: rpcUrl,
+          rpc_url: redactRpcUrl(rpcUrl),
           source: erUrls.has(String(rpcUrl).replace(/\/+$/, '')) ? 'er' : 'base',
         };
       }
     } catch (e) {
       lastError = e;
-      console.warn(`[flash] Flash user deposit ledger RPC failed on ${rpcUrl}:`, e?.message || e);
+      console.warn(`[flash] Flash user deposit ledger RPC failed on ${redactRpcUrl(rpcUrl)}:`, e?.message || e);
     } finally {
       clearTimeout(timer);
     }
@@ -1364,7 +1447,7 @@ async function readFlashBasketFromRpc(rpcUrl, owner, programId, signal) {
       ...basket,
       pubkey: row.pubkey || null,
       program_id: programId,
-      rpc_url: rpcUrl,
+      rpc_url: redactRpcUrl(rpcUrl),
       source: 'flash_er_getProgramAccounts',
     };
   }
@@ -1385,7 +1468,7 @@ async function readFlashBasketFromRpc(rpcUrl, owner, programId, signal) {
     ...basket,
     pubkey: derivedBasket,
     program_id: programId,
-    rpc_url: rpcUrl,
+    rpc_url: redactRpcUrl(rpcUrl),
     source: 'flash_er_getAccountInfo',
   };
 }
@@ -1405,14 +1488,16 @@ async function getFlashErBasket(owner) {
         if (basket && !firstBasket) firstBasket = basket;
       } catch (e) {
         lastError = e;
-        console.warn(`[flash] ER basket read failed on ${rpcUrl} program ${programId}:`, e?.message || e);
+        if (!isFlashBasketLayoutDecodeError(e)) {
+          console.warn(`[flash] ER basket read failed on ${redactRpcUrl(rpcUrl)} program ${programId}:`, e?.message || e);
+        }
       } finally {
         clearTimeout(timer);
       }
     }
   }
   if (firstBasket) return firstBasket;
-  if (lastError) throw lastError;
+  if (lastError && !isFlashBasketLayoutDecodeError(lastError)) throw lastError;
   return null;
 }
 
@@ -1681,9 +1766,14 @@ function txSignedByWallet(parsedTx, wallet) {
 async function getTransactionStatus(signature) {
   if (!signature) throw Object.assign(new Error('signature required'), { status: 400 });
   const parsed = await getParsedFlashTransaction(signature);
+  const logs = Array.isArray(parsed?.meta?.logMessages) ? parsed.meta.logMessages.slice(-30) : [];
+  const programError = decodeFlashProgramError(parsed?.meta?.err, logs);
   return {
     found: !!parsed,
     err: parsed?.meta?.err || null,
+    program_error: programError,
+    error_message: programError?.message || null,
+    logs,
     slot: parsed?.slot || null,
     blockTime: parsed?.blockTime || null,
     confirmationStatus: parsed ? 'confirmed' : null,

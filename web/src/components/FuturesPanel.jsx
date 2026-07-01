@@ -2742,14 +2742,18 @@ function FuturesPanel() {
     : 0;
   const hlUnifiedAccount = dex === 'hyperliquid'
     && (account?.abstraction_mode === 'unifiedAccount' || account?.abstraction_mode === 'portfolioMargin' || account?.is_unified_account === true);
+  const freeMarginValue = account?.available_to_spend ?? account?.free_margin ?? account?.availableToSpend;
   const pacBalanceBase = Math.max(0, parseFloat(
-    account?.available_to_spend            // Pacifica unified margin (preferred)
-      ?? account?.usdc_cross_withdrawable_balance // Decibel
-      ?? account?.usdcAvailable                   // Avantis variant
-      ?? account?.usdc_balance                    // Ostium self-custody wallet balance
-      ?? account?.usdc                            // GMX
-      ?? account?.balance                         // last-resort
-      ?? 0
+    dex === 'flash'
+      ? (freeMarginValue ?? 0)
+      : (account?.available_to_spend            // Pacifica unified margin (preferred)
+        ?? account?.free_margin
+        ?? account?.usdc_cross_withdrawable_balance // Decibel
+        ?? account?.usdcAvailable                   // Avantis variant
+        ?? account?.usdc_balance                    // Ostium self-custody wallet balance
+        ?? account?.usdc                            // GMX
+        ?? account?.balance                         // last-resort
+        ?? 0)
   ));
   const pacBalance = dex === 'gmtrade'
     ? Math.max(0, Number(walletUsdc || 0))
@@ -3506,11 +3510,10 @@ function FuturesPanel() {
             </button>
           )}
           <div style={{...S.balBadge, padding: '4px 8px'}}>
-            <span style={{fontSize: 8, fontWeight: 700, color: '#a3906a', lineHeight: 1}}>BALANCE</span>
-            {/* Use account equity (mark-to-market) so the badge reflects the
-                actual portfolio value — including PnL on open positions —
-                not raw collateral that can go negative under unified margin. */}
-            <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.1}}>${pacAccountValue.toFixed(2)}</span>
+            <span style={{fontSize: 8, fontWeight: 700, color: '#a3906a', lineHeight: 1}}>{dex === 'flash' ? 'FREE' : 'BALANCE'}</span>
+            {/* Flash shows free balance for new trades; other venues show
+                account equity / portfolio value where available. */}
+            <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.1}}>${(dex === 'flash' ? pacBalance : pacAccountValue).toFixed(2)}</span>
           </div>
         </div>
       </div>
@@ -3663,7 +3666,7 @@ function FuturesPanel() {
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
-              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica' || dex === 'hotstuff') ? 'usable' : 'balance'}
+              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica' || dex === 'hotstuff') ? 'usable' : dex === 'flash' ? 'free' : 'balance'}
             </span>
             <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
               buying power ${maxUsdc.toFixed(0)}
@@ -7170,6 +7173,10 @@ function FuturesPanel() {
       equity = parseFloat(account?.account_equity ?? account?.total_account_value ?? account?.equity ?? account?.balance ?? account?.usdc ?? 0);
       available = parseFloat(account?.available_to_withdraw ?? account?.available_to_spend ?? account?.available_balance ?? account?.usdc ?? 0);
       marginUsed = parseFloat(account?.total_margin_used ?? account?.total_initial_margin ?? account?.initial_margin ?? 0);
+    } else if (dex === 'flash') {
+      equity = parseFloat(account?.account_equity ?? account?.equity ?? account?.balance ?? 0);
+      available = parseFloat(account?.available_to_spend ?? account?.free_margin ?? account?.available_to_withdraw ?? 0);
+      marginUsed = parseFloat(account?.total_margin_used ?? account?.margin_used ?? 0);
     } else {
       equity = parseFloat(account?.account_equity || 0);
       available = parseFloat(account?.available_to_withdraw || 0);
@@ -7538,7 +7545,7 @@ function FuturesPanel() {
             <span style={S.balCardValue}>${equity.toFixed(2)}</span>
           </div>
           <div style={S.balCard}>
-            <span style={S.balCardLabel}>{dex === 'hyperliquid' ? 'Available' : 'Free Margin'}</span>
+            <span style={S.balCardLabel}>{dex === 'hyperliquid' ? 'Available' : dex === 'flash' ? 'Free Balance' : 'Free Margin'}</span>
             <span style={S.balCardValue}>${pacBalance.toFixed(2)}</span>
           </div>
         </div>
