@@ -3,6 +3,7 @@ import { usePlayer, useSend } from './useGodot';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
+const AGENT_ACTIONS_ENABLED = false;
 
 function agentWsUrl() {
   const base = GAME_API.startsWith('http')
@@ -35,6 +36,7 @@ export function useAgentActions() {
   }, []);
 
   useEffect(() => {
+    if (!AGENT_ACTIONS_ENABLED) return undefined;
     if (!token) return;
     let cancelled = false;
     let wsRetryMs = 1000;

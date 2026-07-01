@@ -109,7 +109,7 @@ var _skeleton_respawn_timer: float = 0.0
 var _victory_declared: bool = false
 var _find_in_progress: bool = false
 
-const RAID_ATTACK_COST_GOLD: int = 150
+const RAID_ATTACK_COST_GOLD: int = 300
 
 func _get_attack_cost_gold() -> int:
 	return RAID_ATTACK_COST_GOLD

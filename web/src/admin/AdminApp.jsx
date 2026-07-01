@@ -487,6 +487,7 @@ function PlayersPanel({ players, reload }) {
     { label: 'Shielded', value: players.filter((p) => p.shield_active).length, tone: 'gold' },
     { label: 'MM avg win', value: averageMatchmakingRate(players), tone: 'green' },
     { label: 'Recovery 7d', value: num(players.reduce((sum, p) => sum + Number(p.matchmaking?.recovery_matches_7d || 0), 0)), tone: 'blue' },
+    { label: 'Captcha flags', value: players.filter((p) => p.captcha_required || p.battle_risk?.captcha_required).length, tone: players.some((p) => p.captcha_required || p.battle_risk?.captcha_required) ? 'red' : 'green' },
     { label: 'Banned', value: players.filter((p) => p.banned_at).length, tone: 'red' },
   ];
 
@@ -515,7 +516,7 @@ function PlayersPanel({ players, reload }) {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Created</th><th>Trophies</th><th>Level</th><th>MM 7d</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
+                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Created</th><th>Trophies</th><th>Level</th><th>MM 7d</th><th>Risk</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -531,6 +532,7 @@ function PlayersPanel({ players, reload }) {
                     <td data-label="Trophies">{p.trophies}</td>
                     <td data-label="Level">{p.level}</td>
                     <td data-label="MM 7d"><MatchmakingPlayerCell player={p} /></td>
+                    <td data-label="Risk"><BattleRiskBadges risk={p.battle_risk || p} /></td>
                     <td data-label="Gold" style={{ color: 'var(--admin-gold)' }}>{num(p.gold)}</td>
                     <td data-label="Wood" style={{ color: 'var(--admin-wood)' }}>{num(p.wood)}</td>
                     <td data-label="Ore" style={{ color: '#b8c4d8' }}>{num(p.ore)}</td>
@@ -666,6 +668,25 @@ function ProfileFlags({ flags }) {
       {flags.map((flag) => <span key={flag.key || flag.label} className={`admin-badge ${flag.tone || 'blue'}`}>{flag.label}</span>)}
     </div>
   );
+}
+
+function BattleRiskBadges({ risk }) {
+  const flags = risk?.risk_flags || [];
+  if (!flags.length) return <span className="admin-badge green">clean</span>;
+  return (
+    <div className="admin-filter-row">
+      <span className="admin-badge red">captcha_required</span>
+      {flags.slice(0, 2).map((flag) => (
+        <span key={flag.code || flag.label} className={`admin-badge ${flag.tone || 'red'}`}>{flag.label}</span>
+      ))}
+      {flags.length > 2 ? <span className="admin-badge red">+{flags.length - 2}</span> : null}
+    </div>
+  );
+}
+
+function battleRiskReasonText(risk) {
+  const flags = risk?.risk_flags || [];
+  return flags.length ? flags.map((flag) => flag.label || flag.code).join(', ') : 'clean';
 }
 
 function PlayerProfileDrawer({ player, onClose, onOpenTools, reload }) {
@@ -999,6 +1020,7 @@ function PlayerProfileNft({ profile }) {
 
 function PlayerProfileBattles({ profile }) {
   const battles = profile.battles || {};
+  const risk = battles.risk || {};
   return (
     <div className="admin-grid">
       <ProfileMetricGrid items={[
@@ -1007,7 +1029,21 @@ function PlayerProfileBattles({ profile }) {
         { label: 'Defenses', value: battles.summary?.defenses || 0 },
         { label: 'Wins', value: battles.summary?.attack_wins || 0, tone: 'green' },
         { label: 'Rejected', value: battles.summary?.rejected || 0, tone: battles.summary?.rejected ? 'red' : 'green' },
+        { label: 'Captcha flag', value: risk.captcha_required ? 'YES' : 'No', tone: risk.captcha_required ? 'red' : 'green' },
       ]} />
+      <ProfileSection title="Battle Risk" subtitle="Red flag means this account should be gated by CAPTCHA before future prize eligibility. Gameplay CAPTCHA is not enabled here.">
+        <BattleRiskBadges risk={risk} />
+        <ProfileInfoGrid rows={[
+          { label: 'Attack starts 15m', value: risk.attack_starts_15m || 0 },
+          { label: 'Attack starts 24h', value: risk.attack_starts_24h || 0 },
+          { label: 'Submitted results 24h', value: risk.submitted_results_24h || 0 },
+          { label: 'Accepted wins 24h', value: risk.accepted_wins_24h || 0 },
+          { label: 'Rejected results 24h', value: risk.rejected_results_24h || 0 },
+          { label: 'Latest IP', value: risk.last_ip || '-' },
+          { label: 'Shared IP players 24h', value: risk.ip_players_24h || 0 },
+          { label: 'Reasons', value: battleRiskReasonText(risk) },
+        ]} />
+      </ProfileSection>
       <ProfileSection title="Recent Replays">
         <ProfileTable
           columns={[
@@ -2692,6 +2728,7 @@ function StatsPanel({ data }) {
   const mmSummary = mm.summary || {};
   const mmDecided = Number(mmSummary.decided_raids || 0);
   const mmRaids = Number(mmSummary.raids || 0);
+  const mmRiskRows = mm.battle_risk_players || [];
   const mmTargetLow = Number(mm.target_band?.min ?? 0.55);
   const mmTargetHigh = Number(mm.target_band?.max ?? 0.6);
   const mmSuccess = Number.isFinite(Number(mmSummary.success_rate)) ? Number(mmSummary.success_rate) : null;
@@ -2722,8 +2759,25 @@ function StatsPanel({ data }) {
             { label: 'Win rate', value: formatPct(mmSuccess), tone: mmTone },
             { label: 'Bot matches', value: `${num(mmSummary.bot_matches || 0)} (${formatPct(mmRaids ? Number(mmSummary.bot_matches || 0) / mmRaids : null)})`, tone: 'gold' },
             { label: 'Recovery', value: num(mmSummary.recovery_matches || 0), tone: 'blue' },
+            { label: 'Captcha flags', value: num(mm.captcha_required_count || mmRiskRows.length), tone: mmRiskRows.length ? 'red' : 'green' },
             { label: 'Avg base ratio', value: ratioText(mmSummary.avg_base_power_ratio), tone: 'green' },
           ]} />
+          <CompactTable
+            title="Battle Risk Flags"
+            subtitle={`Red flag = captcha_required for future CAPTCHA/prize eligibility. Thresholds: ${mm.battle_risk_thresholds?.burstAttackStarts || 40}+ attacks/15m or >${mm.battle_risk_thresholds?.dailyAttackStartsExclusive || 500}/24h.`}
+            columns={['Player', 'DEX', '15m', '24h', 'Results', 'Wins', 'Rejected', 'IP players', 'Reasons']}
+            rows={mmRiskRows.map((row) => [
+              row.name || short(row.player_id),
+              DEX_LABELS[row.dex] || row.dex || '-',
+              num(row.attack_starts_15m),
+              num(row.attack_starts_24h),
+              num(row.submitted_results_24h),
+              num(row.accepted_wins_24h),
+              num(row.rejected_results_24h),
+              num(row.ip_players_24h),
+              <BattleRiskBadges risk={row} />,
+            ])}
+          />
           <div className="admin-grid two">
             <CompactTable title="By Town Hall" subtitle="Success rate and bot usage grouped by attacker TH." columns={['TH', 'Raids', 'Win rate', 'Bot', 'Recovery', 'Base ratio']} rows={(mm.by_th || []).map((row) => [`TH ${row.attacker_th || 1}`, num(row.raids), formatPct(row.success_rate), num(row.bot_matches), num(row.recovery_matches), ratioText(row.avg_base_power_ratio)])} />
             <CompactTable title="By Target Type" subtitle="Live bases vs generated bot bases and selected difficulty bucket." columns={['Target', 'Bucket', 'Raids', 'Win rate', 'Recovery', 'Base ratio']} rows={(mm.by_target || []).map((row) => [row.target_type || '-', row.bucket || '-', num(row.raids), formatPct(row.success_rate), num(row.recovery_matches), ratioText(row.avg_base_power_ratio)])} />

@@ -31,6 +31,7 @@ import { readSoundEnabled, writeSoundEnabled } from '../lib/soundSettings';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
+const AI_AGENT_KEYS_ENABLED = false;
 const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -446,6 +447,7 @@ function ProfileModal({ onClose }) {
   const token = player?.token || null;
 
   const fetchAiKeys = useCallback(async () => {
+    if (!AI_AGENT_KEYS_ENABLED) { setAiKeys([]); setAiKeyError(''); setNewAiKey(null); return; }
     if (!token) { setAiKeys([]); setAiKeyError(''); setNewAiKey(null); return; }
     try {
       const r = await fetch('/api/players/ai-keys', { headers: { 'x-token': token } });
@@ -462,6 +464,7 @@ function ProfileModal({ onClose }) {
   }, [fetchAiKeys]);
 
   const createAiKey = useCallback(async () => {
+    if (!AI_AGENT_KEYS_ENABLED) return;
     if (!token || aiKeyBusy) return;
     setAiKeyBusy(true);
     setAiKeyError('');
@@ -486,6 +489,7 @@ function ProfileModal({ onClose }) {
   }, [aiKeyBusy, aiKeyName, fetchAiKeys, token]);
 
   const revokeAiKey = useCallback(async (id) => {
+    if (!AI_AGENT_KEYS_ENABLED) return;
     if (!token || !id || aiKeyBusy) return;
     setAiKeyBusy(true);
     setAiKeyError('');
@@ -1130,7 +1134,7 @@ function ProfileModal({ onClose }) {
             </div>
           )}
 
-          {token && (
+          {AI_AGENT_KEYS_ENABLED && token && (
             <div style={S.credentialsBox}>
               <div style={S.credentialsHead}>
                 <div>

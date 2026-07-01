@@ -5242,6 +5242,17 @@ const TROPHY_TABLE = {
 
 // ---------- Helper Functions ----------
 
+const AI_MCP_AGENT_ACCESS_ENABLED = String(process.env.CLASH_AI_MCP_AGENT_ACCESS_ENABLED || '').trim() === '1';
+const AI_MCP_AGENT_DISABLED_MESSAGE = 'AI/MCP agent access is disabled.';
+
+function aiMcpAgentDisabledError() {
+  return {
+    error: AI_MCP_AGENT_DISABLED_MESSAGE,
+    disabled: true,
+    status: 403,
+  };
+}
+
 function parseScopes(scopes) {
   try {
     const parsed = JSON.parse(scopes || '[]');
@@ -5270,6 +5281,7 @@ function hashAiAgentKey(key) {
 }
 
 function createAiAgentKey(playerId, name = 'AI Agent') {
+  if (!AI_MCP_AGENT_ACCESS_ENABLED) return aiMcpAgentDisabledError();
   const player = stmts.getPlayerById.get(playerId);
   if (!player) return { error: 'Player not found' };
   const activeCount = stmts.countActiveAiAgentKeys.get(playerId)?.count || 0;
@@ -5293,6 +5305,7 @@ function createAiAgentKey(playerId, name = 'AI Agent') {
 }
 
 function listAiAgentKeys(playerId) {
+  if (!AI_MCP_AGENT_ACCESS_ENABLED) return [];
   return stmts.listAiAgentKeys.all(playerId).map(publicAiAgentKeyRow);
 }
 
@@ -5305,6 +5318,7 @@ function revokeAiAgentKey(playerId, keyId) {
 }
 
 function authenticateAiAgentKey(rawKey) {
+  if (!AI_MCP_AGENT_ACCESS_ENABLED) return null;
   const key = String(rawKey || '').trim();
   if (!key || !key.startsWith('cop_ai_')) return null;
   const row = stmts.getAiAgentKeyByHash.get(hashAiAgentKey(key));
@@ -5341,6 +5355,7 @@ function publicHermesAgentRow(row) {
 }
 
 function getOrCreateHermesAgent(playerId) {
+  if (!AI_MCP_AGENT_ACCESS_ENABLED) return aiMcpAgentDisabledError();
   const player = stmts.getPlayerById.get(playerId);
   if (!player) return { error: 'Player not found' };
 
@@ -8542,8 +8557,8 @@ function buyShip(playerId, buildingId) {
 
 const LOOT_PERCENT = 0.15;
 
-const RAID_ATTACK_COST_GOLD = 150;
-const TARGETED_ATTACK_COST_MULTIPLIER = 2;
+const RAID_ATTACK_COST_GOLD = 300;
+const TARGETED_ATTACK_COST_MULTIPLIER = 1;
 
 function attackCostForTownHallLevel(thLevel) {
   return RAID_ATTACK_COST_GOLD;
@@ -8875,6 +8890,305 @@ function getPlayerMatchmakingStats(playerId) {
   };
 }
 
+const BATTLE_RISK_THRESHOLDS = Object.freeze({
+  burstWindowMinutes: 15,
+  burstAttackStarts: 40,
+  dailyWindowHours: 24,
+  dailyAttackStartsExclusive: 500,
+  unsubmittedMinStarts: 80,
+  unsubmittedMaxSubmitRate: 0.25,
+  shortWinMinWins: 50,
+  shortWinAvgDurationSec: 20,
+  simMismatchAllowed: 10,
+  rejectedResults: 10,
+  sharedIpPlayers: 8,
+  sharedIpMinStarts: 20,
+});
+
+function battleRiskNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function battleRiskFlagsForMetrics(row = {}) {
+  const starts15m = battleRiskNumber(row.attack_starts_15m);
+  const starts24h = battleRiskNumber(row.attack_starts_24h);
+  const submitted24h = battleRiskNumber(row.submitted_results_24h);
+  const acceptedWins24h = battleRiskNumber(row.accepted_wins_24h);
+  const avgWinDuration = battleRiskNumber(row.avg_win_duration_sec, null);
+  const simMismatchAllowed = battleRiskNumber(row.sim_mismatch_allowed_24h);
+  const rejectedResults = battleRiskNumber(row.rejected_results_24h);
+  const ipPlayers24h = battleRiskNumber(row.ip_players_24h);
+  const submitRate = starts24h > 0 ? submitted24h / starts24h : null;
+  const flags = [];
+
+  if (starts15m >= BATTLE_RISK_THRESHOLDS.burstAttackStarts) {
+    flags.push({
+      code: 'battle_burst_15m',
+      label: `${starts15m} attack starts in ${BATTLE_RISK_THRESHOLDS.burstWindowMinutes}m`,
+      tone: 'red',
+      severity: 'red',
+      detail: 'Burst threshold reached for new attacks.',
+    });
+  }
+  if (starts24h > BATTLE_RISK_THRESHOLDS.dailyAttackStartsExclusive) {
+    flags.push({
+      code: 'battle_daily_volume',
+      label: `${starts24h} attack starts in 24h`,
+      tone: 'red',
+      severity: 'red',
+      detail: 'Daily attack volume exceeds the owner-approved threshold.',
+    });
+  }
+  if (
+    starts24h >= BATTLE_RISK_THRESHOLDS.unsubmittedMinStarts
+    && submitRate !== null
+    && submitRate <= BATTLE_RISK_THRESHOLDS.unsubmittedMaxSubmitRate
+  ) {
+    flags.push({
+      code: 'battle_low_submit_rate',
+      label: `${Math.round(submitRate * 100)}% result submit rate`,
+      tone: 'red',
+      severity: 'red',
+      detail: 'Many targets are reserved without completed battle results.',
+    });
+  }
+  if (
+    acceptedWins24h >= BATTLE_RISK_THRESHOLDS.shortWinMinWins
+    && avgWinDuration !== null
+    && avgWinDuration > 0
+    && avgWinDuration < BATTLE_RISK_THRESHOLDS.shortWinAvgDurationSec
+  ) {
+    flags.push({
+      code: 'battle_short_wins',
+      label: `${acceptedWins24h} wins avg ${Math.round(avgWinDuration)}s`,
+      tone: 'red',
+      severity: 'red',
+      detail: 'Large volume of very short accepted wins.',
+    });
+  }
+  if (simMismatchAllowed >= BATTLE_RISK_THRESHOLDS.simMismatchAllowed) {
+    flags.push({
+      code: 'battle_sim_mismatch',
+      label: `${simMismatchAllowed} sim mismatch allowances`,
+      tone: 'red',
+      severity: 'red',
+      detail: 'Replay verifier allowed too many simulation mismatches in 24h.',
+    });
+  }
+  if (rejectedResults >= BATTLE_RISK_THRESHOLDS.rejectedResults) {
+    flags.push({
+      code: 'battle_rejected_results',
+      label: `${rejectedResults} rejected battle results`,
+      tone: 'red',
+      severity: 'red',
+      detail: 'Replay verifier rejected many submitted battle results in 24h.',
+    });
+  }
+  if (
+    ipPlayers24h >= BATTLE_RISK_THRESHOLDS.sharedIpPlayers
+    && starts24h >= BATTLE_RISK_THRESHOLDS.sharedIpMinStarts
+  ) {
+    flags.push({
+      code: 'battle_shared_ip_cluster',
+      label: `${ipPlayers24h} active players on latest IP`,
+      tone: 'red',
+      severity: 'red',
+      detail: 'Latest client-log IP is shared by many active accounts.',
+    });
+  }
+
+  return flags;
+}
+
+function battleRiskScore(flags, row = {}) {
+  const flagScore = (flags || []).length * 1000;
+  return flagScore
+    + battleRiskNumber(row.attack_starts_24h)
+    + battleRiskNumber(row.attack_starts_15m) * 5
+    + battleRiskNumber(row.accepted_wins_24h) * 2
+    + battleRiskNumber(row.rejected_results_24h) * 10
+    + battleRiskNumber(row.sim_mismatch_allowed_24h) * 10;
+}
+
+function normalizeBattleRiskRow(row, includeClean = false) {
+  const flags = battleRiskFlagsForMetrics(row);
+  const captchaRequired = flags.length > 0;
+  if (!includeClean && !captchaRequired) return null;
+  const starts24h = battleRiskNumber(row.attack_starts_24h);
+  const submitted24h = battleRiskNumber(row.submitted_results_24h);
+  const normalized = {
+    player_id: row.player_id,
+    name: row.name || null,
+    wallet: row.wallet || null,
+    dex: row.dex || null,
+    trophies: battleRiskNumber(row.trophies),
+    level: battleRiskNumber(row.level, 1),
+    th_level: battleRiskNumber(row.th_level, 1),
+    last_ip: row.last_ip || null,
+    last_client_log_at: row.last_client_log_at || null,
+    latest_attack_at: row.latest_attack_at || null,
+    latest_result_at: row.latest_result_at || null,
+    attack_starts_15m: battleRiskNumber(row.attack_starts_15m),
+    attack_starts_24h: starts24h,
+    completed_sessions_24h: battleRiskNumber(row.completed_sessions_24h),
+    cancelled_sessions_24h: battleRiskNumber(row.cancelled_sessions_24h),
+    active_sessions_now: battleRiskNumber(row.active_sessions_now),
+    submitted_results_24h: submitted24h,
+    claimed_wins_24h: battleRiskNumber(row.claimed_wins_24h),
+    accepted_wins_24h: battleRiskNumber(row.accepted_wins_24h),
+    rejected_results_24h: battleRiskNumber(row.rejected_results_24h),
+    sim_mismatch_allowed_24h: battleRiskNumber(row.sim_mismatch_allowed_24h),
+    avg_win_duration_sec: row.avg_win_duration_sec == null ? null : Number(row.avg_win_duration_sec),
+    bot_matches_24h: battleRiskNumber(row.bot_matches_24h),
+    bot_share_24h: row.bot_share_24h == null ? null : Number(row.bot_share_24h),
+    distinct_defenders_24h: battleRiskNumber(row.distinct_defenders_24h),
+    ip_players_24h: battleRiskNumber(row.ip_players_24h),
+    ip_logs_24h: battleRiskNumber(row.ip_logs_24h),
+    submit_rate_24h: starts24h > 0 ? Number((submitted24h / starts24h).toFixed(4)) : null,
+    risk_flags: flags,
+    captcha_required: captchaRequired,
+  };
+  normalized.risk_score = battleRiskScore(flags, normalized);
+  return normalized;
+}
+
+function getBattleRiskPlayers(options = {}) {
+  const limit = Math.max(1, Math.min(1000, Math.trunc(Number(options.limit) || 120)));
+  const includeClean = !!options.includeClean;
+  const playerId = String(options.playerId || '').trim();
+  const playerFilterSql = playerId ? 'AND p.id = ?' : '';
+  const params = playerId ? [playerId] : [];
+  const rows = db.prepare(`
+    WITH human_players AS (
+      SELECT p.id, p.name, p.wallet, p.dex, p.trophies, p.level
+      FROM players p
+      WHERE COALESCE(p.is_bot, 0) = 0
+      ${playerFilterSql}
+    ),
+    player_th AS (
+      SELECT hp.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
+      FROM human_players hp
+      LEFT JOIN buildings b ON b.player_id = hp.id
+      GROUP BY hp.id
+    ),
+    sessions AS (
+      SELECT attacker_id,
+             COUNT(*) AS attack_starts_24h,
+             SUM(CASE WHEN created_at > datetime('now', '-15 minutes') THEN 1 ELSE 0 END) AS attack_starts_15m,
+             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_sessions_24h,
+             SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_sessions_24h,
+             SUM(CASE WHEN status = 'active' AND reserved_until > datetime('now') THEN 1 ELSE 0 END) AS active_sessions_now,
+             MAX(created_at) AS latest_attack_at
+      FROM battle_sessions
+      WHERE created_at > datetime('now', '-24 hours')
+      GROUP BY attacker_id
+    ),
+    replays AS (
+      SELECT attacker_id,
+             COUNT(*) AS submitted_results_24h,
+             SUM(CASE WHEN lower(COALESCE(claimed_result, '')) = 'victory' THEN 1 ELSE 0 END) AS claimed_wins_24h,
+             SUM(CASE WHEN lower(COALESCE(claimed_result, '')) = 'victory'
+                       AND lower(COALESCE(verified_result, '')) IN ('accepted', 'victory') THEN 1 ELSE 0 END) AS accepted_wins_24h,
+             SUM(CASE WHEN lower(COALESCE(verified_result, '')) = 'rejected' THEN 1 ELSE 0 END) AS rejected_results_24h,
+             SUM(CASE WHEN COALESCE(verification_reason, '') LIKE 'SIM_MISMATCH_ALLOWED:%' THEN 1 ELSE 0 END) AS sim_mismatch_allowed_24h,
+             AVG(CASE WHEN lower(COALESCE(claimed_result, '')) = 'victory'
+                       AND lower(COALESCE(verified_result, '')) IN ('accepted', 'victory')
+                      THEN duration_sec ELSE NULL END) AS avg_win_duration_sec,
+             MAX(created_at) AS latest_result_at
+      FROM battle_replays
+      WHERE created_at > datetime('now', '-24 hours')
+      GROUP BY attacker_id
+    ),
+    mm AS (
+      SELECT attacker_id,
+             COUNT(*) AS matchmaking_rows_24h,
+             SUM(CASE WHEN target_is_bot = 1 THEN 1 ELSE 0 END) AS bot_matches_24h,
+             AVG(CASE WHEN target_is_bot = 1 THEN 1.0 ELSE 0.0 END) AS bot_share_24h,
+             COUNT(DISTINCT defender_id) AS distinct_defenders_24h
+      FROM raid_matchmaking
+      WHERE created_at > datetime('now', '-24 hours')
+      GROUP BY attacker_id
+    ),
+    latest_ip AS (
+      SELECT cl.player_id, cl.ip AS last_ip, cl.created_at AS last_client_log_at
+      FROM client_logs cl
+      JOIN (
+        SELECT player_id, MAX(id) AS id
+        FROM client_logs
+        WHERE player_id IS NOT NULL
+          AND COALESCE(ip, '') != ''
+          AND created_at > datetime('now', '-7 days')
+        GROUP BY player_id
+      ) latest ON latest.id = cl.id
+    ),
+    ip_rollup AS (
+      SELECT ip,
+             COUNT(DISTINCT player_id) AS ip_players_24h,
+             COUNT(*) AS ip_logs_24h
+      FROM client_logs
+      WHERE player_id IS NOT NULL
+        AND COALESCE(ip, '') != ''
+        AND created_at > datetime('now', '-24 hours')
+      GROUP BY ip
+    )
+    SELECT hp.id AS player_id,
+           hp.name, hp.wallet, hp.dex, hp.trophies, hp.level,
+           COALESCE(pt.th_level, 1) AS th_level,
+           COALESCE(s.attack_starts_24h, 0) AS attack_starts_24h,
+           COALESCE(s.attack_starts_15m, 0) AS attack_starts_15m,
+           COALESCE(s.completed_sessions_24h, 0) AS completed_sessions_24h,
+           COALESCE(s.cancelled_sessions_24h, 0) AS cancelled_sessions_24h,
+           COALESCE(s.active_sessions_now, 0) AS active_sessions_now,
+           s.latest_attack_at,
+           COALESCE(r.submitted_results_24h, 0) AS submitted_results_24h,
+           COALESCE(r.claimed_wins_24h, 0) AS claimed_wins_24h,
+           COALESCE(r.accepted_wins_24h, 0) AS accepted_wins_24h,
+           COALESCE(r.rejected_results_24h, 0) AS rejected_results_24h,
+           COALESCE(r.sim_mismatch_allowed_24h, 0) AS sim_mismatch_allowed_24h,
+           r.avg_win_duration_sec,
+           r.latest_result_at,
+           COALESCE(mm.bot_matches_24h, 0) AS bot_matches_24h,
+           mm.bot_share_24h,
+           COALESCE(mm.distinct_defenders_24h, 0) AS distinct_defenders_24h,
+           li.last_ip,
+           li.last_client_log_at,
+           COALESCE(ipr.ip_players_24h, 0) AS ip_players_24h,
+           COALESCE(ipr.ip_logs_24h, 0) AS ip_logs_24h
+    FROM human_players hp
+    LEFT JOIN player_th pt ON pt.id = hp.id
+    LEFT JOIN sessions s ON s.attacker_id = hp.id
+    LEFT JOIN replays r ON r.attacker_id = hp.id
+    LEFT JOIN mm ON mm.attacker_id = hp.id
+    LEFT JOIN latest_ip li ON li.player_id = hp.id
+    LEFT JOIN ip_rollup ipr ON ipr.ip = li.last_ip
+    WHERE COALESCE(s.attack_starts_24h, 0) > 0
+       OR COALESCE(r.submitted_results_24h, 0) > 0
+       OR COALESCE(mm.matchmaking_rows_24h, 0) > 0
+    ORDER BY COALESCE(s.attack_starts_24h, 0) DESC, COALESCE(r.accepted_wins_24h, 0) DESC
+  `).all(...params);
+
+  return rows
+    .map((row) => normalizeBattleRiskRow(row, includeClean))
+    .filter(Boolean)
+    .sort((a, b) => b.risk_score - a.risk_score || b.attack_starts_24h - a.attack_starts_24h)
+    .slice(0, limit);
+}
+
+function getBattleRiskForPlayer(playerId) {
+  const id = String(playerId || '').trim();
+  if (!id) return null;
+  const row = getBattleRiskPlayers({ playerId: id, includeClean: true, limit: 1 })[0];
+  return row || {
+    player_id: id,
+    risk_flags: [],
+    captcha_required: false,
+    risk_score: 0,
+    attack_starts_15m: 0,
+    attack_starts_24h: 0,
+  };
+}
+
 function getGlobalMatchmakingStats(days = 7) {
   const safeDays = Math.max(1, Math.min(90, Math.trunc(Number(days) || 7)));
   const params = [`-${safeDays} days`];
@@ -8968,6 +9282,16 @@ function getGlobalMatchmakingStats(days = 7) {
     GROUP BY level, bot_difficulty
     ORDER BY level, bot_difficulty
   `).all();
+  const battleRiskPlayers = getBattleRiskPlayers({ limit: 120 });
+  const battleRiskByPlayer = new Map(battleRiskPlayers.map((row) => [row.player_id, row]));
+  const byPlayerWithRisk = byPlayer.map((row) => {
+    const risk = battleRiskByPlayer.get(row.id);
+    return {
+      ...row,
+      risk_flags: risk?.risk_flags || [],
+      captcha_required: !!risk?.captcha_required,
+    };
+  });
   return {
     days: safeDays,
     target_success_rate: MATCHMAKING_CONFIG.targetSuccessRate,
@@ -8975,7 +9299,10 @@ function getGlobalMatchmakingStats(days = 7) {
     summary,
     by_th: byTh,
     by_target: byTarget,
-    by_player: byPlayer,
+    by_player: byPlayerWithRisk,
+    battle_risk_thresholds: BATTLE_RISK_THRESHOLDS,
+    battle_risk_players: battleRiskPlayers,
+    captcha_required_count: battleRiskPlayers.length,
     bot_templates: botTemplateInventory,
     active_bot_targets: activeBotTargets,
   };
@@ -9096,6 +9423,11 @@ module.exports = {
   finishBattleSession,
   getPlayerMatchmakingStats,
   getGlobalMatchmakingStats,
+  getBattleRiskPlayers,
+  getBattleRiskForPlayer,
+  BATTLE_RISK_THRESHOLDS,
+  AI_MCP_AGENT_ACCESS_ENABLED,
+  AI_MCP_AGENT_DISABLED_MESSAGE,
   // Tournament hooks — exported so server/routes.js claim-gold path and
   // server-futures rewards-workers can credit volume / pnl into
   // tournament_participants alongside the normal flow.

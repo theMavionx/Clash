@@ -32,7 +32,7 @@ const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_MS = 60_000;
 const FLASH_WS_INTERVAL_MS = 1000;
-const FLASH_DEFAULT_V2_RPC = 'https://flashtrade.magicblock.app';
+const FLASH_DEFAULT_V2_RPC = 'https://flash.magicblock.xyz';
 const FLASH_V2_PROGRAM_ID = 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV';
 const FLASH_DELEGATION_PROGRAM_ID = 'DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh';
 const FLASH_ONE_TAP_EXPIRY_MINUTES = Math.max(10, Math.min(24 * 60, Number(import.meta.env.VITE_FLASH_ONE_TAP_EXPIRY_MINUTES || 24 * 60)));
@@ -96,7 +96,7 @@ function flashSessionLabel(session) {
 function flashSessionAllowsTrade(session) {
   const key = String(session || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
   if (!key) return true;
-  return key === 'regular' || key === 'open' || key === 'active';
+  return !['closed', 'halted', 'paused', 'suspended'].includes(key);
 }
 
 function flashMarketUnavailableMessage(symbol, market = {}) {
@@ -109,9 +109,12 @@ function flashMarketUnavailableMessage(symbol, market = {}) {
 
 function flashMarketCanOpen(market = {}) {
   if (!market || typeof market !== 'object') return true;
-  if (market.is_market_open === false || market.isMarketOpen === false) return false;
   if (market.trade_init_allowed === false || market.tradeInitAllowed === false) return false;
-  return flashSessionAllowsTrade(market.market_session || market.marketSession || market.session || '');
+  const session = market.market_session || market.marketSession || market.session || '';
+  const sessionAllowsTrade = flashSessionAllowsTrade(session);
+  if (!sessionAllowsTrade) return false;
+  if ((market.is_market_open === false || market.isMarketOpen === false) && !session) return false;
+  return true;
 }
 
 function solanaAddress(wallet) {
@@ -461,7 +464,7 @@ function flashPriceMap(priceRows = []) {
 
 function displayLiquidationPrice({ side, entry, sizeUsd, collateralUsd, apiLiq }) {
   if (!(entry > 0) || !(sizeUsd > 0) || !(collateralUsd > 0)) return apiLiq || 0;
-  const ratio = Math.max(0, Math.min(0.95, collateralUsd / sizeUsd));
+  const ratio = Math.max(0, Math.min(0.95, collateralUsd / sizeUsd)) * 0.92;
   const derived = side === 'SHORT' ? entry * (1 + ratio) : entry * (1 - ratio);
   if (!(derived > 0)) return apiLiq || 0;
   if (!(apiLiq > 0)) return derived;
@@ -474,20 +477,26 @@ function displayLiquidationPrice({ side, entry, sizeUsd, collateralUsd, apiLiq }
   return apiLiq;
 }
 
-function derivedFlashPnl({ side, entry, mark, amount }) {
-  if (!(entry > 0) || !(mark > 0) || !(amount > 0)) return null;
-  return (mark - entry) * amount * (side === 'SHORT' ? -1 : 1);
+function rawFlashUsd(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n / 1_000_000 : 0;
 }
 
-function flashMetricPnl({ metric, side, entry, mark, amount }) {
-  const apiPnl = numberFromUi(metric.pnlWithoutFeeUsdUi ?? metric.pnlWithFeeUsdUi);
-  const derived = derivedFlashPnl({ side, entry, mark, amount });
-  if (derived == null) return apiPnl;
-  const apiHasOppositeSign = Math.abs(apiPnl) >= 0.01
-    && Math.abs(derived) >= 0.01
-    && Math.sign(apiPnl) !== Math.sign(derived);
-  const apiIsFarFromMarkPnl = Math.abs(apiPnl - derived) > Math.max(0.05, Math.abs(derived) * 3);
-  return apiHasOppositeSign || apiIsFarFromMarkPnl ? derived : apiPnl;
+function flashMetricPnlView({ metric = {}, side, entry, mark, sizeUsd, amount, collateralUsd }) {
+  const dir = side === 'SHORT' ? -1 : 1;
+  const notional = sizeUsd > 0 ? sizeUsd : (entry > 0 && amount > 0 ? entry * amount : 0);
+  const pnlWithoutFees = mark > 0 && entry > 0 && notional > 0
+    ? ((mark - entry) / entry) * notional * dir
+    : numberFromUi(metric.pnlWithoutFeeUsdUi ?? metric.pnlWithFeeUsdUi);
+  const feesUsd = rawFlashUsd(metric.exitFeeUsd) + rawFlashUsd(metric.borrowFeeUsd);
+  const pnlWithFees = pnlWithoutFees - feesUsd;
+  return {
+    pnlWithoutFees,
+    pnlWithFees,
+    pnlPctWithoutFees: collateralUsd > 0 ? (pnlWithoutFees / collateralUsd) * 100 : undefined,
+    pnlPctWithFees: collateralUsd > 0 ? (pnlWithFees / collateralUsd) * 100 : undefined,
+    feesUsd,
+  };
 }
 
 const FLASH_METRIC_POSITIVE_FIELDS = new Set([
@@ -575,8 +584,9 @@ function flashMetricsWithExistingPositions(metrics = {}, existing = {}) {
   }
   for (const [marketPubkey, metric] of Object.entries(metrics || {})) {
     const existingPosition = rows(existing.positions).find(pos => flashMetricMatchesPosition(metric, marketPubkey, pos));
-    const key = flashPositionMetricStorageKey(existingPosition || {}) || marketPubkey;
-    combined[key] = mergeFlashMetric(combined[key], metric);
+    if (!existingPosition) continue;
+    const key = flashPositionMetricStorageKey(existingPosition);
+    if (key) combined[key] = mergeFlashMetric(combined[key], metric);
   }
   return combined;
 }
@@ -597,7 +607,7 @@ function flashPositionFromMetric(marketPubkey, metric = {}, priceRows = [], exis
   const collateralUsdUi = metric.collateralUsdUi ?? existingPosition?.collateralUsdUi ?? existingPosition?.margin;
   const entryPriceUi = metric.entryPriceUi ?? existingPosition?.entryPriceUi ?? existingPosition?.entry_price;
   const liquidationPriceUi = metric.liquidationPriceUi ?? existingPosition?.liquidationPriceUi ?? existingPosition?.liquidation_price;
-  const pnl = flashMetricPnl({ metric, side: tradeType, entry, mark, amount });
+  const pnlView = flashMetricPnlView({ metric, side: tradeType, entry, mark, sizeUsd, amount, collateralUsd });
   const apiLiq = numberFromUi(metric.liquidationPriceUi);
   const leverage = numberFromUi(metric.leverageUi);
   const isDust = isFlashDustMetric(metric);
@@ -625,8 +635,14 @@ function flashPositionFromMetric(marketPubkey, metric = {}, priceRows = [], exis
     margin: collateralUsdUi,
     pnlWithFeeUsdUi: metric.pnlWithFeeUsdUi,
     pnlWithoutFeeUsdUi: metric.pnlWithoutFeeUsdUi,
-    pnl_usd: isDust ? 0 : pnl,
-    pnl_pct: isDust ? 0 : (collateralUsd > 0 ? (pnl / collateralUsd) * 100 : undefined),
+    pnl_usd: isDust ? 0 : pnlView.pnlWithoutFees,
+    pnl_pct: isDust ? 0 : pnlView.pnlPctWithoutFees,
+    pnl_without_fees_usd: isDust ? 0 : pnlView.pnlWithoutFees,
+    pnl_without_fees_pct: isDust ? 0 : pnlView.pnlPctWithoutFees,
+    pnl_with_fees_usd: isDust ? 0 : pnlView.pnlWithFees,
+    pnl_with_fees_pct: isDust ? 0 : pnlView.pnlPctWithFees,
+    flash_position_fees_usd: isDust ? 0 : pnlView.feesUsd,
+    pnl_source: 'flash_mark_price_without_fees',
     liquidationPriceUi,
     liquidation_price: isDust ? undefined : (displayLiquidationPrice({ side: tradeType, entry, sizeUsd, collateralUsd, apiLiq }) || liquidationPriceUi),
     leverage: isDust ? undefined : (displayLev > 0 ? Math.round(displayLev * 10) / 10 : undefined),
@@ -710,6 +726,7 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
   );
   const hasBalanceSource = options.preserveBalance !== true && snapshotUsdc != null;
   const accountUsdc = hasBalanceSource ? snapshotUsdc : (existingUsdc ?? 0);
+  const hasAccountUsdc = hasBalanceSource || existingUsdc != null;
   const explicitAvailable = finiteNumberOrNull(
     snapshot.available_to_spend
     ?? snapshot.availableToSpend
@@ -726,9 +743,12 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
     ?? existing.withdrawable
     ?? existing.free_margin
   );
-  const availableUsdc = Math.max(0, hasBalanceSource ? (explicitAvailable ?? accountUsdc) : (existingAvailable ?? accountUsdc));
+  const derivedAvailable = Math.max(0, accountUsdc - marginUsed);
+  const availableUsdc = Math.max(0, hasBalanceSource
+    ? (explicitAvailable ?? derivedAvailable)
+    : (hasAccountUsdc ? derivedAvailable : (existingAvailable ?? 0)));
   const explicitEquity = finiteNumberOrNull(snapshot.account_equity ?? snapshot.equity ?? snapshot.balance);
-  const equity = Math.max(0, explicitEquity ?? (availableUsdc + marginUsed + pnlUsd));
+  const equity = Math.max(0, explicitEquity ?? (accountUsdc + pnlUsd));
   return {
     ...existing,
     ...snapshot,
@@ -739,6 +759,7 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
     equity,
     account_equity: equity,
     flash_usdc_balance: accountUsdc,
+    flash_in_basket_usdc: accountUsdc,
     account_balance_usdc: accountUsdc,
     flash_balance_source: hasBalanceSource
       ? (snapshot.flash_balance_source || 'flash_v2_snapshot')
@@ -1047,7 +1068,10 @@ export function useFlash() {
   const { connection } = useConnection();
   const isActiveDex = dex === 'flash';
   const token = playerToken(player);
-  const walletAddr = isActiveDex ? solanaAddress(solWallet) : '';
+  const connectedWalletAddr = isActiveDex ? solanaAddress(solWallet) : '';
+  const registeredFlashWallet = isActiveDex ? (registeredDexWallet(player, 'flash', 'solana') || '') : '';
+  const accountOwner = registeredFlashWallet || connectedWalletAddr;
+  const walletAddr = connectedWalletAddr;
 
   const [config, setConfig] = useState(null);
   const [markets, setMarkets] = useState([]);
@@ -1067,9 +1091,6 @@ export function useFlash() {
   const flashApiUrlRef = useRef('https://flashapi.trade');
   const wsReconnectRef = useRef(null);
   const refreshRef = useRef(null);
-  const flashEmptyBasketRefreshRef = useRef(null);
-  const lastNonEmptyPositionAtRef = useRef(0);
-  const allowEmptyPositionsUntilRef = useRef(0);
   const oneTapAgentRef = useRef(null);
   const [oneTapTrading, setOneTapTrading] = useState(() => disabledFlashOneTapState());
 
@@ -1106,19 +1127,21 @@ export function useFlash() {
     return () => { cancelled = true; };
   }, [isActiveDex, walletAddr]);
 
-  const walletMismatch = false;
+  const walletMismatch = !!registeredFlashWallet
+    && !!connectedWalletAddr
+    && publicKeyText(registeredFlashWallet) !== publicKeyText(connectedWalletAddr);
 
   useEffect(() => {
-    if (!isActiveDex || !token || !walletAddr || walletMismatch) return;
+    if (!isActiveDex || !token || !connectedWalletAddr || registeredFlashWallet || walletMismatch) return;
     fetchJson(`${GAME_API}/players/dex-accounts/flash/link`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-token': token },
       body: JSON.stringify({
-        wallet: walletAddr,
+        wallet: connectedWalletAddr,
         walletSource: solWallet?.wallet?.adapter?.name || 'solana-wallet',
       }),
     }).catch(e => console.warn('[Flash] dex wallet link failed:', e?.message || e));
-  }, [isActiveDex, token, walletAddr, walletMismatch, solWallet?.wallet?.adapter?.name]);
+  }, [connectedWalletAddr, isActiveDex, registeredFlashWallet, token, walletMismatch, solWallet?.wallet?.adapter?.name]);
 
   const refresh = useCallback(async () => {
     if (!isActiveDex) return;
@@ -1130,35 +1153,20 @@ export function useFlash() {
         fetchJson(`${FUTURES_API}/markets?dex=flash`),
         fetchJson(`${FUTURES_API}/prices?dex=flash`),
       ]);
-      if (walletAddr && !walletMismatch) {
+      if (accountOwner) {
         const accountPromise = token
-          ? fetchJson(`${FUTURES_API}/flash/account?address=${encodeURIComponent(walletAddr)}`, {
+          ? fetchJson(`${FUTURES_API}/flash/account?address=${encodeURIComponent(accountOwner)}`, {
             headers: { 'x-token': token, 'x-dex': 'flash' },
           }).catch(async (e) => {
             if (e?.status !== 401 && e?.status !== 409) throw e;
-            return fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(walletAddr)}`);
+            return fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(accountOwner)}`);
           })
-          : fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(walletAddr)}`);
+          : fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(accountOwner)}`);
         const acct = await accountPromise;
         const serverUsdc = Number(acct?.wallet_usdc);
         const initialUsdc = Number.isFinite(serverUsdc) ? serverUsdc : null;
         const nextPositions = rows(acct?.positions).map(normalizeFlashPosition);
-        const nextActiveCount = nextPositions.filter(pos => !isFlashDustPosition(pos)).length;
-        const previousActivePositions = rows(positionsRef.current).filter(pos => !isFlashDustPosition(pos));
-        const ignoreTransientEmptyHttp = nextActiveCount === 0
-          && previousActivePositions.length > 0
-          && Date.now() - lastNonEmptyPositionAtRef.current < 10_000
-          && Date.now() > allowEmptyPositionsUntilRef.current;
-        const committedPositions = ignoreTransientEmptyHttp ? previousActivePositions : nextPositions;
-        if (committedPositions.some(pos => !isFlashDustPosition(pos))) {
-          lastNonEmptyPositionAtRef.current = Date.now();
-        }
-        if (ignoreTransientEmptyHttp) {
-          console.info('[Flash] ignored transient empty HTTP owner snapshot; keeping live basket position', {
-            existing_positions: previousActivePositions.length,
-            source: acct?.source || 'flash_v2_owner',
-          });
-        }
+        const committedPositions = nextPositions;
         const nextOrders = rows(acct?.orders);
         const nextAccount = {
           ...acct,
@@ -1169,7 +1177,7 @@ export function useFlash() {
           usdc: acct?.usdc ?? acct?.balance ?? 0,
           available_to_spend: acct?.available_to_spend ?? acct?.free_margin ?? 0,
           wallet_usdc: initialUsdc,
-          positions_count: ignoreTransientEmptyHttp ? previousActivePositions.length : acct?.positions_count,
+          positions_count: acct?.positions_count,
         };
         accountRef.current = nextAccount;
         positionsRef.current = committedPositions;
@@ -1211,7 +1219,7 @@ export function useFlash() {
     } finally {
       setLoading(false);
     }
-  }, [account, isActiveDex, markets.length, positions.length, token, walletAddr, walletMismatch]);
+  }, [account, accountOwner, isActiveDex, markets.length, positions.length, token]);
 
   useEffect(() => { refreshRef.current = refresh; }, [refresh]);
 
@@ -1235,7 +1243,7 @@ export function useFlash() {
   }, [isActiveDex, refresh]);
 
   useEffect(() => {
-    if (!isActiveDex || !walletAddr || walletMismatch || typeof WebSocket === 'undefined') return undefined;
+    if (!isActiveDex || !accountOwner || typeof WebSocket === 'undefined') return undefined;
     let ws = null;
     let closed = false;
     let reconnectMs = 1000;
@@ -1243,7 +1251,7 @@ export function useFlash() {
     const connect = () => {
       if (closed) return;
       const apiUrl = flashApiUrlRef.current || 'https://flashapi.trade';
-      ws = new WebSocket(flashWsUrl(apiUrl, walletAddr));
+      ws = new WebSocket(flashWsUrl(apiUrl, accountOwner));
       ws.onopen = () => {
         reconnectMs = 1000;
       };
@@ -1251,27 +1259,6 @@ export function useFlash() {
         let msg = null;
         try { msg = JSON.parse(event.data); } catch { return; }
         if (msg?.type === 'basket') {
-          const positionMetricCount = Object.keys(msg.data?.positionMetrics || {}).length;
-          const existingActivePositionCount = rows(positionsRef.current).filter(pos => !isFlashDustPosition(pos)).length;
-          const hasLoadedOwnerSnapshot = !!(accountRef.current?.owner || accountRef.current?.basketPubkey || accountRef.current?.source);
-          const allowEmptyPositions = Date.now() <= allowEmptyPositionsUntilRef.current;
-          if (positionMetricCount === 0 && !allowEmptyPositions && (existingActivePositionCount > 0 || !hasLoadedOwnerSnapshot)) {
-            if (!flashEmptyBasketRefreshRef.current) {
-              flashEmptyBasketRefreshRef.current = window.setTimeout(() => {
-                flashEmptyBasketRefreshRef.current = null;
-                refreshRef.current?.();
-              }, 1200);
-            }
-            console.info('[Flash] ignored transient empty basket snapshot; confirming with HTTP owner snapshot', {
-              existing_positions: existingActivePositionCount,
-              loaded_owner_snapshot: hasLoadedOwnerSnapshot,
-            });
-            return;
-          }
-          if (positionMetricCount > 0 && flashEmptyBasketRefreshRef.current) {
-            window.clearTimeout(flashEmptyBasketRefreshRef.current);
-            flashEmptyBasketRefreshRef.current = null;
-          }
           const existingAccount = {
             ...(accountRef.current || {}),
             positions: positionsRef.current,
@@ -1283,9 +1270,6 @@ export function useFlash() {
           };
           accountRef.current = nextAccount;
           positionsRef.current = normalized.positions;
-          if (normalized.positions.some(pos => !isFlashDustPosition(pos))) {
-            lastNonEmptyPositionAtRef.current = Date.now();
-          }
           setAccount(nextAccount);
           setPositions(normalized.positions);
           setOrders(normalized.orders);
@@ -1301,7 +1285,7 @@ export function useFlash() {
           const normalized = normalizeFlashSnapshot(
             {
               ...existingAccount,
-              owner: walletAddr,
+              owner: accountOwner,
               basketPubkey: existingAccount.basketPubkey,
               basketData: existingAccount.basketData,
               positionMetrics: combinedPositionMetrics,
@@ -1318,9 +1302,6 @@ export function useFlash() {
           };
           accountRef.current = nextAccount;
           positionsRef.current = normalized.positions;
-          if (normalized.positions.some(pos => !isFlashDustPosition(pos))) {
-            lastNonEmptyPositionAtRef.current = Date.now();
-          }
           setAccount(nextAccount);
           setPositions(normalized.positions);
           setError('');
@@ -1344,13 +1325,9 @@ export function useFlash() {
         window.clearTimeout(wsReconnectRef.current);
         wsReconnectRef.current = null;
       }
-      if (flashEmptyBasketRefreshRef.current) {
-        window.clearTimeout(flashEmptyBasketRefreshRef.current);
-        flashEmptyBasketRefreshRef.current = null;
-      }
       try { ws?.close(); } catch {}
     };
-  }, [isActiveDex, walletAddr, walletMismatch]);
+  }, [accountOwner, isActiveDex]);
 
   const claimGold = useCallback(async () => {
     if (!token) return { error: 'Missing game session token' };
@@ -1663,17 +1640,17 @@ export function useFlash() {
   }, [sendBuiltTransaction, token, walletAddr]);
 
   const readFlashAccountSnapshot = useCallback(async () => {
-    if (!walletAddr) return null;
+    if (!accountOwner) return null;
     const primary = token
-      ? fetchJson(`${FUTURES_API}/flash/account?address=${encodeURIComponent(walletAddr)}`, {
+      ? fetchJson(`${FUTURES_API}/flash/account?address=${encodeURIComponent(accountOwner)}`, {
         headers: { 'x-token': token, 'x-dex': 'flash' },
       }).catch(async (e) => {
         if (e?.status !== 401 && e?.status !== 409) throw e;
-        return fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(walletAddr)}`);
+        return fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(accountOwner)}`);
       })
-      : fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(walletAddr)}`);
+      : fetchJson(`${FUTURES_API}/account?dex=flash&address=${encodeURIComponent(accountOwner)}`);
     return primary;
-  }, [token, walletAddr]);
+  }, [accountOwner, token]);
 
   const waitForFlashBasket = useCallback(async (onProgress = null) => {
     for (let attempt = 0; attempt < 18; attempt += 1) {
@@ -2031,7 +2008,7 @@ export function useFlash() {
       const { params: sessionParams, session: oneTapSession } = await oneTapTradeParams();
       await ensureFlashBasketDelegated();
       const request = {
-        wallet: walletAddr,
+        wallet: accountOwner,
         inputTokenSymbol: options?.inputTokenSymbol || 'USDC',
         outputTokenSymbol: normalizeSymbol(symbol),
         inputAmountUi: String(amount),
@@ -2080,7 +2057,7 @@ export function useFlash() {
     } finally {
       setActionLoading(false);
     }
-  }, [ensureFlashBasketDelegated, markets, oneTapTradeParams, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [accountOwner, ensureFlashBasketDelegated, markets, oneTapTradeParams, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, qty, _tif, lev = 1, options = {}) => (
     placeMarketOrder(symbol, side, qty, '0.5', lev, {
@@ -2113,7 +2090,7 @@ export function useFlash() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'flash' },
         body: JSON.stringify({
-          wallet: walletAddr,
+          wallet: accountOwner,
           marketSymbol: wantedSymbol,
           side: wantedSide,
           inputUsdUi,
@@ -2130,9 +2107,6 @@ export function useFlash() {
         oneTapSigner: oneTapSession?.publicKey || '',
         sessionToken: oneTapSession?.sessionToken || '',
       });
-      if (fullClose) {
-        allowEmptyPositionsUntilRef.current = Date.now() + 15_000;
-      }
       const imported = await reportTrade({
         signature,
         symbol,
@@ -2155,7 +2129,7 @@ export function useFlash() {
     } finally {
       setActionLoading(false);
     }
-  }, [ensureFlashBasketDelegated, oneTapTradeParams, positions, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [accountOwner, ensureFlashBasketDelegated, oneTapTradeParams, positions, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const depositToPacifica = useCallback(async (amount, options = {}) => {
     if (!token) return { error: 'Missing game session token' };
@@ -2420,7 +2394,8 @@ export function useFlash() {
     goldEarned,
     clearGoldEarned,
     walletMismatch,
-    registeredEvmWallet: registeredDexWallet(player, 'flash', 'solana') || '',
+    registeredEvmWallet: registeredFlashWallet,
+    apiWalletAddr: accountOwner,
     hasReferrer: true,
     referralUrl: config?.app_url || 'https://flash.trade',
     oneTapTrading,

@@ -239,12 +239,12 @@ function flashMarketClosedReason(market = {}) {
   if (market.trade_init_allowed === false || market.tradeInitAllowed === false) {
     return 'new positions are disabled';
   }
-  if (market.is_market_open === false || market.isMarketOpen === false) {
-    return `market session is ${flashMarketSessionLabel(market.market_status || market.market_session || market.marketSession || market.session)}`;
-  }
   const sessionKey = String(market.market_session || market.marketSession || market.session || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
-  if (sessionKey && !['regular', 'open', 'active'].includes(sessionKey)) {
+  if (sessionKey && ['closed', 'halted', 'paused', 'suspended'].includes(sessionKey)) {
     return `market session is ${flashMarketSessionLabel(market.market_session || market.marketSession || market.session)}`;
+  }
+  if ((market.is_market_open === false || market.isMarketOpen === false) && !sessionKey) {
+    return `market session is ${flashMarketSessionLabel(market.market_status || market.market_session || market.marketSession || market.session)}`;
   }
   return '';
 }
@@ -4001,7 +4001,7 @@ function FuturesPanel() {
   }
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
-  const shouldBlockWalletMismatch = false;
+  const shouldBlockWalletMismatch = dex === 'flash';
   if (shouldBlockWalletMismatch && (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') && walletMismatch) {
     return (
       <>

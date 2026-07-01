@@ -8101,10 +8101,18 @@ function extractAgentKey(req) {
 }
 
 function agentAuth(req, res, next) {
+  if (!db.AI_MCP_AGENT_ACCESS_ENABLED) {
+    return res.status(403).json({ ok: false, disabled: true, error: db.AI_MCP_AGENT_DISABLED_MESSAGE });
+  }
   const session = db.authenticateAiAgentKey(extractAgentKey(req));
   if (!session) return res.status(401).json({ error: 'Invalid or missing AI agent key' });
   req.agentSession = session;
   next();
+}
+
+function blockAiMcpAgentAccess(_req, res) {
+  res.set('Cache-Control', 'no-store');
+  return res.status(403).json({ ok: false, disabled: true, error: db.AI_MCP_AGENT_DISABLED_MESSAGE });
 }
 
 function requestHeaderHost(value) {
@@ -8891,11 +8899,21 @@ router.get('/players/me', auth, (req, res) => {
   res.json(state);
 });
 
+if (!db.AI_MCP_AGENT_ACCESS_ENABLED) {
+  router.all(/^\/ai-chat(?:\/.*)?$/, blockAiMcpAgentAccess);
+  router.all(/^\/ai-jobs(?:\/.*)?$/, blockAiMcpAgentAccess);
+  router.all('/agent-events/emit', blockAiMcpAgentAccess);
+}
+
 router.get('/players/ai-keys', auth, (req, res) => {
+  if (!db.AI_MCP_AGENT_ACCESS_ENABLED) {
+    return res.json({ keys: [], disabled: true, error: db.AI_MCP_AGENT_DISABLED_MESSAGE });
+  }
   res.json({ keys: db.listAiAgentKeys(req.player.id) });
 });
 
 router.post('/players/ai-keys', auth, (req, res) => {
+  if (!db.AI_MCP_AGENT_ACCESS_ENABLED) return blockAiMcpAgentAccess(req, res);
   const name = typeof req.body?.name === 'string' ? req.body.name : 'AI Agent';
   const result = db.createAiAgentKey(req.player.id, name);
   if (result.error) return res.status(400).json(result);
@@ -10335,6 +10353,9 @@ router.post('/agent-events/emit', agentAuth, (req, res) => {
 });
 
 router.get('/agent-events/pending', auth, (req, res) => {
+  if (!db.AI_MCP_AGENT_ACCESS_ENABLED) {
+    return res.json({ events: [], disabled: true, error: db.AI_MCP_AGENT_DISABLED_MESSAGE });
+  }
   res.json({ events: consumePendingAgentEvents(req.player.id) });
 });
 
@@ -11940,6 +11961,14 @@ router.get('/matchmaking/stats', auth, (req, res) => {
 
 router.get('/admin/matchmaking/stats', adminAuth, (req, res) => {
   res.json(db.getGlobalMatchmakingStats(req.query?.days || 7));
+});
+
+router.get('/admin/battle-risk', adminAuth, (req, res) => {
+  const limit = Math.max(1, Math.min(1000, Math.trunc(Number(req.query?.limit) || 120)));
+  res.json({
+    thresholds: db.BATTLE_RISK_THRESHOLDS,
+    players: db.getBattleRiskPlayers({ limit }),
+  });
 });
 
 
@@ -14835,6 +14864,12 @@ router.get('/admin/players', adminAuth, (req, res) => {
       }
     }
   } catch { /* raid_matchmaking missing on older DB */ }
+  const battleRiskMap = {};
+  try {
+    for (const row of db.getBattleRiskPlayers({ limit: 1000 })) {
+      battleRiskMap[row.player_id] = row;
+    }
+  } catch { /* battle risk telemetry unavailable on older DB */ }
   res.json(players.map(p => {
     const tr = rewardsMap[p.id];
     const mm = matchmakingMap[p.id] || {
@@ -14847,6 +14882,12 @@ router.get('/admin/players', adminAuth, (req, res) => {
       bot_share_7d: null,
       recovery_matches_7d: 0,
       avg_base_power_ratio_7d: null,
+    };
+    const battleRisk = battleRiskMap[p.id] || {
+      player_id: p.id,
+      risk_flags: [],
+      captcha_required: false,
+      risk_score: 0,
     };
     // Online = heartbeat within the past 5 min. Same window as the
     // /admin/stats counter so the row badge agrees with the headline
@@ -14872,6 +14913,9 @@ router.get('/admin/players', adminAuth, (req, res) => {
         ...mm,
         last: matchmakingLatestMap[p.id] || null,
       },
+      battle_risk: battleRisk,
+      captcha_required: !!battleRisk.captcha_required,
+      risk_flags: battleRisk.risk_flags || [],
       // Heartbeat-derived presence flags. Computed server-side so the
       // panel JS doesn't have to re-implement the same time math 5 places.
       online: ageMs <= 5 * 60 * 1000,
@@ -15214,6 +15258,12 @@ function adminBuildPlayerProfile(player) {
     latest_url: clientLogs.find((row) => row.url)?.url || feedback.find((row) => row.page_url)?.page_url || null,
     latest_ua: clientLogs.find((row) => row.ua)?.ua || feedback.find((row) => row.ua)?.ua || null,
   };
+  const battleRisk = db.getBattleRiskForPlayer(player.id) || {
+    player_id: player.id,
+    risk_flags: [],
+    captcha_required: false,
+    risk_score: 0,
+  };
   const sessionsAll = adminProfileSessions(activityEvents);
   const activity7d = activityEvents.filter((event) => adminProfileAgeDays(event.created_at) <= 7);
   const activity30d = activityEvents.filter((event) => adminProfileAgeDays(event.created_at) <= 30);
@@ -15226,6 +15276,7 @@ function adminBuildPlayerProfile(player) {
   const rewardTradeCount = rewards.reduce((sum, row) => sum + Number(row.last_trade_id || 0), 0);
   const flags = [];
   if (player.banned_at) flags.push({ key: 'banned', label: 'Banned account', tone: 'red' });
+  if (battleRisk.captcha_required) flags.push({ key: 'battle_risk_captcha', label: 'Battle risk: CAPTCHA', tone: 'red' });
   if (createdAgeDays !== null && createdAgeDays <= 7 && totalVolume >= 10_000) flags.push({ key: 'new_high_value', label: 'New high value', tone: 'green' });
   if (!townHall || (Number(battleSummary.total || 0) <= 0 && totalVolume <= 0)) flags.push({ key: 'stuck_onboarding', label: 'Stuck onboarding', tone: 'gold' });
   if (recentClaimFailures >= 3) flags.push({ key: 'quest_friction', label: 'Quest friction', tone: 'red' });
@@ -15336,6 +15387,7 @@ function adminBuildPlayerProfile(player) {
         attack_wins: Number(battleSummary.attack_wins || 0),
         rejected: Number(battleSummary.rejected || 0),
       },
+      risk: battleRisk,
       replays: battles,
       sessions: battleSessions,
     },

@@ -31,7 +31,7 @@ const ATTACK_TROOPS = [
   { key: 'firedragon', label: 'Dragon', img: dragonImg },
 ];
 
-const RAID_ATTACK_COST_GOLD = 200;
+const RAID_ATTACK_COST_GOLD = 300;
 const attackCostForTownHall = () => RAID_ATTACK_COST_GOLD;
 
 // ── Shared styled button (normal mode) ────────────────────────────────────

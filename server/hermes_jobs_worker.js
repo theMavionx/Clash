@@ -8,7 +8,7 @@ const WORKER_ID = `${os.hostname()}:${process.pid}:${Date.now()}`;
 const POLL_MS = Math.max(5_000, Math.min(300_000, Number(process.env.CLASH_HERMES_JOBS_POLL_MS || 30_000)));
 const BATCH_SIZE = Math.max(1, Math.min(20, Number(process.env.CLASH_HERMES_JOBS_BATCH_SIZE || 3)));
 const RUN_TIMEOUT_MS = Math.max(60_000, Math.min(600_000, Number(process.env.CLASH_HERMES_JOBS_RUN_TIMEOUT_MS || 240_000)));
-const JOBS_ENABLED = process.env.CLASH_HERMES_JOBS_ENABLED !== '0';
+const JOBS_ENABLED = process.env.CLASH_HERMES_JOBS_ENABLED !== '0' && db.AI_MCP_AGENT_ACCESS_ENABLED;
 
 function preview(value, max = 1000) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);

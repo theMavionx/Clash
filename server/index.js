@@ -643,6 +643,13 @@ app.get('/api/admin/panel', (req, res) => {
     <table style="margin-bottom:20px"><thead><tr>
       <th>Player</th><th>DEX</th><th>TH</th><th>Issued</th><th>Win %</th><th>Bot %</th><th>Recovery</th><th>Avg Ratio</th><th>Latest</th>
     </tr></thead><tbody id="matchmakingPlayersBody"></tbody></table>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px;flex-wrap:wrap">
+      <h3 style="color:#9ca3af;font-size:13px;margin:0;text-transform:uppercase;letter-spacing:0.5px">Battle Risk Flags</h3>
+      <span style="color:#6b7280;font-size:12px">Red flag = captcha_required for future CAPTCHA/prize eligibility</span>
+    </div>
+    <table style="margin-bottom:20px"><thead><tr>
+      <th>Player</th><th>DEX</th><th>TH</th><th>15m</th><th>24h</th><th>Results</th><th>Wins</th><th>Rejected</th><th>IP Players</th><th>Flags</th>
+    </tr></thead><tbody id="battleRiskBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Growth Funnel</h2>
     <div class="stats" id="growthFunnelStats"></div>
@@ -2361,6 +2368,7 @@ async function loadStats() {
       simpleCard('Issued targets', mmSummary.raids || 0, (mmSummary.decided_raids || 0) + ' decided · ' + (mmSummary.surrenders || 0) + ' surrendered · ' + (mmSummary.abandoned || 0) + ' abandoned', '#38bdf8') +
       simpleCard('Bot target share', rateText(botShare), (mmSummary.bot_matches || 0) + ' bot matches', '#a78bfa') +
       simpleCard('Recovery usage', rateText(recoveryShare), (mmSummary.recovery_matches || 0) + ' recovery matches', '#f97316') +
+      simpleCard('Captcha flags', mm.captcha_required_count || 0, 'risk-flagged battle accounts', (mm.captcha_required_count || 0) ? '#ef4444' : '#4ade80') +
       simpleCard('Avg power ratio', ratioText(mmSummary.avg_base_power_ratio), 'base power / attack power', '#fbbf24');
     document.getElementById('matchmakingNote').textContent = mm.error
       ? mm.error
@@ -2408,6 +2416,27 @@ async function loadStats() {
           '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.latest_at)) + '</td>' +
         '</tr>').join('')
       : '<tr><td colspan="9" style="color:#6b7280;text-align:center;padding:20px">No per-player matchmaking yet</td></tr>';
+
+    const riskRows = mm.battle_risk_players || [];
+    document.getElementById('battleRiskBody').innerHTML = riskRows.length
+      ? riskRows.map(row => {
+          const flags = (row.risk_flags || []).map(flag =>
+            '<span class="badge" style="background:#7f1d1d;color:#fecaca;margin-right:4px">' + esc(flag.label || flag.code || 'risk') + '</span>'
+          ).join('');
+          return '<tr>' +
+            '<td><strong>' + esc(row.name || row.player_id || '-') + '</strong><div style="font-size:10px;color:#6b7280">' + esc(row.player_id || '') + '</div></td>' +
+            '<td>' + dexBadge(row.dex) + ' <span style="color:#9ca3af">' + esc(row.dex || 'unknown') + '</span></td>' +
+            '<td><span class="badge" style="background:#78350f;color:#fde68a">TH' + esc(row.th_level || 1) + '</span></td>' +
+            '<td style="font-weight:800;color:#fca5a5">' + (row.attack_starts_15m || 0) + '</td>' +
+            '<td style="font-weight:800;color:#fca5a5">' + (row.attack_starts_24h || 0) + '</td>' +
+            '<td>' + (row.submitted_results_24h || 0) + '</td>' +
+            '<td style="color:#4ade80">' + (row.accepted_wins_24h || 0) + '</td>' +
+            '<td style="color:#fca5a5">' + (row.rejected_results_24h || 0) + '</td>' +
+            '<td>' + (row.ip_players_24h || 0) + '</td>' +
+            '<td><span class="badge" style="background:#7f1d1d;color:#fecaca;margin-right:4px">captcha_required</span>' + flags + '</td>' +
+          '</tr>';
+        }).join('')
+      : '<tr><td colspan="10" style="color:#6b7280;text-align:center;padding:20px">No battle risk flags right now</td></tr>';
 
     const funnel = s.growth_funnel || {};
     const tradingFunnel = funnel.trading || {};

@@ -11,15 +11,19 @@ const {
 } = require('../server/solana_rpc');
 
 const FLASH_API = String(process.env.FLASH_API_URL || 'https://flashapi.trade').replace(/\/+$/, '');
+const FLASH_PROD_API = String(process.env.FLASH_PROD_API_URL || 'https://api.prod.flash.trade').replace(/\/+$/, '');
 const FLASH_APP_URL = String(process.env.FLASH_APP_URL || 'https://flash.trade').replace(/\/+$/, '');
 const FLASH_DOCS_URL = 'https://docs.flash.trade/flash-trade/flash-trade-protocol/build-on-flash/flash-trade-api/flash-trade-v2';
-const FLASH_V2_RPC_URL = String(process.env.FLASH_V2_RPC_URL || process.env.FLASH_MAGIC_ROUTER_RPC || 'https://flashtrade.magicblock.app').trim().replace(/\/+$/, '');
+const FLASH_DEFAULT_ER_RPC_URL = 'https://flash.magicblock.xyz';
+const FLASH_LEGACY_ER_RPC_URL = 'https://flashtrade.magicblock.app';
+const FLASH_V2_RPC_URL = String(process.env.FLASH_V2_RPC_URL || process.env.ER_RPC_URL || process.env.FLASH_MAGIC_ROUTER_RPC || FLASH_DEFAULT_ER_RPC_URL).trim().replace(/\/+$/, '');
 const FLASH_USDC_MINT = String(process.env.FLASH_USDC_MINT || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 const FLASH_USDC_DECIMALS = 6;
 const FLASH_PROGRAM_IDS = String(
   process.env.FLASH_PROGRAM_IDS || 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV,FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn'
 ).split(',').map(s => s.trim()).filter(Boolean);
 const FLASH_V2_PROGRAM_ID = FLASH_PROGRAM_IDS[0] || 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV';
+const FLASH_LEGACY_PROGRAM_ID = FLASH_PROGRAM_IDS.find(id => id === 'FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn') || 'FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn';
 const GPL_SESSION_PROGRAM_ID = String(process.env.GPL_SESSION_PROGRAM_ID || 'KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5');
 const GPL_SESSION_TOKEN_V2_DISCRIMINATOR = Buffer.from([178, 3, 85, 254, 13, 116, 128, 41]);
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.FLASH_TIMEOUT_MS || 7000)));
@@ -48,6 +52,25 @@ function flashSolanaRpcUrls() {
   ].filter(Boolean)));
 }
 
+function flashErRpcUrls() {
+  return Array.from(new Set([
+    ...splitSolanaRpcUrls(process.env.FLASH_V2_RPC_URLS),
+    ...splitSolanaRpcUrls(process.env.FLASH_V2_RPC_URL),
+    ...splitSolanaRpcUrls(process.env.ER_RPC_URL),
+    ...splitSolanaRpcUrls(process.env.FLASH_MAGIC_ROUTER_RPC),
+    FLASH_V2_RPC_URL,
+    FLASH_DEFAULT_ER_RPC_URL,
+    FLASH_LEGACY_ER_RPC_URL,
+  ].filter(Boolean).map(url => String(url).trim().replace(/\/+$/, ''))));
+}
+
+function flashFundingRpcUrls() {
+  return Array.from(new Set([
+    ...flashErRpcUrls(),
+    ...flashSolanaRpcUrls(),
+  ].filter(Boolean)));
+}
+
 function normalizeFlashSession(value) {
   return String(value || '').trim();
 }
@@ -55,7 +78,7 @@ function normalizeFlashSession(value) {
 function flashSessionAllowsTrade(session) {
   const key = normalizeFlashSession(session).toLowerCase().replace(/[\s_-]+/g, '');
   if (!key) return true;
-  return key === 'regular' || key === 'open' || key === 'active';
+  return !['closed', 'halted', 'paused', 'suspended'].includes(key);
 }
 
 function flashSessionLabel(session) {
@@ -123,6 +146,34 @@ async function flashSolanaRpcRequest(label, method, params) {
     }
     return data?.result;
   });
+}
+
+async function flashJsonRpcRequest(rpcUrl, label, method, params, signal) {
+  const res = await fetch(rpcUrl, {
+    method: 'POST',
+    signal,
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'user-agent': 'ClashOfPerps/1.0 flash-v2-rpc',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: `flash-${Date.now()}`,
+      method,
+      params,
+    }),
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  if (!res.ok || data?.error) {
+    const err = new Error(data?.error?.message || (text ? text.slice(0, 400) : `HTTP ${res.status}`));
+    err.status = res.ok ? 502 : res.status;
+    err.rpc_url = rpcUrl;
+    throw err;
+  }
+  return data?.result;
 }
 
 async function flashV2RpcRequest(label, method, params) {
@@ -211,6 +262,40 @@ async function request(path, options = {}) {
       throw err;
     }
     if (method === 'GET') cache.set(key, { at: now, data });
+    if (cache.size > 250) cache = new Map([...cache.entries()].slice(-150));
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function requestProd(path) {
+  const key = `GET:${FLASH_PROD_API}${path}`;
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && now - cached.at < PUBLIC_CACHE_TTL_MS) return cached.data;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${FLASH_PROD_API}${path}`, {
+      method: 'GET',
+      signal: ctrl.signal,
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'user-agent': 'ClashOfPerps/1.0 flash-prod-read',
+      },
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!res.ok) {
+      const err = new Error(data?.err || data?.error || data?.message || `Flash prod API ${res.status}`);
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
+    cache.set(key, { at: now, data });
     if (cache.size > 250) cache = new Map([...cache.entries()].slice(-150));
     return data;
   } finally {
@@ -405,7 +490,7 @@ async function getMarketInfo() {
       min_order_size: 1,
       tick_size: symbol === 'BTC' ? '0.1' : '0.01',
       market_session: marketSession || null,
-      market_status: sessionOpen ? 'open' : flashSessionLabel(marketSession),
+      market_status: marketSession ? flashSessionLabel(marketSession) : 'open',
       trade_init_allowed: tradeInitAllowed,
       is_market_open: sessionOpen && tradeInitAllowed,
       token: t,
@@ -465,6 +550,134 @@ async function getFundingRates() {
   return rates;
 }
 
+async function getRawMarkets() {
+  return request('/v2/raw/markets');
+}
+
+async function getFlashV2MarketHints() {
+  const [markets, custodies, tokens] = await Promise.all([
+    getRawMarkets(),
+    getRawCustodies(),
+    getTokens(),
+  ]);
+  const custodyToSymbol = new Map();
+  const symbolByMint = new Map((Array.isArray(tokens) ? tokens : [])
+    .map(t => [String(t?.mintKey || '').trim(), normalizeToken(t?.symbol, '')])
+    .filter(([mint, symbol]) => mint && symbol));
+  for (const row of Array.isArray(custodies) ? custodies : []) {
+    const account = row?.account || row;
+    const pubkey = String(row?.pubkey || account?.pubkey || '').trim();
+    const symbol = symbolByMint.get(String(account?.tokenMint || '').trim());
+    if (pubkey && symbol) custodyToSymbol.set(pubkey, symbol);
+  }
+  const hints = new Map();
+  for (const row of Array.isArray(markets) ? markets : []) {
+    const account = row?.account || row;
+    const market = String(row?.pubkey || account?.pubkey || '').trim();
+    if (!market) continue;
+    const targetCustody = String(account?.targetCustody || account?.target_custody || '').trim();
+    const symbol = custodyToSymbol.get(targetCustody) || '';
+    hints.set(market, {
+      market,
+      symbol,
+      side: normalizeSide(account?.side),
+      source: 'flash_v2_raw_markets',
+    });
+  }
+  return hints;
+}
+
+async function getFlashProdMarketHints() {
+  const [volumeRows, statRows] = await Promise.all([
+    requestProd('/market-stat/volume-24hr?source=all&program=flash'),
+    requestProd('/market-stat/24hr?source=all&program=flash'),
+  ]);
+  const statsByVolume = new Map();
+  for (const row of Array.isArray(statRows) ? statRows : []) {
+    const symbol = normalizeToken(row?.token, '');
+    const volume = Number(row?.volume24h);
+    if (!symbol || !Number.isFinite(volume)) continue;
+    const key = Math.round(volume * 100);
+    const list = statsByVolume.get(key) || [];
+    list.push({ symbol, volume });
+    statsByVolume.set(key, list);
+  }
+  const hints = new Map();
+  for (const row of Array.isArray(volumeRows) ? volumeRows : []) {
+    const market = String(row?.market || '').trim();
+    const totalSizeUsd = Number(row?.totalSizeUsd);
+    if (!market || !Number.isFinite(totalSizeUsd)) continue;
+    const volume = totalSizeUsd / 1_000_000;
+    const key = Math.round(volume * 100);
+    const candidates = (statsByVolume.get(key) || [])
+      .filter(item => Math.abs(item.volume - volume) < 0.02);
+    if (candidates.length === 1) {
+      hints.set(market, {
+        market,
+        symbol: candidates[0].symbol,
+        source: 'flash_prod_market_stats',
+      });
+    }
+  }
+  return hints;
+}
+
+async function getFlashHistoryMarketHints(owner) {
+  if (!isSolanaAddress(owner)) return new Map();
+  const params = new URLSearchParams({
+    page: '1',
+    take: '50',
+    source: 'all',
+    program: 'flash',
+    order: 'DESC',
+    timestamp: String(Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60),
+  });
+  const data = await requestProd(`/trading-history-v2/find-all-by-user-v4/${encodeURIComponent(owner)}?${params.toString()}`);
+  const hints = new Map();
+  for (const row of Array.isArray(data?.data) ? data.data : []) {
+    const market = String(row?.market || '').trim();
+    if (!market || hints.has(market)) continue;
+    const side = normalizeSide(row?.side);
+    hints.set(market, {
+      market,
+      side,
+      source: 'flash_prod_trade_history',
+      last_trade_type: row?.tradeType || row?.trade_type || null,
+      last_trade_timestamp: Number(row?.timestamp || 0) || null,
+    });
+  }
+  return hints;
+}
+
+async function getFlashMarketHints(owner) {
+  const [v2, prod, history] = await Promise.all([
+    getFlashV2MarketHints().catch(e => {
+      console.warn('[flash] v2 market hints unavailable:', e?.message || e);
+      return new Map();
+    }),
+    getFlashProdMarketHints().catch(e => {
+      console.warn('[flash] prod market hints unavailable:', e?.message || e);
+      return new Map();
+    }),
+    getFlashHistoryMarketHints(owner).catch(e => {
+      console.warn('[flash] trade history market hints unavailable:', e?.message || e);
+      return new Map();
+    }),
+  ]);
+  const merged = new Map();
+  for (const source of [v2, prod, history]) {
+    for (const [market, hint] of source.entries()) {
+      merged.set(market, {
+        ...(merged.get(market) || {}),
+        ...hint,
+        symbol: hint.symbol || merged.get(market)?.symbol || '',
+        side: hint.side || merged.get(market)?.side || '',
+      });
+    }
+  }
+  return merged;
+}
+
 async function getPositionsByAddress(owner, includePnlInLeverageDisplay = true) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('valid Solana owner required'), { status: 400 });
   const snapshot = await getOwnerSnapshot(owner);
@@ -506,6 +719,11 @@ function accountDiscriminator(name) {
   return crypto.createHash('sha256').update(`account:${name}`).digest().subarray(0, 8);
 }
 
+function bs58Encode(bytes) {
+  const mod = bs58.encode ? bs58 : bs58.default;
+  return mod.encode(bytes);
+}
+
 function rawTokenAmountToUi(raw, decimals = FLASH_USDC_DECIMALS) {
   const value = typeof raw === 'bigint' ? raw : BigInt(String(raw || 0));
   const scale = 10n ** BigInt(decimals);
@@ -526,6 +744,196 @@ function sumRawMint(entries = [], mint = FLASH_USDC_MINT) {
   return (Array.isArray(entries) ? entries : []).reduce((sum, entry) => (
     String(entry?.mint || '') === target ? sum + rawAmount(entry?.amount) : sum
   ), 0n);
+}
+
+function readPubkey(bytes, offset) {
+  if (offset + 32 > bytes.length) throw new Error('Flash account data is truncated while reading pubkey');
+  return new PublicKey(bytes.subarray(offset, offset + 32)).toBase58();
+}
+
+function readI64(bytes, offset) {
+  if (offset + 8 > bytes.length) throw new Error('Flash account data is truncated while reading i64');
+  return bytes.readBigInt64LE(offset);
+}
+
+function readU64(bytes, offset) {
+  if (offset + 8 > bytes.length) throw new Error('Flash account data is truncated while reading u64');
+  return bytes.readBigUInt64LE(offset);
+}
+
+function readOraclePrice(bytes, offset) {
+  const price = readU64(bytes, offset);
+  if (offset + 12 > bytes.length) throw new Error('Flash account data is truncated while reading oracle price');
+  const exponent = bytes.readInt32LE(offset + 8);
+  return {
+    price,
+    exponent,
+    ui: Number(price) * Math.pow(10, exponent),
+  };
+}
+
+function readFlashVector(bytes, offset, reader) {
+  if (offset + 4 > bytes.length) throw new Error('Flash account data is truncated while reading vector length');
+  const length = bytes.readUInt32LE(offset);
+  let cursor = offset + 4;
+  const rows = [];
+  for (let i = 0; i < length; i += 1) {
+    const read = reader(bytes, cursor);
+    rows.push(read.value);
+    cursor = read.offset;
+  }
+  return { value: rows, offset: cursor };
+}
+
+function readFlashLedger(bytes, offset) {
+  return {
+    value: {
+      mint: readPubkey(bytes, offset),
+      amount: readU64(bytes, offset + 32),
+    },
+    offset: offset + 40,
+  };
+}
+
+function readFlashPositionMeta(bytes, offset) {
+  const startOffset = offset;
+  const metaMarket = readPubkey(bytes, offset);
+  offset += 32;
+  const owner = readPubkey(bytes, offset);
+  offset += 32;
+  const market = readPubkey(bytes, offset);
+  offset += 32;
+  const delegate = readPubkey(bytes, offset);
+  offset += 32;
+  const openTime = readI64(bytes, offset);
+  offset += 8;
+  const updateTime = readI64(bytes, offset);
+  offset += 8;
+  const entryPrice = readOraclePrice(bytes, offset);
+  offset += 12;
+  const sizeAmount = readU64(bytes, offset);
+  offset += 8;
+  const sizeUsd = readU64(bytes, offset);
+  offset += 8;
+  const lockedAmount = readU64(bytes, offset);
+  offset += 8;
+  const lockedUsd = readU64(bytes, offset);
+  offset += 8;
+  const priceImpactUsd = readU64(bytes, offset);
+  offset += 8;
+  const collateralUsd = readU64(bytes, offset);
+  offset += 8;
+  const unsettledValueUsd = readU64(bytes, offset);
+  offset += 8;
+  const unsettledFeesUsd = readU64(bytes, offset);
+  offset += 8;
+  const cumulativeLockFeeSnapshotLo = readU64(bytes, offset);
+  const cumulativeLockFeeSnapshotHi = readU64(bytes, offset + 8);
+  offset += 16;
+  const degenSizeUsd = readU64(bytes, offset);
+  offset += 8;
+  const referencePrice = readOraclePrice(bytes, offset);
+  offset += 12;
+  if (offset + 17 > bytes.length) throw new Error('Flash account data is truncated while reading position flags');
+  const isActive = bytes[offset] !== 0;
+  offset += 1;
+  const buffer = Array.from(bytes.subarray(offset, offset + 2));
+  offset += 2;
+  const priceImpactSet = bytes[offset];
+  offset += 1;
+  const sizeDecimals = bytes[offset];
+  offset += 1;
+  const lockedDecimals = bytes[offset];
+  offset += 1;
+  const collateralDecimals = bytes[offset];
+  offset += 1;
+  const bump = bytes[offset];
+  offset += 1;
+  const migrateFlag = bytes[offset] !== 0;
+  offset += 1;
+  const padding = Array.from(bytes.subarray(offset, offset + 7));
+  offset += 7;
+  return {
+    value: {
+      meta_market: metaMarket,
+      market,
+      owner,
+      delegate,
+      open_time: Number(openTime),
+      update_time: Number(updateTime),
+      entry_price: entryPrice,
+      reference_price: referencePrice,
+      size_amount: sizeAmount,
+      size_usd: sizeUsd,
+      locked_amount: lockedAmount,
+      locked_usd: lockedUsd,
+      price_impact_usd: priceImpactUsd,
+      collateral_usd: collateralUsd,
+      unsettled_value_usd: unsettledValueUsd,
+      unsettled_fees_usd: unsettledFeesUsd,
+      cumulative_lock_fee_snapshot: (cumulativeLockFeeSnapshotHi << 64n) + cumulativeLockFeeSnapshotLo,
+      degen_size_usd: degenSizeUsd,
+      is_active: isActive,
+      buffer,
+      price_impact_set: priceImpactSet,
+      size_decimals: sizeDecimals,
+      locked_decimals: lockedDecimals,
+      collateral_decimals: collateralDecimals,
+      bump,
+      migrate_flag: migrateFlag,
+      padding,
+      bytes: offset - startOffset,
+    },
+    offset,
+  };
+}
+
+function decodeFlashBasket(data, expectedOwner = '') {
+  const bytes = Buffer.from(data || []);
+  const discriminator = accountDiscriminator('Basket');
+  if (bytes.length < 92 || !bytes.subarray(0, 8).equals(discriminator)) {
+    throw new Error('Flash basket account has invalid layout');
+  }
+  let offset = 8;
+  const owner = readPubkey(bytes, offset);
+  offset += 32;
+  if (expectedOwner && owner !== expectedOwner) {
+    throw new Error('Flash basket owner mismatch');
+  }
+  const delegate = readPubkey(bytes, offset);
+  offset += 32;
+  const basketBump = bytes[offset];
+  offset += 1;
+  const padding = Array.from(bytes.subarray(offset, offset + 5));
+  offset += 5;
+  const positionsActive = bytes[offset] !== 0;
+  offset += 1;
+  const ordersActive = bytes[offset] !== 0;
+  offset += 1;
+  const debits = readFlashVector(bytes, offset, readFlashLedger);
+  offset = debits.offset;
+  const pendingCredits = readFlashVector(bytes, offset, readFlashLedger);
+  offset = pendingCredits.offset;
+  const positions = readFlashVector(bytes, offset, readFlashPositionMeta);
+  offset = positions.offset;
+  let ordersCount = null;
+  if (offset + 4 <= bytes.length) {
+    ordersCount = bytes.readUInt32LE(offset);
+  }
+  return {
+    owner,
+    delegate,
+    basket_bump: basketBump,
+    padding,
+    positions_active: positionsActive,
+    orders_active: ordersActive,
+    debits: debits.value,
+    pending_credits: pendingCredits.value,
+    positions: positions.value,
+    orders_count: ordersCount,
+    decoded_offset: offset,
+    account_size: bytes.length,
+  };
 }
 
 function decodeUserDepositLedger(data, expectedOwner = '') {
@@ -550,6 +958,66 @@ function decodeUserDepositLedger(data, expectedOwner = '') {
     offset += 40;
   }
   return { owner, deposits };
+}
+
+async function readFlashLedgerFromRpc(rpcUrl, owner, ledgerPubkey, signal, programId = FLASH_V2_PROGRAM_ID) {
+  const discriminator = bs58Encode(accountDiscriminator('UserDepositLedger'));
+  const gpa = await flashJsonRpcRequest(rpcUrl, 'Flash user deposit ledger', 'getProgramAccounts', [
+    programId,
+    {
+      encoding: 'base64',
+      filters: [
+        { memcmp: { offset: 0, bytes: discriminator } },
+        { memcmp: { offset: 16, bytes: owner } },
+      ],
+    },
+  ], signal).catch(() => null);
+  const first = Array.isArray(gpa) ? gpa[0] : null;
+  const firstBase64 = Array.isArray(first?.account?.data) ? first.account.data[0] : null;
+  if (firstBase64) {
+    return {
+      pubkey: first.pubkey || ledgerPubkey.toBase58(),
+      ledger: decodeUserDepositLedger(Buffer.from(firstBase64, 'base64'), owner),
+    };
+  }
+
+  const info = await flashJsonRpcRequest(rpcUrl, 'Flash user deposit ledger', 'getAccountInfo', [
+    ledgerPubkey.toBase58(),
+    { encoding: 'base64', commitment: 'confirmed' },
+  ], signal).catch(() => null);
+  const infoBase64 = Array.isArray(info?.value?.data) ? info.value.data[0] : null;
+  if (!infoBase64) return null;
+  return {
+    pubkey: ledgerPubkey.toBase58(),
+    ledger: decodeUserDepositLedger(Buffer.from(infoBase64, 'base64'), owner),
+  };
+}
+
+async function getFlashUserDepositLedger(owner, ledgerPubkey, programId = FLASH_V2_PROGRAM_ID) {
+  const erUrls = new Set(flashErRpcUrls());
+  let lastError = null;
+  for (const rpcUrl of flashFundingRpcUrls()) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), SOLANA_RPC_TIMEOUT_MS);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const read = await readFlashLedgerFromRpc(rpcUrl, owner, ledgerPubkey, ctrl.signal, programId);
+      if (read?.ledger) {
+        return {
+          ...read,
+          rpc_url: rpcUrl,
+          source: erUrls.has(String(rpcUrl).replace(/\/+$/, '')) ? 'er' : 'base',
+        };
+      }
+    } catch (e) {
+      lastError = e;
+      console.warn(`[flash] Flash user deposit ledger RPC failed on ${rpcUrl}:`, e?.message || e);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
 }
 
 function deriveGplSessionToken(sessionSigner, authority) {
@@ -603,36 +1071,37 @@ async function verifyFlashSessionSigner({ sessionToken, signer, owner, blockTime
   return decoded;
 }
 
-async function getFlashFundingState(owner, snapshot = {}) {
+async function getFlashFundingState(owner, snapshot = {}, erBasket = null) {
   const ownerKey = new PublicKey(owner);
-  const programId = new PublicKey(FLASH_V2_PROGRAM_ID);
+  const fundingProgramId = erBasket?.program_id || FLASH_V2_PROGRAM_ID;
+  const programId = new PublicKey(fundingProgramId);
   const [derivedBasket] = findBasketAddress(ownerKey, programId);
   const [ledgerPubkey] = findUserDepositLedgerAddress(ownerKey, programId);
-  const basketPubkey = String(snapshot?.basketPubkey || derivedBasket.toBase58());
-  const [basketRaw, ledgerRpc] = await Promise.all([
-    basketPubkey
+  const basketPubkey = String(erBasket?.pubkey || snapshot?.basketPubkey || derivedBasket.toBase58());
+  const [basketRaw, ledgerRead] = await Promise.all([
+    erBasket ? Promise.resolve(null) : basketPubkey
       ? request(`/v2/raw/baskets/${basketPubkey}`).catch(() => null)
       : Promise.resolve(null),
-    flashSolanaRpcRequest('Flash user deposit ledger', 'getAccountInfo', [
-      ledgerPubkey.toBase58(),
-      { encoding: 'base64', commitment: 'confirmed' },
-    ]).catch(() => null),
+    getFlashUserDepositLedger(owner, ledgerPubkey, fundingProgramId).catch(() => null),
   ]);
-  const ledgerBase64 = Array.isArray(ledgerRpc?.value?.data)
-    ? ledgerRpc.value.data[0]
-    : null;
-  if (!ledgerBase64) return null;
-  const ledger = decodeUserDepositLedger(Buffer.from(ledgerBase64, 'base64'), owner);
-  const basketAccount = basketRaw?.account || {};
+  if (!ledgerRead?.ledger) return null;
+  const ledger = ledgerRead.ledger;
+  const basketAccount = erBasket || basketRaw?.account || {};
   const depositsRaw = sumRawMint(ledger.deposits);
-  const debitsRaw = sumRawMint(basketAccount.debits);
-  const pendingCreditsRaw = sumRawMint(basketAccount.pendingCredits);
-  const availableRaw = depositsRaw + pendingCreditsRaw - debitsRaw;
+  const debitsRaw = sumRawMint(basketAccount.debits || basketAccount.debitsRaw || []);
+  const pendingCreditsRaw = sumRawMint(basketAccount.pendingCredits || basketAccount.pending_credits || []);
+  // Flash V2 is double-entry: the deposit ledger is cumulative, while basket
+  // debits and pendingCredits are counter-entries. All three must be netted
+  // from the same coherent ER-fed source.
+  const availableRaw = depositsRaw - debitsRaw + pendingCreditsRaw;
   const availableClampedRaw = availableRaw > 0n ? availableRaw : 0n;
   return {
     source: 'magic_trade_client_user_deposit_ledger',
+    program_id: fundingProgramId,
+    ledger_source: ledgerRead.source,
+    ledger_rpc_url: ledgerRead.rpc_url,
     basket_pubkey: basketPubkey,
-    deposit_ledger_pubkey: ledgerPubkey.toBase58(),
+    deposit_ledger_pubkey: ledgerRead.pubkey || ledgerPubkey.toBase58(),
     deposit_ledger_usdc: rawTokenAmountToUi(depositsRaw),
     basket_debits_usdc: rawTokenAmountToUi(debitsRaw),
     basket_pending_credits_usdc: rawTokenAmountToUi(pendingCreditsRaw),
@@ -660,7 +1129,7 @@ async function getParsedFlashTransaction(signature) {
 
 function displayLiquidationPrice({ side, entry, sizeUsd, collateralUsd, apiLiq }) {
   if (!(entry > 0) || !(sizeUsd > 0) || !(collateralUsd > 0)) return apiLiq || 0;
-  const ratio = Math.max(0, Math.min(0.95, collateralUsd / sizeUsd));
+  const ratio = Math.max(0, Math.min(0.95, collateralUsd / sizeUsd)) * 0.92;
   const derived = side === 'SHORT' ? entry * (1 + ratio) : entry * (1 - ratio);
   if (!(derived > 0)) return apiLiq || 0;
   if (!(apiLiq > 0)) return derived;
@@ -672,6 +1141,28 @@ function displayLiquidationPrice({ side, entry, sizeUsd, collateralUsd, apiLiq }
   return apiLiq;
 }
 
+function rawUsdFromMetric(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n / 1_000_000 : 0;
+}
+
+function flashPositionPnlView({ metric = {}, side, entry, mark, sizeUsd, amount, collateralUsd }) {
+  const dir = side === 'SHORT' ? -1 : 1;
+  const notional = sizeUsd > 0 ? sizeUsd : (entry > 0 && amount > 0 ? entry * amount : 0);
+  const pricePnl = mark > 0 && entry > 0 && notional > 0
+    ? ((mark - entry) / entry) * notional * dir
+    : numberFromUi(metric.pnlWithoutFeeUsdUi ?? metric.pnlWithFeeUsdUi);
+  const feesUsd = rawUsdFromMetric(metric.exitFeeUsd) + rawUsdFromMetric(metric.borrowFeeUsd);
+  const pnlWithFees = pricePnl - feesUsd;
+  return {
+    pnlWithoutFees: pricePnl,
+    pnlWithFees,
+    pnlPctWithoutFees: collateralUsd > 0 ? (pricePnl / collateralUsd) * 100 : undefined,
+    pnlPctWithFees: collateralUsd > 0 ? (pnlWithFees / collateralUsd) * 100 : undefined,
+    feesUsd,
+  };
+}
+
 function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map()) {
   const side = metricSide(metric.side || metric.sideUi);
   const symbol = normalizeToken(metric.marketSymbol || metric.symbol || marketPubkey);
@@ -680,11 +1171,9 @@ function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map()) {
   const entry = numberFromUi(metric.entryPriceUi);
   const amount = numberFromUi(metric.sizeAmountUi);
   const mark = numberFromUi(priceMap.get(symbol)?.price);
-  const derivedPnl = mark > 0 && entry > 0 && amount > 0
-    ? (mark - entry) * amount * (side === 'SHORT' ? -1 : 1)
-    : numberFromUi(metric.pnlWithoutFeeUsdUi ?? metric.pnlWithFeeUsdUi);
+  const pnlView = flashPositionPnlView({ metric, side, entry, mark, sizeUsd, amount, collateralUsd });
   const isDust = isDustMetric(metric);
-  const pnl = isDust ? 0 : derivedPnl;
+  const pnl = isDust ? 0 : pnlView.pnlWithoutFees;
   const leverage = numberFromUi(metric.leverageUi);
   const apiLiq = numberFromUi(metric.liquidationPriceUi);
   const liq = displayLiquidationPrice({ side, entry, sizeUsd, collateralUsd, apiLiq });
@@ -709,7 +1198,13 @@ function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map()) {
     pnlWithFeeUsdUi: metric.pnlWithFeeUsdUi,
     pnlWithoutFeeUsdUi: metric.pnlWithoutFeeUsdUi,
     pnl_usd: pnl,
-    pnl_pct: isDust ? 0 : (collateralUsd > 0 ? (pnl / collateralUsd) * 100 : undefined),
+    pnl_pct: isDust ? 0 : pnlView.pnlPctWithoutFees,
+    pnl_without_fees_usd: isDust ? 0 : pnlView.pnlWithoutFees,
+    pnl_without_fees_pct: isDust ? 0 : pnlView.pnlPctWithoutFees,
+    pnl_with_fees_usd: isDust ? 0 : pnlView.pnlWithFees,
+    pnl_with_fees_pct: isDust ? 0 : pnlView.pnlPctWithFees,
+    flash_position_fees_usd: isDust ? 0 : pnlView.feesUsd,
+    pnl_source: 'flash_mark_price_without_fees',
     liquidationPriceUi: metric.liquidationPriceUi,
     liquidation_price: isDust ? undefined : (liq || metric.liquidationPriceUi),
     leverage: isDust ? undefined : (collateralLeverage > 0 ? Math.round(collateralLeverage * 10) / 10 : undefined),
@@ -765,22 +1260,185 @@ function ordersFromMetricBundle(marketPubkey, metric = {}) {
   return [orderFromMetric(marketPubkey, metric)];
 }
 
+function flashMetricFromErPosition(pos = {}, hint = {}) {
+  const market = String(pos.market || pos.meta_market || '').trim();
+  const symbol = hint.symbol ? normalizeToken(hint.symbol, '') : market;
+  const side = normalizeSide(hint.side || 'LONG');
+  const sizeUsd = rawTokenAmountToUi(pos.size_usd, FLASH_USDC_DECIMALS);
+  const collateralUsd = rawTokenAmountToUi(pos.collateral_usd, FLASH_USDC_DECIMALS);
+  const sizeAmount = rawTokenAmountToUi(pos.size_amount, Number(pos.size_decimals || 0));
+  const lockedAmount = rawTokenAmountToUi(pos.locked_amount, Number(pos.locked_decimals || 0));
+  const entry = Number(pos.entry_price?.ui || 0);
+  const reference = Number(pos.reference_price?.ui || 0);
+  return {
+    marketSymbol: symbol,
+    symbol,
+    side,
+    sideUi: side,
+    entryPriceUi: entry || undefined,
+    referencePriceUi: reference || undefined,
+    sizeAmountUi: sizeAmount,
+    sizeUsdUi: sizeUsd,
+    collateralUsdUi: collateralUsd,
+    lockedAmountUi: lockedAmount,
+    leverageUi: collateralUsd > 0 && sizeUsd > 0 ? sizeUsd / collateralUsd : undefined,
+    openTime: pos.open_time || null,
+    updateTime: pos.update_time || null,
+    isActive: pos.is_active === true,
+    sizeUsdRaw: pos.size_usd?.toString?.() || String(pos.size_usd || ''),
+    collateralUsdRaw: pos.collateral_usd?.toString?.() || String(pos.collateral_usd || ''),
+    sizeAmountRaw: pos.size_amount?.toString?.() || String(pos.size_amount || ''),
+    source: 'flash_er_basket',
+  };
+}
+
+function positionsFromFlashErBasket(basket = {}, marketHints = new Map(), priceMap = new Map()) {
+  const positions = [];
+  for (const pos of Array.isArray(basket.positions) ? basket.positions : []) {
+    if (pos?.is_active !== true) continue;
+    if (!(rawAmount(pos.size_usd) > 0n) && !(rawAmount(pos.collateral_usd) > 0n)) continue;
+    const market = String(pos.market || pos.meta_market || '').trim();
+    const hint = marketHints.get(market) || {};
+    const metric = flashMetricFromErPosition(pos, hint);
+    const normalized = positionFromMetric(market, metric, priceMap);
+    positions.push({
+      ...normalized,
+      marketPubkey: market,
+      source: 'flash_er_basket',
+      flash_program_id: basket.program_id || null,
+      flash_basket_pubkey: basket.pubkey || null,
+      flash_er_rpc_url: basket.rpc_url || null,
+      metric: {
+        ...normalized.metric,
+        ...metric,
+        er_position: {
+          owner: pos.owner,
+          market,
+          open_time: pos.open_time,
+          update_time: pos.update_time,
+          entry_price: pos.entry_price?.ui || null,
+          reference_price: pos.reference_price?.ui || null,
+          size_decimals: pos.size_decimals,
+          locked_decimals: pos.locked_decimals,
+          collateral_decimals: pos.collateral_decimals,
+        },
+      },
+    });
+  }
+  return positions;
+}
+
+function mergeFlashPositions(primary = [], secondary = []) {
+  const merged = [];
+  const seen = new Set();
+  const keyOf = (pos = {}) => String(pos.marketPubkey || pos.market_pubkey || pos.positionKey || `${pos.symbol}:${pos.tradeType}` || '').trim();
+  for (const list of [primary, secondary]) {
+    for (const pos of Array.isArray(list) ? list : []) {
+      const key = keyOf(pos);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      merged.push(pos);
+    }
+  }
+  return merged;
+}
+
+async function readFlashBasketFromRpc(rpcUrl, owner, programId, signal) {
+  const discriminator = bs58Encode(accountDiscriminator('Basket'));
+  const gpa = await flashJsonRpcRequest(rpcUrl, 'Flash basket', 'getProgramAccounts', [
+    programId,
+    {
+      encoding: 'base64',
+      filters: [
+        { memcmp: { offset: 0, bytes: discriminator } },
+        { memcmp: { offset: 8, bytes: owner } },
+      ],
+    },
+  ], signal).catch(() => null);
+  const rows = Array.isArray(gpa) ? gpa : [];
+  for (const row of rows) {
+    const data = Array.isArray(row?.account?.data) ? row.account.data[0] : null;
+    if (!data) continue;
+    const basket = decodeFlashBasket(Buffer.from(data, 'base64'), owner);
+    return {
+      ...basket,
+      pubkey: row.pubkey || null,
+      program_id: programId,
+      rpc_url: rpcUrl,
+      source: 'flash_er_getProgramAccounts',
+    };
+  }
+
+  let derivedBasket = null;
+  try {
+    derivedBasket = findBasketAddress(new PublicKey(owner), new PublicKey(programId))[0].toBase58();
+  } catch {}
+  if (!derivedBasket) return null;
+  const info = await flashJsonRpcRequest(rpcUrl, 'Flash basket', 'getAccountInfo', [
+    derivedBasket,
+    { encoding: 'base64', commitment: 'confirmed' },
+  ], signal).catch(() => null);
+  const infoBase64 = Array.isArray(info?.value?.data) ? info.value.data[0] : null;
+  if (!infoBase64) return null;
+  const basket = decodeFlashBasket(Buffer.from(infoBase64, 'base64'), owner);
+  return {
+    ...basket,
+    pubkey: derivedBasket,
+    program_id: programId,
+    rpc_url: rpcUrl,
+    source: 'flash_er_getAccountInfo',
+  };
+}
+
+async function getFlashErBasket(owner) {
+  const programs = Array.from(new Set([FLASH_LEGACY_PROGRAM_ID, ...FLASH_PROGRAM_IDS].filter(Boolean)));
+  let lastError = null;
+  let firstBasket = null;
+  for (const rpcUrl of flashErRpcUrls()) {
+    for (const programId of programs) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), SOLANA_RPC_TIMEOUT_MS);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const basket = await readFlashBasketFromRpc(rpcUrl, owner, programId, ctrl.signal);
+        if (basket?.positions?.some(pos => pos?.is_active === true && rawAmount(pos.size_usd) > 0n)) return basket;
+        if (basket && !firstBasket) firstBasket = basket;
+      } catch (e) {
+        lastError = e;
+        console.warn(`[flash] ER basket read failed on ${rpcUrl} program ${programId}:`, e?.message || e);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  }
+  if (firstBasket) return firstBasket;
+  if (lastError) throw lastError;
+  return null;
+}
+
 async function getOwnerSnapshot(owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('valid Solana owner required'), { status: 400 });
-  const [snapshot, prices, walletUsdc] = await Promise.all([
+  const [snapshot, prices, walletUsdc, marketHints] = await Promise.all([
     request(`/v2/owner/${owner}`),
     getPrices().catch(() => []),
     getWalletUsdcBalance(owner).catch(() => null),
+    getFlashMarketHints(owner).catch(() => new Map()),
   ]);
   const priceMap = new Map((Array.isArray(prices) ? prices : []).map(row => [row.symbol, row]));
   const positionMetrics = snapshot?.positionMetrics || {};
   const orderMetrics = snapshot?.orderMetrics || {};
-  const positions = Object.entries(positionMetrics).map(([marketPubkey, metric]) => positionFromMetric(marketPubkey, metric, priceMap));
+  const v2Positions = Object.entries(positionMetrics).map(([marketPubkey, metric]) => positionFromMetric(marketPubkey, metric, priceMap));
+  const erBasket = await getFlashErBasket(owner).catch(e => {
+    console.warn('[flash] ER basket unavailable:', e?.message || e);
+    return null;
+  });
+  const erPositions = erBasket ? positionsFromFlashErBasket(erBasket, marketHints, priceMap) : [];
+  const positions = mergeFlashPositions(erPositions, v2Positions);
   const activePositions = positions.filter(pos => !isDustPosition(pos));
   const orders = Object.entries(orderMetrics).flatMap(([marketPubkey, metric]) => ordersFromMetricBundle(marketPubkey, metric));
   const collateralUsd = activePositions.reduce((sum, p) => sum + numberFromUi(p.collateralUsdUi), 0);
   const pnlUsd = activePositions.reduce((sum, p) => sum + numberFromUi(p.pnl_usd), 0);
-  const fundingState = await getFlashFundingState(owner, snapshot).catch(e => {
+  const fundingState = await getFlashFundingState(owner, snapshot, erBasket).catch(e => {
     console.warn('[flash] official funding state unavailable:', e?.message || e);
     return null;
   });
@@ -791,10 +1449,11 @@ async function getOwnerSnapshot(owner) {
     ?? snapshot?.available_to_withdraw
     ?? snapshot?.withdrawable
   );
-  const availableUsdc = fundingState
+  const basketUsdc = fundingState
     ? fundingState.available_usdc
     : Math.max(0, explicitFreeMargin);
-  const accountEquity = Math.max(0, availableUsdc + collateralUsd + pnlUsd);
+  const freeMarginUsdc = Math.max(0, basketUsdc);
+  const accountEquity = Math.max(0, basketUsdc + collateralUsd + pnlUsd);
   return {
     owner,
     dex: 'flash',
@@ -804,27 +1463,33 @@ async function getOwnerSnapshot(owner) {
     balance: accountEquity,
     equity: accountEquity,
     account_equity: accountEquity,
-    flash_usdc_balance: availableUsdc,
-    account_balance_usdc: availableUsdc,
+    flash_usdc_balance: basketUsdc,
+    flash_in_basket_usdc: basketUsdc,
+    account_balance_usdc: basketUsdc,
     flash_balance_source: fundingState?.source || (explicitFreeMargin > 0 ? 'flash_v2_owner_field' : 'unavailable'),
     flash_deposit_ledger_usdc: fundingState?.deposit_ledger_usdc ?? null,
     flash_basket_debits_usdc: fundingState?.basket_debits_usdc ?? null,
     flash_basket_pending_credits_usdc: fundingState?.basket_pending_credits_usdc ?? null,
-    flash_basket_pubkey: fundingState?.basket_pubkey || snapshot?.basketPubkey || null,
+    flash_basket_pubkey: fundingState?.basket_pubkey || erBasket?.pubkey || snapshot?.basketPubkey || null,
+    flash_program_id: fundingState?.program_id || erBasket?.program_id || null,
+    flash_er_basket_source: erBasket?.source || null,
+    flash_er_basket_rpc_url: erBasket?.rpc_url || null,
     flash_deposit_ledger_pubkey: fundingState?.deposit_ledger_pubkey || null,
+    flash_deposit_ledger_source: fundingState?.ledger_source || null,
+    flash_deposit_ledger_rpc_url: fundingState?.ledger_rpc_url || null,
     flash_available_raw: fundingState?.available_raw || null,
     wallet_usdc: walletUsdc,
     margin_used: collateralUsd,
     total_margin_used: collateralUsd,
-    free_margin: availableUsdc,
-    available_to_spend: availableUsdc,
-    available_to_withdraw: availableUsdc,
-    withdrawable: availableUsdc,
+    free_margin: freeMarginUsdc,
+    available_to_spend: freeMarginUsdc,
+    available_to_withdraw: freeMarginUsdc,
+    withdrawable: freeMarginUsdc,
     total_position_size_usd: activePositions.reduce((sum, p) => sum + numberFromUi(p.sizeUsdUi), 0),
     positions_count: activePositions.length,
     dust_positions_count: positions.length - activePositions.length,
     orders_count: orders.length,
-    source: 'flash_v2_owner',
+    source: erPositions.length ? 'flash_er_basket_with_v2_owner' : 'flash_v2_owner',
   };
 }
 
@@ -1117,7 +1782,7 @@ function configStatus() {
     transaction_builder_v2: true,
     native_order_builder: true,
     v2_client_sdk: 'magic-trade-client@0.2.0',
-    v2_funding_balance: 'UserDepositLedger.deposits + Basket.pendingCredits - Basket.debits',
+    v2_funding_balance: 'max(UserDepositLedger.deposits - Basket.debits + Basket.pendingCredits, 0); values must come from the same ER-fed source',
   };
 }
 
