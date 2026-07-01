@@ -811,6 +811,45 @@ function normalizeFill(wallet, fill, marketMap) {
   };
 }
 
+function finitePnlString(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n) : null;
+}
+
+function upgradeExistingHistoryTrade(id, trade, tsMs) {
+  const rowId = Number(id);
+  if (!Number.isFinite(rowId) || rowId <= 0 || !trade) return 0;
+  const createdAt = sqlDateFromMs(tsMs);
+  const pnl = finitePnlString(trade.pnl);
+  const notional = Number(trade.notional_usd);
+  const result = db.db.prepare(`
+    UPDATE trade_history SET
+      symbol = COALESCE(NULLIF(?, ''), symbol),
+      side = COALESCE(NULLIF(?, ''), side),
+      order_type = COALESCE(NULLIF(?, ''), order_type),
+      amount = COALESCE(NULLIF(?, ''), amount),
+      price = COALESCE(NULLIF(?, ''), price),
+      notional_usd = CASE WHEN ? > 0 THEN ? ELSE notional_usd END,
+      pnl = COALESCE(?, pnl),
+      status = 'filled',
+      created_at = COALESCE(?, created_at)
+    WHERE id = ?
+      AND dex = 'phoenix'
+  `).run(
+    trade.symbol || '',
+    trade.side || '',
+    trade.orderType || '',
+    trade.amount || '',
+    trade.price || '',
+    Number.isFinite(notional) ? notional : 0,
+    Number.isFinite(notional) ? notional : 0,
+    pnl,
+    createdAt,
+    rowId,
+  );
+  return result?.changes || 0;
+}
+
 async function importFillsForPlayer(playerId, wallet, opts = {}) {
   const cleanWallet = String(wallet || '').trim();
   if (!isSolanaWallet(cleanWallet)) {
@@ -828,6 +867,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   let skippedNoBuilderRoute = 0;
   let skippedTxCheckBudget = 0;
   let txChecks = 0;
+  let updated = 0;
   let limitPlacement = null;
   try {
     limitPlacement = await rememberPhoenixLimitOrderPlacement(playerId, cleanWallet, opts);
@@ -879,6 +919,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       const txClientOrderId = phoenixTxTradeKey(cleanWallet, signature, {});
       const txExisting = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(txClientOrderId);
       if (txExisting) {
+        updated += upgradeExistingHistoryTrade(txExisting.id, trade, tsMs);
         skipped++;
         continue;
       }
@@ -905,6 +946,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
 
       const before = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
       if (before) {
+        updated += upgradeExistingHistoryTrade(before.id, trade, tsMs);
         skipped++;
         continue;
       }
@@ -927,6 +969,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   return {
     ok: true,
     imported: inserted,
+    updated,
     skipped,
     total: fills.length,
     builder_route_required: PHOENIX_REQUIRE_FLIGHT_REWARDS,

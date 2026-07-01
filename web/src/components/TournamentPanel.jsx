@@ -171,6 +171,11 @@ function isDailyPoolTournament(t) {
   return String(t?.scoring_mode || 'live') === 'daily_pool';
 }
 
+function dailyPoolAwardTime(t) {
+  const value = String(t?.daily_pool_award_time_utc || '00:00').trim();
+  return /^\d{2}:\d{2}$/.test(value) ? value : '00:00';
+}
+
 function pointWeights(t) {
   if (t?.sort_by === 'volume_trophies_50_50') return { trophies: 50, volume: 50, pnl: 0 };
   const w = t?.points_weights || {};
@@ -956,7 +961,7 @@ function TournamentPanel({ onClose }) {
                   {isMegaTournament(t) && <span style={S.megaTag}>MEGA</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.teamTag}>DEX VS DEX</span>}
                   <span style={S.tag}>Sort: {sortLabel(t)}</span>
-                  {isDailyPoolTournament(t) && <span style={S.prizeTag}>{fmt(t.daily_pool_points || 1000)} pts/day at 00:00 UTC</span>}
+                  {isDailyPoolTournament(t) && <span style={S.prizeTag}>{fmt(t.daily_pool_points || 1000)} pts/day at {dailyPoolAwardTime(t)} UTC</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.tag}>Winner: {t.team_score_label || 'Volume'}</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.tag}>Player payout: {t.team_member_reward_label || 'Volume'}</span>}
                   {isHistory
@@ -1264,7 +1269,7 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
         <div style={S.dailyHeaderMain}>
           <div>
             <div style={S.dailyTitle}>Daily points</div>
-            <div style={S.dailySub}>{fmt(pool)} pool at 00:00 UTC</div>
+            <div style={S.dailySub}>{fmt(pool)} pool at {dailyPoolAwardTime(t)} UTC</div>
           </div>
           <div style={S.dailyCompactMine}>
             <span style={S.dailyCompactLabel}>You</span>

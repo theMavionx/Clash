@@ -913,11 +913,14 @@ app.get('/api/admin/panel', (req, res) => {
           <label style="font-size:11px;color:#9ca3af">Scoring mode
             <select id="tn_scoring_mode" onchange="updateTournamentPointsUi();updateTournamentDailyOverridesUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
               <option value="live">Live scoring</option>
-              <option value="daily_pool">Daily pool at 00:00 UTC</option>
+              <option value="daily_pool">Daily point pool</option>
             </select>
           </label>
           <label style="font-size:11px;color:#9ca3af">Daily pool points
             <input id="tn_daily_pool_points" type="number" min="1" step="1" value="1000" oninput="updateTournamentPointsUi();updateTournamentDailyOverridesUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+          </label>
+          <label style="font-size:11px;color:#9ca3af">Daily award time UTC
+            <input id="tn_daily_pool_award_time_utc" type="time" step="60" value="00:00" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
           </label>
           <label style="font-size:11px;color:#9ca3af">Daily pool growth %
             <input id="tn_daily_pool_growth_pct" type="number" min="-99" max="500" step="0.1" value="0" oninput="updateTournamentPointsUi();updateTournamentDailyOverridesUi()" title="Example: 20 means each next UTC day auto pool is 20% larger unless that day has an override." style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
@@ -3309,6 +3312,11 @@ function isTournamentDailyPool(t) {
   return String(t?.scoring_mode || 'live') === 'daily_pool';
 }
 
+function tournamentDailyPoolAwardTime(t) {
+  const value = String(t?.daily_pool_award_time_utc || '00:00').trim();
+  return /^\\d{2}:\\d{2}$/.test(value) ? value : '00:00';
+}
+
 function tournamentPointsWeights(t) {
   if (t && t.sort_by === 'volume_trophies_50_50') return { trophies: 50, volume: 50, pnl: 0 };
   const w = (t && t.points_weights) || {};
@@ -3939,7 +3947,7 @@ function renderTournaments() {
       + '<td>' + esc(t.shield_label || 'Default') + '</td>'
       + '<td>' + (t.freeze_trophies ? '<span style="color:#60a5fa">ON</span>' : '<span style="color:#fbbf24">OFF</span>') + '</td>'
       + '<td>' + esc(t.sort_label || tournamentSortLabel(t))
-        + (isTournamentDailyPool(t) ? '<div style="font-size:10px;color:#fbbf24">' + esc(Number(t.daily_pool_points || 1000) + ' base pts/day @ 00:00 UTC') + '</div>'
+        + (isTournamentDailyPool(t) ? '<div style="font-size:10px;color:#fbbf24">' + esc(Number(t.daily_pool_points || 1000) + ' base pts/day @ ' + tournamentDailyPoolAwardTime(t) + ' UTC') + '</div>'
           + '<div style="font-size:10px;color:#9ca3af">' + esc((Number(t.daily_pool_growth_pct || 0) || 0) + '% daily growth · ' + Object.keys(t.daily_pool_overrides || {}).length + ' override(s)') + '</div>' : '')
       + '</td>'
       + '<td style="font-size:11px">' + tournamentPrizeLabel(t) + '</td>'
@@ -3990,6 +3998,7 @@ function getTournamentFormBody() {
     sort_by: document.getElementById('tn_sort').value,
     scoring_mode: document.getElementById('tn_scoring_mode')?.value || 'live',
     daily_pool_points: Math.max(1, Number(document.getElementById('tn_daily_pool_points')?.value || 1000) || 1000),
+    daily_pool_award_time_utc: document.getElementById('tn_daily_pool_award_time_utc')?.value || '00:00',
     daily_pool_growth_pct: Number(document.getElementById('tn_daily_pool_growth_pct')?.value || 0) || 0,
     daily_pool_overrides: readTournamentDailyOverrides(),
     points_trophy_weight: pointWeights.trophies,
@@ -4031,6 +4040,7 @@ function resetTournamentForm() {
   document.getElementById('tn_sort').value = 'points';
   document.getElementById('tn_scoring_mode').value = 'live';
   document.getElementById('tn_daily_pool_points').value = '1000';
+  document.getElementById('tn_daily_pool_award_time_utc').value = '00:00';
   document.getElementById('tn_daily_pool_growth_pct').value = '0';
   document.getElementById('tn_points_trophy').value = '20';
   document.getElementById('tn_points_volume').value = '60';
@@ -4081,6 +4091,7 @@ function editTournament(id) {
   document.getElementById('tn_sort').value = t.sort_by === 'volume_trophies_50_50' ? 'points' : (t.sort_by || 'points');
   document.getElementById('tn_scoring_mode').value = isTournamentDailyPool(t) ? 'daily_pool' : 'live';
   document.getElementById('tn_daily_pool_points').value = Math.max(1, Number(t.daily_pool_points || 1000) || 1000);
+  document.getElementById('tn_daily_pool_award_time_utc').value = tournamentDailyPoolAwardTime(t);
   document.getElementById('tn_daily_pool_growth_pct').value = Number(t.daily_pool_growth_pct || 0) || 0;
   const weights = tournamentPointsWeights(t);
   document.getElementById('tn_points_trophy').value = weights.trophies;

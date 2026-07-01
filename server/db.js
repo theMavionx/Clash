@@ -925,6 +925,7 @@ try {
       daily_pool_growth_pct REAL NOT NULL DEFAULT 0,
       daily_pool_overrides TEXT NOT NULL DEFAULT '{}',
       daily_pool_enabled_at TEXT,
+      daily_pool_award_time_utc TEXT NOT NULL DEFAULT '00:00',
       prize_currency TEXT NOT NULL DEFAULT 'USD',
       prize_tiers    TEXT NOT NULL DEFAULT '[]',
       mega_config    TEXT NOT NULL DEFAULT '{}',
@@ -975,6 +976,7 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_growth_pct REAL NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_overrides TEXT NOT NULL DEFAULT '{}'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_enabled_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_award_time_utc TEXT NOT NULL DEFAULT '00:00'`); } catch {}
   try {
     db.exec(`
       UPDATE tournaments
@@ -1003,6 +1005,17 @@ try {
       WHERE daily_pool_overrides IS NULL OR daily_pool_overrides = ''
     `);
   } catch {}
+  try {
+    db.exec(`
+      UPDATE tournaments
+      SET daily_pool_award_time_utc = '00:00'
+      WHERE daily_pool_award_time_utc IS NULL
+         OR length(daily_pool_award_time_utc) != 5
+         OR daily_pool_award_time_utc NOT GLOB '[0-9][0-9]:[0-9][0-9]'
+         OR CAST(substr(daily_pool_award_time_utc, 1, 2) AS INTEGER) > 23
+         OR CAST(substr(daily_pool_award_time_utc, 4, 2) AS INTEGER) > 59
+    `);
+  } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_currency TEXT NOT NULL DEFAULT 'USD'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_tiers TEXT NOT NULL DEFAULT '[]'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN mega_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
@@ -1029,7 +1042,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'ostium'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'ostium'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("daily_pool_award_time_utc") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -1064,6 +1077,7 @@ try {
             daily_pool_growth_pct REAL NOT NULL DEFAULT 0,
             daily_pool_overrides TEXT NOT NULL DEFAULT '{}',
             daily_pool_enabled_at TEXT,
+            daily_pool_award_time_utc TEXT NOT NULL DEFAULT '00:00',
             prize_currency TEXT NOT NULL DEFAULT 'USD',
             prize_tiers    TEXT NOT NULL DEFAULT '[]',
             mega_config    TEXT NOT NULL DEFAULT '{}',
@@ -1079,7 +1093,7 @@ try {
           INSERT INTO tournaments_new (
             id, event_kind, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost,
             shield_hours, freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
-            scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
+            scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
             prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
@@ -1110,6 +1124,13 @@ try {
             COALESCE(daily_pool_growth_pct, 0),
             COALESCE(daily_pool_overrides, '{}'),
             daily_pool_enabled_at,
+            CASE
+              WHEN daily_pool_award_time_utc GLOB '[0-9][0-9]:[0-9][0-9]'
+               AND CAST(substr(daily_pool_award_time_utc, 1, 2) AS INTEGER) <= 23
+               AND CAST(substr(daily_pool_award_time_utc, 4, 2) AS INTEGER) <= 59
+              THEN daily_pool_award_time_utc
+              ELSE '00:00'
+            END,
             COALESCE(prize_currency, 'USD'),
             COALESCE(prize_tiers, '[]'),
             COALESCE(mega_config, '{}'),
@@ -1157,6 +1178,7 @@ try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_points REAL NOT NUL
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_growth_pct REAL NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_overrides TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_enabled_at TEXT`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_award_time_utc TEXT NOT NULL DEFAULT '00:00'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN mega_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN reward_config TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try { db.exec(`UPDATE tournaments SET reward_config = '{}' WHERE reward_config IS NULL OR reward_config = ''`); } catch {}
@@ -1176,6 +1198,17 @@ try {
 } catch {}
 try { db.exec(`UPDATE tournaments SET daily_pool_growth_pct = 0 WHERE daily_pool_growth_pct IS NULL`); } catch {}
 try { db.exec(`UPDATE tournaments SET daily_pool_overrides = '{}' WHERE daily_pool_overrides IS NULL OR daily_pool_overrides = ''`); } catch {}
+try {
+  db.exec(`
+    UPDATE tournaments
+    SET daily_pool_award_time_utc = '00:00'
+    WHERE daily_pool_award_time_utc IS NULL
+       OR length(daily_pool_award_time_utc) != 5
+       OR daily_pool_award_time_utc NOT GLOB '[0-9][0-9]:[0-9][0-9]'
+       OR CAST(substr(daily_pool_award_time_utc, 1, 2) AS INTEGER) > 23
+       OR CAST(substr(daily_pool_award_time_utc, 4, 2) AS INTEGER) > 59
+  `);
+} catch {}
 try { db.exec(`UPDATE tournaments SET seeker_gold_boost = 1.0 WHERE seeker_gold_boost IS NULL OR seeker_gold_boost <= 0`); } catch {}
 try { db.exec(`UPDATE tournaments SET shield_hours = 0 WHERE shield_hours IS NOT NULL AND shield_hours < 0`); } catch {}
 try {
@@ -2832,6 +2865,7 @@ const stmts = {
            COALESCE(t.scoring_mode, 'live') AS scoring_mode,
            COALESCE(t.daily_pool_points, 1000) AS daily_pool_points,
            t.daily_pool_enabled_at,
+           COALESCE(t.daily_pool_award_time_utc, '00:00') AS daily_pool_award_time_utc,
            t.shield_hours, t.start_at, t.end_at, p.joined_at
     FROM tournament_participants p
     JOIN players pl ON pl.id = p.player_id
@@ -2862,6 +2896,7 @@ const stmts = {
            COALESCE(t.scoring_mode, 'live') AS scoring_mode,
            COALESCE(t.daily_pool_points, 1000) AS daily_pool_points,
            t.daily_pool_enabled_at,
+           COALESCE(t.daily_pool_award_time_utc, '00:00') AS daily_pool_award_time_utc,
            t.shield_hours, t.start_at, t.end_at, p.joined_at
     FROM tournament_participants p
     JOIN players pl ON pl.id = p.player_id
@@ -2929,6 +2964,22 @@ const stmts = {
     INSERT OR IGNORE INTO tournament_trade_credits (
       tournament_id, source, trade_id, player_id, dex, trades_count, volume_usd, pnl_usd
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  getTournamentTradeCredit: db.prepare(`
+    SELECT player_id, dex, trades_count, volume_usd, pnl_usd
+    FROM tournament_trade_credits
+    WHERE tournament_id = ? AND source = ? AND trade_id = ?
+    LIMIT 1
+  `),
+  updateTournamentTradeCreditPnl: db.prepare(`
+    UPDATE tournament_trade_credits
+    SET pnl_usd = ?
+    WHERE tournament_id = ? AND source = ? AND trade_id = ? AND player_id = ?
+  `),
+  bumpTournamentDailyActivityPnl: db.prepare(`
+    UPDATE tournament_daily_activity
+    SET pnl_usd = pnl_usd + ?
+    WHERE tournament_id = ? AND source = ? AND event_id = ? AND player_id = ?
   `),
   insertTournamentDailyActivity: db.prepare(`
     INSERT OR IGNORE INTO tournament_daily_activity (
@@ -3521,6 +3572,8 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
   let tradesCount = 0;
   let volumeUsd = 0;
   let pnlUsd = 0;
+  let updatedRows = 0;
+  let pnlDeltaUsd = 0;
 
   for (const row of rows) {
     if (row?.reward_duplicate) continue;
@@ -3541,7 +3594,32 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
       volume,
       pnl
     );
-    if (!r.changes) continue;
+    if (!r.changes) {
+      if (creditPnl) {
+        const existing = stmts.getTournamentTradeCredit.get(t.tournament_id, source, String(tradeId));
+        if (existing?.player_id === playerId) {
+          const previousPnl = safeUsd(existing.pnl_usd);
+          const delta = pnl - previousPnl;
+          if (Math.abs(delta) >= 0.000001) {
+            const changed = stmts.updateTournamentTradeCreditPnl.run(
+              pnl,
+              t.tournament_id,
+              source,
+              String(tradeId),
+              playerId
+            )?.changes || 0;
+            if (changed) {
+              stmts.bumpTournamentTrade.run(0, 0, delta, t.tournament_id, playerId);
+              stmts.bumpTournamentDailyActivityPnl.run(delta, t.tournament_id, source, String(tradeId), playerId);
+              updatedRows++;
+              pnlDeltaUsd += delta;
+              pnlUsd += delta;
+            }
+          }
+        }
+      }
+      continue;
+    }
     recordTournamentDailyActivity(t, playerId, {
       trades_count: count,
       volume_usd: volume,
@@ -3561,7 +3639,7 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
   if (creditedRows > 0 && (tradesCount !== 0 || volumeUsd !== 0 || pnlUsd !== 0)) {
     stmts.bumpTournamentTrade.run(tradesCount, volumeUsd, pnlUsd, t.tournament_id, playerId);
   }
-  return { credited_rows: creditedRows, trades_count: tradesCount, volume_usd: volumeUsd, pnl_usd: pnlUsd };
+  return { credited_rows: creditedRows, updated_rows: updatedRows, trades_count: tradesCount, volume_usd: volumeUsd, pnl_usd: pnlUsd, pnl_delta_usd: pnlDeltaUsd };
 }
 
 function normalizeDailyPoolDay(day) {
@@ -3578,6 +3656,24 @@ function previousUtcDay(now = new Date()) {
 function addUtcDays(day, count) {
   const ms = Date.parse(`${normalizeDailyPoolDay(day)}T00:00:00Z`) + (Number(count) || 0) * 24 * 60 * 60 * 1000;
   return utcDayFromMs(ms);
+}
+
+function normalizeDailyPoolAwardTimeUtc(value, fallback = '00:00') {
+  const fallbackValue = /^\d{2}:\d{2}$/.test(String(fallback || '')) ? String(fallback) : '00:00';
+  const raw = value === undefined || value === null || value === '' ? fallbackValue : String(value).trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return fallbackValue;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return fallbackValue;
+  }
+  return `${String(Math.floor(hours)).padStart(2, '0')}:${String(Math.floor(minutes)).padStart(2, '0')}`;
+}
+
+function dailyPoolAwardTimeMinutes(t) {
+  const time = normalizeDailyPoolAwardTimeUtc(t?.daily_pool_award_time_utc, '00:00');
+  return (Number(time.slice(0, 2)) * 60) + Number(time.slice(3, 5));
 }
 
 function tournamentFirstDailyPoolDay(t) {
@@ -3632,7 +3728,7 @@ function tournamentDailyPoolPointsForDay(t, dayInput) {
   return { points, base, growth_pct: growthPct, day_index: dayIndex, override: false };
 }
 
-function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
+function tournamentLastClosedUtcDay(t, now = new Date()) {
   const yesterday = previousUtcDay(now);
   const endMs = sqlDateMs(t.end_at);
   const nowMs = now.getTime();
@@ -3649,6 +3745,24 @@ function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
   return endDay < yesterday ? endDay : yesterday;
 }
 
+function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
+  const awardOffsetMs = dailyPoolAwardTimeMinutes(t) * 60 * 1000;
+  const scheduledLast = utcDayFromMs(now.getTime() - (24 * 60 * 60 * 1000) - awardOffsetMs);
+  const endMs = sqlDateMs(t.end_at);
+  const nowMs = now.getTime();
+  if (!endMs) {
+    if (String(t?.status || '').toLowerCase() === 'ended') {
+      const row = db.prepare('SELECT MAX(day_utc) AS day_utc FROM tournament_daily_activity WHERE tournament_id = ?')
+        .get(t.id || t.tournament_id);
+      return row?.day_utc || addUtcDays(tournamentFirstDailyPoolDay(t), -1);
+    }
+    return scheduledLast;
+  }
+  const endDay = utcDayFromMs(endMs - 1);
+  if (endMs <= nowMs) return endDay;
+  return endDay < scheduledLast ? endDay : scheduledLast;
+}
+
 function luckyRaiderDrawTimeMinutes(cfg) {
   const raw = String(cfg?.draw_time_utc || '00:05').trim();
   const match = raw.match(/^(\d{1,2}):(\d{2})/);
@@ -3659,7 +3773,7 @@ function luckyRaiderDrawTimeMinutes(cfg) {
 }
 
 function tournamentLastClosedLuckyRaiderDay(t, now = new Date()) {
-  const baseLast = tournamentLastClosedDailyPoolDay(t, now);
+  const baseLast = tournamentLastClosedUtcDay(t, now);
   const cfg = tournamentLuckyRaiderConfig(t);
   const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
   const yesterday = previousUtcDay(now);
@@ -3744,6 +3858,21 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
       details,
     };
   })();
+}
+
+function awardLatestClosedTournamentDailyPoolDay(tournamentId, options = {}) {
+  const tid = Number(tournamentId);
+  if (!Number.isFinite(tid) || tid <= 0) return { ok: false, error: 'invalid tournament id' };
+  const now = options.now instanceof Date ? options.now : new Date();
+  const t = db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!t) return { ok: false, error: 'tournament not found' };
+  if (!isDailyPoolTournament(t)) return { ok: true, skipped: true, reason: 'not_daily_pool', tournament_id: tid };
+  const day = tournamentLastClosedDailyPoolDay(t, now);
+  const firstDay = tournamentFirstDailyPoolDay(t);
+  if (firstDay > day) {
+    return { ok: true, skipped: true, reason: 'no_awardable_day', tournament_id: tid, day_utc: day };
+  }
+  return awardTournamentDailyPoolDay(tid, day, options);
 }
 
 function playerHasTournamentRewardNft(playerId, collections = ['demon_king', 'dragon']) {
@@ -9438,6 +9567,7 @@ module.exports = {
   recordTournamentTradeRows,
   luckyRaiderAttackStatsForPlayer,
   awardTournamentDailyPoolDay,
+  awardLatestClosedTournamentDailyPoolDay,
   awardTournamentLuckyRaiderDay,
   awardTournamentFinalDailyPoolDay,
   awardPendingTournamentDailyPools,

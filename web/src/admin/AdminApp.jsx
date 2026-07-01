@@ -2013,6 +2013,7 @@ function TournamentScoringStep({ form, update }) {
         {form.scoring_mode === 'daily_pool' && (
           <div className="admin-form-grid three">
             <DateTimeField label="Daily pool starts at" value={form.daily_pool_enabled_at} onChange={(value) => update({ daily_pool_enabled_at: value })} />
+            <label className="admin-field"><span className="admin-label">Daily award time UTC</span><input className="admin-input" type="time" step="60" value={form.daily_pool_award_time_utc || '00:00'} onChange={(e) => update({ daily_pool_award_time_utc: e.target.value || '00:00' })} /></label>
             <div className="admin-help">Leave blank to keep the existing activation time.</div>
           </div>
         )}

@@ -18958,6 +18958,23 @@ function normalizeTournamentDailyPoolGrowthPct(v, fallback = 0) {
   return Math.max(-99, Math.min(500, Number(n.toFixed(4))));
 }
 
+function normalizeTournamentDailyPoolAwardTimeUtc(v, fallback = '00:00', options = {}) {
+  const fallbackValue = /^\d{2}:\d{2}$/.test(String(fallback || '')) ? String(fallback) : '00:00';
+  const raw = v === undefined || v === null || v === '' ? fallbackValue : String(v).trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) {
+    if (options.strict) throw new Error('daily_pool_award_time_utc must be HH:MM UTC');
+    return fallbackValue;
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    if (options.strict) throw new Error('daily_pool_award_time_utc must be HH:MM UTC');
+    return fallbackValue;
+  }
+  return `${String(Math.floor(hours)).padStart(2, '0')}:${String(Math.floor(minutes)).padStart(2, '0')}`;
+}
+
 function normalizeTournamentDailyPoolOverrides(input) {
   let raw = input;
   if (typeof raw === 'string') {
@@ -20499,6 +20516,7 @@ function tournamentRowToPublic(t, options = {}) {
   let dailyPoolOverrides = {};
   try { dailyPoolOverrides = normalizeTournamentDailyPoolOverrides(t.daily_pool_overrides); }
   catch { dailyPoolOverrides = {}; }
+  const dailyPoolAwardTimeUtc = normalizeTournamentDailyPoolAwardTimeUtc(t.daily_pool_award_time_utc, '00:00');
   return {
     id: t.id,
     event_kind: normalizeTournamentEventKind(t.event_kind),
@@ -20521,7 +20539,7 @@ function tournamentRowToPublic(t, options = {}) {
     attack_match_policy: attackMatchPolicy,
     attack_match_policy_label: tournamentAttackMatchPolicyLabel(attackMatchPolicy),
     scoring_mode: scoringMode,
-    scoring_label: scoringMode === 'daily_pool' ? 'Daily points at 00:00 UTC' : 'Live scoring',
+    scoring_label: scoringMode === 'daily_pool' ? `Daily points at ${dailyPoolAwardTimeUtc} UTC` : 'Live scoring',
     min_town_hall_level: tournamentTownHallRequirement(t),
     tournament_kind: normalizeTournamentEventKind(t.event_kind) === 'lucky_raider' ? 'lucky_raider' : (megaConfig.enabled ? 'mega' : 'standard'),
     is_lucky_raider_event: normalizeTournamentEventKind(t.event_kind) === 'lucky_raider',
@@ -20532,6 +20550,7 @@ function tournamentRowToPublic(t, options = {}) {
     daily_pool_growth_pct: normalizeTournamentDailyPoolGrowthPct(t.daily_pool_growth_pct, 0),
     daily_pool_overrides: dailyPoolOverrides,
     daily_pool_enabled_at: cleanSqlDate(t.daily_pool_enabled_at),
+    daily_pool_award_time_utc: dailyPoolAwardTimeUtc,
     start_at: cleanSqlDate(t.start_at),
     end_at: cleanSqlDate(t.end_at),
     gold_boost: Number(t.gold_boost),
@@ -20661,8 +20680,8 @@ function syncFuturesTournamentRowsForParticipant(playerId, tournament, participa
     player_id: playerId,
     dexes,
     rows: 0,
-    main: { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 },
-    pnl: { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 },
+    main: { credited_rows: 0, updated_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, pnl_delta_usd: 0 },
+    pnl: { credited_rows: 0, updated_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, pnl_delta_usd: 0 },
     failed: 0,
     errors: [],
   };
@@ -20677,7 +20696,7 @@ function syncFuturesTournamentRowsForParticipant(playerId, tournament, participa
       continue;
     }
     summary.rows += Number(result.rows || 0);
-    for (const key of ['credited_rows', 'trades_count', 'volume_usd', 'pnl_usd']) {
+    for (const key of ['credited_rows', 'updated_rows', 'trades_count', 'volume_usd', 'pnl_usd', 'pnl_delta_usd']) {
       summary.main[key] += Number(result.main?.[key] || 0);
       summary.pnl[key] += Number(result.pnl?.[key] || 0);
     }
@@ -20719,6 +20738,8 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
     players: participants.length,
     rows: 0,
     inserted: 0,
+    updated: 0,
+    pnl_delta_usd: 0,
     activity_events: 0,
     failed: 0,
     skipped: 0,
@@ -20731,7 +20752,7 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
       continue;
     }
     for (const syncDex of syncDexes) {
-      if (!summary.by_dex[syncDex]) summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, activity_events: 0, failed: 0 };
+      if (!summary.by_dex[syncDex]) summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, updated: 0, pnl_delta_usd: 0, activity_events: 0, failed: 0 };
       summary.by_dex[syncDex].players++;
       const result = syncFuturesTournamentRows(participant.player_id, syncDex, { tournamentId: t.id });
       if (!result?.ok) {
@@ -20741,16 +20762,22 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
       }
       const rows = Number(result.rows || 0);
       const inserted = Number(result.main?.inserted || result.main?.credited_rows || 0);
+      const updated = Number(result.main?.updated_rows || 0);
+      const pnlDelta = Number(result.main?.pnl_delta_usd || 0);
       const activityEvents = Number(result.main?.activity_events || result.main?.credited_rows || 0);
       summary.rows += rows;
       summary.inserted += inserted;
+      summary.updated += updated;
+      summary.pnl_delta_usd += pnlDelta;
       summary.activity_events += activityEvents;
       summary.by_dex[syncDex].rows += rows;
       summary.by_dex[syncDex].inserted += inserted;
+      summary.by_dex[syncDex].updated += updated;
+      summary.by_dex[syncDex].pnl_delta_usd += pnlDelta;
       summary.by_dex[syncDex].activity_events += activityEvents;
     }
   }
-  if (summary.inserted || summary.failed) {
+  if (summary.inserted || summary.updated || summary.failed) {
     console.log('[tournament-sync] participants', JSON.stringify(summary));
   }
   return summary;
@@ -21773,7 +21800,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     min_town_hall_level,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
-    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
+    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
@@ -21787,11 +21814,13 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy, 'all');
   const scoringMode = normalizeTournamentScoringMode(scoring_mode, 'live');
   const dailyPoolPoints = normalizeTournamentDailyPoolPoints(daily_pool_points, 1000);
+  let dailyPoolAwardTimeUtc;
   let dailyPoolOverrides;
   let dailyPoolGrowthPct;
   try {
     dailyPoolGrowthPct = normalizeTournamentDailyPoolGrowthPct(daily_pool_growth_pct, 0);
     dailyPoolOverrides = normalizeTournamentDailyPoolOverrides(daily_pool_overrides);
+    dailyPoolAwardTimeUtc = normalizeTournamentDailyPoolAwardTimeUtc(daily_pool_award_time_utc, '00:00', { strict: true });
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -21875,11 +21904,11 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     INSERT INTO tournaments (
       event_kind, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
-      scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
+      scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
       prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
       shield_hours, freeze_trophies, min_town_hall_level, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     eventKind,
     name.trim(),
@@ -21908,6 +21937,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     dailyPoolGrowthPct,
     JSON.stringify(dailyPoolOverrides),
     scoringMode === 'daily_pool' ? (dailyPoolEnabledIso || nowSql()) : null,
+    dailyPoolAwardTimeUtc,
     sanitizePrizeCurrency(prize_currency),
     JSON.stringify(prizeTiers),
     JSON.stringify(megaConfig),
@@ -21936,7 +21966,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     min_town_hall_level,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
-    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at,
+    scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
@@ -21949,11 +21979,17 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy !== undefined ? attack_match_policy : t.attack_match_policy, 'all');
   const nextScoringMode = normalizeTournamentScoringMode(scoring_mode !== undefined ? scoring_mode : t.scoring_mode, 'live');
   const nextDailyPoolPoints = normalizeTournamentDailyPoolPoints(daily_pool_points !== undefined ? daily_pool_points : t.daily_pool_points, 1000);
+  let nextDailyPoolAwardTimeUtc;
   let nextDailyPoolGrowthPct;
   let nextDailyPoolOverrides;
   try {
     nextDailyPoolGrowthPct = normalizeTournamentDailyPoolGrowthPct(daily_pool_growth_pct !== undefined ? daily_pool_growth_pct : t.daily_pool_growth_pct, 0);
     nextDailyPoolOverrides = normalizeTournamentDailyPoolOverrides(daily_pool_overrides !== undefined ? daily_pool_overrides : t.daily_pool_overrides);
+    nextDailyPoolAwardTimeUtc = normalizeTournamentDailyPoolAwardTimeUtc(
+      daily_pool_award_time_utc !== undefined ? daily_pool_award_time_utc : t.daily_pool_award_time_utc,
+      '00:00',
+      { strict: daily_pool_award_time_utc !== undefined }
+    );
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -22066,6 +22102,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     daily_pool_enabled_at: nextScoringMode === 'daily_pool'
       ? (nextDailyPoolEnabledAt || (normalizeTournamentScoringMode(t.scoring_mode, 'live') === 'daily_pool' ? (cleanSqlDate(t.daily_pool_enabled_at) || nowSql()) : nowSql()))
       : null,
+    daily_pool_award_time_utc: nextDailyPoolAwardTimeUtc,
     prize_currency: prize_currency !== undefined ? sanitizePrizeCurrency(prize_currency) : sanitizePrizeCurrency(t.prize_currency),
     prize_tiers: nextPrizeTiers,
     mega_config: nextMegaConfig,
@@ -22085,7 +22122,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             start_at = ?, end_at = ?,
                             gold_boost = ?, seeker_gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
-                            scoring_mode = ?, daily_pool_points = ?, daily_pool_growth_pct = ?, daily_pool_overrides = ?, daily_pool_enabled_at = ?,
+                            scoring_mode = ?, daily_pool_points = ?, daily_pool_growth_pct = ?, daily_pool_overrides = ?, daily_pool_enabled_at = ?, daily_pool_award_time_utc = ?,
                             prize_currency = ?, prize_tiers = ?, mega_config = ?, reward_config = ?, rewards_in_cop = ?, seeker_only = ?,
                             freeze_trophies = ?, min_town_hall_level = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
@@ -22118,6 +22155,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.daily_pool_growth_pct,
     JSON.stringify(next.daily_pool_overrides),
     next.daily_pool_enabled_at,
+    next.daily_pool_award_time_utc,
     next.prize_currency,
     JSON.stringify(next.prize_tiers),
     JSON.stringify(next.mega_config),
@@ -22168,15 +22206,13 @@ router.post('/admin/tournaments/:id/daily-points/run', adminAuth, (req, res) => 
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   try {
-    const now = new Date();
-    const yesterdayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1)).toISOString().slice(0, 10);
     const explicitDay = req.body?.day || req.query?.day;
     const options = {
       force: parseBool(req.body?.force || req.query?.force),
     };
     const result = explicitDay
       ? db.awardTournamentDailyPoolDay(tid, explicitDay, options)
-      : db.awardTournamentDailyPoolDay(tid, yesterdayUtc, options);
+      : db.awardLatestClosedTournamentDailyPoolDay(tid, options);
     res.json(result);
   } catch (err) {
     res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'daily award failed').slice(0, 180) });
