@@ -530,6 +530,17 @@ const DEFAULT_MARKETPLACE_STATS = {
   floorLabel: '-',
 };
 
+const GAME_SHOP_CONFIG_UNAVAILABLE = {
+  base: { ready: false, saleActive: false, payments: [] },
+  solana: { ready: false, saleActive: false, skrReady: false, clashReady: false },
+  arbitrum: { ready: false, saleActive: false, payments: [] },
+  monad: { ready: false, saleActive: false, payments: [] },
+  ink: { ready: false, saleActive: false, payments: [] },
+  aptos: { ready: false, saleActive: false },
+  products: [],
+  unavailable: true,
+};
+
 function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = null }) {
   const { dex } = useDex();
   const player = usePlayer();
@@ -733,7 +744,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
       if (log) {
         addClientBreadcrumb('shop.config_failed', { message: err?.message || String(err) }, 'warn');
       }
-      return null;
+      if (apply) setGameShopConfig(GAME_SHOP_CONFIG_UNAVAILABLE);
+      return GAME_SHOP_CONFIG_UNAVAILABLE;
     }
   }, []);
 

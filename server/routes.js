@@ -3807,7 +3807,31 @@ async function getParsedTransactionWithSolanaFallback(signature, options) {
 const SOLANA_SKR_MINT_DEFAULT = 'SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3';
 const SOLANA_SKR_DECIMALS_DEFAULT = 6;
 const _solanaMintDecimalsCache = new Map();
-async function resolveSolanaMintDecimals(mint, fallback = SOLANA_SKR_DECIMALS_DEFAULT) {
+
+function shopTimeoutMs(value, fallback, min, max) {
+  const n = Number(value);
+  const base = Number.isFinite(n) && n > 0 ? n : fallback;
+  return Math.max(min, Math.min(max, base));
+}
+
+function shopPromiseWithTimeout(promise, timeoutMs, label) {
+  const ms = Number(timeoutMs) || 0;
+  if (ms <= 0) return promise;
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`${label || 'shop task'} timed out after ${ms}ms`);
+      err.code = 'SHOP_TIMEOUT';
+      reject(err);
+    }, ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+async function resolveSolanaMintDecimals(mint, fallback = SOLANA_SKR_DECIMALS_DEFAULT, options = {}) {
   const fallbackDecimals = Number.isFinite(Number(fallback)) ? Number(fallback) : SOLANA_SKR_DECIMALS_DEFAULT;
   if (!mint || !SOLANA_WALLET_RE.test(String(mint))) return fallbackDecimals;
 
@@ -3822,21 +3846,43 @@ async function resolveSolanaMintDecimals(mint, fallback = SOLANA_SKR_DECIMALS_DE
     const mintPk = new PublicKey(mint);
     const programs = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].filter(Boolean);
     let mintInfo = null;
+    const timeoutMs = Number(options.timeoutMs || 0);
+    const deadlineAt = timeoutMs > 0 ? Date.now() + timeoutMs : 0;
+    let timedOut = false;
     for (const connection of getSolanaConnections()) {
       for (const programId of programs) {
+        const remainingMs = deadlineAt > 0 ? Math.max(1, deadlineAt - Date.now()) : 0;
+        if (deadlineAt > 0 && remainingMs <= 1) {
+          timedOut = true;
+          break;
+        }
         try {
           // eslint-disable-next-line no-await-in-loop
-          mintInfo = await getMint(connection, mintPk, 'confirmed', programId);
+          mintInfo = await shopPromiseWithTimeout(
+            getMint(connection, mintPk, 'confirmed', programId),
+            remainingMs,
+            `Solana mint decimals ${mint}`,
+          );
           break;
-        } catch {
+        } catch (err) {
+          if (err?.code === 'SHOP_TIMEOUT') {
+            timedOut = true;
+            break;
+          }
           // Try the next token program. SKR can be either SPL Token or Token-2022
           // depending on the deployed mint, so the mint account is the source of truth.
         }
       }
-      if (mintInfo) break;
+      if (mintInfo || timedOut) break;
     }
     if (Number.isFinite(Number(mintInfo?.decimals))) {
       decimals = Number(mintInfo.decimals);
+    } else if (timedOut) {
+      console.warn('[shop] timed out reading Solana mint decimals; using fallback', {
+        mint,
+        fallbackDecimals,
+        timeoutMs,
+      });
     }
   } catch (err) {
     console.warn('[shop] failed to read Solana mint decimals; using fallback', {
@@ -5609,16 +5655,37 @@ router.get('/nft/:collectionSlug/:chain/:tokenId.json', (req, res, next) => {
   return sendNftCollectionTokenMetadata(req, res, req.params.tokenId);
 });
 
-// ---------- Game shop: utility resources granted server-side ----------
-router.get('/shop/config', async (req, res) => {
+const _gameShopClientConfigCache = {
+  value: null,
+  refreshedAt: 0,
+  expiresAt: 0,
+};
+let _gameShopClientConfigRefresh = null;
+
+function gameShopConfigCacheMs() {
+  return shopTimeoutMs(process.env.GAME_SHOP_CONFIG_CACHE_MS, 60_000, 5_000, 10 * 60_000);
+}
+
+function gameShopConfigStaleMs() {
+  return shopTimeoutMs(process.env.GAME_SHOP_CONFIG_STALE_MS, 10 * 60_000, 30_000, 60 * 60_000);
+}
+
+function gameShopConfigDecimalTimeoutMs() {
+  return shopTimeoutMs(process.env.GAME_SHOP_CONFIG_DECIMALS_TIMEOUT_MS, 1_200, 250, 5_000);
+}
+
+async function buildGameShopClientConfig() {
   const config = gameShopConfig();
   const solana = gameShopSolanaConfig();
-  const solanaSkrDecimals = solana.skrReady
-    ? await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals)
-    : solana.skrDecimals;
-  const solanaClashDecimals = solana.clashReady
-    ? await resolveSolanaMintDecimals(solana.clashMint, solana.clashDecimals)
-    : solana.clashDecimals;
+  const decimalTimeoutMs = gameShopConfigDecimalTimeoutMs();
+  const [solanaSkrDecimals, solanaClashDecimals] = await Promise.all([
+    solana.skrReady
+      ? resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals, { timeoutMs: decimalTimeoutMs })
+      : Promise.resolve(solana.skrDecimals),
+    solana.clashReady
+      ? resolveSolanaMintDecimals(solana.clashMint, solana.clashDecimals, { timeoutMs: decimalTimeoutMs })
+      : Promise.resolve(solana.clashDecimals),
+  ]);
   const baseEvm = gameShopEvmConfig('base');
   const arbitrum = gameShopEvmConfig('arbitrum');
   const monad = gameShopEvmConfig('monad');
@@ -5626,8 +5693,7 @@ router.get('/shop/config', async (req, res) => {
   const aptos = gameShopAptosConfig();
   const copDiscountBps = Math.max(0, Math.min(9000, Number(process.env.GAME_SHOP_COP_DISCOUNT_BPS || 2000)));
   const basePayments = baseEvm?.payments || [];
-  res.set('Cache-Control', 'no-store');
-  res.json({
+  return {
     base: {
       chainId: config.chainId,
       shop: config.shop,
@@ -5701,7 +5767,66 @@ router.get('/shop/config', async (req, res) => {
       ready: aptos.ready,
     },
     products: gameShopProductsForClient(),
-  });
+  };
+}
+
+async function refreshGameShopClientConfig() {
+  const value = await buildGameShopClientConfig();
+  const now = Date.now();
+  _gameShopClientConfigCache.value = value;
+  _gameShopClientConfigCache.refreshedAt = now;
+  _gameShopClientConfigCache.expiresAt = now + gameShopConfigCacheMs();
+  return value;
+}
+
+async function getGameShopClientConfigCached() {
+  const now = Date.now();
+  const cached = _gameShopClientConfigCache.value;
+  if (cached && _gameShopClientConfigCache.expiresAt > now) {
+    return { value: cached, cacheState: 'hit' };
+  }
+
+  const staleUntil = _gameShopClientConfigCache.expiresAt + gameShopConfigStaleMs();
+  if (cached && staleUntil > now) {
+    if (!_gameShopClientConfigRefresh) {
+      _gameShopClientConfigRefresh = refreshGameShopClientConfig()
+        .catch((err) => {
+          console.warn('[shop] background config refresh failed:', err?.message || err);
+          return null;
+        })
+        .finally(() => {
+          _gameShopClientConfigRefresh = null;
+        });
+    }
+    return { value: cached, cacheState: 'stale' };
+  }
+
+  if (!_gameShopClientConfigRefresh) {
+    _gameShopClientConfigRefresh = refreshGameShopClientConfig()
+      .finally(() => {
+        _gameShopClientConfigRefresh = null;
+      });
+  }
+  return { value: await _gameShopClientConfigRefresh, cacheState: cached ? 'refresh' : 'miss' };
+}
+
+// ---------- Game shop: utility resources granted server-side ----------
+router.get('/shop/config', async (req, res) => {
+  try {
+    const { value, cacheState } = await getGameShopClientConfigCached();
+    res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=120');
+    res.set('X-Shop-Config-Cache', cacheState);
+    res.json(value);
+  } catch (err) {
+    const cached = _gameShopClientConfigCache.value;
+    if (cached) {
+      res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=120');
+      res.set('X-Shop-Config-Cache', 'stale-error');
+      return res.json(cached);
+    }
+    console.warn('[shop] config failed:', err?.message || err);
+    return res.status(503).json({ error: 'Shop config temporarily unavailable' });
+  }
 });
 
 router.post('/shop/base/quote', auth, async (req, res) => {

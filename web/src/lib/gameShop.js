@@ -3,6 +3,10 @@ import { ensureErc20Allowance } from './nftMint';
 import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
 import { buildSolanaWalletTxOptions } from './solanaSeekerTx';
 
+const GAME_SHOP_CONFIG_CACHE_KEY = 'clash-game-shop-config-v1';
+const GAME_SHOP_CONFIG_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
+const GAME_SHOP_CONFIG_FETCH_TIMEOUT_MS = 8000;
+
 function formatCopAmount(units, decimals = 18) {
   // Render a uint256 token amount with up to 4 fractional digits, trimmed.
   // Used only in user-facing balance error messages so we don't expose the
@@ -52,10 +56,59 @@ export const GAME_SHOP_ABI = [
   },
 ];
 
+function readCachedGameShopConfig() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage?.getItem(GAME_SHOP_CONFIG_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.value || Date.now() - Number(parsed.savedAt || 0) > GAME_SHOP_CONFIG_CACHE_MAX_AGE_MS) {
+      return null;
+    }
+    return parsed.value;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedGameShopConfig(value) {
+  if (typeof window === 'undefined' || !value) return;
+  try {
+    window.localStorage?.setItem(GAME_SHOP_CONFIG_CACHE_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      value,
+    }));
+  } catch {
+    /* best-effort cache */
+  }
+}
+
 export async function fetchGameShopConfig() {
-  const response = await fetch('/api/shop/config', { cache: 'no-store' });
-  if (!response.ok) throw new Error(`Shop config failed (${response.status})`);
-  return response.json();
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), GAME_SHOP_CONFIG_FETCH_TIMEOUT_MS)
+    : null;
+  try {
+    const response = await fetch('/api/shop/config', {
+      cache: 'no-store',
+      signal: controller?.signal,
+    });
+    if (!response.ok) throw new Error(`Shop config failed (${response.status})`);
+    const json = await response.json();
+    writeCachedGameShopConfig(json);
+    return json;
+  } catch (err) {
+    const cached = readCachedGameShopConfig();
+    if (cached) {
+      addClientBreadcrumb('shop.config_cache_used', {
+        message: err?.name === 'AbortError' ? 'timeout' : (err?.message || String(err)),
+      }, 'warn');
+      return { ...cached, _stale: true };
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function fetchGameShopQuote({ token, buyer, sku, quantity = 1 }) {
