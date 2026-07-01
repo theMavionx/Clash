@@ -475,6 +475,9 @@ function PlayersPanel({ players, reload }) {
   const [dex, setDex] = useState('all');
   const [profileTarget, setProfileTarget] = useState(null);
   const [selectedTools, setSelectedTools] = useState(null);
+  const [mmGrantInput, setMmGrantInput] = useState('');
+  const [mmBusy, setMmBusy] = useState('');
+  const [mmMessage, setMmMessage] = useState('');
   const filtered = useMemo(() => players.filter((p) => {
     const hay = `${p.name || ''} ${p.id || ''} ${p.wallet || ''}`.toLowerCase();
     return (!search || hay.includes(search.toLowerCase())) && (dex === 'all' || (p.dex || '') === dex);
@@ -488,8 +491,51 @@ function PlayersPanel({ players, reload }) {
     { label: 'MM avg win', value: averageMatchmakingRate(players), tone: 'green' },
     { label: 'Recovery 7d', value: num(players.reduce((sum, p) => sum + Number(p.matchmaking?.recovery_matches_7d || 0), 0)), tone: 'blue' },
     { label: 'Captcha flags', value: players.filter((p) => p.captcha_required || p.battle_risk?.captcha_required).length, tone: players.some((p) => p.captcha_required || p.battle_risk?.captcha_required) ? 'red' : 'green' },
+    { label: 'MM Bots WL', value: players.filter((p) => p.mm_bots_enabled || p.mm_bots_access?.enabled).length, tone: 'gold' },
     { label: 'Banned', value: players.filter((p) => p.banned_at).length, tone: 'red' },
   ];
+
+  async function setMmBotsAccess(player, enabled) {
+    const id = player?.id || player?.name;
+    if (!id) return;
+    const label = `${enabled ? 'grant' : 'revoke'}:${id}`;
+    setMmBusy(label);
+    setMmMessage('');
+    try {
+      const result = await adminPost(`/admin/players/${encodeURIComponent(id)}/mm-bots-access`, {
+        enabled,
+        note: enabled ? 'admin ui grant' : 'admin ui revoke',
+      });
+      setMmMessage(`${result.access?.player_name || player.name || id}: MM Bots ${enabled ? 'enabled' : 'disabled'}.`);
+      await reload();
+    } catch (err) {
+      setMmMessage(err.message || 'MM Bots access update failed');
+    } finally {
+      setMmBusy('');
+    }
+  }
+
+  async function grantMmBotsByInput(event) {
+    event?.preventDefault?.();
+    const player = mmGrantInput.trim();
+    if (!player) return;
+    setMmBusy('grant-input');
+    setMmMessage('');
+    try {
+      const result = await adminPost('/admin/mm-bots/access', {
+        player,
+        enabled: true,
+        note: 'admin ui grant',
+      });
+      setMmMessage(`${result.access?.player_name || player}: MM Bots enabled.`);
+      setMmGrantInput('');
+      await reload();
+    } catch (err) {
+      setMmMessage(err.message || 'MM Bots access grant failed');
+    } finally {
+      setMmBusy('');
+    }
+  }
 
   return (
     <div className="admin-grid">
@@ -512,11 +558,23 @@ function PlayersPanel({ players, reload }) {
             </div>
             <span className="admin-help">{filtered.length} shown</span>
           </div>
+          <form className="admin-filter-row" onSubmit={grantMmBotsByInput} style={{ marginBottom: 12 }}>
+            <input
+              className="admin-input"
+              placeholder="Grant MM Bots by exact player name or id"
+              value={mmGrantInput}
+              onChange={(e) => setMmGrantInput(e.target.value)}
+            />
+            <button className="admin-btn green" type="submit" disabled={!mmGrantInput.trim() || !!mmBusy}>
+              {mmBusy === 'grant-input' ? 'Granting...' : 'Grant MM Bots'}
+            </button>
+            {mmMessage ? <span className={'admin-badge ' + (mmMessage.toLowerCase().includes('failed') || mmMessage.toLowerCase().includes('not found') ? 'red' : 'green')}>{mmMessage}</span> : null}
+          </form>
           <div className="admin-table-wrap admin-scroll">
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Created</th><th>Trophies</th><th>Level</th><th>MM 7d</th><th>Risk</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
+                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Created</th><th>Trophies</th><th>Level</th><th>MM 7d</th><th>Risk</th><th>MM Bots</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -533,6 +591,13 @@ function PlayersPanel({ players, reload }) {
                     <td data-label="Level">{p.level}</td>
                     <td data-label="MM 7d"><MatchmakingPlayerCell player={p} /></td>
                     <td data-label="Risk"><BattleRiskBadges risk={p.battle_risk || p} /></td>
+                    <td data-label="MM Bots">
+                      <MmBotsAccessCell
+                        player={p}
+                        busy={mmBusy}
+                        onToggle={setMmBotsAccess}
+                      />
+                    </td>
                     <td data-label="Gold" style={{ color: 'var(--admin-gold)' }}>{num(p.gold)}</td>
                     <td data-label="Wood" style={{ color: 'var(--admin-wood)' }}>{num(p.wood)}</td>
                     <td data-label="Ore" style={{ color: '#b8c4d8' }}>{num(p.ore)}</td>
@@ -4081,6 +4146,29 @@ function MatchmakingPlayerCell({ player }) {
         <div className="admin-card-sub">
           last {mm.last.target_is_bot ? (mm.last.target_bot_difficulty || 'bot') : 'live'} - {mm.last.result || 'pending'}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MmBotsAccessCell({ player, busy, onToggle }) {
+  const enabled = !!(player?.mm_bots_enabled || player?.mm_bots_access?.enabled);
+  const action = enabled ? 'revoke' : 'grant';
+  const actionBusy = busy === `${action}:${player?.id}`;
+  return (
+    <div className="admin-filter-row">
+      <span className={'admin-badge ' + (enabled ? 'green' : 'off')}>
+        {enabled ? 'Enabled' : 'Off'}
+      </span>
+      <button
+        className={'admin-btn ' + (enabled ? 'danger' : 'green')}
+        onClick={() => onToggle?.(player, !enabled)}
+        disabled={!!busy}
+      >
+        {actionBusy ? 'Saving...' : enabled ? 'Revoke' : 'Grant'}
+      </button>
+      {player?.mm_bots_access?.updated_at ? (
+        <span className="admin-card-sub">{fmtTime(player.mm_bots_access.updated_at)}</span>
       ) : null}
     </div>
   );

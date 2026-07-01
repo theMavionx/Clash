@@ -58,20 +58,17 @@ const MM_BOTS_BUTTON_WHITELIST = parseMmBotsWhitelistEnv(
   import.meta.env.VITE_MM_BOTS_WHITELIST,
   import.meta.env.VITE_MM_BOT_WHITELIST,
 );
-const MM_BOTS_BUTTON_MAY_RENDER = MM_BOTS_BUTTON_CONFIGURED
-  || MM_BOTS_BUTTON_ALLOW_ALL
-  || MM_BOTS_BUTTON_WHITELIST.size > 0;
-const BotsPanel = MM_BOTS_BUTTON_MAY_RENDER
-  ? lazy(lazyWithClientReload(() => import('./BotsPanel'), 'BotsPanel'))
-  : null;
+const BotsPanel = lazy(lazyWithClientReload(() => import('./BotsPanel'), 'BotsPanel'));
 
 const LOCAL_GUEST_DEFAULT_DEX = 'pacifica';
 
-function playerCanUseMmBots(player) {
-  if (!MM_BOTS_BUTTON_MAY_RENDER) return false;
+function playerCanUseMmBots(player, serverAccess) {
+  if (serverAccess?.enabled) return true;
+  if (!MM_BOTS_BUTTON_CONFIGURED && !MM_BOTS_BUTTON_ALLOW_ALL && MM_BOTS_BUTTON_WHITELIST.size === 0) return false;
   if (MM_BOTS_BUTTON_ALLOW_ALL) return true;
   if (MM_BOTS_BUTTON_WHITELIST.size === 0) return false;
   const candidates = [
+    player?.id,
     player?.name,
     player?.player_name,
     player?.username,
@@ -176,7 +173,34 @@ export default function GameUI() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showBots, setShowBots] = useState(false);
   const [showVenuePicker, setShowVenuePicker] = useState(false);
-  const canUseMmBots = playerCanUseMmBots(player);
+  const [mmBotsAccess, setMmBotsAccess] = useState({ loaded: false, enabled: false });
+  const canUseMmBots = playerCanUseMmBots(player, mmBotsAccess);
+
+  useEffect(() => {
+    const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
+    if (!token || showRegister) {
+      setMmBotsAccess({ loaded: false, enabled: false });
+      return undefined;
+    }
+
+    let cancelled = false;
+    fetch('/api/mm-bots/access', {
+      headers: { 'x-token': token },
+      cache: 'no-store',
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        setMmBotsAccess({ loaded: true, enabled: !!data?.enabled });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        addClientBreadcrumb('mm_bots.access_check_failed', { message: err?.message || String(err) });
+        setMmBotsAccess({ loaded: true, enabled: false });
+      });
+
+    return () => { cancelled = true; };
+  }, [player?.id, player?.token, showRegister]);
 
   useEffect(() => {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
@@ -452,7 +476,7 @@ export default function GameUI() {
             <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
           )}
 
-          {canUseMmBots && BotsPanel && showBots && (
+          {canUseMmBots && showBots && (
             <BotsPanel onClose={() => setShowBots(false)} />
           )}
 

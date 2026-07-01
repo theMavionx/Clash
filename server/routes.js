@@ -9106,6 +9106,20 @@ router.get('/players/me', auth, (req, res) => {
   res.json(state);
 });
 
+router.get('/mm-bots/access', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const access = db.getMmBotAccess(req.player.id);
+  res.json({
+    ok: true,
+    enabled: !!access?.enabled,
+    access: access || {
+      player_id: req.player.id,
+      enabled: false,
+      updated_at: null,
+    },
+  });
+});
+
 if (!db.AI_MCP_AGENT_ACCESS_ENABLED) {
   router.all(/^\/ai-chat(?:\/.*)?$/, blockAiMcpAgentAccess);
   router.all(/^\/ai-jobs(?:\/.*)?$/, blockAiMcpAgentAccess);
@@ -14999,6 +15013,38 @@ router.delete('/admin/wallet-blacklist/:wallet', adminAuth, (req, res) => {
   res.json({ ok: true, removed: result.changes || 0 });
 });
 
+router.get('/admin/mm-bots/access', adminAuth, (req, res) => {
+  res.json({
+    ok: true,
+    access: db.listMmBotAccess(req.query?.limit || 500),
+  });
+});
+
+router.post('/admin/mm-bots/access', adminAuth, (req, res) => {
+  const identifier = String(req.body?.player || req.body?.player_id || req.body?.playerId || req.body?.name || '').trim();
+  if (!identifier) return res.status(400).json({ error: 'Player id or exact name required' });
+  const enabled = req.body?.enabled === undefined ? true : parseBool(req.body.enabled);
+  const access = db.setMmBotAccess(identifier, {
+    enabled,
+    note: req.body?.note || null,
+    updatedBy: 'admin',
+  });
+  if (!access) return res.status(404).json({ error: 'Player not found' });
+  res.json({ ok: true, access });
+});
+
+router.post('/admin/players/:name/mm-bots-access', adminAuth, (req, res) => {
+  const identifier = String(req.params.name || '').trim();
+  if (!identifier) return res.status(400).json({ error: 'Player id or exact name required' });
+  const access = db.setMmBotAccess(identifier, {
+    enabled: parseBool(req.body?.enabled),
+    note: req.body?.note || null,
+    updatedBy: 'admin',
+  });
+  if (!access) return res.status(404).json({ error: 'Player not found' });
+  res.json({ ok: true, access });
+});
+
 router.post('/admin/shop/solana/reconcile', adminAuth, async (req, res) => {
   try {
     const limit = Number(req.body?.limit || req.query?.limit || 100);
@@ -15094,6 +15140,12 @@ router.get('/admin/players', adminAuth, (req, res) => {
       battleRiskMap[row.player_id] = row;
     }
   } catch { /* battle risk telemetry unavailable on older DB */ }
+  const mmBotAccessMap = {};
+  try {
+    for (const row of db.listMmBotAccess(5000)) {
+      if (row?.player_id) mmBotAccessMap[row.player_id] = row;
+    }
+  } catch { /* mm bot access table unavailable on older DB */ }
   res.json(players.map(p => {
     const tr = rewardsMap[p.id];
     const mm = matchmakingMap[p.id] || {
@@ -15138,6 +15190,12 @@ router.get('/admin/players', adminAuth, (req, res) => {
         last: matchmakingLatestMap[p.id] || null,
       },
       battle_risk: battleRisk,
+      mm_bots_access: mmBotAccessMap[p.id] || {
+        player_id: p.id,
+        enabled: false,
+        updated_at: null,
+      },
+      mm_bots_enabled: !!mmBotAccessMap[p.id]?.enabled,
       captcha_required: !!battleRisk.captcha_required,
       risk_flags: battleRisk.risk_flags || [],
       // Heartbeat-derived presence flags. Computed server-side so the
