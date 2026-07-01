@@ -852,3 +852,19 @@ Time: 2026-07-01 14:50:34 +03:00
 Request:
 
 > протестуй ще все повністю пару відкритих позицій зроби кастомні помилки полови і перевір чи наш код то все опрацбовує в грі і в тесті
+
+### UR-2026-07-01-013
+
+Time: 2026-07-01 15:48:25 +03:00
+
+Request:
+
+> BTC Flash wallet 4Ze3bbJbmBjAUutV3LT1XUmqZG67fAR5PUr7vkXUgU2g shows FREE $4.05 but opening $2.51 margin 100x fails with InsufficientAvailableBalance 6079; investigate/fix free balance calculation.
+
+### UR-2026-07-01-014
+
+Time: 2026-07-01 16:14:47 +03:00
+
+Request:
+
+> Fix Flash prod position display: FTv2 BTC position shows market pubkey instead of BTC, missing mark/PnL; then commit and deploy to production.

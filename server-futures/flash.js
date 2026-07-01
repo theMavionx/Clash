@@ -643,13 +643,24 @@ async function getFlashV2MarketHints() {
   const symbolByMint = new Map((Array.isArray(tokens) ? tokens : [])
     .map(t => [String(t?.mintKey || '').trim(), normalizeToken(t?.symbol, '')])
     .filter(([mint, symbol]) => mint && symbol));
+  const hints = new Map();
   for (const row of Array.isArray(custodies) ? custodies : []) {
     const account = row?.account || row;
     const pubkey = String(row?.pubkey || account?.pubkey || '').trim();
     const symbol = symbolByMint.get(String(account?.tokenMint || '').trim());
     if (pubkey && symbol) custodyToSymbol.set(pubkey, symbol);
+    if (symbol) {
+      for (const market of Array.isArray(account?.supportedMarkets) ? account.supportedMarkets : []) {
+        const marketKey = String(market || '').trim();
+        if (!marketKey || hints.has(marketKey)) continue;
+        hints.set(marketKey, {
+          market: marketKey,
+          symbol,
+          source: 'flash_v2_custody_supported_markets',
+        });
+      }
+    }
   }
-  const hints = new Map();
   for (const row of Array.isArray(markets) ? markets : []) {
     const account = row?.account || row;
     const market = String(row?.pubkey || account?.pubkey || '').trim();
@@ -701,6 +712,29 @@ async function getFlashProdMarketHints() {
   return hints;
 }
 
+function inferFlashHistorySymbol(row = {}, tokens = []) {
+  const entry = rawPriceToUi(
+    row.entryPrice ?? row.oracleAccountPrice ?? row.exitPrice,
+    row.entryPriceExponent ?? row.oracleAccountPriceExponent ?? row.exitPriceExponent,
+  );
+  const sizeUsd = rawTokenAmountToUi(row.sizeUsd ?? row.deltaSizeUsd ?? row.finalSizeUsd, FLASH_USDC_DECIMALS);
+  const sizeRaw = rawAmount(row.sizeAmount ?? row.deltaSizeAmount ?? row.finalSizeAmount);
+  if (!(entry > 0) || !(sizeUsd > 0) || !(sizeRaw > 0n)) return '';
+  const expectedAmount = sizeUsd / entry;
+  if (!(expectedAmount > 0)) return '';
+  let best = null;
+  for (const token of Array.isArray(tokens) ? tokens : []) {
+    const symbol = normalizeToken(token?.symbol, '');
+    const decimals = Number(token?.decimals);
+    if (!symbol || symbol === 'USDC' || !Number.isFinite(decimals) || decimals < 0 || decimals > 12) continue;
+    const amountUi = rawTokenAmountToUi(sizeRaw, decimals);
+    if (!(amountUi > 0)) continue;
+    const relError = Math.abs(amountUi - expectedAmount) / Math.max(expectedAmount, 1e-12);
+    if (!best || relError < best.relError) best = { symbol, relError };
+  }
+  return best && best.relError <= 0.001 ? best.symbol : '';
+}
+
 async function getFlashHistoryMarketHints(owner) {
   if (!isSolanaAddress(owner)) return new Map();
   const params = new URLSearchParams({
@@ -711,14 +745,19 @@ async function getFlashHistoryMarketHints(owner) {
     order: 'DESC',
     timestamp: String(Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60),
   });
-  const data = await requestProd(`/trading-history-v2/find-all-by-user-v4/${encodeURIComponent(owner)}?${params.toString()}`);
+  const [data, tokens] = await Promise.all([
+    requestProd(`/trading-history-v2/find-all-by-user-v4/${encodeURIComponent(owner)}?${params.toString()}`),
+    getTokens().catch(() => []),
+  ]);
   const hints = new Map();
   for (const row of Array.isArray(data?.data) ? data.data : []) {
     const market = String(row?.market || '').trim();
     if (!market || hints.has(market)) continue;
     const side = normalizeSide(row?.side);
+    const symbol = inferFlashHistorySymbol(row, tokens);
     hints.set(market, {
       market,
+      symbol,
       side,
       source: 'flash_prod_trade_history',
       last_trade_type: row?.tradeType || row?.trade_type || null,
@@ -809,6 +848,13 @@ function rawTokenAmountToUi(raw, decimals = FLASH_USDC_DECIMALS) {
   const whole = value / scale;
   const fraction = value % scale;
   return Number(whole) + (Number(fraction) / Number(scale));
+}
+
+function rawPriceToUi(raw, exponent) {
+  const value = Number(raw);
+  const exp = Number(exponent);
+  if (!Number.isFinite(value) || !Number.isFinite(exp)) return 0;
+  return value * Math.pow(10, exp);
 }
 
 function rawAmount(value) {
@@ -1246,9 +1292,9 @@ function flashPositionPnlView({ metric = {}, side, entry, mark, sizeUsd, amount,
   };
 }
 
-function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map()) {
-  const side = metricSide(metric.side || metric.sideUi);
-  const symbol = normalizeToken(metric.marketSymbol || metric.symbol || marketPubkey);
+function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map(), hint = {}) {
+  const side = metricSide(metric.side || metric.sideUi || hint.side);
+  const symbol = normalizeToken(metric.marketSymbol || metric.symbol || hint.symbol || marketPubkey);
   const collateralUsd = numberFromUi(metric.collateralUsdUi);
   const sizeUsd = numberFromUi(metric.sizeUsdUi);
   const entry = numberFromUi(metric.entryPriceUi);
@@ -1297,13 +1343,18 @@ function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map()) {
     _flashDustUsd: isDust ? sizeUsd : undefined,
     positionKey: `${symbol}:${side}`,
     source: 'flash_v2_basket',
-    metric,
+    metric: {
+      ...metric,
+      marketSymbol: metric.marketSymbol || hint.symbol || metric.symbol,
+      symbol: metric.symbol || hint.symbol || metric.marketSymbol,
+      market_hint_source: hint.source || undefined,
+    },
   };
 }
 
-function orderFromMetric(marketPubkey, metric = {}, parent = {}) {
-  const side = metricSide(metric.side || metric.sideUi || parent.side || parent.sideUi);
-  const symbol = normalizeToken(metric.marketSymbol || metric.symbol || parent.marketSymbol || parent.symbol || marketPubkey);
+function orderFromMetric(marketPubkey, metric = {}, parent = {}, hint = {}) {
+  const side = metricSide(metric.side || metric.sideUi || parent.side || parent.sideUi || hint.side);
+  const symbol = normalizeToken(metric.marketSymbol || metric.symbol || parent.marketSymbol || parent.symbol || hint.symbol || marketPubkey);
   const triggerPriceUi = metric.triggerPriceUi ?? metric.trigger_price_ui;
   const limitPriceUi = metric.entryPriceUi ?? metric.entry_price_ui ?? metric.limitPriceUi ?? metric.limit_price_ui;
   return {
@@ -1327,20 +1378,20 @@ function orderFromMetric(marketPubkey, metric = {}, parent = {}) {
   };
 }
 
-function ordersFromMetricBundle(marketPubkey, metric = {}) {
+function ordersFromMetricBundle(marketPubkey, metric = {}, hint = {}) {
   if (!metric || typeof metric !== 'object') return [];
-  if (Array.isArray(metric)) return metric.flatMap(row => ordersFromMetricBundle(marketPubkey, row));
+  if (Array.isArray(metric)) return metric.flatMap(row => ordersFromMetricBundle(marketPubkey, row, hint));
   const rows = [];
   const pushRows = (items, type) => {
     for (const row of Array.isArray(items) ? items : []) {
-      rows.push(orderFromMetric(marketPubkey, { ...row, type: row?.type || type }, metric));
+      rows.push(orderFromMetric(marketPubkey, { ...row, type: row?.type || type }, metric, hint));
     }
   };
   pushRows(metric.limitOrders || metric.limit_orders, 'LIMIT');
   pushRows(metric.takeProfitOrders || metric.take_profit_orders, 'TP');
   pushRows(metric.stopLossOrders || metric.stop_loss_orders, 'SL');
   if (rows.length) return rows;
-  return [orderFromMetric(marketPubkey, metric)];
+  return [orderFromMetric(marketPubkey, metric, {}, hint)];
 }
 
 function flashMetricFromErPosition(pos = {}, hint = {}) {
@@ -1512,7 +1563,9 @@ async function getOwnerSnapshot(owner) {
   const priceMap = new Map((Array.isArray(prices) ? prices : []).map(row => [row.symbol, row]));
   const positionMetrics = snapshot?.positionMetrics || {};
   const orderMetrics = snapshot?.orderMetrics || {};
-  const v2Positions = Object.entries(positionMetrics).map(([marketPubkey, metric]) => positionFromMetric(marketPubkey, metric, priceMap));
+  const v2Positions = Object.entries(positionMetrics).map(([marketPubkey, metric]) => (
+    positionFromMetric(marketPubkey, metric, priceMap, marketHints.get(marketPubkey) || {})
+  ));
   const erBasket = await getFlashErBasket(owner).catch(e => {
     console.warn('[flash] ER basket unavailable:', e?.message || e);
     return null;
@@ -1520,10 +1573,17 @@ async function getOwnerSnapshot(owner) {
   const erPositions = erBasket ? positionsFromFlashErBasket(erBasket, marketHints, priceMap) : [];
   const positions = mergeFlashPositions(erPositions, v2Positions);
   const activePositions = positions.filter(pos => !isDustPosition(pos));
-  const orders = Object.entries(orderMetrics).flatMap(([marketPubkey, metric]) => ordersFromMetricBundle(marketPubkey, metric));
+  const orders = Object.entries(orderMetrics).flatMap(([marketPubkey, metric]) => (
+    ordersFromMetricBundle(marketPubkey, metric, marketHints.get(marketPubkey) || {})
+  ));
   const collateralUsd = activePositions.reduce((sum, p) => sum + numberFromUi(p.collateralUsdUi), 0);
   const pnlUsd = activePositions.reduce((sum, p) => sum + numberFromUi(p.pnl_usd), 0);
-  const fundingState = await getFlashFundingState(owner, snapshot, erBasket).catch(e => {
+  // Trading transactions are built against the current Flash v2 program and
+  // the basket returned by /v2/owner. Do not use a legacy ER basket for free
+  // balance: it can contain stale debits/credits from the old FLASH6 program,
+  // which makes the UI show spendable collateral that FTv2 will reject.
+  const fundingBasket = erBasket?.program_id === FLASH_V2_PROGRAM_ID ? erBasket : null;
+  const fundingState = await getFlashFundingState(owner, snapshot, fundingBasket).catch(e => {
     console.warn('[flash] official funding state unavailable:', e?.message || e);
     return null;
   });
@@ -1872,7 +1932,7 @@ function configStatus() {
     transaction_builder_v2: true,
     native_order_builder: true,
     v2_client_sdk: 'magic-trade-client@0.2.0',
-    v2_funding_balance: 'max(UserDepositLedger.deposits - Basket.debits + Basket.pendingCredits, 0); values must come from the same ER-fed source',
+    v2_funding_balance: 'max(FTv2 UserDepositLedger.deposits - FTv2 Basket.debits + FTv2 Basket.pendingCredits, 0); values must come from the current /v2/owner basket, not legacy FLASH6 state',
   };
 }
 

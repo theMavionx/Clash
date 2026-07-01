@@ -2849,12 +2849,17 @@ function FuturesPanel() {
         }))
       : pacBalance
   ), [dex, pacBalance, leverage, orderType, hotstuffTakerFeeRate]);
+  const flashMaxMargin = useMemo(() => (
+    dex === 'flash' ? floorUsdCents(pacBalance) : pacBalance
+  ), [dex, pacBalance]);
   const sizePctMarginBase = dex === 'phoenix'
     ? phoenixMaxMargin
     : dex === 'pacifica'
     ? pacificaMaxMargin
     : dex === 'hotstuff'
     ? hotstuffMaxMargin
+    : dex === 'flash'
+    ? flashMaxMargin
     : pacBalance;
 
   // UX semantics (updated 2026-04):
@@ -3203,7 +3208,7 @@ function FuturesPanel() {
           }
         }
         if (dex === 'flash') {
-          const maxMargin = Math.max(0, Number(pacBalance) || 0);
+          const maxMargin = Math.max(0, Number(flashMaxMargin) || 0);
           if (Number.isFinite(collateralUsdc) && collateralUsdc > maxMargin + 1e-9) {
             setLocalAlert(`Flash margin max is $${maxMargin.toFixed(2)} USDC. At ${leverage}x that is about $${(maxMargin * leverage).toFixed(2)} position size.`);
             return;
@@ -3373,7 +3378,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, maxLev]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, maxLev]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
