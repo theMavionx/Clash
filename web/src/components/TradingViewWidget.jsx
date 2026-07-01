@@ -7,8 +7,8 @@ import {
   phoenixFetch,
   phoenixSymbol as normalizePhoenixSymbol,
 } from '../lib/phoenixClient';
+import { pacificaFetch } from '../lib/pacificaClient';
 
-const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 // Pyth Benchmarks serves historical candles in TradingView UDF format for
 // every Pyth feed. Query it directly from the user's browser first so public
 // rate limits are distributed per user/IP. The Clash endpoint is only a
@@ -416,8 +416,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           candles = await loadPythCandles(tf, now, start);
           if (cancelled) return;
         } else {
-          const res = await fetch(`${PACIFICA_API}/kline?symbol=${symbol}&interval=${interval}&start_time=${start}&end_time=${now}`);
-          const json = await res.json();
+          const json = await pacificaFetch(`/kline?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&start_time=${start}&end_time=${now}`);
           if (cancelled || !json.data) return;
           candles = json.data.map(c => ({
             time: Math.floor(c.t / 1000),

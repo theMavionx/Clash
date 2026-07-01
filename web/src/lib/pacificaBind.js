@@ -4,9 +4,9 @@
 import bs58 from 'bs58';
 import { ed25519 } from '@noble/curves/ed25519';
 import { pacificaNow } from './pacificaTime';
+import { pacificaRequest } from './pacificaClient';
 import { persistPacificaAgent } from './pacificaAgentStorage';
 
-const API = 'https://api.pacifica.fi/api/v1';
 const PACIFICA_SIGN_EXPIRY_WINDOW_MS = 30_000;
 
 function sortKeys(v) {
@@ -54,14 +54,13 @@ export async function bindPacificaAgent({ walletAddr, masterSign }) {
     expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS,
   };
 
-  const res = await fetch(`${API}/agent/bind`, {
+  const result = await pacificaRequest('/agent/bind', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const text = await res.text();
-  let data = null;
-  try { data = JSON.parse(text); } catch { /* non-JSON */ }
+  const { response: res, text } = result;
+  const data = result.data && typeof result.data === 'object' ? result.data : null;
   if (!res.ok || data?.error) {
     throw new Error(data?.error || data?.message || text || 'Pacifica agent bind failed');
   }

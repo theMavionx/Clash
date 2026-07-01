@@ -41,8 +41,8 @@ import {
   readPacificaAgent,
 } from '../lib/pacificaAgentStorage';
 import { bindPacificaAgent as bindPacificaAgentCore } from '../lib/pacificaBind';
+import { pacificaRequest } from '../lib/pacificaClient';
 
-const API = 'https://api.pacifica.fi/api/v1';
 const PACIFICA_SIGN_EXPIRY_WINDOW_MS = 30_000;
 
 function buildMessage(type, payload, timestamp = pacificaNow()) {
@@ -189,7 +189,7 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
         timestamp,
         expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS,
       };
-      await fetch(`${API}/agent/revoke`, {
+      await pacificaRequest('/agent/revoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

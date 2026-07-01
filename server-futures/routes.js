@@ -38,6 +38,8 @@ const PYTH_HISTORY_MAX_BARS = 720;
 const pythHistoryCache = new Map();
 const pythHistoryInflight = new Map();
 const PHOENIX_API_BASE = process.env.PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
+const PACIFICA_API_BASE = String(process.env.PACIFICA_API_URL || 'https://api.pacifica.fi/api/v1').replace(/\/+$/, '');
+const PACIFICA_PROXY_TIMEOUT_MS = Math.max(1000, Math.min(10_000, Number(process.env.PACIFICA_PROXY_TIMEOUT_MS || 4500)));
 const PHOENIX_PROXY_TIMEOUT_MS = Math.max(1000, Math.min(10_000, Number(process.env.PHOENIX_PROXY_TIMEOUT_MS || 4500)));
 const PHOENIX_PROXY_STALE_MS = phoenixProxyDurationEnv('PHOENIX_PROXY_STALE_MS', 24 * 60 * 60_000, 30_000);
 const PHOENIX_PROXY_TRADER_STATE_STALE_MS = phoenixProxyDurationEnv('PHOENIX_PROXY_TRADER_STATE_STALE_MS', 45_000, 1000);
@@ -465,6 +467,107 @@ async function handlePhoenixApiProxy(req, res, pathWithQuery) {
       error: status === 504 ? 'Phoenix API timeout' : (status === 503 ? 'Phoenix API temporarily unavailable' : 'Phoenix API request failed'),
       detail: e.message,
     });
+  }
+}
+
+function pacificaProxyPathname(pathWithQuery) {
+  return String(pathWithQuery || '').split('?')[0];
+}
+
+function normalizePacificaProxyPath(rawPath, method) {
+  const pathname = pacificaProxyPathname(rawPath);
+  if (!pathname.startsWith('/') || pathname.includes('..') || pathname.includes('\\')) {
+    throw new Error('invalid Pacifica API path');
+  }
+  if (!/^\/[A-Za-z0-9._~!$&'()*+,;=:@/%?-]*$/.test(rawPath)) {
+    throw new Error('invalid Pacifica API characters');
+  }
+  const verb = String(method || 'GET').toUpperCase();
+  const readAllowed = [
+    /^\/info$/,
+    /^\/info\/prices$/,
+    /^\/book$/,
+    /^\/kline$/,
+    /^\/trades$/,
+    /^\/account$/,
+    /^\/positions$/,
+    /^\/orders$/,
+    /^\/account\/settings$/,
+    /^\/trades\/history$/,
+    /^\/funding\/history$/,
+  ];
+  const writeAllowed = [
+    /^\/agent\/bind$/,
+    /^\/agent\/revoke$/,
+    /^\/account\/builder_codes\/approve$/,
+    /^\/referral\/user\/code\/claim$/,
+    /^\/orders\/create_market$/,
+    /^\/orders\/create$/,
+    /^\/orders\/cancel$/,
+    /^\/orders\/cancel_all$/,
+    /^\/positions\/tpsl$/,
+    /^\/account\/leverage$/,
+    /^\/account\/margin$/,
+    /^\/account\/withdraw$/,
+  ];
+  const allowed = verb === 'GET'
+    ? readAllowed.some((pattern) => pattern.test(pathname))
+    : verb === 'POST'
+    ? writeAllowed.some((pattern) => pattern.test(pathname))
+    : false;
+  if (!allowed) throw new Error('Pacifica API path is not allowed');
+  return rawPath;
+}
+
+async function handlePacificaApiProxy(req, res, pathWithQuery) {
+  const method = String(req.method || 'GET').toUpperCase();
+  if (!['GET', 'POST'].includes(method)) {
+    return res.status(405).json({ error: 'method not allowed' });
+  }
+
+  let cleanPath;
+  try {
+    cleanPath = normalizePacificaProxyPath(pathWithQuery, method);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+
+  const headers = {
+    accept: 'application/json',
+    'user-agent': 'ClashOfPerps/1.0 pacifica-proxy',
+  };
+  if (method !== 'GET') headers['content-type'] = 'application/json';
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), PACIFICA_PROXY_TIMEOUT_MS);
+
+  try {
+    const upstream = await fetch(`${PACIFICA_API_BASE}${cleanPath}`, {
+      method,
+      headers,
+      signal: ctrl.signal,
+      body: method === 'GET' ? undefined : JSON.stringify(req.body || {}),
+    });
+    const text = await upstream.text();
+    const contentType = upstream.headers.get('content-type') || 'application/json';
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Pacifica-Proxy', '1');
+    res.status(upstream.status);
+    if (/application\/json/i.test(contentType)) {
+      res.type('application/json');
+    } else {
+      res.type('text/plain');
+    }
+    return res.send(text);
+  } catch (e) {
+    const status = e.name === 'AbortError' ? 504 : 502;
+    console.warn('[pacifica/proxy] failed:', cleanPath, e.message);
+    res.set('Cache-Control', 'no-store');
+    return res.status(status).json({
+      error: status === 504 ? 'Pacifica API timeout' : 'Pacifica API request failed',
+      detail: e.message,
+    });
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -2291,6 +2394,12 @@ router.all(/^\/phoenix\/api\/(.+)$/, async (req, res) => {
   const suffix = req.params?.[0] || '';
   const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
   return handlePhoenixApiProxy(req, res, `/${suffix}${query}`);
+});
+
+router.all(/^\/pacifica\/api\/(.+)$/, async (req, res) => {
+  const suffix = req.params?.[0] || '';
+  const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  return handlePacificaApiProxy(req, res, `/${suffix}${query}`);
 });
 
 router.get('/trades', async (req, res) => {
@@ -4388,7 +4497,7 @@ router.post('/flash/open-position-tx', auth, async (req, res) => {
   try {
     res.json(await flash.buildOpenPositionTx(req.body || {}, flashBodyWallet(req)));
   } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 open-position transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to build Flash open-position transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4397,7 +4506,7 @@ router.post('/flash/close-position-tx', auth, async (req, res) => {
   try {
     res.json(await flash.buildClosePositionTx(req.body || {}, flashBodyWallet(req)));
   } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 close-position transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to build Flash close-position transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4406,7 +4515,16 @@ router.post('/flash/tpsl-tx', auth, async (req, res) => {
   try {
     res.json(await flash.buildPlaceTpSlTx(req.body || {}, flashBodyWallet(req)));
   } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 TP/SL transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to build Flash TP/SL transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/cancel-order-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildCancelOrderTx(req.body || {}, flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash cancel-order transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4415,7 +4533,7 @@ router.post('/flash/init-deposit-ledger-tx', auth, async (req, res) => {
   try {
     res.json(await flash.buildInitDepositLedgerTx(flashBodyWallet(req)));
   } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 init-deposit-ledger transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to build Flash init-deposit-ledger transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4424,7 +4542,7 @@ router.post('/flash/init-basket-tx', auth, async (req, res) => {
   try {
     res.json(await flash.buildInitBasketTx(flashBodyWallet(req)));
   } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 init-basket transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to build Flash init-basket transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4435,7 +4553,7 @@ router.post('/flash/delegate-basket-tx', auth, async (req, res) => {
     const payer = String(req.body?.payer || req.body?.agent || req.body?.agent_wallet || owner).trim();
     res.json(await flash.buildDelegateBasketTx(owner, payer));
   } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 delegate-basket transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to build Flash delegate-basket transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4444,7 +4562,7 @@ router.post('/flash/deposit-direct-tx', auth, async (req, res) => {
   try {
     res.json(await flash.buildDepositDirectTx(req.body || {}, flashBodyWallet(req)));
   } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 deposit transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to build Flash deposit transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4453,7 +4571,7 @@ router.post('/flash/request-withdrawal-tx', auth, async (req, res) => {
   try {
     res.json(await flash.buildRequestWithdrawalTx(req.body || {}, flashBodyWallet(req)));
   } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 withdrawal transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to build Flash withdrawal transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4462,7 +4580,7 @@ router.post('/flash/execute-withdrawal-tx', auth, async (req, res) => {
   try {
     res.json(await flash.buildExecuteWithdrawalTx(req.body || {}, flashBodyWallet(req)));
   } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash v2 execute-withdrawal transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to build Flash execute-withdrawal transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4484,7 +4602,7 @@ router.post('/flash/submit-tx', auth, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.warn('[flash submit-tx] failed:', e.message, e.data ? JSON.stringify(e.data).slice(0, 500) : '');
-    res.status(e.status || 502).json({ error: 'Failed to submit Flash v2 transaction', detail: e.message, data: e.data || undefined });
+    res.status(e.status || 502).json({ error: 'Failed to submit Flash transaction', detail: e.message, data: e.data || undefined });
   }
 });
 
@@ -4499,8 +4617,8 @@ router.post('/flash/trade-report', auth, async (req, res) => {
       signature: result.signature,
       notional_usd: result.notional_usd,
       reason: result.changes > 0
-        ? 'Flash v2 Solana transaction verified; rewards are ready to claim.'
-        : 'Flash v2 transaction was already imported.',
+        ? 'Flash Solana transaction verified; rewards are ready to claim.'
+        : 'Flash transaction was already imported.',
     });
   } catch (e) {
     res.status(e.status || 502).json({ error: 'Failed to verify Flash trade', detail: e.message });
@@ -4889,7 +5007,7 @@ router.post('/trade-report', auth, async (req, res) => {
     const verifiedReason = req.dex === 'gmtrade'
       ? 'GMTrade Solana transaction verified; rewards are ready to claim.'
       : req.dex === 'flash'
-      ? 'Flash v2 Solana transaction verified; rewards are ready to claim.'
+      ? 'Flash Solana transaction verified; rewards are ready to claim.'
       : 'Trade verified from Avantis Core API; rewards are ready to claim.';
     res.json({
       ok: true,

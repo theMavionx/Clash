@@ -9,6 +9,10 @@ import {
   buildHotstuffOrder,
   createHotstuffExchangeClient,
   createHotstuffInfoClient,
+  fetchHotstuffAccountDirect,
+  fetchHotstuffMarketInfoDirect,
+  fetchHotstuffOrdersDirect,
+  fetchHotstuffPositionsDirect,
   hotstuffBrokerConfig,
   hotstuffErrorMessage,
   hotstuffOrderAccepted,
@@ -271,6 +275,15 @@ async function fetchJsonSafe(url, fallback) {
   return data ?? fallback;
 }
 
+async function hotstuffReadWithFallback(label, directRead, fallbackRead) {
+  try {
+    return await directRead();
+  } catch (directError) {
+    console.warn(`[useHotstuff] browser ${label} read failed; using server fallback:`, directError?.message || directError);
+    return fallbackRead();
+  }
+}
+
 export function useHotstuff() {
   const { dex } = useDex();
   const player = usePlayer();
@@ -408,10 +421,26 @@ export function useHotstuff() {
       const agentAddr = storedAgent?.address || setupStatus.agentAddress || null;
       const qs = `dex=hotstuff&address=${encodeURIComponent(hsWalletAddr)}`;
       const [marketsRes, accountRes, positionsRes, ordersRes] = await Promise.all([
-        fetchJsonSafe(`/api/futures/markets?dex=hotstuff`, { data: [] }),
-        fetchJsonSafe(`/api/futures/account?${qs}`, null),
-        fetchJsonSafe(`/api/futures/positions?${qs}`, []),
-        fetchJsonSafe(`/api/futures/orders?${qs}`, []),
+        hotstuffReadWithFallback(
+          'markets',
+          fetchHotstuffMarketInfoDirect,
+          () => fetchJsonSafe(`/api/futures/markets?dex=hotstuff`, { data: [] }),
+        ),
+        hotstuffReadWithFallback(
+          'account',
+          () => fetchHotstuffAccountDirect(hsWalletAddr),
+          () => fetchJsonSafe(`/api/futures/account?${qs}`, null),
+        ),
+        hotstuffReadWithFallback(
+          'positions',
+          () => fetchHotstuffPositionsDirect(hsWalletAddr),
+          () => fetchJsonSafe(`/api/futures/positions?${qs}`, []),
+        ),
+        hotstuffReadWithFallback(
+          'orders',
+          () => fetchHotstuffOrdersDirect(hsWalletAddr),
+          () => fetchJsonSafe(`/api/futures/orders?${qs}`, []),
+        ),
       ]);
       let nextOrders = Array.isArray(ordersRes) ? ordersRes : [];
       logHotstuffDebug('[useHotstuff] owner open_orders snapshot', {
@@ -429,7 +458,11 @@ export function useHotstuff() {
       });
       if (!nextOrders.length && agentAddr && agentAddr.toLowerCase() !== hsWalletAddr.toLowerCase()) {
         const agentQs = `dex=hotstuff&address=${encodeURIComponent(agentAddr)}`;
-        const agentOrders = await fetchJsonSafe(`/api/futures/orders?${agentQs}&owner=${encodeURIComponent(hsWalletAddr)}`, []);
+        const agentOrders = await hotstuffReadWithFallback(
+          'agent orders',
+          () => fetchHotstuffOrdersDirect(agentAddr),
+          () => fetchJsonSafe(`/api/futures/orders?${agentQs}&owner=${encodeURIComponent(hsWalletAddr)}`, []),
+        );
         logHotstuffDebug('[useHotstuff] agent open_orders snapshot', {
           owner: hsWalletAddr,
           agent: agentAddr,
@@ -509,7 +542,11 @@ export function useHotstuff() {
   const fetchLatestOrders = useCallback(async () => {
     if (!hsWalletAddr) return [];
     const ownerQs = `dex=hotstuff&address=${encodeURIComponent(hsWalletAddr)}`;
-    const ownerOrders = await fetchJsonSafe(`/api/futures/orders?${ownerQs}`, []);
+    const ownerOrders = await hotstuffReadWithFallback(
+      'latest owner orders',
+      () => fetchHotstuffOrdersDirect(hsWalletAddr),
+      () => fetchJsonSafe(`/api/futures/orders?${ownerQs}`, []),
+    );
     logHotstuffDebug('[useHotstuff] fetchLatestOrders owner snapshot', {
       owner: hsWalletAddr,
       count: Array.isArray(ownerOrders) ? ownerOrders.length : 0,
@@ -519,7 +556,11 @@ export function useHotstuff() {
     const agentAddr = storedAgent?.address || setupStatus.agentAddress || null;
     if (!agentAddr || agentAddr.toLowerCase() === hsWalletAddr.toLowerCase()) return Array.isArray(ownerOrders) ? ownerOrders : [];
     const agentQs = `dex=hotstuff&address=${encodeURIComponent(agentAddr)}`;
-    const agentOrders = await fetchJsonSafe(`/api/futures/orders?${agentQs}&owner=${encodeURIComponent(hsWalletAddr)}`, []);
+    const agentOrders = await hotstuffReadWithFallback(
+      'latest agent orders',
+      () => fetchHotstuffOrdersDirect(agentAddr),
+      () => fetchJsonSafe(`/api/futures/orders?${agentQs}&owner=${encodeURIComponent(hsWalletAddr)}`, []),
+    );
     logHotstuffDebug('[useHotstuff] fetchLatestOrders agent snapshot', {
       owner: hsWalletAddr,
       agent: agentAddr,

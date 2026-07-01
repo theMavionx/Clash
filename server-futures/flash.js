@@ -1,5 +1,11 @@
 const crypto = require('crypto');
-const { PublicKey, VersionedTransaction } = require('@solana/web3.js');
+const {
+  PublicKey,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+} = require('@solana/web3.js');
 const bs58 = require('bs58');
 const {
   findBasketAddress,
@@ -13,17 +19,42 @@ const {
 const FLASH_API = String(process.env.FLASH_API_URL || 'https://flashapi.trade').replace(/\/+$/, '');
 const FLASH_PROD_API = String(process.env.FLASH_PROD_API_URL || 'https://api.prod.flash.trade').replace(/\/+$/, '');
 const FLASH_APP_URL = String(process.env.FLASH_APP_URL || 'https://flash.trade').replace(/\/+$/, '');
-const FLASH_DOCS_URL = 'https://docs.flash.trade/flash-trade/flash-trade-protocol/build-on-flash/flash-trade-api/flash-trade-v2';
+const FLASH_DOCS_URL = 'https://docs.flash.trade/flash-trade/flash-trade-protocol/build-on-flash/flash-trade-api';
 const FLASH_DEFAULT_ER_RPC_URL = 'https://flash.magicblock.xyz';
 const FLASH_LEGACY_ER_RPC_URL = 'https://flashtrade.magicblock.app';
 const FLASH_V2_RPC_URL = String(process.env.FLASH_V2_RPC_URL || process.env.ER_RPC_URL || process.env.FLASH_MAGIC_ROUTER_RPC || FLASH_DEFAULT_ER_RPC_URL).trim().replace(/\/+$/, '');
 const FLASH_USDC_MINT = String(process.env.FLASH_USDC_MINT || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 const FLASH_USDC_DECIMALS = 6;
-const FLASH_PROGRAM_IDS = String(
-  process.env.FLASH_PROGRAM_IDS || 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV,FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn'
-).split(',').map(s => s.trim()).filter(Boolean);
-const FLASH_V2_PROGRAM_ID = FLASH_PROGRAM_IDS[0] || 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV';
-const FLASH_LEGACY_PROGRAM_ID = FLASH_PROGRAM_IDS.find(id => id === 'FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn') || 'FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn';
+const FLASH_MAIN_PROGRAM_ID = 'FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn';
+const FLASH_BETA_PROGRAM_ID = 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV';
+const FLASH_PROGRAM_IDS = Array.from(new Set([
+  FLASH_MAIN_PROGRAM_ID,
+  ...String(process.env.FLASH_PROGRAM_IDS || `${FLASH_MAIN_PROGRAM_ID},${FLASH_BETA_PROGRAM_ID}`)
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean),
+  FLASH_BETA_PROGRAM_ID,
+]));
+const FLASH_V2_PROGRAM_ID = FLASH_MAIN_PROGRAM_ID;
+const FLASH_MAIN_PROGRAM_PK = new PublicKey(FLASH_MAIN_PROGRAM_ID);
+const FLASH_ER_DISCRIMINATORS = Object.freeze({
+  openPosition: Buffer.from([56, 132, 228, 149, 65, 34, 167, 111]),
+  closePosition: Buffer.from([119, 84, 92, 18, 238, 109, 30, 92]),
+  placeTriggerOrder: Buffer.from([18, 150, 225, 93, 42, 182, 3, 56]),
+  placeLimitOrder: Buffer.from([81, 75, 213, 34, 116, 52, 25, 191]),
+  cancelTriggerOrder: Buffer.from([200, 204, 193, 155, 116, 240, 109, 102]),
+  cancelLimitOrder: Buffer.from([214, 63, 140, 71, 200, 34, 22, 175]),
+});
+const FLASH_LEGACY_DISCRIMINATORS = Object.freeze({
+  openPosition: '87802f4d0f98f031',
+  swapAndOpen: '1ad12a00a93e1e76',
+  closePosition: '7b86510031446262',
+  closeAndSwap: '93a4b9f09b21a57d',
+  placeTriggerOrder: '209c32bce89f70ec',
+  cancelTriggerOrder: '58df6801468a3ffe',
+  placeLimitOrder: '6cb021ba92e501c5',
+  cancelLimitOrder: '2e05ef05194d6f78',
+});
 const GPL_SESSION_PROGRAM_ID = String(process.env.GPL_SESSION_PROGRAM_ID || 'KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5');
 const GPL_SESSION_TOKEN_V2_DISCRIMINATOR = Buffer.from([178, 3, 85, 254, 13, 116, 128, 41]);
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.FLASH_TIMEOUT_MS || 7000)));
@@ -49,6 +80,19 @@ const FLASH_PROGRAM_ERROR_BY_CODE = (() => {
     return new Map();
   }
 })();
+
+const FLASH_PROGRAM_ERROR_OVERRIDES = new Map([
+  [6013, {
+    code: 6013,
+    name: 'InvalidPositionState',
+    msg: 'Flash position does not exist or is already closed.',
+  }],
+  [6081, {
+    code: 6081,
+    name: 'DeprecatedInstruction',
+    msg: 'Flash rejected this transaction because the builder returned a deprecated instruction. Refresh and try again after the Flash builder is updated.',
+  }],
+]);
 
 function extractFlashCustomErrorCode(value) {
   if (value == null) return null;
@@ -89,7 +133,7 @@ function extractFlashCustomErrorCode(value) {
 function decodeFlashProgramError(err, logs = []) {
   const code = extractFlashCustomErrorCode(err) ?? extractFlashCustomErrorCode(logs);
   if (code == null) return null;
-  const def = FLASH_PROGRAM_ERROR_BY_CODE.get(code) || { code, name: '', msg: '' };
+  const def = FLASH_PROGRAM_ERROR_OVERRIDES.get(code) || FLASH_PROGRAM_ERROR_BY_CODE.get(code) || { code, name: '', msg: '' };
   return {
     code,
     name: def.name || '',
@@ -133,13 +177,13 @@ function flashSolanaRpcUrls() {
 
 function flashErRpcUrls() {
   return Array.from(new Set([
+    FLASH_LEGACY_ER_RPC_URL,
+    FLASH_DEFAULT_ER_RPC_URL,
     ...splitSolanaRpcUrls(process.env.FLASH_V2_RPC_URLS),
     ...splitSolanaRpcUrls(process.env.FLASH_V2_RPC_URL),
     ...splitSolanaRpcUrls(process.env.ER_RPC_URL),
     ...splitSolanaRpcUrls(process.env.FLASH_MAGIC_ROUTER_RPC),
     FLASH_V2_RPC_URL,
-    FLASH_DEFAULT_ER_RPC_URL,
-    FLASH_LEGACY_ER_RPC_URL,
   ].filter(Boolean).map(url => String(url).trim().replace(/\/+$/, ''))));
 }
 
@@ -205,7 +249,7 @@ async function flashSolanaRpcRequest(label, method, params) {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
-        'user-agent': 'ClashOfPerps/1.0 flash-v2-solana',
+        'user-agent': 'ClashOfPerps/1.0 flash-solana',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -234,7 +278,7 @@ async function flashJsonRpcRequest(rpcUrl, label, method, params, signal) {
     headers: {
       accept: 'application/json',
       'content-type': 'application/json',
-      'user-agent': 'ClashOfPerps/1.0 flash-v2-rpc',
+      'user-agent': 'ClashOfPerps/1.0 flash-rpc',
     },
     body: JSON.stringify({
       jsonrpc: '2.0',
@@ -267,7 +311,7 @@ async function flashV2RpcRequest(label, method, params) {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
-        'user-agent': 'ClashOfPerps/1.0 flash-v2-rpc-read',
+        'user-agent': 'ClashOfPerps/1.0 flash-rpc-read',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -289,6 +333,42 @@ async function flashV2RpcRequest(label, method, params) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function flashErRpcRequestAny(label, method, params) {
+  const urls = flashErRpcUrls();
+  let lastError = null;
+  for (const rpcUrl of urls) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), SOLANA_RPC_TIMEOUT_MS);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await flashJsonRpcRequest(rpcUrl, label, method, params, ctrl.signal);
+    } catch (e) {
+      lastError = e;
+      console.warn(`[flash] ${label} ER RPC failed on ${redactRpcUrl(rpcUrl)}:`, e?.message || e);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError || Object.assign(new Error(`${label} failed: no Flash ER RPC endpoint available`), { status: 503 });
+}
+
+async function buildFlashErVersionedTransaction(instructions, signerPk) {
+  const latest = await flashErRpcRequestAny('latest blockhash', 'getLatestBlockhash', [
+    { commitment: 'confirmed' },
+  ]);
+  const blockhash = latest?.value?.blockhash || latest?.blockhash;
+  if (!blockhash) {
+    throw Object.assign(new Error('Flash ER RPC returned no recent blockhash'), { status: 502, data: latest });
+  }
+  const message = new TransactionMessage({
+    payerKey: signerPk,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+  const tx = new VersionedTransaction(message);
+  return Buffer.from(tx.serialize()).toString('base64');
 }
 
 async function getWalletUsdcBalance(owner) {
@@ -321,7 +401,7 @@ async function request(path, options = {}) {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
-        'user-agent': 'ClashOfPerps/1.0 flash-v2',
+        'user-agent': 'ClashOfPerps/1.0 flash',
       },
       body: method === 'GET' ? undefined : JSON.stringify(options.body || {}),
     });
@@ -346,6 +426,27 @@ async function request(path, options = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function requestFirst(paths, options = {}) {
+  let lastError = null;
+  for (const path of paths) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await request(path, options);
+    } catch (e) {
+      lastError = e;
+      if (e?.status !== 404) throw e;
+    }
+  }
+  throw lastError || Object.assign(new Error('Flash API endpoint unavailable'), { status: 404 });
+}
+
+function flashAccountBuilderPaths(name) {
+  return [
+    `/transaction-builder/${name}`,
+    `/v2/transaction-builder/${name}`,
+  ];
 }
 
 async function requestProd(path) {
@@ -382,6 +483,66 @@ async function requestProd(path) {
   }
 }
 
+async function requestFlashApp(path) {
+  const key = `GET:${FLASH_APP_URL}${path}`;
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && now - cached.at < PUBLIC_CACHE_TTL_MS) return cached.data;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${FLASH_APP_URL}${path}`, {
+      method: 'GET',
+      signal: ctrl.signal,
+      redirect: 'follow',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'user-agent': 'ClashOfPerps/1.0 flash-app-read',
+      },
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!res.ok) {
+      const err = new Error(data?.err || data?.error || data?.message || `Flash app API ${res.status}`);
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
+    cache.set(key, { at: now, data });
+    if (cache.size > 250) cache = new Map([...cache.entries()].slice(-150));
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeFlashDepositStats(data) {
+  if (!data || typeof data !== 'object') return null;
+  const liquid = Number(data.v2LiquidBalanceUsd);
+  return {
+    has_v2_deposit: data.hasV2Deposit === true,
+    has_v2_depositor_record: data.hasV2DepositorRecord === true,
+    deposits_usd: numberFromUi(data.v2DepositsUsd),
+    withdrawals_usd: numberFromUi(data.v2WithdrawalsUsd),
+    net_usd: numberFromUi(data.v2NetUsd),
+    liquid_balance_usd: Number.isFinite(liquid) ? Math.max(0, liquid) : null,
+    deposit_count: Number.isFinite(Number(data.v2DepositCount)) ? Number(data.v2DepositCount) : null,
+    open_position_count: Number.isFinite(Number(data.openPositionCount)) ? Number(data.openPositionCount) : null,
+    open_position_collateral_usd: numberFromUi(data.openPositionCollateralUsd),
+    active_lp_value_usd: numberFromUi(data.activeLpValueUsd),
+    active_lp_net_amount: numberFromUi(data.activeLpNetAmount),
+    active_stake_amount: numberFromUi(data.activeStakeAmount),
+  };
+}
+
+async function getFlashV2DepositStats(owner) {
+  if (!isSolanaAddress(owner)) return null;
+  const raw = await requestFlashApp(`/api/fstats/v2-deposit/${encodeURIComponent(owner)}`);
+  return normalizeFlashDepositStats(raw);
+}
+
 function decodeSignedTransaction(rawBase64) {
   const text = String(rawBase64 || '').trim();
   if (!text) throw Object.assign(new Error('rawTransactionBase64 is required'), { status: 400 });
@@ -403,75 +564,89 @@ function decodeSignedTransaction(rawBase64) {
 
 async function submitSignedTransaction(rawBase64, options = {}) {
   const { bytes, tx } = decodeSignedTransaction(rawBase64);
-  const endpoint = String(options.rpcUrl || FLASH_V2_RPC_URL || '').trim();
-  if (!endpoint) throw Object.assign(new Error('Flash v2 RPC endpoint is not configured'), { status: 503 });
+  const endpoints = options.rpcUrl
+    ? [String(options.rpcUrl).trim().replace(/\/+$/, '')]
+    : Array.from(new Set([
+      ...flashErRpcUrls(),
+      ...flashSolanaRpcUrls(),
+    ]));
+  if (!endpoints.length) throw Object.assign(new Error('Flash RPC endpoint is not configured'), { status: 503 });
   const timeoutMs = Math.max(1000, Math.min(30_000, Number(options.timeoutMs || process.env.FLASH_V2_RPC_TIMEOUT_MS || 18_000)));
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const startedAt = Date.now();
-  try {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        'user-agent': 'ClashOfPerps/1.0 flash-v2-rpc',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: `flash-${Date.now()}`,
-        method: 'sendTransaction',
-        params: [
-          bytes.toString('base64'),
-          {
-            encoding: 'base64',
-            skipPreflight: options.skipPreflight === true,
-            preflightCommitment: options.preflightCommitment || 'confirmed',
-            maxRetries: Number.isFinite(Number(options.maxRetries)) ? Number(options.maxRetries) : 3,
-          },
-        ],
-      }),
-    });
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    if (!res.ok || data?.error) {
-      const err = data?.error || {};
-      const message = err.message || (typeof data === 'string' && data) || `Flash v2 RPC ${res.status}`;
-      const error = new Error(message);
-      error.status = res.ok ? 502 : res.status;
-      error.data = data;
-      throw error;
+  const errors = [];
+  for (const endpoint of endpoints) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          'user-agent': 'ClashOfPerps/1.0 flash-rpc',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: `flash-${Date.now()}`,
+          method: 'sendTransaction',
+          params: [
+            bytes.toString('base64'),
+            {
+              encoding: 'base64',
+              skipPreflight: options.skipPreflight === true,
+              preflightCommitment: options.preflightCommitment || 'confirmed',
+              maxRetries: Number.isFinite(Number(options.maxRetries)) ? Number(options.maxRetries) : 3,
+            },
+          ],
+        }),
+      });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (!res.ok || data?.error) {
+        const err = data?.error || {};
+        const message = err.message || (typeof data === 'string' && data) || `Flash RPC ${res.status}`;
+        const error = new Error(message);
+        error.status = res.ok ? 502 : res.status;
+        error.data = data;
+        throw error;
+      }
+      if (!data?.result) {
+        const error = new Error('Flash RPC returned no transaction signature');
+        error.status = 502;
+        error.data = data;
+        throw error;
+      }
+      return {
+        signature: data.result,
+        endpoint: redactRpcUrl(endpoint),
+        submitted_ms: Date.now() - startedAt,
+        tx: {
+          version: tx.version,
+          required_signatures: tx.message?.header?.numRequiredSignatures || 0,
+          static_accounts: tx.message?.staticAccountKeys?.length || 0,
+          instructions: tx.message?.compiledInstructions?.length || 0,
+          recent_blockhash: tx.message?.recentBlockhash || '',
+        },
+      };
+    } catch (e) {
+      if (e?.name === 'AbortError') {
+        const error = new Error(`Flash RPC broadcast timed out after ${timeoutMs}ms`);
+        error.status = 504;
+        errors.push({ endpoint: redactRpcUrl(endpoint), message: error.message, status: error.status });
+      } else {
+        errors.push({ endpoint: redactRpcUrl(endpoint), message: e.message || String(e), status: e.status || null, data: e.data || null });
+      }
+    } finally {
+      clearTimeout(timer);
     }
-    if (!data?.result) {
-      const error = new Error('Flash v2 RPC returned no transaction signature');
-      error.status = 502;
-      error.data = data;
-      throw error;
-    }
-    return {
-      signature: data.result,
-      endpoint: redactRpcUrl(endpoint),
-      submitted_ms: Date.now() - startedAt,
-      tx: {
-        version: tx.version,
-        required_signatures: tx.message?.header?.numRequiredSignatures || 0,
-        static_accounts: tx.message?.staticAccountKeys?.length || 0,
-        instructions: tx.message?.compiledInstructions?.length || 0,
-        recent_blockhash: tx.message?.recentBlockhash || '',
-      },
-    };
-  } catch (e) {
-    if (e?.name === 'AbortError') {
-      const error = new Error(`Flash v2 RPC broadcast timed out after ${timeoutMs}ms`);
-      error.status = 504;
-      throw error;
-    }
-    throw e;
-  } finally {
-    clearTimeout(timer);
   }
+  const detail = errors.map(err => `${err.endpoint}: ${err.message}`).join(' | ');
+  const error = new Error(detail || 'Flash RPC broadcast failed on all endpoints');
+  error.status = errors.find(err => err.status)?.status || 502;
+  error.data = { attempts: errors };
+  throw error;
 }
 
 function normalizeToken(symbol, fallback = 'SOL') {
@@ -484,6 +659,205 @@ function normalizeSide(side) {
   if (s === 'ASK' || s === 'SELL' || s === 'SHORT') return 'SHORT';
   if (s === 'SWAP') return 'SWAP';
   return s || 'LONG';
+}
+
+function flashPublicKey(value, label = 'Flash account') {
+  try {
+    return new PublicKey(String(value || '').trim());
+  } catch {
+    throw Object.assign(new Error(`${label} is not a valid Solana address`), { status: 400 });
+  }
+}
+
+function writeU64Le(value, label = 'u64') {
+  const raw = typeof value === 'bigint' ? value : BigInt(value);
+  if (raw < 0n || raw > 0xffffffffffffffffn) {
+    throw Object.assign(new Error(`${label} is outside u64 range`), { status: 400 });
+  }
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(raw);
+  return buf;
+}
+
+function writeI32Le(value, label = 'i32') {
+  const raw = Number(value);
+  if (!Number.isInteger(raw) || raw < -2147483648 || raw > 2147483647) {
+    throw Object.assign(new Error(`${label} is outside i32 range`), { status: 400 });
+  }
+  const buf = Buffer.alloc(4);
+  buf.writeInt32LE(raw);
+  return buf;
+}
+
+function encodeFlashOraclePrice(price, exponent) {
+  return Buffer.concat([
+    writeU64Le(price, 'Flash oracle price'),
+    writeI32Le(exponent, 'Flash oracle exponent'),
+  ]);
+}
+
+function readFlashOraclePrice(buf, offset = 8) {
+  if (!Buffer.isBuffer(buf) || buf.length < offset + 12) {
+    throw Object.assign(new Error('Flash builder returned malformed oracle price data'), { status: 502 });
+  }
+  return {
+    price: buf.readBigUInt64LE(offset),
+    exponent: buf.readInt32LE(offset + 8),
+  };
+}
+
+function flashPrivilegeByte(value) {
+  const n = Number(value || 0);
+  if (!Number.isInteger(n) || n < 0 || n > 2) return 0;
+  return n;
+}
+
+function encodeFlashPricePrivilegeParams(discriminator, params) {
+  return Buffer.concat([
+    discriminator,
+    encodeFlashOraclePrice(params.price, params.exponent),
+    Buffer.from([flashPrivilegeByte(params.privilege)]),
+  ]);
+}
+
+function encodeFlashOpenErParams(params) {
+  return Buffer.concat([
+    FLASH_ER_DISCRIMINATORS.openPosition,
+    encodeFlashOraclePrice(params.price, params.exponent),
+    writeU64Le(params.collateralAmount, 'Flash collateral amount'),
+    writeU64Le(params.sizeAmount, 'Flash size amount'),
+    Buffer.from([flashPrivilegeByte(params.privilege)]),
+  ]);
+}
+
+function encodeFlashTriggerErParams(params) {
+  return Buffer.concat([
+    FLASH_ER_DISCRIMINATORS.placeTriggerOrder,
+    encodeFlashOraclePrice(params.price, params.exponent),
+    writeU64Le(params.deltaSizeAmount, 'Flash trigger size amount'),
+    Buffer.from([params.isStopLoss ? 1 : 0]),
+  ]);
+}
+
+function encodeFlashLimitErParams(params) {
+  return Buffer.concat([
+    FLASH_ER_DISCRIMINATORS.placeLimitOrder,
+    encodeFlashOraclePrice(params.limitPrice, params.limitExponent),
+    writeU64Le(params.reserveAmount, 'Flash reserve amount'),
+    writeU64Le(params.sizeAmount, 'Flash limit size amount'),
+    encodeFlashOraclePrice(params.stopLossPrice || 0n, params.stopLossExponent || 0),
+    encodeFlashOraclePrice(params.takeProfitPrice || 0n, params.takeProfitExponent || 0),
+  ]);
+}
+
+function encodeFlashCancelTriggerErParams(params) {
+  return Buffer.concat([
+    FLASH_ER_DISCRIMINATORS.cancelTriggerOrder,
+    flashPublicKey(params.market, 'Flash market').toBuffer(),
+    Buffer.from([Number(params.orderId) & 0xff, params.isStopLoss ? 1 : 0]),
+  ]);
+}
+
+function encodeFlashCancelLimitErParams(params) {
+  return Buffer.concat([
+    FLASH_ER_DISCRIMINATORS.cancelLimitOrder,
+    flashPublicKey(params.market, 'Flash market').toBuffer(),
+    Buffer.from([Number(params.orderId) & 0xff]),
+  ]);
+}
+
+function flashInstructionDiscriminator(data) {
+  const buf = Buffer.from(data || []);
+  return buf.length >= 8 ? buf.subarray(0, 8).toString('hex') : '';
+}
+
+function parseLegacyOpenParams(data) {
+  const buf = Buffer.from(data || []);
+  if (buf.length < 37) {
+    throw Object.assign(new Error('Flash open builder returned malformed instruction data'), { status: 502 });
+  }
+  const price = readFlashOraclePrice(buf, 8);
+  return {
+    ...price,
+    collateralAmount: buf.readBigUInt64LE(20),
+    sizeAmount: buf.readBigUInt64LE(28),
+    privilege: buf[36] || 0,
+  };
+}
+
+function parseLegacyPricePrivilegeParams(data, label = 'Flash builder') {
+  const buf = Buffer.from(data || []);
+  if (buf.length < 21) {
+    throw Object.assign(new Error(`${label} returned malformed instruction data`), { status: 502 });
+  }
+  return {
+    ...readFlashOraclePrice(buf, 8),
+    privilege: buf[20] || 0,
+  };
+}
+
+function parseLegacyTriggerParams(data) {
+  const buf = Buffer.from(data || []);
+  if (buf.length < 29) {
+    throw Object.assign(new Error('Flash trigger builder returned malformed instruction data'), { status: 502 });
+  }
+  return {
+    ...readFlashOraclePrice(buf, 8),
+    deltaSizeAmount: buf.readBigUInt64LE(20),
+    isStopLoss: buf[28] === 1,
+  };
+}
+
+function parseLegacyLimitParams(data) {
+  const buf = Buffer.from(data || []);
+  if (buf.length < 60) {
+    throw Object.assign(new Error('Flash limit builder returned malformed instruction data'), { status: 502 });
+  }
+  const limit = readFlashOraclePrice(buf, 8);
+  const stopLoss = readFlashOraclePrice(buf, 36);
+  const takeProfit = readFlashOraclePrice(buf, 48);
+  return {
+    limitPrice: limit.price,
+    limitExponent: limit.exponent,
+    reserveAmount: buf.readBigUInt64LE(20),
+    sizeAmount: buf.readBigUInt64LE(28),
+    stopLossPrice: stopLoss.price,
+    stopLossExponent: stopLoss.exponent,
+    takeProfitPrice: takeProfit.price,
+    takeProfitExponent: takeProfit.exponent,
+  };
+}
+
+function flashPda(seed) {
+  return PublicKey.findProgramAddressSync([Buffer.from(seed)], FLASH_MAIN_PROGRAM_PK)[0];
+}
+
+function flashSignerContext(owner, body = {}) {
+  const ownerPk = flashPublicKey(owner, 'Flash owner');
+  const signer = String(body.signer || body.sessionSigner || body.session_signer || '').trim();
+  const sessionToken = String(body.sessionToken || body.session_token || '').trim();
+  if (signer || sessionToken) {
+    if (!isSolanaAddress(signer) || !isSolanaAddress(sessionToken)) {
+      throw Object.assign(new Error('valid signer and sessionToken are required for Flash one tap trading'), { status: 400 });
+    }
+    return {
+      ownerPk,
+      signerPk: flashPublicKey(signer, 'Flash session signer'),
+      sessionTokenPk: flashPublicKey(sessionToken, 'Flash session token'),
+      hasSession: true,
+    };
+  }
+  return {
+    ownerPk,
+    signerPk: ownerPk,
+    // Anchor optional account placeholder. Omitting it shifts account order.
+    sessionTokenPk: FLASH_MAIN_PROGRAM_PK,
+    hasSession: false,
+  };
+}
+
+function flashMeta(pubkey, isSigner = false, isWritable = false) {
+  return { pubkey, isSigner, isWritable };
 }
 
 function applyTradingSessionPayload(payload, body) {
@@ -500,20 +874,20 @@ function applyTradingSessionPayload(payload, body) {
 }
 
 async function getHealth() {
-  return request('/v2/health');
+  return request('/health');
 }
 
 async function getTokens() {
-  return request('/v2/tokens');
+  return request('/tokens');
 }
 
 async function getRawCustodies() {
-  return request('/v2/raw/custodies');
+  return request('/raw/custodies');
 }
 
 async function getPrices() {
   const [prices, fundingRates] = await Promise.all([
-    request('/v2/prices'),
+    request('/prices'),
     getFundingRates().catch(e => {
       console.warn('[flash] funding rates unavailable:', e?.message || e);
       return new Map();
@@ -573,7 +947,7 @@ async function getMarketInfo() {
       trade_init_allowed: tradeInitAllowed,
       is_market_open: sessionOpen && tradeInitAllowed,
       token: t,
-      source: 'flash_v2',
+      source: 'flash_main',
     };
   });
 }
@@ -605,7 +979,7 @@ async function assertFlashMarketCanOpen(symbol, leverage) {
 async function getFundingRates() {
   const [tokens, custodies] = await Promise.all([
     getTokens(),
-    request('/v2/raw/custodies'),
+    request('/raw/custodies'),
   ]);
   const symbolByMint = new Map((Array.isArray(tokens) ? tokens : [])
     .map(t => [String(t?.mintKey || '').trim(), normalizeToken(t?.symbol, '')])
@@ -630,7 +1004,7 @@ async function getFundingRates() {
 }
 
 async function getRawMarkets() {
-  return request('/v2/raw/markets');
+  return request('/raw/markets');
 }
 
 async function getFlashV2MarketHints() {
@@ -675,6 +1049,95 @@ async function getFlashV2MarketHints() {
     });
   }
   return hints;
+}
+
+function flashRawCustodySymbol(account, symbolByMint) {
+  const mint = String(account?.mint || account?.tokenMint || account?.mintKey || '').trim();
+  return symbolByMint.get(mint) || '';
+}
+
+async function getFlashMainMarketContext(options = {}) {
+  const symbol = normalizeToken(options.symbol || options.marketSymbol || options.outputTokenSymbol || 'SOL');
+  const side = normalizeSide(options.side || options.tradeType || 'LONG');
+  const marketPubkey = String(options.marketPubkey || options.market || '').trim();
+  const receivingSymbol = normalizeToken(options.receivingSymbol || options.inputTokenSymbol || options.withdrawTokenSymbol || 'USDC', 'USDC');
+  const [tokens, custodies, markets] = await Promise.all([
+    getTokens(),
+    getRawCustodies(),
+    getRawMarkets(),
+  ]);
+  const symbolByMint = new Map((Array.isArray(tokens) ? tokens : [])
+    .map(t => [String(t?.mintKey || '').trim(), normalizeToken(t?.symbol, '')])
+    .filter(([mint, sym]) => mint && sym));
+  const custodiesByAccount = new Map();
+  const custodyRows = [];
+  for (const row of Array.isArray(custodies) ? custodies : []) {
+    const account = row?.account || row;
+    const pubkey = String(row?.pubkey || account?.pubkey || account?.custodyAccount || '').trim();
+    if (!pubkey) continue;
+    const custody = {
+      pubkey,
+      symbol: flashRawCustodySymbol(account, symbolByMint),
+      pool: String(account?.pool || '').trim(),
+      mint: String(account?.mint || account?.tokenMint || account?.mintKey || '').trim(),
+      tokenAccount: String(account?.token_account || account?.tokenAccount || '').trim(),
+      oracle: String(account?.oracle?.int_oracle_account || account?.intOracleAddress || account?.oracleAccount || '').trim(),
+      extOracle: String(account?.oracle?.ext_oracle_account || account?.extOracleAddress || account?.erOracleAccount || '').trim(),
+      uid: account?.uid ?? account?.custodyId ?? null,
+      decimals: Number(account?.decimals),
+      raw: account,
+    };
+    custodiesByAccount.set(pubkey, custody);
+    custodyRows.push(custody);
+  }
+  const marketRows = (Array.isArray(markets) ? markets : []).map(row => {
+    const account = row?.account || row;
+    const market = {
+      pubkey: String(row?.pubkey || account?.pubkey || account?.marketAccount || '').trim(),
+      pool: String(account?.pool || '').trim(),
+      targetCustody: String(account?.target_custody || account?.targetCustody || '').trim(),
+      lockCustody: String(account?.collateral_custody || account?.collateralCustody || '').trim(),
+      side: normalizeSide(account?.side),
+      raw: account,
+    };
+    market.target = custodiesByAccount.get(market.targetCustody) || null;
+    market.lock = custodiesByAccount.get(market.lockCustody) || null;
+    return market;
+  }).filter(m => m.pubkey && m.target && m.lock);
+
+  let market = null;
+  if (marketPubkey) {
+    market = marketRows.find(row => row.pubkey === marketPubkey) || null;
+  }
+  if (!market) {
+    const candidates = marketRows.filter(row => row.side === side && row.target?.symbol === symbol);
+    market = candidates.find(row => custodyRows.some(c => c.pool === row.pool && c.symbol === receivingSymbol))
+      || candidates[0]
+      || null;
+  }
+  if (!market) {
+    throw Object.assign(new Error(`Flash market is not available for ${symbol} ${side}`), { status: 400 });
+  }
+  const receiving = custodyRows.find(c => c.pool === market.pool && c.symbol === receivingSymbol)
+    || (receivingSymbol === market.lock?.symbol ? market.lock : null)
+    || (receivingSymbol === market.target?.symbol ? market.target : null);
+  if (!receiving) {
+    throw Object.assign(new Error(`Flash ${receivingSymbol} custody is not available in ${market.target?.symbol || symbol} pool`), { status: 400 });
+  }
+  for (const [label, custody] of [['target', market.target], ['lock', market.lock], ['receiving', receiving]]) {
+    if (!custody?.oracle || !isSolanaAddress(custody.oracle)) {
+      throw Object.assign(new Error(`Flash ${label} oracle is missing for ${market.target?.symbol || symbol}`), { status: 502 });
+    }
+  }
+  return {
+    symbol: market.target?.symbol || symbol,
+    side: market.side,
+    market,
+    pool: market.pool,
+    target: market.target,
+    lock: market.lock,
+    receiving,
+  };
 }
 
 async function getFlashProdMarketHints() {
@@ -1341,8 +1804,8 @@ function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map(), hin
     inputUsdUi: metric.sizeUsdUi,
     _flashDust: isDust,
     _flashDustUsd: isDust ? sizeUsd : undefined,
-    positionKey: `${symbol}:${side}`,
-    source: 'flash_v2_basket',
+    positionKey: marketPubkey ? `mb-${marketPubkey}` : `${symbol}:${side}`,
+    source: 'flash_main_basket',
     metric: {
       ...metric,
       marketSymbol: metric.marketSymbol || hint.symbol || metric.symbol,
@@ -1374,7 +1837,7 @@ function orderFromMetric(marketPubkey, metric = {}, parent = {}, hint = {}) {
     amount: metric.sizeAmountUi ?? metric.size_amount_ui ?? metric.amount,
     initial_amount: metric.sizeAmountUi ?? metric.size_amount_ui ?? metric.amount,
     _readOnly: true,
-    source: 'flash_v2_basket',
+    source: 'flash_main_basket',
   };
 }
 
@@ -1438,6 +1901,7 @@ function positionsFromFlashErBasket(basket = {}, marketHints = new Map(), priceM
     positions.push({
       ...normalized,
       marketPubkey: market,
+      positionKey: market ? `mb-${market}` : normalized.positionKey,
       source: 'flash_er_basket',
       flash_program_id: basket.program_id || null,
       flash_basket_pubkey: basket.pubkey || null,
@@ -1475,6 +1939,94 @@ function mergeFlashPositions(primary = [], secondary = []) {
     }
   }
   return merged;
+}
+
+function flashPositionHasSize(metric = {}) {
+  return numberFromUi(metric.sizeAmountUi ?? metric.size_amount_ui ?? metric.amount) > 0
+    || numberFromUi(metric.sizeUsdUi ?? metric.size_usd_ui ?? metric.sizeUsd ?? metric.size_usd) > 0
+    || numberFromUi(metric.collateralUsdUi ?? metric.collateral_usd_ui ?? metric.collateralUsd ?? metric.collateral_usd) > 0;
+}
+
+function flashMetricMatchesMarketSide(marketPubkey, metric = {}, hint = {}, marketSymbol = '', side = '', requestedMarketPubkey = '') {
+  if (requestedMarketPubkey && String(marketPubkey || '').trim() === requestedMarketPubkey) {
+    const metricTradeType = metricSide(metric.side || metric.sideUi || hint.side);
+    return metricTradeType === side && flashPositionHasSize(metric);
+  }
+  const symbol = normalizeToken(metric.marketSymbol || metric.symbol || hint.symbol || marketPubkey, '');
+  if (!symbol || symbol !== marketSymbol) return false;
+  const metricTradeType = metricSide(metric.side || metric.sideUi || hint.side);
+  return metricTradeType === side && flashPositionHasSize(metric);
+}
+
+function flashPositionMatchesMarketSide(pos = {}, marketSymbol = '', side = '') {
+  const symbol = normalizeToken(pos.marketSymbol || pos.symbol || pos.metric?.marketSymbol || pos.metric?.symbol, '');
+  const tradeType = metricSide(pos.tradeType || pos.sideUi || pos.side || pos.metric?.sideUi || pos.metric?.side);
+  return symbol === marketSymbol && tradeType === side && !isDustPosition(pos);
+}
+
+function flashPositionProgramMismatchError(marketSymbol, side, action = 'manage', position = null) {
+  const err = new Error(
+    `${marketSymbol} ${side} is not on the active Flash main program. Refresh positions before trying to ${action}.`
+  );
+  err.status = 409;
+  err.data = {
+    code: 'FLASH_POSITION_PROGRAM_MISMATCH',
+    marketSymbol,
+    side,
+    action,
+    flash_program_id: position?.flash_program_id || null,
+    source: position?.source || null,
+  };
+  return err;
+}
+
+async function assertFlashMainPosition(owner, marketSymbol, side, requestHint = {}, action = 'manage') {
+  const requestedProgramId = String(requestHint.flashProgramId || requestHint.flash_program_id || '').trim();
+  const requestedMarketPubkey = String(requestHint.marketPubkey || requestHint.market_pubkey || '').trim();
+  if (requestedProgramId && requestedProgramId !== FLASH_MAIN_PROGRAM_ID) {
+    throw flashPositionProgramMismatchError(marketSymbol, side, action, {
+      flash_program_id: requestedProgramId,
+      source: String(requestHint.positionSource || requestHint.position_source || '').trim(),
+    });
+  }
+
+  const [erBasket, snapshot, marketHints] = await Promise.all([
+    getFlashErBasket(owner).catch(e => {
+      console.warn('[flash] position basket check unavailable:', e?.message || e);
+      return null;
+    }),
+    request(`/v2/owner/${owner}`).catch(() => null),
+    getFlashMarketHints(owner).catch(e => {
+      console.warn('[flash] position market hints unavailable:', e?.message || e);
+      return new Map();
+    }),
+  ]);
+  const mainPosition = erBasket
+    ? positionsFromFlashErBasket(erBasket, marketHints, new Map()).find(pos => (
+      (!requestedMarketPubkey || String(pos.marketPubkey || pos.market_pubkey || '') === requestedMarketPubkey)
+      && flashPositionMatchesMarketSide(pos, marketSymbol, side)
+      && (!pos.flash_program_id || pos.flash_program_id === FLASH_MAIN_PROGRAM_ID)
+    ))
+    : null;
+  if (mainPosition) {
+    return { ok: true, source: 'flash_main_basket', marketPubkey: mainPosition.marketPubkey || requestedMarketPubkey };
+  }
+
+  for (const [marketPubkey, metric] of Object.entries(snapshot?.positionMetrics || {})) {
+    if (flashMetricMatchesMarketSide(marketPubkey, metric, marketHints.get(marketPubkey) || {}, marketSymbol, side, requestedMarketPubkey)) {
+      return { ok: true, source: 'flash_beta_basket', marketPubkey };
+    }
+  }
+
+  const err = new Error(`Flash ${marketSymbol} ${side} position was not found. Refresh positions before trying to ${action}.`);
+  err.status = 409;
+  err.data = {
+    code: 'FLASH_POSITION_NOT_FOUND',
+    marketSymbol,
+    side,
+    action,
+  };
+  throw err;
 }
 
 async function readFlashBasketFromRpc(rpcUrl, owner, programId, signal) {
@@ -1525,7 +2077,7 @@ async function readFlashBasketFromRpc(rpcUrl, owner, programId, signal) {
 }
 
 async function getFlashErBasket(owner) {
-  const programs = Array.from(new Set([FLASH_LEGACY_PROGRAM_ID, ...FLASH_PROGRAM_IDS].filter(Boolean)));
+  const programs = Array.from(new Set([FLASH_MAIN_PROGRAM_ID, ...FLASH_PROGRAM_IDS, FLASH_BETA_PROGRAM_ID].filter(Boolean)));
   let lastError = null;
   let firstBasket = null;
   for (const rpcUrl of flashErRpcUrls()) {
@@ -1552,13 +2104,43 @@ async function getFlashErBasket(owner) {
   return null;
 }
 
+async function getFlashErBasketForProgram(owner, programId) {
+  if (!programId) return null;
+  let lastError = null;
+  for (const rpcUrl of flashErRpcUrls()) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), SOLANA_RPC_TIMEOUT_MS);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const basket = await readFlashBasketFromRpc(rpcUrl, owner, programId, ctrl.signal);
+      if (basket) return basket;
+    } catch (e) {
+      lastError = e;
+      if (!isFlashBasketLayoutDecodeError(e)) {
+        console.warn(`[flash] ER basket read failed on ${redactRpcUrl(rpcUrl)} program ${programId}:`, e?.message || e);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (lastError && !isFlashBasketLayoutDecodeError(lastError)) throw lastError;
+  return null;
+}
+
 async function getOwnerSnapshot(owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('valid Solana owner required'), { status: 400 });
-  const [snapshot, prices, walletUsdc, marketHints] = await Promise.all([
-    request(`/v2/owner/${owner}`),
+  const [snapshot, prices, walletUsdc, marketHints, depositStats] = await Promise.all([
+    request(`/v2/owner/${owner}`).catch(e => {
+      console.warn('[flash] beta owner snapshot unavailable:', e?.message || e);
+      return null;
+    }),
     getPrices().catch(() => []),
     getWalletUsdcBalance(owner).catch(() => null),
     getFlashMarketHints(owner).catch(() => new Map()),
+    getFlashV2DepositStats(owner).catch(e => {
+      console.warn('[flash] Flash app deposit stats unavailable:', e?.message || e);
+      return null;
+    }),
   ]);
   const priceMap = new Map((Array.isArray(prices) ? prices : []).map(row => [row.symbol, row]));
   const positionMetrics = snapshot?.positionMetrics || {};
@@ -1578,15 +2160,31 @@ async function getOwnerSnapshot(owner) {
   ));
   const collateralUsd = activePositions.reduce((sum, p) => sum + numberFromUi(p.collateralUsdUi), 0);
   const pnlUsd = activePositions.reduce((sum, p) => sum + numberFromUi(p.pnl_usd), 0);
-  // Trading transactions are built against the current Flash v2 program and
-  // the basket returned by /v2/owner. Do not use a legacy ER basket for free
-  // balance: it can contain stale debits/credits from the old FLASH6 program,
-  // which makes the UI show spendable collateral that FTv2 will reject.
-  const fundingBasket = erBasket?.program_id === FLASH_V2_PROGRAM_ID ? erBasket : null;
+  // Flash production trading now targets the FLASH6 main program.  The /v2
+  // owner endpoint is beta-only, so free collateral must come from the FLASH6
+  // deposit ledger and basket debits/pending credits read on-chain.
+  const fundingBasket = erBasket?.program_id === FLASH_MAIN_PROGRAM_ID
+    ? erBasket
+    : await getFlashErBasketForProgram(owner, FLASH_MAIN_PROGRAM_ID).catch(e => {
+      console.warn('[flash] main ER basket unavailable:', e?.message || e);
+      return null;
+    });
   const fundingState = await getFlashFundingState(owner, snapshot, fundingBasket).catch(e => {
-    console.warn('[flash] official funding state unavailable:', e?.message || e);
+    console.warn('[flash] main funding state unavailable:', e?.message || e);
     return null;
   });
+  const betaBasket = erBasket?.program_id === FLASH_BETA_PROGRAM_ID
+    ? erBasket
+    : await getFlashErBasketForProgram(owner, FLASH_BETA_PROGRAM_ID).catch(e => {
+      console.warn('[flash] beta ER basket unavailable:', e?.message || e);
+      return null;
+    });
+  const betaFundingState = betaBasket
+    ? await getFlashFundingState(owner, snapshot, betaBasket).catch(e => {
+      console.warn('[flash] beta funding state unavailable:', e?.message || e);
+      return null;
+    })
+    : null;
   const explicitFreeMargin = numberFromUi(
     snapshot?.availableToSpend
     ?? snapshot?.available_to_spend
@@ -1594,9 +2192,12 @@ async function getOwnerSnapshot(owner) {
     ?? snapshot?.available_to_withdraw
     ?? snapshot?.withdrawable
   );
+  const depositStatsUsdc = Number.isFinite(Number(depositStats?.liquid_balance_usd))
+    ? Math.max(0, Number(depositStats.liquid_balance_usd))
+    : null;
   const basketUsdc = fundingState
     ? fundingState.available_usdc
-    : Math.max(0, explicitFreeMargin);
+    : Math.max(0, explicitFreeMargin || depositStatsUsdc || 0);
   const freeMarginUsdc = Math.max(0, basketUsdc);
   const accountEquity = Math.max(0, basketUsdc + collateralUsd + pnlUsd);
   return {
@@ -1611,12 +2212,29 @@ async function getOwnerSnapshot(owner) {
     flash_usdc_balance: basketUsdc,
     flash_in_basket_usdc: basketUsdc,
     account_balance_usdc: basketUsdc,
-    flash_balance_source: fundingState?.source || (explicitFreeMargin > 0 ? 'flash_v2_owner_field' : 'unavailable'),
+    flash_balance_source: fundingState?.source || (explicitFreeMargin > 0 ? 'flash_beta_owner_field' : (depositStatsUsdc != null ? 'flash_app_beta_deposit_stats' : 'unavailable')),
     flash_deposit_ledger_usdc: fundingState?.deposit_ledger_usdc ?? null,
     flash_basket_debits_usdc: fundingState?.basket_debits_usdc ?? null,
     flash_basket_pending_credits_usdc: fundingState?.basket_pending_credits_usdc ?? null,
-    flash_basket_pubkey: fundingState?.basket_pubkey || erBasket?.pubkey || snapshot?.basketPubkey || null,
-    flash_program_id: fundingState?.program_id || erBasket?.program_id || null,
+    flash_beta_available_usdc: betaFundingState?.available_usdc ?? null,
+    flash_beta_deposit_ledger_usdc: betaFundingState?.deposit_ledger_usdc ?? null,
+    flash_beta_basket_debits_usdc: betaFundingState?.basket_debits_usdc ?? null,
+    flash_beta_basket_pending_credits_usdc: betaFundingState?.basket_pending_credits_usdc ?? null,
+    flash_beta_basket_pubkey: betaFundingState?.basket_pubkey || betaBasket?.pubkey || null,
+    flash_beta_program_id: betaFundingState?.program_id || betaBasket?.program_id || FLASH_BETA_PROGRAM_ID,
+    flash_beta_deposit_ledger_pubkey: betaFundingState?.deposit_ledger_pubkey || null,
+    flash_beta_deposit_ledger_source: betaFundingState?.ledger_source || null,
+    flash_beta_deposit_ledger_rpc_url: betaFundingState?.ledger_rpc_url || null,
+    flash_beta_available_raw: betaFundingState?.available_raw || null,
+    flash_app_liquid_balance_usd: depositStats?.liquid_balance_usd ?? null,
+    flash_app_deposits_usd: depositStats?.deposits_usd ?? null,
+    flash_app_withdrawals_usd: depositStats?.withdrawals_usd ?? null,
+    flash_app_net_usd: depositStats?.net_usd ?? null,
+    flash_app_deposit_count: depositStats?.deposit_count ?? null,
+    flash_app_open_position_count: depositStats?.open_position_count ?? null,
+    flash_app_open_position_collateral_usd: depositStats?.open_position_collateral_usd ?? null,
+    flash_basket_pubkey: fundingState?.basket_pubkey || fundingBasket?.pubkey || erBasket?.pubkey || snapshot?.basketPubkey || null,
+    flash_program_id: fundingState?.program_id || fundingBasket?.program_id || erBasket?.program_id || null,
     flash_er_basket_source: erBasket?.source || null,
     flash_er_basket_rpc_url: erBasket?.rpc_url || null,
     flash_deposit_ledger_pubkey: fundingState?.deposit_ledger_pubkey || null,
@@ -1634,8 +2252,196 @@ async function getOwnerSnapshot(owner) {
     positions_count: activePositions.length,
     dust_positions_count: positions.length - activePositions.length,
     orders_count: orders.length,
-    source: erPositions.length ? 'flash_er_basket_with_v2_owner' : 'flash_v2_owner',
+    source: erPositions.length ? 'flash_main_basket_with_beta_owner_fallback' : 'flash_main_account',
   };
+}
+
+function getFlashLegacyBuilderInstruction(result, allowedDiscriminators = []) {
+  const raw = result?.transactionBase64 || result?.transaction || '';
+  if (!raw) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+  let tx;
+  try {
+    tx = VersionedTransaction.deserialize(Buffer.from(raw, 'base64'));
+  } catch (e) {
+    throw Object.assign(new Error(`Flash builder returned invalid transaction: ${e.message}`), { status: 502, data: result });
+  }
+  const staticKeys = tx.message.staticAccountKeys || [];
+  for (const ix of tx.message.compiledInstructions || []) {
+    const programKey = staticKeys[ix.programIdIndex];
+    if (!programKey || programKey.toBase58() !== FLASH_MAIN_PROGRAM_ID) continue;
+    const data = Buffer.from(ix.data || []);
+    const discriminator = flashInstructionDiscriminator(data);
+    if (!allowedDiscriminators.length || allowedDiscriminators.includes(discriminator)) {
+      return { data, discriminator };
+    }
+  }
+  throw Object.assign(new Error('Flash builder returned no recognizable Flash instruction'), { status: 502, data: result });
+}
+
+function flashErBaseAccounts(signerContext) {
+  const [basket] = findBasketAddress(signerContext.ownerPk, FLASH_MAIN_PROGRAM_PK);
+  return {
+    owner: signerContext.ownerPk,
+    signer: signerContext.signerPk,
+    sessionToken: signerContext.sessionTokenPk,
+    perpetuals: flashPda('perpetuals'),
+    basket,
+    eventAuthority: flashPda('__event_authority'),
+    program: FLASH_MAIN_PROGRAM_PK,
+  };
+}
+
+function flashErOpenInstruction(signerContext, context, params) {
+  const base = flashErBaseAccounts(signerContext);
+  const [userDepositLedger] = findUserDepositLedgerAddress(signerContext.ownerPk, FLASH_MAIN_PROGRAM_PK);
+  const reallocVault = flashPda('realloc_vault');
+  const keys = [
+    flashMeta(base.owner),
+    flashMeta(base.signer, true),
+    flashMeta(base.sessionToken),
+    flashMeta(base.perpetuals),
+    flashMeta(base.basket, false, true),
+    flashMeta(userDepositLedger),
+    flashMeta(flashPublicKey(context.pool, 'Flash pool'), false, true),
+    flashMeta(flashPublicKey(context.market.pubkey, 'Flash market'), false, true),
+    flashMeta(flashPublicKey(context.target.pubkey, 'Flash target custody')),
+    flashMeta(flashPublicKey(context.lock.pubkey, 'Flash lock custody'), false, true),
+    flashMeta(flashPublicKey(context.receiving.pubkey, 'Flash receiving custody'), false, true),
+    flashMeta(flashPublicKey(context.target.oracle, 'Flash target oracle')),
+    flashMeta(flashPublicKey(context.lock.oracle, 'Flash lock oracle')),
+    flashMeta(flashPublicKey(context.receiving.oracle, 'Flash receiving oracle')),
+    flashMeta(reallocVault, false, true),
+    flashMeta(base.eventAuthority),
+    flashMeta(base.program),
+    flashMeta(SYSVAR_INSTRUCTIONS_PUBKEY),
+  ];
+  return new TransactionInstruction({
+    programId: FLASH_MAIN_PROGRAM_PK,
+    keys,
+    data: encodeFlashOpenErParams(params),
+  });
+}
+
+function flashErCloseInstruction(signerContext, context, params) {
+  const base = flashErBaseAccounts(signerContext);
+  const reallocVault = flashPda('realloc_vault');
+  const keys = [
+    flashMeta(base.owner),
+    flashMeta(base.signer, true),
+    flashMeta(base.sessionToken),
+    flashMeta(base.perpetuals),
+    flashMeta(base.basket, false, true),
+    flashMeta(flashPublicKey(context.pool, 'Flash pool'), false, true),
+    flashMeta(flashPublicKey(context.market.pubkey, 'Flash market'), false, true),
+    flashMeta(flashPublicKey(context.target.pubkey, 'Flash target custody')),
+    flashMeta(flashPublicKey(context.lock.pubkey, 'Flash lock custody'), false, true),
+    flashMeta(flashPublicKey(context.receiving.pubkey, 'Flash dispensing custody'), false, true),
+    flashMeta(flashPublicKey(context.target.oracle, 'Flash target oracle')),
+    flashMeta(flashPublicKey(context.lock.oracle, 'Flash lock oracle')),
+    flashMeta(flashPublicKey(context.receiving.oracle, 'Flash dispensing oracle')),
+    flashMeta(reallocVault, false, true),
+    flashMeta(base.eventAuthority),
+    flashMeta(base.program),
+    flashMeta(SYSVAR_INSTRUCTIONS_PUBKEY),
+  ];
+  return new TransactionInstruction({
+    programId: FLASH_MAIN_PROGRAM_PK,
+    keys,
+    data: encodeFlashPricePrivilegeParams(FLASH_ER_DISCRIMINATORS.closePosition, params),
+  });
+}
+
+function flashErPlaceTriggerInstruction(signerContext, context, params) {
+  const base = flashErBaseAccounts(signerContext);
+  const reallocVault = flashPda('realloc_vault');
+  const keys = [
+    flashMeta(base.owner),
+    flashMeta(base.signer, true),
+    flashMeta(base.sessionToken),
+    flashMeta(base.perpetuals),
+    flashMeta(base.basket, false, true),
+    flashMeta(flashPublicKey(context.pool, 'Flash pool')),
+    flashMeta(flashPublicKey(context.market.pubkey, 'Flash market')),
+    flashMeta(flashPublicKey(context.target.pubkey, 'Flash target custody')),
+    flashMeta(flashPublicKey(context.lock.pubkey, 'Flash lock custody')),
+    flashMeta(flashPublicKey(context.receiving.pubkey, 'Flash receive custody')),
+    flashMeta(flashPublicKey(context.target.oracle, 'Flash target oracle')),
+    flashMeta(flashPublicKey(context.lock.oracle, 'Flash lock oracle')),
+    flashMeta(reallocVault, false, true),
+    flashMeta(base.eventAuthority),
+    flashMeta(base.program),
+    flashMeta(SYSVAR_INSTRUCTIONS_PUBKEY),
+  ];
+  return new TransactionInstruction({
+    programId: FLASH_MAIN_PROGRAM_PK,
+    keys,
+    data: encodeFlashTriggerErParams(params),
+  });
+}
+
+function flashErPlaceLimitInstruction(signerContext, context, params) {
+  const base = flashErBaseAccounts(signerContext);
+  const [userDepositLedger] = findUserDepositLedgerAddress(signerContext.ownerPk, FLASH_MAIN_PROGRAM_PK);
+  const reallocVault = flashPda('realloc_vault');
+  const reserve = context.reserve || context.receiving;
+  const receive = context.receive || context.lock;
+  const keys = [
+    flashMeta(base.owner),
+    flashMeta(base.signer, true),
+    flashMeta(base.sessionToken),
+    flashMeta(base.perpetuals),
+    flashMeta(base.basket, false, true),
+    flashMeta(userDepositLedger),
+    flashMeta(flashPublicKey(context.pool, 'Flash pool')),
+    flashMeta(flashPublicKey(context.market.pubkey, 'Flash market')),
+    flashMeta(flashPublicKey(context.target.pubkey, 'Flash target custody')),
+    flashMeta(flashPublicKey(context.lock.pubkey, 'Flash lock custody')),
+    flashMeta(flashPublicKey(reserve.pubkey, 'Flash reserve custody'), false, true),
+    flashMeta(flashPublicKey(receive.pubkey, 'Flash receive custody')),
+    flashMeta(flashPublicKey(context.target.oracle, 'Flash target oracle')),
+    flashMeta(flashPublicKey(reserve.oracle, 'Flash reserve oracle')),
+    flashMeta(reallocVault, false, true),
+    flashMeta(base.eventAuthority),
+    flashMeta(base.program),
+    flashMeta(SYSVAR_INSTRUCTIONS_PUBKEY),
+  ];
+  return new TransactionInstruction({
+    programId: FLASH_MAIN_PROGRAM_PK,
+    keys,
+    data: encodeFlashLimitErParams(params),
+  });
+}
+
+function flashErCancelOrderInstruction(signerContext, context, params) {
+  const base = flashErBaseAccounts(signerContext);
+  const isTriggerOrder = params.isTriggerOrder === true;
+  const keys = isTriggerOrder
+    ? [
+      flashMeta(base.owner),
+      flashMeta(base.signer, true),
+      flashMeta(base.sessionToken),
+      flashMeta(base.perpetuals),
+      flashMeta(base.basket, false, true),
+      flashMeta(base.eventAuthority),
+      flashMeta(base.program),
+    ]
+    : [
+      flashMeta(base.owner),
+      flashMeta(base.signer, true),
+      flashMeta(base.sessionToken),
+      flashMeta(base.perpetuals),
+      flashMeta(base.basket, false, true),
+      flashMeta(flashPublicKey(context.pool, 'Flash pool')),
+      flashMeta(flashPublicKey(context.target.pubkey, 'Flash target custody')),
+      flashMeta(flashPublicKey(context.lock.pubkey, 'Flash lock custody')),
+      flashMeta(flashPublicKey(context.receiving.pubkey, 'Flash reserve custody'), false, true),
+      flashMeta(base.eventAuthority),
+      flashMeta(base.program),
+    ];
+  const data = isTriggerOrder
+    ? encodeFlashCancelTriggerErParams(params)
+    : encodeFlashCancelLimitErParams(params);
+  return new TransactionInstruction({ programId: FLASH_MAIN_PROGRAM_PK, keys, data });
 }
 
 async function buildOpenPositionTx(body, owner) {
@@ -1664,14 +2470,45 @@ async function buildOpenPositionTx(body, owner) {
   if (body.userReferralAccount) payload.userReferralAccount = String(body.userReferralAccount);
   if (body.privilege) payload.privilege = String(body.privilege).toUpperCase();
   applyTradingSessionPayload(payload, body);
-  const result = await request('/v2/transaction-builder/open-position', { method: 'POST', body: payload });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash v2 builder returned no transactionBase64'), { status: 502, data: result });
+  const result = await request('/transaction-builder/open-position', { method: 'POST', body: payload });
+  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+  const legacyIx = getFlashLegacyBuilderInstruction(result, [
+    FLASH_LEGACY_DISCRIMINATORS.openPosition,
+    FLASH_LEGACY_DISCRIMINATORS.swapAndOpen,
+    FLASH_LEGACY_DISCRIMINATORS.placeLimitOrder,
+  ]);
+  const signerContext = flashSignerContext(owner, body);
+  const context = await getFlashMainMarketContext({
+    symbol: payload.outputTokenSymbol,
+    side: payload.tradeType,
+    receivingSymbol: payload.inputTokenSymbol,
+    marketPubkey: body.marketPubkey || body.market_pubkey,
+  });
+  let transaction;
+  let erInstructionName;
+  if (legacyIx.discriminator === FLASH_LEGACY_DISCRIMINATORS.placeLimitOrder) {
+    const params = parseLegacyLimitParams(legacyIx.data);
+    const limitContext = { ...context, reserve: context.receiving, receive: context.lock };
+    transaction = await buildFlashErVersionedTransaction([
+      flashErPlaceLimitInstruction(signerContext, limitContext, params),
+    ], signerContext.signerPk);
+    erInstructionName = 'place_limit_order_er';
+  } else {
+    const params = parseLegacyOpenParams(legacyIx.data);
+    transaction = await buildFlashErVersionedTransaction([
+      flashErOpenInstruction(signerContext, context, params),
+    ], signerContext.signerPk);
+    erInstructionName = 'open_position_er';
+  }
   return {
     ...result,
-    transaction: result.transactionBase64,
-    transactions: [result.transactionBase64],
+    transaction,
+    transactions: [transaction],
     request: payload,
-    builder: 'flash_trade_v2',
+    builder: 'flash_trade_main_er',
+    legacy_builder: 'flash_trade_main',
+    legacy_instruction: legacyIx.discriminator,
+    er_instruction: erInstructionName,
     txKind: 'trading',
     api: FLASH_API,
   };
@@ -1681,7 +2518,10 @@ async function buildClosePositionTx(body, owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
   const marketSymbol = normalizeToken(body.marketSymbol || body.market_symbol || body.symbol || body.outputTokenSymbol || body.output_token_symbol || 'SOL');
   const side = normalizeSide(body.side || body.tradeType || body.trade_type);
+  const marketPubkey = String(body.marketPubkey || body.market_pubkey || '').trim();
+  const positionKey = String(body.positionKey || body.position_key || (marketPubkey ? `mb-${marketPubkey}` : '')).trim();
   const payload = {
+    positionKey,
     marketSymbol,
     side,
     inputUsdUi: String(body.inputUsdUi || body.input_usd_ui || body.amount || body.notional_usd || '').trim(),
@@ -1689,13 +2529,46 @@ async function buildClosePositionTx(body, owner) {
     owner,
     slippagePercentage: String(body.slippagePercentage || body.slippage_percentage || body.slippage || '0.5'),
   };
-  if (!payload.marketSymbol || !payload.side || !payload.inputUsdUi) {
-    throw Object.assign(new Error('marketSymbol, side and inputUsdUi are required'), { status: 400 });
+  if (body.inputSizeAmountUi || body.input_size_amount_ui || body.sizeAmountUi || body.size_amount_ui) {
+    payload.inputSizeAmountUi = String(body.inputSizeAmountUi || body.input_size_amount_ui || body.sizeAmountUi || body.size_amount_ui);
   }
+  if (body.entryPriceUi || body.entry_price_ui) payload.entryPriceUi = String(body.entryPriceUi || body.entry_price_ui);
+  if (body.sizeUsdUi || body.size_usd_ui) payload.sizeUsdUi = String(body.sizeUsdUi || body.size_usd_ui);
+  if (!payload.positionKey || !payload.marketSymbol || !payload.side || !payload.inputUsdUi) {
+    throw Object.assign(new Error('positionKey, marketSymbol, side and inputUsdUi are required'), { status: 400 });
+  }
+  await assertFlashMainPosition(owner, marketSymbol, side, body, 'close');
   applyTradingSessionPayload(payload, body);
-  const result = await request('/v2/transaction-builder/close-position', { method: 'POST', body: payload });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash v2 builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_v2', txKind: 'trading', api: FLASH_API };
+  const result = await request('/transaction-builder/close-position', { method: 'POST', body: payload });
+  if (result?.err) throw Object.assign(new Error(String(result.err)), { status: 400, data: result });
+  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+  const legacyIx = getFlashLegacyBuilderInstruction(result, [
+    FLASH_LEGACY_DISCRIMINATORS.closePosition,
+    FLASH_LEGACY_DISCRIMINATORS.closeAndSwap,
+  ]);
+  const params = parseLegacyPricePrivilegeParams(legacyIx.data, 'Flash close builder');
+  const signerContext = flashSignerContext(owner, body);
+  const context = await getFlashMainMarketContext({
+    symbol: marketSymbol,
+    side,
+    receivingSymbol: payload.withdrawTokenSymbol,
+    marketPubkey,
+  });
+  const transaction = await buildFlashErVersionedTransaction([
+    flashErCloseInstruction(signerContext, context, params),
+  ], signerContext.signerPk);
+  return {
+    ...result,
+    transaction,
+    transactions: [transaction],
+    request: payload,
+    builder: 'flash_trade_main_er',
+    legacy_builder: 'flash_trade_main',
+    legacy_instruction: legacyIx.discriminator,
+    er_instruction: 'close_position_er',
+    txKind: 'trading',
+    api: FLASH_API,
+  };
 }
 
 async function buildPlaceTpSlTx(body, owner) {
@@ -1714,35 +2587,138 @@ async function buildPlaceTpSlTx(body, owner) {
   if (!(Number(sizeAmountUi) > 0)) {
     throw Object.assign(new Error('sizeAmountUi must be positive'), { status: 400 });
   }
-  const payload = { marketSymbol, side, sizeAmountUi, owner };
-  if (takeProfitUi) payload.takeProfitUi = takeProfitUi;
-  if (stopLossUi) payload.stopLossUi = stopLossUi;
+  const marketPubkey = String(body.marketPubkey || body.market_pubkey || '').trim();
+  const positionKey = String(body.positionKey || body.position_key || (marketPubkey ? `mb-${marketPubkey}` : '')).trim();
+  if (!positionKey) {
+    throw Object.assign(new Error('positionKey is required for Flash TP/SL'), { status: 400 });
+  }
+  await assertFlashMainPosition(owner, marketSymbol, side, body, 'set TP/SL on');
+  const basePayload = {
+    positionKey,
+    marketSymbol,
+    side,
+    sizeAmountUi,
+    receiveTokenSymbol: normalizeToken(body.receiveTokenSymbol || body.receive_token_symbol || body.withdrawTokenSymbol || 'USDC', 'USDC'),
+    owner,
+  };
+  applyTradingSessionPayload(basePayload, body);
+  const requests = [];
+  if (takeProfitUi) requests.push({ ...basePayload, triggerPriceUi: takeProfitUi, isStopLoss: false });
+  if (stopLossUi) requests.push({ ...basePayload, triggerPriceUi: stopLossUi, isStopLoss: true });
+  const results = [];
+  for (const payload of requests) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await request('/transaction-builder/place-trigger-order', { method: 'POST', body: payload });
+    if (result?.err) throw Object.assign(new Error(String(result.err)), { status: 400, data: result });
+    if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+    results.push({ result, payload });
+  }
+  const signerContext = flashSignerContext(owner, body);
+  const context = await getFlashMainMarketContext({
+    symbol: marketSymbol,
+    side,
+    receivingSymbol: basePayload.receiveTokenSymbol,
+    marketPubkey,
+  });
+  const transactions = [];
+  for (const row of results) {
+    const legacyIx = getFlashLegacyBuilderInstruction(row.result, [
+      FLASH_LEGACY_DISCRIMINATORS.placeTriggerOrder,
+    ]);
+    const params = parseLegacyTriggerParams(legacyIx.data);
+    // eslint-disable-next-line no-await-in-loop
+    const transaction = await buildFlashErVersionedTransaction([
+      flashErPlaceTriggerInstruction(signerContext, context, params),
+    ], signerContext.signerPk);
+    transactions.push(transaction);
+    row.legacyInstruction = legacyIx.discriminator;
+  }
+  const first = results[0]?.result || {};
+  return {
+    ...first,
+    transaction: transactions[0],
+    transactions,
+    request: requests[0],
+    requests: results.map(row => row.payload),
+    builder: 'flash_trade_main_er',
+    legacy_builder: 'flash_trade_main',
+    legacy_instruction: results.map(row => row.legacyInstruction),
+    er_instruction: 'place_trigger_order_er',
+    txKind: 'trading',
+    api: FLASH_API,
+  };
+}
+
+async function buildCancelOrderTx(body, owner) {
+  if (!isSolanaAddress(owner)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
+  const marketSymbol = normalizeToken(body.marketSymbol || body.market_symbol || body.symbol || body.outputTokenSymbol || body.output_token_symbol || 'SOL');
+  const side = normalizeSide(body.side || body.tradeType || body.trade_type);
+  const orderIdRaw = body.orderId ?? body.order_id ?? body.id;
+  const orderId = Number(orderIdRaw);
+  if (!Number.isInteger(orderId) || orderId < 0 || orderId > 255) {
+    throw Object.assign(new Error('orderId must be a Flash u8 order id'), { status: 400 });
+  }
+  const rawType = String(body.orderType || body.order_type || body.type || '').trim().toUpperCase();
+  const isTriggerOrder = rawType === 'TRIGGER' || rawType === 'TP' || rawType === 'SL' || body.isStopLoss != null || body.is_stop_loss != null;
+  const payload = {
+    marketSymbol,
+    side,
+    orderId,
+    owner,
+  };
+  if (isTriggerOrder) {
+    payload.isStopLoss = body.isStopLoss != null
+      ? body.isStopLoss === true || body.isStopLoss === 'true'
+      : body.is_stop_loss === true || body.is_stop_loss === 'true' || rawType === 'SL';
+  }
   applyTradingSessionPayload(payload, body);
-  const result = await request('/v2/transaction-builder/place-tp-sl', { method: 'POST', body: payload });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash v2 builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_v2', txKind: 'trading', api: FLASH_API };
+  const signerContext = flashSignerContext(owner, body);
+  const context = await getFlashMainMarketContext({
+    symbol: marketSymbol,
+    side,
+    receivingSymbol: normalizeToken(body.reserveTokenSymbol || body.reserve_token_symbol || body.inputTokenSymbol || 'USDC', 'USDC'),
+    marketPubkey: String(body.marketPubkey || body.market_pubkey || '').trim(),
+  });
+  const market = String(body.marketPubkey || body.market_pubkey || context.market.pubkey || '').trim();
+  const transaction = await buildFlashErVersionedTransaction([
+    flashErCancelOrderInstruction(signerContext, context, {
+      market,
+      orderId,
+      isStopLoss: payload.isStopLoss === true,
+      isTriggerOrder,
+    }),
+  ], signerContext.signerPk);
+  return {
+    transaction,
+    transactions: [transaction],
+    request: payload,
+    builder: 'flash_trade_main_er',
+    er_instruction: isTriggerOrder ? 'cancel_trigger_order_er' : 'cancel_limit_order_er',
+    txKind: 'trading',
+    api: FLASH_API,
+  };
 }
 
 async function buildInitDepositLedgerTx(owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
-  const result = await request('/v2/transaction-builder/init-deposit-ledger', { method: 'POST', body: { owner } });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash v2 builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: { owner }, builder: 'flash_trade_v2', txKind: 'account', api: FLASH_API };
+  const result = await requestFirst(flashAccountBuilderPaths('init-deposit-ledger'), { method: 'POST', body: { owner } });
+  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: { owner }, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
 }
 
 async function buildInitBasketTx(owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
-  const result = await request('/v2/transaction-builder/init-basket', { method: 'POST', body: { owner } });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash v2 builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: { owner }, builder: 'flash_trade_v2', txKind: 'account', api: FLASH_API };
+  const result = await requestFirst(flashAccountBuilderPaths('init-basket'), { method: 'POST', body: { owner } });
+  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: { owner }, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
 }
 
 async function buildDelegateBasketTx(owner, payer = owner) {
   if (!isSolanaAddress(owner) || !isSolanaAddress(payer)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
   const payload = { payer, owner };
-  const result = await request('/v2/transaction-builder/delegate-basket', { method: 'POST', body: payload });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash v2 builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_v2', txKind: 'account', api: FLASH_API };
+  const result = await requestFirst(flashAccountBuilderPaths('delegate-basket'), { method: 'POST', body: payload });
+  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
 }
 
 async function buildDepositDirectTx(body, owner) {
@@ -1754,9 +2730,9 @@ async function buildDepositDirectTx(body, owner) {
     tokenMint: String(body.tokenMint || body.token_mint || FLASH_USDC_MINT),
     amount,
   };
-  const result = await request('/v2/transaction-builder/deposit-direct', { method: 'POST', body: payload });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash v2 builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_v2', txKind: 'account', api: FLASH_API };
+  const result = await requestFirst(flashAccountBuilderPaths('deposit-direct'), { method: 'POST', body: payload });
+  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
 }
 
 async function buildRequestWithdrawalTx(body, owner) {
@@ -1769,9 +2745,9 @@ async function buildRequestWithdrawalTx(body, owner) {
     amount,
     includeCustodySettlement: body.includeCustodySettlement !== false && body.include_custody_settlement !== false,
   };
-  const result = await request('/v2/transaction-builder/request-withdrawal', { method: 'POST', body: payload });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash v2 builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_v2', txKind: 'account', api: FLASH_API };
+  const result = await requestFirst(flashAccountBuilderPaths('request-withdrawal'), { method: 'POST', body: payload });
+  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
 }
 
 async function buildExecuteWithdrawalTx(body, owner) {
@@ -1781,9 +2757,9 @@ async function buildExecuteWithdrawalTx(body, owner) {
     tokenMint: String(body.tokenMint || body.token_mint || FLASH_USDC_MINT),
     includeCustodySettlement: body.includeCustodySettlement !== false && body.include_custody_settlement !== false,
   };
-  const result = await request('/v2/transaction-builder/execute-withdrawal', { method: 'POST', body: payload });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash v2 builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_v2', txKind: 'account', api: FLASH_API };
+  const result = await requestFirst(flashAccountBuilderPaths('execute-withdrawal'), { method: 'POST', body: payload });
+  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
+  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
 }
 
 function txAccountKeyText(key) {
@@ -1907,7 +2883,7 @@ async function recordTradeReport(db, playerId, body, owner) {
       programs: Array.from(programs),
       blockTime: parsed.blockTime || null,
       slot: parsed.slot || null,
-      source: 'flash_v2_transaction_builder',
+      source: 'flash_transaction_builder',
     }),
   });
   return {
@@ -1929,10 +2905,11 @@ function configStatus() {
     usdc_mint: FLASH_USDC_MINT,
     program_ids: FLASH_PROGRAM_IDS,
     rewards_verification_ready: FLASH_PROGRAM_IDS.length > 0,
-    transaction_builder_v2: true,
+    transaction_builder_main: true,
+    transaction_builder_v2_account_setup_fallback: true,
     native_order_builder: true,
     v2_client_sdk: 'magic-trade-client@0.2.0',
-    v2_funding_balance: 'max(FTv2 UserDepositLedger.deposits - FTv2 Basket.debits + FTv2 Basket.pendingCredits, 0); values must come from the current /v2/owner basket, not legacy FLASH6 state',
+    flash_main_funding_balance: 'max(FLASH6 UserDepositLedger.deposits - FLASH6 Basket.debits + FLASH6 Basket.pendingCredits, 0); /v2/owner is beta-only fallback and must not drive spendable balance',
   };
 }
 
@@ -1954,6 +2931,7 @@ module.exports = {
   buildOpenPositionTx,
   buildClosePositionTx,
   buildPlaceTpSlTx,
+  buildCancelOrderTx,
   buildInitDepositLedgerTx,
   buildInitBasketTx,
   buildDelegateBasketTx,

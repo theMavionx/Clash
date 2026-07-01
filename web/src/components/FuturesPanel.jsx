@@ -46,6 +46,7 @@ import { GOLD_REWARD_PANEL_TOAST_STYLE } from './goldRewardToastStyles';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { setClientActivity } from '../lib/updateCoordinator';
 import { reportClientEvent } from '../lib/clientLogger';
+import { ostiumMaxTakeProfitPrice, validateOstiumTakeProfitLimit } from '../lib/ostiumTpLimits';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
@@ -75,6 +76,25 @@ const HOTSTUFF_DEFAULT_TAKER_FEE_RATE = 0.00045;
 const OSTIUM_MIN_MARGIN_USD = 5;
 
 const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
+const DEX_ERROR_LABELS = {
+  avantis: 'Avantis',
+  decibel: 'Decibel',
+  flash: 'Flash',
+  gmtrade: 'GMTrade',
+  gmx: 'GMX',
+  grvt: 'GRVT',
+  hibachi: 'Hibachi',
+  hotstuff: 'Hotstuff',
+  hyperliquid: 'Hyperliquid',
+  katana: 'Katana',
+  lighter: 'Lighter',
+  monad: 'Perpl',
+  nado: 'Nado',
+  ostium: 'Ostium',
+  pacifica: 'Pacifica',
+  phoenix: 'Phoenix',
+  risex: 'RISEx',
+};
 
 function finiteNumber(value) {
   const n = Number(value);
@@ -424,7 +444,17 @@ function hotstuffUsableMargin({ balance, leverage, orderType, takerFeeRate }) {
   return hotstuffMarginReserveDetails({ balance, leverage, orderType, takerFeeRate }).usable_margin;
 }
 
-function humanizeTradeError(message) {
+function dexErrorLabel(dex, text = '') {
+  const key = String(dex || '').trim().toLowerCase();
+  if (DEX_ERROR_LABELS[key]) return DEX_ERROR_LABELS[key];
+  const lower = String(text || '').toLowerCase();
+  for (const [dexKey, label] of Object.entries(DEX_ERROR_LABELS)) {
+    if (lower.includes(dexKey) || lower.includes(label.toLowerCase())) return label;
+  }
+  return 'The exchange';
+}
+
+function humanizeTradeError(message, dex = null) {
   const text = String(message || '');
   if (/HIBACHI_IP_BLOCKED|Hibachi is not available from your IP address|cloudflare|access denied/i.test(text)) {
     return 'Hibachi is not available from your IP address. Use a supported network or IP region, then try again.';
@@ -455,7 +485,7 @@ function humanizeTradeError(message) {
     return 'That Phoenix access code is invalid, already used, or expired. Check the code and try again.';
   }
   if (/Too Many Requests|rate[_\s-]?limit|\b429\b/i.test(text)) {
-    return 'Phoenix is rate-limiting requests. Wait a few seconds, then try again.';
+    return `${dexErrorLabel(dex, text)} is rate-limiting requests. Wait a few seconds, then try again.`;
   }
   if (/Trader not found|Phoenix access code required|not whitelisted|invite_required|invite required|needs an invite/i.test(text)) {
     return 'Enter your Phoenix access code, then create the trader account.';
@@ -887,6 +917,53 @@ function formatTpslInputValue(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return '';
   return n >= 1 ? String(Number(n.toFixed(2))) : String(Number(n.toFixed(8)));
+}
+
+function ostiumTpInputMax(dex, pos) {
+  if (dex !== 'ostium') return undefined;
+  const maxPrice = ostiumMaxTakeProfitPrice(pos);
+  if (!Number.isFinite(maxPrice) || maxPrice <= 0) return undefined;
+  return String(Number(maxPrice.toFixed(maxPrice >= 1 ? 2 : 8)));
+}
+
+function tpslReferencePrice(pos) {
+  return firstFinite(
+    pos?.mark_price,
+    pos?.markPrice,
+    pos?.current_price,
+    pos?.currentPrice,
+    pos?.price,
+    pos?.entry_price,
+  );
+}
+
+function validateTpslBeforeSubmit({ dex, pos, tpPrice, slPrice, setLocalAlert }) {
+  const reference = tpslReferencePrice(pos);
+  const tp = Number(tpPrice);
+  const sl = Number(slPrice);
+  const isLong = String(pos?.side || '').toLowerCase() !== 'ask';
+  const sideLabel = isLong ? 'LONG' : 'SHORT';
+  if (Number.isFinite(reference) && reference > 0) {
+    if (Number.isFinite(tp) && tp > 0) {
+      const badTp = isLong ? tp <= reference : tp >= reference;
+      if (badTp) {
+        setLocalAlert(`TP for ${sideLabel} must be ${isLong ? 'above' : 'below'} current price ($${fmtPrice(reference)}).`);
+        return false;
+      }
+    }
+    if (Number.isFinite(sl) && sl > 0) {
+      const badSl = isLong ? sl >= reference : sl <= reference;
+      if (badSl) {
+        setLocalAlert(`SL for ${sideLabel} must be ${isLong ? 'below' : 'above'} current price ($${fmtPrice(reference)}).`);
+        return false;
+      }
+    }
+  }
+  if (dex !== 'ostium') return true;
+  const check = validateOstiumTakeProfitLimit(pos, tpPrice);
+  if (check.ok) return true;
+  setLocalAlert(check.error);
+  return false;
 }
 
 function PositionTpslRow({ pos, orders }) {
@@ -1817,6 +1894,7 @@ const PositionsList = memo(function PositionsList({
         const posKey = `${pos.symbol}-${pos.side}`;
         const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
         const tpslBusy = tpslSubmittingPos === posKey;
+        const ostiumTpMax = ostiumTpInputMax(dex, pos);
 
         return (
           <div key={positionStableKey(pos) || i} style={S.posCard}>
@@ -1892,9 +1970,10 @@ const PositionsList = memo(function PositionsList({
                 the DOM in Basic mode (and never get accidentally fired). */}
             {!isDust && !isBasic && expanded === 'tpsl' && (
               <div style={{...S.expandPanel, ...S.row}}>
-                <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
+                <input type="number" placeholder="TP Price" value={tpPrice} max={ostiumTpMax} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <button style={S.btnBlue} onClick={async () => {
+                  if (!validateTpslBeforeSubmit({ dex, pos, tpPrice, slPrice, setLocalAlert })) return;
                   setTpslSubmittingPos(posKey);
                   try {
                     const r = await setTpsl(pos.symbol, positionCloseSide(pos), tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
@@ -1920,7 +1999,7 @@ const PositionsList = memo(function PositionsList({
 
       {error && (
         <div style={S.errorBar} onClick={clearError}>
-          <span style={S.errorText}>{humanizeTradeError(error)}</span>
+          <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
         </div>
       )}
     </div>
@@ -3893,13 +3972,13 @@ function FuturesPanel() {
         )}
         {error && (
           <div style={S.errorBar} onClick={clearError}>
-            <span style={S.errorText}>{humanizeTradeError(error)}</span>
+            <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
         {localAlert && (
           <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
-            <span style={S.errorText}>{humanizeTradeError(localAlert)}</span>
+            <span style={S.errorText}>{humanizeTradeError(localAlert, dex)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
@@ -4925,7 +5004,7 @@ function FuturesPanel() {
               )}
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -5112,7 +5191,7 @@ function FuturesPanel() {
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -5263,7 +5342,7 @@ function FuturesPanel() {
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -5465,7 +5544,7 @@ function FuturesPanel() {
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -5559,7 +5638,7 @@ function FuturesPanel() {
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -5660,7 +5739,7 @@ function FuturesPanel() {
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -5851,7 +5930,7 @@ function FuturesPanel() {
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -5935,7 +6014,7 @@ function FuturesPanel() {
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -6108,7 +6187,7 @@ function FuturesPanel() {
 
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -6214,7 +6293,7 @@ function FuturesPanel() {
               </button>
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error || localAlert)}
+                  {humanizeTradeError(error || localAlert, dex)}
                 </div>
               )}
             </div>
@@ -6320,7 +6399,7 @@ function FuturesPanel() {
             </button>
             {error && (
               <div style={{...S.errorBar, maxWidth: 380}} onClick={clearError}>
-                <span style={S.errorText}>{humanizeTradeError(error)}</span>
+                <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
                 <span style={S.errorCloseIcon}>×</span>
               </div>
             )}
@@ -6424,7 +6503,7 @@ function FuturesPanel() {
                 textAlign: 'center', maxWidth: 380, padding: '8px 12px',
                 background: '#FFEBEE', borderRadius: 8, border: '1px solid #FFCDD2',
                 overflowWrap: 'anywhere', wordBreak: 'break-word',
-              }}>{humanizeTradeError(error)}</div>
+              }}>{humanizeTradeError(error, dex)}</div>
             )}
           </div>
         </div>
@@ -6595,7 +6674,7 @@ function FuturesPanel() {
 
               {error && (
                 <div style={hlGateStyles.errorBox}>
-                  {humanizeTradeError(error)}
+                  {humanizeTradeError(error, dex)}
                 </div>
               )}
             </div>
@@ -6797,6 +6876,7 @@ function FuturesPanel() {
           const posKey = `${pos.symbol}-${pos.side}`;
           const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
           const tpslBusy = tpslSubmittingPos === posKey;
+          const ostiumTpMax = ostiumTpInputMax(dex, pos);
 
           // Basic mode shows a stripped-down card: ticker + UP/DOWN icon +
           // leverage + dollar PnL + Close. No size, no entry/mark prices,
@@ -7036,9 +7116,10 @@ function FuturesPanel() {
               {/* TP/SL panel — gated on Basic mode (button is hidden too). */}
               {!isDust && !isBasic && expanded === 'tpsl' && (
                 <div style={{...S.expandPanel, ...S.row}}>
-                  <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
+                  <input type="number" placeholder="TP Price" value={tpPrice} max={ostiumTpMax} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <button style={S.btnBlue} onClick={async () => {
+                    if (!validateTpslBeforeSubmit({ dex, pos, tpPrice, slPrice, setLocalAlert })) return;
                     setTpslSubmittingPos(posKey);
                     try {
                       const r = await setTpsl(pos.symbol, positionCloseSide(pos), tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
@@ -7064,13 +7145,13 @@ function FuturesPanel() {
 
         {error && (
           <div style={S.errorBar} onClick={clearError}>
-            <span style={S.errorText}>{humanizeTradeError(error)}</span>
+            <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
         {localAlert && (
           <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
-            <span style={S.errorText}>{humanizeTradeError(localAlert)}</span>
+            <span style={S.errorText}>{humanizeTradeError(localAlert, dex)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
@@ -8445,13 +8526,13 @@ function FuturesPanel() {
 
         {error && (
           <div style={S.errorBar} onClick={clearError}>
-            <span style={S.errorText}>{humanizeTradeError(error)}</span>
+            <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
         {localAlert && (
           <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
-            <span style={S.errorText}>{humanizeTradeError(localAlert)}</span>
+            <span style={S.errorText}>{humanizeTradeError(localAlert, dex)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}

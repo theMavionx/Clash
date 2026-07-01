@@ -1,13 +1,16 @@
 import BigNumber from 'bignumber.js';
+import { createNadoClient } from '@nadohq/client';
 import { getOrderNonce, packOrderAppendix } from '@nadohq/shared';
 import {
   NADO_BUILDER_FEE_RATE,
   NADO_BUILDER_ID,
+  NADO_CHAIN_ENV,
   NADO_SUBACCOUNT_NAME,
 } from './nadoConfig';
 
 export const NADO_PRODUCT_DECIMALS = 18;
 const SCALE = new BigNumber(10).pow(NADO_PRODUCT_DECIMALS);
+const NADO_PRODUCT_TYPE_PERP = 1;
 
 function nadoBuilderAppendix() {
   const builderId = Math.floor(Number(NADO_BUILDER_ID));
@@ -139,6 +142,80 @@ export function normalizeNadoPrices(markets = []) {
     open_interest: String(m.open_interest || 0),
     funding_rate: m.funding_rate || 0,
   }));
+}
+
+function nadoMaxLeverage(symbol) {
+  const longWeight = finiteNumber(symbol?.longWeightInitial, 0);
+  const shortWeight = finiteNumber(symbol?.shortWeightInitial, 0);
+  const values = [];
+  if (longWeight > 0 && longWeight < 1) values.push(1 / (1 - longWeight));
+  if (shortWeight > 1) values.push(1 / (shortWeight - 1));
+  const leverage = values.length ? Math.min(...values) : 25;
+  return Math.max(1, Math.min(100, Math.floor(leverage + 1e-6)));
+}
+
+export async function fetchNadoMarketsDirect(publicClient) {
+  if (!publicClient) throw new Error('Nado public client is not ready');
+  const client = createNadoClient(NADO_CHAIN_ENV, { publicClient });
+  const symbolsPayload = await client.context.engineClient.getSymbols({});
+  const allMarkets = await client.market.getAllMarkets().catch(() => []);
+  const rawSymbols = Object.values(symbolsPayload?.symbols || {})
+    .filter(symbol => Number(symbol?.type) === NADO_PRODUCT_TYPE_PERP && !symbol?.isolatedOnly);
+  const productIds = rawSymbols.map(symbol => Number(symbol.productId)).filter(Number.isFinite);
+  const pricesPayload = productIds.length
+    ? await client.market.getLatestMarketPrices({ productIds }).catch(() => ({ marketPrices: [] }))
+    : { marketPrices: [] };
+  const priceByProduct = new Map((pricesPayload?.marketPrices || []).map(price => [Number(price.productId), price]));
+  const productById = new Map((allMarkets || []).map(market => [
+    Number(market.productId ?? market?.product?.productId),
+    market,
+  ]));
+
+  const rows = rawSymbols.map((symbol) => {
+    const productId = Number(symbol.productId);
+    const price = priceByProduct.get(productId) || {};
+    const product = productById.get(productId)?.product || productById.get(productId) || {};
+    const bid = finiteNumber(price.bid);
+    const ask = finiteNumber(price.ask);
+    const mark = bid > 0 && ask > 0 ? (bid + ask) / 2 : finiteNumber(product.oraclePrice);
+    const base = normalizeNadoSymbol(symbol.symbol);
+    const minNotional = rawToDecimal(symbol.minSize || 0);
+    const minBaseSize = mark > 0 ? minNotional.div(mark) : new BigNumber(0);
+    return {
+      symbol: base,
+      base,
+      pair: `${base}/USDT`,
+      market_name: `${base}/USDT`,
+      market_id: productId,
+      asset_id: productId,
+      pair_index: productId,
+      lot_size: rawToDecimal(symbol.sizeIncrement || 0).toFixed(),
+      tick_size: String(symbol.priceIncrement || 0.01),
+      min_order_size: minBaseSize.toFixed(),
+      min_notional_usd: minNotional.toFixed(),
+      max_leverage: nadoMaxLeverage(symbol),
+      mark,
+      mid: mark,
+      oracle: finiteNumber(product.oraclePrice, mark),
+      bid: bid || mark,
+      ask: ask || mark,
+      volume_24h: 0,
+      open_interest: rawToDecimal(product.openInterest || 0).toFixed(),
+      funding_rate: 0,
+      isolated_only: !!symbol.isolatedOnly,
+      _nado: {
+        productId,
+        symbol: symbol.symbol,
+        sizeIncrementRaw: String(symbol.sizeIncrement || '0'),
+        minNotionalRaw: String(symbol.minSize || '0'),
+        minSizeRaw: String(symbol.minSize || '0'),
+        raw: symbol,
+      },
+      _raw: symbol,
+    };
+  }).filter(row => row.symbol && Number.isFinite(row.market_id));
+
+  return normalizeNadoMarkets(rows);
 }
 
 function roundRawToStep(rawValue, rawStep) {

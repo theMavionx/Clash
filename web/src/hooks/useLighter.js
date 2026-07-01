@@ -8,6 +8,10 @@ import {
   removeEncryptedCredential,
   writeEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
+import {
+  fetchLighterMarketsDirect,
+  fetchLighterPricesDirect,
+} from '../lib/lighterClient';
 
 const FUTURES_API = '/api/futures';
 const STORAGE_KEY = 'clash_lighter_credentials_v1';
@@ -71,6 +75,15 @@ async function fetchJson(url, options = {}) {
     throw err;
   }
   return data;
+}
+
+async function fetchWithBrowserFallback(label, browserRead, serverRead) {
+  try {
+    return await browserRead();
+  } catch (directError) {
+    console.warn(`[Lighter] browser ${label} read failed; using server fallback:`, directError?.message || directError);
+    return serverRead();
+  }
 }
 
 function unsupportedTrading() {
@@ -165,8 +178,16 @@ export function useLighter() {
     setError('');
     try {
       const [marketData, priceData, accountData] = await Promise.all([
-        fetchJson(`${FUTURES_API}/markets?dex=lighter`),
-        fetchJson(`${FUTURES_API}/prices?dex=lighter`),
+        fetchWithBrowserFallback(
+          'markets',
+          fetchLighterMarketsDirect,
+          () => fetchJson(`${FUTURES_API}/markets?dex=lighter`),
+        ),
+        fetchWithBrowserFallback(
+          'prices',
+          fetchLighterPricesDirect,
+          () => fetchJson(`${FUTURES_API}/prices?dex=lighter`),
+        ),
         credentials?.accountIndex != null && token
           ? fetchJson(`${FUTURES_API}/lighter/account?account_index=${encodeURIComponent(credentials.accountIndex)}`, { headers })
           : Promise.resolve(null),

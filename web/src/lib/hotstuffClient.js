@@ -21,7 +21,7 @@ export function hotstuffExchangeError(response) {
   return '';
 }
 
-export function assertHotstuffExchangeSuccess(response, fallback = 'Hotstuff request failed') {
+export function assertHotstuffExchangeSuccess(response) {
   const error = hotstuffExchangeError(response);
   if (error) throw new Error(error);
   return response;
@@ -53,6 +53,391 @@ export function hotstuffOrderStatusLabel(response) {
 
 export function isHotstuffAddress(addr) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(addr || '').trim());
+}
+
+function num(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeHotstuffAddress(addr) {
+  return isHotstuffAddress(addr) ? String(addr || '').trim() : null;
+}
+
+function hotstuffSymbolOf(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/-PERP$/u, '')
+    .replace(/\/USD[TC]?$/u, '');
+}
+
+function hotstuffMarginMode(row) {
+  const raw = row?.margin_mode
+    ?? row?.marginMode
+    ?? row?.margin_type
+    ?? row?.marginType
+    ?? row?.leverage?.type
+    ?? row?.mode
+    ?? '';
+  const s = String(raw || '').trim().toLowerCase();
+  if (s.includes('isolated') || s === 'iso' || row?.is_isolated === true || row?.isolated === true) return 'isolated';
+  if (s.includes('cross') || s === 'crossed' || row?.is_cross === true || row?.cross === true) return 'cross';
+  return '';
+}
+
+export async function hotstuffInfoRequest(method, params = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${HOTSTUFF_API_BASE}/info`, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ method, params }),
+    });
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
+    }
+    if (!res.ok) {
+      const msg = typeof data === 'string' ? data : (data?.error || data?.message || text);
+      throw new Error(`Hotstuff info ${method} ${res.status}: ${msg || 'request failed'}`);
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getHotstuffPerpInstrumentsDirect() {
+  const data = await hotstuffInfoRequest('instruments', { type: 'perps' });
+  return Array.isArray(data?.perps) ? data.perps : [];
+}
+
+async function hotstuffTickerMapDirect(instruments) {
+  const rows = await Promise.all((instruments || [])
+    .filter(m => !m?.delisted && m?.name)
+    .slice(0, 80)
+    .map(async (m) => {
+      try {
+        const ticker = await hotstuffInfoRequest('ticker', { symbol: m.name });
+        const row = Array.isArray(ticker) ? ticker[0] : ticker;
+        return [String(m.name), row || null];
+      } catch {
+        return [String(m.name), null];
+      }
+    }));
+  return new Map(rows);
+}
+
+export async function fetchHotstuffMarketInfoDirect() {
+  const instruments = await getHotstuffPerpInstrumentsDirect();
+  const tickers = await hotstuffTickerMapDirect(instruments);
+  const data = instruments
+    .filter(m => !m?.delisted)
+    .map((m) => {
+      const ticker = tickers.get(String(m.name)) || {};
+      const base = hotstuffSymbolOf(m.name);
+      const mark = num(ticker.mark_price || ticker.last_price || ticker.mid_price || ticker.index_price);
+      return {
+        symbol: base,
+        base,
+        pair: `${base}/USD`,
+        market_name: m.name,
+        pair_index: Number(m.id),
+        lot_size: String(m.lot_size || ''),
+        tick_size: String(m.tick_size || ''),
+        min_order_size: String(m.min_notional_usd || 10),
+        max_leverage: Number(m.max_leverage || 1),
+        isolated_only: !!m.only_isolated,
+        mark,
+        oracle: num(ticker.index_price, mark),
+        mid: num(ticker.mid_price, mark),
+        yesterday_price: mark && Number.isFinite(num(ticker.change_24h, NaN))
+          ? mark / (1 + (num(ticker.change_24h) / 100))
+          : 0,
+        open_interest: num(ticker.open_interest),
+        volume_24h: num(ticker.volume_24h),
+        funding_rate: num(ticker.funding_rate),
+        _hotstuff: { instrumentId: Number(m.id), raw: m, ticker },
+      };
+    });
+  return { success: true, data };
+}
+
+export async function fetchHotstuffPricesDirect() {
+  const info = await fetchHotstuffMarketInfoDirect();
+  return {
+    success: true,
+    data: (info.data || []).map(m => ({
+      symbol: m.symbol,
+      mark: String(m.mark || ''),
+      mid: String(m.mid || m.mark || ''),
+      oracle: String(m.oracle || m.mark || ''),
+      yesterday_price: String(m.yesterday_price || ''),
+      open_interest: String(m.open_interest || 0),
+      volume_24h: m.volume_24h || 0,
+      funding_rate: m.funding_rate || 0,
+    })),
+  };
+}
+
+export async function fetchHotstuffAccountDirect(address) {
+  const clean = normalizeHotstuffAddress(address);
+  if (!clean) throw new Error('Hotstuff address is required');
+  const [summary, fees] = await Promise.all([
+    hotstuffInfoRequest('account_summary', { user: clean }),
+    hotstuffInfoRequest('user_fees', { user: clean }).catch(() => null),
+  ]);
+  return {
+    balance: String(summary?.total_account_equity ?? summary?.margin_balance ?? 0),
+    usdc: String(summary?.total_account_equity ?? summary?.margin_balance ?? 0),
+    account_equity: String(summary?.total_account_equity ?? 0),
+    available_to_spend: String(summary?.available_balance ?? 0),
+    available_to_withdraw: String(summary?.withdrawable_balance_notional ?? summary?.available_balance ?? 0),
+    total_margin_used: String(summary?.initial_margin ?? 0),
+    derivative_account_equity: String(summary?.derivative_account_equity ?? 0),
+    spot_account_equity: String(summary?.spot_account_equity ?? 0),
+    positions_count: Object.keys(summary?.perp_positions || {}).length,
+    maker_fee: fees?.perp_maker_fee_rate != null ? String(fees.perp_maker_fee_rate) : null,
+    taker_fee: fees?.perp_taker_fee_rate != null ? String(fees.perp_taker_fee_rate) : null,
+    fee_tier: fees?.total_volume_threshold != null ? String(fees.total_volume_threshold) : null,
+    fee_info: fees || null,
+    _raw: summary,
+  };
+}
+
+export async function fetchHotstuffPositionsDirect(address) {
+  const clean = normalizeHotstuffAddress(address);
+  if (!clean) throw new Error('Hotstuff address is required');
+  const rows = await hotstuffInfoRequest('positions', { user: clean });
+  return (Array.isArray(rows) ? rows : []).map((position) => {
+    const size = Math.abs(num(position.size));
+    if (!position?.instrument || size <= 0) return null;
+    const side = String(position.position_side || '').toUpperCase() === 'SHORT'
+      ? 'ask'
+      : num(position.size) < 0 ? 'ask' : 'bid';
+    const entryPrice = num(position.entry_price);
+    const pnlUsd = num(position.unrealized_pnl ?? position.upnl, NaN);
+    const rawMark = num(
+      position.mark_price
+        ?? position.markPrice
+        ?? position.mark
+        ?? position.current_price
+        ?? position.currentPrice
+        ?? position.oracle_price
+        ?? position.index_price
+        ?? position.last_price,
+      NaN,
+    );
+    const sideSign = side === 'ask' ? -1 : 1;
+    const impliedMark = Number.isFinite(pnlUsd) && entryPrice > 0 && size > 0
+      ? entryPrice + (pnlUsd / (size * sideSign))
+      : NaN;
+    const markPrice = Number.isFinite(rawMark) && rawMark > 0
+      ? rawMark
+      : (Number.isFinite(impliedMark) && impliedMark > 0 ? impliedMark : '');
+    const margin = num(position.margin);
+    return {
+      symbol: hotstuffSymbolOf(position.instrument),
+      side,
+      amount: String(size),
+      size_usd: num(position.position_value),
+      entry_price: String(position.entry_price || ''),
+      mark_price: markPrice === '' ? '' : String(markPrice),
+      liquidation_price: null,
+      margin: String(position.margin || ''),
+      leverage: String(position.leverage || 1),
+      pnl_usd: String(position.unrealized_pnl ?? position.upnl ?? ''),
+      pnl_pct: Number.isFinite(pnlUsd) && margin > 0 ? (pnlUsd / margin) * 100 : null,
+      pair_index: Number(position.instrument_id),
+      trade_index: null,
+      is_isolated: hotstuffMarginMode(position) === 'isolated',
+      margin_type: hotstuffMarginMode(position) || '',
+      _raw: position,
+    };
+  }).filter(Boolean);
+}
+
+function hotstuffRows(payload) {
+  return Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.orders)
+        ? payload.orders
+        : Array.isArray(payload?.open_orders)
+          ? payload.open_orders
+          : Array.isArray(payload?.result)
+            ? payload.result
+            : Array.isArray(payload?.rows)
+              ? payload.rows
+              : [];
+}
+
+async function fetchHotstuffOrderPagesDirect(method, clean) {
+  const out = [];
+  const pageLimit = 100;
+  for (let page = 1; page <= 20; page += 1) {
+    const payload = await hotstuffInfoRequest(method, { user: clean, page, limit: pageLimit });
+    const pageRows = hotstuffRows(payload);
+    out.push(...pageRows);
+    if (!payload?.has_next || pageRows.length < pageLimit) break;
+  }
+  return out;
+}
+
+function rawHotstuffOrderSide(order) {
+  const raw = String(order?.side || order?.order_side || order?.orderSide || '').trim().toLowerCase();
+  if (raw === 'b' || raw === 'buy' || raw === 'bid') return 'bid';
+  if (raw === 's' || raw === 'sell' || raw === 'ask') return 'ask';
+  return '';
+}
+
+function hotstuffOrderLifecycleKey(order) {
+  const cloid = String(order?.cloid || order?.client_order_id || order?.clientOrderId || '').trim();
+  if (cloid) return `cloid:${cloid}`;
+  const orderId = order?.order_id ?? order?.orderId ?? order?.oid ?? order?.id;
+  if (orderId != null && orderId !== '') return `oid:${orderId}`;
+  return '';
+}
+
+function hotstuffOrderTimestampMs(order) {
+  const raw = order?.timestamp ?? order?.updated_at ?? order?.created_at;
+  if (raw == null || raw === '') return 0;
+  const n = Number(raw);
+  if (Number.isFinite(n)) return n > 10_000_000_000 ? n : n * 1000;
+  const parsed = Date.parse(String(raw));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function historyOrderMatchesOpenPosition(order, positions) {
+  const symbol = hotstuffSymbolOf(order?.instrument || order?.symbol || order?.market);
+  if (!symbol) return false;
+  const unfilled = num(order?.unfilled ?? order?.remaining ?? order?.remaining_size ?? order?.remainingSize ?? order?.size);
+  if (!(unfilled > 0)) return false;
+  const hasTrigger = order?.trigger_px != null
+    && order.trigger_px !== ''
+    && String(order.trigger_px) !== '0';
+  const hasTpsl = !!String(order?.tpsl || order?.tp_sl || order?.trigger_type || order?.triggerType || '').trim();
+  const reduceOnly = !!(order?.reduce_only ?? order?.reduceOnly ?? order?.ro);
+  if (!hasTrigger && !hasTpsl && !reduceOnly) return false;
+  const orderSide = rawHotstuffOrderSide(order);
+  return positions.some((position) => {
+    if (String(position?.symbol || '').toUpperCase() !== symbol) return false;
+    const rawPosSize = num(position?._raw?.size ?? position?.size ?? position?.amount);
+    const expectedCloseSide = rawPosSize < 0 || position?.side === 'ask' ? 'bid' : 'ask';
+    return !orderSide || orderSide === expectedCloseSide;
+  });
+}
+
+const TERMINAL_HOTSTUFF_ORDER_STATE_RE = /^(filled|canceled|cancelled|rejected|expired|closed|done)$/i;
+const RESTING_HOTSTUFF_ORDER_STATE_RE = /^(open|opened|resting|pending|accepted)$/i;
+
+function isActiveHistoryHotstuffOrder(order, positions, newerTerminalByKey = new Map()) {
+  const state = String(order?.state || '').trim();
+  if (TERMINAL_HOTSTUFF_ORDER_STATE_RE.test(state)) return false;
+  const key = hotstuffOrderLifecycleKey(order);
+  if (key) {
+    const newerTerminalAt = Number(newerTerminalByKey.get(key) || 0);
+    const thisAt = hotstuffOrderTimestampMs(order);
+    if (newerTerminalAt && (!thisAt || newerTerminalAt >= thisAt)) return false;
+  }
+  const hasTrigger = order?.trigger_px != null
+    && order.trigger_px !== ''
+    && String(order.trigger_px) !== '0';
+  const hasTpsl = !!String(order?.tpsl || order?.tp_sl || order?.trigger_type || order?.triggerType || '').trim();
+  const reduceOnly = !!(order?.reduce_only ?? order?.reduceOnly ?? order?.ro);
+  const isConditional = hasTrigger || hasTpsl || reduceOnly;
+  if (isConditional) return historyOrderMatchesOpenPosition(order, positions);
+  if (!state) return false;
+  return RESTING_HOTSTUFF_ORDER_STATE_RE.test(state)
+    && num(order?.unfilled ?? order?.remaining ?? order?.remaining_size ?? order?.remainingSize) > 0;
+}
+
+function activeHotstuffHistoryOrders(historyRows, positions) {
+  const terminalByKey = new Map();
+  for (const order of Array.isArray(historyRows) ? historyRows : []) {
+    const state = String(order?.state || '').trim();
+    if (!TERMINAL_HOTSTUFF_ORDER_STATE_RE.test(state)) continue;
+    const key = hotstuffOrderLifecycleKey(order);
+    if (!key) continue;
+    terminalByKey.set(key, Math.max(Number(terminalByKey.get(key) || 0), hotstuffOrderTimestampMs(order)));
+  }
+  return (Array.isArray(historyRows) ? historyRows : [])
+    .filter(order => isActiveHistoryHotstuffOrder(order, positions, terminalByKey));
+}
+
+function normalizeHotstuffOrderRow(order, source) {
+  const tpsl = order.tpsl || order.tp_sl || order.trigger_type || order.triggerType || order.type || null;
+  const trigger = order.trigger_px ?? order.triggerPx ?? order.trigger_price ?? order.triggerPrice ?? order.stop_price ?? order.stopPrice;
+  const limit = order.limit_price ?? order.limitPrice ?? order.price ?? order.px;
+  const isMarket = !!(order.is_market ?? order.isMarket);
+  const rawSide = String(order.side || order.order_side || order.orderSide || '').trim().toLowerCase();
+  const amount = String(order.unfilled ?? order.remaining ?? order.remaining_size ?? order.remainingSize ?? order.size ?? order.qty ?? '');
+  const reduceOnly = !!(order.reduce_only ?? order.reduceOnly ?? order.ro);
+  const activeHistoryConditional = source === 'hotstuff_order_history'
+    && num(amount) > 0
+    && (tpsl || reduceOnly || (trigger != null && trigger !== '' && String(trigger) !== '0'));
+  const orderType = tpsl
+    ? tpsl
+    : isMarket
+      ? 'market'
+      : (trigger != null && trigger !== '' ? 'trigger' : 'limit');
+  return {
+    symbol: hotstuffSymbolOf(order.instrument || order.symbol || order.market),
+    side: rawSide === 'b' || rawSide === 'buy' || rawSide === 'bid' ? 'bid' : 'ask',
+    amount,
+    initial_amount: String(order.size ?? order.originalSize ?? order.original_size ?? order.qty ?? ''),
+    price: String(trigger ?? limit ?? ''),
+    stop_price: trigger != null && trigger !== '' ? String(trigger) : null,
+    trigger_price: trigger != null && trigger !== '' ? String(trigger) : null,
+    order_id: order.order_id ?? order.orderId ?? order.oid ?? order.id,
+    order_type: orderType,
+    state: activeHistoryConditional ? 'open' : (order.state || null),
+    tpsl,
+    tif: order.tif || order.timeInForce || order.time_in_force || null,
+    reduce_only: reduceOnly,
+    pair_index: Number(order.instrument_id ?? order.instrumentId),
+    trade_index: null,
+    client_order_id: order.cloid || order.client_order_id || order.clientOrderId || null,
+    source,
+    _raw: order,
+  };
+}
+
+export async function fetchHotstuffOrdersDirect(address) {
+  const clean = normalizeHotstuffAddress(address);
+  if (!clean) throw new Error('Hotstuff address is required');
+  const [openRows, positions, historyRows] = await Promise.all([
+    fetchHotstuffOrderPagesDirect('open_orders', clean),
+    fetchHotstuffPositionsDirect(clean).catch(() => []),
+    fetchHotstuffOrderPagesDirect('order_history', clean).catch(() => []),
+  ]);
+  const activeHistoryRows = activeHotstuffHistoryOrders(historyRows, positions);
+  const seen = new Set();
+  return [...openRows, ...activeHistoryRows].map((order, idx) => {
+    const normalized = normalizeHotstuffOrderRow(order, idx < openRows.length ? 'hotstuff_open_orders' : 'hotstuff_order_history');
+    const isHistoryConditional = normalized.source === 'hotstuff_order_history'
+      && (normalized.tpsl || normalized.reduce_only || Number(normalized.trigger_price) > 0);
+    const key = isHistoryConditional
+      ? `conditional:${normalized.symbol}:${normalized.side}:${normalized.price}:${normalized.amount}:${normalized.tpsl || normalized.order_type}`
+      : normalized.order_id != null
+        ? `oid:${normalized.order_id}`
+        : normalized.client_order_id
+          ? `cloid:${normalized.client_order_id}`
+          : `${normalized.symbol}:${normalized.side}:${normalized.price}:${normalized.amount}:${normalized.tpsl || normalized.order_type}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    return normalized;
+  }).filter(Boolean);
 }
 
 function transport() {

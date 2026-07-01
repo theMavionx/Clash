@@ -18,6 +18,7 @@ import {
   ensureOstiumDelegate,
   loadOstiumDelegate,
 } from '../lib/ostiumDelegateWallet';
+import { validateOstiumTakeProfitLimit } from '../lib/ostiumTpLimits';
 
 const FUTURES_API = '/api/futures';
 const POLL_INTERVAL_MS = 45_000;
@@ -976,6 +977,8 @@ export function useOstium() {
       };
       const hashes = [];
       if (takeProfit != null && takeProfit !== '') {
+        const tpCheck = validateOstiumTakeProfitLimit(position, takeProfit);
+        if (!tpCheck.ok) throw new Error(tpCheck.error);
         const params = { ...base, takeProfit: String(takeProfit) };
         hashes.push((await submitWithDelegateOrWallet({
           label: 'ostium.take_profit',

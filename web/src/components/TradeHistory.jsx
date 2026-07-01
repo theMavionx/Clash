@@ -2,12 +2,12 @@ import { memo, useEffect, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
 import { fetchPerplFills } from '../lib/perplClient';
 import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
+import { pacificaFetch } from '../lib/pacificaClient';
 import {
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
 
-const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const HYPERLIQUID_API = import.meta.env.VITE_HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz';
 const READ_TIMEOUT_MS = 8000;
 const GRVT_STORAGE_KEY = 'clash_grvt_credentials_v1';
@@ -443,10 +443,9 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           return;
         }
 
-        const r = await fetch(`${PACIFICA_API}/trades/history?account=${addr}`, {
+        const d = await pacificaFetch(`/trades/history?account=${encodeURIComponent(addr)}`, {
           signal: controller.signal,
         });
-        const d = await r.json();
         if (!cancelled) setTrades(Array.isArray(d.data) ? d.data : []);
       } catch (e) {
         if (!cancelled && e?.name !== 'AbortError') {

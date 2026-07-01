@@ -2,8 +2,8 @@ import { memo, useEffect, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
 import { fetchPerplPositionHistory } from '../lib/perplClient';
 import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
+import { pacificaFetch } from '../lib/pacificaClient';
 
-const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const READ_TIMEOUT_MS = 8000;
 
 function timeMs(value) {
@@ -164,10 +164,9 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
           return;
         }
 
-        const r = await fetch(`${PACIFICA_API}/funding/history?account=${addr}`, {
+        const d = await pacificaFetch(`/funding/history?account=${encodeURIComponent(addr)}`, {
           signal: controller.signal,
         });
-        const d = await r.json();
         if (!cancelled) setPayments(Array.isArray(d.data) ? d.data : []);
       } catch (e) {
         if (!cancelled && e?.name !== 'AbortError') {

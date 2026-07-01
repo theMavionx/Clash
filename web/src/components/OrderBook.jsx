@@ -1,5 +1,6 @@
 import { memo, useState, useEffect, useMemo, useRef } from 'react';
 import { createPhoenixPublicWsClient, phoenixSymbol } from '../lib/phoenixClient';
+import { PACIFICA_WS_URL, pacificaFetch } from '../lib/pacificaClient';
 
 const PRICE_STEPS = [0.01, 0.02, 0.1, 1];
 
@@ -71,6 +72,16 @@ function normalizePhoenixBook(update) {
   };
 }
 
+function normalizePacificaBookPayload(payload) {
+  const levels = payload?.data?.l || payload?.l;
+  if (!Array.isArray(levels)) return null;
+  const [bids = [], asks = []] = levels;
+  return {
+    bids: (bids || []).slice(0, 12).map(b => ({ price: parseFloat(b.p), amount: parseFloat(b.a), count: b.n })),
+    asks: (asks || []).slice(0, 12).map(a => ({ price: parseFloat(a.p), amount: parseFloat(a.a), count: a.n })),
+  };
+}
+
 function OrderBook({ symbol = 'BTC', dex = 'pacifica', priceStep = 0.01, onPriceStepChange, onTopOfBookChange }) {
   const [book, setBook] = useState({ bids: [], asks: [] });
   const wsRef = useRef(null);
@@ -123,9 +134,19 @@ function OrderBook({ symbol = 'BTC', dex = 'pacifica', priceStep = 0.01, onPrice
       throttleTimer = null;
     }
 
+    async function fetchBookSnapshot() {
+      try {
+        const data = await pacificaFetch(`/book?symbol=${encodeURIComponent(symbol)}&agg_level=1`);
+        const snapshot = normalizePacificaBookPayload(data);
+        if (snapshot && !cancelled) setBook(snapshot);
+      } catch (error) {
+        if (!cancelled) console.warn('[Pacifica] orderbook REST fallback failed', error?.message || error);
+      }
+    }
+
     function connect() {
       if (cancelled) return;
-      ws = new WebSocket('wss://ws.pacifica.fi/ws');
+      ws = new WebSocket(PACIFICA_WS_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -137,20 +158,27 @@ function OrderBook({ symbol = 'BTC', dex = 'pacifica', priceStep = 0.01, onPrice
         try {
           const msg = JSON.parse(e.data);
           if (msg.channel === 'book' && msg.data?.l) {
-            const [bids, asks] = msg.data.l;
-            latestBook = {
-              bids: (bids || []).slice(0, 12).map(b => ({ price: parseFloat(b.p), amount: parseFloat(b.a), count: b.n })),
-              asks: (asks || []).slice(0, 12).map(a => ({ price: parseFloat(a.p), amount: parseFloat(a.a), count: a.n })),
-            };
+            latestBook = normalizePacificaBookPayload(msg);
             if (!throttleTimer) throttleTimer = setTimeout(flushBook, 100);
           }
         } catch {}
       };
 
-      ws.onclose = () => { if (!cancelled) reconnectTimer = setTimeout(connect, 3000); };
-      ws.onerror = () => { if (!cancelled) ws.close(); };
+      ws.onclose = () => {
+        if (!cancelled) {
+          fetchBookSnapshot();
+          reconnectTimer = setTimeout(connect, 3000);
+        }
+      };
+      ws.onerror = () => {
+        if (!cancelled) {
+          fetchBookSnapshot();
+          ws.close();
+        }
+      };
     }
 
+    fetchBookSnapshot();
     connect();
     return () => {
       cancelled = true;

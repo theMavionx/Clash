@@ -12,6 +12,7 @@ import {
   removeEncryptedCredential,
   writeEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
+import { fetchGrvtMarketsDirect } from '../lib/grvtClient';
 
 const STORAGE_KEY = 'clash_grvt_credentials_v1';
 const ONE_TAP_SIGNER_STORAGE_KEY = 'clash_grvt_one_tap_signer_v1';
@@ -572,7 +573,13 @@ export function useGrvt() {
 
   const fetchMarkets = useCallback(async () => {
     try {
-      const payload = await fetchJson('/api/futures/markets?dex=grvt');
+      let payload;
+      try {
+        payload = await fetchGrvtMarketsDirect();
+      } catch (directError) {
+        console.warn('[useGrvt] browser markets read failed; using server fallback:', directError?.message || directError);
+        payload = await fetchJson('/api/futures/markets?dex=grvt');
+      }
       const next = rows(payload);
       setMarkets(next);
       setPrices(next.map(m => ({

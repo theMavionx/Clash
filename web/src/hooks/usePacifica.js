@@ -8,6 +8,7 @@ import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { usePacificaAgent } from './usePacificaAgent';
 import { pacificaNow, setPacificaServerTimeFromResponse } from '../lib/pacificaTime';
+import { PACIFICA_WS_URL, pacificaFetch, pacificaRequest } from '../lib/pacificaClient';
 import { reportDiag } from '../lib/diagReporter';
 import { sendSolanaInstructionsWithMobileSupport } from '../lib/phoenixTx';
 import { SOLANA_RPC_URLS } from '../lib/solanaRpc';
@@ -43,8 +44,6 @@ async function fcSignMessage(msgBytes) {
 }
 
 // ---------- Pacifica Config ----------
-const API = 'https://api.pacifica.fi/api/v1';
-const WS_URL = 'wss://ws.pacifica.fi/ws';
 const BUILDER_CODE = 'clashofperps';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const ACTIVATION_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -451,12 +450,15 @@ export function usePacifica() {
         console.log(`[Pacifica] ${type} → ${endpoint} (path=agent, attempt=${label}, agent=${String(headerBag.agent_wallet || '').slice(0,8)}…)`);
         let res, text, parsed = null;
         try {
-          res = await fetch(`${API}${endpoint}`, {
-            method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+          const result = await pacificaRequest(endpoint, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            onResponse: response => setPacificaServerTimeFromResponse(response, `${type}:agent`),
           });
-          setPacificaServerTimeFromResponse(res, `${type}:agent`);
-          text = await res.text();
-          try { parsed = JSON.parse(text); } catch { /* non-JSON body */ }
+          res = result.response;
+          text = result.text;
+          parsed = result.data && typeof result.data === 'object' ? result.data : null;
         } catch (netErr) {
           console.error(`[Pacifica] ${type} agent-path NETWORK ERROR`, { error: netErr?.message, sent: body });
           throw netErr;
@@ -627,16 +629,19 @@ export function usePacifica() {
       adapter: signSubpath,
     });
     console.log(`[Pacifica] ${type} → ${endpoint} (path=master, wallet=${walletKind})`);
-    const res = await fetch(`${API}${endpoint}`, {
+    const result = await pacificaRequest(endpoint, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      onResponse: response => setPacificaServerTimeFromResponse(response, `${type}:master`),
     });
-    setPacificaServerTimeFromResponse(res, `${type}:master`);
-    const text = await res.text();
+    const res = result.response;
+    const text = result.text;
     const responseHeaders = Object.fromEntries(res.headers.entries());
     try {
-      const json = JSON.parse(text);
+      const json = result.data && typeof result.data === 'object'
+        ? result.data
+        : JSON.parse(text);
       if (!res.ok || json?.error || json?.code >= 400) {
         console.warn(`[Pacifica] ${type} master-path FAIL ${res.status}`, {
           responseBody: json,
@@ -701,7 +706,7 @@ export function usePacifica() {
       // activation/retry layer above can react to it instead of bailing.
       return { error: text || `API error ${res.status}`, code: res.status, _nonJson: true };
     }
-  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, walletAddr, signWithAgentKey, bindAgent, forgetAgentLocally, adapterName]);
+  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, walletAddr, signWithAgentKey, bindAgent, forgetAgentLocally, adapterName, isIncompatibleWallet]);
 
   // Onboarding activation — must be defined before signedRequestWithActivation
   const activate = useCallback(async () => {
@@ -807,20 +812,22 @@ export function usePacifica() {
   // ---------- Market Data (public) ----------
   const fetchMarkets = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/info`, { cache: 'no-store' });
+      const result = await pacificaRequest('/info', {
+        cache: 'no-store',
+        onResponse: response => setPacificaServerTimeFromResponse(response, 'info'),
+      });
       // Warm the clock-skew offset BEFORE any signed request fires. fetchMarkets
       // runs on mount, so by the time the user clicks LONG/SHORT we already
       // have an accurate Pacifica-clock baseline even if their local clock is
       // unsynced.
-      setPacificaServerTimeFromResponse(r, 'info');
-      const res = await r.json();
+      const res = result.data;
       if (res.data) { setMarkets(res.data); marketsRef.current = res.data; }
     } catch {}
   }, []);
 
   const fetchPrices = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/info/prices`).then(r => r.json());
+      const res = await pacificaFetch('/info/prices');
       if (res.data) setPrices(res.data);
     } catch {}
   }, []);
@@ -829,7 +836,7 @@ export function usePacifica() {
   const fetchAccount = useCallback(async () => {
     if (!walletAddr) return;
     try {
-      const res = await fetch(`${API}/account?account=${walletAddr}`).then(r => r.json());
+      const res = await pacificaFetch(`/account?account=${encodeURIComponent(walletAddr)}`);
       if (res.data) setAccount(res.data);
     } catch {}
   }, [walletAddr]);
@@ -837,7 +844,7 @@ export function usePacifica() {
   const fetchPositions = useCallback(async () => {
     if (!walletAddr) return;
     try {
-      const res = await fetch(`${API}/positions?account=${walletAddr}`).then(r => r.json());
+      const res = await pacificaFetch(`/positions?account=${encodeURIComponent(walletAddr)}`);
       if (res.data) { setPositions(res.data); setDataReady(true); }
     } catch {}
   }, [walletAddr]);
@@ -845,7 +852,7 @@ export function usePacifica() {
   const fetchOrders = useCallback(async () => {
     if (!walletAddr) return;
     try {
-      const res = await fetch(`${API}/orders?account=${walletAddr}`).then(r => r.json());
+      const res = await pacificaFetch(`/orders?account=${encodeURIComponent(walletAddr)}`);
       if (res.data) setOrders(res.data);
     } catch {}
   }, [walletAddr]);
@@ -855,7 +862,7 @@ export function usePacifica() {
   const fetchLeverageSettings = useCallback(async () => {
     if (!walletAddr) return;
     try {
-      const res = await fetch(`${API}/account/settings?account=${walletAddr}`).then(r => r.json());
+      const res = await pacificaFetch(`/account/settings?account=${encodeURIComponent(walletAddr)}`);
       if (res.data?.margin_settings) {
         const levMap = {};
         const marginMap = {};
@@ -1172,7 +1179,7 @@ export function usePacifica() {
   useEffect(() => {
     if (!walletAddr || !isActiveDex) return;
 
-    let ws, reconnectTimer, pingTimer, pongTimer;
+    let ws, reconnectTimer, pingTimer, pongTimer, restFallbackTimer;
     let latestPrices = null;
     let priceThrottleTimer = null;
     let claimGoldTimer = null;
@@ -1202,7 +1209,7 @@ export function usePacifica() {
 
     function connect() {
       if (cancelled) return;
-      ws = new WebSocket(WS_URL);
+      ws = new WebSocket(PACIFICA_WS_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -1315,10 +1322,14 @@ export function usePacifica() {
       ws.onclose = () => {
         clearInterval(pingTimer);
         clearTimeout(pongTimer);
+        refetchAll();
         scheduleReconnect();
       };
       ws.onerror = () => {
-        if (!cancelled) ws.close();
+        if (!cancelled) {
+          refetchAll();
+          ws.close();
+        }
       };
     }
 
@@ -1338,6 +1349,9 @@ export function usePacifica() {
     window.addEventListener('offline', handleOffline);
 
     connect();
+    restFallbackTimer = setInterval(() => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) refetchAll();
+    }, 15000);
     const h = wsHandlersRef.current;
     h.fetchPrices?.();
     if (walletAddr) {
@@ -1353,6 +1367,7 @@ export function usePacifica() {
       clearInterval(pingTimer);
       clearTimeout(pongTimer);
       clearTimeout(reconnectTimer);
+      clearInterval(restFallbackTimer);
       clearTimeout(priceThrottleTimer);
       clearTimeout(claimGoldTimer);
       clearTimeout(withdrawTimerRef.current);

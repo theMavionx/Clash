@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, memo } from 'react';
 import elfaLogo from '../assets/elfa.svg';
 import { usePlayer } from '../hooks/useGodot';
+import { pacificaFetch } from '../lib/pacificaClient';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
-const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 
 // Live mark price from Pacifica — polled every 5s while modal open.
 function useLiveMark(symbol) {
@@ -13,8 +13,7 @@ function useLiveMark(symbol) {
     let cancelled = false;
     const fetchMark = async () => {
       try {
-        const r = await fetch(`${PACIFICA_API}/info/prices`);
-        const j = await r.json();
+        const j = await pacificaFetch('/info/prices');
         if (cancelled) return;
         const row = Array.isArray(j?.data) ? j.data.find(p => p.symbol === symbol) : null;
         const v = row ? parseFloat(row.mark) : null;
@@ -37,8 +36,7 @@ function MiniChart({ symbol, entry, tp, sl, mark }) {
     let cancelled = false;
     const now = Date.now();
     const start = now - 24 * 60 * 60 * 1000; // 24h
-    fetch(`${PACIFICA_API}/kline?symbol=${symbol}&interval=1h&start_time=${start}&end_time=${now}`)
-      .then(r => r.json())
+    pacificaFetch(`/kline?symbol=${encodeURIComponent(symbol)}&interval=1h&start_time=${start}&end_time=${now}`)
       .then(j => {
         if (cancelled) return;
         const parsed = Array.isArray(j?.data) ? j.data.map(c => ({

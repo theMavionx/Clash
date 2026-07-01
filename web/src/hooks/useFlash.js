@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import * as anchor from '@coral-xyz/anchor';
 import { GPLSESSION_PROGRAMS, SessionTokenManager } from '@magicblock-labs/gum-sdk';
@@ -33,7 +33,8 @@ const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_MS = 60_000;
 const FLASH_WS_INTERVAL_MS = 1000;
 const FLASH_DEFAULT_V2_RPC = 'https://flash.magicblock.xyz';
-const FLASH_V2_PROGRAM_ID = 'FTv2RxXarPfNta45HTTMVaGvjzsGg27FXJ3hEKWBhrzV';
+const FLASH_MAIN_PROGRAM_ID = 'FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn';
+const FLASH_V2_PROGRAM_ID = FLASH_MAIN_PROGRAM_ID;
 const FLASH_DELEGATION_PROGRAM_ID = 'DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh';
 const FLASH_ONE_TAP_EXPIRY_MINUTES = Math.max(10, Math.min(24 * 60, Number(import.meta.env.VITE_FLASH_ONE_TAP_EXPIRY_MINUTES || 24 * 60)));
 const FLASH_ONE_TAP_TOPUP_LAMPORTS = Math.max(0, Math.min(20_000_000, Number(import.meta.env.VITE_FLASH_ONE_TAP_TOPUP_LAMPORTS || 0)));
@@ -60,6 +61,7 @@ const FLASH_ONE_TAP_DISABLED = {
 };
 
 const FLASH_PROGRAM_ERROR_MESSAGES = {
+  6013: 'Flash position does not exist or is already closed. Refresh positions and try again.',
   6020: 'Flash rejected the order because price moved beyond the allowed slippage. Refresh the quote and try again.',
   6021: 'Flash rejected the order because leverage is above the market leverage cap. Lower leverage and retry.',
   6022: 'Flash rejected this order because leverage is above the market initial leverage cap. Lower leverage and retry.',
@@ -77,7 +79,7 @@ const FLASH_PROGRAM_ERROR_MESSAGES = {
   6065: 'Flash rejected the order because the position size is too small.',
   6078: 'Insufficient Flash balance for this operation.',
   6079: 'Insufficient Flash available balance. Deposited funds minus open positions/orders are not enough for this trade. Reduce margin or close/cancel existing exposure.',
-  6081: 'Flash rejected the order because the account has too many open orders.',
+  6081: 'Flash rejected this transaction because the builder returned a deprecated instruction. Refresh and try again after the Flash builder is updated.',
   6083: 'Flash could not find this order. Refresh positions/orders and try again.',
   6084: 'Flash rejected the order because the limit price condition is not met.',
   6085: 'Flash rejected the order because collateral is insufficient for the position.',
@@ -178,7 +180,7 @@ function flashOneTapState(agent, patch = {}) {
 }
 
 function flashOneTapRequiredError() {
-  return 'Flash one tap trading is required for Flash v2 trades. Press ENABLE on Flash one tap, sign the one-time session setup, then try the trade again.';
+  return 'Flash one tap trading is required for Flash trades. Press ENABLE on Flash one tap, sign the one-time session setup, then try the trade again.';
 }
 
 function extractSolanaSignatureFromError(error) {
@@ -341,16 +343,12 @@ function flashPositionIdentity(pos = {}) {
 }
 
 function flashPositionKey(pos = {}) {
+  const explicit = String(pos.positionKey || pos.position_key || pos.key || pos.address || '').trim();
+  if (explicit) return explicit;
+  const marketPubkey = String(pos.marketPubkey || pos.market_pubkey || pos.publicKey || pos.pubkey || '').trim();
+  if (marketPubkey) return marketPubkey.startsWith('mb-') ? marketPubkey : `mb-${marketPubkey}`;
   return String(
-    pos.positionKey
-    || pos.position_key
-    || pos.marketPubkey
-    || pos.market_pubkey
-    || pos.publicKey
-    || pos.pubkey
-    || pos.key
-    || pos.address
-    || flashPositionIdentity(pos)
+    flashPositionIdentity(pos)
     || ''
   ).trim();
 }
@@ -372,6 +370,35 @@ function flashPositionSymbol(pos = {}) {
 
 function flashPositionTradeType(pos = {}) {
   return normalizeTradeType(pos.tradeType || pos.trade_type || pos.sideUi || pos.side || pos.direction || pos.metric?.sideUi || pos.metric?.side || '');
+}
+
+function flashPositionProgramId(pos = {}) {
+  return String(
+    pos.flash_program_id
+    || pos.flashProgramId
+    || pos.metric?.flash_program_id
+    || pos.metric?.flashProgramId
+    || pos._flash?.flash_program_id
+    || pos._flash?.flashProgramId
+    || ''
+  ).trim();
+}
+
+function flashPositionSource(pos = {}) {
+  return String(pos.source || pos.metric?.source || pos._flash?.source || '').trim();
+}
+
+function isLegacyFlashPosition(pos = {}) {
+  const programId = flashPositionProgramId(pos);
+  return !!programId && programId !== FLASH_MAIN_PROGRAM_ID;
+}
+
+function legacyFlashTpslMessage(symbol) {
+  return `${normalizeSymbol(symbol)} is not on the active Flash main program. Refresh positions and try again.`;
+}
+
+function legacyFlashCloseMessage(symbol) {
+  return `${normalizeSymbol(symbol)} is not on the active Flash main program. Refresh positions and try again.`;
 }
 
 function flashPositionCloseUsd(pos = {}, fallbackAmount) {
@@ -400,7 +427,7 @@ function flashPositionCloseUsd(pos = {}, fallbackAmount) {
 function normalizeFlashPosition(pos = {}) {
   const tradeType = flashPositionTradeType(pos);
   const symbol = flashPositionSymbol(pos);
-  const positionKey = flashPositionIdentity({ ...pos, symbol, tradeType }) || flashPositionKey(pos);
+  const positionKey = flashPositionKey(pos) || flashPositionIdentity({ ...pos, symbol, tradeType });
   const notional = Number(
     pos.notional_usd
     ?? pos.notionalUsd
@@ -444,7 +471,7 @@ function normalizeFlashPosition(pos = {}) {
     pnl_pct: isDust ? 0 : pos.pnl_pct,
     marketPubkey: pos.marketPubkey || pos.market_pubkey || '',
     positionKey,
-    source: pos.source || 'flash_v2_basket',
+    source: pos.source || 'flash_main_basket',
     _flashDust: isDust,
     _flashDustUsd: isDust && Number.isFinite(dustUsd) ? dustUsd : pos._flashDustUsd,
     _flash: pos,
@@ -603,17 +630,11 @@ function flashMetricMatchesPosition(metric = {}, marketPubkey = '', pos = {}) {
 
 function flashMetricsWithExistingPositions(metrics = {}, existing = {}) {
   const combined = {};
-  for (const pos of rows(existing.positions)) {
-    const key = flashPositionMetricStorageKey(pos);
-    if (key && pos?.metric && typeof pos.metric === 'object') {
-      combined[key] = { ...pos.metric };
-    }
-  }
   for (const [marketPubkey, metric] of Object.entries(metrics || {})) {
     const existingPosition = rows(existing.positions).find(pos => flashMetricMatchesPosition(metric, marketPubkey, pos));
-    if (!existingPosition) continue;
-    const key = flashPositionMetricStorageKey(existingPosition);
-    if (key) combined[key] = mergeFlashMetric(combined[key], metric);
+    const key = existingPosition ? flashPositionMetricStorageKey(existingPosition) : String(marketPubkey || '').trim();
+    if (!key) continue;
+    combined[key] = mergeFlashMetric(existingPosition?.metric || {}, metric);
   }
   return combined;
 }
@@ -677,8 +698,8 @@ function flashPositionFromMetric(marketPubkey, metric = {}, priceRows = [], exis
     inputUsdUi: sizeUsdUi,
     _flashDust: isDust,
     _flashDustUsd: isDust ? sizeUsd : undefined,
-    positionKey: `${symbol}:${tradeType}`,
-    source: existingPosition?.source || 'flash_v2_ws',
+    positionKey: marketPubkey ? `mb-${marketPubkey}` : (existingPosition?.positionKey || `${symbol}:${tradeType}`),
+    source: existingPosition?.source || 'flash_main_ws',
     metric,
   };
 }
@@ -705,7 +726,7 @@ function flashOrderFromMetric(marketPubkey, metric = {}, parent = {}) {
     amount: metric.sizeAmountUi ?? metric.size_amount_ui ?? metric.amount,
     initial_amount: metric.sizeAmountUi ?? metric.size_amount_ui ?? metric.amount,
     _readOnly: true,
-    source: 'flash_v2_ws',
+    source: 'flash_main_ws',
   };
 }
 
@@ -789,7 +810,7 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
     flash_in_basket_usdc: accountUsdc,
     account_balance_usdc: accountUsdc,
     flash_balance_source: hasBalanceSource
-      ? (snapshot.flash_balance_source || 'flash_v2_snapshot')
+      ? (snapshot.flash_balance_source || 'flash_main_snapshot')
       : (existing.flash_balance_source || 'preserved'),
     margin_used: marginUsed,
     total_margin_used: marginUsed,
@@ -801,7 +822,7 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
     positions_count: activePositions.length,
     dust_positions_count: positions.length - activePositions.length,
     orders_count: orders.length,
-    source: snapshot.source || 'flash_v2_ws',
+    source: snapshot.source || 'flash_main_ws',
   };
 }
 
@@ -1063,7 +1084,7 @@ function flashOneTapSetupUserError(error, solWallet) {
 }
 
 function flashTxBase64(build = {}) {
-  return build.transactionBase64 || build.transaction || build.transactions?.[0] || '';
+  return build.transactions?.[0] || build.transaction || build.transactionBase64 || '';
 }
 
 function isFlashInitEndpoint(endpoint = '') {
@@ -1367,7 +1388,6 @@ export function useFlash() {
           setError('');
           setLoading(false);
         } else if (msg?.type === 'metrics' && msg.data && typeof msg.data === 'object') {
-          if (Object.keys(msg.data).length === 0) return;
           const existingAccount = {
             ...(accountRef.current || {}),
             positions: positionsRef.current,
@@ -1375,13 +1395,12 @@ export function useFlash() {
           const combinedPositionMetrics = flashMetricsWithExistingPositions(msg.data, existingAccount);
           const normalized = normalizeFlashSnapshot(
             {
-              ...existingAccount,
               owner: accountOwner,
               basketPubkey: existingAccount.basketPubkey,
               basketData: existingAccount.basketData,
               positionMetrics: combinedPositionMetrics,
               orderMetrics: existingAccount.orderMetrics || {},
-              source: 'flash_v2_ws_metrics',
+              source: 'flash_main_ws_metrics',
             },
             pricesRef.current,
             existingAccount,
@@ -1441,6 +1460,7 @@ export function useFlash() {
   const confirmSignature = useCallback(async (signature, txConnection = null, options = {}) => {
     const preferBackend = options?.preferBackend === true;
     const acceptProcessed = options?.acceptProcessed === true;
+    const requireBackendStatus = options?.requireBackendStatus === true;
     const loadBackendStatus = async () => fetchJson(`${FUTURES_API}/flash/tx-status?signature=${encodeURIComponent(signature)}`, {
       headers: { 'x-token': token, 'x-dex': 'flash' },
     }).catch(() => null);
@@ -1459,6 +1479,7 @@ export function useFlash() {
       const rpcStatus = await txConnection.getSignatureStatuses([signature], { searchTransactionHistory: true }).catch(() => null);
       const value = rpcStatus?.value?.[0];
       if (value?.err) throwFlashTxError(value.err, await loadBackendStatus());
+      if (requireBackendStatus) return false;
       if (acceptProcessed && value) return true;
       return value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized';
     };
@@ -1606,7 +1627,12 @@ export function useFlash() {
         wallet_path: walletTxOptions.walletPathOverride || 'mwa_sign_and_send',
         magic_router: magicRouter,
       });
-      await confirmSignature(signature, txConnection, { preferBackend: false, acceptProcessed: magicRouter || isFlashTradingTx(meta) });
+      const requireFinalStatus = isFlashTradingTx(meta);
+      await confirmSignature(signature, txConnection, {
+        preferBackend: requireFinalStatus,
+        acceptProcessed: !requireFinalStatus && magicRouter,
+        requireBackendStatus: requireFinalStatus,
+      });
       return signature;
     }
     let signed = tx;
@@ -1615,7 +1641,7 @@ export function useFlash() {
       const ownerSigner = solWallet.publicKey.toBase58();
       if (!requiredSigners.includes(sessionSigner)) {
         if (requiredSigners.includes(ownerSigner)) {
-          throw new Error('Flash one tap is enabled, but the v2 builder returned an owner-signed transaction. Re-enable one tap and try again.');
+          throw new Error('Flash one tap is enabled, but the builder returned an owner-signed transaction. Re-enable one tap and try again.');
         }
         throw new Error('Flash one tap transaction was built without the session signer.');
       }
@@ -1713,7 +1739,12 @@ export function useFlash() {
       }), 20_000, 'Flash transaction broadcast timed out. Check Phantom activity before retrying.');
     }
     console.info('[Flash tx] raw sent', { signature, rpc, magic_router: magicRouter });
-    await confirmSignature(signature, txConnection, { preferBackend: false, acceptProcessed: magicRouter || isFlashTradingTx(meta) });
+    const requireFinalStatus = isFlashTradingTx(meta);
+    await confirmSignature(signature, txConnection, {
+      preferBackend: requireFinalStatus,
+      acceptProcessed: !requireFinalStatus && magicRouter,
+      requireBackendStatus: requireFinalStatus,
+    });
     return signature;
   }, [confirmSignature, getActiveOneTapSession, selectTxConnection, solWallet, token]);
 
@@ -1724,16 +1755,22 @@ export function useFlash() {
       headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'flash' },
       body: JSON.stringify({ wallet: walletAddr, ...wireBody }),
     });
-    const tx = flashTxBase64(build);
-    if (!tx) throw new Error('Flash v2 builder returned no transactionBase64');
-    const signature = await sendBuiltTransaction(tx, {
-      ...build,
-      endpoint,
-      oneTap: !!_flashOneTapSession,
-      oneTapSigner: _flashOneTapSession?.publicKey || '',
-      sessionToken: _flashOneTapSession?.sessionToken || '',
-    });
-    return { ...build, signature };
+    const txs = Array.isArray(build.transactions)
+      ? build.transactions.filter(Boolean)
+      : [flashTxBase64(build)].filter(Boolean);
+    if (!txs.length) throw new Error('Flash builder returned no transactionBase64');
+    const signatures = [];
+    for (const tx of txs) {
+      const signature = await sendBuiltTransaction(tx, {
+        ...build,
+        endpoint,
+        oneTap: !!_flashOneTapSession,
+        oneTapSigner: _flashOneTapSession?.publicKey || '',
+        sessionToken: _flashOneTapSession?.sessionToken || '',
+      });
+      signatures.push(signature);
+    }
+    return { ...build, signature: signatures[signatures.length - 1], signatures };
   }, [sendBuiltTransaction, token, walletAddr]);
 
   const readFlashAccountSnapshot = useCallback(async () => {
@@ -1980,7 +2017,7 @@ export function useFlash() {
     } finally {
       setActionLoading(false);
     }
-  }, [selectTxConnection, solWallet, walletAddr, walletMismatch]);
+  }, [confirmSignature, selectTxConnection, solWallet, walletAddr, walletMismatch]);
 
   const tryBuildAndSend = useCallback(async (endpoint, body = {}) => {
     try {
@@ -2140,7 +2177,7 @@ export function useFlash() {
         body: JSON.stringify(request),
       });
       const tx = flashTxBase64(build);
-      if (!tx) throw new Error('Flash v2 builder returned no transactionBase64');
+      if (!tx) throw new Error('Flash builder returned no transactionBase64');
       const signature = await sendBuiltTransaction(tx, {
         ...build,
         oneTap: !!oneTapSession,
@@ -2180,7 +2217,8 @@ export function useFlash() {
     })
   ), [placeMarketOrder]);
 
-  const closePosition = useCallback(async (symbol, side, amount, _pairIndex, _tradeIndex, fullClose = true, options = {}) => {
+  const closePosition = useCallback(async (symbol, side, amount, _pairIndex, _tradeIndex, _fullClose = true, options = {}) => {
+    void _fullClose;
     if (!token) return { error: 'Missing game session token' };
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
     if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered Flash wallet' };
@@ -2191,9 +2229,17 @@ export function useFlash() {
       flashPositionSymbol(pos) === wantedSymbol
       && flashPositionTradeType(pos) === wantedSide
     )) || positions.find(pos => flashPositionSymbol(pos) === wantedSymbol);
+    if (!matched) {
+      await refresh().catch(() => null);
+      return { error: 'Flash position not found. Refresh positions before closing.' };
+    }
+    if (isLegacyFlashPosition(matched)) {
+      await refresh().catch(() => null);
+      return { error: legacyFlashCloseMessage(wantedSymbol) };
+    }
     const inputUsdUi = String(options?.inputUsdUi || options?.input_usd_ui || flashPositionCloseUsd(matched, amount)).trim();
     if (!inputUsdUi) {
-      return { error: 'Flash close requires a USD close amount from the Flash v2 basket.' };
+      return { error: 'Flash close requires a USD close amount from the Flash position.' };
     }
     setActionLoading(true);
     try {
@@ -2206,14 +2252,21 @@ export function useFlash() {
           wallet: accountOwner,
           marketSymbol: wantedSymbol,
           side: wantedSide,
+          marketPubkey: matched.marketPubkey || matched.market_pubkey || '',
+          positionKey: flashPositionKey(matched),
           inputUsdUi,
+          inputSizeAmountUi: matched.sizeAmountUi || matched.size_amount_ui || matched.amount || matched.size || '',
+          entryPriceUi: matched.entryPriceUi || matched.entry_price || matched.entry_price_ui || '',
+          sizeUsdUi: matched.sizeUsdUi || matched.size_usd_ui || matched.notional_usd || '',
           withdrawTokenSymbol: options?.withdrawTokenSymbol || options?.withdraw_token_symbol || 'USDC',
           slippagePercentage: String(options?.slippage || options?.slippagePercentage || '0.5'),
+          positionSource: flashPositionSource(matched),
+          flashProgramId: flashPositionProgramId(matched),
           ...sessionParams,
         }),
       });
       const tx = flashTxBase64(build);
-      if (!tx) throw new Error('Flash v2 builder returned no transactionBase64');
+      if (!tx) throw new Error('Flash builder returned no transactionBase64');
       const signature = await sendBuiltTransaction(tx, {
         ...build,
         oneTap: !!oneTapSession,
@@ -2238,7 +2291,12 @@ export function useFlash() {
         : { ok: true, signature, ...imported };
     } catch (e) {
       if (isFlashMissingDelegationError(e)) clearFlashDelegationReady(walletAddr);
-      return { error: flashUserError(e) };
+      const message = flashUserError(e);
+      if (/position was not found|FLASH_POSITION_NOT_FOUND|Computation failed/i.test(message)) {
+        await refresh().catch(() => null);
+        return { error: 'Flash position was not found. Positions were refreshed; if it still appears, reload the page.' };
+      }
+      return { error: message };
     } finally {
       setActionLoading(false);
     }
@@ -2394,7 +2452,7 @@ export function useFlash() {
       return {
         ok: true,
         signature: deposit.signature,
-        info: 'Flash v2 deposit sent. Basket balance updates after confirmation.',
+        info: 'Flash deposit sent. Basket balance updates after confirmation.',
       };
     } catch (e) {
       const msg = flashUserError(e);
@@ -2427,7 +2485,7 @@ export function useFlash() {
       return {
         ok: true,
         signature: build.signature,
-        info: 'Flash v2 withdrawal request sent. If it stalls, recover with execute-withdrawal in Flash.',
+        info: 'Flash withdrawal request sent. If it stalls, recover with execute-withdrawal in Flash.',
       };
     } catch (e) {
       return { error: flashUserError(e) };
@@ -2443,6 +2501,7 @@ export function useFlash() {
     const wantedSymbol = normalizeSymbol(symbol);
     const live = positions.find(pos => flashPositionSymbol(pos) === wantedSymbol) || positions.find(pos => normalizeSymbol(pos?.symbol) === wantedSymbol);
     if (!live) return { error: 'Flash position not found. Refresh positions before setting TP/SL.' };
+    if (isLegacyFlashPosition(live)) return { error: legacyFlashTpslMessage(wantedSymbol) };
     const takeProfitUi = String(tpPrice || '').trim();
     const stopLossUi = String(slPrice || '').trim();
     if (!takeProfitUi && !stopLossUi) return { error: 'Enter a TP or SL price first.' };
@@ -2455,7 +2514,7 @@ export function useFlash() {
       || ''
     ).trim();
     if (!sizeAmountUi || !(Number(sizeAmountUi) > 0)) {
-      return { error: 'Flash TP/SL requires the position size from the v2 basket. Refresh positions and try again.' };
+      return { error: 'Flash TP/SL requires the position size from the Flash position. Refresh positions and try again.' };
     }
     setActionLoading(true);
     try {
@@ -2464,9 +2523,13 @@ export function useFlash() {
       const build = await buildAndSend('/flash/tpsl-tx', {
         marketSymbol: wantedSymbol,
         side: flashPositionTradeType(live),
+        marketPubkey: live.marketPubkey || live.market_pubkey || '',
+        positionKey: flashPositionKey(live),
         sizeAmountUi,
         takeProfitUi,
         stopLossUi,
+        positionSource: flashPositionSource(live),
+        flashProgramId: flashPositionProgramId(live),
         ...sessionParams,
         _flashOneTapSession: oneTapSession,
       });
@@ -2483,6 +2546,47 @@ export function useFlash() {
       setActionLoading(false);
     }
   }, [buildAndSend, ensureFlashBasketDelegated, oneTapTradeParams, positions, refresh, token, walletAddr, walletMismatch]);
+
+  const cancelOrder = useCallback(async (order = {}) => {
+    if (!token) return { error: 'Missing game session token' };
+    if (!walletAddr) return { error: 'Connect a Solana wallet first' };
+    if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered Flash wallet' };
+    const wantedSymbol = normalizeSymbol(order.marketSymbol || order.symbol || order.outputTokenSymbol || order.market || '');
+    const orderId = Number(order.orderId ?? order.order_id ?? order.id);
+    if (!wantedSymbol) return { error: 'Flash cancel requires an order market.' };
+    if (!Number.isInteger(orderId) || orderId < 0 || orderId > 255) {
+      return { error: 'Flash cancel requires a valid order id.' };
+    }
+    const rawType = String(order.order_type || order.orderType || order.type || '').trim().toUpperCase();
+    const isStopLoss = order.isStopLoss != null
+      ? order.isStopLoss === true || order.isStopLoss === 'true'
+      : order.is_stop_loss === true || order.is_stop_loss === 'true' || rawType === 'SL';
+    setActionLoading(true);
+    try {
+      const { params: sessionParams, session: oneTapSession } = await oneTapTradeParams();
+      await ensureFlashBasketDelegated();
+      const build = await buildAndSend('/flash/cancel-order-tx', {
+        marketSymbol: wantedSymbol,
+        side: normalizeTradeType(order.tradeType || order.trade_type || order.sideUi || order.side),
+        orderId,
+        orderType: rawType || (order.triggerPriceUi || order.trigger_price ? 'TRIGGER' : 'LIMIT'),
+        isStopLoss,
+        ...sessionParams,
+        _flashOneTapSession: oneTapSession,
+      });
+      window.setTimeout(() => refresh().catch(() => null), 800);
+      return {
+        ok: true,
+        signature: build.signature,
+        info: 'Flash cancel order transaction sent.',
+      };
+    } catch (e) {
+      if (isFlashMissingDelegationError(e)) clearFlashDelegationReady(walletAddr);
+      return { error: flashUserError(e) };
+    } finally {
+      setActionLoading(false);
+    }
+  }, [buildAndSend, ensureFlashBasketDelegated, oneTapTradeParams, refresh, token, walletAddr, walletMismatch]);
 
   const clearError = useCallback(() => setError(''), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
@@ -2515,7 +2619,7 @@ export function useFlash() {
     setOneTapTradingEnabled,
     placeMarketOrder,
     placeLimitOrder,
-    cancelOrder: async () => ({ error: 'Flash cancel order is not wired yet. Use Flash Trade directly for order management.' }),
+    cancelOrder,
     closePosition,
     setLeverage: async () => ({ ok: true }),
     depositToPacifica,

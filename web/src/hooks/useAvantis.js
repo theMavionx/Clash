@@ -29,6 +29,10 @@ import {
   readAvantisSmartWalletDelegate,
 } from '../lib/avantisSmartWallet';
 import {
+  fetchAvantisMarketsDirect,
+  fetchAvantisUserDataDirect,
+} from '../lib/avantisClient';
+import {
   enableAvantisSmartWallet,
   refreshAvantisSmartWalletStatus,
 } from '../lib/avantisSmartWalletSetup';
@@ -637,8 +641,14 @@ export function useAvantis() {
   // ───── Public market data (server proxy, no auth) ─────
   const fetchMarkets = useCallback(async () => {
     try {
-      const r = await fetch(`${FUTURES_API}/markets?dex=avantis`);
-      const j = await r.json();
+      let j;
+      try {
+        j = await fetchAvantisMarketsDirect();
+      } catch (directError) {
+        console.warn('[avantis] browser markets read failed; using server fallback:', directError?.message || directError);
+        const r = await fetch(`${FUTURES_API}/markets?dex=avantis`);
+        j = await r.json();
+      }
       const list = normalizeMarkets(j?.pairs || j?.data || j);
       setMarkets(list);
       marketsRef.current = list;
@@ -690,9 +700,16 @@ export function useAvantis() {
     if (!walletAddr) return;
     try {
       const freshPrices = await fetchPrices();
-      const r = await fetch(`${FUTURES_API}/positions?dex=avantis&address=${walletAddr}`);
-      const j = await r.json();
-      const raw = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      let raw = [];
+      try {
+        const userData = await fetchAvantisUserDataDirect(walletAddr);
+        raw = Array.isArray(userData?.positions) ? userData.positions : [];
+      } catch (directError) {
+        console.warn('[avantis] browser positions read failed; using server fallback:', directError?.message || directError);
+        const r = await fetch(`${FUTURES_API}/positions?dex=avantis&address=${walletAddr}`);
+        const j = await r.json();
+        raw = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      }
       const list = raw.map(p => normalizePosition(p, marketsRef.current, freshPrices || pricesRef.current));
       setPositions(list);
       setDataReady(true);
@@ -703,9 +720,16 @@ export function useAvantis() {
   const fetchOrders = useCallback(async () => {
     if (!walletAddr) return;
     try {
-      const r = await fetch(`${FUTURES_API}/orders?dex=avantis&address=${walletAddr}`);
-      const j = await r.json();
-      const raw = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      let raw = [];
+      try {
+        const userData = await fetchAvantisUserDataDirect(walletAddr);
+        raw = Array.isArray(userData?.limitOrders) ? userData.limitOrders : [];
+      } catch (directError) {
+        console.warn('[avantis] browser orders read failed; using server fallback:', directError?.message || directError);
+        const r = await fetch(`${FUTURES_API}/orders?dex=avantis&address=${walletAddr}`);
+        const j = await r.json();
+        raw = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      }
       const list = raw.map(o => normalizeOrder(o, marketsRef.current));
       setOrders(list);
     } catch {}

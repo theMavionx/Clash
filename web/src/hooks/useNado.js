@@ -21,6 +21,7 @@ import {
 import {
   buildNadoOrderParams,
   buildNadoTriggerOrderParams,
+  fetchNadoMarketsDirect,
   isNadoAddress,
   nadoErrorMessage,
   normalizeNadoMarkets,
@@ -451,8 +452,15 @@ export function useNado() {
 
   const fetchMarkets = useCallback(async () => {
     try {
-      const rows = await fetchJson('/api/futures/markets?dex=nado');
-      const normalized = normalizeNadoMarkets(rows);
+      let normalized = [];
+      try {
+        const publicClient = typeof getPublicClient === 'function' ? getPublicClient(INK_CHAIN_ID) : null;
+        normalized = await fetchNadoMarketsDirect(publicClient);
+      } catch (directError) {
+        console.warn('[useNado] browser markets read failed; using server fallback:', directError?.message || directError);
+        const rows = await fetchJson('/api/futures/markets?dex=nado');
+        normalized = normalizeNadoMarkets(rows);
+      }
       marketsRef.current = normalized;
       setMarkets(normalized);
       setPrices(normalizeNadoPrices(normalized));
@@ -462,16 +470,25 @@ export function useNado() {
       setError(nadoErrorMessage(e));
       return [];
     }
-  }, [fetchJson]);
+  }, [fetchJson, getPublicClient]);
 
   const fetchPrices = useCallback(async () => {
     try {
-      const rows = await fetchJson('/api/futures/prices?dex=nado');
-      setPrices(Array.isArray(rows) ? rows : []);
+      const publicClient = typeof getPublicClient === 'function' ? getPublicClient(INK_CHAIN_ID) : null;
+      const freshMarkets = await fetchNadoMarketsDirect(publicClient);
+      marketsRef.current = freshMarkets;
+      setMarkets(freshMarkets);
+      setPrices(normalizeNadoPrices(freshMarkets));
     } catch (e) {
-      console.warn('[useNado] fetchPrices:', e?.message || e);
+      console.warn('[useNado] browser prices read failed; using server fallback:', e?.message || e);
+      try {
+        const rows = await fetchJson('/api/futures/prices?dex=nado');
+        setPrices(Array.isArray(rows) ? rows : []);
+      } catch (fallbackError) {
+        console.warn('[useNado] fetchPrices:', fallbackError?.message || fallbackError);
+      }
     }
-  }, [fetchJson]);
+  }, [fetchJson, getPublicClient]);
 
   const readWalletUsdt = useCallback(async () => {
     if (!walletAddr || typeof getPublicClient !== 'function') {
