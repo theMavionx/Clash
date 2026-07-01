@@ -8574,6 +8574,24 @@ function resolveClaimWalletForDex(player, dex, currentWallet = null) {
   return currentWallet;
 }
 
+function getReadyPlayerDexAccount(playerId, dex) {
+  const normalizedDex = String(dex || '').toLowerCase();
+  if (!playerId || !VALID_DEXES.has(normalizedDex)) return null;
+  try {
+    return db.db.prepare(`
+      SELECT dex, chain_type, wallet_address, status
+      FROM player_dex_accounts
+      WHERE player_id = ?
+        AND dex = ?
+        AND status = 'ready'
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `).get(playerId, normalizedDex) || null;
+  } catch {
+    return null;
+  }
+}
+
 function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown', opts = {}) {
   if (!player?.id || !VALID_DEXES.has(dex)) return { ok: false, changed: false, conflictResolved: false };
   const bindWallet = opts.bindWallet !== false;
@@ -13321,34 +13339,51 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   const playerDex = VALID_DEXES.has(String(req.player.dex || '').toLowerCase())
     ? String(req.player.dex).toLowerCase()
     : 'pacifica';
-  wallet = resolveClaimWalletForDex(req.player, playerDex, wallet);
+  const requestedDex = req.body.dex == null ? playerDex : String(req.body.dex).toLowerCase();
+  if (!VALID_DEXES.has(requestedDex)) {
+    db.recordTradeClaimResult({
+      playerId: req.player.id,
+      dex: playerDex,
+      futuresMode: req.player.futures_mode || null,
+      wallet,
+      claimLatencyMs: Date.now() - claimStartedAt,
+      result: 'invalid_dex',
+      reason: 'Invalid dex',
+      metadata: { requested_dex: requestedDex },
+    });
+    return res.status(400).json({ error: 'Invalid dex' });
+  }
+  let dex = playerDex;
+  let requestedDexAccount = null;
+  if (requestedDex !== playerDex) {
+    requestedDexAccount = getReadyPlayerDexAccount(req.player.id, requestedDex);
+    if (requestedDexAccount) {
+      dex = requestedDex;
+    }
+  }
+  wallet = resolveClaimWalletForDex(req.player, dex, wallet);
   const recordClaimTelemetry = (event = {}) => {
     db.recordTradeClaimResult({
       playerId: req.player.id,
-      dex: event.dex || playerDex,
+      dex: event.dex || dex,
       futuresMode: req.player.futures_mode || null,
       wallet,
       claimLatencyMs: Date.now() - claimStartedAt,
       ...event,
     });
   };
-  const requestedDex = req.body.dex == null ? playerDex : String(req.body.dex).toLowerCase();
-  if (!VALID_DEXES.has(requestedDex)) {
-    recordClaimTelemetry({ result: 'invalid_dex', reason: 'Invalid dex', metadata: { requested_dex: requestedDex } });
-    return res.status(400).json({ error: 'Invalid dex' });
-  }
-  if (requestedDex !== playerDex) {
+  if (requestedDex !== playerDex && !requestedDexAccount) {
     recordClaimTelemetry({
       result: 'dex_mismatch',
-      reason: 'Requested DEX does not match registered account DEX',
+      reason: 'Requested DEX is not active or linked',
       metadata: { requested_dex: requestedDex, account_dex: playerDex },
     });
     return res.status(409).json({
-      error: `Account is registered for '${playerDex}'. Switch DEX before claiming ${requestedDex} rewards.`,
+      error: `Account is registered for '${playerDex}'. Switch DEX or link ${requestedDex} before claiming ${requestedDex} rewards.`,
       dex: playerDex,
+      requested_dex: requestedDex,
     });
   }
-  const dex = playerDex;
 
   // Auto-replace Farcaster `fc_<fid>` placeholder wallets with the real
   // address from the request body. The placeholder is stored by older
