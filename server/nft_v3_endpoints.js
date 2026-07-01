@@ -2962,6 +2962,7 @@ function mountNftV3Endpoints(router, ctx) {
   const bridgeHelpers = require('./bridge_helpers');
   const { CHAIN_IDS, EVM_CHAINS, ALL_CHAINS, deploymentOf, normalizeBridgeCollectionSlug,
           normalizeAptosAddress,
+          aptosFullnodeBase,
           aptosAccount, signAptosBridgeReceipt, verifyAptosBurnTx,
           verifySolanaBurnTx, buildSourceRef,
           getSolanaBridgeAssetInfo, buildSolanaBridgeMemo,
@@ -3158,21 +3159,90 @@ function mountNftV3Endpoints(router, ctx) {
     return null;
   }
 
-  async function quoteNativeBridgeFee(sourceChain, sourceContract) {
+  const _aptosBridgeFeeCache = new Map();
+
+  function bridgeNativeFeeResult(chainKey, amount, source) {
+    const cfg = BRIDGE_NATIVE[chainKey];
+    return {
+      usdPriceE6: BRIDGE_FEE_USD_E6.toString(),
+      amount,
+      amountFormatted: formatUnits(amount, cfg.decimals),
+      decimals: cfg.decimals,
+      symbol: cfg.symbol,
+      source,
+    };
+  }
+
+  function aptosBridgeFeeFromDeployment(collectionSlugRaw) {
+    const collectionSlug = normalizeBridgeCollectionSlug(collectionSlugRaw || 'demonking');
+    const dep = deploymentOf('aptos', collectionSlug) || {};
+    const raw = dep.bridgeFeeOctas;
+    if (raw !== undefined && raw !== null && /^\d+$/.test(String(raw))) {
+      return {
+        amount: BigInt(raw),
+        source: `${collectionSlug}.deployment.bridgeFeeOctas`,
+      };
+    }
+    return null;
+  }
+
+  async function aptosBridgeFeeFromModule(collectionSlugRaw) {
+    const collectionSlug = normalizeBridgeCollectionSlug(collectionSlugRaw || 'demonking');
+    const dep = deploymentOf('aptos', collectionSlug) || {};
+    if (!dep.module) return null;
+    const cacheKey = `${collectionSlug}:${dep.module}`;
+    const now = Date.now();
+    const cached = _aptosBridgeFeeCache.get(cacheKey);
+    if (cached && now - cached.at < 60_000) return cached.value;
+
+    const response = await timeoutPromise(fetch(`${aptosFullnodeBase()}/v1/view`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(process.env.APTOS_NODE_API_KEY ? { Authorization: `Bearer ${process.env.APTOS_NODE_API_KEY}` } : {}),
+      },
+      body: JSON.stringify({
+        function: `${dep.module}::get_bridge_fee_octas`,
+        type_arguments: [],
+        arguments: [],
+      }),
+    }), 8_000, `${collectionSlug} Aptos bridge fee view`);
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(json?.message || `Aptos bridge fee view ${response.status}`);
+    }
+    const raw = Array.isArray(json) ? json[0] : null;
+    if (raw === undefined || raw === null || !/^\d+$/.test(String(raw))) {
+      throw new Error('Aptos bridge fee view returned malformed value');
+    }
+    const value = {
+      amount: BigInt(raw),
+      source: `${collectionSlug}.module.get_bridge_fee_octas`,
+    };
+    _aptosBridgeFeeCache.set(cacheKey, { at: now, value });
+    return value;
+  }
+
+  async function quoteNativeBridgeFee(sourceChain, sourceContract, options = {}) {
     const cfg = BRIDGE_NATIVE[sourceChain];
     if (!cfg) return null;
 
-    const explicit = explicitFeeUnitsFor(sourceChain);
-    if (explicit) {
-      return {
-        usdPriceE6: BRIDGE_FEE_USD_E6.toString(),
-        amount: explicit.amount,
-        amountFormatted: formatUnits(explicit.amount, cfg.decimals),
-        decimals: cfg.decimals,
-        symbol: cfg.symbol,
-        source: explicit.source,
-      };
+    if (sourceChain === 'aptos') {
+      let moduleFee = null;
+      try {
+        moduleFee = await aptosBridgeFeeFromModule(options.collection || options.collectionSlug);
+      } catch (err) {
+        console.warn('[bridge] Aptos bridge fee view failed:', err?.message || err);
+      }
+      const fixedFee = moduleFee
+        || aptosBridgeFeeFromDeployment(options.collection || options.collectionSlug)
+        || explicitFeeUnitsFor(sourceChain);
+      if (fixedFee) return bridgeNativeFeeResult(sourceChain, fixedFee.amount, fixedFee.source);
+      throw new Error('Aptos bridge fee is not configured');
     }
+
+    const explicit = explicitFeeUnitsFor(sourceChain);
+    if (explicit) return bridgeNativeFeeResult(sourceChain, explicit.amount, explicit.source);
 
     if (process.env.NFT_BRIDGE_USE_CONTRACT_FEE === '1' && EVM_CHAINS.has(sourceChain) && sourceContract) {
       try {
@@ -3182,14 +3252,7 @@ function mountNftV3Endpoints(router, ctx) {
           address: getAddress(sourceContract), abi: NFT_V3_ABI, functionName: 'bridgeFeeWei',
         });
         if (feeWei > 0n) {
-          return {
-            usdPriceE6: BRIDGE_FEE_USD_E6.toString(),
-            amount: feeWei,
-            amountFormatted: formatUnits(feeWei, cfg.decimals),
-            decimals: cfg.decimals,
-            symbol: cfg.symbol,
-            source: 'contract.bridgeFeeWei',
-          };
+          return bridgeNativeFeeResult(sourceChain, feeWei, 'contract.bridgeFeeWei');
         }
       } catch { /* older impl or RPC issue: fall back to USD quote */ }
     }
@@ -3198,14 +3261,7 @@ function mountNftV3Endpoints(router, ctx) {
     if (priceUsdE6 <= 0n) throw new Error(`${cfg.symbol}/USD price unavailable`);
     const scale = 10n ** BigInt(cfg.decimals);
     const amount = (BRIDGE_FEE_USD_E6 * scale + priceUsdE6 - 1n) / priceUsdE6;
-    return {
-      usdPriceE6: BRIDGE_FEE_USD_E6.toString(),
-      amount,
-      amountFormatted: formatUnits(amount, cfg.decimals),
-      decimals: cfg.decimals,
-      symbol: cfg.symbol,
-      source: `${cfg.symbol}/USD ${priceUsdE6.toString()}`,
-    };
+    return bridgeNativeFeeResult(sourceChain, amount, `${cfg.symbol}/USD ${priceUsdE6.toString()}`);
   }
 
   function bridgeFeeJson(fee) {
@@ -3422,7 +3478,7 @@ function mountNftV3Endpoints(router, ctx) {
         const aptosDeploy = bridgeDeploymentOf('aptos', collectionSlug);
         if (!aptosDeploy?.module) return res.status(503).json({ error: 'Aptos module not deployed' });
         if (!req.body?.sourceTokenAddress) return res.status(400).json({ error: 'sourceTokenAddress required (Aptos token object address)' });
-        const bridgeFee = await quoteNativeBridgeFee('aptos');
+        const bridgeFee = await quoteNativeBridgeFee('aptos', null, { collection: collectionSlug });
         return res.json({
           collection: collectionSlug,
           mode: 'aptos-burn',
@@ -3581,7 +3637,7 @@ function mountNftV3Endpoints(router, ctx) {
         if (!/^0x[0-9a-fA-F]{64}$/.test(burnTxHash)) return res.status(400).json({ error: 'Aptos burnTxHash malformed' });
         const r = await verifyAptosBurnTx(burnTxHash, { collection: collectionSlug });
         if (r.error) return res.status(404).json({ error: `Aptos verify: ${r.error}` });
-        const requiredFee = await quoteNativeBridgeFee('aptos');
+        const requiredFee = await quoteNativeBridgeFee('aptos', null, { collection: collectionSlug });
         const feePaid = BigInt(r.feePaidOctas || 0);
         if (!grandfatheredBridge && feePaid < requiredFee.amount) {
           return res.status(402).json({
@@ -4019,7 +4075,7 @@ function mountNftV3Endpoints(router, ctx) {
         if (!/^0x[0-9a-fA-F]{64}$/.test(burnTxHash)) return res.status(400).json({ error: 'Aptos burnTxHash malformed' });
         const r = await verifyAptosBurnTx(burnTxHash, { collection: collectionSlug });
         if (r.error) return res.status(404).json({ error: `Aptos verify: ${r.error}` });
-        const requiredFee = await quoteNativeBridgeFee('aptos');
+        const requiredFee = await quoteNativeBridgeFee('aptos', null, { collection: collectionSlug });
         const feePaid = BigInt(r.feePaidOctas || 0);
         if (!grandfatheredBridge && feePaid < requiredFee.amount) {
           return res.status(402).json({
