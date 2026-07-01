@@ -197,8 +197,50 @@ function phoenixProxyPathname(pathWithQuery) {
   return String(pathWithQuery || '').split('?')[0];
 }
 
+function phoenixApiArray(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.value)) return value.value;
+  if (Array.isArray(value?.data)) return value.data;
+  if (Array.isArray(value?.markets)) return value.markets;
+  if (Array.isArray(value?.items)) return value.items;
+  return [];
+}
+
+function normalizePhoenixMarketSymbol(value) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[-/](PERP|USD|USDC)$/i, '')
+    .replace(/PERP$/i, '')
+    .trim();
+}
+
+function normalizePhoenixMarginCapability(market) {
+  const symbol = normalizePhoenixMarketSymbol(market?.symbol);
+  if (!symbol) return null;
+  const isolatedOnly = !!market?.isolatedOnly;
+  const marginModes = isolatedOnly ? ['isolated'] : ['cross', 'isolated'];
+  const maxLeverage = Math.max(
+    1,
+    ...(Array.isArray(market?.leverageTiers)
+      ? market.leverageTiers.map((tier) => Number(tier?.maxLeverage || 0))
+      : [0])
+  );
+  return {
+    symbol,
+    raw_symbol: market?.symbol || symbol,
+    market_status: market?.marketStatus || null,
+    isolated_only: isolatedOnly,
+    supports_cross: !isolatedOnly,
+    supports_isolated: true,
+    margin_modes: marginModes,
+    default_margin_mode: isolatedOnly ? 'isolated' : 'cross',
+    max_leverage: maxLeverage,
+  };
+}
+
 function shouldPersistPhoenixProxyCache(cacheKey) {
   return /^GET:\/(?:exchange|v1\/exchange)(?:\/|$)/.test(cacheKey)
+    || /^GET:\/v1\/view\/exchange(?:\/|$)/.test(cacheKey)
     || /^GET:\/v1\/funding\/overview(?:\?|:|$)/.test(cacheKey);
 }
 
@@ -241,7 +283,7 @@ function schedulePhoenixProxyDiskCacheFlush() {
 
 function phoenixProxySoftRateLimitData(pathWithQuery) {
   const pathname = phoenixProxyPathname(pathWithQuery);
-  if (/^\/(?:exchange|v1\/exchange)(?:\/|$)/.test(pathname)) {
+  if (/^\/(?:exchange|v1\/exchange|v1\/view\/exchange)(?:\/|$)/.test(pathname)) {
     return {
       markets: [],
       data: [],
@@ -294,7 +336,7 @@ function normalizePhoenixProxyPath(rawPath) {
 
 function phoenixProxyCacheTtl(pathname, method) {
   if (method !== 'GET') return 0;
-  if (/^\/exchange(?:\/|$)/.test(pathname) || /^\/v1\/exchange(?:\/|$)/.test(pathname)) return 12 * 60 * 60_000;
+  if (/^\/exchange(?:\/|$)/.test(pathname) || /^\/v1\/exchange(?:\/|$)/.test(pathname) || /^\/v1\/view\/exchange(?:\/|$)/.test(pathname)) return 12 * 60 * 60_000;
   if (/^\/v1\/view\/orderbook\//.test(pathname)) return 1200;
   if (/^\/v1\/candles\//.test(pathname)) return 30_000;
   if (/^\/v1\/funding\/overview(?:\?|$)/.test(pathname)) return 20_000;
@@ -2199,6 +2241,49 @@ router.post('/phoenix/referral/finalize', (req, res) => {
     const status = Number.isInteger(e.status) ? e.status : 400;
     if (e.retryAfter) res.set('Retry-After', String(e.retryAfter));
     return res.status(status).json({ error: e.message || 'Phoenix referral finalize failed' });
+  }
+});
+
+router.get('/phoenix/margin-modes', async (req, res) => {
+  const fetchMarkets = async (pathWithQuery) => {
+    const raw = await fetchPhoenixProxy(pathWithQuery, { method: 'GET' });
+    return phoenixApiArray(raw)
+      .map(normalizePhoenixMarginCapability)
+      .filter(Boolean);
+  };
+
+  try {
+    let source = '/v1/view/exchange/markets';
+    let markets;
+    try {
+      markets = await fetchMarkets(source);
+    } catch (primaryError) {
+      source = '/exchange/markets';
+      markets = await fetchMarkets(source);
+      if (!markets.length) throw primaryError;
+    }
+
+    const requestedSymbol = normalizePhoenixMarketSymbol(req.query?.symbol);
+    const filtered = requestedSymbol
+      ? markets.filter((market) => market.symbol === requestedSymbol)
+      : markets;
+
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.json({
+      ok: true,
+      source,
+      updated_at: new Date().toISOString(),
+      count: filtered.length,
+      markets: filtered,
+    });
+  } catch (e) {
+    console.warn('[phoenix/margin-modes] failed:', e.message);
+    res.set('Cache-Control', 'no-store');
+    return res.status(502).json({
+      ok: false,
+      error: 'Failed to load Phoenix margin modes',
+      detail: e.message,
+    });
   }
 });
 

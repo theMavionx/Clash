@@ -2200,7 +2200,7 @@ function FuturesPanel() {
     ? lighterHook
     : pacificaHook;
   const {
-    walletAddr, account, positions, orders, prices, markets, walletUsdc, spotUsdc, leverageSettings = {}, marginModes = {}, dataReady, accountReady,
+    walletAddr, account, positions, orders, prices, markets, walletUsdc, spotUsdc, leverageSettings = {}, marginModes = {}, marginModeDetails = {}, dataReady, accountReady,
     connected: tradingConnected,
     loading, error, clearError, goldEarned, clearGoldEarned, depositStatus, walletUsdcStatus,
     bridgeSourceBalances, bridgeSourceBalanceStatus,
@@ -2784,6 +2784,16 @@ function FuturesPanel() {
     ? pacAccountValueBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
     : pacAccountValueBase;
   const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol), [markets, symbol]);
+  const currentMarginDetail = marginModeDetails?.[symbol] || currentMarket?.margin_capabilities || {};
+  const currentMarginModes = Array.isArray(currentMarket?.margin_modes)
+    ? currentMarket.margin_modes
+    : Array.isArray(currentMarginDetail?.margin_modes)
+    ? currentMarginDetail.margin_modes
+    : (currentMarket?.isolated_only ? ['isolated'] : ['cross', 'isolated']);
+  const phoenixSupportsCross = dex !== 'phoenix' || currentMarginModes.includes('cross') || currentMarket?.supports_cross_margin === true;
+  const phoenixSupportsIsolated = dex !== 'phoenix' || currentMarginModes.includes('isolated') || currentMarket?.supports_isolated_margin === true;
+  const phoenixCanToggleMargin = dex === 'phoenix' && phoenixSupportsCross && phoenixSupportsIsolated;
+  const phoenixMarginModeReadOnly = dex === 'phoenix' && !phoenixCanToggleMargin;
   const flashMarketBlockReason = dex === 'flash' ? flashMarketClosedReason(currentMarket) : '';
   const fr = currentMarket ? parseFloat(currentMarket.funding_rate || 0) : 0;
   // Avantis doesn't have a signed funding rate — the number here is the
@@ -2916,9 +2926,18 @@ function FuturesPanel() {
     () => orders.some(o => String(o.symbol || o.s || '').toUpperCase() === symbol.toUpperCase()),
     [orders, symbol]
   );
-  const marginModeLocked = (dex === 'pacifica' || dex === 'grvt' || dex === 'hotstuff') && (hasCurrentSymbolPosition || hasCurrentSymbolOrder);
+  const marginModeLocked = ((dex === 'pacifica' || dex === 'grvt' || dex === 'hotstuff') && (hasCurrentSymbolPosition || hasCurrentSymbolOrder))
+    || phoenixMarginModeReadOnly;
   const handleMarginModeToggle = useCallback(async () => {
     clearTradeFeedback();
+    if (dex === 'phoenix' && phoenixMarginModeReadOnly) {
+      setLocalAlert(
+        phoenixSupportsIsolated && !phoenixSupportsCross
+          ? `Phoenix ${symbol} supports isolated margin only.`
+          : `Phoenix ${symbol} margin mode is not switchable right now.`
+      );
+      return;
+    }
     if (marginModeLocked) {
       setLocalAlert(
         hasCurrentSymbolPosition
@@ -2929,10 +2948,6 @@ function FuturesPanel() {
     }
     if (dex === 'decibel') {
       setLocalAlert('Decibel currently uses cross margin only. Isolated margin is not available yet.');
-      return;
-    }
-    if (dex === 'phoenix') {
-      setLocalAlert('Phoenix uses cross margin for normal markets and isolated subaccounts automatically for isolated-only markets.');
       return;
     }
     if (dex === 'pacifica' && !pacAgent && bindAgent) {
@@ -2953,7 +2968,7 @@ function FuturesPanel() {
     }
     const result = await setMarginMode?.(symbol, !marginModes[symbol]);
     if (result?.error) setLocalAlert(result.error);
-  }, [clearTradeFeedback, marginModeLocked, hasCurrentSymbolPosition, symbol, setMarginMode, marginModes, dex, pacAgent, bindAgent, bindingAgent, currentMarket]);
+  }, [clearTradeFeedback, marginModeLocked, hasCurrentSymbolPosition, symbol, setMarginMode, marginModes, dex, pacAgent, bindAgent, bindingAgent, phoenixMarginModeReadOnly, phoenixSupportsCross, phoenixSupportsIsolated]);
 
   const handleSizePct = useCallback((pct) => {
     clearTradeFeedback();
@@ -3323,6 +3338,7 @@ function FuturesPanel() {
       let result;
       const tradeOptions = {
         ...(Number.isFinite(positionUsdc) && positionUsdc > 0 ? { notional_usd: positionUsdc } : {}),
+        ...(dex === 'phoenix' ? { margin_mode: marginModes[symbol] ? 'isolated' : 'cross' } : {}),
         ...(dex === 'gmtrade' && (currentMarket?.market_token || currentMarket?.marketToken)
           ? { market_token: currentMarket.market_token || currentMarket.marketToken }
           : {}),
@@ -3378,7 +3394,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, maxLev]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, maxLev, marginModes]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -3447,7 +3463,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -3460,8 +3476,6 @@ function FuturesPanel() {
                 ? 'Decibel currently uses cross margin; isolated margin is not available yet'
                 : dex === 'monad'
                 ? 'Perpl uses isolated margin per position in this integration'
-                : dex === 'phoenix'
-                ? 'Phoenix uses cross margin for normal markets and isolated subaccounts automatically for isolated-only markets'
                 : dex === 'hyperliquid'
                 ? 'Hyperliquid uses cross margin in your Hyperliquid account'
                 : dex === 'risex'
@@ -3478,11 +3492,9 @@ function FuturesPanel() {
                 ? 'Lighter margin mode is managed through the Lighter account settings in this integration'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: ((dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
-                  : dex === 'phoenix'
-                  ? 'Auto'
                   : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana')
                   ? 'Cross'
                   : dex === 'lighter'
@@ -3501,7 +3513,11 @@ function FuturesPanel() {
                 cursor: marginModeLocked ? 'not-allowed' : 'pointer',
               }}
               onClick={handleMarginModeToggle}
-              title={marginModeLocked
+              title={dex === 'phoenix' && phoenixMarginModeReadOnly
+                ? (phoenixSupportsIsolated && !phoenixSupportsCross
+                  ? `Phoenix ${symbol} supports isolated margin only`
+                  : `Phoenix ${symbol} margin mode is not switchable right now`)
+                : marginModeLocked
                 ? 'Close this symbol position and cancel its open orders before changing margin mode'
                 : (marginModes[symbol] ? 'Isolated margin' : 'Cross margin')}
             >

@@ -868,3 +868,48 @@ Time: 2026-07-01 16:14:47 +03:00
 Request:
 
 > Fix Flash prod position display: FTv2 BTC position shows market pubkey instead of BTC, missing mark/PnL; then commit and deploy to production.
+- 2026-07-01: User reports Flash BTC TP/SL fails on prod for wallet 4Ze3... with Invalid position state (code 6013) while BTC legacy-looking position is open; analyze Flash position state and fix TP/SL handling without rushed workaround.
+- 2026-07-01: User reports Flash close-position-tx 400 on prod after the same BTC position; investigate whether the position is legacy/stale and prevent UI from showing closable positions Flash v2 no longer sees.
+
+### UR-2026-07-01-015
+
+Time: 2026-07-01 17:34:34 +03:00
+
+Request:
+
+> передививсь інтеграцію фенікс у нас стоїть авто вибір маржі але має бути якийсь ендпоінт для перевірки де ізольована тільки маржа а де і крос і ізольована і додати можливість перемикати її
+
+### UR-2026-07-01-016
+
+Time: 2026-07-01 18:00:00 +03:00
+
+Request:
+
+> Flash wallet 4Ze3bbJbmBjAUutV3LT1XUmqZG67fAR5PUr7vkXUgU2g still shows $1 free in-game after closing; compare with Flash Trade balance/portfolio and fix stale or incorrect account display.
+- id: UR-2026-07-01-017
+  time: 2026-07-01 18:21:02 +03:00
+  request: "Use the Codex/Chrome extension to inspect the currently open Flash Trade site/network for wallet 4Ze3bb balance source."
+
+### UR-2026-07-01-018
+
+Time: 2026-07-01 18:33:07 +03:00
+
+Request:
+
+> phoenix xpl quest not recognising my trades seeker beater його нікнейм перевір на проді
+
+### UR-2026-07-01-019
+
+Time: 2026-07-01 18:35:18 +03:00
+
+Request:
+
+> actually phoenix side isn't recognising any of the tickers
+
+### UR-2026-07-01-020
+
+Time: 2026-07-01 18:44:13 +03:00
+
+Request:
+
+> так спробуй ончейн знайти ці трейди і перевірити чого не зараховує коли знайдеш виправиш все роби коміт своїх змін і деплой на прод зі скіпом експорта годот

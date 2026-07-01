@@ -72,6 +72,7 @@ const PHOENIX_ONE_TAP_DISABLED = true;
 const PHOENIX_DEFAULT_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_DEFAULT_REFERRAL_CODE || 'MVWG4BTW';
 const PHOENIX_ACCESS_CACHE_PREFIX = 'clash:phoenix:access:v1';
 const PHOENIX_SETUP_CACHE_PREFIX = 'clash:phoenix:setup:v1';
+const PHOENIX_MARGIN_MODE_CACHE_PREFIX = 'clash:phoenix:margin-mode:v1';
 const PHOENIX_ACCESS_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
 const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
@@ -876,6 +877,36 @@ function clearPhoenixCache(prefix, wallet) {
   try { window.localStorage?.removeItem(key); } catch {}
 }
 
+function phoenixMarginModeCacheKey(wallet) {
+  const normalized = phoenixCacheWallet(wallet || 'anonymous');
+  return `${PHOENIX_MARGIN_MODE_CACHE_PREFIX}:${normalized}`;
+}
+
+function readPhoenixMarginModeCache(wallet) {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage?.getItem(phoenixMarginModeCacheKey(wallet));
+    const parsed = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out = {};
+    for (const [symbol, value] of Object.entries(parsed)) {
+      const phx = phoenixSymbol(symbol);
+      const mode = normalizePhoenixMarginMode(value);
+      if (phx && mode) out[phx] = mode;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writePhoenixMarginModeCache(wallet, modes) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage?.setItem(phoenixMarginModeCacheKey(wallet), JSON.stringify(modes || {}));
+  } catch {}
+}
+
 function cachedPhoenixAccess(wallet) {
   return readPhoenixCache(PHOENIX_ACCESS_CACHE_PREFIX, wallet);
 }
@@ -1119,6 +1150,27 @@ function isPhoenixIsolatedOnlyMarket(market) {
   return !!(market?.isolated_only ?? market?._phoenix?.isolatedOnly);
 }
 
+function phoenixMarketMarginModes(market) {
+  return isPhoenixIsolatedOnlyMarket(market) ? ['isolated'] : ['cross', 'isolated'];
+}
+
+function normalizePhoenixMarginMode(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === 'isolated' || text === 'iso' || text === 'true') return 'isolated';
+  if (text === 'cross' || text === 'false') return 'cross';
+  return null;
+}
+
+function phoenixMarginCapabilities(market) {
+  const modes = phoenixMarketMarginModes(market);
+  return {
+    margin_modes: modes,
+    supports_cross_margin: modes.includes('cross'),
+    supports_isolated_margin: modes.includes('isolated'),
+    default_margin_mode: modes.includes('cross') ? 'cross' : 'isolated',
+  };
+}
+
 function phoenixTakerFeeRate(market) {
   const fee = Number(market?.taker_fee ?? market?._phoenix?.takerFee ?? market?._phoenix?.fees?.takerFee);
   return Number.isFinite(fee) && fee >= 0 ? fee : PHOENIX_DEFAULT_TAKER_FEE_RATE;
@@ -1349,6 +1401,7 @@ function phoenixTickSizeUsd(m) {
 function normalizeMarket(m) {
   const symbol = phoenixSymbol(m?.symbol);
   if (!symbol || String(m?.marketStatus || 'active').toLowerCase() !== 'active') return null;
+  const marginCaps = phoenixMarginCapabilities(m);
   const tickSizeRaw = Number(m?.tickSize ?? m?.units?.tickSizeInQuoteLotsPerBaseLot ?? 0);
   const tickSize = phoenixTickSizeUsd(m);
   const baseLotsDecimals = Number(m?.baseLotsDecimals ?? m?.units?.baseLotsDecimals ?? 4);
@@ -1375,6 +1428,11 @@ function normalizeMarket(m) {
     min_order_size: String(lotSize),
     max_leverage: maxLev || 15,
     isolated_only: !!m?.isolatedOnly,
+    margin_modes: marginCaps.margin_modes,
+    supports_cross_margin: marginCaps.supports_cross_margin,
+    supports_isolated_margin: marginCaps.supports_isolated_margin,
+    default_margin_mode: marginCaps.default_margin_mode,
+    margin_capabilities: marginCaps,
     maker_fee: Number(m?.makerFee ?? m?.fees?.makerFee ?? 0.00005),
     taker_fee: Number(m?.takerFee ?? m?.fees?.takerFee ?? 0.00035),
     funding_rate: phoenixFundingToDecimal(m),
@@ -2086,6 +2144,7 @@ export function usePhoenix() {
   const [orders, setOrders] = useState([]);
   const [prices, setPrices] = useState([]);
   const [markets, setMarkets] = useState([]);
+  const [marginModeOverrides, setMarginModeOverrides] = useState({});
   const [walletUsdc, setWalletUsdc] = useState(null);
   const [dataReady, setDataReady] = useState(false);
   const [accountReady, setAccountReady] = useState(false);
@@ -2133,6 +2192,7 @@ export function usePhoenix() {
   const claimInFlightRef = useRef(null);
   const lastClaimAtRef = useRef(0);
   const lastPhoenixHistoryImportAtRef = useRef(0);
+  const phoenixServerLinkRef = useRef({ key: '', at: 0 });
   const inFlightRef = useRef(new Map());
   const refreshTraderStateInFlightRef = useRef(null);
   const refreshTraderStateCachedAtRef = useRef(0);
@@ -2151,6 +2211,9 @@ export function usePhoenix() {
   useEffect(() => {
     tokenRef.current = player?.token || null;
   }, [player?.token]);
+  useEffect(() => {
+    setMarginModeOverrides(readPhoenixMarginModeCache(walletAddr));
+  }, [walletAddr]);
 
   const client = getPhoenixClient(connection?.rpcEndpoint);
   const phoenixBrowserRestClient = useMemo(
@@ -2196,6 +2259,43 @@ export function usePhoenix() {
       return next;
     });
   }, []);
+  const phoenixMarginModeDetails = useMemo(() => {
+    const out = {};
+    for (const market of markets || []) {
+      const symbol = phoenixSymbol(market?.symbol);
+      if (!symbol) continue;
+      const caps = phoenixMarginCapabilities(market);
+      const override = normalizePhoenixMarginMode(marginModeOverrides[symbol]);
+      const mode = caps.margin_modes.includes(override) ? override : caps.default_margin_mode;
+      out[symbol] = {
+        ...caps,
+        selected_margin_mode: mode,
+        is_isolated: mode === 'isolated',
+      };
+    }
+    return out;
+  }, [markets, marginModeOverrides]);
+  const phoenixMarginModes = useMemo(() => (
+    Object.fromEntries(Object.entries(phoenixMarginModeDetails).map(([symbol, detail]) => [
+      symbol,
+      !!detail.is_isolated,
+    ]))
+  ), [phoenixMarginModeDetails]);
+  const resolvePhoenixOrderMarginMode = useCallback((symbol, requestedMode = null) => {
+    const phx = phoenixSymbol(symbol);
+    const market = marketsBySymbolRef.current[phx] || marketsRef.current.find(m => phoenixSymbol(m?.symbol) === phx) || null;
+    const caps = phoenixMarginCapabilities(market);
+    const explicit = normalizePhoenixMarginMode(requestedMode);
+    const override = explicit || normalizePhoenixMarginMode(marginModeOverrides[phx]);
+    const mode = caps.margin_modes.includes(override) ? override : caps.default_margin_mode;
+    return {
+      symbol: phx,
+      market,
+      ...caps,
+      selected_margin_mode: mode,
+      is_isolated: mode === 'isolated',
+    };
+  }, [marginModeOverrides]);
 
   useEffect(() => {
     const sessionKey = `${walletAddr || ''}:${walletMismatch ? 'mismatch' : 'ok'}`;
@@ -2982,6 +3082,39 @@ export function usePhoenix() {
     });
   }, [client, connection, ownerPk, refreshOneTapTradingState, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
 
+  const ensurePhoenixServerLink = useCallback(async () => {
+    if (!walletAddr || walletMismatch) return { ok: false, skipped: true };
+    const token = tokenRef.current || window._playerToken;
+    if (!token) return { ok: false, skipped: true, reason: 'missing_token' };
+
+    const key = `${token}:${walletAddr}`;
+    const cached = phoenixServerLinkRef.current || {};
+    if (cached.key === key && Date.now() - Number(cached.at || 0) < 10 * 60_000) {
+      return { ok: true, cached: true };
+    }
+
+    try {
+      const res = await fetch(`${GAME_API}/players/dex-accounts/phoenix/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify({
+          wallet: walletAddr,
+          source: 'phoenix-rewards',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) {
+        console.warn('[Phoenix rewards] server wallet link failed', res.status, data);
+        return { ok: false, status: res.status, ...data };
+      }
+      phoenixServerLinkRef.current = { key, at: Date.now() };
+      return { ok: true, ...data };
+    } catch (e) {
+      console.warn('[Phoenix rewards] server wallet link request failed', e?.message || e);
+      return { ok: false, error: e?.message || String(e) };
+    }
+  }, [walletAddr, walletMismatch]);
+
   const reportPhoenixTradeTx = useCallback(async (details = {}) => {
     if (!walletAddr || walletMismatch) return null;
     const signature = String(details.signature || details.tx_hash || details.hash || '').trim();
@@ -2991,6 +3124,7 @@ export function usePhoenix() {
       console.warn('[Phoenix rewards] tx report skipped - no player token');
       return null;
     }
+    await ensurePhoenixServerLink();
     let last = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -3017,12 +3151,13 @@ export function usePhoenix() {
       await sleep(1500 + attempt * 2500);
     }
     return last;
-  }, [walletAddr, walletMismatch]);
+  }, [ensurePhoenixServerLink, walletAddr, walletMismatch]);
 
   const importPhoenixHistoryFills = useCallback(async (details = {}) => {
     if (!walletAddr || walletMismatch) return null;
     const token = tokenRef.current || window._playerToken;
     if (!token) return null;
+    await ensurePhoenixServerLink();
     const now = Date.now();
     const minGapMs = Math.max(0, Number(details.minGapMs || 12_000));
     if (!details.force && now - lastPhoenixHistoryImportAtRef.current < minGapMs) {
@@ -3055,13 +3190,14 @@ export function usePhoenix() {
       console.warn('[Phoenix rewards] history import request failed', e?.message || e);
       return { ok: false, error: e?.message || String(e) };
     }
-  }, [walletAddr, walletMismatch]);
+  }, [ensurePhoenixServerLink, walletAddr, walletMismatch]);
 
   const claimGold = useCallback(async (opts = {}) => {
     if (!walletAddr) return null;
     if (walletMismatch) return null;
     const token = tokenRef.current || window._playerToken;
     if (!token) return null;
+    await ensurePhoenixServerLink();
     if (claimInFlightRef.current) return claimInFlightRef.current;
     const now = Date.now();
     const minGap = opts.force ? 750 : 5000;
@@ -3116,7 +3252,7 @@ export function usePhoenix() {
     } finally {
       if (claimInFlightRef.current === promise) claimInFlightRef.current = null;
     }
-  }, [walletAddr, walletMismatch]);
+  }, [ensurePhoenixServerLink, walletAddr, walletMismatch]);
 
   useEffect(() => {
     claimGoldRef.current = claimGold;
@@ -5098,7 +5234,7 @@ export function usePhoenix() {
     return String(rounded);
   }, []);
 
-  const placeMarketOrder = useCallback(async (symbol, side, amount, _slippage = '0.5', leverage = 1) => {
+  const placeMarketOrder = useCallback(async (symbol, side, amount, _slippage = '0.5', leverage = 1, options = {}) => {
     void _slippage;
     if (!walletAddr) return { error: 'Wallet not connected' };
     if (walletMismatch) {
@@ -5107,7 +5243,9 @@ export function usePhoenix() {
       return { error: msg };
     }
     const phx = phoenixSymbol(symbol);
-    return runOnce(`market:${walletAddr}:${phx}:${side}:${amount}:${leverage}`, async () => {
+    const requestedMarginMode = normalizePhoenixMarginMode(options?.margin_mode ?? options?.marginMode);
+    const initialMarginDetail = resolvePhoenixOrderMarginMode(phx, requestedMarginMode);
+    return runOnce(`market:${walletAddr}:${phx}:${side}:${amount}:${leverage}:${initialMarginDetail.selected_margin_mode}`, async () => {
       setLoading(true);
       setError(null);
       try {
@@ -5131,7 +5269,8 @@ export function usePhoenix() {
           }, oneTapSession.policy);
           if (!policyCheck.ok) throw new Error(policyCheck.message);
         }
-        const market = marketsBySymbolRef.current[phx];
+        const marginDetail = resolvePhoenixOrderMarginMode(phx, requestedMarginMode);
+        const market = marginDetail.market || marketsBySymbolRef.current[phx];
         const priceLimitUsd = marketOrderPriceLimitUsd(sideEnum, mark);
         const signature = await withFreshPhoenixMetadataRetry('phoenix.market', phx, async (orderClient) => {
           const packet = await orderClient.orderPackets.buildMarketOrderPacket({
@@ -5142,7 +5281,7 @@ export function usePhoenix() {
             minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
             minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
           });
-          if (isPhoenixIsolatedOnlyMarket(market)) {
+          if (marginDetail.is_isolated) {
             const isolated = await resolvePhoenixIsolatedSubaccount(orderClient, phx, orderAuthority);
             const requiredOneTapSubaccounts = [0, isolated.subaccountIndex];
             const isolatedOneTapSession = oneTapSession ? getOneTapSessionForSubaccounts(requiredOneTapSubaccounts) : null;
@@ -5208,6 +5347,8 @@ export function usePhoenix() {
               flight_required: true,
               flight_enabled: isPhoenixFlightEnabled(),
               builder: 'phoenix_api_isolated_market',
+              selected_margin_mode: marginDetail.selected_margin_mode,
+              isolated_only: !!marginDetail.isolated_only,
             });
             reportPhoenixIsolatedEvent('market.build', {
               symbol: phx,
@@ -5227,6 +5368,8 @@ export function usePhoenix() {
               transfer_amount_raw: transferAmount,
               builder: 'phoenix_api_isolated_market',
               tx_label: 'phoenix.market.isolated',
+              selected_margin_mode: marginDetail.selected_margin_mode,
+              isolated_only: !!marginDetail.isolated_only,
               ...phoenixInstructionDebugSummary(finalIsolatedInstructions),
             });
             assertPhoenixBuilderRouted(finalIsolatedInstructions, 'phoenix.market.isolated', {
@@ -5287,12 +5430,15 @@ export function usePhoenix() {
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix market order failed';
-        if (isPhoenixIsolatedOnlyMarket(marketsBySymbolRef.current[phx])) {
+        const marginDetail = resolvePhoenixOrderMarginMode(phx, requestedMarginMode);
+        if (marginDetail.is_isolated) {
           reportPhoenixIsolatedEvent('market.error', {
             symbol: phx,
             side,
             amount_usdc: amount,
             leverage,
+            selected_margin_mode: marginDetail.selected_margin_mode,
+            isolated_only: !!marginDetail.isolated_only,
             ...phoenixErrorDebug(e),
           }, 'error');
         }
@@ -5312,9 +5458,9 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, ensurePhoenixPrice, getActiveOneTapSession, getOneTapSessionForSubaccounts, refreshTraderStateSoon, reportPhoenixTradeTx, resolvePhoenixIsolatedSubaccount, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, ensurePhoenixPrice, getActiveOneTapSession, getOneTapSessionForSubaccounts, refreshTraderStateSoon, reportPhoenixTradeTx, resolvePhoenixIsolatedSubaccount, resolvePhoenixOrderMarginMode, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
-  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
+  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1, options = {}) => {
     void _tif;
     if (!walletAddr) return { error: 'Wallet not connected' };
     if (walletMismatch) {
@@ -5323,7 +5469,9 @@ export function usePhoenix() {
       return { error: msg };
     }
     const phx = phoenixSymbol(symbol);
-    return runOnce(`limit:${walletAddr}:${phx}:${side}:${price}:${amount}:${leverage}`, async () => {
+    const requestedMarginMode = normalizePhoenixMarginMode(options?.margin_mode ?? options?.marginMode);
+    const initialMarginDetail = resolvePhoenixOrderMarginMode(phx, requestedMarginMode);
+    return runOnce(`limit:${walletAddr}:${phx}:${side}:${price}:${amount}:${leverage}:${initialMarginDetail.selected_margin_mode}`, async () => {
       setLoading(true);
       setError(null);
       try {
@@ -5340,7 +5488,8 @@ export function usePhoenix() {
           }, oneTapSession.policy);
           if (!policyCheck.ok) throw new Error(policyCheck.message);
         }
-        const market = marketsBySymbolRef.current[phx];
+        const marginDetail = resolvePhoenixOrderMarginMode(phx, requestedMarginMode);
+        const market = marginDetail.market || marketsBySymbolRef.current[phx];
         const signature = await withFreshPhoenixMetadataRetry('phoenix.limit', phx, async (orderClient) => {
           const baseUnits = buildBaseUnitsFromMargin(phx, amount, leverage, Number(price));
           const packet = await orderClient.orderPackets.buildLimitOrderPacket({
@@ -5349,7 +5498,7 @@ export function usePhoenix() {
             priceUsd: String(price),
             baseUnits,
           });
-          if (isPhoenixIsolatedOnlyMarket(market)) {
+          if (marginDetail.is_isolated) {
             const isolated = await resolvePhoenixIsolatedSubaccount(orderClient, phx, orderAuthority);
             const requiredOneTapSubaccounts = [0, isolated.subaccountIndex];
             const isolatedOneTapSession = oneTapSession ? getOneTapSessionForSubaccounts(requiredOneTapSubaccounts) : null;
@@ -5414,6 +5563,8 @@ export function usePhoenix() {
               flight_required: true,
               flight_enabled: isPhoenixFlightEnabled(),
               builder: 'phoenix_api_isolated_limit',
+              selected_margin_mode: marginDetail.selected_margin_mode,
+              isolated_only: !!marginDetail.isolated_only,
             });
             reportPhoenixIsolatedEvent('limit.build', {
               symbol: phx,
@@ -5432,6 +5583,8 @@ export function usePhoenix() {
               transfer_amount_raw: transferAmount,
               builder: 'phoenix_api_isolated_limit',
               tx_label: 'phoenix.limit.isolated',
+              selected_margin_mode: marginDetail.selected_margin_mode,
+              isolated_only: !!marginDetail.isolated_only,
               ...phoenixInstructionDebugSummary(finalIsolatedInstructions),
             });
             assertPhoenixBuilderRouted(finalIsolatedInstructions, 'phoenix.limit.isolated', {
@@ -5495,13 +5648,16 @@ export function usePhoenix() {
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix limit order failed';
-        if (isPhoenixIsolatedOnlyMarket(marketsBySymbolRef.current[phx])) {
+        const marginDetail = resolvePhoenixOrderMarginMode(phx, requestedMarginMode);
+        if (marginDetail.is_isolated) {
           reportPhoenixIsolatedEvent('limit.error', {
             symbol: phx,
             side,
             price_usd: price,
             amount_usdc: amount,
             leverage,
+            selected_margin_mode: marginDetail.selected_margin_mode,
+            isolated_only: !!marginDetail.isolated_only,
             ...phoenixErrorDebug(e),
           }, 'error');
         }
@@ -5511,7 +5667,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, getActiveOneTapSession, getOneTapSessionForSubaccounts, importPhoenixHistoryFills, refreshTraderStateSoon, resolvePhoenixIsolatedSubaccount, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, getActiveOneTapSession, getOneTapSessionForSubaccounts, importPhoenixHistoryFills, refreshTraderStateSoon, resolvePhoenixIsolatedSubaccount, resolvePhoenixOrderMarginMode, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
     void _pairIndex;
@@ -5781,11 +5937,40 @@ export function usePhoenix() {
   }, [getOneTapSessionForSubaccounts, orders, refreshTraderStateSoon, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const setLeverage = useCallback(async () => ({ success: true }), []);
-  const setMarginMode = useCallback(async (_symbol, isolated) => (
-    isolated
-      ? { error: 'Phoenix isolated subaccounts are readable, but new Clash orders are placed from cross margin.' }
-      : { success: true }
-  ), []);
+  const setMarginMode = useCallback(async (symbol, isolatedOrMode) => {
+    const phx = phoenixSymbol(symbol);
+    if (!phx) return { error: 'Phoenix symbol required' };
+    const mode = typeof isolatedOrMode === 'boolean'
+      ? (isolatedOrMode ? 'isolated' : 'cross')
+      : normalizePhoenixMarginMode(isolatedOrMode);
+    if (!mode) return { error: 'Phoenix margin mode must be cross or isolated' };
+
+    const market = marketsBySymbolRef.current[phx] || marketsRef.current.find(m => phoenixSymbol(m?.symbol) === phx) || null;
+    const caps = phoenixMarginCapabilities(market);
+    if (!caps.margin_modes.includes(mode)) {
+      return {
+        error: isPhoenixIsolatedOnlyMarket(market)
+          ? `Phoenix ${phx} supports isolated margin only.`
+          : `Phoenix ${phx} does not support ${mode} margin.`,
+      };
+    }
+
+    setMarginModeOverrides(prev => {
+      const next = { ...(prev || {}) };
+      if (mode === caps.default_margin_mode) delete next[phx];
+      else next[phx] = mode;
+      writePhoenixMarginModeCache(walletAddr, next);
+      return next;
+    });
+    return {
+      success: true,
+      symbol: phx,
+      margin_mode: mode,
+      supports_cross: caps.supports_cross_margin,
+      supports_isolated: caps.supports_isolated_margin,
+      isolated_only: isPhoenixIsolatedOnlyMarket(market),
+    };
+  }, [walletAddr]);
 
   const setTpsl = useCallback(async (symbol, side, takeProfit, stopLoss) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
@@ -6053,7 +6238,8 @@ export function usePhoenix() {
     markets,
     walletUsdc,
     leverageSettings: {},
-    marginModes: {},
+    marginModes: phoenixMarginModes,
+    marginModeDetails: phoenixMarginModeDetails,
     dataReady: effectiveDataReady,
     accountReady: effectiveAccountReady,
     isReady: !!walletAddr && effectiveTraderRegistered,
