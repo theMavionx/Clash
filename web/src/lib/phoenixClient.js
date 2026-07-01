@@ -14,8 +14,10 @@ export const PHOENIX_PROXY_API_URL = defaultPhoenixApiUrl();
 export const PHOENIX_DIRECT_API_URL =
   import.meta.env.VITE_PHOENIX_DIRECT_API_URL || 'https://perp-api.phoenix.trade';
 
-export const PHOENIX_API_URL =
-  import.meta.env.VITE_PHOENIX_BROWSER_API_URL || PHOENIX_DIRECT_API_URL;
+export const PHOENIX_CONFIGURED_BROWSER_API_URL =
+  import.meta.env.VITE_PHOENIX_BROWSER_API_URL || '';
+
+export const PHOENIX_API_URL = PHOENIX_DIRECT_API_URL;
 
 export const PHOENIX_WS_URL =
   import.meta.env.VITE_PHOENIX_BROWSER_WS_URL || 'wss://perp-api.phoenix.trade/v1/ws';
@@ -44,6 +46,31 @@ let publicWsClient = null;
 
 function trimTrailingSlash(value) {
   return String(value || '').replace(/\/+$/, '');
+}
+
+function phoenixApiUrlKey(value) {
+  const url = trimTrailingSlash(value).toLowerCase();
+  if (!url) return '';
+  if (url.includes('/api/futures/phoenix/api')) return 'proxy';
+  return url;
+}
+
+export function phoenixApiEndpointCandidates(options = {}) {
+  const includeProxy = options.includeProxy !== false;
+  const rows = [
+    { name: 'browser', apiUrl: PHOENIX_DIRECT_API_URL },
+    PHOENIX_CONFIGURED_BROWSER_API_URL
+      ? { name: 'browser-config', apiUrl: PHOENIX_CONFIGURED_BROWSER_API_URL }
+      : null,
+    includeProxy ? { name: 'proxy', apiUrl: PHOENIX_PROXY_API_URL } : null,
+  ].filter(Boolean);
+  const seen = new Set();
+  return rows.filter(row => {
+    const key = phoenixApiUrlKey(row.apiUrl);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function phoenixFetchCacheTtl(path, method) {
@@ -232,27 +259,36 @@ export async function phoenixFetch(path, options = {}) {
   }
 
   const run = async () => {
-    let directError = null;
-    try {
-      return await fetchPhoenixJson(PHOENIX_DIRECT_API_URL, path, options);
-    } catch (error) {
-      if (error?.name === 'AbortError') throw error;
-      directError = error;
-      // Browser direct is the default path. Only fall back to our server proxy
-      // when direct CORS/network/rate-limit fails, so proxy limits are shared
-      // far less often across all players.
+    const errors = [];
+    for (const source of phoenixApiEndpointCandidates()) {
       try {
-        const data = await fetchPhoenixJson(PHOENIX_PROXY_API_URL, path, options);
-        if (directError?.status === 429) {
-          console.info('[Phoenix] direct API rate-limited; recovered through proxy cache', { path });
+        const data = await fetchPhoenixJson(source.apiUrl, path, options);
+        if (errors.length) {
+          console.info('[Phoenix] API fallback recovered', {
+            path,
+            source: source.name,
+            previous: errors.map(row => `${row.name}: ${row.message}`).slice(0, 2),
+          });
         }
         return data;
-      } catch (proxyError) {
-        if (directError?.status === 429) throw directError;
-        proxyError.directError = directError;
-        throw proxyError;
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        errors.push({
+          name: source.name,
+          error,
+          message: error?.message || String(error),
+          status: error?.status || null,
+        });
       }
     }
+    const rateLimitError = errors.find(row => Number(row.status) === 429)?.error;
+    const lastError = errors[errors.length - 1]?.error || new Error(`Phoenix API ${path} failed`);
+    lastError.phoenixSources = errors.map(row => ({
+      name: row.name,
+      status: row.status,
+      message: row.message,
+    }));
+    throw rateLimitError || lastError;
   };
 
   const promise = run().then(data => {

@@ -11,15 +11,13 @@ import {
   createPhoenixPublicWsClient,
   createPhoenixTransactionClient,
   disposePhoenixClient,
-  PHOENIX_DIRECT_API_URL,
-  PHOENIX_PROXY_API_URL,
-  getPhoenixBrowserRestClient,
   getPhoenixClient,
-  getPhoenixProxyRestClient,
+  getPhoenixReadClient,
   isPhoenixFlightEnabled,
   PHOENIX_FLIGHT_BUILDER_AUTHORITY,
   PHOENIX_FLIGHT_BUILDER_PDA_INDEX,
   PHOENIX_FLIGHT_BUILDER_SUBACCOUNT_INDEX,
+  phoenixApiEndpointCandidates,
   phoenixCandlesRoute,
   phoenixFetch,
   phoenixSymbol,
@@ -2216,26 +2214,18 @@ export function usePhoenix() {
   }, [walletAddr]);
 
   const client = getPhoenixClient(connection?.rpcEndpoint);
-  const phoenixBrowserRestClient = useMemo(
-    () => getPhoenixBrowserRestClient(connection?.rpcEndpoint),
-    [connection?.rpcEndpoint],
-  );
-  const phoenixProxyRestClient = useMemo(
-    () => getPhoenixProxyRestClient(connection?.rpcEndpoint),
-    [connection?.rpcEndpoint],
-  );
   const phoenixRestSources = useMemo(() => {
-    const rows = [
-      { name: 'browser', client: phoenixBrowserRestClient },
-      { name: 'proxy', client: phoenixProxyRestClient },
-    ];
+    const rows = phoenixApiEndpointCandidates().map(source => ({
+      ...source,
+      client: getPhoenixReadClient(source.apiUrl, connection?.rpcEndpoint),
+    }));
     const seen = new Set();
     return rows.filter(row => {
-      if (!row.client || seen.has(row.client)) return false;
-      seen.add(row.client);
+      if (!row.client || seen.has(row.apiUrl)) return false;
+      seen.add(row.apiUrl);
       return true;
     });
-  }, [phoenixBrowserRestClient, phoenixProxyRestClient]);
+  }, [connection?.rpcEndpoint]);
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
   const setPhoenixPositions = useCallback((nextOrUpdater) => {
@@ -2375,10 +2365,7 @@ export function usePhoenix() {
 
     if (cached) disposeTransactionClient();
     const promise = (async () => {
-      const apiUrls = [
-        { name: 'browser', apiUrl: PHOENIX_DIRECT_API_URL },
-        { name: 'proxy', apiUrl: PHOENIX_PROXY_API_URL },
-      ];
+      const apiUrls = phoenixApiEndpointCandidates();
       const errors = [];
       for (const source of apiUrls) {
         const next = createPhoenixTransactionClient(endpoint, {
