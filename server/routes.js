@@ -2239,16 +2239,68 @@ function usdToNativeUnits(usdAmount, assetUsd, decimals) {
   return (usd * scale + price - 1n) / price;
 }
 
-async function fetchNftUsdPrice(asset) {
-  const envKey = asset === 'eth' ? 'NFT_ETH_USD'
+const _nftUsdPriceCache = new Map();
+
+function nftUsdPriceEnvKey(asset) {
+  return asset === 'eth' ? 'NFT_ETH_USD'
     : asset === 'sol' ? 'NFT_SOL_USD'
     : asset === 'apt' ? 'NFT_APT_USD'
     : asset === 'mon' ? 'NFT_MON_USD'
     : asset === 'skr' ? 'NFT_SKR_USD'
     : asset === 'clash' ? 'NFT_CLASH_USD'
     : null;
+}
+
+function readNftUsdPriceCache(asset, { includeStale = false } = {}) {
+  const cached = _nftUsdPriceCache.get(String(asset || '').toLowerCase());
+  if (!cached) return null;
+  if (!includeStale && cached.expiresAt <= Date.now()) return null;
+  return cached;
+}
+
+function rememberNftUsdPrice(asset, value, cacheMs) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return value;
+  _nftUsdPriceCache.set(String(asset || '').toLowerCase(), {
+    value: String(value),
+    expiresAt: Date.now() + Math.max(5_000, Number(cacheMs) || 60_000),
+  });
+  return value;
+}
+
+async function fetchNftUsdPrice(asset, options = {}) {
+  const assetKey = String(asset || '').toLowerCase();
+  const envKey = nftUsdPriceEnvKey(assetKey);
   if (envKey && process.env[envKey]) return String(process.env[envKey]);
 
+  const cacheMs = Math.max(5_000, Number(options.cacheMs || process.env.NFT_USD_PRICE_CACHE_MS || 60_000));
+  const cached = readNftUsdPriceCache(assetKey);
+  if (cached) return cached.value;
+
+  const livePromise = fetchNftUsdPriceLive(assetKey, envKey)
+    .then((value) => rememberNftUsdPrice(assetKey, value, cacheMs));
+
+  try {
+    const timeoutMs = Number(options.timeoutMs || 0);
+    if (timeoutMs > 0) {
+      return await shopPromiseWithTimeout(livePromise, timeoutMs, `${assetKey.toUpperCase()} USD price`);
+    }
+    return await livePromise;
+  } catch (err) {
+    const stale = readNftUsdPriceCache(assetKey, { includeStale: true });
+    if (stale && options.allowStale === true) {
+      livePromise.catch(() => null);
+      console.warn('[shop] using stale USD price fallback', {
+        asset: assetKey,
+        message: err?.message || String(err),
+      });
+      return stale.value;
+    }
+    throw err;
+  }
+}
+
+async function fetchNftUsdPriceLive(asset, envKey) {
   // SKR — no major CoinGecko/Binance feed (newly launched Solana Mobile
   // token). Resolve via DexScreener using the SKR mint configured on the
   // Solana shop. Cached for 60s to avoid hammering on every quote.
@@ -5670,22 +5722,18 @@ function gameShopConfigStaleMs() {
   return shopTimeoutMs(process.env.GAME_SHOP_CONFIG_STALE_MS, 10 * 60_000, 30_000, 60 * 60_000);
 }
 
-function gameShopConfigDecimalTimeoutMs() {
-  return shopTimeoutMs(process.env.GAME_SHOP_CONFIG_DECIMALS_TIMEOUT_MS, 1_200, 250, 5_000);
+function gameShopQuotePriceTimeoutMs() {
+  return shopTimeoutMs(
+    process.env.GAME_SHOP_QUOTE_PRICE_TIMEOUT_MS || process.env.NFT_PRICE_FETCH_TIMEOUT_MS,
+    1_500,
+    250,
+    2_000,
+  );
 }
 
-async function buildGameShopClientConfig() {
+function buildGameShopClientConfig() {
   const config = gameShopConfig();
   const solana = gameShopSolanaConfig();
-  const decimalTimeoutMs = gameShopConfigDecimalTimeoutMs();
-  const [solanaSkrDecimals, solanaClashDecimals] = await Promise.all([
-    solana.skrReady
-      ? resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals, { timeoutMs: decimalTimeoutMs })
-      : Promise.resolve(solana.skrDecimals),
-    solana.clashReady
-      ? resolveSolanaMintDecimals(solana.clashMint, solana.clashDecimals, { timeoutMs: decimalTimeoutMs })
-      : Promise.resolve(solana.clashDecimals),
-  ]);
   const baseEvm = gameShopEvmConfig('base');
   const arbitrum = gameShopEvmConfig('arbitrum');
   const monad = gameShopEvmConfig('monad');
@@ -5712,10 +5760,10 @@ async function buildGameShopClientConfig() {
       treasury: solana.treasury,
       usdcMint: solana.usdcMint,
       skrMint: solana.skrMint,
-      skrDecimals: solanaSkrDecimals,
+      skrDecimals: solana.skrDecimals,
       skrReady: solana.skrReady,
       clashMint: solana.clashMint,
-      clashDecimals: solanaClashDecimals,
+      clashDecimals: solana.clashDecimals,
       clashReady: solana.clashReady,
       clashDiscountBps: copDiscountBps,
       memoProgram: solana.memoProgram,
@@ -5766,12 +5814,16 @@ async function buildGameShopClientConfig() {
       saleActive: aptos.saleActive,
       ready: aptos.ready,
     },
+    pricing: {
+      mode: 'quote_on_buy',
+      display: 'preset_usd',
+    },
     products: gameShopProductsForClient(),
   };
 }
 
-async function refreshGameShopClientConfig() {
-  const value = await buildGameShopClientConfig();
+function refreshGameShopClientConfig() {
+  const value = buildGameShopClientConfig();
   const now = Date.now();
   _gameShopClientConfigCache.value = value;
   _gameShopClientConfigCache.refreshedAt = now;
@@ -5779,7 +5831,7 @@ async function refreshGameShopClientConfig() {
   return value;
 }
 
-async function getGameShopClientConfigCached() {
+function getGameShopClientConfigCached() {
   const now = Date.now();
   const cached = _gameShopClientConfigCache.value;
   if (cached && _gameShopClientConfigCache.expiresAt > now) {
@@ -5789,31 +5841,24 @@ async function getGameShopClientConfigCached() {
   const staleUntil = _gameShopClientConfigCache.expiresAt + gameShopConfigStaleMs();
   if (cached && staleUntil > now) {
     if (!_gameShopClientConfigRefresh) {
-      _gameShopClientConfigRefresh = refreshGameShopClientConfig()
-        .catch((err) => {
-          console.warn('[shop] background config refresh failed:', err?.message || err);
-          return null;
-        })
-        .finally(() => {
-          _gameShopClientConfigRefresh = null;
-        });
+      try {
+        _gameShopClientConfigRefresh = refreshGameShopClientConfig();
+      } catch (err) {
+        console.warn('[shop] background config refresh failed:', err?.message || err);
+      } finally {
+        _gameShopClientConfigRefresh = null;
+      }
     }
     return { value: cached, cacheState: 'stale' };
   }
 
-  if (!_gameShopClientConfigRefresh) {
-    _gameShopClientConfigRefresh = refreshGameShopClientConfig()
-      .finally(() => {
-        _gameShopClientConfigRefresh = null;
-      });
-  }
-  return { value: await _gameShopClientConfigRefresh, cacheState: cached ? 'refresh' : 'miss' };
+  return { value: refreshGameShopClientConfig(), cacheState: cached ? 'refresh' : 'miss' };
 }
 
 // ---------- Game shop: utility resources granted server-side ----------
-router.get('/shop/config', async (req, res) => {
+router.get('/shop/config', (req, res) => {
   try {
-    const { value, cacheState } = await getGameShopClientConfigCached();
+    const { value, cacheState } = getGameShopClientConfigCached();
     res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=120');
     res.set('X-Shop-Config-Cache', cacheState);
     res.json(value);
@@ -6998,7 +7043,10 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
       priceSource = 'USDC 1:1 USD';
       mint = solana.usdcMint;
     } else if (payment === 'sol') {
-      const solUsd = await fetchNftUsdPrice('sol');
+      const solUsd = await fetchNftUsdPrice('sol', {
+        timeoutMs: gameShopQuotePriceTimeoutMs(),
+        allowStale: true,
+      });
       amount = usdToNativeUnits(usdAmount, solUsd, 9); // lamports
       decimals = 9;
       priceSource = `SOL/USD ${solUsd}`;
@@ -7007,15 +7055,25 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
       // because no major price API has a canonical SKR/USD feed yet —
       // operator sets NFT_SKR_USD when ready to accept this token. Decimals
       // are read from the mint account so 661 SKR cannot become 0.661 SKR.
-      const skrUsd = await fetchNftUsdPrice('skr');
-      const skrDecimals = await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals);
+      const skrUsd = await fetchNftUsdPrice('skr', {
+        timeoutMs: gameShopQuotePriceTimeoutMs(),
+        allowStale: true,
+      });
+      const skrDecimals = await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals, {
+        timeoutMs: gameShopQuotePriceTimeoutMs(),
+      });
       amount = usdToNativeUnits(usdAmount, skrUsd, skrDecimals);
       decimals = skrDecimals;
       priceSource = `SKR/USD ${skrUsd}`;
       mint = solana.skrMint;
     } else {
-      const clashUsd = await fetchNftUsdPrice('clash');
-      const clashDecimals = await resolveSolanaMintDecimals(solana.clashMint, solana.clashDecimals);
+      const clashUsd = await fetchNftUsdPrice('clash', {
+        timeoutMs: gameShopQuotePriceTimeoutMs(),
+        allowStale: true,
+      });
+      const clashDecimals = await resolveSolanaMintDecimals(solana.clashMint, solana.clashDecimals, {
+        timeoutMs: gameShopQuotePriceTimeoutMs(),
+      });
       amount = usdToNativeUnits(usdAmount, clashUsd, clashDecimals);
       decimals = clashDecimals;
       priceSource = `CLASH/USD ${clashUsd}`;
@@ -7379,7 +7437,10 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
       baseAmount = usdToNativeUnits(usdAmount, '1', paymentSpec.decimals);
       priceSource = `${paymentSpec.label} 1:1 USD`;
     } else {
-      const assetUsd = await fetchNftUsdPrice(paymentSpec.oracleAsset);
+      const assetUsd = await fetchNftUsdPrice(paymentSpec.oracleAsset, {
+        timeoutMs: gameShopQuotePriceTimeoutMs(),
+        allowStale: true,
+      });
       baseAmount = usdToNativeUnits(usdAmount, assetUsd, paymentSpec.decimals);
       priceSource = `${paymentSpec.label}/USD ${assetUsd}`;
     }
@@ -7767,7 +7828,10 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
     } else {
       // APT pricing via the same oracle hop NFT mint uses. APT FA = 8 decimals.
       decimals = 8;
-      const aptUsd = await fetchNftUsdPrice('apt').catch(() => null);
+      const aptUsd = await fetchNftUsdPrice('apt', {
+        timeoutMs: gameShopQuotePriceTimeoutMs(),
+        allowStale: true,
+      }).catch(() => null);
       if (!aptUsd) return res.status(503).json({ error: 'APT price unavailable; try USDC' });
       amount = usdToNativeUnits(usdAmount, aptUsd, decimals);
       asset = '0xa';

@@ -17,7 +17,7 @@ import { BASE_CHAIN_ID, BASE_PRIMARY_RPC_URL, ensureBaseChain } from '../lib/ava
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { INK_CHAIN_ID, ensureInkChain, inkChain } from '../lib/nadoConfig';
-import { fetchGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
+import { fetchGameShopConfig, getCachedGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
 import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
@@ -577,7 +577,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const [busy, setBusy] = useState(null);
   const [notice, setNotice] = useState(null);
   const [mintConfig, setMintConfig] = useState(null);
-  const [gameShopConfig, setGameShopConfig] = useState(null);
+  const [gameShopConfig, setGameShopConfig] = useState(() => getCachedGameShopConfig());
   // Overlay state machine: idle = normal panel, pending = signing/waiting
   // for tx confirmation, success = success animation. Failure resets
   // to idle and surfaces the message through `notice` like before so the

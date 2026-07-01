@@ -5,7 +5,7 @@ import { buildSolanaWalletTxOptions } from './solanaSeekerTx';
 
 const GAME_SHOP_CONFIG_CACHE_KEY = 'clash-game-shop-config-v1';
 const GAME_SHOP_CONFIG_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
-const GAME_SHOP_CONFIG_FETCH_TIMEOUT_MS = 8000;
+const GAME_SHOP_CONFIG_FETCH_TIMEOUT_MS = 1800;
 
 function formatCopAmount(units, decimals = 18) {
   // Render a uint256 token amount with up to 4 fractional digits, trimmed.
@@ -81,6 +81,11 @@ function writeCachedGameShopConfig(value) {
   } catch {
     /* best-effort cache */
   }
+}
+
+export function getCachedGameShopConfig() {
+  const cached = readCachedGameShopConfig();
+  return cached ? { ...cached, _stale: true } : null;
 }
 
 export async function fetchGameShopConfig() {
