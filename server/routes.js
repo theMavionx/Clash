@@ -21284,6 +21284,7 @@ router.get('/tournaments/me', auth, (req, res) => {
       FROM tournament_participants
       WHERE tournament_id = ? AND left_at IS NULL
     `).all(t.id), t);
+    if (tournamentUsesDailyPool(t)) applyTournamentLiveDailyPoolScore(scored, t);
     comboMeScore = scored.find(s => s.player_id === req.player.id) || null;
   }
   const thRequirement = playerMeetsTournamentTownHallRequirement(t, req.player.id);
@@ -21361,6 +21362,7 @@ router.get('/tournaments/history', auth, (req, res) => {
       FROM tournament_participants
       WHERE tournament_id = ? AND left_at IS NULL
     `).all(r.id), r);
+    if (tournamentUsesDailyPool(r)) applyTournamentLiveDailyPoolScore(scored, r);
     const mine = scored.find(s => s.player_id === req.player.id);
     if (mine) comboScores.set(r.id, mine);
   }
@@ -21591,6 +21593,134 @@ function buildTournamentDailyEstimate(activityRows, t, dayUtc = tournamentUtcDay
   }
 
   return { total_points: Number(totalPoints.toFixed(6)), details, byPlayer };
+}
+
+function compareTournamentDailyPoolRows(a, b) {
+  return (Number(b.score) || 0) - (Number(a.score) || 0)
+    || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+    || (Number(b.trophies) || 0) - (Number(a.trophies) || 0)
+    || String(a.player_id).localeCompare(String(b.player_id));
+}
+
+function applyTournamentLiveDailyPoolScore(rows, t) {
+  if (!Array.isArray(rows) || rows.length === 0 || !tournamentUsesDailyPool(t)) return null;
+  const tid = Number(t?.id);
+  const phase = tournamentPhase(t);
+  const day = phase === 'live' ? tournamentDailyPoolCurrentDay(t) : null;
+  const state = {
+    day_utc: day,
+    active: false,
+    processed: false,
+    estimated_total_points: 0,
+  };
+  for (const row of rows) {
+    const awarded = Math.max(0, Number(row.awarded_points) || 0);
+    row.tournament_trophies = Number(row.trophies || 0);
+    row.tournament_trades_count = Number(row.trades_count || 0);
+    row.tournament_volume_usd = Number(row.volume_usd || 0);
+    row.tournament_pnl_usd = Number(row.pnl_usd || 0);
+    row.projected_points = Number(awarded.toFixed(4));
+    row.live_daily_estimated_points = 0;
+    row.live_daily_estimated_trophy_points = 0;
+    row.live_daily_estimated_volume_points = 0;
+    row.live_daily_estimated_pnl_points = 0;
+    row.live_daily_day_utc = day;
+    row.live_daily_processed = false;
+  }
+  if (!Number.isFinite(tid)) return state;
+
+  const scoringTotalRows = db.db.prepare(`
+    SELECT player_id,
+           COALESCE(SUM(trades_count), 0) AS trades_count,
+           COALESCE(SUM(volume_usd), 0) AS volume_usd,
+           COALESCE(SUM(pnl_usd), 0) AS pnl_usd,
+           COALESCE(SUM(trophies), 0) AS trophies
+    FROM tournament_daily_activity
+    WHERE tournament_id = ?
+    GROUP BY player_id
+  `).all(tid);
+  const scoringTotalsByPlayer = new Map(scoringTotalRows.map(row => [row.player_id, row]));
+  for (const row of rows) {
+    const scoring = scoringTotalsByPlayer.get(row.player_id);
+    row.scoring_trades_count = Number(scoring?.trades_count || 0);
+    row.scoring_volume_usd = Number(scoring?.volume_usd || 0);
+    row.scoring_pnl_usd = Number(scoring?.pnl_usd || 0);
+    row.scoring_trophies = Number(scoring?.trophies || 0);
+    row.trades_count = row.scoring_trades_count;
+    row.volume_usd = row.scoring_volume_usd;
+    row.pnl_usd = row.scoring_pnl_usd;
+    row.trophies = row.scoring_trophies;
+  }
+  if (phase !== 'live') return state;
+
+  const run = db.db.prepare(`
+    SELECT day_utc, processed_at, total_points, details_json
+    FROM tournament_daily_point_runs
+    WHERE tournament_id = ? AND day_utc = ?
+  `).get(tid, day);
+  if (run) {
+    state.processed = true;
+    state.processed_at = run.processed_at || null;
+    state.total_points = Number(run.total_points || 0);
+    for (const row of rows) {
+      row.live_daily_processed = true;
+    }
+    return state;
+  }
+
+  const activityDays = tournamentDailyPoolActivityDays(t, day);
+  const placeholders = activityDays.map(() => '?').join(',');
+  const activityRows = db.db.prepare(`
+    SELECT a.player_id,
+           COALESCE(SUM(a.trades_count), 0) AS trades_count,
+           COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
+           COALESCE(SUM(a.pnl_usd), 0) AS pnl_usd,
+           COALESCE(SUM(a.trophies), 0) AS trophies,
+           COALESCE(SUM(a.gold), 0) AS gold
+    FROM tournament_daily_activity a
+    WHERE a.tournament_id = ? AND a.day_utc IN (${placeholders})
+    GROUP BY a.player_id
+  `).all(tid, ...activityDays);
+  const activityByPlayer = new Map();
+  for (const row of rows) {
+    activityByPlayer.set(row.player_id, {
+      player_id: row.player_id,
+      trades_count: 0,
+      volume_usd: 0,
+      pnl_usd: 0,
+      trophies: 0,
+      gold: 0,
+    });
+  }
+  for (const row of activityRows) {
+    const target = activityByPlayer.get(row.player_id);
+    if (!target) continue;
+    target.trades_count = Number(row.trades_count || 0);
+    target.volume_usd = Number(row.volume_usd || 0);
+    target.pnl_usd = Number(row.pnl_usd || 0);
+    target.trophies = Number(row.trophies || 0);
+    target.gold = Number(row.gold || 0);
+  }
+
+  const estimate = buildTournamentDailyEstimate(Array.from(activityByPlayer.values()), t, day);
+  state.active = true;
+  state.activity_days = activityDays;
+  state.estimated_total_points = estimate.total_points;
+  for (const row of rows) {
+    const awarded = Math.max(0, Number(row.awarded_points) || 0);
+    const estimated = estimate.byPlayer.get(row.player_id) || {};
+    const livePoints = Math.max(0, Number(estimated.estimated_points) || 0);
+    row.live_daily_estimated_points = Number(livePoints.toFixed(6));
+    row.live_daily_estimated_trophy_points = Number(estimated.estimated_trophy_points || 0);
+    row.live_daily_estimated_volume_points = Number(estimated.estimated_volume_points || 0);
+    row.live_daily_estimated_pnl_points = Number(estimated.estimated_pnl_points || 0);
+    row.projected_points = Number((awarded + livePoints).toFixed(4));
+    row.score = row.projected_points;
+    row.trophy_score = row.live_daily_estimated_trophy_points;
+    row.volume_score = row.live_daily_estimated_volume_points;
+    row.pnl_score = row.live_daily_estimated_pnl_points;
+  }
+  return state;
 }
 
 function buildTournamentDailyPointRows(t, options = {}) {
@@ -21883,19 +22013,23 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   `;
   let rows;
   let teamState = null;
+  let dailyPoolLive = null;
   if (mode === 'dex_vs_dex') {
     rows = db.db.prepare(baseSql).all(tid);
     if (needsPointsScore) applyTournamentPointsScore(rows, t);
+    if (tournamentUsesDailyPool(t)) dailyPoolLive = applyTournamentLiveDailyPoolScore(rows, t);
   } else if (isTournamentPointsSort(sortBy) || tournamentUsesDailyPool(t)) {
-    rows = applyTournamentPointsScore(db.db.prepare(baseSql).all(tid), t)
-      .sort((a, b) =>
-        (Number(b.score) || 0) - (Number(a.score) || 0)
-        || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
-        || (Number(b.pnl_usd) || 0) - (Number(a.pnl_usd) || 0)
-        || (Number(b.trophies) || 0) - (Number(a.trophies) || 0)
-        || (Number(b.trades_count) || 0) - (Number(a.trades_count) || 0)
-        || String(a.player_id).localeCompare(String(b.player_id))
-      )
+    rows = applyTournamentPointsScore(db.db.prepare(baseSql).all(tid), t);
+    if (tournamentUsesDailyPool(t)) dailyPoolLive = applyTournamentLiveDailyPoolScore(rows, t);
+    rows = rows
+      .sort((a, b) => tournamentUsesDailyPool(t)
+        ? compareTournamentDailyPoolRows(a, b)
+        : ((Number(b.score) || 0) - (Number(a.score) || 0)
+          || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+          || (Number(b.pnl_usd) || 0) - (Number(a.pnl_usd) || 0)
+          || (Number(b.trophies) || 0) - (Number(a.trophies) || 0)
+          || (Number(b.trades_count) || 0) - (Number(a.trades_count) || 0)
+          || String(a.player_id).localeCompare(String(b.player_id))))
       .slice(0, limit);
   } else {
     rows = db.db.prepare(`
@@ -21915,6 +22049,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   if (isMegaTournament(t)) {
     const allRows = db.db.prepare(baseSql).all(tid);
     if (needsPointsScore || isTournamentPointsSort(sortBy) || tournamentUsesDailyPool(t)) applyTournamentPointsScore(allRows, t);
+    if (tournamentUsesDailyPool(t)) dailyPoolLive = applyTournamentLiveDailyPoolScore(allRows, t);
     applyTournamentDexBreakdowns(allRows, t, dexBreakdowns);
     applyTournamentDailyDexBreakdowns(allRows, t, dailyDexBreakdowns);
     megaState = buildMegaTournamentState(allRows, t);
@@ -21949,6 +22084,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     summary,
     prize,
     reward_schedule: tournamentRewardScheduleState(t, viewer?.id || null),
+    daily_pool_live: dailyPoolLive,
     mega: megaState,
     teams: teamState,
     leaderboard: rows.map((r, i) => ({
@@ -21983,8 +22119,23 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       trades_count: r.trades_count,
       volume_usd: r.volume_usd,
       pnl_usd: r.pnl_usd,
+      scoring_trophies: r.scoring_trophies ?? null,
+      scoring_trades_count: r.scoring_trades_count ?? null,
+      scoring_volume_usd: r.scoring_volume_usd ?? null,
+      scoring_pnl_usd: r.scoring_pnl_usd ?? null,
+      tournament_trophies: r.tournament_trophies ?? null,
+      tournament_trades_count: r.tournament_trades_count ?? null,
+      tournament_volume_usd: r.tournament_volume_usd ?? null,
+      tournament_pnl_usd: r.tournament_pnl_usd ?? null,
       awarded_points: r.awarded_points || 0,
       score: r.score ?? null,
+      projected_points: r.projected_points ?? r.score ?? null,
+      live_daily_estimated_points: r.live_daily_estimated_points || 0,
+      live_daily_estimated_trophy_points: r.live_daily_estimated_trophy_points || 0,
+      live_daily_estimated_volume_points: r.live_daily_estimated_volume_points || 0,
+      live_daily_estimated_pnl_points: r.live_daily_estimated_pnl_points || 0,
+      live_daily_day_utc: r.live_daily_day_utc || null,
+      live_daily_processed: !!r.live_daily_processed,
       volume_score: r.volume_score ?? null,
       trophy_score: r.trophy_score ?? null,
       pnl_score: r.pnl_score ?? null,
