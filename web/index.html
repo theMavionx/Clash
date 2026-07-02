@@ -42,6 +42,14 @@
     <script>
       if ('serviceWorker' in navigator) {
         (function(){
+          window.__clashAppInteractive = false;
+          function isBootLoading() {
+            try {
+              return window.__clashAppInteractive !== true;
+            } catch(e) {
+              return true;
+            }
+          }
           function hasCriticalActivity() {
             try {
               var activity = window.__clashClientActivity || {};
@@ -51,6 +59,7 @@
             }
           }
           function reloadForRuntimeUpdate(update) {
+            if (!isBootLoading()) return false;
             if (hasCriticalActivity()) return false;
             try {
               var key = 'clash_boot_runtime_update_' + String(update && update.reason || 'runtime').replace(/[^a-z0-9_-]+/gi, '_');

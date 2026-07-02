@@ -18,6 +18,7 @@ import {
   applyPendingClientUpdate,
   clearPendingClientUpdate,
   getPendingClientUpdate,
+  markClientInteractive,
   scheduleClientUpdateAutoApply,
   setClientActivity,
 } from './lib/updateCoordinator';
@@ -147,6 +148,13 @@ function SplashScreen({ label }) {
   );
 }
 
+function ClientInteractiveMarker() {
+  useEffect(() => {
+    markClientInteractive();
+  }, []);
+  return null;
+}
+
 function AppInner() {
   // Warm up the browser's image cache with every BuildingInfoPanel thumbnail
   // while the player is still on the loading screen — otherwise the first
@@ -157,6 +165,7 @@ function AppInner() {
       <ChunkErrorBoundary name="AppInner">
         <Suspense fallback={<SplashScreen label="Loading game..." />}>
           <div style={styles.container}>
+            <ClientInteractiveMarker />
             <GodotCanvas />
             <GameUI />
             <ClashMigrationNotice />

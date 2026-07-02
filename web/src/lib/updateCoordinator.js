@@ -83,6 +83,23 @@ function clearOldRuntimeCaches(version) {
   }
 }
 
+export function markClientInteractive() {
+  try {
+    window.__clashAppInteractive = true;
+    window.__clashAppInteractiveAt = Date.now();
+  } catch {
+    /* noop */
+  }
+}
+
+export function isClientBootLoading() {
+  try {
+    return window.__clashAppInteractive !== true;
+  } catch {
+    return true;
+  }
+}
+
 export function setClientActivity(patch = {}) {
   activity = { ...activity, ...patch };
   try {
@@ -132,6 +149,7 @@ export function applyPendingClientUpdate() {
 
 export function canAutoApplyClientUpdate(update = readPending()) {
   if (!update) return false;
+  if (!isClientBootLoading()) return false;
   return !hasCriticalClientActivity();
 }
 
