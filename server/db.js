@@ -4104,12 +4104,22 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
     let awardedTotal = 0;
     for (const cat of categories) {
       const catPool = pool * (Math.max(0, Number(cat.weight) || 0) / 100);
+      const signedTotal = rows.reduce((sum, row) => sum + (Number(row[cat.column]) || 0), 0);
       const values = rows.map((row) => ({
         player_id: row.player_id,
         value: Math.max(0, Number(row[cat.column]) || 0),
       })).filter((row) => row.value > 0);
       const totalRaw = values.reduce((sum, row) => sum + row.value, 0);
-      details.categories[cat.key] = { pool: Number(catPool.toFixed(6)), raw_total: Number(totalRaw.toFixed(6)), players: values.length };
+      // Do not hand the whole PnL pool to a tiny positive outlier on a net-losing day.
+      const disabledByNetNegative = cat.key === 'pnl' && signedTotal <= 0;
+      details.categories[cat.key] = {
+        pool: Number(catPool.toFixed(6)),
+        raw_total: Number(totalRaw.toFixed(6)),
+        signed_total: Number(signedTotal.toFixed(6)),
+        players: disabledByNetNegative ? 0 : values.length,
+        ...(disabledByNetNegative ? { skipped: 'net_pnl_not_positive' } : {}),
+      };
+      if (disabledByNetNegative) continue;
       if (catPool <= 0 || totalRaw <= 0) continue;
       for (const row of values) {
         const points = Number((catPool * (row.value / totalRaw)).toFixed(6));

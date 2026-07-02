@@ -21555,16 +21555,22 @@ function buildTournamentDailyEstimate(activityRows, t, dayUtc = tournamentUtcDay
 
   for (const cat of categories) {
     const catPool = pool * (Math.max(0, Number(cat.weight) || 0) / 100);
+    const signedTotal = activityRows.reduce((sum, row) => sum + (Number(row[cat.column]) || 0), 0);
     const values = activityRows.map(row => ({
       player_id: row.player_id,
       value: Math.max(0, Number(row[cat.column]) || 0),
     })).filter(row => row.value > 0);
     const rawTotal = values.reduce((sum, row) => sum + row.value, 0);
+    // Do not hand the whole PnL pool to a tiny positive outlier on a net-losing day.
+    const disabledByNetNegative = cat.key === 'pnl' && signedTotal <= 0;
     details.categories[cat.key] = {
       pool: Number(catPool.toFixed(6)),
       raw_total: Number(rawTotal.toFixed(6)),
-      players: values.length,
+      signed_total: Number(signedTotal.toFixed(6)),
+      players: disabledByNetNegative ? 0 : values.length,
+      ...(disabledByNetNegative ? { skipped: 'net_pnl_not_positive' } : {}),
     };
+    if (disabledByNetNegative) continue;
     if (catPool <= 0 || rawTotal <= 0) continue;
 
     for (const row of values) {

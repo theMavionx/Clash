@@ -273,6 +273,13 @@ function featuredMetric(sortKey, row) {
   };
 }
 
+function leaderboardUsesPnl(t, sortKey) {
+  if (sortKey === 'pnl_usd') return true;
+  if (isDailyPoolTournament(t)) return Number(pointWeights(t).pnl) > 0;
+  if (isPointsSort(sortKey)) return Number(pointWeights(t).pnl) > 0;
+  return false;
+}
+
 function isMegaTournament(t) {
   return !!(t?.is_mega || t?.tournament_kind === 'mega' || t?.mega_config?.enabled);
 }
@@ -1282,6 +1289,7 @@ function TournamentPanel({ onClose }) {
                   const prizeAmount = Number(r.prize_amount || 0);
                   const rankRewards = rankRewardSummary(r.prize_rewards || [], r.prize_currency || t.prize_currency || 'USD');
                   const topDex = leaderboardDexBadgeLabel(t, r);
+                  const showPnl = leaderboardUsesPnl(t, sortKey);
                   return (
                     <div
                       key={r.player_id}
@@ -1308,7 +1316,10 @@ function TournamentPanel({ onClose }) {
                         <span style={S.subRow}>
                           {r.team_label && <>{r.team_label} | </>}
                           {isMegaTournament(t) && r.mega_sector_name && <>{r.mega_sector_name} · </>}
-                          {fmt(r.trophies)} 🏆 · {r.trades_count} trades · {fmtUsd(r.volume_usd)} vol
+                          {fmt(r.trophies)} 🏆 · {fmtUsd(r.volume_usd)} vol
+                          {showPnl && (
+                            <> · <span style={{ color: (r.pnl_usd || 0) >= 0 ? '#15803d' : '#b91c1c' }}>{fmtUsd(r.pnl_usd)} PnL</span></>
+                          )}
                           {rankRewards.length > 0 && <> · <strong style={S.prizeText}>{rankRewards.join(' + ')}</strong></>}
                           {!rankRewards.length && prizeAmount > 0 && <> · <strong style={S.prizeText}>{fmtPrize(prizeAmount)} prize</strong></>}
                         </span>
@@ -1429,6 +1440,7 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
                   const isMe = row.player_id === myPlayerId;
                   const rank = Number(row[rankKey] || row.rank || 0);
                   const points = Number(row[pointsKey] || 0);
+                  const showPnl = leaderboardUsesPnl(t, t?.sort_by);
                   return (
                     <div
                       key={row.player_id}
@@ -1442,7 +1454,7 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
                       <div style={S.dailyPlayerInfo}>
                         <span style={S.dailyPlayerName}>{compactPlayerName(row)}{isMe ? ' (you)' : ''}</span>
                         <span style={S.dailyPlayerMeta}>
-                          {fmt(row.trophies)} trophies | {row.trades_count || 0} trades | {fmtUsd(row.volume_usd)} vol | {fmtUsd(row.pnl_usd)} PnL | {fmt(row.gold)} gold
+                          {fmt(row.trophies)} trophies | {fmtUsd(row.volume_usd)} vol{showPnl ? ` | ${fmtUsd(row.pnl_usd)} PnL` : ''} | {fmt(row.gold)} gold
                         </span>
                       </div>
                       <span style={S.dailyPlayerPoints}>{fmtPoints(points)}</span>
