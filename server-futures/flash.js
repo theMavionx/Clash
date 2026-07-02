@@ -990,6 +990,78 @@ function parseLegacyTriggerParams(data) {
   };
 }
 
+function flashOracleParamsFromUiPrice(value, exponent, label = 'Flash price') {
+  const exp = Number(exponent);
+  if (!Number.isInteger(exp)) {
+    throw Object.assign(new Error(`${label} exponent is unavailable`), { status: 502 });
+  }
+  const priceText = String(value ?? '').trim();
+  if (!priceText || !(Number(priceText) > 0)) {
+    throw Object.assign(new Error(`${label} must be a positive price`), { status: 400 });
+  }
+  if (exp <= 0) {
+    return {
+      price: parseUiAmountToRaw(priceText, Math.abs(exp), label),
+      exponent: exp,
+    };
+  }
+  const raw = Number(priceText) / Math.pow(10, exp);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    throw Object.assign(new Error(`${label} cannot be converted to raw oracle price`), { status: 400 });
+  }
+  return {
+    price: BigInt(Math.round(raw)),
+    exponent: exp,
+  };
+}
+
+function flashRawOraclePrice(value) {
+  if (typeof value === 'bigint') return value > 0n ? value : null;
+  if (typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value > 0) {
+    return BigInt(value);
+  }
+  const text = String(value ?? '').trim();
+  return /^\d+$/.test(text) && BigInt(text) > 0n ? BigInt(text) : null;
+}
+
+async function flashOracleParamsForSymbol(symbol, explicitUiPrice = null, label = 'Flash price') {
+  const wantedSymbol = normalizeToken(symbol);
+  const prices = await getPrices();
+  const row = prices.find(item => normalizeToken(item?.symbol, '') === wantedSymbol);
+  if (!row) {
+    throw Object.assign(new Error(`Flash price is unavailable for ${wantedSymbol}`), { status: 502 });
+  }
+  const exponent = Number(row.exponent);
+  if (!Number.isInteger(exponent)) {
+    throw Object.assign(new Error(`Flash price exponent is unavailable for ${wantedSymbol}`), { status: 502 });
+  }
+  if (explicitUiPrice != null && String(explicitUiPrice).trim() !== '') {
+    return flashOracleParamsFromUiPrice(explicitUiPrice, exponent, label);
+  }
+  const raw = flashRawOraclePrice(row.raw_price ?? row.rawPrice);
+  if (raw) return { price: raw, exponent };
+  return flashOracleParamsFromUiPrice(row.price_ui ?? row.price, exponent, label);
+}
+
+function flashSlippageBps(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 50;
+  return Math.max(0, Math.min(5_000, Math.round(n * 100)));
+}
+
+function applyFlashCloseSlippage(params, side, slippagePercentage) {
+  const bps = flashSlippageBps(slippagePercentage);
+  if (!bps) return { ...params, slippage_bps: 0 };
+  const base = BigInt(params.price);
+  const factor = metricSide(side) === 'SHORT' ? 10_000n + BigInt(bps) : 10_000n - BigInt(bps);
+  const adjusted = (base * factor) / 10_000n;
+  return {
+    ...params,
+    price: adjusted > 0n ? adjusted : 1n,
+    slippage_bps: bps,
+  };
+}
+
 function parseLegacyLimitParams(data) {
   const buf = Buffer.from(data || []);
   if (buf.length < 60) {
@@ -2848,40 +2920,44 @@ async function buildClosePositionTx(body, owner) {
   }
   if (body.entryPriceUi || body.entry_price_ui) payload.entryPriceUi = String(body.entryPriceUi || body.entry_price_ui);
   if (body.sizeUsdUi || body.size_usd_ui) payload.sizeUsdUi = String(body.sizeUsdUi || body.size_usd_ui);
-  if (!payload.positionKey || !payload.marketSymbol || !payload.side || !payload.inputUsdUi) {
-    throw Object.assign(new Error('positionKey, marketSymbol, side and inputUsdUi are required'), { status: 400 });
+  if (!payload.marketSymbol || !payload.side || !payload.inputUsdUi) {
+    throw Object.assign(new Error('marketSymbol, side and inputUsdUi are required'), { status: 400 });
   }
-  await assertFlashMainPosition(owner, marketSymbol, side, body, 'close');
+  const positionCheck = await assertFlashMainPosition(owner, marketSymbol, side, body, 'close');
+  const resolvedMarketPubkey = marketPubkey || positionCheck.marketPubkey || '';
+  if (!payload.positionKey && resolvedMarketPubkey) payload.positionKey = `mb-${resolvedMarketPubkey}`;
+  if (!payload.positionKey) {
+    throw Object.assign(new Error('positionKey is required for Flash close'), { status: 400 });
+  }
   applyTradingSessionPayload(payload, body);
-  const result = await request('/transaction-builder/close-position', { method: 'POST', body: payload });
-  if (result?.err) throw Object.assign(new Error(String(result.err)), { status: 400, data: result });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
-  const legacyIx = getFlashLegacyBuilderInstruction(result, [
-    FLASH_LEGACY_DISCRIMINATORS.closePosition,
-    FLASH_LEGACY_DISCRIMINATORS.closeAndSwap,
-  ]);
-  const params = parseLegacyPricePrivilegeParams(legacyIx.data, 'Flash close builder');
+  const params = applyFlashCloseSlippage(
+    await flashOracleParamsForSymbol(marketSymbol, null, 'Flash close price'),
+    side,
+    payload.slippagePercentage,
+  );
+  params.privilege = flashPrivilegeByte(body.privilege);
   const signerContext = flashSignerContext(owner, body);
   const context = await getFlashMainMarketContext({
     symbol: marketSymbol,
     side,
     receivingSymbol: payload.withdrawTokenSymbol,
-    marketPubkey,
+    marketPubkey: resolvedMarketPubkey,
   });
   const transaction = await buildFlashErVersionedTransaction([
     flashErCloseInstruction(signerContext, context, params),
   ], signerContext.signerPk);
   return {
-    ...result,
     transaction,
     transactions: [transaction],
     request: payload,
     builder: 'flash_trade_main_er',
-    legacy_builder: 'flash_trade_main',
-    legacy_instruction: legacyIx.discriminator,
+    legacy_builder: null,
+    legacy_instruction: null,
     er_instruction: 'close_position_er',
     txKind: 'trading',
     api: FLASH_API,
+    price: Number(params.price) * Math.pow(10, params.exponent),
+    marketPubkey: context.market.pubkey,
   };
 }
 
@@ -2906,7 +2982,8 @@ async function buildPlaceTpSlTx(body, owner) {
   if (!positionKey) {
     throw Object.assign(new Error('positionKey is required for Flash TP/SL'), { status: 400 });
   }
-  await assertFlashMainPosition(owner, marketSymbol, side, body, 'set TP/SL on');
+  const positionCheck = await assertFlashMainPosition(owner, marketSymbol, side, body, 'set TP/SL on');
+  const resolvedMarketPubkey = marketPubkey || positionCheck.marketPubkey || '';
   const basePayload = {
     positionKey,
     marketSymbol,
@@ -2919,47 +2996,51 @@ async function buildPlaceTpSlTx(body, owner) {
   const requests = [];
   if (takeProfitUi) requests.push({ ...basePayload, triggerPriceUi: takeProfitUi, isStopLoss: false });
   if (stopLossUi) requests.push({ ...basePayload, triggerPriceUi: stopLossUi, isStopLoss: true });
-  const results = [];
-  for (const payload of requests) {
-    // eslint-disable-next-line no-await-in-loop
-    const result = await request('/transaction-builder/place-trigger-order', { method: 'POST', body: payload });
-    if (result?.err) throw Object.assign(new Error(String(result.err)), { status: 400, data: result });
-    if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
-    results.push({ result, payload });
-  }
   const signerContext = flashSignerContext(owner, body);
   const context = await getFlashMainMarketContext({
     symbol: marketSymbol,
     side,
     receivingSymbol: basePayload.receiveTokenSymbol,
-    marketPubkey,
+    marketPubkey: resolvedMarketPubkey,
   });
+  const sizeDecimals = Number(context.target?.decimals);
+  if (!Number.isInteger(sizeDecimals) || sizeDecimals < 0 || sizeDecimals > 18) {
+    throw Object.assign(new Error(`Flash target token decimals are unavailable for ${marketSymbol}`), { status: 502 });
+  }
+  const deltaSizeAmount = parseUiAmountToRaw(sizeAmountUi, sizeDecimals, 'Flash trigger size');
   const transactions = [];
-  for (const row of results) {
-    const legacyIx = getFlashLegacyBuilderInstruction(row.result, [
-      FLASH_LEGACY_DISCRIMINATORS.placeTriggerOrder,
-    ]);
-    const params = parseLegacyTriggerParams(legacyIx.data);
+  const built = [];
+  for (const payload of requests) {
+    const price = await flashOracleParamsForSymbol(marketSymbol, payload.triggerPriceUi, 'Flash trigger price');
+    const params = {
+      ...price,
+      deltaSizeAmount,
+      isStopLoss: payload.isStopLoss === true,
+    };
     // eslint-disable-next-line no-await-in-loop
     const transaction = await buildFlashErVersionedTransaction([
       flashErPlaceTriggerInstruction(signerContext, context, params),
     ], signerContext.signerPk);
     transactions.push(transaction);
-    row.legacyInstruction = legacyIx.discriminator;
+    built.push({ payload, params });
   }
-  const first = results[0]?.result || {};
   return {
-    ...first,
     transaction: transactions[0],
     transactions,
     request: requests[0],
-    requests: results.map(row => row.payload),
+    requests,
     builder: 'flash_trade_main_er',
-    legacy_builder: 'flash_trade_main',
-    legacy_instruction: results.map(row => row.legacyInstruction),
+    legacy_builder: null,
+    legacy_instruction: null,
     er_instruction: 'place_trigger_order_er',
     txKind: 'trading',
     api: FLASH_API,
+    marketPubkey: context.market.pubkey,
+    trigger_prices: built.map(row => ({
+      triggerPriceUi: row.payload.triggerPriceUi,
+      isStopLoss: row.payload.isStopLoss,
+      exponent: row.params.exponent,
+    })),
   };
 }
 

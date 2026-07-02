@@ -1168,7 +1168,8 @@ function isFlashAlreadyInitializedError(error) {
     error?.data?.message,
     dataText,
   ].map(value => String(value || '')).join(' ');
-  return /already|exists|initialized|account.*in use|custom program error:\s*0x0|InstructionError.*Custom["']?\s*:?\s*0/i.test(text);
+  return /already|exists|initialized|account.*in use|custom program error:\s*0x0|InstructionError.*Custom["']?\s*:?\s*0/i.test(text)
+    || (/AccountOwnedByWrongProgram/i.test(text) && /DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh/i.test(text));
 }
 
 function flashTimeout(promise, timeoutMs, message) {
