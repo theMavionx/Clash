@@ -27,6 +27,16 @@ const FLASH_API = String(process.env.FLASH_API_URL || 'https://flashapi.trade').
 const FLASH_PROD_API = String(process.env.FLASH_PROD_API_URL || 'https://api.prod.flash.trade').replace(/\/+$/, '');
 const FLASH_APP_URL = String(process.env.FLASH_APP_URL || 'https://flash.trade').replace(/\/+$/, '');
 const FLASH_REFERRAL_CODE = String(process.env.FLASH_REFERRAL_CODE || 'clash').trim();
+const FLASH_REFERRAL_WALLET_ADDRESS = String(
+  process.env.FLASH_REFERRAL_WALLET_ADDRESS
+  || process.env.FLASH_REFERRAL_WALLET
+  || '',
+).trim();
+const FLASH_REFERRAL_TOKEN_STAKE_ACCOUNT = String(
+  process.env.FLASH_REFERRAL_TOKEN_STAKE_ACCOUNT
+  || process.env.FLASH_REFERRAL_TOKEN_STAKE
+  || '',
+).trim();
 const FLASH_REFERRAL_URL = String(
   process.env.FLASH_REFERRAL_URL
   || `https://www.flash.trade?referral=${encodeURIComponent(FLASH_REFERRAL_CODE || 'clash')}`,
@@ -758,7 +768,26 @@ async function getFlashReferralCodeInfo(code = FLASH_REFERRAL_CODE) {
   if (!referralCode) {
     throw Object.assign(new Error('Flash referral code is not configured'), { status: 503 });
   }
-  const payload = await requestProd(`/referral-code/code/${encodeURIComponent(referralCode)}`);
+
+  let payload = null;
+  let apiError = null;
+  try {
+    payload = await requestProd(`/referral-code/code/${encodeURIComponent(referralCode)}`);
+  } catch (e) {
+    apiError = e;
+  }
+  if (!payload && referralCode === FLASH_REFERRAL_CODE && FLASH_REFERRAL_WALLET_ADDRESS && FLASH_REFERRAL_TOKEN_STAKE_ACCOUNT) {
+    payload = {
+      code: referralCode,
+      walletAddress: FLASH_REFERRAL_WALLET_ADDRESS,
+      tokenStakeAccount: FLASH_REFERRAL_TOKEN_STAKE_ACCOUNT,
+      source: 'env_fallback',
+      upstream_error: apiError?.message || null,
+      upstream_status: apiError?.status || null,
+    };
+  }
+  if (!payload && apiError) throw apiError;
+
   const walletAddress = String(payload?.walletAddress || payload?.wallet_address || '').trim();
   const tokenStakeAccount = String(payload?.tokenStakeAccount || payload?.token_stake_account || '').trim();
   if (!isSolanaAddress(walletAddress) || !isSolanaAddress(tokenStakeAccount)) {
@@ -776,6 +805,8 @@ async function getFlashReferralCodeInfo(code = FLASH_REFERRAL_CODE) {
     derived_token_stake_account: derivedTokenStake,
     token_stake_matches_derived: tokenStakeAccount === derivedTokenStake,
     created_at: payload?.createdAt || payload?.created_at || null,
+    source: payload?.source || 'flash_prod_api',
+    upstream_status: payload?.upstream_status || null,
   };
 }
 
@@ -3423,6 +3454,7 @@ function configStatus() {
     referral_url: FLASH_REFERRAL_URL,
     referral_onchain_supported: true,
     referral_program_id: FLASH_MAIN_PROGRAM_ID,
+    referral_env_fallback_configured: !!(FLASH_REFERRAL_WALLET_ADDRESS && FLASH_REFERRAL_TOKEN_STAKE_ACCOUNT),
     docs_url: FLASH_DOCS_URL,
     v2_rpc_url: FLASH_V2_RPC_URL,
     usdc_mint: FLASH_USDC_MINT,
