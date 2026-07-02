@@ -13338,6 +13338,80 @@ function playerCanUsePacifica(req, account = '') {
   return false;
 }
 
+function pacificaExistingWalletBaseline(playerId, account) {
+  const wallet = canonicalWalletIdentifier(account || '');
+  if (!wallet) return 0;
+  try {
+    const row = db.db.prepare(`
+      SELECT MAX(COALESCE(last_trade_id, 0)) AS last_trade_id
+      FROM trading_rewards
+      WHERE dex = 'pacifica'
+        AND wallet = ?
+        AND player_id != ?
+    `).get(wallet, playerId);
+    return Math.max(0, Number(row?.last_trade_id || 0));
+  } catch {
+    return 0;
+  }
+}
+
+function persistVerifiedPacificaTradingWallet(player, account, opts = {}) {
+  if (!player?.id || !isValidSolanaPubkey(account)) return { ok: false, baseline: 0 };
+  const wallet = canonicalWalletIdentifier(account);
+  const agentWallet = isValidSolanaPubkey(opts.agentWallet) ? canonicalWalletIdentifier(opts.agentWallet) : '';
+  const baseline = pacificaExistingWalletBaseline(player.id, wallet);
+  const metadata = JSON.stringify({
+    source: String(opts.source || 'pacifica_verified_wallet'),
+    verified_at: new Date().toISOString(),
+    adopted_from_existing_baseline: baseline,
+  });
+  const txn = db.db.transaction(() => {
+    if (agentWallet) {
+      db.db.prepare(`
+        INSERT OR IGNORE INTO pacifica_agents (player_id, agent_wallet) VALUES (?, ?)
+      `).run(player.id, agentWallet);
+      db.db.prepare(`
+        DELETE FROM pacifica_agents
+        WHERE player_id = ?
+          AND agent_wallet IN (
+            SELECT agent_wallet FROM pacifica_agents
+            WHERE player_id = ?
+            ORDER BY bound_at DESC, agent_wallet ASC
+            LIMIT -1 OFFSET ?
+          )
+      `).run(player.id, player.id, PACIFICA_AGENTS_CAP);
+    }
+    db.db.prepare(`
+      INSERT INTO player_dex_accounts
+        (player_id, dex, chain_type, wallet_address, status, metadata_json, updated_at)
+      VALUES (?, 'pacifica', 'solana', ?, 'ready', ?, datetime('now'))
+      ON CONFLICT(player_id, dex) DO UPDATE SET
+        chain_type = 'solana',
+        wallet_address = excluded.wallet_address,
+        status = 'ready',
+        metadata_json = excluded.metadata_json,
+        updated_at = datetime('now')
+    `).run(player.id, wallet, metadata);
+    db.db.prepare(`
+      INSERT INTO trading_rewards (player_id, dex, wallet, agent_wallet, last_trade_id, updated_at)
+      VALUES (?, 'pacifica', ?, NULLIF(?, ''), ?, datetime('now'))
+      ON CONFLICT(player_id, dex) DO UPDATE SET
+        wallet = excluded.wallet,
+        agent_wallet = COALESCE(NULLIF(excluded.agent_wallet, ''), trading_rewards.agent_wallet),
+        last_trade_id = CASE
+          WHEN COALESCE(trading_rewards.total_volume, 0) = 0
+           AND COALESCE(trading_rewards.total_gold, 0) = 0
+           AND COALESCE(trading_rewards.last_trade_id, 0) < excluded.last_trade_id
+          THEN excluded.last_trade_id
+          ELSE trading_rewards.last_trade_id
+        END,
+        updated_at = datetime('now')
+    `).run(player.id, wallet, agentWallet, baseline);
+  });
+  txn();
+  return { ok: true, wallet, agentWallet, baseline };
+}
+
 router.post('/pacifica/agent', auth, (req, res) => {
   const { account, agent_wallet, signature, timestamp, expiry_window } = req.body || {};
 
@@ -13363,15 +13437,6 @@ router.post('/pacifica/agent', auth, (req, res) => {
     return res.status(400).json({ error: 'timestamp out of window (max 5 min skew)' });
   }
 
-  // The CRITICAL check: account in the signed body must match
-  // players.wallet. Without this, player A could submit player B's signed
-  // bind body (publicly observable on Pacifica's network) and have OUR
-  // server attribute B's agent to A's player_id, then claim-gold against
-  // B's trade history.
-  if (req.player.wallet !== account) {
-    return res.status(403).json({ error: 'signed account does not match player.wallet' });
-  }
-
   // Rebuild the exact message Pacifica signs and verify the master sig.
   const message = pacificaCanonicalMessage(
     'bind_agent_wallet',
@@ -13381,6 +13446,17 @@ router.post('/pacifica/agent', auth, (req, res) => {
   );
   if (!verifyMasterSignature({ message, signatureB58: signature, accountB58: account })) {
     return res.status(403).json({ error: 'invalid signature' });
+  }
+
+  let adoption = { baseline: 0 };
+  try {
+    adoption = persistVerifiedPacificaTradingWallet(req.player, account, {
+      agentWallet: agent_wallet,
+      source: 'bind_agent_wallet',
+    });
+  } catch (e) {
+    console.warn(`[pacifica/agent] verified wallet persist failed:`, e.message);
+    return res.status(500).json({ error: 'failed to persist' });
   }
 
   const txn = db.db.transaction(() => {
@@ -13412,8 +13488,8 @@ router.post('/pacifica/agent', auth, (req, res) => {
   }
 
   const totalAgents = db.db.prepare('SELECT COUNT(*) AS n FROM pacifica_agents WHERE player_id = ?').get(req.player.id)?.n || 0;
-  console.log(`[pacifica/agent] player=${req.player.name} master=${account.slice(0,10)} agent=${agent_wallet.slice(0,10)} sig=ok -> persisted (total agents tracked: ${totalAgents}/${PACIFICA_AGENTS_CAP})`);
-  res.json({ ok: true, agent_wallet, total_agents: totalAgents });
+  console.log(`[pacifica/agent] player=${req.player.name} master=${account.slice(0,10)} agent=${agent_wallet.slice(0,10)} sig=ok -> persisted baseline=${adoption?.baseline || 0} (total agents tracked: ${totalAgents}/${PACIFICA_AGENTS_CAP})`);
+  res.json({ ok: true, agent_wallet, total_agents: totalAgents, baseline: adoption?.baseline || 0 });
 });
 
 // Repair path for browser-only one-tap agents. If the original
@@ -13436,13 +13512,6 @@ router.post('/pacifica/agent/sync', auth, (req, res) => {
   if (!Number.isFinite(tsNum) || Math.abs(now - tsNum) > 5 * 60 * 1000) {
     return res.status(400).json({ error: 'timestamp out of window (max 5 min skew)' });
   }
-  const signedAccount = canonicalWalletIdentifier(account || '');
-  const playerWallet = canonicalWalletIdentifier(req.player.wallet || '');
-  const readyAccount = getReadyPlayerDexAccount(req.player.id, 'pacifica');
-  const readyWallet = canonicalWalletIdentifier(readyAccount?.wallet_address || '');
-  if (playerWallet && signedAccount && playerWallet !== signedAccount && readyWallet !== signedAccount) {
-    return res.status(403).json({ error: 'signed account does not match player' });
-  }
   const message = pacificaCanonicalMessage(
     'clash_agent_sync',
     { account },
@@ -13451,6 +13520,16 @@ router.post('/pacifica/agent/sync', auth, (req, res) => {
   );
   if (!verifyMasterSignature({ message, signatureB58: signature, accountB58: agent_wallet })) {
     return res.status(403).json({ error: 'invalid agent signature' });
+  }
+  let adoption = { baseline: 0 };
+  try {
+    adoption = persistVerifiedPacificaTradingWallet(req.player, account, {
+      agentWallet: agent_wallet,
+      source: 'agent_sync',
+    });
+  } catch (e) {
+    console.warn(`[pacifica/agent/sync] verified wallet persist failed:`, e.message);
+    return res.status(500).json({ error: 'failed to persist' });
   }
   const txn = db.db.transaction(() => {
     db.db.prepare(`
@@ -13479,8 +13558,8 @@ router.post('/pacifica/agent/sync', auth, (req, res) => {
     return res.status(500).json({ error: 'failed to persist' });
   }
   const totalAgents = db.db.prepare('SELECT COUNT(*) AS n FROM pacifica_agents WHERE player_id = ?').get(req.player.id)?.n || 0;
-  console.log(`[pacifica/agent/sync] player=${req.player.name} master=${account.slice(0,10)} agent=${agent_wallet.slice(0,10)} sig=ok -> persisted (total agents tracked: ${totalAgents}/${PACIFICA_AGENTS_CAP})`);
-  res.json({ ok: true, agent_wallet, total_agents: totalAgents });
+  console.log(`[pacifica/agent/sync] player=${req.player.name} master=${account.slice(0,10)} agent=${agent_wallet.slice(0,10)} sig=ok -> persisted baseline=${adoption?.baseline || 0} (total agents tracked: ${totalAgents}/${PACIFICA_AGENTS_CAP})`);
+  res.json({ ok: true, agent_wallet, total_agents: totalAgents, baseline: adoption?.baseline || 0 });
 });
 
 // Server-side mirror of the client's localStorage `clash_pacifica_activated`

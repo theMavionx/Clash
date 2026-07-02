@@ -486,10 +486,25 @@ function resolveWallet(player) {
   if (dex === 'pacifica') {
     try {
       const row = db.db.prepare(
-        'SELECT agent_wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+        'SELECT agent_wallet, wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
       ).get(player.id, dex);
       if (row && isSolanaWallet(row.agent_wallet)) {
         return row.agent_wallet;
+      }
+      if (row && isSolanaWallet(row.wallet)) {
+        return row.wallet;
+      }
+    } catch {}
+    try {
+      const row = db.db.prepare(`
+        SELECT wallet_address
+        FROM player_dex_accounts
+        WHERE player_id = ? AND dex = 'pacifica' AND status = 'ready'
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      `).get(player.id);
+      if (row && isSolanaWallet(row.wallet_address)) {
+        return row.wallet_address;
       }
     } catch {}
   }
