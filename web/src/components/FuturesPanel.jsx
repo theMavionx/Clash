@@ -464,6 +464,9 @@ function humanizeTradeError(message, dex = null) {
   if (/minimum\s+(deposit\s+is\s+)?10\s+USDC|Min deposit 10 USDC/i.test(text)) {
     return 'Minimum Pacifica deposit is 10 USDC.';
   }
+  if (/Insufficient Ostium USDC/i.test(text)) {
+    return text;
+  }
   if (/HIBACHI_IP_BLOCKED|Hibachi is not available from your IP address|cloudflare|access denied/i.test(text)) {
     return 'Hibachi is not available from your IP address. Use a supported network or IP region, then try again.';
   }
@@ -3305,6 +3308,10 @@ function FuturesPanel() {
           setLocalAlert(`Ostium minimum margin is ${OSTIUM_MIN_MARGIN_USD} USDC. Increase margin before signing.`);
           return;
         }
+        if (dex === 'ostium' && Number.isFinite(collateralUsdc) && collateralUsdc > pacBalance + 0.000001) {
+          setLocalAlert(`Insufficient Ostium USDC. Need $${collateralUsdc.toFixed(2)}, available $${pacBalance.toFixed(2)}.`);
+          return;
+        }
         if (dex === 'phoenix') {
           const reserve = phoenixMarginReserveDetails({
             balance: pacBalance,
@@ -3708,10 +3715,16 @@ function FuturesPanel() {
             </button>
           )}
           <div style={{...S.balBadge, padding: '4px 8px'}}>
-            <span style={{fontSize: 8, fontWeight: 700, color: '#a3906a', lineHeight: 1}}>{dex === 'flash' ? 'FREE' : 'BALANCE'}</span>
+            <span style={{fontSize: 8, fontWeight: 700, color: '#a3906a', lineHeight: 1}}>
+              {dex === 'flash' ? 'FREE' : dex === 'ostium' ? 'USDC' : 'BALANCE'}
+            </span>
             {/* Flash shows free balance for new trades; other venues show
-                account equity / portfolio value where available. */}
-            <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.1}}>${(dex === 'flash' ? pacBalance : pacAccountValue).toFixed(2)}</span>
+                account equity / portfolio value where available. Ostium
+                opening margin is wallet USDC, not account value locked in
+                existing positions. */}
+            <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.1}}>
+              ${(dex === 'flash' || dex === 'ostium' ? pacBalance : pacAccountValue).toFixed(2)}
+            </span>
           </div>
         </div>
       </div>
@@ -3864,7 +3877,7 @@ function FuturesPanel() {
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
-              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica' || dex === 'hotstuff') ? 'usable' : dex === 'flash' ? 'free' : 'balance'}
+              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica' || dex === 'hotstuff') ? 'usable' : dex === 'flash' ? 'free' : dex === 'ostium' ? 'USDC' : 'balance'}
             </span>
             <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
               buying power ${maxUsdc.toFixed(0)}

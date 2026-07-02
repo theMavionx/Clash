@@ -52,6 +52,33 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function ostiumAvailableUsdc(account) {
+  const fields = [
+    account?.usdc_balance,
+    account?.wallet_usdc,
+    account?.available_to_spend,
+    account?.free_margin,
+    account?.available_to_withdraw,
+  ];
+  for (const value of fields) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return Math.max(0, n);
+  }
+  return null;
+}
+
+function assertOstiumUsdcBalance(account, requiredCollateral) {
+  const required = Number(requiredCollateral);
+  if (!Number.isFinite(required) || required <= 0) throw new Error('Enter a valid margin amount');
+  const available = ostiumAvailableUsdc(account);
+  if (available == null) {
+    throw new Error('Could not verify Ostium USDC balance. Refresh balance and try again.');
+  }
+  if (required > available + 0.000001) {
+    throw new Error(`Insufficient Ostium USDC. Need $${required.toFixed(2)}, available $${available.toFixed(2)}.`);
+  }
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -904,6 +931,8 @@ export function useOstium() {
       const beforeOrders = ordersRef.current || [];
       if (!marketsRef.current.length) await fetchMarkets();
       const params = buildOpenParams(symbol, side, amount, null, OrderType.Market, leverage, slippage);
+      const fresh = await fetchAccount();
+      assertOstiumUsdcBalance(fresh?.account || account, params.collateral);
       const submitted = await submitWithDelegateOrWallet({
         label: 'ostium.open_market',
         requiredCollateral: params.collateral,
@@ -920,7 +949,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [buildOpenParams, fetchMarkets, submitWithDelegateOrWallet, syncRewards, waitForTradeVisible]);
+  }, [account, buildOpenParams, fetchAccount, fetchMarkets, submitWithDelegateOrWallet, syncRewards, waitForTradeVisible]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     void _tif;
@@ -931,6 +960,8 @@ export function useOstium() {
       const beforeOrders = ordersRef.current || [];
       if (!marketsRef.current.length) await fetchMarkets();
       const params = buildOpenParams(symbol, side, amount, price, OrderType.Limit, leverage, '0.5');
+      const fresh = await fetchAccount();
+      assertOstiumUsdcBalance(fresh?.account || account, params.collateral);
       const submitted = await submitWithDelegateOrWallet({
         label: 'ostium.open_limit',
         requiredCollateral: params.collateral,
@@ -947,7 +978,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [buildOpenParams, fetchMarkets, submitWithDelegateOrWallet, syncRewards, waitForTradeVisible]);
+  }, [account, buildOpenParams, fetchAccount, fetchMarkets, submitWithDelegateOrWallet, syncRewards, waitForTradeVisible]);
 
   const closePosition = useCallback(async (symbol, side, amountBase, pairIndex = null, tradeIndex = null, fullClose = false, options = {}) => {
     setLoading(true);
@@ -1222,6 +1253,7 @@ export function useOstium() {
     setMarginMode: async () => ({ success: true }),
     depositToPacifica: unsupported,
     withdraw: unsupported,
+    fetchAccount,
     activate: activateOstium,
     switchToRise: switchToArbitrum,
     switchToInk: switchToArbitrum,
