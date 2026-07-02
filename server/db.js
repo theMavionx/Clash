@@ -4099,16 +4099,25 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
         value: Math.max(0, Number(row[cat.column]) || 0),
       })).filter((row) => row.value > 0);
       const totalRaw = values.reduce((sum, row) => sum + row.value, 0);
-      // Do not hand the whole PnL pool to a tiny positive outlier on a net-losing day.
-      const disabledByNetNegative = cat.key === 'pnl' && signedTotal <= 0;
+      const negativeTotal = rows.reduce((sum, row) => {
+        const value = Number(row[cat.column]) || 0;
+        return value < 0 ? sum + Math.abs(value) : sum;
+      }, 0);
+      // PnL is positive-only. Losing players never reduce another player's raw
+      // share, but the PnL bucket is not awarded at all on net-losing days.
+      const disabledReason = cat.key === 'pnl' && totalRaw <= 0
+        ? 'no_positive_pnl'
+        : (cat.key === 'pnl' && signedTotal <= 0 ? 'net_pnl_not_positive' : null);
       details.categories[cat.key] = {
         pool: Number(catPool.toFixed(6)),
         raw_total: Number(totalRaw.toFixed(6)),
+        positive_total: Number(totalRaw.toFixed(6)),
+        negative_total: Number(negativeTotal.toFixed(6)),
         signed_total: Number(signedTotal.toFixed(6)),
-        players: disabledByNetNegative ? 0 : values.length,
-        ...(disabledByNetNegative ? { skipped: 'net_pnl_not_positive' } : {}),
+        players: disabledReason ? 0 : values.length,
+        ...(disabledReason ? { skipped: disabledReason } : {}),
       };
-      if (disabledByNetNegative) continue;
+      if (disabledReason) continue;
       if (catPool <= 0 || totalRaw <= 0) continue;
       for (const row of values) {
         const points = Number((catPool * (row.value / totalRaw)).toFixed(6));

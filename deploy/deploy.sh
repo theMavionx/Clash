@@ -29,6 +29,7 @@ BACKUP_SQLITE_TIMEOUT_MIN_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MIN_SECONDS:-60
 BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND="${CLASH_BACKUP_SQLITE_TIMEOUT_MIB_PER_SECOND:-1}"
 BACKUP_SQLITE_TIMEOUT_MAX_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_MAX_SECONDS:-7200}"
 CLOUDFLARE_CACHE_PURGE_ENABLED="${CLOUDFLARE_CACHE_PURGE_ENABLED:-1}"
+GODOT_CHANGED="${CLASH_GODOT_CHANGED:-auto}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -122,6 +123,49 @@ validate_source_dir() {
     fi
     if [ -n "$releases_real" ] && [[ "$SOURCE_DIR" == "$releases_real"* ]]; then
         die "Refusing to deploy from an immutable release ($SOURCE_DIR). Use /opt/clash as the source checkout."
+    fi
+}
+
+detect_godot_changes() {
+    case "${GODOT_CHANGED:-auto}" in
+        0|1)
+            log "Godot change detection supplied by caller: CLASH_GODOT_CHANGED=$GODOT_CHANGED"
+            return 0
+            ;;
+    esac
+
+    local current_real previous_release previous_sha
+    current_real="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+    if [ -z "$current_real" ] || [ ! -d "$current_real" ]; then
+        GODOT_CHANGED=1
+        log "No current release found; treating Godot runtime as changed."
+        return 0
+    fi
+
+    previous_release="$(basename "$current_real")"
+    previous_sha="${previous_release##*-}"
+    if [ -z "$previous_sha" ] \
+        || [ "$previous_sha" = "$previous_release" ] \
+        || ! git -C "$SOURCE_DIR" cat-file -e "$previous_sha^{commit}" 2>/dev/null; then
+        GODOT_CHANGED=1
+        log "Could not resolve previous release commit from $previous_release; treating Godot runtime as changed."
+        return 0
+    fi
+
+    if git -C "$SOURCE_DIR" diff --quiet "$previous_sha..HEAD" -- \
+        project.godot \
+        export_presets.cfg \
+        scripts \
+        scenes \
+        shaders \
+        Model \
+        textures \
+        assets; then
+        GODOT_CHANGED=0
+        log "No Godot-visible git changes since $previous_sha; Godot runtime will be reused."
+    else
+        GODOT_CHANGED=1
+        log "Godot-visible git changes detected since $previous_sha; Godot runtime will be rebuilt/uploaded."
     fi
 }
 
@@ -741,9 +785,13 @@ copy_source_to_release() {
         --exclude='shared' \
         "$SOURCE_DIR/" "$RELEASE_DIR/"
 
-    [ -f "$WEB_DIR/public/godot/Work.pck" ] \
-        || die "Godot export missing at $WEB_DIR/public/godot/Work.pck. Export locally and upload web/public/godot before deploy."
-    validate_godot_export_freshness
+    if [ "$GODOT_CHANGED" = "1" ]; then
+        [ -f "$WEB_DIR/public/godot/Work.pck" ] \
+            || die "Godot export missing at $WEB_DIR/public/godot/Work.pck. Export locally and upload web/public/godot before deploy."
+        validate_godot_export_freshness
+    else
+        log "Skipping source Godot export freshness check because Godot runtime is unchanged."
+    fi
 }
 
 validate_godot_export_freshness() {
@@ -939,13 +987,19 @@ build_frontend() {
         log "SW cache version: clash-runtime-$BUILD_HASH"
     fi
 
-    if [ -f "$WEB_DIST/godot/Work.js" ]; then
+    if [ "$GODOT_CHANGED" = "0" ] && [ -d "$CURRENT_LINK/web/dist/godot" ]; then
+        rm -rf "$WEB_DIST/godot"
+        mkdir -p "$WEB_DIST"
+        cp -a "$CURRENT_LINK/web/dist/godot" "$WEB_DIST/godot"
+        log "Godot runtime unchanged; reused current web/dist/godot without patching or recompressing."
+    elif [ -f "$WEB_DIST/godot/Work.js" ]; then
         patch_godot_work_js "$WEB_DIST/godot/Work.js"
         rm -f "$WEB_DIST/godot/Work.side.wasm"
         log "Patched Work.js runtime guards"
+        node "$WEB_DIR/write-godot-runtime-manifest.cjs" "$WEB_DIST/godot" "$RELEASE_ID"
+    else
+        die "Missing Godot runtime in build output and no current runtime to reuse."
     fi
-
-    node "$WEB_DIR/write-godot-runtime-manifest.cjs" "$WEB_DIST/godot" "$RELEASE_ID"
 
     if [ "${CLASH_SKIP_STATIC_COMPRESSION:-0}" = "1" ]; then
         log "Static compression skipped by CLASH_SKIP_STATIC_COMPRESSION=1"
@@ -961,9 +1015,13 @@ build_frontend() {
     GODOT_COMPRESSED=0
     GODOT_REUSED=0
 
-    compress_static_file "godot/Work.pck" 9
-    compress_static_file "godot/Work.wasm" 6
-    compress_static_file "godot/Work.js" 6
+    if [ "$GODOT_CHANGED" = "1" ]; then
+        compress_static_file "godot/Work.pck" 9
+        compress_static_file "godot/Work.wasm" 6
+        compress_static_file "godot/Work.js" 6
+    else
+        log "Skipping Godot compression because current compressed runtime was reused."
+    fi
 
     for f in "$WEB_DIST"/assets/*.js "$WEB_DIST"/assets/*.css; do
         if [ -f "$f" ]; then
@@ -1089,6 +1147,10 @@ switch_current_release() {
 purge_cloudflare_godot_cache() {
     if [ "$CLOUDFLARE_CACHE_PURGE_ENABLED" != "1" ]; then
         log "Cloudflare cache purge skipped by CLOUDFLARE_CACHE_PURGE_ENABLED=$CLOUDFLARE_CACHE_PURGE_ENABLED"
+        return
+    fi
+    if [ "${GODOT_CHANGED:-1}" = "0" ]; then
+        log "Cloudflare Godot cache purge skipped because Godot runtime is unchanged."
         return
     fi
 
@@ -1746,6 +1808,7 @@ main() {
     require_root
     acquire_deploy_lock
     validate_source_dir
+    detect_godot_changes
     log "=== Atomic deploy $DOMAIN ($RELEASE_ID) ==="
     log "Source: $SOURCE_DIR"
 

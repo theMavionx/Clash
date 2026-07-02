@@ -1293,6 +1293,12 @@ function TournamentPanel({ onClose }) {
                   const rankRewards = rankRewardSummary(r.prize_rewards || [], r.prize_currency || t.prize_currency || 'USD');
                   const topDex = leaderboardDexBadgeLabel(t, r);
                   const showPnl = leaderboardUsesPnl(t, sortKey);
+                  const showLiveDailyMetrics = isDailyPoolTournament(t)
+                    && board?.daily_pool_live?.active
+                    && !r.live_daily_processed;
+                  const displayTrophies = showLiveDailyMetrics ? (r.live_daily_trophies ?? r.trophies) : r.trophies;
+                  const displayVolume = showLiveDailyMetrics ? (r.live_daily_volume_usd ?? r.volume_usd) : r.volume_usd;
+                  const displayPnl = showLiveDailyMetrics ? (r.live_daily_pnl_usd ?? r.pnl_usd) : r.pnl_usd;
                   return (
                     <div
                       key={r.player_id}
@@ -1319,9 +1325,9 @@ function TournamentPanel({ onClose }) {
                         <span style={S.subRow}>
                           {r.team_label && <>{r.team_label} | </>}
                           {isMegaTournament(t) && r.mega_sector_name && <>{r.mega_sector_name} · </>}
-                          {fmt(r.trophies)} 🏆 · {fmtUsd(r.volume_usd)} vol
+                          {fmt(displayTrophies)} 🏆 · {fmtUsd(displayVolume)} vol
                           {showPnl && (
-                            <> · {fmtUsd(r.pnl_usd)} PnL</>
+                            <> · {fmtUsd(displayPnl)} PnL</>
                           )}
                           {rankRewards.length > 0 && <> · <strong style={S.prizeText}>{rankRewards.join(' + ')}</strong></>}
                           {!rankRewards.length && prizeAmount > 0 && <> · <strong style={S.prizeText}>{fmtPrize(prizeAmount)} prize</strong></>}

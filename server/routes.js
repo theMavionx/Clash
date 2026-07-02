@@ -21839,16 +21839,25 @@ function buildTournamentDailyEstimate(activityRows, t, dayUtc = tournamentUtcDay
       value: Math.max(0, Number(row[cat.column]) || 0),
     })).filter(row => row.value > 0);
     const rawTotal = values.reduce((sum, row) => sum + row.value, 0);
-    // Do not hand the whole PnL pool to a tiny positive outlier on a net-losing day.
-    const disabledByNetNegative = cat.key === 'pnl' && signedTotal <= 0;
+    const negativeTotal = activityRows.reduce((sum, row) => {
+      const value = Number(row[cat.column]) || 0;
+      return value < 0 ? sum + Math.abs(value) : sum;
+    }, 0);
+    // PnL is positive-only. Losing players never reduce another player's raw
+    // share, but the PnL bucket is not awarded at all on net-losing days.
+    const disabledReason = cat.key === 'pnl' && rawTotal <= 0
+      ? 'no_positive_pnl'
+      : (cat.key === 'pnl' && signedTotal <= 0 ? 'net_pnl_not_positive' : null);
     details.categories[cat.key] = {
       pool: Number(catPool.toFixed(6)),
       raw_total: Number(rawTotal.toFixed(6)),
+      positive_total: Number(rawTotal.toFixed(6)),
+      negative_total: Number(negativeTotal.toFixed(6)),
       signed_total: Number(signedTotal.toFixed(6)),
-      players: disabledByNetNegative ? 0 : values.length,
-      ...(disabledByNetNegative ? { skipped: 'net_pnl_not_positive' } : {}),
+      players: disabledReason ? 0 : values.length,
+      ...(disabledReason ? { skipped: disabledReason } : {}),
     };
-    if (disabledByNetNegative) continue;
+    if (disabledReason) continue;
     if (catPool <= 0 || rawTotal <= 0) continue;
 
     for (const row of values) {
@@ -21908,6 +21917,11 @@ function applyTournamentLiveDailyPoolScore(rows, t) {
     row.live_daily_estimated_trophy_points = 0;
     row.live_daily_estimated_volume_points = 0;
     row.live_daily_estimated_pnl_points = 0;
+    row.live_daily_trades_count = 0;
+    row.live_daily_volume_usd = 0;
+    row.live_daily_pnl_usd = 0;
+    row.live_daily_trophies = 0;
+    row.live_daily_gold = 0;
     row.live_daily_day_utc = day;
     row.live_daily_processed = false;
   }
@@ -21993,11 +22007,17 @@ function applyTournamentLiveDailyPoolScore(rows, t) {
   for (const row of rows) {
     const awarded = Math.max(0, Number(row.awarded_points) || 0);
     const estimated = estimate.byPlayer.get(row.player_id) || {};
+    const activity = activityByPlayer.get(row.player_id) || {};
     const livePoints = Math.max(0, Number(estimated.estimated_points) || 0);
     row.live_daily_estimated_points = Number(livePoints.toFixed(6));
     row.live_daily_estimated_trophy_points = Number(estimated.estimated_trophy_points || 0);
     row.live_daily_estimated_volume_points = Number(estimated.estimated_volume_points || 0);
     row.live_daily_estimated_pnl_points = Number(estimated.estimated_pnl_points || 0);
+    row.live_daily_trades_count = Number(activity.trades_count || 0);
+    row.live_daily_volume_usd = Number(activity.volume_usd || 0);
+    row.live_daily_pnl_usd = Number(activity.pnl_usd || 0);
+    row.live_daily_trophies = Number(activity.trophies || 0);
+    row.live_daily_gold = Number(activity.gold || 0);
     row.projected_points = Number((awarded + livePoints).toFixed(4));
     row.score = row.projected_points;
     row.trophy_score = row.live_daily_estimated_trophy_points;
@@ -22424,6 +22444,11 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       live_daily_estimated_trophy_points: r.live_daily_estimated_trophy_points || 0,
       live_daily_estimated_volume_points: r.live_daily_estimated_volume_points || 0,
       live_daily_estimated_pnl_points: r.live_daily_estimated_pnl_points || 0,
+      live_daily_trades_count: r.live_daily_trades_count || 0,
+      live_daily_volume_usd: r.live_daily_volume_usd || 0,
+      live_daily_pnl_usd: r.live_daily_pnl_usd || 0,
+      live_daily_trophies: r.live_daily_trophies || 0,
+      live_daily_gold: r.live_daily_gold || 0,
       live_daily_day_utc: r.live_daily_day_utc || null,
       live_daily_processed: !!r.live_daily_processed,
       volume_score: r.volume_score ?? null,

@@ -1,7 +1,8 @@
 param(
     [string]$Branch = "main",
     [switch]$SkipDeploy,
-    [switch]$AllowDirty
+    [switch]$AllowDirty,
+    [switch]$ForceGodotExport
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +29,7 @@ if (-not (Test-Path $DeployScript)) {
 }
 
 if ($SkipDeploy) {
-    & $DeployScript -Branch $Branch -SkipDeploy
+    & $DeployScript -Branch $Branch -SkipDeploy:$SkipDeploy -ForceGodotExport:$ForceGodotExport
 } else {
-    & $DeployScript -Branch $Branch
+    & $DeployScript -Branch $Branch -ForceGodotExport:$ForceGodotExport
 }
