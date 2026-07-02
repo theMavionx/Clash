@@ -904,7 +904,31 @@ async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA
 async function fetchPacificaAllTradesUncached(player, opts = {}) {
   const since = Number(opts.since) || 0;
   const maxPages = opts.firstPageOnly ? 1 : PACIFICA_MAX_PAGES;
-  const master = isSolanaWallet(player.wallet) ? player.wallet : null;
+  let master = isSolanaWallet(player.wallet) ? player.wallet : null;
+  if (!master) {
+    try {
+      const row = db.db.prepare(
+        'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+      ).get(player.id, 'pacifica');
+      if (row && isSolanaWallet(row.wallet)) master = row.wallet;
+    } catch (e) {
+      console.warn(`[pacifica fetch] trading_rewards.wallet read failed:`, e.message);
+    }
+  }
+  if (!master) {
+    try {
+      const row = db.db.prepare(`
+        SELECT wallet_address
+        FROM player_dex_accounts
+        WHERE player_id = ? AND dex = 'pacifica' AND status = 'ready'
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      `).get(player.id);
+      if (row && isSolanaWallet(row.wallet_address)) master = row.wallet_address;
+    } catch (e) {
+      console.warn(`[pacifica fetch] player_dex_accounts wallet read failed:`, e.message);
+    }
+  }
   let agents = [];
   try {
     const rows = db.db.prepare(
