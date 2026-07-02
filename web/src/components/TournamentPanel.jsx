@@ -251,6 +251,50 @@ function shouldShowLeaderboardDexBadge(t) {
   return eligible.length > 1;
 }
 
+function normalizedDex(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function tournamentEligibleDexSet(t) {
+  const list = Array.isArray(t?.eligible_dexes)
+    ? t.eligible_dexes.map(normalizedDex).filter(Boolean)
+    : [];
+  if (list.length > 0) return new Set(list);
+  const fallback = normalizedDex(t?.dex);
+  return fallback ? new Set([fallback]) : new Set();
+}
+
+function leaderboardDexBadgeLabel(t, row) {
+  if (!shouldShowLeaderboardDexBadge(t)) return null;
+  const eligible = tournamentEligibleDexSet(t);
+  const accepts = (dex) => {
+    const normalized = normalizedDex(dex);
+    return normalized && (!eligible.size || eligible.has(normalized));
+  };
+
+  const breakdown = Array.isArray(row?.dex_breakdown) ? row.dex_breakdown : [];
+  const activeDex = [...breakdown]
+    .filter(item => accepts(item?.dex))
+    .sort((a, b) =>
+      (Number(b?.volume_usd || 0) || 0) - (Number(a?.volume_usd || 0) || 0)
+      || (Number(b?.trades_count || 0) || 0) - (Number(a?.trades_count || 0) || 0)
+      || normalizedDex(a?.dex).localeCompare(normalizedDex(b?.dex))
+    )[0];
+  if (activeDex?.dex) return activeDex.label || DEX_LABELS[normalizedDex(activeDex.dex)] || String(activeDex.dex).toUpperCase();
+
+  if (accepts(row?.top_dex)) {
+    const dex = normalizedDex(row.top_dex);
+    return DEX_LABELS[dex] || row.top_dex_label || String(row.top_dex).toUpperCase();
+  }
+
+  if (accepts(row?.team_dex)) {
+    const dex = normalizedDex(row.team_dex);
+    return DEX_LABELS[dex] || row.team_label || String(row.team_dex).toUpperCase();
+  }
+
+  return null;
+}
+
 function sectorRequirementText(sector) {
   const parts = [];
   if (Number(sector?.min_town_hall_level || 0) > 0) parts.push(`TH ${sector.min_town_hall_level}`);
@@ -1203,7 +1247,7 @@ function TournamentPanel({ onClose }) {
                   const featuredDisplay = featuredMetric(sortKey, r);
                   const prizeAmount = Number(r.prize_amount || 0);
                   const rankRewards = rankRewardSummary(r.prize_rewards || [], r.prize_currency || t.prize_currency || 'USD');
-                  const topDex = shouldShowLeaderboardDexBadge(t) ? (r.top_dex_label || r.team_label || null) : null;
+                  const topDex = leaderboardDexBadgeLabel(t, r);
                   return (
                     <div
                       key={r.player_id}

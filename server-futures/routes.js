@@ -4465,6 +4465,25 @@ router.get('/flash/account', auth, async (req, res) => {
   }
 });
 
+router.get('/flash/referral', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    const owner = flashRequestWallet(req);
+    res.json(await flash.getUserReferralByAddress(owner));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Flash referral status', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/flash/referral-tx', auth, async (req, res) => {
+  if (!requireFlashDex(req, res)) return;
+  try {
+    res.json(await flash.buildReferralTx(req.body || {}, flashBodyWallet(req)));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to build Flash referral transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
 router.get('/flash/positions', auth, async (req, res) => {
   if (!requireFlashDex(req, res)) return;
   try {

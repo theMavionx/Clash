@@ -2,11 +2,18 @@ const crypto = require('crypto');
 const {
   PublicKey,
   SYSVAR_INSTRUCTIONS_PUBKEY,
+  SystemProgram,
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
 } = require('@solana/web3.js');
 const bs58 = require('bs58');
+const {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
+} = require('@solana/spl-token');
 const {
   findBasketAddress,
   findUserDepositLedgerAddress,
@@ -19,6 +26,11 @@ const {
 const FLASH_API = String(process.env.FLASH_API_URL || 'https://flashapi.trade').replace(/\/+$/, '');
 const FLASH_PROD_API = String(process.env.FLASH_PROD_API_URL || 'https://api.prod.flash.trade').replace(/\/+$/, '');
 const FLASH_APP_URL = String(process.env.FLASH_APP_URL || 'https://flash.trade').replace(/\/+$/, '');
+const FLASH_REFERRAL_CODE = String(process.env.FLASH_REFERRAL_CODE || 'clash').trim();
+const FLASH_REFERRAL_URL = String(
+  process.env.FLASH_REFERRAL_URL
+  || `https://www.flash.trade?referral=${encodeURIComponent(FLASH_REFERRAL_CODE || 'clash')}`,
+).trim();
 const FLASH_DOCS_URL = 'https://docs.flash.trade/flash-trade/flash-trade-protocol/build-on-flash/flash-trade-api';
 const FLASH_DEFAULT_ER_RPC_URL = 'https://flash.magicblock.xyz';
 const FLASH_LEGACY_ER_RPC_URL = 'https://flashtrade.magicblock.app';
@@ -45,6 +57,13 @@ const FLASH_ER_DISCRIMINATORS = Object.freeze({
   cancelTriggerOrder: Buffer.from([200, 204, 193, 155, 116, 240, 109, 102]),
   cancelLimitOrder: Buffer.from([214, 63, 140, 71, 200, 34, 22, 175]),
 });
+const FLASH_ACCOUNT_DISCRIMINATORS = Object.freeze({
+  initUserDepositLedger: Buffer.from([85, 112, 206, 148, 18, 19, 5, 147]),
+  initBasket: Buffer.from([187, 239, 128, 81, 174, 70, 94, 236]),
+  delegateBasket: Buffer.from([196, 119, 186, 43, 197, 234, 15, 178]),
+  depositDirect: Buffer.from([206, 183, 178, 8, 196, 87, 27, 150]),
+  createReferral: Buffer.from([61, 17, 240, 245, 172, 66, 159, 232]),
+});
 const FLASH_LEGACY_DISCRIMINATORS = Object.freeze({
   openPosition: '87802f4d0f98f031',
   swapAndOpen: '1ad12a00a93e1e76',
@@ -56,6 +75,8 @@ const FLASH_LEGACY_DISCRIMINATORS = Object.freeze({
   cancelLimitOrder: '2e05ef05194d6f78',
 });
 const GPL_SESSION_PROGRAM_ID = String(process.env.GPL_SESSION_PROGRAM_ID || 'KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5');
+const FLASH_DELEGATION_PROGRAM_ID = 'DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh';
+const FLASH_DELEGATION_PROGRAM_PK = new PublicKey(FLASH_DELEGATION_PROGRAM_ID);
 const GPL_SESSION_TOKEN_V2_DISCRIMINATOR = Buffer.from([178, 3, 85, 254, 13, 116, 128, 41]);
 const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.FLASH_TIMEOUT_MS || 7000)));
 const SOLANA_RPC_TIMEOUT_MS = Math.max(1000, Math.min(20_000, Number(process.env.FLASH_SOLANA_RPC_TIMEOUT_MS || 8000)));
@@ -371,6 +392,23 @@ async function buildFlashErVersionedTransaction(instructions, signerPk) {
   return Buffer.from(tx.serialize()).toString('base64');
 }
 
+async function buildFlashBaseVersionedTransaction(instructions, payerPk) {
+  const latest = await flashSolanaRpcRequest('latest base blockhash', 'getLatestBlockhash', [
+    { commitment: 'confirmed' },
+  ]);
+  const blockhash = latest?.value?.blockhash || latest?.blockhash;
+  if (!blockhash) {
+    throw Object.assign(new Error('Solana RPC returned no recent blockhash'), { status: 502, data: latest });
+  }
+  const message = new TransactionMessage({
+    payerKey: payerPk,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+  const tx = new VersionedTransaction(message);
+  return Buffer.from(tx.serialize()).toString('base64');
+}
+
 async function getWalletUsdcBalance(owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('valid Solana owner required'), { status: 400 });
   const accounts = await flashSolanaRpcRequest('wallet USDC balance', 'getTokenAccountsByOwner', [
@@ -669,6 +707,150 @@ function flashPublicKey(value, label = 'Flash account') {
   }
 }
 
+function findFlashReferralAddress(owner, programPk = FLASH_MAIN_PROGRAM_PK) {
+  const ownerPk = flashPublicKey(owner, 'Flash referral owner');
+  return PublicKey.findProgramAddressSync([
+    Buffer.from('referral'),
+    ownerPk.toBuffer(),
+  ], programPk);
+}
+
+function findFlashTokenStakeAddress(owner, programPk = FLASH_MAIN_PROGRAM_PK) {
+  const ownerPk = flashPublicKey(owner, 'Flash token stake owner');
+  return PublicKey.findProgramAddressSync([
+    Buffer.from('token_stake'),
+    ownerPk.toBuffer(),
+  ], programPk);
+}
+
+function flashAccountInfoBuffer(info) {
+  const data = info?.value?.data;
+  if (Array.isArray(data) && data[0]) return Buffer.from(data[0], data[1] || 'base64');
+  if (typeof data === 'string' && data) return Buffer.from(data, 'base64');
+  return null;
+}
+
+function decodeFlashReferralAccount(buffer, referralAccount) {
+  const data = Buffer.from(buffer || []);
+  if (data.length < 74) {
+    return {
+      referral_account: referralAccount,
+      is_initialized: null,
+      bump: null,
+      referer_token_stake_account: null,
+      referer_booster_account: null,
+      raw_size: data.length,
+      decode_warning: 'Flash referral account is smaller than the expected layout',
+    };
+  }
+  return {
+    referral_account: referralAccount,
+    is_initialized: data[8] === 1,
+    bump: data[9],
+    referer_token_stake_account: new PublicKey(data.subarray(10, 42)).toBase58(),
+    referer_booster_account: new PublicKey(data.subarray(42, 74)).toBase58(),
+    raw_size: data.length,
+  };
+}
+
+async function getFlashReferralCodeInfo(code = FLASH_REFERRAL_CODE) {
+  const referralCode = String(code || '').trim();
+  if (!referralCode) {
+    throw Object.assign(new Error('Flash referral code is not configured'), { status: 503 });
+  }
+  const payload = await requestProd(`/referral-code/code/${encodeURIComponent(referralCode)}`);
+  const walletAddress = String(payload?.walletAddress || payload?.wallet_address || '').trim();
+  const tokenStakeAccount = String(payload?.tokenStakeAccount || payload?.token_stake_account || '').trim();
+  if (!isSolanaAddress(walletAddress) || !isSolanaAddress(tokenStakeAccount)) {
+    throw Object.assign(new Error('Flash referral code returned invalid account data'), {
+      status: 502,
+      data: payload,
+    });
+  }
+  const derivedTokenStake = findFlashTokenStakeAddress(walletAddress)[0].toBase58();
+  return {
+    id: payload?.id ?? null,
+    code: String(payload?.code || referralCode),
+    wallet_address: walletAddress,
+    token_stake_account: tokenStakeAccount,
+    derived_token_stake_account: derivedTokenStake,
+    token_stake_matches_derived: tokenStakeAccount === derivedTokenStake,
+    created_at: payload?.createdAt || payload?.created_at || null,
+  };
+}
+
+async function getFlashReferralTokenStakeStatus(tokenStakeAccount) {
+  const address = String(tokenStakeAccount || '').trim();
+  if (!isSolanaAddress(address)) return { exists: false, address };
+  const info = await flashSolanaRpcRequest('Flash referral token stake', 'getAccountInfo', [
+    address,
+    { encoding: 'base64', commitment: 'confirmed' },
+  ]).catch(e => {
+    console.warn('[flash/referral] token stake read failed:', e?.message || e);
+    return { _read_error: e?.message || String(e || '') };
+  });
+  if (info?._read_error) {
+    return {
+      exists: null,
+      address,
+      read_error: info._read_error,
+    };
+  }
+  return {
+    exists: !!info?.value,
+    address,
+    owner_program: info?.value?.owner || null,
+    lamports: info?.value?.lamports ?? null,
+  };
+}
+
+async function getUserReferralByAddress(owner) {
+  if (!isSolanaAddress(owner)) throw Object.assign(new Error('valid Solana owner required'), { status: 400 });
+  const ownerPk = flashPublicKey(owner, 'Flash referral owner');
+  const [referralAccount] = findFlashReferralAddress(ownerPk.toBase58());
+  const codeInfo = await getFlashReferralCodeInfo();
+  const tokenStakeStatus = await getFlashReferralTokenStakeStatus(codeInfo.token_stake_account);
+  const info = await flashSolanaRpcRequest('Flash referral account', 'getAccountInfo', [
+    referralAccount.toBase58(),
+    { encoding: 'base64', commitment: 'confirmed' },
+  ]);
+  const accountData = flashAccountInfoBuffer(info);
+  if (!accountData) {
+    return {
+      ok: true,
+      owner: ownerPk.toBase58(),
+      has_referrer: false,
+      has_any_referrer: false,
+      matches_clash: false,
+      referral_account: referralAccount.toBase58(),
+      referral_code: codeInfo.code,
+      referral_url: FLASH_REFERRAL_URL,
+      expected_referer_wallet: codeInfo.wallet_address,
+      expected_token_stake_account: codeInfo.token_stake_account,
+      expected_token_stake_exists: tokenStakeStatus.exists,
+      token_stake_matches_derived: codeInfo.token_stake_matches_derived,
+      program_id: FLASH_MAIN_PROGRAM_ID,
+    };
+  }
+  const decoded = decodeFlashReferralAccount(accountData, referralAccount.toBase58());
+  const matchesClash = decoded.referer_token_stake_account === codeInfo.token_stake_account;
+  return {
+    ok: true,
+    owner: ownerPk.toBase58(),
+    has_referrer: matchesClash,
+    has_any_referrer: decoded.is_initialized !== false,
+    matches_clash: matchesClash,
+    referral_code: codeInfo.code,
+    referral_url: FLASH_REFERRAL_URL,
+    expected_referer_wallet: codeInfo.wallet_address,
+    expected_token_stake_account: codeInfo.token_stake_account,
+    expected_token_stake_exists: tokenStakeStatus.exists,
+    token_stake_matches_derived: codeInfo.token_stake_matches_derived,
+    program_id: FLASH_MAIN_PROGRAM_ID,
+    ...decoded,
+  };
+}
+
 function writeU64Le(value, label = 'u64') {
   const raw = typeof value === 'bigint' ? value : BigInt(value);
   if (raw < 0n || raw > 0xffffffffffffffffn) {
@@ -828,8 +1010,46 @@ function parseLegacyLimitParams(data) {
   };
 }
 
+function parseUiAmountToRaw(value, decimals, label = 'amount') {
+  const text = String(value ?? '').trim().replace(/,/g, '.');
+  if (!/^\d+(?:\.\d+)?$/.test(text)) {
+    throw Object.assign(new Error(`${label} must be a positive decimal amount`), { status: 400 });
+  }
+  const [wholeRaw, fractionRaw = ''] = text.split('.');
+  if (fractionRaw.length > decimals) {
+    throw Object.assign(new Error(`${label} supports at most ${decimals} decimals`), { status: 400 });
+  }
+  const whole = BigInt(wholeRaw || '0');
+  const fraction = BigInt((fractionRaw + '0'.repeat(decimals)).slice(0, decimals) || '0');
+  const scale = 10n ** BigInt(decimals);
+  const raw = whole * scale + fraction;
+  if (raw <= 0n) throw Object.assign(new Error(`${label} must be positive`), { status: 400 });
+  return raw;
+}
+
 function flashPda(seed) {
   return PublicKey.findProgramAddressSync([Buffer.from(seed)], FLASH_MAIN_PROGRAM_PK)[0];
+}
+
+function flashPdaWithKey(seed, key, program = FLASH_MAIN_PROGRAM_PK) {
+  return PublicKey.findProgramAddressSync([
+    Buffer.from(seed),
+    flashPublicKey(key, `Flash ${seed} PDA key`).toBuffer(),
+  ], program)[0];
+}
+
+function flashMainAccountContext(owner) {
+  const ownerPk = flashPublicKey(owner, 'Flash owner');
+  const [basket] = findBasketAddress(ownerPk, FLASH_MAIN_PROGRAM_PK);
+  const [userDepositLedger] = findUserDepositLedgerAddress(ownerPk, FLASH_MAIN_PROGRAM_PK);
+  return {
+    ownerPk,
+    basket,
+    userDepositLedger,
+    perpetuals: flashPda('perpetuals'),
+    eventAuthority: flashPda('__event_authority'),
+    program: FLASH_MAIN_PROGRAM_PK,
+  };
 }
 
 function flashSignerContext(owner, body = {}) {
@@ -2444,6 +2664,100 @@ function flashErCancelOrderInstruction(signerContext, context, params) {
   return new TransactionInstruction({ programId: FLASH_MAIN_PROGRAM_PK, keys, data });
 }
 
+function flashInitDepositLedgerInstruction(owner) {
+  const base = flashMainAccountContext(owner);
+  return new TransactionInstruction({
+    programId: FLASH_MAIN_PROGRAM_PK,
+    keys: [
+      flashMeta(base.ownerPk),
+      flashMeta(base.ownerPk, true, true),
+      flashMeta(base.userDepositLedger, false, true),
+      flashMeta(SystemProgram.programId),
+    ],
+    data: Buffer.concat([
+      FLASH_ACCOUNT_DISCRIMINATORS.initUserDepositLedger,
+      Buffer.from([4]),
+    ]),
+  });
+}
+
+function flashInitBasketInstruction(owner) {
+  const base = flashMainAccountContext(owner);
+  return new TransactionInstruction({
+    programId: FLASH_MAIN_PROGRAM_PK,
+    keys: [
+      flashMeta(base.ownerPk),
+      flashMeta(base.ownerPk, true, true),
+      flashMeta(base.basket, false, true),
+      flashMeta(SystemProgram.programId),
+    ],
+    data: Buffer.concat([
+      FLASH_ACCOUNT_DISCRIMINATORS.initBasket,
+      Buffer.from([4, 4, 4, 4]),
+    ]),
+  });
+}
+
+function flashDelegateBasketInstruction(owner, payer = owner) {
+  const base = flashMainAccountContext(owner);
+  const payerPk = flashPublicKey(payer, 'Flash payer');
+  const bufferBasket = flashPdaWithKey('buffer', base.basket, FLASH_MAIN_PROGRAM_PK);
+  const delegationRecordBasket = flashPdaWithKey('delegation', base.basket, FLASH_DELEGATION_PROGRAM_PK);
+  const delegationMetadataBasket = flashPdaWithKey('delegation-metadata', base.basket, FLASH_DELEGATION_PROGRAM_PK);
+  return new TransactionInstruction({
+    programId: FLASH_MAIN_PROGRAM_PK,
+    keys: [
+      flashMeta(payerPk, true, true),
+      flashMeta(base.ownerPk),
+      flashMeta(bufferBasket, false, true),
+      flashMeta(delegationRecordBasket, false, true),
+      flashMeta(delegationMetadataBasket, false, true),
+      flashMeta(base.basket, false, true),
+      flashMeta(base.eventAuthority),
+      flashMeta(base.program),
+      flashMeta(base.program),
+      flashMeta(FLASH_DELEGATION_PROGRAM_PK),
+      flashMeta(SystemProgram.programId),
+    ],
+    data: FLASH_ACCOUNT_DISCRIMINATORS.delegateBasket,
+  });
+}
+
+function flashDepositDirectInstruction(owner, amountRaw, tokenMint = FLASH_USDC_MINT) {
+  const base = flashMainAccountContext(owner);
+  const tokenMintPk = flashPublicKey(tokenMint, 'Flash deposit token mint');
+  const depositorTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintPk,
+    base.ownerPk,
+    true,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+  const tradeVault = flashPdaWithKey('trade_vault', tokenMintPk, FLASH_MAIN_PROGRAM_PK);
+  const tradeVaultTokenAccount = flashPdaWithKey('trade_vault_token_account', tokenMintPk, FLASH_MAIN_PROGRAM_PK);
+  return new TransactionInstruction({
+    programId: FLASH_MAIN_PROGRAM_PK,
+    keys: [
+      flashMeta(base.ownerPk, true, true),
+      flashMeta(base.ownerPk),
+      flashMeta(base.perpetuals),
+      flashMeta(depositorTokenAccount, false, true),
+      flashMeta(tokenMintPk),
+      flashMeta(tradeVault, false, true),
+      flashMeta(tradeVaultTokenAccount, false, true),
+      flashMeta(base.userDepositLedger, false, true),
+      flashMeta(TOKEN_PROGRAM_ID),
+      flashMeta(SystemProgram.programId),
+      flashMeta(base.eventAuthority),
+      flashMeta(base.program),
+    ],
+    data: Buffer.concat([
+      FLASH_ACCOUNT_DISCRIMINATORS.depositDirect,
+      writeU64Le(amountRaw, 'Flash deposit amount'),
+    ]),
+  });
+}
+
 async function buildOpenPositionTx(body, owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
   const inputAmountUi = String(body.inputAmountUi || body.input_amount_ui || body.amount || body.margin_usd || '').trim();
@@ -2701,38 +3015,162 @@ async function buildCancelOrderTx(body, owner) {
 
 async function buildInitDepositLedgerTx(owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
-  const result = await requestFirst(flashAccountBuilderPaths('init-deposit-ledger'), { method: 'POST', body: { owner } });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: { owner }, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
+  const base = flashMainAccountContext(owner);
+  const transaction = await buildFlashBaseVersionedTransaction([
+    flashInitDepositLedgerInstruction(owner),
+  ], base.ownerPk);
+  return {
+    transaction,
+    transactions: [transaction],
+    request: { owner },
+    builder: 'flash_trade_main_account',
+    instruction: 'init_user_deposit_ledger',
+    txKind: 'account',
+    api: FLASH_API,
+    flash_program_id: FLASH_MAIN_PROGRAM_ID,
+    user_deposit_ledger: base.userDepositLedger.toBase58(),
+  };
 }
 
 async function buildInitBasketTx(owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
-  const result = await requestFirst(flashAccountBuilderPaths('init-basket'), { method: 'POST', body: { owner } });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: { owner }, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
+  const base = flashMainAccountContext(owner);
+  const transaction = await buildFlashBaseVersionedTransaction([
+    flashInitBasketInstruction(owner),
+  ], base.ownerPk);
+  return {
+    transaction,
+    transactions: [transaction],
+    request: { owner },
+    builder: 'flash_trade_main_account',
+    instruction: 'init_basket',
+    txKind: 'account',
+    api: FLASH_API,
+    flash_program_id: FLASH_MAIN_PROGRAM_ID,
+    basket: base.basket.toBase58(),
+  };
 }
 
 async function buildDelegateBasketTx(owner, payer = owner) {
   if (!isSolanaAddress(owner) || !isSolanaAddress(payer)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
   const payload = { payer, owner };
-  const result = await requestFirst(flashAccountBuilderPaths('delegate-basket'), { method: 'POST', body: payload });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
+  const base = flashMainAccountContext(owner);
+  const transaction = await buildFlashBaseVersionedTransaction([
+    flashDelegateBasketInstruction(owner, payer),
+  ], flashPublicKey(payer, 'Flash payer'));
+  return {
+    transaction,
+    transactions: [transaction],
+    request: payload,
+    builder: 'flash_trade_main_account',
+    instruction: 'delegate_basket',
+    txKind: 'account',
+    api: FLASH_API,
+    flash_program_id: FLASH_MAIN_PROGRAM_ID,
+    basket: base.basket.toBase58(),
+  };
 }
 
 async function buildDepositDirectTx(body, owner) {
   if (!isSolanaAddress(owner)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
   const amount = String(body.amount || body.inputAmountUi || body.input_amount_ui || '').trim();
   if (!amount || !(Number(amount) > 0)) throw Object.assign(new Error('amount is required'), { status: 400 });
+  const tokenMint = String(body.tokenMint || body.token_mint || FLASH_USDC_MINT);
+  if (tokenMint !== FLASH_USDC_MINT) {
+    throw Object.assign(new Error('Only USDC deposits are supported for Flash in Clash'), { status: 400 });
+  }
   const payload = {
     owner,
-    tokenMint: String(body.tokenMint || body.token_mint || FLASH_USDC_MINT),
+    tokenMint,
     amount,
   };
-  const result = await requestFirst(flashAccountBuilderPaths('deposit-direct'), { method: 'POST', body: payload });
-  if (!result?.transactionBase64) throw Object.assign(new Error('Flash builder returned no transactionBase64'), { status: 502, data: result });
-  return { ...result, transaction: result.transactionBase64, transactions: [result.transactionBase64], request: payload, builder: 'flash_trade_account', txKind: 'account', api: FLASH_API };
+  const base = flashMainAccountContext(owner);
+  const tokenMintPk = flashPublicKey(tokenMint, 'Flash deposit token mint');
+  const depositorTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintPk,
+    base.ownerPk,
+    true,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+  const amountRaw = parseUiAmountToRaw(amount, FLASH_USDC_DECIMALS, 'Flash deposit amount');
+  const transaction = await buildFlashBaseVersionedTransaction([
+    createAssociatedTokenAccountIdempotentInstruction(
+      base.ownerPk,
+      depositorTokenAccount,
+      base.ownerPk,
+      tokenMintPk,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+    ),
+    flashDepositDirectInstruction(owner, amountRaw, tokenMint),
+  ], base.ownerPk);
+  return {
+    transaction,
+    transactions: [transaction],
+    request: payload,
+    builder: 'flash_trade_main_account',
+    instruction: 'deposit_direct',
+    txKind: 'account',
+    api: FLASH_API,
+    flash_program_id: FLASH_MAIN_PROGRAM_ID,
+    user_deposit_ledger: base.userDepositLedger.toBase58(),
+    token_account: depositorTokenAccount.toBase58(),
+    amount_raw: amountRaw.toString(),
+  };
+}
+
+async function buildReferralTx(body, owner) {
+  if (!isSolanaAddress(owner)) throw Object.assign(new Error('Flash Solana wallet is not linked'), { status: 409 });
+  const ownerPk = flashPublicKey(owner, 'Flash referral owner');
+  const current = await getUserReferralByAddress(ownerPk.toBase58());
+  if (current.has_referrer === true) {
+    return {
+      ok: true,
+      skipped: true,
+      already_linked: true,
+      referral: current,
+      referral_code: current.referral_code,
+      referral_url: current.referral_url,
+      txKind: 'setup',
+    };
+  }
+  if (current.has_any_referrer === true && current.matches_clash !== true) {
+    throw Object.assign(new Error('This Flash wallet already has a different on-chain referrer. Use a wallet without a Flash referrer or contact support.'), {
+      status: 409,
+      data: current,
+    });
+  }
+  if (current.expected_token_stake_exists === false) {
+    throw Object.assign(new Error('Flash referral code is configured, but its token stake account is not available on-chain.'), {
+      status: 502,
+      data: current,
+    });
+  }
+  const tokenStakeAccount = flashPublicKey(current.expected_token_stake_account, 'Flash referral token stake');
+  const referralAccount = flashPublicKey(current.referral_account, 'Flash referral account');
+  const ix = new TransactionInstruction({
+    programId: FLASH_MAIN_PROGRAM_PK,
+    keys: [
+      flashMeta(ownerPk, true, true),
+      flashMeta(ownerPk, true, true),
+      flashMeta(tokenStakeAccount),
+      flashMeta(referralAccount, false, true),
+      flashMeta(SystemProgram.programId),
+    ],
+    data: FLASH_ACCOUNT_DISCRIMINATORS.createReferral,
+  });
+  const transaction = await buildFlashBaseVersionedTransaction([ix], ownerPk);
+  return {
+    ok: true,
+    transaction,
+    transactions: [transaction],
+    txKind: 'setup',
+    builder: 'flash_trade_main_referral',
+    referral: current,
+    referral_code: current.referral_code,
+    referral_url: current.referral_url,
+  };
 }
 
 async function buildRequestWithdrawalTx(body, owner) {
@@ -2900,13 +3338,17 @@ function configStatus() {
     label: 'Flash Trade',
     api: FLASH_API,
     app_url: FLASH_APP_URL,
+    referral_code: FLASH_REFERRAL_CODE,
+    referral_url: FLASH_REFERRAL_URL,
+    referral_onchain_supported: true,
+    referral_program_id: FLASH_MAIN_PROGRAM_ID,
     docs_url: FLASH_DOCS_URL,
     v2_rpc_url: FLASH_V2_RPC_URL,
     usdc_mint: FLASH_USDC_MINT,
     program_ids: FLASH_PROGRAM_IDS,
     rewards_verification_ready: FLASH_PROGRAM_IDS.length > 0,
     transaction_builder_main: true,
-    transaction_builder_v2_account_setup_fallback: true,
+    transaction_builder_v2_account_setup_fallback: false,
     native_order_builder: true,
     v2_client_sdk: 'magic-trade-client@0.2.0',
     flash_main_funding_balance: 'max(FLASH6 UserDepositLedger.deposits - FLASH6 Basket.debits + FLASH6 Basket.pendingCredits, 0); /v2/owner is beta-only fallback and must not drive spendable balance',
@@ -2926,8 +3368,10 @@ module.exports = {
   getMarketInfo,
   getOwnerSnapshot,
   getWalletUsdcBalance,
+  getUserReferralByAddress,
   getPositionsByAddress,
   getOrdersByAddress,
+  buildReferralTx,
   buildOpenPositionTx,
   buildClosePositionTx,
   buildPlaceTpSlTx,

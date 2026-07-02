@@ -159,6 +159,39 @@ function publicKeyText(value) {
   }
 }
 
+function flashMainProgramIdFromAccount(account = {}) {
+  return publicKeyText(
+    account.flash_program_id
+    || account.flashProgramId
+    || account.program_id
+    || account.programId
+  );
+}
+
+function flashMainBasketPubkey(account = {}) {
+  return publicKeyText(
+    account.flash_basket_pubkey
+    || account.flashBasketPubkey
+    || account.basketPubkey
+    || account.basket_pubkey
+  );
+}
+
+function flashMainLedgerPubkey(account = {}) {
+  return publicKeyText(
+    account.flash_deposit_ledger_pubkey
+    || account.flashDepositLedgerPubkey
+    || account.depositLedgerPubkey
+    || account.deposit_ledger_pubkey
+  );
+}
+
+function flashMainAccountReady(account = {}) {
+  return flashMainProgramIdFromAccount(account) === FLASH_MAIN_PROGRAM_ID
+    && !!flashMainBasketPubkey(account)
+    && !!flashMainLedgerPubkey(account);
+}
+
 function disabledFlashOneTapState(patch = {}) {
   return { ...FLASH_ONE_TAP_DISABLED, ...patch };
 }
@@ -797,6 +830,9 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
     : (hasAccountUsdc ? derivedAvailable : (existingAvailable ?? 0)));
   const explicitEquity = finiteNumberOrNull(snapshot.account_equity ?? snapshot.equity ?? snapshot.balance);
   const equity = Math.max(0, explicitEquity ?? (accountUsdc + pnlUsd));
+  const basketPubkey = flashMainBasketPubkey(snapshot) || flashMainBasketPubkey(existing);
+  const depositLedgerPubkey = flashMainLedgerPubkey(snapshot) || flashMainLedgerPubkey(existing);
+  const flashProgramId = flashMainProgramIdFromAccount(snapshot) || flashMainProgramIdFromAccount(existing);
   return {
     ...existing,
     ...snapshot,
@@ -809,6 +845,10 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
     flash_usdc_balance: accountUsdc,
     flash_in_basket_usdc: accountUsdc,
     account_balance_usdc: accountUsdc,
+    basketPubkey,
+    flash_basket_pubkey: basketPubkey || snapshot.flash_basket_pubkey || existing.flash_basket_pubkey || null,
+    flash_program_id: flashProgramId || snapshot.flash_program_id || existing.flash_program_id || null,
+    flash_deposit_ledger_pubkey: depositLedgerPubkey || snapshot.flash_deposit_ledger_pubkey || existing.flash_deposit_ledger_pubkey || null,
     flash_balance_source: hasBalanceSource
       ? (snapshot.flash_balance_source || 'flash_main_snapshot')
       : (existing.flash_balance_source || 'preserved'),
@@ -1196,6 +1236,7 @@ export function useFlash() {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [goldEarned, setGoldEarned] = useState(null);
+  const [referralState, setReferralState] = useState(null);
   const pricesRef = useRef([]);
   const accountRef = useRef(null);
   const positionsRef = useRef([]);
@@ -1243,6 +1284,26 @@ export function useFlash() {
     && !!connectedWalletAddr
     && publicKeyText(registeredFlashWallet) !== publicKeyText(connectedWalletAddr);
 
+  const refreshReferral = useCallback(async () => {
+    if (!isActiveDex || !accountOwner || !token) {
+      setReferralState(null);
+      return null;
+    }
+    try {
+      const next = await fetchJson(`${FUTURES_API}/flash/referral?address=${encodeURIComponent(accountOwner)}`, {
+        headers: { 'x-token': token, 'x-dex': 'flash' },
+      });
+      setReferralState(next);
+      return next;
+    } catch (e) {
+      const message = e?.data?.detail || e?.message || 'Flash referral status unavailable';
+      const next = { has_referrer: false, error: message };
+      setReferralState(next);
+      setError(message);
+      return next;
+    }
+  }, [accountOwner, isActiveDex, token]);
+
   useEffect(() => {
     if (!isActiveDex || !token || !connectedWalletAddr || registeredFlashWallet || walletMismatch) return;
     fetchJson(`${GAME_API}/players/dex-accounts/flash/link`, {
@@ -1260,6 +1321,7 @@ export function useFlash() {
     const needsInitialData = !account && positions.length === 0 && markets.length === 0;
     setLoading(prev => prev || needsInitialData);
     try {
+      let referralError = '';
       const publicDataPromise = Promise.allSettled([
         fetchJson(`${FUTURES_API}/flash/health`),
         fetchJson(`${FUTURES_API}/markets?dex=flash`),
@@ -1297,6 +1359,8 @@ export function useFlash() {
         setPositions(committedPositions);
         setOrders(nextOrders);
         setWalletUsdc(initialUsdc);
+        const referral = await refreshReferral();
+        if (referral?.error) referralError = referral.error;
       } else {
         accountRef.current = null;
         positionsRef.current = [];
@@ -1304,6 +1368,7 @@ export function useFlash() {
         setPositions([]);
         setOrders([]);
         setWalletUsdc(null);
+        setReferralState(null);
       }
       const [cfgResult, marketResult, priceResult] = await publicDataPromise;
       if (cfgResult.status === 'fulfilled') setConfig(cfgResult.value);
@@ -1325,13 +1390,13 @@ export function useFlash() {
       if (publicError && !account && positions.length === 0) {
         console.warn('[Flash] public data refresh failed:', publicError?.message || publicError);
       }
-      setError('');
+      if (!referralError) setError('');
     } catch (e) {
       setError(e?.message || 'Flash data unavailable');
     } finally {
       setLoading(false);
     }
-  }, [account, accountOwner, isActiveDex, markets.length, positions.length, token]);
+  }, [account, accountOwner, isActiveDex, markets.length, positions.length, refreshReferral, token]);
 
   useEffect(() => { refreshRef.current = refresh; }, [refresh]);
 
@@ -1773,6 +1838,48 @@ export function useFlash() {
     return { ...build, signature: signatures[signatures.length - 1], signatures };
   }, [sendBuiltTransaction, token, walletAddr]);
 
+  const linkOurReferrer = useCallback(async () => {
+    if (!token) return { error: 'Missing game session token' };
+    if (!walletAddr) return { error: 'Connect a Solana wallet first' };
+    if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered Flash wallet' };
+    setActionLoading(true);
+    try {
+      const build = await fetchJson(`${FUTURES_API}/flash/referral-tx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'flash' },
+        body: JSON.stringify({ wallet: walletAddr }),
+      });
+      if (build?.already_linked || build?.skipped) {
+        const next = await refreshReferral();
+        return { ...build, ok: true, already_linked: true, referral: next || build?.referral };
+      }
+      const tx = flashTxBase64(build);
+      if (!tx) throw new Error('Flash referral builder returned no transaction');
+      const signature = await sendBuiltTransaction(tx, {
+        ...build,
+        endpoint: '/flash/referral-tx',
+        txKind: 'setup',
+      });
+      let latest = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await flashDelay(attempt === 0 ? 800 : 1200);
+        latest = await refreshReferral();
+        if (latest?.has_referrer === true) break;
+      }
+      return {
+        ok: true,
+        signature,
+        referral: latest || build?.referral || null,
+      };
+    } catch (e) {
+      const message = flashUserError(e);
+      setError(message);
+      return { error: message };
+    } finally {
+      setActionLoading(false);
+    }
+  }, [refreshReferral, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+
   const readFlashAccountSnapshot = useCallback(async () => {
     if (!accountOwner) return null;
     const primary = token
@@ -1789,7 +1896,7 @@ export function useFlash() {
   const waitForFlashBasket = useCallback(async (onProgress = null) => {
     for (let attempt = 0; attempt < 18; attempt += 1) {
       const snapshot = await readFlashAccountSnapshot().catch(() => null);
-      if (snapshot?.basketPubkey) return snapshot;
+      if (flashMainAccountReady(snapshot)) return snapshot;
       if (typeof onProgress === 'function') {
         onProgress({
           step: 'basket_wait',
@@ -1801,7 +1908,7 @@ export function useFlash() {
       }
       await flashDelay(attempt < 4 ? 750 : 1000);
     }
-    throw new Error('Flash account setup landed, but the basket is not visible yet. Wait a few seconds and retry deposit.');
+    throw new Error('Flash main account setup landed, but the FLASH6 basket is not visible yet. Wait a few seconds and retry deposit.');
   }, [readFlashAccountSnapshot]);
 
   const setOneTapTradingEnabled = useCallback(async (nextEnabled = true) => {
@@ -2052,17 +2159,17 @@ export function useFlash() {
 
   const ensureFlashBasketDelegated = useCallback(async ({ force = false } = {}) => {
     if (!walletAddr) throw new Error('Connect a Solana wallet first');
-    let snapshot = account?.basketPubkey ? account : null;
-    if (!snapshot?.basketPubkey) {
+    let snapshot = flashMainAccountReady(account) ? account : null;
+    if (!flashMainAccountReady(snapshot)) {
       snapshot = await waitForFlashBasket().catch(() => null);
     }
-    if (!snapshot?.basketPubkey) {
+    if (!flashMainAccountReady(snapshot)) {
       throw new Error('Flash basket is not ready yet. Deposit USDC once so Flash can initialize the basket, then trade again.');
     }
     if (!force && readFlashDelegationReady(walletAddr)) {
       return { ok: true, skipped: true, reason: 'delegation cached' };
     }
-    if (!force && await isBasketDelegatedOnChain(snapshot.basketPubkey)) {
+    if (!force && await isBasketDelegatedOnChain(flashMainBasketPubkey(snapshot))) {
       markFlashDelegationReady(walletAddr);
       return { ok: true, skipped: true, reason: 'delegation on-chain' };
     }
@@ -2323,7 +2430,7 @@ export function useFlash() {
     };
     setActionLoading(true);
     try {
-      const hadBasket = !!account?.basketPubkey;
+      const hadBasket = flashMainAccountReady(account);
       const delegationKnown = readFlashDelegationReady(walletAddr);
       const shouldDelegate = !delegationKnown || !hadBasket;
       emit({
@@ -2467,7 +2574,7 @@ export function useFlash() {
     } finally {
       setActionLoading(false);
     }
-  }, [account?.basketPubkey, buildAndSend, refresh, token, tryBuildAndSend, waitForFlashBasket, walletAddr, walletMismatch]);
+  }, [account, buildAndSend, refresh, token, tryBuildAndSend, waitForFlashBasket, walletAddr, walletMismatch]);
 
   const withdraw = useCallback(async (amount, options = {}) => {
     if (!token) return { error: 'Missing game session token' };
@@ -2590,6 +2697,14 @@ export function useFlash() {
 
   const clearError = useCallback(() => setError(''), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+  const openReferralJoin = useCallback(() => {
+    const url = config?.referral_url || config?.referralUrl || 'https://www.flash.trade?referral=clash';
+    if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer');
+  }, [config?.referral_url, config?.referralUrl]);
+
+  const hasFlashReferrer = walletAddr
+    ? (referralState ? referralState.has_referrer === true : null)
+    : true;
 
   return {
     dex: 'flash',
@@ -2613,8 +2728,11 @@ export function useFlash() {
     walletMismatch,
     registeredEvmWallet: registeredFlashWallet,
     apiWalletAddr: accountOwner,
-    hasReferrer: true,
-    referralUrl: config?.app_url || 'https://flash.trade',
+    hasReferrer: hasFlashReferrer,
+    linkOurReferrer,
+    openReferralJoin,
+    referralCode: config?.referral_code || referralState?.referral_code || 'clash',
+    referralUrl: config?.referral_url || referralState?.referral_url || 'https://www.flash.trade?referral=clash',
     oneTapTrading,
     setOneTapTradingEnabled,
     placeMarketOrder,

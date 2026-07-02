@@ -18,7 +18,11 @@ import {
   ensureOstiumDelegate,
   loadOstiumDelegate,
 } from '../lib/ostiumDelegateWallet';
-import { validateOstiumTakeProfitLimit } from '../lib/ostiumTpLimits';
+import {
+  validateOstiumStopLossDirection,
+  validateOstiumTakeProfitDirection,
+  validateOstiumTakeProfitLimit,
+} from '../lib/ostiumTpLimits';
 
 const FUTURES_API = '/api/futures';
 const POLL_INTERVAL_MS = 45_000;
@@ -977,6 +981,8 @@ export function useOstium() {
       };
       const hashes = [];
       if (takeProfit != null && takeProfit !== '') {
+        const tpDirectionCheck = validateOstiumTakeProfitDirection(position, takeProfit);
+        if (!tpDirectionCheck.ok) throw new Error(tpDirectionCheck.error);
         const tpCheck = validateOstiumTakeProfitLimit(position, takeProfit);
         if (!tpCheck.ok) throw new Error(tpCheck.error);
         const params = { ...base, takeProfit: String(takeProfit) };
@@ -988,6 +994,8 @@ export function useOstium() {
         if (stopLoss != null && stopLoss !== '') await sleep(500);
       }
       if (stopLoss != null && stopLoss !== '') {
+        const slDirectionCheck = validateOstiumStopLossDirection(position, stopLoss);
+        if (!slDirectionCheck.ok) throw new Error(slDirectionCheck.error);
         const params = { ...base, stopLoss: String(stopLoss) };
         hashes.push((await submitWithDelegateOrWallet({
           label: 'ostium.stop_loss',

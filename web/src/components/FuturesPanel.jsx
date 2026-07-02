@@ -5648,6 +5648,130 @@ function FuturesPanel() {
     );
   }
 
+  // ==================== FLASH REFERRAL GATE ====================
+  if (dex === 'flash' && hasWallet && hasReferrer !== true) {
+    const isRunning = referralLinking || loading;
+    const isChecking = hasReferrer === null && !referralLinking;
+    const stepState = isChecking || isRunning ? 'active' : 'pending';
+
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Flash setup</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{
+            ...S.body,
+            alignItems: 'stretch',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: 0,
+            background: '#fdf8e7',
+          }}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>{isChecking ? 'Checking Flash referral' : 'Create Flash referral pass'}</span>
+                <span style={hlGateStyles.subtitle}>
+                  {isChecking
+                    ? 'Clash is reading your Flash referral account on Solana before trading unlocks.'
+                    : 'Create the on-chain Flash referral pass for the Clash code before trading. This keeps Flash trading rewards tied to your game account.'}
+                </span>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_done }}>1</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>Solana wallet connected</span>
+                    <span style={hlGateStyles.stepHint}>{walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)} is the Flash wallet for this account.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${stepState}`] }}>
+                    {stepState === 'active' ? <span style={hlGateStyles.spinner} /> : 2}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${stepState}`] }}>
+                      {isChecking ? 'Read on-chain referral' : 'Confirm Clash referral'}
+                    </span>
+                    <span style={hlGateStyles.stepHint}>
+                      {isChecking
+                        ? 'Reading the deterministic Flash referral PDA.'
+                        : `Code: ${referralCode || 'clash'}. If this wallet already has a different Flash referrer, Flash will keep the existing one.`}
+                    </span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_pending }}>3</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_pending }}>Trade and earn gold</span>
+                    <span style={hlGateStyles.stepHint}>Flash orders unlock after the on-chain referral pass is confirmed.</span>
+                  </span>
+                </li>
+              </ol>
+
+              <button
+                style={{ ...hlGateStyles.primaryBtn, ...((isRunning || isChecking) ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={isRunning || isChecking}
+                onClick={async () => {
+                  setReferralLinking(true);
+                  try {
+                    const res = typeof linkOurReferrer === 'function'
+                      ? await linkOurReferrer()
+                      : { error: 'Flash referral approval is not available yet.' };
+                    if (res?.error) setLocalAlert(res.error);
+                    else if (res?.already_linked) setSuccessMsg('Flash referral is already set for this wallet.');
+                    else setSuccessMsg('Flash referral pass confirmed.');
+                  } finally {
+                    setReferralLinking(false);
+                  }
+                }}
+              >
+                {isChecking ? 'Checking referral...' : isRunning ? 'Approve in wallet...' : 'Create referral pass ->'}
+              </button>
+
+              {referralUrl && (
+                <button
+                  type="button"
+                  style={hlGateStyles.secondaryBtn}
+                  onClick={() => {
+                    if (openReferralJoin) openReferralJoin();
+                    else window.open(referralUrl, '_blank', 'noopener,noreferrer');
+                  }}
+                >
+                  Open Flash referral page
+                </button>
+              )}
+
+              {successMsg && (
+                <div style={hlGateStyles.successBox || {fontSize: 12, fontWeight: 800, color: '#0F766E'}}>
+                  {successMsg}
+                </div>
+              )}
+
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert, dex)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   // ==================== AVANTIS BUILDER-CODE GATE ====================
   if (dex === 'avantis' && hasWallet && hasReferrer !== true) {
     const isRunning = referralLinking || loading;

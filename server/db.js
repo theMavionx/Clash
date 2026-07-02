@@ -2087,7 +2087,21 @@ const stmts = {
   getPlayerById: db.prepare(`SELECT * FROM players WHERE id = ?`),
   getAdminPlayerByIdentifier: db.prepare(`
     SELECT * FROM players
-    WHERE id = ? OR name = ? OR lower(name) = lower(?)
+    WHERE id = ?
+       OR name = ?
+       OR lower(name) = lower(?)
+       OR lower(COALESCE(wallet, '')) = lower(?)
+       OR EXISTS (
+         SELECT 1 FROM player_wallets pw
+          WHERE pw.player_id = players.id
+            AND lower(pw.address) = lower(?)
+       )
+       OR EXISTS (
+         SELECT 1 FROM player_dex_accounts pda
+          WHERE pda.player_id = players.id
+            AND lower(COALESCE(pda.wallet_address, '')) = lower(?)
+       )
+    ORDER BY COALESCE(trophies, 0) DESC, created_at ASC
     LIMIT 1
   `),
   banPlayerById: db.prepare(`
@@ -6203,7 +6217,7 @@ function authenticatePlayer(token) {
 function getAdminPlayer(identifier) {
   const key = String(identifier || '').trim();
   if (!key) return null;
-  return stmts.getAdminPlayerByIdentifier.get(key, key, key) || null;
+  return stmts.getAdminPlayerByIdentifier.get(key, key, key, key, key, key) || null;
 }
 
 function banPlayer(identifier, options = {}) {

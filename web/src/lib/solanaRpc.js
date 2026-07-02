@@ -312,6 +312,19 @@ export function solanaConnectionConfig(url, commitmentOrConfig = 'confirmed') {
   };
 }
 
+export function solanaFallbackConnectionConfig(preferredUrl = '', urls = SOLANA_RPC_URLS, commitmentOrConfig = 'confirmed') {
+  const candidates = solanaRpcFallbackUrls(preferredUrl, urls);
+  const endpoint = candidates[0] || DEFAULT_SOLANA_RPC_URL;
+  const config = (!commitmentOrConfig || typeof commitmentOrConfig === 'string')
+    ? { commitment: commitmentOrConfig || 'confirmed' }
+    : { ...commitmentOrConfig };
+  return {
+    ...config,
+    wsEndpoint: config.wsEndpoint || solanaWsUrl(endpoint),
+    fetch: config.fetch || ((input, init) => solanaRpcFallbackFetch(candidates, input, init)),
+  };
+}
+
 export function createSolanaConnection(ConnectionCtor, url, commitmentOrConfig = 'confirmed') {
   return new ConnectionCtor(url, solanaConnectionConfig(url, commitmentOrConfig));
 }
@@ -412,14 +425,7 @@ export function solanaRpcFallbackUrls(preferredUrl = '', urls = SOLANA_RPC_URLS)
 export function createSolanaFallbackConnection(ConnectionCtor, urls = SOLANA_RPC_URLS, commitmentOrConfig = 'confirmed') {
   const candidates = solanaRpcFallbackUrls(urls?.[0] || '', urls);
   const endpoint = candidates[0] || DEFAULT_SOLANA_RPC_URL;
-  const config = (!commitmentOrConfig || typeof commitmentOrConfig === 'string')
-    ? { commitment: commitmentOrConfig || 'confirmed' }
-    : { ...commitmentOrConfig };
-  return new ConnectionCtor(endpoint, {
-    ...config,
-    wsEndpoint: config.wsEndpoint || solanaWsUrl(endpoint),
-    fetch: config.fetch || ((input, init) => solanaRpcFallbackFetch(candidates, input, init)),
-  });
+  return new ConnectionCtor(endpoint, solanaFallbackConnectionConfig(endpoint, candidates, commitmentOrConfig));
 }
 
 function probeErrorMessage(error) {

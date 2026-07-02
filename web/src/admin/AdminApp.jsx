@@ -101,6 +101,7 @@ function repeatProgressionLabel(task) {
 const NAV = [
   { id: 'overview', label: 'Overview', hint: 'Live health and workload', icon: 'OV' },
   { id: 'players', label: 'Players', hint: 'Accounts, resources, tools', icon: 'PL' },
+  { id: 'mm-bots', label: 'MM Bots WL', hint: 'Button access grants', icon: 'MM' },
   { id: 'tournaments', label: 'Tournaments', hint: 'Events, rewards, scoring', icon: 'TN' },
   { id: 'replays', label: 'Battle Replays', hint: 'Verification history', icon: 'BR' },
   { id: 'tasks', label: 'Tasks', hint: 'Quest config and progress', icon: 'TS' },
@@ -242,7 +243,7 @@ export default function AdminApp() {
     setError('');
     setLoading(true);
     try {
-      if (active === 'overview' || active === 'players' || active === 'tournaments' || active === 'replays') {
+      if (active === 'overview' || active === 'players' || active === 'mm-bots' || active === 'tournaments' || active === 'replays') {
         await refreshCore();
       }
       if (SIMPLE_LOADERS[active]) {
@@ -277,7 +278,7 @@ export default function AdminApp() {
   useEffect(() => {
     if (!authed) return undefined;
     const id = setInterval(() => {
-      if (active === 'overview' || active === 'players') refreshCore().catch(() => {});
+      if (active === 'overview' || active === 'players' || active === 'mm-bots') refreshCore().catch(() => {});
     }, 15000);
     return () => clearInterval(id);
   }, [active, authed]);
@@ -360,6 +361,7 @@ export default function AdminApp() {
           <section className="admin-content admin-scroll">
             {active === 'overview' && <Overview players={players} replays={replays} tournaments={tournaments} setActive={setActive} />}
             {active === 'players' && <PlayersPanel players={players} reload={refreshCore} />}
+            {active === 'mm-bots' && <MmBotsAccessPanel players={players} reload={refreshCore} />}
             {active === 'tournaments' && <TournamentsPanel tournaments={tournaments} reload={refreshCore} />}
             {active === 'replays' && <ReplaysPanel replays={replays} />}
             {active === 'stats' && <StatsPanel data={simpleData.stats} />}
@@ -374,7 +376,7 @@ export default function AdminApp() {
             {active === 'feedback' && <FeedbackPanel data={simpleData.feedback} />}
             {active === 'ai-reports' && <AiReportsPanel data={simpleData['ai-reports']} reload={refreshActive} />}
             {active === 'elfa' && <ElfaPanel data={simpleData.elfa} />}
-            {!['overview', 'players', 'tournaments', 'replays', 'stats', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'elfa'].includes(active) && (
+            {!['overview', 'players', 'mm-bots', 'tournaments', 'replays', 'stats', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'elfa'].includes(active) && (
               <GenericDataPanel id={active} data={simpleData[active]} reload={refreshActive} />
             )}
           </section>
@@ -561,7 +563,7 @@ function PlayersPanel({ players, reload }) {
           <form className="admin-filter-row" onSubmit={grantMmBotsByInput} style={{ marginBottom: 12 }}>
             <input
               className="admin-input"
-              placeholder="Grant MM Bots by exact player name or id"
+              placeholder="Grant MM Bots by name, id, or wallet"
               value={mmGrantInput}
               onChange={(e) => setMmGrantInput(e.target.value)}
             />
@@ -625,6 +627,175 @@ function PlayersPanel({ players, reload }) {
         />
       )}
       {selectedTools && <PlayerToolsDrawer player={selectedTools} onClose={() => setSelectedTools(null)} reload={reload} />}
+    </div>
+  );
+}
+
+function MmBotsAccessPanel({ players, reload }) {
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('all');
+  const [grantInput, setGrantInput] = useState('');
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+
+  const rows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return (players || [])
+      .map((player) => {
+        const linkedWallets = Array.isArray(player.linked_wallets) ? player.linked_wallets : [];
+        const walletText = linkedWallets.map((row) => row.wallet).filter(Boolean).join(' ');
+        const enabled = !!(player.mm_bots_enabled || player.mm_bots_access?.enabled);
+        return { ...player, linked_wallets: linkedWallets, mm_enabled: enabled, wallet_text: walletText };
+      })
+      .filter((player) => {
+        if (status === 'enabled' && !player.mm_enabled) return false;
+        if (status === 'off' && player.mm_enabled) return false;
+        if (!needle) return true;
+        const hay = `${player.name || ''} ${player.id || ''} ${player.wallet || ''} ${player.wallet_text || ''}`.toLowerCase();
+        return hay.includes(needle);
+      })
+      .sort((a, b) => {
+        if (a.mm_enabled !== b.mm_enabled) return a.mm_enabled ? -1 : 1;
+        const au = Date.parse(`${a.mm_bots_access?.updated_at || a.last_seen_at || a.created_at || ''}Z`) || 0;
+        const bu = Date.parse(`${b.mm_bots_access?.updated_at || b.last_seen_at || b.created_at || ''}Z`) || 0;
+        return bu - au;
+      });
+  }, [players, search, status]);
+
+  const stats = [
+    { label: 'MM Bots WL', value: players.filter((p) => p.mm_bots_enabled || p.mm_bots_access?.enabled).length, tone: 'gold' },
+    { label: 'Shown', value: rows.length, tone: 'blue' },
+    { label: 'Searchable wallets', value: players.reduce((sum, p) => sum + (Array.isArray(p.linked_wallets) ? p.linked_wallets.length : (p.wallet ? 1 : 0)), 0), tone: 'green' },
+  ];
+
+  async function setAccess(player, enabled) {
+    const identifier = player?.id || player?.name || player?.wallet;
+    if (!identifier) return;
+    const action = enabled ? 'grant' : 'revoke';
+    setBusy(`${action}:${identifier}`);
+    setMessage('');
+    try {
+      const result = await adminPost(`/admin/players/${encodeURIComponent(identifier)}/mm-bots-access`, {
+        enabled,
+        note: enabled ? 'admin mm bots wl grant' : 'admin mm bots wl revoke',
+      });
+      setMessage(`${result.access?.player_name || player.name || identifier}: MM Bots ${enabled ? 'enabled' : 'disabled'}.`);
+      await reload();
+    } catch (err) {
+      setMessage(err.message || 'MM Bots access update failed');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function grantByInput(event) {
+    event?.preventDefault?.();
+    const identifier = grantInput.trim();
+    if (!identifier) return;
+    setBusy('grant-input');
+    setMessage('');
+    try {
+      const result = await adminPost('/admin/mm-bots/access', {
+        player: identifier,
+        enabled: true,
+        note: 'admin mm bots wl grant',
+      });
+      setMessage(`${result.access?.player_name || identifier}: MM Bots enabled.`);
+      setGrantInput('');
+      await reload();
+    } catch (err) {
+      setMessage(err.message || 'MM Bots access grant failed');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <div className="admin-grid">
+      <StatsGrid stats={stats} />
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">MM Bots Button Whitelist</div>
+            <div className="admin-card-sub">Grant by player name, player id, login wallet, linked wallet, or DEX account wallet.</div>
+          </div>
+        </div>
+        <div className="admin-card-body">
+          <form className="admin-filter-row" onSubmit={grantByInput} style={{ marginBottom: 12 }}>
+            <input
+              className="admin-input"
+              placeholder="Name, player id, or wallet"
+              value={grantInput}
+              onChange={(event) => setGrantInput(event.target.value)}
+            />
+            <button className="admin-btn green" type="submit" disabled={!grantInput.trim() || !!busy}>
+              {busy === 'grant-input' ? 'Granting...' : 'Grant Access'}
+            </button>
+            {message ? <span className={'admin-badge ' + (/failed|not found|error/i.test(message) ? 'red' : 'green')}>{message}</span> : null}
+          </form>
+          <div className="admin-toolbar">
+            <div className="admin-filter-row">
+              <input className="admin-input" placeholder="Search name / id / wallet" value={search} onChange={(event) => setSearch(event.target.value)} />
+              <select className="admin-select" value={status} onChange={(event) => setStatus(event.target.value)}>
+                <option value="all">All players</option>
+                <option value="enabled">Enabled only</option>
+                <option value="off">Off only</option>
+              </select>
+            </div>
+            <span className="admin-help">{rows.length} shown</span>
+          </div>
+          <div className="admin-table-wrap admin-scroll">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Player</th><th>DEX</th><th>Wallets</th><th>Status</th><th>Updated</th><th>Note</th><th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((player) => {
+                  const enabled = !!player.mm_enabled;
+                  const action = enabled ? 'revoke' : 'grant';
+                  const actionBusy = busy === `${action}:${player.id || player.name}`;
+                  const wallets = player.linked_wallets?.length
+                    ? player.linked_wallets
+                    : (player.wallet ? [{ wallet: player.wallet, source: 'players.wallet' }] : []);
+                  return (
+                    <tr key={player.id || player.name}>
+                      <td data-label="Player">
+                        <strong>{player.name}</strong>
+                        <div className="admin-card-sub admin-mono">{player.id}</div>
+                      </td>
+                      <td data-label="DEX"><DexBadge dex={player.dex} /></td>
+                      <td data-label="Wallets">
+                        {wallets.length ? wallets.slice(0, 4).map((row) => (
+                          <div key={`${player.id}-${row.wallet}-${row.source}`} className="admin-card-sub admin-mono">
+                            {short(row.wallet, 8, 6)} <span className="admin-help">{row.source}</span>
+                          </div>
+                        )) : <span className="admin-badge off">No wallet</span>}
+                      </td>
+                      <td data-label="Status"><span className={'admin-badge ' + (enabled ? 'green' : 'off')}>{enabled ? 'Enabled' : 'Off'}</span></td>
+                      <td data-label="Updated" className="admin-mono">{fmtTime(player.mm_bots_access?.updated_at)}</td>
+                      <td data-label="Note">{player.mm_bots_access?.note || '-'}</td>
+                      <td data-label="Action">
+                        <button
+                          className={'admin-btn ' + (enabled ? 'danger' : 'green')}
+                          onClick={() => setAccess(player, !enabled)}
+                          disabled={!!busy}
+                        >
+                          {actionBusy ? 'Saving...' : enabled ? 'Revoke' : 'Grant'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!rows.length ? (
+                  <tr><td colSpan={7}><span className="admin-help">No players match this filter.</span></td></tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -754,7 +925,7 @@ function battleRiskReasonText(risk) {
   return flags.length ? flags.map((flag) => flag.label || flag.code).join(', ') : 'clean';
 }
 
-function PlayerProfileDrawer({ player, onClose, onOpenTools, reload }) {
+function PlayerProfileDrawer({ player, onClose, onOpenTools }) {
   const [tab, setTab] = useState('overview');
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1361,7 +1532,6 @@ function TournamentsPanel({ tournaments, reload }) {
   useEffect(() => {
     if (viewMode !== 'lucky_raider') return;
     loadLuckyPayouts().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]);
 
   return (
@@ -3341,7 +3511,7 @@ function EarningsPanel({ data, reload }) {
   const windowD30 = revenueWindows.find((row) => row.key === 'd30' || row.key === '30d') || {};
   const byDex = windowAll.dexes || revenue.dexes || revenue.by_dex || earnings.dexes || earnings.by_dex || {};
   const exactEarningsRows = Object.entries(earnings)
-    .filter(([dex, value]) => value && typeof value === 'object' && ('earned_usd' in value || value.ok === false || 'error' in value))
+    .filter(([, value]) => value && typeof value === 'object' && ('earned_usd' in value || value.ok === false || 'error' in value))
     .map(([dex, value]) => ({ dex, earned_usd: 0, ...value }));
   const exactTotalUsd = Number.isFinite(Number(earnings.total_usd))
     ? Number(earnings.total_usd)

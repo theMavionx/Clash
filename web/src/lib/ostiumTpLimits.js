@@ -69,6 +69,30 @@ export function ostiumPositionEntryPrice(position = {}) {
   );
 }
 
+export function ostiumPositionTriggerReferencePrice(position = {}) {
+  const raw = position?._raw?.position || position?._raw || {};
+  return firstFinite(
+    position?.mark_price,
+    position?.markPrice,
+    position?.current_price,
+    position?.currentPrice,
+    position?.index_price,
+    position?.indexPrice,
+    position?.mid_price,
+    position?.midPrice,
+    position?.price,
+    raw?.mark,
+    raw?.markPx,
+    raw?.markPrice,
+    raw?.currentPx,
+    raw?.currentPrice,
+    raw?.indexPx,
+    raw?.midPx,
+    raw?.price,
+    ostiumPositionEntryPrice(position),
+  );
+}
+
 export function ostiumPositionLeverage(position = {}) {
   const raw = position?._raw?.position || position?._raw || {};
   const direct = normalizeScaledLeverage(firstFinite(
@@ -108,6 +132,63 @@ export function ostiumMaxTakeProfitPrice(position = {}, maxPct = OSTIUM_MAX_TAKE
   return ostiumPositionOpenSide(position) === 'ask'
     ? Math.max(0, entry * (1 - move))
     : entry * (1 + move);
+}
+
+function formatPrice(value) {
+  if (!Number.isFinite(value)) return String(value);
+  return value.toFixed(value >= 1 ? 2 : 8);
+}
+
+export function validateOstiumTakeProfitDirection(position = {}, takeProfit) {
+  if (takeProfit == null || takeProfit === '') return { ok: true };
+  const tp = finiteNumber(takeProfit);
+  if (tp == null || tp <= 0) return { ok: true };
+
+  const reference = ostiumPositionTriggerReferencePrice(position);
+  if (reference == null || reference <= 0) {
+    return {
+      ok: false,
+      error: 'Refresh Ostium positions before setting TP. Clash needs current price to prevent invalid TP.',
+    };
+  }
+
+  const isLong = ostiumPositionOpenSide(position) !== 'ask';
+  const badTp = isLong ? tp <= reference : tp >= reference;
+  if (badTp) {
+    return {
+      ok: false,
+      reference,
+      takeProfit: tp,
+      error: `TP for ${isLong ? 'LONG' : 'SHORT'} must be ${isLong ? 'above' : 'below'} current price ($${formatPrice(reference)}).`,
+    };
+  }
+  return { ok: true, reference, takeProfit: tp };
+}
+
+export function validateOstiumStopLossDirection(position = {}, stopLoss) {
+  if (stopLoss == null || stopLoss === '') return { ok: true };
+  const sl = finiteNumber(stopLoss);
+  if (sl == null || sl <= 0) return { ok: true };
+
+  const reference = ostiumPositionTriggerReferencePrice(position);
+  if (reference == null || reference <= 0) {
+    return {
+      ok: false,
+      error: 'Refresh Ostium positions before setting SL. Clash needs current price to prevent invalid SL.',
+    };
+  }
+
+  const isLong = ostiumPositionOpenSide(position) !== 'ask';
+  const badSl = isLong ? sl >= reference : sl <= reference;
+  if (badSl) {
+    return {
+      ok: false,
+      reference,
+      stopLoss: sl,
+      error: `SL for ${isLong ? 'LONG' : 'SHORT'} must be ${isLong ? 'below' : 'above'} current price ($${formatPrice(reference)}).`,
+    };
+  }
+  return { ok: true, reference, stopLoss: sl };
 }
 
 export function validateOstiumTakeProfitLimit(position = {}, takeProfit, maxPct = OSTIUM_MAX_TAKE_PROFIT_PCT) {

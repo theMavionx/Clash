@@ -15173,6 +15173,7 @@ router.get('/admin/players', adminAuth, (req, res) => {
     const ageMs = lastSeenMs ? (Date.now() - lastSeenMs) : Infinity;
     return {
       ...p,
+      linked_wallets: adminCollectPlayerWallets(p),
       dex: p.dex || null,
       banned: !!p.banned_at,
       // futures_mode: 'pro' | 'basic' | null. NULL means user has not yet
@@ -20223,10 +20224,20 @@ function tournamentDailyDexBreakdowns(tournamentId, dayUtc = tournamentUtcDayStr
 
 function applyTournamentDexBreakdowns(rows, t, breakdowns = null) {
   const map = breakdowns || tournamentDexBreakdowns(t?.id);
+  const eligibleDexes = tournamentEligibleDexes(t);
+  const eligibleSet = new Set(eligibleDexes);
+  const allDexesEligible = eligibleDexes.length === TOURNAMENT_DEXES.length;
+  const singleDex = tournamentSingleDex(t);
   for (const row of rows || []) {
     const state = map.get(row.player_id);
+    const acceptsDex = (dex) => {
+      const normalized = String(dex || '').toLowerCase();
+      return TOURNAMENT_DEXES.includes(normalized) && (allDexesEligible || eligibleSet.has(normalized));
+    };
     if (!state) {
-      const fallbackDex = String(row.team_dex || row.player_dex || t?.dex || '').toLowerCase();
+      const fallbackDex = [row.team_dex, row.trading_dex, row.player_dex, singleDex]
+        .map(dex => String(dex || '').toLowerCase())
+        .find(acceptsDex);
       row.dex_breakdown = fallbackDex && TOURNAMENT_DEXES.includes(fallbackDex)
         ? [{ dex: fallbackDex, label: TOURNAMENT_DEX_LABELS[fallbackDex] || fallbackDex, volume_usd: Number(row.volume_usd || 0) || 0, trades_count: Number(row.trades_count || 0) || 0, pnl_usd: Number(row.pnl_usd || 0) || 0 }]
         : [];
@@ -20234,9 +20245,11 @@ function applyTournamentDexBreakdowns(rows, t, breakdowns = null) {
       row.top_dex_label = fallbackDex ? (TOURNAMENT_DEX_LABELS[fallbackDex] || fallbackDex) : null;
       continue;
     }
-    row.dex_breakdown = state.dex_breakdown || [];
-    row.top_dex = state.top_dex || null;
-    row.top_dex_label = state.top_dex_label || null;
+    const dexBreakdown = (state.dex_breakdown || []).filter(item => acceptsDex(item?.dex));
+    const top = dexBreakdown[0] || null;
+    row.dex_breakdown = dexBreakdown;
+    row.top_dex = top?.dex || null;
+    row.top_dex_label = top?.dex ? (TOURNAMENT_DEX_LABELS[top.dex] || top.dex) : null;
   }
   return rows;
 }

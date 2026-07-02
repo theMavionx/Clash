@@ -1047,3 +1047,71 @@ Time: 2026-07-01 23:11:49 +03:00
 Request:
 
 > роби коміт деплой своїх змін та деплой на прод
+
+### UR-2026-07-01-037
+
+Time: 2026-07-01 23:20:46 +03:00
+
+Request:
+
+> я не можу знайти як гравця додати в вл по мм бот кнопці в адмін панелі додай також його і напиши інструкцію 0xDF05024Ba34034E19E4da64a4543eD75d755F42d а ще easyden
+
+### UR-2026-07-01-038
+
+Time: 2026-07-01 23:25:01 +03:00
+
+Request:
+
+> clientLogger-ylzDdH1C.js:1 [Phoenix setup] invite_check_result
+> {at: '2026-07-01T20:21:15.548Z', owner: '4Ze3bb...gU2g', whitelisted: false, source: null, code_used_present: false}
+> main-Cxz1aE_J.js:2
+>  POST https://clashofperps.fun/rpc/solana 429 (Too Many Requests)
+> clientLogger-ylzDdH1C.js:1 Server responded with 429 .  Retrying after 500ms delay...
+> main-Cxz1aE_J.js:2
+>  POST https://clashofperps.fun/rpc/solana 429 (Too Many Requests)
+> clientLogger-ylzDdH1C.js:1 Server responded with 429 .  Retrying after 1000ms delay...
+> main-Cxz1aE_J.js:2
+>  POST https://clashofperps.fun/rpc/solana 429 (Too Many Requests)
+> clientLogger-ylzDdH1C.js:1 Server responded with 429 .  Retrying after 2000ms delay...
+> main-Cxz1aE_J.js:2
+>  POST https://clashofperps.fun/rpc/solana 429 (Too Many Requests)
+> clientLogger-ylzDdH1C.js:1 Server responded with 429 .  Retrying after 4000ms delay...
+> main-Cxz1aE_J.js:2
+>  POST https://clashofperps.fun/api/players/dex-accounts/phoenix/link 409 (Conflict)
+> clientLogger-ylzDdH1C.js:1 [Phoenix rewards] server wallet link failed 409
+> {error: 'This wallet is already linked to another game account', existing_player_id: 'fb1f9d53-18d5-4ffa-ae9d-266e69b11f8d', existing_name: 'chik'}
+> main-Cxz1aE_J.js:2
+>  POST https://clashofperps.fun/rpc/solana 429 (Too Many Requests)
+> clientLogger-ylzDdH1C.js:1 [Phoenix setup] trader_state_read_start
+> {at: '2026-07-01T20:21:25.179Z', owner: '4Ze3bb...gU2g', authority: '4Ze3bb...gU2g', reason: 'refresh', force: false, …}
+> clientLogger-ylzDdH1C.js:1 [Phoenix setup] trader_state_snapshot_success
+> {at: '2026-07-01T20:21:25.480Z', owner: '4Ze3bb...gU2g', authority: '4Ze3bb...gU2g', reason: 'refresh', force: false, …}
+> main-Cxz1aE_J.js:2
+>  POST https://clashofperps.fun/rpc/solana 429 (Too Many Requests)
+> ﻿  а нащо аж три спроби на безкоштовний рпс? постав тільки одну а далі фолбек на алчемі вже
+
+### UR-2026-07-01-039
+
+Time: 2026-07-01 23:27:53 +03:00
+
+Request:
+
+> це по остіум перевір чи  ти так і зробив
+> [screenshot: user says setting SL at 66666 auto-closes position and asks for client error because SL should be lower; TP higher than 900% max TP gives wallet simulation fail]
+
+### UR-2026-07-02-040
+
+Time: 2026-07-02 08:16:04 +03:00
+
+Request:
+
+> там у нас в турнірі показує основну біржу але якщо вона не вхожить список тих які приймають участь має показуватися та на якій торгує юзер в межах турніра. бо там фенікс пацифіка і флеш трейд тільки
+> [screenshot: tournament leaderboard shows DECIBEL badges inside tournament that should only include Phoenix, Pacifica, and Flash Trade]
+
+### UR-2026-07-02-041
+
+Time: 2026-07-02 08:22:31 +03:00
+
+Request:
+
+> роби коміт деплой на прод своїх змін
