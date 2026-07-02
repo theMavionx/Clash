@@ -3918,7 +3918,7 @@ function dailyPoolDayForEventMs(t, msInput) {
   const ms = Number.isFinite(msInput) ? msInput : Date.now();
   const utcDay = utcDayFromMs(ms);
   const cutoffMs = dailyPoolAwardCutoffMs(t, utcDay);
-  return ms >= cutoffMs ? addUtcDays(utcDay, 1) : utcDay;
+  return ms < cutoffMs ? addUtcDays(utcDay, -1) : utcDay;
 }
 
 function tournamentActivityDayForEvent(t, msInput) {
@@ -3938,18 +3938,7 @@ function tournamentFirstDailyPoolDay(t) {
 
 function tournamentDailyPoolActivityDays(t, dayInput) {
   const day = normalizeDailyPoolDay(dayInput);
-  const days = [day];
-  const startMs = Math.max(
-    sqlDateMs(t?.start_at) ?? 0,
-    sqlDateMs(t?.daily_pool_enabled_at) ?? 0
-  );
-  if (!startMs) return days;
-  const firstDay = tournamentFirstDailyPoolDay(t);
-  const startCalendarDay = utcDayFromMs(startMs);
-  if (day === firstDay && startCalendarDay < firstDay && !days.includes(startCalendarDay)) {
-    days.unshift(startCalendarDay);
-  }
-  return days;
+  return [day];
 }
 
 function parseDailyPoolOverrides(value) {
@@ -4017,8 +4006,8 @@ function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
   const nowMs = now.getTime();
   const today = utcDayFromMs(nowMs);
   const scheduledLast = nowMs >= dailyPoolAwardCutoffMs(t, today)
-    ? today
-    : addUtcDays(today, -1);
+    ? addUtcDays(today, -1)
+    : addUtcDays(today, -2);
   const endMs = sqlDateMs(t.end_at);
   if (!endMs) {
     if (String(t?.status || '').toLowerCase() === 'ended') {

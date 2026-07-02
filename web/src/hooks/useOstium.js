@@ -502,9 +502,11 @@ export function useOstium() {
           ? 'Ostium one tap ready'
           : !allowanceReady
           ? 'USDC allowance needs approval'
+          : !delegateReady && !gasReady
+          ? 'Approve delegate and keep a small Arbitrum ETH balance'
           : !delegateReady
-          ? 'Delegate needs on-chain approval'
-          : 'Delegate needs ETH gas top-up',
+          ? 'Approve Ostium delegate on Arbitrum'
+          : 'Need small Arbitrum ETH balance for one tap',
       };
       setDelegateStatus(next);
       return { ...next, privateKey: signer.privateKey };

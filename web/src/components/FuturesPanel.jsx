@@ -927,6 +927,19 @@ function formatTpslInputValue(value) {
   return n >= 1 ? String(Number(n.toFixed(2))) : String(Number(n.toFixed(8)));
 }
 
+function normalizeTpslInputValue(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const n = Number(raw);
+  return Number.isFinite(n) ? String(n) : raw;
+}
+
+function changedTpslInputValue(value, initialValue) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  return normalizeTpslInputValue(raw) === normalizeTpslInputValue(initialValue) ? null : raw;
+}
+
 function ostiumTpInputMax(dex, pos) {
   if (dex !== 'ostium') return undefined;
   const maxPrice = ostiumMaxTakeProfitPrice(pos);
@@ -1931,6 +1944,7 @@ const PositionsList = memo(function PositionsList({
   const [closePct, setClosePct] = useState(100);
   const [tpPrice, setTpPrice] = useState('');
   const [slPrice, setSlPrice] = useState('');
+  const [tpslInitial, setTpslInitial] = useState({ key: null, tp: '', sl: '' });
   const [tpslSubmittingPos, setTpslSubmittingPos] = useState(null);
 
   if (!positions.length) {
@@ -1951,6 +1965,10 @@ const PositionsList = memo(function PositionsList({
         const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
         const tpslBusy = tpslSubmittingPos === posKey;
         const ostiumTpMax = ostiumTpInputMax(dex, pos);
+        const initialTpsl = tpslInitial.key === posKey ? tpslInitial : { tp: '', sl: '' };
+        const changedTpPrice = changedTpslInputValue(tpPrice, initialTpsl.tp);
+        const changedSlPrice = changedTpslInputValue(slPrice, initialTpsl.sl);
+        const hasTpslChanges = !!(changedTpPrice || changedSlPrice);
 
         return (
           <div key={positionStableKey(pos) || i} style={S.posCard}>
@@ -1991,11 +2009,15 @@ const PositionsList = memo(function PositionsList({
                 <button style={S.btnBlue} onClick={() => {
                   if (expanded === 'tpsl') {
                     setExpandedPos(null);
+                    setTpslInitial({ key: null, tp: '', sl: '' });
                     return;
                   }
                   const { tp, sl } = getPositionTpsl(pos, orders);
-                  setTpPrice(formatTpslInputValue(tp));
-                  setSlPrice(formatTpslInputValue(sl));
+                  const nextTp = formatTpslInputValue(tp);
+                  const nextSl = formatTpslInputValue(sl);
+                  setTpPrice(nextTp);
+                  setSlPrice(nextSl);
+                  setTpslInitial({ key: posKey, tp: nextTp, sl: nextSl });
                   setExpandedPos(`${posKey}:tpsl`);
                 }}>TP/SL</button>
               )}
@@ -2029,22 +2051,26 @@ const PositionsList = memo(function PositionsList({
                 <input type="number" placeholder="TP Price" value={tpPrice} max={ostiumTpMax} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <button style={S.btnBlue} onClick={async () => {
-                  if (!validateTpslBeforeSubmit({ dex, pos, tpPrice, slPrice, setLocalAlert })) return;
+                  if (!hasTpslChanges) {
+                    setLocalAlert('Change TP or SL before setting.');
+                    return;
+                  }
+                  if (!validateTpslBeforeSubmit({ dex, pos, tpPrice: changedTpPrice, slPrice: changedSlPrice, setLocalAlert })) return;
                   setTpslSubmittingPos(posKey);
                   try {
-                    const r = await setTpsl(pos.symbol, positionCloseSide(pos), tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                    const r = await setTpsl(pos.symbol, positionCloseSide(pos), changedTpPrice, changedSlPrice, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
                     if (r?.error) {
                       setLocalAlert(r.error);
                       return;
                     }
-                    setTpPrice(''); setSlPrice(''); setExpandedPos(null);
+                    setTpPrice(''); setSlPrice(''); setTpslInitial({ key: null, tp: '', sl: '' }); setExpandedPos(null);
                     if (r?.info) setSuccessMsg(r.info);
                   } catch (e) {
                     setLocalAlert(e?.message || String(e));
                   } finally {
                     setTpslSubmittingPos((current) => current === posKey ? null : current);
                   }
-                }} disabled={tpslBusy || loading || (!tpPrice && !slPrice)}>
+                }} disabled={tpslBusy || loading || !hasTpslChanges}>
                   {tpslBusy ? <ClosingButtonLabel text="Setting..." /> : 'Set'}
                 </button>
               </div>
@@ -2729,6 +2755,7 @@ function FuturesPanel() {
   const [closePct, setClosePct] = useState(100);
   const [tpPrice, setTpPrice] = useState('');
   const [slPrice, setSlPrice] = useState('');
+  const [tpslInitial, setTpslInitial] = useState({ key: null, tp: '', sl: '' });
   const [tpslSubmittingPos, setTpslSubmittingPos] = useState(null);
   const [showFilter, setShowFilter] = useState(false);
   const defaultFilters = { symbol: 'All', side: 'All', sortBy: 'time', sortDir: 'desc' };
@@ -3913,8 +3940,10 @@ function FuturesPanel() {
           const subtitle = enabled
             ? `Delegate ${oneTapTrading?.signer ? shortAddr(oneTapTrading.signer) : 'ready'} - browser signs Ostium orders.`
             : oneTapTrading?.enabled
-              ? oneTapTrading?.delegateReady === false
-                ? 'Approve the Ostium delegate on Arbitrum.'
+              ? oneTapTrading?.delegateReady === false && oneTapTrading?.gasReady === false
+                ? 'Approve delegate and keep a small Arbitrum ETH balance.'
+                : oneTapTrading?.delegateReady === false
+                  ? 'Approve the Ostium delegate on Arbitrum.'
                 : oneTapTrading?.allowanceReady === false
                   ? 'Approve USDC allowance for Ostium on Arbitrum.'
                   : oneTapTrading?.gasReady === false
@@ -7060,6 +7089,10 @@ function FuturesPanel() {
           const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
           const tpslBusy = tpslSubmittingPos === posKey;
           const ostiumTpMax = ostiumTpInputMax(dex, pos);
+          const initialTpsl = tpslInitial.key === posKey ? tpslInitial : { tp: '', sl: '' };
+          const changedTpPrice = changedTpslInputValue(tpPrice, initialTpsl.tp);
+          const changedSlPrice = changedTpslInputValue(slPrice, initialTpsl.sl);
+          const hasTpslChanges = !!(changedTpPrice || changedSlPrice);
 
           // Basic mode shows a stripped-down card: ticker + UP/DOWN icon +
           // leverage + dollar PnL + Close. No size, no entry/mark prices,
@@ -7240,11 +7273,15 @@ function FuturesPanel() {
                   <button style={S.btnBlue} onClick={() => {
                     if (expanded === 'tpsl') {
                       setExpandedPos(null);
+                      setTpslInitial({ key: null, tp: '', sl: '' });
                       return;
                     }
                     const { tp, sl } = getPositionTpsl(pos, orders);
-                    setTpPrice(formatTpslInputValue(tp));
-                    setSlPrice(formatTpslInputValue(sl));
+                    const nextTp = formatTpslInputValue(tp);
+                    const nextSl = formatTpslInputValue(sl);
+                    setTpPrice(nextTp);
+                    setSlPrice(nextSl);
+                    setTpslInitial({ key: posKey, tp: nextTp, sl: nextSl });
                     setExpandedPos(`${posKey}:tpsl`);
                   }}>TP/SL</button>
                 )}
@@ -7302,22 +7339,26 @@ function FuturesPanel() {
                   <input type="number" placeholder="TP Price" value={tpPrice} max={ostiumTpMax} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <button style={S.btnBlue} onClick={async () => {
-                    if (!validateTpslBeforeSubmit({ dex, pos, tpPrice, slPrice, setLocalAlert })) return;
+                    if (!hasTpslChanges) {
+                      setLocalAlert('Change TP or SL before setting.');
+                      return;
+                    }
+                    if (!validateTpslBeforeSubmit({ dex, pos, tpPrice: changedTpPrice, slPrice: changedSlPrice, setLocalAlert })) return;
                     setTpslSubmittingPos(posKey);
                     try {
-                      const r = await setTpsl(pos.symbol, positionCloseSide(pos), tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                      const r = await setTpsl(pos.symbol, positionCloseSide(pos), changedTpPrice, changedSlPrice, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
                     if (r?.error) {
                       setLocalAlert(r.error);
                       return;
                     }
-                    setTpPrice(''); setSlPrice(''); setExpandedPos(null);
+                    setTpPrice(''); setSlPrice(''); setTpslInitial({ key: null, tp: '', sl: '' }); setExpandedPos(null);
                     if (r?.info) setSuccessMsg(r.info);
                   } catch (e) {
                     setLocalAlert(e?.message || String(e));
                   } finally {
                     setTpslSubmittingPos((current) => current === posKey ? null : current);
                   }
-                }} disabled={tpslBusy || loading || (!tpPrice && !slPrice)}>
+                }} disabled={tpslBusy || loading || !hasTpslChanges}>
                     {tpslBusy ? <ClosingButtonLabel text="Setting..." /> : 'Set'}
                   </button>
                 </div>
