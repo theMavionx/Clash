@@ -3399,7 +3399,7 @@ function applyGoldReward(playerId, baseGold) {
 // Track filled trades in the active tournament leaderboard. No-op outside
 // tournaments. Volume and pnl are already-vetted USD numbers from the
 // caller's per-trade clamp loop, summed across `count` trades.
-function recordTournamentTrade(playerId, volumeUsd, pnlUsd, count = 1) {
+function recordTournamentTrade(playerId, volumeUsd, pnlUsd, count = 1, opts = {}) {
   if (!playerId) return;
   const c = Number(count) || 0;
   if (c <= 0) return;
@@ -3419,7 +3419,7 @@ function recordTournamentTrade(playerId, volumeUsd, pnlUsd, count = 1) {
   }, {
     source: 'trade_summary',
     eventId: `summary:${playerId}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
-    dex: t.dex,
+    dex: resolveTournamentActivityDex(t, opts),
   });
 }
 

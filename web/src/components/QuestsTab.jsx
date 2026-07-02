@@ -7,6 +7,8 @@ import GoldRewardToast from './GoldRewardToast';
 import { GOLD_REWARD_PANEL_TOAST_STYLE } from './goldRewardToastStyles';
 import { useDex } from '../contexts/DexContext';
 import { readEncryptedCredential, writeEncryptedCredential } from '../lib/encryptedCredentialStorage';
+import { pacificaFetch } from '../lib/pacificaClient';
+import { listStoredPacificaMasters, readPacificaAgent } from '../lib/pacificaAgentStorage';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -15,6 +17,9 @@ const LIGHTER_STORAGE_KEY = 'clash_lighter_credentials_v1';
 const HIBACHI_STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const LIGHTER_AUTH_TOKEN_DEADLINE_SECONDS = 600;
 const LIGHTER_AUTH_TOKEN_REFRESH_SKEW_MS = 90_000;
+const PACIFICA_BUILDER_CODE = 'clashofperps';
+const PACIFICA_QUEST_HISTORY_MAX_PAGES = 8;
+const PACIFICA_QUEST_HISTORY_PAGE_LIMIT = 200;
 
 const QUOTE_TICKERS = new Set([
   'USD', 'USDC', 'USDT', 'USDE', 'DAI', 'AUSD',
@@ -136,6 +141,165 @@ function taskTradableOnMarkets(task, markets) {
   if (!Array.isArray(markets) || markets.length === 0) return true;
   const available = marketTickerSet(markets);
   return extractTickerCandidates(sym).some(v => available.has(v));
+}
+
+function isLikelySolanaAddress(value) {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || '').trim());
+}
+
+function classifyTradeSide(side) {
+  const s = String(side || '').toLowerCase();
+  const isClose = s.includes('close');
+  const isLong = s.includes('long') || s === 'buy' || s.includes('buy') || s === 'bid';
+  const isShort = s.includes('short') || s === 'sell' || s.includes('sell') || s === 'ask';
+  return { isClose, isLong, isShort, isOpen: !isClose };
+}
+
+function taskMatchesSide(tradeSide, wantSide) {
+  const wanted = String(wantSide || 'any').toLowerCase();
+  if (!wanted || wanted === 'any') return true;
+  const side = classifyTradeSide(tradeSide);
+  if (wanted === 'long') return side.isLong && !side.isShort;
+  if (wanted === 'short') return side.isShort && !side.isLong;
+  return true;
+}
+
+function taskMatchesSymbol(tradeSymbol, wantSymbol) {
+  const wanted = String(wantSymbol || '').trim();
+  if (!wanted || wanted === '*' || wanted.toLowerCase() === 'any') return true;
+  const wantedVariants = new Set(extractTickerCandidates(wanted));
+  return extractTickerCandidates(tradeSymbol).some(v => wantedVariants.has(v));
+}
+
+function tradeNotionalUsd(trade) {
+  const direct = Number(trade?._notional || trade?.notional_usd || trade?.volume_usd || trade?.volume);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const price = Number(trade?.price || 0);
+  const amount = Number(trade?.amount || trade?.size || 0);
+  const value = price * amount;
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function tradeEventKey(trade) {
+  return String(trade?.order_id || trade?.client_order_id || trade?.history_id || trade?.id || '');
+}
+
+function isAfterTaskSnapshot(task, trade) {
+  const startId = Number(task?.snapshot?.trade_id_start || 0);
+  const tradeId = Number(trade?.history_id || trade?.id || 0);
+  return tradeId > startId;
+}
+
+function computeBrowserTaskProgress(task, trades) {
+  if (!task?.started || task?.claimed_at || !Array.isArray(trades)) return null;
+  const params = task.params || {};
+  const symbol = taskSymbol(task) || params.symbol || 'any';
+  const side = params.side || 'any';
+  if (task.type === 'volume') {
+    let volume = 0;
+    for (const trade of trades) {
+      if (!isAfterTaskSnapshot(task, trade)) continue;
+      if (!taskMatchesSymbol(trade.symbol, symbol)) continue;
+      if (!taskMatchesSide(trade.side, side)) continue;
+      volume += tradeNotionalUsd(trade);
+    }
+    return volume;
+  }
+  if (task.type === 'positions') {
+    let count = 0;
+    const seen = new Set();
+    for (const trade of trades) {
+      if (!isAfterTaskSnapshot(task, trade)) continue;
+      const key = tradeEventKey(trade);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      if (classifyTradeSide(trade.side).isClose) continue;
+      if (!taskMatchesSymbol(trade.symbol, symbol)) continue;
+      if (!taskMatchesSide(trade.side, side)) continue;
+      count += 1;
+    }
+    return count;
+  }
+  return null;
+}
+
+async function pacificaQuestAccounts(player) {
+  const out = new Set();
+  const add = (value) => {
+    const text = String(value || '').trim();
+    if (isLikelySolanaAddress(text)) out.add(text);
+  };
+  add(player?.wallet);
+
+  const masters = new Set([player?.wallet, ...listStoredPacificaMasters()].filter(Boolean));
+  for (const master of masters) {
+    try {
+      const agent = await readPacificaAgent(master);
+      add(agent?.agentPubkey);
+    } catch {}
+  }
+  return [...out].slice(0, 8);
+}
+
+async function fetchPacificaBrowserTradesForQuests(player, tasks) {
+  const started = (tasks || []).filter(t => t?.started && !t?.claimed_at && t?.snapshot);
+  if (!started.length) return [];
+  let minStartId = Infinity;
+  for (const task of started) {
+    const startId = Number(task?.snapshot?.trade_id_start || 0);
+    if (Number.isFinite(startId) && startId >= 0) minStartId = Math.min(minStartId, startId);
+  }
+  if (!Number.isFinite(minStartId)) return [];
+
+  const accounts = await pacificaQuestAccounts(player);
+  const seen = new Set();
+  const merged = [];
+  for (const account of accounts) {
+    let cursor = '';
+    let crossedStart = false;
+    for (let page = 0; page < PACIFICA_QUEST_HISTORY_MAX_PAGES; page += 1) {
+      const params = new URLSearchParams({
+        account,
+        limit: String(PACIFICA_QUEST_HISTORY_PAGE_LIMIT),
+        builder_code: PACIFICA_BUILDER_CODE,
+      });
+      if (cursor) params.set('cursor', cursor);
+      const data = await pacificaFetch(`/trades/history?${params.toString()}`, { includeProxy: false });
+      const rows = data?.success && Array.isArray(data.data) ? data.data : [];
+      for (const trade of rows) {
+        const id = Number(trade?.history_id || 0);
+        if (id <= minStartId) {
+          crossedStart = true;
+          continue;
+        }
+        const key = String(id || '');
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        merged.push(trade);
+      }
+      if (crossedStart || !data?.has_more || !data?.next_cursor) break;
+      cursor = data.next_cursor;
+    }
+  }
+  return merged.sort((a, b) => Number(a.history_id || 0) - Number(b.history_id || 0));
+}
+
+function overlayPacificaBrowserProgress(tasks, browserTrades) {
+  if (!Array.isArray(browserTrades) || !browserTrades.length) return tasks;
+  return (tasks || []).map(task => {
+    const browserValue = computeBrowserTaskProgress(task, browserTrades);
+    if (browserValue == null) return task;
+    const currentValue = Number(task.progress_value || 0);
+    const progressValue = Math.max(currentValue, browserValue);
+    const targetValue = Number(task.target_value || 0);
+    return {
+      ...task,
+      progress_value: progressValue,
+      target_value: targetValue,
+      progress: targetValue > 0 ? Math.min(1, progressValue / targetValue) : 0,
+      progress_source: 'browser_pacifica',
+    };
+  });
 }
 
 function fmtVal(v, type) {
@@ -392,10 +556,22 @@ function QuestsTab({ markets = [] }) {
   const fetchTasks = useCallback(async (tok) => {
     if (!tok) { setLoaded(true); return; }
     try {
-      const r = await fetch(`${GAME_API}/tasks`, { headers: await taskHeaders(tok) });
+      const headers = await taskHeaders(tok);
+      const activeDex = String(dex || '').toLowerCase();
+      if (activeDex === 'pacifica') headers['x-skip-live-progress'] = 'browser';
+      const r = await fetch(`${GAME_API}/tasks`, { headers });
       if (!r.ok) throw new Error('status ' + r.status);
       const data = await r.json();
-      setTasks(Array.isArray(data) ? data : []);
+      let nextTasks = Array.isArray(data) ? data : [];
+      if (activeDex === 'pacifica') {
+        try {
+          const browserTrades = await fetchPacificaBrowserTradesForQuests(player, nextTasks);
+          nextTasks = overlayPacificaBrowserProgress(nextTasks, browserTrades);
+        } catch (e) {
+          console.warn('[Quests] Pacifica browser progress refresh failed:', e?.message || e);
+        }
+      }
+      setTasks(nextTasks);
     } catch (e) {
       // Surface non-2xx so the user sees why the list is empty instead of
       // staring at a silent "No quests available" — Farcaster users hit this
@@ -403,7 +579,7 @@ function QuestsTab({ markets = [] }) {
       setError('Could not load quests — ' + (e?.message || 'network error'));
     }
     finally { setLoaded(true); }
-  }, [taskHeaders]);
+  }, [dex, player, taskHeaders]);
 
   useEffect(() => {
     fetchTasks(token);
@@ -434,6 +610,18 @@ function QuestsTab({ markets = [] }) {
 
   const handleClaim = useCallback(async (id) => {
     if (!token) { setError('Not signed in yet — try again in a moment.'); return; }
+    const activeDex = String(dex || '').toLowerCase();
+    const currentTask = tasks.find(t => Number(t.id) === Number(id));
+    const currentTarget = Number(currentTask?.target_value || 0);
+    const currentProgress = Number(currentTask?.progress_value || 0);
+    const locallyComplete = currentTarget > 0 && currentProgress >= currentTarget;
+    if (activeDex === 'pacifica' && currentTask?.started && !locallyComplete) {
+      setLoading(true);
+      setError(null);
+      try { await fetchTasks(token); }
+      finally { setLoading(false); }
+      return;
+    }
     setLoading(true); setError(null);
     try {
       const refreshResources = async () => {
@@ -482,7 +670,7 @@ function QuestsTab({ markets = [] }) {
       }
       await fetchTasks(token);
     } finally { setLoading(false); }
-  }, [fetchTasks, taskHeaders, token]);
+  }, [dex, fetchTasks, taskHeaders, tasks, token]);
 
   const visibleTasks = useMemo(
     () => sortQuestsForClaiming(tasks.filter(t => taskTradableOnMarkets(t, markets))),

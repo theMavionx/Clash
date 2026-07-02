@@ -14314,7 +14314,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
             if (Number.isFinite(v)) tournamentNetPnl += v;
           }
         }
-        db.recordTournamentTrade(req.player.id, newVolume, tournamentNetPnl, uniqueTradeCount);
+        db.recordTournamentTrade(req.player.id, newVolume, tournamentNetPnl, uniqueTradeCount, { dex: 'pacifica' });
       }
       return {
         raced: false,
@@ -14639,7 +14639,9 @@ router.get('/tasks', auth, async (req, res) => {
   const progressContext = {};
   const requestedDex = requestedTaskDexFromHeaders(req.headers);
   const effectiveDex = requestedDex || String(req.player?.dex || '').toLowerCase();
-  if (effectiveDex === 'pacifica') {
+  const skipLiveProgress = effectiveDex === 'pacifica'
+    && /^(1|true|yes|client|browser)$/i.test(String(req.headers['x-skip-live-progress'] || ''));
+  if (effectiveDex === 'pacifica' && !skipLiveProgress) {
     let minStartId = Infinity;
     for (const t of list) {
       const pt = tasks.getPlayerTask(req.player.id, t.id);
@@ -14668,7 +14670,10 @@ router.get('/tasks', auth, async (req, res) => {
     const eligibility = tasks.checkTaskEligibility(req.player, t);
     if (!eligibility.ok) continue;
     let pt = tasks.getPlayerTask(req.player.id, t.id);
-    pt = await maybeRefreshTaskProgress(req.player, t, pt, req.headers, progressContext);
+    if (!skipLiveProgress) {
+      pt = await maybeRefreshTaskProgress(req.player, t, pt, req.headers, progressContext);
+    }
+    const snapshot = pt ? tasks.parseParams(pt.snapshot) : {};
     out.push({
       id: t.id,
       type: t.type,
@@ -14684,6 +14689,7 @@ router.get('/tasks', auth, async (req, res) => {
       progress_value: pt ? pt.progress_value : 0,
       target_value: pt ? pt.target_value : 0,
       claimed_at: pt ? pt.claimed_at : null,
+      snapshot: skipLiveProgress ? snapshot : undefined,
       eligibility: eligibility.eligibility,
     });
   }
@@ -20304,55 +20310,48 @@ function tournamentLeaderboardSummary(tournamentId) {
   }
 }
 
-function tournamentDexBreakdowns(tournamentId) {
-  const byPlayer = new Map();
-  if (!tournamentId) return byPlayer;
-  let rows = [];
-  try {
-    rows = db.db.prepare(`
-      SELECT player_id, dex,
-             COALESCE(SUM(volume_usd), 0) AS volume_usd,
-             COALESCE(SUM(trades_count), 0) AS trades_count,
-             COALESCE(SUM(pnl_usd), 0) AS pnl_usd
-      FROM tournament_trade_credits
-      WHERE tournament_id = ?
-      GROUP BY player_id, dex
-    `).all(tournamentId);
-  } catch {
-    rows = [];
-  }
-  for (const row of rows) {
-    const playerId = row.player_id;
-    const dex = String(row.dex || '').toLowerCase();
-    if (!playerId || !TOURNAMENT_DEXES.includes(dex)) continue;
-    const state = byPlayer.get(playerId) || {
-      by_dex: {},
-      top_dex: null,
-      top_dex_label: null,
-      total_volume_usd: 0,
-      total_trades_count: 0,
-      total_pnl_usd: 0,
-    };
-    const volume = Number(row.volume_usd || 0) || 0;
-    const trades = Number(row.trades_count || 0) || 0;
-    const pnl = Number(row.pnl_usd || 0) || 0;
-    state.by_dex[dex] = {
-      dex,
-      label: TOURNAMENT_DEX_LABELS[dex] || dex,
-      volume_usd: Number(volume.toFixed(2)),
-      trades_count: trades,
-      pnl_usd: Number(pnl.toFixed(2)),
-    };
-    state.total_volume_usd += volume;
-    state.total_trades_count += trades;
-    state.total_pnl_usd += pnl;
-    const currentTop = state.top_dex ? state.by_dex[state.top_dex] : null;
-    if (!currentTop || volume > Number(currentTop.volume_usd || 0)) {
-      state.top_dex = dex;
-      state.top_dex_label = TOURNAMENT_DEX_LABELS[dex] || dex;
-    }
+function addTournamentDexBreakdownRow(byPlayer, row, options = {}) {
+  const playerId = row.player_id;
+  const dex = String(row.dex || '').toLowerCase();
+  if (!playerId || !TOURNAMENT_DEXES.includes(dex)) return;
+  const state = byPlayer.get(playerId) || {
+    by_dex: {},
+    top_dex: null,
+    top_dex_label: null,
+    total_volume_usd: 0,
+    total_trades_count: 0,
+    total_pnl_usd: 0,
+  };
+  if (options.skipExistingDex && state.by_dex[dex]) {
     byPlayer.set(playerId, state);
+    return;
   }
+  const volume = Number(row.volume_usd || 0) || 0;
+  const trades = Number(row.trades_count || 0) || 0;
+  const pnl = Number(row.pnl_usd || 0) || 0;
+  const existing = state.by_dex[dex] || {
+    dex,
+    label: TOURNAMENT_DEX_LABELS[dex] || dex,
+    volume_usd: 0,
+    trades_count: 0,
+    pnl_usd: 0,
+  };
+  existing.volume_usd = Number((Number(existing.volume_usd || 0) + volume).toFixed(2));
+  existing.trades_count = Number(existing.trades_count || 0) + trades;
+  existing.pnl_usd = Number((Number(existing.pnl_usd || 0) + pnl).toFixed(2));
+  state.by_dex[dex] = existing;
+  state.total_volume_usd += volume;
+  state.total_trades_count += trades;
+  state.total_pnl_usd += pnl;
+  const currentTop = state.top_dex ? state.by_dex[state.top_dex] : null;
+  if (!currentTop || Number(existing.volume_usd || 0) > Number(currentTop.volume_usd || 0)) {
+    state.top_dex = dex;
+    state.top_dex_label = TOURNAMENT_DEX_LABELS[dex] || dex;
+  }
+  byPlayer.set(playerId, state);
+}
+
+function finalizeTournamentDexBreakdownMap(byPlayer) {
   for (const state of byPlayer.values()) {
     state.total_volume_usd = Number(state.total_volume_usd.toFixed(2));
     state.total_pnl_usd = Number(state.total_pnl_usd.toFixed(2));
@@ -20362,12 +20361,62 @@ function tournamentDexBreakdowns(tournamentId) {
   return byPlayer;
 }
 
-function tournamentDailyDexBreakdowns(tournamentId, dayUtc = tournamentUtcDayString()) {
+function tournamentDexBreakdowns(tournamentId, t = null) {
+  const byPlayer = new Map();
+  if (!tournamentId) return byPlayer;
+  const useDailyActivity = t && tournamentUsesDailyPool(t);
+  let rows = [];
+  try {
+    rows = useDailyActivity
+      ? db.db.prepare(`
+          SELECT player_id, dex,
+                 COALESCE(SUM(volume_usd), 0) AS volume_usd,
+                 COALESCE(SUM(trades_count), 0) AS trades_count,
+                 COALESCE(SUM(pnl_usd), 0) AS pnl_usd
+          FROM tournament_daily_activity
+          WHERE tournament_id = ?
+          GROUP BY player_id, dex
+        `).all(tournamentId)
+      : db.db.prepare(`
+          SELECT player_id, dex,
+                 COALESCE(SUM(volume_usd), 0) AS volume_usd,
+                 COALESCE(SUM(trades_count), 0) AS trades_count,
+                 COALESCE(SUM(pnl_usd), 0) AS pnl_usd
+          FROM tournament_trade_credits
+          WHERE tournament_id = ?
+          GROUP BY player_id, dex
+        `).all(tournamentId);
+  } catch {
+    rows = [];
+  }
+  for (const row of rows) {
+    addTournamentDexBreakdownRow(byPlayer, row);
+  }
+  if (!useDailyActivity) {
+    try {
+      const fallbackRows = db.db.prepare(`
+        SELECT player_id, dex,
+               COALESCE(SUM(volume_usd), 0) AS volume_usd,
+               COALESCE(SUM(trades_count), 0) AS trades_count,
+               COALESCE(SUM(pnl_usd), 0) AS pnl_usd
+        FROM tournament_daily_activity
+        WHERE tournament_id = ?
+        GROUP BY player_id, dex
+      `).all(tournamentId);
+      for (const row of fallbackRows) {
+        addTournamentDexBreakdownRow(byPlayer, row, { skipExistingDex: true });
+      }
+    } catch {}
+  }
+  return finalizeTournamentDexBreakdownMap(byPlayer);
+}
+
+function tournamentDailyDexBreakdowns(tournamentId, dayUtc = tournamentUtcDayString(), t = null) {
   const byPlayer = new Map();
   if (!tournamentId) return byPlayer;
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dayUtc || '')) ? String(dayUtc) : tournamentUtcDayString();
-  const dayStart = `${day} 00:00:00`;
-  const dayEnd = `${day} 23:59:59`;
+  const activityDays = t ? tournamentDailyPoolActivityDays(t, day) : [day];
+  const placeholders = activityDays.map(() => '?').join(',');
   let rows = [];
   try {
     rows = db.db.prepare(`
@@ -20375,46 +20424,17 @@ function tournamentDailyDexBreakdowns(tournamentId, dayUtc = tournamentUtcDayStr
              COALESCE(SUM(volume_usd), 0) AS volume_usd,
              COALESCE(SUM(trades_count), 0) AS trades_count,
              COALESCE(SUM(pnl_usd), 0) AS pnl_usd
-      FROM tournament_trade_credits
-      WHERE tournament_id = ?
-        AND replace(replace(credited_at, 'T', ' '), 'Z', '') BETWEEN ? AND ?
+      FROM tournament_daily_activity
+      WHERE tournament_id = ? AND day_utc IN (${placeholders})
       GROUP BY player_id, dex
-    `).all(tournamentId, dayStart, dayEnd);
+    `).all(tournamentId, ...activityDays);
   } catch {
     rows = [];
   }
   for (const row of rows) {
-    const playerId = row.player_id;
-    const dex = String(row.dex || '').toLowerCase();
-    if (!playerId || !TOURNAMENT_DEXES.includes(dex)) continue;
-    const state = byPlayer.get(playerId) || {
-      by_dex: {},
-      total_volume_usd: 0,
-      total_trades_count: 0,
-      total_pnl_usd: 0,
-    };
-    const volume = Number(row.volume_usd || 0) || 0;
-    const trades = Number(row.trades_count || 0) || 0;
-    const pnl = Number(row.pnl_usd || 0) || 0;
-    state.by_dex[dex] = {
-      dex,
-      label: TOURNAMENT_DEX_LABELS[dex] || dex,
-      volume_usd: Number(volume.toFixed(2)),
-      trades_count: trades,
-      pnl_usd: Number(pnl.toFixed(2)),
-    };
-    state.total_volume_usd += volume;
-    state.total_trades_count += trades;
-    state.total_pnl_usd += pnl;
-    byPlayer.set(playerId, state);
+    addTournamentDexBreakdownRow(byPlayer, row);
   }
-  for (const state of byPlayer.values()) {
-    state.total_volume_usd = Number(state.total_volume_usd.toFixed(2));
-    state.total_pnl_usd = Number(state.total_pnl_usd.toFixed(2));
-    state.dex_breakdown = Object.values(state.by_dex)
-      .sort((a, b) => Number(b.volume_usd || 0) - Number(a.volume_usd || 0) || a.dex.localeCompare(b.dex));
-  }
-  return byPlayer;
+  return finalizeTournamentDexBreakdownMap(byPlayer);
 }
 
 function applyTournamentDexBreakdowns(rows, t, breakdowns = null) {
@@ -20450,7 +20470,7 @@ function applyTournamentDexBreakdowns(rows, t, breakdowns = null) {
 }
 
 function applyTournamentDailyDexBreakdowns(rows, t, breakdowns = null) {
-  const map = breakdowns || tournamentDailyDexBreakdowns(t?.id);
+  const map = breakdowns || tournamentDailyDexBreakdowns(t?.id, tournamentDailyPoolCurrentDay(t), t);
   for (const row of rows || []) {
     const state = map.get(row.player_id);
     if (!state) {
@@ -22162,8 +22182,8 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     LIMIT ?
     `).all(tid, limit);
   }
-  const dexBreakdowns = tournamentDexBreakdowns(tid);
-  const dailyDexBreakdowns = tournamentDailyDexBreakdowns(tid);
+  const dexBreakdowns = tournamentDexBreakdowns(tid, t);
+  const dailyDexBreakdowns = tournamentDailyDexBreakdowns(tid, tournamentDailyPoolCurrentDay(t), t);
   applyTournamentDexBreakdowns(rows, t, dexBreakdowns);
   applyTournamentDailyDexBreakdowns(rows, t, dailyDexBreakdowns);
   const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
