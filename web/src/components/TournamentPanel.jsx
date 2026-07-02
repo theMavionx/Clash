@@ -1318,7 +1318,7 @@ function TournamentPanel({ onClose }) {
                           {isMegaTournament(t) && r.mega_sector_name && <>{r.mega_sector_name} · </>}
                           {fmt(r.trophies)} 🏆 · {fmtUsd(r.volume_usd)} vol
                           {showPnl && (
-                            <> · <span style={{ color: (r.pnl_usd || 0) >= 0 ? '#15803d' : '#b91c1c' }}>{fmtUsd(r.pnl_usd)} PnL</span></>
+                            <> · {fmtUsd(r.pnl_usd)} PnL</>
                           )}
                           {rankRewards.length > 0 && <> · <strong style={S.prizeText}>{rankRewards.join(' + ')}</strong></>}
                           {!rankRewards.length && prizeAmount > 0 && <> · <strong style={S.prizeText}>{fmtPrize(prizeAmount)} prize</strong></>}
