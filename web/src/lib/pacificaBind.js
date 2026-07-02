@@ -77,7 +77,7 @@ export async function bindPacificaAgent({ walletAddr, masterSign }) {
     if (token) {
       fetch('/api/pacifica/agent', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'pacifica' },
         body: JSON.stringify(body),
       }).catch(() => {});
     }

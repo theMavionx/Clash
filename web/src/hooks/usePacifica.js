@@ -348,6 +348,20 @@ export function usePacifica() {
         console.warn('[usePacifica] claim-gold failed:', res.status, data?.error || data?.reason || '(no body)');
         return data;
       }
+      const refreshResources = async () => {
+        try {
+          const rr = await fetch(`${GAME_API}/resources`, { headers: { 'x-token': token } });
+          if (!rr.ok) return;
+          const resources = await rr.json();
+          const nextResources = {
+            gold: Number(resources.gold || 0),
+            wood: Number(resources.wood || 0),
+            ore: Number(resources.ore || 0),
+          };
+          window.onGodotMessage?.({ action: 'resources', data: nextResources });
+          window.godotBridge?.(JSON.stringify({ action: 'set_resources', data: nextResources }));
+        } catch {}
+      };
       if (data.gold > 0) {
         setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards' });
         // Update React resource bar immediately
@@ -355,6 +369,10 @@ export function usePacifica() {
           window.onGodotMessage({ action: 'resources_add', data: { gold: data.gold, wood: 0, ore: 0 } });
         }
       }
+      window.dispatchEvent?.(new CustomEvent('clash:trading-reward-claimed', {
+        detail: { dex: 'pacifica', gold: Number(data.gold || 0), reason: data.reason || '' },
+      }));
+      await refreshResources();
       return data;
     } catch (e) {
       console.warn('[usePacifica] claim-gold network error:', e?.message || e);

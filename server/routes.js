@@ -13318,11 +13318,32 @@ const PACIFICA_AGENTS_CAP = 10;
 //
 // Body: { account, agent_wallet, signature, timestamp, expiry_window }
 // — exact shape Pacifica's /agent/bind expects.
-router.post('/pacifica/agent', auth, (req, res) => {
-  if (req.player.dex !== 'pacifica') {
-    return res.status(400).json({ error: 'agent only applies to pacifica accounts' });
+function playerCanUsePacifica(req, account = '') {
+  if (!req?.player?.id) return false;
+  if (String(req.player.dex || '').toLowerCase() === 'pacifica') return true;
+  const readyAccount = getReadyPlayerDexAccount(req.player.id, 'pacifica');
+  if (readyAccount) {
+    const readyWallet = canonicalWalletIdentifier(readyAccount.wallet_address || '');
+    const signedAccount = canonicalWalletIdentifier(account || '');
+    if (!signedAccount || !readyWallet || readyWallet === signedAccount) return true;
   }
+  try {
+    const reward = db.db.prepare(
+      "SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = 'pacifica'"
+    ).get(req.player.id);
+    const rewardWallet = canonicalWalletIdentifier(reward?.wallet || '');
+    const signedAccount = canonicalWalletIdentifier(account || '');
+    if (rewardWallet && (!signedAccount || rewardWallet === signedAccount)) return true;
+  } catch {}
+  return false;
+}
+
+router.post('/pacifica/agent', auth, (req, res) => {
   const { account, agent_wallet, signature, timestamp, expiry_window } = req.body || {};
+
+  if (!playerCanUsePacifica(req, account)) {
+    return res.status(400).json({ error: 'pacifica account is not linked or ready' });
+  }
 
   // Strict pubkey validation (32-byte ed25519 → 43-44 base58 chars).
   if (!isValidSolanaPubkey(account))      return res.status(400).json({ error: 'invalid account pubkey' });
@@ -13402,7 +13423,7 @@ router.post('/pacifica/agent', auth, (req, res) => {
 // flag from the player state on init and skips the redundant
 // approve_builder_code preflight.
 router.post('/pacifica/builder-approved', auth, (req, res) => {
-  if (req.player.dex !== 'pacifica') return res.status(400).json({ error: 'pacifica only' });
+  if (!playerCanUsePacifica(req)) return res.status(400).json({ error: 'pacifica account is not linked or ready' });
   db.db.prepare('UPDATE players SET pacifica_builder_approved = 1 WHERE id = ?').run(req.player.id);
   console.log(`[pacifica/builder-approved] player=${req.player.name} -> persisted`);
   res.json({ ok: true });
@@ -14483,6 +14504,11 @@ router.get('/trading/stats', auth, async (req, res) => {
 const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 const TASK_PROGRESS_REFRESH_TIMEOUT_MS = Math.max(1000, Number(process.env.TASK_PROGRESS_REFRESH_TIMEOUT_MS || 5000));
 
+function requestedTaskDexFromHeaders(headers = {}) {
+  if (!headers || typeof headers !== 'object') return '';
+  return String(headers['x-dex'] || headers['X-Dex'] || headers['x-clash-dex'] || '').trim().toLowerCase();
+}
+
 function withTaskProgressTimeout(promise, label) {
   let timer = null;
   const timeout = new Promise((_, reject) => {
@@ -14495,9 +14521,13 @@ function withTaskProgressTimeout(promise, label) {
 
 async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders = null) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
-  const dex = String(player?.dex || '').toLowerCase();
+  const requestedDex = requestedTaskDexFromHeaders(requestHeaders);
+  const dex = requestedDex || String(player?.dex || '').toLowerCase();
   if (!LIVE_TASK_PROGRESS_DEXES.has(dex)) return playerTask;
   try {
+    const taskPlayer = requestedDex && requestedDex !== String(player?.dex || '').toLowerCase()
+      ? { ...player, dex: requestedDex }
+      : player;
     const snap = tasks.parseParams(playerTask.snapshot);
     if (task.repeatable && !snap.strict_after_start_id) {
       const previousPaid = db.db.prepare(
@@ -14514,7 +14544,7 @@ async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders
       }
     }
     const result = await withTaskProgressTimeout(
-      tasks.verifyTask(player, task, snap, { headers: requestHeaders }),
+      tasks.verifyTask(taskPlayer, task, snap, { headers: requestHeaders }),
       `player=${player?.name || player?.id} task=${task?.id} dex=${dex}`
     );
     const progress = result.target_value > 0
