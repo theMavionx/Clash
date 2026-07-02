@@ -18,6 +18,7 @@ import {
   applyPendingClientUpdate,
   clearPendingClientUpdate,
   getPendingClientUpdate,
+  scheduleClientUpdateAutoApply,
   setClientActivity,
 } from './lib/updateCoordinator';
 import WalletSessionRecovery from './components/WalletSessionRecovery';
@@ -232,12 +233,23 @@ function ClientUpdateNotice() {
   const [pending, setPending] = useState(() => getPendingClientUpdate());
 
   useEffect(() => {
-    const onUpdate = (event) => setPending(event?.detail?.update || getPendingClientUpdate());
+    const handleUpdate = (update) => {
+      const next = update || getPendingClientUpdate();
+      if (scheduleClientUpdateAutoApply(next)) {
+        setPending(null);
+        return;
+      }
+      setPending(next);
+    };
+    const onUpdate = (event) => handleUpdate(event?.detail?.update);
+    handleUpdate();
     window.addEventListener('clash:update-available', onUpdate);
     window.addEventListener('storage', onUpdate);
+    window.addEventListener('clash:activity', onUpdate);
     return () => {
       window.removeEventListener('clash:update-available', onUpdate);
       window.removeEventListener('storage', onUpdate);
+      window.removeEventListener('clash:activity', onUpdate);
     };
   }, []);
 

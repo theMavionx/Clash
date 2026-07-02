@@ -209,6 +209,7 @@ export function useOstium() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
+  const [oneTapWalletFallback, setOneTapWalletFallback] = useState(null);
 
   const marketsRef = useRef([]);
   const claimGoldRef = useRef(null);
@@ -235,10 +236,15 @@ export function useOstium() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+  const clearOneTapWalletFallback = useCallback(() => setOneTapWalletFallback(null), []);
 
   useEffect(() => {
     delegateSignerRef.current = delegateSigner;
   }, [delegateSigner]);
+
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr) setOneTapWalletFallback(null);
+  }, [isActiveDex, walletAddr]);
 
   const createBuildClient = useCallback(async () => {
     if (!walletAddr || !isEvmAddress(walletAddr)) throw new Error('Connect your EVM wallet first');
@@ -511,27 +517,60 @@ export function useOstium() {
     }
   }, [createBuildClient, delegateGasBalance, readRegisteredDelegate, walletAddr]);
 
-  const ensureOneTapReady = useCallback(async ({ topUpGas = true } = {}) => {
+  const ensureOneTapReady = useCallback(async ({ topUpGas = true, requireAllowance = true, setupIfNeeded = true } = {}) => {
     if (!walletAddr || !isEvmAddress(walletAddr)) throw new Error('Connect your EVM wallet first');
     if (typeof ensureChain === 'function') await ensureChain(OSTIUM_CHAIN_ID);
-    const signer = await ensureOstiumDelegate(walletAddr);
+    const signer = setupIfNeeded
+      ? await ensureOstiumDelegate(walletAddr)
+      : (delegateSignerRef.current || await loadOstiumDelegate(walletAddr));
+    if (!signer?.privateKey) throw new Error('Ostium one tap is not enabled');
     setDelegateSigner(signer);
     delegateSignerRef.current = signer;
     const selfClient = await createBuildClient();
-    await ensureMaxAllowance(selfClient);
+    if (requireAllowance) {
+      if (setupIfNeeded) {
+        await ensureMaxAllowance(selfClient);
+      } else {
+        const allowance = await selfClient.checkUsdcAllowance(OSTIUM_MAX_ALLOWANCE_CHECK_USD).catch(() => null);
+        if (allowance?.sufficient !== true) throw new Error('Ostium one tap needs USDC allowance approval before opening trades.');
+      }
+    }
     const registered = await readRegisteredDelegate(selfClient, signer.address);
     if (String(registered || '').toLowerCase() !== String(signer.address).toLowerCase()) {
+      if (!setupIfNeeded) throw new Error('Ostium one tap delegate is not approved on-chain.');
       const tx = selfClient.getSetDelegateTx(signer.address);
       await sendBuiltTx(tx, 'ostium.set_delegate');
     }
-    if (topUpGas) await topUpDelegateGas(signer.address);
+    const gasWei = await delegateGasBalance(signer.address).catch(() => null);
+    if (gasWei != null && gasWei < DELEGATE_GAS_MIN_WEI && !(topUpGas && setupIfNeeded)) {
+      throw new Error(`Ostium one tap delegate needs Arbitrum ETH gas top-up. Current delegate gas is ${formatEthAmount(gasWei)} ETH.`);
+    }
+    if (topUpGas && setupIfNeeded) await topUpDelegateGas(signer.address);
     await refreshDelegateStatus(signer);
     return signer;
-  }, [createBuildClient, ensureChain, ensureMaxAllowance, readRegisteredDelegate, refreshDelegateStatus, sendBuiltTx, topUpDelegateGas, walletAddr]);
+  }, [createBuildClient, delegateGasBalance, ensureChain, ensureMaxAllowance, readRegisteredDelegate, refreshDelegateStatus, sendBuiltTx, topUpDelegateGas, walletAddr]);
 
-  const submitWithDelegateOrWallet = useCallback(async ({ buildSelfTx, submitDelegate, label, requiredCollateral = null }) => {
+  const submitWithDelegateOrWallet = useCallback(async ({
+    buildSelfTx,
+    submitDelegate,
+    label,
+    requiredCollateral = null,
+    allowWalletFallback = true,
+    requireAllowance = true,
+    setupIfNeeded = true,
+    topUpGas = true,
+    forceWallet = false,
+  }) => {
+    if (forceWallet) {
+      const selfClient = await createBuildClient();
+      if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
+      const tx = buildSelfTx(selfClient);
+      return sendBuiltTx(tx, `${label}.wallet`);
+    }
+    const existingSigner = delegateSignerRef.current || await loadOstiumDelegate(walletAddr).catch(() => null);
+    const hadOneTapEnabled = !!existingSigner?.privateKey;
     try {
-      const signer = await ensureOneTapReady({ topUpGas: true });
+      const signer = await ensureOneTapReady({ topUpGas, requireAllowance, setupIfNeeded });
       const delegatedClient = await createDelegatedClient(signer);
       const result = await submitDelegate(delegatedClient);
       return await waitForSubmittedTx(result, `${label}.delegated`);
@@ -539,13 +578,22 @@ export function useOstium() {
       const text = String(delegateError?.message || delegateError || '');
       if (/user rejected|denied|cancelled/i.test(text)) throw delegateError;
       if (isOstiumValidationError(delegateError)) throw delegateError;
+      const fallbackBlocked = allowWalletFallback === false
+        || (allowWalletFallback === 'when_one_tap_enabled' && hadOneTapEnabled);
+      if (fallbackBlocked) {
+        await refreshDelegateStatus(existingSigner).catch(() => null);
+        const err = new Error(`Ostium one tap failed for ${label.replace(/^ostium\./u, '')}: ${text || 'delegated submission failed'}`);
+        err.code = 'OSTIUM_ONE_TAP_FAILED';
+        err.cause = delegateError;
+        throw err;
+      }
       console.warn('[useOstium] delegated path failed, falling back to wallet signature:', text);
       const selfClient = await createBuildClient();
       if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
       const tx = buildSelfTx(selfClient);
       return sendBuiltTx(tx, `${label}.self`);
     }
-  }, [createBuildClient, createDelegatedClient, ensureAllowance, ensureOneTapReady, sendBuiltTx, waitForSubmittedTx]);
+  }, [createBuildClient, createDelegatedClient, ensureAllowance, ensureOneTapReady, refreshDelegateStatus, sendBuiltTx, waitForSubmittedTx, walletAddr]);
 
   const fetchMarkets = useCallback(async () => {
     try {
@@ -896,9 +944,10 @@ export function useOstium() {
     }
   }, [buildOpenParams, fetchMarkets, submitWithDelegateOrWallet, syncRewards, waitForTradeVisible]);
 
-  const closePosition = useCallback(async (symbol, side, amountBase, pairIndex = null, tradeIndex = null, fullClose = false) => {
+  const closePosition = useCallback(async (symbol, side, amountBase, pairIndex = null, tradeIndex = null, fullClose = false, options = {}) => {
     setLoading(true);
     setError(null);
+    const forceWallet = options?.forceWallet === true || options?.ostiumForceWallet === true;
     try {
       if (!marketsRef.current.length) await fetchMarkets();
       const position = (positions || []).find(pos => (
@@ -924,18 +973,51 @@ export function useOstium() {
         label: 'ostium.close',
         buildSelfTx: (buildClient) => buildClient.getCloseTradeTx(params),
         submitDelegate: (delegatedClient) => delegatedClient.closeTrade(params),
+        allowWalletFallback: 'when_one_tap_enabled',
+        requireAllowance: false,
+        setupIfNeeded: false,
+        topUpGas: false,
+        forceWallet,
       });
+      setOneTapWalletFallback(null);
       await fetchAccount();
       syncRewards('close');
       return { success: true, status: 'submitted', txHash: submitted.txHash };
     } catch (e) {
       const msg = errorMessage(e, 'Ostium close failed');
+      if (e?.code === 'OSTIUM_ONE_TAP_FAILED' && !forceWallet) {
+        setOneTapWalletFallback({
+          type: 'close',
+          symbol,
+          side,
+          amountBase: String(amountBase ?? ''),
+          pairIndex,
+          tradeIndex,
+          fullClose: !!fullClose,
+          message: msg,
+          createdAt: Date.now(),
+        });
+      }
       setError(msg);
       return { error: msg };
     } finally {
       setLoading(false);
     }
   }, [fetchAccount, fetchMarkets, positions, submitWithDelegateOrWallet, syncRewards]);
+
+  const executeOneTapWalletFallback = useCallback(async () => {
+    const action = oneTapWalletFallback;
+    if (!action || action.type !== 'close') return { error: 'No Ostium wallet fallback is pending' };
+    return closePosition(
+      action.symbol,
+      action.side,
+      action.amountBase,
+      action.pairIndex,
+      action.tradeIndex,
+      action.fullClose,
+      { forceWallet: true },
+    );
+  }, [closePosition, oneTapWalletFallback]);
 
   const cancelOrder = useCallback(async (symbol, orderId, pairIndex = null) => {
     setLoading(true);
@@ -954,6 +1036,10 @@ export function useOstium() {
         label: 'ostium.cancel_order',
         buildSelfTx: (client) => client.getCancelOrderTx(params),
         submitDelegate: (client) => client.cancelOrder(params),
+        allowWalletFallback: 'when_one_tap_enabled',
+        requireAllowance: false,
+        setupIfNeeded: false,
+        topUpGas: false,
       });
       await fetchAccount();
       return { success: true, status: 'submitted', txHash: submitted.txHash };
@@ -990,6 +1076,10 @@ export function useOstium() {
           label: 'ostium.take_profit',
           buildSelfTx: (client) => client.getModifyOrderTx(params),
           submitDelegate: (client) => client.modifyOrder(params),
+          allowWalletFallback: 'when_one_tap_enabled',
+          requireAllowance: false,
+          setupIfNeeded: false,
+          topUpGas: false,
         })).txHash);
         if (stopLoss != null && stopLoss !== '') await sleep(500);
       }
@@ -1001,6 +1091,10 @@ export function useOstium() {
           label: 'ostium.stop_loss',
           buildSelfTx: (client) => client.getModifyOrderTx(params),
           submitDelegate: (client) => client.modifyOrder(params),
+          allowWalletFallback: 'when_one_tap_enabled',
+          requireAllowance: false,
+          setupIfNeeded: false,
+          topUpGas: false,
         })).txHash);
       }
       await fetchAccount();
@@ -1110,6 +1204,9 @@ export function useOstium() {
     clearError,
     goldEarned,
     clearGoldEarned,
+    oneTapWalletFallback,
+    executeOneTapWalletFallback,
+    clearOneTapWalletFallback,
     depositStatus: null,
     placeMarketOrder,
     placeLimitOrder,

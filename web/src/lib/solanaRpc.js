@@ -20,6 +20,9 @@ const includeTatumRpcProxy = false;
 export const SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS = 50;
 export const SOLANA_RPC_MAX_BLOCK_HEIGHT_LAG = 40;
 export const SOLANA_RPC_PROBE_TIMEOUT_MS = 2_000;
+const SOLANA_RPC_RATE_LIMIT_COOLDOWN_MS = 60_000;
+const SOLANA_RPC_ERROR_COOLDOWN_MS = 12_000;
+const solanaRpcCooldownUntilByKey = new Map();
 
 function sameOriginPath(path) {
   return `${siteOrigin()}${path}`;
@@ -208,6 +211,39 @@ export function solanaRpcSupportsBatch(url) {
     && !isTatumSolanaRpcUrl(url);
 }
 
+function solanaRpcCooldownKey(url) {
+  try {
+    const parsed = new URL(url, siteOrigin());
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return String(url || '').replace(/\/+$/, '');
+  }
+}
+
+function solanaRpcCooldownRemainingMs(url, now = Date.now()) {
+  const until = solanaRpcCooldownUntilByKey.get(solanaRpcCooldownKey(url)) || 0;
+  return Math.max(0, until - now);
+}
+
+function markSolanaRpcCooldown(url, detail = {}) {
+  const status = Number(detail.status || 0);
+  const cooldownMs = status === 429 || detail.rpc_error
+    ? SOLANA_RPC_RATE_LIMIT_COOLDOWN_MS
+    : SOLANA_RPC_ERROR_COOLDOWN_MS;
+  solanaRpcCooldownUntilByKey.set(solanaRpcCooldownKey(url), Date.now() + cooldownMs);
+  return cooldownMs;
+}
+
+function uniqueSolanaRpcUrls(urls = []) {
+  return (urls || []).filter((url, index, list) => url && list.indexOf(url) === index);
+}
+
+function activeSolanaRpcCandidates(urls = []) {
+  const unique = uniqueSolanaRpcUrls(urls);
+  const active = unique.filter(url => solanaRpcCooldownRemainingMs(url) <= 0);
+  return active.length ? active : unique;
+}
+
 export function solanaNonHeliusRpcUrls(urls = SOLANA_RPC_URLS) {
   return (urls || []).filter((url) => url && !isHeliusSolanaRpcUrl(url));
 }
@@ -300,8 +336,16 @@ export function solanaRpcFetchForUrl(url) {
   return baseFetch === fetch ? undefined : baseFetch;
 }
 
+export function solanaConnectionFetchForUrl(url, urls = SOLANA_RPC_URLS) {
+  const candidates = solanaRpcFallbackUrls(url, urls);
+  if (candidates.length > 1) {
+    return (input, init) => solanaRpcFallbackFetch(candidates, input, init);
+  }
+  return solanaRpcFetchForUrl(url);
+}
+
 export function solanaConnectionConfig(url, commitmentOrConfig = 'confirmed') {
-  const customFetch = solanaRpcFetchForUrl(url);
+  const customFetch = solanaConnectionFetchForUrl(url);
   if (!customFetch) return commitmentOrConfig;
   if (!commitmentOrConfig || typeof commitmentOrConfig === 'string') {
     return { commitment: commitmentOrConfig || 'confirmed', fetch: customFetch };
@@ -379,7 +423,7 @@ function logSolanaRpcFallbackSuccess(url, detail = {}) {
 }
 
 async function solanaRpcFallbackFetch(urls, _input, init = {}) {
-  const candidates = (urls || []).filter((url, index, list) => url && list.indexOf(url) === index);
+  const candidates = activeSolanaRpcCandidates(urls);
   if (candidates.length === 0) return fetch(_input, init);
   let lastError = null;
   const method = jsonRpcMethodNames(init?.body);
@@ -391,13 +435,15 @@ async function solanaRpcFallbackFetch(urls, _input, init = {}) {
     try {
       const response = await rpcFetch(url, init);
       if (isRetryableSolanaRpcStatus(response.status) && !isLast) {
-        logSolanaRpcFallback(url, nextUrl, { status: response.status, method });
+        const cooldown_ms = markSolanaRpcCooldown(url, { status: response.status });
+        logSolanaRpcFallback(url, nextUrl, { status: response.status, method, cooldown_ms });
         continue;
       }
       if (response.ok && !isLast) {
         const payload = await response.clone().json().catch(() => null);
         if (payload && isRetryableSolanaRpcPayload(payload)) {
-          logSolanaRpcFallback(url, nextUrl, { status: response.status, method, rpc_error: true });
+          const cooldown_ms = markSolanaRpcCooldown(url, { status: response.status, rpc_error: true });
+          logSolanaRpcFallback(url, nextUrl, { status: response.status, method, rpc_error: true, cooldown_ms });
           continue;
         }
       }
@@ -406,7 +452,8 @@ async function solanaRpcFallbackFetch(urls, _input, init = {}) {
     } catch (error) {
       lastError = error;
       if (init?.signal?.aborted || isLast) throw error;
-      logSolanaRpcFallback(url, nextUrl, { error: error?.message || String(error), method });
+      const cooldown_ms = markSolanaRpcCooldown(url, { error: true });
+      logSolanaRpcFallback(url, nextUrl, { error: error?.message || String(error), method, cooldown_ms });
     }
   }
   if (lastError) throw lastError;

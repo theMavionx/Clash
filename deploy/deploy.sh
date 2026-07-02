@@ -1141,6 +1141,10 @@ server {
     server_name $DOMAIN;
     root $CURRENT_LINK/web/dist;
     index index.html;
+    location = / {
+        try_files /index.html =404;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    }
     location / { try_files \$uri \$uri/ /index.html; }
 }
 HTTPCONF
@@ -1469,6 +1473,12 @@ server {
 
     root /opt/clash/current/web/dist;
     index index.html;
+
+    location = / {
+        try_files /index.html =404;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
+    }
 
     location / {
         try_files $uri $uri/ /index.html;

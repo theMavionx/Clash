@@ -346,6 +346,149 @@ const OSTIUM_EARNINGS_LOG_BLOCKS = Math.max(
   10_000,
   Math.min(1_000_000, Number(process.env.OSTIUM_EARNINGS_LOG_BLOCKS || 200_000)),
 );
+const EARNINGS_EVM_LOG_FINALITY_BLOCKS = Math.max(
+  0,
+  Math.min(10_000, Number(process.env.EARNINGS_EVM_LOG_FINALITY_BLOCKS || 64)),
+);
+
+function ensureEarningsHistorySyncState(mainDb) {
+  if (!mainDb) return false;
+  mainDb.exec(`
+    CREATE TABLE IF NOT EXISTS earnings_history_sync_state (
+      source_key             TEXT PRIMARY KEY,
+      dex                    TEXT NOT NULL,
+      chain                  TEXT,
+      scanner                TEXT NOT NULL,
+      configured_from_block  INTEGER,
+      last_fetched_block     INTEGER,
+      latest_seen_block      INTEGER,
+      total_items            INTEGER NOT NULL DEFAULT 0,
+      total_amount_usd       REAL NOT NULL DEFAULT 0,
+      runs                   INTEGER NOT NULL DEFAULT 0,
+      pages_fetched          INTEGER NOT NULL DEFAULT 0,
+      blocks_fetched         INTEGER NOT NULL DEFAULT 0,
+      last_run_from_block    INTEGER,
+      last_run_to_block      INTEGER,
+      last_run_items         INTEGER NOT NULL DEFAULT 0,
+      last_run_amount_usd    REAL NOT NULL DEFAULT 0,
+      last_run_blocks        INTEGER NOT NULL DEFAULT 0,
+      last_run_pages         INTEGER NOT NULL DEFAULT 0,
+      last_run_at            TEXT,
+      updated_at             TEXT NOT NULL DEFAULT (datetime('now')),
+      meta_json              TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_earnings_history_sync_state_dex
+      ON earnings_history_sync_state(dex, scanner, updated_at);
+  `);
+  return true;
+}
+
+function readEarningsHistorySyncState(mainDb, sourceKey) {
+  if (!mainDb || !sourceKey) return null;
+  ensureEarningsHistorySyncState(mainDb);
+  return mainDb.prepare(`
+    SELECT *
+    FROM earnings_history_sync_state
+    WHERE source_key = ?
+  `).get(sourceKey) || null;
+}
+
+function resetEarningsHistorySyncState(mainDb, sourceKey) {
+  if (!mainDb || !sourceKey) return;
+  ensureEarningsHistorySyncState(mainDb);
+  mainDb.prepare('DELETE FROM earnings_history_sync_state WHERE source_key = ?').run(sourceKey);
+}
+
+function writeEarningsHistorySyncState(mainDb, state) {
+  ensureEarningsHistorySyncState(mainDb);
+  mainDb.prepare(`
+    INSERT INTO earnings_history_sync_state (
+      source_key, dex, chain, scanner, configured_from_block,
+      last_fetched_block, latest_seen_block, total_items, total_amount_usd,
+      runs, pages_fetched, blocks_fetched,
+      last_run_from_block, last_run_to_block, last_run_items,
+      last_run_amount_usd, last_run_blocks, last_run_pages,
+      last_run_at, updated_at, meta_json
+    ) VALUES (
+      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?,
+      1, ?, ?,
+      ?, ?, ?,
+      ?, ?, ?,
+      datetime('now'), datetime('now'), ?
+    )
+    ON CONFLICT(source_key) DO UPDATE SET
+      dex = excluded.dex,
+      chain = excluded.chain,
+      scanner = excluded.scanner,
+      configured_from_block = excluded.configured_from_block,
+      last_fetched_block = excluded.last_fetched_block,
+      latest_seen_block = excluded.latest_seen_block,
+      total_items = excluded.total_items,
+      total_amount_usd = excluded.total_amount_usd,
+      runs = earnings_history_sync_state.runs + 1,
+      pages_fetched = earnings_history_sync_state.pages_fetched + excluded.pages_fetched,
+      blocks_fetched = earnings_history_sync_state.blocks_fetched + excluded.blocks_fetched,
+      last_run_from_block = excluded.last_run_from_block,
+      last_run_to_block = excluded.last_run_to_block,
+      last_run_items = excluded.last_run_items,
+      last_run_amount_usd = excluded.last_run_amount_usd,
+      last_run_blocks = excluded.last_run_blocks,
+      last_run_pages = excluded.last_run_pages,
+      last_run_at = excluded.last_run_at,
+      updated_at = excluded.updated_at,
+      meta_json = excluded.meta_json
+  `).run(
+    state.sourceKey,
+    state.dex,
+    state.chain || null,
+    state.scanner,
+    state.configuredFromBlock,
+    state.lastFetchedBlock,
+    state.latestSeenBlock,
+    state.totalItems,
+    state.totalAmountUsd,
+    state.lastRunPages,
+    state.lastRunBlocks,
+    state.lastRunFromBlock,
+    state.lastRunToBlock,
+    state.lastRunItems,
+    state.lastRunAmountUsd,
+    state.lastRunBlocks,
+    state.lastRunPages,
+    JSON.stringify(state.meta || {}),
+  );
+  return readEarningsHistorySyncState(mainDb, state.sourceKey);
+}
+
+function publicEarningsHistorySyncState(row) {
+  if (!row) return null;
+  let meta = {};
+  try { meta = JSON.parse(row.meta_json || '{}'); } catch {}
+  return {
+    source_key: row.source_key,
+    dex: row.dex,
+    chain: row.chain || null,
+    scanner: row.scanner,
+    configured_from_block: row.configured_from_block == null ? null : Number(row.configured_from_block),
+    last_fetched_block: row.last_fetched_block == null ? null : Number(row.last_fetched_block),
+    latest_seen_block: row.latest_seen_block == null ? null : Number(row.latest_seen_block),
+    total_items: Number(row.total_items || 0),
+    total_amount_usd: roundUsd(row.total_amount_usd || 0),
+    runs: Number(row.runs || 0),
+    pages_fetched: Number(row.pages_fetched || 0),
+    blocks_fetched: Number(row.blocks_fetched || 0),
+    last_run_from_block: row.last_run_from_block == null ? null : Number(row.last_run_from_block),
+    last_run_to_block: row.last_run_to_block == null ? null : Number(row.last_run_to_block),
+    last_run_items: Number(row.last_run_items || 0),
+    last_run_amount_usd: roundUsd(row.last_run_amount_usd || 0),
+    last_run_blocks: Number(row.last_run_blocks || 0),
+    last_run_pages: Number(row.last_run_pages || 0),
+    last_run_at: row.last_run_at || null,
+    updated_at: row.updated_at || null,
+    meta,
+  };
+}
 
 async function readErc20Balance(rpcUrl, token, owner, decimals = 6) {
   const data = `0x70a08231${evmTopicAddress(owner).slice(2)}`;
@@ -353,15 +496,48 @@ async function readErc20Balance(rpcUrl, token, owner, decimals = 6) {
   return unitsToUsd(raw, decimals);
 }
 
-async function sumIncomingErc20Transfers(rpcUrl, token, owner, fromBlock, latestBlock, decimals = 6) {
-  if (!fromBlock || fromBlock < 1 || latestBlock < fromBlock) {
-    return { enabled: false, amount: 0, transfers: 0, from_block: null, to_block: latestBlock };
+async function sumIncomingErc20Transfers(rpcUrl, token, owner, fromBlock, latestBlock, decimals = 6, options = {}) {
+  const configuredFromBlock = Math.max(0, Number(fromBlock || 0));
+  const latestSeenBlock = Math.max(0, Number(latestBlock || 0));
+  if (!configuredFromBlock || configuredFromBlock < 1 || latestSeenBlock < configuredFromBlock) {
+    return {
+      enabled: false,
+      amount: 0,
+      transfers: 0,
+      from_block: null,
+      to_block: latestSeenBlock,
+      latest_seen_block: latestSeenBlock,
+    };
   }
+
+  const mainDb = options.mainDb || null;
+  const sourceKey = String(options.sourceKey || '').trim();
+  const dex = String(options.dex || 'unknown').trim().toLowerCase() || 'unknown';
+  const chain = String(options.chain || '').trim().toLowerCase() || null;
+  const scanner = String(options.scanner || 'erc20_incoming_transfers').trim() || 'erc20_incoming_transfers';
+  const finalityBlocks = Math.max(0, Number(options.finalityBlocks ?? EARNINGS_EVM_LOG_FINALITY_BLOCKS) || 0);
+  const scanToBlock = Math.max(configuredFromBlock - 1, latestSeenBlock - finalityBlocks);
+
+  let state = null;
+  if (mainDb && sourceKey) {
+    state = readEarningsHistorySyncState(mainDb, sourceKey);
+    if (state && Number(state.configured_from_block || 0) !== configuredFromBlock) {
+      resetEarningsHistorySyncState(mainDb, sourceKey);
+      state = null;
+    }
+  }
+
+  const previousAmount = Number(state?.total_amount_usd || 0);
+  const previousTransfers = Number(state?.total_items || 0);
+  const previousLastFetched = state?.last_fetched_block == null ? null : Number(state.last_fetched_block);
+  const startBlock = Math.max(configuredFromBlock, (previousLastFetched || configuredFromBlock - 1) + 1);
+
   let amount = 0;
   let transfers = 0;
+  let pages = 0;
   const toTopic = evmTopicAddress(owner);
-  for (let start = fromBlock; start <= latestBlock; start += OSTIUM_EARNINGS_LOG_BLOCKS) {
-    const end = Math.min(latestBlock, start + OSTIUM_EARNINGS_LOG_BLOCKS - 1);
+  for (let start = startBlock; start <= scanToBlock; start += OSTIUM_EARNINGS_LOG_BLOCKS) {
+    const end = Math.min(scanToBlock, start + OSTIUM_EARNINGS_LOG_BLOCKS - 1);
     const logs = await ethRpc(rpcUrl, 'eth_getLogs', [{
       address: token,
       fromBlock: `0x${start.toString(16)}`,
@@ -372,8 +548,55 @@ async function sumIncomingErc20Transfers(rpcUrl, token, owner, fromBlock, latest
       amount += unitsToUsd(log?.data, decimals);
       transfers += 1;
     }
+    pages++;
   }
-  return { enabled: true, amount, transfers, from_block: fromBlock, to_block: latestBlock };
+  const scannedBlocks = scanToBlock >= startBlock ? (scanToBlock - startBlock + 1) : 0;
+  const nextTotalAmount = previousAmount + amount;
+  const nextTotalTransfers = previousTransfers + transfers;
+  const nextLastFetched = scannedBlocks > 0 ? scanToBlock : previousLastFetched;
+  let syncState = null;
+  if (mainDb && sourceKey) {
+    syncState = publicEarningsHistorySyncState(writeEarningsHistorySyncState(mainDb, {
+      sourceKey,
+      dex,
+      chain,
+      scanner,
+      configuredFromBlock,
+      lastFetchedBlock: nextLastFetched,
+      latestSeenBlock,
+      totalItems: nextTotalTransfers,
+      totalAmountUsd: nextTotalAmount,
+      lastRunPages: pages,
+      lastRunBlocks: scannedBlocks,
+      lastRunFromBlock: scannedBlocks > 0 ? startBlock : null,
+      lastRunToBlock: scannedBlocks > 0 ? scanToBlock : null,
+      lastRunItems: transfers,
+      lastRunAmountUsd: amount,
+      meta: {
+        token,
+        owner,
+        decimals,
+        rpc_url: String(rpcUrl || '').replace(/([?&](?:api[_-]?key|key|token)=)[^&]+/ig, '$1***'),
+        finality_blocks: finalityBlocks,
+      },
+    }));
+  }
+  return {
+    enabled: true,
+    amount: syncState ? nextTotalAmount : amount,
+    transfers: syncState ? nextTotalTransfers : transfers,
+    from_block: configuredFromBlock,
+    to_block: syncState ? nextLastFetched : scanToBlock,
+    latest_seen_block: latestSeenBlock,
+    scan_to_block: scanToBlock,
+    finality_blocks: finalityBlocks,
+    incremental: !!syncState,
+    fetched_blocks: scannedBlocks,
+    fetched_pages: pages,
+    fetched_transfers: transfers,
+    fetched_amount_usd: roundUsd(amount),
+    sync_state: syncState,
+  };
 }
 
 async function fetchGmxEarnings() {
@@ -436,7 +659,7 @@ async function fetchGmxEarnings() {
 // HTTPS call each, except Pacifica which paginates) but cumulatively
 // 4–10s if Pacifica has a lot of trades. Cache aggressively — a 60 s
 // staleness window is fine for an internal dashboard.
-async function fetchOstiumEarnings() {
+async function fetchOstiumEarnings({ mainDb = null } = {}) {
   const local = readVerifiedFuturesDexStats('ostium', 'ostium_api');
   const estimated = local.volume_usd * (Math.max(0, OSTIUM_BUILDER_FEE_BPS) / 10000);
   const rpcUrls = rpcCandidates(
@@ -476,8 +699,20 @@ async function fetchOstiumEarnings() {
       const [nativeBalance, legacyBalance, nativeIncoming, legacyIncoming] = await Promise.all([
         readErc20Balance(rpcUrl, ARBITRUM_NATIVE_USDC, OSTIUM_BUILDER_ADDRESS, 6),
         readErc20Balance(rpcUrl, ARBITRUM_LEGACY_USDCE, OSTIUM_BUILDER_ADDRESS, 6),
-        sumIncomingErc20Transfers(rpcUrl, ARBITRUM_NATIVE_USDC, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6),
-        sumIncomingErc20Transfers(rpcUrl, ARBITRUM_LEGACY_USDCE, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6),
+        sumIncomingErc20Transfers(rpcUrl, ARBITRUM_NATIVE_USDC, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6, {
+          mainDb,
+          sourceKey: 'ostium:arbitrum:usdc:incoming',
+          dex: 'ostium',
+          chain: 'arbitrum',
+          scanner: 'erc20_incoming_transfers',
+        }),
+        sumIncomingErc20Transfers(rpcUrl, ARBITRUM_LEGACY_USDCE, OSTIUM_BUILDER_ADDRESS, OSTIUM_EARNINGS_FROM_BLOCK, latestBlock, 6, {
+          mainDb,
+          sourceKey: 'ostium:arbitrum:usdce:incoming',
+          dex: 'ostium',
+          chain: 'arbitrum',
+          scanner: 'erc20_incoming_transfers',
+        }),
       ]);
       const onchainBalance = nativeBalance + legacyBalance;
       const incomingAmount = nativeIncoming.amount + legacyIncoming.amount;
@@ -496,6 +731,16 @@ async function fetchOstiumEarnings() {
         onchain_incoming_transfers: nativeIncoming.enabled || legacyIncoming.enabled ? incomingTransfers : null,
         onchain_from_block: OSTIUM_EARNINGS_FROM_BLOCK || null,
         onchain_latest_block: latestBlock,
+        onchain_scan_to_block: Math.max(0, latestBlock - EARNINGS_EVM_LOG_FINALITY_BLOCKS),
+        onchain_sync: {
+          finality_blocks: EARNINGS_EVM_LOG_FINALITY_BLOCKS,
+          native_usdc: nativeIncoming.sync_state || null,
+          legacy_usdce: legacyIncoming.sync_state || null,
+          last_run_blocks: Number(nativeIncoming.fetched_blocks || 0) + Number(legacyIncoming.fetched_blocks || 0),
+          last_run_pages: Number(nativeIncoming.fetched_pages || 0) + Number(legacyIncoming.fetched_pages || 0),
+          last_run_transfers: Number(nativeIncoming.fetched_transfers || 0) + Number(legacyIncoming.fetched_transfers || 0),
+          last_run_amount_usd: roundUsd(Number(nativeIncoming.fetched_amount_usd || 0) + Number(legacyIncoming.fetched_amount_usd || 0)),
+        },
         rpc_url: rpcUrl.replace(/([?&](?:api[_-]?key|key|token)=)[^&]+/ig, '$1***'),
         rpc_fallbacks: rpcUrls.length,
         estimated_fee_usd: roundUsd(estimated),
@@ -503,7 +748,7 @@ async function fetchOstiumEarnings() {
         builder_fee_pct: OSTIUM_BUILDER_FEE_BPS / 100,
         model: 'ostium_onchain_usdc_balance',
         source_detail: 'arbitrum_usdc_balance_of_builder',
-        note: `Exact on-chain current USDC + USDC.e balance of the Ostium builder address. Local ${OSTIUM_BUILDER_FEE_BPS}bps estimate from imported Ostium fills is shown only for comparison and is not counted as earned. Set OSTIUM_EARNINGS_FROM_BLOCK to also scan incoming Transfer logs.`,
+        note: `Exact on-chain current USDC + USDC.e balance of the Ostium builder address. Local ${OSTIUM_BUILDER_FEE_BPS}bps estimate from imported Ostium fills is shown only for comparison and is not counted as earned. Incoming Transfer logs are indexed incrementally from OSTIUM_EARNINGS_FROM_BLOCK and resume from the last stored block.`,
       };
     } catch (err) {
       lastError = err;
@@ -2495,66 +2740,155 @@ const FAILED_EARNINGS_META = {
   },
 };
 
+const EARNINGS_READER_CONFIG = {
+  pacifica: { source: 'pacifica_builder_trades_sum', read: () => fetchPacificaEarnings() },
+  decibel: { source: 'decibel_account_overview_fee_income', read: () => fetchDecibelEarnings() },
+  avantis: { source: 'avantis_code_owner_onchain_estimate_only', read: () => fetchAvantisEarnings() },
+  gmx: { source: 'gmx_referral_tier_onchain_estimate_only', read: () => fetchGmxEarnings() },
+  ostium: { source: 'arbitrum_usdc_balance_of_builder', read: ({ mainDb }) => fetchOstiumEarnings({ mainDb }) },
+  phoenix: { source: 'phoenix_flight_collateral_transfers', read: ({ mainDb }) => fetchPhoenixEarnings({ mainDb }) },
+  monad: { source: 'perpl_builder_fee_not_configured', read: () => fetchPerplEarnings() },
+  hyperliquid: { source: 'hyperliquid_referral_builder_rewards', read: () => fetchHyperliquidEarnings() },
+  grvt: { source: 'grvt_builder_fill_history', read: () => fetchGrvtEarnings() },
+  nado: { source: 'nado_indexer_match_builder_fee', read: () => fetchNadoEarnings() },
+  hotstuff: { source: 'hotstuff_api_fills_broker_fee', read: () => fetchHotstuffEarnings() },
+  hibachi: { source: 'hibachi_api_activity_builder_fee_unverified', read: () => fetchHibachiEarnings() },
+  katana: { source: 'katana_builder_fee_exact_or_estimate', read: () => fetchKatanaEarnings() },
+  gmtrade: { source: 'gmtrade_verified_tx_local_estimate', read: () => fetchGmtradeEarnings() },
+  flash: { source: 'flash_v2_verified_tx_local_estimate', read: () => fetchFlashEarnings() },
+  lighter: { source: 'lighter_integrator_fills_fee_sum', read: () => fetchLighterEarnings() },
+};
+
+const EARNINGS_DEX_ORDER = [
+  'pacifica',
+  'decibel',
+  'avantis',
+  'gmx',
+  'ostium',
+  'phoenix',
+  'monad',
+  'hyperliquid',
+  'grvt',
+  'nado',
+  'hotstuff',
+  'hibachi',
+  'katana',
+  'gmtrade',
+  'flash',
+  'lighter',
+];
+
+const EARNINGS_DEX_ALIASES = {
+  perpl: 'monad',
+  rise: 'risex',
+};
+
+function normalizeEarningsDex(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return EARNINGS_DEX_ALIASES[key] || key;
+}
+
+function wrapEarningsResult(label, settledOrValue) {
+  if (settledOrValue?.status === 'fulfilled') {
+    return {
+      ok: true,
+      ...settledOrValue.value,
+      source: EARNINGS_READER_CONFIG[label]?.source || settledOrValue.value?.source || label,
+    };
+  }
+  if (!settledOrValue || settledOrValue.status !== 'rejected') {
+    return {
+      ok: true,
+      ...(settledOrValue || {}),
+      source: EARNINGS_READER_CONFIG[label]?.source || settledOrValue?.source || label,
+    };
+  }
+  const error = String(settledOrValue.reason?.message || settledOrValue.reason).slice(0, 240);
+  return {
+    ok: false,
+    earned_usd: 0,
+    ...(FAILED_EARNINGS_META[label] || {}),
+    error,
+    note: error,
+    source: EARNINGS_READER_CONFIG[label]?.source || label,
+  };
+}
+
+function earningsTotalUsd(rows) {
+  return EARNINGS_DEX_ORDER.reduce(
+    (sum, key) => sum + (rows[key]?.ok && Number.isFinite(Number(rows[key].earned_usd)) ? Number(rows[key].earned_usd) : 0),
+    0,
+  );
+}
+
+async function readEarningsDex(label, context = {}) {
+  const config = EARNINGS_READER_CONFIG[label];
+  if (!config) {
+    const err = new Error(`Unknown earnings DEX: ${label}`);
+    err.status = 404;
+    throw err;
+  }
+  try {
+    const value = await config.read(context);
+    return wrapEarningsResult(label, value);
+  } catch (reason) {
+    return wrapEarningsResult(label, { status: 'rejected', reason });
+  }
+}
+
+async function fetchEarningsDex(dex, { force = false, mainDb = null } = {}) {
+  const label = normalizeEarningsDex(dex);
+  if (!EARNINGS_READER_CONFIG[label]) {
+    const err = new Error(`Unknown earnings DEX: ${dex}`);
+    err.status = 404;
+    throw err;
+  }
+  const now = Date.now();
+  if (!force && _cache && _cache[label] && now - _cacheAt < CACHE_TTL_MS) {
+    return {
+      dex: label,
+      row: { ..._cache[label], cached: true, age_ms: now - _cacheAt },
+      last_updated: _cache.last_updated || new Date(_cacheAt).toISOString(),
+      cached: true,
+      age_ms: now - _cacheAt,
+    };
+  }
+  const row = await readEarningsDex(label, { mainDb });
+  if (_cache) {
+    _cache = {
+      ..._cache,
+      [label]: row,
+      total_usd: earningsTotalUsd({ ..._cache, [label]: row }),
+      last_updated: new Date(now).toISOString(),
+    };
+    _cacheAt = now;
+  }
+  return {
+    dex: label,
+    row,
+    last_updated: new Date(now).toISOString(),
+    cached: false,
+    age_ms: 0,
+  };
+}
+
 async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   const now = Date.now();
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, ostium, phx, mon, hl, grvt, nado, hotstuff, hibachi, katana, gmtrade, flash, lighter] = await Promise.allSettled([
-    fetchPacificaEarnings(),
-    fetchDecibelEarnings(),
-    fetchAvantisEarnings(),
-    fetchGmxEarnings(),
-    fetchOstiumEarnings(),
-    fetchPhoenixEarnings({ mainDb }),
-    fetchPerplEarnings(),
-    fetchHyperliquidEarnings(),
-    fetchGrvtEarnings(),
-    fetchNadoEarnings(),
-    fetchHotstuffEarnings(),
-    fetchHibachiEarnings(),
-    fetchKatanaEarnings(),
-    fetchGmtradeEarnings(),
-    fetchFlashEarnings(),
-    fetchLighterEarnings(),
-  ]);
-  const wrap = (label, r) => {
-    if (r.status === 'fulfilled') return { ok: true, ...r.value };
-    const error = String(r.reason?.message || r.reason).slice(0, 240);
-    return {
-      ok: false,
-      earned_usd: 0,
-      ...(FAILED_EARNINGS_META[label] || {}),
-      error,
-      note: error,
-    };
-  };
-
+  const entries = await Promise.all(EARNINGS_DEX_ORDER.map(async (label) => ([
+    label,
+    await readEarningsDex(label, { mainDb }),
+  ])));
   const out = {
-    pacifica: { ...wrap('pacifica', pac), source: 'pacifica_builder_trades_sum' },
-    decibel:  { ...wrap('decibel',  dec), source: 'decibel_account_overview_fee_income' },
-    avantis:  { ...wrap('avantis',  avt), source: 'avantis_code_owner_onchain_estimate_only' },
-    gmx:      { ...wrap('gmx',      gmx), source: 'gmx_referral_tier_onchain_estimate_only' },
-    ostium:   { ...wrap('ostium',   ostium), source: 'arbitrum_usdc_balance_of_builder' },
-    phoenix:  { ...wrap('phoenix',  phx), source: 'phoenix_flight_collateral_transfers' },
-    monad:    { ...wrap('monad',    mon), source: 'perpl_builder_fee_not_configured' },
-    hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_referral_builder_rewards' },
-    grvt: { ...wrap('grvt', grvt), source: 'grvt_builder_fill_history' },
-    nado: { ...wrap('nado', nado), source: 'nado_indexer_match_builder_fee' },
-    hotstuff: { ...wrap('hotstuff', hotstuff), source: 'hotstuff_api_fills_broker_fee' },
-    hibachi: { ...wrap('hibachi', hibachi), source: 'hibachi_api_activity_builder_fee_unverified' },
-    katana: { ...wrap('katana', katana), source: 'katana_builder_fee_exact_or_estimate' },
-    gmtrade: { ...wrap('gmtrade', gmtrade), source: 'gmtrade_verified_tx_local_estimate' },
-    flash: { ...wrap('flash', flash), source: 'flash_v2_verified_tx_local_estimate' },
-    lighter: { ...wrap('lighter', lighter), source: 'lighter_integrator_fills_fee_sum' },
+    ...Object.fromEntries(entries),
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','ostium','phoenix','monad','hyperliquid','grvt','nado','hotstuff','hibachi','katana','gmtrade','flash','lighter'].reduce(
-    (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
-  );
+  out.total_usd = earningsTotalUsd(out);
   _cache = out;
   _cacheAt = now;
   return { ...out, cached: false, age_ms: 0 };
 }
 
-module.exports = { fetchAllEarnings, fetchRevenueAnalytics };
+module.exports = { fetchAllEarnings, fetchEarningsDex, fetchRevenueAnalytics };

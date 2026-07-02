@@ -14008,6 +14008,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       if (creditedTrades > 0) {
         db.recordTournamentTradeRows(req.player.id, creditedTradeRows, {
           source: 'trade_history',
+          dex,
           count: true,
           volume: true,
           pnl: true,
@@ -19223,6 +19224,43 @@ function normalizeTournamentDailyPoolAwardTimeUtc(v, fallback = '00:00', options
   return `${String(Math.floor(hours)).padStart(2, '0')}:${String(Math.floor(minutes)).padStart(2, '0')}`;
 }
 
+function tournamentDateMs(v) {
+  const clean = cleanSqlDate(v);
+  if (!clean) return null;
+  const ms = Date.parse(`${clean.replace(' ', 'T')}Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function tournamentUtcDayFromMs(ms) {
+  return new Date(Number.isFinite(ms) ? ms : Date.now()).toISOString().slice(0, 10);
+}
+
+function tournamentAddUtcDays(dayInput, count) {
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dayInput || ''))
+    ? String(dayInput)
+    : tournamentUtcDayFromMs(Date.now());
+  const ms = Date.parse(`${day}T00:00:00Z`) + (Number(count) || 0) * 24 * 60 * 60 * 1000;
+  return tournamentUtcDayFromMs(ms);
+}
+
+function tournamentDailyPoolAwardTimeMinutes(t) {
+  const time = normalizeTournamentDailyPoolAwardTimeUtc(t?.daily_pool_award_time_utc, '00:00');
+  return Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+}
+
+function tournamentDailyPoolCutoffMs(t, dayInput) {
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dayInput || ''))
+    ? String(dayInput)
+    : tournamentUtcDayFromMs(Date.now());
+  return Date.parse(`${day}T00:00:00Z`) + tournamentDailyPoolAwardTimeMinutes(t) * 60 * 1000;
+}
+
+function tournamentDailyPoolDayFromMs(t, msInput) {
+  const ms = Number.isFinite(msInput) ? msInput : Date.now();
+  const utcDay = tournamentUtcDayFromMs(ms);
+  return ms >= tournamentDailyPoolCutoffMs(t, utcDay) ? tournamentAddUtcDays(utcDay, 1) : utcDay;
+}
+
 function normalizeTournamentDailyPoolOverrides(input) {
   let raw = input;
   if (typeof raw === 'string') {
@@ -19254,10 +19292,49 @@ function normalizeTournamentDailyPoolOverrides(input) {
 }
 
 function tournamentDailyPoolFirstDay(t) {
-  const startMs = Date.parse(`${cleanSqlDate(t?.start_at)?.slice(0, 10) || ''}T00:00:00Z`);
-  const enabledMs = Date.parse(`${cleanSqlDate(t?.daily_pool_enabled_at)?.slice(0, 10) || ''}T00:00:00Z`);
-  const ms = Math.max(Number.isFinite(startMs) ? startMs : 0, Number.isFinite(enabledMs) ? enabledMs : 0);
-  return new Date(ms || Date.now()).toISOString().slice(0, 10);
+  const startMs = Math.max(
+    tournamentDateMs(t?.start_at) ?? 0,
+    tournamentDateMs(t?.daily_pool_enabled_at) ?? 0
+  );
+  return tournamentDailyPoolDayFromMs(t, startMs || Date.now());
+}
+
+function tournamentDailyPoolCurrentDay(t, now = new Date()) {
+  return tournamentDailyPoolDayFromMs(t, now.getTime());
+}
+
+function tournamentDailyPoolActivityDays(t, dayInput) {
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dayInput || '')) ? String(dayInput) : tournamentDailyPoolCurrentDay(t);
+  const days = [day];
+  const startMs = Math.max(
+    tournamentDateMs(t?.start_at) ?? 0,
+    tournamentDateMs(t?.daily_pool_enabled_at) ?? 0
+  );
+  if (!startMs) return days;
+  const firstDay = tournamentDailyPoolFirstDay(t);
+  const startCalendarDay = tournamentUtcDayFromMs(startMs);
+  if (day === firstDay && startCalendarDay < firstDay && !days.includes(startCalendarDay)) {
+    days.unshift(startCalendarDay);
+  }
+  return days;
+}
+
+function tournamentDailyPoolWindow(t, dayInput) {
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dayInput || '')) ? String(dayInput) : tournamentDailyPoolCurrentDay(t);
+  const firstDay = tournamentDailyPoolFirstDay(t);
+  const startMs = Math.max(
+    tournamentDailyPoolCutoffMs(t, tournamentAddUtcDays(day, -1)),
+    day === firstDay ? (tournamentDateMs(t?.start_at) ?? 0) : 0,
+    day === firstDay ? (tournamentDateMs(t?.daily_pool_enabled_at) ?? 0) : 0
+  );
+  const closeMs = tournamentDailyPoolCutoffMs(t, day);
+  const endMs = tournamentDateMs(t?.end_at);
+  const effectiveEndMs = endMs && endMs < closeMs ? endMs : closeMs;
+  return {
+    starts_at: new Date(startMs).toISOString(),
+    closes_at: new Date(closeMs).toISOString(),
+    ends_at: new Date(effectiveEndMs).toISOString(),
+  };
 }
 
 function tournamentDailyPoolDayIndex(t, dayInput) {
@@ -20940,8 +21017,8 @@ function syncFuturesTournamentRowsForParticipant(playerId, tournament, participa
     player_id: playerId,
     dexes,
     rows: 0,
-    main: { credited_rows: 0, updated_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, pnl_delta_usd: 0 },
-    pnl: { credited_rows: 0, updated_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, pnl_delta_usd: 0 },
+    main: { credited_rows: 0, updated_rows: 0, dex_updated_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, pnl_delta_usd: 0 },
+    pnl: { credited_rows: 0, updated_rows: 0, dex_updated_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, pnl_delta_usd: 0 },
     failed: 0,
     errors: [],
   };
@@ -20956,7 +21033,7 @@ function syncFuturesTournamentRowsForParticipant(playerId, tournament, participa
       continue;
     }
     summary.rows += Number(result.rows || 0);
-    for (const key of ['credited_rows', 'updated_rows', 'trades_count', 'volume_usd', 'pnl_usd', 'pnl_delta_usd']) {
+    for (const key of ['credited_rows', 'updated_rows', 'dex_updated_rows', 'trades_count', 'volume_usd', 'pnl_usd', 'pnl_delta_usd']) {
       summary.main[key] += Number(result.main?.[key] || 0);
       summary.pnl[key] += Number(result.pnl?.[key] || 0);
     }
@@ -20999,6 +21076,7 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
     rows: 0,
     inserted: 0,
     updated: 0,
+    dex_updated: 0,
     pnl_delta_usd: 0,
     activity_events: 0,
     failed: 0,
@@ -21012,7 +21090,7 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
       continue;
     }
     for (const syncDex of syncDexes) {
-      if (!summary.by_dex[syncDex]) summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, updated: 0, pnl_delta_usd: 0, activity_events: 0, failed: 0 };
+      if (!summary.by_dex[syncDex]) summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, updated: 0, dex_updated: 0, pnl_delta_usd: 0, activity_events: 0, failed: 0 };
       summary.by_dex[syncDex].players++;
       const result = syncFuturesTournamentRows(participant.player_id, syncDex, { tournamentId: t.id });
       if (!result?.ok) {
@@ -21023,21 +21101,24 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
       const rows = Number(result.rows || 0);
       const inserted = Number(result.main?.inserted || result.main?.credited_rows || 0);
       const updated = Number(result.main?.updated_rows || 0);
+      const dexUpdated = Number(result.main?.dex_updated_rows || 0);
       const pnlDelta = Number(result.main?.pnl_delta_usd || 0);
       const activityEvents = Number(result.main?.activity_events || result.main?.credited_rows || 0);
       summary.rows += rows;
       summary.inserted += inserted;
       summary.updated += updated;
+      summary.dex_updated += dexUpdated;
       summary.pnl_delta_usd += pnlDelta;
       summary.activity_events += activityEvents;
       summary.by_dex[syncDex].rows += rows;
       summary.by_dex[syncDex].inserted += inserted;
       summary.by_dex[syncDex].updated += updated;
+      summary.by_dex[syncDex].dex_updated += dexUpdated;
       summary.by_dex[syncDex].pnl_delta_usd += pnlDelta;
       summary.by_dex[syncDex].activity_events += activityEvents;
     }
   }
-  if (summary.inserted || summary.updated || summary.failed) {
+  if (summary.inserted || summary.updated || summary.dex_updated || summary.failed) {
     console.log('[tournament-sync] participants', JSON.stringify(summary));
   }
   return summary;
@@ -21526,8 +21607,12 @@ function buildTournamentDailyPointRows(t, options = {}) {
       SELECT day_utc FROM tournament_daily_point_runs WHERE tournament_id = ?
     )
   `).all(tid, tid, tid).map(row => row.day_utc).filter(Boolean));
-  if (includeCurrentDay) daySet.add(tournamentUtcDayString());
-  const days = Array.from(daySet).sort((a, b) => String(b).localeCompare(String(a))).slice(0, limit);
+  if (includeCurrentDay) daySet.add(tournamentDailyPoolCurrentDay(t));
+  const firstDay = tournamentDailyPoolFirstDay(t);
+  const days = Array.from(daySet)
+    .filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) && String(day) >= firstDay)
+    .sort((a, b) => String(b).localeCompare(String(a)))
+    .slice(0, limit);
   const participantRows = db.db.prepare(`
     SELECT tp.player_id, p.name, p.wallet, p.dex
     FROM tournament_participants tp
@@ -21541,6 +21626,8 @@ function buildTournamentDailyPointRows(t, options = {}) {
   `).all(tid).map(row => [row.day_utc, row]));
 
   return days.map((day) => {
+    const activityDays = tournamentDailyPoolActivityDays(t, day);
+    const activityDayPlaceholders = activityDays.map(() => '?').join(',');
     const activityRows = db.db.prepare(`
       SELECT a.player_id, p.name, p.wallet, COALESCE(p.dex, a.dex) AS dex,
              COALESCE(SUM(a.trades_count), 0) AS trades_count,
@@ -21551,9 +21638,9 @@ function buildTournamentDailyPointRows(t, options = {}) {
              COUNT(*) AS events
       FROM tournament_daily_activity a
       LEFT JOIN players p ON p.id = a.player_id
-      WHERE a.tournament_id = ? AND a.day_utc = ?
+      WHERE a.tournament_id = ? AND a.day_utc IN (${activityDayPlaceholders})
       GROUP BY a.player_id
-    `).all(tid, day);
+    `).all(tid, ...activityDays);
     const awardRows = db.db.prepare(`
       SELECT a.player_id, p.name, p.wallet, p.dex,
              COALESCE(SUM(a.points), 0) AS awarded_points,
@@ -21687,6 +21774,8 @@ function buildTournamentDailyPointRows(t, options = {}) {
     const run = runByDay.get(day);
     return {
       day_utc: day,
+      activity_days: activityDays,
+      window: tournamentDailyPoolWindow(t, day),
       processed,
       run: run ? {
         processed_at: run.processed_at,
@@ -21732,6 +21821,7 @@ router.get('/tournaments/:id/daily-points', (req, res) => {
     tournament: tournamentRowToPublic(t, { totalVolumeUsd }),
     my_player_id: viewer?.id || null,
     server_day_utc: tournamentUtcDayString(),
+    server_round_day_utc: tournamentDailyPoolCurrentDay(t),
     days: buildTournamentDailyPointRows(t, { limit }),
   });
 });
@@ -22492,6 +22582,23 @@ router.post('/admin/tournaments/:id/daily-points/finalize', adminAuth, (req, res
   }
 });
 
+router.post('/admin/tournaments/:id/sync-trades', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!t) return res.status(404).json({ error: 'tournament not found' });
+  try {
+    const result = syncFuturesTournamentParticipants(t, {
+      force: true,
+      limit: req.body?.limit || req.query?.limit,
+      liveOnly: parseBool(req.body?.live_only ?? req.query?.live_only ?? true),
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'trade sync failed').slice(0, 180) });
+  }
+});
+
 router.post('/admin/tournaments/:id/participants/:playerId/adjust-trophies', adminAuth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   const playerId = String(req.params.playerId || '').trim();
@@ -22562,7 +22669,8 @@ router.get('/admin/tournaments/:id/daily-points', adminAuth, (req, res) => {
   try { syncFuturesTournamentParticipants(t, { force: String(req.query.sync || '') === '1' }); } catch {}
   const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 14));
   try {
-    const days = db.db.prepare(`
+    const firstDay = tournamentDailyPoolFirstDay(t);
+    const daySet = new Set(db.db.prepare(`
       SELECT day_utc FROM (
         SELECT day_utc FROM tournament_daily_activity WHERE tournament_id = ?
         UNION
@@ -22570,9 +22678,12 @@ router.get('/admin/tournaments/:id/daily-points', adminAuth, (req, res) => {
         UNION
         SELECT day_utc FROM tournament_daily_point_runs WHERE tournament_id = ?
       )
-      ORDER BY day_utc DESC
-      LIMIT ?
-    `).all(tid, tid, tid, limit).map(r => r.day_utc);
+    `).all(tid, tid, tid).map(r => r.day_utc).filter(Boolean));
+    if (tournamentPhase(t) === 'live') daySet.add(tournamentDailyPoolCurrentDay(t));
+    const days = Array.from(daySet)
+      .filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) && String(day) >= firstDay)
+      .sort((a, b) => String(b).localeCompare(String(a)))
+      .slice(0, limit);
 
     const runByDay = new Map(db.db.prepare(`
       SELECT day_utc, processed_at, total_points, details_json
@@ -22590,6 +22701,8 @@ router.get('/admin/tournaments/:id/daily-points', adminAuth, (req, res) => {
     }));
 
     const outputDays = days.map((day) => {
+      const activityDays = tournamentDailyPoolActivityDays(t, day);
+      const activityDayPlaceholders = activityDays.map(() => '?').join(',');
       const activityRows = db.db.prepare(`
         SELECT a.player_id, p.name, p.wallet, p.dex,
                COALESCE(SUM(a.trades_count), 0) AS trades_count,
@@ -22600,9 +22713,9 @@ router.get('/admin/tournaments/:id/daily-points', adminAuth, (req, res) => {
                COUNT(*) AS events
         FROM tournament_daily_activity a
         LEFT JOIN players p ON p.id = a.player_id
-        WHERE a.tournament_id = ? AND a.day_utc = ?
+        WHERE a.tournament_id = ? AND a.day_utc IN (${activityDayPlaceholders})
         GROUP BY a.player_id
-      `).all(tid, day);
+      `).all(tid, ...activityDays);
       const awardRows = db.db.prepare(`
         SELECT a.player_id, p.name, p.wallet, p.dex,
                COALESCE(SUM(a.points), 0) AS points,
@@ -22703,6 +22816,8 @@ router.get('/admin/tournaments/:id/daily-points', adminAuth, (req, res) => {
       totals.points = Number(totals.points.toFixed(6));
       return {
         day_utc: day,
+        activity_days: activityDays,
+        window: tournamentDailyPoolWindow(t, day),
         processed: runByDay.has(day),
         run: runByDay.get(day) || null,
         totals,
@@ -23355,6 +23470,20 @@ router.get('/admin/earnings', adminAuth, async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────
 // Admin: local revenue analytics by DEX window and by tournament.
+router.get('/admin/earnings/:dex', adminAuth, async (req, res) => {
+  try {
+    const data = await earnings.fetchEarningsDex(req.params.dex, {
+      force: req.query.force === '1',
+      mainDb: db.db,
+    });
+    res.json(data);
+  } catch (e) {
+    const status = Number(e?.status || 0) >= 400 && Number(e?.status || 0) < 600 ? Number(e.status) : 500;
+    console.warn('[earnings] single dex failed:', req.params.dex, e.message);
+    res.status(status).json({ error: e.message });
+  }
+});
+
 router.get('/admin/revenue-analytics', adminAuth, async (req, res) => {
   try {
     const tournamentLimit = Math.max(1, Math.min(500, parseInt(req.query.tournaments, 10) || 120));

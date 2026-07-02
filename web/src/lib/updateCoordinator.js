@@ -1,4 +1,5 @@
 const PENDING_UPDATE_KEY = 'clash_pending_update_v1';
+const AUTO_UPDATE_APPLY_PREFIX = 'clash_auto_update_applied_';
 
 let activity = {
   selected_dex: null,
@@ -34,6 +35,54 @@ function clearPending() {
   try { localStorage.removeItem(PENDING_UPDATE_KEY); } catch { /* noop */ }
 }
 
+function updateApplyKey(update = {}) {
+  const raw = [
+    update.version || 'unknown',
+    update.reason || 'app_update',
+    update.scope || 'app',
+    update.chunk_name || '',
+  ].join(':');
+  return `${AUTO_UPDATE_APPLY_PREFIX}${raw.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 160)}`;
+}
+
+function markAutoApplyScheduled(update) {
+  try {
+    const key = updateApplyKey(update);
+    if (sessionStorage.getItem(key) === '1') return false;
+    sessionStorage.setItem(key, '1');
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function reloadLatestApp() {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('_clash_update', Date.now().toString(36));
+    window.location.replace(url.toString());
+    return;
+  } catch {
+    /* fall through */
+  }
+  window.location.reload();
+}
+
+function clearOldRuntimeCaches(version) {
+  try {
+    if (!window.caches?.keys) return Promise.resolve();
+    return window.caches.keys()
+      .then((names) => Promise.all(
+        names
+          .filter((name) => /^clash-runtime-/.test(name) && (!version || name !== version))
+          .map((name) => window.caches.delete(name))
+      ))
+      .catch(() => {});
+  } catch {
+    return Promise.resolve();
+  }
+}
+
 export function setClientActivity(patch = {}) {
   activity = { ...activity, ...patch };
   try {
@@ -63,6 +112,7 @@ export function requestClientUpdate(update = {}) {
   };
   writePending(pending);
   safeDispatch('clash:update-available', { update: pending });
+  scheduleClientUpdateAutoApply(pending);
   return pending;
 }
 
@@ -77,21 +127,20 @@ export function clearPendingClientUpdate() {
 export function applyPendingClientUpdate() {
   const update = readPending();
   clearPending();
-  try {
-    const version = update?.version;
-    if (version && window.caches?.keys) {
-      window.caches.keys()
-        .then((names) => Promise.all(
-          names
-            .filter((name) => /^clash-runtime-/.test(name) && name !== version)
-            .map((name) => window.caches.delete(name))
-        ))
-        .catch(() => {})
-        .finally(() => window.location.reload());
-      return;
-    }
-  } catch {
-    /* fall through */
-  }
-  window.location.reload();
+  clearOldRuntimeCaches(update?.version).finally(reloadLatestApp);
+}
+
+export function canAutoApplyClientUpdate(update = readPending()) {
+  if (!update) return false;
+  return !hasCriticalClientActivity();
+}
+
+export function scheduleClientUpdateAutoApply(update = readPending(), options = {}) {
+  if (!canAutoApplyClientUpdate(update)) return false;
+  if (!markAutoApplyScheduled(update)) return true;
+  const delayMs = Math.max(0, Number(options.delayMs ?? 120));
+  window.setTimeout(() => {
+    if (!hasCriticalClientActivity()) applyPendingClientUpdate();
+  }, delayMs);
+  return true;
 }

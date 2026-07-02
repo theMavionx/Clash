@@ -3250,12 +3250,48 @@ router.post('/phoenix/import-fills', auth, async (req, res) => {
       if (result.imported > 0) {
         console.log(`[phoenix] imported tx reward for player=${req.playerName} wallet=${wallet.slice(0, 8)}... tx=${txHash.slice(0, 8)}...`);
       }
+      const requestedHistoryAfterTx = req.body?.history_after_tx === true
+        || req.body?.historyAfterTx === true
+        || String(req.body?.history_after_tx || req.body?.historyAfterTx || '').trim().toLowerCase() === 'true';
+      const tradeKind = String(req.body?.trade_kind || req.body?.tradeKind || '').trim().toLowerCase();
+      const tradeSide = String(req.body?.side || '').trim().toLowerCase();
+      const shouldUpgradeHistory = requestedHistoryAfterTx
+        || tradeKind === 'close'
+        || tradeSide === 'close'
+        || tradeSide.startsWith('close_');
+      if (result?.ok !== false && shouldUpgradeHistory) {
+        try {
+          const requestedTxCheckLimit = Number(req.body?.tx_check_limit ?? req.body?.txCheckLimit);
+          const txCheckLimit = Number.isFinite(requestedTxCheckLimit)
+            ? Math.max(1, Math.min(100, requestedTxCheckLimit))
+            : 50;
+          const requestedHistoryLimit = Number(req.body?.history_limit ?? req.body?.historyLimit);
+          const historyLimit = Number.isFinite(requestedHistoryLimit)
+            ? Math.max(1, Math.min(100, requestedHistoryLimit))
+            : 50;
+          const historyUpgrade = await phoenixRewards.importFillsForPlayer(req.playerId, wallet, {
+            limit: historyLimit,
+            timeoutMs: PHOENIX_PROXY_TIMEOUT_MS,
+            cacheTtlMs: 0,
+            txCheckLimit,
+            symbol: req.body?.symbol,
+          });
+          return res.json({ ...result, history_upgrade: historyUpgrade });
+        } catch (e) {
+          console.warn('[phoenix] tx history upgrade failed:', e.message);
+          return res.json({
+            ...result,
+            history_upgrade: { ok: false, imported: 0, skipped: 0, total: 0, error: e.message },
+          });
+        }
+      }
       return res.json(result);
     }
 
     const historyReason = String(req.body?.reason || req.body?.history_reason || '').trim().toLowerCase();
     const allowHistoryImport = process.env.PHOENIX_ALLOW_HISTORY_IMPORT === '1'
       || historyReason === 'limit_order_fill_check'
+      || historyReason === 'tx_history_upgrade'
       || historyReason === 'manual_backfill';
     // The previous implementation fetched /trader/{wallet}/trades-history on
     // every claim/poll. That endpoint is now intentionally not called from
@@ -3274,15 +3310,17 @@ router.post('/phoenix/import-fills', auth, async (req, res) => {
     }
 
     const requestedTxCheckLimit = Number(req.body?.tx_check_limit ?? req.body?.txCheckLimit);
-    const txCheckLimit = historyReason === 'limit_order_fill_check'
-      ? (Number.isFinite(requestedTxCheckLimit) ? Math.max(1, Math.min(200, requestedTxCheckLimit)) : 200)
+    const txCheckLimit = historyReason === 'limit_order_fill_check' || historyReason === 'tx_history_upgrade'
+      ? (Number.isFinite(requestedTxCheckLimit) ? Math.max(1, Math.min(200, requestedTxCheckLimit)) : (historyReason === 'tx_history_upgrade' ? 50 : 200))
       : undefined;
     const result = await phoenixRewards.importFillsForPlayer(req.playerId, wallet, {
-      limit: historyReason === 'limit_order_fill_check' ? 200 : 100,
+      limit: historyReason === 'limit_order_fill_check' ? 200 : (historyReason === 'tx_history_upgrade' ? 50 : 100),
       timeoutMs: PHOENIX_PROXY_TIMEOUT_MS,
-      cacheTtlMs: 20_000,
+      cacheTtlMs: historyReason === 'tx_history_upgrade' ? 0 : 20_000,
       txCheckLimit,
-      limitOrderSignature: req.body?.limit_order_signature || req.body?.limitOrderSignature,
+      limitOrderSignature: historyReason === 'limit_order_fill_check'
+        ? (req.body?.limit_order_signature || req.body?.limitOrderSignature)
+        : null,
       symbol: req.body?.symbol,
       placementTtlMs: req.body?.placement_ttl_ms || req.body?.placementTtlMs,
     });

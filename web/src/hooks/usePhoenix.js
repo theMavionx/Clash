@@ -3153,15 +3153,17 @@ export function usePhoenix() {
     lastPhoenixHistoryImportAtRef.current = now;
     try {
       const reportWallet = details.wallet || details.trader_authority || details.position_authority || walletAddr;
+      const reason = details.reason || 'limit_order_fill_check';
       const res = await fetch(`${GAME_API}/futures/phoenix/import-fills?dex=phoenix`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({
           wallet: reportWallet,
           owner_wallet: walletAddr,
-          reason: details.reason || 'limit_order_fill_check',
+          reason,
           symbol: details.symbol,
-          limit_order_signature: details.signature,
+          limit_order_signature: reason === 'limit_order_fill_check' ? details.signature : undefined,
+          history_tx_signature: reason === 'tx_history_upgrade' ? details.signature : undefined,
           tx_check_limit: details.tx_check_limit,
           placement_ttl_ms: details.placement_ttl_ms,
         }),
@@ -5742,11 +5744,24 @@ export function usePhoenix() {
           price: mark,
           order_type: 'market',
           trade_kind: 'close',
+          history_after_tx: true,
+          history_limit: 50,
+          tx_check_limit: 50,
           trader_authority: orderAuthority,
           position_authority: oneTapSession?.publicKey || null,
           trader_subaccount_index: subaccountIndex,
         }).then(() => claimGold({ force: true, importFills: false }));
-        setTimeout(() => claimGold({ force: true, importFills: false }), 12_000);
+        setTimeout(() => {
+          void importPhoenixHistoryFills({
+            reason: 'tx_history_upgrade',
+            signature,
+            symbol: phx,
+            wallet: walletAddr,
+            tx_check_limit: 50,
+            minGapMs: 0,
+            force: true,
+          }).then(() => claimGold({ force: true, importFills: false }));
+        }, 12_000);
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix close failed';
@@ -5756,7 +5771,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [claimGold, ensurePhoenixPrice, getOneTapSessionForSubaccounts, positions, refreshTraderStateSoon, reportPhoenixTradeTx, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [claimGold, ensurePhoenixPrice, getOneTapSessionForSubaccounts, importPhoenixHistoryFills, positions, refreshTraderStateSoon, reportPhoenixTradeTx, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!walletAddr) return { error: 'Wallet not connected' };

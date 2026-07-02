@@ -46,15 +46,41 @@ function formatUtcDay(ms) {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+function addUtcDays(day, count) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  return formatUtcDay(Date.parse(`${day}T00:00:00Z`) + count * dayMs);
+}
+
+function dailyPoolAwardMinutes(value) {
+  const match = String(value || '00:00').trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return 0;
+  const hours = Math.max(0, Math.min(23, Number(match[1]) || 0));
+  const minutes = Math.max(0, Math.min(59, Number(match[2]) || 0));
+  return hours * 60 + minutes;
+}
+
+function dailyPoolRoundDayFromMs(ms, awardMinutes) {
+  const day = formatUtcDay(ms);
+  const cutoffMs = Date.parse(`${day}T00:00:00Z`) + awardMinutes * 60 * 1000;
+  return ms >= cutoffMs ? addUtcDays(day, 1) : day;
+}
+
 function tournamentUtcDays(form, limit = 31) {
   const scheduleStart = form.scoring_mode === 'daily_pool' ? (form.daily_pool_enabled_at || form.start_at) : form.start_at;
   const startMs = parseUtcDateMs(scheduleStart);
   if (!Number.isFinite(startMs)) return [];
   const endMsRaw = parseUtcDateMs(form.end_at);
   const dayMs = 24 * 60 * 60 * 1000;
-  const first = Date.parse(`${formatUtcDay(startMs)}T00:00:00Z`);
+  const awardMinutes = dailyPoolAwardMinutes(form.daily_pool_award_time_utc || '00:00');
+  const firstDay = form.scoring_mode === 'daily_pool'
+    ? dailyPoolRoundDayFromMs(startMs, awardMinutes)
+    : formatUtcDay(startMs);
+  const first = Date.parse(`${firstDay}T00:00:00Z`);
   const lastSource = Number.isFinite(endMsRaw) ? Math.max(startMs, endMsRaw - 1) : first + 6 * dayMs;
-  const last = Date.parse(`${formatUtcDay(lastSource)}T00:00:00Z`);
+  const lastDay = form.scoring_mode === 'daily_pool'
+    ? dailyPoolRoundDayFromMs(lastSource, awardMinutes)
+    : formatUtcDay(lastSource);
+  const last = Date.parse(`${lastDay}T00:00:00Z`);
   const count = Math.max(1, Math.min(limit, Math.floor((last - first) / dayMs) + 1));
   return Array.from({ length: count }, (_, idx) => formatUtcDay(first + idx * dayMs));
 }
@@ -2318,7 +2344,7 @@ function DailyPoolConfig({ form, update }) {
       <div className="admin-card-head">
         <div>
           <div className="admin-card-title">Daily Point Pool</div>
-          <div className="admin-card-sub">Automatic growth is exponential by UTC day. Manual day values override the auto calculation.</div>
+          <div className="admin-card-sub">Days are award rounds labeled by their cutoff date. Manual values override the auto calculation.</div>
         </div>
         <div className="admin-filter-row">
           <button className="admin-btn ghost" onClick={fillManualFromPreview} disabled={!days.length}>Fill manual</button>
@@ -3504,8 +3530,46 @@ function ServerLogsPanel({ data, reload }) {
 }
 
 function EarningsPanel({ data, reload }) {
-  const earnings = data?.earnings || {};
-  const revenue = data?.revenue || {};
+  const [localData, setLocalData] = useState(data || {});
+  const [refreshingDex, setRefreshingDex] = useState('');
+  const [refreshMessage, setRefreshMessage] = useState('');
+
+  useEffect(() => {
+    setLocalData(data || {});
+  }, [data]);
+
+  const refreshDex = async (dex) => {
+    const key = String(dex || '').trim().toLowerCase();
+    if (!key) return;
+    setRefreshingDex(key);
+    setRefreshMessage('');
+    try {
+      const result = await adminGet(`/admin/earnings/${encodeURIComponent(key)}?force=1`);
+      const row = result.row || result[key] || result;
+      setLocalData((prev) => {
+        const prevEarnings = prev?.earnings || {};
+        const nextEarnings = {
+          ...prevEarnings,
+          [result.dex || key]: { dex: result.dex || key, ...row },
+          last_updated: result.last_updated || new Date().toISOString(),
+          cached: false,
+          age_ms: 0,
+        };
+        const rows = Object.entries(nextEarnings)
+          .filter(([, value]) => value && typeof value === 'object' && ('earned_usd' in value || value.ok === false || 'error' in value));
+        nextEarnings.total_usd = rows.reduce((sum, [, value]) => sum + (value.ok && Number.isFinite(Number(value.earned_usd)) ? Number(value.earned_usd) : 0), 0);
+        return { ...(prev || {}), earnings: nextEarnings };
+      });
+      setRefreshMessage(`${DEX_LABELS[result.dex || key] || result.dex || key} refreshed`);
+    } catch (err) {
+      setRefreshMessage(`${DEX_LABELS[key] || key}: ${err.message || 'refresh failed'}`);
+    } finally {
+      setRefreshingDex('');
+    }
+  };
+
+  const earnings = localData?.earnings || {};
+  const revenue = localData?.revenue || {};
   const revenueWindows = Array.isArray(revenue.windows) ? revenue.windows : [];
   const windowAll = revenueWindows.find((row) => row.key === 'all') || revenueWindows[revenueWindows.length - 1] || {};
   const windowD30 = revenueWindows.find((row) => row.key === 'd30' || row.key === '30d') || {};
@@ -3526,8 +3590,16 @@ function EarningsPanel({ data, reload }) {
         { label: 'All local volume', value: fmtMaybeUsd(windowAll.total_volume_usd ?? earnings.volume_all_usd), tone: 'blue' },
         { label: '30d local trades', value: num(windowD30.total_trades || 0), tone: 'blue' },
       ]} />
+      {refreshMessage && <div className="admin-card-sub">{refreshMessage}</div>}
       <div className="earnings-card-grid">
-        {exactEarningsRows.map((row) => <EarningsDexCard key={row.dex} row={row} />)}
+        {exactEarningsRows.map((row) => (
+          <EarningsDexCard
+            key={row.dex}
+            row={row}
+            refreshing={refreshingDex === row.dex}
+            onRefresh={() => refreshDex(row.dex)}
+          />
+        ))}
       </div>
       <div className="admin-grid two">
         <CompactTable title="DEX Local Model" subtitle={`Local volume x configured rate analytics for comparison only. Updated ${fmtTime(revenue.last_updated)}.`} columns={['DEX', 'Estimated fee', 'Volume', 'Trades', 'Model', 'Configured']} rows={normalizeDexRows(byDex).map((row) => [DEX_LABELS[row.dex] || row.dex || '-', fmtMaybeUsd(row.estimated_fee_usd ?? row.fee_usd), fmtMaybeUsd(row.volume_usd ?? row.total_volume_usd), row.trades || row.trades_count || 0, row.rate_label || row.model || row.source_detail || '-', row.configured === false ? <span className="admin-badge off">no</span> : <span className="admin-badge green">yes</span>])} />
@@ -3536,19 +3608,22 @@ function EarningsPanel({ data, reload }) {
       <CompactTable title="Exact Earnings Sources" subtitle={`Live/cached source reads. Total ${fmtMaybeUsd(exactTotalUsd)}.`} columns={['DEX', 'Earned', 'Volume', 'Trades', 'Currency', 'Source']} rows={exactEarningsRows.map((row) => [DEX_LABELS[row.dex] || row.dex, fmtMaybeUsd(row.earned_usd), fmtMaybeUsd(row.volume_usd), row.trades ?? row.local_trades ?? '-', row.currency || '-', row.source_detail || row.source || row.note || '-'])} />
       <div className="admin-card">
         <div className="admin-card-head"><div><div className="admin-card-title">Earnings Audit</div><div className="admin-card-sub">Full source payload is available when finance needs to inspect a provider mismatch.</div></div><button className="admin-btn" onClick={reload}>Refresh</button></div>
-        <div className="admin-card-body"><details><summary className="admin-help">Open raw provider payload</summary><pre className="admin-mono admin-scroll" style={{ overflow: 'auto', maxHeight: 420, whiteSpace: 'pre-wrap' }}>{JSON.stringify(data || {}, null, 2)}</pre></details></div>
+        <div className="admin-card-body"><details><summary className="admin-help">Open raw provider payload</summary><pre className="admin-mono admin-scroll" style={{ overflow: 'auto', maxHeight: 420, whiteSpace: 'pre-wrap' }}>{JSON.stringify(localData || {}, null, 2)}</pre></details></div>
       </div>
     </div>
   );
 }
 
-function EarningsDexCard({ row }) {
+function EarningsDexCard({ row, refreshing = false, onRefresh }) {
   const accent = dexAccent(row.dex);
   const earned = fmtUsd(Number(row.earned_usd || 0), 4);
   const trades = row.trades ?? row.local_trades ?? row.matched_events ?? row.transfer_events ?? null;
   const volume = row.volume_usd ?? row.local_volume_usd ?? row.hyperliquid_cum_volume_usd ?? null;
   const note = row.note || row.source_detail || row.source || '';
   const address = row.address || row.subaccount || row.builder_id || row.latest_submission_idx || '';
+  const sync = row.onchain_sync || row.sync_state || null;
+  const syncLastBlock = sync?.native_usdc?.last_fetched_block || sync?.legacy_usdce?.last_fetched_block || sync?.last_fetched_block || row.onchain_scan_to_block || null;
+  const syncLastRunBlocks = sync?.last_run_blocks ?? sync?.last_run_blocks_fetched ?? null;
   const extra = [
     trades != null ? `${num(trades)} trades` : '',
     volume != null ? `${fmtMaybeUsd(volume)} vol` : '',
@@ -3557,12 +3632,21 @@ function EarningsDexCard({ row }) {
     row.withdrawable_usd != null ? `${fmtMaybeUsd(row.withdrawable_usd)} withdrawable` : '',
     row.unclaimed_rewards_usd != null ? `${fmtMaybeUsd(row.unclaimed_rewards_usd)} unclaimed` : '',
     row.estimated_fee_usd != null ? `estimate ${fmtMaybeUsd(row.estimated_fee_usd)}` : '',
+    syncLastBlock ? `block ${num(syncLastBlock)}` : '',
+    syncLastRunBlocks != null ? `+${num(syncLastRunBlocks)} blocks` : '',
   ].filter(Boolean);
   return (
     <div className="earnings-card" style={{ '--earnings-accent': accent }}>
       <div className="earnings-card-head">
         <div className="earnings-dex">{(DEX_LABELS[row.dex] || row.dex || '-').toUpperCase()}</div>
-        <div className="earnings-currency">{row.currency || '-'}</div>
+        <div className="earnings-card-actions">
+          <div className="earnings-currency">{row.currency || '-'}</div>
+          {onRefresh && (
+            <button className="admin-btn earnings-refresh-btn" onClick={onRefresh} disabled={refreshing}>
+              {refreshing ? '...' : 'Refresh'}
+            </button>
+          )}
+        </div>
       </div>
       <div className="earnings-amount">{earned}</div>
       <div className="earnings-meta">

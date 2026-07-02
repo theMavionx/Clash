@@ -1799,6 +1799,39 @@ const ClosingButtonLabel = memo(function ClosingButtonLabel({ text = 'Closing...
   );
 });
 
+const OstiumWalletFallbackBar = memo(function OstiumWalletFallbackBar({
+  action,
+  loading,
+  onRetry,
+  onDismiss,
+}) {
+  if (!action || action.type !== 'close') return null;
+  const text = humanizeTradeError(action.message || 'Ostium one tap close failed.', 'ostium');
+  return (
+    <div style={S.oneTapFallbackBar}>
+      <div style={S.oneTapFallbackHead}>
+        <span style={S.errorText}>{text}</span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          style={S.oneTapFallbackDismiss}
+          aria-label="Dismiss wallet fallback"
+        >
+          ×
+        </button>
+      </div>
+      <button
+        type="button"
+        style={{...S.btnRed, width: '100%', flex: '0 0 auto', opacity: loading ? 0.65 : 1}}
+        disabled={loading}
+        onClick={onRetry}
+      >
+        {loading ? <ClosingButtonLabel /> : 'Close via wallet'}
+      </button>
+    </div>
+  );
+});
+
 // ==================== ORDERS LIST (mobile/tab card view) ====================
 const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [] }) {
   if (!orders.length) {
@@ -2285,6 +2318,7 @@ function FuturesPanel() {
     bridgeSourceBalances, bridgeSourceBalanceStatus,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
     closePosition, depositToPacifica, withdraw, activate, disconnect, setTpsl, setMarginMode, moveSpotToPerp, switchToRise, switchToInk,
+    oneTapWalletFallback, executeOneTapWalletFallback, clearOneTapWalletFallback,
     // Avantis-only — undefined on the Pacifica branch.
     hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, openReferralJoin, approveIntegrator, referralCode, referralUrl, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
@@ -2525,6 +2559,15 @@ function FuturesPanel() {
     setSuccessMsg(null);
     if (error && clearError) clearError();
   }, [clearError, error]);
+  const handleOstiumWalletFallback = useCallback(async () => {
+    if (dex !== 'ostium' || typeof executeOneTapWalletFallback !== 'function') return;
+    const result = await executeOneTapWalletFallback();
+    if (result?.error) {
+      setLocalAlert(result.error);
+      return;
+    }
+    setSuccessMsg('Wallet close submitted.');
+  }, [dex, executeOneTapWalletFallback]);
   const handleToggleOneTapTrading = useCallback(async () => {
     if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash' && dex !== 'ostium') return;
     const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : dex === 'flash' ? 'Flash' : dex === 'ostium' ? 'Ostium' : 'Hyperliquid';
@@ -8855,6 +8898,17 @@ function FuturesPanel() {
           </div>
         </div>
 
+        {dex === 'ostium' && oneTapWalletFallback && (
+          <div style={S.oneTapFallbackWrap}>
+            <OstiumWalletFallbackBar
+              action={oneTapWalletFallback}
+              loading={loading}
+              onRetry={handleOstiumWalletFallback}
+              onDismiss={clearOneTapWalletFallback}
+            />
+          </div>
+        )}
+
         {/* Powered by DEX footer — switches logo + label per active DEX */}
         <div style={S.pacificaFooter}>
           {(() => {
@@ -9190,6 +9244,46 @@ const S = {
   },
   errorCloseIcon: {
     color: '#B71C1C', fontSize: 14, fontWeight: 900, opacity: 0.7, flexShrink: 0,
+  },
+  oneTapFallbackWrap: {
+    padding: '0 10px 8px',
+    flex: '0 0 auto',
+  },
+  oneTapFallbackBar: {
+    background: '#E5393520',
+    border: '2px solid #E53935',
+    borderRadius: 8,
+    padding: 9,
+    color: '#B71C1C',
+    fontSize: 12,
+    fontWeight: 700,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    minWidth: 0,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+  },
+  oneTapFallbackHead: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+    minWidth: 0,
+  },
+  oneTapFallbackDismiss: {
+    background: 'transparent',
+    border: 'none',
+    color: '#B71C1C',
+    fontSize: 16,
+    fontWeight: 900,
+    lineHeight: 1,
+    padding: 0,
+    cursor: 'pointer',
+    opacity: 0.75,
+    flexShrink: 0,
   },
   successBar: {
     background: '#4CAF5020', border: '2px solid #4CAF50', borderRadius: 8,

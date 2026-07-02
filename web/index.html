@@ -42,9 +42,52 @@
     <script>
       if ('serviceWorker' in navigator) {
         (function(){
+          function hasCriticalActivity() {
+            try {
+              var activity = window.__clashClientActivity || {};
+              return !!(activity.critical_action || activity.futures_busy);
+            } catch(e) {
+              return false;
+            }
+          }
+          function reloadForRuntimeUpdate(update) {
+            if (hasCriticalActivity()) return false;
+            try {
+              var key = 'clash_boot_runtime_update_' + String(update && update.reason || 'runtime').replace(/[^a-z0-9_-]+/gi, '_');
+              if (sessionStorage.getItem(key) === '1') return true;
+              sessionStorage.setItem(key, '1');
+            } catch(e) {}
+            var reload = function() {
+              try {
+                var url = new URL(window.location.href);
+                url.searchParams.set('_clash_update', Date.now().toString(36));
+                window.location.replace(url.toString());
+                return;
+              } catch(e) {}
+              try { window.location.reload(); } catch(e) {}
+            };
+            try {
+              if (window.caches && window.caches.keys) {
+                window.caches.keys()
+                  .then(function(names) {
+                    return Promise.all(names.filter(function(name) {
+                      return /^clash-runtime-/.test(name);
+                    }).map(function(name) {
+                      return window.caches.delete(name);
+                    }));
+                  })
+                  .catch(function(){})
+                  .finally(reload);
+                return true;
+              }
+            } catch(e) {}
+            setTimeout(reload, 50);
+            return true;
+          }
           navigator.serviceWorker.addEventListener('controllerchange', function() {
             try {
               var update = { reason: 'controllerchange', scope: 'runtime', created_at: new Date().toISOString() };
+              if (reloadForRuntimeUpdate(update)) return;
               sessionStorage.setItem('clash_pending_update_v1', JSON.stringify(update));
               localStorage.setItem('clash_pending_update_v1', JSON.stringify(update));
               window.dispatchEvent(new CustomEvent('clash:update-available', {

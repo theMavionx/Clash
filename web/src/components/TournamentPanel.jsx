@@ -116,6 +116,40 @@ function fmtDay(s) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
+function fmtUtcDateTime(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'UTC',
+  });
+}
+
+function dailyRoundNumber(dayRow) {
+  const idx = Number(
+    dayRow?.estimate?.pool_state?.day_index
+    ?? dayRow?.run?.details?.pool_state?.day_index
+  );
+  return Number.isFinite(idx) ? idx + 1 : null;
+}
+
+function dailyRoundLabel(dayRow) {
+  const n = dailyRoundNumber(dayRow);
+  return n ? `Day ${n}` : fmtDay(dayRow?.day_utc);
+}
+
+function dailyWindowLabel(dayRow) {
+  const start = fmtUtcDateTime(dayRow?.window?.starts_at);
+  const end = fmtUtcDateTime(dayRow?.window?.ends_at || dayRow?.window?.closes_at);
+  if (!start || !end) return '';
+  return `${start} -> ${end} UTC`;
+}
+
 function compactPlayerName(row) {
   const name = String(row?.name || '').trim();
   if (name) return name;
@@ -1306,6 +1340,7 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
   const minePoints = mine ? Number(mine[pointsKey] || 0) : 0;
   const mineRank = mine ? Number(mine[rankKey] || mine.rank || 0) : 0;
   const shownPlayers = players;
+  const windowLabel = dailyWindowLabel(day);
 
   return (
     <div style={S.dailyCard}>
@@ -1313,7 +1348,7 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
         <div style={S.dailyHeaderMain}>
           <div>
             <div style={S.dailyTitle}>Daily points</div>
-            <div style={S.dailySub}>{fmt(pool)} pool at {dailyPoolAwardTime(t)} UTC</div>
+            <div style={S.dailySub}>{fmt(pool)} pool, closes {dailyPoolAwardTime(t)} UTC</div>
           </div>
           <div style={S.dailyCompactMine}>
             <span style={S.dailyCompactLabel}>You</span>
@@ -1348,11 +1383,13 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
                   style={dayRow.day_utc === activeDayId ? S.dailyChipActive : S.dailyChip}
                   onClick={() => onPickDay(dayRow.day_utc)}
                 >
-                  {fmtDay(dayRow.day_utc)}
+                  {dailyRoundLabel(dayRow)}
                 </button>
               ))}
             </div>
           )}
+
+          {windowLabel && <div style={S.dailyWindow}>{windowLabel}</div>}
 
           {!day && (
             <div style={S.dailyEmpty}>No daily activity yet.</div>
@@ -1362,7 +1399,7 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
             <>
               <div style={S.dailyMine}>
                 <div style={S.dailyMineMain}>
-                  <span style={S.dailyMineLabel}>Your day</span>
+                  <span style={S.dailyMineLabel}>Your round</span>
                   <strong style={S.dailyMineValue}>{fmtPoints(minePoints)} pts</strong>
                 </div>
                 <span style={S.dailyMineRank}>{mineRank ? `#${mineRank}` : '-'}</span>
@@ -1911,6 +1948,16 @@ const S = {
     flex: '0 0 auto', padding: '5px 8px', borderRadius: 999,
     background: '#fef3c7', border: '2px solid #f59e0b', color: '#5C3A21',
     fontSize: 10, fontWeight: 900, cursor: 'pointer',
+  },
+  dailyWindow: {
+    fontSize: 10,
+    fontWeight: 800,
+    color: '#7c5a3a',
+    background: '#fdf8e7',
+    border: '2px solid #d4c8b0',
+    borderRadius: 9,
+    padding: '5px 7px',
+    lineHeight: 1.15,
   },
   dailyMine: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',

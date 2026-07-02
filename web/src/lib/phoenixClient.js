@@ -1,5 +1,5 @@
 import { createPhoenixClient, createPhoenixWsClient } from '@ellipsis-labs/rise';
-import { DEFAULT_SOLANA_RPC_URL } from './solanaRpc';
+import { DEFAULT_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_ALCHEMY_URL } from './solanaRpc';
 
 function defaultPhoenixApiUrl() {
   const path = '/api/futures/phoenix/api';
@@ -34,7 +34,7 @@ export const PHOENIX_FLIGHT_BUILDER_PDA_INDEX =
 export const PHOENIX_FLIGHT_BUILDER_SUBACCOUNT_INDEX =
   Number(import.meta.env.VITE_PHOENIX_FLIGHT_BUILDER_SUBACCOUNT_INDEX || 0);
 
-const DEFAULT_RPC_URL = DEFAULT_SOLANA_RPC_URL;
+const DEFAULT_RPC_URL = SAME_ORIGIN_SOLANA_ALCHEMY_URL || DEFAULT_SOLANA_RPC_URL;
 const EXCHANGE_METADATA_RPC_TTL_MS = 5 * 60_000;
 const EXCHANGE_METADATA_RPC_POLL_INTERVAL_MS = 0;
 

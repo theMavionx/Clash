@@ -32,6 +32,31 @@ const { setupWebSocket, getOnlinePlayers } = require('./websocket');
 
 const PORT = process.env.PORT || 4000;
 const WEB_DIST_DIR = path.join(REPO_ROOT, 'web', 'dist');
+const NO_STORE_WEB_CACHE = 'no-store, no-cache, max-age=0, must-revalidate';
+const IMMUTABLE_WEB_CACHE = 'public, max-age=31536000, immutable';
+
+function setNoStoreWebHeaders(res) {
+  res.setHeader('Cache-Control', NO_STORE_WEB_CACHE);
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+}
+
+function setWebStaticHeaders(res, filePath) {
+  const rel = path.relative(WEB_DIST_DIR, filePath).replace(/\\/g, '/');
+  if (
+    rel === 'index.html'
+    || rel === 'admin.html'
+    || rel === 'sw.js'
+    || rel === 'manifest.json'
+    || rel === 'godot/godot-runtime-manifest.json'
+  ) {
+    setNoStoreWebHeaders(res);
+    return;
+  }
+  if (rel.startsWith('assets/') || /^godot\/Work\.(pck|wasm|side\.wasm|js)$/i.test(rel)) {
+    res.setHeader('Cache-Control', IMMUTABLE_WEB_CACHE);
+  }
+}
 
 const app = express();
 // Production traffic is normally behind nginx on the same host. Trust only
@@ -57,7 +82,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: process.env.CLASH_JSON_LIMIT || '2mb' }));
 if (fs.existsSync(WEB_DIST_DIR)) {
-  app.use(express.static(WEB_DIST_DIR, { index: false }));
+  app.use(express.static(WEB_DIST_DIR, { index: false, setHeaders: setWebStaticHeaders }));
 }
 
 function dashboardAuth(req, res, next) {
@@ -346,6 +371,7 @@ app.get('/api/admin/panel', (req, res) => {
   if (req.query.legacy !== '1') {
     const builtAdmin = path.join(REPO_ROOT, 'web', 'dist', 'admin.html');
     if (fs.existsSync(builtAdmin)) {
+      setNoStoreWebHeaders(res);
       return res.sendFile(builtAdmin);
     }
     const devOrigin = process.env.CLASH_ADMIN_DEV_ORIGIN || 'http://localhost:5173';

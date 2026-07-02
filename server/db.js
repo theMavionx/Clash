@@ -3036,10 +3036,36 @@ const stmts = {
     SET pnl_usd = ?
     WHERE tournament_id = ? AND source = ? AND trade_id = ? AND player_id = ?
   `),
+  updateTournamentTradeCreditMetrics: db.prepare(`
+    UPDATE tournament_trade_credits
+    SET trades_count = ?,
+        volume_usd = ?,
+        pnl_usd = ?
+    WHERE tournament_id = ? AND source = ? AND trade_id = ? AND player_id = ?
+  `),
+  updateTournamentTradeCreditDex: db.prepare(`
+    UPDATE tournament_trade_credits
+    SET dex = ?
+    WHERE tournament_id = ? AND source = ? AND trade_id = ? AND player_id = ?
+      AND lower(COALESCE(dex, '')) != ?
+  `),
   bumpTournamentDailyActivityPnl: db.prepare(`
     UPDATE tournament_daily_activity
     SET pnl_usd = pnl_usd + ?
     WHERE tournament_id = ? AND source = ? AND event_id = ? AND player_id = ?
+  `),
+  bumpTournamentDailyActivityTradeMetrics: db.prepare(`
+    UPDATE tournament_daily_activity
+    SET trades_count = trades_count + ?,
+        volume_usd = volume_usd + ?,
+        pnl_usd = pnl_usd + ?
+    WHERE tournament_id = ? AND source = ? AND event_id = ? AND player_id = ?
+  `),
+  updateTournamentDailyActivityDex: db.prepare(`
+    UPDATE tournament_daily_activity
+    SET dex = ?
+    WHERE tournament_id = ? AND source = ? AND event_id = ? AND player_id = ?
+      AND lower(COALESCE(dex, '')) != ?
   `),
   insertTournamentDailyActivity: db.prepare(`
     INSERT OR IGNORE INTO tournament_daily_activity (
@@ -3515,6 +3541,90 @@ function tournamentNeedsDailyActivity(t) {
   return isDailyPoolTournament(t) || tournamentHasLuckyRaider(t);
 }
 
+const TOURNAMENT_CREDIT_DEXES = new Set([
+  'pacifica',
+  'avantis',
+  'decibel',
+  'gmx',
+  'ostium',
+  'monad',
+  'phoenix',
+  'hyperliquid',
+  'risex',
+  'nado',
+  'hibachi',
+  'hotstuff',
+  'grvt',
+  'katana',
+  'gmtrade',
+  'flash',
+  'lighter',
+]);
+
+function normalizeTournamentCreditDex(value) {
+  const dex = String(value || '').trim().toLowerCase();
+  return TOURNAMENT_CREDIT_DEXES.has(dex) ? dex : null;
+}
+
+function normalizeTournamentCreditDexList(value) {
+  let raw = value;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try { raw = JSON.parse(trimmed); }
+    catch { raw = trimmed.split(',').map((item) => item.trim()); }
+  }
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    const dex = normalizeTournamentCreditDex(item);
+    if (dex && !out.includes(dex)) out.push(dex);
+  }
+  return out;
+}
+
+function tournamentEligibleCreditDexes(t) {
+  const scope = String(t?.dex_scope || 'single').trim().toLowerCase();
+  if (scope === 'all') return [...TOURNAMENT_CREDIT_DEXES];
+  const list = normalizeTournamentCreditDexList(t?.eligible_dexes);
+  if (list.length) return list;
+  const dex = normalizeTournamentCreditDex(t?.dex);
+  return dex ? [dex] : [];
+}
+
+function tournamentSingleCreditDex(t) {
+  const eligible = tournamentEligibleCreditDexes(t);
+  const scope = String(t?.dex_scope || 'single').trim().toLowerCase();
+  return scope !== 'all' && eligible.length === 1 ? eligible[0] : null;
+}
+
+function tournamentCreditDexAllowed(t, dex) {
+  const normalized = normalizeTournamentCreditDex(dex);
+  if (!normalized) return null;
+  return tournamentEligibleCreditDexes(t).includes(normalized) ? normalized : null;
+}
+
+function resolveTournamentCreditDex(t, row = {}, opts = {}) {
+  const candidates = [
+    opts.dex,
+    opts.trading_dex,
+    row?.dex,
+    row?.trading_dex,
+    row?.team_dex,
+    row?.player_dex,
+  ];
+  for (const candidate of candidates) {
+    const dex = tournamentCreditDexAllowed(t, candidate);
+    if (dex) return dex;
+  }
+  return tournamentSingleCreditDex(t);
+}
+
+function resolveTournamentActivityDex(t, opts = {}) {
+  const dex = tournamentCreditDexAllowed(t, opts.dex || opts.trading_dex || opts.team_dex || opts.player_dex);
+  return dex || tournamentSingleCreditDex(t);
+}
+
 function dailyPoolWeights(t) {
   const weights = {
     trophies: Number(t?.points_trophy_weight || 0),
@@ -3535,14 +3645,15 @@ function recordTournamentDailyActivity(t, playerId, metrics = {}, opts = {}) {
   const eventMs = sqlDateMs(eventTime);
   const enabledMs = sqlDateMs(t.daily_pool_enabled_at);
   if (enabledMs && eventMs && eventMs < enabledMs) return false;
-  const day = opts.day || utcDayFromSql(eventTime);
+  const day = opts.day || tournamentActivityDayForEvent(t, eventMs ?? Date.now());
+  const activityDex = resolveTournamentActivityDex(t, opts);
   const r = stmts.insertTournamentDailyActivity.run(
     t.tournament_id || t.id,
     day,
     playerId,
     source,
     eventId,
-    String(opts.dex || t.dex || '').toLowerCase() || null,
+    activityDex,
     Math.max(0, Math.floor(Number(metrics.trades_count || metrics.tradesCount || 0))),
     Math.max(0, safeUsd(metrics.volume_usd ?? metrics.volumeUsd ?? 0)),
     safeUsd(metrics.pnl_usd ?? metrics.pnlUsd ?? 0),
@@ -3617,12 +3728,12 @@ function safeUsd(v, maxAbs = 10_000_000) {
 // gold twice.
 function recordTournamentTradeRows(playerId, rows, opts = {}) {
   if (!playerId || !Array.isArray(rows) || rows.length === 0) {
-    return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
+    return { credited_rows: 0, updated_rows: 0, dex_updated_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, pnl_delta_usd: 0 };
   }
   const t = opts.tournamentId || opts.tournament_id
     ? getPlayerTournamentById(playerId, opts.tournamentId || opts.tournament_id)
     : getPlayerActiveTournament(playerId);
-  if (!t) return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
+  if (!t) return { credited_rows: 0, updated_rows: 0, dex_updated_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, pnl_delta_usd: 0 };
 
   const source = String(opts.source || 'trade_history');
   const creditCount = opts.count !== false;
@@ -3633,14 +3744,19 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
   let volumeUsd = 0;
   let pnlUsd = 0;
   let updatedRows = 0;
+  let dexUpdatedRows = 0;
   let pnlDeltaUsd = 0;
+  let insertedTradesCount = 0;
+  let insertedVolumeUsd = 0;
+  let insertedPnlUsd = 0;
 
   for (const row of rows) {
     if (row?.reward_duplicate) continue;
     if (!tradeInTournamentWindow(t, row)) continue;
     const tradeId = row?.id ?? row?.history_id ?? row?.trade_id;
     if (tradeId === undefined || tradeId === null || tradeId === '') continue;
-    const creditDex = String(opts.dex || row?.dex || t.dex || '').toLowerCase() || t.dex;
+    const creditDex = resolveTournamentCreditDex(t, row, opts);
+    if (!creditDex) continue;
     const count = creditCount ? 1 : 0;
     const volume = creditVolume ? Math.max(0, safeUsd(row.notional_usd ?? row.volume_usd ?? row.volume)) : 0;
     const pnl = creditPnl ? safeUsd(row.pnl ?? row.pnl_usd ?? row.realized_pnl ?? row.realised_pnl) : 0;
@@ -3655,26 +3771,80 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
       pnl
     );
     if (!r.changes) {
-      if (creditPnl) {
-        const existing = stmts.getTournamentTradeCredit.get(t.tournament_id, source, String(tradeId));
-        if (existing?.player_id === playerId) {
-          const previousPnl = safeUsd(existing.pnl_usd);
-          const delta = pnl - previousPnl;
-          if (Math.abs(delta) >= 0.000001) {
-            const changed = stmts.updateTournamentTradeCreditPnl.run(
-              pnl,
+      const existing = stmts.getTournamentTradeCredit.get(t.tournament_id, source, String(tradeId));
+      if (existing?.player_id === playerId) {
+        if (normalizeTournamentCreditDex(existing.dex) !== creditDex) {
+          const changedDex = stmts.updateTournamentTradeCreditDex.run(
+            creditDex,
+            t.tournament_id,
+            source,
+            String(tradeId),
+            playerId,
+            creditDex
+          )?.changes || 0;
+          if (changedDex) {
+            stmts.updateTournamentDailyActivityDex.run(
+              creditDex,
+              t.tournament_id,
+              source,
+              String(tradeId),
+              playerId,
+              creditDex
+            );
+            dexUpdatedRows += changedDex;
+          }
+        }
+        const previousCount = Number(existing.trades_count || 0);
+        const previousVolume = safeUsd(existing.volume_usd);
+        const previousPnl = safeUsd(existing.pnl_usd);
+        const targetCount = creditCount ? count : previousCount;
+        const targetVolume = creditVolume ? volume : previousVolume;
+        const targetPnl = creditPnl ? pnl : previousPnl;
+        const countDelta = targetCount - previousCount;
+        const volumeDelta = targetVolume - previousVolume;
+        const pnlDelta = targetPnl - previousPnl;
+        if (
+          Math.abs(countDelta) >= 0.000001
+          || Math.abs(volumeDelta) >= 0.000001
+          || Math.abs(pnlDelta) >= 0.000001
+        ) {
+          const changed = stmts.updateTournamentTradeCreditMetrics.run(
+            targetCount,
+            targetVolume,
+            targetPnl,
+            t.tournament_id,
+            source,
+            String(tradeId),
+            playerId
+          )?.changes || 0;
+          if (changed) {
+            stmts.bumpTournamentTrade.run(countDelta, volumeDelta, pnlDelta, t.tournament_id, playerId);
+            const dailyChanged = stmts.bumpTournamentDailyActivityTradeMetrics.run(
+              countDelta,
+              volumeDelta,
+              pnlDelta,
               t.tournament_id,
               source,
               String(tradeId),
               playerId
             )?.changes || 0;
-            if (changed) {
-              stmts.bumpTournamentTrade.run(0, 0, delta, t.tournament_id, playerId);
-              stmts.bumpTournamentDailyActivityPnl.run(delta, t.tournament_id, source, String(tradeId), playerId);
-              updatedRows++;
-              pnlDeltaUsd += delta;
-              pnlUsd += delta;
+            if (!dailyChanged) {
+              recordTournamentDailyActivity(t, playerId, {
+                trades_count: targetCount,
+                volume_usd: targetVolume,
+                pnl_usd: targetPnl,
+              }, {
+                source,
+                eventId: String(tradeId),
+                dex: creditDex,
+                created_at: row.created_at,
+              });
             }
+            updatedRows++;
+            tradesCount += countDelta;
+            volumeUsd += volumeDelta;
+            pnlUsd += pnlDelta;
+            pnlDeltaUsd += pnlDelta;
           }
         }
       }
@@ -3694,12 +3864,15 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
     tradesCount += count;
     volumeUsd += volume;
     pnlUsd += pnl;
+    insertedTradesCount += count;
+    insertedVolumeUsd += volume;
+    insertedPnlUsd += pnl;
   }
 
-  if (creditedRows > 0 && (tradesCount !== 0 || volumeUsd !== 0 || pnlUsd !== 0)) {
-    stmts.bumpTournamentTrade.run(tradesCount, volumeUsd, pnlUsd, t.tournament_id, playerId);
+  if (creditedRows > 0 && (insertedTradesCount !== 0 || insertedVolumeUsd !== 0 || insertedPnlUsd !== 0)) {
+    stmts.bumpTournamentTrade.run(insertedTradesCount, insertedVolumeUsd, insertedPnlUsd, t.tournament_id, playerId);
   }
-  return { credited_rows: creditedRows, updated_rows: updatedRows, trades_count: tradesCount, volume_usd: volumeUsd, pnl_usd: pnlUsd, pnl_delta_usd: pnlDeltaUsd };
+  return { credited_rows: creditedRows, updated_rows: updatedRows, dex_updated_rows: dexUpdatedRows, trades_count: tradesCount, volume_usd: volumeUsd, pnl_usd: pnlUsd, pnl_delta_usd: pnlDeltaUsd };
 }
 
 function normalizeDailyPoolDay(day) {
@@ -3736,12 +3909,47 @@ function dailyPoolAwardTimeMinutes(t) {
   return (Number(time.slice(0, 2)) * 60) + Number(time.slice(3, 5));
 }
 
+function dailyPoolAwardCutoffMs(t, dayInput) {
+  const day = normalizeDailyPoolDay(dayInput);
+  return Date.parse(`${day}T00:00:00Z`) + dailyPoolAwardTimeMinutes(t) * 60 * 1000;
+}
+
+function dailyPoolDayForEventMs(t, msInput) {
+  const ms = Number.isFinite(msInput) ? msInput : Date.now();
+  const utcDay = utcDayFromMs(ms);
+  const cutoffMs = dailyPoolAwardCutoffMs(t, utcDay);
+  return ms >= cutoffMs ? addUtcDays(utcDay, 1) : utcDay;
+}
+
+function tournamentActivityDayForEvent(t, msInput) {
+  if (!isDailyPoolTournament(t)) {
+    return utcDayFromMs(Number.isFinite(msInput) ? msInput : Date.now());
+  }
+  return dailyPoolDayForEventMs(t, msInput);
+}
+
 function tournamentFirstDailyPoolDay(t) {
   const start = Math.max(
     sqlDateMs(t.start_at) ?? 0,
     sqlDateMs(t.daily_pool_enabled_at) ?? 0
   );
-  return utcDayFromMs(start || Date.now());
+  return dailyPoolDayForEventMs(t, start || Date.now());
+}
+
+function tournamentDailyPoolActivityDays(t, dayInput) {
+  const day = normalizeDailyPoolDay(dayInput);
+  const days = [day];
+  const startMs = Math.max(
+    sqlDateMs(t?.start_at) ?? 0,
+    sqlDateMs(t?.daily_pool_enabled_at) ?? 0
+  );
+  if (!startMs) return days;
+  const firstDay = tournamentFirstDailyPoolDay(t);
+  const startCalendarDay = utcDayFromMs(startMs);
+  if (day === firstDay && startCalendarDay < firstDay && !days.includes(startCalendarDay)) {
+    days.unshift(startCalendarDay);
+  }
+  return days;
 }
 
 function parseDailyPoolOverrides(value) {
@@ -3806,10 +4014,12 @@ function tournamentLastClosedUtcDay(t, now = new Date()) {
 }
 
 function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
-  const awardOffsetMs = dailyPoolAwardTimeMinutes(t) * 60 * 1000;
-  const scheduledLast = utcDayFromMs(now.getTime() - (24 * 60 * 60 * 1000) - awardOffsetMs);
-  const endMs = sqlDateMs(t.end_at);
   const nowMs = now.getTime();
+  const today = utcDayFromMs(nowMs);
+  const scheduledLast = nowMs >= dailyPoolAwardCutoffMs(t, today)
+    ? today
+    : addUtcDays(today, -1);
+  const endMs = sqlDateMs(t.end_at);
   if (!endMs) {
     if (String(t?.status || '').toLowerCase() === 'ended') {
       const row = db.prepare('SELECT MAX(day_utc) AS day_utc FROM tournament_daily_activity WHERE tournament_id = ?')
@@ -3818,7 +4028,7 @@ function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
     }
     return scheduledLast;
   }
-  const endDay = utcDayFromMs(endMs - 1);
+  const endDay = dailyPoolDayForEventMs(t, endMs - 1);
   if (endMs <= nowMs) return endDay;
   return endDay < scheduledLast ? endDay : scheduledLast;
 }
@@ -3870,6 +4080,8 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
       `).run(tid);
     }
 
+    const activityDays = tournamentDailyPoolActivityDays(t, day);
+    const activityDayPlaceholders = activityDays.map(() => '?').join(',');
     const rows = db.prepare(`
       SELECT player_id,
              COALESCE(SUM(trades_count), 0) AS trades_count,
@@ -3877,9 +4089,9 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
              COALESCE(SUM(pnl_usd), 0) AS pnl_usd,
              COALESCE(SUM(trophies), 0) AS trophies
         FROM tournament_daily_activity
-       WHERE tournament_id = ? AND day_utc = ?
+       WHERE tournament_id = ? AND day_utc IN (${activityDayPlaceholders})
        GROUP BY player_id
-    `).all(tid, day);
+    `).all(tid, ...activityDays);
     const poolState = tournamentDailyPoolPointsForDay(t, day);
     const pool = Math.max(0, Number(poolState.points || t.daily_pool_points || 1000) || 0);
     const weights = dailyPoolWeights(t);
@@ -3888,7 +4100,7 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
       { key: 'volume', column: 'volume_usd', weight: weights.volume },
       { key: 'pnl', column: 'pnl_usd', weight: weights.pnl },
     ];
-    const details = { pool, pool_state: poolState, weights, categories: {} };
+    const details = { pool, pool_state: poolState, weights, activity_days: activityDays, categories: {} };
     let awardedTotal = 0;
     for (const cat of categories) {
       const catPool = pool * (Math.max(0, Number(cat.weight) || 0) / 100);
@@ -4841,7 +5053,7 @@ function awardTournamentFinalDailyPoolDay(tournamentId, options = {}) {
   if (!isDailyPoolTournament(t)) return { ok: true, skipped: true, reason: 'not_daily_pool', tournament_id: tid };
   const endMs = sqlDateMs(t.end_at);
   const nowMs = now.getTime();
-  const finalDay = endMs && endMs <= nowMs ? utcDayFromMs(endMs - 1) : utcDayFromMs(nowMs);
+  const finalDay = endMs && endMs <= nowMs ? dailyPoolDayForEventMs(t, endMs - 1) : dailyPoolDayForEventMs(t, nowMs);
   const firstDay = tournamentFirstDailyPoolDay(t);
   if (firstDay > finalDay) {
     return { ok: true, skipped: true, reason: 'no_awardable_day', tournament_id: tid, day_utc: finalDay };
