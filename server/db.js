@@ -4891,7 +4891,7 @@ const TH_MAX_COUNT = {
   mine:         [1, 2, 3, 3, 4],
   sawmill:      [1, 2, 3, 3, 4],
   barn:         [1, 1, 1, 1, 1],
-  port:         [1, 2, 3, 3, 3],
+  port:         [1, 2, 3, 3, 5],
   altar:        [1, 1, 1, 1, 1],
   archer_tower: [1, 2, 3, 3, 3],
   tombstone:    [0, 1, 3, 3, 3],  // unlocked at TH2
@@ -4939,7 +4939,7 @@ const BUILDING_DEFS = {
     size: [4, 3], max_level: 3,
     hp_levels: [1800, 3200, 5500],
     cost: { gold: 240, wood: 560, ore: 480 },
-    max_count: 3,
+    max_count: 5,
   },
   altar: {
     size: [3, 3], max_level: 1,

@@ -329,7 +329,7 @@ const TH_MAX_COUNT: Dictionary = {
 	"mine": [1, 2, 3, 3, 4],
 	"sawmill": [1, 2, 3, 3, 4],
 	"barn": [1, 1, 1, 1, 1],
-	"port": [1, 2, 3, 3, 3],
+	"port": [1, 2, 3, 3, 5],
 	"altar": [1, 1, 1, 1, 1],
 	"archer_tower": [1, 2, 3, 3, 3],
 	"tombstone": [0, 1, 3, 3, 3],
