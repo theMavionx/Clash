@@ -14503,6 +14503,10 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
 const TASK_PROGRESS_REFRESH_TIMEOUT_MS = Math.max(1000, Number(process.env.TASK_PROGRESS_REFRESH_TIMEOUT_MS || 5000));
+const PACIFICA_TASK_PREFETCH_TIMEOUT_MS = Math.max(
+  TASK_PROGRESS_REFRESH_TIMEOUT_MS,
+  Number(process.env.PACIFICA_TASK_PREFETCH_TIMEOUT_MS || 15000),
+);
 
 function requestedTaskDexFromHeaders(headers = {}) {
   if (!headers || typeof headers !== 'object') return '';
@@ -14519,7 +14523,17 @@ function withTaskProgressTimeout(promise, label) {
   });
 }
 
-async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders = null) {
+function withTaskProgressTimeoutMs(promise, label, timeoutMs) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label || 'task progress'} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders = null, progressContext = null) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
   const requestedDex = requestedTaskDexFromHeaders(requestHeaders);
   const dex = requestedDex || String(player?.dex || '').toLowerCase();
@@ -14544,7 +14558,10 @@ async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders
       }
     }
     const result = await withTaskProgressTimeout(
-      tasks.verifyTask(taskPlayer, task, snap, { headers: requestHeaders }),
+      tasks.verifyTask(taskPlayer, task, snap, {
+        headers: requestHeaders,
+        prefetchedTrades: progressContext?.prefetchedTrades || null,
+      }),
       `player=${player?.name || player?.id} task=${task?.id} dex=${dex}`
     );
     const progress = result.target_value > 0
@@ -14576,11 +14593,39 @@ async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders
 router.get('/tasks', auth, async (req, res) => {
   const list = tasks.getActiveTasks();
   const out = [];
+  const progressContext = {};
+  const requestedDex = requestedTaskDexFromHeaders(req.headers);
+  const effectiveDex = requestedDex || String(req.player?.dex || '').toLowerCase();
+  if (effectiveDex === 'pacifica') {
+    let minStartId = Infinity;
+    for (const t of list) {
+      const pt = tasks.getPlayerTask(req.player.id, t.id);
+      if (!pt || pt.claimed_at) continue;
+      const snap = tasks.parseParams(pt.snapshot);
+      const startId = Number(snap.trade_id_start || 0);
+      if (Number.isFinite(startId) && startId >= 0) minStartId = Math.min(minStartId, startId);
+    }
+    if (Number.isFinite(minStartId)) {
+      try {
+        const taskPlayer = requestedDex && requestedDex !== String(req.player?.dex || '').toLowerCase()
+          ? { ...req.player, dex: requestedDex }
+          : req.player;
+        progressContext.prefetchedTrades = await withTaskProgressTimeoutMs(
+          tasks.fetchWalletTrades(taskPlayer, { since: minStartId, headers: req.headers }),
+          `player=${req.player?.name || req.player?.id} tasks-prefetch dex=pacifica`,
+          PACIFICA_TASK_PREFETCH_TIMEOUT_MS,
+        );
+      } catch (e) {
+        progressContext.prefetchError = e;
+        console.warn(`[tasks] pacifica prefetch failed player=${req.player?.name || req.player?.id}:`, e.message);
+      }
+    }
+  }
   for (const t of list) {
     const eligibility = tasks.checkTaskEligibility(req.player, t);
     if (!eligibility.ok) continue;
     let pt = tasks.getPlayerTask(req.player.id, t.id);
-    pt = await maybeRefreshTaskProgress(req.player, t, pt, req.headers);
+    pt = await maybeRefreshTaskProgress(req.player, t, pt, req.headers, progressContext);
     out.push({
       id: t.id,
       type: t.type,

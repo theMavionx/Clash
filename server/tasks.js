@@ -963,7 +963,9 @@ async function verifyVolume(player, task, snap, opts = {}) {
   // the snapshot baseline — for an active trader with thousands of
   // trades this avoids walking all of history just to count the last few.
   const startId = snap.trade_id_start || 0;
-  const trades = await fetchWalletTrades(player, { since: startId, headers: opts.headers || opts.requestHeaders || null });
+  const trades = Array.isArray(opts.prefetchedTrades)
+    ? opts.prefetchedTrades
+    : await fetchWalletTrades(player, { since: startId, headers: opts.headers || opts.requestHeaders || null });
   let vol = 0;
   let matched = 0;
   for (const t of trades) {
@@ -990,7 +992,9 @@ async function verifyPositions(player, task, snap, opts = {}) {
   const side = p.side || 'any';
   const countClose = !!p.count_close; // default: count openings only
   const startId = snap.trade_id_start || 0;
-  const trades = await fetchWalletTrades(player, { since: startId, headers: opts.headers || opts.requestHeaders || null });
+  const trades = Array.isArray(opts.prefetchedTrades)
+    ? opts.prefetchedTrades
+    : await fetchWalletTrades(player, { since: startId, headers: opts.headers || opts.requestHeaders || null });
   let n = 0;
   const seenOrders = new Set();
   for (const t of trades) {
@@ -1018,7 +1022,9 @@ async function verifyComboVolumeAttack(player, task, snap, opts = {}) {
   const countClose = !!p.count_close;
 
   const startId = snap.trade_id_start || 0;
-  const trades = await fetchWalletTrades(player, { since: startId, headers: opts.headers || opts.requestHeaders || null });
+  const trades = Array.isArray(opts.prefetchedTrades)
+    ? opts.prefetchedTrades
+    : await fetchWalletTrades(player, { since: startId, headers: opts.headers || opts.requestHeaders || null });
   let vol = 0;
   for (const t of trades) {
     if (!isAfterTaskSnapshot(snap, t)) continue;
@@ -1154,5 +1160,6 @@ module.exports = {
   getPlayerTask,
   upsertPlayerTask,
   canClaim,
+  fetchWalletTrades,
   fetchPacificaAllTrades,
 };
