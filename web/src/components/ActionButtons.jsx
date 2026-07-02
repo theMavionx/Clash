@@ -6,6 +6,7 @@ import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335
 import chartIcon from '../assets/resources/chart.png';
 import goldIcon from '../assets/resources/gold_bar.png';
 import mmBotIcon from '../assets/resources/mm-bot-icon.png';
+import tournamentIcon from '../assets/resources/tournament-icon.png';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import shipImg from '../assets/buildings/shipsmall.png';
 import TournamentPanel from './TournamentPanel';
@@ -443,28 +444,6 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel 
 }
 
 // ── Main component ────────────────────────────────────────────────────────
-// ── Crossed swords icon for tournament button ─────────────────────────────
-const CrossedSwordsIcon = ({ size = 50 }) => (
-  <svg width={size} height={size} viewBox="0 0 64 64" fill="none" style={{ filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.4))' }}>
-    {/* Sword 1: top-left → bottom-right */}
-    <g transform="rotate(45 32 32)">
-      <rect x="30" y="6" width="4" height="36" fill="#e6e6e6" stroke="#5a5a5a" strokeWidth="1.5" />
-      <polygon points="32,2 35,8 29,8" fill="#f0f0f0" stroke="#5a5a5a" strokeWidth="1.5" />
-      <rect x="24" y="42" width="16" height="3.5" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="1.5" />
-      <rect x="29" y="45" width="6" height="12" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="1.5" />
-      <circle cx="32" cy="59" r="3.5" fill="#FFD700" stroke="#3d1f00" strokeWidth="1.5" />
-    </g>
-    {/* Sword 2: top-right → bottom-left */}
-    <g transform="rotate(-45 32 32)">
-      <rect x="30" y="6" width="4" height="36" fill="#e6e6e6" stroke="#5a5a5a" strokeWidth="1.5" />
-      <polygon points="32,2 35,8 29,8" fill="#f0f0f0" stroke="#5a5a5a" strokeWidth="1.5" />
-      <rect x="24" y="42" width="16" height="3.5" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="1.5" />
-      <rect x="29" y="45" width="6" height="12" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="1.5" />
-      <circle cx="32" cy="59" r="3.5" fill="#FFD700" stroke="#3d1f00" strokeWidth="1.5" />
-    </g>
-  </svg>
-);
-
 // ── NFT shop icon — cartoon storefront with striped awning + windows
 // showing the valuables on offer (coin + gem). Sits in the action bar
 // next to the tournament/battle-log buttons; line weights and palette
@@ -779,7 +758,11 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
               the old battle-log slot above ATTACK. */}
           {!mobile && nftMintButton}
           <CustomBtn onClick={() => setShowTournament(true)} width={btnSmall} height={btnSmall} data-tutorial="tournament-btn">
-            <CrossedSwordsIcon size={mobile ? 38 : 50} />
+            <img
+              src={tournamentIcon}
+              alt="Tournament"
+              style={mobile ? styles.tournamentIconImgMobile : styles.tournamentIconImg}
+            />
           </CustomBtn>
         </div>
         <div style={styles.tradeButtonRow}>
@@ -1299,6 +1282,20 @@ const styles = {
     width: 44,
     height: 44,
     transform: 'translateY(-5px)',
+  },
+  tournamentIconImg: {
+    width: 112,
+    height: 83,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 3px 5px rgba(0,0,0,0.55))',
+    pointerEvents: 'none',
+  },
+  tournamentIconImgMobile: {
+    width: 86,
+    height: 65,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.55))',
+    pointerEvents: 'none',
   },
   btnLabel: {
     position: 'absolute', bottom: 28, left: 0, right: 0,
