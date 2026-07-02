@@ -1865,7 +1865,13 @@ export function useFlash() {
       for (let attempt = 0; attempt < 8; attempt += 1) {
         await flashDelay(attempt === 0 ? 800 : 1200);
         latest = await refreshReferral();
-        if (latest?.has_referrer === true) break;
+        if (latest?.matches_clash === true || (latest?.matches_clash == null && latest?.has_referrer === true)) break;
+        if (latest?.has_any_referrer === true && latest?.matches_clash !== true) {
+          return {
+            error: 'This Flash wallet already has a different on-chain referrer. Use another wallet for Clash rewards.',
+            referral: latest,
+          };
+        }
       }
       return {
         ok: true,
@@ -2703,8 +2709,13 @@ export function useFlash() {
     if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer');
   }, [config?.referral_url, config?.referralUrl]);
 
+  const flashReferralMismatch = !!walletAddr
+    && referralState?.has_any_referrer === true
+    && referralState?.matches_clash !== true;
   const hasFlashReferrer = walletAddr
-    ? (referralState ? referralState.has_referrer === true : null)
+    ? (referralState
+      ? (referralState.matches_clash === true || (referralState.matches_clash == null && referralState.has_referrer === true))
+      : null)
     : true;
 
   return {
@@ -2730,6 +2741,8 @@ export function useFlash() {
     registeredEvmWallet: registeredFlashWallet,
     apiWalletAddr: accountOwner,
     hasReferrer: hasFlashReferrer,
+    referralStatus: referralState,
+    referralMismatch: flashReferralMismatch,
     linkOurReferrer,
     openReferralJoin,
     referralCode: config?.referral_code || referralState?.referral_code || 'clash',
