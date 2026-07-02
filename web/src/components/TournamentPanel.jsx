@@ -684,10 +684,13 @@ function TournamentPanel({ onClose }) {
     limit: 7,
   });
   const dailyDays = daily?.days || [];
+  const activeDailyDayId = daily?.server_round_day_utc || dailyDays[0]?.day_utc || null;
   const selectedDailyDay = useMemo(() => {
     if (!dailyDays.length) return null;
-    return dailyDays.find(day => day.day_utc === pickedDailyDay) || dailyDays[0];
-  }, [dailyDays, pickedDailyDay]);
+    return dailyDays.find(day => day.day_utc === pickedDailyDay)
+      || dailyDays.find(day => day.day_utc === activeDailyDayId)
+      || dailyDays[0];
+  }, [dailyDays, pickedDailyDay, activeDailyDayId]);
   const playerId = player?.player_id || player?.id;
   const dailyMyPlayerId = daily?.my_player_id || playerId;
   const activeInitialLoading = tab === 'active' && !tournamentLoaded && !me;
@@ -757,9 +760,9 @@ function TournamentPanel({ onClose }) {
     }
     if (!dailyDays.length) return;
     if (!pickedDailyDay || !dailyDays.some(day => day.day_utc === pickedDailyDay)) {
-      setPickedDailyDay(dailyDays[0].day_utc);
+      setPickedDailyDay(activeDailyDayId || dailyDays[0].day_utc);
     }
-  }, [dailyActive, dailyDays, pickedDailyDay]);
+  }, [dailyActive, dailyDays, pickedDailyDay, activeDailyDayId]);
 
   useEffect(() => {
     setDailyOpen(false);

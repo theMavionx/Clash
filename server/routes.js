@@ -22012,6 +22012,7 @@ function buildTournamentDailyPointRows(t, options = {}) {
   if (!Number.isFinite(tid)) return [];
   const limit = Math.max(1, Math.min(60, parseInt(options.limit, 10) || 7));
   const includeCurrentDay = options.includeCurrentDay !== false && tournamentPhase(t) === 'live';
+  const currentDay = includeCurrentDay ? tournamentDailyPoolCurrentDay(t) : null;
   const daySet = new Set(db.db.prepare(`
     SELECT day_utc FROM (
       SELECT day_utc FROM tournament_daily_activity WHERE tournament_id = ?
@@ -22021,10 +22022,15 @@ function buildTournamentDailyPointRows(t, options = {}) {
       SELECT day_utc FROM tournament_daily_point_runs WHERE tournament_id = ?
     )
   `).all(tid, tid, tid).map(row => row.day_utc).filter(Boolean));
-  if (includeCurrentDay) daySet.add(tournamentDailyPoolCurrentDay(t));
+  if (currentDay) daySet.add(currentDay);
   const firstDay = tournamentDailyPoolFirstDay(t);
   const days = Array.from(daySet)
-    .filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) && String(day) >= firstDay)
+    .filter((day) => {
+      const value = String(day || '');
+      return /^\d{4}-\d{2}-\d{2}$/.test(value)
+        && value >= firstDay
+        && (!currentDay || value <= currentDay);
+    })
     .sort((a, b) => String(b).localeCompare(String(a)))
     .slice(0, limit);
   const participantRows = db.db.prepare(`
