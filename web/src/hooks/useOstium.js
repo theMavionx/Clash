@@ -29,7 +29,7 @@ const POLL_INTERVAL_MS = 45_000;
 const TX_TIMEOUT_MS = 120_000;
 const CLAIM_LOOKBACK_ATTEMPTS = 5;
 const ORDER_VISIBLE_TIMEOUT_MS = 45_000;
-const ORDER_VISIBLE_POLL_MS = 1_500;
+const ORDER_VISIBLE_POLL_MS = 800;
 
 function safeParseEther(value, fallback) {
   try { return parseEther(String(value || fallback)); } catch { return parseEther(fallback); }
@@ -100,6 +100,9 @@ function errorMessage(error, fallback = 'Ostium request failed') {
   for (const item of chain) {
     const text = item?.shortMessage || item?.reason || item?.details || item?.message;
     if (!text) continue;
+    if (/Too Many Requests|rate[_\s-]?limit|\b429\b/i.test(text)) {
+      return 'Ostium is rate-limiting requests. Wait a few seconds, then try again.';
+    }
     if (item?.code === 'WRONG_EVM_CHAIN') return String(text).slice(0, 300);
     if (/user rejected|denied|rejected the request/i.test(text)) return 'Signature cancelled';
     if (isGasLimitTooLowError(text)) return 'Ostium setup used too low gas. Reload and retry; Clash will send an explicit Arbitrum gas limit.';
@@ -678,7 +681,6 @@ export function useOstium() {
     let lastFresh = null;
 
     while (Date.now() - startedAt < ORDER_VISIBLE_TIMEOUT_MS) {
-      await sleep(ORDER_VISIBLE_POLL_MS);
       lastFresh = await fetchAccount();
       const freshPositions = lastFresh?.positions || positionsRef.current || [];
       const freshOrders = lastFresh?.orders || ordersRef.current || [];
@@ -693,6 +695,7 @@ export function useOstium() {
         if (nextCount > beforeOrderCount) return lastFresh;
         if (beforeOrderCount === 0 && findBySymbol(freshOrders, symbol)) return lastFresh;
       }
+      await sleep(ORDER_VISIBLE_POLL_MS);
     }
 
     // Keep the latest refresh in state even if Ostium indexing is slower
@@ -1076,7 +1079,7 @@ export function useOstium() {
           label: 'ostium.take_profit',
           buildSelfTx: (client) => client.getModifyOrderTx(params),
           submitDelegate: (client) => client.modifyOrder(params),
-          allowWalletFallback: 'when_one_tap_enabled',
+          allowWalletFallback: delegateStatus.enabled ? false : 'when_one_tap_enabled',
           requireAllowance: false,
           setupIfNeeded: false,
           topUpGas: false,
@@ -1091,7 +1094,7 @@ export function useOstium() {
           label: 'ostium.stop_loss',
           buildSelfTx: (client) => client.getModifyOrderTx(params),
           submitDelegate: (client) => client.modifyOrder(params),
-          allowWalletFallback: 'when_one_tap_enabled',
+          allowWalletFallback: delegateStatus.enabled ? false : 'when_one_tap_enabled',
           requireAllowance: false,
           setupIfNeeded: false,
           topUpGas: false,
@@ -1106,7 +1109,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [fetchAccount, positions, submitWithDelegateOrWallet]);
+  }, [delegateStatus.enabled, fetchAccount, positions, submitWithDelegateOrWallet]);
 
   const switchToArbitrum = useCallback(async () => {
     try {

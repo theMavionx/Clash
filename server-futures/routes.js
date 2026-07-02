@@ -27,9 +27,12 @@ const { createPublicClient, decodeFunctionData, formatUnits, http } = require('v
 const { base } = require('viem/chains');
 const { Keypair, PublicKey, VersionedTransaction } = require('@solana/web3.js');
 const bs58Module = require('bs58');
+const nacl = require('tweetnacl');
 
 const router = express.Router();
 const bs58 = bs58Module.default || bs58Module;
+const WALLET_AUTH_ACTION = 'wallet-auth';
+const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
 
 const PYTH_BENCHMARKS = 'https://benchmarks.pyth.network/v1/shims/tradingview';
 const PYTH_HISTORY_CACHE_TTL_MS = 60_000;
@@ -963,6 +966,129 @@ function flashLinkedSolanaWallet(req) {
     new Error('Flash Solana wallet is not linked to this game account. Reconnect your Solana wallet for Flash.'),
     { status: 409 },
   );
+}
+
+function flashWalletAuthMessage({ wallet, issuedAt }) {
+  return [
+    'Clash wallet auth',
+    `Action: ${WALLET_AUTH_ACTION}`,
+    `Wallet: ${String(wallet || '').trim()}`,
+    'DEX: flash',
+    `Issued At: ${issuedAt}`,
+  ].join('\n');
+}
+
+function flashDecodeSignatureBytes(value, encoding = '') {
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (/^[0-9a-fA-F]{128}$/.test(raw)) return Uint8Array.from(Buffer.from(raw, 'hex'));
+  const preferred = String(encoding || '').toLowerCase();
+  if (preferred === 'base64') {
+    const bytes = Uint8Array.from(Buffer.from(raw, 'base64'));
+    return bytes.length === 64 ? bytes : null;
+  }
+  if (preferred === 'base58') {
+    try {
+      const bytes = bs58.decode(raw);
+      return bytes.length === 64 ? bytes : null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const bytes = Uint8Array.from(Buffer.from(raw, 'base64'));
+    if (bytes.length === 64) return bytes;
+  } catch { /* try base58 */ }
+  try {
+    const bytes = bs58.decode(raw);
+    return bytes.length === 64 ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+function flashVerifyWalletAuthProof(req, wallet) {
+  const owner = String(wallet || '').trim();
+  if (!flash.isSolanaAddress(owner)) {
+    throw Object.assign(new Error('Flash trade-report wallet must be a valid Solana address.'), { status: 400 });
+  }
+  const proof = req.body?.auth_proof || req.body?.authProof || req.body?.wallet_auth_proof || req.body?.walletAuthProof || null;
+  if (!proof || typeof proof !== 'object' || Array.isArray(proof)) {
+    throw Object.assign(new Error('Flash wallet signature required for this trading wallet.'), { status: 401 });
+  }
+  const issuedAt = String(proof.issued_at || proof.issuedAt || '').trim();
+  const issuedMs = Date.parse(issuedAt);
+  if (!Number.isFinite(issuedMs)) {
+    throw Object.assign(new Error('Flash wallet signature required for this trading wallet.'), { status: 401 });
+  }
+  if (Math.abs(Date.now() - issuedMs) > WALLET_AUTH_MAX_AGE_MS) {
+    throw Object.assign(new Error('Flash wallet signature expired. Sign again and retry.'), { status: 401 });
+  }
+  const proofWallet = String(proof.wallet || '').trim();
+  if (proofWallet && proofWallet !== owner) {
+    throw Object.assign(new Error('Flash wallet signature wallet mismatch.'), { status: 401 });
+  }
+  const action = String(proof.action || '').trim().toLowerCase();
+  if (action && action !== WALLET_AUTH_ACTION) {
+    throw Object.assign(new Error('Flash wallet signature action mismatch.'), { status: 401 });
+  }
+  const dex = String(proof.dex || '').trim().toLowerCase();
+  if (dex && dex !== 'flash') {
+    throw Object.assign(new Error('Flash wallet signature DEX mismatch.'), { status: 401 });
+  }
+  const chain = String(proof.chain_type || proof.chainType || '').trim().toLowerCase();
+  if (chain && chain !== 'solana') {
+    throw Object.assign(new Error('Flash wallet signature chain mismatch.'), { status: 401 });
+  }
+  const message = flashWalletAuthMessage({ wallet: owner, issuedAt });
+  const suppliedMessage = String(proof.message || '').trim();
+  if (suppliedMessage && suppliedMessage !== message) {
+    throw Object.assign(new Error('Flash wallet signature message mismatch.'), { status: 401 });
+  }
+  let publicKeyBytes;
+  try {
+    publicKeyBytes = bs58.decode(owner);
+  } catch {
+    publicKeyBytes = null;
+  }
+  const signatureBytes = flashDecodeSignatureBytes(proof.signature, proof.signature_encoding || proof.signatureEncoding || '');
+  const ok = publicKeyBytes?.length === 32
+    && signatureBytes?.length === 64
+    && nacl.sign.detached.verify(
+      Uint8Array.from(Buffer.from(message, 'utf8')),
+      signatureBytes,
+      publicKeyBytes,
+    );
+  if (!ok) {
+    console.warn('[flash trade-report] rejected wallet auth proof', {
+      player_id: req.playerId,
+      owner,
+      ip: req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || null,
+      ua: String(req.headers['user-agent'] || '').slice(0, 160),
+    });
+    throw Object.assign(new Error('Flash wallet signature verification failed.'), { status: 401 });
+  }
+  return owner;
+}
+
+function flashReportWallet(req) {
+  const requested = String(req.body?.wallet || req.body?.address || req.body?.owner || '').trim();
+  const linked = (() => {
+    try { return flashLinkedSolanaWallet(req); } catch { return ''; }
+  })();
+  if (!requested) {
+    if (linked) return linked;
+    throw Object.assign(
+      new Error('Flash Solana wallet is required for trade verification.'),
+      { status: 400 },
+    );
+  }
+  if (!flash.isSolanaAddress(requested)) {
+    throw Object.assign(new Error('Flash trade-report wallet must be a valid Solana address.'), { status: 400 });
+  }
+  if (linked && requested === linked) return requested;
+  return flashVerifyWalletAuthProof(req, requested);
 }
 
 function flashRequestWallet(req) {
@@ -4666,7 +4792,7 @@ router.post('/flash/submit-tx', auth, async (req, res) => {
 router.post('/flash/trade-report', auth, async (req, res) => {
   if (!requireFlashDex(req, res)) return;
   try {
-    const result = await flash.recordTradeReport(db, req.playerId, req.body || {}, flashLinkedSolanaWallet(req));
+    const result = await flash.recordTradeReport(db, req.playerId, req.body || {}, flashReportWallet(req));
     res.json({
       ok: true,
       verified: result.changes > 0,
@@ -5058,7 +5184,7 @@ router.post('/trade-report', auth, async (req, res) => {
       const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, gmtradeLinkedSolanaWallet(req));
       verified = result.changes > 0;
     } else if (req.dex === 'flash') {
-      const result = await flash.recordTradeReport(db, req.playerId, req.body || {}, flashLinkedSolanaWallet(req));
+      const result = await flash.recordTradeReport(db, req.playerId, req.body || {}, flashReportWallet(req));
       verified = result.changes > 0;
     }
     const verifiedReason = req.dex === 'gmtrade'

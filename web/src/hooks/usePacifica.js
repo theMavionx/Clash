@@ -330,16 +330,15 @@ export function usePacifica() {
       console.warn('[usePacifica] claimGold skipped — no token yet (account still loading)');
       return;
     }
-    // Body intentionally minimal: server uses req.player.wallet from auth
-    // and pacifica_agents (signature-verified ledger) for fan-out. We
-    // used to pass agent_wallet here too, but that route was an
-    // unverified write into the agents ledger — moved exclusively to
-    // /pacifica/agent which checks the master signature.
+    // Force Pacifica for players whose account-level default dex points at
+    // another exchange. The server still uses req.player.wallet from auth and
+    // pacifica_agents (signature-verified ledger) for fan-out; agent_wallet is
+    // only written by /pacifica/agent after checking the master signature.
     try {
       const res = await fetch(`${GAME_API}/trading/claim-gold`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-token': token },
-        body: JSON.stringify({ wallet: walletAddr }),
+        headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'pacifica' },
+        body: JSON.stringify({ wallet: walletAddr, dex: 'pacifica' }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -889,7 +888,7 @@ export function usePacifica() {
     setError(null);
     try {
       const amountRaw = Math.floor(parseFloat(amountUsdc) * 1e6);
-      if (amountRaw < 10e6) throw new Error('Minimum 10 USDC');
+      if (amountRaw < 10e6) throw new Error('Minimum Pacifica deposit is 10 USDC.');
 
       // Check SOL balance for gas fees
       let solBal = 0;

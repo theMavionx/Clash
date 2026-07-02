@@ -46,7 +46,12 @@ import { GOLD_REWARD_PANEL_TOAST_STYLE } from './goldRewardToastStyles';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { setClientActivity } from '../lib/updateCoordinator';
 import { reportClientEvent } from '../lib/clientLogger';
-import { ostiumMaxTakeProfitPrice, validateOstiumTakeProfitLimit } from '../lib/ostiumTpLimits';
+import {
+  ostiumMaxTakeProfitPrice,
+  validateOstiumStopLossDirection,
+  validateOstiumTakeProfitDirection,
+  validateOstiumTakeProfitLimit,
+} from '../lib/ostiumTpLimits';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
@@ -456,6 +461,9 @@ function dexErrorLabel(dex, text = '') {
 
 function humanizeTradeError(message, dex = null) {
   const text = String(message || '');
+  if (/minimum\s+(deposit\s+is\s+)?10\s+USDC|Min deposit 10 USDC/i.test(text)) {
+    return 'Minimum Pacifica deposit is 10 USDC.';
+  }
   if (/HIBACHI_IP_BLOCKED|Hibachi is not available from your IP address|cloudflare|access denied/i.test(text)) {
     return 'Hibachi is not available from your IP address. Use a supported network or IP region, then try again.';
   }
@@ -938,6 +946,25 @@ function tpslReferencePrice(pos) {
 }
 
 function validateTpslBeforeSubmit({ dex, pos, tpPrice, slPrice, setLocalAlert }) {
+  if (dex === 'ostium') {
+    const tpDirectionCheck = validateOstiumTakeProfitDirection(pos, tpPrice);
+    if (!tpDirectionCheck.ok) {
+      setLocalAlert(tpDirectionCheck.error);
+      return false;
+    }
+    const tpLimitCheck = validateOstiumTakeProfitLimit(pos, tpPrice);
+    if (!tpLimitCheck.ok) {
+      setLocalAlert(tpLimitCheck.error);
+      return false;
+    }
+    const slDirectionCheck = validateOstiumStopLossDirection(pos, slPrice);
+    if (!slDirectionCheck.ok) {
+      setLocalAlert(slDirectionCheck.error);
+      return false;
+    }
+    return true;
+  }
+
   const reference = tpslReferencePrice(pos);
   const tp = Number(tpPrice);
   const sl = Number(slPrice);
@@ -959,11 +986,7 @@ function validateTpslBeforeSubmit({ dex, pos, tpPrice, slPrice, setLocalAlert })
       }
     }
   }
-  if (dex !== 'ostium') return true;
-  const check = validateOstiumTakeProfitLimit(pos, tpPrice);
-  if (check.ok) return true;
-  setLocalAlert(check.error);
-  return false;
+  return true;
 }
 
 function PositionTpslRow({ pos, orders }) {
@@ -2512,6 +2535,11 @@ function FuturesPanel() {
     const t = setTimeout(() => setLocalAlert(null), 6000);
     return () => clearTimeout(t);
   }, [localAlert]);
+  const panelAlert = localAlert || error || null;
+  const closePanelAlert = useCallback(() => {
+    setLocalAlert(null);
+    if (error && typeof clearError === 'function') clearError();
+  }, [clearError, error]);
   const [flashFundingProgress, setFlashFundingProgress] = useState(null);
   const updateFlashFundingProgress = useCallback((event = {}) => {
     setFlashFundingProgress(prev => {
@@ -4011,18 +4039,6 @@ function FuturesPanel() {
         {tradeButtonBlocked && (
           <div style={S.errorBar}>
             <span style={S.errorText}>{symbol} is not open for Flash trading right now ({flashMarketBlockReason}).</span>
-          </div>
-        )}
-        {error && (
-          <div style={S.errorBar} onClick={clearError}>
-            <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
-            <span style={S.errorCloseIcon}>✕</span>
-          </div>
-        )}
-        {localAlert && (
-          <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
-            <span style={S.errorText}>{humanizeTradeError(localAlert, dex)}</span>
-            <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
         {successMsg && (
@@ -7310,18 +7326,6 @@ function FuturesPanel() {
           );
         })}
 
-        {error && (
-          <div style={S.errorBar} onClick={clearError}>
-            <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
-            <span style={S.errorCloseIcon}>✕</span>
-          </div>
-        )}
-        {localAlert && (
-          <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
-            <span style={S.errorText}>{humanizeTradeError(localAlert, dex)}</span>
-            <span style={S.errorCloseIcon}>✕</span>
-          </div>
-        )}
         {successMsg && (
           <div style={S.successBar} onClick={() => setSuccessMsg(null)}>
             <span>✓ {successMsg}</span>
@@ -8549,7 +8553,15 @@ function FuturesPanel() {
                 const minDeposit = dex === 'pacifica' ? 10 : (dex === 'nado' && !account?.exists ? 5 : 0);
                 const v = parseFloat(depositAmt);
                 if (!Number.isFinite(v) || v <= 0 || (minDeposit > 0 && v < minDeposit)) {
-                  setLocalAlert(minDeposit > 0 ? `Min deposit ${minDeposit} ${dex === 'nado' ? selectedNadoDepositAsset.label : 'USDC'}` : 'Enter a positive amount');
+                  setLocalAlert(dex === 'pacifica'
+                    ? 'Minimum Pacifica deposit is 10 USDC.'
+                    : minDeposit > 0
+                      ? `Minimum deposit is ${minDeposit} ${dex === 'nado' ? selectedNadoDepositAsset.label : 'USDC'}.`
+                      : 'Enter a positive amount.');
+                  return;
+                }
+                if (dex === 'pacifica' && Number.isFinite(Number(walletUsdc)) && v > Number(walletUsdc) + 0.000001) {
+                  setLocalAlert(`Your wallet has ${Number(walletUsdc).toFixed(2)} USDC. Deposit less, or add USDC first.`);
                   return;
                 }
                 if (dex === 'risex') {
@@ -8691,18 +8703,6 @@ function FuturesPanel() {
           ))}
         </div>
 
-        {error && (
-          <div style={S.errorBar} onClick={clearError}>
-            <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
-            <span style={S.errorCloseIcon}>✕</span>
-          </div>
-        )}
-        {localAlert && (
-          <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
-            <span style={S.errorText}>{humanizeTradeError(localAlert, dex)}</span>
-            <span style={S.errorCloseIcon}>✕</span>
-          </div>
-        )}
         {successMsg && (
           <div style={S.successBar} onClick={() => setSuccessMsg(null)}>
             <span>✓ {successMsg}</span>
@@ -8883,6 +8883,31 @@ function FuturesPanel() {
                 fontSize: 18, fontWeight: 900, padding: '0 4px', lineHeight: 1,
               }}
             >×</button>
+          </div>
+        )}
+        {panelAlert && (
+          <div
+            style={{
+              ...S.panelErrorToast,
+              top: showReferralBanner ? 94 : 48,
+            }}
+            onClick={closePanelAlert}
+            role="status"
+          >
+            <span style={S.panelErrorIcon}>!</span>
+            <span style={S.panelErrorText}>{humanizeTradeError(panelAlert, dex)}</span>
+            <button
+              type="button"
+              data-nodrag
+              style={S.panelErrorClose}
+              onClick={(e) => {
+                e.stopPropagation();
+                closePanelAlert();
+              }}
+              aria-label="Close error"
+            >
+              x
+            </button>
           </div>
         )}
         <div className="futures-panel-body" style={S.body}>
@@ -9244,6 +9269,65 @@ const S = {
   },
   errorCloseIcon: {
     color: '#B71C1C', fontSize: 14, fontWeight: 900, opacity: 0.7, flexShrink: 0,
+  },
+  panelErrorToast: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    zIndex: 45,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+    padding: '8px 10px',
+    background: 'linear-gradient(180deg, #fff4e6 0%, #ffe3e0 100%)',
+    border: '2px solid #E53935',
+    borderRadius: 10,
+    boxShadow: '0 5px 14px rgba(92,58,33,0.24)',
+    color: '#8A1C13',
+    fontSize: 11,
+    fontWeight: 850,
+    lineHeight: 1.25,
+    cursor: 'pointer',
+    boxSizing: 'border-box',
+    pointerEvents: 'auto',
+  },
+  panelErrorIcon: {
+    width: 18,
+    height: 18,
+    borderRadius: '50%',
+    background: '#E53935',
+    color: '#fff',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 12,
+    fontWeight: 950,
+    flexShrink: 0,
+    lineHeight: 1,
+  },
+  panelErrorText: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+  },
+  panelErrorClose: {
+    width: 20,
+    height: 20,
+    borderRadius: '50%',
+    background: 'rgba(138,28,19,0.12)',
+    border: 'none',
+    color: '#8A1C13',
+    fontSize: 12,
+    fontWeight: 950,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    padding: 0,
+    lineHeight: 1,
   },
   oneTapFallbackWrap: {
     padding: '0 10px 8px',

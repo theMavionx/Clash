@@ -15,6 +15,7 @@ import { pacificaFetch } from '../lib/pacificaClient';
 // fallback for CORS/network failures or transient direct errors.
 const PYTH_HISTORY_API = '/api/futures/pyth/history';
 const PYTH_HISTORY_DIRECT_API = 'https://benchmarks.pyth.network/v1/shims/tradingview/history';
+const OSTIUM_PRICE_STREAM_WS = 'wss://builder.ostium.io/v1/prices/stream';
 
 const INTERVALS = [
   { label: '1m', value: '1m', ms: 2 * 60 * 60 * 1000, pyth: '1' },
@@ -32,6 +33,15 @@ const DECIBEL_INTERVALS = {
   '1h': '1h',
   '4h': '4h',
   '1d': '1d',
+};
+
+const INTERVAL_SECONDS = {
+  '1m': 60,
+  '5m': 300,
+  '15m': 900,
+  '1h': 3600,
+  '4h': 14400,
+  '1d': 86400,
 };
 
 // Avantis trades a mix of crypto, equities, FX, and commodities — all via
@@ -186,6 +196,30 @@ function normalizePhoenixCandle(row) {
     : null;
 }
 
+function ostiumStreamPair(symbol) {
+  const raw = String(symbol || '').toUpperCase().trim();
+  if (!raw) return '';
+  if (raw.includes('-') || raw.includes('/')) {
+    const [base, quote = 'USD'] = raw.split(/[-/]/u);
+    return `${base.trim()}-${quote.trim() || 'USD'}`;
+  }
+  return `${raw}-USD`;
+}
+
+function ostiumTickPrice(tick) {
+  const price = Number(tick?.mid ?? tick?.mark ?? tick?.price ?? tick?.bid ?? tick?.ask);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+function ostiumTickMatchesSymbol(tick, symbol) {
+  const expected = ostiumStreamPair(symbol);
+  const pair = String(tick?.pair || '').toUpperCase();
+  if (pair && pair === expected) return true;
+  const from = String(tick?.from || '').toUpperCase();
+  const to = String(tick?.to || 'USD').toUpperCase();
+  return `${from}-${to}` === expected;
+}
+
 function fmtLineUsd(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '$0.00';
@@ -278,6 +312,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const linesRef = useRef([]);
+  const lastCandleRef = useRef(null);
   const [interval, setInterval_] = useState('5m');
   const [loading, setLoading] = useState(false);
 
@@ -430,6 +465,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         if (!candles.length) candles = flatCandlesFromPrice(currentPriceRef.current, now, tf);
         if (!candles.length) return;
         seriesRef.current.setData(candles);
+        lastCandleRef.current = candles[candles.length - 1] || null;
         if (chartRef.current) {
           chartRef.current.timeScale().fitContent();
           chartRef.current.priceScale('right').applyOptions({ autoScale: true });
@@ -438,6 +474,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         const fallback = flatCandlesFromPrice(currentPriceRef.current, now, tf);
         if (!cancelled && fallback.length && seriesRef.current) {
           seriesRef.current.setData(fallback);
+          lastCandleRef.current = fallback[fallback.length - 1] || null;
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -448,9 +485,89 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     if (dex === 'phoenix') {
       return () => { cancelled = true; };
     }
-    const iv = window.setInterval(load, 30000);
+    const reloadMs = dex === 'ostium'
+      ? Math.max(60_000, Number(INTERVAL_SECONDS[interval] || 300) * 1000)
+      : 30_000;
+    const iv = window.setInterval(load, reloadMs);
     return () => { cancelled = true; window.clearInterval(iv); };
   }, [symbol, pythSymbol, interval, dex]);
+
+  useEffect(() => {
+    if (dex !== 'ostium' || !seriesRef.current || typeof WebSocket === 'undefined') return undefined;
+    let cancelled = false;
+    let reconnectTimer = null;
+    let ws = null;
+    const pair = ostiumStreamPair(symbol);
+    const bucketSeconds = INTERVAL_SECONDS[interval] || 300;
+
+    const applyTick = (tick) => {
+      if (cancelled || !seriesRef.current || !ostiumTickMatchesSymbol(tick, symbol)) return;
+      const price = ostiumTickPrice(tick);
+      if (price == null) return;
+      const tickSeconds = unixSeconds(tick?.timestampSeconds) || Math.floor(Date.now() / 1000);
+      const bucket = Math.floor(tickSeconds / bucketSeconds) * bucketSeconds;
+      const prev = lastCandleRef.current;
+      const next = prev && Number(prev.time) === bucket
+        ? {
+          ...prev,
+          high: Math.max(Number(prev.high), price),
+          low: Math.min(Number(prev.low), price),
+          close: price,
+        }
+        : {
+          time: bucket,
+          open: Number(prev?.close) > 0 ? Number(prev.close) : price,
+          high: price,
+          low: price,
+          close: price,
+        };
+      lastCandleRef.current = next;
+      seriesRef.current.update(next);
+    };
+
+    const handlePayload = (payload) => {
+      if (payload?.type === 'snapshot' && Array.isArray(payload.data)) {
+        for (const tick of payload.data) applyTick(tick);
+        return;
+      }
+      if (payload?.type === 'tick') applyTick(payload.data);
+    };
+
+    const connect = () => {
+      if (cancelled || !pair) return;
+      try {
+        ws = new WebSocket(OSTIUM_PRICE_STREAM_WS);
+        ws.addEventListener('open', () => {
+          if (!cancelled && ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'subscribe', pairs: [pair] }));
+          }
+        });
+        ws.addEventListener('message', (event) => {
+          try {
+            handlePayload(JSON.parse(event.data));
+          } catch {}
+        });
+        ws.addEventListener('close', () => {
+          if (!cancelled) reconnectTimer = window.setTimeout(connect, 2500);
+        });
+        ws.addEventListener('error', () => {
+          try { ws?.close(); } catch {}
+        });
+      } catch {
+        if (!cancelled) reconnectTimer = window.setTimeout(connect, 2500);
+      }
+    };
+
+    connect();
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      try {
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'unsubscribe', pairs: [pair] }));
+        ws?.close();
+      } catch {}
+    };
+  }, [symbol, interval, dex]);
 
   useEffect(() => {
     if (dex !== 'phoenix' || !seriesRef.current) return undefined;

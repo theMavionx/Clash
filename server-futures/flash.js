@@ -701,6 +701,16 @@ function normalizeToken(symbol, fallback = 'SOL') {
   return String(symbol || fallback).toUpperCase().replace(/[-/](PERP|USD|USDC)$/i, '').trim();
 }
 
+function normalizeMarketSymbol(...values) {
+  for (const value of values) {
+    const raw = String(value || '').trim();
+    if (!raw || isSolanaAddress(raw)) continue;
+    const symbol = normalizeToken(raw, '');
+    if (symbol && !isSolanaAddress(symbol)) return symbol;
+  }
+  return '';
+}
+
 function normalizeSide(side) {
   const s = String(side || '').trim().toUpperCase();
   if (s === 'BID' || s === 'BUY' || s === 'LONG') return 'LONG';
@@ -2080,7 +2090,8 @@ function flashPositionPnlView({ metric = {}, side, entry, mark, sizeUsd, amount,
 
 function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map(), hint = {}) {
   const side = metricSide(metric.side || metric.sideUi || hint.side);
-  const symbol = normalizeToken(metric.marketSymbol || metric.symbol || hint.symbol || marketPubkey);
+  const symbol = normalizeMarketSymbol(metric.marketSymbol, metric.symbol, hint.symbol);
+  if (!symbol) return null;
   const collateralUsd = numberFromUi(metric.collateralUsdUi);
   const sizeUsd = numberFromUi(metric.sizeUsdUi);
   const entry = numberFromUi(metric.entryPriceUi);
@@ -2140,7 +2151,8 @@ function positionFromMetric(marketPubkey, metric = {}, priceMap = new Map(), hin
 
 function orderFromMetric(marketPubkey, metric = {}, parent = {}, hint = {}) {
   const side = metricSide(metric.side || metric.sideUi || parent.side || parent.sideUi || hint.side);
-  const symbol = normalizeToken(metric.marketSymbol || metric.symbol || parent.marketSymbol || parent.symbol || hint.symbol || marketPubkey);
+  const symbol = normalizeMarketSymbol(metric.marketSymbol, metric.symbol, parent.marketSymbol, parent.symbol, hint.symbol);
+  if (!symbol) return null;
   const triggerPriceUi = metric.triggerPriceUi ?? metric.trigger_price_ui;
   const limitPriceUi = metric.entryPriceUi ?? metric.entry_price_ui ?? metric.limitPriceUi ?? metric.limit_price_ui;
   return {
@@ -2170,14 +2182,16 @@ function ordersFromMetricBundle(marketPubkey, metric = {}, hint = {}) {
   const rows = [];
   const pushRows = (items, type) => {
     for (const row of Array.isArray(items) ? items : []) {
-      rows.push(orderFromMetric(marketPubkey, { ...row, type: row?.type || type }, metric, hint));
+      const order = orderFromMetric(marketPubkey, { ...row, type: row?.type || type }, metric, hint);
+      if (order) rows.push(order);
     }
   };
   pushRows(metric.limitOrders || metric.limit_orders, 'LIMIT');
   pushRows(metric.takeProfitOrders || metric.take_profit_orders, 'TP');
   pushRows(metric.stopLossOrders || metric.stop_loss_orders, 'SL');
   if (rows.length) return rows;
-  return [orderFromMetric(marketPubkey, metric, {}, hint)];
+  const order = orderFromMetric(marketPubkey, metric, {}, hint);
+  return order ? [order] : [];
 }
 
 function flashMetricFromErPosition(pos = {}, hint = {}) {
@@ -2221,6 +2235,7 @@ function positionsFromFlashErBasket(basket = {}, marketHints = new Map(), priceM
     const hint = marketHints.get(market) || {};
     const metric = flashMetricFromErPosition(pos, hint);
     const normalized = positionFromMetric(market, metric, priceMap);
+    if (!normalized) continue;
     positions.push({
       ...normalized,
       marketPubkey: market,
@@ -2275,14 +2290,14 @@ function flashMetricMatchesMarketSide(marketPubkey, metric = {}, hint = {}, mark
     const metricTradeType = metricSide(metric.side || metric.sideUi || hint.side);
     return metricTradeType === side && flashPositionHasSize(metric);
   }
-  const symbol = normalizeToken(metric.marketSymbol || metric.symbol || hint.symbol || marketPubkey, '');
+  const symbol = normalizeMarketSymbol(metric.marketSymbol, metric.symbol, hint.symbol);
   if (!symbol || symbol !== marketSymbol) return false;
   const metricTradeType = metricSide(metric.side || metric.sideUi || hint.side);
   return metricTradeType === side && flashPositionHasSize(metric);
 }
 
 function flashPositionMatchesMarketSide(pos = {}, marketSymbol = '', side = '') {
-  const symbol = normalizeToken(pos.marketSymbol || pos.symbol || pos.metric?.marketSymbol || pos.metric?.symbol, '');
+  const symbol = normalizeMarketSymbol(pos.marketSymbol, pos.symbol, pos.metric?.marketSymbol, pos.metric?.symbol);
   const tradeType = metricSide(pos.tradeType || pos.sideUi || pos.side || pos.metric?.sideUi || pos.metric?.side);
   return symbol === marketSymbol && tradeType === side && !isDustPosition(pos);
 }
@@ -2470,7 +2485,7 @@ async function getOwnerSnapshot(owner) {
   const orderMetrics = snapshot?.orderMetrics || {};
   const v2Positions = Object.entries(positionMetrics).map(([marketPubkey, metric]) => (
     positionFromMetric(marketPubkey, metric, priceMap, marketHints.get(marketPubkey) || {})
-  ));
+  )).filter(Boolean);
   const erBasket = await getFlashErBasket(owner).catch(e => {
     console.warn('[flash] ER basket unavailable:', e?.message || e);
     return null;

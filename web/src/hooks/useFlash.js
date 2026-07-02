@@ -43,6 +43,8 @@ const FLASH_REQUIRE_ONE_TAP_TRADING = import.meta.env.VITE_FLASH_REQUIRE_ONE_TAP
 const FLASH_CONFIRM_ATTEMPTS = Math.max(30, Math.min(120, Number(import.meta.env.VITE_FLASH_CONFIRM_ATTEMPTS || 75)));
 const FLASH_DUST_POSITION_USD = Math.max(0.01, Math.min(1, Number(import.meta.env.VITE_FLASH_DUST_POSITION_USD || 0.10)));
 const FLASH_DUST_COLLATERAL_USD = Math.max(0, Math.min(0.05, Number(import.meta.env.VITE_FLASH_DUST_COLLATERAL_USD || 0.01)));
+const WALLET_AUTH_ACTION = 'wallet-auth';
+const FLASH_WALLET_AUTH_PROOF_TTL_MS = 9 * 60 * 1000;
 const FLASH_SOLANA_RPC_URLS = [
   SAME_ORIGIN_SOLANA_ALCHEMY_URL,
   SAME_ORIGIN_SOLANA_RPC_URL,
@@ -345,6 +347,26 @@ function normalizeOptionalSymbol(value) {
   return raw ? normalizeSymbol(raw) : '';
 }
 
+function isLikelySolanaPubkey(value) {
+  const raw = String(value || '').trim();
+  if (raw.length < 32 || raw.length > 44) return false;
+  try {
+    return new PublicKey(raw).toBase58() === raw;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeFlashMarketSymbol(...values) {
+  for (const value of values) {
+    const raw = String(value || '').trim();
+    if (!raw || isLikelySolanaPubkey(raw)) continue;
+    const symbol = normalizeSymbol(raw);
+    if (symbol && !isLikelySolanaPubkey(symbol)) return symbol;
+  }
+  return '';
+}
+
 function normalizeTradeType(side) {
   const s = String(side || '').toUpperCase();
   if (s === 'ASK' || s === 'SELL' || s === 'SHORT') return 'SHORT';
@@ -353,15 +375,15 @@ function normalizeTradeType(side) {
 }
 
 function flashPositionIdentity(pos = {}) {
-  const symbol = normalizeOptionalSymbol(
-    pos.marketSymbol
-    || pos.market_symbol
-    || pos.outputTokenSymbol
-    || pos.output_token_symbol
-    || pos.token
-    || pos.symbol
-    || pos.metric?.marketSymbol
-    || pos.metric?.symbol
+  const symbol = normalizeFlashMarketSymbol(
+    pos.marketSymbol,
+    pos.market_symbol,
+    pos.outputTokenSymbol,
+    pos.output_token_symbol,
+    pos.token,
+    pos.symbol,
+    pos.metric?.marketSymbol,
+    pos.metric?.symbol,
   );
   const tradeType = normalizeTradeType(
     pos.tradeType
@@ -387,17 +409,16 @@ function flashPositionKey(pos = {}) {
 }
 
 function flashPositionSymbol(pos = {}) {
-  return normalizeSymbol(
-    pos.marketSymbol
-    || pos.market_symbol
-    || pos.outputTokenSymbol
-    || pos.output_token_symbol
-    || pos.token
-    || pos.symbol
-    || pos.metric?.marketSymbol
-    || pos.metric?.symbol
-    || pos.market
-    || ''
+  return normalizeFlashMarketSymbol(
+    pos.marketSymbol,
+    pos.market_symbol,
+    pos.outputTokenSymbol,
+    pos.output_token_symbol,
+    pos.token,
+    pos.symbol,
+    pos.metric?.marketSymbol,
+    pos.metric?.symbol,
+    pos.market,
   );
 }
 
@@ -614,7 +635,7 @@ function flashPositionLookupKeys(pos = {}) {
   const marketPubkey = String(pos.marketPubkey || pos.market_pubkey || '').trim();
   const positionKey = String(pos.positionKey || pos.position_key || '').trim();
   const identity = flashPositionIdentity(pos);
-  const symbol = normalizeOptionalSymbol(pos.marketSymbol || pos.symbol || pos.metric?.marketSymbol || pos.metric?.symbol || '');
+  const symbol = normalizeFlashMarketSymbol(pos.marketSymbol, pos.symbol, pos.metric?.marketSymbol, pos.metric?.symbol);
   const tradeType = normalizeTradeType(pos.tradeType || pos.side || pos.metric?.side || pos.metric?.sideUi || '');
   if (marketPubkey) keys.add(marketPubkey);
   if (positionKey) keys.add(positionKey);
@@ -637,7 +658,7 @@ function flashExistingPositionMap(existing = {}) {
 }
 
 function flashExistingPositionForMetric(existingMap, marketPubkey, metric = {}) {
-  const symbol = normalizeOptionalSymbol(metric.marketSymbol || metric.symbol);
+  const symbol = normalizeFlashMarketSymbol(metric.marketSymbol, metric.symbol);
   const tradeType = normalizeTradeType(metric.side || metric.sideUi);
   return existingMap.get(marketPubkey)
     || existingMap.get(`${symbol}:${tradeType}`)
@@ -655,7 +676,7 @@ function flashPositionMetricStorageKey(pos = {}) {
 function flashMetricMatchesPosition(metric = {}, marketPubkey = '', pos = {}) {
   const posKeys = new Set(flashPositionLookupKeys(pos));
   if (marketPubkey && posKeys.has(marketPubkey)) return true;
-  const symbol = normalizeSymbol(metric.marketSymbol || metric.symbol || marketPubkey);
+  const symbol = normalizeFlashMarketSymbol(metric.marketSymbol, metric.symbol);
   const tradeType = normalizeTradeType(metric.side || metric.sideUi);
   return (symbol && tradeType && posKeys.has(`${symbol}:${tradeType}`))
     || (symbol && posKeys.has(symbol));
@@ -676,7 +697,13 @@ function flashPositionFromMetric(marketPubkey, metric = {}, priceRows = [], exis
   const mergedMetric = mergeFlashMetric(existingPosition?.metric || {}, metric);
   metric = mergedMetric;
   const tradeType = normalizeTradeType(metric.side || metric.sideUi || existingPosition?.tradeType || existingPosition?.side);
-  const symbol = normalizeSymbol(metric.marketSymbol || metric.symbol || existingPosition?.marketSymbol || existingPosition?.symbol || marketPubkey);
+  const symbol = normalizeFlashMarketSymbol(
+    metric.marketSymbol,
+    metric.symbol,
+    existingPosition?.marketSymbol,
+    existingPosition?.symbol,
+  );
+  if (!symbol) return null;
   const priceMap = flashPriceMap(priceRows);
   const collateralUsd = numberFromUi(metric.collateralUsdUi ?? existingPosition?.collateralUsdUi ?? existingPosition?.margin);
   const sizeUsd = numberFromUi(metric.sizeUsdUi ?? existingPosition?.sizeUsdUi ?? existingPosition?.size_usd);
@@ -739,7 +766,8 @@ function flashPositionFromMetric(marketPubkey, metric = {}, priceRows = [], exis
 
 function flashOrderFromMetric(marketPubkey, metric = {}, parent = {}) {
   const tradeType = normalizeTradeType(metric.side || metric.sideUi || parent.side || parent.sideUi);
-  const symbol = normalizeSymbol(metric.marketSymbol || metric.symbol || parent.marketSymbol || parent.symbol || marketPubkey);
+  const symbol = normalizeFlashMarketSymbol(metric.marketSymbol, metric.symbol, parent.marketSymbol, parent.symbol);
+  if (!symbol) return null;
   const triggerPriceUi = metric.triggerPriceUi ?? metric.trigger_price_ui;
   const limitPriceUi = metric.entryPriceUi ?? metric.entry_price_ui ?? metric.limitPriceUi ?? metric.limit_price_ui;
   return {
@@ -769,14 +797,16 @@ function flashOrdersFromMetricBundle(marketPubkey, metric = {}) {
   const rows = [];
   const pushRows = (items, type) => {
     for (const row of Array.isArray(items) ? items : []) {
-      rows.push(flashOrderFromMetric(marketPubkey, { ...row, type: row?.type || type }, metric));
+      const order = flashOrderFromMetric(marketPubkey, { ...row, type: row?.type || type }, metric);
+      if (order) rows.push(order);
     }
   };
   pushRows(metric.limitOrders || metric.limit_orders, 'LIMIT');
   pushRows(metric.takeProfitOrders || metric.take_profit_orders, 'TP');
   pushRows(metric.stopLossOrders || metric.stop_loss_orders, 'SL');
   if (rows.length) return rows;
-  return [flashOrderFromMetric(marketPubkey, metric)];
+  const order = flashOrderFromMetric(marketPubkey, metric);
+  return order ? [order] : [];
 }
 
 function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, options = {}) {
@@ -785,8 +815,14 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
   const existingMap = flashExistingPositionMap(existing);
   const positions = Object.entries(positionMetrics).map(([marketPubkey, metric]) => (
     flashPositionFromMetric(marketPubkey, metric, priceRows, flashExistingPositionForMetric(existingMap, marketPubkey, metric))
-  ));
-  const activePositions = positions.filter(pos => !isFlashDustPosition(pos));
+  )).filter(Boolean);
+  const existingPositions = rows(existing.positions).filter(pos => !!flashPositionSymbol(pos));
+  const hasExistingActivePositions = existingPositions.some(pos => !isFlashDustPosition(pos));
+  const shouldPreservePositions = hasExistingActivePositions
+    && positions.length === 0
+    && (options.preservePositions === true || Object.keys(positionMetrics).length > 0);
+  const committedPositions = shouldPreservePositions ? existingPositions : positions;
+  const activePositions = committedPositions.filter(pos => !isFlashDustPosition(pos));
   const orders = Object.entries(orderMetrics).flatMap(([marketPubkey, metric]) => flashOrdersFromMetricBundle(marketPubkey, metric));
   const marginUsed = activePositions.reduce((sum, p) => sum + numberFromUi(p.collateralUsdUi), 0);
   const pnlUsd = activePositions.reduce((sum, p) => sum + numberFromUi(p.pnl_usd), 0);
@@ -837,7 +873,7 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
     ...existing,
     ...snapshot,
     dex: 'flash',
-    positions,
+    positions: committedPositions,
     orders,
     balance: equity,
     equity,
@@ -860,7 +896,7 @@ function normalizeFlashSnapshot(snapshot = {}, priceRows = [], existing = {}, op
     withdrawable: availableUsdc,
     total_position_size_usd: activePositions.reduce((sum, p) => sum + numberFromUi(p.sizeUsdUi), 0),
     positions_count: activePositions.length,
-    dust_positions_count: positions.length - activePositions.length,
+    dust_positions_count: committedPositions.length - activePositions.length,
     orders_count: orders.length,
     source: snapshot.source || 'flash_main_ws',
   };
@@ -899,6 +935,16 @@ function bytesToBase64(bytes) {
     return btoa(binary);
   }
   return Buffer.from(bytes).toString('base64');
+}
+
+function flashWalletAuthMessage({ wallet, issuedAt }) {
+  return [
+    'Clash wallet auth',
+    `Action: ${WALLET_AUTH_ACTION}`,
+    `Wallet: ${publicKeyText(wallet)}`,
+    'DEX: flash',
+    `Issued At: ${issuedAt}`,
+  ].join('\n');
 }
 
 function decodeTransaction(base64) {
@@ -1223,7 +1269,7 @@ export function useFlash() {
   const token = playerToken(player);
   const connectedWalletAddr = isActiveDex ? solanaAddress(solWallet) : '';
   const registeredFlashWallet = isActiveDex ? (registeredDexWallet(player, 'flash', 'solana') || '') : '';
-  const accountOwner = registeredFlashWallet || connectedWalletAddr;
+  const accountOwner = connectedWalletAddr || registeredFlashWallet;
   const walletAddr = connectedWalletAddr;
 
   const [config, setConfig] = useState(null);
@@ -1246,6 +1292,7 @@ export function useFlash() {
   const wsReconnectRef = useRef(null);
   const refreshRef = useRef(null);
   const oneTapAgentRef = useRef(null);
+  const walletAuthProofRef = useRef({ wallet: '', proof: null, expiresAt: 0 });
   const [oneTapTrading, setOneTapTrading] = useState(() => disabledFlashOneTapState());
 
   useEffect(() => { pricesRef.current = prices; }, [prices]);
@@ -1281,9 +1328,10 @@ export function useFlash() {
     return () => { cancelled = true; };
   }, [isActiveDex, walletAddr]);
 
-  const walletMismatch = !!registeredFlashWallet
+  const registeredFlashWalletMismatch = !!registeredFlashWallet
     && !!connectedWalletAddr
     && publicKeyText(registeredFlashWallet) !== publicKeyText(connectedWalletAddr);
+  const walletMismatch = false;
 
   const refreshReferral = useCallback(async () => {
     if (!isActiveDex || !accountOwner || !token) {
@@ -1379,9 +1427,10 @@ export function useFlash() {
         pricesRef.current = nextPrices;
         setPrices(nextPrices);
         setPositions(prev => {
-          const nextPositions = prev.map(pos => (
-            pos?.metric ? flashPositionFromMetric(pos.marketPubkey || pos.positionKey || pos.symbol, pos.metric, nextPrices, pos) : pos
-          ));
+          const nextPositions = prev.map(pos => {
+            if (!pos?.metric) return pos;
+            return flashPositionFromMetric(pos.marketPubkey || pos.positionKey || pos.symbol, pos.metric, nextPrices, pos) || pos;
+          });
           positionsRef.current = nextPositions;
           accountRef.current = accountRef.current ? { ...accountRef.current, positions: nextPositions } : accountRef.current;
           return nextPositions;
@@ -1441,7 +1490,12 @@ export function useFlash() {
             ...(accountRef.current || {}),
             positions: positionsRef.current,
           };
-          const normalized = normalizeFlashSnapshot(msg.data || {}, pricesRef.current, existingAccount);
+          const normalized = normalizeFlashSnapshot(
+            msg.data || {},
+            pricesRef.current,
+            existingAccount,
+            { preservePositions: true },
+          );
           const nextAccount = {
             ...normalized,
             wallet_usdc: normalized.wallet_usdc ?? walletUsdcRef.current ?? accountRef.current?.wallet_usdc ?? null,
@@ -1470,7 +1524,7 @@ export function useFlash() {
             },
             pricesRef.current,
             existingAccount,
-            { preserveBalance: true },
+            { preserveBalance: true, preservePositions: true },
           );
           const nextAccount = {
             ...normalized,
@@ -2185,10 +2239,58 @@ export function useFlash() {
     return { ok: true, ...delegated };
   }, [account, isBasketDelegatedOnChain, tryBuildAndSend, waitForFlashBasket, walletAddr]);
 
+  const createFlashWalletAuthProof = useCallback(async () => {
+    const owner = publicKeyText(walletAddr);
+    if (!owner) throw new Error('Connect a Solana wallet first');
+    const cached = walletAuthProofRef.current;
+    if (cached?.wallet === owner && cached?.proof && Date.now() < cached.expiresAt) {
+      return cached.proof;
+    }
+    if (typeof solWallet?.signMessage !== 'function') {
+      throw new Error('Connected Solana wallet cannot sign the Flash reward proof.');
+    }
+    const issuedAt = new Date().toISOString();
+    const message = flashWalletAuthMessage({ wallet: owner, issuedAt });
+    const signatureBytes = await solWallet.signMessage(new TextEncoder().encode(message));
+    const proof = {
+      action: WALLET_AUTH_ACTION,
+      chain_type: 'solana',
+      wallet: owner,
+      dex: 'flash',
+      issued_at: issuedAt,
+      message,
+      signature: typeof signatureBytes === 'string' ? signatureBytes : bytesToBase64(signatureBytes),
+      signature_encoding: typeof signatureBytes === 'string' ? '' : 'base64',
+    };
+    walletAuthProofRef.current = {
+      wallet: owner,
+      proof,
+      expiresAt: Date.now() + FLASH_WALLET_AUTH_PROOF_TTL_MS,
+    };
+    return proof;
+  }, [solWallet, walletAddr]);
+
+  const needsFlashWalletAuthProof = useCallback(() => {
+    const linkedOwner = publicKeyText(registeredFlashWallet);
+    const connectedOwner = publicKeyText(walletAddr);
+    return !!connectedOwner && (!linkedOwner || linkedOwner !== connectedOwner || registeredFlashWalletMismatch);
+  }, [registeredFlashWallet, registeredFlashWalletMismatch, walletAddr]);
+
+  const ensureFlashRewardProofReady = useCallback(async () => {
+    if (!needsFlashWalletAuthProof()) return null;
+    try {
+      await createFlashWalletAuthProof();
+      return null;
+    } catch (e) {
+      return e?.message || 'Flash wallet signature required before trading so rewards can be credited.';
+    }
+  }, [createFlashWalletAuthProof, needsFlashWalletAuthProof]);
+
   const reportTrade = useCallback(async ({ signature, symbol, side, amount, leverage = 1, price, orderType = 'market', notionalUsd, signer = '', sessionToken = '', deferred = false } = {}) => {
     if (!token) return { error: 'Missing game session token' };
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
     const retryArgs = { signature, symbol, side, amount, leverage, price, orderType, notionalUsd, signer, sessionToken };
+    const needsWalletProof = needsFlashWalletAuthProof();
     const reportPayload = {
       signature,
       tx_hash: signature,
@@ -2203,6 +2305,13 @@ export function useFlash() {
       signer,
       sessionToken,
     };
+    if (needsWalletProof) {
+      try {
+        reportPayload.auth_proof = await createFlashWalletAuthProof();
+      } catch (e) {
+        return { error: e?.message || 'Flash wallet signature required for trade rewards.' };
+      }
+    }
     try {
       let data = null;
       for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -2214,6 +2323,10 @@ export function useFlash() {
           });
           break;
         } catch (e) {
+          if (!reportPayload.auth_proof && (e?.status === 401 || e?.status === 409)) {
+            reportPayload.auth_proof = await createFlashWalletAuthProof();
+            continue;
+          }
           if (e?.status !== 404 || attempt === 5) throw e;
           await new Promise(resolve => setTimeout(resolve, 1200));
         }
@@ -2233,12 +2346,14 @@ export function useFlash() {
       }
       return { error: e?.message || 'Flash trade verification failed' };
     }
-  }, [claimGold, token, walletAddr]);
+  }, [claimGold, createFlashWalletAuthProof, needsFlashWalletAuthProof, token, walletAddr]);
 
   const placeMarketOrder = useCallback(async (symbol, side, qty, slippage = '0.5', lev = 1, options = {}) => {
     if (!token) return { error: 'Missing game session token' };
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
     if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered Flash wallet' };
+    const proofError = await ensureFlashRewardProofReady();
+    if (proofError) return { error: proofError };
     const leverage = Number(lev || 1);
     const amount = Number(options?.collateral_delta_usd ?? options?.collateralDeltaUsd ?? qty ?? 0);
     if (!Number.isFinite(amount) || amount <= 0) return { error: 'Enter a Flash collateral amount before placing the order' };
@@ -2321,7 +2436,7 @@ export function useFlash() {
     } finally {
       setActionLoading(false);
     }
-  }, [accountOwner, ensureFlashBasketDelegated, markets, oneTapTradeParams, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [accountOwner, ensureFlashBasketDelegated, ensureFlashRewardProofReady, markets, oneTapTradeParams, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, qty, _tif, lev = 1, options = {}) => (
     placeMarketOrder(symbol, side, qty, '0.5', lev, {
@@ -2336,6 +2451,8 @@ export function useFlash() {
     if (!token) return { error: 'Missing game session token' };
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
     if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered Flash wallet' };
+    const proofError = await ensureFlashRewardProofReady();
+    if (proofError) return { error: proofError };
     const wantedSymbol = normalizeSymbol(symbol);
     const wantedSide = normalizeTradeType(side);
     const explicitPosition = options?.position || options?.pos || null;
@@ -2414,7 +2531,7 @@ export function useFlash() {
     } finally {
       setActionLoading(false);
     }
-  }, [accountOwner, ensureFlashBasketDelegated, oneTapTradeParams, positions, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
+  }, [accountOwner, ensureFlashBasketDelegated, ensureFlashRewardProofReady, oneTapTradeParams, positions, refresh, reportTrade, sendBuiltTransaction, token, walletAddr, walletMismatch]);
 
   const depositToPacifica = useCallback(async (amount, options = {}) => {
     if (!token) return { error: 'Missing game session token' };
