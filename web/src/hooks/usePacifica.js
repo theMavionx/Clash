@@ -221,6 +221,7 @@ export function usePacifica() {
   const withdrawTimerRef = useRef(null);
   const claimGoldTimersRef = useRef([]);
   const signedOpInFlightRef = useRef(new Map());
+  const agentSyncInFlightRef = useRef(new Map());
   const activatedRef = useRef(false);
   const activatingRef = useRef(null);
   const [builderApproved, setBuilderApproved] = useState(false);
@@ -305,6 +306,53 @@ export function usePacifica() {
     tokenRef.current = player?.token || null;
   }, [player?.token]);
 
+  const syncPacificaAgentToServer = useCallback(async () => {
+    if (!walletAddr || !signWithAgentKey) return false;
+    const token = tokenRef.current || window._playerToken || null;
+    if (!token) {
+      console.warn('[Pacifica] agent sync skipped: no game token');
+      return false;
+    }
+    const proof = signWithAgentKey('clash_agent_sync', { account: walletAddr });
+    if (!proof?.agent_wallet || !proof?.signature) return false;
+    const key = `${walletAddr}:${proof.agent_wallet}:${token}`;
+    const existing = agentSyncInFlightRef.current.get(key);
+    if (existing) return existing;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    const run = fetch(`${GAME_API}/pacifica/agent/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'pacifica' },
+      body: JSON.stringify(proof),
+      signal: controller.signal,
+    }).then(async (res) => {
+      if (res.ok) {
+        console.log(`[Pacifica] agent sync OK agent=${String(proof.agent_wallet || '').slice(0, 8)}...`);
+        return true;
+      }
+      let text = '';
+      try { text = await res.text(); } catch {}
+      console.warn(`[Pacifica] agent sync failed ${res.status}`, {
+        body: text.slice(0, 300),
+        agent: proof.agent_wallet,
+      });
+      return false;
+    }).catch((e) => {
+      console.warn('[Pacifica] agent sync error', {
+        error: e?.message || String(e),
+        agent: proof.agent_wallet,
+      });
+      return false;
+    }).finally(() => {
+      clearTimeout(timeout);
+      setTimeout(() => {
+        if (agentSyncInFlightRef.current.get(key) === run) agentSyncInFlightRef.current.delete(key);
+      }, 10000);
+    });
+    agentSyncInFlightRef.current.set(key, run);
+    return run;
+  }, [walletAddr, signWithAgentKey]);
+
   // Hydrate the builder_code activation flag from server state. localStorage
   // is the primary cache (faster, sticks across reloads on this device),
   // but if it gets cleared (incognito, browser cleanup, Privy iframe reset)
@@ -341,6 +389,7 @@ export function usePacifica() {
     // pacifica_agents (signature-verified ledger) for fan-out; agent_wallet is
     // only written by /pacifica/agent after checking the master signature.
     try {
+      await syncPacificaAgentToServer();
       const res = await fetch(`${GAME_API}/trading/claim-gold`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'pacifica' },
@@ -384,7 +433,7 @@ export function usePacifica() {
       console.warn('[usePacifica] claim-gold network error:', e?.message || e);
       return null;
     }
-  }, [walletAddr]);
+  }, [walletAddr, syncPacificaAgentToServer]);
 
   const scheduleClaimGold = useCallback(() => {
     // Pacifica trade history can lag the order response by a moment. Claim
@@ -478,6 +527,7 @@ export function usePacifica() {
         }
         const body = { ...headerBag, ...payload };
         console.log(`[Pacifica] ${type} → ${endpoint} (path=agent, attempt=${label}, agent=${String(headerBag.agent_wallet || '').slice(0,8)}…)`);
+        await syncPacificaAgentToServer();
         let res, text, parsed = null;
         try {
           const result = await pacificaRequest(endpoint, {
@@ -736,7 +786,7 @@ export function usePacifica() {
       // activation/retry layer above can react to it instead of bailing.
       return { error: text || `API error ${res.status}`, code: res.status, _nonJson: true };
     }
-  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, walletAddr, signWithAgentKey, bindAgent, forgetAgentLocally, adapterName, isIncompatibleWallet]);
+  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, walletAddr, signWithAgentKey, syncPacificaAgentToServer, bindAgent, forgetAgentLocally, adapterName, isIncompatibleWallet]);
 
   // Onboarding activation — must be defined before signedRequestWithActivation
   const activate = useCallback(async () => {

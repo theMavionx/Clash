@@ -13416,6 +13416,73 @@ router.post('/pacifica/agent', auth, (req, res) => {
   res.json({ ok: true, agent_wallet, total_agents: totalAgents });
 });
 
+// Repair path for browser-only one-tap agents. If the original
+// /pacifica/agent persist failed because the game token was missing/stale,
+// each later agent-signed order can still prove possession of the agent key.
+// Persisting it here lets claim-gold/tasks fetch that agent's trade history.
+router.post('/pacifica/agent/sync', auth, (req, res) => {
+  const { account, agent_wallet, signature, timestamp, expiry_window } = req.body || {};
+  if (!playerCanUsePacifica(req, account)) {
+    return res.status(400).json({ error: 'pacifica account is not linked or ready' });
+  }
+  if (!isValidSolanaPubkey(account)) return res.status(400).json({ error: 'invalid account pubkey' });
+  if (!isValidSolanaPubkey(agent_wallet)) return res.status(400).json({ error: 'invalid agent_wallet pubkey' });
+  if (typeof signature !== 'string' || signature.length < 64) {
+    return res.status(400).json({ error: 'signature required' });
+  }
+  const tsNum = Number(timestamp);
+  const expiry = Number(expiry_window) || 5000;
+  const now = Date.now();
+  if (!Number.isFinite(tsNum) || Math.abs(now - tsNum) > 5 * 60 * 1000) {
+    return res.status(400).json({ error: 'timestamp out of window (max 5 min skew)' });
+  }
+  const signedAccount = canonicalWalletIdentifier(account || '');
+  const playerWallet = canonicalWalletIdentifier(req.player.wallet || '');
+  const readyAccount = getReadyPlayerDexAccount(req.player.id, 'pacifica');
+  const readyWallet = canonicalWalletIdentifier(readyAccount?.wallet_address || '');
+  if (playerWallet && signedAccount && playerWallet !== signedAccount && readyWallet !== signedAccount) {
+    return res.status(403).json({ error: 'signed account does not match player' });
+  }
+  const message = pacificaCanonicalMessage(
+    'clash_agent_sync',
+    { account },
+    tsNum,
+    expiry,
+  );
+  if (!verifyMasterSignature({ message, signatureB58: signature, accountB58: agent_wallet })) {
+    return res.status(403).json({ error: 'invalid agent signature' });
+  }
+  const txn = db.db.transaction(() => {
+    db.db.prepare(`
+      INSERT OR IGNORE INTO pacifica_agents (player_id, agent_wallet) VALUES (?, ?)
+    `).run(req.player.id, agent_wallet);
+    db.db.prepare(`
+      DELETE FROM pacifica_agents
+      WHERE player_id = ?
+        AND agent_wallet IN (
+          SELECT agent_wallet FROM pacifica_agents
+          WHERE player_id = ?
+          ORDER BY bound_at DESC, agent_wallet ASC
+          LIMIT -1 OFFSET ?
+        )
+    `).run(req.player.id, req.player.id, PACIFICA_AGENTS_CAP);
+    db.db.prepare(`
+      INSERT INTO trading_rewards (player_id, dex, wallet, agent_wallet)
+      VALUES (?, 'pacifica', ?, ?)
+      ON CONFLICT(player_id, dex) DO UPDATE SET
+        wallet = COALESCE(NULLIF(excluded.wallet, ''), trading_rewards.wallet),
+        agent_wallet = excluded.agent_wallet
+    `).run(req.player.id, account, agent_wallet);
+  });
+  try { txn(); } catch (e) {
+    console.warn(`[pacifica/agent/sync] persist failed:`, e.message);
+    return res.status(500).json({ error: 'failed to persist' });
+  }
+  const totalAgents = db.db.prepare('SELECT COUNT(*) AS n FROM pacifica_agents WHERE player_id = ?').get(req.player.id)?.n || 0;
+  console.log(`[pacifica/agent/sync] player=${req.player.name} master=${account.slice(0,10)} agent=${agent_wallet.slice(0,10)} sig=ok -> persisted (total agents tracked: ${totalAgents}/${PACIFICA_AGENTS_CAP})`);
+  res.json({ ok: true, agent_wallet, total_agents: totalAgents });
+});
+
 // Server-side mirror of the client's localStorage `clash_pacifica_activated`
 // flag. Pacifica's builder_code approval is one-time-per-account but the
 // client used to forget that whenever localStorage was cleared (incognito,
@@ -21266,6 +21333,11 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
 // We show every DEX's tournaments — the client filters/sorts by the
 // player's own DEX. Admin gets full list (incl. drafts) via the admin
 // endpoint below.
+router.use('/tournaments', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 router.get('/tournaments', (req, res) => {
   const rows = db.db.prepare(`
     SELECT * FROM tournaments
