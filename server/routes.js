@@ -14366,6 +14366,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       result: txnResPac.paid > 0 ? 'paid' : 'zero_payout',
       reason: reasons.join(' + ') || 'No new rewards',
     });
+    await refreshStartedTaskProgressForTradeClaim(req.player, dex, req.headers);
 
     res.json({
       gold: Math.floor(txnResPac.paid),
@@ -14582,6 +14583,48 @@ async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders
   } catch (e) {
     console.warn(`[tasks] live progress refresh failed player=${player?.name || player?.id} task=${task?.id}:`, e.message);
     return playerTask;
+  }
+}
+
+async function refreshStartedTaskProgressForTradeClaim(player, dex, requestHeaders = null) {
+  const effectiveDex = String(dex || '').trim().toLowerCase();
+  if (!player?.id || !LIVE_TASK_PROGRESS_DEXES.has(effectiveDex)) return;
+  const taskHeaders = {
+    ...(requestHeaders || {}),
+    'x-dex': effectiveDex,
+    'x-clash-dex': effectiveDex,
+  };
+  const list = tasks.getActiveTasks();
+  const progressContext = {};
+
+  if (effectiveDex === 'pacifica') {
+    let minStartId = Infinity;
+    for (const task of list) {
+      const pt = tasks.getPlayerTask(player.id, task.id);
+      if (!pt || pt.claimed_at) continue;
+      const snap = tasks.parseParams(pt.snapshot);
+      const startId = Number(snap.trade_id_start || 0);
+      if (Number.isFinite(startId) && startId >= 0) minStartId = Math.min(minStartId, startId);
+    }
+    if (Number.isFinite(minStartId)) {
+      try {
+        progressContext.prefetchedTrades = await withTaskProgressTimeoutMs(
+          tasks.fetchWalletTrades({ ...player, dex: effectiveDex }, { since: minStartId, headers: taskHeaders }),
+          `player=${player?.name || player?.id} post-claim-tasks-prefetch dex=${effectiveDex}`,
+          PACIFICA_TASK_PREFETCH_TIMEOUT_MS,
+        );
+      } catch (e) {
+        console.warn(`[tasks] post-claim prefetch failed player=${player?.name || player?.id} dex=${effectiveDex}:`, e.message);
+      }
+    }
+  }
+
+  for (const task of list) {
+    const eligibility = tasks.checkTaskEligibility(player, task);
+    if (!eligibility.ok) continue;
+    const pt = tasks.getPlayerTask(player.id, task.id);
+    if (!pt || pt.claimed_at) continue;
+    await maybeRefreshTaskProgress(player, task, pt, taskHeaders, progressContext);
   }
 }
 

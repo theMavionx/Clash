@@ -901,6 +901,14 @@ async function fetchPacificaAllTradesUncached(player, opts = {}) {
   } catch (e) {
     console.warn(`[pacifica fetch] pacifica_agents read failed:`, e.message);
   }
+  try {
+    const row = db.db.prepare(
+      'SELECT agent_wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+    ).get(player.id, 'pacifica');
+    if (row && isSolanaWallet(row.agent_wallet)) agents.unshift(row.agent_wallet);
+  } catch (e) {
+    console.warn(`[pacifica fetch] trading_rewards.agent_wallet read failed:`, e.message);
+  }
 
   const queryList = [...new Set([master, ...agents].filter(Boolean))]
     .slice(0, PACIFICA_FETCH_FANOUT_CAP);

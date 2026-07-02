@@ -219,6 +219,7 @@ export function usePacifica() {
   const wsRef = useRef(null);
   const marketsRef = useRef([]);
   const withdrawTimerRef = useRef(null);
+  const claimGoldTimersRef = useRef([]);
   const signedOpInFlightRef = useRef(new Map());
   const activatedRef = useRef(false);
   const activatingRef = useRef(null);
@@ -232,6 +233,11 @@ export function usePacifica() {
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
   const walletAddr = privyActive ? privyAddr : (adapterAddr || privyAddr);
+
+  const clearScheduledClaimGold = useCallback(() => {
+    for (const timer of claimGoldTimersRef.current) clearTimeout(timer);
+    claimGoldTimersRef.current = [];
+  }, []);
 
   useEffect(() => {
     const cached = readActivationCache(walletAddr);
@@ -382,11 +388,18 @@ export function usePacifica() {
 
   const scheduleClaimGold = useCallback(() => {
     // Pacifica trade history can lag the order response by a moment. Claim
-    // twice so market opens/closes still credit gold + tournaments even if
-    // the account_trades websocket event is missed while the tab is asleep.
-    setTimeout(() => { claimGold(); }, 1500);
-    setTimeout(() => { claimGold(); }, 6000);
-  }, [claimGold]);
+    // several times so market opens/closes and delayed limit fills still
+    // credit gold + tournaments even if the first history read races ahead
+    // of Pacifica's public trade-history index.
+    clearScheduledClaimGold();
+    for (const delay of [1500, 6000, 15000, 30000]) {
+      const timer = setTimeout(() => {
+        claimGoldTimersRef.current = claimGoldTimersRef.current.filter(id => id !== timer);
+        claimGold();
+      }, delay);
+      claimGoldTimersRef.current.push(timer);
+    }
+  }, [claimGold, clearScheduledClaimGold]);
 
   // Fetch wallet USDC balance — try connection first, fallback to direct RPC
   const fetchWalletUsdc = useCallback(async () => {
@@ -1042,6 +1055,7 @@ export function usePacifica() {
         if (res.error) throw new Error(res.error);
         fetchOrders();
         fetchAccount();
+        scheduleClaimGold();
         return res;
       } catch (e) {
         setError(e.message);
@@ -1050,7 +1064,7 @@ export function usePacifica() {
         setLoading(false);
       }
     });
-  }, [walletAddr, signedRequestWithActivation, fetchOrders, fetchAccount, runSignedOnce]);
+  }, [walletAddr, signedRequestWithActivation, fetchOrders, fetchAccount, scheduleClaimGold, runSignedOnce]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex, _tradeIndex, fullClose = false) => {
     if (!walletAddr) return;
@@ -1199,7 +1213,6 @@ export function usePacifica() {
     let ws, reconnectTimer, pingTimer, pongTimer, restFallbackTimer;
     let latestPrices = null;
     let priceThrottleTimer = null;
-    let claimGoldTimer = null;
     let retryCount = 0;
     const PING_INTERVAL = 15000;
     const PONG_TIMEOUT = 5000;
@@ -1329,9 +1342,7 @@ export function usePacifica() {
           }
             // Real-time: when trade happens, claim gold from server
             if (msg.channel === 'account_trades' && msg.data) {
-              // Small delay to let Pacifica finalize the trade
-              clearTimeout(claimGoldTimer);
-              claimGoldTimer = setTimeout(() => wsHandlersRef.current.claimGold?.(), 1000);
+              scheduleClaimGold();
             }
         } catch {}
       };
@@ -1386,13 +1397,31 @@ export function usePacifica() {
       clearTimeout(reconnectTimer);
       clearInterval(restFallbackTimer);
       clearTimeout(priceThrottleTimer);
-      clearTimeout(claimGoldTimer);
+      clearScheduledClaimGold();
       clearTimeout(withdrawTimerRef.current);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       if (ws) { ws.onclose = null; ws.onerror = null; ws.close(); }
     };
-  }, [walletAddr, isActiveDex]);
+  }, [walletAddr, isActiveDex, scheduleClaimGold, clearScheduledClaimGold]);
+
+  // Safety net for fills missed by Pacifica websocket delivery or indexed
+  // after the short post-order claim window. Runs only for the active
+  // Pacifica tab and only while visible, so it keeps reward credit reliable
+  // without turning every mounted hook into a background poller.
+  useEffect(() => {
+    if (!walletAddr || !isActiveDex) return;
+    const fire = () => claimGold();
+    const kickoff = setTimeout(fire, 5000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fire();
+    }, 60_000);
+    return () => {
+      clearTimeout(kickoff);
+      clearInterval(iv);
+    };
+  }, [walletAddr, isActiveDex, claimGold]);
 
   // Fetch markets once
   useEffect(() => { fetchMarkets(); }, [fetchMarkets]);
