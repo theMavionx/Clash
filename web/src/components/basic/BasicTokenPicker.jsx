@@ -11,6 +11,10 @@ import { fmtPrice } from '../../lib/fmtPrice';
 
 const PCT_GREEN = '#4caf50';
 const PCT_RED = '#e53935';
+const FIAT_SYMBOLS = new Set([
+  'AUD', 'BRL', 'CAD', 'CHF', 'CNH', 'EUR', 'GBP', 'IDR', 'INR', 'JPY', 'KRW',
+  'MXN', 'NZD', 'SEK', 'SGD', 'TRY', 'TWD', 'USD', 'ZAR',
+]);
 
 function pctColor(pct) {
   const n = Number(pct);
@@ -23,6 +27,22 @@ function fmtPct(p) {
   const n = Number(p);
   if (!Number.isFinite(n)) return '—';
   return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+}
+
+function isForexMarket(m) {
+  const category = String(m?.category || m?.assetClass || m?.asset_class || '').toLowerCase();
+  if (category.includes('forex')) return true;
+  const pair = String(m?.pair || m?.market_name || '').toUpperCase().trim();
+  const parts = pair.split('/');
+  return parts.length === 2 && FIAT_SYMBOLS.has(parts[0]) && FIAT_SYMBOLS.has(parts[1]);
+}
+
+function marketDisplaySymbol(m) {
+  if (m?.display_symbol) return String(m.display_symbol);
+  if (isForexMarket(m) && (m?.pair || m?.market_name)) {
+    return String(m.pair || m.market_name).toUpperCase();
+  }
+  return String(m?.symbol || '');
 }
 
 // 24h-change pill is rendered as a tiny horizontal bar where the fill width
@@ -58,25 +78,41 @@ function BasicTokenPicker({ markets, prices, onPick }) {
   // existent `change_24h` key, hence the +0.00% on every card.
   const list = useMemo(() => {
     if (!Array.isArray(markets)) return [];
-    const priceBy = {};
+    const priceBySymbol = {};
+    const priceByPair = {};
     if (Array.isArray(prices)) {
-      for (const p of prices) priceBy[p.symbol] = p;
+      for (const p of prices) {
+        if (p?.symbol && !priceBySymbol[p.symbol]) priceBySymbol[p.symbol] = p;
+        const pairKey = p?.pair_index ?? p?.market_id ?? p?.asset_id;
+        if (pairKey != null) priceByPair[String(pairKey)] = p;
+      }
     }
     const q = search.trim().toLowerCase();
     return markets
-      .filter(m => !q || m.symbol.toLowerCase().includes(q))
+      .filter(m => {
+        if (!q) return true;
+        return [m.symbol, m.display_symbol, m.pair, m.market_name, m.base]
+          .some(value => String(value || '').toLowerCase().includes(q));
+      })
       .map(m => {
-        const p = priceBy[m.symbol];
+        const pairKey = m.pair_index ?? m.market_id ?? m.asset_id;
+        const displaySymbol = marketDisplaySymbol(m);
+        const p = (pairKey != null ? priceByPair[String(pairKey)] : null)
+          || priceBySymbol[displaySymbol]
+          || priceBySymbol[m.symbol];
         const mark = p ? parseFloat(p.mark || p.mid || 0) : 0;
         const yest = p ? parseFloat(p.yesterday_price || 0) : 0;
         const change24h = yest > 0 ? ((mark - yest) / yest) * 100 : 0;
         return {
-          symbol: m.symbol,
-          iconSym: m.icon_symbol || m.base || m.symbol,
+          key: String(pairKey ?? displaySymbol ?? m.symbol),
+          symbol: displaySymbol,
+          iconSym: m.icon_symbol || m.base || displaySymbol,
           price: mark,
           change24h,
           volume: Number(p?.volume_24h || 0),
-          market: m,
+          market: displaySymbol !== m.symbol && isForexMarket(m)
+            ? { ...m, symbol: displaySymbol, display_symbol: displaySymbol }
+            : m,
         };
       })
       .sort((a, b) => b.volume - a.volume);
@@ -87,7 +123,7 @@ function BasicTokenPicker({ markets, prices, onPick }) {
     // scrollbar styles injected by FuturesPanel (matches ShopPanel,
     // SymbolPicker etc. so it doesn't feel like a bolted-on screen).
     <div className="grad-scrollbar" style={shared.page}>
-      <h2 style={shared.title}>Pick a token</h2>
+      <h2 style={shared.title}>Pick an asset</h2>
       <div style={shared.subtitle}>What do you want to trade?</div>
 
       <div style={S.searchWrap}>
@@ -103,12 +139,12 @@ function BasicTokenPicker({ markets, prices, onPick }) {
       <div style={S.grid}>
         {list.length === 0 && (
           <div style={S.empty}>
-            {markets?.length ? `No tokens match "${search}"` : 'Loading markets…'}
+            {markets?.length ? `No assets match "${search}"` : 'Loading markets…'}
           </div>
         )}
         {list.map((t, i) => (
           <motion.button
-            key={t.symbol}
+            key={t.key}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: Math.min(i * 0.025, 0.4), duration: 0.2 }}

@@ -93,6 +93,21 @@ export function ostiumPositionTriggerReferencePrice(position = {}) {
   );
 }
 
+export function ostiumPositionLiquidationPrice(position = {}) {
+  const raw = position?._raw?.position || position?._raw || {};
+  return firstFinite(
+    position?.liquidation_price,
+    position?.liquidationPrice,
+    position?.liq_price,
+    position?.liqPrice,
+    position?.liquidation,
+    raw?.liquidationPx,
+    raw?.liquidationPrice,
+    raw?.liqPx,
+    raw?.liqPrice,
+  );
+}
+
 export function ostiumPositionLeverage(position = {}) {
   const raw = position?._raw?.position || position?._raw || {};
   const direct = normalizeScaledLeverage(firstFinite(
@@ -179,16 +194,25 @@ export function validateOstiumStopLossDirection(position = {}, stopLoss) {
   }
 
   const isLong = ostiumPositionOpenSide(position) !== 'ask';
-  const badSl = isLong ? sl >= reference : sl <= reference;
+  const liquidation = ostiumPositionLiquidationPrice(position);
+  const hasLiquidation = liquidation != null && liquidation > 0;
+  const badSl = isLong
+    ? sl >= reference || (hasLiquidation && sl <= liquidation)
+    : sl <= reference || (hasLiquidation && sl >= liquidation);
   if (badSl) {
+    const currentLabel = `$${formatPrice(reference)}`;
+    const liquidationLabel = hasLiquidation ? `$${formatPrice(liquidation)}` : 'the liquidation price';
     return {
       ok: false,
       reference,
+      liquidation,
       stopLoss: sl,
-      error: `SL for ${isLong ? 'LONG' : 'SHORT'} must be ${isLong ? 'below' : 'above'} current price ($${formatPrice(reference)}).`,
+      error: isLong
+        ? `SL should be above liquidation price and below current price. Liq: ${liquidationLabel}, current: ${currentLabel}.`
+        : `SL should be below liquidation price and above current price. Liq: ${liquidationLabel}, current: ${currentLabel}.`,
     };
   }
-  return { ok: true, reference, stopLoss: sl };
+  return { ok: true, reference, liquidation, stopLoss: sl };
 }
 
 export function validateOstiumTakeProfitLimit(position = {}, takeProfit, maxPct = OSTIUM_MAX_TAKE_PROFIT_PCT) {

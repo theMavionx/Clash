@@ -11,6 +11,7 @@ import {
   OSTIUM_DELEGATE_MIN_ETH,
   OSTIUM_DELEGATE_TARGET_ETH,
   OSTIUM_MAX_ALLOWANCE_CHECK_USD,
+  OSTIUM_ORACLE_FEE_BUFFER_USD,
   ostiumClientConfig,
 } from '../lib/ostiumConfig';
 import {
@@ -74,8 +75,12 @@ function assertOstiumUsdcBalance(account, requiredCollateral) {
   if (available == null) {
     throw new Error('Could not verify Ostium USDC balance. Refresh balance and try again.');
   }
-  if (required > available + 0.000001) {
-    throw new Error(`Insufficient Ostium USDC. Need $${required.toFixed(2)}, available $${available.toFixed(2)}.`);
+  const maxMargin = Math.max(0, available - OSTIUM_ORACLE_FEE_BUFFER_USD);
+  if (required > maxMargin + 0.000001) {
+    throw new Error(
+      `Ostium keeps $${OSTIUM_ORACLE_FEE_BUFFER_USD.toFixed(2)} USDC for oracle fees. ` +
+      `Use $${maxMargin.toFixed(2)} margin or less from your $${available.toFixed(2)} balance.`
+    );
   }
 }
 
@@ -155,9 +160,12 @@ function isOstiumValidationError(error) {
 }
 
 function findBySymbol(rows, symbol) {
-  const target = String(symbol || '').toUpperCase().replace(/-PERP$/u, '');
+  const target = String(symbol || '').toUpperCase().replace(/-PERP$/u, '').replace('-', '/');
   return (rows || []).find(row => (
     String(row?.symbol || '').toUpperCase() === target
+    || String(row?.display_symbol || '').toUpperCase() === target
+    || String(row?.pair || '').toUpperCase() === target
+    || String(row?.market_name || '').toUpperCase() === target
     || String(row?.pair || '').toUpperCase().split('/')[0] === target
     || String(row?.market_name || '').toUpperCase().split('/')[0] === target
   )) || null;
@@ -168,10 +176,13 @@ function symbolRowCount(rows, symbol) {
 }
 
 function symbolRows(rows, symbol) {
-  const target = String(symbol || '').toUpperCase().replace(/-PERP$/u, '');
+  const target = String(symbol || '').toUpperCase().replace(/-PERP$/u, '').replace('-', '/');
   if (!target) return [];
   return (rows || []).filter(row => (
     String(row?.symbol || '').toUpperCase() === target
+    || String(row?.display_symbol || '').toUpperCase() === target
+    || String(row?.pair || '').toUpperCase() === target
+    || String(row?.market_name || '').toUpperCase() === target
     || String(row?.pair || '').toUpperCase().split('/')[0] === target
     || String(row?.market_name || '').toUpperCase().split('/')[0] === target
   ));

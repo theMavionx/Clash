@@ -82,6 +82,13 @@ function toPythSymbol(sym) {
   const raw = String(sym || '').toUpperCase().trim();
   // Strip optional quote suffix first ("APT/USD" → "APT"). But NOT for FX
   // pairs stored as "USD/JPY" — those shouldn't be split naively.
+  if (raw.includes('/')) {
+    const [baseRaw, quoteRaw = 'USD'] = raw.split('/');
+    const base = baseRaw.trim();
+    const quote = quoteRaw.trim();
+    if (base === 'USD' && FX_NON_USD.has(quote)) return `FX.USD/${quote}`;
+    if (quote === 'USD' && FX_NON_USD.has(base)) return `FX.${base}/USD`;
+  }
   const s = raw.includes('/') ? raw.split('/')[0].trim() : raw;
 
   // FX: symbols stored as "USDJPY" → "FX.USD/JPY"

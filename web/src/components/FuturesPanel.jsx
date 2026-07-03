@@ -52,6 +52,7 @@ import {
   validateOstiumTakeProfitDirection,
   validateOstiumTakeProfitLimit,
 } from '../lib/ostiumTpLimits';
+import { OSTIUM_ORACLE_FEE_BUFFER_USD } from '../lib/ostiumConfig';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
@@ -64,6 +65,10 @@ const TABS = [
 ];
 
 const POPULAR_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'SUI', 'TRUMP'];
+const FIAT_SYMBOLS = new Set([
+  'AUD', 'BRL', 'CAD', 'CHF', 'CNH', 'EUR', 'GBP', 'IDR', 'INR', 'JPY', 'KRW',
+  'MXN', 'NZD', 'SEK', 'SGD', 'TRY', 'TWD', 'USD', 'ZAR',
+]);
 const PACIFICA_MIN_NOTIONAL_USD = 10;
 const PACIFICA_MARKET_SLIPPAGE_RATE = 0.005;
 const PACIFICA_DEFAULT_TAKER_FEE_RATE = 0.0004;
@@ -130,6 +135,22 @@ function baseSymbolForIcon(market, fallbackSymbol = '') {
     .replace(/[_/-]?(USDT|USDC|USD|PERP)$/iu, '')
     .replace(/[_/-]?(USDT|USDC|USD)[_/-]?PERP$/iu, '')
     .replace(/[_/-]?(USDT|USDC|USD)$/iu, '');
+}
+
+function isForexMarket(market) {
+  const category = String(market?.category || market?.assetClass || market?.asset_class || '').toLowerCase();
+  if (category.includes('forex')) return true;
+  const pair = String(market?.pair || market?.market_name || '').toUpperCase().trim();
+  const parts = pair.split('/');
+  return parts.length === 2 && FIAT_SYMBOLS.has(parts[0]) && FIAT_SYMBOLS.has(parts[1]);
+}
+
+function marketDisplaySymbol(market) {
+  if (market?.display_symbol) return String(market.display_symbol);
+  if (isForexMarket(market) && (market?.pair || market?.market_name)) {
+    return String(market.pair || market.market_name).toUpperCase();
+  }
+  return String(market?.symbol || '');
 }
 
 function marketChange24h(priceRow) {
@@ -1724,18 +1745,30 @@ const DecibelDepositGate = ({
 const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSelect, fullscreen, signals }) {
   const [search, setSearch] = useState('');
   const rows = useMemo(() => {
+    const priceBySymbol = new Map();
+    const priceByPair = new Map();
+    for (const price of prices || []) {
+      if (price?.symbol && !priceBySymbol.has(price.symbol)) priceBySymbol.set(price.symbol, price);
+      const pairKey = price?.pair_index ?? price?.market_id ?? price?.asset_id;
+      if (pairKey != null) priceByPair.set(String(pairKey), price);
+    }
     return markets.map(m => {
-      const p = prices.find(pr => pr.symbol === m.symbol);
+      const pairKey = m.pair_index ?? m.market_id ?? m.asset_id;
+      const displaySymbol = marketDisplaySymbol(m);
+      const p = (pairKey != null ? priceByPair.get(String(pairKey)) : null)
+        || priceBySymbol.get(displaySymbol)
+        || priceBySymbol.get(m.symbol);
       const priceData = { ...m, ...(p || {}) };
       const mark = firstFinite(priceData.mark, priceData._mark, priceData.mid, priceData.oracle) || 0;
       const change = marketChange24h(priceData);
       const activity = marketActivity(priceData);
       return {
-        symbol: m.symbol,
+        key: String(pairKey ?? displaySymbol ?? m.symbol),
+        symbol: displaySymbol,
         // Prefer the human-readable pair ("USD/JPY") when present; falls back
         // to the symbol key for legacy Pacifica markets that only ship base.
-        label: m.pair || m.symbol,
-        iconSym: baseSymbolForIcon(m, m.symbol),
+        label: displaySymbol,
+        iconSym: baseSymbolForIcon(m, displaySymbol),
         maxLev: m.max_leverage,
         mark,
         change,
@@ -1773,7 +1806,7 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
             <th style={{...SP.th, textAlign: 'right'}}>24h</th>
           </tr></thead>
           <tbody>{rows.map(r => (
-            <tr key={r.symbol} onClick={() => onSelect(r.symbol)}
+            <tr key={r.key} onClick={() => onSelect(r.symbol)}
               style={{...SP.row, background: r.symbol === symbol ? '#e8dfc8' : 'transparent', cursor: 'pointer'}}>
               <td style={SP.td}>
                 <div style={{display: 'flex', alignItems: 'center', gap: 5}}>
@@ -3029,6 +3062,11 @@ function FuturesPanel() {
       ? pacificaUsableMargin({ balance: pacBalance })
       : pacBalance
   ), [dex, pacBalance]);
+  const ostiumMaxMargin = useMemo(() => (
+    dex === 'ostium'
+      ? Math.max(0, pacBalance - OSTIUM_ORACLE_FEE_BUFFER_USD)
+      : pacBalance
+  ), [dex, pacBalance]);
   const hotstuffMaxMargin = useMemo(() => (
     dex === 'hotstuff'
       ? floorUsdCents(hotstuffUsableMargin({
@@ -3046,6 +3084,8 @@ function FuturesPanel() {
     ? phoenixMaxMargin
     : dex === 'pacifica'
     ? pacificaMaxMargin
+    : dex === 'ostium'
+    ? ostiumMaxMargin
     : dex === 'hotstuff'
     ? hotstuffMaxMargin
     : dex === 'flash'
@@ -3308,8 +3348,11 @@ function FuturesPanel() {
           setLocalAlert(`Ostium minimum margin is ${OSTIUM_MIN_MARGIN_USD} USDC. Increase margin before signing.`);
           return;
         }
-        if (dex === 'ostium' && Number.isFinite(collateralUsdc) && collateralUsdc > pacBalance + 0.000001) {
-          setLocalAlert(`Insufficient Ostium USDC. Need $${collateralUsdc.toFixed(2)}, available $${pacBalance.toFixed(2)}.`);
+        if (dex === 'ostium' && Number.isFinite(collateralUsdc) && collateralUsdc > ostiumMaxMargin + 0.000001) {
+          setLocalAlert(
+            `Ostium keeps $${OSTIUM_ORACLE_FEE_BUFFER_USD.toFixed(2)} USDC for oracle fees. ` +
+            `Use $${ostiumMaxMargin.toFixed(2)} margin or less from your $${pacBalance.toFixed(2)} balance.`
+          );
           return;
         }
         if (dex === 'phoenix') {
@@ -3578,7 +3621,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, maxLev, marginModes]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, maxLev, marginModes]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -3877,7 +3920,7 @@ function FuturesPanel() {
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
-              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica' || dex === 'hotstuff') ? 'usable' : dex === 'flash' ? 'free' : dex === 'ostium' ? 'USDC' : 'balance'}
+              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica' || dex === 'hotstuff' || dex === 'ostium') ? 'usable' : dex === 'flash' ? 'free' : 'balance'}
             </span>
             <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
               buying power ${maxUsdc.toFixed(0)}

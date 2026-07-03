@@ -37,6 +37,7 @@ export const OSTIUM_MAX_ALLOWANCE_CHECK_USD = (
   import.meta.env.VITE_OSTIUM_MAX_ALLOWANCE_CHECK_USD
   || '1000000000'
 );
+export const OSTIUM_ORACLE_FEE_BUFFER_USD = 0.10;
 
 export function ostiumClientConfig(extra = {}) {
   return {

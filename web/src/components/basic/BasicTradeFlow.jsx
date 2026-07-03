@@ -17,6 +17,7 @@ import BasicAmountSlider from './BasicAmountSlider';
 import BasicLeveragePicker from './BasicLeveragePicker';
 import BasicConfirm from './BasicConfirm';
 import { colors, shared } from './styles';
+import { OSTIUM_ORACLE_FEE_BUFFER_USD } from '../../lib/ostiumConfig';
 
 const STEPS = ['token', 'direction', 'amount', 'leverage', 'confirm'];
 const PACIFICA_MIN_NOTIONAL_USD = 10;
@@ -91,7 +92,11 @@ function BasicTradeFlow({
   // on every parent re-render.
   const livePrice = useMemo(() => {
     if (!pickedToken || !Array.isArray(prices)) return 0;
-    const p = prices.find(x => x.symbol === pickedToken.symbol);
+    const pairKey = pickedToken?.pair_index ?? pickedToken?.market_id ?? pickedToken?.asset_id;
+    const p = (pairKey != null
+      ? prices.find(x => String(x?.pair_index ?? x?.market_id ?? x?.asset_id) === String(pairKey))
+      : null)
+      || prices.find(x => x.symbol === pickedToken.symbol || x.symbol === pickedToken.display_symbol);
     return Number(p?.mid || p?.mark || 0);
   }, [pickedToken, prices]);
 
@@ -131,6 +136,7 @@ function BasicTradeFlow({
   }, [account?.taker_fee]);
 
   const tradeBalance = useMemo(() => {
+    if (dex === 'ostium') return Math.max(0, balance - OSTIUM_ORACLE_FEE_BUFFER_USD);
     if (dex !== 'pacifica') return balance;
     const computed = pacificaUsableMargin(balance);
     const provided = Number(maxTradableMargin);
@@ -197,6 +203,15 @@ function BasicTradeFlow({
         // Decibel has no fixed floor (per-market minSize varies, hook +
         // SDK surface a useful revert if you go too small).
         const notional = pickedAmount * pickedLev;
+        if (dex === 'ostium' && Number.isFinite(tradeBalance) && pickedAmount > tradeBalance + 1e-6) {
+          setErrorMsg(
+            `Ostium keeps $${OSTIUM_ORACLE_FEE_BUFFER_USD.toFixed(2)} USDC for oracle fees. ` +
+            `Use $${tradeBalance.toFixed(2)} margin or less.`
+          );
+          submittedRef.current = false;
+          setSubmitting(false);
+          return;
+        }
         if (dex === 'avantis' && notional < 100) {
           setErrorMsg(`Avantis min position size is $100. With $${pickedAmount.toFixed(2)} margin you need ≥${Math.ceil(100 / pickedAmount)}× leverage.`);
           submittedRef.current = false;

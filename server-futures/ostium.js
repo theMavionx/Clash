@@ -37,6 +37,10 @@ const positionsCache = new Map();
 const ordersCache = new Map();
 const CACHE_TTL_MS = 15_000;
 const STALE_CACHE_TTL_MS = 10 * 60_000;
+const FIAT_SYMBOLS = new Set([
+  'AUD', 'BRL', 'CAD', 'CHF', 'CNH', 'EUR', 'GBP', 'IDR', 'INR', 'JPY', 'KRW',
+  'MXN', 'NZD', 'SEK', 'SGD', 'TRY', 'TWD', 'USD', 'ZAR',
+]);
 
 function clampBuilderFee(value) {
   const fee = Number(value);
@@ -62,6 +66,21 @@ function trimNumber(value, decimals = 6) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '';
   return n.toFixed(decimals).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
+}
+
+function cleanMarketLeg(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/-PERP$/u, '')
+    .replace(/[/_-]PERP$/u, '')
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+function isForexCategory(pair) {
+  return String(pair?.category || pair?.assetClass || pair?.asset_class || '')
+    .toLowerCase()
+    .includes('forex');
 }
 
 function sideToPanel(side) {
@@ -126,8 +145,12 @@ function isTransientReadError(error) {
 }
 
 function pairSymbolFromFeed(item) {
-  const from = String(item?.from || '').trim().toUpperCase();
+  const from = cleanMarketLeg(item?.from);
   if (!from) return '';
+  const to = cleanMarketLeg(item?.to || item?.quote || item?.pairTo);
+  if (to && (isForexCategory(item) || (FIAT_SYMBOLS.has(from) && FIAT_SYMBOLS.has(to)))) {
+    return `${from}/${to}`;
+  }
   const mapped = {
     CL: 'WTI',
     HG: 'XCU',
@@ -194,22 +217,33 @@ async function getBuildClient(traderAddress) {
 }
 
 function symbolOf(pair) {
-  return String(pair?.pairFrom || pair?.symbol || '')
+  const raw = String(pair?.pairFrom || pair?.symbol || '')
     .trim()
     .toUpperCase()
-    .replace(/\/USD[TC]?$/u, '')
     .replace(/-PERP$/u, '');
+  const quoted = raw.match(/^([A-Z0-9]+)[/_-]([A-Z0-9]+)$/u);
+  const from = quoted ? cleanMarketLeg(quoted[1]) : cleanMarketLeg(raw);
+  const to = cleanMarketLeg(pair?.pairTo || pair?.to || pair?.quote || (quoted ? quoted[2] : ''));
+  if (!from) return '';
+  if (to && (isForexCategory(pair) || (FIAT_SYMBOLS.has(from) && FIAT_SYMBOLS.has(to)))) {
+    return `${from}/${to}`;
+  }
+  return from;
 }
 
 function normalizeMarket(pair) {
   const symbol = symbolOf(pair);
   if (!symbol) return null;
+  const quote = cleanMarketLeg(pair?.pairTo || pair?.to || pair?.quote) || 'USD';
+  const pairName = symbol.includes('/') ? symbol : `${symbol}/${quote}`;
   const mark = num(pair?.midPx || pair?.askPx || pair?.bidPx, 0);
   return {
     symbol,
-    base: symbol,
-    pair: `${symbol}/${String(pair?.pairTo || 'USD').toUpperCase()}`,
-    market_name: `${symbol}/${String(pair?.pairTo || 'USD').toUpperCase()}`,
+    display_symbol: symbol,
+    base: symbol.split('/')[0],
+    quote,
+    pair: pairName,
+    market_name: pairName,
     market_id: Number(pair?.pairId),
     pair_index: Number(pair?.pairId),
     asset_id: Number(pair?.pairId),
@@ -349,7 +383,7 @@ function normalizePosition(row, marketsById = new Map()) {
   const position = row?.position || row;
   const pairId = position?.pairId ?? row?.pairId;
   const market = marketsById.get(String(pairId));
-  const symbol = symbolOf(position) || market?.symbol || `PAIR${pairId}`;
+  const symbol = market?.symbol || symbolOf(position) || `PAIR${pairId}`;
   const sizeUsd = num(position?.ntl || position?.notional || position?.sizeUsd, 0);
   const collateral = num(position?.collateralUsed || position?.collateral || position?.margin, 0);
   const entry = num(position?.entryPx || position?.entryPrice, 0);
@@ -422,7 +456,7 @@ async function getPositionsByAddress(address) {
 function normalizeOrder(order, marketsById = new Map()) {
   const pairId = order?.pairId;
   const market = marketsById.get(String(pairId));
-  const symbol = symbolOf(order) || market?.symbol || `PAIR${pairId}`;
+  const symbol = market?.symbol || symbolOf(order) || `PAIR${pairId}`;
   return {
     dex: 'ostium',
     symbol,
@@ -469,7 +503,7 @@ async function getOrdersByAddress(address) {
 function normalizeFillForDb(fill, marketsById = new Map()) {
   const pairId = fill?.pairId;
   const market = marketsById.get(String(pairId));
-  const symbol = symbolOf(fill) || market?.symbol || `PAIR${pairId}`;
+  const symbol = market?.symbol || symbolOf(fill) || `PAIR${pairId}`;
   const notional = Math.abs(num(fill?.ntl || fill?.notional || fill?.sizeUsd, 0));
   const side = sideToPanel(fill?.side ?? fill?.buy);
   const legacySide = legacySideToPanelForClientOrderId(fill?.side ?? fill?.buy);
