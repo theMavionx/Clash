@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/tokenLogos';
 
+// v14 = fixes FX pair normalization/placeholders (USD/JPY, USD/CAD, etc.).
 // v13 = tries local aliases before raw synthetic symbols like 1000BONK,
 //       invalidating sessions that cached those raw symbols as missing.
 // v12 = adds local Hotstuff/Decibel/Flash stock, ETF, index, and commodity
@@ -22,7 +23,7 @@ import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/t
 // v4 = invalidated entries from before we added local SKR.
 // v3 invalidated MSATS / MET / SYRUP / BRENTOIL aliases. Bump
 // whenever new local /tokens/* are added so users force a fresh probe.
-const LOGO_CACHE_KEY = 'clash_token_logos_v13';
+const LOGO_CACHE_KEY = 'clash_token_logos_v14';
 const LOGO_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const logoCache = new Map();

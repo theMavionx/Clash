@@ -124,17 +124,25 @@ function firstFinite(...values) {
   return null;
 }
 
+function cleanIconSymbol(value) {
+  const text = String(value || '').trim();
+  if (!text || text === '?' || text === '-' || /^unknown$/iu.test(text)) return '';
+  return text;
+}
+
 function baseSymbolForIcon(market, fallbackSymbol = '') {
-  const raw = String(
-    market?.icon_symbol
-    || market?.base
-    || market?.base_asset
-    || market?.base_symbol
-    || market?.display_base_asset_symbol
-    || fallbackSymbol
-    || market?.symbol
-    || '',
-  ).trim();
+  const forexPair = isForexMarket(market)
+    ? cleanIconSymbol(market?.display_symbol || market?.pair || market?.market_name || fallbackSymbol)
+    : '';
+  if (forexPair) return forexPair;
+  const raw = forexPair
+    || cleanIconSymbol(market?.icon_symbol)
+    || cleanIconSymbol(market?.base)
+    || cleanIconSymbol(market?.base_asset)
+    || cleanIconSymbol(market?.base_symbol)
+    || cleanIconSymbol(market?.display_base_asset_symbol)
+    || cleanIconSymbol(fallbackSymbol)
+    || cleanIconSymbol(market?.symbol);
   if (!raw) return '';
   return raw
     .replace(/[_/-]?(USDT|USDC|USD|PERP)$/iu, '')

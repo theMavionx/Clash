@@ -46,6 +46,23 @@ function marketDisplaySymbol(m) {
   return String(m?.symbol || '');
 }
 
+function cleanIconSymbol(value) {
+  const text = String(value || '').trim();
+  if (!text || text === '?' || text === '-' || /^unknown$/iu.test(text)) return '';
+  return text;
+}
+
+function iconSymbolForMarket(m, displaySymbol) {
+  if (isForexMarket(m)) {
+    return cleanIconSymbol(m?.display_symbol || m?.pair || m?.market_name || displaySymbol);
+  }
+  return cleanIconSymbol(m?.icon_symbol)
+    || cleanIconSymbol(m?.base)
+    || cleanIconSymbol(m?.base_asset)
+    || cleanIconSymbol(m?.base_symbol)
+    || cleanIconSymbol(displaySymbol);
+}
+
 // 24h-change pill is rendered as a tiny horizontal bar where the fill width
 // scales to a ±10% range. Visual cue beats numeric reading for first-time
 // traders.
@@ -107,7 +124,7 @@ function BasicTokenPicker({ markets, prices, dex, onPick }) {
         return {
           key: String(pairKey ?? displaySymbol ?? m.symbol),
           symbol: displaySymbol,
-          iconSym: m.icon_symbol || m.base || displaySymbol,
+          iconSym: iconSymbolForMarket(m, displaySymbol),
           price: mark,
           change24h,
           volume: Number(p?.volume_24h || 0),

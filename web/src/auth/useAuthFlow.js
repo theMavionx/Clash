@@ -573,7 +573,7 @@ export function useAuthFlow() {
       const storedMatch = candidates.find(c => c?.wallet && canonicalWalletAddress(c.wallet) === storedAuthWallet);
       if (storedMatch) return storedMatch;
     }
-    if (!dexPicked) return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
+    if (!dexPicked) return null;
     // Avantis (Base), GMX (Arbitrum), Monad and Hyperliquid all source from the same EVM wallet
     // context. The wallet address is the same on every EVM chain — the chain
     // switch happens at tx time via ensureChain(). Privy embedded EVM works
@@ -967,6 +967,7 @@ export function useAuthFlow() {
     if (registerError && candidate) return 'need_name';
     if (registering) return 'registering';
     if (booting) return 'booting';
+    if (!dexPicked && !storedAuthWallet && !manualReconnectRequired) return 'pick_dex';
     if (
       manualReconnectRequired &&
       !manualReconnectSatisfied &&

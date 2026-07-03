@@ -97,6 +97,8 @@ export function canonTokenSymbol(sym) {
     .split('[')[0]
     .trim();
   if (!raw) return '';
+  const compactPair = raw.replace(/[^A-Z0-9]/g, '');
+  if (FX_SYMBOLS.has(compactPair)) return compactPair;
   let s = raw
     .replace(/-PERP$/u, '')
     .replace(/-P$/u, '')

@@ -22,6 +22,7 @@ import {
   scheduleClientUpdateAutoApply,
   setClientActivity,
 } from './lib/updateCoordinator';
+import { installTradeFetchCache, prefetchDexTradeData } from './lib/tradePrefetch';
 import WalletSessionRecovery from './components/WalletSessionRecovery';
 // Loading splash assets — served directly from `web/public/` so art can be
 // swapped without rebuilding the bundle. We layer background + logo
@@ -350,6 +351,100 @@ function ClientLogContextBridge() {
   return null;
 }
 
+function isEvmTradeDex(dex) {
+  return dex === 'avantis'
+    || dex === 'gmx'
+    || dex === 'ostium'
+    || dex === 'monad'
+    || dex === 'hyperliquid'
+    || dex === 'risex'
+    || dex === 'nado'
+    || dex === 'hibachi'
+    || dex === 'hotstuff'
+    || dex === 'grvt'
+    || dex === 'katana'
+    || dex === 'lighter';
+}
+
+function TradeDataPrefetchBridge() {
+  const { dex } = useDex();
+  const player = usePlayer();
+  const ui = useUI();
+  const solWallet = useSolWallet();
+  const evmWallet = useEvmWallet();
+  const aptosWallet = useAptosWallet();
+  const privy = useOptionalPrivy();
+
+  const solAddress = solWallet?.publicKey?.toBase58?.() || null;
+  const privySolAddress = (privy.solanaWallets || []).find(w => w?.address)?.address || null;
+  const walletAddress = dex === 'decibel'
+    ? aptosWallet?.address
+    : isEvmTradeDex(dex)
+      ? evmWallet?.address
+      : (solAddress || privySolAddress);
+  const walletKind = dex === 'decibel'
+    ? (aptosWallet?.walletName || null)
+    : isEvmTradeDex(dex)
+      ? (evmWallet?.source || null)
+      : (solWallet?.wallet?.adapter?.name || (privySolAddress ? 'privy_solana' : null));
+  const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null) || null;
+  const canPrefetch = !!dex && (ui?.ready || !!token || !!walletAddress);
+
+  useEffect(() => {
+    installTradeFetchCache();
+  }, []);
+
+  useEffect(() => {
+    if (!canPrefetch) return undefined;
+    let cancelled = false;
+    let idleId = null;
+    let bootTimerId = null;
+
+    const runPrefetch = (reason, force = false) => {
+      if (cancelled) return;
+      prefetchDexTradeData({
+        dex,
+        token,
+        walletAddress,
+        walletKind,
+        reason,
+        force,
+      }).catch(() => {
+        // Startup prefetch is opportunistic; the trade panel still owns errors.
+      });
+    };
+
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      idleId = window.requestIdleCallback(() => runPrefetch('boot'), { timeout: 1500 });
+    } else {
+      bootTimerId = setTimeout(() => runPrefetch('boot'), 250);
+    }
+
+    const intervalId = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      runPrefetch('warm-interval');
+    }, 30000);
+
+    const onFocus = () => runPrefetch('focus');
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') runPrefetch('visible');
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      cancelled = true;
+      if (idleId !== null && typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(idleId);
+      if (bootTimerId !== null) clearTimeout(bootTimerId);
+      clearInterval(intervalId);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [canPrefetch, dex, token, walletAddress, walletKind]);
+
+  return null;
+}
+
 export default function App() {
   prepareLocalGuestSession();
 
@@ -381,6 +476,7 @@ export default function App() {
                       the player's `futures_mode` from the player state context. */}
                   <FuturesModeProvider>
                     <ClientLogContextBridge />
+                    <TradeDataPrefetchBridge />
                     <WalletSessionRecovery />
                     <AppInner />
                   </FuturesModeProvider>
