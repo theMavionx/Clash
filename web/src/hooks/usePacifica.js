@@ -69,6 +69,10 @@ function referralClaimCacheKey(walletAddr) {
   return walletAddr ? `clash_pacifica_referral:${walletAddr}:${REFERRAL_CODE}` : null;
 }
 
+function isReferralAlreadyClaimedText(text) {
+  return /already|referr|invite|another|different|existing|used|claimed|bound|attached|cannot.*change|unique violation|duplicate key|unique constraint|constraint failed/i.test(String(text || ''));
+}
+
 function readActivationCache(walletAddr) {
   const key = activationCacheKey(walletAddr);
   if (!key || typeof localStorage === 'undefined') return false;
@@ -105,6 +109,11 @@ function readReferralClaimCache(walletAddr) {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const entry = JSON.parse(raw);
+    if (entry?.status === 'retry_later' && isReferralAlreadyClaimedText(entry.reason)) {
+      const migrated = { ...entry, status: 'skipped_existing', ts: Date.now() };
+      localStorage.setItem(key, JSON.stringify(migrated));
+      return migrated;
+    }
     const ttl = entry?.status === 'retry_later'
       ? REFERRAL_CLAIM_RETRY_TTL_MS
       : REFERRAL_CLAIM_CACHE_TTL_MS;
@@ -144,7 +153,7 @@ function referralClaimTerminalStatus(res) {
   const text = pacificaErrorText(res);
   if (!text) return null;
   if (/must have registered|first deposit|deposit/i.test(text)) return null;
-  if (/already|referr|invite|another|different|existing|used|claimed|bound|attached|cannot.*change/i.test(text)) {
+  if (isReferralAlreadyClaimedText(text)) {
     return 'skipped_existing';
   }
   if (/invalid message|signature|verification|unauthorized/i.test(text)) return 'retry_later';
@@ -906,9 +915,17 @@ export function usePacifica() {
           return { skipped: 'no-deposit' };
         }
         const terminalStatus = referralClaimTerminalStatus(res);
-        if (terminalStatus) writeReferralClaimCache(walletAddr, terminalStatus, text);
-        else writeReferralClaimCache(walletAddr, 'retry_later', text);
-        console.info('[Pacifica] referral claim skipped/failed', {
+        if (terminalStatus) {
+          writeReferralClaimCache(walletAddr, terminalStatus, text);
+          console.info('[Pacifica] referral claim skipped terminal', {
+            status: res?.code || null,
+            terminalStatus,
+            reason: text || 'unknown',
+          });
+          return { skipped: terminalStatus };
+        }
+        writeReferralClaimCache(walletAddr, 'retry_later', text);
+        console.info('[Pacifica] referral claim failed; will retry later', {
           status: res?.code || null,
           reason: text || 'unknown',
         });
@@ -916,8 +933,16 @@ export function usePacifica() {
       } catch (e) {
         const text = e?.message || String(e);
         const terminalStatus = referralClaimTerminalStatus({ error: text });
-        writeReferralClaimCache(walletAddr, terminalStatus || 'retry_later', text);
-        console.info('[Pacifica] referral claim error', text);
+        if (terminalStatus) {
+          writeReferralClaimCache(walletAddr, terminalStatus, text);
+          console.info('[Pacifica] referral claim skipped terminal', {
+            terminalStatus,
+            reason: text,
+          });
+          return { skipped: terminalStatus };
+        }
+        writeReferralClaimCache(walletAddr, 'retry_later', text);
+        console.info('[Pacifica] referral claim error; will retry later', text);
         return { error: text };
       }
     })().finally(() => {
