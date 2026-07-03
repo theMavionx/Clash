@@ -45,8 +45,11 @@ async function fcSignMessage(msgBytes) {
 
 // ---------- Pacifica Config ----------
 const BUILDER_CODE = 'clashofperps';
+const REFERRAL_CODE = BUILDER_CODE;
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const ACTIVATION_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const REFERRAL_CLAIM_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const REFERRAL_CLAIM_RETRY_TTL_MS = 24 * 60 * 60 * 1000;
 const PACIFICA_SIGN_EXPIRY_WINDOW_MS = 30_000;
 const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. Pacifica rejected the direct wallet signature for this account setting.';
 const AGENT_SIGNED_TYPES = new Set([
@@ -60,6 +63,10 @@ const AGENT_SIGNED_TYPES = new Set([
 
 function activationCacheKey(walletAddr) {
   return walletAddr ? `clash_pacifica_activated:${walletAddr}` : null;
+}
+
+function referralClaimCacheKey(walletAddr) {
+  return walletAddr ? `clash_pacifica_referral:${walletAddr}:${REFERRAL_CODE}` : null;
 }
 
 function readActivationCache(walletAddr) {
@@ -89,6 +96,59 @@ function clearActivationCache(walletAddr) {
   const key = activationCacheKey(walletAddr);
   if (!key || typeof localStorage === 'undefined') return;
   try { localStorage.removeItem(key); } catch {}
+}
+
+function readReferralClaimCache(walletAddr) {
+  const key = referralClaimCacheKey(walletAddr);
+  if (!key || typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const entry = JSON.parse(raw);
+    const ttl = entry?.status === 'retry_later'
+      ? REFERRAL_CLAIM_RETRY_TTL_MS
+      : REFERRAL_CLAIM_CACHE_TTL_MS;
+    if (!entry?.ts || Date.now() - entry.ts > ttl) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+function writeReferralClaimCache(walletAddr, status, reason = '') {
+  const key = referralClaimCacheKey(walletAddr);
+  if (!key || typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      ts: Date.now(),
+      status,
+      reason: String(reason || '').slice(0, 160),
+    }));
+  } catch {}
+}
+
+function pacificaErrorText(res) {
+  if (!res) return '';
+  if (typeof res === 'string') return res;
+  return String(res.error || res.message || res.reason || res.code || '');
+}
+
+function pacificaSignedResponseOk(res) {
+  return !!res && res.success !== false && !res.error && !(Number(res.code) >= 400);
+}
+
+function referralClaimTerminalStatus(res) {
+  const text = pacificaErrorText(res);
+  if (!text) return null;
+  if (/must have registered|first deposit|deposit/i.test(text)) return null;
+  if (/already|referr|invite|another|different|existing|used|claimed|bound|attached|cannot.*change/i.test(text)) {
+    return 'skipped_existing';
+  }
+  if (/invalid message|signature|verification|unauthorized/i.test(text)) return 'retry_later';
+  return null;
 }
 
 // Gold rewards are calculated server-side via POST /trading/claim-gold
@@ -224,6 +284,7 @@ export function usePacifica() {
   const agentSyncInFlightRef = useRef(new Map());
   const activatedRef = useRef(false);
   const activatingRef = useRef(null);
+  const referralClaimInFlightRef = useRef(null);
   const [builderApproved, setBuilderApproved] = useState(false);
   const [activationStep, setActivationStep] = useState(null);
   // Re-bind reentry guard for signedRequest. If Pacifica rejects a stored
@@ -788,14 +849,93 @@ export function usePacifica() {
     }
   }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, walletAddr, signWithAgentKey, syncPacificaAgentToServer, bindAgent, forgetAgentLocally, adapterName, isIncompatibleWallet]);
 
+  const fetchAccountForReferralClaim = useCallback(async () => {
+    if (!walletAddr) return null;
+    try {
+      const result = await pacificaRequest(`/account?account=${encodeURIComponent(walletAddr)}`, {
+        cache: 'no-store',
+        onResponse: response => setPacificaServerTimeFromResponse(response, 'referral-account-check'),
+      });
+      if (result.ok && result.data?.data) return result.data.data;
+      if (result.status === 404) return null;
+      console.info('[Pacifica] referral claim skipped: account check failed', {
+        status: result.status,
+        error: result.data?.error || result.text || null,
+      });
+    } catch (e) {
+      console.info('[Pacifica] referral claim skipped: account check error', e?.message || e);
+    }
+    return null;
+  }, [walletAddr]);
+
+  const ensurePacificaReferralClaim = useCallback(async ({
+    accountSnapshot = null,
+    force = false,
+    showStep = false,
+  } = {}) => {
+    if (!walletAddr) return { skipped: 'no-wallet' };
+    const cached = readReferralClaimCache(walletAddr);
+    if (cached && (!force || cached.status !== 'retry_later')) {
+      return { skipped: cached.status, cached: true };
+    }
+    if (referralClaimInFlightRef.current) return referralClaimInFlightRef.current;
+
+    const run = (async () => {
+      let snapshot = accountSnapshot;
+      if (!snapshot) snapshot = await fetchAccountForReferralClaim();
+      if (!snapshot) {
+        // No Pacifica account yet means no first deposit. Do not ask for a
+        // wallet signature; the next account fetch after deposit can retry.
+        return { skipped: 'no-deposit' };
+      }
+
+      if (showStep) setActivationStep({ label: 'Claim referral code', index: 1, total: 2 });
+      try {
+        const res = await signedRequest('POST', '/referral/user/code/claim', 'claim_referral_code', {
+          code: REFERRAL_CODE,
+        });
+        if (pacificaSignedResponseOk(res)) {
+          writeReferralClaimCache(walletAddr, 'claimed');
+          console.info('[Pacifica] referral claim OK', { code: REFERRAL_CODE });
+          return { claimed: true };
+        }
+
+        const text = pacificaErrorText(res);
+        if (/must have registered|first deposit|deposit/i.test(text)) {
+          console.info('[Pacifica] referral claim skipped: first deposit required');
+          return { skipped: 'no-deposit' };
+        }
+        const terminalStatus = referralClaimTerminalStatus(res);
+        if (terminalStatus) writeReferralClaimCache(walletAddr, terminalStatus, text);
+        else writeReferralClaimCache(walletAddr, 'retry_later', text);
+        console.info('[Pacifica] referral claim skipped/failed', {
+          status: res?.code || null,
+          reason: text || 'unknown',
+        });
+        return { error: text || 'Pacifica referral claim failed' };
+      } catch (e) {
+        const text = e?.message || String(e);
+        const terminalStatus = referralClaimTerminalStatus({ error: text });
+        writeReferralClaimCache(walletAddr, terminalStatus || 'retry_later', text);
+        console.info('[Pacifica] referral claim error', text);
+        return { error: text };
+      }
+    })().finally(() => {
+      if (referralClaimInFlightRef.current === run) referralClaimInFlightRef.current = null;
+    });
+
+    referralClaimInFlightRef.current = run;
+    return run;
+  }, [walletAddr, signedRequest, fetchAccountForReferralClaim]);
+
   // Onboarding activation — must be defined before signedRequestWithActivation
   const activate = useCallback(async () => {
     if (!walletAddr) return false;
-    // Referral-code claim is optional and currently returns "Invalid message"
-    // for Privy users, costing an extra master signature before every first
-    // trade. The required part for Pacifica trading is builder-code approval.
-    setActivationStep({ label: 'Approve builder code', index: 1, total: 1 });
+    // Referral attribution is best-effort. It only runs after Pacifica account
+    // creation (first deposit) and never blocks builder-code approval/trading.
     try {
+      await ensurePacificaReferralClaim({ force: true, showStep: true });
+      setActivationStep({ label: 'Approve builder code', index: 2, total: 2 });
       const res = await signedRequest('POST', '/account/builder_codes/approve', 'approve_builder_code', {
         builder_code: BUILDER_CODE, max_fee_rate: '0.001',
       });
@@ -835,7 +975,7 @@ export function usePacifica() {
       setActivationStep(null);
     }
     return false;
-  }, [walletAddr, signedRequest]);
+  }, [walletAddr, signedRequest, ensurePacificaReferralClaim]);
 
   // Auto-activate: every signed Pacifica request that carries our builder_code
   // must be preceded by master-wallet approval. Reduce-only closes still create
@@ -920,6 +1060,11 @@ export function usePacifica() {
       if (res.data) setAccount(res.data);
     } catch {}
   }, [walletAddr]);
+
+  useEffect(() => {
+    if (!walletAddr || !isActiveDex || !account) return;
+    ensurePacificaReferralClaim().catch(() => {});
+  }, [walletAddr, isActiveDex, account, ensurePacificaReferralClaim]);
 
   const fetchPositions = useCallback(async () => {
     if (!walletAddr) return;
