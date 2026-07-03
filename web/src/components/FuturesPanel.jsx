@@ -52,6 +52,11 @@ import {
   validateOstiumTakeProfitDirection,
   validateOstiumTakeProfitLimit,
 } from '../lib/ostiumTpLimits';
+import {
+  ostiumMarketSymbol,
+  ostiumOpenTradeBlockMessage,
+  ostiumOpenTradeBlockReason,
+} from '../lib/ostiumMarketStatus';
 import { OSTIUM_ORACLE_FEE_BUFFER_USD, ostiumOracleFeeBufferMessage } from '../lib/ostiumConfig';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
@@ -1773,9 +1778,11 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
         mark,
         change,
         activity,
+        marketClosed: ostiumOpenTradeBlockReason(m, 1) === 'market_closed',
       };
     }).filter(r => !search || r.label.toLowerCase().includes(search.toLowerCase()))
       .sort((a, b) => {
+        if (a.marketClosed !== b.marketClosed) return a.marketClosed ? 1 : -1;
         const byActivity = (b.activity?.score || 0) - (a.activity?.score || 0);
         if (Math.abs(byActivity) > 1e-9) return byActivity;
         return a.label.localeCompare(b.label);
@@ -1813,6 +1820,11 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
                   <TokenIcon sym={r.iconSym} size={18} />
                   <span style={{fontWeight: 900, color: '#5C3A21'}}>{r.label}</span>
                   <span style={{fontSize: 10, fontWeight: 800, color: '#a3906a'}}>{r.maxLev}x</span>
+                  {r.marketClosed && (
+                    <span style={{fontSize: 9, fontWeight: 900, color: '#B45309', background: '#FFF7D6', border: '1px solid #F59E0B', borderRadius: 5, padding: '1px 4px'}}>
+                      Closed
+                    </span>
+                  )}
                   {(() => {
                     // If signals are loaded but this symbol isn't in the top-N trending feed,
                     // we know Elfa has no chatter for it → show 💀 "quiet" badge.
@@ -2996,7 +3008,7 @@ function FuturesPanel() {
     : dex === 'hyperliquid'
     ? pacAccountValueBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
     : pacAccountValueBase;
-  const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol), [markets, symbol]);
+  const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol || marketDisplaySymbol(m) === symbol), [markets, symbol]);
   const currentMarginDetail = marginModeDetails?.[symbol] || currentMarket?.margin_capabilities || {};
   const currentMarginModes = Array.isArray(currentMarket?.margin_modes)
     ? currentMarket.margin_modes
@@ -3148,6 +3160,23 @@ function FuturesPanel() {
   );
   const marginModeLocked = ((dex === 'pacifica' || dex === 'grvt' || dex === 'hotstuff') && (hasCurrentSymbolPosition || hasCurrentSymbolOrder))
     || phoenixMarginModeReadOnly;
+  const ostiumMarketBlockReason = dex === 'ostium'
+    ? ostiumOpenTradeBlockReason(currentMarket, leverage)
+    : '';
+  const ostiumMarketBlockMessage = ostiumMarketBlockReason
+    ? ostiumOpenTradeBlockMessage(currentMarket, symbol, leverage)
+    : '';
+  const ostiumOpenMarketChoices = useMemo(() => {
+    if (dex !== 'ostium') return [];
+    return markets
+      .filter(m => !ostiumOpenTradeBlockReason(m, leverage))
+      .sort((a, b) => {
+        const byActivity = (marketActivity(b).score || 0) - (marketActivity(a).score || 0);
+        if (Math.abs(byActivity) > 1e-9) return byActivity;
+        return ostiumMarketSymbol(a).localeCompare(ostiumMarketSymbol(b));
+      })
+      .slice(0, 4);
+  }, [dex, markets, leverage]);
   const handleMarginModeToggle = useCallback(async () => {
     clearTradeFeedback();
     if (dex === 'phoenix' && phoenixMarginModeReadOnly) {
@@ -3307,6 +3336,10 @@ function FuturesPanel() {
       const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       if (dex === 'flash' && flashMarketBlockReason) {
         setLocalAlert(`${symbol} is not open for Flash trading right now (${flashMarketBlockReason}).`);
+        return;
+      }
+      if (dex === 'ostium' && ostiumMarketBlockMessage) {
+        setLocalAlert(ostiumMarketBlockMessage);
         return;
       }
       if (dex === 'flash' && Number(leverage) > Number(maxLev) + 1e-9) {
@@ -3618,7 +3651,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, maxLev, marginModes]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -3632,7 +3665,7 @@ function FuturesPanel() {
   const vol24h = curPriceData ? parseFloat(curPriceData.volume_24h || 0) : 0;
   const oi = curPriceData ? parseFloat(curPriceData.open_interest || 0) : 0;
   const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
-  const tradeButtonBlocked = dex === 'flash' && !!flashMarketBlockReason;
+  const tradeButtonBlocked = (dex === 'flash' && !!flashMarketBlockReason) || (dex === 'ostium' && !!ostiumMarketBlockMessage);
   const tradeButtonBusy = loading || tradeBusy || tradePhase != null;
   useEffect(() => {
     setClientActivity({
@@ -3797,6 +3830,39 @@ function FuturesPanel() {
       {pacAccountValue < 0.01 && (
         <div style={S.noBalanceHint} onClick={() => setActiveTab('Account')}>
           No balance — go to Account tab to deposit USDC
+        </div>
+      )}
+
+      {dex === 'ostium' && ostiumMarketBlockMessage && (
+        <div style={S.marketClosedHint}>
+          <div style={S.marketClosedHead}>
+            <span style={S.marketClosedTitle}>
+              {ostiumMarketBlockReason === 'day_trading_closed' ? 'Day trading closed' : 'Market closed'}
+            </span>
+            <span style={S.marketClosedSymbol}>{ostiumMarketSymbol(currentMarket, symbol) || symbol}</span>
+          </div>
+          <div style={S.marketClosedCopy}>{ostiumMarketBlockMessage}</div>
+          {ostiumOpenMarketChoices.length > 0 && (
+            <div style={S.marketClosedActions}>
+              <span style={S.marketClosedActionLabel}>Open now:</span>
+              {ostiumOpenMarketChoices.map((market) => {
+                const choiceSymbol = ostiumMarketSymbol(market);
+                return (
+                  <button
+                    key={String(market.pair_index ?? market.market_id ?? choiceSymbol)}
+                    type="button"
+                    style={S.marketClosedChoice}
+                    onClick={() => {
+                      clearTradeFeedback();
+                      setSymbol(choiceSymbol);
+                    }}
+                  >
+                    {choiceSymbol}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -4130,10 +4196,10 @@ function FuturesPanel() {
         )}
 
         <div style={S.row}>
-          <button style={{...cartoonBtn('#4CAF50','#2E7D32'), ...S.tradeBtn}} onClick={() => handleTrade('bid')} disabled={tradeButtonBusy || tradeButtonBlocked}>
+          <button style={{...cartoonBtn('#4CAF50','#2E7D32'), ...S.tradeBtn, opacity: tradeButtonBlocked ? 0.55 : 1}} onClick={() => handleTrade('bid')} disabled={tradeButtonBusy || tradeButtonBlocked}>
             <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'LONG'}</span>
           </button>
-          <button style={{...cartoonBtn('#E53935','#B71C1C'), ...S.tradeBtn}} onClick={() => handleTrade('ask')} disabled={tradeButtonBusy || tradeButtonBlocked}>
+          <button style={{...cartoonBtn('#E53935','#B71C1C'), ...S.tradeBtn, opacity: tradeButtonBlocked ? 0.55 : 1}} onClick={() => handleTrade('ask')} disabled={tradeButtonBusy || tradeButtonBlocked}>
             <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'SHORT'}</span>
           </button>
         </div>
@@ -9659,6 +9725,69 @@ const S = {
   btnSmall: {
     padding: '8px 10px', background: '#d4c8b0', border: '2px solid #bba882', borderRadius: 8,
     fontWeight: 800, fontSize: 12, color: '#5C3A21', cursor: 'pointer',
+  },
+  marketClosedHint: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    padding: '8px 10px',
+    background: '#FFF7D6',
+    border: '2px solid #F59E0B',
+    borderRadius: 10,
+    color: '#7C2D12',
+    fontSize: 11,
+    fontWeight: 750,
+    lineHeight: 1.25,
+    boxShadow: '0 2px 0 rgba(181,139,42,0.25)',
+  },
+  marketClosedHead: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  marketClosedTitle: {
+    fontSize: 12,
+    fontWeight: 950,
+    textTransform: 'uppercase',
+    color: '#B45309',
+  },
+  marketClosedSymbol: {
+    fontSize: 11,
+    fontWeight: 950,
+    color: '#5C3A21',
+    background: 'rgba(255,255,255,0.55)',
+    border: '1px solid rgba(180,83,9,0.22)',
+    borderRadius: 6,
+    padding: '2px 6px',
+    whiteSpace: 'nowrap',
+  },
+  marketClosedCopy: {
+    color: '#7C2D12',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+  },
+  marketClosedActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 5,
+    flexWrap: 'wrap',
+  },
+  marketClosedActionLabel: {
+    fontSize: 10,
+    fontWeight: 900,
+    color: '#9A6B24',
+    textTransform: 'uppercase',
+  },
+  marketClosedChoice: {
+    padding: '4px 7px',
+    background: '#fdf8e7',
+    border: '2px solid #d4c8b0',
+    borderRadius: 7,
+    cursor: 'pointer',
+    color: '#5C3A21',
+    fontSize: 11,
+    fontWeight: 900,
   },
   noBalanceHint: {
     padding: '8px 12px', background: '#FFF3E0', border: '2px solid #FF9800', borderRadius: 8,

@@ -8,6 +8,7 @@ import { motion } from 'framer-motion';
 import { colors, shared } from './styles';
 import TokenIcon from '../TokenIcon';
 import { fmtPrice } from '../../lib/fmtPrice';
+import { ostiumOpenTradeBlockReason } from '../../lib/ostiumMarketStatus';
 
 const PCT_GREEN = '#4caf50';
 const PCT_RED = '#e53935';
@@ -70,7 +71,7 @@ function ChangeBar({ pct }) {
   );
 }
 
-function BasicTokenPicker({ markets, prices, onPick }) {
+function BasicTokenPicker({ markets, prices, dex, onPick }) {
   const [search, setSearch] = useState('');
 
   // Build a sorted, filtered list. 24h change is computed from
@@ -110,13 +111,17 @@ function BasicTokenPicker({ markets, prices, onPick }) {
           price: mark,
           change24h,
           volume: Number(p?.volume_24h || 0),
+          marketClosed: dex === 'ostium' && ostiumOpenTradeBlockReason(m, 1) === 'market_closed',
           market: displaySymbol !== m.symbol && isForexMarket(m)
             ? { ...m, symbol: displaySymbol, display_symbol: displaySymbol }
             : m,
         };
       })
-      .sort((a, b) => b.volume - a.volume);
-  }, [markets, prices, search]);
+      .sort((a, b) => {
+        if (a.marketClosed !== b.marketClosed) return a.marketClosed ? 1 : -1;
+        return b.volume - a.volume;
+      });
+  }, [markets, prices, search, dex]);
 
   return (
     // `grad-scrollbar` class — picks up the project-wide parchment-toned
@@ -157,6 +162,7 @@ function BasicTokenPicker({ markets, prices, onPick }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                 <TokenIcon sym={t.iconSym} size={26} />
                 <span style={S.symbol}>{t.symbol}</span>
+                {t.marketClosed && <span style={S.closedBadge}>Closed</span>}
               </div>
               <span style={{ ...S.pct, color: pctColor(t.change24h) }}>
                 {fmtPct(t.change24h)}
@@ -220,6 +226,16 @@ const S = {
   symbol: {
     fontSize: 14, fontWeight: 900, color: colors.ink, letterSpacing: '0.4px',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  closedBadge: {
+    fontSize: 9,
+    fontWeight: 900,
+    color: '#B45309',
+    background: '#FFF7D6',
+    border: '1px solid #F59E0B',
+    borderRadius: 5,
+    padding: '1px 4px',
+    flexShrink: 0,
   },
   pct: {
     fontSize: 11, fontWeight: 800,

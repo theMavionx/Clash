@@ -18,6 +18,11 @@ import BasicLeveragePicker from './BasicLeveragePicker';
 import BasicConfirm from './BasicConfirm';
 import { colors, shared } from './styles';
 import { OSTIUM_ORACLE_FEE_BUFFER_USD, ostiumOracleFeeBufferMessage } from '../../lib/ostiumConfig';
+import {
+  ostiumMarketSymbol,
+  ostiumOpenTradeBlockMessage,
+  ostiumOpenTradeBlockReason,
+} from '../../lib/ostiumMarketStatus';
 
 const STEPS = ['token', 'direction', 'amount', 'leverage', 'confirm'];
 const PACIFICA_MIN_NOTIONAL_USD = 10;
@@ -166,9 +171,13 @@ function BasicTradeFlow({
   }, []);
 
   const handlePickToken = useCallback((m) => {
+    if (dex === 'ostium' && ostiumOpenTradeBlockReason(m, 1) === 'market_closed') {
+      setErrorMsg(ostiumOpenTradeBlockMessage(m, ostiumMarketSymbol(m), 1));
+      return;
+    }
     setPickedToken(m);
     goto('direction', 1);
-  }, [goto]);
+  }, [dex, goto]);
 
   const handlePickDirection = useCallback((d) => {
     setPickedDir(d);
@@ -208,6 +217,15 @@ function BasicTradeFlow({
           submittedRef.current = false;
           setSubmitting(false);
           return;
+        }
+        if (dex === 'ostium') {
+          const ostiumBlock = ostiumOpenTradeBlockMessage(pickedToken, pickedToken.symbol, pickedLev);
+          if (ostiumBlock) {
+            setErrorMsg(ostiumBlock);
+            submittedRef.current = false;
+            setSubmitting(false);
+            return;
+          }
         }
         if (dex === 'avantis' && notional < 100) {
           setErrorMsg(`Avantis min position size is $100. With $${pickedAmount.toFixed(2)} margin you need ≥${Math.ceil(100 / pickedAmount)}× leverage.`);
@@ -444,6 +462,7 @@ function BasicTradeFlow({
               <BasicTokenPicker
                 markets={markets}
                 prices={prices}
+                dex={dex}
                 onPick={handlePickToken}
               />
             )}

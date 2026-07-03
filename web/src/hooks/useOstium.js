@@ -25,6 +25,10 @@ import {
   validateOstiumTakeProfitDirection,
   validateOstiumTakeProfitLimit,
 } from '../lib/ostiumTpLimits';
+import {
+  ostiumOpenTradeBlockMessage,
+  ostiumOpenTradeBlockReason,
+} from '../lib/ostiumMarketStatus';
 
 const FUTURES_API = '/api/futures';
 const POLL_INTERVAL_MS = 45_000;
@@ -909,6 +913,10 @@ export function useOstium() {
     const collateral = Number(amount);
     const lev = Number(leverage);
     const entryPrice = Number(price || market.mark || market.mid || market.oracle);
+    const marketBlockReason = ostiumOpenTradeBlockReason(market, lev);
+    if (marketBlockReason) {
+      throw new Error(ostiumOpenTradeBlockMessage(market, symbol, lev));
+    }
     if (!Number.isFinite(collateral) || collateral <= 0) throw new Error('Enter a valid margin amount');
     if (collateral < MIN_OPEN_SIZE_USD) {
       throw new Error(`Ostium minimum margin is ${MIN_OPEN_SIZE_USD} USDC. Increase margin before signing.`);
