@@ -52,7 +52,7 @@ import {
   validateOstiumTakeProfitDirection,
   validateOstiumTakeProfitLimit,
 } from '../lib/ostiumTpLimits';
-import { OSTIUM_ORACLE_FEE_BUFFER_USD } from '../lib/ostiumConfig';
+import { OSTIUM_ORACLE_FEE_BUFFER_USD, ostiumOracleFeeBufferMessage } from '../lib/ostiumConfig';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
@@ -3349,10 +3349,7 @@ function FuturesPanel() {
           return;
         }
         if (dex === 'ostium' && Number.isFinite(collateralUsdc) && collateralUsdc > ostiumMaxMargin + 0.000001) {
-          setLocalAlert(
-            `Ostium keeps $${OSTIUM_ORACLE_FEE_BUFFER_USD.toFixed(2)} USDC for oracle fees. ` +
-            `Use $${ostiumMaxMargin.toFixed(2)} margin or less from your $${pacBalance.toFixed(2)} balance.`
-          );
+          setLocalAlert(ostiumOracleFeeBufferMessage(ostiumMaxMargin, pacBalance));
           return;
         }
         if (dex === 'phoenix') {

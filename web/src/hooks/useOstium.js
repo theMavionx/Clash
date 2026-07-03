@@ -12,6 +12,7 @@ import {
   OSTIUM_DELEGATE_TARGET_ETH,
   OSTIUM_MAX_ALLOWANCE_CHECK_USD,
   OSTIUM_ORACLE_FEE_BUFFER_USD,
+  ostiumOracleFeeBufferMessage,
   ostiumClientConfig,
 } from '../lib/ostiumConfig';
 import {
@@ -77,10 +78,7 @@ function assertOstiumUsdcBalance(account, requiredCollateral) {
   }
   const maxMargin = Math.max(0, available - OSTIUM_ORACLE_FEE_BUFFER_USD);
   if (required > maxMargin + 0.000001) {
-    throw new Error(
-      `Ostium keeps $${OSTIUM_ORACLE_FEE_BUFFER_USD.toFixed(2)} USDC for oracle fees. ` +
-      `Use $${maxMargin.toFixed(2)} margin or less from your $${available.toFixed(2)} balance.`
-    );
+    throw new Error(ostiumOracleFeeBufferMessage(maxMargin, available));
   }
 }
 

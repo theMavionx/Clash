@@ -39,6 +39,14 @@ export const OSTIUM_MAX_ALLOWANCE_CHECK_USD = (
 );
 export const OSTIUM_ORACLE_FEE_BUFFER_USD = 0.10;
 
+export function ostiumOracleFeeBufferMessage(maxMargin, availableBalance = null) {
+  const max = Number(maxMargin);
+  const available = Number(availableBalance);
+  const maxText = Number.isFinite(max) ? max.toFixed(2) : '0.00';
+  const balanceText = Number.isFinite(available) ? ` from your $${available.toFixed(2)} balance` : '';
+  return `Ostium charges a ${OSTIUM_ORACLE_FEE_BUFFER_USD.toFixed(2)} USDC oracle fee, which is refunded upon successful full closure of the position via a market order. Use $${maxText} margin or less${balanceText}.`;
+}
+
 export function ostiumClientConfig(extra = {}) {
   return {
     ...(OSTIUM_RPC_URL ? { rpcUrl: OSTIUM_RPC_URL } : {}),

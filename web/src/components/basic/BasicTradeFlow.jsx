@@ -17,7 +17,7 @@ import BasicAmountSlider from './BasicAmountSlider';
 import BasicLeveragePicker from './BasicLeveragePicker';
 import BasicConfirm from './BasicConfirm';
 import { colors, shared } from './styles';
-import { OSTIUM_ORACLE_FEE_BUFFER_USD } from '../../lib/ostiumConfig';
+import { OSTIUM_ORACLE_FEE_BUFFER_USD, ostiumOracleFeeBufferMessage } from '../../lib/ostiumConfig';
 
 const STEPS = ['token', 'direction', 'amount', 'leverage', 'confirm'];
 const PACIFICA_MIN_NOTIONAL_USD = 10;
@@ -204,10 +204,7 @@ function BasicTradeFlow({
         // SDK surface a useful revert if you go too small).
         const notional = pickedAmount * pickedLev;
         if (dex === 'ostium' && Number.isFinite(tradeBalance) && pickedAmount > tradeBalance + 1e-6) {
-          setErrorMsg(
-            `Ostium keeps $${OSTIUM_ORACLE_FEE_BUFFER_USD.toFixed(2)} USDC for oracle fees. ` +
-            `Use $${tradeBalance.toFixed(2)} margin or less.`
-          );
+          setErrorMsg(ostiumOracleFeeBufferMessage(tradeBalance));
           submittedRef.current = false;
           setSubmitting(false);
           return;
