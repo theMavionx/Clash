@@ -249,6 +249,64 @@ function finiteLineNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function priceLineKey(kind, price) {
+  const n = finiteLineNumber(price);
+  return n == null ? '' : `${kind}:${Math.round(n * 1e8) / 1e8}`;
+}
+
+function orderLimitLinePrice(order) {
+  return finiteLineNumber(
+    order?.price
+      ?? order?.ip
+      ?? order?.limit_price
+      ?? order?.limitPrice
+      ?? order?._raw?.limit_price
+      ?? order?._raw?.limitPrice
+  );
+}
+
+function orderTriggerLinePrice(order) {
+  return finiteLineNumber(
+    order?.stop_price
+      ?? order?.sp
+      ?? order?.trigger_price
+      ?? order?.triggerPrice
+      ?? order?.triggerPriceUi
+      ?? order?.trigger_price_ui
+      ?? order?.trigger_px
+      ?? order?.triggerPx
+      ?? order?._raw?.triggerPrice
+      ?? order?._raw?.trigger_price
+      ?? order?._raw?.triggerPriceUi
+      ?? order?._raw?.trigger_price_ui
+      ?? order?._raw?.trigger_px
+      ?? order?._raw?.triggerPx
+  );
+}
+
+function positionTpslLinePrice(pos, kind) {
+  if (kind === 'tp') {
+    return finiteLineNumber(
+      pos?.take_profit_price
+        ?? pos?.takeProfitPrice
+        ?? pos?.take_profit
+        ?? pos?.takeProfit
+        ?? pos?.tp
+        ?? pos?.tp_trigger_price
+        ?? pos?.tpTriggerPrice
+    );
+  }
+  return finiteLineNumber(
+    pos?.stop_loss_price
+      ?? pos?.stopLossPrice
+      ?? pos?.stop_loss
+      ?? pos?.stopLoss
+      ?? pos?.sl
+      ?? pos?.sl_trigger_price
+      ?? pos?.slTriggerPrice
+  );
+}
+
 function positionLineIsLong(pos) {
   const side = String(pos?.side || '').toLowerCase();
   if (side === 'bid' || side === 'long' || side === 'buy') return true;
@@ -624,36 +682,57 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
 
       // Position entry lines
       const symPositions = positions.filter(p => p.symbol === symbol);
+      const positionTpslLineKeys = new Set();
       for (const pos of symPositions) {
         const entry = parseFloat(pos.entry_price);
-        if (!entry) continue;
         const isLong = positionLineIsLong(pos);
-        const amount = displayPositionAmount(pos, mark, entry);
-        const pnl = positionLinePnl(pos, mark, entry, amount, isLong);
-        const pnlStr = fmtLineUsd(pnl);
-        const line = seriesRef.current.createPriceLine({
-          price: entry,
-          color: isLong ? '#4CAF50' : '#E53935',
-          lineWidth: 2,
-          lineStyle: 2, // dashed
-          axisLabelVisible: true,
-          title: `${isLong ? 'Long' : 'Short'} ${fmtBaseAmount(amount)} ${symbol} ${pnlStr}`,
-        });
-        linesRef.current.push(line);
+        if (entry) {
+          const amount = displayPositionAmount(pos, mark, entry);
+          const pnl = positionLinePnl(pos, mark, entry, amount, isLong);
+          const pnlStr = fmtLineUsd(pnl);
+          const line = seriesRef.current.createPriceLine({
+            price: entry,
+            color: isLong ? '#4CAF50' : '#E53935',
+            lineWidth: 2,
+            lineStyle: 2, // dashed
+            axisLabelVisible: true,
+            title: `${isLong ? 'Long' : 'Short'} ${fmtBaseAmount(amount)} ${symbol} ${pnlStr}`,
+          });
+          linesRef.current.push(line);
+        }
+
+        for (const [kind, color, label] of [
+          ['tp', '#4CAF50', 'TP'],
+          ['sl', '#E53935', 'SL'],
+        ]) {
+          const price = positionTpslLinePrice(pos, kind);
+          if (!(price > 0)) continue;
+          positionTpslLineKeys.add(priceLineKey(kind, price));
+          const line = seriesRef.current.createPriceLine({
+            price,
+            color,
+            lineWidth: 2,
+            lineStyle: 1, // dotted
+            axisLabelVisible: true,
+            title: `${label} $${price.toLocaleString()}`,
+          });
+          linesRef.current.push(line);
+        }
       }
 
       // Order lines (limit, stop, TP/SL)
       const symOrders = orders.filter(o => (o.symbol || o.s) === symbol);
       for (const ord of symOrders) {
-        const rawPrice = parseFloat(ord.price || ord.ip || 0);
-        const stopPrice = parseFloat(ord.stop_price || ord.sp || 0);
-        const price = rawPrice > 0 ? rawPrice : stopPrice;
-        if (!price) continue;
+        const rawPrice = orderLimitLinePrice(ord);
+        const stopPrice = orderTriggerLinePrice(ord);
         const side = ord.side || ord.d;
         const isBid = side === 'bid';
         const triggerKind = stopPrice > 0 ? classifyTriggerOrder(ord, symPositions, stopPrice) : null;
         const isTP = triggerKind === 'tp';
         const isSL = triggerKind === 'sl';
+        const price = stopPrice > 0 ? stopPrice : rawPrice;
+        if (!price) continue;
+        if ((isTP || isSL) && positionTpslLineKeys.has(priceLineKey(triggerKind, price))) continue;
         const color = isTP ? '#4CAF50' : isSL ? '#E53935' : stopPrice > 0 ? '#FF9800' : (isBid ? '#2196F3' : '#9C27B0');
         const label = isTP ? 'TP' : isSL ? 'SL' : stopPrice > 0 ? 'STOP' : 'LIMIT';
         const line = seriesRef.current.createPriceLine({

@@ -1,5 +1,9 @@
 import { getReadClient } from './decibel';
 
+const DECIBEL_REALTIME_WS_ENABLED = /^(1|true|yes)$/i.test(
+  String(import.meta.env?.VITE_DECIBEL_REALTIME_WS_ENABLED || '').trim(),
+);
+
 const emptySnapshot = {
   status: 'idle',
   prices: [],
@@ -58,6 +62,10 @@ function normalizeSubaccount(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+export function isDecibelRealtimeEnabled() {
+  return DECIBEL_REALTIME_WS_ENABLED;
+}
+
 export function getDecibelRealtimeSnapshot() {
   return snapshot;
 }
@@ -72,6 +80,11 @@ export function subscribeDecibelRealtime(listener) {
 }
 
 export async function startDecibelRealtime({ subaccountAddr = '' } = {}) {
+  if (!DECIBEL_REALTIME_WS_ENABLED) {
+    emit({ status: 'disabled', error: null });
+    return false;
+  }
+
   if (typeof window === 'undefined' || typeof WebSocket === 'undefined') {
     emit({ status: 'unavailable', error: 'WebSocket is unavailable in this browser' });
     return false;

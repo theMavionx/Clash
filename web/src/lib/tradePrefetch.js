@@ -456,12 +456,12 @@ export async function prefetchDexTradeData({
 
   if (normalizedDex === 'decibel') {
     try {
-      const [{ getPrimarySubaccountAddr }, { startDecibelRealtime }] = await Promise.all([
-        import('./decibel'),
-        import('./decibelRealtime'),
-      ]);
-      const subaccountAddr = normalizedWallet ? await getPrimarySubaccountAddr(normalizedWallet) : '';
-      startDecibelRealtime({ subaccountAddr });
+      const { isDecibelRealtimeEnabled, startDecibelRealtime } = await import('./decibelRealtime');
+      if (isDecibelRealtimeEnabled()) {
+        const { getPrimarySubaccountAddr } = await import('./decibel');
+        const subaccountAddr = normalizedWallet ? await getPrimarySubaccountAddr(normalizedWallet) : '';
+        startDecibelRealtime({ subaccountAddr });
+      }
     } catch {
       // Decibel realtime warmup is opportunistic; normal hook reads remain the fallback.
     }

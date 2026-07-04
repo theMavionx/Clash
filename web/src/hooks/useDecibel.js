@@ -78,6 +78,7 @@ const TX_WAIT_TIMEOUT_MS = 45_000;
 const APTOS_FULLNODE = 'https://fullnode.mainnet.aptoslabs.com/v1';
 const FUTURES_API = '/api/futures';
 const DECIBEL_REWARD_CLAIM_DELAY_MS = 1_500;
+const DECIBEL_POST_WRITE_REFRESH_DELAYS_MS = [0, 250, 750, 1_500, 2_500, 4_000, 6_500, 9_500, 14_000];
 const BUILDER_APPROVAL_VIEW = `${DECIBEL_PACKAGE_MAINNET}::builder_code_registry::get_approved_max_fee`;
 const TRADING_DELEGATION_VIEW = `${DECIBEL_PACKAGE_MAINNET}::dex_accounts::view_delegated_permissions`;
 const TIME_IN_FORCE = Object.freeze({
@@ -131,6 +132,10 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => {
     if (timer) clearTimeout(timer);
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isAbortLikeError(e) {
@@ -839,6 +844,7 @@ export function useDecibel() {
   const claimGoldRef = useRef(null);
   const closeInFlightRef = useRef(new Set());
   const activationInFlightRef = useRef(false);
+  const postWritePollRef = useRef(0);
   // Builder subaccount cache (deterministic, but resolution touches REST +
   // SDK helpers so we avoid repeating the work on every trade).
   const builderSubRef = useRef(null);
@@ -1349,6 +1355,47 @@ export function useDecibel() {
     } catch { /* tolerate transient RPC errors — keep prior value */ }
   }, [address]);
 
+  const pollDecibelStateAfterWrite = useCallback(({ symbol, mode = 'position-refresh' } = {}) => {
+    if (!address) return;
+    const target = String(symbol || '').toUpperCase();
+    const pollId = ++postWritePollRef.current;
+
+    const targetPositions = (rows) => (Array.isArray(rows) ? rows : [])
+      .filter(p => !target || String(p?.symbol || '').toUpperCase() === target);
+    const targetOrders = (rows) => (Array.isArray(rows) ? rows : [])
+      .filter(o => !target || String(o?.symbol || o?.s || '').toUpperCase() === target);
+
+    void (async () => {
+      for (let i = 0; i < DECIBEL_POST_WRITE_REFRESH_DELAYS_MS.length; i += 1) {
+        const delay = DECIBEL_POST_WRITE_REFRESH_DELAYS_MS[i];
+        if (delay > 0) await sleep(delay);
+        if (postWritePollRef.current !== pollId || !address) return;
+
+        const needsPositions = mode !== 'order-open';
+        const needsOrders = mode !== 'position-open';
+        const [positionsResult] = await Promise.allSettled([
+          needsPositions ? fetchPositions() : Promise.resolve(positionsRef.current),
+          needsOrders ? fetchOrders() : Promise.resolve(ordersRef.current),
+          fetchAccount({ force: true, quiet: true }),
+          fetchBalance(),
+        ]);
+
+        const nextPositions = positionsResult.status === 'fulfilled' && Array.isArray(positionsResult.value)
+          ? positionsResult.value
+          : positionsRef.current;
+        const matchingPositions = targetPositions(nextPositions);
+        const matchingOrders = targetOrders(ordersRef.current);
+
+        if (mode === 'position-open' && matchingPositions.length > 0) return;
+        if (mode === 'order-open' && matchingOrders.length > 0) return;
+        if (mode === 'position-refresh' && i >= 3) return;
+        if (mode === 'tpsl-refresh' && i >= 3 && matchingPositions.some(p => (
+          p?.tp || p?.take_profit || p?.tp_trigger_price || p?.sl || p?.stop_loss || p?.sl_trigger_price
+        ))) return;
+      }
+    })();
+  }, [address, fetchAccount, fetchBalance, fetchOrders, fetchPositions]);
+
   // ───── Builder fee linkage ─────
   // We treat builder approvals as a one-shot on-chain cap, but require it to
   // exactly match the current fee. Otherwise old 10 bps approvals would keep
@@ -1785,9 +1832,7 @@ export function useDecibel() {
         price: livePrice, dedup_key: dedup,
       });
 
-      fetchPositions();
-      fetchAccount({ force: true });
-      fetchBalance();
+      pollDecibelStateAfterWrite({ symbol, mode: 'position-open' });
       scheduleClaim();
       return { tx_hash: txHash, status: 'submitted', info: fillInfo || undefined, filled_notional_usd: hasFilledNotional ? filledNotional : undefined };
     } catch (e) {
@@ -1797,7 +1842,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
+  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif, leverage) => {
     setLoading(true);
@@ -1862,9 +1907,7 @@ export function useDecibel() {
         dedup_key: dedup,
       });
 
-      fetchOrders();
-      fetchAccount({ force: true });
-      fetchBalance();
+      pollDecibelStateAfterWrite({ symbol, mode: 'order-open' });
       scheduleClaim();
       return { tx_hash: txHash, status: 'open' };
     } catch (e) {
@@ -1874,7 +1917,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, fetchOrders, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
+  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer]);
 
   // Close = reduceOnly IOC at slipped live mark. `amount` is base units
   // (the position's quantity to close, NOT collateral) — same semantics as
@@ -1950,11 +1993,7 @@ export function useDecibel() {
         amount: amt, leverage: 1, order_type: 'close', dedup_key: dedupKey,
       });
 
-      fetchPositions();
-      setTimeout(() => fetchPositions(), 1_500);
-      setTimeout(() => fetchPositions(), 3_500);
-      fetchAccount({ force: true });
-      fetchBalance();
+      pollDecibelStateAfterWrite({ symbol, mode: 'position-refresh' });
       scheduleClaim(500);
       scheduleClaim(3_000);
       return {
@@ -1970,7 +2009,7 @@ export function useDecibel() {
       closeInFlightRef.current.delete(closeLockKey);
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
+  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     try {
@@ -2064,8 +2103,7 @@ export function useDecibel() {
         ...builderArgs,
       });
       const txHash = assertWriteSuccess(res, 'TP/SL update');
-      fetchPositions();
-      fetchOrders();
+      pollDecibelStateAfterWrite({ symbol: target, mode: 'tpsl-refresh' });
       return { tx_hash: txHash, status: 'updated' };
     } catch (e) {
       const msg = decodeTradeError(e, 'TP/SL update failed');
@@ -2074,7 +2112,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, ensureSubaccount, builderFields, fetchPositions, fetchOrders, tpslOnServer]);
+  }, [requireServerSigner, ensureSubaccount, builderFields, pollDecibelStateAfterWrite, tpslOnServer]);
 
   // Decibel `configureUserSettingsForMarket` stores leverage together with
   // the cross-margin flag. Isolated margin is not currently exposed as a
@@ -2229,6 +2267,10 @@ export function useDecibel() {
   claimGoldRef.current = claimGold;
 
   // ───── Effects ─────
+
+  useEffect(() => () => {
+    postWritePollRef.current += 1;
+  }, [address]);
 
   useEffect(() => {
     if (!isActiveDex) {
