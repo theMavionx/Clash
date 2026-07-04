@@ -1403,7 +1403,14 @@ async function getFlashMainMarketContext(options = {}) {
     getRawMarkets(),
   ]);
   const symbolByMint = new Map((Array.isArray(tokens) ? tokens : [])
-    .map(t => [String(t?.mintKey || '').trim(), normalizeToken(t?.symbol, '')])
+    .flatMap(t => {
+      const symbol = normalizeToken(t?.symbol, '');
+      return [
+        [String(t?.mintKey || '').trim(), symbol],
+        [String(t?.mint || '').trim(), symbol],
+        [String(t?.tokenMint || '').trim(), symbol],
+      ];
+    })
     .filter(([mint, sym]) => mint && sym));
   const custodiesByAccount = new Map();
   const custodyRows = [];
@@ -1417,8 +1424,20 @@ async function getFlashMainMarketContext(options = {}) {
       pool: String(account?.pool || '').trim(),
       mint: String(account?.mint || account?.tokenMint || account?.mintKey || '').trim(),
       tokenAccount: String(account?.token_account || account?.tokenAccount || '').trim(),
-      oracle: String(account?.oracle?.int_oracle_account || account?.intOracleAddress || account?.oracleAccount || '').trim(),
-      extOracle: String(account?.oracle?.ext_oracle_account || account?.extOracleAddress || account?.erOracleAccount || '').trim(),
+      oracle: String(
+        account?.oracle?.int_oracle_account
+        || account?.oracle?.intOracleAccount
+        || account?.intOracleAddress
+        || account?.oracleAccount
+        || '',
+      ).trim(),
+      extOracle: String(
+        account?.oracle?.ext_oracle_account
+        || account?.oracle?.extOracleAccount
+        || account?.extOracleAddress
+        || account?.erOracleAccount
+        || '',
+      ).trim(),
       uid: account?.uid ?? account?.custodyId ?? null,
       decimals: Number(account?.decimals),
       raw: account,
