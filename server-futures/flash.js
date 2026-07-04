@@ -84,6 +84,9 @@ const FLASH_LEGACY_DISCRIMINATORS = Object.freeze({
   placeLimitOrder: '6cb021ba92e501c5',
   cancelLimitOrder: '2e05ef05194d6f78',
 });
+const FLASH_ER_DISCRIMINATOR_HEX = Object.freeze(
+  Object.fromEntries(Object.entries(FLASH_ER_DISCRIMINATORS).map(([key, value]) => [key, value.toString('hex')]))
+);
 const GPL_SESSION_PROGRAM_ID = String(process.env.GPL_SESSION_PROGRAM_ID || 'KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5');
 const FLASH_DELEGATION_PROGRAM_ID = 'DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh';
 const FLASH_DELEGATION_PROGRAM_PK = new PublicKey(FLASH_DELEGATION_PROGRAM_ID);
@@ -2908,6 +2911,8 @@ async function buildOpenPositionTx(body, owner) {
     FLASH_LEGACY_DISCRIMINATORS.openPosition,
     FLASH_LEGACY_DISCRIMINATORS.swapAndOpen,
     FLASH_LEGACY_DISCRIMINATORS.placeLimitOrder,
+    FLASH_ER_DISCRIMINATOR_HEX.openPosition,
+    FLASH_ER_DISCRIMINATOR_HEX.placeLimitOrder,
   ]);
   const signerContext = flashSignerContext(owner, body);
   const context = await getFlashMainMarketContext({
@@ -2918,7 +2923,10 @@ async function buildOpenPositionTx(body, owner) {
   });
   let transaction;
   let erInstructionName;
-  if (legacyIx.discriminator === FLASH_LEGACY_DISCRIMINATORS.placeLimitOrder) {
+  if (
+    legacyIx.discriminator === FLASH_LEGACY_DISCRIMINATORS.placeLimitOrder
+    || legacyIx.discriminator === FLASH_ER_DISCRIMINATOR_HEX.placeLimitOrder
+  ) {
     const params = parseLegacyLimitParams(legacyIx.data);
     const limitContext = { ...context, reserve: context.receiving, receive: context.lock };
     transaction = await buildFlashErVersionedTransaction([
