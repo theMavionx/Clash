@@ -8952,10 +8952,16 @@ router.post('/players/register', async (req, res) => {
       if (!localGuestWallet && trimmed.length >= 2 && !looksAutoDerived && trimmed !== existing.name) {
         const validation = validatePlayerNameInput(trimmed);
         if (validation.error) return res.status(400).json({ error: validation.error });
-        const clash = db.db.prepare('SELECT id FROM players WHERE lower(name) = lower(?) AND id != ? LIMIT 1').get(validation.name, existing.id);
-        if (clash) return res.status(409).json({ error: 'Nickname is already taken' });
-        db.db.prepare('UPDATE players SET name = ? WHERE id = ?').run(validation.name, existing.id);
-        existing.name = validation.name;
+        const rename = db.renamePlayer(existing.id, validation.name, {
+          source: 'register-existing',
+          changedBy: existing.id,
+          metadata: { route: '/players/register', dex: requestedDex, wallet_present: !!wallet },
+        });
+        if (!rename.ok) {
+          const message = rename.error === 'nickname_taken' ? 'Nickname is already taken' : 'Could not rename player';
+          return res.status(rename.status || 500).json({ error: message });
+        }
+        existing.name = rename.player?.name || validation.name;
       }
       // No more dex-switching on the existing row — DEX is now part of
       // identity. If the caller wanted a different DEX they fall through
@@ -9062,17 +9068,16 @@ router.patch('/players/name', auth, (req, res) => {
   if (nextName === req.player.name) {
     return res.json({ ok: true, name: req.player.name });
   }
-  const clash = db.db.prepare('SELECT id FROM players WHERE lower(name) = lower(?) AND id != ? LIMIT 1').get(nextName, req.player.id);
-  if (clash) return res.status(409).json({ error: 'Nickname is already taken' });
-  try {
-    db.db.prepare('UPDATE players SET name = ? WHERE id = ?').run(nextName, req.player.id);
-  } catch (e) {
-    if (String(e?.message || '').includes('UNIQUE')) {
-      return res.status(409).json({ error: 'Nickname is already taken' });
-    }
-    throw e;
+  const rename = db.renamePlayer(req.player.id, nextName, {
+    source: 'player-profile',
+    changedBy: req.player.id,
+    metadata: { route: '/players/name' },
+  });
+  if (!rename.ok) {
+    const message = rename.error === 'nickname_taken' ? 'Nickname is already taken' : 'Could not rename player';
+    return res.status(rename.status || 500).json({ error: message });
   }
-  logAuth('Player renamed', { player_id: req.player.id, from: req.player.name, to: nextName });
+  logAuth('Player renamed', { player_id: req.player.id, from: rename.old_name, to: rename.new_name });
   res.json({ ok: true, name: nextName });
 });
 
@@ -13116,6 +13121,29 @@ try {
     CREATE INDEX IF NOT EXISTS idx_pacifica_agents_player ON pacifica_agents(player_id);
   `);
 } catch {}
+try {
+  db.db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_pacifica_ready_wallet_owner
+      ON player_dex_accounts(wallet_address)
+      WHERE dex = 'pacifica'
+        AND status = 'ready'
+        AND wallet_address IS NOT NULL
+        AND wallet_address != '';
+  `);
+} catch (e) {
+  console.warn('[boot] pacifica wallet owner uniqueness skipped:', e.message);
+}
+try {
+  db.db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_pacifica_agent_owner
+      ON pacifica_agents(agent_wallet)
+      WHERE agent_wallet IS NOT NULL
+        AND agent_wallet != ''
+        AND length(agent_wallet) BETWEEN 43 AND 44;
+  `);
+} catch (e) {
+  console.warn('[boot] pacifica agent owner uniqueness skipped:', e.message);
+}
 
 // One-shot legacy migration: older client builds POSTed `wallet=<agent>`
 // to /trading/claim-gold (instead of `wallet=<master>, agent_wallet=<agent>`),
@@ -13355,10 +13383,73 @@ function pacificaExistingWalletBaseline(playerId, account) {
   }
 }
 
+function pacificaIdentityConflict(playerId, account, agentWallet = '') {
+  const wallet = canonicalWalletIdentifier(account || '');
+  const agent = canonicalWalletIdentifier(agentWallet || '');
+  if (wallet) {
+    const row = db.db.prepare(`
+      SELECT a.player_id, p.name, 'wallet' AS kind, a.wallet_address AS identity
+        FROM player_dex_accounts a
+        LEFT JOIN players p ON p.id = a.player_id
+       WHERE a.dex = 'pacifica'
+         AND a.status = 'ready'
+         AND a.wallet_address = ?
+         AND a.player_id != ?
+       ORDER BY a.updated_at DESC, a.id DESC
+       LIMIT 1
+    `).get(wallet, playerId);
+    if (row) return row;
+  }
+  if (agent) {
+    const row = db.db.prepare(`
+      SELECT pa.player_id, p.name, 'agent' AS kind, pa.agent_wallet AS identity
+        FROM pacifica_agents pa
+        LEFT JOIN players p ON p.id = pa.player_id
+       WHERE pa.agent_wallet = ?
+         AND pa.player_id != ?
+       ORDER BY pa.bound_at DESC
+       LIMIT 1
+    `).get(agent, playerId);
+    if (row) return row;
+  }
+  return null;
+}
+
+function pacificaIdentityConflictError(conflict) {
+  const label = conflict.kind === 'agent' ? 'Pacifica agent wallet' : 'Pacifica wallet';
+  const err = new Error(`${label} is already linked to another game account`);
+  err.status = 409;
+  err.conflict = conflict;
+  return err;
+}
+
+function pacificaUniqueConstraintConflict(error, playerId, account, agentWallet = '') {
+  const message = String(error?.message || '');
+  if (!message.includes('UNIQUE constraint failed') && !message.includes('uniq_pacifica')) {
+    return null;
+  }
+  return pacificaIdentityConflict(playerId, account, agentWallet);
+}
+
+function sendPacificaPersistError(res, routeLabel, error) {
+  if (Number(error?.status) === 409) {
+    return res.status(409).json({
+      error: error.message,
+      existing_player_id: error.conflict?.player_id || null,
+      existing_name: error.conflict?.name || null,
+      conflict_kind: error.conflict?.kind || null,
+    });
+  }
+  console.warn(`[${routeLabel}] verified wallet persist failed:`, error?.message || error);
+  return res.status(500).json({ error: 'failed to persist' });
+}
+
 function persistVerifiedPacificaTradingWallet(player, account, opts = {}) {
   if (!player?.id || !isValidSolanaPubkey(account)) return { ok: false, baseline: 0 };
   const wallet = canonicalWalletIdentifier(account);
   const agentWallet = isValidSolanaPubkey(opts.agentWallet) ? canonicalWalletIdentifier(opts.agentWallet) : '';
+  const conflict = pacificaIdentityConflict(player.id, wallet, agentWallet);
+  if (conflict) throw pacificaIdentityConflictError(conflict);
   const baseline = pacificaExistingWalletBaseline(player.id, wallet);
   const metadata = JSON.stringify({
     source: String(opts.source || 'pacifica_verified_wallet'),
@@ -13408,7 +13499,13 @@ function persistVerifiedPacificaTradingWallet(player, account, opts = {}) {
         updated_at = datetime('now')
     `).run(player.id, wallet, agentWallet, baseline);
   });
-  txn();
+  try {
+    txn();
+  } catch (e) {
+    const conflict = pacificaUniqueConstraintConflict(e, player.id, wallet, agentWallet);
+    if (conflict) throw pacificaIdentityConflictError(conflict);
+    throw e;
+  }
   return { ok: true, wallet, agentWallet, baseline };
 }
 
@@ -13455,8 +13552,7 @@ router.post('/pacifica/agent', auth, (req, res) => {
       source: 'bind_agent_wallet',
     });
   } catch (e) {
-    console.warn(`[pacifica/agent] verified wallet persist failed:`, e.message);
-    return res.status(500).json({ error: 'failed to persist' });
+    return sendPacificaPersistError(res, 'pacifica/agent', e);
   }
 
   const txn = db.db.transaction(() => {
@@ -13528,8 +13624,7 @@ router.post('/pacifica/agent/sync', auth, (req, res) => {
       source: 'agent_sync',
     });
   } catch (e) {
-    console.warn(`[pacifica/agent/sync] verified wallet persist failed:`, e.message);
-    return res.status(500).json({ error: 'failed to persist' });
+    return sendPacificaPersistError(res, 'pacifica/agent/sync', e);
   }
   const txn = db.db.transaction(() => {
     db.db.prepare(`
@@ -15670,6 +15765,15 @@ function adminBuildPlayerProfile(player) {
      WHERE player_id = ?
      ORDER BY verified_at DESC, created_at DESC
   `, [playerId]);
+  const nameHistory = typeof db.listPlayerNameHistory === 'function'
+    ? db.listPlayerNameHistory(playerId, 100)
+    : adminSafeAll(`
+      SELECT id, old_name, new_name, source, changed_by, metadata_json, changed_at
+        FROM player_name_history
+       WHERE player_id = ?
+       ORDER BY datetime(changed_at) DESC, id DESC
+       LIMIT 100
+    `, [playerId]).map((row) => ({ ...row, metadata: adminProfileSafePayload(row.metadata_json), metadata_json: undefined }));
   const dexAccounts = adminSafeAll(`
     SELECT dex, chain_type, wallet_address, account_id, status, metadata_json, created_at, updated_at
       FROM player_dex_accounts
@@ -15892,6 +15996,10 @@ function adminBuildPlayerProfile(player) {
       primary_login_wallet: player.wallet || wallets.find((w) => Number(w.is_primary || 0) === 1)?.address || null,
       wallets,
       identities,
+      name_history: nameHistory,
+      name_changes_count: nameHistory.length,
+      previous_names: Array.from(new Set(nameHistory.map((row) => row.old_name).filter(Boolean))),
+      last_name_change_at: nameHistory[0]?.changed_at || null,
       dex_accounts: dexAccounts,
     },
     activity: {

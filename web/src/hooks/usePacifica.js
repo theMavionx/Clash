@@ -206,6 +206,34 @@ function buildMessage(type, payload) {
   return JSON.stringify(sortKeys({ ...header, data: payload }));
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizeOrdersResponseData(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.orders)) return data.orders;
+  return [];
+}
+
+function pacificaOrderStillOpen(rows, symbol, orderId) {
+  const targetId = String(orderId ?? '');
+  if (!targetId) return true;
+  const targetSymbol = String(symbol || '').trim().toUpperCase();
+  return normalizeOrdersResponseData(rows).some((order) => {
+    const rowSymbol = String(order?.symbol || order?.s || '').trim().toUpperCase();
+    if (targetSymbol && rowSymbol && rowSymbol !== targetSymbol) return false;
+    const ids = [
+      order?.order_id,
+      order?.i,
+      order?.id,
+      order?.client_order_id,
+      order?.clientOrderId,
+    ].filter(value => value !== undefined && value !== null).map(value => String(value));
+    return ids.includes(targetId);
+  });
+}
+
 function getATA(owner, mint) {
   return PublicKey.findProgramAddressSync(
     [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
@@ -1099,13 +1127,28 @@ export function usePacifica() {
     } catch {}
   }, [walletAddr]);
 
+  const fetchOrdersSnapshot = useCallback(async () => {
+    if (!walletAddr) return;
+    const res = await pacificaFetch(`/orders?account=${encodeURIComponent(walletAddr)}`);
+    const rows = normalizeOrdersResponseData(res.data);
+    setOrders(rows);
+    return rows;
+  }, [walletAddr]);
+
   const fetchOrders = useCallback(async () => {
     if (!walletAddr) return;
     try {
-      const res = await pacificaFetch(`/orders?account=${encodeURIComponent(walletAddr)}`);
-      if (res.data) setOrders(res.data);
+      await fetchOrdersSnapshot();
     } catch {}
-  }, [walletAddr]);
+  }, [walletAddr, fetchOrdersSnapshot]);
+
+  const confirmOrderGoneAfterCancelError = useCallback(async (symbol, orderId) => {
+    const latest = await fetchOrdersSnapshot();
+    if (!pacificaOrderStillOpen(latest, symbol, orderId)) return true;
+    await sleep(1200);
+    const delayed = await fetchOrdersSnapshot();
+    return !pacificaOrderStillOpen(delayed, symbol, orderId);
+  }, [fetchOrdersSnapshot]);
 
   const [marginModes, setMarginModes] = useState({}); // { BTC: false (cross), ETH: true (isolated) }
 
@@ -1326,12 +1369,25 @@ export function usePacifica() {
     return runSignedOnce(`cancel:${walletAddr}:${symbol}:${orderId}`, async () => {
       try {
         const res = await signedRequestWithActivation('POST', '/orders/cancel', 'cancel_order', { symbol, order_id: orderId });
-        if (res.error) throw new Error(res.error);
-        fetchOrders();
+        if (res.error) {
+          if (await confirmOrderGoneAfterCancelError(symbol, orderId)) {
+            return { success: true, stale_order_removed: true, original_error: res.error };
+          }
+          throw new Error(res.error);
+        }
+        await fetchOrdersSnapshot();
         return res;
-      } catch (e) { setError(e.message); return { error: e.message }; }
+      } catch (e) {
+        try {
+          if (await confirmOrderGoneAfterCancelError(symbol, orderId)) {
+            return { success: true, stale_order_removed: true, original_error: e?.message || 'Cancel failed after order closed' };
+          }
+        } catch {}
+        setError(e.message);
+        return { error: e.message };
+      }
     }, 3000);
-  }, [walletAddr, signedRequestWithActivation, fetchOrders, runSignedOnce]);
+  }, [walletAddr, signedRequestWithActivation, fetchOrdersSnapshot, confirmOrderGoneAfterCancelError, runSignedOnce]);
 
   const setTpsl = useCallback(async (symbol, side, takeProfit, stopLoss) => {
     if (!walletAddr) return;

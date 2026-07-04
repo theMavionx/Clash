@@ -1045,6 +1045,8 @@ function PlayerProfileOverview({ profile }) {
             { label: 'Futures mode', value: p.futures_mode || '-' },
             { label: 'Created', value: profileDate(p.created_at) },
             { label: 'Last seen', value: profileDate(p.last_seen_at) },
+            { label: 'Name changes', value: profile.identity?.name_changes_count || 0 },
+            { label: 'Last name change', value: profileDate(profile.identity?.last_name_change_at) },
             { label: 'Banned at', value: profileDate(p.banned_at) },
             { label: 'Ban reason', value: p.banned_reason || '-' },
             { label: 'Shield until', value: profileDate(p.shield_until) },
@@ -1062,6 +1064,19 @@ function PlayerProfileOverview({ profile }) {
           ]} />
         </ProfileSection>
       </div>
+      <ProfileSection title="Nickname History" subtitle="Canonical name changes. Older player_name fields in logs are historical snapshots and are not rewritten.">
+        <ProfileTable
+          columns={[
+            { key: 'changed_at', label: 'Changed', render: (r) => profileDate(r.changed_at) },
+            { key: 'old_name', label: 'From' },
+            { key: 'new_name', label: 'To' },
+            { key: 'source', label: 'Source' },
+            { key: 'changed_by', label: 'Changed by', render: (r) => r.changed_by ? <span className="admin-mono">{short(r.changed_by, 8, 6)}</span> : '-' },
+          ]}
+          rows={profile.identity?.name_history || []}
+          empty="No nickname changes recorded yet."
+        />
+      </ProfileSection>
       <ProfileSection title="Wallets" subtitle="All linked wallets and auth identities.">
         <ProfileTable
           columns={[

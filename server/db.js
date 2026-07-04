@@ -161,6 +161,27 @@ try { db.exec(`ALTER TABLE players ADD COLUMN banned_by TEXT`); } catch {}
 
 try {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS player_name_history (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id     TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      old_name      TEXT NOT NULL,
+      new_name      TEXT NOT NULL,
+      source        TEXT,
+      changed_by    TEXT,
+      metadata_json TEXT,
+      changed_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_name_history_player
+      ON player_name_history(player_id, changed_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_player_name_history_names
+      ON player_name_history(old_name, new_name);
+  `);
+} catch (e) {
+  console.warn('[db] player_name_history migration warning:', e.message);
+}
+
+try {
+  db.exec(`
     CREATE TABLE IF NOT EXISTS wallet_blacklist (
       wallet     TEXT PRIMARY KEY,
       chain_type TEXT,
@@ -256,6 +277,18 @@ try {
   `);
 } catch (e) {
   console.warn('[db] unified identity migration warning:', e.message);
+}
+try {
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_pacifica_ready_wallet_owner
+      ON player_dex_accounts(wallet_address)
+      WHERE dex = 'pacifica'
+        AND status = 'ready'
+        AND wallet_address IS NOT NULL
+        AND wallet_address != '';
+  `);
+} catch (e) {
+  console.warn('[db] pacifica wallet owner uniqueness skipped:', e.message);
 }
 
 // Player-bound NFT cache. Demon King ownership is verified from chain once,
@@ -2085,6 +2118,19 @@ const stmts = {
   // is now a UNIQUE pair so this returns at most one row.
   getPlayerByWalletAndDex: db.prepare(`SELECT * FROM players WHERE wallet = ? AND dex = ? LIMIT 1`),
   getPlayerById: db.prepare(`SELECT * FROM players WHERE id = ?`),
+  getPlayerNameClash: db.prepare(`SELECT id FROM players WHERE lower(name) = lower(?) AND id != ? LIMIT 1`),
+  updatePlayerNameById: db.prepare(`UPDATE players SET name = ? WHERE id = ?`),
+  insertPlayerNameHistory: db.prepare(`
+    INSERT INTO player_name_history (player_id, old_name, new_name, source, changed_by, metadata_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `),
+  listPlayerNameHistory: db.prepare(`
+    SELECT id, old_name, new_name, source, changed_by, metadata_json, changed_at
+      FROM player_name_history
+     WHERE player_id = ?
+     ORDER BY datetime(changed_at) DESC, id DESC
+     LIMIT ?
+  `),
   getAdminPlayerByIdentifier: db.prepare(`
     SELECT * FROM players
     WHERE id = ?
@@ -6434,6 +6480,60 @@ function authenticatePlayer(token) {
   return isPlayerBanned(player) ? null : player;
 }
 
+function safeNameHistoryMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  try {
+    return JSON.stringify(metadata).slice(0, 4000);
+  } catch {
+    return null;
+  }
+}
+
+function renamePlayer(playerId, nextName, options = {}) {
+  const id = String(playerId || '').trim();
+  const name = String(nextName || '').trim();
+  if (!id) return { ok: false, error: 'player_not_found', status: 404 };
+  if (!name) return { ok: false, error: 'invalid_name', status: 400 };
+  const source = String(options.source || 'unknown').trim().slice(0, 80) || 'unknown';
+  const changedBy = String(options.changedBy || options.changed_by || '').trim().slice(0, 120) || null;
+  const metadataJson = safeNameHistoryMetadata(options.metadata);
+  const run = db.transaction(() => {
+    const player = stmts.getPlayerById.get(id);
+    if (!player) return { ok: false, error: 'player_not_found', status: 404 };
+    const oldName = String(player.name || '');
+    if (oldName === name) {
+      return { ok: true, changed: false, old_name: oldName, new_name: oldName, player };
+    }
+    const clash = stmts.getPlayerNameClash.get(name, id);
+    if (clash) return { ok: false, error: 'nickname_taken', status: 409 };
+    stmts.updatePlayerNameById.run(name, id);
+    stmts.insertPlayerNameHistory.run(id, oldName, name, source, changedBy, metadataJson);
+    const updated = stmts.getPlayerById.get(id) || { ...player, name };
+    return { ok: true, changed: true, old_name: oldName, new_name: name, player: updated };
+  });
+  try {
+    return run();
+  } catch (e) {
+    if (String(e?.message || '').includes('UNIQUE')) {
+      return { ok: false, error: 'nickname_taken', status: 409 };
+    }
+    throw e;
+  }
+}
+
+function listPlayerNameHistory(playerId, limit = 100) {
+  const id = String(playerId || '').trim();
+  if (!id) return [];
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  return stmts.listPlayerNameHistory.all(id, safeLimit).map((row) => ({
+    ...row,
+    metadata: (() => {
+      try { return JSON.parse(row.metadata_json || '{}'); } catch { return {}; }
+    })(),
+    metadata_json: undefined,
+  }));
+}
+
 function getAdminPlayer(identifier) {
   const key = String(identifier || '').trim();
   if (!key) return null;
@@ -9787,6 +9887,8 @@ module.exports = {
   ALTAR_SKILL_DEFS,
   registerPlayer,
   authenticatePlayer,
+  renamePlayer,
+  listPlayerNameHistory,
   isPlayerBanned,
   getAdminPlayer,
   banPlayer,
