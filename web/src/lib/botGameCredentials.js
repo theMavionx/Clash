@@ -19,7 +19,7 @@ import { signTypedDataCompat } from './risexClient';
 import bs58 from 'bs58';
 import { getPhoenixOneTapSession, importPhoenixOneTapSigner, PHOENIX_ONE_TAP_STORAGE_PREFIX } from './phoenixOneTap';
 import { ensureGameExchangeReady, evmWalletsForPlayer, solanaWalletsForPlayer } from './botGameAuth';
-import { botApiUrl, botAuthHeaders } from './botApiClient';
+import { botApiUrl, botAuthHeaders, fetchBotApiJson } from './botApiClient';
 import { readHyperliquidAgentAsync } from './hyperliquidClient';
 
 const GRVT_BUILDER_ACCOUNT_ID = String(import.meta.env.VITE_GRVT_BUILDER_ACCOUNT_ID || '').trim();
@@ -1343,6 +1343,23 @@ export async function syncGameAccountToPhantom({
 }
 
 /**
+ * Re-sync credentials from the game after clearing Phantom balance cache.
+ * Use when the exchange row is already synced but reads fail (stale cache / session drift).
+ */
+export async function reconnectGameAccountToPhantom(opts) {
+  if (!opts?.token) return { ok: false, error: 'Log in to the game (player token required).' };
+  const ex = String(opts.exchangeId || '').toLowerCase();
+  if (!ex) return { ok: false, error: 'Exchange id required.' };
+
+  await fetch(botApiUrl(`/api/v1/exchanges/${ex}/reconnect`), {
+    method: 'POST',
+    headers: botAuthHeaders(opts.token),
+  }).catch(() => null);
+
+  return syncGameAccountToPhantom(opts);
+}
+
+/**
  * POST account directly (after manual paste), without re-gather.
  */
 export async function syncDirectAccountToPhantom({
@@ -1582,14 +1599,9 @@ async function setupAndSyncGameAccountInner({
 export async function probeExchangeBalance(token, exchangeId) {
   if (!token) return { ok: false, error: 'no token' };
   const ex = String(exchangeId || '').toLowerCase();
-  const res = await fetch(botApiUrl(`/api/v1/exchanges/${ex}/balance`), {
-    headers: botAuthHeaders(token),
-  }).then((r) => r.json().then((body) => ({ ok: r.ok, status: r.status, body })));
-  if (!res.ok || res.body?.success === false) {
-    const raw = res.body?.error?.message
-      || res.body?.error?.code
-      || res.body?.error
-      || `balance probe failed (HTTP ${res.status})`;
+  const res = await fetchBotApiJson(`/exchanges/${ex}/balance`, token);
+  if (!res.ok) {
+    const raw = res.error || 'balance probe failed';
     if (/adapter not registered/i.test(String(raw))) {
       return {
         ok: false,
@@ -1600,8 +1612,8 @@ export async function probeExchangeBalance(token, exchangeId) {
     }
     return { ok: false, error: raw };
   }
-  const equity = res.body?.data?.equity_usd ?? res.body?.data?.available_margin_usd;
-  return { ok: true, exchange: ex, balance: equity, raw: res.body?.data };
+  const equity = res.data?.equity_usd ?? res.data?.available_margin_usd;
+  return { ok: true, exchange: ex, balance: equity, raw: res.data };
 }
 
 function randomUint32() {

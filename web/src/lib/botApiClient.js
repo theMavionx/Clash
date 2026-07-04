@@ -9,6 +9,62 @@ function withLeadingSlash(path) {
   return value.startsWith('/') ? value : `/${value}`;
 }
 
+const BOT_WS_PREFIX = '/api/v1/bot/ws';
+const BOT_API_CANONICAL = '/api/v1/bot';
+
+/**
+ * Canonical `/api/v1/bot/*` first, then legacy flat `/api/v1/*` (older Clash proxy mounts).
+ * Accepts `/portfolio/summary`, `/api/v1/bot/accounts`, or `/api/v1/exchanges`.
+ */
+export function botApiPathCandidates(path) {
+  let suffix = withLeadingSlash(path);
+  if (suffix.startsWith(`${BOT_API_CANONICAL}/`)) {
+    suffix = suffix.slice(BOT_API_CANONICAL.length);
+  } else if (suffix.startsWith('/api/v1/')) {
+    suffix = suffix.slice('/api/v1'.length);
+  }
+  if (!suffix.startsWith('/')) suffix = `/${suffix}`;
+  const canonical = `${BOT_API_CANONICAL}${suffix}`;
+  const legacy = `/api/v1${suffix}`;
+  return canonical === legacy ? [canonical] : [canonical, legacy];
+}
+
+/** GET JSON from bot API — tries canonical path, then legacy flat mount. */
+export async function fetchBotApiJson(path, token, init = {}) {
+  const headers = botAuthHeaders(token, init.headers || {});
+  let lastError = null;
+  for (const urlPath of botApiPathCandidates(path)) {
+    try {
+      const r = await fetch(botApiUrl(urlPath), { ...init, headers });
+      let body = null;
+      try {
+        body = await r.json();
+      } catch {
+        body = null;
+      }
+      if (r.ok && body?.success !== false && body?.data !== undefined) {
+        return { ok: true, data: body.data, body, status: r.status, path: urlPath };
+      }
+      lastError = body?.error?.message || body?.error?.code || `HTTP ${r.status}`;
+    } catch (err) {
+      lastError = err?.message || String(err);
+    }
+  }
+  return { ok: false, error: lastError || 'request failed' };
+}
+
+/** Clash proxy mounts flat `/api/v1/{portfolio,exchanges,...}` — do not rewrite REST paths. */
+function normalizeBotWsPath(path) {
+  const suffix = withLeadingSlash(path);
+  if (suffix.startsWith(BOT_WS_PREFIX)) {
+    return suffix;
+  }
+  if (suffix === '/ws' || suffix === '/api/v1/bot/ws') {
+    return BOT_WS_PREFIX;
+  }
+  return BOT_WS_PREFIX;
+}
+
 function isHttpsPage() {
   return typeof window !== 'undefined' && window.location?.protocol === 'https:';
 }
@@ -90,7 +146,7 @@ export function botApiUrl(path) {
 
 export function botWsUrl(path) {
   const base = botWsBaseUrl();
-  const suffix = withLeadingSlash(path);
+  const suffix = normalizeBotWsPath(path);
   return base ? `${base}${suffix}` : suffix;
 }
 

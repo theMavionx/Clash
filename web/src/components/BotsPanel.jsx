@@ -20,11 +20,12 @@ import {
   saveThenSyncGameAccount,
   scanGameCredentialStatuses,
   setupAndSyncGameAccount,
+  reconnectGameAccountToPhantom,
   supportsGameWalletSync,
   syncGameAccountToPhantom,
   UNSUPPORTED_GAME_WALLET_EXCHANGES,
 } from '../lib/botGameCredentials';
-import { botApiUrl, botAuthHeaders, botWsUrl } from '../lib/botApiClient';
+import { botApiUrl, botAuthHeaders, botWsUrl, fetchBotApiJson, botApiPathCandidates } from '../lib/botApiClient';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import { keccak256 } from 'js-sha3';
@@ -103,56 +104,6 @@ const DEFAULT_HISTORY = [
 ];
 
 const STEPS = ['strategy', 'risk', 'review'];
-const PRO_STEPS = ['strategy', 'pro'];
-
-const PRO_REFERENCE_MODES = [
-  { id: 'mid', label: 'Mid Price' },
-  { id: 'grid', label: 'Grid' },
-  { id: 'dgrid', label: 'DGrid' },
-  { id: 'rgrid', label: 'RGrid' },
-  { id: 'blend', label: 'Blend' },
-  { id: 'signal', label: 'Signal' },
-];
-
-const PRO_PARTICIPATION_MODES = [
-  { id: 'aggressive', label: 'Aggressive', detail: '~5 min', tone: '#C62828' },
-  { id: 'normal', label: 'Normal', detail: '~10 min', tone: '#5C3A21' },
-  { id: 'passive', label: 'Passive', detail: '~30 min', tone: '#2E7D32' },
-];
-
-const PRO_BIAS_MODES = [
-  { id: 'short', label: 'Short', tone: '#C62828' },
-  { id: 'neutral', label: 'Neutral', tone: '#8B6500' },
-  { id: 'long', label: 'Long', tone: '#2E7D32' },
-];
-
-const DEFAULT_PRO_BOT_CONFIG = {
-  accountId: '',
-  pairId: '',
-  marginUsd: '',
-  volumeUsd: '',
-  participation: 'normal',
-  durationMinutes: 10,
-  referenceMode: 'mid',
-  bias: 'neutral',
-  spreadBps: 1,
-  stopLossPct: 25,
-  takeProfitPct: 100,
-};
-
-const DELTA_STOP_LOSS_OPTIONS = [50, 75, 90, 0];
-
-const DEFAULT_DELTA_NEUTRAL_CONFIG = {
-  longAccountId: '',
-  shortAccountId: '',
-  longPairId: '',
-  shortPairId: '',
-  notionalUsd: '',
-  twapMinutes: 60,
-  positionMinutes: '',
-  stopLossPct: 90,
-  participation: '-',
-};
 
 function money(value) {
   const n = Number(value);
@@ -225,6 +176,125 @@ function parseDecimalField(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+const BALANCE_CLIENT_CACHE_MS = 45_000;
+const balanceClientCache = { map: {}, ts: {} };
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getClientCachedBalance(ex) {
+  const ts = balanceClientCache.ts[ex];
+  if (ts && Date.now() - ts < BALANCE_CLIENT_CACHE_MS) {
+    return balanceClientCache.map[ex];
+  }
+  return null;
+}
+
+function setClientCachedBalance(ex, bal) {
+  if (!bal) return;
+  const hasFunds = (bal.available ?? 0) > 0 || (bal.equity ?? 0) > 0;
+  if (!hasFunds && !bal.error && !bal.staleWarning) return;
+  balanceClientCache.map[ex] = bal;
+  balanceClientCache.ts[ex] = Date.now();
+}
+
+function getUsableClientCachedBalance(ex) {
+  const cached = getClientCachedBalance(ex);
+  if (!cached) return null;
+  const hasFunds = (cached.available ?? 0) > 0 || (cached.equity ?? 0) > 0;
+  if (hasFunds || cached.error || cached.staleWarning) return cached;
+  return null;
+}
+
+function normalizeBalanceError(msg) {
+  const t = String(msg || '').trim();
+  if (!t) return { error: null, staleWarning: null };
+  if (t.startsWith('cached (rate limited)')) {
+    return { error: null, staleWarning: t };
+  }
+  return { error: t, staleWarning: null };
+}
+
+function mergeExchangeBalance(prev, incoming) {
+  if (!incoming) return prev;
+  if (!prev) return incoming;
+  const prevHasFunds = (prev.available ?? 0) > 0 || (prev.equity ?? 0) > 0;
+  const incomingHasFunds = (incoming.available ?? 0) > 0 || (incoming.equity ?? 0) > 0;
+  if (prevHasFunds && !incomingHasFunds && incoming.error) {
+    return {
+      ...prev,
+      error: incoming.error,
+      staleWarning: incoming.staleWarning ?? prev.staleWarning ?? null,
+    };
+  }
+  if (!incomingHasFunds && prevHasFunds && !incoming.error) {
+    return prev;
+  }
+  return incoming;
+}
+
+function getExchangeKey(id) {
+  const parsed = parseStrategyInstanceId(id);
+  return String(parsed.exchanges[0] || '').toLowerCase();
+}
+
+function shortenError(msg, max = 80) {
+  const t = String(msg || '').replace(/\s+/g, ' ').trim();
+  if (!t) return 'unknown error';
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+function formatExchangeBalance(bal) {
+  if (!bal) return { label: 'not synced', tone: 'muted', detail: null };
+  const avail = bal.available;
+  const equity = bal.equity;
+  const hasAmount = avail != null || equity != null;
+  if (bal.error && !hasAmount) {
+    return { label: 'API error', tone: 'error', detail: shortenError(bal.error) };
+  }
+  if (avail == null && equity == null) return { label: '—', tone: 'muted', detail: null };
+  const a = avail ?? 0;
+  const e = equity ?? a;
+  const staleNote = bal.staleWarning || (bal.error?.startsWith?.('cached (rate limited)') ? bal.error : null);
+  if (a === 0 && e === 0 && bal.error && !staleNote) {
+    return { label: 'API error', tone: 'error', detail: shortenError(bal.error) };
+  }
+  if (a === 0 && e === 0 && !bal.error && !staleNote) {
+    return {
+      label: '$0.00',
+      tone: 'warn',
+      detail: 'zero balance — deposit margin or fix API keys (try Accounts → re-sync)',
+    };
+  }
+  let detail = staleNote ? shortenError(staleNote) : null;
+  if (e !== a) detail = detail ? `${detail} · equity $${e.toFixed(2)}` : `equity $${e.toFixed(2)}`;
+  if (bal.unrealized != null && bal.unrealized !== 0) {
+    const unr = `uPnL ${bal.unrealized >= 0 ? '+' : ''}$${bal.unrealized.toFixed(2)}`;
+    detail = detail ? `${detail} · ${unr}` : unr;
+  }
+  const tone = staleNote ? 'warn' : 'ok';
+  return { label: `$${a.toFixed(2)}`, tone, detail };
+}
+
+function countFillsForExchange(orderHistory, exchangeDisplay) {
+  const ex = String(exchangeDisplay).toUpperCase();
+  return orderHistory.filter((row) => {
+    const bot = String(row.bot || '').toUpperCase();
+    const val = String(row.value || '').toLowerCase();
+    return bot === ex && val.includes('filled');
+  }).length;
+}
+
+function formatInventory(rt) {
+  const inv = rt?.inventory;
+  if (!inv || typeof inv !== 'object') return null;
+  const entries = Object.entries(inv);
+  if (entries.length === 0) return '0';
+  if (entries.length === 1) return String(entries[0][1]);
+  return entries.map(([sym, qty]) => `${sym}: ${qty}`).join(', ');
+}
+
 function accountActiveForExchange(accounts, exchange) {
   const needle = String(exchange).toLowerCase();
   return accounts.some(
@@ -282,7 +352,15 @@ const getExchangeName = (id) => {
   return 'Unknown';
 };
 
-const mapHandleToBot = (handle, runningList, runtime = {}, activeOrdersGlobal = 0, overrides = {}) => {
+const mapHandleToBot = (
+  handle,
+  runningList,
+  runtime = {},
+  activeOrdersGlobal = 0,
+  overrides = {},
+  exchangeBalances = {},
+  orderHistory = [],
+) => {
   const details = getBotConfigDetails(handle.id);
   const ov = overrides[handle.id] || {};
   const tradeSize = ov.order_size_usd != null && ov.order_size_usd !== ''
@@ -298,40 +376,84 @@ const mapHandleToBot = (handle, runningList, runtime = {}, activeOrdersGlobal = 
   const spread = spreadBps != null
     ? `${(spreadBps / 100).toFixed(2)}%`
     : (handle.kind === 'ping_pong' ? '0.22%' : '0.14%');
-  const isRunning = runningList.some(r => r.id === handle.id);
+  const isRunning = runningList.some((r) => r.id === handle.id);
   const rt = runtime[handle.id] || {};
   const cycles = Number(rt.cycles) || 0;
   const openQuotes = Number(rt.open_quotes) || 0;
+  const backoffSymbols = Array.isArray(rt.backoff_symbols) ? rt.backoff_symbols : [];
+  const inBackoff = rt.in_backoff === true || backoffSymbols.length > 0;
   const market = (Array.isArray(handle.symbols) ? handle.symbols : [])
     .map((s) => String(s).toUpperCase())
     .join(', ');
   const exchange = getExchangeName(handle.id);
+  const exchangeKey = getExchangeKey(handle.id);
+  const bal = exchangeBalances[exchangeKey];
+  const balFmt = formatExchangeBalance(bal);
+  const fills = countFillsForExchange(orderHistory, exchange);
+  const inventory = formatInventory(rt);
+  const unrealizedPnl = bal?.unrealized != null ? bal.unrealized : null;
+
+  let status = isRunning ? 'Running' : 'Template';
+  if (isRunning && inBackoff) status = 'Paused';
+
+  let lastAction;
+  if (!isRunning) {
+    lastAction = 'Press ▶ Start — only works if exchange account is ACTIVE';
+  } else if (inBackoff) {
+    const parts = backoffSymbols.map(
+      (s) => `${s.symbol} (~${s.pause_secs_remaining ?? '?'}s)`,
+    );
+    lastAction = `Circuit breaker active${parts.length ? `: ${parts.join(', ')}` : ''}. `
+      + 'Fix API keys / margin, then wait for cooldown.';
+  } else if (bal?.error && (bal.available ?? 0) <= 0 && (bal.equity ?? 0) <= 0) {
+    lastAction = `Exchange balance error: ${shortenError(bal.error)}`;
+  } else if (openQuotes > 0) {
+    lastAction = `${openQuotes} quote(s) on exchange · cycle ${cycles}`;
+  } else if (cycles > 0) {
+    if (String(exchange).toUpperCase().includes('GRVT') && handle.kind === 'ping_pong') {
+      lastAction = 'Ping Pong active — after fill bot drains position; low margin until close is normal';
+    } else if (String(exchange).toUpperCase().includes('GRVT')) {
+      lastAction = 'Bot runs but GRVT has 0 quotes — min ~$130/order; need margin + builder auth';
+    } else if (exchangeKey === 'katana') {
+      lastAction = 'Katana: 0 quotes — check API key/secret + one-tap signer in Accounts';
+    } else if (balFmt.tone === 'warn') {
+      lastAction = 'Bot runs but account balance is $0 — deposit margin before quoting';
+    } else {
+      lastAction = `Bot runs but ${exchange} has 0 quotes — check margin, min notional, leverage`;
+    }
+  } else {
+    lastAction = 'Worker spawned, waiting for first cycle';
+  }
+
   return {
     id: handle.id,
     type: handle.kind,
     market: market,
     exchange: exchange,
-    status: isRunning ? 'Running' : 'Template',
+    exchangeKey,
+    status,
     tradeSize: Number.isFinite(tradeSize) ? tradeSize : details.tradeSize,
     maxPosition: Number.isFinite(maxPosition) ? maxPosition : details.maxPosition,
     preset,
     spreadBps,
-    pnl: 0,
-    inventory: '0.00',
+    pnl: unrealizedPnl,
+    pnlLabel: unrealizedPnl != null ? 'uPnL' : 'uPnL',
+    balanceLabel: balFmt.label,
+    balanceDetail: balFmt.detail,
+    balanceTone: balFmt.tone,
+    inventory: inventory ?? '—',
     spread,
-    fills: 0,
+    fills,
     cycles,
     openQuotes,
-    uptime: isRunning ? (cycles > 0 ? `${cycles} cycles` : 'Starting…') : 'Not started',
-    lastAction: isRunning
-      ? (openQuotes > 0
-        ? `${openQuotes} quote(s) on exchange · cycle ${cycles}`
-          : cycles > 0
-          ? (String(exchange).toUpperCase().includes('GRVT')
-            ? `Bot runs but GRVT has 0 quotes — min ~$130/order on GRVT; need ~$15–30 free margin, builder auth, leverage`
-            : `Bot runs but ${exchange} has 0 quotes — check free margin, min notional, leverage`)
-          : 'Worker spawned, waiting for first cycle')
-      : 'Press ▶ Start — only works if exchange account is ACTIVE',
+    inBackoff,
+    backoffSymbols,
+    uptime: isRunning
+      ? (inBackoff
+        ? `Paused · ${cycles} cycles`
+        : (cycles > 0 ? `${cycles} cycles` : 'Starting…'))
+      : 'Not started',
+    lastAction,
     isTemplate: !isRunning,
     activeOrdersGlobal,
   };
@@ -363,11 +485,11 @@ function RobotButtonMark({ size = 48 }) {
   );
 }
 
-function StepDots({ activeStep, steps = STEPS }) {
-  const index = Math.max(0, steps.indexOf(activeStep));
+function StepDots({ activeStep }) {
+  const index = Math.max(0, STEPS.indexOf(activeStep));
   return (
     <div style={shared.stepDots}>
-      {steps.map((step, i) => (
+      {STEPS.map((step, i) => (
         <div
           key={step}
           style={{
@@ -410,8 +532,16 @@ function SliderField({ label, value, min, max, step, onChange, defaultValue }) {
 
 function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
   const type = getBotType(bot.type);
-  const pnlPositive = Number(bot.pnl) >= 0;
-  const isRunning = bot.status === 'Running';
+  const pnlKnown = bot.pnl != null && Number.isFinite(Number(bot.pnl));
+  const pnlPositive = !pnlKnown || Number(bot.pnl) >= 0;
+  const isRunning = bot.status === 'Running' || bot.status === 'Paused';
+  const statusStyle = bot.status === 'Running'
+    ? S.statusRunning
+    : bot.status === 'Paused'
+      ? S.statusPaused
+      : bot.status === 'Template'
+        ? S.statusTemplate
+        : S.statusPaused;
   return (
     <div style={{ ...S.botCard, ...(expanded ? S.botCardExpanded : {}) }}>
       <button type="button" style={S.cardMainButton} onClick={() => onToggle(bot.id)} aria-expanded={expanded}>
@@ -422,10 +552,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
           <div style={S.cardTitleBlock}>
             <div style={S.cardTitleRow}>
               <strong style={S.cardTitle}>{type.name}</strong>
-              <span style={{
-                ...S.statusPill,
-                ...(bot.status === 'Running' ? S.statusRunning : bot.status === 'Template' ? S.statusTemplate : S.statusPaused),
-              }}>
+              <span style={{ ...S.statusPill, ...statusStyle }}>
                 {bot.status}
               </span>
             </div>
@@ -435,18 +562,27 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
         </div>
         <div style={S.metricGrid}>
           <div style={S.metric}>
-            <span style={S.metricLabel}>Real PnL</span>
-            <strong style={{ ...S.metricValue, color: pnlPositive ? colors.long : colors.short }}>
-              {signedMoney(bot.pnl)}
+            <span style={S.metricLabel}>{bot.pnlLabel || 'uPnL'}</span>
+            <strong style={{
+              ...S.metricValue,
+              color: pnlKnown ? (pnlPositive ? colors.long : colors.short) : '#78909C',
+            }}>
+              {pnlKnown ? signedMoney(bot.pnl) : '—'}
+            </strong>
+          </div>
+          <div style={S.metric}>
+            <span style={S.metricLabel}>Margin</span>
+            <strong style={{
+              ...S.metricValue,
+              color: bot.balanceTone === 'error' ? colors.short
+                : bot.balanceTone === 'warn' ? '#E65100' : undefined,
+            }}>
+              {bot.balanceLabel || '—'}
             </strong>
           </div>
           <div style={S.metric}>
             <span style={S.metricLabel}>Trade Size</span>
             <strong style={S.metricValue}>{money(bot.tradeSize)}</strong>
-          </div>
-          <div style={S.metric}>
-            <span style={S.metricLabel}>Max Position</span>
-            <strong style={S.metricValue}>{money(bot.maxPosition)}</strong>
           </div>
         </div>
         {!expanded && isRunning && (
@@ -454,6 +590,9 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
             Cycles <strong>{bot.cycles ?? 0}</strong>
             {' · '}
             Open quotes <strong>{bot.openQuotes ?? 0}</strong>
+            {bot.inBackoff ? (
+              <> · <strong style={{ color: '#E65100' }}>backoff</strong></>
+            ) : null}
           </div>
         )}
       </button>
@@ -487,6 +626,16 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
               <p style={S.detailCopy}>{type.description}</p>
             </div>
             <div style={S.detailCard}>
+              <span style={S.metricLabel}>Account</span>
+              <div style={S.detailRows}>
+                <span>Margin <strong>{bot.balanceLabel || '—'}</strong></span>
+                {bot.balanceDetail ? (
+                  <span style={{ fontSize: 11, color: '#6b5340' }}>{bot.balanceDetail}</span>
+                ) : null}
+                <span>Max position <strong>{money(bot.maxPosition)}</strong></span>
+              </div>
+            </div>
+            <div style={S.detailCard}>
               <span style={S.metricLabel}>Runtime</span>
               <div style={S.detailRows}>
                 <span>Cycles <strong>{bot.cycles ?? 0}</strong></span>
@@ -506,7 +655,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
             <strong>{bot.lastAction}</strong>
           </div>
           <div style={S.actionsRow}>
-            {bot.status === 'Running' ? (
+            {isRunning ? (
               <button
                 type="button"
                 style={{ ...cartoonBtn('#E53935', '#C62828'), padding: '8px 16px', fontSize: 13, borderRadius: 10 }}
@@ -584,18 +733,16 @@ function BotsPanel({ onClose }) {
 
   const [view, setView] = useState('dashboard');
   const [step, setStep] = useState('strategy');
-  const [bots, setBots] = useState([]);
   const [history, setHistory] = useState(DEFAULT_HISTORY);
   const [orderHistory, setOrderHistory] = useState([]);
   const [expandedBotId, setExpandedBotId] = useState(null);
   const userCollapsedRef = useRef(false);
+  const portfolioFetchInFlight = useRef(false);
+  const balanceFallbackAt = useRef(0);
   const [selectedType, setSelectedType] = useState('delta_neutral');
   const [tradeSize, setTradeSize] = useState(20);
   const [maxPosition, setMaxPosition] = useState(200);
   const [preset, setPreset] = useState('calm');
-  const [launchMode, setLaunchMode] = useState('basic');
-  const [proBotConfig, setProBotConfig] = useState(DEFAULT_PRO_BOT_CONFIG);
-  const [deltaNeutralConfig, setDeltaNeutralConfig] = useState(DEFAULT_DELTA_NEUTRAL_CONFIG);
   const [notice, setNotice] = useState('');
   const [totalPnl, setTotalPnl] = useState(0);
   const [fillsCount, setFillsCount] = useState(0);
@@ -628,6 +775,10 @@ function BotsPanel({ onClose }) {
   const [keyTransMethod, setKeyTransMethod] = useState('encrypt');
   const [hlBalanceUsd, setHlBalanceUsd] = useState(null);
   const [grvtBalanceUsd, setGrvtBalanceUsd] = useState(null);
+  /** Per-exchange balance from GET /api/v1/portfolio/summary */
+  const [exchangeBalances, setExchangeBalances] = useState({});
+  const [portfolioPnl, setPortfolioPnl] = useState(null);
+  const [portfolioTotals, setPortfolioTotals] = useState(null);
   const [overridesById, setOverridesById] = useState({});
   const [gameAuthRows, setGameAuthRows] = useState([]);
   const [grvtOneTapInput, setGrvtOneTapInput] = useState('');
@@ -672,89 +823,6 @@ function BotsPanel({ onClose }) {
     });
   }, [instancesForSelectedType, syncedAccounts]);
 
-  const proAccountOptions = useMemo(() => {
-    return syncedAccounts
-      .filter((acc) => acc.status === 'active')
-      .map((acc) => ({
-        id: String(acc.id || `${acc.exchange || 'account'}:${acc.sub_account || acc.subAccount || '0'}`),
-        label: `${String(acc.exchange || 'Account').toUpperCase()} ${acc.label || `#${acc.sub_account ?? acc.subAccount ?? '0'}`}`,
-        wallet: acc.wallet || acc.wallet_address || acc.address || '',
-        exchange: String(acc.exchange || '').toLowerCase(),
-      }));
-  }, [syncedAccounts]);
-
-  const proPairOptions = useMemo(() => {
-    const source = filteredInstances.length > 0 ? filteredInstances : instancesForSelectedType;
-    return source.map((inst) => ({
-      id: inst.id,
-      label: `${getExchangeName(inst.id)} ${Array.isArray(inst.symbols) ? inst.symbols.join(', ') : ''}`.trim(),
-    }));
-  }, [filteredInstances, instancesForSelectedType]);
-
-  const deltaNeutralPairOptions = useMemo(() => {
-    const source = filteredInstances.length > 0 ? filteredInstances : instancesForSelectedType;
-    return source
-      .filter((inst) => parseStrategyInstanceId(inst.id).kind === 'delta_neutral')
-      .map((inst) => {
-        const parsed = parseStrategyInstanceId(inst.id);
-        const symbol = inst.symbols?.[0] || parsed.symbols[0] || 'BTC:PERP-USDC';
-        const longExchange = parsed.exchanges[0] || 'long';
-        const shortExchange = parsed.exchanges[1] || 'short';
-        return {
-          id: inst.id,
-          symbol,
-          longExchange,
-          shortExchange,
-          label: `${symbol} - ${longExchange.toUpperCase()} / ${shortExchange.toUpperCase()}`,
-          longLabel: `${symbol} on ${longExchange.toUpperCase()}`,
-          shortLabel: `${symbol} on ${shortExchange.toUpperCase()}`,
-        };
-      });
-  }, [filteredInstances, instancesForSelectedType]);
-
-  useEffect(() => {
-    setProBotConfig((prev) => {
-      const nextAccount = prev.accountId || proAccountOptions[0]?.id || '';
-      const nextPair = prev.pairId || selectedInstanceId || proPairOptions[0]?.id || '';
-      if (nextAccount === prev.accountId && nextPair === prev.pairId) return prev;
-      return { ...prev, accountId: nextAccount, pairId: nextPair };
-    });
-  }, [proAccountOptions, proPairOptions, selectedInstanceId]);
-
-  useEffect(() => {
-    if (selectedType !== 'delta_neutral') return;
-    const activePairId = selectedInstanceId || deltaNeutralPairOptions[0]?.id || '';
-    const parsed = parseStrategyInstanceId(activePairId);
-    const longExchange = parsed.exchanges[0]?.toLowerCase() || '';
-    const shortExchange = parsed.exchanges[1]?.toLowerCase() || '';
-    const longAccount = proAccountOptions.find((account) => account.exchange === longExchange)?.id
-      || proAccountOptions[0]?.id
-      || '';
-    const shortAccount = proAccountOptions.find((account) => account.exchange === shortExchange)?.id
-      || proAccountOptions.find((account) => account.id !== longAccount)?.id
-      || longAccount
-      || '';
-
-    setDeltaNeutralConfig((prev) => {
-      const next = {
-        ...prev,
-        longAccountId: prev.longAccountId || longAccount,
-        shortAccountId: prev.shortAccountId || shortAccount,
-        longPairId: activePairId,
-        shortPairId: activePairId,
-      };
-      if (
-        next.longAccountId === prev.longAccountId
-        && next.shortAccountId === prev.shortAccountId
-        && next.longPairId === prev.longPairId
-        && next.shortPairId === prev.shortPairId
-      ) {
-        return prev;
-      }
-      return next;
-    });
-  }, [deltaNeutralPairOptions, proAccountOptions, selectedInstanceId, selectedType]);
-
   useEffect(() => {
     if (instancesForSelectedType.length > 0) {
       const preferred = filteredInstances.find((inst) => inst.id === selectedInstanceId)
@@ -769,10 +837,41 @@ function BotsPanel({ onClose }) {
   }, [selectedType, filteredInstances, instancesForSelectedType, selectedInstanceId]);
 
   const selectedBot = useMemo(() => getBotType(selectedType), [selectedType]);
-  const activeCount = runningInstances.length || bots.filter((bot) => bot.status === 'Running').length;
-  const mockPnl = totalPnl !== 0 ? totalPnl : bots.reduce((sum, bot) => sum + Number(bot.pnl || 0), 0);
-  const totalFills = bots.reduce((sum, bot) => sum + Number(bot.fills || 0), 0);
-  const runningBots = bots.filter((b) => b.status === 'Running');
+
+  const bots = useMemo(() => {
+    const allHandles = [...configuredInstances];
+    runningInstances.forEach((r) => {
+      if (!allHandles.some((h) => h.id === r.id)) {
+        allHandles.push(r);
+      }
+    });
+    return allHandles.map((h) => mapHandleToBot(
+      h,
+      runningInstances,
+      runtimeById,
+      globalActiveOrders,
+      overridesById,
+      exchangeBalances,
+      orderHistory,
+    ));
+  }, [
+    configuredInstances,
+    runningInstances,
+    runtimeById,
+    globalActiveOrders,
+    overridesById,
+    exchangeBalances,
+    orderHistory,
+  ]);
+
+  const activeCount = runningInstances.length
+    || bots.filter((bot) => bot.status === 'Running' || bot.status === 'Paused').length;
+  const mockPnl = portfolioPnl != null ? portfolioPnl : totalPnl;
+  const totalFills = useMemo(
+    () => orderHistory.filter((row) => String(row.value || '').toLowerCase().includes('filled')).length,
+    [orderHistory],
+  );
+  const runningBots = bots.filter((b) => b.status === 'Running' || b.status === 'Paused');
   const templateBots = bots.filter((b) => b.status === 'Template');
   const startableTemplates = templateBots.filter((b) => canStartBot(b, syncedAccounts));
   const blockedTemplates = templateBots.filter((b) => !canStartBot(b, syncedAccounts));
@@ -783,9 +882,6 @@ function BotsPanel({ onClose }) {
     setTradeSize(20);
     setMaxPosition(200);
     setPreset('calm');
-    setLaunchMode('basic');
-    setProBotConfig(DEFAULT_PRO_BOT_CONFIG);
-    setDeltaNeutralConfig(DEFAULT_DELTA_NEUTRAL_CONFIG);
     setSelectedInstanceId('');
   }, []);
 
@@ -809,61 +905,185 @@ function BotsPanel({ onClose }) {
       .catch((err) => console.error('fetch exchanges failed:', err));
   }, [token]);
 
-  const fetchAccounts = useCallback(() => {
-    if (!token) return;
-    fetch(botApiUrl('/api/v1/accounts'), {
-      headers: botAuthHeaders(token)
-    })
-      .then((r) => r.json().then((body) => ({ ok: r.ok, status: r.status, body })))
-      .then((res) => {
-        if (!res.ok || res.body?.success === false) {
-          const msg = res.body?.error?.message || res.body?.error?.code || `HTTP ${res.status}`;
-          console.error('fetch accounts failed:', msg);
-          return;
+  const applyPortfolioPayload = useCallback((data) => {
+    if (!data) return;
+    setExchangeBalances((prev) => {
+      const map = { ...prev };
+      for (const row of data.exchanges || []) {
+        const ex = String(row.exchange || '').toLowerCase();
+        if (!ex) continue;
+        const { error, staleWarning } = normalizeBalanceError(row.balance_error);
+        const incoming = {
+          available: parseDecimalField(
+            row.balance?.available_margin_usd ?? row.balance?.equity_usd,
+          ),
+          equity: parseDecimalField(row.balance?.equity_usd),
+          error,
+          staleWarning,
+          unrealized: parseDecimalField(row.unrealized_pnl_usd),
+        };
+        map[ex] = mergeExchangeBalance(prev[ex], incoming);
+        if (incoming.available != null || incoming.equity != null) {
+          setClientCachedBalance(ex, map[ex]);
         }
-        const rows = Array.isArray(res.body?.data) ? res.body.data : [];
-        setSyncedAccounts(rows);
-        const hasHl = rows.some((acc) => acc.exchange?.toLowerCase() === 'hyperliquid' && acc.status === 'active');
-        if (hasHl) {
-          fetch(botApiUrl('/api/v1/exchanges/hyperliquid/balance'), { headers: botAuthHeaders(token) })
-            .then((br) => br.json())
-            .then((bal) => {
-              if (bal?.success === false) {
-                console.error('HL balance:', bal?.error?.message || bal?.error?.code);
-                setHlBalanceUsd(null);
-                return;
-              }
-              const available = parseDecimalField(
-                bal?.data?.available_margin_usd ?? bal?.data?.equity_usd,
-              );
-              setHlBalanceUsd(available);
-            })
-            .catch(() => setHlBalanceUsd(null));
+      }
+      return map;
+    });
+    setHlBalanceUsd((prev) => {
+      const row = (data.exchanges || []).find((r) => String(r.exchange).toLowerCase() === 'hyperliquid');
+      const v = parseDecimalField(row?.balance?.available_margin_usd ?? row?.balance?.equity_usd);
+      return v != null ? v : prev;
+    });
+    setGrvtBalanceUsd((prev) => {
+      const row = (data.exchanges || []).find((r) => String(r.exchange).toLowerCase() === 'grvt');
+      const v = parseDecimalField(row?.balance?.available_margin_usd ?? row?.balance?.equity_usd);
+      return v != null ? v : prev;
+    });
+    const sumAvailable = (data.exchanges || []).reduce((acc, row) => {
+      const v = parseDecimalField(row.balance?.available_margin_usd ?? row.balance?.equity_usd);
+      return acc + (v ?? 0);
+    }, 0);
+    const sumEquity = (data.exchanges || []).reduce((acc, row) => {
+      const v = parseDecimalField(row.balance?.equity_usd);
+      return acc + (v ?? 0);
+    }, 0);
+    const totalAvail = parseDecimalField(data.total_available_usd);
+    const totalEq = parseDecimalField(data.total_equity_usd);
+    setPortfolioTotals((prev) => ({
+      equity: totalEq != null ? totalEq : (sumEquity > 0 ? sumEquity : prev?.equity ?? null),
+      available: totalAvail != null ? totalAvail : (sumAvailable > 0 ? sumAvailable : prev?.available ?? null),
+      unrealized: parseDecimalField(data.total_unrealized_pnl_usd) ?? prev?.unrealized ?? null,
+    }));
+    if (data.net_pnl_usd != null) {
+      const net = parseDecimalField(data.net_pnl_usd);
+      setPortfolioPnl(net);
+      setTotalPnl(net);
+    }
+  }, []);
+
+  const fetchExchangeBalanceFallback = useCallback(async (exchanges) => {
+    if (!token || !Array.isArray(exchanges) || exchanges.length === 0) return;
+    const active = exchanges.filter((acc) => acc.status === 'active');
+    const results = [];
+    for (let i = 0; i < active.length; i += 1) {
+      const acc = active[i];
+      const ex = String(acc.exchange || '').toLowerCase();
+      if (!ex) continue;
+      const cached = getUsableClientCachedBalance(ex);
+      if (cached) {
+        results.push({ ex, ...cached });
+        continue;
+      }
+      if (i > 0) await sleep(650);
+      try {
+        let row = null;
+        let lastErr = null;
+        for (const balancePath of botApiPathCandidates(`/exchanges/${ex}/balance`)) {
+          const r = await fetch(botApiUrl(balancePath), { headers: botAuthHeaders(token) });
+          const body = await r.json().catch(() => ({}));
+          if (r.ok && body?.success !== false && body?.data) {
+            const b = body.data;
+            row = {
+              available: parseDecimalField(b.available_margin_usd ?? b.equity_usd),
+              equity: parseDecimalField(b.equity_usd),
+              error: null,
+              staleWarning: null,
+              unrealized: null,
+            };
+            break;
+          }
+          lastErr = body?.error?.message || body?.error?.code || `HTTP ${r.status}`;
+        }
+        if (row) {
+          setClientCachedBalance(ex, row);
+          results.push({ ex, ...row });
         } else {
-          setHlBalanceUsd(null);
+          results.push({ ex, error: lastErr || 'balance unavailable' });
         }
-        const hasGrvt = rows.some((acc) => acc.exchange?.toLowerCase() === 'grvt' && acc.status === 'active');
-        if (hasGrvt) {
-          fetch(botApiUrl('/api/v1/exchanges/grvt/balance'), { headers: botAuthHeaders(token) })
-            .then((br) => br.json())
-            .then((bal) => {
-              if (bal?.success === false) {
-                console.error('GRVT balance:', bal?.error?.message || bal?.error?.code);
-                setGrvtBalanceUsd(null);
-                return;
-              }
-              const available = parseDecimalField(
-                bal?.data?.available_margin_usd ?? bal?.data?.equity_usd,
-              );
-              setGrvtBalanceUsd(available);
-            })
-            .catch(() => setGrvtBalanceUsd(null));
-        } else {
-          setGrvtBalanceUsd(null);
-        }
-      })
-      .catch((err) => console.error('fetch accounts failed:', err));
+      } catch (err) {
+        results.push({ ex, error: err?.message || String(err) });
+      }
+    }
+    const map = {};
+    let totalEquity = 0;
+    let totalAvailable = 0;
+    for (const row of results) {
+      if (!row?.ex) continue;
+      const { error, staleWarning } = normalizeBalanceError(row.error);
+      map[row.ex] = {
+        available: row.available,
+        equity: row.equity,
+        error,
+        staleWarning,
+        unrealized: row.unrealized,
+      };
+      if (row.available != null) totalAvailable += row.available;
+      if (row.equity != null) totalEquity += row.equity;
+    }
+    if (Object.keys(map).length === 0) return;
+    setExchangeBalances((prev) => {
+      const next = { ...prev };
+      for (const [ex, incoming] of Object.entries(map)) {
+        next[ex] = mergeExchangeBalance(prev[ex], incoming);
+      }
+      return next;
+    });
+    setHlBalanceUsd((prev) => {
+      const v = map.hyperliquid?.available;
+      return v != null && v > 0 ? v : prev;
+    });
+    setGrvtBalanceUsd((prev) => {
+      const v = map.grvt?.available;
+      return v != null && v > 0 ? v : prev;
+    });
+    setPortfolioTotals((prev) => ({
+      equity: totalEquity > 0 ? totalEquity : prev?.equity ?? null,
+      available: totalAvailable > 0 ? totalAvailable : prev?.available ?? null,
+      unrealized: prev?.unrealized ?? null,
+    }));
   }, [token]);
+
+  const fetchPortfolio = useCallback(async () => {
+    if (!token || portfolioFetchInFlight.current) return;
+    portfolioFetchInFlight.current = true;
+    try {
+      const portfolioRes = await fetchBotApiJson('/portfolio/summary', token);
+      if (portfolioRes.ok) {
+        applyPortfolioPayload(portfolioRes.data);
+        return;
+      }
+      console.warn('portfolio summary:', portfolioRes.error);
+      const accountsRes = await fetchBotApiJson('/accounts', token);
+      if (accountsRes.ok) {
+        const rows = Array.isArray(accountsRes.data) ? accountsRes.data : [];
+        await fetchExchangeBalanceFallback(rows);
+      } else {
+        console.error('portfolio fallback via accounts failed:', accountsRes.error);
+      }
+    } catch (err) {
+      console.error('fetch portfolio failed:', err);
+    } finally {
+      portfolioFetchInFlight.current = false;
+    }
+  }, [token, applyPortfolioPayload, fetchExchangeBalanceFallback]);
+
+  const fetchAccounts = useCallback(async () => {
+    if (!token) return;
+    const res = await fetchBotApiJson('/accounts', token);
+    if (!res.ok) {
+      console.error('fetch accounts failed:', res.error);
+      return;
+    }
+    const rows = Array.isArray(res.data) ? res.data : [];
+    setSyncedAccounts(rows);
+    const now = Date.now();
+    if (rows.length > 0 && now - balanceFallbackAt.current > 45000) {
+      balanceFallbackAt.current = now;
+      fetchExchangeBalanceFallback(rows).catch((err) => {
+        console.warn('balance fallback after accounts:', err);
+      });
+    }
+  }, [token, fetchExchangeBalanceFallback]);
 
   const authorizeGrvtBuilder = useCallback(async ({ silent = false } = {}) => {
     if (!token) return { ok: false, error: 'no token' };
@@ -1070,6 +1290,52 @@ function BotsPanel({ onClose }) {
     fetchAccounts,
     refreshGameAuthScan,
     formatSetupResultNotice,
+  ]);
+
+  const reconnectGameWalletAccount = useCallback(async (exchangeOverride) => {
+    if (!token) return;
+    const target = String(exchangeOverride || '').toLowerCase();
+    if (!target) return;
+    setGameAuthBusy(true);
+    setNotice(`Reconnect ${target.toUpperCase()}…`);
+    try {
+      const result = await reconnectGameAccountToPhantom({
+        token,
+        exchangeId: target,
+        player: playerForBots,
+        encryptSecret,
+        keyTransMethod,
+        label: newAccLabel,
+        subAccount: newAccSubId,
+        ...gameSetupSyncOpts,
+      });
+      if (result.ok) {
+        setNotice(`${target.toUpperCase()} reconnected — credentials re-synced.`);
+      } else {
+        setNotice(result.error || 'Reconnect failed.');
+      }
+      await fetchAccounts();
+      try {
+        await refreshGameAuthScan();
+      } catch (scanErr) {
+        console.error('post-reconnect scan failed:', scanErr);
+      }
+    } catch (err) {
+      console.error('reconnect game wallet failed:', err);
+      const msg = String(err?.message || err || '').trim();
+      setNotice(msg || 'Reconnect failed.');
+    } finally {
+      setGameAuthBusy(false);
+    }
+  }, [
+    token,
+    newAccSubId,
+    newAccLabel,
+    keyTransMethod,
+    playerForBots,
+    gameSetupSyncOpts,
+    fetchAccounts,
+    refreshGameAuthScan,
   ]);
 
   const syncAllReadyGameAccounts = useCallback(async () => {
@@ -1407,56 +1673,58 @@ function BotsPanel({ onClose }) {
       .catch((err) => console.error('fetch order history failed:', err));
   }, [token]);
 
-  const fetchInstances = useCallback(() => {
+  const fetchInstances = useCallback(async () => {
     if (!token) return;
-    fetch(botApiUrl('/api/v1/strategies/instances'), {
-      headers: botAuthHeaders(token)
-    })
-      .then((r) => r.json())
-      .then((res) => {
-        if (!res?.success || !res.data) {
-          setNotice(formatApiError(res?.error, 'Could not load bot strategies. Check the configured bot API is reachable.'));
-          return;
+    try {
+      const res = await fetchBotApiJson('/strategies/instances', token);
+      if (!res.ok || !res.data) {
+        setNotice(formatApiError(res.body?.error, 'Could not load bot strategies. Check the configured bot API is reachable.'));
+        return;
+      }
+      const {
+        running = [],
+        configured = [],
+        runtime = {},
+        overrides = {},
+        active_orders: activeOrders = 0,
+      } = res.data;
+      setConfiguredInstances(configured);
+      setRunningInstances(running);
+      setRuntimeById(runtime || {});
+      setOverridesById(overrides || {});
+      setGlobalActiveOrders(Number(activeOrders) || 0);
+      setConfiguredCount(Number(res.data.configured_count) || configured.length);
+      if (res.data.exchange_balances) {
+        applyPortfolioPayload({
+          exchanges: (res.data.exchange_balances.exchanges || []).map((row) => ({
+            exchange: row.exchange,
+            balance: row.balance,
+            balance_error: row.balance_error,
+            unrealized_pnl_usd: 0,
+          })),
+          total_equity_usd: res.data.exchange_balances.total_equity_usd,
+          total_available_usd: res.data.exchange_balances.total_available_usd,
+          total_unrealized_pnl_usd: 0,
+        });
+      }
+      setExpandedBotId((current) => {
+        if (current && (configured.some((h) => h.id === current) || running.some((h) => h.id === current))) {
+          return current;
         }
-        const {
-          running = [],
-          configured = [],
-          runtime = {},
-          overrides = {},
-          active_orders: activeOrders = 0,
-        } = res.data;
-        setConfiguredInstances(configured);
-        setRunningInstances(running);
-        setRuntimeById(runtime || {});
-        setOverridesById(overrides || {});
-        setGlobalActiveOrders(Number(activeOrders) || 0);
-        setConfiguredCount(Number(res.data.configured_count) || configured.length);
-        const allHandles = [...configured];
-        running.forEach((r) => {
-          if (!allHandles.some((h) => h.id === r.id)) {
-            allHandles.push(r);
-          }
-        });
-        const mappedBots = allHandles.map((h) => mapHandleToBot(h, running, runtime, activeOrders, overrides));
-        setBots(mappedBots);
-        setExpandedBotId((current) => {
-          if (current && mappedBots.some((b) => b.id === current)) {
-            return current;
-          }
-          if (userCollapsedRef.current) {
-            return null;
-          }
-          const firstRunning = mappedBots.find((b) => b.status === 'Running');
-          if (firstRunning) return firstRunning.id;
-          if (mappedBots.length > 0) return mappedBots[0].id;
+        if (userCollapsedRef.current) {
           return null;
-        });
-      })
-      .catch((err) => {
-        console.error('fetch instances failed:', err);
-        setNotice('Cannot reach bot API — check the configured bot endpoint is reachable.');
+        }
+        const allIds = [...configured, ...running];
+        const firstRunning = allIds.find((h) => running.some((r) => r.id === h.id));
+        if (firstRunning) return firstRunning.id;
+        if (configured.length > 0) return configured[0].id;
+        return null;
       });
-  }, [token]);
+    } catch (err) {
+      console.error('fetch instances failed:', err);
+      setNotice('Cannot reach bot API — check the configured bot endpoint is reachable.');
+    }
+  }, [token, applyPortfolioPayload]);
 
   const appendHistory = useCallback((event, value, botLabel = 'System') => {
     const time = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -1589,30 +1857,6 @@ function BotsPanel({ onClose }) {
       });
   }, [selectedInstanceId, token, tradeSize, maxPosition, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder]);
 
-  const updateProBotConfig = useCallback((patch) => {
-    setProBotConfig((prev) => ({ ...prev, ...patch }));
-  }, []);
-
-  const previewProBot = useCallback(() => {
-    const pair = proPairOptions.find((item) => item.id === proBotConfig.pairId)?.label
-      || getExchangeName(selectedInstanceId)
-      || 'selected market';
-    setNotice(`Pro MM bot mock configured for ${pair}. API launch wiring is not enabled yet.`);
-    setView('dashboard');
-  }, [proBotConfig.pairId, proPairOptions, selectedInstanceId]);
-
-  const updateDeltaNeutralConfig = useCallback((patch) => {
-    setDeltaNeutralConfig((prev) => ({ ...prev, ...patch }));
-  }, []);
-
-  const previewDeltaNeutralBot = useCallback(() => {
-    const pair = deltaNeutralPairOptions.find((item) => item.id === deltaNeutralConfig.longPairId)?.label
-      || getExchangeName(selectedInstanceId)
-      || 'selected hedge pair';
-    setNotice(`Delta Neutral Pro mock configured for ${pair}. API launch wiring is not enabled yet.`);
-    setView('dashboard');
-  }, [deltaNeutralConfig.longPairId, deltaNeutralPairOptions, selectedInstanceId]);
-
   // Real-time WebSocket updates via Clash game backend mediator
   const [wsConnected, setWsConnected] = useState(false);
 
@@ -1632,6 +1876,7 @@ function BotsPanel({ onClose }) {
     fetchAccounts();
     fetchExchanges();
     fetchOrderHistory();
+    fetchPortfolio();
 
     // Fallback polling every 5 s — keeps UI in sync even when WS is down
     const pollInterval = setInterval(() => {
@@ -1639,6 +1884,9 @@ function BotsPanel({ onClose }) {
       fetchAccounts();
       fetchOrderHistory();
     }, 5000);
+    const portfolioInterval = setInterval(() => {
+      fetchPortfolio();
+    }, 15000);
 
     const wsParams = new URLSearchParams({
       token,
@@ -1647,6 +1895,8 @@ function BotsPanel({ onClose }) {
     const wsUrl = `${botWsUrl('/api/v1/bot/ws')}?${wsParams.toString()}`;
     let ws;
     let reconnectTimer;
+    let pingTimer;
+    let reconnectDelayMs = 3000;
 
     const connectWs = () => {
       try {
@@ -1654,16 +1904,23 @@ function BotsPanel({ onClose }) {
       } catch (err) {
         console.warn('[bot-ws] connect failed:', err);
         setWsConnected(false);
-        reconnectTimer = setTimeout(connectWs, 3000);
+        reconnectTimer = setTimeout(connectWs, reconnectDelayMs);
+        reconnectDelayMs = Math.min(Math.round(reconnectDelayMs * 1.5), 30000);
         return;
       }
 
       ws.onopen = () => {
+        reconnectDelayMs = 3000;
         setWsConnected(true);
         ws.send(JSON.stringify({
           action: 'subscribe',
           channels: ['strategies', 'orders', 'positions', 'pnl', 'volume_stats', 'alerts']
         }));
+        pingTimer = setInterval(() => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: 'ping' }));
+          }
+        }, 25000);
       };
 
       ws.onmessage = (event) => {
@@ -1671,53 +1928,47 @@ function BotsPanel({ onClose }) {
           const msg = JSON.parse(event.data);
           if (msg.type === 'strategy_event') {
             fetchInstances();
+            const ev = msg.data || {};
             const time = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
             setHistory((prev) => [
               {
                 id: `h-${Date.now()}`,
                 time,
-                bot: msg.data.strategy_id?.split(':')[0].replace('_', ' ').toUpperCase() || 'BOT',
-                event: msg.data.type || 'Lifecycle event',
-                value: msg.data.reason || 'state change'
+                bot: ev.strategy_id?.split(':')[0].replace('_', ' ').toUpperCase() || 'BOT',
+                event: ev.type || 'Lifecycle event',
+                value: ev.reason || ev.message || 'state change'
               },
               ...prev.slice(0, 49)
             ]);
-          } else if (msg.type === 'pnl_snapshot') {
-            setTotalPnl(Number(msg.data.net_pnl_usd) || 0);
-          } else if (msg.type === 'volume_stats') {
-            setFillsCount(Number(msg.data.total_volume_usd_24h) || 0);
-          } else if (msg.type === 'position_update') {
-            const pos = msg.data;
-            setBots((currentBots) => currentBots.map((b) => {
-              if (matchPositionToBot(b.id, pos.exchange, pos.symbol)) {
-                return {
-                  ...b,
-                  inventory: `${pos.size >= 0 ? '+' : ''}${Number(pos.size).toFixed(3)}`,
-                  pnl: Number(pos.unrealized_pnl) || 0,
-                  lastAction: `Position updated: size=${pos.size}`
-                };
+            if (ev.type === 'order_filled' || ev.type === 'order_updated') {
+              const ord = ev.response || ev;
+              const status = ev.type === 'order_filled' ? 'Filled' : String(ord.status || 'update');
+              if (status === 'Filled' || status === 'PartiallyFilled') {
+                fetchOrderHistory();
+                fetchPortfolio();
               }
-              return b;
-            }));
+            }
+            if (ev.type === 'position_updated' || ev.type === 'position_opened') {
+              fetchInstances();
+              fetchPortfolio();
+            }
+          } else if (msg.type === 'pnl_snapshot') {
+            setTotalPnl(Number(msg.data?.net_pnl_usd) || 0);
+            setPortfolioPnl(Number(msg.data?.net_pnl_usd) || 0);
+          } else if (msg.type === 'volume_stats') {
+            setFillsCount(Number(msg.data?.total_volume_usd_24h) || 0);
+          } else if (msg.type === 'position_update') {
+            fetchInstances();
+            fetchPortfolio();
           } else if (msg.type === 'order_update') {
             const ord = msg.data;
             const status = String(ord.status || 'update');
             const time = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
             const sideLabel = String(ord.side || '').toUpperCase();
             if (status === 'Filled' || status === 'PartiallyFilled') {
-              setBots((currentBots) => currentBots.map((b) => {
-                const parsed = parseStrategyInstanceId(b.id);
-                const matches = parsed.exchanges.includes(String(ord.exchange).toLowerCase())
-                  && parsed.symbols.includes(String(ord.symbol).toLowerCase());
-                if (matches) {
-                  return {
-                    ...b,
-                    fills: b.fills + 1,
-                    lastAction: `Order filled: ${ord.filled_size} @ ${ord.avg_fill_price || 'mkt'}`
-                  };
-                }
-                return b;
-              }));
+              fetchInstances();
+              fetchPortfolio();
+              fetchOrderHistory();
 
               const time = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
               setHistory((prev) => [
@@ -1750,8 +2001,10 @@ function BotsPanel({ onClose }) {
       };
 
       ws.onclose = () => {
+        clearInterval(pingTimer);
         setWsConnected(false);
-        reconnectTimer = setTimeout(connectWs, 3000);
+        reconnectTimer = setTimeout(connectWs, reconnectDelayMs);
+        reconnectDelayMs = Math.min(Math.round(reconnectDelayMs * 1.5), 30000);
       };
 
       ws.onerror = () => {
@@ -1763,23 +2016,24 @@ function BotsPanel({ onClose }) {
 
     return () => {
       clearInterval(pollInterval);
+      clearInterval(portfolioInterval);
+      clearInterval(pingTimer);
       clearTimeout(reconnectTimer);
       if (ws) {
         ws.onclose = null;
         ws.close();
       }
     };
-  }, [token, fetchInstances, fetchAccounts, fetchExchanges, fetchOrderHistory]);
+  }, [token, fetchInstances, fetchAccounts, fetchExchanges, fetchOrderHistory, fetchPortfolio]);
 
   const goBack = useCallback(() => {
-    const steps = launchMode === 'pro' ? PRO_STEPS : STEPS;
-    const index = steps.indexOf(step);
+    const index = STEPS.indexOf(step);
     if (index <= 0) {
       setView('dashboard');
       return;
     }
-    setStep(steps[index - 1]);
-  }, [launchMode, step]);
+    setStep(STEPS[index - 1]);
+  }, [step]);
 
   const renderDashboard = () => (
     <>
@@ -1794,14 +2048,29 @@ function BotsPanel({ onClose }) {
         Launch/Start <strong>does not add a new row</strong> — it only runs one template for your wallet.
         After Launch the card shows <strong>your</strong> trade size and spread (saved in Phantom).
         Templates cannot be removed from the UI. A new bot type requires a server config change.
-        {hlBalanceUsd != null && (
-          <> Hyperliquid: <strong>${hlBalanceUsd.toFixed(2)}</strong>.</>
-        )}
-        {grvtBalanceUsd != null && (
-          <> GRVT free margin: <strong>${grvtBalanceUsd.toFixed(2)}</strong> (what the bot uses for quotes).</>
-        )}
-        {(hlBalanceUsd != null || grvtBalanceUsd != null) && (
-          <> GRVT MM needs ~$130 min notional per order (leverage auto-raised). $10–15 accounts are tight — deposit $30+ for reliable quotes.</>
+        {(Object.keys(exchangeBalances).length > 0 || portfolioTotals) && (
+          <> Balances (live):{' '}
+            {Object.entries(exchangeBalances).map(([ex, bal]) => {
+              const fmt = formatExchangeBalance(bal);
+              return (
+                <span key={ex} title={fmt.detail || undefined}>
+                  {' '}{ex.toUpperCase()}:{' '}
+                  <strong style={{
+                    color: fmt.tone === 'error' ? '#C62828'
+                      : fmt.tone === 'warn' ? '#E65100' : undefined,
+                  }}>
+                    {fmt.label}
+                  </strong>
+                </span>
+              );
+            })}
+            {portfolioTotals?.available != null && (
+              <> · Total available <strong>${portfolioTotals.available.toFixed(2)}</strong></>
+            )}
+            {grvtBalanceUsd != null && (
+              <> — GRVT MM needs ~$130 min notional/order on small accounts.</>
+            )}
+          </>
         )}
       </p>
       <div style={S.summaryGrid}>
@@ -1818,16 +2087,24 @@ function BotsPanel({ onClose }) {
           <strong style={S.summaryValue}>{globalActiveOrders}</strong>
         </div>
         <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Real PnL</span>
-          <strong style={{ ...S.summaryValue, color: mockPnl >= 0 ? colors.long : colors.short }}>
-            {signedMoney(mockPnl)}
+          <span style={S.metricLabel}>Total Margin</span>
+          <strong style={S.summaryValue}>
+            {portfolioTotals?.available != null
+              ? money(portfolioTotals.available)
+              : '—'}
           </strong>
         </div>
         <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Fills Today</span>
+          <span style={S.metricLabel}>Net PnL</span>
+          <strong style={{ ...S.summaryValue, color: mockPnl >= 0 ? colors.long : colors.short }}>
+            {portfolioPnl != null ? signedMoney(mockPnl) : '—'}
+          </strong>
+        </div>
+        <div style={S.summaryCard}>
+          <span style={S.metricLabel}>Fills (tracked)</span>
           <strong style={S.summaryValue}>{totalFills}</strong>
         </div>
-        <div style={{ ...S.summaryCard, border: `3px solid ${wsConnected ? '#43A047' : '#E53935'}` }}>
+        <div style={{ ...S.summaryCard, borderColor: wsConnected ? '#43A047' : '#E53935' }}>
           <span style={S.metricLabel}>Live Feed</span>
           <strong style={{ ...S.summaryValue, fontSize: 12, color: wsConnected ? '#43A047' : '#E53935' }}>
             {wsConnected ? '● Connected' : '○ Polling (WS offline)'}
@@ -2400,6 +2677,17 @@ function BotsPanel({ onClose }) {
                           ? 'Connect bot'
                           : 'Setup & Sync'}
                       </button>
+                      {row.synced && (
+                        <button
+                          type="button"
+                          disabled={gameAuthBusy}
+                          onClick={() => reconnectGameWalletAccount(row.exchange)}
+                          style={{ ...cartoonBtn('#1E88E5', '#1565C0'), fontSize: 11, padding: '5px 8px' }}
+                          title="Clear Phantom cache and re-sync credentials from the game"
+                        >
+                          Reconnect
+                        </button>
+                      )}
                       <button
                         type="button"
                         disabled={!row.synced || gameAuthProbing === row.exchange}
@@ -2550,229 +2838,6 @@ function BotsPanel({ onClose }) {
     </>
   );
 
-  const renderDeltaNeutralPro = () => {
-    const selectedPair = deltaNeutralPairOptions.find((item) => item.id === deltaNeutralConfig.longPairId)
-      || deltaNeutralPairOptions[0];
-    const notional = Number(deltaNeutralConfig.notionalUsd) || 0;
-    const reserve = notional > 0 ? notional / 2 : 0.013163;
-    const feeEstimate = notional > 0 ? Math.max(notional * 0.0004, 0.01) : null;
-    const stopLabel = Number(deltaNeutralConfig.stopLossPct) <= 0
-      ? 'No limit'
-      : `${deltaNeutralConfig.stopLossPct}%`;
-
-    return (
-      <div style={S.deltaShell}>
-        <div className="bots-delta-grid" style={S.deltaGrid}>
-          <div style={S.deltaTradePanel}>
-            <span style={S.deltaSectionLabel}>Accounts and Pairs</span>
-            <div className="bots-delta-leg-grid" style={S.deltaLegGrid}>
-              <div style={S.deltaLegCard}>
-                <strong style={{ ...S.deltaLegTitle, color: '#2E7D32' }}>Long</strong>
-                <select
-                  value={deltaNeutralConfig.longAccountId}
-                  onChange={(event) => updateDeltaNeutralConfig({ longAccountId: event.target.value })}
-                  style={S.proSelect}
-                >
-                  {proAccountOptions.length > 0 ? proAccountOptions.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.label}{account.wallet ? ` - ${account.wallet.slice(0, 6)}...${account.wallet.slice(-4)}` : ''}
-                    </option>
-                  )) : (
-                    <option value="">No active account</option>
-                  )}
-                </select>
-                <div style={S.deltaPairRow}>
-                  <select
-                    value={deltaNeutralConfig.longPairId}
-                    onChange={(event) => {
-                      updateDeltaNeutralConfig({ longPairId: event.target.value, shortPairId: event.target.value });
-                      setSelectedInstanceId(event.target.value);
-                    }}
-                    style={S.deltaPairSelect}
-                  >
-                    {deltaNeutralPairOptions.length > 0 ? deltaNeutralPairOptions.map((pair) => (
-                      <option key={pair.id} value={pair.id}>{pair.longLabel}</option>
-                    )) : (
-                      <option value="">No hedge pair</option>
-                    )}
-                  </select>
-                  <span style={S.proMiniTag}>1x</span>
-                </div>
-              </div>
-
-              <div style={S.deltaSwapMark}>{"<->"}</div>
-
-              <div style={S.deltaLegCard}>
-                <strong style={{ ...S.deltaLegTitle, color: '#C62828' }}>Short</strong>
-                <select
-                  value={deltaNeutralConfig.shortAccountId}
-                  onChange={(event) => updateDeltaNeutralConfig({ shortAccountId: event.target.value })}
-                  style={S.proSelect}
-                >
-                  {proAccountOptions.length > 0 ? proAccountOptions.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.label}{account.wallet ? ` - ${account.wallet.slice(0, 6)}...${account.wallet.slice(-4)}` : ''}
-                    </option>
-                  )) : (
-                    <option value="">No active account</option>
-                  )}
-                </select>
-                <div style={S.deltaPairRow}>
-                  <select
-                    value={deltaNeutralConfig.shortPairId}
-                    onChange={(event) => {
-                      updateDeltaNeutralConfig({ shortPairId: event.target.value, longPairId: event.target.value });
-                      setSelectedInstanceId(event.target.value);
-                    }}
-                    style={S.deltaPairSelect}
-                  >
-                    {deltaNeutralPairOptions.length > 0 ? deltaNeutralPairOptions.map((pair) => (
-                      <option key={pair.id} value={pair.id}>{pair.shortLabel}</option>
-                    )) : (
-                      <option value="">No hedge pair</option>
-                    )}
-                  </select>
-                  <span style={S.proMiniTag}>1x</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="bots-delta-input-grid" style={S.deltaInputGrid}>
-              <label style={S.proField}>
-                <span style={S.proLabel}>Notional</span>
-                <div style={S.proMoneyInputWrap}>
-                  <span style={S.proDollar}>$</span>
-                  <input
-                    value={deltaNeutralConfig.notionalUsd}
-                    onChange={(event) => updateDeltaNeutralConfig({ notionalUsd: event.target.value })}
-                    placeholder="0"
-                    inputMode="decimal"
-                    style={S.proMoneyInput}
-                  />
-                </div>
-              </label>
-              <label style={S.proField}>
-                <span style={S.proLabelRow}>
-                  <span>TWAP Duration</span>
-                  <span>10 - 1440 min</span>
-                </span>
-                <div style={S.proNumberUnit}>
-                  <input
-                    type="number"
-                    min="10"
-                    max="1440"
-                    value={deltaNeutralConfig.twapMinutes}
-                    onChange={(event) => updateDeltaNeutralConfig({ twapMinutes: event.target.value })}
-                    style={S.proNumberInput}
-                  />
-                  <span>min</span>
-                </div>
-              </label>
-              <label style={S.proField}>
-                <span style={S.proLabel}>Position Duration</span>
-                <div style={S.proNumberUnit}>
-                  <input
-                    value={deltaNeutralConfig.positionMinutes}
-                    onChange={(event) => updateDeltaNeutralConfig({ positionMinutes: event.target.value })}
-                    placeholder="Infinity"
-                    inputMode="numeric"
-                    style={S.proNumberInput}
-                  />
-                  <span>min</span>
-                </div>
-              </label>
-            </div>
-
-            <div style={S.proField}>
-              <span style={S.proLabel}>Stop Loss</span>
-              <div className="bots-delta-stop-grid" style={S.deltaStopGrid}>
-                {DELTA_STOP_LOSS_OPTIONS.map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    style={{
-                      ...S.deltaStopButton,
-                      ...(Number(deltaNeutralConfig.stopLossPct) === value ? S.deltaStopActive : {}),
-                    }}
-                    onClick={() => updateDeltaNeutralConfig({ stopLossPct: value })}
-                  >
-                    {value <= 0 ? 'No limit' : `${value}%`}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div style={S.deltaStartRow}>
-              <button type="button" style={S.deltaStartButton} onClick={previewDeltaNeutralBot}>
-                Start Mock Hedge
-              </button>
-              <button type="button" style={S.deltaIconButton} aria-label="Schedule mock hedge">O</button>
-              <button type="button" style={S.deltaIconButton} aria-label="Swap hedge sides">{"<->"}</button>
-            </div>
-          </div>
-
-          <div style={S.deltaSidePanel}>
-            <div style={S.deltaAnalysisCard}>
-              <div style={S.deltaPanelTitle}>Pre-Trade Analytics</div>
-              <div style={S.deltaAnalysisSection}>
-                <span style={{ ...S.deltaSideTitle, color: '#2E7D32' }}>Long Side</span>
-                <div style={S.deltaMetricRow}><span>Inventory (1x)</span><strong>${reserve.toFixed(6)}</strong></div>
-                <div style={S.deltaMetricRow}><span>Target Amount</span><strong>{notional > 0 ? money(notional / 2) : '-'}</strong></div>
-                <div style={S.deltaMetricRow}><span>Estimated Fees</span><strong>{feeEstimate ? `$${feeEstimate.toFixed(2)}` : '-'}</strong></div>
-                <div style={S.deltaMetricRow}><span>POV Long</span><strong>-</strong></div>
-                <div style={S.deltaMetricRow}>
-                  <span>External Funding Rate / 1h</span>
-                  <strong style={{ color: '#C62828' }}>-0.0000%</strong>
-                </div>
-              </div>
-              <div style={S.deltaDivider} />
-              <div style={S.deltaAnalysisSection}>
-                <span style={{ ...S.deltaSideTitle, color: '#C62828' }}>Short Side</span>
-                <div style={S.deltaMetricRow}><span>Inventory (1x)</span><strong>${reserve.toFixed(6)}</strong></div>
-                <div style={S.deltaMetricRow}><span>Target Amount</span><strong>{notional > 0 ? money(notional / 2) : '-'}</strong></div>
-                <div style={S.deltaMetricRow}><span>Estimated Fees</span><strong>{feeEstimate ? `$${feeEstimate.toFixed(2)}` : '-'}</strong></div>
-                <div style={S.deltaMetricRow}><span>POV Short</span><strong>-</strong></div>
-                <div style={S.deltaMetricRow}>
-                  <span>External Funding Rate / 1h</span>
-                  <strong style={{ color: '#2E7D32' }}>0.0013%</strong>
-                </div>
-              </div>
-              <div style={S.deltaDivider} />
-              <div style={S.deltaAnalysisSection}>
-                <span style={S.deltaSideTitle}>Net Position</span>
-                <div style={S.deltaMetricRow}>
-                  <span>Net External Funding Rate / 1h</span>
-                  <strong style={{ color: '#2E7D32' }}>0.0012%</strong>
-                </div>
-              </div>
-            </div>
-
-            <div style={S.deltaConfigCard}>
-              <div style={S.deltaPanelTitle}>Configuration</div>
-              <div style={S.deltaMetricRow}><span>TWAP Duration</span><strong>{deltaNeutralConfig.twapMinutes || 0} min</strong></div>
-              <div style={S.deltaMetricRow}><span>Participation Share</span><strong>{deltaNeutralConfig.participation}</strong></div>
-              <div style={S.deltaMetricRow}><span>Position Duration</span><strong>{deltaNeutralConfig.positionMinutes || 'No limit'}</strong></div>
-              <div style={S.deltaMetricRow}><span>Stop Loss</span><strong>{stopLabel}</strong></div>
-              <div style={S.deltaMetricRow}><span>Pair</span><strong>{selectedPair?.label || '-'}</strong></div>
-            </div>
-          </div>
-        </div>
-
-        <div className="bots-delta-tabs" style={S.deltaTabs}>
-          {['Positions', 'Orders', 'History', 'Scheduled'].map((tab, index) => (
-            <button
-              key={tab}
-              type="button"
-              style={{ ...S.deltaTabButton, ...(index === 0 ? S.deltaTabActive : {}) }}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
   const renderLaunch = () => (
     <div style={S.launchShell}>
       <div style={S.launchHeader}>
@@ -2781,34 +2846,8 @@ function BotsPanel({ onClose }) {
             <polyline points="15 18 9 12 15 6" />
           </svg>
         </button>
-        <StepDots activeStep={step} steps={launchMode === 'pro' ? PRO_STEPS : STEPS} />
+        <StepDots activeStep={step} />
         <div style={shared.spacer36} />
-      </div>
-
-      <div style={S.modeSwitchCard}>
-        <div>
-          <span style={S.label}>Bot Setup Mode</span>
-          <p style={S.modeSwitchCopy}>Basic keeps the current launch flow. Pro is a mock advanced console for the selected strategy.</p>
-        </div>
-        <div style={S.modeSwitch}>
-          {[
-            ['basic', 'Basic'],
-            ['pro', 'Pro'],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              style={{ ...S.modeSwitchButton, ...(launchMode === id ? S.modeSwitchActive : {}) }}
-              onClick={() => {
-                setLaunchMode(id);
-                if (id === 'pro' && step !== 'strategy') setStep('pro');
-                if (id === 'basic' && step === 'pro') setStep('risk');
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
       </div>
 
       {step === 'strategy' && (
@@ -2824,7 +2863,7 @@ function BotsPanel({ onClose }) {
                 <button
                   key={bot.id}
                   type="button"
-                  style={{ ...S.strategyCard, ...(active ? { border: `3px solid ${bot.accent}`, boxShadow: `0 0 0 3px ${bot.accent}22, 0 4px 0 #d4c8b0` } : {}) }}
+                  style={{ ...S.strategyCard, ...(active ? { borderColor: bot.accent, boxShadow: `0 0 0 3px ${bot.accent}22, 0 4px 0 #d4c8b0` } : {}) }}
                   onClick={() => setSelectedType(bot.id)}
                 >
                   <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
@@ -2921,210 +2960,9 @@ function BotsPanel({ onClose }) {
               opacity: (selectedInstanceId && filteredInstances.length > 0) ? 1 : 0.6,
               cursor: (selectedInstanceId && filteredInstances.length > 0) ? 'pointer' : 'not-allowed',
             }}
-            onClick={() => setStep(launchMode === 'pro' ? 'pro' : 'risk')}
+            onClick={() => setStep('risk')}
           >
-            {launchMode === 'pro' ? 'Open Pro Setup' : 'Continue'}
-          </button>
-        </div>
-      )}
-
-      {step === 'pro' && selectedType === 'delta_neutral' && renderDeltaNeutralPro()}
-
-      {step === 'pro' && selectedType !== 'delta_neutral' && (
-        <div style={S.proShell}>
-          <div className="bots-pro-top-grid" style={S.proTopGrid}>
-            <label style={S.proFieldWide}>
-              <span style={S.proLabel}>Account</span>
-              <select
-                value={proBotConfig.accountId}
-                onChange={(event) => updateProBotConfig({ accountId: event.target.value })}
-                style={S.proSelect}
-              >
-                {proAccountOptions.length > 0 ? proAccountOptions.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.label}{account.wallet ? ` · ${account.wallet.slice(0, 6)}...${account.wallet.slice(-4)}` : ''}
-                  </option>
-                )) : (
-                  <option value="">No active account</option>
-                )}
-              </select>
-            </label>
-            <label style={S.proField}>
-              <span style={S.proLabel}>Pair</span>
-              <select
-                value={proBotConfig.pairId}
-                onChange={(event) => {
-                  updateProBotConfig({ pairId: event.target.value });
-                  setSelectedInstanceId(event.target.value);
-                }}
-                style={S.proSelect}
-              >
-                {proPairOptions.length > 0 ? proPairOptions.map((pair) => (
-                  <option key={pair.id} value={pair.id}>{pair.label}</option>
-                )) : (
-                  <option value="">No active pair</option>
-                )}
-              </select>
-            </label>
-            <button type="button" style={S.proPresetButton}>
-              Presets
-              <span style={S.proChevron}>v</span>
-            </button>
-          </div>
-
-          <div className="bots-pro-two-col" style={S.proTwoCol}>
-            <label style={S.proField}>
-              <span style={S.proLabel}>Margin</span>
-              <div style={S.proMoneyInputWrap}>
-                <span style={S.proDollar}>$</span>
-                <input
-                  value={proBotConfig.marginUsd}
-                  onChange={(event) => updateProBotConfig({ marginUsd: event.target.value })}
-                  placeholder="0"
-                  inputMode="decimal"
-                  style={S.proMoneyInput}
-                />
-                <span style={S.proMiniTag}>1x</span>
-              </div>
-            </label>
-            <label style={S.proField}>
-              <span style={S.proLabel}>Volume</span>
-              <div style={S.proMoneyInputWrap}>
-                <span style={S.proDollar}>$</span>
-                <input
-                  value={proBotConfig.volumeUsd}
-                  onChange={(event) => updateProBotConfig({ volumeUsd: event.target.value })}
-                  placeholder="0"
-                  inputMode="decimal"
-                  style={S.proMoneyInput}
-                />
-              </div>
-            </label>
-          </div>
-
-          <div className="bots-pro-two-col" style={S.proTwoCol}>
-            <div style={S.proField}>
-              <span style={S.proLabel}>Participation Share</span>
-              <div style={S.proSegmentGrid}>
-                {PRO_PARTICIPATION_MODES.map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    style={{
-                      ...S.proSegmentButton,
-                      ...(proBotConfig.participation === mode.id ? S.proSegmentActive : {}),
-                    }}
-                    onClick={() => updateProBotConfig({ participation: mode.id })}
-                  >
-                    <strong style={{ color: mode.tone }}>{mode.label}</strong>
-                    <span>{mode.detail}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <label style={S.proField}>
-              <span style={S.proLabelRow}>
-                <span>Duration</span>
-                <span>5 mins - 5 hours</span>
-              </span>
-              <div style={S.proNumberUnit}>
-                <input
-                  type="number"
-                  min="5"
-                  max="300"
-                  value={proBotConfig.durationMinutes}
-                  onChange={(event) => updateProBotConfig({ durationMinutes: event.target.value })}
-                  style={S.proNumberInput}
-                />
-                <span>minutes</span>
-              </div>
-            </label>
-          </div>
-
-          <div style={S.proField}>
-            <span style={S.proLabel}>Reference Price</span>
-            <div className="bots-pro-reference-grid" style={S.proReferenceGrid}>
-              {PRO_REFERENCE_MODES.map((mode) => (
-                <button
-                  key={mode.id}
-                  type="button"
-                  style={{
-                    ...S.proReferenceButton,
-                    ...(proBotConfig.referenceMode === mode.id ? S.proReferenceActive : {}),
-                  }}
-                  onClick={() => updateProBotConfig({ referenceMode: mode.id })}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="bots-pro-two-col" style={S.proTwoCol}>
-            <div style={S.proField}>
-              <span style={S.proLabel}>Directional Bias</span>
-              <div style={S.proBiasGrid}>
-                {PRO_BIAS_MODES.map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    style={{
-                      ...S.proBiasButton,
-                      ...(proBotConfig.bias === mode.id ? S.proBiasActive : {}),
-                    }}
-                    onClick={() => updateProBotConfig({ bias: mode.id })}
-                  >
-                    <span style={{ color: mode.tone }}>{mode.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <label style={S.proField}>
-              <span style={S.proLabel}>Spread <strong>+{proBotConfig.spreadBps} bps</strong></span>
-              <input
-                className="bots-pro-range green"
-                type="range"
-                min="1"
-                max="50"
-                value={proBotConfig.spreadBps}
-                onChange={(event) => updateProBotConfig({ spreadBps: Number(event.target.value) })}
-              />
-            </label>
-          </div>
-
-          <div className="bots-pro-two-col" style={S.proTwoCol}>
-            <label style={S.proField}>
-              <span style={S.proLabelRow}>
-                <span>Stop Loss</span>
-                <strong>{proBotConfig.stopLossPct}%</strong>
-              </span>
-              <input
-                className="bots-pro-range yellow"
-                type="range"
-                min="0"
-                max="100"
-                value={proBotConfig.stopLossPct}
-                onChange={(event) => updateProBotConfig({ stopLossPct: Number(event.target.value) })}
-              />
-            </label>
-            <label style={S.proField}>
-              <span style={S.proLabelRow}>
-                <span>Take Profit</span>
-                <strong>{Number(proBotConfig.takeProfitPct) >= 100 ? 'No limit' : `${proBotConfig.takeProfitPct}%`}</strong>
-              </span>
-              <input
-                className="bots-pro-range yellow"
-                type="range"
-                min="0"
-                max="100"
-                value={proBotConfig.takeProfitPct}
-                onChange={(event) => updateProBotConfig({ takeProfitPct: Number(event.target.value) })}
-              />
-            </label>
-          </div>
-
-          <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.nextButton }} onClick={previewProBot}>
-            Save Pro Mock
+            Continue
           </button>
         </div>
       )}
@@ -3242,38 +3080,6 @@ const STYLE = `
   }
   .bots-range::-webkit-slider-thumb {
     box-shadow: 0 2px 0 rgba(0,0,0,0.28);
-  }
-  .bots-pro-range {
-    width: 100%;
-    height: 22px;
-    margin: 0;
-    cursor: pointer;
-    background: transparent;
-  }
-  .bots-pro-range.green {
-    accent-color: #43A047;
-  }
-  .bots-pro-range.yellow {
-    accent-color: #E8B830;
-  }
-  .bots-pro-range::-webkit-slider-thumb {
-    box-shadow: 0 0 0 4px rgba(232,184,48,0.22), 0 2px 0 rgba(92,58,33,0.28);
-  }
-  @media (max-width: 680px) {
-    .bots-pro-top-grid,
-    .bots-pro-two-col,
-    .bots-delta-grid,
-    .bots-delta-leg-grid,
-    .bots-delta-input-grid {
-      grid-template-columns: 1fr !important;
-    }
-    .bots-pro-reference-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    }
-    .bots-delta-stop-grid,
-    .bots-delta-tabs {
-      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    }
   }
 `;
 
@@ -3447,7 +3253,7 @@ const S = {
   },
   segmentActive: {
     background: '#fdf8e7',
-    border: '2px solid #bba882',
+    borderColor: '#bba882',
     color: '#5C3A21',
     boxShadow: '0 2px 0 #bba882',
   },
@@ -3758,488 +3564,6 @@ const S = {
     flexShrink: 0,
     padding: 0,
   },
-  modeSwitchCard: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
-    gap: 10,
-    alignItems: 'center',
-    background: '#e8dfc8',
-    border: '3px solid #d4c8b0',
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 10,
-  },
-  modeSwitchCopy: {
-    margin: '3px 0 0',
-    color: '#77573d',
-    fontSize: 11,
-    fontWeight: 800,
-    lineHeight: 1.35,
-  },
-  modeSwitch: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: 4,
-    padding: 4,
-    background: '#d4c8b0',
-    border: '2px solid #bba882',
-    borderRadius: 12,
-    minWidth: 150,
-  },
-  modeSwitchButton: {
-    border: '2px solid transparent',
-    background: 'transparent',
-    borderRadius: 8,
-    color: '#77573d',
-    fontSize: 12,
-    fontWeight: 900,
-    padding: '7px 10px',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-  modeSwitchActive: {
-    background: '#fdf8e7',
-    border: '2px solid #43A047',
-    color: '#2E7D32',
-    boxShadow: '0 2px 0 #bba882',
-  },
-  proShell: {
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    border: '3px solid #d4c8b0',
-    borderRadius: 12,
-    padding: 12,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 0 rgba(92,58,33,0.12)',
-    color: '#5C3A21',
-    overflowY: 'auto',
-    overflowX: 'hidden',
-  },
-  proTopGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(220px, 1.35fr) minmax(180px, 1fr) 132px',
-    gap: 10,
-    alignItems: 'end',
-  },
-  proTwoCol: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: 10,
-  },
-  proField: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 7,
-    minWidth: 0,
-  },
-  proFieldWide: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 7,
-    minWidth: 0,
-  },
-  proLabel: {
-    color: '#5C3A21',
-    fontSize: 12,
-    fontWeight: 900,
-    display: 'flex',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  proLabelRow: {
-    color: '#5C3A21',
-    fontSize: 12,
-    fontWeight: 900,
-    display: 'flex',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  proSelect: {
-    minHeight: 54,
-    background: '#fdf8e7',
-    border: '2px solid #d4c8b0',
-    color: '#5C3A21',
-    fontSize: 13,
-    fontWeight: 800,
-    padding: '0 13px',
-    borderRadius: 10,
-    outline: 'none',
-    fontFamily: 'inherit',
-    width: '100%',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
-  },
-  proPresetButton: {
-    minHeight: 54,
-    background: '#fdf8e7',
-    border: '2px solid #d4c8b0',
-    color: '#5C3A21',
-    fontSize: 13,
-    fontWeight: 800,
-    padding: '0 14px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    borderRadius: 10,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
-  },
-  proChevron: {
-    color: '#8b7655',
-    fontWeight: 900,
-  },
-  proMoneyInputWrap: {
-    minHeight: 72,
-    border: '2px solid #d4c8b0',
-    background: '#fdf8e7',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 9,
-    padding: '0 10px',
-    borderRadius: 12,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
-  },
-  proDollar: {
-    color: '#a3906a',
-    fontSize: 26,
-    fontWeight: 500,
-  },
-  proMoneyInput: {
-    flex: 1,
-    minWidth: 0,
-    border: 0,
-    outline: 0,
-    background: 'transparent',
-    color: '#5C3A21',
-    fontSize: 28,
-    fontWeight: 500,
-    fontFamily: 'inherit',
-  },
-  proMiniTag: {
-    border: '2px solid #43A047',
-    color: '#2E7D32',
-    fontSize: 12,
-    fontWeight: 900,
-    padding: '5px 8px',
-    borderRadius: 6,
-    background: 'rgba(67,160,71,0.12)',
-  },
-  proNumberUnit: {
-    minHeight: 54,
-    border: '2px solid #d4c8b0',
-    background: '#fdf8e7',
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
-    alignItems: 'center',
-    gap: 10,
-    padding: '0 12px',
-    color: '#77573d',
-    fontSize: 12,
-    fontWeight: 800,
-    borderRadius: 10,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
-  },
-  proNumberInput: {
-    minWidth: 0,
-    border: 0,
-    outline: 0,
-    background: 'transparent',
-    color: '#5C3A21',
-    fontSize: 18,
-    fontWeight: 700,
-    fontFamily: 'inherit',
-  },
-  proSegmentGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    border: '2px solid #d4c8b0',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  proSegmentButton: {
-    minHeight: 58,
-    background: '#fdf8e7',
-    border: 0,
-    borderRight: '2px solid #d4c8b0',
-    color: '#77573d',
-    cursor: 'pointer',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    fontFamily: 'inherit',
-    fontSize: 12,
-    fontWeight: 800,
-  },
-  proSegmentActive: {
-    background: 'linear-gradient(180deg, #fff2a8 0%, #e8b830 100%)',
-    color: '#5C3A21',
-    boxShadow: 'inset 0 -3px 0 rgba(92,58,33,0.22)',
-  },
-  proReferenceGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-    border: '2px solid #d4c8b0',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  proReferenceButton: {
-    minHeight: 40,
-    border: 0,
-    borderRight: '2px solid #d4c8b0',
-    background: '#fdf8e7',
-    color: '#8B6500',
-    fontSize: 12,
-    fontWeight: 900,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-  proReferenceActive: {
-    background: 'linear-gradient(180deg, #5bb6e6 0%, #2c83ba 100%)',
-    color: '#fff7df',
-    textShadow: '0 1px 0 rgba(0,0,0,0.25)',
-  },
-  proBiasGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    border: '2px solid #d4c8b0',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  proBiasButton: {
-    minHeight: 40,
-    border: 0,
-    borderRight: '2px solid #d4c8b0',
-    background: '#fdf8e7',
-    fontSize: 12,
-    fontWeight: 900,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-  proBiasActive: {
-    background: 'linear-gradient(180deg, #fff2a8 0%, #e8b830 100%)',
-    boxShadow: 'inset 0 -3px 0 rgba(92,58,33,0.22)',
-  },
-  deltaShell: {
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    border: '3px solid #d4c8b0',
-    borderRadius: 12,
-    padding: 12,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 14,
-    color: '#5C3A21',
-    overflowY: 'auto',
-    overflowX: 'hidden',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 0 rgba(92,58,33,0.12)',
-  },
-  deltaGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 2.2fr) minmax(260px, 0.95fr)',
-    gap: 14,
-    alignItems: 'start',
-  },
-  deltaTradePanel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-    minWidth: 0,
-  },
-  deltaSectionLabel: {
-    color: '#5C3A21',
-    fontSize: 13,
-    fontWeight: 900,
-  },
-  deltaLegGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) 44px minmax(0, 1fr)',
-    gap: 10,
-    alignItems: 'center',
-  },
-  deltaLegCard: {
-    border: '2px solid #d4c8b0',
-    background: '#fdf8e7',
-    borderRadius: 12,
-    padding: 10,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 10,
-    minWidth: 0,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
-  },
-  deltaLegTitle: {
-    fontSize: 18,
-    fontWeight: 900,
-    letterSpacing: 0,
-  },
-  deltaSwapMark: {
-    color: '#8B6500',
-    fontSize: 17,
-    fontWeight: 900,
-    textAlign: 'center',
-  },
-  deltaPairRow: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
-    gap: 10,
-    alignItems: 'center',
-    minHeight: 58,
-  },
-  deltaPairSelect: {
-    minHeight: 58,
-    background: '#fffaf0',
-    border: '2px solid #d4c8b0',
-    color: '#5C3A21',
-    fontSize: 17,
-    fontWeight: 900,
-    padding: '0 13px',
-    borderRadius: 10,
-    outline: 'none',
-    fontFamily: 'inherit',
-    width: '100%',
-  },
-  deltaInputGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)',
-    gap: 10,
-  },
-  deltaStopGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-    border: '2px solid #d4c8b0',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  deltaStopButton: {
-    minHeight: 40,
-    border: 0,
-    borderRight: '2px solid #d4c8b0',
-    background: '#fdf8e7',
-    color: '#5C3A21',
-    fontSize: 12,
-    fontWeight: 900,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-  deltaStopActive: {
-    background: 'linear-gradient(180deg, #fff2a8 0%, #e8b830 100%)',
-    color: '#5C3A21',
-    boxShadow: 'inset 0 -3px 0 rgba(92,58,33,0.22)',
-  },
-  deltaStartRow: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) 60px 60px',
-    gap: 8,
-  },
-  deltaStartButton: {
-    minHeight: 56,
-    border: '3px solid #2E7D32',
-    background: 'linear-gradient(180deg, #78d66b 0%, #43A047 100%)',
-    color: '#fff7df',
-    fontSize: 14,
-    fontWeight: 900,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    borderRadius: 12,
-    textShadow: '0 2px 0 rgba(0,0,0,0.25)',
-    boxShadow: '0 4px 0 #1b5e20, 0 8px 12px rgba(0,0,0,0.18)',
-  },
-  deltaIconButton: {
-    minHeight: 56,
-    border: '2px solid #d4c8b0',
-    background: '#fdf8e7',
-    color: '#5C3A21',
-    fontSize: 18,
-    fontWeight: 900,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    borderRadius: 12,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
-  },
-  deltaSidePanel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-    minWidth: 0,
-  },
-  deltaAnalysisCard: {
-    border: '2px solid #d4c8b0',
-    background: '#fdf8e7',
-    borderRadius: 12,
-    padding: 10,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 9,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
-  },
-  deltaConfigCard: {
-    border: '2px solid #d4c8b0',
-    background: '#fdf8e7',
-    borderRadius: 12,
-    padding: 10,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 7,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
-  },
-  deltaPanelTitle: {
-    color: '#5C3A21',
-    fontSize: 13,
-    fontWeight: 900,
-  },
-  deltaAnalysisSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-  },
-  deltaSideTitle: {
-    color: '#5C3A21',
-    fontSize: 11,
-    fontWeight: 900,
-  },
-  deltaMetricRow: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
-    gap: 10,
-    alignItems: 'baseline',
-    color: '#77573d',
-    fontSize: 12,
-    fontWeight: 700,
-    borderBottom: '1px dashed rgba(92,58,33,0.22)',
-    paddingBottom: 3,
-  },
-  deltaDivider: {
-    height: 1,
-    background: '#d4c8b0',
-  },
-  deltaTabs: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-    borderTop: '2px solid #d4c8b0',
-    paddingTop: 14,
-    gap: 8,
-  },
-  deltaTabButton: {
-    minHeight: 52,
-    border: '2px solid transparent',
-    borderBottom: '3px solid transparent',
-    background: 'transparent',
-    color: '#77573d',
-    fontSize: 16,
-    fontWeight: 900,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-  deltaTabActive: {
-    border: '2px solid #d4c8b0',
-    borderBottom: '3px solid #E8B830',
-    color: '#5C3A21',
-    background: '#fdf8e7',
-    borderRadius: 12,
-  },
   stepPage: {
     flex: 1,
     minHeight: 0,
@@ -4353,7 +3677,7 @@ const S = {
   },
   presetActive: {
     background: '#fdf8e7',
-    border: '2px solid #1E88E5',
+    borderColor: '#1E88E5',
     color: '#1565C0',
     boxShadow: '0 2px 0 #bba882',
   },
