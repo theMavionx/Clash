@@ -32,6 +32,7 @@ const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_MS = 60_000;
 const FLASH_WS_INTERVAL_MS = 1000;
+const FLASH_WS_REST_FALLBACK_MS = 3000;
 const FLASH_DEFAULT_V2_RPC = 'https://flash.magicblock.xyz';
 const FLASH_MAIN_PROGRAM_ID = 'FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn';
 const FLASH_V2_PROGRAM_ID = FLASH_MAIN_PROGRAM_ID;
@@ -1284,6 +1285,7 @@ export function useFlash() {
   const [actionLoading, setActionLoading] = useState(false);
   const [goldEarned, setGoldEarned] = useState(null);
   const [referralState, setReferralState] = useState(null);
+  const [flashWsHealthy, setFlashWsHealthy] = useState(false);
   const pricesRef = useRef([]);
   const accountRef = useRef(null);
   const positionsRef = useRef([]);
@@ -1474,6 +1476,7 @@ export function useFlash() {
     let ws = null;
     let closed = false;
     let reconnectMs = 1000;
+    setFlashWsHealthy(false);
 
     const connect = () => {
       if (closed) return;
@@ -1481,6 +1484,7 @@ export function useFlash() {
       ws = new WebSocket(flashWsUrl(apiUrl, accountOwner));
       ws.onopen = () => {
         reconnectMs = 1000;
+        setFlashWsHealthy(true);
       };
       ws.onmessage = (event) => {
         let msg = null;
@@ -1540,9 +1544,13 @@ export function useFlash() {
       };
       ws.onerror = () => {
         console.warn('[Flash] websocket error');
+        setFlashWsHealthy(false);
+        refreshRef.current?.();
       };
       ws.onclose = () => {
         if (closed) return;
+        setFlashWsHealthy(false);
+        refreshRef.current?.();
         wsReconnectRef.current = window.setTimeout(connect, reconnectMs);
         reconnectMs = Math.min(10_000, reconnectMs * 1.7);
       };
@@ -1556,8 +1564,20 @@ export function useFlash() {
         wsReconnectRef.current = null;
       }
       try { ws?.close(); } catch {}
+      setFlashWsHealthy(false);
     };
   }, [accountOwner, isActiveDex]);
+
+  useEffect(() => {
+    if (!isActiveDex || !accountOwner || flashWsHealthy) return undefined;
+    const refreshIfVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      refreshRef.current?.();
+    };
+    refreshIfVisible();
+    const timer = window.setInterval(refreshIfVisible, FLASH_WS_REST_FALLBACK_MS);
+    return () => window.clearInterval(timer);
+  }, [accountOwner, flashWsHealthy, isActiveDex]);
 
   const claimGold = useCallback(async () => {
     if (!token) return { error: 'Missing game session token' };
