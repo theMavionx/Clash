@@ -18,11 +18,16 @@ import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import {
   BUILDER_ADDR, BUILDER_FEE_BPS, isBuilderConfigured,
-  getReadClient, getTimeInForce,
+  getReadClient,
   amountToChainUnits, getPrimarySubaccountAddr,
   DECIBEL_PACKAGE_MAINNET, DECIBEL_USDC_MAINNET,
   REFERRAL_CODE,
 } from '../lib/decibel';
+import {
+  startDecibelRealtime,
+  stopDecibelRealtime,
+  subscribeDecibelRealtime,
+} from '../lib/decibelRealtime';
 
 // Move function paths for the calls we route through Petra (one-time or
 // ownership-related). Verified against `@decibeltrade/sdk/dist/write.js`
@@ -73,9 +78,13 @@ const TX_WAIT_TIMEOUT_MS = 45_000;
 const APTOS_FULLNODE = 'https://fullnode.mainnet.aptoslabs.com/v1';
 const FUTURES_API = '/api/futures';
 const DECIBEL_REWARD_CLAIM_DELAY_MS = 1_500;
-const DECIBEL_CLOSE_CONFIRM_TIMEOUT_MS = 20_000;
 const BUILDER_APPROVAL_VIEW = `${DECIBEL_PACKAGE_MAINNET}::builder_code_registry::get_approved_max_fee`;
 const TRADING_DELEGATION_VIEW = `${DECIBEL_PACKAGE_MAINNET}::dex_accounts::view_delegated_permissions`;
+const TIME_IN_FORCE = Object.freeze({
+  GoodTillCanceled: 0,
+  PostOnly: 1,
+  ImmediateOrCancel: 2,
+});
 
 // USDC has 6 decimals on Aptos and IS the collateral asset. Used for
 // deposits/withdrawals and any USD-denominated balance read.
@@ -122,21 +131,6 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => {
     if (timer) clearTimeout(timer);
   });
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function sameDecibelPosition(position, symbol, side) {
-  const normalizeSide = value => {
-    const raw = String(value || '').toLowerCase();
-    if (raw === 'long') return 'bid';
-    if (raw === 'short') return 'ask';
-    return raw;
-  };
-  return String(position?.symbol || '').toUpperCase() === String(symbol || '').toUpperCase()
-    && normalizeSide(position?.side) === normalizeSide(side);
 }
 
 function isAbortLikeError(e) {
@@ -837,6 +831,9 @@ export function useDecibel() {
   const [activationStep, setActivationStep] = useState(null);
 
   const marketsRef = useRef([]);
+  const pricesRef = useRef([]);
+  const rawPricesRef = useRef([]);
+  const subaccountRef = useRef(null);
   const positionsRef = useRef([]);
   const ordersRef = useRef([]);
   const claimGoldRef = useRef(null);
@@ -850,6 +847,14 @@ export function useDecibel() {
     failCount: 0,
     nextAllowedAt: 0,
     lastWarnAt: 0,
+  });
+  const realtimeAppliedRef = useRef({
+    pricesAt: 0,
+    accountAt: 0,
+    positionsAt: 0,
+    ordersAt: 0,
+    orderUpdateAt: 0,
+    tradesAt: 0,
   });
 
   const decibelServerRequest = useCallback(async (path, body, method = 'POST') => {
@@ -978,6 +983,9 @@ export function useDecibel() {
     setSubaccountAddr(null);
     setPositions([]);
     setOrders([]);
+    subaccountRef.current = null;
+    pricesRef.current = [];
+    rawPricesRef.current = [];
     positionsRef.current = [];
     ordersRef.current = [];
     setPrices([]);
@@ -997,6 +1005,14 @@ export function useDecibel() {
       nextAllowedAt: 0,
       lastWarnAt: 0,
     };
+    realtimeAppliedRef.current = {
+      pricesAt: 0,
+      accountAt: 0,
+      positionsAt: 0,
+      ordersAt: 0,
+      orderUpdateAt: 0,
+      tradesAt: 0,
+    };
     if (isActiveDex) {
       if (address) D.log('Petra wallet connected:', address);
       else D.log('Petra wallet disconnected');
@@ -1004,6 +1020,23 @@ export function useDecibel() {
   }, [address, isActiveDex]);
 
   // ───── Read paths ─────
+
+  const applyPriceRows = useCallback((rows) => {
+    const raw = Array.isArray(rows) ? rows : [];
+    if (!raw.length) return [];
+    rawPricesRef.current = raw;
+    const norm = raw.map(p => normalizePrice(p, marketsRef.current));
+    setPrices(prev => {
+      const byKey = new Map((prev || []).map(p => [p.symbol, p]));
+      for (const p of norm) {
+        if (p?.symbol) byKey.set(p.symbol, p);
+      }
+      const next = Array.from(byKey.values());
+      pricesRef.current = next;
+      return next;
+    });
+    return norm;
+  }, []);
 
   const fetchMarkets = useCallback(async () => {
     try {
@@ -1018,10 +1051,13 @@ export function useDecibel() {
       D.log(`fetchMarkets: ${norm.length} markets loaded`);
       setMarkets(norm);
       marketsRef.current = norm;
+      if (rawPricesRef.current.length) {
+        applyPriceRows(rawPricesRef.current);
+      }
     } catch (e) {
       D.warn('fetchMarkets failed:', e?.message || e);
     }
-  }, []);
+  }, [applyPriceRows]);
 
   const fetchPrices = useCallback(async () => {
     try {
@@ -1032,17 +1068,11 @@ export function useDecibel() {
         'prices',
       );
       const arr = Array.isArray(list) ? list : (list?.data || []);
-      const norm = arr.map(p => normalizePrice(p, marketsRef.current));
-      setPrices(prev => {
-        if (!norm.length) return prev;
-        const byKey = new Map((prev || []).map(p => [p.symbol, p]));
-        for (const p of norm) byKey.set(p.symbol, p);
-        return Array.from(byKey.values());
-      });
+      applyPriceRows(arr);
     } catch (e) {
       D.warn('fetchPrices failed:', e?.message || e);
     }
-  }, []);
+  }, [applyPriceRows]);
 
   // Resolves the user's primary subaccount address.
   //
@@ -1057,17 +1087,20 @@ export function useDecibel() {
   const ensureSubaccount = useCallback(async () => {
     if (!address) return null;
     try {
+      if (subaccountRef.current) return subaccountRef.current;
       const derived = await getPrimarySubaccountAddr(address);
       if (!derived) {
         D.warn('ensureSubaccount: deterministic derivation returned null');
         return null;
       }
       if (subaccountAddr && sameAptosAddress(subaccountAddr, derived)) {
+        subaccountRef.current = subaccountAddr;
         return subaccountAddr;
       }
       const cached = readLocalSubaccount(address);
       if (cached && sameAptosAddress(cached, derived)) {
         D.log('ensureSubaccount: local cache hit', cached);
+        subaccountRef.current = cached;
         setSubaccountAddr(cached);
         return cached;
       }
@@ -1088,6 +1121,7 @@ export function useDecibel() {
       if (exists) {
         D.log('ensureSubaccount: subaccount confirmed ✓', derived);
         markLocalSubaccount(address, derived);
+        subaccountRef.current = derived;
         setSubaccountAddr(derived);
         return derived;
       }
@@ -1187,7 +1221,7 @@ export function useDecibel() {
   const fetchPositions = useCallback(async () => {
     if (!address) return [];
     try {
-      const sub = await ensureSubaccount();
+      const sub = subaccountRef.current || await ensureSubaccount();
       if (!sub) {
         setPositions([]);
         positionsRef.current = [];
@@ -1225,32 +1259,6 @@ export function useDecibel() {
       return null;
     }
   }, [address, ensureSubaccount, decibelServerRequest]);
-
-  const waitForCloseSettlement = useCallback(async ({ symbol, side, beforeAmount, closeAmount }) => {
-    const before = Number(beforeAmount);
-    const closing = Number(closeAmount);
-    const fullClose = !(before > 0) || closing >= before * 0.995;
-    const minReduction = Math.max(1e-8, Math.min(Math.max(closing * 0.25, before * 0.05), before));
-    const deadline = Date.now() + DECIBEL_CLOSE_CONFIRM_TIMEOUT_MS;
-    let delayMs = 700;
-
-    while (Date.now() <= deadline) {
-      const latest = await fetchPositions();
-      const list = Array.isArray(latest) ? latest : positionsRef.current;
-      const match = (list || []).find(p => sameDecibelPosition(p, symbol, side));
-      if (!match) return { settled: true, closed: true };
-
-      const remaining = Number(match.amount);
-      if (!fullClose && Number.isFinite(before) && Number.isFinite(remaining) && remaining <= before - minReduction) {
-        return { settled: true, closed: false };
-      }
-
-      await sleep(delayMs);
-      delayMs = Math.min(2_000, Math.round(delayMs * 1.25));
-    }
-
-    return { settled: false, closed: false };
-  }, [fetchPositions]);
 
   const fetchOrders = useCallback(async () => {
     if (!address) return;
@@ -1716,12 +1724,11 @@ export function useDecibel() {
       const market = marketsRef.current.find(m => m.symbol === symbol);
       if (!market) throw new Error(`Unknown market: ${symbol}`);
 
-      const sub = await ensureSubaccount(); checkGen();
+      const sub = subaccountRef.current || await ensureSubaccount(); checkGen();
       if (!sub) throw new Error('Trading account not yet provisioned — tap "Activate trading"');
-      const TimeInForce = await getTimeInForce(); checkGen();
 
       const livePrice = (() => {
-        const p = prices.find(x => x.symbol === symbol);
+        const p = pricesRef.current.find(x => x.symbol === symbol);
         return p ? Number(p.mark) : 0;
       })();
       if (!(livePrice > 0)) throw new Error('Price feed unavailable — try again in a moment');
@@ -1738,7 +1745,7 @@ export function useDecibel() {
         price: priceToChainUnits(limitPrice, market),
         size: size.toString(),
         isBuy,
-        timeInForce: TimeInForce.ImmediateOrCancel,
+        timeInForce: TIME_IN_FORCE.ImmediateOrCancel,
         isReduceOnly: false,
         subaccountAddr: sub,
         // SDK rounds price/stop/TP/SL down to tickSize when provided.
@@ -1790,7 +1797,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, prices, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
+  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif, leverage) => {
     setLoading(true);
@@ -1814,9 +1821,8 @@ export function useDecibel() {
       const market = marketsRef.current.find(m => m.symbol === symbol);
       if (!market) throw new Error(`Unknown market: ${symbol}`);
 
-      const sub = await ensureSubaccount(); checkGen();
+      const sub = subaccountRef.current || await ensureSubaccount(); checkGen();
       if (!sub) throw new Error('Trading account not yet provisioned — tap "Activate trading"');
-      const TimeInForce = await getTimeInForce(); checkGen();
       const isBuy = sideIsBuy(side);
       const sizeBase = (collateral * lev) / priceN;
       const size = assertTradableSize(sizeToChainUnits(sizeBase, market), market);
@@ -1827,7 +1833,7 @@ export function useDecibel() {
         price: priceToChainUnits(priceN, market),
         size: size.toString(),
         isBuy,
-        timeInForce: TimeInForce.GoodTillCanceled,
+        timeInForce: TIME_IN_FORCE.GoodTillCanceled,
         isReduceOnly: false,
         subaccountAddr: sub,
         tickSize: tickSizeChainUnits(market),
@@ -1891,17 +1897,13 @@ export function useDecibel() {
       if (!Number.isFinite(amt) || amt <= 0) throw new Error('Invalid close amount');
       const market = marketsRef.current.find(m => m.symbol === symbol);
       if (!market) throw new Error(`Unknown market: ${symbol}`);
-      const existingPosition = (positionsRef.current || []).find(p => sameDecibelPosition(p, symbol, side));
-      const beforeAmount = Number(existingPosition?.amount);
-
-      const sub = await ensureSubaccount();
+      const sub = subaccountRef.current || await ensureSubaccount();
       if (!sub) throw new Error('Trading account not yet provisioned');
-      const TimeInForce = await getTimeInForce();
       const closingLong = String(side).toLowerCase() === 'long' || String(side).toLowerCase() === 'bid';
       const closeIsBuy = !closingLong;
 
       const livePrice = (() => {
-        const p = prices.find(x => x.symbol === symbol);
+        const p = pricesRef.current.find(x => x.symbol === symbol);
         return p ? Number(p.mark) : 0;
       })();
       if (!(livePrice > 0)) throw new Error('Price feed unavailable — try again in a moment');
@@ -1921,7 +1923,7 @@ export function useDecibel() {
         price: priceToChainUnits(slipPrice, market),
         size: size.toString(),
         isBuy: closeIsBuy,
-        timeInForce: TimeInForce.ImmediateOrCancel,
+        timeInForce: TIME_IN_FORCE.ImmediateOrCancel,
         isReduceOnly: true,
         subaccountAddr: sub,
         tickSize: tickSizeChainUnits(market),
@@ -1948,20 +1950,17 @@ export function useDecibel() {
         amount: amt, leverage: 1, order_type: 'close', dedup_key: dedupKey,
       });
 
-      const closeSettlement = await waitForCloseSettlement({
-        symbol,
-        side,
-        beforeAmount: Number.isFinite(beforeAmount) ? beforeAmount : amt,
-        closeAmount: amt,
-      });
+      fetchPositions();
+      setTimeout(() => fetchPositions(), 1_500);
+      setTimeout(() => fetchPositions(), 3_500);
       fetchAccount({ force: true });
       fetchBalance();
       scheduleClaim(500);
       scheduleClaim(3_000);
       return {
         tx_hash: txHash,
-        status: closeSettlement.settled ? 'closed' : 'submitted',
-        close_settled: closeSettlement.settled,
+        status: result?.verification?.effect === 'position_closed' ? 'closed' : 'submitted',
+        close_settled: result?.verification?.effect === 'position_closed',
       };
     } catch (e) {
       const msg = decodeTradeError(e, 'Close failed');
@@ -1971,7 +1970,7 @@ export function useDecibel() {
       closeInFlightRef.current.delete(closeLockKey);
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, prices, reportTrade, waitForCloseSettlement, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
+  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     try {
@@ -2028,7 +2027,7 @@ export function useDecibel() {
       const sizeHuman = Number(position?.amount ?? positionAmount);
       const size = assertTradableSize(sizeToChainUnits(sizeHuman, market), market);
       const sizeStr = size.toString();
-      const mark = Number(prices.find(p => p.symbol === target)?.mark || 0);
+      const mark = Number(pricesRef.current.find(p => p.symbol === target)?.mark || 0);
       const refPrice = mark > 0 ? mark : Number(position?.entry_price || 0);
       if (refPrice > 0) {
         if (tp > 0 && ((isLong && tp <= refPrice) || (!isLong && tp >= refPrice))) {
@@ -2075,7 +2074,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, ensureSubaccount, builderFields, prices, fetchPositions, fetchOrders, tpslOnServer]);
+  }, [requireServerSigner, ensureSubaccount, builderFields, fetchPositions, fetchOrders, tpslOnServer]);
 
   // Decibel `configureUserSettingsForMarket` stores leverage together with
   // the cross-margin flag. Isolated margin is not currently exposed as a
@@ -2231,6 +2230,79 @@ export function useDecibel() {
 
   // ───── Effects ─────
 
+  useEffect(() => {
+    if (!isActiveDex) {
+      stopDecibelRealtime();
+      return undefined;
+    }
+
+    const unsubscribe = subscribeDecibelRealtime((snap) => {
+      const applied = realtimeAppliedRef.current;
+
+      if (snap.pricesAt && snap.pricesAt > applied.pricesAt) {
+        applied.pricesAt = snap.pricesAt;
+        applyPriceRows(snap.prices);
+      }
+
+      if (snap.accountAt && snap.accountAt > applied.accountAt) {
+        applied.accountAt = snap.accountAt;
+        if (snap.account && typeof snap.account === 'object') {
+          setAccount(snap.account);
+          setAccountReady(true);
+          accountFetchRef.current.failCount = 0;
+          accountFetchRef.current.nextAllowedAt = 0;
+        }
+      }
+
+      if (snap.ordersAt && snap.ordersAt > applied.ordersAt) {
+        applied.ordersAt = snap.ordersAt;
+        const norm = (Array.isArray(snap.orders) ? snap.orders : []).map(o => normalizeOrder(o, marketsRef.current));
+        ordersRef.current = norm;
+        setOrders(norm);
+        setPositions(prev => {
+          const merged = mergeTpslOrdersIntoPositions(prev, norm);
+          positionsRef.current = merged;
+          return merged;
+        });
+      }
+
+      if (snap.positionsAt && snap.positionsAt > applied.positionsAt) {
+        applied.positionsAt = snap.positionsAt;
+        const norm = mergeTpslOrdersIntoPositions(
+          (Array.isArray(snap.positions) ? snap.positions : []).map(p => normalizePosition(p, marketsRef.current)),
+          ordersRef.current,
+        );
+        positionsRef.current = norm;
+        setPositions(norm);
+        setDataReady(true);
+        if (typeof window !== 'undefined') window._openPositionsCount = norm.length;
+      }
+
+      if (snap.orderUpdateAt && snap.orderUpdateAt > applied.orderUpdateAt) {
+        applied.orderUpdateAt = snap.orderUpdateAt;
+        setTimeout(() => {
+          fetchOrders();
+          fetchPositions();
+          fetchAccount({ force: true, quiet: true });
+        }, 250);
+      }
+
+      if (snap.tradesAt && snap.tradesAt > applied.tradesAt) {
+        applied.tradesAt = snap.tradesAt;
+        setTimeout(() => {
+          fetchPositions();
+          fetchAccount({ force: true, quiet: true });
+          scheduleClaim(500);
+        }, 250);
+      }
+    });
+
+    startDecibelRealtime({ subaccountAddr: subaccountAddr || subaccountRef.current || '' });
+    return () => {
+      unsubscribe();
+    };
+  }, [isActiveDex, subaccountAddr, applyPriceRows, fetchAccount, fetchOrders, fetchPositions, scheduleClaim]);
+
   // Gate fetchMarkets on the active DEX. FuturesPanel mounts ALL three
   // hooks (Pacifica + Avantis + Decibel + GMX) for the cross-DEX branch
   // pattern, so without this gate Decibel was loading 26 markets via
@@ -2242,13 +2314,16 @@ export function useDecibel() {
   useEffect(() => {
     if (!address || !isActiveDex) return;
     const tickState = () => {
-      fetchAccount({ quiet: true });
-      fetchPositions();
-      fetchOrders();
+      const latest = realtimeAppliedRef.current;
+      const nowMs = Date.now();
+      if (!latest.accountAt || nowMs - latest.accountAt > 60_000) fetchAccount({ quiet: true });
+      if (!latest.positionsAt || nowMs - latest.positionsAt > 60_000) fetchPositions();
+      if (!latest.ordersAt || nowMs - latest.ordersAt > 60_000) fetchOrders();
       fetchBalance();
     };
     const tickPrices = () => {
-      fetchPrices();
+      const lastWsPriceAt = realtimeAppliedRef.current.pricesAt || 0;
+      if (!lastWsPriceAt || Date.now() - lastWsPriceAt > 5_000) fetchPrices();
     };
     tickState();
     tickPrices();

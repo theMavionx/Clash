@@ -20,6 +20,7 @@ import bs58 from 'bs58';
 import { getPhoenixOneTapSession, importPhoenixOneTapSigner, PHOENIX_ONE_TAP_STORAGE_PREFIX } from './phoenixOneTap';
 import { ensureGameExchangeReady, evmWalletsForPlayer, solanaWalletsForPlayer } from './botGameAuth';
 import { botApiUrl, botAuthHeaders } from './botApiClient';
+import { readHyperliquidAgentAsync } from './hyperliquidClient';
 
 const GRVT_BUILDER_ACCOUNT_ID = String(import.meta.env.VITE_GRVT_BUILDER_ACCOUNT_ID || '').trim();
 const GRVT_BUILDER_FEE_RATE = String(import.meta.env.VITE_GRVT_BUILDER_FEE_RATE || '0.01').trim();
@@ -36,6 +37,7 @@ const GMX_ONE_TAP_KEY = 'clash_gmx_one_tap_signer_v1';
 const GMTRADE_ONE_TAP_PREFIX = 'clash_gmtrade_one_tap_signer_v1';
 const PERPL_ONE_TAP_PREFIX = 'clash_perpl_one_tap_signer_v1';
 const FLASH_ONE_TAP_PREFIX = 'clash_flash_one_tap_agent_v1:';
+const DECIBEL_STORAGE_KEY = 'clash_decibel_bot_credentials_v1';
 const DECIBEL_SUBACCOUNT_PREFIX = 'clash_decibel_subaccount:';
 const DECIBEL_SUBACCOUNT_TTL_MS = 24 * 60 * 60 * 1000;
 /** VPS signs via env — never paste server API wallet key in the browser. */

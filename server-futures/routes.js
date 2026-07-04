@@ -2053,17 +2053,19 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
       orderType,
       reduceOnly: !!orderPayload.isReduceOnly,
       txResult: result,
-      attempts: orderType === 'market' ? 10 : 6,
-      delayMs: 900,
+      attempts: orderType === 'market' ? 2 : 3,
+      delayMs: 500,
     });
     if (!verification.verified) {
-      return res.status(409).json({
-        success: false,
-        error: verification.reason || 'Decibel order was submitted, but no matching position or open order was verified.',
-        clientOrderId: orderPayload.clientOrderId,
-        transactionHash: result.transactionHash || result.hash || null,
-        result,
-        verification,
+      console.warn('[decibel] order submitted but fast verification is pending', {
+        player: req.playerId,
+        market: orderPayload.marketName,
+        reduceOnly: !!orderPayload.isReduceOnly,
+        orderType,
+        reason: verification.reason,
+        attempts: verification.attempts,
+        total_ms: Date.now() - startedAt,
+        tx_ms: result?.timings?.total_ms,
       });
     }
     recordDecibelBuilderProof(req.playerId, verified.subaccount, orderPayload, result, orderType, side);
@@ -2103,7 +2105,7 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
     } else if (result?.success !== false) {
       fillRecord = { inserted: 0, rows: 0, volume_usd: 0, reason: 'open_order_waiting_for_fill' };
     }
-    res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: true, verification, fillRecord });
+    res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: verification.verified === true, verification, fillRecord });
   } catch (e) {
     console.error('[decibel] place order error:', e);
     res.status(500).json({ error: e.message || 'Failed to place Decibel order' });
@@ -2280,6 +2282,7 @@ router.get('/markets', async (req, res) => {
   const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
     const info = dex === 'avantis' ? await avantis.getMarketInfo()
+      : dex === 'decibel' ? await decibel.fetchMarkets()
       : dex === 'gmx' ? await gmx.getMarketInfo()
       : dex === 'ostium' ? await ostium.getMarketInfo()
       : dex === 'hyperliquid' ? await hyperliquid.getMarketInfo()
@@ -2306,6 +2309,7 @@ router.get('/prices', async (req, res) => {
   const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
     const prices = dex === 'avantis' ? await avantis.getPrices()
+      : dex === 'decibel' ? await decibel.fetchMarketPrices()
       : dex === 'gmx' ? await gmx.getPrices()
       : dex === 'ostium' ? await ostium.getPrices()
       : dex === 'hyperliquid' ? await hyperliquid.getPrices()

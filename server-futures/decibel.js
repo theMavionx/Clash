@@ -268,6 +268,30 @@ function generateReplayProtectionNonce() {
   return n === 0n ? 1n : n;
 }
 
+const DECIBEL_GAS_PRICE_CACHE_MS = Math.max(1000, Number(process.env.DECIBEL_GAS_PRICE_CACHE_MS || 15_000));
+let gasPriceCache = { value: 100, at: 0, promise: null };
+
+async function getCachedGasUnitPrice(aptos) {
+  const now = Date.now();
+  if (gasPriceCache.value && now - gasPriceCache.at < DECIBEL_GAS_PRICE_CACHE_MS) {
+    return gasPriceCache.value;
+  }
+  if (gasPriceCache.promise) return gasPriceCache.promise;
+  gasPriceCache.promise = aptos.getGasPriceEstimation()
+    .then((gas) => {
+      const value = Math.max(1, Number(gas?.gas_estimate || gas?.prioritized_gas_estimate || gasPriceCache.value || 100));
+      gasPriceCache = { value, at: Date.now(), promise: null };
+      return value;
+    })
+    .catch((e) => {
+      gasPriceCache.promise = null;
+      if (gasPriceCache.value) return gasPriceCache.value;
+      console.warn('[decibel] gas price estimate failed, using fallback:', e?.message || e);
+      return 100;
+    });
+  return gasPriceCache.promise;
+}
+
 function newClientOrderId() {
   return crypto.randomBytes(16).toString('hex');
 }
@@ -294,7 +318,7 @@ async function sendDecibelTx(payload) {
   stepStarted = mark('client_ms', stepStarted);
   const account = await getServerAccount();
   stepStarted = mark('account_ms', stepStarted);
-  const gas = await aptos.getGasPriceEstimation().catch(() => ({ gas_estimate: 100 }));
+  const gasUnitPrice = await getCachedGasUnitPrice(aptos);
   stepStarted = mark('gas_ms', stepStarted);
   const transaction = await aptos.transaction.build.simple({
     sender: account.accountAddress,
@@ -302,7 +326,7 @@ async function sendDecibelTx(payload) {
     options: {
       replayProtectionNonce: generateReplayProtectionNonce(),
       maxGasAmount: 200_000,
-      gasUnitPrice: Math.max(1, Number(gas?.gas_estimate || 100)),
+      gasUnitPrice,
     },
   });
   stepStarted = mark('build_ms', stepStarted);

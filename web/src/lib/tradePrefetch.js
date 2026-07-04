@@ -12,7 +12,6 @@ const COMMON_PRIVATE_DEXES = new Set([
   'hibachi',
   'hotstuff',
   'grvt',
-  'decibel',
 ]);
 
 let fetchCacheInstalled = false;
@@ -391,6 +390,11 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
     return requests;
   }
 
+  if (dex === 'decibel') {
+    addPrefetchRequest(requests, futuresUrl('/decibel/signer'), { headers, signal });
+    return requests;
+  }
+
   return requests;
 }
 
@@ -441,14 +445,27 @@ export async function prefetchDexTradeData({
   }
 
   installTradeFetchCache();
-
   const normalizedWallet = normalizeAddress(walletAddress);
+
   const prefetchKey = `${normalizedDex}:${normalizedWallet || 'no-wallet'}:${token ? 'auth' : 'anon'}`;
   const now = currentTimeMs();
   if (!force && (now - (lastPrefetchByKey.get(prefetchKey) || 0)) < PREFETCH_MIN_INTERVAL_MS) {
     return { ok: true, skipped: true, reason: 'recent', dex: normalizedDex };
   }
   lastPrefetchByKey.set(prefetchKey, now);
+
+  if (normalizedDex === 'decibel') {
+    try {
+      const [{ getPrimarySubaccountAddr }, { startDecibelRealtime }] = await Promise.all([
+        import('./decibel'),
+        import('./decibelRealtime'),
+      ]);
+      const subaccountAddr = normalizedWallet ? await getPrimarySubaccountAddr(normalizedWallet) : '';
+      startDecibelRealtime({ subaccountAddr });
+    } catch {
+      // Decibel realtime warmup is opportunistic; normal hook reads remain the fallback.
+    }
+  }
 
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeoutId = controller

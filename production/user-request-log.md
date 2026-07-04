@@ -1299,3 +1299,19 @@ Time: 2026-07-03 13:16:58 +03:00
 Request:
 
 > Hi @xaitoshi, one small proposed change here would be "Ostium charges a 0.10 USDC oracle fee, which is refunded upon successful closure of the position via a market order. Use ...". Docs on Oracle Fee: https://docs.ostium.com/traders/reference/fees#oracle-fee. Final fix for Ostium потім коміт деплой відразу
+
+### UR-2026-07-04-001
+
+Time: 2026-07-04 18:08:43 +03:00
+
+Request:
+
+> передививсь децибел подумай як можна покращити швидкість відкриття угод і так далі можливо веб сокети - прочитай документацію бо зроблено в нас трохи криво то все діло
+
+### UR-2026-07-04-002
+
+Time: 2026-07-04 18:17:47 +03:00
+
+Request:
+
+> виправляй все
