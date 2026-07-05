@@ -13820,13 +13820,58 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   }
   let dex = playerDex;
   let requestedDexAccount = null;
+  let verifiedFlashClaimWallet = null;
   if (requestedDex !== playerDex) {
     requestedDexAccount = getReadyPlayerDexAccount(req.player.id, requestedDex);
     if (requestedDexAccount) {
       dex = requestedDex;
     }
   }
+  if (requestedDex === 'flash') {
+    const requestedFlashWallet = String(req.body.wallet || req.body.address || req.body.owner || '').trim();
+    if (requestedFlashWallet) {
+      if (!isValidSolanaPubkey(requestedFlashWallet)) {
+        return res.status(400).json({ error: 'Flash claim wallet must be a valid Solana address' });
+      }
+      const flashProof = await verifyWalletAuthProof(req, { wallet: requestedFlashWallet, dex: 'flash' });
+      if (!flashProof.ok) {
+        return res.status(flashProof.status || 401).json({ error: flashProof.error || 'Flash wallet signature verification failed' });
+      }
+      verifiedFlashClaimWallet = flashProof.wallet || canonicalWalletIdentifier(requestedFlashWallet);
+      if (requestedDex !== playerDex && !requestedDexAccount) {
+        upsertPlayerDexAccount(req.player.id, 'flash', verifiedFlashClaimWallet, 'ready', {
+          source: 'claim_gold_auth_proof',
+          linked_at: new Date().toISOString(),
+        });
+        requestedDexAccount = getReadyPlayerDexAccount(req.player.id, 'flash') || {
+          dex: 'flash',
+          chain_type: 'solana',
+          wallet_address: verifiedFlashClaimWallet,
+          status: 'ready',
+        };
+        dex = 'flash';
+      }
+    }
+  }
   wallet = resolveClaimWalletForDex(req.player, dex, wallet);
+  if (dex === 'flash' && verifiedFlashClaimWallet) {
+    wallet = verifiedFlashClaimWallet;
+    upsertPlayerDexAccount(req.player.id, 'flash', wallet, 'ready', {
+      source: 'claim_gold_auth_proof',
+      linked_at: new Date().toISOString(),
+    });
+    try {
+      db.db.prepare(`
+        INSERT INTO trading_rewards (player_id, dex, wallet, updated_at)
+        VALUES (?, 'flash', ?, datetime('now'))
+        ON CONFLICT(player_id, dex) DO UPDATE SET
+          wallet = excluded.wallet,
+          updated_at = datetime('now')
+      `).run(req.player.id, wallet);
+    } catch (e) {
+      console.warn('[claim-gold flash] reward wallet upsert failed:', e.message);
+    }
+  }
   const recordClaimTelemetry = (event = {}) => {
     db.recordTradeClaimResult({
       playerId: req.player.id,

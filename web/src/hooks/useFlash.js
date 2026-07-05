@@ -1586,20 +1586,31 @@ export function useFlash() {
   const claimGold = useCallback(async () => {
     if (!token) return { error: 'Missing game session token' };
     try {
+      const payload = { dex: 'flash' };
+      const owner = publicKeyText(walletAddr);
+      if (owner && needsFlashWalletAuthProof()) {
+        payload.wallet = owner;
+        payload.auth_proof = await createFlashWalletAuthProof();
+      }
       const data = await fetchJson(`${GAME_API}/trading/claim-gold`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-token': token },
-        body: JSON.stringify({ dex: 'flash' }),
+        headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'flash' },
+        body: JSON.stringify(payload),
       });
       if (Number(data?.gold || 0) > 0) {
         setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards', ...data });
         window.onGodotMessage?.({ action: 'resources_add', data: { gold: Number(data.gold || 0), wood: 0, ore: 0 } });
       }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('clash:trading-reward-claimed', {
+          detail: { dex: 'flash', gold: Number(data?.gold || 0), reason: data?.reason || '' },
+        }));
+      }
       return data;
     } catch (e) {
       return { error: e?.message || 'Could not claim Flash gold' };
     }
-  }, [token]);
+  }, [createFlashWalletAuthProof, needsFlashWalletAuthProof, token, walletAddr]);
 
   const confirmSignature = useCallback(async (signature, txConnection = null, options = {}) => {
     const preferBackend = options?.preferBackend === true;
