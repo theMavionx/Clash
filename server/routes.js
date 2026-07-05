@@ -24166,13 +24166,97 @@ const BOT_PROXY_SECRET = String(
   || process.env.PHANTOM__AUTH__TRUSTED_PROXY_SECRET
   || '',
 ).trim();
+const BOT_PROXY_TIMEOUT_MS = Math.max(1000, Math.min(60_000, Number(process.env.CLASH_BOT_PROXY_TIMEOUT_MS || 12_000)));
+const BOT_BALANCE_STALE_MS = Math.max(0, Math.min(300_000, Number(process.env.CLASH_BOT_BALANCE_STALE_MS || 120_000)));
+const BOT_BALANCE_CACHE_MAX = Math.max(10, Math.min(1000, Number(process.env.CLASH_BOT_BALANCE_CACHE_MAX || 250)));
+const botBalanceResponseCache = new Map();
+
+function isBotBalanceProxyRequest(req) {
+  return req.method === 'GET'
+    && /^\/api\/v1\/(?:bot\/)?exchanges\/[^/?#]+\/balance(?:[?#]|$)/.test(String(req.originalUrl || ''));
+}
+
+function botBalanceCacheKey(req) {
+  return `${req.player?.id || 'anonymous'}:${req.originalUrl || req.url || ''}`;
+}
+
+function pruneBotBalanceCache(now = Date.now()) {
+  if (botBalanceResponseCache.size <= BOT_BALANCE_CACHE_MAX) return;
+  for (const [key, value] of botBalanceResponseCache.entries()) {
+    if (!value || now - Number(value.at || 0) > BOT_BALANCE_STALE_MS) {
+      botBalanceResponseCache.delete(key);
+    }
+  }
+  while (botBalanceResponseCache.size > BOT_BALANCE_CACHE_MAX) {
+    const oldestKey = botBalanceResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    botBalanceResponseCache.delete(oldestKey);
+  }
+}
+
+function safeBotResponseHeaders(headers) {
+  const out = [];
+  for (const [key, value] of headers.entries()) {
+    if (['content-encoding', 'transfer-encoding', 'connection', 'content-length'].includes(key.toLowerCase())) continue;
+    out.push([key, value]);
+  }
+  return out;
+}
+
+function applyProxyHeaders(res, headers) {
+  for (const [key, value] of headers) {
+    res.setHeader(key, value);
+  }
+}
+
+function botProxyErrorMessage(status, bodyText, fallback = 'balance unavailable') {
+  if (bodyText) {
+    try {
+      const parsed = JSON.parse(bodyText);
+      const message = parsed?.error?.message || parsed?.error || parsed?.message;
+      if (message) return String(message).slice(0, 240);
+    } catch {}
+  }
+  return status ? `HTTP ${status}: ${fallback}` : String(fallback || 'balance unavailable');
+}
+
+function sendCachedBotBalance(req, res, reason) {
+  if (BOT_BALANCE_STALE_MS <= 0) return false;
+  const cached = botBalanceResponseCache.get(botBalanceCacheKey(req));
+  if (!cached || Date.now() - Number(cached.at || 0) > BOT_BALANCE_STALE_MS) return false;
+  applyProxyHeaders(res, cached.headers);
+  res.setHeader('x-clash-bot-balance-cache', 'stale');
+  res.setHeader('x-clash-bot-balance-cache-reason', String(reason || 'upstream_error').slice(0, 80));
+  res.status(cached.status || 200).send(cached.bodyText);
+  return true;
+}
+
+function sendBotBalanceFallback(req, res, status, bodyText, reason) {
+  const message = botProxyErrorMessage(status, bodyText, reason);
+  res.setHeader('x-clash-bot-balance-fallback', '1');
+  res.status(200).json({
+    success: false,
+    data: null,
+    stale: false,
+    unavailable: true,
+    error: {
+      code: 'BOT_BALANCE_UNAVAILABLE',
+      message,
+    },
+  });
+}
+
 async function proxyToBot(req, res) {
+  const balanceRequest = isBotBalanceProxyRequest(req);
   try {
     const targetUrl = `${BOT_URL}${req.originalUrl}`;
     const headers = {
       accept: req.headers.accept || 'application/json',
       'x-tenant-id': req.player?.id || '',
     };
+    if (req.headers.authorization) {
+      headers.authorization = req.headers.authorization;
+    }
     if (BOT_PROXY_SECRET) {
       headers['x-proxy-secret'] = BOT_PROXY_SECRET;
     }
@@ -24185,17 +24269,39 @@ async function proxyToBot(req, res) {
       options.body = JSON.stringify(req.body);
       headers['content-type'] = 'application/json';
     }
-    const response = await fetch(targetUrl, options);
-    const bodyText = await response.text();
-    res.status(response.status);
-    for (const [key, value] of response.headers.entries()) {
-      if (['content-encoding', 'transfer-encoding', 'connection'].includes(key.toLowerCase())) continue;
-      res.setHeader(key, value);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BOT_PROXY_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(targetUrl, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
     }
+    const bodyText = await response.text();
+    const responseHeaders = safeBotResponseHeaders(response.headers);
+    if (balanceRequest && response.ok && bodyText) {
+      pruneBotBalanceCache();
+      botBalanceResponseCache.set(botBalanceCacheKey(req), {
+        at: Date.now(),
+        status: response.status,
+        headers: responseHeaders,
+        bodyText,
+      });
+    }
+    if (balanceRequest && response.status >= 500) {
+      if (sendCachedBotBalance(req, res, `upstream_${response.status}`)) return;
+      return sendBotBalanceFallback(req, res, response.status, bodyText, 'upstream balance adapter failed');
+    }
+    res.status(response.status);
+    applyProxyHeaders(res, responseHeaders);
     res.send(bodyText);
   } catch (error) {
     console.error('[bot proxy error]:', error.message, error.cause?.message || '');
     const detail = error.cause?.message || error.message || 'unknown';
+    if (balanceRequest) {
+      if (sendCachedBotBalance(req, res, 'proxy_error')) return;
+      return sendBotBalanceFallback(req, res, 502, null, detail);
+    }
     res.status(502).json({
       success: false,
       error: {
