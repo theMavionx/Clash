@@ -14792,6 +14792,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 // ==================== TASKS (QUESTS) ====================
 
 const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
+const TRADE_HISTORY_TASK_TYPES = new Set(['volume', 'positions', 'combo_volume_attack']);
 const TASK_PROGRESS_REFRESH_TIMEOUT_MS = Math.max(1000, Number(process.env.TASK_PROGRESS_REFRESH_TIMEOUT_MS || 5000));
 const PACIFICA_TASK_PREFETCH_TIMEOUT_MS = Math.max(
   TASK_PROGRESS_REFRESH_TIMEOUT_MS,
@@ -15046,7 +15047,17 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
   const task = tasks.getTaskById(id);
+  const claimStartedAt = Date.now();
+  const requestedDex = requestedTaskDexFromHeaders(req.headers);
+  const effectiveDex = requestedDex || String(req.player?.dex || '').toLowerCase();
+  const taskPlayer = requestedDex && requestedDex !== String(req.player?.dex || '').toLowerCase()
+    ? { ...req.player, dex: requestedDex }
+    : req.player;
+  const claimTimeoutMs = effectiveDex === 'pacifica'
+    ? PACIFICA_TASK_PREFETCH_TIMEOUT_MS
+    : TASK_PROGRESS_REFRESH_TIMEOUT_MS;
   const recordTaskTelemetry = (resultName, extra = {}) => {
+    const extraMetadata = extra && typeof extra.metadata === 'object' && extra.metadata ? extra.metadata : {};
     db.recordTaskClaimEvent({
       playerId: req.player.id,
       taskId: id,
@@ -15059,6 +15070,12 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       repeatable: Boolean(task?.repeatable),
       cooldownHours: task?.cooldown_hours || 0,
       ...extra,
+      metadata: {
+        ...extraMetadata,
+        duration_ms: Date.now() - claimStartedAt,
+        dex: effectiveDex || null,
+        requested_dex: requestedDex || null,
+      },
     });
   };
   if (!tasks.isTaskLive(task)) return res.status(404).json({ error: 'Task not active' });
@@ -15071,7 +15088,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   let pt = tasks.getPlayerTask(req.player.id, id);
   if (!pt) {
     // auto-start — snapshot taken now, so there's nothing yet to claim
-    const snap = await tasks.buildSnapshot(req.player, task, { headers: req.headers });
+    const snap = await tasks.buildSnapshot(taskPlayer, task, { headers: req.headers });
     db.db.prepare(
       `INSERT INTO player_tasks (player_id, task_id, snapshot) VALUES (?, ?, ?)`
     ).run(req.player.id, id, JSON.stringify(snap));
@@ -15110,16 +15127,38 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   }
   let result;
   try {
-    result = await tasks.verifyTask(req.player, task, snap, { headers: req.headers });
+    let progressContext = {};
+    if (TRADE_HISTORY_TASK_TYPES.has(String(task?.type || '')) && LIVE_TASK_PROGRESS_DEXES.has(effectiveDex)) {
+      progressContext = await prefetchStartedTaskTradesForDex(
+        req.player,
+        [task],
+        effectiveDex,
+        req.headers,
+        claimTimeoutMs,
+        'claim-prefetch',
+      );
+      if (progressContext.prefetchError) throw progressContext.prefetchError;
+    }
+    result = await withTaskProgressTimeoutMs(
+      tasks.verifyTask(taskPlayer, task, snap, {
+        headers: req.headers,
+        prefetchedTrades: progressContext.prefetchedTrades || null,
+      }),
+      `player=${req.player?.name || req.player?.id} task=${id} claim dex=${effectiveDex}`,
+      claimTimeoutMs,
+    );
   } catch (e) {
-    if (e?.code === 'PACIFICA_RATE_LIMIT') {
-      const retryMessage = e.message || 'Pacifica trade history is rate limited. Wait a minute and retry.';
+    const timedOut = /\btimed out after \d+ms\b/i.test(String(e?.message || ''));
+    if (e?.code === 'PACIFICA_RATE_LIMIT' || timedOut) {
+      const retryMessage = e?.code === 'PACIFICA_RATE_LIMIT'
+        ? (e.message || 'Pacifica trade history is rate limited. Wait a minute and retry.')
+        : 'Quest verification is still syncing trades. Try again in a few seconds.';
       console.warn(`[task ${id} claim] player=${req.player.name} -> RETRYABLE ${retryMessage}`);
       recordTaskTelemetry('retryable_error', {
         errorReason: retryMessage,
-        metadata: { code: e.code, retryable: true, dex: req.player.dex || null },
+        metadata: { code: e?.code || 'TASK_VERIFY_TIMEOUT', retryable: true, dex: effectiveDex || null },
       });
-      return res.status(503).json({
+      return res.status(e?.code === 'PACIFICA_RATE_LIMIT' ? 503 : 504).json({
         ok: false,
         retryable: true,
         error: retryMessage,
@@ -15146,7 +15185,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     });
     return res.json({ ok: false, completed: false, progress_value: result.progress_value, target_value: result.target_value, breakdown: result.breakdown });
   }
-  const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task, { headers: req.headers }) : null;
+  const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(taskPlayer, task, { headers: req.headers }) : null;
   if (nextRepeatableSnapshot) nextRepeatableSnapshot.strict_after_start_id = true;
 
   // Atomic payout: re-check the snapshot inside the transaction so two

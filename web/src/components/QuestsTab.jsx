@@ -435,7 +435,7 @@ function normalizeHibachiTaskCredentials(creds) {
   };
 }
 
-function QuestCard({ task, onStart, onClaim, loading }) {
+function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
   const pct = task.target_value > 0 ? Math.min(1, task.progress_value / task.target_value) : 0;
   const isDone = task.target_value > 0 && task.progress_value >= task.target_value;
   const isClaimed = !!task.claimed_at;
@@ -443,6 +443,9 @@ function QuestCard({ task, onStart, onClaim, loading }) {
   const canReClaim = isClaimed && task.repeatable && !autoRestarted;
   const showClaimed = isClaimed && !task.repeatable;
   const exclusiveBadge = questEligibilityBadge(task);
+  const isStarting = busyAction === 'start';
+  const isClaiming = busyAction === 'claim';
+  const isRefreshing = busyAction === 'refresh';
 
   return (
     <div style={S.card}>
@@ -491,15 +494,15 @@ function QuestCard({ task, onStart, onClaim, loading }) {
         </div>
 
         {!task.started ? (
-          <button style={S.btnStart} onClick={() => onStart(task.id)} disabled={loading}>Start</button>
+          <button style={S.btnStart} onClick={() => onStart(task.id)} disabled={loading}>{isStarting ? 'Starting...' : 'Start'}</button>
         ) : isDone && (!isClaimed || autoRestarted) ? (
-          <button style={S.btnClaim} onClick={() => onClaim(task.id)} disabled={loading}>Claim</button>
+          <button style={S.btnClaim} onClick={() => onClaim(task.id)} disabled={loading}>{isClaiming ? 'Claiming...' : 'Claim'}</button>
         ) : canReClaim && isClaimed ? (
-          <button style={S.btnStart} onClick={() => onStart(task.id)} disabled={loading}>Restart</button>
+          <button style={S.btnStart} onClick={() => onStart(task.id)} disabled={loading}>{isStarting ? 'Starting...' : 'Restart'}</button>
         ) : isClaimed && !autoRestarted ? (
           <span style={S.doneLabel}>✓</span>
         ) : (
-          <button style={S.btnRefresh} onClick={() => onClaim(task.id)} disabled={loading}>Refresh</button>
+          <button style={S.btnRefresh} onClick={() => onClaim(task.id)} disabled={loading}>{isRefreshing ? 'Refreshing...' : 'Refresh'}</button>
         )}
       </div>
     </div>
@@ -510,6 +513,7 @@ function QuestsTab({ markets = [] }) {
   const [tasks, setTasks] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [busyTask, setBusyTask] = useState(null);
   const [error, setError] = useState(null);
   const [flash, setFlash] = useState(null);
   // Subscribe to the reactive player state so this component re-runs when
@@ -596,6 +600,8 @@ function QuestsTab({ markets = [] }) {
 
   const handleStart = useCallback(async (id) => {
     if (!token) { setError('Not signed in yet — try again in a moment.'); return; }
+    if (loading) return;
+    setBusyTask({ id: Number(id), action: 'start' });
     setLoading(true); setError(null);
     try {
       const r = await fetch(`${GAME_API}/tasks/${id}/start`, {
@@ -605,23 +611,32 @@ function QuestsTab({ markets = [] }) {
       const j = await r.json();
       if (!r.ok) setError(j.error || 'Failed');
       await fetchTasks(token);
-    } finally { setLoading(false); }
-  }, [fetchTasks, taskHeaders, token]);
+    } finally {
+      setLoading(false);
+      setBusyTask(null);
+    }
+  }, [fetchTasks, loading, taskHeaders, token]);
 
   const handleClaim = useCallback(async (id) => {
     if (!token) { setError('Not signed in yet — try again in a moment.'); return; }
+    if (loading) return;
     const activeDex = String(dex || '').toLowerCase();
     const currentTask = tasks.find(t => Number(t.id) === Number(id));
     const currentTarget = Number(currentTask?.target_value || 0);
     const currentProgress = Number(currentTask?.progress_value || 0);
     const locallyComplete = currentTarget > 0 && currentProgress >= currentTarget;
     if (activeDex === 'pacifica' && currentTask?.started && !locallyComplete) {
+      setBusyTask({ id: Number(id), action: 'refresh' });
       setLoading(true);
       setError(null);
       try { await fetchTasks(token); }
-      finally { setLoading(false); }
+      finally {
+        setLoading(false);
+        setBusyTask(null);
+      }
       return;
     }
+    setBusyTask({ id: Number(id), action: 'claim' });
     setLoading(true); setError(null);
     try {
       const refreshResources = async () => {
@@ -669,8 +684,11 @@ function QuestsTab({ markets = [] }) {
         setError(j.retryable && j.error ? j.error : 'Not completed yet');
       }
       await fetchTasks(token);
-    } finally { setLoading(false); }
-  }, [dex, fetchTasks, taskHeaders, tasks, token]);
+    } finally {
+      setLoading(false);
+      setBusyTask(null);
+    }
+  }, [dex, fetchTasks, loading, taskHeaders, tasks, token]);
 
   const visibleTasks = useMemo(
     () => sortQuestsForClaiming(tasks.filter(t => taskTradableOnMarkets(t, markets))),
@@ -716,7 +734,14 @@ function QuestsTab({ markets = [] }) {
       )}
       {error && <div style={S.error} onClick={() => setError(null)}>{error}</div>}
       {visibleTasks.map(t => (
-        <QuestCard key={t.id} task={t} onStart={handleStart} onClaim={handleClaim} loading={loading} />
+        <QuestCard
+          key={t.id}
+          task={t}
+          onStart={handleStart}
+          onClaim={handleClaim}
+          loading={loading}
+          busyAction={Number(busyTask?.id) === Number(t.id) ? busyTask.action : null}
+        />
       ))}
     </div>
   );
@@ -748,17 +773,17 @@ const S = {
   rewardIcon: { width: 16, height: 16, objectFit: 'contain' },
 
   btnStart: {
-    padding: '6px 14px', background: 'linear-gradient(180deg, #6ab344 0%, #4d7a2e 100%)',
+    minWidth: 86, padding: '6px 14px', background: 'linear-gradient(180deg, #6ab344 0%, #4d7a2e 100%)',
     color: '#fff', fontWeight: 900, fontSize: 12, border: '2px solid #3a5e22', borderRadius: 8,
     cursor: 'pointer', textShadow: '1px 1px 0 rgba(0,0,0,0.3)',
   },
   btnClaim: {
-    padding: '6px 14px', background: 'linear-gradient(180deg, #e8b830 0%, #b8860b 100%)',
+    minWidth: 86, padding: '6px 14px', background: 'linear-gradient(180deg, #e8b830 0%, #b8860b 100%)',
     color: '#fff', fontWeight: 900, fontSize: 12, border: '2px solid #8a5f00', borderRadius: 8,
     cursor: 'pointer', textShadow: '1px 1px 0 rgba(0,0,0,0.3)', animation: 'pulse-glow 1.5s infinite',
   },
   btnRefresh: {
-    padding: '6px 14px', background: '#d4c8b0', color: '#5C3A21',
+    minWidth: 86, padding: '6px 14px', background: '#d4c8b0', color: '#5C3A21',
     fontWeight: 800, fontSize: 12, border: '2px solid #a3906a', borderRadius: 8, cursor: 'pointer',
   },
   doneLabel: { fontSize: 18, fontWeight: 900, color: '#6ab344' },
