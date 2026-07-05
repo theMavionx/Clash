@@ -377,7 +377,16 @@ function isAfterTaskSnapshot(snap, trade) {
   const startId = Number(snap?.trade_id_start || 0);
   const tradeId = Number(trade?.history_id || 0);
   if (tradeId > startId) return true;
-  return isTaskStartBoundaryTrade(snap, trade);
+  if (isTaskStartBoundaryTrade(snap, trade)) return true;
+
+  const snapDex = String(snap?.dex || '').trim().toLowerCase();
+  const tradeDex = String(trade?.dex || '').trim().toLowerCase();
+  if (snapDex && tradeDex && snapDex === tradeDex) return false;
+
+  const startedMs = parseTaskTimeMs(snap?.start_time);
+  const tradeMs = parseTaskTimeMs(trade?.created_at);
+  if (!Number.isFinite(startedMs) || !Number.isFinite(tradeMs)) return false;
+  return tradeMs > startedMs;
 }
 
 // ---------- Snapshots ----------
@@ -385,7 +394,8 @@ function isAfterTaskSnapshot(snap, trade) {
 async function buildSnapshot(player, task, opts = {}) {
   const p = parseParams(task.params);
   const now = new Date().toISOString();
-  const snap = { start_time: now, type: task.type };
+  const effectiveDex = requestedTaskDex(opts) || String(player?.dex || 'pacifica').toLowerCase();
+  const snap = { start_time: now, type: task.type, dex: effectiveDex };
 
   if (task.type === 'volume' || task.type === 'positions' || task.type === 'combo_volume_attack') {
     // Baseline = max trade id the moment the user starts this quest. Pre-
@@ -412,13 +422,13 @@ async function buildSnapshot(player, task, opts = {}) {
     }
     let baselineSource = trades.length > 0 ? 'fetched_trades' : 'none';
     if (baseline === 0) {
-      const dex = requestedTaskDex(opts) || String(player.dex || 'pacifica').toLowerCase();
+      const dex = effectiveDex;
       const reward = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ? AND dex = ?').get(player.id, dex);
       baseline = reward ? reward.last_trade_id : 0;
       baselineSource = reward ? 'trading_rewards.last_trade_id' : 'zero_default';
     }
     snap.trade_id_start = baseline;
-    console.log(`[tasks] snapshot task=${task.id} (${task.title || task.type}) player=${player.name} dex=${player.dex} baseline=${baseline} source=${baselineSource} fetched_count=${trades.length}`);
+    console.log(`[tasks] snapshot task=${task.id} (${task.title || task.type}) player=${player.name} dex=${effectiveDex} baseline=${baseline} source=${baselineSource} fetched_count=${trades.length}`);
   }
   if (task.type === 'combo_volume_attack') {
     const winsRow = db.db.prepare(

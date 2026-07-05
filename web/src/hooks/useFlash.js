@@ -33,6 +33,7 @@ const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_MS = 60_000;
 const FLASH_WS_INTERVAL_MS = 1000;
 const FLASH_WS_REST_FALLBACK_MS = 3000;
+const FLASH_OWNER_WS_ENABLED = import.meta.env.VITE_FLASH_OWNER_WS_ENABLED === 'true';
 const FLASH_DEFAULT_V2_RPC = 'https://flash.magicblock.xyz';
 const FLASH_MAIN_PROGRAM_ID = 'FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn';
 const FLASH_V2_PROGRAM_ID = FLASH_MAIN_PROGRAM_ID;
@@ -1472,7 +1473,10 @@ export function useFlash() {
   }, [isActiveDex, refresh]);
 
   useEffect(() => {
-    if (!isActiveDex || !accountOwner || typeof WebSocket === 'undefined') return undefined;
+    if (!isActiveDex || !accountOwner || !FLASH_OWNER_WS_ENABLED || typeof WebSocket === 'undefined') {
+      setFlashWsHealthy(false);
+      return undefined;
+    }
     let ws = null;
     let closed = false;
     let reconnectMs = 1000;

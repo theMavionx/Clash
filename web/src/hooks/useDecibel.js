@@ -2256,6 +2256,9 @@ export function useDecibel() {
         if (window.onGodotMessage) {
           window.onGodotMessage({ action: 'resources_add', data: { gold: data.gold, wood: 0, ore: 0 } });
         }
+        window.dispatchEvent?.(new CustomEvent('clash:trading-reward-claimed', {
+          detail: { dex: 'decibel', gold: Number(data.gold) || 0, reason: data.reason || 'Trading rewards' },
+        }));
       }
       return data;
     } catch (e) {

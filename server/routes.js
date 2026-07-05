@@ -14322,6 +14322,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       });
       return res.json({ gold: 0, reason: 'Already claimed by parallel request', dex });
     }
+    if (creditedTrades > 0) {
+      await refreshStartedTaskProgressForTradeClaim(req.player, dex, req.headers);
+    }
     if (txnResult.paid > 0) {
       console.log(`[claim-gold ${dex}] player=${req.player.name} -> PAID gold=${txnResult.paid} base_gold=${totalGold} nft_boosted_gold=${boostedTotalGold} new_volume=$${newVolume.toFixed(2)} pnl=$${newPnl.toFixed(2)} credited_trades=${creditedTrades} reasons="${reasons.join(' + ')}"`);
       recordClaimTelemetry({
@@ -14827,6 +14830,39 @@ async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders
   }
 }
 
+async function prefetchStartedTaskTradesForDex(player, taskList, effectiveDex, requestHeaders = null, timeoutMs = TASK_PROGRESS_REFRESH_TIMEOUT_MS, label = 'tasks-prefetch') {
+  const dex = String(effectiveDex || '').trim().toLowerCase();
+  if (!player?.id || !LIVE_TASK_PROGRESS_DEXES.has(dex)) return {};
+  let minStartId = Infinity;
+  for (const task of taskList || []) {
+    const pt = tasks.getPlayerTask(player.id, task.id);
+    if (!pt || pt.claimed_at) continue;
+    const snap = tasks.parseParams(pt.snapshot);
+    const startId = Number(snap.trade_id_start || 0);
+    if (Number.isFinite(startId) && startId >= 0) minStartId = Math.min(minStartId, startId);
+  }
+  if (!Number.isFinite(minStartId)) return {};
+  try {
+    const requestedDex = requestedTaskDexFromHeaders(requestHeaders);
+    const taskPlayer = requestedDex && requestedDex !== String(player?.dex || '').toLowerCase()
+      ? { ...player, dex: requestedDex }
+      : { ...player, dex };
+    const prefetchedTrades = await withTaskProgressTimeoutMs(
+      tasks.fetchWalletTrades(taskPlayer, {
+        since: minStartId,
+        headers: requestHeaders,
+        singleDex: true,
+      }),
+      `player=${player?.name || player?.id} ${label} dex=${dex}`,
+      timeoutMs,
+    );
+    return { prefetchedTrades };
+  } catch (e) {
+    console.warn(`[tasks] ${label} failed player=${player?.name || player?.id} dex=${dex}:`, e.message);
+    return { prefetchError: e };
+  }
+}
+
 async function refreshStartedTaskProgressForTradeClaim(player, dex, requestHeaders = null) {
   const effectiveDex = String(dex || '').trim().toLowerCase();
   if (!player?.id || !LIVE_TASK_PROGRESS_DEXES.has(effectiveDex)) return;
@@ -14836,29 +14872,14 @@ async function refreshStartedTaskProgressForTradeClaim(player, dex, requestHeade
     'x-clash-dex': effectiveDex,
   };
   const list = tasks.getActiveTasks();
-  const progressContext = {};
-
-  if (effectiveDex === 'pacifica') {
-    let minStartId = Infinity;
-    for (const task of list) {
-      const pt = tasks.getPlayerTask(player.id, task.id);
-      if (!pt || pt.claimed_at) continue;
-      const snap = tasks.parseParams(pt.snapshot);
-      const startId = Number(snap.trade_id_start || 0);
-      if (Number.isFinite(startId) && startId >= 0) minStartId = Math.min(minStartId, startId);
-    }
-    if (Number.isFinite(minStartId)) {
-      try {
-        progressContext.prefetchedTrades = await withTaskProgressTimeoutMs(
-          tasks.fetchWalletTrades({ ...player, dex: effectiveDex }, { since: minStartId, headers: taskHeaders }),
-          `player=${player?.name || player?.id} post-claim-tasks-prefetch dex=${effectiveDex}`,
-          PACIFICA_TASK_PREFETCH_TIMEOUT_MS,
-        );
-      } catch (e) {
-        console.warn(`[tasks] post-claim prefetch failed player=${player?.name || player?.id} dex=${effectiveDex}:`, e.message);
-      }
-    }
-  }
+  const progressContext = await prefetchStartedTaskTradesForDex(
+    player,
+    list,
+    effectiveDex,
+    taskHeaders,
+    effectiveDex === 'pacifica' ? PACIFICA_TASK_PREFETCH_TIMEOUT_MS : TASK_PROGRESS_REFRESH_TIMEOUT_MS,
+    'post-claim-tasks-prefetch',
+  );
 
   for (const task of list) {
     const eligibility = tasks.checkTaskEligibility(player, task);
@@ -14882,30 +14903,15 @@ router.get('/tasks', auth, async (req, res) => {
   const effectiveDex = requestedDex || String(req.player?.dex || '').toLowerCase();
   const skipLiveProgress = effectiveDex === 'pacifica'
     && /^(1|true|yes|client|browser)$/i.test(String(req.headers['x-skip-live-progress'] || ''));
-  if (effectiveDex === 'pacifica' && !skipLiveProgress) {
-    let minStartId = Infinity;
-    for (const t of list) {
-      const pt = tasks.getPlayerTask(req.player.id, t.id);
-      if (!pt || pt.claimed_at) continue;
-      const snap = tasks.parseParams(pt.snapshot);
-      const startId = Number(snap.trade_id_start || 0);
-      if (Number.isFinite(startId) && startId >= 0) minStartId = Math.min(minStartId, startId);
-    }
-    if (Number.isFinite(minStartId)) {
-      try {
-        const taskPlayer = requestedDex && requestedDex !== String(req.player?.dex || '').toLowerCase()
-          ? { ...req.player, dex: requestedDex }
-          : req.player;
-        progressContext.prefetchedTrades = await withTaskProgressTimeoutMs(
-          tasks.fetchWalletTrades(taskPlayer, { since: minStartId, headers: req.headers }),
-          `player=${req.player?.name || req.player?.id} tasks-prefetch dex=pacifica`,
-          PACIFICA_TASK_PREFETCH_TIMEOUT_MS,
-        );
-      } catch (e) {
-        progressContext.prefetchError = e;
-        console.warn(`[tasks] pacifica prefetch failed player=${req.player?.name || req.player?.id}:`, e.message);
-      }
-    }
+  if (!skipLiveProgress) {
+    Object.assign(progressContext, await prefetchStartedTaskTradesForDex(
+      req.player,
+      list,
+      effectiveDex,
+      req.headers,
+      effectiveDex === 'pacifica' ? PACIFICA_TASK_PREFETCH_TIMEOUT_MS : TASK_PROGRESS_REFRESH_TIMEOUT_MS,
+      'tasks-prefetch',
+    ));
   }
   for (const t of list) {
     const eligibility = tasks.checkTaskEligibility(req.player, t);
