@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { formatEther, parseEther } from 'viem';
+import { createWalletClient, formatEther, http, parseEther } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { arbitrum } from 'viem/chains';
 import { CancelOrderType, MIN_OPEN_SIZE_USD, OrderType, OstiumClient } from '@ostium/builder-sdk';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -12,6 +14,7 @@ import {
   OSTIUM_DELEGATE_TARGET_ETH,
   OSTIUM_MAX_ALLOWANCE_CHECK_USD,
   OSTIUM_ORACLE_FEE_BUFFER_USD,
+  OSTIUM_RPC_URL,
   ostiumOracleFeeBufferMessage,
   ostiumClientConfig,
 } from '../lib/ostiumConfig';
@@ -36,6 +39,13 @@ const TX_TIMEOUT_MS = 120_000;
 const CLAIM_LOOKBACK_ATTEMPTS = 5;
 const ORDER_VISIBLE_TIMEOUT_MS = 45_000;
 const ORDER_VISIBLE_POLL_MS = 800;
+const TPSL_SYNC_TIMEOUT_MS = 20_000;
+const TPSL_SYNC_POLL_MS = 1_000;
+const PENDING_TPSL_TTL_MS = 120_000;
+const OSTIUM_PRICE_STREAM_WS = 'wss://builder.ostium.io/v1/prices/stream';
+const OSTIUM_LIVE_PRICE_FLUSH_MS = 750;
+const OSTIUM_LIVE_PRICE_RECONNECT_MS = 2_500;
+const OSTIUM_LIVE_SUBSCRIPTION_LIMIT = 48;
 
 function safeParseEther(value, fallback) {
   try { return parseEther(String(value || fallback)); } catch { return parseEther(fallback); }
@@ -114,6 +124,304 @@ function formatEthAmount(valueWei) {
   } catch {
     return '0';
   }
+}
+
+function normalizeSymbol(value) {
+  return String(value || '').trim().toUpperCase().replace(/-PERP$/u, '').replace('-', '/');
+}
+
+function positivePrice(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function pricesNear(a, b) {
+  const left = Number(a);
+  const right = Number(b);
+  if (!Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0) return false;
+  const tolerance = Math.max(0.000001, Math.abs(right) * 0.00001);
+  return Math.abs(left - right) <= tolerance;
+}
+
+function pendingTpslKey({ symbol, pairIndex, tradeIndex }) {
+  const pair = pairIndex != null && Number.isFinite(Number(pairIndex)) ? String(Number(pairIndex)) : '';
+  const trade = tradeIndex != null && Number.isFinite(Number(tradeIndex)) ? String(Number(tradeIndex)) : '';
+  return `${normalizeSymbol(symbol)}:${pair}:${trade}`;
+}
+
+function positionMatchesPendingTpsl(row, pending) {
+  if (!row || !pending) return false;
+  const rowPair = row?.pair_index ?? row?.pairIndex ?? row?._raw?.pairId;
+  if (pending.pairIndex != null && rowPair != null && Number(rowPair) !== Number(pending.pairIndex)) return false;
+  const rowTrade = row?.trade_index ?? row?.tradeIndex ?? row?.idx ?? row?._raw?.idx;
+  if (pending.tradeIndex != null && rowTrade != null && Number(rowTrade) !== Number(pending.tradeIndex)) return false;
+  const rowSymbol = normalizeSymbol(row?.symbol || row?.display_symbol || row?._raw?.symbol);
+  return !pending.symbol || !rowSymbol || rowSymbol === normalizeSymbol(pending.symbol);
+}
+
+function readPositionTpsl(row, leg) {
+  if (leg === 'tp') {
+    return positivePrice(
+      row?.take_profit
+        ?? row?.takeProfit
+        ?? row?.take_profit_price
+        ?? row?.takeProfitPrice
+        ?? row?.tp
+        ?? row?._raw?.tpPx
+        ?? row?._raw?.takeProfit
+        ?? row?._raw?.take_profit
+    );
+  }
+  return positivePrice(
+    row?.stop_loss
+      ?? row?.stopLoss
+      ?? row?.stop_loss_price
+      ?? row?.stopLossPrice
+      ?? row?.sl
+      ?? row?._raw?.slPx
+      ?? row?._raw?.stopLoss
+      ?? row?._raw?.stop_loss
+  );
+}
+
+function mergePendingTpslRows(rows, pendingMap, now = Date.now()) {
+  if (!pendingMap?.size || !Array.isArray(rows) || !rows.length) return Array.isArray(rows) ? rows : [];
+  return rows.map((row) => {
+    let next = row;
+    for (const [key, pending] of pendingMap.entries()) {
+      if (!pending || pending.expiresAt <= now) {
+        pendingMap.delete(key);
+        continue;
+      }
+      if (!positionMatchesPendingTpsl(row, pending)) continue;
+      const actualTp = readPositionTpsl(row, 'tp');
+      const actualSl = readPositionTpsl(row, 'sl');
+      const tpConfirmed = pending.takeProfit == null || pricesNear(actualTp, pending.takeProfit);
+      const slConfirmed = pending.stopLoss == null || pricesNear(actualSl, pending.stopLoss);
+      if (tpConfirmed && slConfirmed) {
+        pendingMap.delete(key);
+        continue;
+      }
+      next = {
+        ...next,
+        _ostiumPendingTpsl: true,
+        ...(pending.takeProfit != null && !tpConfirmed ? {
+          take_profit: pending.takeProfit,
+          _ostiumOptimisticTakeProfitPrice: pending.takeProfit,
+        } : {}),
+        ...(pending.stopLoss != null && !slConfirmed ? {
+          stop_loss: pending.stopLoss,
+          _ostiumOptimisticStopLossPrice: pending.stopLoss,
+        } : {}),
+      };
+    }
+    return next;
+  });
+}
+
+function ostiumStreamPair(symbol) {
+  const raw = String(symbol || '').toUpperCase().trim();
+  if (!raw) return '';
+  if (raw.includes('-') || raw.includes('/')) {
+    const [base, quote = 'USD'] = raw.split(/[-/]/u);
+    return `${base.trim()}-${quote.trim() || 'USD'}`;
+  }
+  return `${raw}-USD`;
+}
+
+function ostiumTickPrice(tick) {
+  const price = Number(tick?.mid ?? tick?.mark ?? tick?.mark_price ?? tick?.price ?? tick?.bid ?? tick?.ask);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+function ostiumTickSymbol(tick) {
+  const explicit = tick?.symbol || tick?.name || tick?.market || tick?.market_name || tick?.pair;
+  if (explicit) {
+    const text = String(explicit).toUpperCase().trim();
+    if (text.includes('-') || text.includes('/')) {
+      const [base, quote = 'USD'] = text.split(/[-/]/u);
+      return normalizeSymbol(`${base}/${quote || 'USD'}`);
+    }
+    return normalizeSymbol(text);
+  }
+  const from = String(tick?.from || tick?.base || '').toUpperCase().trim();
+  const to = String(tick?.to || tick?.quote || 'USD').toUpperCase().trim();
+  return from ? normalizeSymbol(`${from}/${to || 'USD'}`) : '';
+}
+
+function ostiumTicksFromPayload(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (payload?.type === 'tick') return payload.data ? [payload.data] : [];
+  if (payload?.type === 'snapshot' && Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.prices)) return payload.prices;
+  if (Array.isArray(payload?.ticks)) return payload.ticks;
+  return payload?.data && typeof payload.data === 'object' ? [payload.data] : [payload];
+}
+
+function rowSymbolMatches(row, symbol) {
+  const target = normalizeSymbol(symbol);
+  if (!target) return false;
+  const compactTarget = target.replace(/[/\s-]/gu, '');
+  const candidates = [
+    row?.symbol,
+    row?.display_symbol,
+    row?.pair,
+    row?.market,
+    row?.market_name,
+    row?._raw?.symbol,
+    row?._raw?.pair,
+    row?._raw?.market,
+    row?._raw?.market_name,
+  ];
+  return candidates.some((value) => {
+    const normalized = normalizeSymbol(value);
+    if (!normalized) return false;
+    const compact = normalized.replace(/[/\s-]/gu, '');
+    return normalized === target
+      || compact === compactTarget
+      || normalized.split('/')[0] === target.split('/')[0];
+  });
+}
+
+function priceDeltaMeaningful(current, next) {
+  const left = Number(current);
+  const right = Number(next);
+  if (!Number.isFinite(left) || left <= 0) return true;
+  if (!Number.isFinite(right) || right <= 0) return false;
+  return Math.abs(left - right) > Math.max(0.0000001, Math.abs(right) * 0.0000001);
+}
+
+function applyOstiumLiveTicksToPrices(rows, ticks) {
+  if (!Array.isArray(ticks) || !ticks.length) return Array.isArray(rows) ? rows : [];
+  const bySymbol = new Map();
+  for (const tick of ticks) {
+    const symbol = ostiumTickSymbol(tick);
+    const price = ostiumTickPrice(tick);
+    if (symbol && price != null) bySymbol.set(symbol, { symbol, price, tick });
+  }
+  if (!bySymbol.size) return Array.isArray(rows) ? rows : [];
+  const list = Array.isArray(rows) ? rows : [];
+  const matched = new Set();
+  let changed = false;
+  const nextRows = list.map((row) => {
+    let match = null;
+    for (const item of bySymbol.values()) {
+      if (rowSymbolMatches(row, item.symbol)) {
+        match = item;
+        break;
+      }
+    }
+    if (!match) return row;
+    matched.add(match.symbol);
+    const current = row?.mark ?? row?.mark_price ?? row?.price ?? row?.mid;
+    if (!priceDeltaMeaningful(current, match.price)) return row;
+    changed = true;
+    return {
+      ...row,
+      mark: match.price,
+      mark_price: match.price,
+      price: match.price,
+      mid: match.price,
+      _ostiumLivePrice: true,
+      _ostiumLivePriceAt: Date.now(),
+    };
+  });
+  for (const item of bySymbol.values()) {
+    if (matched.has(item.symbol)) continue;
+    changed = true;
+    nextRows.push({
+      symbol: item.symbol,
+      mark: item.price,
+      mark_price: item.price,
+      price: item.price,
+      mid: item.price,
+      dex: 'ostium',
+      _ostiumLivePrice: true,
+      _ostiumLivePriceAt: Date.now(),
+    });
+  }
+  return changed ? nextRows : list;
+}
+
+function ostiumPositionAmount(row, entry) {
+  const direct = Math.abs(num(row?.amount ?? row?.base_amount ?? row?.baseAmount ?? row?.position ?? row?.qty, 0));
+  if (direct > 0) return direct;
+  const sizeUsd = Math.abs(num(row?.size_usd ?? row?.sizeUsd ?? row?.notional_usd ?? row?.notionalUsd, 0));
+  return entry > 0 && sizeUsd > 0 ? sizeUsd / entry : 0;
+}
+
+function ostiumPositionSideMultiplier(row) {
+  const text = String(row?.side ?? row?.raw_side ?? row?._raw?.position?.side ?? row?._raw?.side ?? '').toLowerCase();
+  if (text === 'ask' || text === 'short' || text === 'sell' || text === 'false') return -1;
+  if (text === 'bid' || text === 'long' || text === 'buy' || text === 'true') return 1;
+  if (row?.isLong === false || row?.long === false || row?.buy === false) return -1;
+  return 1;
+}
+
+function applyOstiumLiveTicksToPositions(rows, ticks) {
+  if (!Array.isArray(rows) || !rows.length || !Array.isArray(ticks) || !ticks.length) return Array.isArray(rows) ? rows : [];
+  const bySymbol = new Map();
+  for (const tick of ticks) {
+    const symbol = ostiumTickSymbol(tick);
+    const price = ostiumTickPrice(tick);
+    if (symbol && price != null) bySymbol.set(symbol, price);
+  }
+  if (!bySymbol.size) return rows;
+  let changed = false;
+  const nextRows = rows.map((row) => {
+    let livePrice = null;
+    for (const [symbol, price] of bySymbol.entries()) {
+      if (rowSymbolMatches(row, symbol)) {
+        livePrice = price;
+        break;
+      }
+    }
+    if (livePrice == null) return row;
+    const entry = positivePrice(row?.entry_price ?? row?.entryPrice ?? row?._raw?.position?.entryPx ?? row?._raw?.entryPx);
+    const amount = entry ? ostiumPositionAmount(row, entry) : 0;
+    const margin = num(row?.margin ?? row?.collateral ?? row?._raw?.position?.collateralUsed, 0);
+    const currentMark = row?.mark_price ?? row?.mark ?? row?.price;
+    const markChanged = priceDeltaMeaningful(currentMark, livePrice);
+    if (!entry || !amount) {
+      if (!markChanged) return row;
+      changed = true;
+      return {
+        ...row,
+        mark_price: livePrice,
+        mark: livePrice,
+        price: livePrice,
+        _ostiumLivePrice: true,
+        _ostiumLivePriceAt: Date.now(),
+      };
+    }
+    const pnlUsdRaw = (livePrice - entry) * amount * ostiumPositionSideMultiplier(row);
+    const pnlUsd = Math.abs(pnlUsdRaw) < 0.0000001 ? 0 : pnlUsdRaw;
+    const pnlPct = margin > 0 ? (pnlUsd / margin) * 100 : row?.pnl_pct;
+    const oldPnl = Number(row?.pnl_usd);
+    const pnlChanged = !Number.isFinite(oldPnl) || Math.abs(oldPnl - pnlUsd) > 0.005;
+    const oldPct = Number(row?.pnl_pct);
+    const pctChanged = Number.isFinite(Number(pnlPct)) && (!Number.isFinite(oldPct) || Math.abs(oldPct - Number(pnlPct)) > 0.005);
+    if (!markChanged && !pnlChanged && !pctChanged) return row;
+    changed = true;
+    return {
+      ...row,
+      mark_price: livePrice,
+      mark: livePrice,
+      price: livePrice,
+      pnl_usd: pnlUsd,
+      pnl_source: 'ostium_live_stream',
+      ...(Number.isFinite(Number(pnlPct)) ? {
+        pnl_pct: Number(pnlPct),
+        pnl_pct_source: 'ostium_live_stream',
+        return_on_equity: margin > 0 ? pnlUsd / margin : row?.return_on_equity,
+      } : {}),
+      _ostiumLivePrice: true,
+      _ostiumLivePriceAt: Date.now(),
+    };
+  });
+  return changed ? nextRows : rows;
 }
 
 function gasWithBuffer(value, fallback = 30_000n, bufferBps = 2_000n) {
@@ -260,6 +568,8 @@ export function useOstium() {
   const positionsRef = useRef([]);
   const ordersRef = useRef([]);
   const delegateSignerRef = useRef(null);
+  const pendingTpslRef = useRef(new Map());
+  const submissionLocksRef = useRef(new Set());
 
   const token = useMemo(() => (
     (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null
@@ -276,6 +586,28 @@ export function useOstium() {
     }
     return headers;
   }, [token]);
+
+  const ostiumLivePairKey = useMemo(() => {
+    if (!isActiveDex) return '';
+    const symbols = new Set();
+    const addSymbol = (value) => {
+      const normalized = normalizeSymbol(value);
+      if (!normalized || symbols.size >= OSTIUM_LIVE_SUBSCRIPTION_LIMIT) return;
+      symbols.add(normalized);
+    };
+    for (const row of positions || []) {
+      addSymbol(row?.symbol || row?.display_symbol || row?.pair || row?.market_name);
+    }
+    for (const row of markets || []) {
+      if (symbols.size >= OSTIUM_LIVE_SUBSCRIPTION_LIMIT) break;
+      addSymbol(row?.symbol || row?.display_symbol || row?.pair || row?.market_name);
+    }
+    return Array.from(symbols)
+      .map(ostiumStreamPair)
+      .filter(Boolean)
+      .sort()
+      .join('|');
+  }, [isActiveDex, markets, positions]);
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
@@ -404,6 +736,53 @@ export function useOstium() {
     const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
     if (!publicClient?.getBalance || !delegateAddress) return null;
     return publicClient.getBalance({ address: delegateAddress });
+  }, [getPublicClient]);
+
+  const sendDelegateBuiltTx = useCallback(async (tx, signer, label = 'ostium.delegate_tx') => {
+    if (!signer?.privateKey) throw new Error('Ostium one tap signer is not ready');
+    if (tx?.kind !== 'eoa') throw new Error('Ostium delegate transaction must be an EOA transaction');
+    const delegateAccount = privateKeyToAccount(signer.privateKey);
+    if (tx?.from && String(tx.from).toLowerCase() !== delegateAccount.address.toLowerCase()) {
+      throw new Error('Ostium delegate transaction signer does not match local delegate wallet');
+    }
+    const value = tx.value || 0n;
+    const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
+    let gas;
+    if (publicClient?.estimateGas) {
+      gas = await publicClient.estimateGas({
+        account: delegateAccount.address,
+        to: tx.to,
+        data: tx.data,
+        value,
+      }).then((estimated) => gasWithBuffer(estimated, 180_000n)).catch((e) => {
+        console.warn(`[useOstium] ${label} delegate gas estimate failed:`, e?.message || e);
+        return gasWithBuffer(180_000n, 180_000n);
+      });
+    }
+    const walletClient = createWalletClient({
+      account: delegateAccount,
+      chain: arbitrum,
+      transport: http(OSTIUM_RPC_URL || undefined),
+    });
+    console.info('[useOstium] delegate tx send', {
+      label,
+      to: tx.to,
+      delegate: delegateAccount.address,
+      hasData: Boolean(tx.data),
+      valueEth: formatEthAmount(value),
+      gas: gas ? gas.toString() : null,
+    });
+    const hash = await walletClient.sendTransaction({
+      account: delegateAccount,
+      chain: arbitrum,
+      to: tx.to,
+      data: tx.data,
+      value,
+      ...(gas ? { gas } : {}),
+    });
+    const receipt = await waitForReceipt(publicClient, hash);
+    if (receipt?.status && receipt.status !== 'success') throw new Error(`${label} reverted`);
+    return { txHash: hash, receipt };
   }, [getPublicClient]);
 
   const topUpDelegateGas = useCallback(async (delegateAddress, { force = false } = {}) => {
@@ -597,6 +976,7 @@ export function useOstium() {
 
   const submitWithDelegateOrWallet = useCallback(async ({
     buildSelfTx,
+    buildDelegateTx = null,
     submitDelegate,
     label,
     requiredCollateral = null,
@@ -605,40 +985,57 @@ export function useOstium() {
     setupIfNeeded = true,
     topUpGas = true,
     forceWallet = false,
+    dedupeKey = null,
   }) => {
-    if (forceWallet) {
-      const selfClient = await createBuildClient();
-      if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
-      const tx = buildSelfTx(selfClient);
-      return sendBuiltTx(tx, `${label}.wallet`);
+    const lockKey = dedupeKey || label;
+    if (submissionLocksRef.current.has(lockKey)) {
+      throw new Error('Ostium is already submitting this action. Wait for the current transaction to finish.');
     }
-    const existingSigner = delegateSignerRef.current || await loadOstiumDelegate(walletAddr).catch(() => null);
-    const hadOneTapEnabled = !!existingSigner?.privateKey;
+    submissionLocksRef.current.add(lockKey);
     try {
-      const signer = await ensureOneTapReady({ topUpGas, requireAllowance, setupIfNeeded });
-      const delegatedClient = await createDelegatedClient(signer);
-      const result = await submitDelegate(delegatedClient);
-      return await waitForSubmittedTx(result, `${label}.delegated`);
-    } catch (delegateError) {
-      const text = String(delegateError?.message || delegateError || '');
-      if (/user rejected|denied|cancelled/i.test(text)) throw delegateError;
-      if (isOstiumValidationError(delegateError)) throw delegateError;
-      const fallbackBlocked = allowWalletFallback === false
-        || (allowWalletFallback === 'when_one_tap_enabled' && hadOneTapEnabled);
-      if (fallbackBlocked) {
-        await refreshDelegateStatus(existingSigner).catch(() => null);
-        const err = new Error(`Ostium one tap failed for ${label.replace(/^ostium\./u, '')}: ${text || 'delegated submission failed'}`);
-        err.code = 'OSTIUM_ONE_TAP_FAILED';
-        err.cause = delegateError;
-        throw err;
+      if (forceWallet) {
+        const selfClient = await createBuildClient();
+        if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
+        const tx = buildSelfTx(selfClient);
+        return sendBuiltTx(tx, `${label}.wallet`);
       }
-      console.warn('[useOstium] delegated path failed, falling back to wallet signature:', text);
-      const selfClient = await createBuildClient();
-      if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
-      const tx = buildSelfTx(selfClient);
-      return sendBuiltTx(tx, `${label}.self`);
+      const existingSigner = delegateSignerRef.current || await loadOstiumDelegate(walletAddr).catch(() => null);
+      const hadOneTapEnabled = !!existingSigner?.privateKey;
+      try {
+        const signer = await ensureOneTapReady({ topUpGas, requireAllowance, setupIfNeeded });
+        const delegatedClient = await createDelegatedClient(signer);
+        if (typeof buildDelegateTx === 'function') {
+          // Avoid SDK submitPrepared here: it fire-and-forgets Ostium /v1/trade
+          // attribution after the tx hash, and that endpoint is user-visible
+          // as noisy 429s in the browser console.
+          const tx = buildDelegateTx(delegatedClient);
+          return await sendDelegateBuiltTx(tx, signer, `${label}.delegated`);
+        }
+        const result = await submitDelegate(delegatedClient);
+        return await waitForSubmittedTx(result, `${label}.delegated`);
+      } catch (delegateError) {
+        const text = String(delegateError?.message || delegateError || '');
+        if (/user rejected|denied|cancelled/i.test(text)) throw delegateError;
+        if (isOstiumValidationError(delegateError)) throw delegateError;
+        const fallbackBlocked = allowWalletFallback === false
+          || (allowWalletFallback === 'when_one_tap_enabled' && hadOneTapEnabled);
+        if (fallbackBlocked) {
+          await refreshDelegateStatus(existingSigner).catch(() => null);
+          const err = new Error(`Ostium one tap failed for ${label.replace(/^ostium\./u, '')}: ${text || 'delegated submission failed'}`);
+          err.code = 'OSTIUM_ONE_TAP_FAILED';
+          err.cause = delegateError;
+          throw err;
+        }
+        console.warn('[useOstium] delegated path failed, falling back to wallet signature:', text);
+        const selfClient = await createBuildClient();
+        if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
+        const tx = buildSelfTx(selfClient);
+        return sendBuiltTx(tx, `${label}.self`);
+      }
+    } finally {
+      submissionLocksRef.current.delete(lockKey);
     }
-  }, [createBuildClient, createDelegatedClient, ensureAllowance, ensureOneTapReady, refreshDelegateStatus, sendBuiltTx, waitForSubmittedTx, walletAddr]);
+  }, [createBuildClient, createDelegatedClient, ensureAllowance, ensureOneTapReady, refreshDelegateStatus, sendBuiltTx, sendDelegateBuiltTx, waitForSubmittedTx, walletAddr]);
 
   const fetchMarkets = useCallback(async () => {
     try {
@@ -667,6 +1064,7 @@ export function useOstium() {
 
   const fetchAccount = useCallback(async () => {
     if (!walletAddr) {
+      pendingTpslRef.current.clear();
       setAccount(null);
       setPositions([]);
       setOrders([]);
@@ -680,13 +1078,14 @@ export function useOstium() {
       return;
     }
     try {
+      const noStore = { cache: 'no-store' };
       const [acct, pos, ord] = await Promise.all([
-        fetchJson(`${FUTURES_API}/account?dex=ostium&address=${encodeURIComponent(walletAddr)}`),
-        fetchJson(`${FUTURES_API}/positions?dex=ostium&address=${encodeURIComponent(walletAddr)}`).catch(() => []),
-        fetchJson(`${FUTURES_API}/orders?dex=ostium&address=${encodeURIComponent(walletAddr)}`).catch(() => []),
+        fetchJson(`${FUTURES_API}/account?dex=ostium&address=${encodeURIComponent(walletAddr)}`, noStore),
+        fetchJson(`${FUTURES_API}/positions?dex=ostium&address=${encodeURIComponent(walletAddr)}`, noStore).catch(() => []),
+        fetchJson(`${FUTURES_API}/orders?dex=ostium&address=${encodeURIComponent(walletAddr)}`, noStore).catch(() => []),
       ]);
       setAccount(acct || null);
-      const nextPositions = Array.isArray(pos) ? pos : [];
+      const nextPositions = mergePendingTpslRows(Array.isArray(pos) ? pos : [], pendingTpslRef.current);
       const nextOrders = Array.isArray(ord) ? ord : [];
       positionsRef.current = nextPositions;
       ordersRef.current = nextOrders;
@@ -745,6 +1144,36 @@ export function useOstium() {
     return lastFresh;
   }, [fetchAccount]);
 
+  const rememberPendingTpsl = useCallback(({ symbol, pairIndex, tradeIndex, takeProfit, stopLoss }) => {
+    const pending = {
+      symbol: normalizeSymbol(symbol),
+      pairIndex: pairIndex != null && Number.isFinite(Number(pairIndex)) ? Number(pairIndex) : null,
+      tradeIndex: tradeIndex != null && Number.isFinite(Number(tradeIndex)) ? Number(tradeIndex) : null,
+      takeProfit: positivePrice(takeProfit),
+      stopLoss: positivePrice(stopLoss),
+      createdAt: Date.now(),
+      expiresAt: Date.now() + PENDING_TPSL_TTL_MS,
+    };
+    if (pending.takeProfit == null && pending.stopLoss == null) return null;
+    const key = pendingTpslKey(pending);
+    pendingTpslRef.current.set(key, pending);
+    const applyPending = (rows) => mergePendingTpslRows(Array.isArray(rows) ? rows : [], pendingTpslRef.current);
+    positionsRef.current = applyPending(positionsRef.current);
+    setPositions(applyPending);
+    return { ...pending, key };
+  }, []);
+
+  const waitForTpslSync = useCallback(async (pending) => {
+    if (!pending?.key) return null;
+    const startedAt = Date.now();
+    let lastFresh = null;
+    while (Date.now() - startedAt < TPSL_SYNC_TIMEOUT_MS && pendingTpslRef.current.has(pending.key)) {
+      await sleep(TPSL_SYNC_POLL_MS);
+      lastFresh = await fetchAccount();
+    }
+    return lastFresh;
+  }, [fetchAccount]);
+
   const refreshAll = useCallback(async () => {
     if (!isActiveDex) return;
     await Promise.all([
@@ -774,7 +1203,84 @@ export function useOstium() {
   }, [isActiveDex, refreshAll]);
 
   useEffect(() => {
+    if (!isActiveDex || !ostiumLivePairKey || typeof WebSocket === 'undefined') return undefined;
+    let cancelled = false;
+    let reconnectTimer = null;
+    let flushTimer = null;
+    let ws = null;
+    const pairs = ostiumLivePairKey.split('|').filter(Boolean);
+    const pendingTicks = new Map();
+
+    const flushTicks = () => {
+      flushTimer = null;
+      if (cancelled || !pendingTicks.size) return;
+      const ticks = Array.from(pendingTicks.values());
+      pendingTicks.clear();
+      setPrices((prev) => applyOstiumLiveTicksToPrices(prev, ticks));
+      setPositions((prev) => {
+        const next = applyOstiumLiveTicksToPositions(prev, ticks);
+        if (next !== prev) positionsRef.current = next;
+        return next;
+      });
+    };
+
+    const scheduleFlush = () => {
+      if (cancelled || flushTimer) return;
+      flushTimer = window.setTimeout(flushTicks, OSTIUM_LIVE_PRICE_FLUSH_MS);
+    };
+
+    const enqueueTick = (tick) => {
+      const symbol = ostiumTickSymbol(tick);
+      const price = ostiumTickPrice(tick);
+      if (!symbol || price == null) return;
+      pendingTicks.set(symbol, tick);
+      scheduleFlush();
+    };
+
+    const handlePayload = (payload) => {
+      for (const tick of ostiumTicksFromPayload(payload)) enqueueTick(tick);
+    };
+
+    const connect = () => {
+      if (cancelled || !pairs.length) return;
+      try {
+        ws = new WebSocket(OSTIUM_PRICE_STREAM_WS);
+        ws.addEventListener('open', () => {
+          if (!cancelled && ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'subscribe', pairs }));
+          }
+        });
+        ws.addEventListener('message', (event) => {
+          try {
+            handlePayload(JSON.parse(event.data));
+          } catch {}
+        });
+        ws.addEventListener('close', () => {
+          if (!cancelled) reconnectTimer = window.setTimeout(connect, OSTIUM_LIVE_PRICE_RECONNECT_MS);
+        });
+        ws.addEventListener('error', () => {
+          try { ws?.close(); } catch {}
+        });
+      } catch {
+        if (!cancelled) reconnectTimer = window.setTimeout(connect, OSTIUM_LIVE_PRICE_RECONNECT_MS);
+      }
+    };
+
+    connect();
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (flushTimer) window.clearTimeout(flushTimer);
+      try {
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'unsubscribe', pairs }));
+        ws?.close();
+      } catch {}
+    };
+  }, [isActiveDex, ostiumLivePairKey]);
+
+  useEffect(() => {
     if (!isActiveDex || !walletAddr) {
+      pendingTpslRef.current.clear();
       setDelegateSigner(null);
       delegateSignerRef.current = null;
       setDelegateStatus({
@@ -952,8 +1458,10 @@ export function useOstium() {
       assertOstiumUsdcBalance(fresh?.account || account, params.collateral);
       const submitted = await submitWithDelegateOrWallet({
         label: 'ostium.open_market',
+        dedupeKey: `open:market:${symbol}:${side}`,
         requiredCollateral: params.collateral,
         buildSelfTx: (client) => client.getOpenTradeTx(params),
+        buildDelegateTx: (client) => client.getOpenTradeTx(params),
         submitDelegate: (client) => client.openTrade(params),
       });
       await waitForTradeVisible({ symbol, kind: 'position', beforePositions, beforeOrders });
@@ -981,8 +1489,10 @@ export function useOstium() {
       assertOstiumUsdcBalance(fresh?.account || account, params.collateral);
       const submitted = await submitWithDelegateOrWallet({
         label: 'ostium.open_limit',
+        dedupeKey: `open:limit:${symbol}:${side}:${price}`,
         requiredCollateral: params.collateral,
         buildSelfTx: (client) => client.getOpenTradeTx(params),
+        buildDelegateTx: (client) => client.getOpenTradeTx(params),
         submitDelegate: (client) => client.openTrade(params),
       });
       await waitForTradeVisible({ symbol, kind: 'order', beforePositions, beforeOrders });
@@ -1024,7 +1534,9 @@ export function useOstium() {
       };
       const submitted = await submitWithDelegateOrWallet({
         label: 'ostium.close',
+        dedupeKey: `close:${position.pair_index ?? pairIndex}:${position.idx ?? position.trade_index ?? tradeIndex ?? 0}`,
         buildSelfTx: (buildClient) => buildClient.getCloseTradeTx(params),
+        buildDelegateTx: (delegatedClient) => delegatedClient.getCloseTradeTx(params),
         submitDelegate: (delegatedClient) => delegatedClient.closeTrade(params),
         allowWalletFallback: 'when_one_tap_enabled',
         requireAllowance: false,
@@ -1087,7 +1599,9 @@ export function useOstium() {
       };
       const submitted = await submitWithDelegateOrWallet({
         label: 'ostium.cancel_order',
+        dedupeKey: `cancel:${params.type}:${params.pairId}:${params.idx}`,
         buildSelfTx: (client) => client.getCancelOrderTx(params),
+        buildDelegateTx: (client) => client.getCancelOrderTx(params),
         submitDelegate: (client) => client.cancelOrder(params),
         allowWalletFallback: 'when_one_tap_enabled',
         requireAllowance: false,
@@ -1127,7 +1641,9 @@ export function useOstium() {
         const params = { ...base, takeProfit: String(takeProfit) };
         hashes.push((await submitWithDelegateOrWallet({
           label: 'ostium.take_profit',
+          dedupeKey: `tpsl:tp:${base.pairId}:${base.idx}`,
           buildSelfTx: (client) => client.getModifyOrderTx(params),
+          buildDelegateTx: (client) => client.getModifyOrderTx(params),
           submitDelegate: (client) => client.modifyOrder(params),
           allowWalletFallback: delegateStatus.enabled ? false : 'when_one_tap_enabled',
           requireAllowance: false,
@@ -1142,7 +1658,9 @@ export function useOstium() {
         const params = { ...base, stopLoss: String(stopLoss) };
         hashes.push((await submitWithDelegateOrWallet({
           label: 'ostium.stop_loss',
+          dedupeKey: `tpsl:sl:${base.pairId}:${base.idx}`,
           buildSelfTx: (client) => client.getModifyOrderTx(params),
+          buildDelegateTx: (client) => client.getModifyOrderTx(params),
           submitDelegate: (client) => client.modifyOrder(params),
           allowWalletFallback: delegateStatus.enabled ? false : 'when_one_tap_enabled',
           requireAllowance: false,
@@ -1150,8 +1668,22 @@ export function useOstium() {
           topUpGas: false,
         })).txHash);
       }
-      await fetchAccount();
-      return { success: true, txHash: hashes[hashes.length - 1], txHashes: hashes };
+      const pending = rememberPendingTpsl({
+        symbol,
+        pairIndex: position.pair_index ?? pairIndex,
+        tradeIndex: position.idx ?? position.trade_index ?? tradeIndex ?? 0,
+        takeProfit,
+        stopLoss,
+      });
+      void waitForTpslSync(pending).catch((err) => {
+        console.warn('[useOstium] TP/SL sync polling failed:', err?.message || err);
+      });
+      return {
+        success: true,
+        txHash: hashes[hashes.length - 1],
+        txHashes: hashes,
+        info: 'TP/SL submitted. Syncing Ostium indexer.',
+      };
     } catch (e) {
       const msg = errorMessage(e, 'Ostium TP/SL update failed');
       setError(msg);
@@ -1159,7 +1691,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [delegateStatus.enabled, fetchAccount, positions, submitWithDelegateOrWallet]);
+  }, [delegateStatus.enabled, positions, rememberPendingTpsl, submitWithDelegateOrWallet, waitForTpslSync]);
 
   const switchToArbitrum = useCallback(async () => {
     try {
