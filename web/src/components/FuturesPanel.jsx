@@ -6,6 +6,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDecibel } from '../hooks/useDecibel';
+import { useDango } from '../hooks/useDango';
 import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
 import { usePhoenix } from '../hooks/usePhoenix';
@@ -94,6 +95,7 @@ const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
 const DEX_ERROR_LABELS = {
   avantis: 'Avantis',
   decibel: 'Decibel',
+  dango: 'Dango',
   flash: 'Flash',
   gmtrade: 'GMTrade',
   gmx: 'GMX',
@@ -692,9 +694,28 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   const isFlashPosition = isFlashPositionLike(pos);
   const entryP = numOrNull(pos.entry_price) || 0;
   const markP = numOrNull(pos.mark_price) || priceRowMark || 0;
-  const amt = numOrNull(pos.amount) || 0;
+  const amt = firstPositive(
+    Math.abs(Number(pos.amount) || 0),
+    Math.abs(Number(pos.base_amount) || 0),
+    Math.abs(Number(pos.baseAmount) || 0),
+    Math.abs(Number(pos.position) || 0),
+  );
   const margin = numOrNull(pos.margin) || 0;
-  const providedValue = numOrNull(pos.size_usd);
+  const providedValue = firstPositive(
+    pos.size_usd,
+    pos.sizeUsd,
+    pos.notional_usd,
+    pos.notionalUsd,
+    pos.position_usd,
+    pos.positionUsd,
+    pos.inputUsdUi,
+    pos._flash?.sizeUsdUi,
+    pos._flash?.size_usd_ui,
+    pos._flash?.size_usd,
+    pos._flash?.sizeUsd,
+    pos._flash?.notional_usd,
+    pos._flash?.notionalUsd,
+  );
   const posValueUsd = providedValue && providedValue > 0
     ? providedValue
     : (markP ? amt * markP : amt * entryP);
@@ -971,12 +992,6 @@ function normalizeTpslInputValue(value) {
   return Number.isFinite(n) ? String(n) : raw;
 }
 
-function changedTpslInputValue(value, initialValue) {
-  const raw = String(value ?? '').trim();
-  if (!raw) return null;
-  return normalizeTpslInputValue(raw) === normalizeTpslInputValue(initialValue) ? null : raw;
-}
-
 function ostiumTpInputMax(dex, pos) {
   if (dex !== 'ostium') return undefined;
   const maxPrice = ostiumMaxTakeProfitPrice(pos);
@@ -1037,6 +1052,220 @@ function validateTpslBeforeSubmit({ dex, pos, tpPrice, slPrice, setLocalAlert })
     }
   }
   return true;
+}
+
+const TPSL_INPUT_MODES = [
+  { id: 'price', label: 'Price' },
+  { id: 'pct', label: '% PnL' },
+  { id: 'usd', label: '$ PnL' },
+];
+
+function tpslModeLabel(mode) {
+  const found = TPSL_INPUT_MODES.find(m => m.id === mode);
+  return found ? found.label : 'Price';
+}
+
+function firstPositive(...values) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+function tpslCollateralUsd(pos, metrics = {}) {
+  const entry = firstPositive(metrics.entryP, pos?.entry_price, metrics.markP, pos?.mark_price);
+  const lev = firstPositive(metrics.setLev, pos?.leverage, pos?.lev);
+  const baseAmount = tpslPositionAmount(pos, metrics);
+  return firstPositive(
+    metrics.margin,
+    pos?.metric?.collateralUsdUi,
+    pos?.metric?.collateral_usd_ui,
+    pos?.collateralUsdUi,
+    pos?.collateral_usd_ui,
+    pos?.collateral_usd,
+    pos?.collateralUsd,
+    pos?.margin_usd,
+    pos?.marginUsd,
+    pos?.initial_margin,
+    pos?.initialMargin,
+    pos?.margin,
+    metrics.posValueUsd && metrics.setLev ? Number(metrics.posValueUsd) / Number(metrics.setLev) : null,
+    entry && baseAmount && lev ? (entry * baseAmount) / lev : null,
+  );
+}
+
+function tpslPositionAmount(pos, metrics = {}) {
+  const direct = firstPositive(
+    Math.abs(Number(metrics.amt) || 0),
+    Math.abs(Number(pos?.amount) || 0),
+    Math.abs(Number(pos?.base_amount) || 0),
+    Math.abs(Number(pos?.baseAmount) || 0),
+    Math.abs(Number(pos?.position) || 0),
+    Math.abs(Number(pos?.qty) || 0),
+    Math.abs(Number(pos?.quantity) || 0),
+    Math.abs(Number(pos?.tokenAmount) || 0),
+    Math.abs(Number(pos?.token_amount) || 0),
+    Math.abs(Number(pos?._flash?.amount) || 0),
+    Math.abs(Number(pos?._flash?.tokenAmount) || 0),
+    Math.abs(Number(pos?._flash?.token_amount) || 0),
+  );
+  if (direct > 0) return direct;
+  const entry = firstPositive(metrics.entryP, pos?.entry_price, metrics.markP, pos?.mark_price);
+  const sizeUsd = firstPositive(
+    metrics.posValueUsd,
+    pos?.size_usd,
+    pos?.sizeUsd,
+    pos?.sizeUsdUi,
+    pos?.notionalUsd,
+    pos?.notional_usd,
+    pos?.positionUsd,
+    pos?.position_usd,
+    pos?.inputUsdUi,
+    pos?.input_usd_ui,
+    pos?._flash?.sizeUsdUi,
+    pos?._flash?.size_usd_ui,
+    pos?._flash?.size_usd,
+    pos?._flash?.sizeUsd,
+    pos?._flash?.notional_usd,
+    pos?._flash?.notionalUsd,
+  );
+  if (entry > 0 && sizeUsd > 0) return Math.abs(sizeUsd / entry);
+  return 0;
+}
+
+function tpslPriceFromInput({ pos, metrics = {}, leg, mode, value }) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return { price: null, error: '' };
+  const amount = Number(raw);
+  if (!Number.isFinite(amount) || amount <= 0) return { price: null, error: 'Enter a positive TP/SL value.' };
+  const selectedMode = ['price', 'pct', 'usd'].includes(mode) ? mode : 'price';
+  if (selectedMode === 'price') return { price: amount, error: '' };
+
+  const entry = firstPositive(metrics.entryP, pos?.entry_price, metrics.markP, pos?.mark_price);
+  const baseAmount = tpslPositionAmount(pos, metrics);
+  if (!(entry > 0) || !(baseAmount > 0)) {
+    return { price: null, error: 'Position entry price or size is missing. Use Price mode for this position.' };
+  }
+
+  const signedPnlUsd = (() => {
+    const signed = leg === 'sl' ? -Math.abs(amount) : Math.abs(amount);
+    if (selectedMode === 'usd') return signed;
+    const collateral = tpslCollateralUsd(pos, metrics);
+    if (!(collateral > 0)) return null;
+    return collateral * signed / 100;
+  })();
+  if (!Number.isFinite(signedPnlUsd)) {
+    return { price: null, error: 'Position margin is missing. Use Price or $ PnL mode for this position.' };
+  }
+
+  const isLong = positionOpenSide(pos) !== 'ask';
+  const priceDelta = signedPnlUsd / baseAmount;
+  const price = isLong ? entry + priceDelta : entry - priceDelta;
+  if (!Number.isFinite(price) || price <= 0) {
+    return { price: null, error: 'TP/SL value resolves to an invalid trigger price.' };
+  }
+  return { price, error: '' };
+}
+
+function tpslSubmitValue({ pos, metrics, leg, mode, value, initialValue }) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return { value: null, changed: false, error: '' };
+  const resolved = tpslPriceFromInput({ pos, metrics, leg, mode, value });
+  if (resolved.error) return { value: null, changed: true, error: resolved.error };
+  const next = formatTpslInputValue(resolved.price);
+  const changed = normalizeTpslInputValue(next) !== normalizeTpslInputValue(initialValue);
+  return { value: changed ? next : null, changed, error: '', price: resolved.price };
+}
+
+function tpslInputPlaceholder(leg, mode) {
+  if (mode === 'pct') return leg === 'tp' ? 'TP profit %' : 'SL loss %';
+  if (mode === 'usd') return leg === 'tp' ? 'TP profit $' : 'SL loss $';
+  return leg === 'tp' ? 'TP Price' : 'SL Price';
+}
+
+function TpslValueInput({ leg, mode, value, onChange, pos, metrics, maxPrice }) {
+  const resolved = tpslPriceFromInput({ pos, metrics, leg, mode, value });
+  const hasValue = String(value ?? '').trim() !== '';
+  const preview = hasValue && !resolved.error && resolved.price > 0
+    ? `Trigger $${fmtPrice(resolved.price)}`
+    : (hasValue && resolved.error ? resolved.error : (leg === 'tp' ? 'Take profit' : 'Stop loss'));
+  return (
+    <div style={S.tpslField}>
+      <input
+        type="number"
+        min="0"
+        step={mode === 'price' ? 'any' : '0.1'}
+        placeholder={tpslInputPlaceholder(leg, mode)}
+        value={value}
+        max={mode === 'price' ? maxPrice : undefined}
+        onChange={e => onChange(e.target.value)}
+        style={S.tpslInput}
+      />
+      <div style={{
+        ...S.tpslPreview,
+        color: hasValue && resolved.error ? '#B71C1C' : (leg === 'tp' ? '#2e7d32' : '#8a4b20'),
+      }}>
+        {preview}
+      </div>
+    </div>
+  );
+}
+
+function TpslEditor({
+  mode,
+  onModeChange,
+  tpValue,
+  slValue,
+  onTpChange,
+  onSlChange,
+  pos,
+  metrics,
+  ostiumTpMax,
+  busy,
+  loading,
+  hasChanges,
+  onSubmit,
+}) {
+  const entry = firstPositive(metrics?.entryP, pos?.entry_price, metrics?.markP, pos?.mark_price);
+  const mark = firstPositive(metrics?.markP, pos?.mark_price, pos?.price, entry);
+  const isLong = positionOpenSide(pos) !== 'ask';
+  return (
+    <div style={S.tpslEditor}>
+      <div style={S.tpslMetaRow}>
+        <span>Entry {entry > 0 ? `$${fmtPrice(entry)}` : '-'}</span>
+        <span>Mark {mark > 0 ? `$${fmtPrice(mark)}` : '-'}</span>
+        <span>{isLong ? 'LONG' : 'SHORT'}</span>
+      </div>
+      <div style={S.tpslModeRow}>
+        <span style={S.tpslModeLabel}>Input</span>
+        <div style={S.tpslModeGroup}>
+          {TPSL_INPUT_MODES.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              style={mode === item.id ? S.tpslModeActive : S.tpslModeButton}
+              onClick={() => onModeChange(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={S.tpslInputGrid}>
+        <TpslValueInput leg="tp" mode={mode} value={tpValue} onChange={onTpChange} pos={pos} metrics={metrics} maxPrice={ostiumTpMax} />
+        <TpslValueInput leg="sl" mode={mode} value={slValue} onChange={onSlChange} pos={pos} metrics={metrics} />
+        <button style={S.btnBlue} onClick={onSubmit} disabled={busy || loading || !hasChanges}>
+          {busy ? <ClosingButtonLabel text="Setting..." /> : 'Set'}
+        </button>
+      </div>
+      <div style={S.tpslHint}>
+        {mode === 'price'
+          ? 'Enter trigger price.'
+          : `${tpslModeLabel(mode)} uses position PnL: TP = profit, SL = loss.`}
+      </div>
+    </div>
+  );
 }
 
 function PositionTpslRow({ pos, orders }) {
@@ -2000,6 +2229,7 @@ const PositionsList = memo(function PositionsList({
   const [closePct, setClosePct] = useState(100);
   const [tpPrice, setTpPrice] = useState('');
   const [slPrice, setSlPrice] = useState('');
+  const [tpslInputMode, setTpslInputMode] = useState('price');
   const [tpslInitial, setTpslInitial] = useState({ key: null, tp: '', sl: '' });
   const [tpslSubmittingPos, setTpslSubmittingPos] = useState(null);
 
@@ -2017,14 +2247,17 @@ const PositionsList = memo(function PositionsList({
     <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start'}}>
       {positions.map((pos, i) => {
         const { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
+        const tpslMetrics = { entryP, markP, amt, margin, setLev, posValueUsd };
         const posKey = `${pos.symbol}-${pos.side}`;
         const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
         const tpslBusy = tpslSubmittingPos === posKey;
         const ostiumTpMax = ostiumTpInputMax(dex, pos);
         const initialTpsl = tpslInitial.key === posKey ? tpslInitial : { tp: '', sl: '' };
-        const changedTpPrice = changedTpslInputValue(tpPrice, initialTpsl.tp);
-        const changedSlPrice = changedTpslInputValue(slPrice, initialTpsl.sl);
-        const hasTpslChanges = !!(changedTpPrice || changedSlPrice);
+        const tpSubmit = tpslSubmitValue({ pos, metrics: tpslMetrics, leg: 'tp', mode: tpslInputMode, value: tpPrice, initialValue: initialTpsl.tp });
+        const slSubmit = tpslSubmitValue({ pos, metrics: tpslMetrics, leg: 'sl', mode: tpslInputMode, value: slPrice, initialValue: initialTpsl.sl });
+        const changedTpPrice = tpSubmit.value;
+        const changedSlPrice = slSubmit.value;
+        const hasTpslChanges = tpSubmit.changed || slSubmit.changed;
 
         return (
           <div key={positionStableKey(pos) || i} style={S.posCard}>
@@ -2066,6 +2299,7 @@ const PositionsList = memo(function PositionsList({
                   if (expanded === 'tpsl') {
                     setExpandedPos(null);
                     setTpslInitial({ key: null, tp: '', sl: '' });
+                    setTpslInputMode('price');
                     return;
                   }
                   const { tp, sl } = getPositionTpsl(pos, orders);
@@ -2073,6 +2307,7 @@ const PositionsList = memo(function PositionsList({
                   const nextSl = formatTpslInputValue(sl);
                   setTpPrice(nextTp);
                   setSlPrice(nextSl);
+                  setTpslInputMode('price');
                   setTpslInitial({ key: posKey, tp: nextTp, sl: nextSl });
                   setExpandedPos(`${posKey}:tpsl`);
                 }}>TP/SL</button>
@@ -2103,12 +2338,30 @@ const PositionsList = memo(function PositionsList({
             {/* TP/SL panel — same isBasic gate so the inputs never reach
                 the DOM in Basic mode (and never get accidentally fired). */}
             {!isDust && !isBasic && expanded === 'tpsl' && (
-              <div style={{...S.expandPanel, ...S.row}}>
-                <input type="number" placeholder="TP Price" value={tpPrice} max={ostiumTpMax} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
-                <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
-                <button style={S.btnBlue} onClick={async () => {
+              <TpslEditor
+                mode={tpslInputMode}
+                onModeChange={(nextMode) => {
+                  setTpslInputMode(nextMode);
+                  setTpPrice('');
+                  setSlPrice('');
+                }}
+                tpValue={tpPrice}
+                slValue={slPrice}
+                onTpChange={setTpPrice}
+                onSlChange={setSlPrice}
+                pos={pos}
+                metrics={tpslMetrics}
+                ostiumTpMax={ostiumTpMax}
+                busy={tpslBusy}
+                loading={loading}
+                hasChanges={hasTpslChanges}
+                onSubmit={async () => {
                   if (!hasTpslChanges) {
                     setLocalAlert('Change TP or SL before setting.');
+                    return;
+                  }
+                  if (tpSubmit.error || slSubmit.error) {
+                    setLocalAlert(tpSubmit.error || slSubmit.error);
                     return;
                   }
                   if (!validateTpslBeforeSubmit({ dex, pos, tpPrice: changedTpPrice, slPrice: changedSlPrice, setLocalAlert })) return;
@@ -2119,17 +2372,15 @@ const PositionsList = memo(function PositionsList({
                       setLocalAlert(r.error);
                       return;
                     }
-                    setTpPrice(''); setSlPrice(''); setTpslInitial({ key: null, tp: '', sl: '' }); setExpandedPos(null);
+                    setTpPrice(''); setSlPrice(''); setTpslInputMode('price'); setTpslInitial({ key: null, tp: '', sl: '' }); setExpandedPos(null);
                     if (r?.info) setSuccessMsg(r.info);
                   } catch (e) {
                     setLocalAlert(e?.message || String(e));
                   } finally {
                     setTpslSubmittingPos((current) => current === posKey ? null : current);
                   }
-                }} disabled={tpslBusy || loading || !hasTpslChanges}>
-                  {tpslBusy ? <ClosingButtonLabel text="Setting..." /> : 'Set'}
-                </button>
-              </div>
+                }}
+              />
             )}
           </div>
         );
@@ -2365,6 +2616,7 @@ function FuturesPanel() {
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const decibelHook = useDecibel();
+  const dangoHook = useDango();
   const gmxHook = useGmx();
   const monadHook = useMonad();
   const phoenixHook = usePhoenix();
@@ -2387,6 +2639,8 @@ function FuturesPanel() {
     ? avantisHook
     : dex === 'decibel'
     ? decibelHook
+    : dex === 'dango'
+    ? dangoHook
     : dex === 'gmx'
     ? gmxHook
     : dex === 'ostium'
@@ -2811,6 +3065,7 @@ function FuturesPanel() {
   const [closePct, setClosePct] = useState(100);
   const [tpPrice, setTpPrice] = useState('');
   const [slPrice, setSlPrice] = useState('');
+  const [tpslInputMode, setTpslInputMode] = useState('price');
   const [tpslInitial, setTpslInitial] = useState({ key: null, tp: '', sl: '' });
   const [tpslSubmittingPos, setTpslSubmittingPos] = useState(null);
   const [showFilter, setShowFilter] = useState(false);
@@ -3203,8 +3458,8 @@ function FuturesPanel() {
       );
       return;
     }
-    if (dex === 'decibel') {
-      setLocalAlert('Decibel currently uses cross margin only. Isolated margin is not available yet.');
+    if (dex === 'decibel' || dex === 'dango') {
+      setLocalAlert(`${dex === 'dango' ? 'Dango' : 'Decibel'} currently uses cross margin only. Isolated margin is not available yet.`);
       return;
     }
     if (dex === 'pacifica' && !pacAgent && bindAgent) {
@@ -3275,7 +3530,7 @@ function FuturesPanel() {
       setLeverageApi(symbol, v);
       return;
     }
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt' || dex === 'flash') return;
+    if (dex === 'avantis' || dex === 'dango' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt' || dex === 'flash') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -3341,7 +3596,7 @@ function FuturesPanel() {
       // Guard against missing/NaN currentPrice (feed blip).
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'dango' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       if (dex === 'flash' && flashMarketBlockReason) {
         setLocalAlert(`${symbol} is not open for Flash trading right now (${flashMarketBlockReason}).`);
         return;
@@ -3728,7 +3983,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'dango' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -3739,6 +3994,8 @@ function FuturesPanel() {
                 ? 'Ostium uses isolated collateral per trade in this integration'
                 : dex === 'decibel'
                 ? 'Decibel currently uses cross margin; isolated margin is not available yet'
+                : dex === 'dango'
+                ? 'Dango currently uses cross margin in this integration'
                 : dex === 'monad'
                 ? 'Perpl uses isolated margin per position in this integration'
                 : dex === 'hyperliquid'
@@ -3757,10 +4014,10 @@ function FuturesPanel() {
                 ? 'Lighter margin mode is managed through the Lighter account settings in this integration'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'dango' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
-                  : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana')
+                  : (dex === 'decibel' || dex === 'dango' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana')
                   ? 'Cross'
                   : dex === 'lighter'
                   ? 'Cross'
@@ -7212,14 +7469,18 @@ function FuturesPanel() {
       <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
         {openedSortedPositions.map((pos, i) => {
           const { entryP, markP, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
+          const amt = numOrNull(pos.amount) || 0;
+          const tpslMetrics = { entryP, markP, amt, margin, setLev, posValueUsd };
           const posKey = `${pos.symbol}-${pos.side}`;
           const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
           const tpslBusy = tpslSubmittingPos === posKey;
           const ostiumTpMax = ostiumTpInputMax(dex, pos);
           const initialTpsl = tpslInitial.key === posKey ? tpslInitial : { tp: '', sl: '' };
-          const changedTpPrice = changedTpslInputValue(tpPrice, initialTpsl.tp);
-          const changedSlPrice = changedTpslInputValue(slPrice, initialTpsl.sl);
-          const hasTpslChanges = !!(changedTpPrice || changedSlPrice);
+          const tpSubmit = tpslSubmitValue({ pos, metrics: tpslMetrics, leg: 'tp', mode: tpslInputMode, value: tpPrice, initialValue: initialTpsl.tp });
+          const slSubmit = tpslSubmitValue({ pos, metrics: tpslMetrics, leg: 'sl', mode: tpslInputMode, value: slPrice, initialValue: initialTpsl.sl });
+          const changedTpPrice = tpSubmit.value;
+          const changedSlPrice = slSubmit.value;
+          const hasTpslChanges = tpSubmit.changed || slSubmit.changed;
 
           // Basic mode shows a stripped-down card: ticker + UP/DOWN icon +
           // leverage + dollar PnL + Close. No size, no entry/mark prices,
@@ -7401,6 +7662,7 @@ function FuturesPanel() {
                     if (expanded === 'tpsl') {
                       setExpandedPos(null);
                       setTpslInitial({ key: null, tp: '', sl: '' });
+                      setTpslInputMode('price');
                       return;
                     }
                     const { tp, sl } = getPositionTpsl(pos, orders);
@@ -7408,6 +7670,7 @@ function FuturesPanel() {
                     const nextSl = formatTpslInputValue(sl);
                     setTpPrice(nextTp);
                     setSlPrice(nextSl);
+                    setTpslInputMode('price');
                     setTpslInitial({ key: posKey, tp: nextTp, sl: nextSl });
                     setExpandedPos(`${posKey}:tpsl`);
                   }}>TP/SL</button>
@@ -7462,12 +7725,30 @@ function FuturesPanel() {
 
               {/* TP/SL panel — gated on Basic mode (button is hidden too). */}
               {!isDust && !isBasic && expanded === 'tpsl' && (
-                <div style={{...S.expandPanel, ...S.row}}>
-                  <input type="number" placeholder="TP Price" value={tpPrice} max={ostiumTpMax} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
-                  <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
-                  <button style={S.btnBlue} onClick={async () => {
+                <TpslEditor
+                  mode={tpslInputMode}
+                  onModeChange={(nextMode) => {
+                    setTpslInputMode(nextMode);
+                    setTpPrice('');
+                    setSlPrice('');
+                  }}
+                  tpValue={tpPrice}
+                  slValue={slPrice}
+                  onTpChange={setTpPrice}
+                  onSlChange={setSlPrice}
+                  pos={pos}
+                  metrics={tpslMetrics}
+                  ostiumTpMax={ostiumTpMax}
+                  busy={tpslBusy}
+                  loading={loading}
+                  hasChanges={hasTpslChanges}
+                  onSubmit={async () => {
                     if (!hasTpslChanges) {
                       setLocalAlert('Change TP or SL before setting.');
+                      return;
+                    }
+                    if (tpSubmit.error || slSubmit.error) {
+                      setLocalAlert(tpSubmit.error || slSubmit.error);
                       return;
                     }
                     if (!validateTpslBeforeSubmit({ dex, pos, tpPrice: changedTpPrice, slPrice: changedSlPrice, setLocalAlert })) return;
@@ -7478,17 +7759,15 @@ function FuturesPanel() {
                       setLocalAlert(r.error);
                       return;
                     }
-                    setTpPrice(''); setSlPrice(''); setTpslInitial({ key: null, tp: '', sl: '' }); setExpandedPos(null);
+                    setTpPrice(''); setSlPrice(''); setTpslInputMode('price'); setTpslInitial({ key: null, tp: '', sl: '' }); setExpandedPos(null);
                     if (r?.info) setSuccessMsg(r.info);
                   } catch (e) {
                     setLocalAlert(e?.message || String(e));
                   } finally {
                     setTpslSubmittingPos((current) => current === posKey ? null : current);
                   }
-                }} disabled={tpslBusy || loading || !hasTpslChanges}>
-                    {tpslBusy ? <ClosingButtonLabel text="Setting..." /> : 'Set'}
-                  </button>
-                </div>
+                }}
+              />
               )}
             </div>
           );
@@ -8773,6 +9052,8 @@ function FuturesPanel() {
                 ? 'Opens GRVT deposit. Native in-game deposit needs GRVT bridge approval data or a GRVT-supported deposit-address API; the current builder API key is not enough for that.'
                 : dex === 'katana'
                 ? 'Opens Katana deposit. Katana deposits can be bridged from Arbitrum USDC through the official Stargate/Katana bridge flow.'
+                : dex === 'dango'
+                ? 'Dango funding requires the Dango signed transaction flow. This integration reads Dango balances and credits filled trades while the signing UX is being wired.'
                 : dex === 'risex'
                 ? (
                   <>
@@ -8837,6 +9118,8 @@ function FuturesPanel() {
                 ? 'Requests a Hyperliquid withdrawal to your connected Arbitrum address. Arrival usually takes a few minutes.'
                 : dex === 'decibel'
                 ? 'Withdraws from your Decibel trading subaccount back to your Aptos wallet.'
+                : dex === 'dango'
+                ? 'Dango withdrawal requires a browser-signed Dango transaction or approved Dango session credential.'
                 : dex === 'monad'
                 ? 'Withdraws AUSD from Perpl back to your Monad wallet.'
                 : dex === 'phoenix'
@@ -9704,6 +9987,54 @@ const S = {
   expandPanel: {
     display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4,
     animation: 'slideDown 0.2s ease-out',
+  },
+  tpslEditor: {
+    display: 'flex', flexDirection: 'column', gap: 7, marginTop: 4,
+    animation: 'slideDown 0.2s ease-out',
+  },
+  tpslMetaRow: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+    flexWrap: 'wrap', fontSize: 11, fontWeight: 800, color: '#77573d',
+    background: 'rgba(255,255,255,0.35)', border: '1px solid #d4c8b0',
+    borderRadius: 8, padding: '5px 8px',
+  },
+  tpslModeRow: {
+    display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
+  },
+  tpslModeLabel: {
+    fontSize: 10, fontWeight: 900, color: '#77573d', textTransform: 'uppercase', flexShrink: 0,
+  },
+  tpslModeGroup: {
+    display: 'flex', gap: 4, flex: '1 1 auto', minWidth: 0,
+  },
+  tpslModeButton: {
+    flex: 1, minWidth: 0, padding: '5px 4px', background: '#d4c8b0',
+    border: '2px solid #bba882', borderRadius: 7, color: '#5C3A21',
+    fontWeight: 900, fontSize: 10, cursor: 'pointer', textAlign: 'center',
+  },
+  tpslModeActive: {
+    flex: 1, minWidth: 0, padding: '5px 4px', background: '#fdf8e7',
+    border: '2px solid #8a5f35', borderRadius: 7, color: '#5C3A21',
+    fontWeight: 950, fontSize: 10, cursor: 'pointer', textAlign: 'center',
+    boxShadow: '0 1px 0 rgba(92,58,33,0.25)',
+  },
+  tpslInputGrid: {
+    display: 'flex', gap: 6, alignItems: 'stretch', flexWrap: 'wrap',
+  },
+  tpslField: {
+    flex: '1 1 118px', minWidth: 118, display: 'flex', flexDirection: 'column', gap: 3,
+  },
+  tpslInput: {
+    background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,
+    padding: '7px 8px', color: '#333', fontSize: 12, fontWeight: 800,
+    outline: 'none', width: '100%', boxSizing: 'border-box', minWidth: 0,
+  },
+  tpslPreview: {
+    minHeight: 13, fontSize: 10, fontWeight: 850, lineHeight: 1.25,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  tpslHint: {
+    fontSize: 10, fontWeight: 750, color: '#8a7252', lineHeight: 1.2,
   },
   btnRed: {
     flex: 1, padding: '8px', background: '#E53935', border: '2px solid #B71C1C', borderRadius: 8,

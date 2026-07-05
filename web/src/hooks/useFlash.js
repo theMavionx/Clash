@@ -505,7 +505,20 @@ function normalizeFlashPosition(pos = {}) {
     ?? 0
   );
   const entry = Number(pos.entry_price ?? pos.entryPrice ?? pos.avgEntryPrice ?? pos.averageEntryPrice ?? pos.price ?? 0);
-  const amount = Number(pos.amount ?? pos.size ?? pos.tokenAmount ?? (entry > 0 && notional > 0 ? notional / entry : collateral || notional || 0));
+  const explicitBaseAmount = Number(
+    pos.amount
+    ?? pos.base_amount
+    ?? pos.baseAmount
+    ?? pos.tokenAmount
+    ?? pos.token_amount
+    ?? pos.sizeAmount
+    ?? pos.size_amount
+    ?? 0
+  );
+  const sizeFallback = Number(pos.size ?? 0);
+  const amount = explicitBaseAmount > 0
+    ? explicitBaseAmount
+    : (entry > 0 && notional > 0 ? notional / entry : (sizeFallback > 0 ? sizeFallback : (collateral || notional || 0)));
   const isDust = !!pos?._flashDust
     || isFlashDustMetric(pos?.metric || {})
     || isFlashDustValues(notional, collateral, amount);
@@ -1336,6 +1349,43 @@ export function useFlash() {
     && publicKeyText(registeredFlashWallet) !== publicKeyText(connectedWalletAddr);
   const walletMismatch = false;
 
+  const createFlashWalletAuthProof = useCallback(async () => {
+    const owner = publicKeyText(walletAddr);
+    if (!owner) throw new Error('Connect a Solana wallet first');
+    const cached = walletAuthProofRef.current;
+    if (cached?.wallet === owner && cached?.proof && Date.now() < cached.expiresAt) {
+      return cached.proof;
+    }
+    if (typeof solWallet?.signMessage !== 'function') {
+      throw new Error('Connected Solana wallet cannot sign the Flash reward proof.');
+    }
+    const issuedAt = new Date().toISOString();
+    const message = flashWalletAuthMessage({ wallet: owner, issuedAt });
+    const signatureBytes = await solWallet.signMessage(new TextEncoder().encode(message));
+    const proof = {
+      action: WALLET_AUTH_ACTION,
+      chain_type: 'solana',
+      wallet: owner,
+      dex: 'flash',
+      issued_at: issuedAt,
+      message,
+      signature: typeof signatureBytes === 'string' ? signatureBytes : bytesToBase64(signatureBytes),
+      signature_encoding: typeof signatureBytes === 'string' ? '' : 'base64',
+    };
+    walletAuthProofRef.current = {
+      wallet: owner,
+      proof,
+      expiresAt: Date.now() + FLASH_WALLET_AUTH_PROOF_TTL_MS,
+    };
+    return proof;
+  }, [solWallet, walletAddr]);
+
+  const needsFlashWalletAuthProof = useCallback(() => {
+    const linkedOwner = publicKeyText(registeredFlashWallet);
+    const connectedOwner = publicKeyText(walletAddr);
+    return !!connectedOwner && (!linkedOwner || linkedOwner !== connectedOwner || registeredFlashWalletMismatch);
+  }, [registeredFlashWallet, registeredFlashWalletMismatch, walletAddr]);
+
   const refreshReferral = useCallback(async () => {
     if (!isActiveDex || !accountOwner || !token) {
       setReferralState(null);
@@ -1582,53 +1632,6 @@ export function useFlash() {
     const timer = window.setInterval(refreshIfVisible, FLASH_WS_REST_FALLBACK_MS);
     return () => window.clearInterval(timer);
   }, [accountOwner, flashWsHealthy, isActiveDex]);
-
-  const createFlashWalletAuthProof = useCallback(async () => {
-    const owner = publicKeyText(walletAddr);
-    if (!owner) throw new Error('Connect a Solana wallet first');
-    const cached = walletAuthProofRef.current;
-    if (cached?.wallet === owner && cached?.proof && Date.now() < cached.expiresAt) {
-      return cached.proof;
-    }
-    if (typeof solWallet?.signMessage !== 'function') {
-      throw new Error('Connected Solana wallet cannot sign the Flash reward proof.');
-    }
-    const issuedAt = new Date().toISOString();
-    const message = flashWalletAuthMessage({ wallet: owner, issuedAt });
-    const signatureBytes = await solWallet.signMessage(new TextEncoder().encode(message));
-    const proof = {
-      action: WALLET_AUTH_ACTION,
-      chain_type: 'solana',
-      wallet: owner,
-      dex: 'flash',
-      issued_at: issuedAt,
-      message,
-      signature: typeof signatureBytes === 'string' ? signatureBytes : bytesToBase64(signatureBytes),
-      signature_encoding: typeof signatureBytes === 'string' ? '' : 'base64',
-    };
-    walletAuthProofRef.current = {
-      wallet: owner,
-      proof,
-      expiresAt: Date.now() + FLASH_WALLET_AUTH_PROOF_TTL_MS,
-    };
-    return proof;
-  }, [solWallet, walletAddr]);
-
-  const needsFlashWalletAuthProof = useCallback(() => {
-    const linkedOwner = publicKeyText(registeredFlashWallet);
-    const connectedOwner = publicKeyText(walletAddr);
-    return !!connectedOwner && (!linkedOwner || linkedOwner !== connectedOwner || registeredFlashWalletMismatch);
-  }, [registeredFlashWallet, registeredFlashWalletMismatch, walletAddr]);
-
-  const ensureFlashRewardProofReady = useCallback(async () => {
-    if (!needsFlashWalletAuthProof()) return null;
-    try {
-      await createFlashWalletAuthProof();
-      return null;
-    } catch (e) {
-      return e?.message || 'Flash wallet signature required before trading so rewards can be credited.';
-    }
-  }, [createFlashWalletAuthProof, needsFlashWalletAuthProof]);
 
   const claimGold = useCallback(async () => {
     if (!token) return { error: 'Missing game session token' };
@@ -2320,6 +2323,16 @@ export function useFlash() {
     markFlashDelegationReady(walletAddr);
     return { ok: true, ...delegated };
   }, [account, isBasketDelegatedOnChain, tryBuildAndSend, waitForFlashBasket, walletAddr]);
+
+  const ensureFlashRewardProofReady = useCallback(async () => {
+    if (!needsFlashWalletAuthProof()) return null;
+    try {
+      await createFlashWalletAuthProof();
+      return null;
+    } catch (e) {
+      return e?.message || 'Flash wallet signature required before trading so rewards can be credited.';
+    }
+  }, [createFlashWalletAuthProof, needsFlashWalletAuthProof]);
 
   const reportTrade = useCallback(async ({ signature, symbol, side, amount, leverage = 1, price, orderType = 'market', notionalUsd, signer = '', sessionToken = '', deferred = false } = {}) => {
     if (!token) return { error: 'Missing game session token' };

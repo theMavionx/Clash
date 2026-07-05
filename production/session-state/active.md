@@ -1,6 +1,6 @@
 # Active Session State
 
-Last updated: 2026-06-18
+Last updated: 2026-07-05
 
 ## Current Focus
 
@@ -24,6 +24,7 @@ Main current goals:
 3. Agent workflow, memory, hooks, skills, and deployment automation.
 4. Resource building upgrade content for Sawmill, Storage, and Mine.
 5. Mortar functionality and Town Hall 5 expansion with TH5 unlocks.
+6. Dango realtime exchange integration with WebSocket-backed trade credit.
 
 ## Git Notes
 
@@ -56,18 +57,29 @@ tools/codex/start-context.cmd -Full
 tools/codex/check-repo.cmd -Mode Quick
 ```
 
-Current execution focus: G-002 Full Game Balance Pass checkpoint complete.
+Current execution focus: G-006 Dango Realtime Exchange Integration audit and
+foundation checkpoint complete.
 
-Completed on 2026-06-18:
+Completed on 2026-07-05:
 
-1. Added TH4/TH2-TH4 support to `tools/pvp-balance/run.js`.
-2. Tuned TH4 normal/hard bot templates in `server/matchmaking_defs.js`.
-3. Improved TH4 PvP breakability from 22.1% attacker win rate to 57.8%.
-4. Verified mixed TH2-TH4 PvP at 56.9% across 3000 generated battles.
-5. Documented before/after reasoning in `production/reports/g002-full-balance-pass-2026-06-18.md`.
+1. Added Dango as a selectable self-custody futures DEX across server, futures
+   server, admin/tournament lists, and `FuturesPanel`.
+2. Added `server-futures/dango.js` and `dango-realtime-worker.js` using Dango
+   REST `/query`, `/simulate`, `/broadcast`, GraphQL reads, and native `/ws`
+   `perpsEvents`.
+3. Added Dango verified fill rows as `trade_history.dex = 'dango'` with
+   `verified_source = 'dango_ws'` so gold, quests, and tournaments use the
+   existing reward path.
+4. Added signed message flows for order/cancel, margin deposit/withdraw, and
+   conditional TP/SL. Unsigned writes return `428 DANGO_SIGNATURE_REQUIRED`
+   with a Dango `execute` payload.
+5. Verified syntax, frontend build, Dango live market/account/order reads,
+   backfill smoke, and native WebSocket open/close.
 
 Remaining follow-up:
 
-- Decide target economy max-out pace. Current live server pacing is about 102 days
-  to full TH4 max before raid income, which may be acceptable for monetization but
-  no longer matches the older 4-week economy fantasy.
+- Build and verify the browser Dango Tx signing/session credential UX against a
+  real Dango account; current server routes correctly prepare and broadcast
+  signed Tx payloads but cannot complete unsigned writes by design.
+- Run a real Dango filled-trade smoke on testnet/mainnet account before calling
+  player trading end-to-end complete.

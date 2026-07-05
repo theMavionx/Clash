@@ -951,6 +951,14 @@ function battleRiskReasonText(risk) {
   return flags.length ? flags.map((flag) => flag.label || flag.code).join(', ') : 'clean';
 }
 
+function battleRiskShipPatternText(risk) {
+  const samples = Number(risk?.ship_deploy_samples_24h || 0);
+  if (!samples) return '-';
+  const repeats = Number(risk?.ship_deploy_top_repeats_24h || 0);
+  const ratio = Number(risk?.ship_deploy_top_ratio_24h || 0);
+  return `${repeats}/${samples} (${Math.round(ratio * 100)}%)`;
+}
+
 function PlayerProfileDrawer({ player, onClose, onOpenTools }) {
   const [tab, setTab] = useState('overview');
   const [profile, setProfile] = useState(null);
@@ -1318,6 +1326,9 @@ function PlayerProfileBattles({ profile }) {
           { label: 'Rejected results 24h', value: risk.rejected_results_24h || 0 },
           { label: 'Latest IP', value: risk.last_ip || '-' },
           { label: 'Shared IP players 24h', value: risk.ip_players_24h || 0 },
+          { label: 'Ship pattern 24h', value: battleRiskShipPatternText(risk) },
+          { label: 'Ship pattern variants', value: risk.ship_deploy_distinct_patterns_24h || 0 },
+          { label: 'Top ship coords', value: risk.ship_deploy_top_coords || '-' },
           { label: 'Reasons', value: battleRiskReasonText(risk) },
         ]} />
       </ProfileSection>
@@ -3041,14 +3052,15 @@ function StatsPanel({ data }) {
           ]} />
           <CompactTable
             title="Battle Risk Flags"
-            subtitle={`Red flag = captcha_required for future CAPTCHA/prize eligibility. Thresholds: ${mm.battle_risk_thresholds?.burstAttackStarts || 40}+ attacks/15m or >${mm.battle_risk_thresholds?.dailyAttackStartsExclusive || 500}/24h.`}
-            columns={['Player', 'DEX', '15m', '24h', 'Results', 'Wins', 'Rejected', 'IP players', 'Reasons']}
+            subtitle={`Red flag = captcha_required for future CAPTCHA/prize eligibility. Thresholds: ${mm.battle_risk_thresholds?.burstAttackStarts || 40}+ attacks/15m, >${mm.battle_risk_thresholds?.dailyAttackStartsExclusive || 500}/24h, or repeated ship deployment ${mm.battle_risk_thresholds?.shipDeployMinRepeats || 6}/${mm.battle_risk_thresholds?.shipDeployMinSamples || 8}+ at ${Math.round((mm.battle_risk_thresholds?.shipDeployMinRatio || 0.75) * 100)}%+.`}
+            columns={['Player', 'DEX', '15m', '24h', 'Results', 'Ship pattern', 'Wins', 'Rejected', 'IP players', 'Reasons']}
             rows={mmRiskRows.map((row) => [
               row.name || short(row.player_id),
               DEX_LABELS[row.dex] || row.dex || '-',
               num(row.attack_starts_15m),
               num(row.attack_starts_24h),
               num(row.submitted_results_24h),
+              battleRiskShipPatternText(row),
               num(row.accepted_wins_24h),
               num(row.rejected_results_24h),
               num(row.ip_players_24h),

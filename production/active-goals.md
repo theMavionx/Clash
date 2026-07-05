@@ -241,6 +241,83 @@ Latest local checkpoint:
 - Godot CLI was not available from PATH, so live editor verification still needs
   a manual local playtest.
 
+## G-006 Dango Realtime Exchange Integration
+
+- Status: active
+- Priority: P0
+- Owner intent: add Dango as a full selectable futures exchange with fast
+  WebSocket-backed fills so gold, quests, positions, orders, and tournament
+  volume update without the long delays seen in polling-only integrations.
+- Core idea: Dango trade credit must be server-authoritative from Dango
+  `perpsEvents`, while browser trading must use Dango's signed Tx/session
+  credential flow instead of storing user master keys server-side.
+
+Scope:
+
+- Dango DEX selection and account linking.
+- Dango market/prices/account/positions/orders reads.
+- Dango signed order, cancel, TP/SL, deposit, and withdraw routes.
+- Native Dango `perpsEvents` WebSocket worker for fills and rewardable volume.
+- Gold and quest credit through existing `trade_history` and claim pipelines.
+- Tournament/admin DEX lists and labels.
+- Frontend FuturesPanel hook integration.
+
+Key files and docs:
+
+- `docs/architecture/adr-0012-dango-realtime-exchange-integration.md`
+- `server-futures/dango.js`
+- `server-futures/dango-realtime-worker.js`
+- `server-futures/routes.js`
+- `server-futures/db.js`
+- `web/src/hooks/useDango.js`
+- `web/src/contexts/DexContext.jsx`
+- `web/src/components/FuturesPanel.jsx`
+- Dango API docs: https://docs.dango.exchange/perps/8-api.html
+- Dango constants: https://docs.dango.exchange/perps/9-constants.html
+
+Acceptance criteria:
+
+- Dango appears as a selectable DEX in normal and admin/tournament flows.
+- Dango market data, account state, positions, and open orders load without
+  requiring a wallet popup.
+- Dango write flows use browser/user-authorized signing or session credentials;
+  the server never fabricates unsigned trades as successful.
+- Filled Dango orders are recorded by a server-side WebSocket worker with
+  deterministic `client_order_id` deduplication.
+- `/claim-gold`, quest completion, and tournament scoring see Dango trades
+  through the same verified trade history path as other exchanges.
+- WebSocket reconnect resumes from the last seen block height or performs a
+  documented backfill path.
+- Local syntax/build checks pass.
+
+Next checkpoint:
+
+- First Dango foundation pass implemented: adapter, realtime worker, DEX
+  registry entries, frontend hook wiring, syntax checks, frontend build,
+  live market read smoke, and native WebSocket handshake smoke. Full browser
+  signing/session credential UX remains the next checkpoint before Dango
+  trading can be considered end-to-end complete from the player UI.
+- Docs audit checkpoint completed on 2026-07-05: Dango REST/GraphQL/WebSocket
+  requests were rechecked against the API reference. Fixed request body shapes
+  for REST `/simulate` and `/broadcast`, `submit_order`, `cancel_order`,
+  `orders_by_user`, `user_state_extended`, native WebSocket ids, and the testnet
+  perps contract constant. Remaining gap is still the browser signing/session
+  credential UX plus deposit/withdraw/TP-SL UI flows.
+- Follow-up bug audit completed on 2026-07-05: fixed Dango reward source
+  recognition in `server/trade_reconciliation.js`, added Dango smart-account
+  resolution from Ethereum key hash, fixed raw Tx acceptance in Dango proxy
+  routes, made Dango backfill paginated, and ensured WebSocket reconnect paths
+  reopen subscriptions after `ws_error`.
+- Continued Dango audit completed on 2026-07-05: added docs-matched signed
+  message flows for margin deposit/withdraw and standalone conditional TP/SL,
+  normalized Dango fixed-point numeric payloads to six decimals, fixed Dango
+  close-long size direction, preserved direct account-address resolution before
+  Ethereum key-hash fallback, and included native WebSocket error codes so
+  `resync` reconnects are reliably detected. Verified syntax, frontend build,
+  live Dango market/account/order reads, paginated fill backfill smoke, and
+  native `/ws` open/close. Remaining blocker for true end-to-end trading is
+  browser Tx signing/session credential UX with a real Dango account.
+
 ## Parking Lot
 
 - Add CI once the local checks are stable.

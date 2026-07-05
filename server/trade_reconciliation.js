@@ -10,6 +10,7 @@ const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;
 const FUTURES_REWARD_DEXES = new Set([
   'avantis',
   'decibel',
+  'dango',
   'gmx',
   'ostium',
   'monad',
@@ -33,6 +34,7 @@ const DEX_REQUIRED_CHAIN = {
   flash: 'solana',
   decibel: 'aptos',
   avantis: 'evm',
+  dango: 'evm',
   gmx: 'evm',
   ostium: 'evm',
   monad: 'evm',
@@ -49,6 +51,7 @@ const DEX_REQUIRED_CHAIN = {
 const VERIFIED_SOURCES_BY_DEX = {
   avantis: ['worker'],
   decibel: ['decibel_fill', 'server'],
+  dango: ['dango_ws'],
   gmx: ['worker', 'server'],
   ostium: ['ostium_api'],
   monad: ['perpl_api', 'perpl_ws'],

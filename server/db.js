@@ -950,7 +950,7 @@ try {
       event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
       dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
       eligible_dexes TEXT NOT NULL DEFAULT '[]',
       mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -1093,7 +1093,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'ostium'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("daily_pool_award_time_utc") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'dango'") || !schema.includes("'ostium'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("daily_pool_award_time_utc") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -1103,7 +1103,7 @@ try {
             event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
             name         TEXT NOT NULL,
             description  TEXT,
-            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash')),
             dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
             eligible_dexes TEXT NOT NULL DEFAULT '[]',
             mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -1151,11 +1151,11 @@ try {
             id,
             CASE WHEN event_kind IN ('standard','lucky_raider') THEN event_kind ELSE 'standard' END,
             name, description,
-            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END,
+            CASE WHEN dex IN ('pacifica','avantis','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END,
             CASE WHEN dex_scope IN ('single','custom','all') THEN dex_scope ELSE 'single' END,
             CASE
               WHEN eligible_dexes IS NOT NULL AND eligible_dexes != '' AND eligible_dexes != '[]' THEN eligible_dexes
-              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END || '"]'
+              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','hibachi','hotstuff','grvt','katana','gmtrade','flash') THEN dex ELSE 'pacifica' END || '"]'
             END,
             CASE WHEN mode IN ('individual','dex_vs_dex') THEN mode ELSE 'individual' END,
             COALESCE(team_score_by, 'volume_usd'),
@@ -3591,6 +3591,7 @@ const TOURNAMENT_CREDIT_DEXES = new Set([
   'pacifica',
   'avantis',
   'decibel',
+  'dango',
   'gmx',
   'ostium',
   'monad',
@@ -5078,7 +5079,8 @@ function awardPendingTournamentDailyPools(options = {}) {
     const luckyLast = needsLucky ? tournamentLastClosedLuckyRaiderDay(t, now) : addUtcDays(first, -1);
     const last = dailyLast > luckyLast ? dailyLast : luckyLast;
     if (first > last) continue;
-    let day = first;
+    const windowFirst = addUtcDays(last, -(maxDays - 1));
+    let day = first > windowFirst ? first : windowFirst;
     let guard = 0;
     while (day <= last && guard < maxDays) {
       const dayResults = [];
@@ -9461,11 +9463,134 @@ const BATTLE_RISK_THRESHOLDS = Object.freeze({
   rejectedResults: 10,
   sharedIpPlayers: 8,
   sharedIpMinStarts: 20,
+  shipDeployWindowHours: 24,
+  shipDeployBucketSize: 0.5,
+  shipDeployMinSamples: 8,
+  shipDeployMinRepeats: 6,
+  shipDeployMinRatio: 0.75,
 });
 
 function battleRiskNumber(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function battleRiskReplayActions(replayData) {
+  let parsed = replayData;
+  if (typeof replayData === 'string') {
+    try { parsed = JSON.parse(replayData || '[]'); } catch { return []; }
+  }
+  if (Array.isArray(parsed?.actions)) return parsed.actions;
+  if (Array.isArray(parsed)) return parsed;
+  return [];
+}
+
+function battleRiskFiniteCoord(...values) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function battleRiskCoordBucket(value) {
+  const bucketSize = Math.max(0.01, Number(BATTLE_RISK_THRESHOLDS.shipDeployBucketSize) || 0.5);
+  const rounded = Math.round(Number(value) / bucketSize) * bucketSize;
+  const clean = Object.is(rounded, -0) ? 0 : rounded;
+  return Number(clean.toFixed(2));
+}
+
+function battleRiskCoordText(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  return Number(n.toFixed(2)).toString();
+}
+
+function battleRiskShipDeployPatternFromReplay(replayData) {
+  const actions = battleRiskReplayActions(replayData);
+  const coords = [];
+  for (const action of actions) {
+    if (action?.type !== 'place_ship') continue;
+    const troopSpawns = Array.isArray(action.troop_spawns) ? action.troop_spawns : [];
+    const firstSpawn = troopSpawns[0] || {};
+    const rawX = battleRiskFiniteCoord(action.troop_x, action.x, firstSpawn.x);
+    const rawZ = battleRiskFiniteCoord(action.troop_z, action.z, firstSpawn.z);
+    if (rawX === null || rawZ === null) continue;
+    const x = battleRiskCoordBucket(rawX);
+    const z = battleRiskCoordBucket(rawZ);
+    coords.push({
+      order: coords.length + 1,
+      x,
+      z,
+      label: `${battleRiskCoordText(x)},${battleRiskCoordText(z)}`,
+    });
+  }
+  if (!coords.length) return null;
+  return {
+    signature: coords.map((coord) => coord.label).join('|'),
+    ship_count: coords.length,
+    coords,
+    coords_text: coords.map((coord) => coord.label).join(' -> '),
+  };
+}
+
+function getBattleShipDeployPatternMetrics(options = {}) {
+  const playerId = String(options.playerId || '').trim();
+  const windowHours = Math.max(1, Math.min(168, Math.trunc(Number(options.windowHours) || BATTLE_RISK_THRESHOLDS.shipDeployWindowHours)));
+  const limit = Math.max(100, Math.min(50000, Math.trunc(Number(options.limit) || (playerId ? 2000 : 50000))));
+  const playerSql = playerId ? 'AND attacker_id = ?' : '';
+  const params = [`-${windowHours} hours`];
+  if (playerId) params.push(playerId);
+  params.push(limit);
+
+  const rows = db.prepare(`
+    SELECT attacker_id, replay_data, created_at
+    FROM battle_replays
+    WHERE created_at > datetime('now', ?)
+      AND replay_data LIKE '%place_ship%'
+      ${playerSql}
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?
+  `).all(...params);
+
+  const byPlayer = new Map();
+  for (const row of rows) {
+    const pattern = battleRiskShipDeployPatternFromReplay(row.replay_data);
+    if (!pattern?.signature) continue;
+    let player = byPlayer.get(row.attacker_id);
+    if (!player) {
+      player = { samples: 0, signatures: new Map(), latest_at: null };
+      byPlayer.set(row.attacker_id, player);
+    }
+    player.samples += 1;
+    if (!player.latest_at || String(row.created_at || '') > player.latest_at) player.latest_at = row.created_at || null;
+    const existing = player.signatures.get(pattern.signature) || {
+      count: 0,
+      ship_count: pattern.ship_count,
+      coords_text: pattern.coords_text,
+      signature: pattern.signature,
+    };
+    existing.count += 1;
+    player.signatures.set(pattern.signature, existing);
+  }
+
+  const metrics = new Map();
+  for (const [id, player] of byPlayer.entries()) {
+    const top = [...player.signatures.values()].sort((a, b) => b.count - a.count || b.ship_count - a.ship_count)[0] || null;
+    if (!top) continue;
+    const ratio = player.samples > 0 ? top.count / player.samples : 0;
+    metrics.set(id, {
+      ship_deploy_samples_24h: player.samples,
+      ship_deploy_distinct_patterns_24h: player.signatures.size,
+      ship_deploy_top_repeats_24h: top.count,
+      ship_deploy_top_ratio_24h: Number(ratio.toFixed(4)),
+      ship_deploy_top_ship_count: top.ship_count,
+      ship_deploy_top_signature: top.signature,
+      ship_deploy_top_coords: top.coords_text,
+      ship_deploy_latest_at: player.latest_at,
+    });
+  }
+  return metrics;
 }
 
 function battleRiskFlagsForMetrics(row = {}) {
@@ -9477,6 +9602,9 @@ function battleRiskFlagsForMetrics(row = {}) {
   const simMismatchAllowed = battleRiskNumber(row.sim_mismatch_allowed_24h);
   const rejectedResults = battleRiskNumber(row.rejected_results_24h);
   const ipPlayers24h = battleRiskNumber(row.ip_players_24h);
+  const shipDeploySamples = battleRiskNumber(row.ship_deploy_samples_24h);
+  const shipDeployRepeats = battleRiskNumber(row.ship_deploy_top_repeats_24h);
+  const shipDeployRatio = battleRiskNumber(row.ship_deploy_top_ratio_24h);
   const submitRate = starts24h > 0 ? submitted24h / starts24h : null;
   const flags = [];
 
@@ -9555,6 +9683,19 @@ function battleRiskFlagsForMetrics(row = {}) {
       detail: 'Latest client-log IP is shared by many active accounts.',
     });
   }
+  if (
+    shipDeploySamples >= BATTLE_RISK_THRESHOLDS.shipDeployMinSamples
+    && shipDeployRepeats >= BATTLE_RISK_THRESHOLDS.shipDeployMinRepeats
+    && shipDeployRatio >= BATTLE_RISK_THRESHOLDS.shipDeployMinRatio
+  ) {
+    flags.push({
+      code: 'battle_repeated_ship_deploy',
+      label: `${shipDeployRepeats}/${shipDeploySamples} same ship deployment`,
+      tone: 'red',
+      severity: 'red',
+      detail: `Same rounded ship coordinate pattern repeated. Pattern: ${row.ship_deploy_top_coords || row.ship_deploy_top_signature || 'unknown'}`,
+    });
+  }
 
   return flags;
 }
@@ -9566,7 +9707,8 @@ function battleRiskScore(flags, row = {}) {
     + battleRiskNumber(row.attack_starts_15m) * 5
     + battleRiskNumber(row.accepted_wins_24h) * 2
     + battleRiskNumber(row.rejected_results_24h) * 10
-    + battleRiskNumber(row.sim_mismatch_allowed_24h) * 10;
+    + battleRiskNumber(row.sim_mismatch_allowed_24h) * 10
+    + battleRiskNumber(row.ship_deploy_top_repeats_24h) * 20;
 }
 
 function normalizeBattleRiskRow(row, includeClean = false) {
@@ -9603,6 +9745,14 @@ function normalizeBattleRiskRow(row, includeClean = false) {
     distinct_defenders_24h: battleRiskNumber(row.distinct_defenders_24h),
     ip_players_24h: battleRiskNumber(row.ip_players_24h),
     ip_logs_24h: battleRiskNumber(row.ip_logs_24h),
+    ship_deploy_samples_24h: battleRiskNumber(row.ship_deploy_samples_24h),
+    ship_deploy_distinct_patterns_24h: battleRiskNumber(row.ship_deploy_distinct_patterns_24h),
+    ship_deploy_top_repeats_24h: battleRiskNumber(row.ship_deploy_top_repeats_24h),
+    ship_deploy_top_ratio_24h: row.ship_deploy_top_ratio_24h == null ? null : Number(row.ship_deploy_top_ratio_24h),
+    ship_deploy_top_ship_count: battleRiskNumber(row.ship_deploy_top_ship_count),
+    ship_deploy_top_signature: row.ship_deploy_top_signature || null,
+    ship_deploy_top_coords: row.ship_deploy_top_coords || null,
+    ship_deploy_latest_at: row.ship_deploy_latest_at || null,
     submit_rate_24h: starts24h > 0 ? Number((submitted24h / starts24h).toFixed(4)) : null,
     risk_flags: flags,
     captcha_required: captchaRequired,
@@ -9726,8 +9876,9 @@ function getBattleRiskPlayers(options = {}) {
     ORDER BY COALESCE(s.attack_starts_24h, 0) DESC, COALESCE(r.accepted_wins_24h, 0) DESC
   `).all(...params);
 
+  const shipDeployMetricsByPlayer = getBattleShipDeployPatternMetrics({ playerId });
   return rows
-    .map((row) => normalizeBattleRiskRow(row, includeClean))
+    .map((row) => normalizeBattleRiskRow({ ...row, ...(shipDeployMetricsByPlayer.get(row.player_id) || {}) }, includeClean))
     .filter(Boolean)
     .sort((a, b) => b.risk_score - a.risk_score || b.attack_starts_24h - a.attack_starts_24h)
     .slice(0, limit);

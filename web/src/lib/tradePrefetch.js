@@ -3,6 +3,7 @@ const TRADE_CACHE_MAX_ENTRIES = 250;
 const DEFAULT_PREFETCH_TIMEOUT_MS = 9000;
 const COMMON_PRIVATE_DEXES = new Set([
   'avantis',
+  'dango',
   'gmx',
   'ostium',
   'monad',

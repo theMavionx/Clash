@@ -138,7 +138,7 @@ setupGmtradeRealtime(server);
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Futures server running on http://127.0.0.1:${PORT}`);
-  console.log('Network: Pacifica Mainnet + Avantis (Base) + Decibel (Aptos) + GMX (Arbitrum) + Perpl (Monad) + Phoenix (Solana) + Hyperliquid + Nado (Ink) + Katana + GMTrade realtime');
+  console.log('Network: Pacifica Mainnet + Avantis (Base) + Decibel (Aptos) + Dango + GMX (Arbitrum) + Perpl (Monad) + Phoenix (Solana) + Hyperliquid + Nado (Ink) + Katana + GMTrade realtime');
   console.log('Builder code: clashofperps');
   // Start gold-rewards indexers. Avantis still needs polling. Decibel orders
   // are submitted by this server signer, so the Decibel order route records
@@ -169,6 +169,15 @@ server.listen(PORT, '127.0.0.1', () => {
   // registered GMX wallet and writes verified rows into trade_history. Same
   // pattern as Avantis; the trade_history.client_order_id UNIQUE index
   // dedups against any future client-side reportTrade path.
+  if (process.env.DANGO_REALTIME_WORKER !== '0') {
+    try {
+      require('./dango-realtime-worker').start();
+    } catch (e) {
+      console.error('[worker] dango-realtime-worker failed to start:', e.message);
+    }
+  } else {
+    console.log('[dango-realtime-worker] skipped (DANGO_REALTIME_WORKER=0)');
+  }
   try {
     require('./gmx-rewards-worker').start();
   } catch (e) {

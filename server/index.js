@@ -1507,6 +1507,7 @@ function renderPlayers() {
   const pacCount   = players.filter(p => p.dex === 'pacifica').length;
   const avtCount   = players.filter(p => p.dex === 'avantis').length;
   const decCount   = players.filter(p => p.dex === 'decibel').length;
+  const dngCount   = players.filter(p => p.dex === 'dango').length;
   const gmxCount   = players.filter(p => p.dex === 'gmx').length;
   const ostCount   = players.filter(p => p.dex === 'ostium').length;
   const monCount   = players.filter(p => p.dex === 'monad').length;
@@ -1535,6 +1536,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#7C3AED"><div class="v" style="color:#a78bfa;font-size:22px">' + pacCount + '</div><div class="l">Pacifica</div></div>' +
     '<div class="stat" style="border-color:#0EA5E9"><div class="v" style="color:#38bdf8;font-size:22px">' + avtCount + '</div><div class="l">Avantis</div></div>' +
     '<div class="stat" style="border-color:#facc15"><div class="v" style="color:#facc15;font-size:22px">' + decCount + '</div><div class="l">Decibel</div></div>' +
+    '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#86efac;font-size:22px">' + dngCount + '</div><div class="l">Dango</div></div>' +
     '<div class="stat" style="border-color:#f97316"><div class="v" style="color:#fb923c;font-size:22px">' + ostCount + '</div><div class="l">Ostium</div></div>' +
     '<div class="stat" style="border-color:#4f46e5"><div class="v" style="color:#a5b4fc;font-size:22px">' + gmxCount + '</div><div class="l">GMX</div></div>' +
     '<div class="stat" style="border-color:#8b5cf6"><div class="v" style="color:#c4b5fd;font-size:22px">' + monCount + '</div><div class="l">Perpl</div></div>' +
@@ -1559,6 +1561,7 @@ function renderPlayers() {
     if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
     if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
     if (d === 'decibel')  return '<span class="badge" style="background:#713f12;color:#fde68a">DCB</span>';
+    if (d === 'dango')    return '<span class="badge" style="background:#14532d;color:#bbf7d0">DNG</span>';
     if (d === 'gmx')      return '<span class="badge" style="background:#312e81;color:#c7d2fe">GMX</span>';
     if (d === 'ostium')   return '<span class="badge" style="background:#7c2d12;color:#ffedd5">OST</span>';
     if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
@@ -2683,6 +2686,7 @@ async function loadStats() {
     const pacCount = (byDex.find(x => x.dex === 'pacifica') || {}).n || 0;
     const avtCount = (byDex.find(x => x.dex === 'avantis')  || {}).n || 0;
     const decCount = (byDex.find(x => x.dex === 'decibel')  || {}).n || 0;
+    const dngCount = (byDex.find(x => x.dex === 'dango')    || {}).n || 0;
     const gmxCount = (byDex.find(x => x.dex === 'gmx')      || {}).n || 0;
     const ostCount = (byDex.find(x => x.dex === 'ostium')   || {}).n || 0;
     const monCount = (byDex.find(x => x.dex === 'monad')    || {}).n || 0;
@@ -2701,6 +2705,7 @@ async function loadStats() {
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
     const decRew = rewardsMap.decibel  || {};
+    const dngRew = rewardsMap.dango    || {};
     const gmxRew = rewardsMap.gmx      || {};
     const ostRew = rewardsMap.ostium   || {};
     const monRew = rewardsMap.monad    || {};
@@ -2724,6 +2729,7 @@ async function loadStats() {
       dexCard('phoenix',  'Phoenix · Solana',  '#f97316', phxCount, phxRew.total_gold || 0, phxRew.total_volume || 0, activityLines('phoenix')) +
       dexCard('monad',    'Perpl / Monad',     '#8b5cf6', monCount, monRew.total_gold || 0, monRew.total_volume || 0, activityLines('monad')) +
       dexCard('hyperliquid', 'Hyperliquid',     '#16a34a', hplCount, hplRew.total_gold || 0, hplRew.total_volume || 0, activityLines('hyperliquid')) +
+      dexCard('dango',    'Dango',              '#22c55e', dngCount, dngRew.total_gold || 0, dngRew.total_volume || 0, activityLines('dango')) +
       dexCard('risex',    'RISEx',             '#e11d48', risCount, risRew.total_gold || 0, risRew.total_volume || 0, activityLines('risex')) +
       dexCard('nado',     'Nado · Ink',        '#00b8d9', ndoCount, ndoRew.total_gold || 0, ndoRew.total_volume || 0, activityLines('nado')) +
       dexCard('hibachi',  'Hibachi',           '#dc2626', hibCount, hibRew.total_gold || 0, hibRew.total_volume || 0, activityLines('hibachi')) +
@@ -2877,6 +2883,7 @@ async function loadStats() {
       topTraderTable('ostium',  'Ostium · Arbitrum', '#f97316') +
       topTraderTable('monad',   'Perpl / Monad',   '#8b5cf6') +
       topTraderTable('hyperliquid', 'Hyperliquid', '#16a34a') +
+      topTraderTable('dango',   'Dango',            '#22c55e') +
       topTraderTable('risex',   'RISEx',           '#e11d48') +
       topTraderTable('phoenix', 'Phoenix · Solana', '#f97316') +
       topTraderTable('nado',    'Nado · Ink',       '#00b8d9') +
@@ -2901,6 +2908,7 @@ async function loadStats() {
       if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
       if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
       if (d === 'decibel')  return '<span class="badge" style="background:#713f12;color:#fde68a">DCB</span>';
+      if (d === 'dango')    return '<span class="badge" style="background:#14532d;color:#bbf7d0">DNG</span>';
       if (d === 'gmx')      return '<span class="badge" style="background:#312e81;color:#c7d2fe">GMX</span>';
       if (d === 'ostium')   return '<span class="badge" style="background:#7c2d12;color:#ffedd5">OST</span>';
       if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
@@ -3150,11 +3158,12 @@ async function deleteTask(id) {
 let TOURNAMENTS_CACHE = [];
 let TOURNAMENT_LB_ID = null;
 let TOURNAMENT_EDIT_ID = null;
-const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter'];
+const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'dango', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter'];
 const TOURNAMENT_DEX_LABELS_ADMIN = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
   decibel: 'Decibel',
+  dango: 'Dango',
   gmx: 'GMX',
   ostium: 'Ostium',
   monad: 'Perpl',
@@ -4457,6 +4466,7 @@ function renderRevenueAnalytics(data) {
     { key: 'katana', label: 'Katana Perps' },
     { key: 'gmtrade', label: 'GMTrade' },
     { key: 'flash', label: 'Flash Trade' },
+    { key: 'dango', label: 'Dango' },
     { key: 'lighter', label: 'Lighter' },
   ];
   const windowKeys = ['24h', '7d', '30d', 'all'];
@@ -4526,6 +4536,7 @@ async function loadEarnings(force) {
     const dexes = [
       ['pacifica', 'Pacifica', '#a78bfa', '#7C3AED'],
       ['decibel',  'Decibel',  '#facc15', '#facc15'],
+      ['dango',    'Dango',    '#86efac', '#22c55e'],
       ['avantis',  'Avantis',  '#38bdf8', '#0EA5E9'],
       ['gmx',      'GMX',      '#a5b4fc', '#4f46e5'],
       ['ostium',   'Ostium',   '#fb923c', '#f97316'],

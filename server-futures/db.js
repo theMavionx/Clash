@@ -134,6 +134,14 @@ db.exec(`
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS dex_worker_state (
+    dex        TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (dex, key)
+  );
+
 `);
 
 // ---------- Pre-statement migrations ----------
@@ -306,6 +314,14 @@ const stmts = {
     WHERE signature = ?
   `),
   deletePendingGmtradeTradeReport: db.prepare('DELETE FROM gmtrade_pending_trade_reports WHERE signature = ?'),
+  getDexWorkerState: db.prepare('SELECT value FROM dex_worker_state WHERE dex = ? AND key = ?'),
+  setDexWorkerState: db.prepare(`
+    INSERT INTO dex_worker_state (dex, key, value, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(dex, key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = datetime('now')
+  `),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
 };
@@ -367,6 +383,16 @@ function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, c
     createdAt != null ? String(createdAt) : null
   );
   return { id: info.changes ? info.lastInsertRowid : null, changes: info.changes };
+}
+
+function getDexWorkerState(dex, key, fallback = null) {
+  const row = stmts.getDexWorkerState.get(String(dex), String(key));
+  return row?.value ?? fallback;
+}
+
+function setDexWorkerState(dex, key, value) {
+  stmts.setDexWorkerState.run(String(dex), String(key), String(value));
+  return { success: true };
 }
 
 function recordDecibelOrderProof({
@@ -527,6 +553,8 @@ module.exports = {
   addDeposit,
   getDeposits,
   addTrade,
+  getDexWorkerState,
+  setDexWorkerState,
   getTrades,
   upsertPendingGmtradeTradeReport,
   listPendingGmtradeTradeReports,
