@@ -10641,11 +10641,17 @@ router.post('/players/login-wallet', async (req, res) => {
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
   if (rejectBlacklistedWallet(req, res, wallet, 'players.login-wallet')) return;
 
-  let player = VALID_DEXES.has(dex)
-    ? getPlayerByWalletAndDexAnyForm(wallet, dex)
-    : null;
-  if (!player) player = getUnifiedPlayerByWalletAnyForm(wallet);
-  if (!player) return res.status(404).json({ error: 'No Clash account found for this wallet' });
+  const explicitDex = VALID_DEXES.has(dex) ? dex : '';
+  const player = explicitDex
+    ? getPlayerByWalletAndDexAnyForm(wallet, explicitDex)
+    : getUnifiedPlayerByWalletAnyForm(wallet);
+  if (!player) {
+    return res.status(404).json({
+      error: explicitDex
+        ? 'No account found for this wallet on this DEX'
+        : 'No Clash account found for this wallet',
+    });
+  }
   if (db.isPlayerBanned(player)) return rejectBannedPlayer(res, player);
   if (req.body?.probeOnly === true) {
     return res.json({
@@ -10656,20 +10662,19 @@ router.post('/players/login-wallet', async (req, res) => {
       dex: player.dex,
     });
   }
-  const requestedDex = VALID_DEXES.has(dex) ? dex : (player.dex || '');
-  const proofDex = VALID_DEXES.has(dex) ? dex : '';
+  const proofDex = explicitDex;
   const authProof = await verifyWalletAuthProof(req, { wallet, dex: proofDex });
   if (!authProof.ok) return res.status(authProof.status || 401).json({ error: authProof.error });
-  if (VALID_DEXES.has(dex) && dex !== player.dex) {
+  if (explicitDex && explicitDex !== player.dex) {
     try {
-      safelySetPlayerActiveDex(player, dex, wallet, 'login-wallet');
+      safelySetPlayerActiveDex(player, explicitDex, wallet, 'login-wallet');
     } catch (e) {
       console.warn('[auth] login-wallet dex update failed:', e.message);
     }
   }
   upsertUnifiedIdentity(player.id, wallet, { label: req.body?.walletSource || req.body?.source });
-  if (VALID_DEXES.has(dex)) {
-    upsertPlayerDexAccountFromLoginWallet(player.id, dex, wallet, 'ready', {
+  if (explicitDex) {
+    upsertPlayerDexAccountFromLoginWallet(player.id, explicitDex, wallet, 'ready', {
       source: req.body?.walletSource || req.body?.source || 'login-wallet',
     });
   }
@@ -10796,6 +10801,25 @@ router.post('/players/dex-accounts/:dex/select', auth, (req, res) => {
   const venueWallet = dexAcceptsWallet(dex, wallet) ? wallet : '';
   if (venueWallet && !requireFirstPartyBrowserContext(req, res, 'players.dex-account.select')) return;
   if (venueWallet && rejectBlacklistedWallet(req, res, venueWallet, 'players.dex-account.select')) return;
+  const currentLoginWallet = req.player.wallet && isStorableAuthWallet(req.player.wallet)
+    ? canonicalWalletIdentifier(req.player.wallet)
+    : '';
+  const selectedLoginWallet = venueWallet && isStorableAuthWallet(venueWallet)
+    ? canonicalWalletIdentifier(venueWallet)
+    : '';
+  if (selectedLoginWallet && selectedLoginWallet === currentLoginWallet) {
+    const existingDexPlayer = getPlayerByWalletAndDexAnyForm(venueWallet, dex);
+    if (existingDexPlayer && existingDexPlayer.id !== req.player.id) {
+      const state = db.getFullPlayerState(existingDexPlayer.id);
+      return res.json({
+        ok: true,
+        dex,
+        switched_account: true,
+        token: existingDexPlayer.token,
+        player: state,
+      });
+    }
+  }
   if (venueWallet) {
     upsertUnifiedIdentity(req.player.id, venueWallet, { label: req.body?.walletSource || req.body?.source });
   }
@@ -10810,9 +10834,18 @@ router.post('/players/dex-accounts/:dex/select', auth, (req, res) => {
       ...(wallet && !venueWallet ? { ignored_wallet: canonicalWalletIdentifier(wallet), ignored_chain_type: walletChainType(wallet) } : {}),
     },
   );
-  safelySetPlayerActiveDex(req.player, dex, null, 'select-dex', { bindWallet: false });
+  try {
+    safelySetPlayerActiveDex(req.player, dex, null, 'select-dex', { bindWallet: false });
+  } catch (e) {
+    console.warn('[auth] select-dex update failed:', e.message);
+    return res.status(409).json({
+      error: 'Could not switch this account to the requested DEX. Reconnect the DEX wallet and try again.',
+      code: 'dex_switch_conflict',
+      requested_dex: dex,
+    });
+  }
   const state = db.getFullPlayerState(req.player.id);
-  res.json({ ok: true, dex, player: state });
+  res.json({ ok: true, dex, switched_account: false, token: req.player.token, player: state });
 });
 
 router.post('/players/dex-accounts/:dex/link', auth, (req, res) => {

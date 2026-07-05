@@ -1411,3 +1411,11 @@ Time: 2026-07-05 18:42:48 +03:00
 Request:
 
 > client:510 ReferenceError: Cannot access 'createFlashWalletAuthProof' before initialization ... спочатку виправ оце
+
+### UR-2026-07-05-013
+
+Time: 2026-07-05 23:11:31 +03:00
+
+Request:
+
+> забудь то все ось виправ цю проблему і також потім коміт деплой хз чому не дає торгувати якщо я зробив світч декса Failed to load resource: the server responded with a status of 409 ... Account is registered for 'pacifica'. Switch DEX in your profile before calling dango endpoints

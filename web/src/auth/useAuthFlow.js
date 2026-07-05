@@ -47,8 +47,9 @@ const DEX_PICKED_KEY = 'clash_dex_picked';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
 const MANUAL_RECONNECT_KEY = 'clash_manual_reconnect_required';
 const REFERRAL_STORAGE_KEY = 'clash_referral_code_v1';
-// Unified account cache: one wallet resolves to one Clash account, and the
-// chosen venue is a profile setting instead of a separate registration.
+// Account probe cache is scoped by wallet + DEX. The server authorizes
+// futures endpoints against the DEX stored on the active player row, so a
+// cached Pacifica probe must not be reused after the user picks Dango.
 const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_account_cache_v3';
 const ACCOUNT_PROBE_POSITIVE_TTL_MS = 24 * 60 * 60 * 1000;
 const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
@@ -251,12 +252,8 @@ function walletCacheKey(wallet, dex) {
   const raw = String(wallet || '').trim();
   const w = raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
   if (!w) return '';
-  // Unified account model: one wallet resolves to one Clash account, while
-  // the chosen DEX is a profile/venue setting. Keep this cache wallet-only
-  // so switching venues does not send returning users into the relogin/name
-  // form just because they have not traded on that DEX before.
-  void dex;
-  return w;
+  const d = String(dex || 'account').toLowerCase();
+  return `${d}:${w}`;
 }
 
 function readAccountProbeCache(wallet, dex) {
@@ -1115,7 +1112,7 @@ export function useAuthFlow() {
     const payload = { name: nameToUse, wallet: candidate.wallet };
     if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'ostium' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
+    if (authDex === 'avantis' || authDex === 'dango' || authDex === 'gmx' || authDex === 'ostium' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
       // resolver hard-codes 'base' regardless of which DEX is active, so
       // trusting candidate.chain would mis-tag GMX/Perpl registrations as
@@ -1201,7 +1198,7 @@ export function useAuthFlow() {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Actions exposed to the UI. All auth decisions flow through here.
-  const pickDex = useCallback((newDex) => {
+  const pickDex = useCallback(async (newDex) => {
     if (!isDexAvailableInContext(newDex, { isInFrame, isSolanaMobile })) return;
     const isLoggedIn = typeof window !== 'undefined' && !!window._playerToken;
     const switching = isLoggedIn && dexPicked && newDex !== dex;
@@ -1218,15 +1215,46 @@ export function useAuthFlow() {
       // need a fresh player_row, not a fresh wallet.
       const token = typeof window !== 'undefined' ? window._playerToken : null;
       if (token) {
-        fetch(`/api/players/dex-accounts/${encodeURIComponent(newDex)}/select`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-token': token },
-          body: JSON.stringify({ wallet: candidate?.wallet || '' }),
-        }).catch(() => {});
+        try {
+          const response = await fetch(`/api/players/dex-accounts/${encodeURIComponent(newDex)}/select`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-token': token },
+            body: JSON.stringify({ wallet: candidate?.wallet || '' }),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(data?.error || `Could not switch DEX (${response.status})`);
+          }
+          const serverDex = data?.player?.dex || data?.dex || newDex;
+          if (serverDex !== newDex) {
+            setDex(serverDex);
+            writeLastPlayerDexPreference({ wallet: candidate?.wallet, token }, serverDex);
+          }
+          if (data?.player || data?.token) {
+            window.onGodotMessage?.({
+              action: 'state',
+              data: {
+                ...(data?.player || { dex: serverDex }),
+                ...(data?.token ? { token: data.token } : {}),
+              },
+            });
+          }
+          addClientBreadcrumb('dex.select_success', {
+            dex: serverDex,
+            switched_account: !!data?.switched_account,
+          });
+        } catch (e) {
+          setDex(dex);
+          writeLastPlayerDexPreference({ wallet: candidate?.wallet, token }, dex);
+          addClientBreadcrumb('dex.select_failed', {
+            from: dex,
+            to: newDex,
+            message: e?.message || String(e || ''),
+          }, 'warn');
+          setRegisterError(authErrorMessage(e?.message || 'Could not switch DEX. Try again.'));
+          return;
+        }
       }
-      // Tell the session-reset effect to NOT bounce us to the DEX picker
-      // when Godot fires show_register=true in response to logout.
-      intentionalDexSwitchRef.current = false;
       // If we were on Decibel and we're leaving it, drop the Petra
       // connection — useDecibel keeps polling Aptos REST as long as
       // address is set, which wastes RPC quota and shows ghost balances
@@ -1262,7 +1290,7 @@ export function useAuthFlow() {
     const payload = { name: name.trim(), wallet: candidate.wallet };
     if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'ostium' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
+    if (authDex === 'avantis' || authDex === 'dango' || authDex === 'gmx' || authDex === 'ostium' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
       payload.chain = authDex === 'gmx' || authDex === 'ostium' ? 'arbitrum'
         : authDex === 'monad' ? 'monad'
         : authDex === 'hyperliquid' ? 'arbitrum'

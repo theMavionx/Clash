@@ -155,7 +155,7 @@ function VenuePickerOverlay({ isSolanaMobile, onPick }) {
 
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
-  const { setDex } = useDex();
+  const { dex, setDex } = useDex();
   const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
   const { tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useTutorial();
   const player = usePlayer();
@@ -235,20 +235,54 @@ export default function GameUI() {
     return () => { cancelled = true; };
   }, [isSolanaMobile, player, setDex, showRegister, solanaMobileReady]);
 
-  const chooseVenue = useCallback((nextDex) => {
+  const chooseVenue = useCallback(async (nextDex) => {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
-    setDex(nextDex);
-    writeLastPlayerDexPreference({ ...player, token }, nextDex);
-    try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
-    setShowVenuePicker(false);
-    if (token) {
-      fetch(`/api/players/dex-accounts/${encodeURIComponent(nextDex)}/select`, {
+    const previousDex = dex || player?.dex || 'pacifica';
+    const preferenceOwner = { ...player, token };
+    if (!token) {
+      setDex(nextDex);
+      writeLastPlayerDexPreference(preferenceOwner, nextDex);
+      try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
+      setShowVenuePicker(false);
+      return;
+    }
+    try {
+      const response = await fetch(`/api/players/dex-accounts/${encodeURIComponent(nextDex)}/select`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({}),
-      }).catch(() => {});
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error || `Could not switch DEX (${response.status})`);
+      }
+      const serverDex = data?.player?.dex || data?.dex || nextDex;
+      const playerPatch = data?.player && typeof data.player === 'object'
+        ? { ...data.player, ...(data?.token ? { token: data.token } : {}) }
+        : { dex: serverDex, ...(data?.token ? { token: data.token } : {}) };
+      setDex(serverDex);
+      writeLastPlayerDexPreference(preferenceOwner, serverDex);
+      try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
+      window.onGodotMessage?.({ action: 'state', data: playerPatch });
+      setShowVenuePicker(false);
+      addClientBreadcrumb('venue_picker.select_success', {
+        dex: serverDex,
+        switched_account: !!data?.switched_account,
+      });
+    } catch (err) {
+      setDex(previousDex);
+      writeLastPlayerDexPreference(preferenceOwner, previousDex);
+      addClientBreadcrumb('venue_picker.select_failed', {
+        requestedDex: nextDex,
+        previousDex,
+        message: err?.message || String(err || ''),
+      }, 'warn');
+      window.onGodotMessage?.({
+        action: 'error',
+        data: { message: err?.message || 'Could not switch DEX. Try again.' },
+      });
     }
-  }, [player, setDex]);
+  }, [dex, player, setDex]);
 
   useEffect(() => {
     const openVenuePicker = (event) => {
