@@ -41,6 +41,7 @@ const REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(20_000, Number(process.env.DA
 const MARKET_CACHE_MS = Math.max(1000, Math.min(10 * 60_000, Number(process.env.DANGO_MARKET_CACHE_MS || 15_000)));
 const EVENT_BACKFILL_LIMIT = Math.max(1, Math.min(500, Number(process.env.DANGO_EVENT_BACKFILL_LIMIT || 100)));
 const EVENT_BACKFILL_MAX_PAGES = Math.max(1, Math.min(25, Number(process.env.DANGO_EVENT_BACKFILL_MAX_PAGES || 10)));
+const DEFAULT_QUANTITY_STEP = '0.000001';
 
 let marketCache = null;
 let marketCacheAt = 0;
@@ -48,6 +49,7 @@ let priceCache = null;
 let priceCacheAt = 0;
 const accountResolveCache = new Map();
 const ACCOUNT_RESOLVE_CACHE_MS = 60_000;
+let nextWsSubscriptionId = 1;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -266,6 +268,7 @@ function normalizeMarket(pairId, params = {}, stats = {}) {
   const price = num(stats.currentPrice ?? stats.current_price ?? stats.price);
   const initialMarginRatio = num(params.initial_margin_ratio, 0);
   const maxLeverage = initialMarginRatio > 0 ? Math.floor((1 / initialMarginRatio) * 100) / 100 : 50;
+  const minOrderUsd = num(params.min_order_size, 0);
   return {
     symbol,
     display_symbol: symbol,
@@ -283,7 +286,9 @@ function normalizeMarket(pairId, params = {}, stats = {}) {
     funding_rate: num(params.funding_rate ?? stats.fundingRate ?? stats.funding_rate),
     max_leverage: maxLeverage,
     min_order_size: String(params.min_order_size ?? '0'),
-    lot_size: String(params.min_order_size ?? params.tick_size ?? '0.0001'),
+    min_notional_usd: String(minOrderUsd || ''),
+    lot_size: DEFAULT_QUANTITY_STEP,
+    quantity_step: DEFAULT_QUANTITY_STEP,
     tick_size: String(params.tick_size ?? '0.01'),
     max_market_slippage: String(params.max_market_slippage ?? '0.02'),
     initial_margin_ratio: String(params.initial_margin_ratio ?? ''),
@@ -477,6 +482,10 @@ function conditionalOrdersFromState(state = {}) {
       const trigger = num(order.trigger_price ?? order.triggerPrice ?? order.price);
       const id = String(order.order_id ?? order.orderId ?? `${pairId}:${key}:${trigger}`).trim();
       const isAbove = /above/i.test(key);
+      const closesLong = num(position.size) >= 0;
+      const type = closesLong
+        ? (isAbove ? 'take_profit' : 'stop_loss')
+        : (isAbove ? 'stop_loss' : 'take_profit');
       out.push({
         symbol: symbolFromPairId(pairId),
         pair_id: pairId,
@@ -487,8 +496,8 @@ function conditionalOrdersFromState(state = {}) {
         price: String((order.limit_price ?? order.limitPrice ?? trigger) || ''),
         trigger_price: String(trigger || ''),
         stop_price: String(trigger || ''),
-        order_type: isAbove ? 'take_profit' : 'stop_loss',
-        type: isAbove ? 'take_profit' : 'stop_loss',
+        order_type: type,
+        type,
         status: 'open',
         reduce_only: true,
         market_addr: pairId,
@@ -921,7 +930,8 @@ function startPerpsEventsSocket({ users = [], since = null, onBatch, onError, on
   const ws = new WebSocket(NATIVE_WS_URL);
   let closed = false;
   let pingTimer = null;
-  const subscriptionId = Math.max(1, Math.floor(Date.now()));
+  const subscriptionId = nextWsSubscriptionId++;
+  if (nextWsSubscriptionId > 1_000_000) nextWsSubscriptionId = 1;
   const clearPing = () => {
     if (pingTimer) clearInterval(pingTimer);
     pingTimer = null;

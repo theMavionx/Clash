@@ -43,7 +43,7 @@ const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const POLL_MS = 45_000;
 const PHOENIX_PRICE_CACHE_MS = 15_000;
 const PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS = 60_000;
-const PHOENIX_MARKET_STATS_WS_FLUSH_MS = 100;
+const PHOENIX_MARKET_STATS_WS_FLUSH_MS = 750;
 const USDC_DECIMALS = 6;
 const PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL = '0';
 const PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL = quoteLots(0n);
@@ -1989,6 +1989,69 @@ function mergeSnapshotPositionMargin(position, marketMargin, previousPosition = 
   return next;
 }
 
+function phoenixLivePositionPnl(position, markPrice) {
+  const mark = Number(markPrice);
+  const entry = Number(position?.entry_price);
+  const amount = Math.abs(Number(position?.amount || 0));
+  if (!Number.isFinite(mark) || mark <= 0 || !Number.isFinite(entry) || entry <= 0 || !Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+  const side = String(position?.side || '').toLowerCase() === 'ask' ? -1 : 1;
+  const pnl = (mark - entry) * amount * side;
+  const margin = Number(position?.margin || 0);
+  return {
+    mark,
+    pnl: Math.abs(pnl) < 0.0000001 ? 0 : pnl,
+    pnlPct: margin > 0 ? (pnl / margin) * 100 : (
+      entry > 0 ? ((mark - entry) / entry) * 100 * side : Number(position?.pnl_pct || 0)
+    ),
+    sizeUsd: amount * mark,
+  };
+}
+
+function applyPhoenixLivePricesToPositions(rows, priceRows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const prices = Array.isArray(priceRows) ? priceRows : [];
+  if (!list.length || !prices.length) return list;
+  const priceBySymbol = new Map();
+  for (const row of prices) {
+    const symbol = phoenixSymbol(row?.symbol);
+    const mark = firstFinite(row?.mark, row?.mark_price, row?.price);
+    if (symbol && mark != null && mark > 0) priceBySymbol.set(symbol, mark);
+  }
+  if (!priceBySymbol.size) return list;
+  let changed = false;
+  const next = list.map((position) => {
+    const symbol = phoenixSymbol(position?.symbol);
+    const mark = priceBySymbol.get(symbol);
+    const live = phoenixLivePositionPnl(position, mark);
+    if (!live) return position;
+    const oldMark = Number(position?.mark_price || 0);
+    const oldPnl = Number(position?.pnl_usd || 0);
+    const oldPct = Number(position?.pnl_pct || 0);
+    const markChanged = !Number.isFinite(oldMark) || Math.abs(oldMark - live.mark) > Math.max(0.0000001, live.mark * 0.0000001);
+    const pnlChanged = !Number.isFinite(oldPnl) || Math.abs(oldPnl - live.pnl) > 0.005;
+    const pctChanged = !Number.isFinite(oldPct) || Math.abs(oldPct - live.pnlPct) > 0.005;
+    if (!markChanged && !pnlChanged && !pctChanged) return position;
+    changed = true;
+    return {
+      ...position,
+      mark_price: live.mark,
+      size_usd: live.sizeUsd > 0 ? live.sizeUsd : position.size_usd,
+      pnl_usd: live.pnl,
+      pnl_pct: live.pnlPct,
+      pnl_source: 'phoenix_market_stats_ws',
+      pnl_pct_source: 'phoenix_market_stats_ws',
+      _phoenixLivePriceAt: Date.now(),
+    };
+  });
+  return changed ? next : list;
+}
+
+function phoenixPositionsPnl(rows) {
+  return (Array.isArray(rows) ? rows : []).reduce((sum, row) => sum + Number(row?.pnl_usd || 0), 0);
+}
+
 function ordersFromSnapshot(group, marketsBySymbol, subaccountIndex = 0) {
   const symbol = phoenixSymbol(group?.symbol);
   if (!symbol) return [];
@@ -3277,6 +3340,29 @@ export function usePhoenix() {
     }
   }, [walletAddr, ownerPk, connection]);
 
+  const applyLivePositionPrices = useCallback((priceRows) => {
+    const livePositions = applyPhoenixLivePricesToPositions(positionsRef.current, priceRows);
+    if (livePositions === positionsRef.current) return;
+    const oldPnl = phoenixPositionsPnl(positionsRef.current);
+    const newPnl = phoenixPositionsPnl(livePositions);
+    const pnlDelta = newPnl - oldPnl;
+    positionsRef.current = livePositions;
+    setPositions(livePositions);
+    if (Math.abs(pnlDelta) <= 0.000001) return;
+    setPhoenixAccount(prev => {
+      if (!prev) return prev;
+      const equity = Number(prev.account_equity ?? prev.equity);
+      return {
+        ...prev,
+        ...(Number.isFinite(equity) ? {
+          account_equity: String(Math.max(0, equity + pnlDelta)),
+          equity: String(Math.max(0, equity + pnlDelta)),
+        } : {}),
+        positions_count: livePositions.length,
+      };
+    });
+  }, [setPhoenixAccount]);
+
   const applyPriceRows = useCallback((rows) => {
     const next = Array.isArray(rows) ? rows.filter(Boolean) : [];
     if (!next.length) return pricesRef.current;
@@ -3289,8 +3375,9 @@ export function usePhoenix() {
     pricesFetchedAtRef.current = Date.now();
     priceBackoffUntilRef.current = 0;
     setPrices(next);
+    applyLivePositionPrices(next);
     return next;
-  }, []);
+  }, [applyLivePositionPrices]);
 
   const mergePriceRows = useCallback((rows) => {
     const incoming = Array.isArray(rows) ? rows.filter(Boolean) : [];
@@ -3329,8 +3416,9 @@ export function usePhoenix() {
     pricesFetchedAtRef.current = Date.now();
     priceBackoffUntilRef.current = 0;
     setPrices(next);
+    applyLivePositionPrices(next);
     return next;
-  }, []);
+  }, [applyLivePositionPrices]);
 
   const applyMarketStatsUpdates = useCallback((updates) => {
     const batch = Array.isArray(updates) ? updates.filter(Boolean) : [];

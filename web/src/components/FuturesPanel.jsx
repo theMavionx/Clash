@@ -3355,6 +3355,12 @@ function FuturesPanel() {
   const flashMaxMargin = useMemo(() => (
     dex === 'flash' ? floorUsdCents(pacBalance) : pacBalance
   ), [dex, pacBalance]);
+  const dangoMinNotionalUsd = useMemo(() => {
+    if (dex !== 'dango') return 0;
+    const raw = currentMarket?.min_notional_usd ?? currentMarket?.min_order_size;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }, [dex, currentMarket]);
   const sizePctMarginBase = dex === 'phoenix'
     ? phoenixMaxMargin
     : dex === 'pacifica'
@@ -3391,6 +3397,7 @@ function FuturesPanel() {
         })
       : (parseFloat(amount) * leverage) / sizingPx;
     const lot = parseFloat(lotSize);
+    if (!Number.isFinite(lot) || lot <= 0) return String(raw);
     return String(Math.floor(raw / lot) * lot);
   }, [amount, currentPrice, amountInUsdc, lotSize, leverage, dex, orderSizingPrice, orderType, pacificaTakerFeeRate]);
 
@@ -3634,6 +3641,12 @@ function FuturesPanel() {
             );
             return;
           }
+        }
+        if (dex === 'dango' && dangoMinNotionalUsd > 0 && positionUsdc < dangoMinNotionalUsd) {
+          setLocalAlert(
+            `Dango requires a position >= $${dangoMinNotionalUsd.toFixed(2)}. Yours: $${positionUsdc.toFixed(2)}. Increase margin or leverage.`
+          );
+          return;
         }
         // Avantis and Decibel hooks take USDC collateral directly. The token
         // readout is display math, so do not round collateral through it.
@@ -3914,7 +3927,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, dangoMinNotionalUsd]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)

@@ -38,6 +38,7 @@ function normalizeMarket(row) {
   const symbol = String(row?.symbol || row?.display_symbol || '').toUpperCase();
   if (!symbol) return null;
   const price = num(row?.mark ?? row?.mark_price ?? row?.price);
+  const minNotionalUsd = num(row?.min_notional_usd ?? row?.min_order_size);
   return {
     ...row,
     symbol,
@@ -45,8 +46,10 @@ function normalizeMarket(row) {
     mark_price: String((row?.mark_price ?? row?.mark ?? price) || ''),
     price: String((row?.price ?? row?.mark ?? price) || ''),
     max_leverage: num(row?.max_leverage, 50),
-    lot_size: String(row?.lot_size || row?.min_order_size || '0.0001'),
+    lot_size: String(row?.lot_size || row?.quantity_step || '0.000001'),
+    quantity_step: String(row?.quantity_step || row?.lot_size || '0.000001'),
     min_order_size: String(row?.min_order_size || '0'),
+    min_notional_usd: String(minNotionalUsd || ''),
     margin_modes: ['cross'],
     supports_cross_margin: true,
     supports_isolated_margin: false,

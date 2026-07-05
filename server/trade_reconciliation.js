@@ -70,6 +70,7 @@ const VERIFIED_SOURCES_BY_DEX = {
 
 const USER_SCOPED_IMPORT_DEXES = new Set([
   'decibel',
+  'dango',
   'ostium',
   'gmtrade',
   'hotstuff',
@@ -394,6 +395,15 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
       return { ok: false, skipped: 'adapter_missing', dex };
     }
     return { dex, ...(await decibelRewards.importRecentLimitFillsForPlayer(playerId, wallet)) };
+  }
+
+  if (dex === 'dango') {
+    const dango = require('../server-futures/dango');
+    if (!dango.isDangoAddress(wallet)) return { ok: false, skipped: 'invalid_dango_wallet', dex };
+    return {
+      dex,
+      ...(await dango.importRecentFillsForPlayer(playerId, wallet, futuresDbWritable().addTrade, { limit })),
+    };
   }
 
   if (dex === 'hotstuff') {
