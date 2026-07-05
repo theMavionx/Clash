@@ -13,7 +13,8 @@ const BOT_WS_PREFIX = '/api/v1/bot/ws';
 const BOT_API_CANONICAL = '/api/v1/bot';
 
 /**
- * Canonical `/api/v1/bot/*` first, then legacy flat `/api/v1/*` (older Clash proxy mounts).
+ * Prefer flat `/api/v1/*` REST paths because the Clash server owns that proxy
+ * mount and `/api/v1/bot/*` is kept as a compatibility alias plus WS path.
  * Accepts `/portfolio/summary`, `/api/v1/bot/accounts`, or `/api/v1/exchanges`.
  */
 export function botApiPathCandidates(path) {
@@ -26,10 +27,10 @@ export function botApiPathCandidates(path) {
   if (!suffix.startsWith('/')) suffix = `/${suffix}`;
   const canonical = `${BOT_API_CANONICAL}${suffix}`;
   const legacy = `/api/v1${suffix}`;
-  return canonical === legacy ? [canonical] : [canonical, legacy];
+  return canonical === legacy ? [legacy] : [legacy, canonical];
 }
 
-/** GET JSON from bot API — tries canonical path, then legacy flat mount. */
+/** GET JSON from bot API via the flat proxy first, then the `/bot` alias. */
 export async function fetchBotApiJson(path, token, init = {}) {
   const headers = botAuthHeaders(token, init.headers || {});
   let lastError = null;

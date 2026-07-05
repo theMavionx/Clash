@@ -24356,6 +24356,7 @@ async function proxyToBot(req, res) {
 
 router.use('/v1/strategies', auth, proxyToBot);
 router.use('/v1/bot', auth, proxyToBot);
+router.use('/v1/portfolio', auth, proxyToBot);
 router.use('/v1/accounts', auth, proxyToBot);
 router.use('/v1/exchanges', auth, proxyToBot);
 router.use('/v1/orders', auth, proxyToBot);
