@@ -10,6 +10,14 @@ export function sameOriginRpcUrl(path) {
   return `${siteOrigin()}${raw.startsWith('/') ? raw : `/${raw}`}`;
 }
 
+export function sameOriginWsUrl(path) {
+  const raw = String(path || '').trim();
+  if (!raw) return '';
+  if (/^wss?:\/\//i.test(raw)) return raw;
+  const origin = siteOrigin().replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+  return `${origin}${raw.startsWith('/') ? raw : `/${raw}`}`;
+}
+
 export function splitRpcUrls(value) {
   return String(value || '')
     .split(/[,\s]+/)

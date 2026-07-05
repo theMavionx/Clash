@@ -1403,6 +1403,21 @@ server {
         proxy_set_header Accept-Encoding "";
         gzip off;
     }
+
+    location /rpc/arb-alchemy-ws {
+        proxy_pass https://arb-mainnet.g.alchemy.com/v2/__ARBITRUM_ALCHEMY_KEY__;
+        proxy_http_version 1.1;
+        proxy_set_header Host arb-mainnet.g.alchemy.com;
+        proxy_ssl_server_name on;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+        proxy_cache off;
+    }
     location = /rpc/base-alchemy {
         proxy_pass https://base-mainnet.g.alchemy.com/v2/__BASE_ALCHEMY_KEY__;
         proxy_http_version 1.1;
@@ -1636,7 +1651,7 @@ MCPCONF
         sed -i "s|__ARBITRUM_ALCHEMY_KEY__|$ARBITRUM_ALCHEMY_KEY|g" /etc/nginx/sites-available/$DOMAIN
     else
         sed -i 's|proxy_pass https://arb-mainnet.g.alchemy.com/v2/__ARBITRUM_ALCHEMY_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
-        log "ARBITRUM_ALCHEMY_KEY is not set; /rpc/arb-alchemy will return 503 and clients should use fallback RPCs."
+        log "ARBITRUM_ALCHEMY_KEY is not set; /rpc/arb-alchemy and /rpc/arb-alchemy-ws will return 503 and clients should use fallback RPCs."
     fi
 
     if [ -n "$BASE_ALCHEMY_KEY" ]; then

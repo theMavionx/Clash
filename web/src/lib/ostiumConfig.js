@@ -1,4 +1,5 @@
 import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS } from './gmxConfig';
+import { sameOriginWsUrl } from './rpcPolicy';
 
 export const OSTIUM_CHAIN_ID = ARBITRUM_CHAIN_ID;
 export const OSTIUM_BUILDER_ADDRESS = (
@@ -22,9 +23,18 @@ export const OSTIUM_RPC_URL = (
   || ARBITRUM_RPC_URLS[0]
   || ''
 );
+export const OSTIUM_ALCHEMY_WS_URL = (
+  import.meta.env.VITE_OSTIUM_ARBITRUM_WS_URL
+  || import.meta.env.VITE_ARBITRUM_WS_URL
+  || sameOriginWsUrl('/rpc/arb-alchemy-ws')
+);
 
 export const OSTIUM_SUBGRAPH_URL = import.meta.env.VITE_OSTIUM_SUBGRAPH_URL || '';
 export const OSTIUM_BUILDER_API_URL = import.meta.env.VITE_OSTIUM_BUILDER_API_URL || '';
+export const OSTIUM_TRADING_CALLBACKS_ADDRESS = (
+  import.meta.env.VITE_OSTIUM_TRADING_CALLBACKS_ADDRESS
+  || '0x7720fC8c8680bF4a1Af99d44c6c265a74e9742a9'
+).trim();
 export const OSTIUM_DELEGATE_MIN_ETH = (
   import.meta.env.VITE_OSTIUM_DELEGATE_MIN_ETH
   || '0.00005'

@@ -341,6 +341,19 @@ export default defineConfig({
         changeOrigin: true, secure: true,
         rewrite: () => ARBITRUM_ALCHEMY_KEY ? `/v2/${ARBITRUM_ALCHEMY_KEY}` : '/v2/',
       },
+      '/rpc/arb-alchemy-ws': {
+        target: 'wss://arb-mainnet.g.alchemy.com',
+        ws: true,
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReqWs', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
+        rewrite: () => ARBITRUM_ALCHEMY_KEY ? `/v2/${ARBITRUM_ALCHEMY_KEY}` : '/v2/',
+      },
       '/rpc/base-alchemy': {
         target: 'https://base-mainnet.g.alchemy.com',
         changeOrigin: true,

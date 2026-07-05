@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createWalletClient, formatEther, http, parseEther } from 'viem';
+import { createPublicClient, createWalletClient, formatEther, http, parseAbiItem, parseEther, webSocket } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { arbitrum } from 'viem/chains';
 import { CancelOrderType, MIN_OPEN_SIZE_USD, OrderType, OstiumClient } from '@ostium/builder-sdk';
@@ -14,7 +14,9 @@ import {
   OSTIUM_DELEGATE_TARGET_ETH,
   OSTIUM_MAX_ALLOWANCE_CHECK_USD,
   OSTIUM_ORACLE_FEE_BUFFER_USD,
+  OSTIUM_ALCHEMY_WS_URL,
   OSTIUM_RPC_URL,
+  OSTIUM_TRADING_CALLBACKS_ADDRESS,
   ostiumOracleFeeBufferMessage,
   ostiumClientConfig,
 } from '../lib/ostiumConfig';
@@ -39,13 +41,23 @@ const TX_TIMEOUT_MS = 120_000;
 const CLAIM_LOOKBACK_ATTEMPTS = 5;
 const ORDER_VISIBLE_TIMEOUT_MS = 45_000;
 const ORDER_VISIBLE_POLL_MS = 800;
+const CLOSE_SYNC_TIMEOUT_MS = 18_000;
+const CLOSE_SYNC_POLL_MS = 900;
 const TPSL_SYNC_TIMEOUT_MS = 20_000;
 const TPSL_SYNC_POLL_MS = 1_000;
 const PENDING_TPSL_TTL_MS = 120_000;
+const PENDING_CLOSE_TTL_MS = 60_000;
 const OSTIUM_PRICE_STREAM_WS = 'wss://builder.ostium.io/v1/prices/stream';
 const OSTIUM_LIVE_PRICE_FLUSH_MS = 750;
 const OSTIUM_LIVE_PRICE_RECONNECT_MS = 2_500;
 const OSTIUM_LIVE_SUBSCRIPTION_LIMIT = 48;
+const OSTIUM_CLOSE_PERCENT_FULL = 10_000n;
+const OSTIUM_OPEN_EXECUTED_EVENT = parseAbiItem(
+  'event MarketOpenExecuted(uint256 indexed orderId, (uint256 collateral, uint192 openPrice, uint192 tp, uint192 sl, address trader, uint32 leverage, uint16 pairIndex, uint8 index, bool buy, bool isDayTrade) t, uint256 priceImpactP, uint256 tradeNotional)',
+);
+const OSTIUM_CLOSE_EXECUTED_EVENT = parseAbiItem(
+  'event MarketCloseExecutedV2(uint256 indexed orderId, uint256 indexed tradeId, uint256 price, uint256 priceImpactP, int256 percentProfit, uint256 usdcSentToTrader, uint256 percentageClosed)',
+);
 
 function safeParseEther(value, fallback) {
   try { return parseEther(String(value || fallback)); } catch { return parseEther(fallback); }
@@ -147,6 +159,141 @@ function pendingTpslKey({ symbol, pairIndex, tradeIndex }) {
   const pair = pairIndex != null && Number.isFinite(Number(pairIndex)) ? String(Number(pairIndex)) : '';
   const trade = tradeIndex != null && Number.isFinite(Number(tradeIndex)) ? String(Number(tradeIndex)) : '';
   return `${normalizeSymbol(symbol)}:${pair}:${trade}`;
+}
+
+function numericId(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function positionPairIndex(row) {
+  return numericId(row?.pair_index ?? row?.pairIndex ?? row?.pair_id ?? row?._raw?.pairId ?? row?._raw?.position?.pairId);
+}
+
+function positionTradeIndex(row) {
+  return numericId(row?.trade_index ?? row?.tradeIndex ?? row?.idx ?? row?._raw?.idx ?? row?._raw?.position?.idx);
+}
+
+function positionPid(row) {
+  return String(row?.pid ?? row?._raw?.pid ?? row?._raw?.position?.pid ?? '').trim();
+}
+
+function positionIdentity(row) {
+  return String(row?.position_id ?? row?.positionId ?? row?.id ?? row?.positionKey ?? row?._raw?.key ?? row?._raw?.positionKey ?? '').trim();
+}
+
+function positionIdentityMatchesId(row, id) {
+  const target = String(id ?? '').trim();
+  if (!target) return false;
+  const values = [
+    positionPid(row),
+    row?.orderId,
+    row?.order_id,
+    row?._raw?.orderId,
+    row?._raw?.position?.orderId,
+    positionIdentity(row),
+  ];
+  return values.some((value) => {
+    const text = String(value ?? '').trim();
+    if (!text) return false;
+    return text === target || text.split(/[:|]/u).includes(target);
+  });
+}
+
+function positionSide(row) {
+  return normalizeSide(row?.side ?? row?.raw_side ?? row?._raw?.side ?? row?._raw?.position?.side);
+}
+
+function pendingCloseKey(pending) {
+  return [
+    normalizeSymbol(pending?.symbol),
+    normalizeSide(pending?.side),
+    pending?.pairIndex ?? '',
+    pending?.tradeIndex ?? '',
+    pending?.pid || '',
+    pending?.id || '',
+  ].join(':');
+}
+
+function createPendingClose(position, { symbol, side, pairIndex, tradeIndex, txHash } = {}) {
+  const pending = {
+    symbol: normalizeSymbol(position?.symbol || position?.display_symbol || symbol),
+    side: normalizeSide(position?.side || side),
+    pairIndex: positionPairIndex(position) ?? numericId(pairIndex),
+    tradeIndex: positionTradeIndex(position) ?? numericId(tradeIndex),
+    pid: positionPid(position),
+    id: positionIdentity(position),
+    txHash: txHash || null,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + PENDING_CLOSE_TTL_MS,
+  };
+  pending.key = pendingCloseKey(pending);
+  return pending;
+}
+
+function positionMatchesPendingClose(row, pending) {
+  if (!row || !pending) return false;
+  const rowPair = positionPairIndex(row);
+  const rowTrade = positionTradeIndex(row);
+  const rowPid = positionPid(row);
+  const rowId = positionIdentity(row);
+  const rowSymbol = normalizeSymbol(row?.symbol || row?.display_symbol || row?._raw?.symbol);
+  const rowSide = positionSide(row);
+
+  if (pending.pairIndex != null && rowPair != null && rowPair !== pending.pairIndex) return false;
+  if (pending.tradeIndex != null && rowTrade != null && rowTrade !== pending.tradeIndex) return false;
+  if (pending.pid && rowPid && rowPid !== pending.pid) return false;
+  if (pending.id && rowId && rowId !== pending.id) return false;
+  if (pending.symbol && rowSymbol && rowSymbol !== pending.symbol) return false;
+  if (pending.side && rowSide && rowSide !== pending.side) return false;
+
+  return Boolean(
+    (pending.pairIndex != null && rowPair != null)
+    || (pending.tradeIndex != null && rowTrade != null)
+    || (pending.pid && rowPid)
+    || (pending.id && rowId)
+    || (pending.symbol && rowSymbol && pending.side && rowSide)
+  );
+}
+
+function filterPendingClosedPositions(rows, pendingMap, now = Date.now()) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!pendingMap?.size || !list.length) {
+    if (pendingMap?.size) {
+      for (const [key, pending] of pendingMap.entries()) {
+        if (!pending || pending.expiresAt <= now) pendingMap.delete(key);
+      }
+    }
+    return { rows: list, suppressed: 0 };
+  }
+
+  for (const [key, pending] of pendingMap.entries()) {
+    if (!pending || pending.expiresAt <= now) pendingMap.delete(key);
+  }
+  if (!pendingMap.size) return { rows: list, suppressed: 0 };
+
+  let suppressed = 0;
+  const nextRows = [];
+  for (const row of list) {
+    let hidden = false;
+    for (const pending of pendingMap.values()) {
+      if (positionMatchesPendingClose(row, pending)) {
+        hidden = true;
+        break;
+      }
+    }
+    if (hidden) suppressed += 1;
+    else nextRows.push(row);
+  }
+
+  for (const [key, pending] of pendingMap.entries()) {
+    if (!list.some(row => positionMatchesPendingClose(row, pending))) {
+      pendingMap.delete(key);
+    }
+  }
+
+  return { rows: suppressed > 0 ? nextRows : list, suppressed };
 }
 
 function positionMatchesPendingTpsl(row, pending) {
@@ -553,6 +700,7 @@ export function useOstium() {
   const ordersRef = useRef([]);
   const delegateSignerRef = useRef(null);
   const pendingTpslRef = useRef(new Map());
+  const pendingCloseRef = useRef(new Map());
   const submissionLocksRef = useRef(new Set());
 
   const token = useMemo(() => (
@@ -1049,6 +1197,7 @@ export function useOstium() {
   const fetchAccount = useCallback(async () => {
     if (!walletAddr) {
       pendingTpslRef.current.clear();
+      pendingCloseRef.current.clear();
       setAccount(null);
       setPositions([]);
       setOrders([]);
@@ -1068,8 +1217,13 @@ export function useOstium() {
         fetchJson(`${FUTURES_API}/positions?dex=ostium&address=${encodeURIComponent(walletAddr)}`, noStore).catch(() => []),
         fetchJson(`${FUTURES_API}/orders?dex=ostium&address=${encodeURIComponent(walletAddr)}`, noStore).catch(() => []),
       ]);
-      setAccount(acct || null);
-      const nextPositions = mergePendingTpslRows(Array.isArray(pos) ? pos : [], pendingTpslRef.current);
+      const mergedPositions = mergePendingTpslRows(Array.isArray(pos) ? pos : [], pendingTpslRef.current);
+      const closeFiltered = filterPendingClosedPositions(mergedPositions, pendingCloseRef.current);
+      const nextPositions = closeFiltered.rows;
+      const nextAccount = acct && closeFiltered.suppressed > 0
+        ? { ...acct, positions_count: nextPositions.length }
+        : (acct || null);
+      setAccount(nextAccount);
       const nextOrders = Array.isArray(ord) ? ord : [];
       positionsRef.current = nextPositions;
       ordersRef.current = nextOrders;
@@ -1083,7 +1237,7 @@ export function useOstium() {
         checkedAt: Date.now(),
       });
       setDataReady(true);
-      return { account: acct || null, positions: nextPositions, orders: nextOrders };
+      return { account: nextAccount, positions: nextPositions, orders: nextOrders };
     } catch (e) {
       const msg = errorMessage(e, 'Failed to load Ostium account');
       console.warn('[useOstium] account:', msg);
@@ -1125,6 +1279,35 @@ export function useOstium() {
 
     // Keep the latest refresh in state even if Ostium indexing is slower
     // than usual. The tx is already confirmed; background polling will catch up.
+    return lastFresh;
+  }, [fetchAccount]);
+
+  const rememberPendingClose = useCallback((pending) => {
+    if (!pending?.key) return null;
+    pendingCloseRef.current.set(pending.key, pending);
+    setPositions((prev) => {
+      const filtered = filterPendingClosedPositions(prev, pendingCloseRef.current);
+      positionsRef.current = filtered.rows;
+      return filtered.rows;
+    });
+    if (pendingCloseRef.current.has(pending.key)) {
+      setAccount((prev) => (
+        prev
+          ? { ...prev, positions_count: Math.max(0, Number(prev.positions_count || 0) - 1) }
+          : prev
+      ));
+    }
+    return pending;
+  }, []);
+
+  const verifyPendingClose = useCallback(async (pending) => {
+    if (!pending?.key) return null;
+    const startedAt = Date.now();
+    let lastFresh = null;
+    while (pendingCloseRef.current.has(pending.key) && Date.now() - startedAt < CLOSE_SYNC_TIMEOUT_MS) {
+      await sleep(CLOSE_SYNC_POLL_MS);
+      lastFresh = await fetchAccount();
+    }
     return lastFresh;
   }, [fetchAccount]);
 
@@ -1203,7 +1386,8 @@ export function useOstium() {
       pendingTicks.clear();
       setPrices((prev) => applyOstiumLiveTicksToPrices(prev, ticks));
       setPositions((prev) => {
-        const next = applyOstiumLiveTicksToPositions(prev, ticks);
+        const liveRows = applyOstiumLiveTicksToPositions(prev, ticks);
+        const next = filterPendingClosedPositions(liveRows, pendingCloseRef.current).rows;
         if (next !== prev) positionsRef.current = next;
         return next;
       });
@@ -1268,6 +1452,7 @@ export function useOstium() {
   useEffect(() => {
     if (!isActiveDex || !walletAddr) {
       pendingTpslRef.current.clear();
+      pendingCloseRef.current.clear();
       setDelegateSigner(null);
       delegateSignerRef.current = null;
       setDelegateStatus({
@@ -1385,6 +1570,88 @@ export function useOstium() {
     run(5, 1500);
     setTimeout(() => run(3, 2000), 12_000);
   }, [importFills, refreshServerResources, token, walletAddr]);
+
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr || !OSTIUM_ALCHEMY_WS_URL || typeof WebSocket === 'undefined') return undefined;
+    let stopped = false;
+    let client = null;
+    const unwatchers = [];
+    const refreshTimers = new Set();
+    const refreshSoon = () => {
+      const timer = setTimeout(() => {
+        refreshTimers.delete(timer);
+        if (!stopped) void fetchAccount();
+      }, 250);
+      refreshTimers.add(timer);
+    };
+
+    try {
+      client = createPublicClient({
+        chain: arbitrum,
+        transport: webSocket(OSTIUM_ALCHEMY_WS_URL, {
+          reconnect: { attempts: 3, delay: 2_000 },
+          retryCount: 0,
+        }),
+      });
+
+      unwatchers.push(client.watchEvent({
+        address: OSTIUM_TRADING_CALLBACKS_ADDRESS,
+        event: OSTIUM_CLOSE_EXECUTED_EVENT,
+        poll: false,
+        onLogs: (logs) => {
+          if (stopped) return;
+          for (const log of logs || []) {
+            const percentageClosed = BigInt(log?.args?.percentageClosed ?? 0);
+            if (percentageClosed !== OSTIUM_CLOSE_PERCENT_FULL) continue;
+            const tradeId = String(log?.args?.tradeId ?? '');
+            const position = (positionsRef.current || []).find(row => positionIdentityMatchesId(row, tradeId));
+            if (!position) continue;
+            rememberPendingClose(createPendingClose(position, {
+              symbol: position.symbol,
+              side: position.side,
+              pairIndex: positionPairIndex(position),
+              tradeIndex: positionTradeIndex(position),
+              txHash: log?.transactionHash || null,
+            }));
+            refreshSoon();
+            syncRewards('close ws');
+          }
+        },
+        onError: (err) => {
+          if (!stopped) console.warn('[useOstium] close event stream:', err?.message || err);
+        },
+      }));
+
+      unwatchers.push(client.watchEvent({
+        address: OSTIUM_TRADING_CALLBACKS_ADDRESS,
+        event: OSTIUM_OPEN_EXECUTED_EVENT,
+        poll: false,
+        onLogs: (logs) => {
+          if (stopped) return;
+          const owner = String(walletAddr || '').toLowerCase();
+          const matched = (logs || []).some(log => String(log?.args?.t?.trader || '').toLowerCase() === owner);
+          if (!matched) return;
+          refreshSoon();
+          syncRewards('open ws');
+        },
+        onError: (err) => {
+          if (!stopped) console.warn('[useOstium] open event stream:', err?.message || err);
+        },
+      }));
+    } catch (e) {
+      console.warn('[useOstium] account event stream unavailable:', e?.message || e);
+      return undefined;
+    }
+
+    return () => {
+      stopped = true;
+      for (const timer of refreshTimers) clearTimeout(timer);
+      refreshTimers.clear();
+      for (const unwatch of unwatchers.splice(0)) {
+        try { unwatch?.(); } catch {}
+      }
+    };
+  }, [fetchAccount, isActiveDex, rememberPendingClose, syncRewards, walletAddr]);
 
   useEffect(() => {
     if (!walletAddr || !isActiveDex) return undefined;
@@ -1532,7 +1799,21 @@ export function useOstium() {
         forceWallet,
       });
       setOneTapWalletFallback(null);
+      const pendingClose = closePercent >= 100
+        ? rememberPendingClose(createPendingClose(position, {
+          symbol,
+          side,
+          pairIndex,
+          tradeIndex,
+          txHash: submitted.txHash,
+        }))
+        : null;
       await fetchAccount();
+      if (pendingClose) {
+        void verifyPendingClose(pendingClose).catch((err) => {
+          console.warn('[useOstium] close sync polling failed:', err?.message || err);
+        });
+      }
       syncRewards('close');
       return { success: true, status: 'submitted', txHash: submitted.txHash };
     } catch (e) {
@@ -1555,7 +1836,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [fetchAccount, fetchMarkets, positions, submitWithDelegateOrWallet, syncRewards]);
+  }, [fetchAccount, fetchMarkets, positions, rememberPendingClose, submitWithDelegateOrWallet, syncRewards, verifyPendingClose]);
 
   const executeOneTapWalletFallback = useCallback(async () => {
     const action = oneTapWalletFallback;

@@ -3,7 +3,6 @@ const TRADE_CACHE_MAX_ENTRIES = 250;
 const DEFAULT_PREFETCH_TIMEOUT_MS = 9000;
 const COMMON_PRIVATE_DEXES = new Set([
   'avantis',
-  'dango',
   'gmx',
   'ostium',
   'monad',
@@ -263,6 +262,10 @@ function normalizeAddress(address) {
   return String(address || '').trim();
 }
 
+function isDangoAddress(address) {
+  return /^0x[0-9a-fA-F]{1,64}$/u.test(String(address || '').trim());
+}
+
 function makeAuthHeaders(token, dex) {
   const headers = {};
   if (token) headers['x-token'] = token;
@@ -332,6 +335,15 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
   if (dex === 'phoenix') {
     addPrefetchRequest(requests, futuresUrl('/phoenix/api/exchange'), { headers, signal });
     addPrefetchRequest(requests, futuresUrl('/phoenix/api/v1/funding/overview?perMarketLimit=2'), { headers, signal });
+    return requests;
+  }
+
+  if (dex === 'dango') {
+    if (isDangoAddress(address)) {
+      addPrefetchRequest(requests, futuresUrl(`/dango/account?dex=dango&account=${encoded(address)}`), { headers, signal });
+      addPrefetchRequest(requests, futuresUrl(`/dango/positions?dex=dango&account=${encoded(address)}`), { headers, signal });
+      addPrefetchRequest(requests, futuresUrl(`/dango/orders?dex=dango&account=${encoded(address)}`), { headers, signal });
+    }
     return requests;
   }
 
