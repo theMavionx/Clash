@@ -303,7 +303,6 @@ function applyOstiumLiveTicksToPrices(rows, ticks) {
   }
   if (!bySymbol.size) return Array.isArray(rows) ? rows : [];
   const list = Array.isArray(rows) ? rows : [];
-  const matched = new Set();
   let changed = false;
   const nextRows = list.map((row) => {
     let match = null;
@@ -314,7 +313,6 @@ function applyOstiumLiveTicksToPrices(rows, ticks) {
       }
     }
     if (!match) return row;
-    matched.add(match.symbol);
     const current = row?.mark ?? row?.mark_price ?? row?.price ?? row?.mid;
     if (!priceDeltaMeaningful(current, match.price)) return row;
     changed = true;
@@ -328,20 +326,6 @@ function applyOstiumLiveTicksToPrices(rows, ticks) {
       _ostiumLivePriceAt: Date.now(),
     };
   });
-  for (const item of bySymbol.values()) {
-    if (matched.has(item.symbol)) continue;
-    changed = true;
-    nextRows.push({
-      symbol: item.symbol,
-      mark: item.price,
-      mark_price: item.price,
-      price: item.price,
-      mid: item.price,
-      dex: 'ostium',
-      _ostiumLivePrice: true,
-      _ostiumLivePriceAt: Date.now(),
-    });
-  }
   return changed ? nextRows : list;
 }
 
@@ -1209,6 +1193,7 @@ export function useOstium() {
     let flushTimer = null;
     let ws = null;
     const pairs = ostiumLivePairKey.split('|').filter(Boolean);
+    const pairSet = new Set(pairs.map((pair) => String(pair).toUpperCase()));
     const pendingTicks = new Map();
 
     const flushTicks = () => {
@@ -1233,6 +1218,8 @@ export function useOstium() {
       const symbol = ostiumTickSymbol(tick);
       const price = ostiumTickPrice(tick);
       if (!symbol || price == null) return;
+      const pair = ostiumStreamPair(symbol).toUpperCase();
+      if (pairSet.size && !pairSet.has(pair)) return;
       pendingTicks.set(symbol, tick);
       scheduleFlush();
     };
