@@ -5543,7 +5543,7 @@ func _refresh_barn_panel() -> void:
 				_style_button(btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
 				btn.disabled = true
 			var tn = troop_name
-			var expected_lvl := lvl
+			var expected_lvl: int = int(lvl)
 			btn.pressed.connect(func(): _upgrade_troop(tn, expected_lvl))
 			vb.add_child(btn)
 
