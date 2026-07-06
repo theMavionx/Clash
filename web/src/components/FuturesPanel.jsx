@@ -906,6 +906,19 @@ function orderDisplayLeverage(order, fallbackLeverage = null) {
   return displayLeverage(fallbackLeverage);
 }
 
+function isOrderPendingConfirmation(order) {
+  return !!(order?._optimistic || order?._raw?.optimistic);
+}
+
+function OrderPendingBadge() {
+  return (
+    <span style={S.orderPendingBadge} title="Waiting for Decibel confirmation">
+      <span style={S.orderPendingSpinner} />
+      Confirming
+    </span>
+  );
+}
+
 function orderUsdValue(...values) {
   for (const value of values) {
     const n = numOrNull(value);
@@ -2199,16 +2212,20 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
         const sideLabel = orderSideLabel(o);
         const isTP = type.includes('TAKE') || type.includes('TP');
         const isSL = type.includes('STOP') || type.includes('SL');
+        const pending = isOrderPendingConfirmation(o);
         const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
         return (
           <div key={orderStableKey(o, i)} style={S.posCard}>
             <div style={S.row}>
               <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
               <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
+              {pending ? <OrderPendingBadge /> : null}
               <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
                 {sideLabel}
               </span>
-              {isReadOnlyOrder(o) ? (
+              {pending ? (
+                <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>Pending</span>
+              ) : isReadOnlyOrder(o) ? (
                 <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>On position</span>
               ) : (
                 <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
@@ -7844,16 +7861,20 @@ function FuturesPanel() {
           const sideLabel = orderSideLabel(o);
           const isTP = type.includes('TAKE') || type.includes('TP');
           const isSL = type.includes('STOP') || type.includes('SL');
+          const pending = isOrderPendingConfirmation(o);
           const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
           return (
             <div key={orderStableKey(o, i)} style={S.posCard}>
               <div style={S.row}>
                 <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
                 <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
+                {pending ? <OrderPendingBadge /> : null}
                 <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
                   {sideLabel}
                 </span>
-                {isReadOnlyOrder(o) ? (
+                {pending ? (
+                  <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>Pending</span>
+                ) : isReadOnlyOrder(o) ? (
                   <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>On position</span>
                 ) : (
                   <button
@@ -9731,6 +9752,31 @@ const S = {
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   label: { color: '#5C3A21', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' },
   detail: { fontSize: 12, fontWeight: 700, color: '#77573d' },
+  orderPendingBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '2px 6px',
+    borderRadius: 6,
+    border: '1px solid #d4c8b0',
+    background: '#fff7d6',
+    color: '#8a6d2f',
+    fontSize: 10,
+    fontWeight: 900,
+    lineHeight: 1,
+    whiteSpace: 'nowrap',
+  },
+  orderPendingSpinner: {
+    width: 9,
+    height: 9,
+    borderRadius: '50%',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: '#d4c8b0',
+    borderTopColor: '#8a6d2f',
+    animation: 'wallet-spin 0.75s linear infinite',
+    flexShrink: 0,
+  },
   input: {
     background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,
     padding: '9px 10px', color: '#333', fontSize: 15, fontWeight: 700, outline: 'none',

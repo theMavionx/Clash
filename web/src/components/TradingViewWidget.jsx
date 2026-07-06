@@ -358,6 +358,32 @@ function classifyTriggerOrder(order, positionsForSymbol, triggerPrice) {
   return triggerPrice < reference ? 'tp' : 'sl';
 }
 
+function samePendingLineBadges(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i].key !== b[i].key || Math.abs(a[i].top - b[i].top) > 0.5 || a[i].label !== b[i].label) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function pendingOrderLineKey(order, price, label) {
+  return [
+    order?.order_id,
+    order?.id,
+    order?.client_order_id,
+    order?.clientOrderId,
+    order?._optimisticKey,
+    order?._raw?.order_id,
+    order?._raw?.id,
+    order?._raw?.client_order_id,
+    order?._raw?.clientOrderId,
+    label,
+    price,
+  ].filter((value) => value != null && value !== '').join(':');
+}
+
 async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
   const read = await getReadClient();
   const rows = await read.candlesticks.getByName({
@@ -380,6 +406,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
   const lastCandleRef = useRef(null);
   const [interval, setInterval_] = useState('5m');
   const [loading, setLoading] = useState(false);
+  const [pendingLineBadges, setPendingLineBadges] = useState([]);
 
   // Create chart once
   useEffect(() => {
@@ -679,6 +706,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       linesRef.current = [];
 
       const mark = currentPriceRef.current ? parseFloat(currentPriceRef.current) : 0;
+      const nextPendingLineBadges = [];
 
       // Position entry lines
       const symPositions = positions.filter(p => p.symbol === symbol);
@@ -733,24 +761,44 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         const price = stopPrice > 0 ? stopPrice : rawPrice;
         if (!price) continue;
         if ((isTP || isSL) && positionTpslLineKeys.has(priceLineKey(triggerKind, price))) continue;
-        const color = isTP ? '#4CAF50' : isSL ? '#E53935' : stopPrice > 0 ? '#FF9800' : (isBid ? '#2196F3' : '#9C27B0');
+        const pending = !!(ord?._optimistic || ord?._raw?.optimistic);
+        const color = pending
+          ? '#B59A4A'
+          : isTP ? '#4CAF50' : isSL ? '#E53935' : stopPrice > 0 ? '#FF9800' : (isBid ? '#2196F3' : '#9C27B0');
         const label = isTP ? 'TP' : isSL ? 'SL' : stopPrice > 0 ? 'STOP' : 'LIMIT';
         const line = seriesRef.current.createPriceLine({
           price,
           color,
-          lineWidth: isTP || isSL ? 2 : 1,
-          lineStyle: 1, // dotted
+          lineWidth: pending ? 1 : (isTP || isSL ? 2 : 1),
+          lineStyle: pending ? 2 : 1, // dashed while waiting, dotted once confirmed
           axisLabelVisible: true,
-          title: `${label} $${price.toLocaleString()}`,
+          title: `${label}${pending ? ' confirming' : ''} $${price.toLocaleString()}`,
         });
         linesRef.current.push(line);
+        if (pending && typeof seriesRef.current.priceToCoordinate === 'function') {
+          const y = seriesRef.current.priceToCoordinate(price);
+          if (Number.isFinite(y)) {
+            nextPendingLineBadges.push({
+              key: pendingOrderLineKey(ord, price, label),
+              top: Math.max(8, y - 12),
+              label,
+            });
+          }
+        }
       }
+
+      setPendingLineBadges((prev) => (
+        samePendingLineBadges(prev, nextPendingLineBadges) ? prev : nextPendingLineBadges
+      ));
     }
 
     drawLines();
     // Update PnL labels every 3 seconds instead of every 250ms price tick
     const pnlInterval = window.setInterval(drawLines, 3000);
-    return () => window.clearInterval(pnlInterval);
+    return () => {
+      window.clearInterval(pnlInterval);
+      setPendingLineBadges([]);
+    };
   }, [positions, orders, symbol]);
 
   return (
@@ -778,6 +826,15 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         {/* Overlay rendered inside the chart container — absolute positioning
             anchors to the actual price-chart area, not to the outer wrapper
             that also includes the timeframe tab bar. */}
+        {pendingLineBadges.map((badge) => (
+          <div key={badge.key} style={{position: 'absolute', top: badge.top, right: 8, zIndex: 9, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 7px', borderRadius: 8, border: '1px solid #c7b16b', background: 'rgba(255, 247, 214, 0.94)', color: '#7a6224', fontSize: 10, fontWeight: 900, pointerEvents: 'none', boxShadow: '0 1px 4px rgba(92,58,33,0.18)'}}>
+            <span style={{width: 9, height: 9, borderRadius: '50%', borderWidth: 2, borderStyle: 'solid', borderColor: '#d7c58b', borderTopColor: '#7a6224', animation: 'tv-pending-spin 0.75s linear infinite', flexShrink: 0}} />
+            {badge.label}
+          </div>
+        ))}
+        {pendingLineBadges.length > 0 && (
+          <style dangerouslySetInnerHTML={{__html: `@keyframes tv-pending-spin { to { transform: rotate(360deg); } }`}} />
+        )}
         {chartOverlay}
       </div>
     </div>
