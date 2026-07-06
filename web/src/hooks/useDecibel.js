@@ -889,6 +889,20 @@ export function useDecibel() {
     return data;
   }, []);
 
+  const applyDecibelOrders = useCallback((rows) => {
+    const raw = Array.isArray(rows) ? rows : (Array.isArray(rows?.data) ? rows.data : []);
+    const norm = raw.map(o => normalizeOrder(o, marketsRef.current));
+    ordersRef.current = norm;
+    setOrders(norm);
+    realtimeAppliedRef.current.ordersAt = Date.now();
+    setPositions(prev => {
+      const merged = mergeTpslOrdersIntoPositions(prev, norm);
+      positionsRef.current = merged;
+      return merged;
+    });
+    return norm;
+  }, []);
+
   const fetchServerSigner = useCallback(async () => {
     const info = await decibelServerRequest('/signer', null, 'GET');
     const signer = normalizeAptosAddress(info?.public_key);
@@ -1284,18 +1298,12 @@ export function useDecibel() {
         );
       }
       const raw = Array.isArray(list) ? list : (list?.data || []);
-      const norm = raw.map(o => normalizeOrder(o, marketsRef.current));
-      ordersRef.current = norm;
-      setOrders(norm);
-      setPositions(prev => {
-        const merged = mergeTpslOrdersIntoPositions(prev, norm);
-        positionsRef.current = merged;
-        return merged;
-      });
+      return applyDecibelOrders(raw);
     } catch (e) {
       console.warn('[useDecibel] fetchOrders:', e?.message || e);
+      return null;
     }
-  }, [address, ensureSubaccount, decibelServerRequest]);
+  }, [address, ensureSubaccount, decibelServerRequest, applyDecibelOrders]);
 
   // Wallet-level balances:
   //   walletUsdc  ← USDC sitting on the MASTER wallet (= what user can
@@ -1907,6 +1915,9 @@ export function useDecibel() {
         dedup_key: dedup,
       });
 
+      if (Array.isArray(result?.ordersAfter) && result.ordersAfter.length) {
+        applyDecibelOrders(result.ordersAfter);
+      }
       pollDecibelStateAfterWrite({ symbol, mode: 'order-open' });
       scheduleClaim();
       return { tx_hash: txHash, status: 'open' };
@@ -1917,7 +1928,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer]);
+  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer, applyDecibelOrders]);
 
   // Close = reduceOnly IOC at slipped live mark. `amount` is base units
   // (the position's quantity to close, NOT collateral) — same semantics as
@@ -2103,6 +2114,9 @@ export function useDecibel() {
         ...builderArgs,
       });
       const txHash = assertWriteSuccess(res, 'TP/SL update');
+      if (Array.isArray(res?.ordersAfter) && res.ordersAfter.length) {
+        applyDecibelOrders(res.ordersAfter);
+      }
       pollDecibelStateAfterWrite({ symbol: target, mode: 'tpsl-refresh' });
       return { tx_hash: txHash, status: 'updated' };
     } catch (e) {
@@ -2112,7 +2126,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, ensureSubaccount, builderFields, pollDecibelStateAfterWrite, tpslOnServer]);
+  }, [requireServerSigner, ensureSubaccount, builderFields, pollDecibelStateAfterWrite, tpslOnServer, applyDecibelOrders]);
 
   // Decibel `configureUserSettingsForMarket` stores leverage together with
   // the cross-margin flag. Isolated margin is not currently exposed as a
@@ -2301,14 +2315,7 @@ export function useDecibel() {
 
       if (snap.ordersAt && snap.ordersAt > applied.ordersAt) {
         applied.ordersAt = snap.ordersAt;
-        const norm = (Array.isArray(snap.orders) ? snap.orders : []).map(o => normalizeOrder(o, marketsRef.current));
-        ordersRef.current = norm;
-        setOrders(norm);
-        setPositions(prev => {
-          const merged = mergeTpslOrdersIntoPositions(prev, norm);
-          positionsRef.current = merged;
-          return merged;
-        });
+        applyDecibelOrders(snap.orders);
       }
 
       if (snap.positionsAt && snap.positionsAt > applied.positionsAt) {
@@ -2346,7 +2353,7 @@ export function useDecibel() {
     return () => {
       unsubscribe();
     };
-  }, [isActiveDex, subaccountAddr, applyPriceRows, fetchAccount, fetchOrders, fetchPositions, scheduleClaim]);
+  }, [isActiveDex, subaccountAddr, applyPriceRows, applyDecibelOrders, fetchAccount, fetchOrders, fetchPositions, scheduleClaim]);
 
   // Gate fetchMarkets on the active DEX. FuturesPanel mounts ALL three
   // hooks (Pacifica + Avantis + Decibel + GMX) for the cross-DEX branch

@@ -2093,6 +2093,44 @@ router.get('/decibel/orders', auth, async (req, res) => {
   }
 });
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sameNormalizedAddress(a, b) {
+  const left = decibel.normalizeAptosAddress(a || '');
+  const right = decibel.normalizeAptosAddress(b || '');
+  return !!left && !!right && left === right;
+}
+
+function decibelOrderMatchesMarket(order, marketAddr) {
+  if (!marketAddr) return true;
+  return sameNormalizedAddress(order?.market || order?.marketAddr || order?.market_addr, marketAddr);
+}
+
+function decibelOrderLooksTpsl(order) {
+  const text = `${order?.order_type || order?.orderType || ''} ${order?.trigger_condition || order?.triggerCondition || ''}`.toLowerCase();
+  return /\b(take\s*profit|take-profit|stop\s*loss|stop-loss|tp|sl)\b/.test(text) || !!(order?.is_tpsl ?? order?.isTpsl);
+}
+
+async function fetchDecibelOpenOrdersAfterWrite(subaccount, options = {}) {
+  const attempts = Math.max(1, Math.min(8, Number(options.attempts || 1)));
+  const delayMs = Math.max(100, Math.min(1500, Number(options.delayMs || 300)));
+  const marketAddr = options.marketAddr || options.market_addr || '';
+  const requireTpsl = !!options.requireTpsl;
+  let rows = [];
+  for (let i = 0; i < attempts; i += 1) {
+    if (i > 0) await sleep(delayMs);
+    rows = await decibel.fetchOpenOrders(subaccount, { limit: 100 });
+    const matching = rows.filter((order) => (
+      decibelOrderMatchesMarket(order, marketAddr)
+      && (!requireTpsl || decibelOrderLooksTpsl(order))
+    ));
+    if (matching.length) break;
+  }
+  return rows;
+}
+
 router.post('/decibel/orders/place', auth, async (req, res) => {
   const startedAt = Date.now();
   try {
@@ -2184,7 +2222,14 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
     } else if (result?.success !== false) {
       fillRecord = { inserted: 0, rows: 0, volume_usd: 0, reason: 'open_order_waiting_for_fill' };
     }
-    res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: verification.verified === true, verification, fillRecord });
+    let ordersAfter = [];
+    if (orderType !== 'market' && verification.verified === true) {
+      ordersAfter = await fetchDecibelOpenOrdersAfterWrite(verified.subaccount, {
+        attempts: 1,
+        marketAddr: orderPayload.marketAddr || orderPayload.market_addr,
+      });
+    }
+    res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: verification.verified === true, verification, fillRecord, ordersAfter });
   } catch (e) {
     console.error('[decibel] place order error:', e);
     res.status(500).json({ error: e.message || 'Failed to place Decibel order' });
@@ -2307,11 +2352,18 @@ router.post('/decibel/tpsl', auth, async (req, res) => {
       }, result, leg || 'tpsl', leg || 'tpsl');
     }
     const hashes = results.map(r => r.transactionHash || r.hash).filter(Boolean);
+    const ordersAfter = await fetchDecibelOpenOrdersAfterWrite(verified.subaccount, {
+      attempts: 6,
+      delayMs: 300,
+      marketAddr: body.marketAddr || body.market_addr,
+      requireTpsl: true,
+    });
     res.json({
       success: true,
       results,
       transactionHash: hashes[hashes.length - 1] || null,
       hash: hashes[hashes.length - 1] || null,
+      ordersAfter,
     });
   } catch (e) {
     console.error('[decibel] TP/SL error:', e);

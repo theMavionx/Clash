@@ -1340,6 +1340,16 @@ function verifyPlacedOrderFromTxEvents(orderEvents = [], expected = {}, isMarket
     };
   }
 
+  const rejected = matching.find(orderEventLooksRejected);
+  if (rejected) {
+    return {
+      verified: false,
+      reason: rejected.cancellationReason || rejected.status || 'Decibel rejected or cancelled the order.',
+      attempts: 0,
+      order_events: matching,
+    };
+  }
+
   if (!isMarket) {
     const open = matching.find((event) => event.orderId != null && !orderEventLooksRejected(event));
     if (open) {
@@ -1350,16 +1360,6 @@ function verifyPlacedOrderFromTxEvents(orderEvents = [], expected = {}, isMarket
         order_event: open,
       };
     }
-  }
-
-  const rejected = matching.find(orderEventLooksRejected);
-  if (rejected) {
-    return {
-      verified: false,
-      reason: rejected.cancellationReason || rejected.status || 'Decibel rejected or cancelled the order.',
-      attempts: 0,
-      order_events: matching,
-    };
   }
 
   return null;
