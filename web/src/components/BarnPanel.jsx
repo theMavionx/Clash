@@ -5,7 +5,8 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import useHydratedNftPlayer from '../hooks/useHydratedNftPlayer';
+import { fetchOwnedNftsForPlayerWallets, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -404,6 +405,7 @@ function BarnPanel({ building, onClose }) {
   const playerState = usePlayer();
   const { buildingDefs, troopLevels } = useBuildingDefs();
   const { isMobile: mobile } = useLayout();
+  const nftPlayerState = useHydratedNftPlayer(playerState);
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
   const solWallet = useSolWallet();
@@ -414,11 +416,11 @@ function BarnPanel({ building, onClose }) {
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
   const demonKingSyncTarget = useMemo(() => resolveDemonKingPlayerInventorySyncTarget({
-    player: playerState,
+    player: nftPlayerState,
     evmAddress,
     solAddress,
     aptosAddress,
-  }), [aptosAddress, evmAddress, playerState, solAddress]);
+  }), [aptosAddress, evmAddress, nftPlayerState, solAddress]);
   const hasDemonKingWallet = !!demonKingSyncTarget;
 
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -457,11 +459,32 @@ function BarnPanel({ building, onClose }) {
       signal: controller.signal,
     }).then((res) => res.json().catch(() => ({}))).catch(() => null);
     const ownedPromise = demonKingSyncTarget
-      ? syncDemonKingNfts({
+      ? fetchOwnedNftsForPlayerWallets({
           ...demonKingSyncTarget,
           collection: currentNftTroop.collection,
           signal: controller.signal,
-        }).catch((err) => ({ error: err, tokens: [] }))
+        })
+          .then((ownedJson) => {
+            if ((ownedJson?.tokens || []).length) {
+              syncDemonKingNfts({
+                ...demonKingSyncTarget,
+                collection: currentNftTroop.collection,
+                signal: controller.signal,
+              }).catch(() => {});
+            }
+            return ownedJson;
+          })
+          .catch(async (err) => {
+            try {
+              return await syncDemonKingNfts({
+                ...demonKingSyncTarget,
+                collection: currentNftTroop.collection,
+                signal: controller.signal,
+              });
+            } catch {
+              return { error: err, tokens: [] };
+            }
+          })
       : Promise.resolve({ tokens: [] });
 
     Promise.all([statusPromise, ownedPromise])

@@ -1381,6 +1381,84 @@ export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON
 
 export const syncCollectionNfts = syncDemonKingNfts;
 
+export async function fetchOwnedNftsForPlayerWallets({
+  wallet,
+  wallets = null,
+  chains = DEMON_KING_SUPPORTED_CHAINS,
+  collection = 'demonking',
+  signal,
+} = {}) {
+  const jobs = normalizeDemonKingSyncJobs({ wallet, wallets, chains });
+  const requestedChains = normalizeDemonKingChains(chains);
+  const collectionSlug = normalizeNftCollectionSlug(collection);
+  if (!jobs.length) {
+    return { ok: true, collection: collectionSlug, wallet: String(wallet || ''), chains: requestedChains, total: 0, tokens: [] };
+  }
+
+  const requests = [];
+  for (const job of jobs) {
+    for (const chain of job.chains || []) {
+      requests.push({
+        wallet: job.wallet,
+        chain,
+        promise: fetchOwnedNfts({
+          collection: collectionSlug,
+          chain,
+          address: job.wallet,
+          signal,
+        }),
+      });
+    }
+  }
+
+  const settled = await Promise.allSettled(requests.map((request) => request.promise));
+  const tokensByKey = new Map();
+  const errors = [];
+  const walletsRead = new Set();
+  const chainsRead = new Set();
+
+  for (let i = 0; i < settled.length; i += 1) {
+    const row = settled[i];
+    const request = requests[i];
+    if (row.status === 'rejected') {
+      errors.push({
+        wallet: request.wallet,
+        chains: [request.chain],
+        error: row.reason?.message || String(row.reason),
+      });
+      continue;
+    }
+    walletsRead.add(request.wallet);
+    chainsRead.add(request.chain);
+    (row.value?.chains || [request.chain]).forEach((chain) => chainsRead.add(String(chain || '').toLowerCase()));
+    for (const tokenItem of row.value?.tokens || []) {
+      const tokenId = String(tokenItem.tokenId || tokenItem.tokenAddress || tokenItem.asset || tokenItem.mint || tokenItem.id || '').trim();
+      const chain = String(tokenItem.chain || request.chain || '').toLowerCase();
+      if (!chain || !tokenId) continue;
+      tokensByKey.set(`${chain}:${tokenId}`, {
+        ...tokenItem,
+        chain,
+        tokenId,
+      });
+    }
+  }
+
+  if (!tokensByKey.size && errors.length === requests.length) {
+    throw new Error(errors[0]?.error || 'NFT ownership lookup failed');
+  }
+
+  return normalizeNftPayloadImages({
+    ok: true,
+    collection: collectionSlug,
+    partial: errors.length > 0,
+    wallets: [...walletsRead],
+    chains: [...chainsRead],
+    total: tokensByKey.size,
+    tokens: [...tokensByKey.values()],
+    errors,
+  }, collectionSlug);
+}
+
 function evmRpcUrls(chain) {
   const config = EVM_OWNED_CONFIG[chain];
   if (!config) return [];

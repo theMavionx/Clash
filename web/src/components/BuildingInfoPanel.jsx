@@ -5,7 +5,8 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import useHydratedNftPlayer from '../hooks/useHydratedNftPlayer';
+import { fetchOwnedNftsForPlayerWallets, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -445,6 +446,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const player = usePlayer();
   const resources = useResources();
   const { isMobile } = useLayout();
+  const nftPlayer = useHydratedNftPlayer(player);
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
   const solWallet = useSolWallet();
@@ -455,11 +457,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
   const demonKingSyncTarget = useMemo(() => resolveDemonKingPlayerInventorySyncTarget({
-    player,
+    player: nftPlayer,
     evmAddress,
     solAddress,
     aptosAddress,
-  }), [aptosAddress, evmAddress, player, solAddress]);
+  }), [aptosAddress, evmAddress, nftPlayer, solAddress]);
   const hasDemonKingWallet = !!demonKingSyncTarget;
   
   const [view, setView] = useState('ACTIONS');
@@ -566,34 +568,58 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const shouldForceRefresh = syncKey && Date.now() - lastForcedAt > DEMON_KING_PORT_FORCE_SYNC_MS;
       const controller = new AbortController();
       controllers.push(controller);
-      let appliedCachedResult = false;
+      let appliedOwnedResult = false;
+      const applyOwnedJson = (ownedJson) => {
+        const tokens = normalizeOwnedNftTokens(ownedJson, collection);
+        setTokens(tokens);
+        appliedOwnedResult = true;
+        return tokens;
+      };
+      const runBackgroundSync = (force = false) => {
+        syncDemonKingNfts({
+          ...demonKingSyncTarget,
+          collection,
+          force,
+          signal: controller.signal,
+        })
+          .then((ownedJson) => {
+            if (!controller.signal.aborted) applyOwnedJson(ownedJson);
+          })
+          .catch((err) => {
+            if (!controller.signal.aborted && !appliedOwnedResult) {
+              setError((err?.message || `Could not sync ${label} NFTs`).slice(0, 120));
+            }
+          });
+      };
       setLoading(true);
       setError(null);
-      syncDemonKingNfts({
+      fetchOwnedNftsForPlayerWallets({
         ...demonKingSyncTarget,
         collection,
         signal: controller.signal,
       })
-        .then(async (ownedJson) => {
+        .then((ownedJson) => {
           if (controller.signal.aborted) return;
-          setTokens(normalizeOwnedNftTokens(ownedJson, collection));
-          appliedCachedResult = true;
-          if (!shouldForceRefresh) return;
-          demonKingPortForceSyncRef.current.set(syncKey, Date.now());
-          try {
-            const freshJson = await syncDemonKingNfts({
-              ...demonKingSyncTarget,
-              collection,
-              force: true,
-              signal: controller.signal,
-            });
-            if (!controller.signal.aborted) setTokens(normalizeOwnedNftTokens(freshJson, collection));
-          } catch (err) {
-            if (!appliedCachedResult) throw err;
+          const tokens = applyOwnedJson(ownedJson);
+          if (tokens.length) {
+            if (syncKey && shouldForceRefresh) demonKingPortForceSyncRef.current.set(syncKey, Date.now());
+            runBackgroundSync(Boolean(shouldForceRefresh));
           }
         })
-        .catch((err) => {
-          if (!controller.signal.aborted) setError((err?.message || `Could not read ${label} NFTs`).slice(0, 120));
+        .catch(async (err) => {
+          if (controller.signal.aborted) return;
+          try {
+            const ownedJson = await syncDemonKingNfts({
+              ...demonKingSyncTarget,
+              collection,
+              signal: controller.signal,
+            });
+            if (!controller.signal.aborted) applyOwnedJson(ownedJson);
+          } catch (syncErr) {
+            if (!controller.signal.aborted) {
+              setError((err?.message || syncErr?.message || `Could not read ${label} NFTs`).slice(0, 120));
+            }
+          }
         })
         .finally(() => {
           if (!controller.signal.aborted) setLoading(false);

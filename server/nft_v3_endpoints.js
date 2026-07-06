@@ -1854,8 +1854,10 @@ function mountNftV3Endpoints(router, ctx) {
       }
       const wallet = walletByChain.get(syncChains[0]);
       const force = req.body?.force === true || String(req.body?.force || req.query?.force || '') === '1';
-      const cachedTokens = gameDb.listPlayerDemonKingNfts(player.id, wallet)
+      const cachedWalletTokens = gameDb.listPlayerDemonKingNfts(player.id, wallet)
         .filter((token) => syncChains.includes(token.chain));
+      const cachedPlayerTokens = gameDb.listPlayerDemonKingNfts(player.id);
+      const cachedTokens = mergePlayerCollectionTokens(cachedWalletTokens, cachedPlayerTokens);
       const check = gameDb.getDemonKingNftWalletCheck(player.id, wallet);
 
       if (!force && walletCheckCovers(check, syncChains)) {
@@ -1949,6 +1951,8 @@ function mountNftV3Endpoints(router, ctx) {
             standard: scanned.standard || token.standard,
           };
         });
+        const allActiveTokens = gameDb.listPlayerDemonKingNfts(player.id);
+        const mergedResponseTokens = mergePlayerCollectionTokens(allActiveTokens, responseTokens);
         const nextCheck = gameDb.getDemonKingNftWalletCheck(player.id, wallet);
         return {
           ok: true,
@@ -1958,8 +1962,8 @@ function mountNftV3Endpoints(router, ctx) {
           wallet,
           chains: syncChains,
           checkedAt: nextCheck?.checkedAt || null,
-          total: responseTokens.length,
-          tokens: responseTokens,
+          total: mergedResponseTokens.length,
+          tokens: mergedResponseTokens,
           errors,
         };
       })();

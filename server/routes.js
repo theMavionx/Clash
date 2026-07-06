@@ -2635,11 +2635,8 @@ async function verifyDemonKingNftUpgradeProof(player, proof, nextLevel) {
     if (ownerHint && ownerHint !== onchainOwner) {
       return { error: 'Demon King NFT owner mismatch', status: 403 };
     }
-    const linkedWallets = [
-      player?.wallet,
-      player?.nft_gold_boost_wallet,
-    ].filter((wallet) => EVM_WALLET_RE.test(String(wallet || '')));
-    const linkedMatch = linkedWallets.some((wallet) => getAddress(wallet) === onchainOwner);
+    const linkedWallets = evmLinkedWalletsForPlayer(player, getAddress);
+    const linkedMatch = linkedWallets.some((wallet) => wallet === onchainOwner);
     if (!linkedMatch) {
       return { error: 'Connect or verify the EVM wallet that owns this Demon King NFT first', status: 403 };
     }
@@ -2697,6 +2694,58 @@ function trustedServerBoundNft(row) {
 
 function freshNftLoadBinding(row) {
   return freshDemonKingBinding(row) || trustedServerBoundNft(row);
+}
+
+function evmLinkedWalletsForPlayer(player, getAddress) {
+  const wallets = [];
+  const seen = new Set();
+  const add = (raw) => {
+    const value = String(raw || '').trim();
+    if (!EVM_WALLET_RE.test(value)) return;
+    try {
+      const address = getAddress(value);
+      const key = address.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      wallets.push(address);
+    } catch {}
+  };
+
+  add(player?.wallet);
+  add(player?.nft_gold_boost_wallet);
+
+  if (player?.id) {
+    try {
+      db.db.prepare(`
+        SELECT address
+          FROM player_wallets
+         WHERE player_id = ?
+           AND chain_type = 'evm'
+           AND address IS NOT NULL
+      `).all(player.id).forEach((row) => add(row.address));
+    } catch {}
+    try {
+      db.db.prepare(`
+        SELECT wallet_address
+          FROM player_dex_accounts
+         WHERE player_id = ?
+           AND chain_type = 'evm'
+           AND wallet_address IS NOT NULL
+           AND COALESCE(status, '') NOT IN ('disconnected', 'failed', 'error')
+      `).all(player.id).forEach((row) => add(row.wallet_address));
+    } catch {}
+    try {
+      db.db.prepare(`
+        SELECT identifier
+          FROM player_auth_identities
+         WHERE player_id = ?
+           AND type = 'evm_wallet'
+           AND identifier IS NOT NULL
+      `).all(player.id).forEach((row) => add(row.identifier));
+    } catch {}
+  }
+
+  return wallets;
 }
 
 function parseDemonKingTroopEntry(entry) {
@@ -2795,13 +2844,10 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
   try {
     const { createPublicClient, getAddress, http } = await import('viem');
     const ownerHint = ownerHintRaw ? getAddress(String(ownerHintRaw)) : null;
-    const linkedWallets = [
-      player?.wallet,
-      player?.nft_gold_boost_wallet,
-    ].filter((wallet) => EVM_WALLET_RE.test(String(wallet || '')));
+    const linkedWallets = evmLinkedWalletsForPlayer(player, getAddress);
     if (cached && freshDemonKingBinding(cached)) {
       const cachedOwner = getAddress(cached.wallet);
-      const cachedLinked = linkedWallets.some((wallet) => getAddress(wallet) === cachedOwner);
+      const cachedLinked = linkedWallets.some((wallet) => wallet === cachedOwner);
       if (cachedLinked && (!ownerHint || ownerHint === cachedOwner)) {
         const level = normalizeNftLevel(cached.level);
         const rarity = String(cached.rarity || 'common').toLowerCase();
@@ -2838,7 +2884,7 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       return { error: 'Demon King NFT owner mismatch', status: 403 };
     }
 
-    const linkedMatch = linkedWallets.some((wallet) => getAddress(wallet) === onchainOwner);
+    const linkedMatch = linkedWallets.some((wallet) => wallet === onchainOwner);
     if (!linkedMatch) {
       return { error: 'Connect or verify the EVM wallet that owns this Demon King NFT first', status: 403 };
     }
