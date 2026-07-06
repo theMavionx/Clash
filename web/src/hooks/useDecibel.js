@@ -487,6 +487,7 @@ function normalizeOrder(o, markets) {
     ?? 0;
   const size = positiveNumberOrNull(sizeRaw) ?? 0;
   return {
+    dex: 'decibel',
     symbol,
     side: isBuy ? 'bid' : 'ask',
     amount: String(size),
@@ -494,6 +495,7 @@ function normalizeOrder(o, markets) {
     price: String(price),
     stop_price: triggerPrice == null ? '' : String(triggerPrice),
     leverage: o.leverage == null ? null : String(o.leverage),
+    requested_leverage: o.requested_leverage ?? o.requestedLeverage ?? null,
     order_type: type,
     reduce_only: !!(o.reduce_only ?? o.reduceOnly ?? o.is_reduce_only),
     is_tpsl: !!(o.is_tpsl ?? o.isTpsl) || !!kind,
@@ -627,12 +629,29 @@ function summarizeDecibelOrderForLog(order) {
     price: order.price || order.limit_price || order.limitPrice || '',
     stop: order.stop_price || order.stopPrice || order.trigger_condition || order.triggerCondition || '',
     amount: order.amount || order.remaining_size || order.remainingSize || order.orig_size || order.origSize || '',
+    leverage: order.leverage || order.user_leverage || order.userLeverage || order.requested_leverage || order.requestedLeverage || '',
     reduce_only: !!(order.reduce_only ?? order.reduceOnly ?? order.is_reduce_only),
     is_tpsl: !!(order.is_tpsl ?? order.isTpsl) || !!tpslKindFromOrder(order),
     order_id: String(order.order_id ?? order.orderId ?? order.id ?? '').slice(0, 18),
     client_order_id: String(order.client_order_id ?? order.clientOrderId ?? '').slice(0, 18),
     market: shortDecibelAddr(order.market_addr || order.marketAddr || order.market || ''),
   };
+}
+
+function decibelOrderStateKey(order) {
+  if (!order) return '';
+  const orderId = String(order.order_id ?? order.orderId ?? order.id ?? '').trim();
+  if (orderId) return `id:${orderId}`;
+  const clientOrderId = String(order.client_order_id ?? order.clientOrderId ?? '').trim();
+  if (clientOrderId) return `client:${clientOrderId}`;
+  return [
+    order.symbol || order.s || '',
+    order.market_addr || order.marketAddr || order.market || '',
+    order.side || order.d || order.order_direction || order.orderDirection || '',
+    order.order_type || order.orderType || '',
+    order.price || order.limit_price || order.limitPrice || '',
+    order.stop_price || order.stopPrice || '',
+  ].map(v => String(v || '').toLowerCase()).join(':');
 }
 
 function summarizeDecibelPositionForLog(position) {
@@ -976,6 +995,19 @@ export function useDecibel() {
   const applyDecibelOrders = useCallback((rows, source = 'unknown') => {
     const raw = Array.isArray(rows) ? rows : (Array.isArray(rows?.data) ? rows.data : []);
     const norm = raw.map(o => normalizeOrder(o, marketsRef.current));
+    const previousByKey = new Map((ordersRef.current || [])
+      .map(order => [decibelOrderStateKey(order), order])
+      .filter(([key]) => !!key));
+    for (const order of norm) {
+      const key = decibelOrderStateKey(order);
+      const previous = key ? previousByKey.get(key) : null;
+      if (order.leverage == null && previous?.leverage != null) {
+        order.leverage = previous.leverage;
+      }
+      if (order.requested_leverage == null && previous?.requested_leverage != null) {
+        order.requested_leverage = previous.requested_leverage;
+      }
+    }
     D.log('apply orders', {
       source,
       raw_count: raw.length,
@@ -2346,7 +2378,7 @@ export function useDecibel() {
   // live trader feature, so this hook always configures cross margin and
   // only caches duplicate leverage updates.
   const lastAppliedSettingsRef = useRef(new Map()); // symbol -> {lev, isCross}
-  const setLeverage = useCallback(async (symbol, lev) => {
+  const setLeverage = useCallback(async (symbol, lev, options = {}) => {
     try {
       requireServerSigner();
       const market = marketsRef.current.find(m => m.symbol === symbol);
@@ -2362,7 +2394,7 @@ export function useDecibel() {
       // idempotent — re-sending wastes builder gas + Aptos sequencer
       // capacity for nothing.
       const cached = lastAppliedSettingsRef.current.get(symbol);
-      if (cached && cached.lev === userLev && cached.isCross === isCross) {
+      if (!options?.force && cached && cached.lev === userLev && cached.isCross === isCross) {
         return { ok: true, cached: true };
       }
       const res = await leverageOnServer({

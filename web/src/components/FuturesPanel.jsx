@@ -895,12 +895,17 @@ function orderPriceDetailLabel(order, type = '') {
 function orderDisplayLeverage(order, fallbackLeverage = null) {
   const direct = displayLeverage(order?.leverage);
   if (direct) return direct;
+  const requested = displayLeverage(order?.requested_leverage ?? order?.requestedLeverage);
+  if (requested) return requested;
   const raw = numOrNull(order?._raw?.leverage ?? order?._raw?.trade?.leverage);
   if (raw != null && raw > 10_000) {
     const scaled = raw / 1e10;
     return Number.isFinite(scaled) && scaled > 0 ? Math.round(scaled * 10) / 10 : null;
   }
-  return displayLeverage(raw) || displayLeverage(fallbackLeverage);
+  const rawDisplay = displayLeverage(raw);
+  if (rawDisplay) return rawDisplay;
+  if (order?.dex === 'decibel' || order?._raw?.dex === 'decibel') return null;
+  return displayLeverage(fallbackLeverage);
 }
 
 function orderUsdValue(...values) {
@@ -3867,7 +3872,10 @@ function FuturesPanel() {
             if (dex !== 'decibel') return undefined;
             return { isCross: true };
           })();
-          const levRes = await setLeverageApi(symbol, leverage, levOpts);
+          const levRes = await setLeverageApi(symbol, leverage, {
+            ...levOpts,
+            force: dex === 'decibel',
+          });
           logLighterTrade('set_leverage_result', { ok: !!levRes && !levRes.error, result: levRes });
           if (!levRes || levRes.error) {
             setLocalAlert(levRes?.error || 'Could not set leverage. Close any open position on this symbol first.');
