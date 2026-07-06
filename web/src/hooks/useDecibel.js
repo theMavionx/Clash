@@ -470,7 +470,13 @@ function normalizeOrder(o, markets) {
     ? m.symbol
     : (String(o.symbol || o.s || marketName || '').split(/[-/]/)[0].toUpperCase()
       || String(marketId || '').slice(0, 8).toUpperCase());
-  const isBuy = o.isBuy ?? o.is_buy ?? false;
+  const rawSide = String(o.side || o.order_side || o.orderSide || o.direction || '').toLowerCase();
+  const isBuy = o.isBuy ?? o.is_buy ?? o.is_bid ?? o.isBid
+    ?? (['buy', 'bid', 'long'].includes(rawSide)
+      ? true
+      : ['sell', 'ask', 'short'].includes(rawSide)
+        ? false
+        : false);
   const sizeRaw = o.remaining_size ?? o.orig_size ?? o.size_delta ?? o.size ?? 0;
   const type = orderTypeText(o) || (o.isTrigger || o.is_trigger ? 'STOP_LIMIT' : 'LIMIT');
   const kind = tpslKindFromOrder({ ...o, order_type: type });
@@ -500,6 +506,7 @@ function normalizeOrder(o, markets) {
     market_addr: marketId || (m && m.market_addr) || null,
     market_name: marketName || (m && m.market_name) || '',
     client_order_id: o.client_order_id ?? o.clientOrderId ?? null,
+    _raw: o,
   };
 }
 

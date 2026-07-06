@@ -869,16 +869,24 @@ function formatOrderPrice(price) {
 
 function orderPriceDetailLabel(order, type = '') {
   const rawType = String(type || order?.order_type || order?.type || order?.ot || '').toLowerCase();
-  const hasExplicitTrigger = order?.trigger_price != null
-    || order?.triggerPrice != null
-    || order?.triggerPriceUi != null
-    || order?.trigger_price_ui != null
-    || order?.stop_price != null
-    || order?.sp != null
-    || order?._raw?.triggerPrice != null
-    || order?._raw?.trigger_price != null
-    || order?._raw?.triggerPriceUi != null
-    || order?._raw?.trigger_price_ui != null;
+  const hasExplicitTrigger = [
+    order?.trigger_price,
+    order?.triggerPrice,
+    order?.triggerPriceUi,
+    order?.trigger_price_ui,
+    order?.stop_price,
+    order?.sp,
+    order?._raw?.triggerPrice,
+    order?._raw?.trigger_price,
+    order?._raw?.triggerPriceUi,
+    order?._raw?.trigger_price_ui,
+  ].some((value) => {
+    if (value == null) return false;
+    const text = String(value).trim();
+    if (!text || text === '0' || /^(none|null|undefined|no[_ -]?trigger)$/i.test(text)) return false;
+    const n = Number(text);
+    return !Number.isFinite(n) || n > 0;
+  });
   if (hasExplicitTrigger || rawType.includes('trigger') || rawType.includes('stop')) return 'Trigger';
   if (rawType.includes('limit')) return 'Limit';
   return 'Price';

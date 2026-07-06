@@ -2113,6 +2113,20 @@ function decibelOrderLooksTpsl(order) {
   return /\b(take\s*profit|take-profit|stop\s*loss|stop-loss|tp|sl)\b/.test(text) || !!(order?.is_tpsl ?? order?.isTpsl);
 }
 
+function decibelOrderClientId(order) {
+  const direct = order?.client_order_id ?? order?.clientOrderId ?? order?.clientOrderID;
+  const vec = order?.client_order_id?.vec;
+  const value = Array.isArray(vec) ? vec[0] : direct;
+  return value == null ? '' : String(value);
+}
+
+function decibelOrderId(order) {
+  const direct = order?.order_id ?? order?.orderId ?? order?.orderID ?? order?.id;
+  const vec = order?.order_id?.vec;
+  const value = Array.isArray(vec) ? vec[0] : direct;
+  return value == null ? '' : String(value);
+}
+
 function decibelOrderTpslKinds(order) {
   const text = `${order?.order_type || order?.orderType || ''} ${order?.trigger_condition || order?.triggerCondition || ''} ${order?.details || ''}`.toLowerCase();
   const kinds = [];
@@ -2135,10 +2149,19 @@ function decibelOrderTpslKinds(order) {
   return kinds;
 }
 
+function decibelOpenOrderMatchesExpected(order, options = {}) {
+  const expectedClientOrderId = String(options.clientOrderId || options.client_order_id || '');
+  if (expectedClientOrderId && decibelOrderClientId(order) === expectedClientOrderId) return true;
+
+  const expectedOrderId = String(options.orderId || options.order_id || '');
+  if (expectedOrderId && decibelOrderId(order) === expectedOrderId) return true;
+
+  return decibelOrderMatchesMarket(order, options.marketAddr || options.market_addr || '');
+}
+
 async function fetchDecibelOpenOrdersAfterWrite(subaccount, options = {}) {
   const attempts = Math.max(1, Math.min(8, Number(options.attempts || 1)));
   const delayMs = Math.max(100, Math.min(1500, Number(options.delayMs || 300)));
-  const marketAddr = options.marketAddr || options.market_addr || '';
   const requireTpsl = !!options.requireTpsl;
   const expectedTpslKinds = Array.isArray(options.expectedTpslKinds)
     ? Array.from(new Set(options.expectedTpslKinds.map(k => String(k || '').toLowerCase()).filter(k => k === 'tp' || k === 'sl')))
@@ -2148,7 +2171,7 @@ async function fetchDecibelOpenOrdersAfterWrite(subaccount, options = {}) {
     if (i > 0) await sleep(delayMs);
     rows = await decibel.fetchOpenOrders(subaccount, { limit: 100 });
     const matching = rows.filter((order) => (
-      decibelOrderMatchesMarket(order, marketAddr)
+      decibelOpenOrderMatchesExpected(order, options)
       && (!requireTpsl || decibelOrderLooksTpsl(order))
     ));
     if (expectedTpslKinds.length) {
@@ -2256,10 +2279,18 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
       fillRecord = { inserted: 0, rows: 0, volume_usd: 0, reason: 'open_order_waiting_for_fill' };
     }
     let ordersAfter = [];
-    if (orderType !== 'market' && verification.verified === true) {
+    if (
+      orderType !== 'market'
+      && result?.success !== false
+      && verification.effect !== 'position'
+      && verification.effect !== 'tx_event_fill_or_partial'
+    ) {
       ordersAfter = await fetchDecibelOpenOrdersAfterWrite(verified.subaccount, {
-        attempts: 1,
+        attempts: 8,
+        delayMs: 250,
         marketAddr: orderPayload.marketAddr || orderPayload.market_addr,
+        clientOrderId: orderPayload.clientOrderId,
+        orderId: result?.orderId || result?.order_id,
       });
     }
     res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: verification.verified === true, verification, fillRecord, ordersAfter });
