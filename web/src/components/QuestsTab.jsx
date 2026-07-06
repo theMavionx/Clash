@@ -9,6 +9,7 @@ import { useDex } from '../contexts/DexContext';
 import { readEncryptedCredential, writeEncryptedCredential } from '../lib/encryptedCredentialStorage';
 import { pacificaFetch } from '../lib/pacificaClient';
 import { listStoredPacificaMasters, readPacificaAgent } from '../lib/pacificaAgentStorage';
+import { nftRarityCardStyle, normalizeNftRarity } from '../lib/nftV3Client';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -336,6 +337,32 @@ const QUEST_ELIGIBILITY_BADGES = {
   demon_and_dragon: 'Demon + Dragon',
 };
 
+const NFT_RARITY_RANK = {
+  common: 1,
+  epic: 2,
+  legendary: 3,
+};
+
+function higherNftRarity(a, b) {
+  const ak = normalizeNftRarity(a);
+  const bk = normalizeNftRarity(b);
+  if (!ak) return bk;
+  if (!bk) return ak;
+  return (NFT_RARITY_RANK[bk] || 0) > (NFT_RARITY_RANK[ak] || 0) ? bk : ak;
+}
+
+function rewardBoostHighestRarity(rewardBoost) {
+  let highest = null;
+  for (const detail of rewardBoost?.details || []) {
+    highest = higherNftRarity(highest, detail?.best_rarity);
+    const counts = detail?.rarity_counts || {};
+    for (const [rarity, count] of Object.entries(counts)) {
+      if (Number(count || 0) > 0) highest = higherNftRarity(highest, rarity);
+    }
+  }
+  return highest;
+}
+
 function questEligibilityBadge(task) {
   const cfg = task?.eligibility || task?.params?.eligibility || {};
   const mode = String(cfg.mode || 'all');
@@ -449,6 +476,10 @@ function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
   const nftBoostPct = Number(task.reward_boost?.nft_pct || 0);
   const taskNftBoostEnabled = !!task.reward_boost && task.reward_boost.task_enabled !== false;
   const showNftUnlock = taskNftBoostEnabled && nftBoostPct <= 0;
+  const nftBoostRarity = rewardBoostHighestRarity(task.reward_boost);
+  const nftBoostStyle = nftBoostRarity
+    ? { ...S.rewardBoost, ...nftRarityCardStyle(nftBoostRarity, 1) }
+    : S.rewardBoost;
 
   function openDragonShop() {
     try {
@@ -506,7 +537,7 @@ function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
             </span>
           )}
           {nftBoostPct > 0 && (
-            <span style={S.rewardBoost}>Your NFT boost: {Math.round(nftBoostPct * 100) / 100}%</span>
+            <span style={nftBoostStyle}>Your NFT boost: {Math.round(nftBoostPct * 100) / 100}%</span>
           )}
         </div>
 
