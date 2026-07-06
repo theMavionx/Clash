@@ -3341,13 +3341,16 @@ function TaskNftRewardBoostCard({ settings, reload }) {
               <tr>
                 <th>Collection</th>
                 <th>Base NFT boost</th>
-                <th>Each extra NFT</th>
+                <th>Each extra NFT (%)</th>
                 {TASK_NFT_REWARD_BOOST_RARITIES.map((rarity) => <th key={rarity.key}>{rarity.label}</th>)}
+                <th>Example</th>
               </tr>
             </thead>
             <tbody>
               {TASK_NFT_REWARD_BOOST_COLLECTIONS.map((collection) => {
                 const cfg = form.collections?.[collection.key] || {};
+                const epicPct = Number(cfg.rarity_pct?.epic || 0) || 0;
+                const extraPct = Number(cfg.extra_pct_per_additional || 0) || 0;
                 return (
                   <tr key={collection.key}>
                     <td>
@@ -3360,13 +3363,14 @@ function TaskNftRewardBoostCard({ settings, reload }) {
                     </td>
                     <td>
                       <input className="admin-input" type="number" step="0.01" value={cfg.extra_pct_per_additional ?? 0} onChange={(e) => updateCollection(collection.key, { extra_pct_per_additional: Number(e.target.value) || 0 })} />
-                      <div className="admin-card-sub">Added for NFT #2, #3...</div>
+                      <div className="admin-card-sub">10 = +10% for NFT #2, #3...</div>
                     </td>
                     {TASK_NFT_REWARD_BOOST_RARITIES.map((rarity) => (
                       <td key={`${collection.key}-${rarity.key}`}>
                         <input className="admin-input" type="number" step="0.01" value={cfg.rarity_pct?.[rarity.key] ?? 0} onChange={(e) => updateRarity(collection.key, rarity.key, e.target.value)} />
                       </td>
                     ))}
+                    <td><div className="admin-card-sub">Epic + 2 NFTs = +{Math.round((epicPct + extraPct) * 100) / 100}%</div></td>
                   </tr>
                 );
               })}

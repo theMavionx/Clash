@@ -2633,6 +2633,76 @@ const stmts = {
        AND active = 1
      ORDER BY level DESC, chain ASC, CAST(token_id AS INTEGER) ASC
   `),
+  listPlayerCollectionNftsForTaskBoost: db.prepare(`
+    WITH linked_wallets(wallet) AS (
+      SELECT wallet
+        FROM players
+       WHERE id = ?
+         AND wallet IS NOT NULL
+         AND wallet != ''
+      UNION
+      SELECT nft_gold_boost_wallet
+        FROM players
+       WHERE id = ?
+         AND nft_gold_boost_wallet IS NOT NULL
+         AND nft_gold_boost_wallet != ''
+      UNION
+      SELECT address
+        FROM player_wallets
+       WHERE player_id = ?
+         AND address IS NOT NULL
+         AND address != ''
+      UNION
+      SELECT wallet_address
+        FROM player_dex_accounts
+       WHERE player_id = ?
+         AND wallet_address IS NOT NULL
+         AND wallet_address != ''
+         AND COALESCE(status, '') NOT IN ('disconnected', 'failed', 'error')
+      UNION
+      SELECT identifier
+        FROM player_auth_identities
+       WHERE player_id = ?
+         AND identifier IS NOT NULL
+         AND identifier != ''
+         AND type IN ('evm_wallet', 'solana_wallet', 'aptos_wallet')
+    )
+    SELECT pn.player_id, pn.collection, pn.chain, pn.token_id, pn.wallet, pn.level, pn.image_url,
+           pn.active, pn.source, pn.tx_hash, pn.verified_at, pn.last_seen_at, pn.updated_at,
+           (SELECT r.rarity
+              FROM nft_rarities r
+             WHERE r.collection = pn.collection
+               AND r.chain = pn.chain
+               AND r.token_id = pn.token_id
+             LIMIT 1) AS rarity,
+           (SELECT r.revealed_at
+              FROM nft_rarities r
+             WHERE r.collection = pn.collection
+               AND r.chain = pn.chain
+               AND r.token_id = pn.token_id
+             LIMIT 1) AS rarity_revealed_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = pn.player_id
+                AND e.collection = pn.collection
+                AND e.chain = pn.chain
+                AND e.token_id = pn.token_id
+           ), 0) AS battle_wins,
+           CASE WHEN pn.player_id = ? THEN 0 ELSE 1 END AS owner_priority
+      FROM player_nfts pn
+     WHERE pn.collection = ?
+       AND pn.active = 1
+       AND (
+         pn.player_id = ?
+         OR EXISTS (
+           SELECT 1
+             FROM linked_wallets lw
+            WHERE lower(lw.wallet) = lower(pn.wallet)
+         )
+       )
+     ORDER BY owner_priority ASC, pn.level DESC, pn.chain ASC, pn.updated_at DESC
+  `),
   getPlayerCollectionNft: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
            active, source, tx_hash, verified_at, last_seen_at, updated_at,
@@ -6235,7 +6305,7 @@ function taskNftRewardBoostNftSummary(playerId, settings = getTaskNftRewardBoost
   for (const spec of TASK_NFT_REWARD_BOOST_COLLECTIONS) {
     const cfg = settings.collections?.[spec.key] || emptyTaskNftRewardBoostCollectionConfig(spec.key);
     if (!cfg.enabled) continue;
-    const nfts = listPlayerCollectionNfts(playerId, spec.key);
+    const nfts = listPlayerCollectionNftsForTaskBoost(playerId, spec.key);
     const count = nfts.length;
     if (count <= 0) continue;
 
@@ -6988,6 +7058,33 @@ function listPlayerCollectionNfts(playerId, collection = 'demon_king', wallet = 
     ? stmts.listPlayerCollectionNftsByWallet.all(playerId, collectionKey, String(wallet).trim())
     : stmts.listPlayerCollectionNfts.all(playerId, collectionKey);
   return rows.map(normalizeCollectionNftRow).filter(Boolean);
+}
+
+function listPlayerCollectionNftsForTaskBoost(playerId, collection = 'demon_king') {
+  const collectionKey = normalizePlayerNftCollection(collection);
+  if (!playerId || !collectionKey) return [];
+  const rows = stmts.listPlayerCollectionNftsForTaskBoost.all(
+    playerId,
+    playerId,
+    playerId,
+    playerId,
+    playerId,
+    playerId,
+    collectionKey,
+    playerId
+  );
+  const byToken = new Map();
+  for (const row of rows) {
+    const nft = normalizeCollectionNftRow(row);
+    if (!nft) continue;
+    const key = `${nft.collection}:${nft.chain}:${nft.tokenId}`.toLowerCase();
+    if (!key) continue;
+    const existing = byToken.get(key);
+    if (!existing || existing.playerId !== playerId && nft.playerId === playerId) {
+      byToken.set(key, nft);
+    }
+  }
+  return [...byToken.values()];
 }
 
 function getPlayerDemonKingNft(playerId, chain, tokenId) {
