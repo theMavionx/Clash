@@ -928,6 +928,7 @@ export function useDecibel() {
     });
     const res = await fetch(`${FUTURES_API}/decibel${path}`, {
       method,
+      cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
         'x-dex': 'decibel',
@@ -1480,11 +1481,16 @@ export function useDecibel() {
     } catch { /* tolerate transient RPC errors — keep prior value */ }
   }, [address]);
 
-  const pollDecibelStateAfterWrite = useCallback(({ symbol, mode = 'position-refresh' } = {}) => {
+  const pollDecibelStateAfterWrite = useCallback(({ symbol, mode = 'position-refresh', expectedTpslKinds = [] } = {}) => {
     if (!address) return;
     const target = String(symbol || '').toUpperCase();
+    const expectedKinds = Array.from(new Set(
+      (Array.isArray(expectedTpslKinds) ? expectedTpslKinds : [])
+        .map(k => String(k || '').toLowerCase())
+        .filter(k => k === 'tp' || k === 'sl')
+    ));
     const pollId = ++postWritePollRef.current;
-    D.log('post-write poll start', { poll_id: pollId, mode, symbol: target || null });
+    D.log('post-write poll start', { poll_id: pollId, mode, symbol: target || null, expected_tpsl: expectedKinds });
 
     const targetPositions = (rows) => (Array.isArray(rows) ? rows : [])
       .filter(p => !target || String(p?.symbol || '').toUpperCase() === target);
@@ -1517,6 +1523,7 @@ export function useDecibel() {
           delay_ms: delay,
           needs_positions: needsPositions,
           needs_orders: needsOrders,
+          expected_tpsl: expectedKinds,
         });
         const [positionsResult] = await Promise.allSettled([
           needsPositions ? fetchPositions() : Promise.resolve(positionsRef.current),
@@ -1537,6 +1544,7 @@ export function useDecibel() {
           iteration: i,
           matching_positions: matchingPositions.length,
           matching_orders: matchingOrders.length,
+          expected_tpsl: expectedKinds,
           positions: matchingPositions.slice(0, 5).map(summarizeDecibelPositionForLog),
           orders: matchingOrders.slice(0, 5).map(summarizeDecibelOrderForLog),
         });
@@ -1553,9 +1561,12 @@ export function useDecibel() {
           D.log('post-write poll stop: position refresh budget reached', { poll_id: pollId, symbol: target || null, iteration: i });
           return;
         }
-        if (mode === 'tpsl-refresh' && i >= 3 && matchingPositions.some(p => (
-          p?.tp || p?.take_profit || p?.tp_trigger_price || p?.sl || p?.stop_loss || p?.sl_trigger_price
-        ))) {
+        if (mode === 'tpsl-refresh' && i >= 3 && matchingPositions.some(p => {
+          const hasTp = !!(p?.tp || p?.take_profit || p?.tp_trigger_price);
+          const hasSl = !!(p?.sl || p?.stop_loss || p?.sl_trigger_price);
+          if (!expectedKinds.length) return hasTp || hasSl;
+          return expectedKinds.every(kind => (kind === 'tp' ? hasTp : hasSl));
+        })) {
           D.log('post-write poll stop: TP/SL found on position', { poll_id: pollId, symbol: target || null, iteration: i });
           return;
         }
@@ -2305,7 +2316,14 @@ export function useDecibel() {
         });
         applyDecibelOrders(res.ordersAfter, 'tpsl-ordersAfter');
       }
-      pollDecibelStateAfterWrite({ symbol: target, mode: 'tpsl-refresh' });
+      pollDecibelStateAfterWrite({
+        symbol: target,
+        mode: 'tpsl-refresh',
+        expectedTpslKinds: [
+          ...(tp > 0 ? ['tp'] : []),
+          ...(sl > 0 ? ['sl'] : []),
+        ],
+      });
       return { tx_hash: txHash, status: 'updated' };
     } catch (e) {
       const msg = decodeTradeError(e, 'TP/SL update failed');

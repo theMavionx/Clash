@@ -2113,11 +2113,36 @@ function decibelOrderLooksTpsl(order) {
   return /\b(take\s*profit|take-profit|stop\s*loss|stop-loss|tp|sl)\b/.test(text) || !!(order?.is_tpsl ?? order?.isTpsl);
 }
 
+function decibelOrderTpslKinds(order) {
+  const text = `${order?.order_type || order?.orderType || ''} ${order?.trigger_condition || order?.triggerCondition || ''} ${order?.details || ''}`.toLowerCase();
+  const kinds = [];
+  if (
+    order?.tp_trigger_price != null
+    || order?.tpTriggerPrice != null
+    || order?.take_profit != null
+    || /\b(take\s*profit|take-profit|tp)\b/.test(text)
+  ) {
+    kinds.push('tp');
+  }
+  if (
+    order?.sl_trigger_price != null
+    || order?.slTriggerPrice != null
+    || order?.stop_loss != null
+    || /\b(stop\s*loss|stop-loss|sl)\b/.test(text)
+  ) {
+    kinds.push('sl');
+  }
+  return kinds;
+}
+
 async function fetchDecibelOpenOrdersAfterWrite(subaccount, options = {}) {
   const attempts = Math.max(1, Math.min(8, Number(options.attempts || 1)));
   const delayMs = Math.max(100, Math.min(1500, Number(options.delayMs || 300)));
   const marketAddr = options.marketAddr || options.market_addr || '';
   const requireTpsl = !!options.requireTpsl;
+  const expectedTpslKinds = Array.isArray(options.expectedTpslKinds)
+    ? Array.from(new Set(options.expectedTpslKinds.map(k => String(k || '').toLowerCase()).filter(k => k === 'tp' || k === 'sl')))
+    : [];
   let rows = [];
   for (let i = 0; i < attempts; i += 1) {
     if (i > 0) await sleep(delayMs);
@@ -2126,7 +2151,15 @@ async function fetchDecibelOpenOrdersAfterWrite(subaccount, options = {}) {
       decibelOrderMatchesMarket(order, marketAddr)
       && (!requireTpsl || decibelOrderLooksTpsl(order))
     ));
-    if (matching.length) break;
+    if (expectedTpslKinds.length) {
+      const seenKinds = new Set();
+      for (const order of matching) {
+        for (const kind of decibelOrderTpslKinds(order)) seenKinds.add(kind);
+      }
+      if (expectedTpslKinds.every(kind => seenKinds.has(kind))) break;
+    } else if (matching.length) {
+      break;
+    }
   }
   return rows;
 }
@@ -2357,6 +2390,10 @@ router.post('/decibel/tpsl', auth, async (req, res) => {
       delayMs: 300,
       marketAddr: body.marketAddr || body.market_addr,
       requireTpsl: true,
+      expectedTpslKinds: [
+        ...(hasTp ? ['tp'] : []),
+        ...(hasSl ? ['sl'] : []),
+      ],
     });
     res.json({
       success: true,
