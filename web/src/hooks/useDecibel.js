@@ -487,7 +487,7 @@ function normalizeOrder(o, markets) {
     initial_amount: String(size),
     price: String(price),
     stop_price: triggerPrice == null ? '' : String(triggerPrice),
-    leverage: String(o.leverage ?? 1),
+    leverage: o.leverage == null ? null : String(o.leverage),
     order_type: type,
     reduce_only: !!(o.reduce_only ?? o.reduceOnly ?? o.is_reduce_only),
     is_tpsl: !!(o.is_tpsl ?? o.isTpsl) || !!kind,

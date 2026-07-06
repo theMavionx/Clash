@@ -884,7 +884,7 @@ function orderPriceDetailLabel(order, type = '') {
   return 'Price';
 }
 
-function orderDisplayLeverage(order) {
+function orderDisplayLeverage(order, fallbackLeverage = null) {
   const direct = displayLeverage(order?.leverage);
   if (direct) return direct;
   const raw = numOrNull(order?._raw?.leverage ?? order?._raw?.trade?.leverage);
@@ -892,7 +892,7 @@ function orderDisplayLeverage(order) {
     const scaled = raw / 1e10;
     return Number.isFinite(scaled) && scaled > 0 ? Math.round(scaled * 10) / 10 : null;
   }
-  return displayLeverage(raw);
+  return displayLeverage(raw) || displayLeverage(fallbackLeverage);
 }
 
 function orderUsdValue(...values) {
@@ -2154,7 +2154,7 @@ const OstiumWalletFallbackBar = memo(function OstiumWalletFallbackBar({
 });
 
 // ==================== ORDERS LIST (mobile/tab card view) ====================
-const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [] }) {
+const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [], leverageSettings = {} }) {
   if (!orders.length) {
     return (
       <div style={S.empty}>
@@ -2175,7 +2175,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
         const amt = parseFloat(rawAmt || 0) > 0 ? fmtAmount(rawAmt) : 'Full position';
         const type = orderDisplayType(o, positions);
         const priceLabel = orderPriceDetailLabel(o, type);
-        const leverageValue = orderDisplayLeverage(o);
+        const leverageValue = orderDisplayLeverage(o, leverageSettings[sym]);
         const marginUsd = orderUsdValue(o.margin, o.margin_usd, o.marginUsd, o.collateral_usd, o.collateralUsd);
         const notionalUsd = orderUsdValue(
           o.notional_usd,
@@ -7817,7 +7817,7 @@ function FuturesPanel() {
           const amt = parseFloat(rawAmt || 0) > 0 ? fmtAmount(rawAmt) : 'Full position';
           const type = orderDisplayType(o, positions);
           const priceLabel = orderPriceDetailLabel(o, type);
-          const leverageValue = orderDisplayLeverage(o);
+          const leverageValue = orderDisplayLeverage(o, leverageSettings[sym]);
           const marginUsd = orderUsdValue(o.margin, o.margin_usd, o.marginUsd, o.collateral_usd, o.collateralUsd);
           const notionalUsd = orderUsdValue(
             o.notional_usd,
