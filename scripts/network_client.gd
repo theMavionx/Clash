@@ -463,8 +463,11 @@ func _server_troop_type(troop_type: String) -> String:
 			return "fire_dragon"
 	return troop_type.to_lower()
 
-func upgrade_troop(troop_type: String) -> Dictionary:
-	return await _http_post("/troops/%s/upgrade" % _server_troop_type(troop_type), {})
+func upgrade_troop(troop_type: String, expected_level: int = -1) -> Dictionary:
+	var payload: Dictionary = {}
+	if expected_level > 0:
+		payload["expected_level"] = expected_level
+	return await _http_post("/troops/%s/upgrade" % _server_troop_type(troop_type), payload)
 
 func upgrade_altar_skill(skill_id: String) -> Dictionary:
 	return await _http_post("/altar/skills/%s/upgrade" % skill_id, {})

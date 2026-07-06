@@ -124,6 +124,73 @@ async function queryApp(msg, { contract = PERPS_CONTRACT, height = null } = {}) 
   return data?.wasm_smart ?? data;
 }
 
+let appConfigCache = null;
+let appConfigCacheAt = 0;
+const APP_CONFIG_CACHE_MS = 60_000;
+
+async function queryIndexer(document, variables = undefined) {
+  const data = await graphqlRequest(document, variables);
+  return data || {};
+}
+
+async function queryAppIndexer(request, { height = null } = {}) {
+  const data = await queryIndexer(
+    `query DangoQueryApp($request: GrugQueryInput!, $height: Int) {
+      queryApp(request: $request, height: $height)
+    }`,
+    { request, ...(height ? { height: Math.floor(Number(height)) } : {}) },
+  );
+  return data?.queryApp || {};
+}
+
+async function fetchAppConfig({ force = false } = {}) {
+  if (!force && appConfigCache && Date.now() - appConfigCacheAt < APP_CONFIG_CACHE_MS) return appConfigCache;
+  const data = await queryAppIndexer({ app_config: {} });
+  const config = data?.app_config || data?.appConfig || null;
+  if (!config?.addresses?.account_factory || !config?.addresses?.perps) {
+    throw new Error('Dango app config missing account_factory/perps addresses');
+  }
+  appConfigCache = config;
+  appConfigCacheAt = Date.now();
+  return config;
+}
+
+async function fetchAccountInfo(address) {
+  const account = normalizeDangoAddress(address);
+  if (!account) throw new Error('Dango account address required');
+  const config = await fetchAppConfig();
+  const info = await queryApp({ account: { address: account } }, { contract: config.addresses.account_factory }).catch((e) => {
+    if (/data not found|not found|no such/i.test(e?.message || '')) return null;
+    throw e;
+  });
+  if (!info || typeof info !== 'object') {
+    const err = new Error('Dango account not found. Create or fund this Dango account in the Dango app first.');
+    err.status = 404;
+    throw err;
+  }
+  return {
+    address: account,
+    index: Number(info.index ?? info.account_index ?? info.accountIndex ?? 0),
+    owner: Number(info.owner ?? info.user_index ?? info.userIndex ?? 0),
+    raw: info,
+  };
+}
+
+async function fetchAccountSeenNonces(address) {
+  const account = normalizeDangoAddress(address);
+  if (!account) throw new Error('Dango account address required');
+  const nonces = await queryApp({ seen_nonces: {} }, { contract: account }).catch((e) => {
+    if (/data not found|not found|no such/i.test(e?.message || '')) return [];
+    throw e;
+  });
+  return Array.isArray(nonces) ? nonces.map(Number).filter(Number.isFinite) : [];
+}
+
+function nextNonce(nonces = []) {
+  if (!Array.isArray(nonces) || !nonces.length) return 0;
+  return Math.max(...nonces.map(Number).filter(Number.isFinite), -1) + 1;
+}
+
 function normalizeDangoAddress(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (!/^0x[0-9a-f]{1,64}$/u.test(raw)) return '';
@@ -709,14 +776,124 @@ async function importRecentFillsForPlayer(playerId, address, addTrade, opts = {}
   return { ok: true, imported, skipped, total };
 }
 
-async function broadcastSignedTx(signedTx) {
-  if (!signedTx || typeof signedTx !== 'object') throw new Error('signed Dango tx object required');
-  return restPost('broadcast', signedTx);
+function snakeTypeValue(value) {
+  if (Array.isArray(value)) return value.map(snakeTypeValue);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    const snake = key.replace(/[A-Z]/g, ch => `_${ch.toLowerCase()}`);
+    out[snake] = snakeTypeValue(item);
+  }
+  return out;
+}
+
+function coinsTypedData(coins) {
+  if (!coins || typeof coins !== 'object') return [];
+  return Object.keys(coins).map(name => ({ name, type: 'string' }));
+}
+
+function executeTypedData(childTypedData = {}, funds = {}, index = 0) {
+  const { extraTypes = {}, type = [] } = childTypedData || {};
+  return {
+    type: [{ name: 'execute', type: `Execute${index}` }],
+    extraTypes: {
+      [`Execute${index}`]: [
+        { name: 'contract', type: 'address' },
+        { name: 'msg', type: `ExecuteMessage${index}` },
+        { name: 'funds', type: `Funds${index}` },
+      ],
+      [`ExecuteMessage${index}`]: type,
+      [`Funds${index}`]: coinsTypedData(funds),
+      ...extraTypes,
+    },
+  };
+}
+
+function composeTxTypedData({ sender, messages, metadata, gasLimit }, childTypedData = {}) {
+  const { type = [], extraTypes = {} } = childTypedData || {};
+  return {
+    types: {
+      EIP712Domain: [
+        { name: 'name', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+        { name: 'verifyingContract', type: 'address' },
+      ],
+      Message: [
+        { name: 'sender', type: 'address' },
+        { name: 'data', type: 'Metadata' },
+        { name: 'gas_limit', type: 'uint32' },
+        { name: 'messages', type: 'TxMessage[]' },
+      ],
+      Metadata: [
+        { name: 'user_index', type: 'uint32' },
+        { name: 'chain_id', type: 'string' },
+        { name: 'nonce', type: 'uint32' },
+        ...(metadata.expiry ? [{ name: 'expiry', type: 'string' }] : []),
+      ],
+      TxMessage: type,
+      ...extraTypes,
+    },
+    primaryType: 'Message',
+    domain: {
+      name: 'dango',
+      chainId: 1,
+      verifyingContract: sender,
+    },
+    message: {
+      sender,
+      data: snakeTypeValue(metadata),
+      gas_limit: Math.max(1, Math.floor(Number(gasLimit || 0))),
+      messages: snakeTypeValue(messages),
+    },
+  };
 }
 
 async function simulateTx(tx) {
   if (!tx || typeof tx !== 'object') throw new Error('Dango tx object required');
-  return restPost('simulate', tx);
+  const data = await queryIndexer(
+    `query DangoSimulate($tx: UnsignedTx!) {
+      simulate(tx: $tx)
+    }`,
+    { tx },
+  );
+  const sim = data?.simulate || {};
+  const gasUsed = Number(sim.gas_used ?? sim.gasUsed ?? sim.gas_limit ?? sim.gasLimit ?? 0);
+  return {
+    ...sim,
+    gas_used: gasUsed,
+    gasUsed,
+    gas_limit: Number((sim.gas_limit ?? sim.gasLimit ?? Math.ceil(gasUsed * 1.3)) || 0),
+  };
+}
+
+async function broadcastTxSync(signedTx) {
+  if (!signedTx || typeof signedTx !== 'object') throw new Error('signed Dango tx object required');
+  const tx = snakeTypeValue(signedTx);
+  const data = await queryIndexer(
+    `mutation DangoBroadcastTx($tx: Tx!) {
+      broadcastTxSync(tx: $tx)
+    }`,
+    { tx },
+  );
+  const result = data?.broadcastTxSync || data;
+  const checkResult = result?.check_tx?.result || result?.checkTx?.result;
+  const errPayload = checkResult?.Err ?? checkResult?.err ?? null;
+  if (errPayload) {
+    const err = new Error(typeof errPayload === 'string' ? errPayload : (errPayload.error || JSON.stringify(errPayload)));
+    err.status = 400;
+    err.data = result;
+    throw err;
+  }
+  return result;
+}
+
+async function broadcastSignedTx(signedTx) {
+  try {
+    return await broadcastTxSync(signedTx);
+  } catch (e) {
+    if (!/Unknown type|Failed to parse|broadcastTxSync/i.test(e?.message || '')) throw e;
+    return restPost('broadcast', signedTx);
+  }
 }
 
 function normalizeSlippage(value, fallback = '0.010000') {
@@ -759,12 +936,32 @@ function depositMarginMessage({ amount = null, amountBaseUnits = null, denom = '
   };
 }
 
+function depositMarginTypedData() {
+  return {
+    type: [{ name: 'trade', type: 'Trade' }],
+    extraTypes: {
+      Trade: [{ name: 'deposit', type: 'Deposit' }],
+      Deposit: [],
+    },
+  };
+}
+
 function withdrawMarginMessage({ amount } = {}) {
   return {
     trade: {
       withdraw: {
         amount: normalizeAmountText(amount),
       },
+    },
+  };
+}
+
+function withdrawMarginTypedData() {
+  return {
+    type: [{ name: 'trade', type: 'Trade' }],
+    extraTypes: {
+      Trade: [{ name: 'withdraw', type: 'Withdraw' }],
+      Withdraw: [{ name: 'amount', type: 'string' }],
     },
   };
 }
@@ -822,6 +1019,22 @@ function submitConditionalOrderMessage({
   };
 }
 
+function submitConditionalOrderTypedData(includeSize = true) {
+  return {
+    type: [{ name: 'trade', type: 'Trade' }],
+    extraTypes: {
+      Trade: [{ name: 'submit_conditional_order', type: 'SubmitConditionalOrder' }],
+      SubmitConditionalOrder: [
+        { name: 'pair_id', type: 'string' },
+        ...(includeSize ? [{ name: 'size', type: 'string' }] : []),
+        { name: 'trigger_price', type: 'string' },
+        { name: 'trigger_direction', type: 'string' },
+        { name: 'max_slippage', type: 'string' },
+      ],
+    },
+  };
+}
+
 function cancelConditionalOrderMessage({ symbol, pairId, triggerDirection = null, allForPair = false, all = false } = {}) {
   if (all) {
     return {
@@ -851,6 +1064,39 @@ function cancelConditionalOrderMessage({ symbol, pairId, triggerDirection = null
           trigger_direction: direction,
         },
       },
+    },
+  };
+}
+
+function cancelConditionalOrderTypedData(request) {
+  if (request === 'all') {
+    return {
+      type: [{ name: 'trade', type: 'Trade' }],
+      extraTypes: {
+        Trade: [{ name: 'cancel_conditional_order', type: 'CancelConditionalOrder' }],
+        CancelConditionalOrder: [],
+      },
+    };
+  }
+  if (request?.one) {
+    return {
+      type: [{ name: 'trade', type: 'Trade' }],
+      extraTypes: {
+        Trade: [{ name: 'cancel_conditional_order', type: 'CancelConditionalOrder' }],
+        CancelConditionalOrder: [{ name: 'one', type: 'One' }],
+        One: [
+          { name: 'pair_id', type: 'string' },
+          { name: 'trigger_direction', type: 'string' },
+        ],
+      },
+    };
+  }
+  return {
+    type: [{ name: 'trade', type: 'Trade' }],
+    extraTypes: {
+      Trade: [{ name: 'cancel_conditional_order', type: 'CancelConditionalOrder' }],
+      CancelConditionalOrder: [{ name: 'all_for_pair', type: 'AllForPair' }],
+      AllForPair: [{ name: 'pair_id', type: 'string' }],
     },
   };
 }
@@ -909,6 +1155,48 @@ function submitOrderMessage({
   };
 }
 
+function submitOrderTypedData(message) {
+  const submit = message?.trade?.submit_order || {};
+  const kind = submit.kind || {};
+  const isLimit = !!kind.limit;
+  const limitHasClientOrderId = isLimit && kind.limit.client_order_id != null;
+  const kindTypedData = isLimit ? {
+    kind: [{ name: 'limit', type: 'Limit' }],
+    Limit: [
+      { name: 'limit_price', type: 'string' },
+      { name: 'time_in_force', type: 'string' },
+      ...(limitHasClientOrderId ? [{ name: 'client_order_id', type: 'string' }] : []),
+    ],
+  } : {
+    kind: [{ name: 'market', type: 'Market' }],
+    Market: [{ name: 'max_slippage', type: 'string' }],
+  };
+  const childOrderTypeFor = (child) => [
+    { name: 'trigger_price', type: 'string' },
+    { name: 'max_slippage', type: 'string' },
+    ...(child?.size ? [{ name: 'size', type: 'string' }] : []),
+  ];
+  return {
+    type: [{ name: 'trade', type: 'Trade' }],
+    extraTypes: {
+      Trade: [{ name: 'submit_order', type: 'SubmitOrder' }],
+      SubmitOrder: [
+        { name: 'pair_id', type: 'string' },
+        { name: 'size', type: 'string' },
+        { name: 'kind', type: 'Kind' },
+        { name: 'reduce_only', type: 'bool' },
+        ...(submit.tp ? [{ name: 'tp', type: 'ChildOrderTp' }] : []),
+        ...(submit.sl ? [{ name: 'sl', type: 'ChildOrderSl' }] : []),
+      ],
+      Kind: kindTypedData.kind,
+      ...(kindTypedData.Market ? { Market: kindTypedData.Market } : {}),
+      ...(kindTypedData.Limit ? { Limit: kindTypedData.Limit } : {}),
+      ...(submit.tp ? { ChildOrderTp: childOrderTypeFor(submit.tp) } : {}),
+      ...(submit.sl ? { ChildOrderSl: childOrderTypeFor(submit.sl) } : {}),
+    },
+  };
+}
+
 function cancelOrderMessage({ orderId, clientOrderId = null, all = false }) {
   if (!orderId && !clientOrderId && !all) throw new Error('orderId, clientOrderId, or all required');
   let request = 'all';
@@ -921,6 +1209,117 @@ function cancelOrderMessage({ orderId, clientOrderId = null, all = false }) {
     trade: {
       cancel_order: request,
     },
+  };
+}
+
+function cancelOrderTypedData(request) {
+  let CancelOrder = [];
+  if (request?.one) CancelOrder = [{ name: 'one', type: 'string' }];
+  else if (request?.one_by_client_order_id) CancelOrder = [{ name: 'one_by_client_order_id', type: 'string' }];
+  return {
+    type: [{ name: 'trade', type: 'Trade' }],
+    extraTypes: {
+      Trade: [{ name: 'cancel_order', type: 'CancelOrder' }],
+      CancelOrder,
+    },
+  };
+}
+
+function intentFromAction(action, body = {}) {
+  const key = String(action || body.action || '').trim().toLowerCase();
+  if (key === 'deposit') {
+    const prepared = depositMarginMessage(body);
+    return {
+      action: key,
+      message: prepared.message,
+      funds: prepared.funds,
+      typedData: depositMarginTypedData(),
+    };
+  }
+  if (key === 'withdraw') {
+    const message = withdrawMarginMessage(body);
+    return { action: key, message, funds: {}, typedData: withdrawMarginTypedData() };
+  }
+  if (key === 'place_order' || key === 'order' || key === 'market_order' || key === 'limit_order') {
+    const message = submitOrderMessage(body);
+    return { action: key, message, funds: {}, typedData: submitOrderTypedData(message) };
+  }
+  if (key === 'cancel_order' || key === 'cancel') {
+    const message = cancelOrderMessage(body);
+    const request = message?.trade?.cancel_order;
+    return { action: key, message, funds: {}, typedData: cancelOrderTypedData(request) };
+  }
+  if (key === 'tpsl' || key === 'conditional_order' || key === 'place_tpsl') {
+    const message = submitConditionalOrderMessage(body);
+    const submit = message?.trade?.submit_conditional_order || {};
+    return {
+      action: key,
+      message,
+      funds: {},
+      typedData: submitConditionalOrderTypedData(submit.size !== undefined),
+    };
+  }
+  if (key === 'cancel_tpsl' || key === 'cancel_conditional_order') {
+    const message = cancelConditionalOrderMessage(body);
+    const request = message?.trade?.cancel_conditional_order;
+    return {
+      action: key,
+      message,
+      funds: {},
+      typedData: cancelConditionalOrderTypedData(request),
+    };
+  }
+  const err = new Error(`Unsupported Dango action: ${action || body.action || ''}`);
+  err.status = 400;
+  throw err;
+}
+
+async function prepareSignedIntent({ account, linkedAccount = '', action, body = {}, gasScale = 1.3 } = {}) {
+  const sender = await resolveAccountAddress(account || linkedAccount || body.account);
+  if (!sender) throw new Error('Dango account address required');
+  const config = await fetchAppConfig();
+  const accountInfo = await fetchAccountInfo(sender);
+  const seenNonces = await fetchAccountSeenNonces(sender);
+  const metadata = {
+    chain_id: CHAIN_ID,
+    user_index: accountInfo.owner,
+    nonce: nextNonce(seenNonces),
+  };
+  const intent = intentFromAction(action, body);
+  const message = executeMessage(intent.message, intent.funds || {});
+  const unsignedTx = {
+    sender,
+    msgs: [message],
+    data: metadata,
+  };
+  const simulation = await simulateTx(unsignedTx);
+  const gasUsed = Number(simulation.gas_used ?? simulation.gasUsed ?? 0);
+  const gasLimit = Math.max(1, Math.ceil(gasUsed * Math.max(1, Number(gasScale) || 1.3)));
+  const executeData = executeTypedData(intent.typedData, intent.funds || {}, 0);
+  const signDoc = composeTxTypedData({
+    sender,
+    messages: [message],
+    metadata,
+    gasLimit,
+  }, executeData);
+  return {
+    action: intent.action,
+    network: NETWORK,
+    chain_id: CHAIN_ID,
+    linked_account: normalizeDangoAddress(linkedAccount),
+    account: sender,
+    sender,
+    key_hash: linkedAccount ? ethereumKeyHash(linkedAccount) : '',
+    perps_contract: config.addresses.perps,
+    unsigned_tx: { ...unsignedTx, gasLimit },
+    sign_doc: signDoc,
+    tx: {
+      sender,
+      msgs: [message],
+      data: metadata,
+      gasLimit,
+    },
+    simulation,
   };
 }
 
@@ -1010,6 +1409,9 @@ module.exports = {
   isDangoAddress,
   ethereumKeyHash,
   resolveAccountAddress,
+  fetchAppConfig,
+  fetchAccountInfo,
+  fetchAccountSeenNonces,
   pairIdFromSymbol,
   symbolFromPairId,
   dangoDisplaySymbol,
@@ -1018,9 +1420,11 @@ module.exports = {
   withdrawMarginMessage,
   submitConditionalOrderMessage,
   cancelConditionalOrderMessage,
+  prepareSignedIntent,
   fetchStatus,
   graphqlRequest,
   queryApp,
+  queryAppIndexer,
   queryPerpsEvents,
   fetchPairParams,
   fetchPairStats,
@@ -1038,6 +1442,7 @@ module.exports = {
   tradeFromPerpsEvent,
   importRecentFillsForPlayer,
   broadcastSignedTx,
+  broadcastTxSync,
   simulateTx,
   submitOrderMessage,
   cancelOrderMessage,

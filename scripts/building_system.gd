@@ -5543,7 +5543,8 @@ func _refresh_barn_panel() -> void:
 				_style_button(btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
 				btn.disabled = true
 			var tn = troop_name
-			btn.pressed.connect(func(): _upgrade_troop(tn))
+			var expected_lvl := lvl
+			btn.pressed.connect(func(): _upgrade_troop(tn, expected_lvl))
 			vb.add_child(btn)
 
 	# ── Buy Troops section ──
@@ -5664,10 +5665,12 @@ func _refresh_troop_levels_from_server() -> void:
 				})
 
 
-func _upgrade_troop(troop_name: String) -> void:
+func _upgrade_troop(troop_name: String, expected_level: int = -1) -> void:
 	if _server_busy:
 		return
 	var lvl = troop_levels[troop_name]
+	if expected_level > 0 and expected_level != lvl:
+		return
 	if lvl >= _get_troop_max_level(troop_name):
 		return
 	var next_lvl = lvl + 1
@@ -5682,10 +5685,10 @@ func _upgrade_troop(troop_name: String) -> void:
 		if _block_without_server("upgrade troop"):
 			return
 		_server_busy = true
-		var result = await net.upgrade_troop(troop_name)
+		var result = await net.upgrade_troop(troop_name, lvl)
 		_server_busy = false
 		if result.has("error"):
-			if str(result.get("error", "")) == "Already at max level":
+			if str(result.get("error", "")) == "Already at max level" or str(result.get("code", "")) == "TROOP_LEVEL_CHANGED":
 				await _refresh_troop_levels_from_server()
 			if str(result.get("code", "")) == "NFT_TROOP_REQUIRED":
 				if _bridge:

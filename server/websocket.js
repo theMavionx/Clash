@@ -201,7 +201,9 @@ function handleMessage(ws, playerId, msg) {
       break;
 
     case 'upgrade_troop':
-      result = db.upgradeTroop(playerId, msg.troop_type);
+      result = db.upgradeTroop(playerId, msg.troop_type, {
+        expectedLevel: msg.expected_level ?? msg.expectedLevel ?? msg.current_level ?? msg.currentLevel,
+      });
       ws.send(JSON.stringify({ type: 'troop_upgraded', data: result }));
       break;
 

@@ -3,6 +3,7 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
+import { signDangoTx } from '../lib/dangoBrowserSigner';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -105,7 +106,8 @@ function dangoTpslTriggerDirection(closeSide, leg) {
 export function useDango() {
   const { dex } = useDex();
   const isActiveDex = dex === 'dango';
-  const { address } = useEvmWallet();
+  const evm = useEvmWallet();
+  const { address } = evm;
   const player = usePlayer();
   const token = playerToken(player);
   const registered = registeredDexWallet(player, 'dango', 'evm');
@@ -271,28 +273,61 @@ export function useDango() {
     return () => clearTimeout(kickoff);
   }, [isActiveDex, walletAddr, token]);
 
-  const submitUnsignedIntent = useCallback(async (path, body, action) => {
+  const submitDangoAction = useCallback(async (action, body, label = action) => {
+    if (!walletAddr) return { error: 'Connect a Dango/EVM wallet first' };
     setLoading(true);
     setError(null);
     try {
-      const payload = await fetchJson(`${FUTURES_API}${path}?dex=dango`, {
+      if (action === 'deposit') setDepositStatus({ status: 'preparing', amount: body?.amount });
+      const prepared = await fetchJson(`${FUTURES_API}/dango/tx/prepare?dex=dango`, {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ account: walletAddr, ...body }),
+        body: JSON.stringify({
+          action,
+          account: walletAddr,
+          linkedAccount: address || walletAddr,
+          params: { account: walletAddr, ...body },
+        }),
       });
+      if (action === 'deposit') setDepositStatus({ status: 'signing', amount: body?.amount });
+      const credential = await signDangoTx({
+        evm,
+        account: address || walletAddr,
+        signDoc: prepared?.sign_doc,
+        keyHash: prepared?.key_hash || '',
+      });
+      if (action === 'deposit') setDepositStatus({ status: 'broadcasting', amount: body?.amount });
+      const signedTx = {
+        ...(prepared?.tx || prepared?.unsigned_tx || {}),
+        credential,
+      };
+      const result = await fetchJson(`${FUTURES_API}/dango/tx/broadcast?dex=dango`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ signedTx }),
+      });
+      if (action === 'deposit') setDepositStatus({ status: 'confirming', amount: body?.amount, result });
       await fetchAccount();
-      return { success: true, ...payload };
+      setTimeout(fetchAccount, 1200);
+      setTimeout(fetchAccount, 3000);
+      return {
+        success: true,
+        submitted: true,
+        result,
+        txHash: result?.txHash || result?.tx_hash || result?.hash || null,
+      };
     } catch (e) {
-      const msg = e?.status === 428 ? dangoSignatureError(action, e?.data) : (e?.message || `Dango ${action} failed`);
+      const msg = e?.status === 428 ? dangoSignatureError(label, e?.data) : (e?.message || `Dango ${label} failed`);
       setError(msg);
+      if (action === 'deposit') setDepositStatus({ status: 'failed', amount: body?.amount, error: msg });
       return { error: msg, signatureRequired: e?.status === 428, payload: e?.data || null };
     } finally {
       setLoading(false);
     }
-  }, [headers, walletAddr, fetchAccount]);
+  }, [walletAddr, headers, evm, address, fetchAccount]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, _slippage = '0.5', leverage = 1, opts = {}) => (
-    submitUnsignedIntent('/dango/orders/place', {
+    submitDangoAction('place_order', {
       symbol,
       side,
       size: amount,
@@ -301,10 +336,10 @@ export function useDango() {
       leverage,
       ...opts,
     }, 'market order')
-  ), [submitUnsignedIntent]);
+  ), [submitDangoAction]);
 
   const placeLimitOrder = useCallback((symbol, side, price, amount, _tif = 'GTC', leverage = 1, opts = {}) => (
-    submitUnsignedIntent('/dango/orders/place', {
+    submitDangoAction('place_order', {
       symbol,
       side,
       size: amount,
@@ -314,14 +349,14 @@ export function useDango() {
       leverage,
       ...opts,
     }, 'limit order')
-  ), [submitUnsignedIntent]);
+  ), [submitDangoAction]);
 
   const closePosition = useCallback((symbol, side, amount, pairId) => {
     const s = String(side || '').toLowerCase();
     const closeSide = s === 'ask' || s === 'sell' || s === 'short' || s === 'close_long'
       ? 'close_long'
       : 'close_short';
-    return submitUnsignedIntent('/dango/orders/place', {
+    return submitDangoAction('place_order', {
       symbol,
       pairId,
       side: closeSide,
@@ -329,17 +364,17 @@ export function useDango() {
       orderKind: 'market',
       reduceOnly: true,
     }, 'close');
-  }, [submitUnsignedIntent]);
+  }, [submitDangoAction]);
 
   const cancelOrder = useCallback((symbol, orderId) => (
-    submitUnsignedIntent('/dango/orders/cancel', { symbol, orderId }, 'cancel')
-  ), [submitUnsignedIntent]);
+    submitDangoAction('cancel_order', { symbol, orderId }, 'cancel')
+  ), [submitDangoAction]);
 
   const setTpsl = useCallback(async (symbol, side, tpPrice, slPrice, pairIndex, _tradeIndex, amount, marketAddr) => {
     const pairId = marketAddr || pairIndex || undefined;
     const requests = [];
     if (tpPrice) {
-      requests.push(submitUnsignedIntent('/dango/tpsl/place', {
+      requests.push(submitDangoAction('tpsl', {
         symbol,
         pairId,
         side,
@@ -350,7 +385,7 @@ export function useDango() {
       }, 'TP/SL'));
     }
     if (slPrice) {
-      requests.push(submitUnsignedIntent('/dango/tpsl/place', {
+      requests.push(submitDangoAction('tpsl', {
         symbol,
         pairId,
         side,
@@ -365,17 +400,17 @@ export function useDango() {
     const failed = results.find(result => result?.error);
     if (failed) return { ...failed, results };
     return { success: true, results };
-  }, [submitUnsignedIntent]);
+  }, [submitDangoAction]);
 
   const depositToPacifica = useCallback(async (amount) => {
-    const result = await submitUnsignedIntent('/dango/margin/deposit', { amount }, 'deposit');
-    if (result?.signatureRequired) setDepositStatus({ status: 'signature_required', payload: result.payload || null });
+    const result = await submitDangoAction('deposit', { amount }, 'deposit');
+    if (result?.success) setDepositStatus({ status: 'complete', amount, result });
     return result;
-  }, [submitUnsignedIntent]);
+  }, [submitDangoAction]);
 
   const withdraw = useCallback((amount) => (
-    submitUnsignedIntent('/dango/margin/withdraw', { amount }, 'withdraw')
-  ), [submitUnsignedIntent]);
+    submitDangoAction('withdraw', { amount }, 'withdraw')
+  ), [submitDangoAction]);
 
   return useMemo(() => ({
     walletAddr,

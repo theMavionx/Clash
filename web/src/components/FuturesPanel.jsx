@@ -9066,7 +9066,7 @@ function FuturesPanel() {
                 : dex === 'katana'
                 ? 'Opens Katana deposit. Katana deposits can be bridged from Arbitrum USDC through the official Stargate/Katana bridge flow.'
                 : dex === 'dango'
-                ? 'Dango funding requires the Dango signed transaction flow. This integration reads Dango balances and credits filled trades while the signing UX is being wired.'
+                ? 'Deposits move USDC from your Dango wallet into Dango margin. Your wallet signs the Dango transaction, then Clash refreshes the trading balance.'
                 : dex === 'risex'
                 ? (
                   <>
@@ -9132,7 +9132,7 @@ function FuturesPanel() {
                 : dex === 'decibel'
                 ? 'Withdraws from your Decibel trading subaccount back to your Aptos wallet.'
                 : dex === 'dango'
-                ? 'Dango withdrawal requires a browser-signed Dango transaction or approved Dango session credential.'
+                ? 'Withdrawals move USDC from Dango margin back to your Dango wallet. Your wallet signs the Dango transaction.'
                 : dex === 'monad'
                 ? 'Withdraws AUSD from Perpl back to your Monad wallet.'
                 : dex === 'phoenix'

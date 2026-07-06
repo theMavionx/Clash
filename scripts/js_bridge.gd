@@ -346,7 +346,8 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"upgrade_troop":
 			if bs:
 				var tn = data.get("troop_name", "")
-				bs._upgrade_troop(tn)
+				var expected_level := int(data.get("expected_level", data.get("current_level", -1)))
+				bs._upgrade_troop(tn, expected_level)
 		"register":
 			var auth_proof := _auth_proof_from_payload(data)
 			var referral_code := String(data.get("referralCode", data.get("ref", data.get("invite", "")))).strip_edges()

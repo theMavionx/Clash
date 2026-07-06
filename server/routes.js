@@ -12082,7 +12082,9 @@ router.get('/troops/:type/upgrade-status', auth, (req, res) => {
 // Upgrade a troop
 router.post('/troops/:type/upgrade', auth, async (req, res) => {
   const type = _serverTroopKey(req.params.type);
-  const result = db.upgradeTroop(req.player.id, type);
+  const result = db.upgradeTroop(req.player.id, type, {
+    expectedLevel: req.body?.expected_level ?? req.body?.expectedLevel ?? req.body?.current_level ?? req.body?.currentLevel,
+  });
   if (result.error) return res.status(result.status || 400).json(result);
   logEconomy('troop_upgrade', { player: req.player.id, troop: type, level: result.level });
   res.json(result);

@@ -428,6 +428,7 @@ function BarnPanel({ building, onClose }) {
   const [demonKingStatus, setDemonKingStatus] = useState(null);
   const [demonKingLoading, setDemonKingLoading] = useState(false);
   const [demonKingError, setDemonKingError] = useState(null);
+  const [pendingUpgrade, setPendingUpgrade] = useState(null);
   const troops = buildingDefs?.troops || {};
   const troopNames = ACTIVE_TROOP_NAMES.filter((name) => troops[name]);
   const safeIndex = troopNames.length ? Math.min(currentIndex, troopNames.length - 1) : 0;
@@ -523,7 +524,24 @@ function BarnPanel({ building, onClose }) {
     return () => controller.abort();
   }, [currentTroopName, currentNftTroop, demonKingNfts, selectedDemonKey]);
 
-  const handleUpgradeTroop = useCallback((name) => sendToGodot('upgrade_troop', { troop_name: name }), [sendToGodot]);
+  const handleUpgradeTroop = useCallback((name, expectedLevel) => {
+    const normalizedExpected = Number(expectedLevel || 0);
+    setPendingUpgrade({ troop: name, expectedLevel: normalizedExpected, at: Date.now() });
+    sendToGodot('upgrade_troop', {
+      troop_name: name,
+      ...(normalizedExpected > 0 ? { expected_level: normalizedExpected } : {}),
+    });
+  }, [sendToGodot]);
+
+  useEffect(() => {
+    if (!pendingUpgrade) return undefined;
+    if (pendingUpgrade.troop !== currentTroopName || Number(lvl || 0) !== Number(pendingUpgrade.expectedLevel || 0)) {
+      setPendingUpgrade(null);
+      return undefined;
+    }
+    const timeoutId = setTimeout(() => setPendingUpgrade(null), 5000);
+    return () => clearTimeout(timeoutId);
+  }, [currentTroopName, lvl, pendingUpgrade]);
   
   const handlePrev = useCallback(() => {
     setCurrentIndex(prev => (prev === 0 ? troopNames.length - 1 : prev - 1));
@@ -606,10 +624,12 @@ function BarnPanel({ building, onClose }) {
   const sliderW = mobile ? 32 : 48;
   const sliderH = mobile ? 52 : 72;
   const reqBoxSize = mobile ? 60 : 90;
+  const upgradePending = !!pendingUpgrade && pendingUpgrade.troop === currentTroopName && Number(pendingUpgrade.expectedLevel || 0) === Number(displayLvl || 0);
   const handleMainUpgrade = () => {
+    if (upgradePending) return;
     if (!barnReadyForNextLevel) return;
     if (!isNftBackedTroop) {
-      handleUpgradeTroop(currentTroopName);
+      handleUpgradeTroop(currentTroopName, displayLvl);
       return;
     }
     if (!selectedDemonNft) {
@@ -624,7 +644,7 @@ function BarnPanel({ building, onClose }) {
       }));
       return;
     }
-    handleUpgradeTroop(currentTroopName);
+    handleUpgradeTroop(currentTroopName, displayLvl);
   };
 
   return (
@@ -771,20 +791,22 @@ function BarnPanel({ building, onClose }) {
             <button
               style={{
                 ...styles.actionBtn,
-                ...(!barnReadyForNextLevel ? styles.actionBtnDisabled : null),
+                ...(!barnReadyForNextLevel || upgradePending ? styles.actionBtnDisabled : null),
                 width: '100%',
                 maxWidth: mobile ? '100%' : 240,
                 padding: mobile ? '12px 16px' : '14px 20px',
                 fontSize: mobile ? 14 : 14,
               }}
-              disabled={!barnReadyForNextLevel}
+              disabled={!barnReadyForNextLevel || upgradePending}
               onClick={handleMainUpgrade}
             >
-              {!barnReadyForNextLevel
+              {upgradePending
+                ? 'Upgrading...'
+                : !barnReadyForNextLevel
                 ? `Upgrade Barn to Lv ${requiredBarnLevel}`
                 : isNftBackedTroop
                 ? (selectedDemonNft ? `Upgrade ${currentNftTroop.label} to Lv` : `Get ${currentNftTroop.label} NFT`)
-                : 'Upgrade to Lv'} {!barnReadyForNextLevel || (isNftBackedTroop && !selectedDemonNft) ? '' : nextTroopLevel}
+                : 'Upgrade to Lv'} {upgradePending || !barnReadyForNextLevel || (isNftBackedTroop && !selectedDemonNft) ? '' : nextTroopLevel}
             </button>
           </div>
         )}

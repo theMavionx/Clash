@@ -7738,6 +7738,18 @@ function upgradeTroop(playerId, troopType, options = {}) {
   const levels = stmts.getTroopLevels.all(playerId);
   const current = levels.find(t => normalizeTroopTypeKey(t.troop_type) === troopKey);
   const currentLevel = current ? clampTroopLevelForType(troopKey, current.level) : 1;
+  const expectedLevel = Number(options.expectedLevel ?? options.expected_level ?? options.currentLevel ?? options.current_level ?? 0);
+  if (Number.isFinite(expectedLevel) && expectedLevel > 0 && expectedLevel !== currentLevel) {
+    return {
+      error: `Troop level changed. Current level is ${currentLevel}.`,
+      code: 'TROOP_LEVEL_CHANGED',
+      status: 409,
+      troop_type: troopKey,
+      current_level: currentLevel,
+      expected_level: expectedLevel,
+      resources: getResources(playerId),
+    };
+  }
 
   if (currentLevel >= def.max_level) {
     return { error: 'Already at max level' };

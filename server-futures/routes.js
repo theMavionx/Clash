@@ -2584,6 +2584,26 @@ router.post('/dango/tx/simulate', auth, async (req, res) => {
   }
 });
 
+router.post('/dango/tx/prepare', auth, async (req, res) => {
+  try {
+    if (!ensureDango(req, res)) return;
+    const body = req.body || {};
+    const linkedAccount = dango.normalizeDangoAddress(body.linkedAccount || body.linked_account || body.signer || body.owner || req.dexWallet || req.playerWallet || body.account);
+    const account = dango.normalizeDangoAddress(body.account || linkedAccount);
+    const action = body.action || body.intent || '';
+    const params = body.params && typeof body.params === 'object' ? body.params : body;
+    const prepared = await dango.prepareSignedIntent({
+      account,
+      linkedAccount,
+      action,
+      body: params,
+    });
+    res.json(prepared);
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message || 'Failed to prepare Dango transaction' });
+  }
+});
+
 router.post('/dango/tx/broadcast', auth, async (req, res) => {
   try {
     if (!ensureDango(req, res)) return;
