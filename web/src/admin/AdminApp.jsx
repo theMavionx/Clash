@@ -146,7 +146,11 @@ const NAV = [
 
 const SIMPLE_LOADERS = {
   replays: () => adminGet('/admin/replays'),
-  tasks: () => Promise.all([adminGet('/admin/tasks'), adminGet('/admin/tasks-summary')]).then(([tasks, summary]) => ({ tasks, summary })),
+  tasks: () => Promise.all([
+    adminGet('/admin/tasks'),
+    adminGet('/admin/tasks-summary'),
+    adminGet('/admin/tasks-nft-reward-boosts'),
+  ]).then(([tasks, summary, nftRewardBoosts]) => ({ tasks, summary, nftRewardBoosts })),
   stats: () => Promise.all([
     adminGet('/admin/stats'),
     adminGet('/admin/matchmaking/stats?days=7').catch((error) => ({ error: error.message })),
@@ -3154,6 +3158,7 @@ function TasksPanel({ data, reload }) {
         { label: '24h Started', value: summary.last_24h?.started || 0 },
         { label: '24h Claimed', value: summary.last_24h?.claimed || 0 },
       ]} />
+      <TaskNftRewardBoostCard settings={data?.nftRewardBoosts} reload={reload} />
       <div className="admin-card">
         <div className="admin-card-head">
           <div><div className="admin-card-title">Tasks</div><div className="admin-card-sub">Quest configuration, rewards, progress inspection, and player reset tools.</div></div>
@@ -3207,6 +3212,169 @@ function TasksPanel({ data, reload }) {
       </div>
       {selected && <TaskPlayersDrawer task={selected} onClose={() => setSelected(null)} />}
       {editing && <TaskEditorDrawer task={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await reload(); }} />}
+    </div>
+  );
+}
+
+const TASK_NFT_REWARD_BOOST_COLLECTIONS = [
+  { key: 'demon_king', label: 'Demon King' },
+  { key: 'dragon', label: 'Dragon' },
+];
+const TASK_NFT_REWARD_BOOST_RARITIES = [
+  { key: 'common', label: 'Common' },
+  { key: 'epic', label: 'Epic' },
+  { key: 'legendary', label: 'Legendary' },
+];
+
+function emptyTaskNftRewardBoostSettings() {
+  const collections = {};
+  for (const spec of TASK_NFT_REWARD_BOOST_COLLECTIONS) {
+    collections[spec.key] = {
+      enabled: true,
+      label: spec.label,
+      base_pct: 0,
+      extra_pct_per_additional: 0,
+      rarity_pct: { common: 0, epic: 0, legendary: 0 },
+    };
+  }
+  return { enabled: true, rarity_mode: 'best', collections };
+}
+
+function normalizeTaskNftRewardBoostSettingsForAdmin(settings) {
+  const base = emptyTaskNftRewardBoostSettings();
+  const raw = settings && typeof settings === 'object' ? settings : {};
+  const next = { ...base, ...raw, collections: { ...base.collections } };
+  for (const spec of TASK_NFT_REWARD_BOOST_COLLECTIONS) {
+    const rawCollection = raw.collections?.[spec.key] || {};
+    next.collections[spec.key] = {
+      ...base.collections[spec.key],
+      ...rawCollection,
+      rarity_pct: {
+        ...base.collections[spec.key].rarity_pct,
+        ...(rawCollection.rarity_pct || {}),
+      },
+    };
+  }
+  return next;
+}
+
+function TaskNftRewardBoostCard({ settings, reload }) {
+  const [form, setForm] = useState(() => normalizeTaskNftRewardBoostSettingsForAdmin(settings));
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    setForm(normalizeTaskNftRewardBoostSettingsForAdmin(settings));
+  }, [settings]);
+
+  function updateRoot(patch) {
+    setForm((prev) => ({ ...prev, ...patch }));
+  }
+
+  function updateCollection(collectionKey, patch) {
+    setForm((prev) => ({
+      ...prev,
+      collections: {
+        ...(prev.collections || {}),
+        [collectionKey]: {
+          ...((prev.collections || {})[collectionKey] || {}),
+          ...patch,
+        },
+      },
+    }));
+  }
+
+  function updateRarity(collectionKey, rarityKey, value) {
+    setForm((prev) => {
+      const current = (prev.collections || {})[collectionKey] || {};
+      return {
+        ...prev,
+        collections: {
+          ...(prev.collections || {}),
+          [collectionKey]: {
+            ...current,
+            rarity_pct: {
+              ...(current.rarity_pct || {}),
+              [rarityKey]: Number(value) || 0,
+            },
+          },
+        },
+      };
+    });
+  }
+
+  async function save() {
+    setSaving(true);
+    setMessage('');
+    try {
+      await adminPatch('/admin/tasks-nft-reward-boosts', form);
+      setMessage('Saved');
+      await reload();
+    } catch (err) {
+      setMessage(err.message || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="admin-card">
+      <div className="admin-card-head">
+        <div>
+          <div className="admin-card-title">Task NFT Reward Boosts</div>
+          <div className="admin-card-sub">Global additive percent boosts for quest rewards. Count bonus stacks per extra NFT; rarity uses the best owned rarity per collection.</div>
+        </div>
+        <button className="admin-btn primary" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save boosts'}</button>
+      </div>
+      <div className="admin-card-body admin-grid">
+        <div className="admin-choice-grid">
+          <ToggleChoice
+            active={!!form.enabled}
+            title="NFT task rewards enabled"
+            subtitle="When off, tasks pay their base rewards plus existing altar bonuses only."
+            onClick={() => updateRoot({ enabled: !form.enabled })}
+          />
+        </div>
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Collection</th>
+                <th>Base NFT boost</th>
+                <th>Each extra NFT</th>
+                {TASK_NFT_REWARD_BOOST_RARITIES.map((rarity) => <th key={rarity.key}>{rarity.label}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {TASK_NFT_REWARD_BOOST_COLLECTIONS.map((collection) => {
+                const cfg = form.collections?.[collection.key] || {};
+                return (
+                  <tr key={collection.key}>
+                    <td>
+                      <strong>{collection.label}</strong>
+                      <div><button className={'admin-btn ' + (cfg.enabled ? 'green' : 'ghost')} type="button" onClick={() => updateCollection(collection.key, { enabled: !cfg.enabled })}>{cfg.enabled ? 'Enabled' : 'Disabled'}</button></div>
+                    </td>
+                    <td>
+                      <input className="admin-input" type="number" step="0.01" value={cfg.base_pct ?? 0} onChange={(e) => updateCollection(collection.key, { base_pct: Number(e.target.value) || 0 })} />
+                      <div className="admin-card-sub">Example: 50 = +50%</div>
+                    </td>
+                    <td>
+                      <input className="admin-input" type="number" step="0.01" value={cfg.extra_pct_per_additional ?? 0} onChange={(e) => updateCollection(collection.key, { extra_pct_per_additional: Number(e.target.value) || 0 })} />
+                      <div className="admin-card-sub">Added for NFT #2, #3...</div>
+                    </td>
+                    {TASK_NFT_REWARD_BOOST_RARITIES.map((rarity) => (
+                      <td key={`${collection.key}-${rarity.key}`}>
+                        <input className="admin-input" type="number" step="0.01" value={cfg.rarity_pct?.[rarity.key] ?? 0} onChange={(e) => updateRarity(collection.key, rarity.key, e.target.value)} />
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {message ? <span className={'admin-badge ' + (/fail|error/i.test(message) ? 'red' : 'green')}>{message}</span> : null}
+      </div>
     </div>
   );
 }

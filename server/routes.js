@@ -15003,15 +15003,27 @@ router.get('/tasks', auth, async (req, res) => {
       pt = await maybeRefreshTaskProgress(req.player, t, pt, req.headers, progressContext);
     }
     const snapshot = pt ? tasks.parseParams(pt.snapshot) : {};
+    const rewardBoost = db.applyTaskNftRewardBoost(req.player.id, {
+      gold: t.reward_gold || 0,
+      wood: t.reward_wood || 0,
+      ore: t.reward_ore || 0,
+    });
     out.push({
       id: t.id,
       type: t.type,
       title: t.title,
       description: t.description,
       params: tasks.parseParams(t.params),
-      reward_gold: t.reward_gold,
-      reward_wood: t.reward_wood,
-      reward_ore: t.reward_ore,
+      reward_gold: rewardBoost.gold,
+      reward_wood: rewardBoost.wood,
+      reward_ore: rewardBoost.ore,
+      reward_base: rewardBoost.base,
+      reward_boost: {
+        nft_pct: rewardBoost.boost_pct || 0,
+        multiplier: rewardBoost.multiplier || 1,
+        nft_bonus: rewardBoost.nft_bonus || { gold: 0, wood: 0, ore: 0 },
+        details: rewardBoost.details || [],
+      },
       repeatable: !!t.repeatable,
       cooldown_hours: t.cooldown_hours,
       started: !!pt,
@@ -15241,10 +15253,15 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     if (latest && latest.claimed_at && (!task.repeatable || latest.claimed_at !== pt.claimed_at)) {
       return { raced: true };
     }
-    const reward = db.applyAltarProsperityResourceBonus(req.player.id, {
+    const nftReward = db.applyTaskNftRewardBoost(req.player.id, {
       gold: task.reward_gold || 0,
       wood: task.reward_wood || 0,
       ore: task.reward_ore || 0,
+    });
+    const reward = db.applyAltarProsperityResourceBonus(req.player.id, {
+      gold: nftReward.gold || 0,
+      wood: nftReward.wood || 0,
+      ore: nftReward.ore || 0,
     });
     db.addResources(req.player.id, reward.gold, reward.wood, reward.ore, {
       sourceType: 'task_claim',
@@ -15254,6 +15271,11 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
         task_type: task.type,
         repeatable: Boolean(task.repeatable),
         cooldown_hours: Number(task.cooldown_hours) || 0,
+        task_reward_base: nftReward.base || { gold: task.reward_gold || 0, wood: task.reward_wood || 0, ore: task.reward_ore || 0 },
+        nft_reward_boost_pct: nftReward.boost_pct || 0,
+        nft_reward_multiplier: nftReward.multiplier || 1,
+        nft_reward_bonus: nftReward.nft_bonus || { gold: 0, wood: 0, ore: 0 },
+        nft_reward_details: nftReward.details || [],
         prosperity_bonus_pct: reward.prosperity_bonus_pct || 0,
       },
     });
@@ -15288,7 +15310,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     } else {
       db.db.prepare(`UPDATE player_tasks SET claimed_at = datetime('now') WHERE player_id = ? AND task_id = ?`).run(req.player.id, id);
     }
-    return { raced: false, reward };
+    return { raced: false, reward, nftReward };
   });
   const payoutRes = payout();
   if (payoutRes.raced) {
@@ -15309,7 +15331,8 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     });
   }
   const paidReward = payoutRes.reward || { gold: task.reward_gold || 0, wood: task.reward_wood || 0, ore: task.reward_ore || 0 };
-  console.log(`[task ${id} claim] player=${req.player.name} -> PAID gold=${paidReward.gold||0} wood=${paidReward.wood||0} ore=${paidReward.ore||0} prosperity=${paidReward.prosperity_bonus_pct||0}% (${task.title})`);
+  const paidNftReward = payoutRes.nftReward || { base: { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore }, nft_bonus: { gold: 0, wood: 0, ore: 0 }, boost_pct: 0, multiplier: 1, details: [] };
+  console.log(`[task ${id} claim] player=${req.player.name} -> PAID gold=${paidReward.gold||0} wood=${paidReward.wood||0} ore=${paidReward.ore||0} nft_boost=${paidNftReward.boost_pct||0}% prosperity=${paidReward.prosperity_bonus_pct||0}% (${task.title})`);
   recordTaskTelemetry('paid', {
     progressValue: result.progress_value,
     targetValue: result.target_value,
@@ -15318,7 +15341,12 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     rewardOre: paidReward.ore || 0,
     metadata: {
       auto_restarted: Boolean(task.repeatable && (Number(task.cooldown_hours) || 0) <= 0),
-      reward_base: paidReward.base || { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore },
+      reward_base: paidNftReward.base || { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore },
+      reward_after_nft_boost: { gold: paidNftReward.gold || 0, wood: paidNftReward.wood || 0, ore: paidNftReward.ore || 0 },
+      nft_reward_boost_pct: paidNftReward.boost_pct || 0,
+      nft_reward_multiplier: paidNftReward.multiplier || 1,
+      nft_reward_bonus: paidNftReward.nft_bonus || { gold: 0, wood: 0, ore: 0 },
+      nft_reward_details: paidNftReward.details || [],
       altar_prosperity_bonus_pct: paidReward.prosperity_bonus_pct || 0,
       altar_prosperity_bonus: paidReward.bonus || { gold: 0, wood: 0, ore: 0 },
     },
@@ -15333,7 +15361,14 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     completed: true,
     auto_restarted: Boolean(task.repeatable && (Number(task.cooldown_hours) || 0) <= 0),
     reward: { gold: paidReward.gold, wood: paidReward.wood, ore: paidReward.ore },
-    reward_base: paidReward.base || { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore },
+    reward_base: paidNftReward.base || { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore },
+    reward_after_nft_boost: { gold: paidNftReward.gold || 0, wood: paidNftReward.wood || 0, ore: paidNftReward.ore || 0 },
+    reward_boost: {
+      nft_pct: paidNftReward.boost_pct || 0,
+      multiplier: paidNftReward.multiplier || 1,
+      nft_bonus: paidNftReward.nft_bonus || { gold: 0, wood: 0, ore: 0 },
+      details: paidNftReward.details || [],
+    },
     altar_prosperity_bonus_pct: paidReward.prosperity_bonus_pct || 0,
     altar_prosperity_bonus: paidReward.bonus || { gold: 0, wood: 0, ore: 0 },
     progress_value: result.progress_value,
@@ -19173,6 +19208,18 @@ function normalizeAdminTaskParams(params) {
   return out;
 }
 
+router.get('/admin/tasks-nft-reward-boosts', adminAuth, (req, res) => {
+  res.json(db.getTaskNftRewardBoostSettings());
+});
+
+router.patch('/admin/tasks-nft-reward-boosts', adminAuth, (req, res) => {
+  try {
+    res.json(db.setTaskNftRewardBoostSettings(req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'bad task NFT reward boost settings' });
+  }
+});
+
 router.get('/admin/tasks', adminAuth, (req, res) => {
   const list = tasks.getAllTasks();
   // Per-task aggregate stats
@@ -19245,14 +19292,14 @@ router.get('/admin/tasks-summary', adminAuth, (req, res) => {
   const claimed = db.db.prepare('SELECT COUNT(*) AS n FROM player_tasks WHERE claimed_at IS NOT NULL').get().n;
   const uniquePlayers = db.db.prepare('SELECT COUNT(DISTINCT player_id) AS n FROM player_tasks').get().n;
   const claimers = db.db.prepare('SELECT COUNT(DISTINCT player_id) AS n FROM player_tasks WHERE claimed_at IS NOT NULL').get().n;
-  // Rewards paid — sum reward_* for each claimed (player_tasks, task)
+  // Rewards paid from claim telemetry, so repeatable tasks and multipliers
+  // use actual payout amounts instead of base task rows.
   const rewardRow = db.db.prepare(`
-    SELECT COALESCE(SUM(t.reward_gold),0) AS gold,
-           COALESCE(SUM(t.reward_wood),0) AS wood,
-           COALESCE(SUM(t.reward_ore),0)  AS ore
-    FROM player_tasks pt
-    JOIN tasks t ON t.id = pt.task_id
-    WHERE pt.claimed_at IS NOT NULL
+    SELECT COALESCE(SUM(reward_gold),0) AS gold,
+           COALESCE(SUM(reward_wood),0) AS wood,
+           COALESCE(SUM(reward_ore),0)  AS ore
+    FROM task_claim_events
+    WHERE result = 'paid'
   `).get();
   // Recent activity — last 24h
   const cutoff24 = new Date(Date.now() - 24 * 3600 * 1000).toISOString().replace('T', ' ').split('.')[0];
@@ -19261,12 +19308,11 @@ router.get('/admin/tasks-summary', adminAuth, (req, res) => {
   // Top 5 players by claims
   const topPlayers = db.db.prepare(`
     SELECT p.name, COUNT(*) AS claims,
-           COALESCE(SUM(t.reward_gold),0) AS gold_earned
-    FROM player_tasks pt
-    JOIN tasks t   ON t.id = pt.task_id
-    JOIN players p ON p.id = pt.player_id
-    WHERE pt.claimed_at IS NOT NULL
-    GROUP BY pt.player_id
+           COALESCE(SUM(e.reward_gold),0) AS gold_earned
+    FROM task_claim_events e
+    JOIN players p ON p.id = e.player_id
+    WHERE e.result = 'paid'
+    GROUP BY e.player_id
     ORDER BY claims DESC, gold_earned DESC
     LIMIT 5
   `).all();

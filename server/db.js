@@ -6094,6 +6094,12 @@ function writeAppSettingJsonValue(key, value) {
 
 const LUCKY_RAIDER_PAYOUT_SETTINGS_KEY = 'lucky_raider.payouts';
 const REFERRAL_SETTINGS_KEY = 'referrals.config';
+const TASK_NFT_REWARD_BOOST_SETTINGS_KEY = 'tasks.nft_reward_boosts.v1';
+const TASK_NFT_REWARD_BOOST_COLLECTIONS = [
+  { key: 'demon_king', label: 'Demon King' },
+  { key: 'dragon', label: 'Dragon' },
+];
+const TASK_NFT_REWARD_BOOST_RARITIES = ['common', 'epic', 'legendary'];
 
 function getLuckyRaiderPayoutSettings() {
   const parsed = readAppSettingJsonValue(LUCKY_RAIDER_PAYOUT_SETTINGS_KEY, null) || {};
@@ -6146,6 +6152,162 @@ function setLuckyRaiderPayoutSettings(input = {}) {
   }
   writeAppSettingJsonValue(LUCKY_RAIDER_PAYOUT_SETTINGS_KEY, next);
   return next;
+}
+
+function clampSettingPct(value, fallback = 0, min = 0, max = 1000) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function emptyTaskNftRewardBoostCollectionConfig(collectionKey) {
+  const spec = TASK_NFT_REWARD_BOOST_COLLECTIONS.find((item) => item.key === collectionKey) || {};
+  return {
+    enabled: true,
+    label: spec.label || collectionKey,
+    base_pct: 0,
+    extra_pct_per_additional: 0,
+    rarity_pct: { common: 0, epic: 0, legendary: 0 },
+  };
+}
+
+function normalizeTaskNftRewardBoostCollectionConfig(input = {}, collectionKey) {
+  const base = emptyTaskNftRewardBoostCollectionConfig(collectionKey);
+  const raw = input && typeof input === 'object' ? input : {};
+  const rawRarity = raw.rarity_pct && typeof raw.rarity_pct === 'object' ? raw.rarity_pct : {};
+  const rarityPct = {};
+  for (const rarity of TASK_NFT_REWARD_BOOST_RARITIES) {
+    rarityPct[rarity] = clampSettingPct(rawRarity[rarity], base.rarity_pct[rarity], 0, 1000);
+  }
+  return {
+    enabled: parseSettingBool(raw.enabled, base.enabled),
+    label: String(raw.label || base.label || collectionKey).trim().slice(0, 80),
+    base_pct: clampSettingPct(raw.base_pct, base.base_pct, 0, 1000),
+    extra_pct_per_additional: clampSettingPct(raw.extra_pct_per_additional, base.extra_pct_per_additional, 0, 1000),
+    rarity_pct: rarityPct,
+  };
+}
+
+function normalizeTaskNftRewardBoostSettings(input = {}) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const rawCollections = raw.collections && typeof raw.collections === 'object' ? raw.collections : {};
+  const collections = {};
+  for (const spec of TASK_NFT_REWARD_BOOST_COLLECTIONS) {
+    collections[spec.key] = normalizeTaskNftRewardBoostCollectionConfig(rawCollections[spec.key], spec.key);
+  }
+  return {
+    enabled: parseSettingBool(raw.enabled, true),
+    // Count bonuses stack per owned NFT. Rarity uses the best owned rarity per
+    // collection so a whale cannot multiply rarity bonus by every token.
+    rarity_mode: 'best',
+    collections,
+  };
+}
+
+function getTaskNftRewardBoostSettings() {
+  return normalizeTaskNftRewardBoostSettings(
+    readAppSettingJsonValue(TASK_NFT_REWARD_BOOST_SETTINGS_KEY, {})
+  );
+}
+
+function setTaskNftRewardBoostSettings(input = {}) {
+  const current = getTaskNftRewardBoostSettings();
+  const raw = input && typeof input === 'object' ? input : {};
+  const next = normalizeTaskNftRewardBoostSettings({
+    ...current,
+    ...raw,
+    collections: {
+      ...(current.collections || {}),
+      ...((raw.collections && typeof raw.collections === 'object') ? raw.collections : {}),
+    },
+  });
+  writeAppSettingJsonValue(TASK_NFT_REWARD_BOOST_SETTINGS_KEY, next);
+  return next;
+}
+
+function taskNftRewardBoostNftSummary(playerId, settings = getTaskNftRewardBoostSettings()) {
+  const details = [];
+  let totalPct = 0;
+  if (!playerId || !settings.enabled) {
+    return { enabled: !!settings.enabled, total_pct: 0, multiplier: 1, collections: details };
+  }
+
+  for (const spec of TASK_NFT_REWARD_BOOST_COLLECTIONS) {
+    const cfg = settings.collections?.[spec.key] || emptyTaskNftRewardBoostCollectionConfig(spec.key);
+    if (!cfg.enabled) continue;
+    const nfts = listPlayerCollectionNfts(playerId, spec.key);
+    const count = nfts.length;
+    if (count <= 0) continue;
+
+    const rarityCounts = {};
+    let bestRarity = null;
+    let bestRarityPct = 0;
+    for (const nft of nfts) {
+      const rarity = normalizeNftRarity(nft.rarity);
+      if (!rarity) continue;
+      rarityCounts[rarity] = (rarityCounts[rarity] || 0) + 1;
+      const pct = clampSettingPct(cfg.rarity_pct?.[rarity], 0, 0, 1000);
+      if (pct > bestRarityPct) {
+        bestRarityPct = pct;
+        bestRarity = rarity;
+      }
+    }
+
+    const basePct = clampSettingPct(cfg.base_pct, 0, 0, 1000);
+    const extraPctPerAdditional = clampSettingPct(cfg.extra_pct_per_additional, 0, 0, 1000);
+    const extraPct = extraPctPerAdditional * Math.max(0, count - 1);
+    const collectionPct = basePct + extraPct + bestRarityPct;
+    if (collectionPct <= 0) continue;
+    totalPct += collectionPct;
+    details.push({
+      collection: spec.key,
+      label: cfg.label || spec.label,
+      count,
+      base_pct: basePct,
+      extra_pct: extraPct,
+      extra_pct_per_additional: extraPctPerAdditional,
+      rarity_pct: bestRarityPct,
+      best_rarity: bestRarity,
+      rarity_counts: rarityCounts,
+      total_pct: collectionPct,
+    });
+  }
+
+  return {
+    enabled: !!settings.enabled,
+    total_pct: totalPct,
+    multiplier: 1 + (totalPct / 100),
+    collections: details,
+  };
+}
+
+function applyTaskNftRewardBoost(playerId, reward = {}) {
+  const base = {
+    gold: Math.max(0, intOr0(reward.gold)),
+    wood: Math.max(0, intOr0(reward.wood)),
+    ore: Math.max(0, intOr0(reward.ore)),
+  };
+  const boost = taskNftRewardBoostNftSummary(playerId);
+  const multiplier = Number(boost.multiplier || 1) || 1;
+  const boosted = {
+    gold: Math.round(base.gold * multiplier),
+    wood: Math.round(base.wood * multiplier),
+    ore: Math.round(base.ore * multiplier),
+  };
+  const bonus = {
+    gold: Math.max(0, boosted.gold - base.gold),
+    wood: Math.max(0, boosted.wood - base.wood),
+    ore: Math.max(0, boosted.ore - base.ore),
+  };
+  return {
+    ...boosted,
+    base,
+    bonus,
+    nft_bonus: bonus,
+    boost_pct: boost.total_pct,
+    multiplier: boost.multiplier,
+    details: boost.collections,
+  };
 }
 
 function clampReferralBps(value, fallback = 1000) {
@@ -10070,6 +10232,10 @@ module.exports = {
   issueReferralCodeForPlayer,
   getLuckyRaiderPayoutSettings,
   setLuckyRaiderPayoutSettings,
+  getTaskNftRewardBoostSettings,
+  setTaskNftRewardBoostSettings,
+  taskNftRewardBoostNftSummary,
+  applyTaskNftRewardBoost,
   getReferralSettings,
   setReferralSettings,
   bindPlayerReferral,

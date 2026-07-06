@@ -491,6 +491,9 @@ function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
               <img src={stoneIcon} alt="Ore" style={S.rewardIcon} />
             </span>
           )}
+          {Number(task.reward_boost?.nft_pct || 0) > 0 && (
+            <span style={S.rewardBoost}>NFT +{Math.round(Number(task.reward_boost.nft_pct || 0) * 100) / 100}%</span>
+          )}
         </div>
 
         {!task.started ? (
@@ -770,6 +773,7 @@ const S = {
   rewardGold: { fontSize: 12, fontWeight: 900, color: '#b8860b', background: '#fff5cc', padding: '3px 8px', borderRadius: 6, border: '1px solid #e8b830', display: 'flex', alignItems: 'center', gap: 4 },
   rewardWood: { fontSize: 12, fontWeight: 900, color: '#4d7a2e', background: '#e8f5d8', padding: '3px 8px', borderRadius: 6, border: '1px solid #6ab344', display: 'flex', alignItems: 'center', gap: 4 },
   rewardOre: { fontSize: 12, fontWeight: 900, color: '#566878', background: '#dde5ea', padding: '3px 8px', borderRadius: 6, border: '1px solid #8a9aaa', display: 'flex', alignItems: 'center', gap: 4 },
+  rewardBoost: { fontSize: 11, fontWeight: 900, color: '#704214', background: '#fff0b8', padding: '3px 7px', borderRadius: 6, border: '1px solid #d8a62a', display: 'flex', alignItems: 'center' },
   rewardIcon: { width: 16, height: 16, objectFit: 'contain' },
 
   btnStart: {
