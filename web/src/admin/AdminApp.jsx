@@ -3158,7 +3158,7 @@ function TasksPanel({ data, reload }) {
         { label: '24h Started', value: summary.last_24h?.started || 0 },
         { label: '24h Claimed', value: summary.last_24h?.claimed || 0 },
       ]} />
-      <TaskNftRewardBoostCard settings={data?.nftRewardBoosts} reload={reload} />
+      <TaskNftRewardBoostCard settings={data?.nftRewardBoosts} tasks={data?.tasks || []} reload={reload} />
       <div className="admin-card">
         <div className="admin-card-head">
           <div><div className="admin-card-title">Tasks</div><div className="admin-card-sub">Quest configuration, rewards, progress inspection, and player reset tools.</div></div>
@@ -3234,16 +3234,23 @@ function emptyTaskNftRewardBoostSettings() {
       label: spec.label,
       base_pct: 0,
       extra_pct_per_additional: 0,
+      max_extra_nfts: 0,
       rarity_pct: { common: 0, epic: 0, legendary: 0 },
     };
   }
-  return { enabled: true, rarity_mode: 'best', collections };
+  return { enabled: true, default_task_enabled: true, task_overrides: {}, rarity_mode: 'best', collections };
 }
 
 function normalizeTaskNftRewardBoostSettingsForAdmin(settings) {
   const base = emptyTaskNftRewardBoostSettings();
   const raw = settings && typeof settings === 'object' ? settings : {};
-  const next = { ...base, ...raw, collections: { ...base.collections } };
+  const next = {
+    ...base,
+    ...raw,
+    default_task_enabled: raw.default_task_enabled !== undefined ? !!raw.default_task_enabled : true,
+    task_overrides: raw.task_overrides && typeof raw.task_overrides === 'object' ? { ...raw.task_overrides } : {},
+    collections: { ...base.collections },
+  };
   for (const spec of TASK_NFT_REWARD_BOOST_COLLECTIONS) {
     const rawCollection = raw.collections?.[spec.key] || {};
     next.collections[spec.key] = {
@@ -3258,10 +3265,13 @@ function normalizeTaskNftRewardBoostSettingsForAdmin(settings) {
   return next;
 }
 
-function TaskNftRewardBoostCard({ settings, reload }) {
+function TaskNftRewardBoostCard({ settings, tasks = [], reload }) {
   const [form, setForm] = useState(() => normalizeTaskNftRewardBoostSettingsForAdmin(settings));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const taskRows = useMemo(() => [...(Array.isArray(tasks) ? tasks : [])]
+    .sort((a, b) => Number(b.active || 0) - Number(a.active || 0) || Number(a.sort_order || 0) - Number(b.sort_order || 0) || Number(a.id || 0) - Number(b.id || 0)),
+  [tasks]);
 
   useEffect(() => {
     setForm(normalizeTaskNftRewardBoostSettingsForAdmin(settings));
@@ -3269,6 +3279,29 @@ function TaskNftRewardBoostCard({ settings, reload }) {
 
   function updateRoot(patch) {
     setForm((prev) => ({ ...prev, ...patch }));
+  }
+
+  function setTaskOverride(taskId, value) {
+    const key = String(taskId || '').trim();
+    if (!key) return;
+    setForm((prev) => {
+      const nextOverrides = { ...(prev.task_overrides || {}) };
+      if (value === 'inherit') delete nextOverrides[key];
+      else nextOverrides[key] = value === 'on';
+      return { ...prev, task_overrides: nextOverrides };
+    });
+  }
+
+  function taskOverrideMode(taskId) {
+    const key = String(taskId || '').trim();
+    if (!Object.prototype.hasOwnProperty.call(form.task_overrides || {}, key)) return 'inherit';
+    return form.task_overrides[key] ? 'on' : 'off';
+  }
+
+  function taskEffectiveEnabled(taskId) {
+    const key = String(taskId || '').trim();
+    if (Object.prototype.hasOwnProperty.call(form.task_overrides || {}, key)) return !!form.task_overrides[key];
+    return !!form.default_task_enabled;
   }
 
   function updateCollection(collectionKey, patch) {
@@ -3331,8 +3364,14 @@ function TaskNftRewardBoostCard({ settings, reload }) {
           <ToggleChoice
             active={!!form.enabled}
             title="NFT task rewards enabled"
-            subtitle="When off, tasks pay their base rewards plus existing altar bonuses only."
+            subtitle="Master switch. When off, all tasks pay their base rewards plus existing altar bonuses only."
             onClick={() => updateRoot({ enabled: !form.enabled })}
+          />
+          <ToggleChoice
+            active={!!form.default_task_enabled}
+            title="Apply to every task by default"
+            subtitle="Turn this off, then enable only selected tasks below."
+            onClick={() => updateRoot({ default_task_enabled: !form.default_task_enabled })}
           />
         </div>
         <div className="admin-table-wrap">
@@ -3342,6 +3381,7 @@ function TaskNftRewardBoostCard({ settings, reload }) {
                 <th>Collection</th>
                 <th>Base NFT boost</th>
                 <th>Each extra NFT (%)</th>
+                <th>Max extra NFTs</th>
                 {TASK_NFT_REWARD_BOOST_RARITIES.map((rarity) => <th key={rarity.key}>{rarity.label}</th>)}
                 <th>Example</th>
               </tr>
@@ -3351,6 +3391,7 @@ function TaskNftRewardBoostCard({ settings, reload }) {
                 const cfg = form.collections?.[collection.key] || {};
                 const epicPct = Number(cfg.rarity_pct?.epic || 0) || 0;
                 const extraPct = Number(cfg.extra_pct_per_additional || 0) || 0;
+                const maxExtra = Number(cfg.max_extra_nfts || 0) || 0;
                 return (
                   <tr key={collection.key}>
                     <td>
@@ -3365,15 +3406,57 @@ function TaskNftRewardBoostCard({ settings, reload }) {
                       <input className="admin-input" type="number" step="0.01" value={cfg.extra_pct_per_additional ?? 0} onChange={(e) => updateCollection(collection.key, { extra_pct_per_additional: Number(e.target.value) || 0 })} />
                       <div className="admin-card-sub">10 = +10% for NFT #2, #3...</div>
                     </td>
+                    <td>
+                      <input className="admin-input" type="number" step="1" min="0" value={cfg.max_extra_nfts ?? 0} onChange={(e) => updateCollection(collection.key, { max_extra_nfts: Math.max(0, Math.floor(Number(e.target.value) || 0)) })} />
+                      <div className="admin-card-sub">0 = unlimited. 5 means NFTs #2-#6.</div>
+                    </td>
                     {TASK_NFT_REWARD_BOOST_RARITIES.map((rarity) => (
                       <td key={`${collection.key}-${rarity.key}`}>
                         <input className="admin-input" type="number" step="0.01" value={cfg.rarity_pct?.[rarity.key] ?? 0} onChange={(e) => updateRarity(collection.key, rarity.key, e.target.value)} />
                       </td>
                     ))}
-                    <td><div className="admin-card-sub">Epic + 2 NFTs = +{Math.round((epicPct + extraPct) * 100) / 100}%</div></td>
+                    <td><div className="admin-card-sub">Epic + 2 NFTs = +{Math.round((epicPct + extraPct) * 100) / 100}%{maxExtra ? `; max ${maxExtra + 1} counted` : ''}</div></td>
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Task</th>
+                <th>Default</th>
+                <th>Override</th>
+                <th>Effective</th>
+              </tr>
+            </thead>
+            <tbody>
+              {taskRows.map((task) => {
+                const mode = taskOverrideMode(task.id);
+                const effective = taskEffectiveEnabled(task.id);
+                return (
+                  <tr key={task.id}>
+                    <td>
+                      <strong>#{task.id} {task.title}</strong>
+                      <div className="admin-card-sub">{task.type}{task.active ? '' : ' · inactive'}</div>
+                    </td>
+                    <td><span className={'admin-badge ' + (form.default_task_enabled ? 'green' : 'off')}>{form.default_task_enabled ? 'On' : 'Off'}</span></td>
+                    <td>
+                      <div className="admin-filter-row">
+                        <button className={'admin-btn ' + (mode === 'inherit' ? 'primary' : 'ghost')} type="button" onClick={() => setTaskOverride(task.id, 'inherit')}>Inherit</button>
+                        <button className={'admin-btn ' + (mode === 'on' ? 'green' : 'ghost')} type="button" onClick={() => setTaskOverride(task.id, 'on')}>On</button>
+                        <button className={'admin-btn ' + (mode === 'off' ? 'danger' : 'ghost')} type="button" onClick={() => setTaskOverride(task.id, 'off')}>Off</button>
+                      </div>
+                    </td>
+                    <td><span className={'admin-badge ' + (effective ? 'green' : 'off')}>{effective ? 'Boosted' : 'Base only'}</span></td>
+                  </tr>
+                );
+              })}
+              {!taskRows.length && (
+                <tr><td colSpan={4}><span className="admin-card-sub">No tasks yet.</span></td></tr>
+              )}
             </tbody>
           </table>
         </div>

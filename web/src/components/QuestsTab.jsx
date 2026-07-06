@@ -446,6 +446,20 @@ function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
   const isStarting = busyAction === 'start';
   const isClaiming = busyAction === 'claim';
   const isRefreshing = busyAction === 'refresh';
+  const nftBoostPct = Number(task.reward_boost?.nft_pct || 0);
+  const taskNftBoostEnabled = !!task.reward_boost && task.reward_boost.task_enabled !== false;
+  const showNftUnlock = taskNftBoostEnabled && nftBoostPct <= 0;
+
+  function openDragonShop() {
+    try {
+      window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {
+        detail: {
+          view: 'shop',
+          request: { troop: 'FireDragon', collection: 'dragon' },
+        },
+      }));
+    } catch {}
+  }
 
   return (
     <div style={S.card}>
@@ -491,8 +505,8 @@ function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
               <img src={stoneIcon} alt="Ore" style={S.rewardIcon} />
             </span>
           )}
-          {Number(task.reward_boost?.nft_pct || 0) > 0 && (
-            <span style={S.rewardBoost}>NFT +{Math.round(Number(task.reward_boost.nft_pct || 0) * 100) / 100}%</span>
+          {nftBoostPct > 0 && (
+            <span style={S.rewardBoost}>Your NFT boost: {Math.round(nftBoostPct * 100) / 100}%</span>
           )}
         </div>
 
@@ -508,6 +522,12 @@ function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
           <button style={S.btnRefresh} onClick={() => onClaim(task.id)} disabled={loading}>{isRefreshing ? 'Refreshing...' : 'Refresh'}</button>
         )}
       </div>
+      {showNftUnlock && (
+        <div style={S.nftUnlockRow}>
+          <span style={S.nftUnlockText}>Unlock up to 100% rewards boost with NFTs</span>
+          <button type="button" style={S.nftUnlockBtn} onClick={openDragonShop}>Dragon shop</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -775,6 +795,18 @@ const S = {
   rewardOre: { fontSize: 12, fontWeight: 900, color: '#566878', background: '#dde5ea', padding: '3px 8px', borderRadius: 6, border: '1px solid #8a9aaa', display: 'flex', alignItems: 'center', gap: 4 },
   rewardBoost: { fontSize: 11, fontWeight: 900, color: '#704214', background: '#fff0b8', padding: '3px 7px', borderRadius: 6, border: '1px solid #d8a62a', display: 'flex', alignItems: 'center' },
   rewardIcon: { width: 16, height: 16, objectFit: 'contain' },
+  nftUnlockRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    background: '#fff7d6', border: '1px solid #e6c46b', borderRadius: 7,
+    padding: '5px 7px', marginTop: 2,
+  },
+  nftUnlockText: { fontSize: 11, lineHeight: 1.2, fontWeight: 800, color: '#704214' },
+  nftUnlockBtn: {
+    flex: '0 0 auto', padding: '4px 8px', borderRadius: 7, border: '1px solid #a86d16',
+    background: 'linear-gradient(180deg, #f0be35 0%, #c68419 100%)',
+    color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer',
+    textShadow: '1px 1px 0 rgba(0,0,0,0.22)',
+  },
 
   btnStart: {
     minWidth: 86, padding: '6px 14px', background: 'linear-gradient(180deg, #6ab344 0%, #4d7a2e 100%)',

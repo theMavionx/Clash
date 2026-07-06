@@ -6237,6 +6237,7 @@ function emptyTaskNftRewardBoostCollectionConfig(collectionKey) {
     label: spec.label || collectionKey,
     base_pct: 0,
     extra_pct_per_additional: 0,
+    max_extra_nfts: 0,
     rarity_pct: { common: 0, epic: 0, legendary: 0 },
   };
 }
@@ -6254,8 +6255,21 @@ function normalizeTaskNftRewardBoostCollectionConfig(input = {}, collectionKey) 
     label: String(raw.label || base.label || collectionKey).trim().slice(0, 80),
     base_pct: clampSettingPct(raw.base_pct, base.base_pct, 0, 1000),
     extra_pct_per_additional: clampSettingPct(raw.extra_pct_per_additional, base.extra_pct_per_additional, 0, 1000),
+    max_extra_nfts: clampSettingInt(raw.max_extra_nfts ?? raw.maxExtraNfts, base.max_extra_nfts, 0, 1000),
     rarity_pct: rarityPct,
   };
+}
+
+function normalizeTaskNftRewardBoostTaskOverrides(input = {}) {
+  const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const id = String(key || '').trim();
+    if (!/^\d+$/.test(id)) continue;
+    if (value === null || value === undefined || value === '') continue;
+    out[id] = parseSettingBool(value, false);
+  }
+  return out;
 }
 
 function normalizeTaskNftRewardBoostSettings(input = {}) {
@@ -6267,6 +6281,8 @@ function normalizeTaskNftRewardBoostSettings(input = {}) {
   }
   return {
     enabled: parseSettingBool(raw.enabled, true),
+    default_task_enabled: parseSettingBool(raw.default_task_enabled ?? raw.defaultTaskEnabled, true),
+    task_overrides: normalizeTaskNftRewardBoostTaskOverrides(raw.task_overrides || raw.taskOverrides || {}),
     // Count bonuses stack per owned NFT. Rarity uses the best owned rarity per
     // collection so a whale cannot multiply rarity bonus by every token.
     rarity_mode: 'best',
@@ -6290,16 +6306,41 @@ function setTaskNftRewardBoostSettings(input = {}) {
       ...(current.collections || {}),
       ...((raw.collections && typeof raw.collections === 'object') ? raw.collections : {}),
     },
+    task_overrides: Object.prototype.hasOwnProperty.call(raw, 'task_overrides') || Object.prototype.hasOwnProperty.call(raw, 'taskOverrides')
+      ? (raw.task_overrides || raw.taskOverrides || {})
+      : (current.task_overrides || {}),
   });
   writeAppSettingJsonValue(TASK_NFT_REWARD_BOOST_SETTINGS_KEY, next);
   return next;
 }
 
-function taskNftRewardBoostNftSummary(playerId, settings = getTaskNftRewardBoostSettings()) {
+function taskNftRewardBoostTaskEnabled(taskId, settings = getTaskNftRewardBoostSettings()) {
+  if (!settings.enabled) return false;
+  const rawId = taskId == null || taskId === '' ? '' : String(taskId).trim();
+  if (rawId && Object.prototype.hasOwnProperty.call(settings.task_overrides || {}, rawId)) {
+    return !!settings.task_overrides[rawId];
+  }
+  return !!settings.default_task_enabled;
+}
+
+function taskNftRewardBoostNftSummary(playerId, options = {}) {
+  const settings = options && (options.collections || Object.prototype.hasOwnProperty.call(options, 'enabled')) && !options.settings
+    ? normalizeTaskNftRewardBoostSettings(options)
+    : normalizeTaskNftRewardBoostSettings(options?.settings || getTaskNftRewardBoostSettings());
+  const taskId = options?.taskId ?? options?.task_id ?? options?.id ?? null;
   const details = [];
   let totalPct = 0;
-  if (!playerId || !settings.enabled) {
-    return { enabled: !!settings.enabled, total_pct: 0, multiplier: 1, collections: details };
+  const taskEnabled = taskNftRewardBoostTaskEnabled(taskId, settings);
+  if (!playerId || !settings.enabled || !taskEnabled) {
+    return {
+      enabled: !!settings.enabled,
+      task_enabled: taskEnabled,
+      default_task_enabled: !!settings.default_task_enabled,
+      task_id: taskId,
+      total_pct: 0,
+      multiplier: 1,
+      collections: details,
+    };
   }
 
   for (const spec of TASK_NFT_REWARD_BOOST_COLLECTIONS) {
@@ -6325,7 +6366,10 @@ function taskNftRewardBoostNftSummary(playerId, settings = getTaskNftRewardBoost
 
     const basePct = clampSettingPct(cfg.base_pct, 0, 0, 1000);
     const extraPctPerAdditional = clampSettingPct(cfg.extra_pct_per_additional, 0, 0, 1000);
-    const extraPct = extraPctPerAdditional * Math.max(0, count - 1);
+    const maxExtraNfts = clampSettingInt(cfg.max_extra_nfts, 0, 0, 1000);
+    const rawExtraCount = Math.max(0, count - 1);
+    const countedExtraCount = maxExtraNfts > 0 ? Math.min(rawExtraCount, maxExtraNfts) : rawExtraCount;
+    const extraPct = extraPctPerAdditional * countedExtraCount;
     const collectionPct = basePct + extraPct + bestRarityPct;
     if (collectionPct <= 0) continue;
     totalPct += collectionPct;
@@ -6333,6 +6377,9 @@ function taskNftRewardBoostNftSummary(playerId, settings = getTaskNftRewardBoost
       collection: spec.key,
       label: cfg.label || spec.label,
       count,
+      extra_count: countedExtraCount,
+      raw_extra_count: rawExtraCount,
+      max_extra_nfts: maxExtraNfts,
       base_pct: basePct,
       extra_pct: extraPct,
       extra_pct_per_additional: extraPctPerAdditional,
@@ -6345,19 +6392,22 @@ function taskNftRewardBoostNftSummary(playerId, settings = getTaskNftRewardBoost
 
   return {
     enabled: !!settings.enabled,
+    task_enabled: taskEnabled,
+    default_task_enabled: !!settings.default_task_enabled,
+    task_id: taskId,
     total_pct: totalPct,
     multiplier: 1 + (totalPct / 100),
     collections: details,
   };
 }
 
-function applyTaskNftRewardBoost(playerId, reward = {}) {
+function applyTaskNftRewardBoost(playerId, reward = {}, options = {}) {
   const base = {
     gold: Math.max(0, intOr0(reward.gold)),
     wood: Math.max(0, intOr0(reward.wood)),
     ore: Math.max(0, intOr0(reward.ore)),
   };
-  const boost = taskNftRewardBoostNftSummary(playerId);
+  const boost = taskNftRewardBoostNftSummary(playerId, options);
   const multiplier = Number(boost.multiplier || 1) || 1;
   const boosted = {
     gold: Math.round(base.gold * multiplier),
@@ -6376,6 +6426,9 @@ function applyTaskNftRewardBoost(playerId, reward = {}) {
     nft_bonus: bonus,
     boost_pct: boost.total_pct,
     multiplier: boost.multiplier,
+    task_enabled: boost.task_enabled,
+    default_task_enabled: boost.default_task_enabled,
+    task_id: boost.task_id,
     details: boost.collections,
   };
 }

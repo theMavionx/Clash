@@ -15007,6 +15007,8 @@ router.get('/tasks', auth, async (req, res) => {
       gold: t.reward_gold || 0,
       wood: t.reward_wood || 0,
       ore: t.reward_ore || 0,
+    }, {
+      taskId: t.id,
     });
     out.push({
       id: t.id,
@@ -15021,6 +15023,9 @@ router.get('/tasks', auth, async (req, res) => {
       reward_boost: {
         nft_pct: rewardBoost.boost_pct || 0,
         multiplier: rewardBoost.multiplier || 1,
+        task_enabled: rewardBoost.task_enabled,
+        default_task_enabled: rewardBoost.default_task_enabled,
+        task_id: rewardBoost.task_id,
         nft_bonus: rewardBoost.nft_bonus || { gold: 0, wood: 0, ore: 0 },
         details: rewardBoost.details || [],
       },
@@ -15257,6 +15262,8 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       gold: task.reward_gold || 0,
       wood: task.reward_wood || 0,
       ore: task.reward_ore || 0,
+    }, {
+      taskId: id,
     });
     const reward = db.applyAltarProsperityResourceBonus(req.player.id, {
       gold: nftReward.gold || 0,
@@ -15274,6 +15281,8 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
         task_reward_base: nftReward.base || { gold: task.reward_gold || 0, wood: task.reward_wood || 0, ore: task.reward_ore || 0 },
         nft_reward_boost_pct: nftReward.boost_pct || 0,
         nft_reward_multiplier: nftReward.multiplier || 1,
+        nft_reward_task_enabled: nftReward.task_enabled,
+        nft_reward_default_task_enabled: nftReward.default_task_enabled,
         nft_reward_bonus: nftReward.nft_bonus || { gold: 0, wood: 0, ore: 0 },
         nft_reward_details: nftReward.details || [],
         prosperity_bonus_pct: reward.prosperity_bonus_pct || 0,
@@ -15345,6 +15354,8 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       reward_after_nft_boost: { gold: paidNftReward.gold || 0, wood: paidNftReward.wood || 0, ore: paidNftReward.ore || 0 },
       nft_reward_boost_pct: paidNftReward.boost_pct || 0,
       nft_reward_multiplier: paidNftReward.multiplier || 1,
+      nft_reward_task_enabled: paidNftReward.task_enabled,
+      nft_reward_default_task_enabled: paidNftReward.default_task_enabled,
       nft_reward_bonus: paidNftReward.nft_bonus || { gold: 0, wood: 0, ore: 0 },
       nft_reward_details: paidNftReward.details || [],
       altar_prosperity_bonus_pct: paidReward.prosperity_bonus_pct || 0,
@@ -15366,6 +15377,9 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     reward_boost: {
       nft_pct: paidNftReward.boost_pct || 0,
       multiplier: paidNftReward.multiplier || 1,
+      task_enabled: paidNftReward.task_enabled,
+      default_task_enabled: paidNftReward.default_task_enabled,
+      task_id: paidNftReward.task_id,
       nft_bonus: paidNftReward.nft_bonus || { gold: 0, wood: 0, ore: 0 },
       details: paidNftReward.details || [],
     },
