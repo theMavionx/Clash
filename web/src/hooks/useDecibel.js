@@ -28,6 +28,11 @@ import {
   stopDecibelRealtime,
   subscribeDecibelRealtime,
 } from '../lib/decibelRealtime';
+import {
+  decibelOrderStateKey,
+  makeOptimisticDecibelOrder,
+  mergeDecibelOrderSnapshot,
+} from '../lib/decibelOrderState';
 
 // Move function paths for the calls we route through Petra (one-time or
 // ownership-related). Verified against `@decibeltrade/sdk/dist/write.js`
@@ -477,7 +482,7 @@ function normalizeOrder(o, markets) {
       : ['sell', 'ask', 'short'].includes(rawSide)
         ? false
         : false);
-  const sizeRaw = o.remaining_size ?? o.orig_size ?? o.size_delta ?? o.size ?? 0;
+  const sizeRaw = o.remaining_size ?? o.orig_size ?? o.size_delta ?? o.size ?? o.amount ?? o.initial_amount ?? 0;
   const type = orderTypeText(o) || (o.isTrigger || o.is_trigger ? 'STOP_LIMIT' : 'LIMIT');
   const kind = tpslKindFromOrder({ ...o, order_type: type });
   const triggerPrice = kind ? tpslPriceFromOrder(o) : null;
@@ -495,7 +500,6 @@ function normalizeOrder(o, markets) {
     price: String(price),
     stop_price: triggerPrice == null ? '' : String(triggerPrice),
     leverage: o.leverage == null ? null : String(o.leverage),
-    requested_leverage: o.requested_leverage ?? o.requestedLeverage ?? null,
     order_type: type,
     reduce_only: !!(o.reduce_only ?? o.reduceOnly ?? o.is_reduce_only),
     is_tpsl: !!(o.is_tpsl ?? o.isTpsl) || !!kind,
@@ -508,6 +512,8 @@ function normalizeOrder(o, markets) {
     market_addr: marketId || (m && m.market_addr) || null,
     market_name: marketName || (m && m.market_name) || '',
     client_order_id: o.client_order_id ?? o.clientOrderId ?? null,
+    _optimistic: !!o._optimistic,
+    _optimistic_at: o._optimistic_at || o._raw?.optimistic_at || null,
     _raw: o,
   };
 }
@@ -629,29 +635,14 @@ function summarizeDecibelOrderForLog(order) {
     price: order.price || order.limit_price || order.limitPrice || '',
     stop: order.stop_price || order.stopPrice || order.trigger_condition || order.triggerCondition || '',
     amount: order.amount || order.remaining_size || order.remainingSize || order.orig_size || order.origSize || '',
-    leverage: order.leverage || order.user_leverage || order.userLeverage || order.requested_leverage || order.requestedLeverage || '',
+    leverage: order.leverage || order.user_leverage || order.userLeverage || '',
+    optimistic: !!order._optimistic,
     reduce_only: !!(order.reduce_only ?? order.reduceOnly ?? order.is_reduce_only),
     is_tpsl: !!(order.is_tpsl ?? order.isTpsl) || !!tpslKindFromOrder(order),
     order_id: String(order.order_id ?? order.orderId ?? order.id ?? '').slice(0, 18),
     client_order_id: String(order.client_order_id ?? order.clientOrderId ?? '').slice(0, 18),
     market: shortDecibelAddr(order.market_addr || order.marketAddr || order.market || ''),
   };
-}
-
-function decibelOrderStateKey(order) {
-  if (!order) return '';
-  const orderId = String(order.order_id ?? order.orderId ?? order.id ?? '').trim();
-  if (orderId) return `id:${orderId}`;
-  const clientOrderId = String(order.client_order_id ?? order.clientOrderId ?? '').trim();
-  if (clientOrderId) return `client:${clientOrderId}`;
-  return [
-    order.symbol || order.s || '',
-    order.market_addr || order.marketAddr || order.market || '',
-    order.side || order.d || order.order_direction || order.orderDirection || '',
-    order.order_type || order.orderType || '',
-    order.price || order.limit_price || order.limitPrice || '',
-    order.stop_price || order.stopPrice || '',
-  ].map(v => String(v || '').toLowerCase()).join(':');
 }
 
 function summarizeDecibelPositionForLog(position) {
@@ -914,6 +905,7 @@ export function useDecibel() {
   const subaccountRef = useRef(null);
   const positionsRef = useRef([]);
   const ordersRef = useRef([]);
+  const orderSeenMetaRef = useRef(new Map());
   const claimGoldRef = useRef(null);
   const closeInFlightRef = useRef(new Set());
   const activationInFlightRef = useRef(false);
@@ -992,35 +984,39 @@ export function useDecibel() {
     return data;
   }, []);
 
-  const applyDecibelOrders = useCallback((rows, source = 'unknown') => {
-    const raw = Array.isArray(rows) ? rows : (Array.isArray(rows?.data) ? rows.data : []);
-    const norm = raw.map(o => normalizeOrder(o, marketsRef.current));
-    const previousByKey = new Map((ordersRef.current || [])
-      .map(order => [decibelOrderStateKey(order), order])
-      .filter(([key]) => !!key));
-    for (const order of norm) {
-      const key = decibelOrderStateKey(order);
-      const previous = key ? previousByKey.get(key) : null;
-      if (order.leverage == null && previous?.leverage != null) {
-        order.leverage = previous.leverage;
-      }
-      if (order.requested_leverage == null && previous?.requested_leverage != null) {
-        order.requested_leverage = previous.requested_leverage;
-      }
-    }
+  const applyDecibelOrders = useCallback((rows, source = 'unknown', options = {}) => {
+    const mergedOrders = mergeDecibelOrderSnapshot({
+      previousOrders: ordersRef.current || [],
+      rawOrders: rows,
+      normalizeOrder: (order) => normalizeOrder(order, marketsRef.current),
+      source,
+      options,
+      meta: orderSeenMetaRef.current,
+      helpers: {
+        sameAddress: sameAptosAddress,
+        tpslKindFromOrder,
+        tpslPriceFromOrder,
+      },
+    });
+    const next = mergedOrders.orders;
     D.log('apply orders', {
       source,
-      raw_count: raw.length,
-      normalized_count: norm.length,
-      tpsl_count: norm.filter(o => o.is_tpsl || tpslKindFromOrder(o)).length,
-      reduce_only_count: norm.filter(o => o.reduce_only).length,
-      orders: norm.slice(0, 8).map(summarizeDecibelOrderForLog),
+      authoritative: mergedOrders.authoritative,
+      merge_only: mergedOrders.mergeOnly,
+      raw_count: mergedOrders.raw.length,
+      normalized_count: mergedOrders.normalized.length,
+      applied_count: next.length,
+      retained_missing_count: mergedOrders.retainedMissingCount,
+      optimistic_count: mergedOrders.optimisticCount,
+      tpsl_count: next.filter(o => o.is_tpsl || tpslKindFromOrder(o)).length,
+      reduce_only_count: next.filter(o => o.reduce_only).length,
+      orders: next.slice(0, 8).map(summarizeDecibelOrderForLog),
     });
-    ordersRef.current = norm;
-    setOrders(norm);
+    ordersRef.current = next;
+    setOrders(next);
     realtimeAppliedRef.current.ordersAt = Date.now();
     setPositions(prev => {
-      const merged = mergeTpslOrdersIntoPositions(prev, norm);
+      const merged = mergeTpslOrdersIntoPositions(prev, next);
       D.log('merge orders into positions', {
         source,
         positions_before: Array.isArray(prev) ? prev.length : 0,
@@ -1030,7 +1026,7 @@ export function useDecibel() {
       positionsRef.current = merged;
       return merged;
     });
-    return norm;
+    return next;
   }, []);
 
   const fetchServerSigner = useCallback(async () => {
@@ -1138,6 +1134,7 @@ export function useDecibel() {
     rawPricesRef.current = [];
     positionsRef.current = [];
     ordersRef.current = [];
+    orderSeenMetaRef.current = new Map();
     setPrices([]);
     setWalletUsdc(null);
     setWalletApt(null);
@@ -2123,6 +2120,26 @@ export function useDecibel() {
       });
 
       const txHash = assertWriteSuccess(result, 'Limit order');
+      const optimisticOrder = makeOptimisticDecibelOrder({
+        symbol,
+        side: isBuy ? 'bid' : 'ask',
+        amount: sizeBase,
+        price: priceN,
+        order_type: 'Limit',
+        reduce_only: false,
+        is_tpsl: false,
+        order_direction: isBuy ? 'Open Long' : 'Open Short',
+        market_addr: market.market_addr,
+        market_name: market.market_name,
+        client_order_id: result?.clientOrderId || result?.client_order_id || null,
+        _raw: {
+          market: market.market_addr,
+          marketName: market.market_name,
+          isBuy,
+          client_order_id: result?.clientOrderId || result?.client_order_id || null,
+        },
+      });
+      applyDecibelOrders([...ordersRef.current, optimisticOrder], 'optimistic-limit', { mergeOnly: true });
       const dedup = `decibel:open:${address.toLowerCase()}:${market.market_name}:${result?.orderId || Date.now()}`;
       void reportTrade({
         tx_hash: txHash, symbol, side: isBuy ? 'long' : 'short',
@@ -2258,6 +2275,13 @@ export function useDecibel() {
         return { status: 'not_found', noop: true };
       }
       const txHash = assertWriteSuccess(res, 'Cancel order');
+      const cancelledId = String(orderId || '');
+      const remaining = (ordersRef.current || []).filter(order => (
+        String(order?.order_id || order?.orderId || '') !== cancelledId
+        && String(order?.client_order_id || order?.clientOrderId || '') !== cancelledId
+      ));
+      ordersRef.current = remaining;
+      setOrders(remaining);
       fetchOrders();
       return { tx_hash: txHash, status: 'cancelled' };
     } catch (e) {
@@ -2334,6 +2358,66 @@ export function useDecibel() {
         ...builderArgs,
       });
       const txHash = assertWriteSuccess(res, 'TP/SL update');
+      const resultRows = Array.isArray(res?.results) ? res.results : [];
+      const clientIdForLeg = (leg) => {
+        const row = resultRows.find(r => String(r?.leg || '').toLowerCase().includes(leg));
+        return row?.clientOrderId || row?.client_order_id || null;
+      };
+      const optimisticTpsl = [
+        ...(tp > 0 ? [makeOptimisticDecibelOrder({
+          symbol: target,
+          side: isLong ? 'ask' : 'bid',
+          amount: sizeHuman,
+          price: tp,
+          stop_price: tp,
+          order_type: 'Trigger',
+          reduce_only: true,
+          is_tpsl: true,
+          order_direction: isLong ? 'Close Long' : 'Close Short',
+          take_profit: tp,
+          market_addr: market.market_addr,
+          market_name: market.market_name,
+          client_order_id: clientIdForLeg('tp'),
+          _raw: {
+            market: market.market_addr,
+            marketName: market.market_name,
+            is_tpsl: true,
+            take_profit: tp,
+            triggerPriceUi: tp,
+          },
+        })] : []),
+        ...(sl > 0 ? [makeOptimisticDecibelOrder({
+          symbol: target,
+          side: isLong ? 'ask' : 'bid',
+          amount: sizeHuman,
+          price: sl,
+          stop_price: sl,
+          order_type: 'Trigger',
+          reduce_only: true,
+          is_tpsl: true,
+          order_direction: isLong ? 'Close Long' : 'Close Short',
+          stop_loss: sl,
+          market_addr: market.market_addr,
+          market_name: market.market_name,
+          client_order_id: clientIdForLeg('sl'),
+          _raw: {
+            market: market.market_addr,
+            marketName: market.market_name,
+            is_tpsl: true,
+            stop_loss: sl,
+            triggerPriceUi: sl,
+          },
+        })] : []),
+      ];
+      if (optimisticTpsl.length) {
+        const replacingKinds = new Set(optimisticTpsl.map(order => tpslKindFromOrder(order)).filter(Boolean));
+        const baseOrders = (ordersRef.current || []).filter(order => {
+          if (String(order?.symbol || '').toUpperCase() !== target) return true;
+          const kind = tpslKindFromOrder(order);
+          return !kind || !replacingKinds.has(kind);
+        });
+        applyDecibelOrders([...baseOrders, ...optimisticTpsl], 'optimistic-tpsl', { mergeOnly: true });
+      }
       D.log('tpsl server returned', {
         symbol: target,
         tx_hash: String(txHash || '').slice(0, 18),

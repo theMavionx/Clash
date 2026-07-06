@@ -2159,19 +2159,6 @@ function decibelOpenOrderMatchesExpected(order, options = {}) {
   return decibelOrderMatchesMarket(order, options.marketAddr || options.market_addr || '');
 }
 
-function enrichDecibelOrdersAfterWrite(rows, options = {}) {
-  const leverage = Number(options.leverage ?? options.rewardLeverage);
-  if (!Number.isFinite(leverage) || leverage <= 0) return rows;
-  return rows.map((order) => {
-    if (!decibelOpenOrderMatchesExpected(order, options)) return order;
-    if (order?.leverage != null || order?.requested_leverage != null || order?.requestedLeverage != null) return order;
-    return {
-      ...order,
-      requested_leverage: leverage,
-    };
-  });
-}
-
 async function fetchDecibelOpenOrdersAfterWrite(subaccount, options = {}) {
   const attempts = Math.max(1, Math.min(8, Number(options.attempts || 1)));
   const delayMs = Math.max(100, Math.min(1500, Number(options.delayMs || 300)));
@@ -2197,7 +2184,7 @@ async function fetchDecibelOpenOrdersAfterWrite(subaccount, options = {}) {
       break;
     }
   }
-  return enrichDecibelOrdersAfterWrite(rows, options);
+  return rows;
 }
 
 router.post('/decibel/orders/place', auth, async (req, res) => {
@@ -2304,7 +2291,6 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
         marketAddr: orderPayload.marketAddr || orderPayload.market_addr,
         clientOrderId: orderPayload.clientOrderId,
         orderId: result?.orderId || result?.order_id,
-        leverage: orderPayload.rewardLeverage || orderPayload.leverage,
       });
     }
     res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: verification.verified === true, verification, fillRecord, ordersAfter });

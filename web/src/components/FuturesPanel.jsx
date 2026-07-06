@@ -895,8 +895,6 @@ function orderPriceDetailLabel(order, type = '') {
 function orderDisplayLeverage(order, fallbackLeverage = null) {
   const direct = displayLeverage(order?.leverage);
   if (direct) return direct;
-  const requested = displayLeverage(order?.requested_leverage ?? order?.requestedLeverage);
-  if (requested) return requested;
   const raw = numOrNull(order?._raw?.leverage ?? order?._raw?.trade?.leverage);
   if (raw != null && raw > 10_000) {
     const scaled = raw / 1e10;
