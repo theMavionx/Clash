@@ -1475,3 +1475,19 @@ Time: 2026-07-06 00:52:16 +03:00
 Request:
 
 > коміт деплой на прод все
+
+### UR-2026-07-06-005
+
+Time: 2026-07-06 08:47:24 +03:00
+
+Request:
+
+> [authFlow] state Object /api/futures/dango/positions?dex=dango&account=0x39b36f1edf2ef5a6f2e02991b3a85fb356eb5005:1 Failed to load resource: the server responded with a status of 401 () ... щось з данго ніяк не виправимо все то
+
+### UR-2026-07-06-006
+
+Time: 2026-07-06 09:46:54 +03:00
+
+Request:
+
+> коміт депой роби

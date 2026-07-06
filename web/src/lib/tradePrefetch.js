@@ -339,7 +339,7 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
   }
 
   if (dex === 'dango') {
-    if (isDangoAddress(address)) {
+    if (token && isDangoAddress(address)) {
       addPrefetchRequest(requests, futuresUrl(`/dango/account?dex=dango&account=${encoded(address)}`), { headers, signal });
       addPrefetchRequest(requests, futuresUrl(`/dango/positions?dex=dango&account=${encoded(address)}`), { headers, signal });
       addPrefetchRequest(requests, futuresUrl(`/dango/orders?dex=dango&account=${encoded(address)}`), { headers, signal });
