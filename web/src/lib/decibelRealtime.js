@@ -33,6 +33,14 @@ function now() {
   return Date.now();
 }
 
+function logRealtime(message, data) {
+  try {
+    console.log('[Decibel realtime]', message, data || '');
+  } catch {
+    // noop
+  }
+}
+
 function emit(patch) {
   snapshot = {
     ...snapshot,
@@ -81,21 +89,25 @@ export function subscribeDecibelRealtime(listener) {
 
 export async function startDecibelRealtime({ subaccountAddr = '' } = {}) {
   if (!DECIBEL_REALTIME_WS_ENABLED) {
+    logRealtime('disabled by env flag');
     emit({ status: 'disabled', error: null });
     return false;
   }
 
   if (typeof window === 'undefined' || typeof WebSocket === 'undefined') {
+    logRealtime('unavailable: missing browser WebSocket');
     emit({ status: 'unavailable', error: 'WebSocket is unavailable in this browser' });
     return false;
   }
 
   const startToken = ++activeStartToken;
+  logRealtime('connecting', { subaccount: normalizeSubaccount(subaccountAddr) });
   emit({ status: 'connecting', error: null });
   let read;
   try {
     read = await getReadClient();
   } catch (e) {
+    logRealtime('read client init failed', { error: e?.message || String(e || '') });
     emit({ status: 'error', error: e?.message || String(e || 'Decibel realtime init failed') });
     return false;
   }
@@ -103,8 +115,10 @@ export async function startDecibelRealtime({ subaccountAddr = '' } = {}) {
 
   try {
     if (!priceUnsub && read?.marketPrices?.subscribeAll) {
+      logRealtime('subscribe prices');
       priceUnsub = read.marketPrices.subscribeAll((payload) => {
         const rows = Array.isArray(payload?.prices) ? payload.prices : [];
+        logRealtime('prices snapshot', { count: rows.length });
         emit({ status: 'open', prices: rows, pricesAt: now(), error: null });
       });
     }
@@ -114,43 +128,59 @@ export async function startDecibelRealtime({ subaccountAddr = '' } = {}) {
       stopAccountTopics();
       activeSubaccount = nextSub;
       if (read?.accountOverview?.subscribeByAddr) {
+        logRealtime('subscribe account', { subaccount: nextSub });
         pushUnsub(read.accountOverview.subscribeByAddr(nextSub, (payload) => {
           emit({ status: 'open', account: payload?.account_overview || payload || null, accountAt: now(), error: null });
         }));
       }
       if (read?.userPositions?.subscribeByAddr) {
+        logRealtime('subscribe positions', { subaccount: nextSub });
         pushUnsub(read.userPositions.subscribeByAddr(nextSub, (payload) => {
-          emit({ status: 'open', positions: Array.isArray(payload?.positions) ? payload.positions : [], positionsAt: now(), error: null });
+          const positions = Array.isArray(payload?.positions) ? payload.positions : [];
+          logRealtime('positions snapshot', { subaccount: nextSub, count: positions.length });
+          emit({ status: 'open', positions, positionsAt: now(), error: null });
         }));
       }
       if (read?.userOpenOrders?.subscribeByAddr) {
+        logRealtime('subscribe open orders', { subaccount: nextSub });
         pushUnsub(read.userOpenOrders.subscribeByAddr(nextSub, (payload) => {
-          emit({ status: 'open', orders: Array.isArray(payload?.orders) ? payload.orders : [], ordersAt: now(), error: null });
+          const orders = Array.isArray(payload?.orders) ? payload.orders : [];
+          logRealtime('orders snapshot', { subaccount: nextSub, count: orders.length });
+          emit({ status: 'open', orders, ordersAt: now(), error: null });
         }));
       }
       if (read?.userOrderHistory?.subscribeByAddr) {
+        logRealtime('subscribe order history', { subaccount: nextSub });
         pushUnsub(read.userOrderHistory.subscribeByAddr(nextSub, (payload) => {
+          logRealtime('order history update', { subaccount: nextSub, has_order: !!(payload?.order || payload) });
           emit({ status: 'open', orderUpdate: payload?.order || payload || null, orderUpdateAt: now(), error: null });
         }));
       }
       if (read?.userTradeHistory?.subscribeByAddr) {
+        logRealtime('subscribe trade history', { subaccount: nextSub });
         pushUnsub(read.userTradeHistory.subscribeByAddr(nextSub, (payload) => {
-          emit({ status: 'open', trades: Array.isArray(payload?.trades) ? payload.trades : [], tradesAt: now(), error: null });
+          const trades = Array.isArray(payload?.trades) ? payload.trades : [];
+          logRealtime('trade history update', { subaccount: nextSub, count: trades.length });
+          emit({ status: 'open', trades, tradesAt: now(), error: null });
         }));
       }
     } else if (!nextSub) {
+      logRealtime('stop account topics: empty subaccount');
       stopAccountTopics();
     }
 
+    logRealtime('open', { subaccount: nextSub || null });
     emit({ status: 'open', error: null });
     return true;
   } catch (e) {
+    logRealtime('subscription failed', { error: e?.message || String(e || '') });
     emit({ status: 'error', error: e?.message || String(e || 'Decibel realtime subscription failed') });
     return false;
   }
 }
 
 export function stopDecibelRealtime() {
+  logRealtime('stop');
   activeStartToken += 1;
   safeUnsub(priceUnsub);
   priceUnsub = null;

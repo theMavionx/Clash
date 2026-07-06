@@ -606,6 +606,53 @@ const D = {
   groupEnd: () => { try { console.groupEnd(); } catch { /* noop */ } },
 };
 
+function shortDecibelAddr(value) {
+  const raw = String(value || '');
+  return raw.length > 18 ? `${raw.slice(0, 10)}...${raw.slice(-6)}` : raw;
+}
+
+function summarizeDecibelOrderForLog(order) {
+  if (!order) return null;
+  return {
+    symbol: order.symbol || order.s || '',
+    side: order.side || order.d || order.order_direction || order.orderDirection || '',
+    type: order.order_type || order.orderType || '',
+    price: order.price || order.limit_price || order.limitPrice || '',
+    stop: order.stop_price || order.stopPrice || order.trigger_condition || order.triggerCondition || '',
+    amount: order.amount || order.remaining_size || order.remainingSize || order.orig_size || order.origSize || '',
+    reduce_only: !!(order.reduce_only ?? order.reduceOnly ?? order.is_reduce_only),
+    is_tpsl: !!(order.is_tpsl ?? order.isTpsl) || !!tpslKindFromOrder(order),
+    order_id: String(order.order_id ?? order.orderId ?? order.id ?? '').slice(0, 18),
+    client_order_id: String(order.client_order_id ?? order.clientOrderId ?? '').slice(0, 18),
+    market: shortDecibelAddr(order.market_addr || order.marketAddr || order.market || ''),
+  };
+}
+
+function summarizeDecibelPositionForLog(position) {
+  if (!position) return null;
+  return {
+    symbol: position.symbol || position.s || '',
+    side: position.side || position.d || '',
+    amount: position.amount || position.size || '',
+    entry: position.entry_price || position.entryPrice || '',
+    tp: position.tp || position.take_profit || position.tp_trigger_price || '',
+    sl: position.sl || position.stop_loss || position.sl_trigger_price || '',
+    market: shortDecibelAddr(position.market_addr || position.marketAddr || position.market || ''),
+  };
+}
+
+function summarizeDecibelVerificationForLog(verification) {
+  if (!verification) return null;
+  return {
+    verified: verification.verified,
+    effect: verification.effect,
+    reason: verification.reason,
+    attempts: verification.attempts,
+    open_order: summarizeDecibelOrderForLog(verification.open_order),
+    position: summarizeDecibelPositionForLog(verification.position),
+  };
+}
+
 const BUILDER_APPROVAL_PREFIX = 'clash_decibel_builder_approval:';
 const SUBACCOUNT_CACHE_PREFIX = 'clash_decibel_subaccount:';
 const SUBACCOUNT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -845,6 +892,7 @@ export function useDecibel() {
   const closeInFlightRef = useRef(new Set());
   const activationInFlightRef = useRef(false);
   const postWritePollRef = useRef(0);
+  const serverRequestSeqRef = useRef(0);
   // Builder subaccount cache (deterministic, but resolution touches REST +
   // SDK helpers so we avoid repeating the work on every trade).
   const builderSubRef = useRef(null);
@@ -870,6 +918,14 @@ export function useDecibel() {
       err.code = 'TOKEN_MISSING';
       throw err;
     }
+    const requestId = ++serverRequestSeqRef.current;
+    const startedAt = performance.now();
+    D.log('server request start', {
+      request_id: requestId,
+      method,
+      path,
+      has_body: !!body,
+    });
     const res = await fetch(`${FUTURES_API}/decibel${path}`, {
       method,
       headers: {
@@ -880,23 +936,57 @@ export function useDecibel() {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const data = await res.json().catch(() => ({}));
+    const ms = Math.round(performance.now() - startedAt);
     if (!res.ok) {
+      D.warn('server request failed', {
+        request_id: requestId,
+        method,
+        path,
+        status: res.status,
+        ms,
+        error: data?.error || null,
+      });
       const err = new Error(data?.error || `Decibel server request failed (${res.status})`);
       err.status = res.status;
       err.body = data;
       throw err;
     }
+    D.log('server request ok', {
+      request_id: requestId,
+      method,
+      path,
+      status: res.status,
+      ms,
+      rows: Array.isArray(data) ? data.length : (Array.isArray(data?.data) ? data.data.length : undefined),
+      orders_after: Array.isArray(data?.ordersAfter) ? data.ordersAfter.length : undefined,
+      verified: data?.verified,
+      verification: summarizeDecibelVerificationForLog(data?.verification),
+    });
     return data;
   }, []);
 
-  const applyDecibelOrders = useCallback((rows) => {
+  const applyDecibelOrders = useCallback((rows, source = 'unknown') => {
     const raw = Array.isArray(rows) ? rows : (Array.isArray(rows?.data) ? rows.data : []);
     const norm = raw.map(o => normalizeOrder(o, marketsRef.current));
+    D.log('apply orders', {
+      source,
+      raw_count: raw.length,
+      normalized_count: norm.length,
+      tpsl_count: norm.filter(o => o.is_tpsl || tpslKindFromOrder(o)).length,
+      reduce_only_count: norm.filter(o => o.reduce_only).length,
+      orders: norm.slice(0, 8).map(summarizeDecibelOrderForLog),
+    });
     ordersRef.current = norm;
     setOrders(norm);
     realtimeAppliedRef.current.ordersAt = Date.now();
     setPositions(prev => {
       const merged = mergeTpslOrdersIntoPositions(prev, norm);
+      D.log('merge orders into positions', {
+        source,
+        positions_before: Array.isArray(prev) ? prev.length : 0,
+        positions_after: Array.isArray(merged) ? merged.length : 0,
+        positions: (Array.isArray(merged) ? merged : []).slice(0, 8).map(summarizeDecibelPositionForLog),
+      });
       positionsRef.current = merged;
       return merged;
     });
@@ -1240,15 +1330,18 @@ export function useDecibel() {
   // setPositions inside fetchPositions.
   const fetchPositions = useCallback(async () => {
     if (!address) return [];
+    const startedAt = performance.now();
     try {
       const sub = subaccountRef.current || await ensureSubaccount();
       if (!sub) {
+        D.log('fetchPositions skipped: no subaccount', { address: shortDecibelAddr(address) });
         setPositions([]);
         positionsRef.current = [];
         setDataReady(true);
         return [];
       }
       let list;
+      let source = 'direct-sdk';
       try {
         const read = await getReadClient();
         list = await withAbortableRead(
@@ -1258,6 +1351,7 @@ export function useDecibel() {
         );
       } catch (readError) {
         D.warn('fetchPositions direct Decibel read failed; falling back to server:', readError?.message || readError);
+        source = 'server-fallback';
         list = await decibelServerRequest(`/positions?subaccountAddr=${encodeURIComponent(sub)}`, null, 'GET');
       }
       const raw = Array.isArray(list) ? list : (list?.data || []);
@@ -1269,6 +1363,14 @@ export function useDecibel() {
         D.log(`fetchPositions: ${norm.length} open`,
           norm.map(p => `${p.symbol} ${p.side} ${p.amount}@$${p.entry_price}`).join(' | '));
       }
+      D.log('fetchPositions result', {
+        source,
+        ms: Math.round(performance.now() - startedAt),
+        subaccount: shortDecibelAddr(sub),
+        raw_count: raw.length,
+        normalized_count: norm.length,
+        positions: norm.slice(0, 8).map(summarizeDecibelPositionForLog),
+      });
       setPositions(norm);
       positionsRef.current = norm;
       setDataReady(true);
@@ -1281,15 +1383,23 @@ export function useDecibel() {
   }, [address, ensureSubaccount, decibelServerRequest]);
 
   const fetchOrders = useCallback(async () => {
-    if (!address) return;
+    if (!address) return [];
+    const startedAt = performance.now();
     try {
       const sub = await ensureSubaccount();
-      if (!sub) { setOrders([]); ordersRef.current = []; return; }
+      if (!sub) {
+        D.log('fetchOrders skipped: no subaccount', { address: shortDecibelAddr(address) });
+        setOrders([]);
+        ordersRef.current = [];
+        return [];
+      }
       let list;
+      let source = 'server';
       try {
         list = await decibelServerRequest(`/orders?subaccountAddr=${encodeURIComponent(sub)}&limit=100`, null, 'GET');
       } catch (serverError) {
         D.warn('fetchOrders server Decibel read failed; falling back to direct SDK:', serverError?.message || serverError);
+        source = 'direct-sdk-fallback';
         const read = await getReadClient();
         list = await withAbortableRead(
           fetchOptions => read.userOpenOrders.getByAddr({ subAddr: sub, fetchOptions }),
@@ -1298,7 +1408,14 @@ export function useDecibel() {
         );
       }
       const raw = Array.isArray(list) ? list : (list?.data || []);
-      return applyDecibelOrders(raw);
+      D.log('fetchOrders result', {
+        source,
+        ms: Math.round(performance.now() - startedAt),
+        subaccount: shortDecibelAddr(sub),
+        raw_count: raw.length,
+        orders: raw.slice(0, 8).map(summarizeDecibelOrderForLog),
+      });
+      return applyDecibelOrders(raw, `fetchOrders:${source}`);
     } catch (e) {
       console.warn('[useDecibel] fetchOrders:', e?.message || e);
       return null;
@@ -1367,6 +1484,7 @@ export function useDecibel() {
     if (!address) return;
     const target = String(symbol || '').toUpperCase();
     const pollId = ++postWritePollRef.current;
+    D.log('post-write poll start', { poll_id: pollId, mode, symbol: target || null });
 
     const targetPositions = (rows) => (Array.isArray(rows) ? rows : [])
       .filter(p => !target || String(p?.symbol || '').toUpperCase() === target);
@@ -1377,10 +1495,29 @@ export function useDecibel() {
       for (let i = 0; i < DECIBEL_POST_WRITE_REFRESH_DELAYS_MS.length; i += 1) {
         const delay = DECIBEL_POST_WRITE_REFRESH_DELAYS_MS[i];
         if (delay > 0) await sleep(delay);
-        if (postWritePollRef.current !== pollId || !address) return;
+        if (postWritePollRef.current !== pollId || !address) {
+          D.log('post-write poll cancelled', {
+            poll_id: pollId,
+            mode,
+            symbol: target || null,
+            iteration: i,
+            latest_poll_id: postWritePollRef.current,
+            has_address: !!address,
+          });
+          return;
+        }
 
         const needsPositions = mode !== 'order-open';
         const needsOrders = mode !== 'position-open';
+        D.log('post-write poll tick', {
+          poll_id: pollId,
+          mode,
+          symbol: target || null,
+          iteration: i,
+          delay_ms: delay,
+          needs_positions: needsPositions,
+          needs_orders: needsOrders,
+        });
         const [positionsResult] = await Promise.allSettled([
           needsPositions ? fetchPositions() : Promise.resolve(positionsRef.current),
           needsOrders ? fetchOrders() : Promise.resolve(ordersRef.current),
@@ -1393,14 +1530,37 @@ export function useDecibel() {
           : positionsRef.current;
         const matchingPositions = targetPositions(nextPositions);
         const matchingOrders = targetOrders(ordersRef.current);
+        D.log('post-write poll observed state', {
+          poll_id: pollId,
+          mode,
+          symbol: target || null,
+          iteration: i,
+          matching_positions: matchingPositions.length,
+          matching_orders: matchingOrders.length,
+          positions: matchingPositions.slice(0, 5).map(summarizeDecibelPositionForLog),
+          orders: matchingOrders.slice(0, 5).map(summarizeDecibelOrderForLog),
+        });
 
-        if (mode === 'position-open' && matchingPositions.length > 0) return;
-        if (mode === 'order-open' && matchingOrders.length > 0) return;
-        if (mode === 'position-refresh' && i >= 3) return;
+        if (mode === 'position-open' && matchingPositions.length > 0) {
+          D.log('post-write poll stop: position found', { poll_id: pollId, symbol: target || null, iteration: i });
+          return;
+        }
+        if (mode === 'order-open' && matchingOrders.length > 0) {
+          D.log('post-write poll stop: order found', { poll_id: pollId, symbol: target || null, iteration: i });
+          return;
+        }
+        if (mode === 'position-refresh' && i >= 3) {
+          D.log('post-write poll stop: position refresh budget reached', { poll_id: pollId, symbol: target || null, iteration: i });
+          return;
+        }
         if (mode === 'tpsl-refresh' && i >= 3 && matchingPositions.some(p => (
           p?.tp || p?.take_profit || p?.tp_trigger_price || p?.sl || p?.stop_loss || p?.sl_trigger_price
-        ))) return;
+        ))) {
+          D.log('post-write poll stop: TP/SL found on position', { poll_id: pollId, symbol: target || null, iteration: i });
+          return;
+        }
       }
+      D.log('post-write poll exhausted', { poll_id: pollId, mode, symbol: target || null });
     })();
   }, [address, fetchAccount, fetchBalance, fetchOrders, fetchPositions]);
 
@@ -1903,8 +2063,13 @@ export function useDecibel() {
         ms: Math.round(performance.now() - startedAt),
         tx_ms: result?.timings?.total_ms,
         tx_wait_ms: result?.timings?.wait_ms,
+        verified: result?.verified,
         verification: result?.verification?.effect,
+        verification_detail: summarizeDecibelVerificationForLog(result?.verification),
         verify_attempts: result?.verification?.attempts,
+        orders_after: Array.isArray(result?.ordersAfter) ? result.ordersAfter.length : null,
+        client_order_id: String(result?.clientOrderId || '').slice(0, 18),
+        order_id: String(result?.orderId || result?.order_id || '').slice(0, 18),
       });
 
       const txHash = assertWriteSuccess(result, 'Limit order');
@@ -1916,7 +2081,12 @@ export function useDecibel() {
       });
 
       if (Array.isArray(result?.ordersAfter) && result.ordersAfter.length) {
-        applyDecibelOrders(result.ordersAfter);
+        D.log('limit order applying server-confirmed ordersAfter', {
+          symbol,
+          orders_after: result.ordersAfter.length,
+          orders: result.ordersAfter.slice(0, 8).map(summarizeDecibelOrderForLog),
+        });
+        applyDecibelOrders(result.ordersAfter, 'limit-ordersAfter');
       }
       pollDecibelStateAfterWrite({ symbol, mode: 'order-open' });
       scheduleClaim();
@@ -2114,8 +2284,26 @@ export function useDecibel() {
         ...builderArgs,
       });
       const txHash = assertWriteSuccess(res, 'TP/SL update');
+      D.log('tpsl server returned', {
+        symbol: target,
+        tx_hash: String(txHash || '').slice(0, 18),
+        result_count: Array.isArray(res?.results) ? res.results.length : null,
+        orders_after: Array.isArray(res?.ordersAfter) ? res.ordersAfter.length : null,
+        results: (Array.isArray(res?.results) ? res.results : []).map(r => ({
+          leg: r?.leg,
+          success: r?.success,
+          tx: String(r?.transactionHash || r?.hash || '').slice(0, 18),
+          order_id: String(r?.orderId || r?.order_id || '').slice(0, 18),
+          client_order_id: String(r?.clientOrderId || r?.client_order_id || '').slice(0, 18),
+        })),
+      });
       if (Array.isArray(res?.ordersAfter) && res.ordersAfter.length) {
-        applyDecibelOrders(res.ordersAfter);
+        D.log('tpsl applying server-confirmed ordersAfter', {
+          symbol: target,
+          orders_after: res.ordersAfter.length,
+          orders: res.ordersAfter.slice(0, 8).map(summarizeDecibelOrderForLog),
+        });
+        applyDecibelOrders(res.ordersAfter, 'tpsl-ordersAfter');
       }
       pollDecibelStateAfterWrite({ symbol: target, mode: 'tpsl-refresh' });
       return { tx_hash: txHash, status: 'updated' };
@@ -2314,11 +2502,21 @@ export function useDecibel() {
       }
 
       if (snap.ordersAt && snap.ordersAt > applied.ordersAt) {
+        D.log('realtime orders snapshot', {
+          orders_at: snap.ordersAt,
+          count: Array.isArray(snap.orders) ? snap.orders.length : 0,
+          orders: (Array.isArray(snap.orders) ? snap.orders : []).slice(0, 8).map(summarizeDecibelOrderForLog),
+        });
         applied.ordersAt = snap.ordersAt;
-        applyDecibelOrders(snap.orders);
+        applyDecibelOrders(snap.orders, 'realtime-orders');
       }
 
       if (snap.positionsAt && snap.positionsAt > applied.positionsAt) {
+        D.log('realtime positions snapshot', {
+          positions_at: snap.positionsAt,
+          count: Array.isArray(snap.positions) ? snap.positions.length : 0,
+          positions: (Array.isArray(snap.positions) ? snap.positions : []).slice(0, 8).map(summarizeDecibelPositionForLog),
+        });
         applied.positionsAt = snap.positionsAt;
         const norm = mergeTpslOrdersIntoPositions(
           (Array.isArray(snap.positions) ? snap.positions : []).map(p => normalizePosition(p, marketsRef.current)),
@@ -2331,6 +2529,10 @@ export function useDecibel() {
       }
 
       if (snap.orderUpdateAt && snap.orderUpdateAt > applied.orderUpdateAt) {
+        D.log('realtime order update event', {
+          order_update_at: snap.orderUpdateAt,
+          order: summarizeDecibelOrderForLog(snap.orderUpdate),
+        });
         applied.orderUpdateAt = snap.orderUpdateAt;
         setTimeout(() => {
           fetchOrders();
@@ -2340,6 +2542,10 @@ export function useDecibel() {
       }
 
       if (snap.tradesAt && snap.tradesAt > applied.tradesAt) {
+        D.log('realtime trades event', {
+          trades_at: snap.tradesAt,
+          trade_count: Array.isArray(snap.trades) ? snap.trades.length : 0,
+        });
         applied.tradesAt = snap.tradesAt;
         setTimeout(() => {
           fetchPositions();
