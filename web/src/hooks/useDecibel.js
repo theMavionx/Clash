@@ -528,6 +528,20 @@ function orderMatchesPosition(order, position) {
   return true;
 }
 
+function optimisticOpenOrderMatchesPosition(order, position) {
+  if (!order || !position || !order._optimistic) return false;
+  if (order.reduce_only || order.is_tpsl || tpslKindFromOrder(order)) return false;
+  if (order.symbol && position.symbol && order.symbol !== position.symbol) return false;
+  if (order.market_addr && position.market_addr && !sameAptosAddress(order.market_addr, position.market_addr)) return false;
+  const direction = String(order.order_direction || '').toLowerCase();
+  const orderSide = direction.includes('short')
+    ? 'ask'
+    : direction.includes('long')
+      ? 'bid'
+      : String(order.side || '').toLowerCase();
+  return !orderSide || orderSide === String(position.side || '').toLowerCase();
+}
+
 function mergeTpslOrdersIntoPositions(positions, orders) {
   if (!Array.isArray(positions) || !positions.length || !Array.isArray(orders) || !orders.length) {
     return positions;
@@ -1517,6 +1531,44 @@ export function useDecibel() {
     } catch { /* tolerate transient RPC errors — keep prior value */ }
   }, [address]);
 
+  const clearFilledOptimisticOpenOrders = useCallback(({ symbol, positions, reason = 'position-found' } = {}) => {
+    const target = String(symbol || '').toUpperCase();
+    const positionRows = Array.isArray(positions) ? positions : [];
+    if (!positionRows.length) return 0;
+
+    const removed = [];
+    const next = (ordersRef.current || []).filter(order => {
+      if (!order?._optimistic || !order?._stale_in_latest_snapshot) return true;
+      if (order.reduce_only || order.is_tpsl || tpslKindFromOrder(order)) return true;
+      if (target && String(order.symbol || '').toUpperCase() !== target) return true;
+      const matchedPosition = positionRows.find(position => optimisticOpenOrderMatchesPosition(order, position));
+      if (!matchedPosition) return true;
+      removed.push({ order, position: matchedPosition });
+      const key = decibelOrderStateKey(order);
+      if (key) orderSeenMetaRef.current.delete(key);
+      return false;
+    });
+
+    if (!removed.length) return 0;
+    D.log('cleared filled optimistic open orders', {
+      reason,
+      symbol: target || null,
+      removed_count: removed.length,
+      removed: removed.map(item => ({
+        order: summarizeDecibelOrderForLog(item.order),
+        position: summarizeDecibelPositionForLog(item.position),
+      })),
+    });
+    ordersRef.current = next;
+    setOrders(next);
+    setPositions(prev => {
+      const merged = mergeTpslOrdersIntoPositions(prev, next);
+      positionsRef.current = merged;
+      return merged;
+    });
+    return removed.length;
+  }, []);
+
   const pollDecibelStateAfterWrite = useCallback(({ symbol, mode = 'position-refresh', expectedTpslKinds = [] } = {}) => {
     if (!address) return;
     const target = String(symbol || '').toUpperCase();
@@ -1532,6 +1584,8 @@ export function useDecibel() {
       .filter(p => !target || String(p?.symbol || '').toUpperCase() === target);
     const targetOrders = (rows) => (Array.isArray(rows) ? rows : [])
       .filter(o => !target || String(o?.symbol || o?.s || '').toUpperCase() === target);
+    const targetOpenOrders = (rows) => targetOrders(rows)
+      .filter(o => !o?.reduce_only && !o?.is_tpsl && !tpslKindFromOrder(o));
 
     void (async () => {
       for (let i = 0; i < DECIBEL_POST_WRITE_REFRESH_DELAYS_MS.length; i += 1) {
@@ -1549,7 +1603,7 @@ export function useDecibel() {
           return;
         }
 
-        const needsPositions = mode !== 'order-open';
+        const needsPositions = true;
         const needsOrders = mode !== 'position-open';
         D.log('post-write poll tick', {
           poll_id: pollId,
@@ -1573,6 +1627,7 @@ export function useDecibel() {
           : positionsRef.current;
         const matchingPositions = targetPositions(nextPositions);
         const matchingOrders = targetOrders(ordersRef.current);
+        const matchingOpenOrders = targetOpenOrders(ordersRef.current);
         D.log('post-write poll observed state', {
           poll_id: pollId,
           mode,
@@ -1580,17 +1635,34 @@ export function useDecibel() {
           iteration: i,
           matching_positions: matchingPositions.length,
           matching_orders: matchingOrders.length,
+          matching_open_orders: matchingOpenOrders.length,
           expected_tpsl: expectedKinds,
           positions: matchingPositions.slice(0, 5).map(summarizeDecibelPositionForLog),
           orders: matchingOrders.slice(0, 5).map(summarizeDecibelOrderForLog),
         });
 
+        if (mode === 'order-open' && matchingPositions.length > 0) {
+          const removedFilled = clearFilledOptimisticOpenOrders({
+            symbol: target,
+            positions: matchingPositions,
+            reason: `post-write:${mode}`,
+          });
+          if (removedFilled > 0) {
+            D.log('post-write poll stop: open order filled into position', {
+              poll_id: pollId,
+              symbol: target || null,
+              iteration: i,
+              removed_filled: removedFilled,
+            });
+            return;
+          }
+        }
         if (mode === 'position-open' && matchingPositions.length > 0) {
           D.log('post-write poll stop: position found', { poll_id: pollId, symbol: target || null, iteration: i });
           return;
         }
-        if (mode === 'order-open' && matchingOrders.length > 0) {
-          D.log('post-write poll stop: order found', { poll_id: pollId, symbol: target || null, iteration: i });
+        if (mode === 'order-open' && matchingOpenOrders.some(o => !o?._optimistic || !o?._stale_in_latest_snapshot)) {
+          D.log('post-write poll stop: open order found', { poll_id: pollId, symbol: target || null, iteration: i });
           return;
         }
         if (mode === 'position-refresh' && i >= 3) {
@@ -1609,7 +1681,7 @@ export function useDecibel() {
       }
       D.log('post-write poll exhausted', { poll_id: pollId, mode, symbol: target || null });
     })();
-  }, [address, fetchAccount, fetchBalance, fetchOrders, fetchPositions]);
+  }, [address, clearFilledOptimisticOpenOrders, fetchAccount, fetchBalance, fetchOrders, fetchPositions]);
 
   // ───── Builder fee linkage ─────
   // We treat builder approvals as a one-shot on-chain cap, but require it to

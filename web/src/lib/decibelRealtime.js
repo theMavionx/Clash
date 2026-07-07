@@ -1,7 +1,7 @@
 import { getReadClient } from './decibel';
 
-const DECIBEL_REALTIME_WS_ENABLED = /^(1|true|yes)$/i.test(
-  String(import.meta.env?.VITE_DECIBEL_REALTIME_WS_ENABLED || '').trim(),
+const DECIBEL_REALTIME_WS_ENABLED = !/^(0|false|no|off)$/i.test(
+  String(import.meta.env?.VITE_DECIBEL_REALTIME_WS_ENABLED ?? 'true').trim(),
 );
 
 const emptySnapshot = {
@@ -70,6 +70,29 @@ function normalizeSubaccount(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function rowsFromPayload(payload, keys = []) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+  for (const key of keys) {
+    const value = payload[key];
+    if (Array.isArray(value)) return value;
+  }
+  if (Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload.data?.items)) return payload.data.items;
+  if (Array.isArray(payload.items)) return payload.items;
+  return [];
+}
+
+function firstFromPayload(payload, keys = []) {
+  if (!payload || typeof payload !== 'object') return payload || null;
+  for (const key of keys) {
+    const value = payload[key];
+    if (value && typeof value === 'object') return value;
+  }
+  if (payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data)) return payload.data;
+  return payload;
+}
+
 export function isDecibelRealtimeEnabled() {
   return DECIBEL_REALTIME_WS_ENABLED;
 }
@@ -117,7 +140,7 @@ export async function startDecibelRealtime({ subaccountAddr = '' } = {}) {
     if (!priceUnsub && read?.marketPrices?.subscribeAll) {
       logRealtime('subscribe prices');
       priceUnsub = read.marketPrices.subscribeAll((payload) => {
-        const rows = Array.isArray(payload?.prices) ? payload.prices : [];
+        const rows = rowsFromPayload(payload, ['prices', 'market_prices', 'marketPrices']);
         logRealtime('prices snapshot', { count: rows.length });
         emit({ status: 'open', prices: rows, pricesAt: now(), error: null });
       });
@@ -136,7 +159,7 @@ export async function startDecibelRealtime({ subaccountAddr = '' } = {}) {
       if (read?.userPositions?.subscribeByAddr) {
         logRealtime('subscribe positions', { subaccount: nextSub });
         pushUnsub(read.userPositions.subscribeByAddr(nextSub, (payload) => {
-          const positions = Array.isArray(payload?.positions) ? payload.positions : [];
+          const positions = rowsFromPayload(payload, ['positions', 'account_positions', 'accountPositions']);
           logRealtime('positions snapshot', { subaccount: nextSub, count: positions.length });
           emit({ status: 'open', positions, positionsAt: now(), error: null });
         }));
@@ -144,7 +167,7 @@ export async function startDecibelRealtime({ subaccountAddr = '' } = {}) {
       if (read?.userOpenOrders?.subscribeByAddr) {
         logRealtime('subscribe open orders', { subaccount: nextSub });
         pushUnsub(read.userOpenOrders.subscribeByAddr(nextSub, (payload) => {
-          const orders = Array.isArray(payload?.orders) ? payload.orders : [];
+          const orders = rowsFromPayload(payload, ['orders', 'open_orders', 'openOrders']);
           logRealtime('orders snapshot', { subaccount: nextSub, count: orders.length });
           emit({ status: 'open', orders, ordersAt: now(), error: null });
         }));
@@ -152,14 +175,15 @@ export async function startDecibelRealtime({ subaccountAddr = '' } = {}) {
       if (read?.userOrderHistory?.subscribeByAddr) {
         logRealtime('subscribe order history', { subaccount: nextSub });
         pushUnsub(read.userOrderHistory.subscribeByAddr(nextSub, (payload) => {
-          logRealtime('order history update', { subaccount: nextSub, has_order: !!(payload?.order || payload) });
-          emit({ status: 'open', orderUpdate: payload?.order || payload || null, orderUpdateAt: now(), error: null });
+          const order = firstFromPayload(payload, ['order', 'order_update', 'orderUpdate']);
+          logRealtime('order history update', { subaccount: nextSub, has_order: !!order });
+          emit({ status: 'open', orderUpdate: order, orderUpdateAt: now(), error: null });
         }));
       }
       if (read?.userTradeHistory?.subscribeByAddr) {
         logRealtime('subscribe trade history', { subaccount: nextSub });
         pushUnsub(read.userTradeHistory.subscribeByAddr(nextSub, (payload) => {
-          const trades = Array.isArray(payload?.trades) ? payload.trades : [];
+          const trades = rowsFromPayload(payload, ['trades', 'trade_history', 'tradeHistory', 'fills']);
           logRealtime('trade history update', { subaccount: nextSub, count: trades.length });
           emit({ status: 'open', trades, tradesAt: now(), error: null });
         }));

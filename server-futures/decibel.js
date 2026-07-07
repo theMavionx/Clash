@@ -995,11 +995,11 @@ async function fetchUserSubaccounts(ownerAddr) {
 async function fetchAccountPositions(subaccountAddr) {
   if (!subaccountAddr) return [];
   try {
-    const url = `${DECIBEL_HTTP}/api/v1/account_positions?account=${encodeURIComponent(subaccountAddr)}`;
-    const r = await fetch(url, { headers: authHeaders() });
-    if (!r.ok) return [];
-    const j = await r.json();
-    const list = Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : []);
+    const list = await fetchDecibelRows('account_positions', {
+      account: subaccountAddr,
+      include_deleted: 'false',
+      limit: 10,
+    });
     const markets = await fetchMarkets();
     const byAddr = new Map(markets.map(m => [String(m.market_addr || '').toLowerCase(), m]));
     return list.map(p => {

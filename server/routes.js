@@ -12306,7 +12306,7 @@ function _battleLogDisplayDuration(replayData, storedDuration) {
 
 // Get battle log — both attacks on player's base AND player's own attacks
 router.get('/battle-log', auth, (req, res) => {
-  const rows = db.db.prepare(`
+  const selectBattleLogRows = `
     SELECT r.id, r.attacker_id, r.defender_id, r.claimed_result, r.verified_result,
            r.loot_gold, r.loot_wood, r.loot_ore,
            r.sim_th_hp_pct, r.sim_buildings_destroyed, r.duration_sec,
@@ -12316,10 +12316,28 @@ router.get('/battle-log', auth, (req, res) => {
     FROM battle_replays r
     LEFT JOIN players pa ON pa.id = r.attacker_id
     LEFT JOIN players pd ON pd.id = r.defender_id
-    WHERE (r.defender_id = ? OR r.attacker_id = ?) AND r.verified_result = 'accepted'
+  `;
+  const validReplayFilter = `lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory')`;
+  const attackRows = db.db.prepare(`
+    ${selectBattleLogRows}
+    WHERE r.attacker_id = ? AND ${validReplayFilter}
+    ORDER BY r.created_at DESC, r.id DESC
+    LIMIT 50
+  `).all(req.player.id);
+  const defenseRows = db.db.prepare(`
+    ${selectBattleLogRows}
+    WHERE r.defender_id = ?
+      AND r.attacker_id != ?
+      AND ${validReplayFilter}
     ORDER BY r.created_at DESC, r.id DESC
     LIMIT 50
   `).all(req.player.id, req.player.id);
+
+  const rows = [...attackRows, ...defenseRows]
+    .sort((a, b) => {
+      const byDate = String(b.created_at || '').localeCompare(String(a.created_at || ''));
+      return byDate || (Number(b.id) - Number(a.id));
+    });
 
   res.json(rows.map(r => {
     const isAttacker = r.attacker_id === req.player.id;
