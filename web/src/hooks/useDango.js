@@ -10,6 +10,7 @@ import { ARBITRUM_CHAIN_ID } from '../lib/gmxConfig';
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_INTERVAL_MS = 30_000;
+const DANGO_DEPOSIT_URL = 'https://dango.exchange/bridge';
 const DANGO_ARBITRUM_SOURCE_CHAIN = Object.freeze({
   id: ARBITRUM_CHAIN_ID,
   key: 'arbitrum',
@@ -406,6 +407,12 @@ export function useDango() {
           params: { account: walletAddr, ...body },
         }),
       });
+      console.info('[useDango] prepared action', {
+        action,
+        label,
+        account: walletAddr,
+        message: prepared?.sign_doc?.message || null,
+      });
       if (action === 'deposit') setDepositStatus({ status: 'signing', amount: body?.amount });
       const credential = await signDangoTx({
         evm,
@@ -423,10 +430,17 @@ export function useDango() {
         headers: headers(),
         body: JSON.stringify({ signedTx }),
       });
+      console.info('[useDango] broadcast result', {
+        action,
+        label,
+        result,
+      });
       if (action === 'deposit') setDepositStatus({ status: 'confirming', amount: body?.amount, result });
       await fetchAccount();
       setTimeout(fetchAccount, 1200);
       setTimeout(fetchAccount, 3000);
+      setTimeout(fetchAccount, 6000);
+      setTimeout(fetchAccount, 10_000);
       return {
         success: true,
         submitted: true,
@@ -470,9 +484,8 @@ export function useDango() {
 
   const closePosition = useCallback((symbol, side, amount, pairId) => {
     const s = String(side || '').toLowerCase();
-    const closeSide = s === 'ask' || s === 'sell' || s === 'short' || s === 'close_long'
-      ? 'close_long'
-      : 'close_short';
+    const closesLong = s === 'bid' || s === 'buy' || s === 'long' || s === 'close_long';
+    const closeSide = closesLong ? 'close_long' : 'close_short';
     return submitDangoAction('place_order', {
       symbol,
       pairId,
@@ -527,6 +540,16 @@ export function useDango() {
 
   const depositToPacifica = useCallback(async (amount) => {
     const amountText = String(amount ?? '').trim();
+    if (!amountText) {
+      if (typeof window !== 'undefined') {
+        window.open(DANGO_DEPOSIT_URL, '_blank', 'noopener,noreferrer');
+      }
+      return {
+        success: true,
+        opened: true,
+        info: 'Opened Dango deposit.',
+      };
+    }
     setLoading(true);
     setError(null);
     try {

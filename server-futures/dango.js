@@ -479,6 +479,9 @@ function normalizePosition(pairId, row = {}, market = {}) {
   const inferredLeverage = initialMarginRatio > 0 ? 1 / initialMarginRatio : 1;
   return {
     symbol: symbolFromPairId(pairId),
+    dex: 'dango',
+    source: 'dango',
+    pnl_source: 'dango_position',
     pair_id: pairId,
     pair_index: pairId,
     side: size >= 0 ? 'bid' : 'ask',
@@ -492,6 +495,7 @@ function normalizePosition(pairId, row = {}, market = {}) {
     margin: String(num(firstValue(row, ['margin', 'position_margin', 'initial_margin']), initialMarginRatio > 0 ? notional * initialMarginRatio : 0)),
     leverage: String(num(firstValue(row, ['leverage']), inferredLeverage)),
     pnl_usd: String(num(firstValue(row, ['unrealized_pnl', 'unrealizedPnl', 'pnl']))),
+    unrealized_funding: String(num(firstValue(row, ['unrealized_funding', 'unrealizedFunding']))),
     realized_pnl: String(num(firstValue(row, ['realized_pnl', 'realizedPnl']))),
     is_isolated: false,
     market_addr: pairId,
