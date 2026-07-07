@@ -760,7 +760,8 @@ func _on_find_pressed() -> void:
 	if result.has("attacker_resources") and result.attacker_resources is Dictionary:
 		bs._apply_resources_from_server(result.attacker_resources)
 	enemy_info = result
-	_switch_to_enemy_island_after_sail(combat_warmup, true)
+	print("[BATTLE_ENTRY] switch_call elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
+	await _switch_to_enemy_island_after_sail(combat_warmup, true)
 
 func _on_revenge_pressed(source_battle_id: int) -> void:
 	if is_viewing_enemy or _find_in_progress:
@@ -850,7 +851,8 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	if result.has("attacker_resources") and result.attacker_resources is Dictionary:
 		bs._apply_resources_from_server(result.attacker_resources)
 	enemy_info = result
-	_switch_to_enemy_island_after_sail(combat_warmup, true)
+	print("[BATTLE_ENTRY] revenge_switch_call elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
+	await _switch_to_enemy_island_after_sail(combat_warmup, true)
 
 
 ## Animates all active ships sailing off-screen and saves their transforms

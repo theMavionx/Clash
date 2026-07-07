@@ -341,6 +341,17 @@ function dangoOneTapStorageKey(wallet) {
   return clean ? `${DANGO_ONE_TAP_STORAGE_PREFIX}${clean}` : '';
 }
 
+function resolveDangoRealtimeAccount(wallet, config = null) {
+  const localAccount = normalizeDangoAddress(wallet);
+  const linkedAccount = normalizeDangoAddress(config?.linked_account);
+  const resolvedAccount = normalizeDangoAddress(config?.resolved_account || config?.account);
+  if (localAccount && linkedAccount && localAccount === linkedAccount && resolvedAccount) {
+    return resolvedAccount;
+  }
+  if (localAccount) return localAccount;
+  return resolvedAccount || linkedAccount || '';
+}
+
 export function useDango() {
   const { dex } = useDex();
   const isActiveDex = dex === 'dango';
@@ -734,7 +745,7 @@ export function useDango() {
       cleanupTimers();
       let cfg = dangoConfigRef.current;
       if (!cfg?.graphql_ws_url) cfg = await fetchDangoConfig();
-      realtimeAccount = normalizeDangoAddress(cfg?.account || cfg?.resolved_account || walletAddr);
+      realtimeAccount = resolveDangoRealtimeAccount(walletAddr, cfg);
       realtimeAccountRef.current = realtimeAccount;
       const url = cfg?.graphql_ws_url;
       if (stopped || !url || !realtimeAccount) return;
@@ -792,6 +803,8 @@ export function useDango() {
           }, 25_000);
           console.info('[useDango] realtime ws subscribed', {
             linkedAccount: walletAddr,
+            configLinkedAccount: cfg?.linked_account || null,
+            configResolvedAccount: cfg?.resolved_account || null,
             account: realtimeAccount,
             interval: DANGO_QUERY_APP_BLOCK_INTERVAL,
           });
