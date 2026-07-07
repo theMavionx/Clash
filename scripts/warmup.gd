@@ -585,7 +585,6 @@ func _warmup_fire_dragon_breath_materials() -> void:
 
 	if OS.has_feature("web"):
 		_spawn_warmup_fire_dragon_cpu_particles(breath)
-		_spawn_warmup_fire_dragon_light()
 		return
 
 	var flame_particles := GPUParticles3D.new()

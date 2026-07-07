@@ -10,7 +10,6 @@ import { ARBITRUM_CHAIN_ID } from '../lib/gmxConfig';
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_INTERVAL_MS = 30_000;
-const POST_TX_REFRESH_DELAYS_MS = [700, 1500, 3000, 5000, 8000, 12_000, 18_000, 25_000, 35_000, 45_000];
 const DANGO_QUERY_APP_BLOCK_INTERVAL = 1;
 const DANGO_WS_RECONNECT_MS = 3000;
 const DANGO_PERPS_CONTRACT = '0x7065727073000000000000000000000000000000';
@@ -847,24 +846,6 @@ export function useDango() {
     applyRealtimeOrders,
   ]);
 
-  const schedulePostTxRefresh = useCallback((action, label) => {
-    POST_TX_REFRESH_DELAYS_MS.forEach(delay => {
-      setTimeout(() => {
-        fetchAccount()
-          .then(snapshot => {
-            console.info('[useDango] post-tx refresh', {
-              action,
-              label,
-              delay,
-              positions: snapshot?.positions?.length ?? null,
-              orders: snapshot?.orders?.length ?? null,
-            });
-          })
-          .catch(e => console.warn('[useDango] post-tx refresh failed', { action, label, delay, error: e?.message || String(e) }));
-      }, delay);
-    });
-  }, [fetchAccount]);
-
   const submitDangoAction = useCallback(async (action, body, label = action, meta = {}) => {
     if (!walletAddr) return { error: 'Connect a Dango/EVM wallet first' };
     const onPhase = typeof meta?.onPhase === 'function' ? meta.onPhase : null;
@@ -916,7 +897,6 @@ export function useDango() {
       if (action === 'deposit') setDepositStatus({ status: 'confirming', amount: body?.amount, result });
       onPhase?.('indexing');
       const snapshot = await fetchAccount();
-      schedulePostTxRefresh(action, label);
       return {
         success: true,
         submitted: true,
@@ -932,7 +912,7 @@ export function useDango() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, headers, evm, address, fetchAccount, schedulePostTxRefresh]);
+  }, [walletAddr, headers, evm, address, fetchAccount]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, _slippage = '0.5', leverage = 1, opts = {}) => (
     submitDangoAction('place_order', {

@@ -52,6 +52,8 @@ const FIRE_BREATH_MIN_LENGTH: float = 0.12
 const FIRE_BREATH_FLAME_PARTICLES: int = 46
 const FIRE_BREATH_TRAIL_PARTICLES: int = 16
 const FIRE_BREATH_POOL_SIZE: int = 4
+const FIRE_BREATH_WEB_PARTICLE_SCALE: float = 0.55
+const FIRE_BREATH_WEB_LIFETIME_SCALE: float = 0.82
 const FIRE_BREATH_LIGHT_ENERGY: float = 1.7
 const FIRE_BREATH_FLAME_LIFETIME_SCALE: float = 0.96
 const FIRE_BREATH_TRAIL_LIFETIME_SCALE: float = 0.56
@@ -77,8 +79,13 @@ var _hit_this_swing: bool = false
 var _breath_vfx_pool: Array = []
 var _breath_vfx_pool_ready: bool = false
 var _breath_vfx_pool_exhausted_warned: bool = false
+var _cached_fire_skeleton: Skeleton3D = null
+var _cached_fire_head_bone_idx: int = -2
 var player_troop_levels: Dictionary = {}
 var nft_rarity: String = "common"
+static var _shared_body_materials: Dictionary = {}
+static var _shared_fire_color_ramps: Dictionary = {}
+static var _shared_fire_color_ramp_textures: Dictionary = {}
 static var _shared_fire_particle_materials: Dictionary = {}
 
 
@@ -392,17 +399,20 @@ func _make_fire_breath_vfx_slot(root_parent: Node) -> Dictionary:
 		use_cpu_particles
 	)
 
-	var mouth_light := OmniLight3D.new()
-	mouth_light.name = "FireDragonMouthLight"
-	mouth_light.light_color = Color(1.0, 0.84, 0.18)
-	mouth_light.light_energy = 0.0
-	holder.add_child(mouth_light)
+	var mouth_light: OmniLight3D = null
+	var impact_light: OmniLight3D = null
+	if _use_fire_breath_lights():
+		mouth_light = OmniLight3D.new()
+		mouth_light.name = "FireDragonMouthLight"
+		mouth_light.light_color = Color(1.0, 0.84, 0.18)
+		mouth_light.light_energy = 0.0
+		holder.add_child(mouth_light)
 
-	var impact_light := OmniLight3D.new()
-	impact_light.name = "FireDragonImpactLight"
-	impact_light.light_color = Color(1.0, 0.78, 0.12)
-	impact_light.light_energy = 0.0
-	holder.add_child(impact_light)
+		impact_light = OmniLight3D.new()
+		impact_light.name = "FireDragonImpactLight"
+		impact_light.light_color = Color(1.0, 0.78, 0.12)
+		impact_light.light_energy = 0.0
+		holder.add_child(impact_light)
 
 	var slot := {
 		"holder": holder,
@@ -465,6 +475,10 @@ func _use_cpu_fire_particles() -> bool:
 	return OS.has_feature("web")
 
 
+func _use_fire_breath_lights() -> bool:
+	return not OS.has_feature("web")
+
+
 func _make_fire_particle_entry(holder: Node3D, node_name: String, texture: Texture2D, color: Color, use_cpu_particles: bool) -> Dictionary:
 	var mesh := QuadMesh.new()
 	mesh.material = _get_fire_particle_material(texture, color)
@@ -504,11 +518,13 @@ func _configure_flame_particle_entry(entry: Dictionary, mouth_pos: Vector3, dir:
 	var velocity_min: float = maxf(0.62, length / maxf(FIRE_BREATH_DURATION, 0.1) * 0.82)
 	var velocity_max: float = maxf(0.95, length / maxf(FIRE_BREATH_DURATION, 0.1) * 1.12)
 	var transform := Transform3D(Basis(side, dir, normal).orthonormalized(), mouth_pos)
+	var amount := _effective_fire_particle_amount(FIRE_BREATH_FLAME_PARTICLES)
+	var lifetime := _effective_fire_particle_lifetime(FIRE_BREATH_DURATION * FIRE_BREATH_FLAME_LIFETIME_SCALE)
 	if str(entry.get("backend", "")) == "cpu":
 		var cpu := entry.get("node") as CPUParticles3D
-		_configure_cpu_fire_particles(cpu, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_FLAME_LIFETIME_SCALE, transform, Color(1.0, 0.92, 0.22, 0.84), 5.2, velocity_min, velocity_max, width * 0.045, Vector3.ZERO, 0.32, 1.00)
+		_configure_cpu_fire_particles(cpu, amount, lifetime, transform, Color(1.0, 0.92, 0.22, 0.84), 5.2, velocity_min, velocity_max, width * 0.045, Vector3.ZERO, 0.32, 1.00)
 		return
-	_configure_gpu_fire_particles(entry, FIRE_BREATH_FLAME_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_FLAME_LIFETIME_SCALE, transform, length, Color(1.0, 0.92, 0.22, 0.84), 5.2, velocity_min, velocity_max, width * 0.045, Vector3.ZERO, 0.32, 1.00)
+	_configure_gpu_fire_particles(entry, amount, lifetime, transform, length, Color(1.0, 0.92, 0.22, 0.84), 5.2, velocity_min, velocity_max, width * 0.045, Vector3.ZERO, 0.32, 1.00)
 
 
 func _hide_fire_particle_entry(entry: Dictionary) -> void:
@@ -530,11 +546,25 @@ func _configure_trail_particle_entry(entry: Dictionary, mouth_pos: Vector3, dir:
 	var origin := mouth_pos + dir * (length * 0.64)
 	var transform := Transform3D(Basis(side, dir, normal).orthonormalized(), origin)
 	var box_extents := Vector3(width * 0.14, length * 0.34, width * 0.10)
+	var amount := _effective_fire_particle_amount(FIRE_BREATH_TRAIL_PARTICLES)
+	var lifetime := _effective_fire_particle_lifetime(FIRE_BREATH_DURATION * FIRE_BREATH_TRAIL_LIFETIME_SCALE)
 	if str(entry.get("backend", "")) == "cpu":
 		var cpu := entry.get("node") as CPUParticles3D
-		_configure_cpu_fire_particles(cpu, FIRE_BREATH_TRAIL_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_TRAIL_LIFETIME_SCALE, transform, Color(1.0, 0.84, 0.14, 0.40), 10.0, 0.26, 0.50, 0.0, box_extents, 0.24, 0.70)
+		_configure_cpu_fire_particles(cpu, amount, lifetime, transform, Color(1.0, 0.84, 0.14, 0.40), 10.0, 0.26, 0.50, 0.0, box_extents, 0.24, 0.70)
 		return
-	_configure_gpu_fire_particles(entry, FIRE_BREATH_TRAIL_PARTICLES, FIRE_BREATH_DURATION * FIRE_BREATH_TRAIL_LIFETIME_SCALE, transform, length, Color(1.0, 0.84, 0.14, 0.40), 10.0, 0.26, 0.50, 0.0, box_extents, 0.24, 0.70)
+	_configure_gpu_fire_particles(entry, amount, lifetime, transform, length, Color(1.0, 0.84, 0.14, 0.40), 10.0, 0.26, 0.50, 0.0, box_extents, 0.24, 0.70)
+
+
+func _effective_fire_particle_amount(base_amount: int) -> int:
+	if OS.has_feature("web"):
+		return maxi(8, int(ceil(float(base_amount) * FIRE_BREATH_WEB_PARTICLE_SCALE)))
+	return base_amount
+
+
+func _effective_fire_particle_lifetime(base_lifetime: float) -> float:
+	if OS.has_feature("web"):
+		return base_lifetime * FIRE_BREATH_WEB_LIFETIME_SCALE
+	return base_lifetime
 
 
 func _configure_gpu_fire_particles(entry: Dictionary, amount: int, lifetime: float, transform: Transform3D, length: float, color: Color, spread: float, velocity_min: float, velocity_max: float, sphere_radius: float, box_extents: Vector3, scale_min: float, scale_max: float) -> void:
@@ -556,7 +586,7 @@ func _configure_gpu_fire_particles(entry: Dictionary, amount: int, lifetime: flo
 	particles.visibility_aabb = AABB(Vector3(-length, -length, -length), Vector3(length * 2.0, length * 2.0, length * 2.0))
 	process.direction = Vector3(0.0, 1.0, 0.0)
 	process.color = color
-	process.color_ramp = _make_fire_color_ramp_texture(color)
+	process.color_ramp = _get_fire_color_ramp_texture(color)
 	process.spread = spread
 	process.gravity = Vector3.ZERO
 	process.initial_velocity_min = velocity_min
@@ -597,7 +627,7 @@ func _configure_cpu_fire_particles(particles: CPUParticles3D, amount: int, lifet
 	particles.local_coords = true
 	particles.direction = Vector3(0.0, 1.0, 0.0)
 	particles.color = color
-	particles.color_ramp = _make_fire_color_ramp(color)
+	particles.color_ramp = _get_fire_color_ramp(color)
 	particles.spread = spread
 	particles.gravity = Vector3.ZERO
 	particles.initial_velocity_min = velocity_min
@@ -626,6 +656,8 @@ func _configure_cpu_fire_particles(particles: CPUParticles3D, amount: int, lifet
 
 
 func _configure_breath_lights_for_slot(slot: Dictionary, mouth_pos: Vector3, target_pos: Vector3, length: float) -> void:
+	if not _use_fire_breath_lights():
+		return
 	var mouth_light := slot.get("mouth_light") as OmniLight3D
 	var impact_light := slot.get("impact_light") as OmniLight3D
 	if not is_instance_valid(mouth_light) or not is_instance_valid(impact_light):
@@ -697,7 +729,11 @@ func _make_fire_particle_material(texture: Texture2D, color: Color, additive: bo
 	return mat
 
 
-func _make_fire_color_ramp(color: Color) -> Gradient:
+func _make_fire_color_key(color: Color) -> String:
+	return "%.3f|%.3f|%.3f|%.3f" % [color.r, color.g, color.b, color.a]
+
+
+func _create_fire_color_ramp(color: Color) -> Gradient:
 	var gradient := Gradient.new()
 	gradient.set_offset(0, 0.0)
 	gradient.set_color(0, color)
@@ -706,9 +742,20 @@ func _make_fire_color_ramp(color: Color) -> Gradient:
 	return gradient
 
 
-func _make_fire_color_ramp_texture(color: Color) -> GradientTexture1D:
+func _get_fire_color_ramp(color: Color) -> Gradient:
+	var key := _make_fire_color_key(color)
+	if not _shared_fire_color_ramps.has(key):
+		_shared_fire_color_ramps[key] = _create_fire_color_ramp(color)
+	return _shared_fire_color_ramps[key] as Gradient
+
+
+func _get_fire_color_ramp_texture(color: Color) -> GradientTexture1D:
+	var key := _make_fire_color_key(color)
+	if _shared_fire_color_ramp_textures.has(key):
+		return _shared_fire_color_ramp_textures[key] as GradientTexture1D
 	var texture := GradientTexture1D.new()
-	texture.gradient = _make_fire_color_ramp(color)
+	texture.gradient = _get_fire_color_ramp(color)
+	_shared_fire_color_ramp_textures[key] = texture
 	return texture
 
 
@@ -731,13 +778,29 @@ func _get_fire_breath_target_position() -> Vector3:
 
 
 func _get_mouth_position(fallback_dir: Vector3) -> Vector3:
-	var skeleton: Skeleton3D = _find_skeleton(self)
+	var skeleton: Skeleton3D = _get_cached_fire_skeleton()
 	if skeleton != null:
-		var head_idx: int = _find_head_bone_index(skeleton)
+		var head_idx: int = _get_cached_head_bone_index(skeleton)
 		if head_idx >= 0:
 			var head_pose: Transform3D = skeleton.get_bone_global_pose(head_idx)
 			return skeleton.global_transform * head_pose.origin + Vector3(0.0, FIRE_BREATH_MOUTH_Y_OFFSET, 0.0) + fallback_dir.normalized() * FIRE_BREATH_MOUTH_FORWARD_OFFSET
 	return global_position + Vector3(0.0, 0.08 + FIRE_BREATH_MOUTH_Y_OFFSET, 0.0) + fallback_dir.normalized() * 0.18
+
+
+func _get_cached_fire_skeleton() -> Skeleton3D:
+	if is_instance_valid(_cached_fire_skeleton):
+		return _cached_fire_skeleton
+	var model := get_node_or_null("Model")
+	_cached_fire_skeleton = _find_skeleton(model if model != null else self)
+	_cached_fire_head_bone_idx = -2
+	return _cached_fire_skeleton
+
+
+func _get_cached_head_bone_index(skeleton: Skeleton3D) -> int:
+	if _cached_fire_head_bone_idx != -2:
+		return _cached_fire_head_bone_idx
+	_cached_fire_head_bone_idx = _find_head_bone_index(skeleton)
+	return _cached_fire_head_bone_idx
 
 
 func _find_head_bone_index(skeleton: Skeleton3D) -> int:
@@ -804,6 +867,8 @@ func _play_dragon_animation(animation_name: String, force_restart: bool = false)
 	animated_model.name = "Model"
 	add_child(animated_model)
 	move_child(animated_model, 0)
+	_cached_fire_skeleton = null
+	_cached_fire_head_bone_idx = -2
 
 	_current_dragon_animation = animation_name
 	_apply_skin()
@@ -844,11 +909,19 @@ func _play_first_imported_clip(player: AnimationPlayer, animation_name: String, 
 
 
 func _apply_skin() -> void:
+	_assign_material_recursive(self, _get_body_material_for_skin(skin))
+
+
+func _get_body_material_for_skin(skin_value: DragonSkin) -> StandardMaterial3D:
+	var key := str(int(skin_value))
+	if _shared_body_materials.has(key):
+		return _shared_body_materials[key] as StandardMaterial3D
 	var body_material := StandardMaterial3D.new()
-	body_material.albedo_texture = _texture_for_skin(skin)
+	body_material.albedo_texture = _texture_for_skin(skin_value)
 	body_material.roughness = 0.8
 	body_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_assign_material_recursive(self, body_material)
+	_shared_body_materials[key] = body_material
+	return body_material
 
 
 func _texture_for_skin(skin_value: DragonSkin) -> Texture2D:
