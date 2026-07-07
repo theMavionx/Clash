@@ -4,7 +4,12 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
-import { signDangoTx } from '../lib/dangoBrowserSigner';
+import {
+  createDangoSession,
+  dangoSessionIsUsable,
+  signDangoSessionTx,
+  signDangoTx,
+} from '../lib/dangoBrowserSigner';
 import { ARBITRUM_CHAIN_ID } from '../lib/gmxConfig';
 
 const FUTURES_API = '/api/futures';
@@ -12,6 +17,7 @@ const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_INTERVAL_MS = 30_000;
 const DANGO_QUERY_APP_BLOCK_INTERVAL = 1;
 const DANGO_WS_RECONNECT_MS = 3000;
+const DANGO_WS_QUERY_ERROR_BACKOFF_MS = 30_000;
 const DANGO_PERPS_CONTRACT = '0x7065727073000000000000000000000000000000';
 const DANGO_QUERY_APP_SUBSCRIPTION = `
   subscription QueryAppSubscription($request: GrugQueryInput!, $interval: Int! = 10) {
@@ -115,6 +121,25 @@ function marketByPairId(markets) {
 function unwrapDangoWasmSmart(response) {
   const root = response?.wasm_smart ?? response?.wasmSmart ?? response?.response?.wasm_smart ?? response?.response?.wasmSmart ?? response;
   return root && typeof root === 'object' ? root : {};
+}
+
+function compactDangoGraphqlErrors(error) {
+  const list = Array.isArray(error) ? error : [error];
+  return list.filter(Boolean).map((item) => {
+    if (typeof item === 'string') return item;
+    const message = item?.message || item?.error || item?.reason || item?.extensions?.message || '';
+    const code = item?.extensions?.code || item?.code || '';
+    const path = Array.isArray(item?.path) ? item.path.join('.') : item?.path || '';
+    return [code, path, message].filter(Boolean).join(' | ') || JSON.stringify(item);
+  });
+}
+
+function stringifyDangoGraphqlErrors(error) {
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }
 
 function normalizeRealtimeAccount(address, state = {}) {
@@ -341,6 +366,32 @@ function dangoOneTapStorageKey(wallet) {
   return clean ? `${DANGO_ONE_TAP_STORAGE_PREFIX}${clean}` : '';
 }
 
+function loadStoredDangoSession(wallet) {
+  const key = dangoOneTapStorageKey(wallet);
+  if (!key || typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const session = JSON.parse(raw);
+    if (dangoSessionIsUsable(session)) return session;
+    localStorage.removeItem(key);
+  } catch {
+    try { localStorage.removeItem(key); } catch {}
+  }
+  return null;
+}
+
+function saveStoredDangoSession(wallet, session) {
+  const key = dangoOneTapStorageKey(wallet);
+  if (!key || typeof localStorage === 'undefined') return false;
+  if (!session) {
+    localStorage.removeItem(key);
+    return true;
+  }
+  localStorage.setItem(key, JSON.stringify(session));
+  return true;
+}
+
 function resolveDangoRealtimeAccount(wallet, config = null) {
   const localAccount = normalizeDangoAddress(wallet);
   const linkedAccount = normalizeDangoAddress(config?.linked_account);
@@ -380,7 +431,8 @@ export function useDango() {
   const [bridgeSourceBalances, setBridgeSourceBalances] = useState({});
   const [bridgeSourceBalanceStatus, setBridgeSourceBalanceStatus] = useState({});
   const [bridgeDepositSourceChainId, setBridgeDepositSourceChainId] = useState(DANGO_ARBITRUM_SOURCE_CHAIN.id);
-  const [oneTapEnabled, setOneTapEnabled] = useState(false);
+  const [dangoSession, setDangoSession] = useState(null);
+  const oneTapEnabled = dangoSessionIsUsable(dangoSession);
 
   const claimGoldRef = useRef(null);
   const marketsRef = useRef([]);
@@ -389,6 +441,8 @@ export function useDango() {
   const realtimeLimitOrdersRef = useRef([]);
   const realtimeConditionalOrdersRef = useRef([]);
   const realtimeWsRef = useRef(null);
+  const realtimeQueryErrorsRef = useRef({});
+  const realtimeBackoffUntilRef = useRef(0);
 
   useEffect(() => {
     marketsRef.current = markets;
@@ -399,17 +453,8 @@ export function useDango() {
   }, [dangoConfig]);
 
   useEffect(() => {
-    const key = dangoOneTapStorageKey(walletAddr);
-    if (!key || typeof localStorage === 'undefined') {
-      setOneTapEnabled(false);
-      return;
-    }
-    try {
-      setOneTapEnabled(localStorage.getItem(key) === '1');
-    } catch {
-      setOneTapEnabled(false);
-    }
-  }, [walletAddr]);
+    setDangoSession(loadStoredDangoSession(sourceWalletAddr || walletAddr));
+  }, [walletAddr, sourceWalletAddr]);
 
   const headers = useCallback((extra = {}) => {
     const out = {
@@ -427,17 +472,26 @@ export function useDango() {
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
 
   const setOneTapTradingEnabled = useCallback(async (nextEnabled = true) => {
-    const key = dangoOneTapStorageKey(walletAddr);
-    if (!key) return { error: 'Connect a Dango/EVM wallet first' };
+    const owner = sourceWalletAddr || walletAddr;
+    if (!owner) return { error: 'Connect a Dango/EVM wallet first' };
     try {
-      if (nextEnabled) localStorage.setItem(key, '1');
-      else localStorage.removeItem(key);
-      setOneTapEnabled(!!nextEnabled);
-      return { success: true, enabled: !!nextEnabled };
+      if (!nextEnabled) {
+        saveStoredDangoSession(owner, null);
+        setDangoSession(null);
+        return { success: true, enabled: false };
+      }
+      const session = await createDangoSession({
+        evm,
+        account: owner,
+        chainId: dangoConfigRef.current?.chain_id || 'dango-1',
+      });
+      saveStoredDangoSession(owner, session);
+      setDangoSession(session);
+      return { success: true, enabled: true, signer: session.publicKey, expireAt: session.sessionInfo?.expireAt || null };
     } catch (e) {
-      return { error: e?.message || 'Dango one tap preference could not be saved' };
+      return { error: e?.message || 'Dango one tap session could not be created' };
     }
-  }, [walletAddr]);
+  }, [walletAddr, sourceWalletAddr, evm]);
 
   const authedGet = useCallback((path) => fetchJson(path, {
     headers: headers({ 'Content-Type': undefined }),
@@ -743,6 +797,11 @@ export function useDango() {
 
     const connect = async () => {
       cleanupTimers();
+      const backoffMs = Math.max(0, realtimeBackoffUntilRef.current - Date.now());
+      if (backoffMs > 0) {
+        reconnectTimer = setTimeout(connect, backoffMs);
+        return;
+      }
       let cfg = dangoConfigRef.current;
       if (!cfg?.graphql_ws_url) cfg = await fetchDangoConfig();
       realtimeAccount = resolveDangoRealtimeAccount(walletAddr, cfg);
@@ -794,6 +853,7 @@ export function useDango() {
         try { message = JSON.parse(event.data); } catch { return; }
         const type = String(message?.type || '');
         if (type === 'connection_ack') {
+          realtimeQueryErrorsRef.current = {};
           sendSubscription('dango-user-state', userStateRequest);
           sendSubscription('dango-orders', ordersRequest);
           pingTimer = setInterval(() => {
@@ -811,12 +871,43 @@ export function useDango() {
           return;
         }
         if (type === 'next') {
-          if (message?.payload?.errors || message?.payload?.error) {
+          const queryError = message?.payload?.errors || message?.payload?.error || null;
+          if (queryError) {
+            const id = String(message?.id || 'unknown');
+            const errorMessages = compactDangoGraphqlErrors(queryError);
+            const nextErrorCounts = {
+              ...(realtimeQueryErrorsRef.current || {}),
+              [id]: Number(realtimeQueryErrorsRef.current?.[id] || 0) + 1,
+            };
+            realtimeQueryErrorsRef.current = nextErrorCounts;
             console.warn('[useDango] realtime ws query error', {
-              id: message?.id || null,
+              id,
               account: realtimeAccount,
-              errors: message.payload.errors || message.payload.error,
+              errors: queryError,
+              errorMessages,
+              errorJson: stringifyDangoGraphqlErrors(queryError),
+              errorCount: nextErrorCounts[id],
+              linkedAccount: walletAddr,
+              sourceWallet: sourceWalletAddr,
+              configLinkedAccount: cfg?.linked_account || null,
+              configResolvedAccount: cfg?.resolved_account || null,
             });
+            if (nextErrorCounts[id] === 1 || nextErrorCounts[id] % 3 === 0) {
+              fetchAccount().catch(e => {
+                console.warn('[useDango] REST fallback after realtime query error failed', e?.message || e);
+              });
+            }
+            if (nextErrorCounts[id] >= 3) {
+              realtimeBackoffUntilRef.current = Date.now() + DANGO_WS_QUERY_ERROR_BACKOFF_MS;
+              try { ws?.close?.(1013, 'query errors'); } catch {}
+              return;
+            }
+            return;
+          } else if (message?.id) {
+            realtimeQueryErrorsRef.current = {
+              ...(realtimeQueryErrorsRef.current || {}),
+              [String(message.id)]: 0,
+            };
           }
           handleNext(message);
           return;
@@ -853,10 +944,12 @@ export function useDango() {
   }, [
     isActiveDex,
     walletAddr,
+    sourceWalletAddr,
     token,
     fetchDangoConfig,
     applyRealtimeUserState,
     applyRealtimeOrders,
+    fetchAccount,
   ]);
 
   const submitDangoAction = useCallback(async (action, body, label = action, meta = {}) => {
@@ -867,6 +960,11 @@ export function useDango() {
     try {
       onPhase?.('preparing');
       if (action === 'deposit') setDepositStatus({ status: 'preparing', amount: body?.amount });
+      const activeSession = dangoSessionIsUsable(dangoSession) ? dangoSession : null;
+      if (dangoSession && !activeSession) {
+        saveStoredDangoSession(sourceWalletAddr || walletAddr, null);
+        setDangoSession(null);
+      }
       const prepared = await fetchJson(`${FUTURES_API}/dango/tx/prepare?dex=dango`, {
         method: 'POST',
         headers: headers(),
@@ -874,6 +972,7 @@ export function useDango() {
           action,
           account: walletAddr,
           linkedAccount: address || walletAddr,
+          ...(activeSession?.sessionInfo?.sessionKey ? { sessionKey: activeSession.sessionInfo.sessionKey } : {}),
           params: { account: walletAddr, ...body },
         }),
       });
@@ -881,16 +980,21 @@ export function useDango() {
         action,
         label,
         account: walletAddr,
+        signerMode: activeSession ? 'session' : 'wallet_eip712',
+        sessionKey: activeSession?.sessionInfo?.sessionKey ? `${activeSession.sessionInfo.sessionKey.slice(0, 8)}...` : null,
+        nonceSource: prepared?.nonce_source || null,
         message: prepared?.sign_doc?.message || null,
       });
       if (action === 'deposit') setDepositStatus({ status: 'signing', amount: body?.amount });
       onPhase?.('signing');
-      const credential = await signDangoTx({
-        evm,
-        account: address || walletAddr,
-        signDoc: prepared?.sign_doc,
-        keyHash: prepared?.key_hash || '',
-      });
+      const credential = activeSession
+        ? await signDangoSessionTx({ session: activeSession, signDoc: prepared?.sign_doc })
+        : await signDangoTx({
+            evm,
+            account: address || walletAddr,
+            signDoc: prepared?.sign_doc,
+            keyHash: prepared?.key_hash || '',
+          });
       if (action === 'deposit') setDepositStatus({ status: 'broadcasting', amount: body?.amount });
       onPhase?.('confirming');
       const signedTx = {
@@ -925,7 +1029,7 @@ export function useDango() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, headers, evm, address, fetchAccount]);
+  }, [walletAddr, sourceWalletAddr, headers, evm, address, fetchAccount, dangoSession]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, _slippage = '0.5', leverage = 1, opts = {}) => (
     submitDangoAction('place_order', {
@@ -1190,11 +1294,13 @@ export function useDango() {
       enabled: oneTapEnabled,
       approved: oneTapEnabled,
       required: false,
-      signer: sourceWalletAddr || walletAddr || null,
-      mode: 'browser_eip712',
+      signer: dangoSession?.publicKey || dangoSession?.sessionInfo?.sessionKey || null,
+      owner: sourceWalletAddr || walletAddr || null,
+      expiresAt: dangoSession?.sessionInfo?.expireAt || null,
+      mode: oneTapEnabled ? 'dango_session' : 'wallet_eip712',
       note: oneTapEnabled
-        ? 'Browser signing session is enabled for Dango.'
-        : 'Enable browser signing session for Dango.',
+        ? 'Browser session key signs Dango orders.'
+        : 'Enable a browser session key for Dango orders.',
     },
     setOneTapTradingEnabled,
     placeMarketOrder,
@@ -1215,7 +1321,7 @@ export function useDango() {
     walletAddr, account, positions, orders, markets, prices, walletUsdc, loading, error,
     clearError, dataReady, accountReady, goldEarned, clearGoldEarned, depositStatus,
     bridgeSourceBalances, bridgeSourceBalanceStatus, bridgeDepositSourceChainId,
-    registered, sourceWalletAddr, oneTapEnabled, setOneTapTradingEnabled,
+    registered, sourceWalletAddr, dangoSession, oneTapEnabled, setOneTapTradingEnabled,
     placeMarketOrder, placeLimitOrder, closePosition, cancelOrder, setTpsl,
     depositToPacifica, depositInternalMargin, withdraw, claimGold, refresh,
   ]);

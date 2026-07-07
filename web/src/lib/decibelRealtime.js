@@ -1,10 +1,9 @@
 import { getReadClient } from './decibel';
 
-const DECIBEL_REALTIME_WS_ENABLED = !/^(0|false|no|off)$/i.test(
-  // Decibel's public WS endpoint currently rejects browser connections on
-  // production, so keep realtime opt-in and fall back to REST polling by default.
-  String(import.meta.env?.VITE_DECIBEL_REALTIME_WS_ENABLED ?? 'false').trim(),
-);
+// Decibel's public WS currently fails from production browsers and can amplify
+// Aptos/Decibel quota usage through SDK subscriptions. Keep it hard-disabled;
+// the hook uses bounded REST polling and post-write refreshes instead.
+const DECIBEL_REALTIME_WS_ENABLED = false;
 
 const emptySnapshot = {
   status: 'idle',

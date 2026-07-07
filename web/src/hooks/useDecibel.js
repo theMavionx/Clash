@@ -17,7 +17,7 @@ import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import {
-  BUILDER_ADDR, BUILDER_FEE_BPS, isBuilderConfigured,
+  BUILDER_ADDR, BUILDER_SUBACCOUNT_ADDR, BUILDER_FEE_BPS, isBuilderConfigured,
   getReadClient,
   amountToChainUnits, getPrimarySubaccountAddr,
   DECIBEL_PACKAGE_MAINNET, DECIBEL_USDC_MAINNET,
@@ -1069,6 +1069,11 @@ export function useDecibel() {
     if (!isBuilderConfigured()) {
       D.log('resolveBuilderSubaccount: builder not configured');
       return null;
+    }
+    if (BUILDER_SUBACCOUNT_ADDR) {
+      builderSubRef.current = BUILDER_SUBACCOUNT_ADDR;
+      D.log('resolveBuilderSubaccount: configured subaccount cache hit', BUILDER_SUBACCOUNT_ADDR);
+      return BUILDER_SUBACCOUNT_ADDR;
     }
     D.log('resolveBuilderSubaccount: resolving for', BUILDER_ADDR);
     try {

@@ -24,6 +24,7 @@
 // (consumer-side), NOT builder addresses — `placeOrder` validates this
 // on-chain and reverts with "invalid address" if you pass a short code.
 export const BUILDER_ADDR = '0xc82aea3965cd4f0731baf1e9a28cea65b0697911aea346577e6488d542653332';
+export const BUILDER_SUBACCOUNT_ADDR = '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
 
 // 1 basis point = 0.01%. Per builder agreement / user request. Must
 // match DECIBEL_BUILDER_FEE_BPS on the server (server-futures/routes.js
@@ -76,14 +77,7 @@ const APTOS_GAS_STATION_API_KEY = (typeof import.meta !== 'undefined' && import.
 // at `api.mainnet.aptoslabs.com/decibel`, NOT a `decibel.trade` subdomain.
 // The marketing site uses decibel.trade but the API is hosted by Aptos.
 const DECIBEL_HTTP = 'https://api.mainnet.aptoslabs.com/decibel';
-const DECIBEL_WS = 'wss://api.mainnet.aptoslabs.com/decibel/ws';
-const DECIBEL_SDK_WS_ENABLED = /^(1|true|yes|on)$/i.test(
-  String(
-    import.meta.env?.VITE_DECIBEL_SDK_WS_ENABLED
-    ?? import.meta.env?.VITE_DECIBEL_REALTIME_WS_ENABLED
-    ?? 'false'
-  ).trim(),
-);
+const DECIBEL_SDK_WS_ENABLED = false;
 
 // Decibel package address on Aptos mainnet. Verified against the SDK's
 // shipped `MAINNET_CONFIG` (constants.js) — same value the SDK derives the
@@ -127,7 +121,6 @@ async function _buildConfig() {
     fullnodeUrl: APTOS_FULLNODE,
     tradingHttpUrl: DECIBEL_HTTP,
     chainId: APTOS_CHAIN_ID,
-    ...(DECIBEL_SDK_WS_ENABLED ? { tradingWsUrl: DECIBEL_WS } : {}),
     ...(APTOS_GAS_STATION_API_KEY ? { gasStationApiKey: APTOS_GAS_STATION_API_KEY } : {}),
   };
   if (!DECIBEL_SDK_WS_ENABLED) {

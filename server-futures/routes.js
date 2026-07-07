@@ -2756,9 +2756,11 @@ router.post('/dango/tx/prepare', auth, async (req, res) => {
     const account = dango.normalizeDangoAddress(body.account || linkedAccount);
     const action = body.action || body.intent || '';
     const params = body.params && typeof body.params === 'object' ? body.params : body;
+    const sessionKey = String(body.sessionKey || body.session_key || params.sessionKey || params.session_key || '').trim();
     const prepared = await dango.prepareSignedIntent({
       account,
       linkedAccount,
+      sessionKey,
       action,
       body: params,
     });

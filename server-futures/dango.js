@@ -186,6 +186,25 @@ async function fetchAccountSeenNonces(address) {
   return Array.isArray(nonces) ? nonces.map(Number).filter(Number.isFinite) : [];
 }
 
+async function fetchAccountSessionSeenNonces(address, sessionKey) {
+  const account = normalizeDangoAddress(address);
+  const key = String(sessionKey || '').trim();
+  if (!account) throw new Error('Dango account address required');
+  if (!key) return { next: null, nonces: [], standardNonces: [] };
+  const nonces = await queryApp({ session_seen_nonces: { session_key: key } }, { contract: account }).catch((e) => {
+    if (/data not found|not found|no such/i.test(e?.message || '')) return [];
+    throw e;
+  });
+  const clean = Array.isArray(nonces) ? nonces.map(Number).filter(Number.isFinite) : [];
+  if (clean.length) return { next: nextNonce(clean), nonces: clean, standardNonces: [] };
+  const standardNonces = await fetchAccountSeenNonces(account);
+  return {
+    next: nextNonce(standardNonces),
+    nonces: clean,
+    standardNonces,
+  };
+}
+
 function nextNonce(nonces = []) {
   if (!Array.isArray(nonces) || !nonces.length) return 0;
   return Math.max(...nonces.map(Number).filter(Number.isFinite), -1) + 1;
@@ -1278,16 +1297,19 @@ function intentFromAction(action, body = {}) {
   throw err;
 }
 
-async function prepareSignedIntent({ account, linkedAccount = '', action, body = {}, gasScale = 1.3 } = {}) {
+async function prepareSignedIntent({ account, linkedAccount = '', sessionKey = '', action, body = {}, gasScale = 1.3 } = {}) {
   const sender = await resolveAccountAddress(account || linkedAccount || body.account);
   if (!sender) throw new Error('Dango account address required');
   const config = await fetchAppConfig();
   const accountInfo = await fetchAccountInfo(sender);
-  const seenNonces = await fetchAccountSeenNonces(sender);
+  const cleanSessionKey = String(sessionKey || body.sessionKey || body.session_key || '').trim();
+  const nonceState = cleanSessionKey
+    ? await fetchAccountSessionSeenNonces(sender, cleanSessionKey)
+    : { next: null, nonces: await fetchAccountSeenNonces(sender), standardNonces: [] };
   const metadata = {
     chain_id: CHAIN_ID,
     user_index: accountInfo.owner,
-    nonce: nextNonce(seenNonces),
+    nonce: Number.isFinite(Number(nonceState.next)) ? Number(nonceState.next) : nextNonce(nonceState.nonces),
   };
   const intent = intentFromAction(action, body);
   const message = executeMessage(intent.message, intent.funds || {});
@@ -1314,6 +1336,8 @@ async function prepareSignedIntent({ account, linkedAccount = '', action, body =
     account: sender,
     sender,
     key_hash: linkedAccount ? ethereumKeyHash(linkedAccount) : '',
+    session_key: cleanSessionKey || '',
+    nonce_source: cleanSessionKey ? 'session' : 'standard',
     perps_contract: config.addresses.perps,
     unsigned_tx: { ...unsignedTx, gasLimit },
     sign_doc: signDoc,

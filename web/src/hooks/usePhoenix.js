@@ -4346,6 +4346,86 @@ export function usePhoenix() {
     }
   }, [refreshTraderState]);
 
+  const findPhoenixPositionForTpsl = useCallback((phx, requestedPositionSide) => {
+    const livePositions = Array.isArray(positionsRef.current) ? positionsRef.current : [];
+    const strictMatch = livePositions.find(position => (
+      position?.symbol === phx
+      && position?.side === requestedPositionSide
+    ));
+    if (strictMatch) return { position: strictMatch, match: 'symbol_side', count: livePositions.length };
+    const symbolMatch = livePositions.find(position => position?.symbol === phx);
+    if (symbolMatch) return { position: symbolMatch, match: 'symbol', count: livePositions.length };
+    return { position: null, match: 'none', count: livePositions.length };
+  }, []);
+
+  const waitForPhoenixPositionForTpsl = useCallback(async (phx, requestedPositionSide, closeSideUi) => {
+    const first = findPhoenixPositionForTpsl(phx, requestedPositionSide);
+    if (first.position) {
+      console.info('[Phoenix] TP/SL position ready', {
+        symbol: phx,
+        requested_position_side: requestedPositionSide,
+        close_side: closeSideUi,
+        match: first.match,
+        positions: first.count,
+        immediate: true,
+      });
+      return first.position;
+    }
+
+    const delays = [0, 500, 1_000, 1_750, 2_750, 4_000];
+    console.info('[Phoenix] waiting for TP/SL position', {
+      symbol: phx,
+      requested_position_side: requestedPositionSide,
+      close_side: closeSideUi,
+      wallet: shortPhoenixAddress(walletAddr),
+      initial_positions: first.count,
+      attempts: delays.length,
+    });
+    for (let i = 0; i < delays.length; i += 1) {
+      const delay = delays[i];
+      if (delay > 0) await sleep(delay);
+      try {
+        await refreshTraderState({
+          force: true,
+          reason: 'wait_tpsl_position',
+        });
+      } catch (error) {
+        console.warn('[Phoenix] TP/SL position refresh failed', {
+          symbol: phx,
+          attempt: i + 1,
+          message: error?.message || String(error),
+        });
+      }
+      const next = findPhoenixPositionForTpsl(phx, requestedPositionSide);
+      if (next.position) {
+        console.info('[Phoenix] TP/SL position found', {
+          symbol: phx,
+          requested_position_side: requestedPositionSide,
+          close_side: closeSideUi,
+          match: next.match,
+          positions: next.count,
+          attempt: i + 1,
+        });
+        return next.position;
+      }
+      console.info('[Phoenix] TP/SL position still missing', {
+        symbol: phx,
+        requested_position_side: requestedPositionSide,
+        close_side: closeSideUi,
+        positions: next.count,
+        attempt: i + 1,
+      });
+    }
+    console.warn('[Phoenix] TP/SL position wait timed out', {
+      symbol: phx,
+      requested_position_side: requestedPositionSide,
+      close_side: closeSideUi,
+      wallet: shortPhoenixAddress(walletAddr),
+      positions: positionsRef.current.length,
+    });
+    return null;
+  }, [findPhoenixPositionForTpsl, refreshTraderState, walletAddr]);
+
   const applyOptimisticMarginUse = useCallback((marginAmount) => {
     const margin = Number(marginAmount);
     if (!Number.isFinite(margin) || margin <= 0) return;
@@ -6075,11 +6155,12 @@ export function usePhoenix() {
       setError(null);
       try {
         if (!takeProfit && !stopLoss) return { success: true };
-        const requestedPositionSide = sideToUi(sideToPhoenix(side));
-        const position = positions.find(p => p.symbol === phx && p.side === requestedPositionSide)
-          || positions.find(p => p.symbol === phx)
-          || null;
-        if (!position) throw new Error(`No open ${phx} position to attach TP/SL to`);
+        const closeSideUi = sideToUi(sideToPhoenix(side));
+        const requestedPositionSide = closeSideUi === 'bid' ? 'ask' : 'bid';
+        const position = await waitForPhoenixPositionForTpsl(phx, requestedPositionSide, closeSideUi);
+        if (!position) {
+          throw new Error(`Phoenix ${phx} position is still syncing. Wait a few seconds and press TP/SL again.`);
+        }
         const closeSide = position.side === 'bid' ? Side.Ask : Side.Bid;
         const market = marketsBySymbolRef.current[phx];
         if (!market) throw new Error(`No Phoenix market metadata for ${phx}`);
@@ -6159,6 +6240,7 @@ export function usePhoenix() {
           console.info('[Phoenix] TP/SL build', {
             symbol: phx,
             requested_side: side,
+            requested_position_side: requestedPositionSide,
             position_side: position.side,
             close_side: closeSide === Side.Bid ? 'bid' : 'ask',
             wallet: shortPhoenixAddress(walletAddr),
@@ -6257,7 +6339,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [claimGold, ensureConditionalOrdersAccountIx, getOneTapSessionForSubaccounts, importPhoenixHistoryFills, positions, refreshTraderStateSoon, runOnce, sendOrderIxs, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [claimGold, ensureConditionalOrdersAccountIx, getOneTapSessionForSubaccounts, importPhoenixHistoryFills, refreshTraderStateSoon, runOnce, sendOrderIxs, setPhoenixOrders, setPhoenixPositions, waitForPhoenixPositionForTpsl, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;

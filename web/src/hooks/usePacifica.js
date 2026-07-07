@@ -52,6 +52,40 @@ const REFERRAL_CLAIM_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REFERRAL_CLAIM_RETRY_TTL_MS = 24 * 60 * 60 * 1000;
 const PACIFICA_SIGN_EXPIRY_WINDOW_MS = 30_000;
 const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. Pacifica rejected the direct wallet signature for this account setting.';
+// Used only when /info has not warmed yet. Live Pacifica market metadata remains
+// the source of truth once it is available.
+const PACIFICA_TICK_SIZE_FALLBACKS = Object.freeze({
+  BTC: '1',
+  ETH: '0.1',
+  SOL: '0.01',
+  'SOL-USDC': '0.01',
+  XRP: '0.0001',
+  HYPE: '0.001',
+  DOGE: '0.00001',
+  BNB: '0.01',
+  SUI: '0.0001',
+  AAVE: '0.01',
+  LINK: '0.001',
+  LTC: '0.01',
+  UNI: '0.001',
+  AVAX: '0.001',
+  PAXG: '0.1',
+  ZEC: '0.01',
+  TAO: '0.01',
+  NEAR: '0.0001',
+  BCH: '0.01',
+  XMR: '0.01',
+  ADA: '0.00001',
+  ARB: '0.00001',
+  NVDA: '0.01',
+  TSLA: '0.01',
+  GOOGL: '0.01',
+  SP500: '0.1',
+  EURUSD: '0.0001',
+  USDJPY: '0.01',
+  XAU: '0.1',
+  XAG: '0.001',
+});
 const AGENT_SIGNED_TYPES = new Set([
   'create_market_order',
   'create_order',
@@ -217,14 +251,24 @@ function pacificaMarketForSymbol(markets, symbol) {
   )) || null;
 }
 
-function pacificaMarketTickSize(market) {
-  return market?.tick_size
+function pacificaMarketTickSize(market, symbol = '') {
+  const metadataTick = market?.tick_size
     ?? market?.tickSize
     ?? market?.price_tick_size
     ?? market?.priceTickSize
     ?? market?.price_increment
     ?? market?.priceIncrement
     ?? null;
+  if (metadataTick != null && metadataTick !== '') return metadataTick;
+  const key = String(symbol || market?.symbol || market?.s || '').trim().toUpperCase();
+  return PACIFICA_TICK_SIZE_FALLBACKS[key] || null;
+}
+
+function pacificaPositionSideFromCloseSide(closeSide) {
+  const side = String(closeSide || '').toLowerCase();
+  if (side === 'ask' || side === 'sell' || side === 'short') return 'bid';
+  if (side === 'bid' || side === 'buy' || side === 'long') return 'ask';
+  return side;
 }
 
 function pacificaTpslRoundMode(positionSide, leg) {
@@ -1149,8 +1193,13 @@ export function usePacifica() {
       // have an accurate Pacifica-clock baseline even if their local clock is
       // unsynced.
       const res = result.data;
-      if (res.data) { setMarkets(res.data); marketsRef.current = res.data; }
+      if (res.data) {
+        setMarkets(res.data);
+        marketsRef.current = res.data;
+        return res.data;
+      }
     } catch {}
+    return [];
   }, []);
 
   const fetchPrices = useCallback(async () => {
@@ -1448,20 +1497,28 @@ export function usePacifica() {
     if (!walletAddr) return;
     return runSignedOnce(`tpsl:${walletAddr}:${symbol}:${side}`, async () => {
       try {
-        const market = pacificaMarketForSymbol(marketsRef.current, symbol);
-        const tick = pacificaMarketTickSize(market);
+        let market = pacificaMarketForSymbol(marketsRef.current, symbol);
+        if (!market) {
+          const refreshedMarkets = await fetchMarkets();
+          market = pacificaMarketForSymbol(refreshedMarkets, symbol)
+            || pacificaMarketForSymbol(marketsRef.current, symbol);
+        }
+        const tick = pacificaMarketTickSize(market, symbol);
+        const positionSide = pacificaPositionSideFromCloseSide(side);
         const normalizeTrigger = (value, leg) => {
           if (!value) return null;
           if (!tick) return String(value);
-          return roundToStep(value, tick, pacificaTpslRoundMode(side, leg));
+          return roundToStep(value, tick, pacificaTpslRoundMode(positionSide, leg));
         };
         const normalizedTakeProfit = normalizeTrigger(takeProfit, 'tp');
         const normalizedStopLoss = normalizeTrigger(stopLoss, 'sl');
         if (tick && (String(normalizedTakeProfit || '') !== String(takeProfit || '') || String(normalizedStopLoss || '') !== String(stopLoss || ''))) {
           console.info('[Pacifica] normalized TP/SL to tick size', {
             symbol,
-            side,
+            close_side: side,
+            position_side: positionSide,
             tick_size: tick,
+            market_found: !!market,
             take_profit: takeProfit || null,
             normalized_take_profit: normalizedTakeProfit,
             stop_loss: stopLoss || null,
@@ -1476,7 +1533,7 @@ export function usePacifica() {
         return res;
       } catch (e) { setError(e.message); return { error: e.message }; }
     });
-  }, [walletAddr, signedRequestWithActivation, runSignedOnce]);
+  }, [walletAddr, signedRequestWithActivation, fetchMarkets, runSignedOnce]);
 
   const setLeverage = useCallback(async (symbol, leverage) => {
     if (!walletAddr) return;

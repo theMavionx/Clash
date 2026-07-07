@@ -832,6 +832,49 @@ function listEvents(orderId) {
   }));
 }
 
+function recoverExpiredReservationPaymentOrder(order, player, config) {
+  if (!order || order.status !== 'active' || order.payment_tx_hash || order.delivery_tx_hash || order.payout_tx_hash) return null;
+  const events = listEvents(order.id);
+  const latestAction = [...events].reverse().find((event) => [
+    'buy_intent',
+    'reservation_expired',
+    'payment_verified',
+    'delivered',
+    'cancelled',
+  ].includes(event.type));
+  if (latestAction?.type !== 'reservation_expired') return null;
+  const buyIntent = [...events].reverse().find((event) => event.type === 'buy_intent');
+  if (!buyIntent || String(buyIntent.actorPlayerId || '') !== String(player?.id || '')) return null;
+  const data = buyIntent.data || {};
+  const paymentChain = normalizeChain(data.paymentChain || 'base', 'paymentChain');
+  const payment = config?.payments?.[paymentChain];
+  if (!payment?.ready) return null;
+  const buyerWallet = normalizeAddressForChain(paymentChain, data.buyerWallet, 'Buyer wallet');
+  const destChain = normalizeChain(data.destChain || paymentChain, 'destinationChain');
+  const destAddress = normalizeAddressForChain(destChain, data.destAddress || buyerWallet, 'Destination wallet');
+  const amount = String(data.amountTokenUnits || '').trim();
+  if (!/^\d+$/.test(amount) || BigInt(amount) <= 0n) return null;
+  return {
+    order: {
+      ...order,
+      status: 'reserved',
+      buyer_player_id: player.id,
+      buyer_wallet: buyerWallet,
+      buyer_dest_chain: destChain,
+      buyer_dest_address: destAddress,
+      payment_chain: paymentChain,
+      payment_token: payment.token || data.paymentToken || 'usdc',
+      payment_token_address: payment.tokenAddress || null,
+      payment_decimals: Number(payment.decimals || 6),
+      payment_label: payment.tokenLabel || data.paymentLabel || String(payment.token || 'USDC').toUpperCase(),
+      payment_treasury: payment.treasury,
+      payment_amount_usdc_units: amount,
+      payment_deadline: Number(data.deadline || 0),
+    },
+    buyIntent,
+  };
+}
+
 function latestBridgeBurnEvent(orderId, { sourceChain, destChain, destAddress } = {}) {
   const wantedSource = String(sourceChain || '').toLowerCase();
   const wantedDest = String(destChain || '').toLowerCase();
@@ -1465,8 +1508,14 @@ async function verifySolanaTokenPayment({ payment, txHash, amount, expectedFrom 
   const label = String(payment.label || payment.token || 'token').toUpperCase();
   const sig = String(txHash || '').trim();
   if (!/^[1-9A-HJ-NP-Za-km-z]{64,100}$/.test(sig)) throw httpError(400, 'Bad Solana transaction signature');
-  const conn = solanaConnection();
-  const parsed = await conn.getParsedTransaction(sig, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
+  const parsed = await withSolanaRpcFallback(async (rpc) => {
+    const { Connection } = require('@solana/web3.js');
+    const conn = createSolanaConnection(Connection, rpc, 'confirmed');
+    return conn.getParsedTransaction(sig, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
+  }, {
+    urls: solanaRpcUrls([payment.rpcUrl]),
+    label: 'Custodial marketplace Solana payment verification',
+  });
   if (!parsed) throw httpError(400, 'Tx not found or not confirmed yet');
   if (parsed.meta?.err) throw httpError(400, 'Tx failed on-chain');
   const mint = new PublicKey(payment.tokenAddress);
@@ -2889,7 +2938,12 @@ function mountCustodialMarketplace(router, ctx = {}) {
   router.post('/marketplace/custodial/orders/:id/payment', auth, async (req, res) => {
     try {
       const config = await marketplaceRuntimeConfig(ctx);
-      const order = getOrder(req.params.id);
+      let order = getOrder(req.params.id);
+      let recovery = null;
+      if (order?.status === 'active') {
+        recovery = recoverExpiredReservationPaymentOrder(order, req.player, config);
+        if (recovery) order = recovery.order;
+      }
       requireOrderBuyerForPlayer(order, req.player);
       if (order.status === 'delivered') {
         let finalOrder = order;
@@ -2914,7 +2968,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
         return res.json({ success: true, alreadyPaid: true, deliveryError, order: publicOrder(maybeDelivered, { includePrivate: true }) });
       }
       if (order.status !== 'reserved') throw httpError(409, `Order is ${order.status}`);
-      if (Number(order.payment_deadline || 0) < nowSec() - 300) throw httpError(400, 'Payment quote expired');
+      if (!recovery && Number(order.payment_deadline || 0) < nowSec() - 300) throw httpError(400, 'Payment quote expired');
       const txHash = String(req.body?.txHash || '').trim();
       const duplicate = gameDb.db.prepare(`SELECT id FROM custodial_marketplace_orders WHERE payment_tx_hash = ? AND id != ?`).get(txHash, order.id);
       if (duplicate) throw httpError(409, 'Payment transaction was already used');
@@ -2931,21 +2985,51 @@ function mountCustodialMarketplace(router, ctx = {}) {
         amount: order.payment_amount_usdc_units,
         expectedFrom: order.buyer_wallet,
       });
+      if (recovery && order.payment_deadline && verified.receipt?.blockTime && Number(verified.receipt.blockTime) > Number(order.payment_deadline) + 600) {
+        throw httpError(400, 'Payment transaction confirmed after quote expiry');
+      }
       gameDb.db.transaction(() => {
-        gameDb.db.prepare(`
+        const result = gameDb.db.prepare(`
           UPDATE custodial_marketplace_orders
              SET status = 'paid',
+                 buyer_player_id = ?,
+                 buyer_wallet = ?,
+                 buyer_dest_chain = ?,
+                 buyer_dest_address = ?,
+                 payment_chain = ?,
+                 payment_token = ?,
+                 payment_token_address = ?,
+                 payment_decimals = ?,
+                 payment_label = ?,
+                 payment_treasury = ?,
+                 payment_amount_usdc_units = ?,
                  payment_tx_hash = ?,
                  payment_verified_at = datetime('now'),
                  metadata_json = ?,
                  updated_at = datetime('now')
-           WHERE id = ? AND status = 'reserved'
+           WHERE id = ?
+             AND payment_tx_hash IS NULL
+             AND delivery_tx_hash IS NULL
+             AND status = ?
         `).run(
+          order.buyer_player_id,
+          order.buyer_wallet,
+          order.buyer_dest_chain,
+          order.buyer_dest_address,
+          order.payment_chain,
+          order.payment_token,
+          order.payment_token_address,
+          Number(order.payment_decimals || 6),
+          order.payment_label,
+          order.payment_treasury,
+          order.payment_amount_usdc_units,
           txHash,
-          JSON.stringify({ ...safeJsonParse(order.metadata_json, {}), paymentTransfer: verified.transfer }),
+          JSON.stringify({ ...safeJsonParse(order.metadata_json, {}), paymentTransfer: verified.transfer, recoveredExpiredReservation: !!recovery }),
           order.id,
+          recovery ? 'active' : 'reserved',
         );
-        insertEvent(order.id, 'payment_verified', { actorPlayerId: req.player.id, txHash, data: verified.transfer });
+        if (!result.changes) throw httpError(409, recovery ? 'Order changed before payment recovery completed' : 'Order changed before payment verification completed');
+        insertEvent(order.id, 'payment_verified', { actorPlayerId: req.player.id, txHash, data: { ...verified.transfer, recoveredExpiredReservation: !!recovery } });
       })();
       const afterPayment = getOrder(order.id);
       let afterDelivery = afterPayment;
