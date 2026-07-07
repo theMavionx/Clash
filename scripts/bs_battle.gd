@@ -651,6 +651,25 @@ func _await_hidden_combat_warmup(warmup: Node, max_wait_sec: float = COMBAT_WARM
 	else:
 		print("[BATTLE_ENTRY] combat_warmup_done wait_ms=", int(waited * 1000.0))
 
+
+func _await_signal_or_timeout(source: Object, signal_name: String, timeout_sec: float, log_label: String) -> bool:
+	if source == null or not is_instance_valid(source) or not source.has_signal(signal_name):
+		print("[BATTLE_ENTRY] ", log_label, "_missing_signal")
+		return false
+	var done: bool = false
+	var on_done := func() -> void:
+		done = true
+	source.connect(signal_name, on_done, CONNECT_ONE_SHOT)
+	var waited: float = 0.0
+	while not done and waited < timeout_sec:
+		await bs.get_tree().process_frame
+		waited += bs.get_process_delta_time()
+	if done:
+		print("[BATTLE_ENTRY] ", log_label, "_done wait_ms=", int(waited * 1000.0))
+		return true
+	print("[BATTLE_ENTRY] ", log_label, "_timeout wait_ms=", int(waited * 1000.0))
+	return false
+
 ## Kicks off the enemy search flow: boards home troops, sails ships, closes
 ## the cloud transition, fetches an enemy from the server, then switches to
 ## the enemy island. Called when the Find Enemy button is pressed.
@@ -715,7 +734,7 @@ func _on_find_pressed() -> void:
 		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Finding opponent..."})
 	var cloud: Node = bs._get_or_create_cloud()
 	cloud.close()
-	await cloud.close_finished
+	await _await_signal_or_timeout(cloud, "close_finished", 2.5, "cloud_close")
 	print("[BATTLE_ENTRY] cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	var combat_warmup: Node = _start_hidden_combat_warmup()
 	await _await_hidden_combat_warmup(combat_warmup)
@@ -805,7 +824,7 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Finding opponent..."})
 	var cloud: Node = bs._get_or_create_cloud()
 	cloud.close()
-	await cloud.close_finished
+	await _await_signal_or_timeout(cloud, "close_finished", 2.5, "revenge_cloud_close")
 	print("[BATTLE_ENTRY] revenge_cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	var combat_warmup: Node = _start_hidden_combat_warmup()
 	await _await_hidden_combat_warmup(combat_warmup)
@@ -904,6 +923,7 @@ func _restore_ships_and_troops() -> void:
 ## Used when jumping to an enemy without having sailed first (e.g. direct
 ## attack from the main menu).
 func _switch_to_enemy_island() -> void:
+	var switch_started_ticks: int = Time.get_ticks_msec()
 	_victory_declared = false
 	_reset_troop_death_reports()
 	if _saved_fleet.is_empty():
@@ -912,7 +932,8 @@ func _switch_to_enemy_island() -> void:
 	_battle_start_time = Time.get_ticks_msec() / 1000.0
 	_battle_timer = 0.0
 	_battle_timer_active = true
-	bs._cannon.reset()
+	if bs._cannon and bs._cannon.has_method("reset"):
+		bs._cannon.reset()
 	if bs._rally:
 		bs._rally.reset()
 	_battle_replay.append({
@@ -947,9 +968,12 @@ func _switch_to_enemy_island() -> void:
 		# otherwise leftover UI (move arrows, range indicator, building panel)
 		# stays parented to the BS and reappears overlaid on the enemy island
 		# at the local coordinates of the previously selected home building.
-		bsys._deselect_building()
-		bsys._battle.is_viewing_enemy = true
-		bsys._battle._find_in_progress = false
+		if bsys.has_method("_deselect_building"):
+			bsys._deselect_building()
+		if "_battle" in bsys and bsys._battle:
+			bsys._battle.is_viewing_enemy = true
+			bsys._battle._find_in_progress = false
+	print("[BATTLE_ENTRY] switch_enemy_mode_set elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
 	var bridge = bs._bridge
 	if bridge:
 		var enemy_res: Dictionary = enemy_info.get("resources", {})
@@ -967,10 +991,11 @@ func _switch_to_enemy_island() -> void:
 		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Loading opponent..."})
 	var cloud = bs._get_or_create_cloud()
 	cloud.close()
-	await cloud.close_finished
+	await _await_signal_or_timeout(cloud, "close_finished", 2.5, "direct_switch_cloud_close")
 	var combat_warmup: Node = _start_hidden_combat_warmup()
 	await _await_hidden_combat_warmup(combat_warmup)
-	bs._cannon._preload_explosion_textures()
+	if bs._cannon and bs._cannon.has_method("_preload_explosion_textures"):
+		bs._cannon._preload_explosion_textures()
 	for bsys in bs._building_systems:
 		bsys._destroy_all_buildings()
 	if enemy_info.has("buildings") and enemy_info.buildings is Array:
@@ -1013,7 +1038,9 @@ func _switch_to_enemy_island() -> void:
 		return_button.pressed.connect(_return_home)
 		bs.canvas.add_child(return_button)
 	cloud.reveal()
-	await cloud.reveal_finished
+	var revealed: bool = await _await_signal_or_timeout(cloud, "reveal_finished", 2.5, "direct_switch_cloud_reveal")
+	if not revealed and cloud.has_method("hide_now"):
+		cloud.hide_now()
 	if bridge:
 		bridge.send_to_react("cloud_transition", {"visible": false})
 	var attack_system = bs.get_node_or_null("../AttackSystem")
@@ -1025,13 +1052,18 @@ func _switch_to_enemy_island() -> void:
 ## Skips the cloud-close step; the caller is responsible for closing the
 ## cloud before calling this function.
 func _switch_to_enemy_island_after_sail(combat_warmup: Node = null, warmup_already_waited: bool = false) -> void:
+	var switch_started_ticks: int = Time.get_ticks_msec()
+	var enemy_buildings_value: Variant = enemy_info.get("buildings", [])
+	var enemy_building_count: int = enemy_buildings_value.size() if enemy_buildings_value is Array else 0
+	print("[BATTLE_ENTRY] switch_start enemy=", str(enemy_info.get("name", "???")), " buildings=", enemy_building_count)
 	_victory_declared = false
 	_reset_troop_death_reports()
 	_battle_replay.clear()
 	_battle_start_time = Time.get_ticks_msec() / 1000.0
 	_battle_timer = 0.0
 	_battle_timer_active = true
-	bs._cannon.reset()
+	if bs._cannon and bs._cannon.has_method("reset"):
+		bs._cannon.reset()
 	if bs._rally:
 		bs._rally.reset()
 	_battle_replay.append({
@@ -1053,15 +1085,20 @@ func _switch_to_enemy_island_after_sail(combat_warmup: Node = null, warmup_alrea
 		bs._ship_attack_node.visible = true
 	# Free home troops and port ships immediately — they are consumed by the attack
 	_free_home_troops_and_ships()
+	print("[BATTLE_ENTRY] switch_freed_home elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
 	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
-		bsys._production._hide_all_collect_icons()
+		if "_production" in bsys and bsys._production:
+			bsys._production._hide_all_collect_icons()
 		# Deselect any home-side building before flipping to enemy view —
 		# otherwise leftover UI (move arrows, range indicator, building panel)
 		# stays parented to the BS and reappears overlaid on the enemy island
 		# at the local coordinates of the previously selected home building.
-		bsys._deselect_building()
-		bsys._battle.is_viewing_enemy = true
-		bsys._battle._find_in_progress = false
+		if bsys.has_method("_deselect_building"):
+			bsys._deselect_building()
+		if "_battle" in bsys and bsys._battle:
+			bsys._battle.is_viewing_enemy = true
+			bsys._battle._find_in_progress = false
+	print("[BATTLE_ENTRY] switch_enemy_mode_set elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
 	var bridge = bs._bridge
 	if bridge:
 		var enemy_res: Dictionary = enemy_info.get("resources", {})
@@ -1074,16 +1111,22 @@ func _switch_to_enemy_island_after_sail(combat_warmup: Node = null, warmup_alrea
 			"ore": enemy_res.get("ore", 0),
 			"attack_cost_gold": enemy_info.get("attack_cost_gold", 0),
 		})
-	bs._cannon._preload_explosion_textures()
+	if bs._cannon and bs._cannon.has_method("_preload_explosion_textures"):
+		bs._cannon._preload_explosion_textures()
 	if not warmup_already_waited:
 		if combat_warmup == null or not is_instance_valid(combat_warmup):
 			combat_warmup = _start_hidden_combat_warmup()
 		await _await_hidden_combat_warmup(combat_warmup)
+	print("[BATTLE_ENTRY] switch_preload_done elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
 	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
-		bsys._destroy_all_buildings()
+		if bsys.has_method("_destroy_all_buildings"):
+			bsys._destroy_all_buildings()
+	print("[BATTLE_ENTRY] switch_destroyed_home_buildings elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
 	if enemy_info.has("buildings") and enemy_info.buildings is Array:
 		for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
-			bsys._load_buildings_from_server(enemy_info.buildings)
+			if bsys.has_method("_load_buildings_from_server"):
+				bsys._load_buildings_from_server(enemy_info.buildings)
+	print("[BATTLE_ENTRY] switch_loaded_enemy_buildings elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
 	if bs.build_button:
 		bs.build_button.visible = false
 	if bs.find_button:
@@ -1122,7 +1165,10 @@ func _switch_to_enemy_island_after_sail(combat_warmup: Node = null, warmup_alrea
 		bs.canvas.add_child(return_button)
 	var cloud = bs._get_or_create_cloud()
 	cloud.reveal()
-	await cloud.reveal_finished
+	var revealed: bool = await _await_signal_or_timeout(cloud, "reveal_finished", 2.5, "cloud_reveal")
+	if not revealed and cloud.has_method("hide_now"):
+		cloud.hide_now()
+		print("[BATTLE_ENTRY] cloud_reveal_forced elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
 	var bridge2 = bs._bridge
 	if bridge2:
 		bridge2.send_to_react("cloud_transition", {"visible": false})
@@ -1131,6 +1177,11 @@ func _switch_to_enemy_island_after_sail(combat_warmup: Node = null, warmup_alrea
 	var attack_system = bs.get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
 		attack_system.enter_attack_mode(_saved_fleet)
+		print("[BATTLE_ENTRY] attack_mode_entered elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks, " fleet=", _saved_fleet.size())
+	else:
+		print("[BATTLE_ENTRY] attack_mode_missing elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
+		if bridge2:
+			bridge2.send_to_react("error", {"message": "Attack system failed to start. Please reload and try again."})
 
 
 ## Returns the player to their home island: tears down enemy state, reloads
@@ -1208,7 +1259,7 @@ func _return_home() -> void:
 		bridge.send_to_react("cloud_transition", {"visible": true})
 	var cloud = bs._get_or_create_cloud()
 	cloud.close()
-	await cloud.close_finished
+	await _await_signal_or_timeout(cloud, "close_finished", 2.5, "return_home_cloud_close")
 	_cleanup_combat_runtime_nodes()
 	for bsys in bs._building_systems:
 		bsys._destroy_all_buildings()
@@ -1237,7 +1288,9 @@ func _return_home() -> void:
 	enemy_info = {}
 	_victory_declared = false
 	cloud.reveal()
-	await cloud.reveal_finished
+	var revealed: bool = await _await_signal_or_timeout(cloud, "reveal_finished", 2.5, "return_home_cloud_reveal")
+	if not revealed and cloud.has_method("hide_now"):
+		cloud.hide_now()
 	if bridge:
 		bridge.send_to_react("cloud_transition", {"visible": false})
 	# Ships and troops were already freed in _free_home_troops_and_ships

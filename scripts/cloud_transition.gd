@@ -122,8 +122,17 @@ func cover_instant() -> void:
 	_set_clouds_covering()
 
 
+## Immediately clears the cloud layer. Used as a safety fallback if a tween
+## signal is missed while switching scenes on low-end/mobile browsers.
+func hide_now() -> void:
+	_white_overlay.modulate.a = 0.0
+	for spr in _clouds:
+		spr.visible = false
+
+
 ## Clouds fly away revealing the scene beneath.
 func reveal() -> void:
+	visible = true
 	var vp := _get_vp_size()
 	var center := vp * 0.5
 	_white_overlay.size = vp
@@ -170,6 +179,7 @@ func reveal() -> void:
 
 ## Clouds fly in covering the screen.
 func close() -> void:
+	visible = true
 	var vp := _get_vp_size()
 	var center := vp * 0.5
 	_white_overlay.size = vp
