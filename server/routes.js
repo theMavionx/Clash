@@ -14880,6 +14880,10 @@ const PACIFICA_TASK_PREFETCH_TIMEOUT_MS = Math.max(
   TASK_PROGRESS_REFRESH_TIMEOUT_MS,
   Number(process.env.PACIFICA_TASK_PREFETCH_TIMEOUT_MS || 15000),
 );
+const PACIFICA_TASK_FAST_FANOUT_CAP = Math.max(
+  2,
+  Number(process.env.PACIFICA_TASK_FAST_FANOUT_CAP || 3),
+);
 
 function requestedTaskDexFromHeaders(headers = {}) {
   if (!headers || typeof headers !== 'object') return '';
@@ -14980,6 +14984,7 @@ async function prefetchStartedTaskTradesForDex(player, taskList, effectiveDex, r
         since: minStartId,
         headers: requestHeaders,
         singleDex: true,
+        pacificaFanoutCap: dex === 'pacifica' ? PACIFICA_TASK_FAST_FANOUT_CAP : undefined,
       }),
       `player=${player?.name || player?.id} ${label} dex=${dex}`,
       timeoutMs,

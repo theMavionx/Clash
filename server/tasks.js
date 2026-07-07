@@ -915,6 +915,10 @@ async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA
 async function fetchPacificaAllTradesUncached(player, opts = {}) {
   const since = Number(opts.since) || 0;
   const maxPages = opts.firstPageOnly ? 1 : PACIFICA_MAX_PAGES;
+  const requestedFanoutCap = Number(opts.pacificaFanoutCap || opts.fanoutCap || 0);
+  const fanoutCap = Number.isFinite(requestedFanoutCap) && requestedFanoutCap > 0
+    ? Math.max(1, Math.min(PACIFICA_FETCH_FANOUT_CAP, Math.floor(requestedFanoutCap)))
+    : PACIFICA_FETCH_FANOUT_CAP;
   let master = isSolanaWallet(player.wallet) ? player.wallet : null;
   if (!master) {
     try {
@@ -946,7 +950,7 @@ async function fetchPacificaAllTradesUncached(player, opts = {}) {
       // Newest agents first — if we're capped, the most-recent ones are
       // the most likely to hold uncredited trades.
       'SELECT agent_wallet FROM pacifica_agents WHERE player_id = ? ORDER BY bound_at DESC LIMIT ?'
-    ).all(player.id, PACIFICA_FETCH_FANOUT_CAP);
+    ).all(player.id, fanoutCap);
     agents = rows.map(r => r.agent_wallet).filter(isSolanaWallet);
   } catch (e) {
     console.warn(`[pacifica fetch] pacifica_agents read failed:`, e.message);
@@ -961,7 +965,7 @@ async function fetchPacificaAllTradesUncached(player, opts = {}) {
   }
 
   const queryList = [...new Set([master, ...agents].filter(Boolean))]
-    .slice(0, PACIFICA_FETCH_FANOUT_CAP);
+    .slice(0, fanoutCap);
   if (queryList.length === 0) {
     console.log(`[pacifica fetch] player=${player.name} -> NO valid wallet to query`);
     return [];
