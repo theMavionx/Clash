@@ -77,6 +77,13 @@ const APTOS_GAS_STATION_API_KEY = (typeof import.meta !== 'undefined' && import.
 // The marketing site uses decibel.trade but the API is hosted by Aptos.
 const DECIBEL_HTTP = 'https://api.mainnet.aptoslabs.com/decibel';
 const DECIBEL_WS = 'wss://api.mainnet.aptoslabs.com/decibel/ws';
+const DECIBEL_SDK_WS_ENABLED = /^(1|true|yes|on)$/i.test(
+  String(
+    import.meta.env?.VITE_DECIBEL_SDK_WS_ENABLED
+    ?? import.meta.env?.VITE_DECIBEL_REALTIME_WS_ENABLED
+    ?? 'false'
+  ).trim(),
+);
 
 // Decibel package address on Aptos mainnet. Verified against the SDK's
 // shipped `MAINNET_CONFIG` (constants.js) — same value the SDK derives the
@@ -115,14 +122,19 @@ async function _loadSdk() {
 async function _buildConfig() {
   const sdk = await _loadSdk();
   const base = sdk.MAINNET_CONFIG ? { ...sdk.MAINNET_CONFIG } : {};
-  return {
+  const cfg = {
     ...base,
     fullnodeUrl: APTOS_FULLNODE,
     tradingHttpUrl: DECIBEL_HTTP,
-    tradingWsUrl: DECIBEL_WS,
     chainId: APTOS_CHAIN_ID,
+    ...(DECIBEL_SDK_WS_ENABLED ? { tradingWsUrl: DECIBEL_WS } : {}),
     ...(APTOS_GAS_STATION_API_KEY ? { gasStationApiKey: APTOS_GAS_STATION_API_KEY } : {}),
   };
+  if (!DECIBEL_SDK_WS_ENABLED) {
+    delete cfg.tradingWsUrl;
+    delete cfg.wsUrl;
+  }
+  return cfg;
 }
 
 // Read-only client. Safe to call without a connected wallet — used for

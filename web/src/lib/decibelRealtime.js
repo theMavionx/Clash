@@ -1,7 +1,9 @@
 import { getReadClient } from './decibel';
 
 const DECIBEL_REALTIME_WS_ENABLED = !/^(0|false|no|off)$/i.test(
-  String(import.meta.env?.VITE_DECIBEL_REALTIME_WS_ENABLED ?? 'true').trim(),
+  // Decibel's public WS endpoint currently rejects browser connections on
+  // production, so keep realtime opt-in and fall back to REST polling by default.
+  String(import.meta.env?.VITE_DECIBEL_REALTIME_WS_ENABLED ?? 'false').trim(),
 );
 
 const emptySnapshot = {
