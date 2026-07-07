@@ -1379,6 +1379,54 @@ function orderStableKey(order, index) {
   return parts.some(part => part !== '' && part != null) ? parts.join('|') : `order:${index}`;
 }
 
+function dangoTradeVisibleSnapshot(positions, orders, symbol) {
+  const sym = String(symbol || '').toUpperCase();
+  const posRows = (Array.isArray(positions) ? positions : [])
+    .filter(pos => String(pos?.symbol || pos?.s || '').toUpperCase() === sym)
+    .map((pos, index) => {
+      const key = positionStableKey(pos) || `position:${index}:${String(pos?.side || '')}`;
+      return {
+        key,
+        amount: Number(pos?.amount ?? pos?.size ?? pos?.position ?? 0),
+        entry: Number(pos?.entry_price ?? pos?.entryPrice ?? 0),
+        side: String(pos?.side || pos?.d || '').toLowerCase(),
+      };
+    });
+  const orderRows = (Array.isArray(orders) ? orders : [])
+    .filter(order => String(order?.symbol || order?.s || '').toUpperCase() === sym)
+    .map((order, index) => {
+      const key = orderStableKey(order, index);
+      return {
+        key,
+        amount: Number(order?.amount ?? order?.size ?? 0),
+        price: Number(order?.price ?? order?.trigger_price ?? order?.stop_price ?? 0),
+        side: String(order?.side || order?.d || '').toLowerCase(),
+        type: String(order?.order_type || order?.type || '').toLowerCase(),
+      };
+    });
+  return {
+    positions: new Map(posRows.map(row => [row.key, row])),
+    orders: new Map(orderRows.map(row => [row.key, row])),
+  };
+}
+
+function dangoSnapshotChanged(before, after) {
+  if (!before || !after) return false;
+  for (const [key, row] of after.positions) {
+    const prev = before.positions.get(key);
+    if (!prev) return true;
+    if (Math.abs(Number(row.amount || 0) - Number(prev.amount || 0)) > 1e-9) return true;
+    if (Math.abs(Number(row.entry || 0) - Number(prev.entry || 0)) > 1e-6) return true;
+  }
+  for (const [key, row] of after.orders) {
+    const prev = before.orders.get(key);
+    if (!prev) return true;
+    if (Math.abs(Number(row.amount || 0) - Number(prev.amount || 0)) > 1e-9) return true;
+    if (Math.abs(Number(row.price || 0) - Number(prev.price || 0)) > 1e-6) return true;
+  }
+  return false;
+}
+
 function orderPositionSide(order) {
   const direction = String(order?.order_direction || order?.orderDirection || '').toLowerCase();
   if (direction.includes('long')) return 'bid';
@@ -2734,8 +2782,13 @@ function FuturesPanel() {
     // delegation missing — usually after rejecting the delegate step).
     activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, hotstuffSetupStatus,
     bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources, lighterNeedsIntegratorApproval, lighterCredentials, detectAccount: detectLighterAccount,
+    refresh: refreshTrading,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
+  const latestPositionsRef = useRef(positions);
+  const latestOrdersRef = useRef(orders);
+  useEffect(() => { latestPositionsRef.current = positions; }, [positions]);
+  useEffect(() => { latestOrdersRef.current = orders; }, [orders]);
   // The trading hook owns the active signer. Do not treat a detected adapter
   // or a stored player wallet as "connected" unless the hook resolved the
   // address it will actually use for signing.
@@ -3608,6 +3661,35 @@ function FuturesPanel() {
   // second click can land between dispatch-1 and React committing the button's
   // `disabled` attribute. This ref flips synchronously in-callback.
   const tradeInFlight = useRef(false);
+  const waitForDangoTradeVisibility = useCallback(async ({ before, symbol: waitSymbol }) => {
+    if (dex !== 'dango') return true;
+    const delays = [0, 700, 1200, 1800, 2500, 3500, 5000, 7000, 9000, 12_000];
+    const deadline = Date.now() + 45_000;
+    let attempt = 0;
+    while (Date.now() < deadline) {
+      const delay = delays[Math.min(attempt, delays.length - 1)];
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+      let after = dangoTradeVisibleSnapshot(latestPositionsRef.current, latestOrdersRef.current, waitSymbol);
+      if (dangoSnapshotChanged(before, after)) return true;
+      if (typeof refreshTrading === 'function') {
+        try {
+          const refreshed = await refreshTrading();
+          const snapshot = refreshed?.accountSnapshot;
+          after = dangoTradeVisibleSnapshot(
+            snapshot?.positions || latestPositionsRef.current,
+            snapshot?.orders || latestOrdersRef.current,
+            waitSymbol,
+          );
+          if (dangoSnapshotChanged(before, after)) return true;
+        } catch (e) {
+          console.warn('[Dango UI] refresh while waiting for trade visibility failed', e?.message || e);
+        }
+      }
+      attempt += 1;
+    }
+    return false;
+  }, [dex, refreshTrading]);
+
   const handleTrade = useCallback(async (side) => {
     if (tradeInFlight.current) return;
     tradeInFlight.current = true;
@@ -3925,12 +4007,16 @@ function FuturesPanel() {
       }
       setTradePhase('signing');
       let result;
+      const beforeDangoSnapshot = dex === 'dango'
+        ? dangoTradeVisibleSnapshot(latestPositionsRef.current, latestOrdersRef.current, symbol)
+        : null;
       const tradeOptions = {
         ...(Number.isFinite(positionUsdc) && positionUsdc > 0 ? { notional_usd: positionUsdc } : {}),
         ...(dex === 'phoenix' ? { margin_mode: marginModes[symbol] ? 'isolated' : 'cross' } : {}),
         ...(dex === 'gmtrade' && (currentMarket?.market_token || currentMarket?.marketToken)
           ? { market_token: currentMarket.market_token || currentMarket.marketToken }
           : {}),
+        ...(dex === 'dango' ? { onPhase: phase => setTradePhase(phase) } : {}),
       };
       if (dex === 'gmtrade') {
         const gmtradeOrderPrice = orderType === 'limit' ? parseFloat(limitPrice) : tradePrice;
@@ -3954,16 +4040,24 @@ function FuturesPanel() {
         result = await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage, tradeOptions);
       }
       logLighterTrade('submit_result', { result });
-      setTradePhase(null);
       if (result?.error) {
+        setTradePhase(null);
         setLocalAlert(result.error);
         return;
       }
       if (result && !result.error) {
+        let visible = true;
+        if (dex === 'dango') {
+          setTradePhase('indexing');
+          visible = await waitForDangoTradeVisibility({ before: beforeDangoSnapshot, symbol });
+        }
+        setTradePhase(null);
         const successText = result.info
           ? result.info
           : dex === 'gmtrade' && result.status === 'submitted'
             ? `${side.toUpperCase()} ${symbol} submitted`
+            : dex === 'dango' && !visible
+            ? `${side.toUpperCase()} ${symbol} submitted. Dango is still syncing it.`
             : orderType === 'market'
             ? `${side.toUpperCase()} ${symbol} opened`
             : `${side.toUpperCase()} ${symbol} limit placed`;
@@ -3983,7 +4077,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, dangoMinNotionalUsd]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, dangoMinNotionalUsd, waitForDangoTradeVisibility]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -4013,7 +4107,9 @@ function FuturesPanel() {
       });
     };
   }, [dex, tradeButtonBusy, tpslSubmittingPos]);
-  const tradeButtonPendingLabel = tradePhase === 'confirming'
+  const tradeButtonPendingLabel = tradePhase === 'indexing'
+    ? 'Syncing...'
+    : tradePhase === 'confirming'
     ? 'Confirming...'
     : tradePhase === 'signing'
       ? 'Signing...'
@@ -8030,6 +8126,22 @@ function FuturesPanel() {
       if (risexSourceBalanceState === 'error') return 'unavailable';
       return '$--';
     })();
+    const dangoDepositSource = Array.isArray(bridgeDepositSources)
+      ? bridgeDepositSources.find(chain => Number(chain.id) === 42161)
+      : null;
+    const dangoSourceBalance = dex === 'dango'
+      ? bridgeSourceBalances?.[Number(dangoDepositSource?.id || 42161)]
+      : null;
+    const dangoSourceBalanceState = dex === 'dango'
+      ? bridgeSourceBalanceStatus?.[Number(dangoDepositSource?.id || 42161)]?.status
+      : null;
+    const dangoSourceBalanceText = (() => {
+      if (dex !== 'dango') return '';
+      if (typeof dangoSourceBalance === 'number' && Number.isFinite(dangoSourceBalance)) return `$${dangoSourceBalance.toFixed(2)}`;
+      if (dangoSourceBalanceState === 'checking') return 'checking...';
+      if (dangoSourceBalanceState === 'error') return 'unavailable';
+      return '$--';
+    })();
     const depositActionBusy = ['preparing', 'switching', 'approving', 'signing', 'confirming', 'bridging', 'depositing']
       .includes(String(depositStatus?.status || ''));
     const risexDepositBusy = dex === 'risex' && depositActionBusy;
@@ -8923,11 +9035,17 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : dex === 'dango' ? 'Open Dango Deposit' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : dex === 'dango' ? 'Dango Arbitrum deposit' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: '#15803D'}}>
                     {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
+                  </span>
+                )
+                : dex === 'dango'
+                ? (
+                  <span style={{...S.detail, color: '#15803D'}}>
+                    Arbitrum USDC: {dangoSourceBalanceText}
                   </span>
                 )
                 : dex === 'nado'
@@ -9023,34 +9141,6 @@ function FuturesPanel() {
                   {loading ? '...' : 'Open Katana Deposit'}
                 </button>
               </div>
-            ) : dex === 'dango' ? (
-              <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
-                <div style={{
-                  background: 'rgba(34,197,94,0.08)',
-                  border: '1px solid rgba(34,197,94,0.28)',
-                  borderRadius: 8,
-                  padding: '8px 10px',
-                  fontSize: 11,
-                  lineHeight: 1.4,
-                  color: '#5C3A21',
-                  fontWeight: 750,
-                }}>
-                  Dango deposits and withdrawals are handled in the official Dango app. Clash reads your Dango trading balance and uses it for trading here.
-                </div>
-                <button
-                  style={{...S.depositBtn, width: '100%', whiteSpace: 'nowrap', padding: '9px 10px'}}
-                  onClick={async () => {
-                    const r = await depositToPacifica?.('');
-                    if (r?.info) {
-                      setLocalAlert(null);
-                      setSuccessMsg(r.info);
-                    }
-                  }}
-                  disabled={loading}
-                >
-                  {loading ? '...' : 'Open Dango Deposit'}
-                </button>
-              </div>
             ) : (
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
               {dex === 'risex' && (
@@ -9123,6 +9213,10 @@ function FuturesPanel() {
                     return;
                   }
                 }
+                if (dex === 'dango' && typeof dangoSourceBalance === 'number' && Number.isFinite(dangoSourceBalance) && v > dangoSourceBalance + 0.000001) {
+                  setLocalAlert(`Arbitrum wallet has ${dangoSourceBalance.toFixed(2)} USDC`);
+                  return;
+                }
                 if (dex === 'nado' && Number.isFinite(selectedNadoWalletBalance) && v > selectedNadoWalletBalance + 0.000001) {
                   setLocalAlert(`Ink wallet has ${selectedNadoWalletBalance.toFixed(2)} ${selectedNadoDepositAsset.label}`);
                   return;
@@ -9162,7 +9256,7 @@ function FuturesPanel() {
                 : dex === 'katana'
                 ? 'Opens Katana deposit. Katana deposits can be bridged from Arbitrum USDC through the official Stargate/Katana bridge flow.'
                 : dex === 'dango'
-                ? 'Use the official Dango bridge/deposit flow. Clash refreshes your Dango balance after it is credited.'
+                ? 'Bridges native USDC from your Arbitrum wallet to your Dango account through Dango Hyperlane. Needs a small ETH gas float; Dango balance can take a few minutes to update.'
                 : dex === 'risex'
                 ? (
                   <>
@@ -9180,7 +9274,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && dex !== 'dango' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'flash' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'flash' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>

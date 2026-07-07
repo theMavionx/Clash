@@ -10,6 +10,18 @@ import { ARBITRUM_CHAIN_ID } from '../lib/gmxConfig';
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_INTERVAL_MS = 30_000;
+const POST_TX_REFRESH_DELAYS_MS = [700, 1500, 3000, 5000, 8000, 12_000, 18_000, 25_000, 35_000, 45_000];
+const DANGO_QUERY_APP_BLOCK_INTERVAL = 1;
+const DANGO_WS_RECONNECT_MS = 3000;
+const DANGO_PERPS_CONTRACT = '0x7065727073000000000000000000000000000000';
+const DANGO_QUERY_APP_SUBSCRIPTION = `
+  subscription QueryAppSubscription($request: GrugQueryInput!, $interval: Int! = 10) {
+    queryApp(request: $request, blockInterval: $interval) {
+      response
+      blockHeight
+    }
+  }
+`;
 const DANGO_DEPOSIT_URL = 'https://dango.exchange/bridge';
 const DANGO_ARBITRUM_SOURCE_CHAIN = Object.freeze({
   id: ARBITRUM_CHAIN_ID,
@@ -74,6 +86,172 @@ function normalizeDangoAddress(value) {
 function num(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function firstValue(row, keys, fallback = undefined) {
+  for (const key of keys) {
+    if (row && row[key] != null && row[key] !== '') return row[key];
+  }
+  return fallback;
+}
+
+function symbolFromPairId(pairId) {
+  const text = String(pairId || '').toLowerCase();
+  const match = text.match(/perp\/([a-z0-9]+)usd/u);
+  return match ? match[1].toUpperCase() : String(pairId || '').toUpperCase();
+}
+
+function marketByPairId(markets) {
+  const map = new Map();
+  for (const market of Array.isArray(markets) ? markets : []) {
+    const pairId = String(market?.pair_id || market?.pairId || '').toLowerCase();
+    if (pairId) map.set(pairId, market);
+    const symbol = String(market?.symbol || '').toUpperCase();
+    if (symbol) map.set(`perp/${symbol.toLowerCase()}usd`, market);
+  }
+  return map;
+}
+
+function unwrapDangoWasmSmart(response) {
+  const root = response?.wasm_smart ?? response?.wasmSmart ?? response?.response?.wasm_smart ?? response?.response?.wasmSmart ?? response;
+  return root && typeof root === 'object' ? root : {};
+}
+
+function normalizeRealtimeAccount(address, state = {}) {
+  const equity = num(firstValue(state, ['account_margin', 'accountMargin', 'equity', 'account_equity']), 0);
+  const available = num(firstValue(state, ['available_margin', 'availableMargin', 'available_to_spend']), equity);
+  const margin = num(firstValue(state, ['position_margin', 'positionMargin', 'margin_used', 'total_margin_used']), 0);
+  const positionMap = state?.positions && typeof state.positions === 'object' ? state.positions : {};
+  const limitOrders = state?.limit_orders && typeof state.limit_orders === 'object' ? state.limit_orders : {};
+  return {
+    address,
+    balance: String(equity),
+    usdc: String(equity),
+    account_equity: String(equity),
+    available_to_spend: String(Math.max(0, available)),
+    available_to_withdraw: String(Math.max(0, available)),
+    total_margin_used: String(margin),
+    positions_count: Object.keys(positionMap).length,
+    orders_count: Math.max(0, Number(state?.open_order_count ?? Object.values(limitOrders).reduce((count, sideMap) => count + Object.keys(sideMap || {}).length, 0)) || 0),
+    _raw: state,
+  };
+}
+
+function normalizeRealtimePosition(pairId, row = {}, market = {}) {
+  const size = num(firstValue(row, ['size', 'base_size', 'baseSize']), 0);
+  if (!size) return null;
+  const amount = Math.abs(size);
+  const mark = num(market.mark_price || market.price || market.mark, 0);
+  const entry = num(firstValue(row, ['entry_price', 'entryPrice', 'average_entry_price', 'avgEntryPrice', 'average_price']), mark);
+  const notional = amount * (mark || entry || 0);
+  const initialMarginRatio = num(market.initial_margin_ratio ?? market.initialMarginRatio, 0);
+  const inferredLeverage = initialMarginRatio > 0 ? 1 / initialMarginRatio : 1;
+  return {
+    symbol: symbolFromPairId(pairId),
+    dex: 'dango',
+    source: 'dango',
+    pnl_source: 'dango_position',
+    pair_id: pairId,
+    pair_index: pairId,
+    side: size >= 0 ? 'bid' : 'ask',
+    direction: size >= 0 ? 'long' : 'short',
+    amount: String(amount),
+    size: String(size),
+    size_usd: notional,
+    entry_price: String(entry || ''),
+    mark_price: String(mark || ''),
+    liquidation_price: firstValue(row, ['liquidation_price', 'liquidationPrice'], null),
+    margin: String(num(firstValue(row, ['margin', 'position_margin', 'initial_margin']), initialMarginRatio > 0 ? notional * initialMarginRatio : 0)),
+    leverage: String(num(firstValue(row, ['leverage']), inferredLeverage)),
+    pnl_usd: String(num(firstValue(row, ['unrealized_pnl', 'unrealizedPnl', 'pnl']), 0)),
+    unrealized_funding: String(num(firstValue(row, ['unrealized_funding', 'unrealizedFunding']), 0)),
+    realized_pnl: String(num(firstValue(row, ['realized_pnl', 'realizedPnl']), 0)),
+    is_isolated: false,
+    market_addr: pairId,
+    _raw: row,
+  };
+}
+
+function normalizeRealtimeOpenOrder(pairId, sideKey, priceKey, order = {}) {
+  const rawSize = num(order?.size ?? order?.base_size ?? order?.baseSize ?? order?.remaining_size ?? order?.remainingSize, 0);
+  const side = String(sideKey || order?.side || '').toLowerCase().includes('ask') || rawSize < 0 ? 'ask' : 'bid';
+  const amount = Math.abs(rawSize || num(order?.amount, 0));
+  const price = num(order?.limit_price ?? order?.limitPrice ?? order?.price ?? priceKey, 0);
+  const id = String(order?.order_id ?? order?.orderId ?? order?.id ?? `${pairId}:${side}:${priceKey}`).trim();
+  return {
+    symbol: symbolFromPairId(pairId),
+    pair_id: pairId,
+    pair_index: pairId,
+    order_id: id,
+    client_order_id: String(order?.client_order_id ?? order?.clientOrderId ?? ''),
+    side,
+    amount: String(amount),
+    size: String(rawSize || (side === 'ask' ? -amount : amount)),
+    price: String(price || ''),
+    trigger_price: null,
+    order_type: 'limit',
+    type: 'limit',
+    status: String(order?.status || 'open'),
+    reduce_only: order?.reduce_only === true || order?.reduceOnly === true,
+    market_addr: pairId,
+    _raw: { pairId, sideKey, priceKey, order },
+  };
+}
+
+function conditionalOrdersFromRealtimeState(state = {}) {
+  const out = [];
+  const positionMap = state?.positions && typeof state.positions === 'object' ? state.positions : {};
+  for (const [pairId, position] of Object.entries(positionMap)) {
+    for (const key of ['conditional_order_above', 'conditionalOrderAbove', 'conditional_order_below', 'conditionalOrderBelow']) {
+      const order = position?.[key];
+      if (!order || typeof order !== 'object') continue;
+      const trigger = num(order.trigger_price ?? order.triggerPrice ?? order.price, 0);
+      const id = String(order.order_id ?? order.orderId ?? `${pairId}:${key}:${trigger}`).trim();
+      const isAbove = /above/iu.test(key);
+      const closesLong = num(position.size, 0) >= 0;
+      const type = closesLong
+        ? (isAbove ? 'take_profit' : 'stop_loss')
+        : (isAbove ? 'stop_loss' : 'take_profit');
+      out.push({
+        symbol: symbolFromPairId(pairId),
+        pair_id: pairId,
+        pair_index: pairId,
+        order_id: id,
+        side: closesLong ? 'ask' : 'bid',
+        amount: String(Math.abs(num(position.size, 0))),
+        price: String((order.limit_price ?? order.limitPrice ?? trigger) || ''),
+        trigger_price: String(trigger || ''),
+        stop_price: String(trigger || ''),
+        order_type: type,
+        type,
+        status: 'open',
+        reduce_only: true,
+        market_addr: pairId,
+        _raw: { pairId, key, order, position },
+      });
+    }
+  }
+  return out;
+}
+
+function normalizeRealtimeOrders(payload = {}) {
+  const out = [];
+  const source = payload?.orders && typeof payload.orders === 'object' ? payload.orders : payload;
+  const entries = Array.isArray(source)
+    ? source.map((order, index) => [String(order?.order_id ?? order?.orderId ?? index), order])
+    : Object.entries(source && typeof source === 'object' ? source : {});
+  for (const [orderId, order] of entries) {
+    if (!order || typeof order !== 'object') continue;
+    const pairId = String(order.pair_id || order.pairId || '').toLowerCase();
+    if (!pairId) continue;
+    out.push(normalizeRealtimeOpenOrder(pairId, null, order.limit_price ?? order.limitPrice, { ...order, order_id: orderId }));
+  }
+  return out;
+}
+
+function isDangoConditionalOrder(order) {
+  const type = String(order?.order_type || order?.type || '').toLowerCase();
+  return type.includes('take_profit') || type.includes('stop_loss') || order?.reduce_only === true || order?.reduceOnly === true;
 }
 
 function rows(payload) {
@@ -181,12 +359,16 @@ export function useDango() {
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
   const [depositStatus, setDepositStatus] = useState(null);
+  const [dangoConfig, setDangoConfig] = useState(null);
   const [bridgeConfig, setBridgeConfig] = useState(null);
   const [bridgeSourceBalances, setBridgeSourceBalances] = useState({});
   const [bridgeSourceBalanceStatus, setBridgeSourceBalanceStatus] = useState({});
   const [bridgeDepositSourceChainId, setBridgeDepositSourceChainId] = useState(DANGO_ARBITRUM_SOURCE_CHAIN.id);
 
   const claimGoldRef = useRef(null);
+  const realtimeLimitOrdersRef = useRef([]);
+  const realtimeConditionalOrdersRef = useRef([]);
+  const realtimeWsRef = useRef(null);
 
   const headers = useCallback((extra = {}) => {
     const out = {
@@ -230,6 +412,21 @@ export function useDango() {
     }
   }, []);
 
+  const fetchDangoConfig = useCallback(async () => {
+    if (!walletAddr || !token) {
+      setDangoConfig(null);
+      return null;
+    }
+    try {
+      const data = await authedGet(`${FUTURES_API}/dango/config?dex=dango`);
+      setDangoConfig(data || null);
+      return data || null;
+    } catch (e) {
+      console.warn('[useDango] config:', e?.message || e);
+      return null;
+    }
+  }, [walletAddr, token, authedGet]);
+
   const fetchAccount = useCallback(async () => {
     if (!walletAddr || !token) {
       setAccount(null);
@@ -248,12 +445,20 @@ export function useDango() {
         authedGet(positionsUrl),
         authedGet(ordersUrl),
       ]);
+      const nextPositionRows = Array.isArray(nextPositions) ? nextPositions : [];
+      const nextOrderRows = Array.isArray(nextOrders) ? nextOrders : [];
       setAccount(nextAccount || null);
-      setPositions(Array.isArray(nextPositions) ? nextPositions : []);
-      setOrders(Array.isArray(nextOrders) ? nextOrders : []);
+      setPositions(nextPositionRows);
+      setOrders(nextOrderRows);
+      realtimeLimitOrdersRef.current = nextOrderRows.filter(order => !isDangoConditionalOrder(order));
+      realtimeConditionalOrdersRef.current = nextOrderRows.filter(isDangoConditionalOrder);
       setWalletUsdc(num(nextAccount?.available_to_spend ?? nextAccount?.usdc ?? nextAccount?.account_equity));
       setAccountReady(true);
-      return nextAccount;
+      return {
+        account: nextAccount || null,
+        positions: nextPositionRows,
+        orders: nextOrderRows,
+      };
     } catch (e) {
       console.warn('[useDango] account:', e?.message || e);
       setError(e?.message || 'Failed to load Dango account');
@@ -261,6 +466,45 @@ export function useDango() {
       return null;
     }
   }, [walletAddr, token, authedGet]);
+
+  const mergeRealtimeOrders = useCallback(() => {
+    setOrders([
+      ...realtimeLimitOrdersRef.current,
+      ...realtimeConditionalOrdersRef.current,
+    ]);
+  }, []);
+
+  const applyRealtimeUserState = useCallback((response, blockHeight = null) => {
+    const state = unwrapDangoWasmSmart(response);
+    const accountSnapshot = normalizeRealtimeAccount(walletAddr, state);
+    const marketsByPair = marketByPairId(markets);
+    const positionMap = state?.positions && typeof state.positions === 'object' ? state.positions : {};
+    const nextPositions = Object.entries(positionMap)
+      .map(([pairId, row]) => normalizeRealtimePosition(pairId, row, marketsByPair.get(String(pairId).toLowerCase()) || {}))
+      .filter(Boolean);
+    realtimeConditionalOrdersRef.current = conditionalOrdersFromRealtimeState(state);
+    setAccount(accountSnapshot);
+    setPositions(nextPositions);
+    setWalletUsdc(num(accountSnapshot?.available_to_spend ?? accountSnapshot?.usdc ?? accountSnapshot?.account_equity));
+    setAccountReady(true);
+    mergeRealtimeOrders();
+    console.info('[useDango] realtime user_state_extended', {
+      blockHeight,
+      positions: nextPositions.length,
+      conditionalOrders: realtimeConditionalOrdersRef.current.length,
+    });
+  }, [walletAddr, markets, mergeRealtimeOrders]);
+
+  const applyRealtimeOrders = useCallback((response, blockHeight = null) => {
+    const payload = unwrapDangoWasmSmart(response);
+    const nextOrders = normalizeRealtimeOrders(payload);
+    realtimeLimitOrdersRef.current = nextOrders;
+    mergeRealtimeOrders();
+    console.info('[useDango] realtime orders_by_user', {
+      blockHeight,
+      orders: nextOrders.length,
+    });
+  }, [mergeRealtimeOrders]);
 
   const fetchBridgeConfig = useCallback(async () => {
     if (!walletAddr || !token) {
@@ -324,12 +568,19 @@ export function useDango() {
     setLoading(true);
     setError(null);
     try {
-      await Promise.all([fetchMarkets(), fetchAccount(), fetchBridgeConfig(), readBridgeSourceUsdc()]);
+      const [marketRows, accountSnapshot, config, sourceBalance, realtimeConfig] = await Promise.all([
+        fetchMarkets(),
+        fetchAccount(),
+        fetchBridgeConfig(),
+        readBridgeSourceUsdc(),
+        fetchDangoConfig(),
+      ]);
       setDataReady(true);
+      return { markets: marketRows, accountSnapshot, config, sourceBalance, realtimeConfig };
     } finally {
       setLoading(false);
     }
-  }, [isActiveDex, fetchMarkets, fetchAccount, fetchBridgeConfig, readBridgeSourceUsdc]);
+  }, [isActiveDex, fetchMarkets, fetchAccount, fetchBridgeConfig, readBridgeSourceUsdc, fetchDangoConfig]);
 
   const refreshServerResources = useCallback(async () => {
     if (!token) return null;
@@ -391,11 +642,175 @@ export function useDango() {
     return () => clearTimeout(kickoff);
   }, [isActiveDex, walletAddr, token]);
 
-  const submitDangoAction = useCallback(async (action, body, label = action) => {
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr || !token || typeof WebSocket === 'undefined') return undefined;
+    let stopped = false;
+    let reconnectTimer = null;
+    let pingTimer = null;
+    let ws = null;
+    const userStateRequest = {
+      wasm_smart: {
+        contract: DANGO_PERPS_CONTRACT,
+        msg: {
+          user_state_extended: {
+            include_all: true,
+            include_available_margin: true,
+            include_equity: true,
+            include_liquidation_price: true,
+            include_maintenance_margin: true,
+            include_unrealized_funding: true,
+            include_unrealized_pnl: true,
+            user: walletAddr,
+          },
+        },
+      },
+    };
+    const ordersRequest = {
+      wasm_smart: {
+        contract: DANGO_PERPS_CONTRACT,
+        msg: {
+          orders_by_user: {
+            user: walletAddr,
+          },
+        },
+      },
+    };
+
+    const cleanupTimers = () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (pingTimer) clearInterval(pingTimer);
+      reconnectTimer = null;
+      pingTimer = null;
+    };
+
+    const sendSubscription = (id, request) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        id,
+        type: 'subscribe',
+        payload: {
+          query: DANGO_QUERY_APP_SUBSCRIPTION,
+          variables: {
+            request,
+            interval: DANGO_QUERY_APP_BLOCK_INTERVAL,
+          },
+        },
+      }));
+    };
+
+    const handleNext = (message) => {
+      const id = String(message?.id || '');
+      const queryApp = message?.payload?.data?.queryApp;
+      if (!queryApp) return;
+      if (id === 'dango-user-state') {
+        applyRealtimeUserState(queryApp.response, queryApp.blockHeight);
+      } else if (id === 'dango-orders') {
+        applyRealtimeOrders(queryApp.response, queryApp.blockHeight);
+      }
+    };
+
+    const connect = async () => {
+      cleanupTimers();
+      let cfg = dangoConfig;
+      if (!cfg?.graphql_ws_url) cfg = await fetchDangoConfig();
+      const url = cfg?.graphql_ws_url;
+      if (stopped || !url) return;
+      try {
+        ws = new WebSocket(url, 'graphql-transport-ws');
+        realtimeWsRef.current = ws;
+      } catch (e) {
+        console.warn('[useDango] realtime ws create failed', e?.message || e);
+        reconnectTimer = setTimeout(connect, DANGO_WS_RECONNECT_MS);
+        return;
+      }
+
+      ws.onopen = () => {
+        console.info('[useDango] realtime ws open', { url });
+        ws.send(JSON.stringify({ type: 'connection_init' }));
+      };
+      ws.onmessage = (event) => {
+        let message = null;
+        try { message = JSON.parse(event.data); } catch { return; }
+        const type = String(message?.type || '');
+        if (type === 'connection_ack') {
+          sendSubscription('dango-user-state', userStateRequest);
+          sendSubscription('dango-orders', ordersRequest);
+          pingTimer = setInterval(() => {
+            if (ws?.readyState === WebSocket.OPEN) {
+              try { ws.send(JSON.stringify({ type: 'ping' })); } catch {}
+            }
+          }, 25_000);
+          console.info('[useDango] realtime ws subscribed', { account: walletAddr, interval: DANGO_QUERY_APP_BLOCK_INTERVAL });
+          return;
+        }
+        if (type === 'next') {
+          handleNext(message);
+          return;
+        }
+        if (type === 'ping' && ws?.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'pong' })); } catch {}
+          return;
+        }
+        if (type === 'error') {
+          console.warn('[useDango] realtime ws subscription error', message?.payload || message);
+        }
+      };
+      ws.onerror = (event) => {
+        console.warn('[useDango] realtime ws error', event?.message || event?.type || event);
+      };
+      ws.onclose = (event) => {
+        if (realtimeWsRef.current === ws) realtimeWsRef.current = null;
+        if (pingTimer) clearInterval(pingTimer);
+        pingTimer = null;
+        if (!stopped) {
+          console.warn('[useDango] realtime ws closed', { code: event?.code, reason: event?.reason || '' });
+          reconnectTimer = setTimeout(connect, DANGO_WS_RECONNECT_MS);
+        }
+      };
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      cleanupTimers();
+      if (realtimeWsRef.current === ws) realtimeWsRef.current = null;
+      try { ws?.close?.(); } catch {}
+    };
+  }, [
+    isActiveDex,
+    walletAddr,
+    token,
+    dangoConfig,
+    fetchDangoConfig,
+    applyRealtimeUserState,
+    applyRealtimeOrders,
+  ]);
+
+  const schedulePostTxRefresh = useCallback((action, label) => {
+    POST_TX_REFRESH_DELAYS_MS.forEach(delay => {
+      setTimeout(() => {
+        fetchAccount()
+          .then(snapshot => {
+            console.info('[useDango] post-tx refresh', {
+              action,
+              label,
+              delay,
+              positions: snapshot?.positions?.length ?? null,
+              orders: snapshot?.orders?.length ?? null,
+            });
+          })
+          .catch(e => console.warn('[useDango] post-tx refresh failed', { action, label, delay, error: e?.message || String(e) }));
+      }, delay);
+    });
+  }, [fetchAccount]);
+
+  const submitDangoAction = useCallback(async (action, body, label = action, meta = {}) => {
     if (!walletAddr) return { error: 'Connect a Dango/EVM wallet first' };
+    const onPhase = typeof meta?.onPhase === 'function' ? meta.onPhase : null;
     setLoading(true);
     setError(null);
     try {
+      onPhase?.('preparing');
       if (action === 'deposit') setDepositStatus({ status: 'preparing', amount: body?.amount });
       const prepared = await fetchJson(`${FUTURES_API}/dango/tx/prepare?dex=dango`, {
         method: 'POST',
@@ -414,6 +829,7 @@ export function useDango() {
         message: prepared?.sign_doc?.message || null,
       });
       if (action === 'deposit') setDepositStatus({ status: 'signing', amount: body?.amount });
+      onPhase?.('signing');
       const credential = await signDangoTx({
         evm,
         account: address || walletAddr,
@@ -421,6 +837,7 @@ export function useDango() {
         keyHash: prepared?.key_hash || '',
       });
       if (action === 'deposit') setDepositStatus({ status: 'broadcasting', amount: body?.amount });
+      onPhase?.('confirming');
       const signedTx = {
         ...(prepared?.tx || prepared?.unsigned_tx || {}),
         credential,
@@ -436,15 +853,14 @@ export function useDango() {
         result,
       });
       if (action === 'deposit') setDepositStatus({ status: 'confirming', amount: body?.amount, result });
-      await fetchAccount();
-      setTimeout(fetchAccount, 1200);
-      setTimeout(fetchAccount, 3000);
-      setTimeout(fetchAccount, 6000);
-      setTimeout(fetchAccount, 10_000);
+      onPhase?.('indexing');
+      const snapshot = await fetchAccount();
+      schedulePostTxRefresh(action, label);
       return {
         success: true,
         submitted: true,
         result,
+        snapshot,
         txHash: result?.txHash || result?.tx_hash || result?.hash || null,
       };
     } catch (e) {
@@ -455,7 +871,7 @@ export function useDango() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, headers, evm, address, fetchAccount]);
+  }, [walletAddr, headers, evm, address, fetchAccount, schedulePostTxRefresh]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, _slippage = '0.5', leverage = 1, opts = {}) => (
     submitDangoAction('place_order', {
@@ -465,8 +881,8 @@ export function useDango() {
       orderKind: 'market',
       maxSlippage: opts?.maxSlippage ?? opts?.slippage ?? _slippage,
       leverage,
-      ...opts,
-    }, 'market order')
+      ...Object.fromEntries(Object.entries(opts || {}).filter(([key]) => key !== 'onPhase')),
+    }, 'market order', { onPhase: opts?.onPhase })
   ), [submitDangoAction]);
 
   const placeLimitOrder = useCallback((symbol, side, price, amount, _tif = 'GTC', leverage = 1, opts = {}) => (
@@ -478,8 +894,8 @@ export function useDango() {
       price,
       timeInForce: _tif || 'GTC',
       leverage,
-      ...opts,
-    }, 'limit order')
+      ...Object.fromEntries(Object.entries(opts || {}).filter(([key]) => key !== 'onPhase')),
+    }, 'limit order', { onPhase: opts?.onPhase })
   ), [submitDangoAction]);
 
   const closePosition = useCallback((symbol, side, amount, pairId) => {
