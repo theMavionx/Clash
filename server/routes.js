@@ -8807,6 +8807,7 @@ function resolveClaimWalletForDex(player, dex, currentWallet = null) {
     }
   } catch {}
   if (dexAcceptsWallet(normalizedDex, currentWallet)) return canonicalWalletIdentifier(currentWallet);
+  if (DEX_REQUIRED_CHAIN[normalizedDex]) return null;
   return currentWallet;
 }
 
@@ -13557,6 +13558,21 @@ function persistVerifiedPacificaTradingWallet(player, account, opts = {}) {
     adopted_from_existing_baseline: baseline,
   });
   const txn = db.db.transaction(() => {
+    db.db.prepare(`
+      INSERT INTO player_auth_identities (player_id, type, identifier, verified_at)
+      VALUES (?, 'solana_wallet', ?, datetime('now'))
+      ON CONFLICT(type, identifier) DO UPDATE SET
+        player_id = excluded.player_id,
+        verified_at = datetime('now')
+    `).run(player.id, wallet);
+    db.db.prepare(`
+      INSERT INTO player_wallets (player_id, chain_type, address, label, is_primary, updated_at)
+      VALUES (?, 'solana', ?, 'Pacifica trading wallet', 0, datetime('now'))
+      ON CONFLICT(chain_type, address) DO UPDATE SET
+        player_id = excluded.player_id,
+        label = COALESCE(player_wallets.label, excluded.label),
+        updated_at = datetime('now')
+    `).run(player.id, wallet);
     if (agentWallet) {
       db.db.prepare(`
         INSERT OR IGNORE INTO pacifica_agents (player_id, agent_wallet) VALUES (?, ?)

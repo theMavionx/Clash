@@ -518,6 +518,7 @@ function resolveWallet(player) {
         return row.wallet_address;
       }
     } catch {}
+    return null;
   }
   if (isSolanaWallet(player.wallet) || isEvmWallet(player.wallet) || isAptosWallet(player.wallet)) {
     return player.wallet;
@@ -535,7 +536,7 @@ function resolveWallet(player) {
 
 function walletMatchesDex(dex, wallet) {
   if (dex === 'decibel') return isAptosWallet(wallet);
-  if (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') return isSolanaWallet(wallet);
+  if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') return isSolanaWallet(wallet);
   if (
     dex === 'avantis' ||
     dex === 'gmx' ||
@@ -576,7 +577,7 @@ function resolveWalletForDex(player, dex) {
   try {
     const chainType = normalizedDex === 'decibel'
       ? 'aptos'
-      : (normalizedDex === 'phoenix' || normalizedDex === 'gmtrade' || normalizedDex === 'flash')
+      : (normalizedDex === 'pacifica' || normalizedDex === 'phoenix' || normalizedDex === 'gmtrade' || normalizedDex === 'flash')
         ? 'solana'
         : 'evm';
     const walletRow = db.db.prepare(
@@ -942,6 +943,20 @@ async function fetchPacificaAllTradesUncached(player, opts = {}) {
       if (row && isSolanaWallet(row.wallet_address)) master = row.wallet_address;
     } catch (e) {
       console.warn(`[pacifica fetch] player_dex_accounts wallet read failed:`, e.message);
+    }
+  }
+  if (!master) {
+    try {
+      const row = db.db.prepare(`
+        SELECT address
+        FROM player_wallets
+        WHERE player_id = ? AND chain_type = 'solana'
+        ORDER BY is_primary DESC, updated_at DESC, id DESC
+        LIMIT 1
+      `).get(player.id);
+      if (row && isSolanaWallet(row.address)) master = row.address;
+    } catch (e) {
+      console.warn(`[pacifica fetch] player_wallets solana read failed:`, e.message);
     }
   }
   let agents = [];

@@ -182,6 +182,61 @@ function roundToLot(amount, lotSize, mode = 'floor') {
   return (roundedUnits * lot).toFixed(decimals);
 }
 
+function decimalPlacesForStep(step) {
+  const text = String(step || '').trim().toLowerCase();
+  if (!text) return 0;
+  if (text.includes('e-')) {
+    const [base, exponent] = text.split('e-');
+    const baseDecimals = (base.split('.')[1] || '').length;
+    const exp = Number(exponent);
+    return Number.isFinite(exp) ? exp + baseDecimals : baseDecimals;
+  }
+  return (text.split('.')[1] || '').length;
+}
+
+function roundToStep(amount, step, mode = 'nearest') {
+  const n = parseFloat(amount);
+  const size = parseFloat(step);
+  if (!Number.isFinite(n) || !Number.isFinite(size) || size <= 0) return String(amount);
+  const units = n / size;
+  const roundedUnits = mode === 'ceil'
+    ? Math.ceil(units - 1e-10)
+    : mode === 'floor'
+      ? Math.floor(units + 1e-10)
+      : Math.round(units);
+  const decimals = decimalPlacesForStep(step);
+  const rounded = roundedUnits * size;
+  return rounded.toFixed(decimals);
+}
+
+function pacificaMarketForSymbol(markets, symbol) {
+  const target = String(symbol || '').trim().toUpperCase();
+  if (!target) return null;
+  return (Array.isArray(markets) ? markets : []).find((market) => (
+    String(market?.symbol || market?.s || '').trim().toUpperCase() === target
+  )) || null;
+}
+
+function pacificaMarketTickSize(market) {
+  return market?.tick_size
+    ?? market?.tickSize
+    ?? market?.price_tick_size
+    ?? market?.priceTickSize
+    ?? market?.price_increment
+    ?? market?.priceIncrement
+    ?? null;
+}
+
+function pacificaTpslRoundMode(positionSide, leg) {
+  const side = String(positionSide || '').toLowerCase();
+  const isLong = side === 'bid' || side === 'long' || side === 'buy';
+  const isTp = leg === 'tp';
+  if (isLong && isTp) return 'ceil';
+  if (isLong && !isTp) return 'floor';
+  if (!isLong && isTp) return 'floor';
+  return 'ceil';
+}
+
 // Pacifica on-chain deposit constants
 const PACIFICA_PROGRAM = new PublicKey('PCFA5iYgmqK6MqPhWNKg7Yv7auX7VZ4Cx7T1eJyrAMH');
 const CENTRAL_STATE = new PublicKey('9Gdmhq4Gv1LnNMp7aiS1HSVd7pNnXNMsbuXALCQRmGjY');
@@ -1393,9 +1448,29 @@ export function usePacifica() {
     if (!walletAddr) return;
     return runSignedOnce(`tpsl:${walletAddr}:${symbol}:${side}`, async () => {
       try {
+        const market = pacificaMarketForSymbol(marketsRef.current, symbol);
+        const tick = pacificaMarketTickSize(market);
+        const normalizeTrigger = (value, leg) => {
+          if (!value) return null;
+          if (!tick) return String(value);
+          return roundToStep(value, tick, pacificaTpslRoundMode(side, leg));
+        };
+        const normalizedTakeProfit = normalizeTrigger(takeProfit, 'tp');
+        const normalizedStopLoss = normalizeTrigger(stopLoss, 'sl');
+        if (tick && (String(normalizedTakeProfit || '') !== String(takeProfit || '') || String(normalizedStopLoss || '') !== String(stopLoss || ''))) {
+          console.info('[Pacifica] normalized TP/SL to tick size', {
+            symbol,
+            side,
+            tick_size: tick,
+            take_profit: takeProfit || null,
+            normalized_take_profit: normalizedTakeProfit,
+            stop_loss: stopLoss || null,
+            normalized_stop_loss: normalizedStopLoss,
+          });
+        }
         const payload = { symbol, side, builder_code: BUILDER_CODE };
-        if (takeProfit) payload.take_profit = { stop_price: takeProfit };
-        if (stopLoss) payload.stop_loss = { stop_price: stopLoss };
+        if (normalizedTakeProfit) payload.take_profit = { stop_price: normalizedTakeProfit };
+        if (normalizedStopLoss) payload.stop_loss = { stop_price: normalizedStopLoss };
         const res = await signedRequestWithActivation('POST', '/positions/tpsl', 'set_position_tpsl', payload);
         if (res.error) throw new Error(res.error);
         return res;
