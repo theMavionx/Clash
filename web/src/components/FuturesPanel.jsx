@@ -112,6 +112,24 @@ const DEX_ERROR_LABELS = {
   phoenix: 'Phoenix',
   risex: 'RISEx',
 };
+const OPEN_TPSL_NATIVE_ATTACH_DEXES = new Set(['avantis', 'flash']);
+const OPEN_TPSL_POST_MARKET_DEXES = new Set([
+  'decibel',
+  'dango',
+  'gmx',
+  'hotstuff',
+  'hyperliquid',
+  'katana',
+  'lighter',
+  'monad',
+  'nado',
+  'ostium',
+  'pacifica',
+  'phoenix',
+  'grvt',
+  'gmtrade',
+  'hibachi',
+]);
 
 function finiteNumber(value) {
   const n = Number(value);
@@ -1394,6 +1412,76 @@ function TpslEditor({
           ? 'Enter trigger price.'
           : `${tpslModeLabel(mode)} uses position PnL: TP = profit, SL = loss.`}
       </div>
+    </div>
+  );
+}
+
+function OpenTpslEditor({
+  enabled,
+  onEnabledChange,
+  mode,
+  onModeChange,
+  previewSide,
+  onPreviewSideChange,
+  tpValue,
+  slValue,
+  onTpChange,
+  onSlChange,
+  pos,
+  metrics,
+  dex,
+  orderType,
+}) {
+  const entry = firstPositive(metrics?.entryP, pos?.entry_price, metrics?.markP, pos?.mark_price);
+  const isNativeLimitAttach = OPEN_TPSL_NATIVE_ATTACH_DEXES.has(String(dex || '').toLowerCase());
+  const showLimitNotice = enabled && orderType === 'limit' && !isNativeLimitAttach;
+  return (
+    <div style={enabled ? S.openTpslBoxActive : S.openTpslBox}>
+      <button type="button" style={S.openTpslHeader} onClick={() => onEnabledChange(!enabled)}>
+        <span style={S.openTpslTitle}>TP/SL</span>
+        <span style={enabled ? S.openTpslToggleOn : S.openTpslToggleOff}>{enabled ? 'ON' : 'OFF'}</span>
+      </button>
+      {enabled && (
+        <div style={S.openTpslBody}>
+          <div style={S.tpslMetaRow}>
+            <span>Entry {entry > 0 ? `$${fmtPrice(entry)}` : '-'}</span>
+            <span>{orderType === 'limit' ? 'Limit order' : 'Market order'}</span>
+          </div>
+          <div style={S.tpslModeRow}>
+            <span style={S.tpslModeLabel}>Side</span>
+            <div style={S.tpslModeGroup}>
+              <button type="button" style={previewSide === 'bid' ? S.tpslModeActive : S.tpslModeButton} onClick={() => onPreviewSideChange('bid')}>LONG</button>
+              <button type="button" style={previewSide === 'ask' ? S.tpslModeActive : S.tpslModeButton} onClick={() => onPreviewSideChange('ask')}>SHORT</button>
+            </div>
+          </div>
+          <div style={S.tpslModeRow}>
+            <span style={S.tpslModeLabel}>Input</span>
+            <div style={S.tpslModeGroup}>
+              {TPSL_INPUT_MODES.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  style={mode === item.id ? S.tpslModeActive : S.tpslModeButton}
+                  onClick={() => onModeChange(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={S.openTpslInputGrid}>
+            <TpslValueInput leg="tp" mode={mode} value={tpValue} onChange={onTpChange} pos={pos} metrics={metrics} />
+            <TpslValueInput leg="sl" mode={mode} value={slValue} onChange={onSlChange} pos={pos} metrics={metrics} />
+          </div>
+          <div style={showLimitNotice ? S.openTpslNoticeWarn : S.openTpslNotice}>
+            {showLimitNotice
+              ? `${dexErrorLabel(dex)} limit TP/SL can be placed after the limit fills.`
+              : mode === 'price'
+                ? 'Optional triggers sent with the order when the exchange supports it.'
+                : `${tpslModeLabel(mode)} is converted from margin PnL into trigger price before signing.`}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3372,6 +3460,11 @@ function FuturesPanel() {
   const [tpslInputMode, setTpslInputMode] = useState('price');
   const [tpslInitial, setTpslInitial] = useState({ key: null, tp: '', sl: '' });
   const [tpslSubmittingPos, setTpslSubmittingPos] = useState(null);
+  const [openTpslEnabled, setOpenTpslEnabled] = useState(false);
+  const [openTpslMode, setOpenTpslMode] = useState('price');
+  const [openTpslPreviewSide, setOpenTpslPreviewSide] = useState('bid');
+  const [openTpPrice, setOpenTpPrice] = useState('');
+  const [openSlPrice, setOpenSlPrice] = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const defaultFilters = { symbol: 'All', side: 'All', sortBy: 'time', sortDir: 'desc' };
   const [btmFilters, setBtmFilters] = useState(defaultFilters);
@@ -3723,6 +3816,94 @@ function FuturesPanel() {
   }, [amount, amountInUsdc, leverage, tokenAmount, currentPrice, orderSizingPrice, dex]);
 
   // Buying power = max possible position size = balance × leverage.
+  const makeOpenTpslPosition = useCallback((sideForPosition) => {
+    const entry = Number(orderSizingPrice || currentPrice) || 0;
+    const baseAmount = Number(tokenAmount) > 0
+      ? Number(tokenAmount)
+      : (entry > 0 && Number(positionUsdc) > 0 ? Number(positionUsdc) / entry : 0);
+    const margin = Number(amountInUsdc ? amount : (Number(leverage) > 0 ? Number(positionUsdc) / Number(leverage) : 0)) || 0;
+    return {
+      symbol,
+      side: sideForPosition,
+      entry_price: entry,
+      mark_price: entry,
+      price: entry,
+      amount: baseAmount,
+      margin,
+      leverage,
+      size_usd: Number(positionUsdc) || 0,
+      notional_usd: Number(positionUsdc) || 0,
+    };
+  }, [amount, amountInUsdc, currentPrice, leverage, orderSizingPrice, positionUsdc, symbol, tokenAmount]);
+
+  const makeOpenTpslMetrics = useCallback((pos) => ({
+    entryP: Number(pos?.entry_price || 0),
+    markP: Number(pos?.mark_price || pos?.entry_price || 0),
+    amt: Number(pos?.amount || 0),
+    margin: Number(pos?.margin || 0),
+    setLev: Number(pos?.leverage || leverage || 1),
+    posValueUsd: Number(pos?.size_usd || positionUsdc || 0),
+  }), [leverage, positionUsdc]);
+
+  const openTpslPreviewPos = useMemo(
+    () => makeOpenTpslPosition(openTpslPreviewSide),
+    [makeOpenTpslPosition, openTpslPreviewSide]
+  );
+  const openTpslPreviewMetrics = useMemo(
+    () => makeOpenTpslMetrics(openTpslPreviewPos),
+    [makeOpenTpslMetrics, openTpslPreviewPos]
+  );
+
+  const resolveOpenTpslForSide = useCallback((sideForPosition) => {
+    const hasAnyInput = String(openTpPrice || '').trim() !== '' || String(openSlPrice || '').trim() !== '';
+    if (!openTpslEnabled || !hasAnyInput) {
+      return { ok: true, hasTpsl: false, options: {} };
+    }
+    const pos = makeOpenTpslPosition(sideForPosition);
+    const metrics = makeOpenTpslMetrics(pos);
+    if (!(Number(pos.entry_price) > 0)) {
+      setLocalAlert(orderType === 'limit' ? 'Enter a valid limit price before attaching TP/SL.' : 'Price feed unavailable. Try again in a moment.');
+      return { ok: false };
+    }
+    if (!(Number(pos.amount) > 0)) {
+      setLocalAlert('Enter a valid amount before attaching TP/SL.');
+      return { ok: false };
+    }
+    const tpSubmit = tpslSubmitValue({ pos, metrics, leg: 'tp', mode: openTpslMode, value: openTpPrice, initialValue: '' });
+    const slSubmit = tpslSubmitValue({ pos, metrics, leg: 'sl', mode: openTpslMode, value: openSlPrice, initialValue: '' });
+    if (tpSubmit.error || slSubmit.error) {
+      setLocalAlert(tpSubmit.error || slSubmit.error);
+      return { ok: false };
+    }
+    const takeProfit = tpSubmit.value || null;
+    const stopLoss = slSubmit.value || null;
+    if (!takeProfit && !stopLoss) {
+      return { ok: true, hasTpsl: false, options: {} };
+    }
+    if (!validateTpslBeforeSubmit({ dex, pos, tpPrice: takeProfit || '', slPrice: stopLoss || '', setLocalAlert })) {
+      return { ok: false };
+    }
+    return {
+      ok: true,
+      hasTpsl: true,
+      pos,
+      metrics,
+      takeProfit,
+      stopLoss,
+      amountBase: String(pos.amount),
+      options: {
+        attached_tpsl: true,
+        take_profit: takeProfit || undefined,
+        stop_loss: stopLoss || undefined,
+        takeProfit: takeProfit || undefined,
+        stopLoss: stopLoss || undefined,
+        tp: takeProfit || undefined,
+        sl: stopLoss || undefined,
+        tpsl_input_mode: openTpslMode,
+      },
+    };
+  }, [dex, makeOpenTpslMetrics, makeOpenTpslPosition, openSlPrice, openTpPrice, openTpslEnabled, openTpslMode, orderType, setLocalAlert]);
+
   const maxUsdc = sizePctMarginBase * leverage;
   const hasCurrentSymbolPosition = useMemo(
     () => positions.some(p => String(p.symbol || p.s || '').toUpperCase() === symbol.toUpperCase()),
@@ -3937,6 +4118,12 @@ function FuturesPanel() {
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
       const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+      const attachedTpsl = resolveOpenTpslForSide(side);
+      if (!attachedTpsl?.ok) return;
+      if (attachedTpsl?.hasTpsl && orderType === 'limit' && !OPEN_TPSL_NATIVE_ATTACH_DEXES.has(dex)) {
+        setLocalAlert(`${dexErrorLabel(dex)} can attach TP/SL after a limit order fills. For now attach TP/SL directly only works for supported exchanges.`);
+        return;
+      }
       if (dex === 'flash' && flashMarketBlockReason) {
         setLocalAlert(`${symbol} is not open for Flash trading right now (${flashMarketBlockReason}).`);
         return;
@@ -4219,6 +4406,7 @@ function FuturesPanel() {
         : null;
       const tradeOptions = {
         ...(Number.isFinite(positionUsdc) && positionUsdc > 0 ? { notional_usd: positionUsdc } : {}),
+        ...(attachedTpsl?.options || {}),
         ...(dex === 'phoenix' ? { margin_mode: marginModes[symbol] ? 'isolated' : 'cross' } : {}),
         ...(dex === 'gmtrade' && (currentMarket?.market_token || currentMarket?.marketToken)
           ? { market_token: currentMarket.market_token || currentMarket.marketToken }
@@ -4244,7 +4432,9 @@ function FuturesPanel() {
           return;
         }
         logLighterTrade('submit_limit_start', { qty, limitPrice });
-        result = await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage, tradeOptions);
+        result = dex === 'avantis'
+          ? await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage, 1, tradeOptions)
+          : await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage, tradeOptions);
       }
       logLighterTrade('submit_result', { result });
       if (result?.error) {
@@ -4258,6 +4448,35 @@ function FuturesPanel() {
           setTradePhase('indexing');
           visible = await waitForDangoTradeVisibility({ before: beforeDangoSnapshot, symbol });
         }
+        let tpslWarning = '';
+        const shouldPostAttachTpsl = attachedTpsl?.hasTpsl
+          && orderType === 'market'
+          && !OPEN_TPSL_NATIVE_ATTACH_DEXES.has(dex)
+          && OPEN_TPSL_POST_MARKET_DEXES.has(dex)
+          && typeof setTpsl === 'function';
+        if (shouldPostAttachTpsl) {
+          setTradePhase('tpsl');
+          const closeSide = side === 'bid' ? 'ask' : 'bid';
+          const tpslAmount = attachedTpsl.amountBase || tokenAmount || (tradePrice > 0 && positionUsdc > 0 ? String(positionUsdc / tradePrice) : '');
+          const pairHint = result?.pair_index ?? result?.pairIndex ?? currentMarket?.pair_index ?? currentMarket?.pairIndex ?? currentMarket?.market_id ?? currentMarket?.marketId ?? currentMarket?.asset_id;
+          const tradeHint = result?.trade_index ?? result?.tradeIndex ?? result?.index;
+          const marketHint = result?.market_addr ?? result?.marketAddr ?? currentMarket?.market_addr ?? currentMarket?.marketAddress ?? currentMarket?.market;
+          const tpslResult = await setTpsl(
+            symbol,
+            closeSide,
+            attachedTpsl.takeProfit || null,
+            attachedTpsl.stopLoss || null,
+            pairHint,
+            tradeHint,
+            tpslAmount,
+            marketHint,
+            dex === 'dango' ? { onPhase: phase => setTradePhase(phase) } : undefined,
+          );
+          if (tpslResult?.error) {
+            tpslWarning = ` TP/SL failed: ${tpslResult.error}`;
+            setLocalAlert(tpslWarning.trim());
+          }
+        }
         setTradePhase(null);
         const successText = result.info
           ? result.info
@@ -4268,7 +4487,7 @@ function FuturesPanel() {
             : orderType === 'market'
             ? `${side.toUpperCase()} ${symbol} opened`
             : `${side.toUpperCase()} ${symbol} limit placed`;
-        setSuccessMsg(successText);
+        setSuccessMsg(`${successText}${attachedTpsl?.hasTpsl && !tpslWarning ? ' + TP/SL' : ''}${tpslWarning}`);
         setAmount('');
         setSizePct(0);
       }
@@ -4284,7 +4503,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, dangoMinNotionalUsd, waitForDangoTradeVisibility]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, dangoMinNotionalUsd, waitForDangoTradeVisibility, resolveOpenTpslForSide, setTpsl]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -4316,6 +4535,8 @@ function FuturesPanel() {
   }, [dex, tradeButtonBusy, tpslSubmittingPos]);
   const tradeButtonPendingLabel = tradePhase === 'indexing'
     ? 'Syncing...'
+    : tradePhase === 'tpsl'
+    ? 'Setting TP/SL...'
     : tradePhase === 'confirming'
     ? 'Confirming...'
     : tradePhase === 'signing'
@@ -4617,6 +4838,23 @@ function FuturesPanel() {
         )}
 
         {/* Size slider — % of wallet balance committed as margin */}
+        <OpenTpslEditor
+          enabled={openTpslEnabled}
+          onEnabledChange={(next) => { clearTradeFeedback(); setOpenTpslEnabled(next); }}
+          mode={openTpslMode}
+          onModeChange={(next) => { clearTradeFeedback(); setOpenTpslMode(next); }}
+          previewSide={openTpslPreviewSide}
+          onPreviewSideChange={(next) => { clearTradeFeedback(); setOpenTpslPreviewSide(next); }}
+          tpValue={openTpPrice}
+          slValue={openSlPrice}
+          onTpChange={(next) => { clearTradeFeedback(); setOpenTpPrice(next); }}
+          onSlChange={(next) => { clearTradeFeedback(); setOpenSlPrice(next); }}
+          pos={openTpslPreviewPos}
+          metrics={openTpslPreviewMetrics}
+          dex={dex}
+          orderType={orderType}
+        />
+
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
@@ -10548,6 +10786,41 @@ const S = {
   },
   tpslHint: {
     fontSize: 10, fontWeight: 750, color: '#8a7252', lineHeight: 1.2,
+  },
+  openTpslBox: {
+    border: '2px solid #d4c8b0', borderRadius: 10, background: 'rgba(255,255,255,0.28)',
+    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+  },
+  openTpslBoxActive: {
+    border: '2px solid #f2a000', borderRadius: 10, background: '#fff7d6',
+    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    boxShadow: '0 1px 0 rgba(92,58,33,0.16)',
+  },
+  openTpslHeader: {
+    width: '100%', border: 'none', background: 'transparent', padding: '7px 9px',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    cursor: 'pointer', color: '#5C3A21',
+  },
+  openTpslTitle: { fontSize: 12, fontWeight: 950, textTransform: 'uppercase' },
+  openTpslToggleOff: {
+    fontSize: 10, fontWeight: 950, padding: '2px 7px', borderRadius: 999,
+    background: '#d4c8b0', color: '#6f5a3d',
+  },
+  openTpslToggleOn: {
+    fontSize: 10, fontWeight: 950, padding: '2px 7px', borderRadius: 999,
+    background: '#16A34A', color: '#fff',
+  },
+  openTpslBody: {
+    display: 'flex', flexDirection: 'column', gap: 6, padding: '0 8px 8px',
+  },
+  openTpslInputGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6,
+  },
+  openTpslNotice: {
+    fontSize: 10, fontWeight: 750, color: '#8a7252', lineHeight: 1.2,
+  },
+  openTpslNoticeWarn: {
+    fontSize: 10, fontWeight: 850, color: '#9A3412', lineHeight: 1.2,
   },
   btnRed: {
     flex: 1, padding: '8px', background: '#E53935', border: '2px solid #B71C1C', borderRadius: 8,
