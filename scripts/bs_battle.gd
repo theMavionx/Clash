@@ -702,18 +702,21 @@ func _watch_battle_entry_switch(seq: int, started_ticks: int, label: String) -> 
 		bs.find_button.text = "Find Enemy"
 
 
-func _run_battle_entry_switch(combat_warmup: Node, warmup_already_waited: bool, seq: int, started_ticks: int, label: String) -> void:
-	print("[BATTLE_ENTRY] ", label, "_runner_start seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_valid=", combat_warmup != null and is_instance_valid(combat_warmup), " enemy_has_buildings=", enemy_info.has("buildings"))
-	await _switch_to_enemy_island_after_sail(combat_warmup, warmup_already_waited)
+func _run_battle_entry_switch(combat_warmup: Variant, warmup_already_waited: bool, seq: int, started_ticks: int, label: String) -> void:
+	var safe_warmup: Node = null
+	if combat_warmup is Node and is_instance_valid(combat_warmup):
+		safe_warmup = combat_warmup
+	print("[BATTLE_ENTRY] ", label, "_runner_start seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_valid=", safe_warmup != null, " enemy_has_buildings=", enemy_info.has("buildings"))
+	await _switch_to_enemy_island_after_sail(safe_warmup, warmup_already_waited)
 	print("[BATTLE_ENTRY] ", label, "_runner_done seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " viewing=", is_viewing_enemy, " in_progress=", _find_in_progress)
 
 
-func _dispatch_battle_entry_switch(combat_warmup: Node, warmup_already_waited: bool, started_ticks: int, label: String) -> void:
+func _dispatch_battle_entry_switch(combat_warmup: Variant, warmup_already_waited: bool, started_ticks: int, label: String) -> void:
 	_battle_entry_switch_seq += 1
 	var seq: int = _battle_entry_switch_seq
-	print("[BATTLE_ENTRY] ", label, "_dispatch seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_already_waited=", warmup_already_waited)
-	call_deferred("_run_battle_entry_switch", combat_warmup, warmup_already_waited, seq, started_ticks, label)
-	call_deferred("_watch_battle_entry_switch", seq, started_ticks, label)
+	print("[BATTLE_ENTRY] ", label, "_dispatch seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_already_waited=", warmup_already_waited, " warmup_valid=", combat_warmup is Node and is_instance_valid(combat_warmup))
+	_run_battle_entry_switch(combat_warmup, warmup_already_waited, seq, started_ticks, label)
+	_watch_battle_entry_switch(seq, started_ticks, label)
 
 ## Kicks off the enemy search flow: boards home troops, sails ships, closes
 ## the cloud transition, fetches an enemy from the server, then switches to
@@ -805,8 +808,12 @@ func _on_find_pressed() -> void:
 	if result.has("attacker_resources") and result.attacker_resources is Dictionary:
 		bs._apply_resources_from_server(result.attacker_resources)
 	enemy_info = result
-	print("[BATTLE_ENTRY] switch_call elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
-	_dispatch_battle_entry_switch(combat_warmup, true, entry_started_ticks, "switch")
+	print("[BATTLE_ENTRY] switch_call elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks, " dispatch_next=true")
+	# The hidden warmup node queues itself for deletion as soon as it finishes.
+	# Passing that stale Node into the next typed call can abort before the
+	# switch function prints anything. We only need the fact that warmup already
+	# ran, so intentionally drop the node reference here.
+	_dispatch_battle_entry_switch(null, true, entry_started_ticks, "switch")
 
 func _on_revenge_pressed(source_battle_id: int) -> void:
 	if is_viewing_enemy or _find_in_progress:
@@ -896,8 +903,10 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	if result.has("attacker_resources") and result.attacker_resources is Dictionary:
 		bs._apply_resources_from_server(result.attacker_resources)
 	enemy_info = result
-	print("[BATTLE_ENTRY] revenge_switch_call elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
-	_dispatch_battle_entry_switch(combat_warmup, true, entry_started_ticks, "revenge_switch")
+	print("[BATTLE_ENTRY] revenge_switch_call elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks, " dispatch_next=true")
+	# The warmup node self-frees after completion; do not pass the stale Node
+	# reference into the island switch path.
+	_dispatch_battle_entry_switch(null, true, entry_started_ticks, "revenge_switch")
 
 
 ## Animates all active ships sailing off-screen and saves their transforms
@@ -1098,8 +1107,11 @@ func _switch_to_enemy_island() -> void:
 ## Switches to the enemy island assuming ships have already sailed away.
 ## Skips the cloud-close step; the caller is responsible for closing the
 ## cloud before calling this function.
-func _switch_to_enemy_island_after_sail(combat_warmup: Node = null, warmup_already_waited: bool = false) -> void:
+func _switch_to_enemy_island_after_sail(combat_warmup: Variant = null, warmup_already_waited: bool = false) -> void:
 	var switch_started_ticks: int = Time.get_ticks_msec()
+	var safe_warmup: Node = null
+	if combat_warmup is Node and is_instance_valid(combat_warmup):
+		safe_warmup = combat_warmup
 	var enemy_buildings_value: Variant = enemy_info.get("buildings", [])
 	var enemy_building_count: int = enemy_buildings_value.size() if enemy_buildings_value is Array else 0
 	print("[BATTLE_ENTRY] switch_start enemy=", str(enemy_info.get("name", "???")), " buildings=", enemy_building_count)
@@ -1161,9 +1173,9 @@ func _switch_to_enemy_island_after_sail(combat_warmup: Node = null, warmup_alrea
 	if bs._cannon and bs._cannon.has_method("_preload_explosion_textures"):
 		bs._cannon._preload_explosion_textures()
 	if not warmup_already_waited:
-		if combat_warmup == null or not is_instance_valid(combat_warmup):
-			combat_warmup = _start_hidden_combat_warmup()
-		await _await_hidden_combat_warmup(combat_warmup)
+		if safe_warmup == null:
+			safe_warmup = _start_hidden_combat_warmup()
+		await _await_hidden_combat_warmup(safe_warmup)
 	print("[BATTLE_ENTRY] switch_preload_done elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
 	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
 		if bsys.has_method("_destroy_all_buildings"):
