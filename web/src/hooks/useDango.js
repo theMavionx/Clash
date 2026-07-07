@@ -1,13 +1,61 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatUnits, parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import { signDangoTx } from '../lib/dangoBrowserSigner';
+import { ARBITRUM_CHAIN_ID } from '../lib/gmxConfig';
 
 const FUTURES_API = '/api/futures';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const POLL_INTERVAL_MS = 30_000;
+const DANGO_ARBITRUM_SOURCE_CHAIN = Object.freeze({
+  id: ARBITRUM_CHAIN_ID,
+  key: 'arbitrum',
+  name: 'Arbitrum',
+  shortName: 'ARB',
+  token: 'USDC',
+  tokenAddress: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+  tokenDecimals: 6,
+  routerAddress: '0x9d0ea335355da17ee89e50df43ab823416cf73d4',
+});
+const DANGO_ERC20_ABI = [
+  {
+    type: 'function',
+    name: 'balanceOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'allowance',
+    stateMutability: 'view',
+    inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'approve',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }],
+    outputs: [{ type: 'bool' }],
+  },
+];
+const DANGO_HYPERLANE_ROUTER_ABI = [
+  {
+    type: 'function',
+    name: 'transferRemote',
+    stateMutability: 'payable',
+    inputs: [
+      { name: '_destination', type: 'uint32' },
+      { name: '_recipient', type: 'bytes32' },
+      { name: '_amountOrId', type: 'uint256' },
+    ],
+    outputs: [{ type: 'bytes32' }],
+  },
+];
 
 function playerToken(player) {
   return player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
@@ -103,15 +151,22 @@ function dangoTpslTriggerDirection(closeSide, leg) {
     : (closesLong ? 'below' : 'above');
 }
 
+function dangoAccountToBytes32(account) {
+  const clean = normalizeDangoAddress(account);
+  if (!clean) throw new Error('Dango account address required');
+  return `0x${clean.slice(2).padStart(64, '0')}`;
+}
+
 export function useDango() {
   const { dex } = useDex();
   const isActiveDex = dex === 'dango';
   const evm = useEvmWallet();
-  const { address } = evm;
+  const { address, ensureChain, getWalletClient, getPublicClient } = evm;
   const player = usePlayer();
   const token = playerToken(player);
   const registered = registeredDexWallet(player, 'dango', 'evm');
   const walletAddr = normalizeDangoAddress(registered) || normalizeDangoAddress(address) || '';
+  const sourceWalletAddr = normalizeDangoAddress(address) || walletAddr;
 
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -125,6 +180,10 @@ export function useDango() {
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
   const [depositStatus, setDepositStatus] = useState(null);
+  const [bridgeConfig, setBridgeConfig] = useState(null);
+  const [bridgeSourceBalances, setBridgeSourceBalances] = useState({});
+  const [bridgeSourceBalanceStatus, setBridgeSourceBalanceStatus] = useState({});
+  const [bridgeDepositSourceChainId, setBridgeDepositSourceChainId] = useState(DANGO_ARBITRUM_SOURCE_CHAIN.id);
 
   const claimGoldRef = useRef(null);
 
@@ -202,17 +261,74 @@ export function useDango() {
     }
   }, [walletAddr, token, authedGet]);
 
+  const fetchBridgeConfig = useCallback(async () => {
+    if (!walletAddr || !token) {
+      setBridgeConfig(null);
+      return null;
+    }
+    try {
+      const data = await authedGet(`${FUTURES_API}/dango/bridge/config?dex=dango&account=${encodeURIComponent(walletAddr)}`);
+      setBridgeConfig(data || null);
+      return data || null;
+    } catch (e) {
+      console.warn('[useDango] bridge config:', e?.message || e);
+      return null;
+    }
+  }, [walletAddr, token, authedGet]);
+
+  const readBridgeSourceUsdc = useCallback(async (chainId = DANGO_ARBITRUM_SOURCE_CHAIN.id) => {
+    const id = Number(chainId || DANGO_ARBITRUM_SOURCE_CHAIN.id);
+    const source = id === DANGO_ARBITRUM_SOURCE_CHAIN.id ? DANGO_ARBITRUM_SOURCE_CHAIN : null;
+    if (!source || !sourceWalletAddr) {
+      setBridgeSourceBalances(prev => ({ ...prev, [id]: null }));
+      setBridgeSourceBalanceStatus(prev => ({
+        ...prev,
+        [id]: { status: sourceWalletAddr ? 'unsupported' : 'idle', message: sourceWalletAddr ? 'Unsupported Dango deposit source' : 'Connect EVM wallet' },
+      }));
+      return null;
+    }
+    setBridgeSourceBalanceStatus(prev => ({
+      ...prev,
+      [id]: { status: 'checking', message: `Checking ${source.name} USDC balance...` },
+    }));
+    try {
+      const publicClient = typeof getPublicClient === 'function' ? getPublicClient(id) : null;
+      if (!publicClient) throw new Error('Arbitrum RPC is not available');
+      const raw = await publicClient.readContract({
+        address: source.tokenAddress,
+        abi: DANGO_ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [sourceWalletAddr],
+      });
+      const balance = Number(formatUnits(raw, source.tokenDecimals));
+      setBridgeSourceBalances(prev => ({ ...prev, [id]: balance }));
+      setBridgeSourceBalanceStatus(prev => ({
+        ...prev,
+        [id]: { status: 'ready', message: null, chainId: id },
+      }));
+      return balance;
+    } catch (e) {
+      const message = e?.message || `Could not read ${source.name} USDC balance`;
+      console.warn('[useDango] bridge source balance:', message);
+      setBridgeSourceBalanceStatus(prev => ({
+        ...prev,
+        [id]: { status: 'error', message, chainId: id },
+      }));
+      return null;
+    }
+  }, [sourceWalletAddr, getPublicClient]);
+
   const refresh = useCallback(async () => {
     if (!isActiveDex) return;
     setLoading(true);
     setError(null);
     try {
-      await Promise.all([fetchMarkets(), fetchAccount()]);
+      await Promise.all([fetchMarkets(), fetchAccount(), fetchBridgeConfig(), readBridgeSourceUsdc()]);
       setDataReady(true);
     } finally {
       setLoading(false);
     }
-  }, [isActiveDex, fetchMarkets, fetchAccount]);
+  }, [isActiveDex, fetchMarkets, fetchAccount, fetchBridgeConfig, readBridgeSourceUsdc]);
 
   const refreshServerResources = useCallback(async () => {
     if (!token) return null;
@@ -262,10 +378,11 @@ export function useDango() {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       fetchPrices();
       fetchAccount();
+      readBridgeSourceUsdc();
       claimGoldRef.current?.({ reason: 'poll' });
     }, POLL_INTERVAL_MS);
     return () => clearInterval(iv);
-  }, [isActiveDex, refresh, fetchPrices, fetchAccount]);
+  }, [isActiveDex, refresh, fetchPrices, fetchAccount, readBridgeSourceUsdc]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || !token) return undefined;
@@ -402,11 +519,141 @@ export function useDango() {
     return { success: true, results };
   }, [submitDangoAction]);
 
-  const depositToPacifica = useCallback(async (amount) => {
+  const depositInternalMargin = useCallback(async (amount) => {
     const result = await submitDangoAction('deposit', { amount }, 'deposit');
     if (result?.success) setDepositStatus({ status: 'complete', amount, result });
     return result;
   }, [submitDangoAction]);
+
+  const depositToPacifica = useCallback(async (amount) => {
+    const amountText = String(amount ?? '').trim();
+    setLoading(true);
+    setError(null);
+    try {
+      if (!walletAddr) throw new Error('Connect a Dango wallet first');
+      if (!sourceWalletAddr) throw new Error('Connect an Arbitrum EVM wallet first');
+      if (typeof ensureChain !== 'function' || typeof getWalletClient !== 'function') {
+        throw new Error('EVM wallet network switching is not available');
+      }
+      const parsed = Number(amountText);
+      if (!Number.isFinite(parsed) || parsed <= 0) throw new Error('Enter a positive USDC amount');
+      const source = DANGO_ARBITRUM_SOURCE_CHAIN;
+      const amountUnits = parseUnits(amountText, source.tokenDecimals);
+      const config = bridgeConfig || await fetchBridgeConfig();
+      const destinationDomain = Number(config?.destination_domain);
+      if (!Number.isFinite(destinationDomain) || destinationDomain <= 0) throw new Error('Dango bridge destination is not ready');
+      const serverSource = (config?.source_chains || []).find(row => Number(row?.id) === source.id) || {};
+      const routerAddress = serverSource.router_address || source.routerAddress;
+      const tokenAddress = serverSource.token_address || source.tokenAddress;
+      const protocolFeeWei = BigInt(String(serverSource.protocol_fee_wei ?? '0'));
+
+      const sourceBalance = bridgeSourceBalances[source.id];
+      if (Number.isFinite(Number(sourceBalance)) && parsed > Number(sourceBalance) + 0.000001) {
+        throw new Error(`${source.name} wallet has ${Number(sourceBalance).toFixed(2)} USDC`);
+      }
+
+      setDepositStatus({
+        status: 'switching',
+        amount: amountText,
+        sourceChainId: source.id,
+        sourceChain: source.name,
+        message: `Switching to ${source.name}`,
+      });
+      await ensureChain(source.id);
+
+      const walletClient = getWalletClient(source.id) || getWalletClient();
+      const publicClient = typeof getPublicClient === 'function' ? getPublicClient(source.id) : null;
+      if (!walletClient) throw new Error('EVM wallet is not ready');
+      if (!publicClient) throw new Error('Arbitrum RPC is not available');
+
+      const allowance = await publicClient.readContract({
+        address: tokenAddress,
+        abi: DANGO_ERC20_ABI,
+        functionName: 'allowance',
+        args: [sourceWalletAddr, routerAddress],
+      });
+      if (allowance < amountUnits) {
+        setDepositStatus(prev => ({
+          ...prev,
+          status: 'approving',
+          message: `Approve ${amountText} USDC for Dango bridge`,
+        }));
+        const approveHash = await walletClient.writeContract({
+          account: sourceWalletAddr,
+          address: tokenAddress,
+          abi: DANGO_ERC20_ABI,
+          functionName: 'approve',
+          args: [routerAddress, amountUnits],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash, timeout: 60_000 });
+      }
+
+      setDepositStatus(prev => ({
+        ...prev,
+        status: 'signing',
+        message: `Bridge ${amountText} USDC to Dango`,
+      }));
+      const txHash = await walletClient.writeContract({
+        account: sourceWalletAddr,
+        address: routerAddress,
+        abi: DANGO_HYPERLANE_ROUTER_ABI,
+        functionName: 'transferRemote',
+        args: [destinationDomain, dangoAccountToBytes32(walletAddr), amountUnits],
+        value: protocolFeeWei,
+      });
+
+      setDepositStatus(prev => ({
+        ...prev,
+        status: 'confirming',
+        txHash,
+        message: 'Waiting for Arbitrum transaction confirmation',
+      }));
+      await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 90_000 });
+
+      setDepositStatus(prev => ({
+        ...prev,
+        status: 'bridging',
+        txHash,
+        message: 'Dango bridge is indexing the deposit',
+      }));
+      await readBridgeSourceUsdc(source.id);
+      await fetchAccount();
+      setDepositStatus(prev => ({
+        ...prev,
+        status: 'submitted',
+        txHash,
+        message: 'Dango bridge deposit submitted',
+      }));
+      setTimeout(fetchAccount, 10_000);
+      setTimeout(fetchAccount, 30_000);
+      setTimeout(fetchAccount, 60_000);
+      return {
+        success: true,
+        submitted: true,
+        txHash,
+        sourceChain: source.name,
+        info: 'Dango bridge deposit sent from Arbitrum. It can take a few minutes before the Dango balance updates.',
+      };
+    } catch (e) {
+      const msg = e?.message || 'Dango Arbitrum deposit failed';
+      setError(msg);
+      setDepositStatus({ status: 'failed', amount: amountText, error: msg });
+      return { error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    walletAddr,
+    sourceWalletAddr,
+    ensureChain,
+    getWalletClient,
+    getPublicClient,
+    bridgeConfig,
+    fetchBridgeConfig,
+    bridgeSourceBalances,
+    readBridgeSourceUsdc,
+    fetchAccount,
+  ]);
 
   const withdraw = useCallback((amount) => (
     submitDangoAction('withdraw', { amount }, 'withdraw')
@@ -433,8 +680,11 @@ export function useDango() {
     walletUsdcStatus: walletAddr
       ? { status: 'ready', message: null }
       : { status: 'idle', message: 'Connect a Dango/EVM wallet' },
-    bridgeSourceBalances: {},
-    bridgeSourceBalanceStatus: {},
+    bridgeSourceBalances,
+    bridgeSourceBalanceStatus,
+    bridgeDepositSourceChainId,
+    setBridgeDepositSourceChainId,
+    bridgeDepositSources: [DANGO_ARBITRUM_SOURCE_CHAIN],
     leverageSettings: {},
     marginModes: {},
     marginModeDetails: {},
@@ -455,13 +705,14 @@ export function useDango() {
     withdraw,
     activate: async () => ({ success: true }),
     disconnect: () => {},
-    moveSpotToPerp: depositToPacifica,
+    moveSpotToPerp: depositInternalMargin,
     claimGold,
     refresh,
   }), [
     walletAddr, account, positions, orders, markets, prices, walletUsdc, loading, error,
     clearError, dataReady, accountReady, goldEarned, clearGoldEarned, depositStatus,
+    bridgeSourceBalances, bridgeSourceBalanceStatus, bridgeDepositSourceChainId,
     registered, placeMarketOrder, placeLimitOrder, closePosition, cancelOrder, setTpsl,
-    depositToPacifica, withdraw, claimGold, refresh,
+    depositToPacifica, depositInternalMargin, withdraw, claimGold, refresh,
   ]);
 }

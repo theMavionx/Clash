@@ -8005,13 +8005,30 @@ function FuturesPanel() {
       if (risexSourceBalanceState === 'error') return 'unavailable';
       return '$--';
     })();
-    const depositActionBusy = ['preparing', 'switching', 'signing', 'confirming', 'bridging', 'depositing']
+    const dangoDepositSource = Array.isArray(bridgeDepositSources)
+      ? bridgeDepositSources.find(chain => Number(chain.id) === 42161)
+      : null;
+    const dangoSourceBalance = dex === 'dango'
+      ? bridgeSourceBalances?.[Number(dangoDepositSource?.id || 42161)]
+      : null;
+    const dangoSourceBalanceState = dex === 'dango'
+      ? bridgeSourceBalanceStatus?.[Number(dangoDepositSource?.id || 42161)]?.status
+      : null;
+    const dangoSourceBalanceText = (() => {
+      if (dex !== 'dango') return '';
+      if (typeof dangoSourceBalance === 'number' && Number.isFinite(dangoSourceBalance)) return `$${dangoSourceBalance.toFixed(2)}`;
+      if (dangoSourceBalanceState === 'checking') return 'checking...';
+      if (dangoSourceBalanceState === 'error') return 'unavailable';
+      return '$--';
+    })();
+    const depositActionBusy = ['preparing', 'switching', 'approving', 'signing', 'confirming', 'bridging', 'depositing']
       .includes(String(depositStatus?.status || ''));
     const risexDepositBusy = dex === 'risex' && depositActionBusy;
     const depositButtonLabel = (() => {
       if (dex === 'grvt') return loading ? '...' : 'Open';
       if (depositStatus?.status === 'preparing') return 'Preparing...';
       if (depositStatus?.status === 'switching') return 'Switching...';
+      if (depositStatus?.status === 'approving') return 'Approve...';
       if (depositStatus?.status === 'signing') return 'Sign...';
       if (depositStatus?.status === 'confirming') return 'Confirming...';
       if (depositStatus?.status === 'bridging') return 'Bridging...';
@@ -8897,11 +8914,17 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : dex === 'dango' ? 'Dango Arbitrum deposit' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: '#15803D'}}>
                     {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
+                  </span>
+                )
+                : dex === 'dango'
+                ? (
+                  <span style={{...S.detail, color: '#15803D'}}>
+                    Arbitrum USDC: {dangoSourceBalanceText}
                   </span>
                 )
                 : dex === 'nado'
@@ -9041,7 +9064,7 @@ function FuturesPanel() {
                   do not have this fixed UI floor here (per-market minSize
                   matters for trading; deposits are free-form). */}
               <input type="number"
-                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'nado' && !account?.exists ? `Min 5 ${selectedNadoDepositAsset.label}` : dex === 'nado' ? `Amount (${selectedNadoDepositAsset.label})` : dex === 'risex' ? 'Amount (USDC)' : 'Amount (USDC)'}
+                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'nado' && !account?.exists ? `Min 5 ${selectedNadoDepositAsset.label}` : dex === 'nado' ? `Amount (${selectedNadoDepositAsset.label})` : dex === 'risex' ? 'Amount (USDC)' : dex === 'dango' ? 'Arbitrum USDC' : 'Amount (USDC)'}
                 value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
@@ -9068,6 +9091,10 @@ function FuturesPanel() {
                     setLocalAlert(`${risexDepositSource.name} wallet has ${risexSourceBalance.toFixed(2)} USDC`);
                     return;
                   }
+                }
+                if (dex === 'dango' && typeof dangoSourceBalance === 'number' && Number.isFinite(dangoSourceBalance) && v > dangoSourceBalance + 0.000001) {
+                  setLocalAlert(`Arbitrum wallet has ${dangoSourceBalance.toFixed(2)} USDC`);
+                  return;
                 }
                 if (dex === 'nado' && Number.isFinite(selectedNadoWalletBalance) && v > selectedNadoWalletBalance + 0.000001) {
                   setLocalAlert(`Ink wallet has ${selectedNadoWalletBalance.toFixed(2)} ${selectedNadoDepositAsset.label}`);
@@ -9101,7 +9128,7 @@ function FuturesPanel() {
                 : dex === 'katana'
                 ? 'Opens Katana deposit. Katana deposits can be bridged from Arbitrum USDC through the official Stargate/Katana bridge flow.'
                 : dex === 'dango'
-                ? 'Deposits move USDC from your Dango wallet into Dango margin. Your wallet signs the Dango transaction, then Clash refreshes the trading balance.'
+                ? 'Bridges native USDC from your Arbitrum wallet to your Dango account through Dango Hyperlane. Needs a small ETH gas float; Dango balance can take a few minutes to update.'
                 : dex === 'risex'
                 ? (
                   <>

@@ -34,14 +34,28 @@ export function dangoNormalizeSignature(signature) {
   return out;
 }
 
+function normalizeChainId(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'bigint') return Number(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const parsed = /^0x/i.test(text) ? Number.parseInt(text, 16) : Number(text);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export async function signDangoTx({ evm, account, signDoc, keyHash = '' }) {
   const walletAddress = String(account || evm?.address || '').trim();
   if (!walletAddress) throw new Error('Connect a Dango/EVM wallet first');
   if (!signDoc?.domain || !signDoc?.types || !signDoc?.primaryType || !signDoc?.message) {
     throw new Error('Dango signer received an invalid EIP-712 document');
   }
+  const signingChainId = normalizeChainId(signDoc.domain.chainId);
+  if (signingChainId && typeof evm?.ensureChain === 'function') {
+    await evm.ensureChain(signingChainId);
+  }
   const walletClient = typeof evm?.getWalletClient === 'function'
-    ? evm.getWalletClient()
+    ? evm.getWalletClient(signingChainId || undefined)
     : evm?.walletClient;
   const rawSignature = await signTypedDataCompat({
     provider: evm?.provider,

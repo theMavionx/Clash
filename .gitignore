@@ -65,6 +65,7 @@ addons/godot_mcp/
 !.codex/docs/**
 !.codex/rules/
 !.codex/rules/**
+.codex-remote-attachments/
 .clash-hermes-local/
 .client-logs*.json
 

@@ -2479,6 +2479,50 @@ router.get('/dango/config', auth, async (req, res) => {
   }
 });
 
+router.get('/dango/bridge/config', auth, async (req, res) => {
+  try {
+    if (!ensureDango(req, res)) return;
+    const account = dango.normalizeDangoAddress(
+      req.query?.account
+      || req.query?.address
+      || req.dexWallet
+      || req.playerWallet
+    );
+    if (!account) return res.status(400).json({ error: 'Dango account required' });
+    const config = await dango.fetchAppConfig();
+    const mailbox = config?.addresses?.hyperlane?.mailbox || config?.addresses?.mailbox;
+    if (!mailbox) return res.status(502).json({ error: 'Dango bridge mailbox is not configured' });
+    const mailboxConfig = await dango.queryApp({ config: {} }, { contract: mailbox });
+    const localDomain = Number(mailboxConfig?.local_domain ?? mailboxConfig?.localDomain);
+    if (!Number.isFinite(localDomain) || localDomain <= 0) {
+      return res.status(502).json({ error: 'Dango bridge local domain is unavailable' });
+    }
+    res.json({
+      network: dango.NETWORK,
+      account,
+      destination_domain: localDomain,
+      destination_chain: dango.CHAIN_ID,
+      mailbox,
+      gateway: config?.addresses?.gateway || '',
+      warp: config?.addresses?.warp || '',
+      source_chains: [
+        {
+          id: 42161,
+          key: 'arbitrum',
+          name: 'Arbitrum',
+          token: 'USDC',
+          token_address: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+          token_decimals: 6,
+          router_address: '0x9d0ea335355da17ee89e50df43ab823416cf73d4',
+          protocol_fee_wei: '0',
+        },
+      ],
+    });
+  } catch (e) {
+    res.status(502).json({ error: e.message || 'Failed to load Dango bridge config' });
+  }
+});
+
 router.get('/dango/status', auth, async (req, res) => {
   try {
     if (!ensureDango(req, res)) return;
