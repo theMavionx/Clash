@@ -368,6 +368,7 @@ export function useDango() {
   const claimGoldRef = useRef(null);
   const marketsRef = useRef([]);
   const dangoConfigRef = useRef(null);
+  const realtimeAccountRef = useRef('');
   const realtimeLimitOrdersRef = useRef([]);
   const realtimeConditionalOrdersRef = useRef([]);
   const realtimeWsRef = useRef(null);
@@ -487,7 +488,8 @@ export function useDango() {
 
   const applyRealtimeUserState = useCallback((response, blockHeight = null) => {
     const state = unwrapDangoWasmSmart(response);
-    const accountSnapshot = normalizeRealtimeAccount(walletAddr, state);
+    const realtimeAccount = realtimeAccountRef.current || walletAddr;
+    const accountSnapshot = normalizeRealtimeAccount(realtimeAccount, state);
     const marketsByPair = marketByPairId(marketsRef.current);
     const positionMap = state?.positions && typeof state.positions === 'object' ? state.positions : {};
     const nextPositions = Object.entries(positionMap)
@@ -659,33 +661,9 @@ export function useDango() {
     let reconnectTimer = null;
     let pingTimer = null;
     let ws = null;
-    const userStateRequest = {
-      wasm_smart: {
-        contract: DANGO_PERPS_CONTRACT,
-        msg: {
-          user_state_extended: {
-            include_all: true,
-            include_available_margin: true,
-            include_equity: true,
-            include_liquidation_price: true,
-            include_maintenance_margin: true,
-            include_unrealized_funding: true,
-            include_unrealized_pnl: true,
-            user: walletAddr,
-          },
-        },
-      },
-    };
-    const ordersRequest = {
-      wasm_smart: {
-        contract: DANGO_PERPS_CONTRACT,
-        msg: {
-          orders_by_user: {
-            user: walletAddr,
-          },
-        },
-      },
-    };
+    let userStateRequest = null;
+    let ordersRequest = null;
+    let realtimeAccount = '';
 
     const cleanupTimers = () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -724,8 +702,37 @@ export function useDango() {
       cleanupTimers();
       let cfg = dangoConfigRef.current;
       if (!cfg?.graphql_ws_url) cfg = await fetchDangoConfig();
+      realtimeAccount = normalizeDangoAddress(cfg?.account || cfg?.resolved_account || walletAddr);
+      realtimeAccountRef.current = realtimeAccount;
       const url = cfg?.graphql_ws_url;
-      if (stopped || !url) return;
+      if (stopped || !url || !realtimeAccount) return;
+      userStateRequest = {
+        wasm_smart: {
+          contract: DANGO_PERPS_CONTRACT,
+          msg: {
+            user_state_extended: {
+              include_all: true,
+              include_available_margin: true,
+              include_equity: true,
+              include_liquidation_price: true,
+              include_maintenance_margin: true,
+              include_unrealized_funding: true,
+              include_unrealized_pnl: true,
+              user: realtimeAccount,
+            },
+          },
+        },
+      };
+      ordersRequest = {
+        wasm_smart: {
+          contract: DANGO_PERPS_CONTRACT,
+          msg: {
+            orders_by_user: {
+              user: realtimeAccount,
+            },
+          },
+        },
+      };
       try {
         ws = new WebSocket(url, 'graphql-transport-ws');
         realtimeWsRef.current = ws;
@@ -751,10 +758,21 @@ export function useDango() {
               try { ws.send(JSON.stringify({ type: 'ping' })); } catch {}
             }
           }, 25_000);
-          console.info('[useDango] realtime ws subscribed', { account: walletAddr, interval: DANGO_QUERY_APP_BLOCK_INTERVAL });
+          console.info('[useDango] realtime ws subscribed', {
+            linkedAccount: walletAddr,
+            account: realtimeAccount,
+            interval: DANGO_QUERY_APP_BLOCK_INTERVAL,
+          });
           return;
         }
         if (type === 'next') {
+          if (message?.payload?.errors || message?.payload?.error) {
+            console.warn('[useDango] realtime ws query error', {
+              id: message?.id || null,
+              account: realtimeAccount,
+              errors: message.payload.errors || message.payload.error,
+            });
+          }
           handleNext(message);
           return;
         }
