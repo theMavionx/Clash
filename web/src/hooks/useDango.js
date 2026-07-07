@@ -366,9 +366,19 @@ export function useDango() {
   const [bridgeDepositSourceChainId, setBridgeDepositSourceChainId] = useState(DANGO_ARBITRUM_SOURCE_CHAIN.id);
 
   const claimGoldRef = useRef(null);
+  const marketsRef = useRef([]);
+  const dangoConfigRef = useRef(null);
   const realtimeLimitOrdersRef = useRef([]);
   const realtimeConditionalOrdersRef = useRef([]);
   const realtimeWsRef = useRef(null);
+
+  useEffect(() => {
+    marketsRef.current = markets;
+  }, [markets]);
+
+  useEffect(() => {
+    dangoConfigRef.current = dangoConfig;
+  }, [dangoConfig]);
 
   const headers = useCallback((extra = {}) => {
     const out = {
@@ -419,6 +429,7 @@ export function useDango() {
     }
     try {
       const data = await authedGet(`${FUTURES_API}/dango/config?dex=dango`);
+      dangoConfigRef.current = data || null;
       setDangoConfig(data || null);
       return data || null;
     } catch (e) {
@@ -477,7 +488,7 @@ export function useDango() {
   const applyRealtimeUserState = useCallback((response, blockHeight = null) => {
     const state = unwrapDangoWasmSmart(response);
     const accountSnapshot = normalizeRealtimeAccount(walletAddr, state);
-    const marketsByPair = marketByPairId(markets);
+    const marketsByPair = marketByPairId(marketsRef.current);
     const positionMap = state?.positions && typeof state.positions === 'object' ? state.positions : {};
     const nextPositions = Object.entries(positionMap)
       .map(([pairId, row]) => normalizeRealtimePosition(pairId, row, marketsByPair.get(String(pairId).toLowerCase()) || {}))
@@ -493,7 +504,7 @@ export function useDango() {
       positions: nextPositions.length,
       conditionalOrders: realtimeConditionalOrdersRef.current.length,
     });
-  }, [walletAddr, markets, mergeRealtimeOrders]);
+  }, [walletAddr, mergeRealtimeOrders]);
 
   const applyRealtimeOrders = useCallback((response, blockHeight = null) => {
     const payload = unwrapDangoWasmSmart(response);
@@ -711,7 +722,7 @@ export function useDango() {
 
     const connect = async () => {
       cleanupTimers();
-      let cfg = dangoConfig;
+      let cfg = dangoConfigRef.current;
       if (!cfg?.graphql_ws_url) cfg = await fetchDangoConfig();
       const url = cfg?.graphql_ws_url;
       if (stopped || !url) return;
@@ -780,7 +791,6 @@ export function useDango() {
     isActiveDex,
     walletAddr,
     token,
-    dangoConfig,
     fetchDangoConfig,
     applyRealtimeUserState,
     applyRealtimeOrders,
