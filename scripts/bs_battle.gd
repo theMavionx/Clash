@@ -109,6 +109,7 @@ var _had_troops: bool = false
 var _skeleton_respawn_timer: float = 0.0
 var _victory_declared: bool = false
 var _find_in_progress: bool = false
+var _battle_entry_switch_seq: int = 0
 
 const RAID_ATTACK_COST_GOLD: int = 300
 
@@ -670,6 +671,50 @@ func _await_signal_or_timeout(source: Object, signal_name: String, timeout_sec: 
 	print("[BATTLE_ENTRY] ", log_label, "_timeout wait_ms=", int(waited * 1000.0))
 	return false
 
+
+func _clear_battle_entry_overlay(reason: String) -> void:
+	var bridge: Node = bs._bridge if bs else null
+	if bridge:
+		bridge.send_to_react("cloud_transition", {"visible": false, "reason": reason})
+
+
+func _watch_battle_entry_switch(seq: int, started_ticks: int, label: String) -> void:
+	await bs.get_tree().create_timer(6.0).timeout
+	if seq != _battle_entry_switch_seq:
+		return
+	if is_viewing_enemy:
+		print("[BATTLE_ENTRY] ", label, "_watch_ok elapsed_ms=", Time.get_ticks_msec() - started_ticks)
+		return
+	if not _find_in_progress:
+		print("[BATTLE_ENTRY] ", label, "_watch_not_in_progress elapsed_ms=", Time.get_ticks_msec() - started_ticks)
+		return
+	print("[BATTLE_ENTRY] ", label, "_watch_stuck elapsed_ms=", Time.get_ticks_msec() - started_ticks, " forcing_reveal=true")
+	_find_in_progress = false
+	var cloud: Node = bs._get_or_create_cloud()
+	if cloud and cloud.has_method("hide_now"):
+		cloud.hide_now()
+	elif cloud:
+		cloud.reveal()
+	_clear_battle_entry_overlay("%s_watchdog" % label)
+	if bs.find_button:
+		bs.find_button.disabled = false
+		bs.find_button.visible = true
+		bs.find_button.text = "Find Enemy"
+
+
+func _run_battle_entry_switch(combat_warmup: Node, warmup_already_waited: bool, seq: int, started_ticks: int, label: String) -> void:
+	print("[BATTLE_ENTRY] ", label, "_runner_start seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_valid=", combat_warmup != null and is_instance_valid(combat_warmup), " enemy_has_buildings=", enemy_info.has("buildings"))
+	await _switch_to_enemy_island_after_sail(combat_warmup, warmup_already_waited)
+	print("[BATTLE_ENTRY] ", label, "_runner_done seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " viewing=", is_viewing_enemy, " in_progress=", _find_in_progress)
+
+
+func _dispatch_battle_entry_switch(combat_warmup: Node, warmup_already_waited: bool, started_ticks: int, label: String) -> void:
+	_battle_entry_switch_seq += 1
+	var seq: int = _battle_entry_switch_seq
+	print("[BATTLE_ENTRY] ", label, "_dispatch seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_already_waited=", warmup_already_waited)
+	call_deferred("_run_battle_entry_switch", combat_warmup, warmup_already_waited, seq, started_ticks, label)
+	call_deferred("_watch_battle_entry_switch", seq, started_ticks, label)
+
 ## Kicks off the enemy search flow: boards home troops, sails ships, closes
 ## the cloud transition, fetches an enemy from the server, then switches to
 ## the enemy island. Called when the Find Enemy button is pressed.
@@ -761,7 +806,7 @@ func _on_find_pressed() -> void:
 		bs._apply_resources_from_server(result.attacker_resources)
 	enemy_info = result
 	print("[BATTLE_ENTRY] switch_call elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
-	await _switch_to_enemy_island_after_sail(combat_warmup, true)
+	_dispatch_battle_entry_switch(combat_warmup, true, entry_started_ticks, "switch")
 
 func _on_revenge_pressed(source_battle_id: int) -> void:
 	if is_viewing_enemy or _find_in_progress:
@@ -852,7 +897,7 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 		bs._apply_resources_from_server(result.attacker_resources)
 	enemy_info = result
 	print("[BATTLE_ENTRY] revenge_switch_call elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
-	await _switch_to_enemy_island_after_sail(combat_warmup, true)
+	_dispatch_battle_entry_switch(combat_warmup, true, entry_started_ticks, "revenge_switch")
 
 
 ## Animates all active ships sailing off-screen and saves their transforms
