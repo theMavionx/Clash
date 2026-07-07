@@ -23,6 +23,7 @@ const DANGO_QUERY_APP_SUBSCRIPTION = `
   }
 `;
 const DANGO_DEPOSIT_URL = 'https://dango.exchange/bridge';
+const DANGO_ONE_TAP_STORAGE_PREFIX = 'clash_dango_one_tap:';
 const DANGO_ARBITRUM_SOURCE_CHAIN = Object.freeze({
   id: ARBITRUM_CHAIN_ID,
   key: 'arbitrum',
@@ -336,6 +337,11 @@ function dangoAccountToBytes32(account) {
   return `0x${clean.slice(2).padStart(64, '0')}`;
 }
 
+function dangoOneTapStorageKey(wallet) {
+  const clean = normalizeDangoAddress(wallet);
+  return clean ? `${DANGO_ONE_TAP_STORAGE_PREFIX}${clean}` : '';
+}
+
 export function useDango() {
   const { dex } = useDex();
   const isActiveDex = dex === 'dango';
@@ -364,6 +370,7 @@ export function useDango() {
   const [bridgeSourceBalances, setBridgeSourceBalances] = useState({});
   const [bridgeSourceBalanceStatus, setBridgeSourceBalanceStatus] = useState({});
   const [bridgeDepositSourceChainId, setBridgeDepositSourceChainId] = useState(DANGO_ARBITRUM_SOURCE_CHAIN.id);
+  const [oneTapEnabled, setOneTapEnabled] = useState(false);
 
   const claimGoldRef = useRef(null);
   const marketsRef = useRef([]);
@@ -381,6 +388,19 @@ export function useDango() {
     dangoConfigRef.current = dangoConfig;
   }, [dangoConfig]);
 
+  useEffect(() => {
+    const key = dangoOneTapStorageKey(walletAddr);
+    if (!key || typeof localStorage === 'undefined') {
+      setOneTapEnabled(false);
+      return;
+    }
+    try {
+      setOneTapEnabled(localStorage.getItem(key) === '1');
+    } catch {
+      setOneTapEnabled(false);
+    }
+  }, [walletAddr]);
+
   const headers = useCallback((extra = {}) => {
     const out = {
       'Content-Type': 'application/json',
@@ -395,6 +415,19 @@ export function useDango() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+
+  const setOneTapTradingEnabled = useCallback(async (nextEnabled = true) => {
+    const key = dangoOneTapStorageKey(walletAddr);
+    if (!key) return { error: 'Connect a Dango/EVM wallet first' };
+    try {
+      if (nextEnabled) localStorage.setItem(key, '1');
+      else localStorage.removeItem(key);
+      setOneTapEnabled(!!nextEnabled);
+      return { success: true, enabled: !!nextEnabled };
+    } catch (e) {
+      return { error: e?.message || 'Dango one tap preference could not be saved' };
+    }
+  }, [walletAddr]);
 
   const authedGet = useCallback((path) => fetchJson(path, {
     headers: headers({ 'Content-Type': undefined }),
@@ -926,7 +959,7 @@ export function useDango() {
     }, 'limit order', { onPhase: opts?.onPhase })
   ), [submitDangoAction]);
 
-  const closePosition = useCallback((symbol, side, amount, pairId) => {
+  const closePosition = useCallback((symbol, side, amount, pairId, _tradeIndex, _isFullClose, opts = {}) => {
     const s = String(side || '').toLowerCase();
     const closesLong = s === 'bid' || s === 'buy' || s === 'long' || s === 'close_long';
     const closeSide = closesLong ? 'close_long' : 'close_short';
@@ -937,14 +970,14 @@ export function useDango() {
       size: amount,
       orderKind: 'market',
       reduceOnly: true,
-    }, 'close');
+    }, 'close', { onPhase: opts?.onPhase });
   }, [submitDangoAction]);
 
   const cancelOrder = useCallback((symbol, orderId) => (
     submitDangoAction('cancel_order', { symbol, orderId }, 'cancel')
   ), [submitDangoAction]);
 
-  const setTpsl = useCallback(async (symbol, side, tpPrice, slPrice, pairIndex, _tradeIndex, amount, marketAddr) => {
+  const setTpsl = useCallback(async (symbol, side, tpPrice, slPrice, pairIndex, _tradeIndex, amount, marketAddr, opts = {}) => {
     const pairId = marketAddr || pairIndex || undefined;
     const requests = [];
     if (tpPrice) {
@@ -956,7 +989,7 @@ export function useDango() {
         triggerPrice: tpPrice,
         triggerDirection: dangoTpslTriggerDirection(side, 'tp'),
         maxSlippage: '0.020000',
-      }, 'TP/SL'));
+      }, 'TP/SL', { onPhase: opts?.onPhase }));
     }
     if (slPrice) {
       requests.push(submitDangoAction('tpsl', {
@@ -967,7 +1000,7 @@ export function useDango() {
         triggerPrice: slPrice,
         triggerDirection: dangoTpslTriggerDirection(side, 'sl'),
         maxSlippage: '0.020000',
-      }, 'TP/SL'));
+      }, 'TP/SL', { onPhase: opts?.onPhase }));
     }
     if (!requests.length) return { success: true, skipped: true };
     const results = await Promise.all(requests);
@@ -1160,7 +1193,17 @@ export function useDango() {
     isReady: !!walletAddr,
     walletMismatch: false,
     registeredEvmWallet: registered || '',
-    oneTapTrading: { enabled: false, approved: false, required: true },
+    oneTapTrading: {
+      enabled: oneTapEnabled,
+      approved: oneTapEnabled,
+      required: false,
+      signer: sourceWalletAddr || walletAddr || null,
+      mode: 'browser_eip712',
+      note: oneTapEnabled
+        ? 'Browser signing session is enabled for Dango.'
+        : 'Enable browser signing session for Dango.',
+    },
+    setOneTapTradingEnabled,
     placeMarketOrder,
     placeLimitOrder,
     closePosition,
@@ -1179,7 +1222,8 @@ export function useDango() {
     walletAddr, account, positions, orders, markets, prices, walletUsdc, loading, error,
     clearError, dataReady, accountReady, goldEarned, clearGoldEarned, depositStatus,
     bridgeSourceBalances, bridgeSourceBalanceStatus, bridgeDepositSourceChainId,
-    registered, placeMarketOrder, placeLimitOrder, closePosition, cancelOrder, setTpsl,
+    registered, sourceWalletAddr, oneTapEnabled, setOneTapTradingEnabled,
+    placeMarketOrder, placeLimitOrder, closePosition, cancelOrder, setTpsl,
     depositToPacifica, depositInternalMargin, withdraw, claimGold, refresh,
   ]);
 }

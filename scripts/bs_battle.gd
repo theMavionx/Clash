@@ -103,6 +103,7 @@ var _returning_home: bool = false
 const REPLAY_TELEMETRY_MAX_EVENTS: int = 2500
 const REPLAY_SYNC_FPS: int = 60
 const REPLAY_SYNC_MAX_PHYSICS_STEPS: int = 16
+const COMBAT_WARMUP_MAX_WAIT_SEC: float = 10.0
 
 var _had_troops: bool = false
 var _skeleton_respawn_timer: float = 0.0
@@ -638,9 +639,17 @@ func _start_hidden_combat_warmup() -> Node:
 	return script.start_combat_warmup(bs)
 
 
-func _await_hidden_combat_warmup(warmup: Node) -> void:
-	if warmup != null and is_instance_valid(warmup):
-		await warmup.finished
+func _await_hidden_combat_warmup(warmup: Node, max_wait_sec: float = COMBAT_WARMUP_MAX_WAIT_SEC) -> void:
+	if warmup == null or not is_instance_valid(warmup):
+		return
+	var waited: float = 0.0
+	while is_instance_valid(warmup) and not bool(warmup.get("_finished_emitted")) and waited < max_wait_sec:
+		await bs.get_tree().process_frame
+		waited += bs.get_process_delta_time()
+	if is_instance_valid(warmup) and not bool(warmup.get("_finished_emitted")):
+		print("[BATTLE_ENTRY] combat_warmup_continue_in_background wait_ms=", int(waited * 1000.0))
+	else:
+		print("[BATTLE_ENTRY] combat_warmup_done wait_ms=", int(waited * 1000.0))
 
 ## Kicks off the enemy search flow: boards home troops, sails ships, closes
 ## the cloud transition, fetches an enemy from the server, then switches to
@@ -648,6 +657,7 @@ func _await_hidden_combat_warmup(warmup: Node) -> void:
 func _on_find_pressed() -> void:
 	if is_viewing_enemy or _find_in_progress:
 		return
+	var entry_started_ticks: int = Time.get_ticks_msec()
 	var net: Node = bs._net
 	if not net or not net.has_token():
 		print("Not logged in")
@@ -691,6 +701,7 @@ func _on_find_pressed() -> void:
 	while pending_count > 0 and wait_timer < 6.0:
 		await bs.get_tree().process_frame
 		wait_timer += bs.get_process_delta_time()
+	print("[BATTLE_ENTRY] boarding_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks, " wait_sec=", wait_timer)
 	for ht in bs._home_troops:
 		var troop = ht.get("node")
 		if is_instance_valid(troop):
@@ -698,17 +709,20 @@ func _on_find_pressed() -> void:
 	if bs.find_button:
 		bs.find_button.text = "Sailing..."
 	await _sail_ships_away()
+	print("[BATTLE_ENTRY] sailing_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	var bridge2 = bs._bridge
 	if bridge2:
-		bridge2.send_to_react("cloud_transition", {"visible": true})
+		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Finding opponent..."})
 	var cloud: Node = bs._get_or_create_cloud()
 	cloud.close()
 	await cloud.close_finished
+	print("[BATTLE_ENTRY] cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	var combat_warmup: Node = _start_hidden_combat_warmup()
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Searching..."
 	var result: Dictionary = await net.find_enemy()
+	print("[BATTLE_ENTRY] find_enemy_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	if bs.find_button:
 		bs.find_button.disabled = false
 		bs.find_button.text = "Find Enemy"
@@ -727,13 +741,14 @@ func _on_find_pressed() -> void:
 	if result.has("attacker_resources") and result.attacker_resources is Dictionary:
 		bs._apply_resources_from_server(result.attacker_resources)
 	enemy_info = result
-	_switch_to_enemy_island_after_sail()
+	_switch_to_enemy_island_after_sail(combat_warmup, true)
 
 func _on_revenge_pressed(source_battle_id: int) -> void:
 	if is_viewing_enemy or _find_in_progress:
 		return
 	if source_battle_id <= 0:
 		return
+	var entry_started_ticks: int = Time.get_ticks_msec()
 	var net: Node = bs._net
 	if not net or not net.has_token():
 		print("Not logged in")
@@ -776,6 +791,7 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	while pending_count > 0 and wait_timer < 6.0:
 		await bs.get_tree().process_frame
 		wait_timer += bs.get_process_delta_time()
+	print("[BATTLE_ENTRY] revenge_boarding_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks, " wait_sec=", wait_timer)
 	for ht in bs._home_troops:
 		var troop: Node = ht.get("node")
 		if is_instance_valid(troop):
@@ -783,17 +799,20 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	if bs.find_button:
 		bs.find_button.text = "Sailing..."
 	await _sail_ships_away()
+	print("[BATTLE_ENTRY] revenge_sailing_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	var bridge2: Node = bs._bridge
 	if bridge2:
-		bridge2.send_to_react("cloud_transition", {"visible": true})
+		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Finding opponent..."})
 	var cloud: Node = bs._get_or_create_cloud()
 	cloud.close()
 	await cloud.close_finished
+	print("[BATTLE_ENTRY] revenge_cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	var combat_warmup: Node = _start_hidden_combat_warmup()
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Revenge..."
 	var result: Dictionary = await net.start_revenge(source_battle_id)
+	print("[BATTLE_ENTRY] revenge_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	if bs.find_button:
 		bs.find_button.disabled = false
 		bs.find_button.text = "Find Enemy"
@@ -812,7 +831,7 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	if result.has("attacker_resources") and result.attacker_resources is Dictionary:
 		bs._apply_resources_from_server(result.attacker_resources)
 	enemy_info = result
-	_switch_to_enemy_island_after_sail()
+	_switch_to_enemy_island_after_sail(combat_warmup, true)
 
 
 ## Animates all active ships sailing off-screen and saves their transforms
@@ -945,7 +964,7 @@ func _switch_to_enemy_island() -> void:
 		})
 	var bridge2 = bs._bridge
 	if bridge2:
-		bridge2.send_to_react("cloud_transition", {"visible": true})
+		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Loading opponent..."})
 	var cloud = bs._get_or_create_cloud()
 	cloud.close()
 	await cloud.close_finished
@@ -1005,7 +1024,7 @@ func _switch_to_enemy_island() -> void:
 ## Switches to the enemy island assuming ships have already sailed away.
 ## Skips the cloud-close step; the caller is responsible for closing the
 ## cloud before calling this function.
-func _switch_to_enemy_island_after_sail() -> void:
+func _switch_to_enemy_island_after_sail(combat_warmup: Node = null, warmup_already_waited: bool = false) -> void:
 	_victory_declared = false
 	_reset_troop_death_reports()
 	_battle_replay.clear()
@@ -1056,8 +1075,10 @@ func _switch_to_enemy_island_after_sail() -> void:
 			"attack_cost_gold": enemy_info.get("attack_cost_gold", 0),
 		})
 	bs._cannon._preload_explosion_textures()
-	var combat_warmup: Node = _start_hidden_combat_warmup()
-	await _await_hidden_combat_warmup(combat_warmup)
+	if not warmup_already_waited:
+		if combat_warmup == null or not is_instance_valid(combat_warmup):
+			combat_warmup = _start_hidden_combat_warmup()
+		await _await_hidden_combat_warmup(combat_warmup)
 	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
 		bsys._destroy_all_buildings()
 	if enemy_info.has("buildings") and enemy_info.buildings is Array:

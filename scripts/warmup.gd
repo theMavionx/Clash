@@ -22,8 +22,8 @@ extends Node3D
 ## by hidden pre-draw work; the nodes below already exercise each material
 ## variant on the first few frames.
 const HOME_WARMUP_FRAMES: int = 4
-const COMBAT_WARMUP_FRAMES: int = 40
-const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [8, 24]
+const COMBAT_WARMUP_FRAMES: int = 14
+const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [4, 10]
 ## Sub-pixel scales (< ~0.005) are frustum-culled by both renderers — the draw
 ## call never reaches the GPU and the pipeline isn't compiled. 0.02 is small
 ## enough to be invisible against the water/sky but big enough to rasterize.
@@ -35,6 +35,8 @@ const WARMUP_POS: Vector3 = Vector3(0.0, 0.1, 0.0)
 signal finished
 
 static var _combat_warmup_done: bool = false
+static var _combat_warmup_active: bool = false
+static var _combat_warmup_node: Node = null
 
 @export_enum("home", "combat") var mode: String = "home"
 
@@ -51,6 +53,11 @@ var _fire_dragon_repeat_index: int = 0
 static func start_combat_warmup(parent: Node) -> Node:
 	if _combat_warmup_done:
 		return null
+	if _combat_warmup_active:
+		if is_instance_valid(_combat_warmup_node):
+			return _combat_warmup_node
+		_combat_warmup_active = false
+		_combat_warmup_node = null
 	if parent == null or not parent.is_inside_tree():
 		return null
 	var script: Script = load("res://scripts/warmup.gd")
@@ -59,6 +66,8 @@ static func start_combat_warmup(parent: Node) -> Node:
 	var node: Node = script.new()
 	node.set("mode", "combat")
 	parent.add_child(node)
+	_combat_warmup_active = true
+	_combat_warmup_node = node
 	return node
 
 
@@ -95,6 +104,8 @@ func _process(_delta: float) -> void:
 	if _frames_left <= 0:
 		if mode == "combat":
 			_combat_warmup_done = true
+			_combat_warmup_active = false
+			_combat_warmup_node = null
 		else:
 			_report_loading_progress(88, "home_warmup_done")
 		_clear_runtime_warmup_nodes()

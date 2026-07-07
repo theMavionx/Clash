@@ -62,6 +62,18 @@ const BotsPanel = lazy(lazyWithClientReload(() => import('./BotsPanel'), 'BotsPa
 
 const LOCAL_GUEST_DEFAULT_DEX = 'pacifica';
 
+function CloudTransitionStatus({ message }) {
+  if (!message) return null;
+  return (
+    <div style={styles.cloudStatusOverlay}>
+      <div style={styles.cloudStatusPanel}>
+        <span style={styles.cloudStatusSpinner} />
+        <span>{message || 'Finding opponent...'}</span>
+      </div>
+    </div>
+  );
+}
+
 function playerCanUseMmBots(player, serverAccess) {
   if (serverAccess?.enabled) return true;
   if (!MM_BOTS_BUTTON_CONFIGURED && !MM_BOTS_BUTTON_ALLOW_ALL && MM_BOTS_BUTTON_WHITELIST.size === 0) return false;
@@ -156,7 +168,7 @@ function VenuePickerOverlay({ isSolanaMobile, onPick }) {
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
   const { dex, setDex } = useDex();
-  const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
+  const { ready, shopOpen, error, showRegister, cloudVisible, cloudMessage, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
   const { tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useTutorial();
   const player = usePlayer();
   const { selectedBuilding } = useSelectedBuilding();
@@ -456,8 +468,9 @@ export default function GameUI() {
     return <RegisterPanel />;
   }
 
-  // Hide all UI during cloud transition
-  if (cloudVisible) return null;
+  // Hide normal HUD during cloud transition, but keep a small status above
+  // the Godot cloud canvas so long waits do not feel frozen.
+  if (cloudVisible) return <CloudTransitionStatus message={cloudMessage} />;
 
   return (
     <div style={styles.overlay}>
@@ -640,5 +653,41 @@ const styles = {
     inset: 0,
     pointerEvents: 'none',
     zIndex: 5,
+  },
+  cloudStatusOverlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 15,
+    pointerEvents: 'none',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  cloudStatusPanel: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    maxWidth: 'min(360px, 88vw)',
+    padding: '10px 16px',
+    borderRadius: 8,
+    border: '3px solid rgba(92,58,33,0.82)',
+    background: 'rgba(246,232,196,0.92)',
+    color: '#5C3A21',
+    fontSize: 17,
+    fontWeight: 900,
+    textAlign: 'center',
+    textShadow: '0 1px 0 rgba(255,255,255,0.65)',
+    boxShadow: '0 6px 18px rgba(0,0,0,0.26)',
+  },
+  cloudStatusSpinner: {
+    width: 14,
+    height: 14,
+    borderRadius: '50%',
+    border: '3px solid rgba(92,58,33,0.25)',
+    borderTopColor: '#5C3A21',
+    animation: 'spin 0.8s linear infinite',
+    flex: '0 0 auto',
   },
 };

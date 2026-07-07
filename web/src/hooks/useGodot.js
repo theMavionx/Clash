@@ -99,6 +99,7 @@ export function GodotProvider({ children }) {
   const [showRegister, setShowRegister] = useState(false);
   const [collectibles, setCollectibles] = useState([]);
   const [cloudVisible, setCloudVisible] = useState(false);
+  const [cloudMessage, setCloudMessage] = useState('');
   const [futuresOpen, setFuturesOpen] = useState(false);
   const [cannonMode, setCannonMode] = useState(false);
   const [rallyMode, setRallyMode] = useState(false);
@@ -434,6 +435,7 @@ export function GodotProvider({ children }) {
           break;
         case 'cloud_transition':
           setCloudVisible(data.visible);
+          setCloudMessage(data.visible ? (data.message || '') : '');
           break;
         case 'perf':
           // Throttle perf events — Godot sends at frame rate but React only needs ~4/sec
@@ -473,8 +475,8 @@ export function GodotProvider({ children }) {
     selectedBuilding,
   }), [selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, rallyMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, rallyMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
   const tutorialCtx = useMemo(() => ({
     tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase
   }), [tutorialFlags, tutorialPhase]);

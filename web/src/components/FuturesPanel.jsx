@@ -928,11 +928,100 @@ function isOrderPendingConfirmation(order) {
 
 function OrderPendingBadge() {
   return (
-    <span style={S.orderPendingBadge} title="Waiting for Decibel confirmation">
+    <span style={S.orderPendingBadge} title="Waiting for exchange confirmation">
       <span style={S.orderPendingSpinner} />
       Confirming
     </span>
   );
+}
+
+const DANGO_PENDING_ACTION_TTL_MS = 120_000;
+
+function dangoPhaseLabel(phase, fallback = 'Syncing...') {
+  if (phase === 'preparing') return 'Preparing...';
+  if (phase === 'signing') return 'Signing...';
+  if (phase === 'confirming') return 'Confirming...';
+  if (phase === 'indexing') return 'Syncing...';
+  return fallback;
+}
+
+function dangoPriceMatches(a, b) {
+  const left = Number(a);
+  const right = Number(b);
+  if (!Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0) return false;
+  return Math.abs(left - right) <= Math.max(0.01, Math.abs(right) * 0.00001);
+}
+
+function makeDangoPendingOrder(pos, kind, triggerPrice, phase, actionId) {
+  const price = Number(triggerPrice);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  const symbol = String(pos?.symbol || pos?.s || '').toUpperCase();
+  const closeSide = positionCloseSide(pos);
+  return {
+    dex: 'dango',
+    symbol,
+    side: closeSide,
+    order_type: kind === 'tp' ? 'take_profit' : 'stop_loss',
+    type: kind === 'tp' ? 'take_profit' : 'stop_loss',
+    tpsl: kind === 'tp' ? 'take_profit' : 'stop_loss',
+    reduce_only: true,
+    amount: pos?.amount,
+    initial_amount: pos?.amount,
+    stop_price: String(price),
+    trigger_price: String(price),
+    price: String(price),
+    pair_index: pos?.pair_index,
+    pairIndex: pos?.pairIndex,
+    market_addr: pos?.market_addr,
+    position_id: pos?.position_id || pos?.positionId || pos?.id,
+    order_id: `dango-pending-${kind}-${actionId}`,
+    _optimistic: true,
+    _optimisticKey: `dango-pending-${kind}-${symbol}-${price}-${actionId}`,
+    _pendingPhase: phase,
+    _raw: { optimistic: true, phase },
+  };
+}
+
+function dangoPendingActionForPosition(actions, pos, kind) {
+  const key = positionStableKey(pos);
+  return (actions || []).find(action => action.kind === kind && action.positionKey === key) || null;
+}
+
+function dangoPendingTpslConfirmed(action, orders) {
+  const expected = Array.isArray(action?.orders) ? action.orders : [];
+  if (!expected.length) return true;
+  return expected.every(pending => {
+    const pendingKind = orderTpslKind(pending);
+    const pendingPrice = orderTriggerPrice(pending);
+    const pendingSymbol = String(pending?.symbol || pending?.s || '').toUpperCase();
+    return (Array.isArray(orders) ? orders : []).some(order => {
+      if (isOrderPendingConfirmation(order)) return false;
+      const orderSymbol = String(order?.symbol || order?.s || '').toUpperCase();
+      if (pendingSymbol && orderSymbol && pendingSymbol !== orderSymbol) return false;
+      const displayType = orderDisplayType(order).toLowerCase();
+      const actualKind = orderTpslKind(order)
+        || (displayType.includes('profit') || displayType.includes('tp') ? 'tp' : '')
+        || (displayType.includes('stop') || displayType.includes('sl') ? 'sl' : '');
+      if (pendingKind && actualKind && pendingKind !== actualKind) return false;
+      return dangoPriceMatches(orderTriggerPrice(order), pendingPrice);
+    });
+  });
+}
+
+function dangoPendingCloseConfirmed(action, positions) {
+  const rows = Array.isArray(positions) ? positions : [];
+  const originalKey = action?.positionKey || '';
+  const current = rows.find(pos => positionStableKey(pos) === originalKey)
+    || rows.find(pos => {
+      const symbol = String(pos?.symbol || pos?.s || '').toUpperCase();
+      const side = positionOpenSide(pos);
+      return symbol === action?.symbol && side === action?.side;
+    });
+  if (!current) return true;
+  const beforeAmount = Math.abs(Number(action?.startAmount || 0));
+  const currentAmount = Math.abs(Number(current?.amount ?? current?.size ?? current?.position ?? 0));
+  if (action?.fullClose) return false;
+  return beforeAmount > 0 && currentAmount < beforeAmount - 1e-9;
 }
 
 function orderUsdValue(...values) {
@@ -1263,6 +1352,7 @@ function TpslEditor({
   metrics,
   ostiumTpMax,
   busy,
+  busyLabel,
   loading,
   hasChanges,
   onSubmit,
@@ -1296,7 +1386,7 @@ function TpslEditor({
         <TpslValueInput leg="tp" mode={mode} value={tpValue} onChange={onTpChange} pos={pos} metrics={metrics} maxPrice={ostiumTpMax} />
         <TpslValueInput leg="sl" mode={mode} value={slValue} onChange={onSlChange} pos={pos} metrics={metrics} />
         <button style={S.btnBlue} onClick={onSubmit} disabled={busy || loading || !hasChanges}>
-          {busy ? <ClosingButtonLabel text="Setting..." /> : 'Set'}
+          {busy ? <ClosingButtonLabel text={busyLabel || 'Setting...'} /> : 'Set'}
         </button>
       </div>
       <div style={S.tpslHint}>
@@ -2495,6 +2585,7 @@ const BottomPanel = memo(function BottomPanel({
   filteredPositions, filteredOrders, orders, positions,
   prices, walletAddr, dataReady, leverageSettings,
   closePosition, cancelOrder, dex, loading, historyAccountAddr, markets,
+  dangoPendingActions = [], beginDangoPendingClose = () => null, removeDangoPendingAction = () => {},
 }) {
   const tpslOrders = Array.isArray(orders) ? orders : filteredOrders;
   // Avantis/Flash do not expose funding payments in the trading UI flow.
@@ -2556,6 +2647,7 @@ const BottomPanel = memo(function BottomPanel({
                   dustUsd,
                 } = getPositionMetrics(p, prices, leverageSettings);
                 const { tp, sl } = getPositionTpsl(p, tpslOrders);
+                const pendingClose = dangoPendingActionForPosition(dangoPendingActions, p, 'close');
                 return (
                   <tr key={positionStableKey(p) || i} style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
@@ -2573,20 +2665,25 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>{isDust ? 'Dust' : formatPositionLeverageBadge(lev)}</td>
                     <td style={S.td}>
                       <button
-                        style={{...S.tblCloseBtn, opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer'}}
-                        disabled={loading}
+                        style={{...S.tblCloseBtn, opacity: loading || pendingClose ? 0.5 : 1, cursor: loading || pendingClose ? 'not-allowed' : 'pointer'}}
+                        disabled={loading || !!pendingClose}
                         onClick={async () => {
-                          await closePosition(
+                          const amount = dex === 'avantis' ? p.margin : p.amount;
+                          const pending = beginDangoPendingClose(p, amount, true);
+                          const result = await closePosition(
                             p.symbol,
                             p.side,
-                            dex === 'avantis' ? p.margin : p.amount,
+                            amount,
                             p.pair_index,
                             p.trade_index,
                             true,
-                            dex === 'flash' ? { position: p, inputUsdUi: String(isDust ? dustUsd : tblPosValue) } : undefined,
+                            dex === 'dango'
+                              ? pending?.options
+                              : (dex === 'flash' ? { position: p, inputUsdUi: String(isDust ? dustUsd : tblPosValue) } : undefined),
                           );
+                          if (result?.error && pending?.id) removeDangoPendingAction(pending.id);
                         }}
-                      >{loading ? <ClosingButtonLabel text="" /> : 'Close'}</button>
+                      >{pendingClose ? <ClosingButtonLabel text="" /> : loading ? <ClosingButtonLabel text="" /> : 'Close'}</button>
                     </td>
                   </tr>
                 );
@@ -2612,15 +2709,23 @@ const BottomPanel = memo(function BottomPanel({
                 const isTP = type.includes('TAKE') || type.includes('TP');
                 const isSL = type.includes('STOP') || type.includes('SL');
                 const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
+                const pending = isOrderPendingConfirmation(o);
                 return (
                   <tr key={orderStableKey(o, i)} style={S.tr}>
                     <td style={S.td}>{sym}</td>
                     <td style={{...S.td, color: positionSide === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{sideLabel}</td>
-                    <td style={{...S.td, color: typeColor, fontWeight: 700}}>{type}</td>
+                    <td style={{...S.td, color: typeColor, fontWeight: 700}}>
+                      <span style={{display: 'inline-flex', alignItems: 'center', gap: 6}}>
+                        {type}
+                        {pending ? <OrderPendingBadge /> : null}
+                      </span>
+                    </td>
                     <td style={S.td}>${fmtPrice(price)}</td>
                     <td style={S.td}>{amt}</td>
                     <td style={S.td}>
-                      {isReadOnlyOrder(o) ? (
+                      {pending ? (
+                        <span style={{color: '#8b7655', fontSize: 11, fontWeight: 800}}>Pending</span>
+                      ) : isReadOnlyOrder(o) ? (
                         <span style={{color: '#8b7655', fontSize: 11, fontWeight: 800}}>On position</span>
                       ) : (
                         <button
@@ -2789,6 +2894,98 @@ function FuturesPanel() {
   const latestOrdersRef = useRef(orders);
   useEffect(() => { latestPositionsRef.current = positions; }, [positions]);
   useEffect(() => { latestOrdersRef.current = orders; }, [orders]);
+  const [dangoPendingActions, setDangoPendingActions] = useState([]);
+  const dangoPendingOrders = useMemo(
+    () => dangoPendingActions.flatMap(action => Array.isArray(action.orders) ? action.orders : []),
+    [dangoPendingActions],
+  );
+  const displayOrders = useMemo(
+    () => [...dangoPendingOrders, ...(Array.isArray(orders) ? orders : [])],
+    [dangoPendingOrders, orders],
+  );
+  const updateDangoPendingAction = useCallback((id, patch) => {
+    setDangoPendingActions(current => current.map(action => (
+      action.id === id
+        ? {
+          ...action,
+          ...patch,
+          orders: Array.isArray(action.orders)
+            ? action.orders.map(order => ({
+              ...order,
+              _pendingPhase: patch.phase || order._pendingPhase,
+              _raw: { ...(order._raw || {}), phase: patch.phase || order?._raw?.phase },
+            }))
+            : action.orders,
+        }
+        : action
+    )));
+  }, []);
+  const removeDangoPendingAction = useCallback((id) => {
+    setDangoPendingActions(current => current.filter(action => action.id !== id));
+  }, []);
+  const beginDangoPendingClose = useCallback((pos, amount, fullClose) => {
+    if (dex !== 'dango') return null;
+    const id = `dango-close-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const action = {
+      id,
+      kind: 'close',
+      phase: 'preparing',
+      createdAt: Date.now(),
+      positionKey: positionStableKey(pos),
+      symbol: String(pos?.symbol || pos?.s || '').toUpperCase(),
+      side: positionOpenSide(pos),
+      startAmount: Math.abs(Number(pos?.amount ?? pos?.size ?? pos?.position ?? 0)),
+      closeAmount: Math.abs(Number(amount || 0)),
+      fullClose: !!fullClose,
+      orders: [],
+    };
+    setDangoPendingActions(current => [...current.filter(row => !(row.kind === 'close' && row.positionKey === action.positionKey)), action]);
+    return {
+      id,
+      options: {
+        onPhase: phase => updateDangoPendingAction(id, { phase }),
+      },
+    };
+  }, [dex, updateDangoPendingAction]);
+  const beginDangoPendingTpsl = useCallback((pos, tpPrice, slPrice) => {
+    if (dex !== 'dango') return null;
+    const id = `dango-tpsl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const base = {
+      id,
+      kind: 'tpsl',
+      phase: 'preparing',
+      createdAt: Date.now(),
+      positionKey: positionStableKey(pos),
+      symbol: String(pos?.symbol || pos?.s || '').toUpperCase(),
+      side: positionOpenSide(pos),
+    };
+    const pendingOrders = [
+      makeDangoPendingOrder(pos, 'tp', tpPrice, base.phase, id),
+      makeDangoPendingOrder(pos, 'sl', slPrice, base.phase, id),
+    ].filter(Boolean);
+    if (!pendingOrders.length) return null;
+    const action = { ...base, orders: pendingOrders };
+    setDangoPendingActions(current => [...current.filter(row => !(row.kind === 'tpsl' && row.positionKey === action.positionKey)), action]);
+    return {
+      id,
+      options: {
+        onPhase: phase => updateDangoPendingAction(id, { phase }),
+      },
+    };
+  }, [dex, updateDangoPendingAction]);
+  useEffect(() => {
+    if (dex !== 'dango') {
+      setDangoPendingActions([]);
+      return;
+    }
+    const now = Date.now();
+    setDangoPendingActions(current => current.filter(action => {
+      if (now - Number(action.createdAt || 0) > DANGO_PENDING_ACTION_TTL_MS) return false;
+      if (action.kind === 'tpsl') return !dangoPendingTpslConfirmed(action, orders);
+      if (action.kind === 'close') return !dangoPendingCloseConfirmed(action, positions);
+      return true;
+    }));
+  }, [dex, positions, orders]);
   // The trading hook owns the active signer. Do not treat a detected adapter
   // or a stored player wallet as "connected" unless the hook resolved the
   // address it will actually use for signing.
@@ -3030,8 +3227,18 @@ function FuturesPanel() {
     setSuccessMsg('Wallet close submitted.');
   }, [dex, executeOneTapWalletFallback]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash' && dex !== 'ostium') return;
-    const dexLabel = dex === 'nado' ? 'Nado' : dex === 'katana' ? 'Katana' : dex === 'flash' ? 'Flash' : dex === 'ostium' ? 'Ostium' : 'Hyperliquid';
+    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash' && dex !== 'ostium' && dex !== 'dango') return;
+    const dexLabel = dex === 'nado'
+      ? 'Nado'
+      : dex === 'katana'
+        ? 'Katana'
+        : dex === 'flash'
+          ? 'Flash'
+          : dex === 'ostium'
+            ? 'Ostium'
+            : dex === 'dango'
+              ? 'Dango'
+              : 'Hyperliquid';
     if (oneTapTrading?.enabled) {
       const result = typeof setOneTapTradingEnabled === 'function'
         ? await setOneTapTradingEnabled(false)
@@ -3043,7 +3250,7 @@ function FuturesPanel() {
       setSuccessMsg(`One tap trading disabled. Opening a ${dexLabel} order will ask to enable it again.`);
       return;
     }
-    if (dex === 'katana' || dex === 'flash' || dex === 'ostium') {
+    if (dex === 'katana' || dex === 'flash' || dex === 'ostium' || dex === 'dango') {
       setReferralLinking(true);
       try {
         const result = typeof setOneTapTradingEnabled === 'function'
@@ -4483,6 +4690,63 @@ function FuturesPanel() {
           );
         })()}
 
+        {dex === 'dango' && (() => {
+          const enabled = !!oneTapTrading?.approved;
+          const busy = !!referralLinking || !!loading;
+          const subtitle = enabled
+            ? `Signer ${oneTapTrading?.signer ? shortAddr(oneTapTrading.signer) : 'ready'} - browser signing session is on.`
+            : 'Enable browser signing session for Dango actions.';
+          return (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              background: enabled ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
+              borderWidth: 1,
+              borderStyle: 'solid',
+              borderColor: enabled ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.30)',
+              borderRadius: 8,
+              padding: '7px 9px',
+            }}>
+              <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
+                <span style={{fontSize: 11, fontWeight: 900, color: enabled ? '#166534' : '#7C2D12'}}>
+                  Dango one tap trading
+                </span>
+                <span style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: '#8a7252',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {subtitle}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleToggleOneTapTrading}
+                disabled={busy}
+                style={{
+                  ...S.btnSmall,
+                  flex: '0 0 auto',
+                  minWidth: 72,
+                  padding: '5px 10px',
+                  background: enabled ? '#16A34A' : '#fff6dc',
+                  color: enabled ? '#fff' : '#5C3A21',
+                  borderWidth: 2,
+                  borderStyle: 'solid',
+                  borderColor: enabled ? '#15803D' : '#b58b2a',
+                  opacity: busy ? 0.7 : 1,
+                }}
+              >
+                {busy ? '...' : enabled ? 'ON' : 'ENABLE'}
+              </button>
+            </div>
+          );
+        })()}
+
         {dex === 'ostium' && (() => {
           const enabled = !!oneTapTrading?.approved;
           const busy = !!referralLinking || !!loading;
@@ -4671,7 +4935,7 @@ function FuturesPanel() {
 
   // Apply filters to orders
   const filteredOrders = useMemo(() => {
-    let list = orders;
+    let list = displayOrders;
     if (btmFilters.symbol !== 'All') list = list.filter(o => (o.symbol || o.s) === btmFilters.symbol);
     if (btmFilters.side !== 'All') {
       const wantBid = btmFilters.side === 'Long';
@@ -4681,7 +4945,7 @@ function FuturesPanel() {
     if (btmFilters.sortBy === 'symbol') list = [...list].sort((a, b) => dir * (a.symbol || a.s || '').localeCompare(b.symbol || b.s || ''));
     else if (btmFilters.sortBy === 'price') list = [...list].sort((a, b) => dir * (parseFloat(b.price || b.ip || 0) - parseFloat(a.price || a.ip || 0)));
     return list;
-  }, [orders, btmFilters]);
+  }, [displayOrders, btmFilters]);
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
 
@@ -7515,7 +7779,7 @@ function FuturesPanel() {
             {renderSymbolBar()}
             {/* Top: chart */}
             <div style={{flex: '0 0 clamp(220px, 38vh, 360px)', position: 'relative', minHeight: 180}}>
-              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
               {fundingBadge}
             </div>
 
@@ -7541,7 +7805,7 @@ function FuturesPanel() {
           {/* Top: chart + orderbook + controls */}
           <div style={{display: 'flex', flex: '1 1 auto', minHeight: 0, overflow: 'hidden'}}>
             <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
-              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
             </div>
             {(dex === 'pacifica' || dex === 'phoenix') && (
               <>
@@ -7582,7 +7846,7 @@ function FuturesPanel() {
             hasActiveFilters={hasActiveFilters}
             filteredPositions={filteredPositions}
             filteredOrders={filteredOrders}
-            orders={orders}
+            orders={displayOrders}
             positions={positions}
             prices={prices}
             walletAddr={walletAddr}
@@ -7594,6 +7858,9 @@ function FuturesPanel() {
             cancelOrder={cancelOrder}
             dex={dex}
             loading={loading}
+            dangoPendingActions={dangoPendingActions}
+            beginDangoPendingClose={beginDangoPendingClose}
+            removeDangoPendingAction={removeDangoPendingAction}
           />
         </div>
       );
@@ -7603,7 +7870,7 @@ function FuturesPanel() {
       <>
         {renderSymbolBar()}
         <div style={{...S.chartArea, position: 'relative'}}>
-          <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+          <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
           {fundingBadge}
         </div>
         {renderTradeControls()}
@@ -7666,13 +7933,19 @@ function FuturesPanel() {
               isOpen: true,
             };
             const handleClose = async () => {
-              await closePosition(
+              const amount = dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount);
+              const pending = beginDangoPendingClose(pos, amount, true);
+              const result = await closePosition(
                 pos.symbol, pos.side,
-                String(dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)),
+                String(amount),
                 pos.pair_index, pos.trade_index, true,
-                dex === 'flash' ? { position: pos, inputUsdUi: String(dustUsd || posValueUsd) } : undefined,
+                dex === 'dango'
+                  ? pending?.options
+                  : (dex === 'flash' ? { position: pos, inputUsdUi: String(dustUsd || posValueUsd) } : undefined),
               );
+              if (result?.error && pending?.id) removeDangoPendingAction(pending.id);
             };
+            const pendingClose = dangoPendingActionForPosition(dangoPendingActions, pos, 'close');
             return (
               <div key={positionStableKey(pos) || i} style={S.posCard}>
                 <div style={S.row}>
@@ -7710,9 +7983,11 @@ function FuturesPanel() {
                   <button
                     style={{...S.btnRed, flex: 1, padding: '10px'}}
                     onClick={handleClose}
-                    disabled={loading}
+                    disabled={loading || !!pendingClose}
                   >
-                    {loading ? <ClosingButtonLabel text="Closing position..." /> : (isDust ? 'Clean up dust' : 'Close position')}
+                    {pendingClose
+                      ? <ClosingButtonLabel text={dangoPhaseLabel(pendingClose.phase, 'Closing position...')} />
+                      : loading ? <ClosingButtonLabel text="Closing position..." /> : (isDust ? 'Clean up dust' : 'Close position')}
                   </button>
                   <button
                     style={{
@@ -7759,12 +8034,17 @@ function FuturesPanel() {
           };
           const handleProClose = async (closeFraction) => {
             const amount = (dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closeFraction;
-            await closePosition(
+            const pending = beginDangoPendingClose(pos, amount, closeFraction >= 1);
+            const result = await closePosition(
               pos.symbol, pos.side, String(amount),
               pos.pair_index, pos.trade_index, closeFraction >= 1,
-              dex === 'flash' ? { position: pos, inputUsdUi: String((dustUsd || posValueUsd) * closeFraction) } : undefined,
+              dex === 'dango'
+                ? pending?.options
+                : (dex === 'flash' ? { position: pos, inputUsdUi: String((dustUsd || posValueUsd) * closeFraction) } : undefined),
             );
+            if (result?.error && pending?.id) removeDangoPendingAction(pending.id);
           };
+          const pendingClose = dangoPendingActionForPosition(dangoPendingActions, pos, 'close');
           return (
             <div key={positionStableKey(pos) || i} style={S.posCard}>
               <div style={S.row}>
@@ -7815,7 +8095,7 @@ function FuturesPanel() {
                   </div>
                 );
               })()}
-              <PositionTpslRow pos={pos} orders={orders} />
+              <PositionTpslRow pos={pos} orders={displayOrders} />
 
               {/* Action buttons: Close + TP/SL + Share-icon. Share lives in
                   Pro too (per-user-request) — same icon as Basic for
@@ -7830,7 +8110,7 @@ function FuturesPanel() {
                       setTpslInputMode('price');
                       return;
                     }
-                    const { tp, sl } = getPositionTpsl(pos, orders);
+                    const { tp, sl } = getPositionTpsl(pos, displayOrders);
                     const nextTp = formatTpslInputValue(tp);
                     const nextSl = formatTpslInputValue(sl);
                     setTpPrice(nextTp);
@@ -7882,8 +8162,10 @@ function FuturesPanel() {
                       <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
                     </>
                   )}
-                  <button style={{...S.btnRed, width: '100%'}} onClick={() => handleProClose(isDust ? 1 : closePct / 100)} disabled={loading}>
-                    {loading ? <ClosingButtonLabel /> : (isDust ? 'Clean up dust' : `Close ${closePct}%`)}
+                  <button style={{...S.btnRed, width: '100%'}} onClick={() => handleProClose(isDust ? 1 : closePct / 100)} disabled={loading || !!pendingClose}>
+                    {pendingClose
+                      ? <ClosingButtonLabel text={dangoPhaseLabel(pendingClose.phase, 'Closing...')} />
+                      : loading ? <ClosingButtonLabel /> : (isDust ? 'Clean up dust' : `Close ${closePct}%`)}
                   </button>
                 </div>
               )}
@@ -7904,7 +8186,8 @@ function FuturesPanel() {
                   pos={pos}
                   metrics={tpslMetrics}
                   ostiumTpMax={ostiumTpMax}
-                  busy={tpslBusy}
+                  busy={tpslBusy || !!dangoPendingActionForPosition(dangoPendingActions, pos, 'tpsl')}
+                  busyLabel={dangoPhaseLabel(dangoPendingActionForPosition(dangoPendingActions, pos, 'tpsl')?.phase, 'Setting...')}
                   loading={loading}
                   hasChanges={hasTpslChanges}
                   onSubmit={async () => {
@@ -7918,9 +8201,11 @@ function FuturesPanel() {
                     }
                     if (!validateTpslBeforeSubmit({ dex, pos, tpPrice: changedTpPrice, slPrice: changedSlPrice, setLocalAlert })) return;
                     setTpslSubmittingPos(posKey);
+                    const pending = beginDangoPendingTpsl(pos, changedTpPrice, changedSlPrice);
                     try {
-                      const r = await setTpsl(pos.symbol, positionCloseSide(pos), changedTpPrice, changedSlPrice, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                      const r = await setTpsl(pos.symbol, positionCloseSide(pos), changedTpPrice, changedSlPrice, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr, pending?.options);
                     if (r?.error) {
+                      if (pending?.id) removeDangoPendingAction(pending.id);
                       setLocalAlert(r.error);
                       return;
                     }
@@ -7949,7 +8234,7 @@ function FuturesPanel() {
 
   // ==================== ORDERS TAB ====================
   const renderOrders = () => {
-    if (!orders.length) {
+    if (!displayOrders.length) {
       return (
         <div style={S.empty}>
           <div style={{opacity: 0.3, color: '#5C3A21'}}>
@@ -7961,7 +8246,7 @@ function FuturesPanel() {
     }
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
-        {orders.map((o, i) => {
+        {displayOrders.map((o, i) => {
           const sym = o.symbol || o.s;
           const side = o.side || o.d;
           const price = orderDisplayPrice(o);
