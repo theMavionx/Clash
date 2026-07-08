@@ -66,6 +66,7 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
       body: JSON.stringify({
         reward_wallet_evm: options.rewardWalletEvm || options.reward_wallet_evm || undefined,
         reward_wallet_solana: options.rewardWalletSolana || options.reward_wallet_solana || options.rewardWalletEvm || options.reward_wallet_evm || undefined,
+        twitter_handle: options.twitterHandle || options.twitter_handle || undefined,
       }),
     });
     let data = null;
@@ -74,12 +75,16 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     return { ok: res.ok, ...(data || {}) };
   }, [token, refresh]);
 
-  const updateRewardWallet = useCallback(async (tournamentId, rewardWalletEvm) => {
+  const updateRewardWallet = useCallback(async (tournamentId, rewardWalletEvm, options = {}) => {
     if (!token) return { ok: false, error: 'not authenticated' };
     const res = await fetch(`/api/tournaments/${tournamentId}/reward-wallet`, {
       method: 'POST',
       headers: { 'x-token': token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reward_wallet_evm: rewardWalletEvm, reward_wallet_solana: rewardWalletEvm }),
+      body: JSON.stringify({
+        reward_wallet_evm: rewardWalletEvm,
+        reward_wallet_solana: rewardWalletEvm,
+        twitter_handle: options.twitterHandle || options.twitter_handle || undefined,
+      }),
     });
     let data = null;
     try { data = await res.json(); } catch {}
@@ -147,12 +152,16 @@ export function useLuckyRaider({ active = false, pollMs = 30000 } = {}) {
     return () => clearInterval(id);
   }, [active, token, pollMs, refresh]);
 
-  const updateRewardWallet = useCallback(async (tournamentId, rewardWalletEvm) => {
+  const updateRewardWallet = useCallback(async (tournamentId, rewardWalletEvm, options = {}) => {
     if (!token) return { ok: false, error: 'not authenticated' };
     const res = await fetch(`/api/tournaments/${tournamentId}/reward-wallet`, {
       method: 'POST',
       headers: { 'x-token': token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reward_wallet_evm: rewardWalletEvm, reward_wallet_solana: rewardWalletEvm }),
+      body: JSON.stringify({
+        reward_wallet_evm: rewardWalletEvm,
+        reward_wallet_solana: rewardWalletEvm,
+        twitter_handle: options.twitterHandle || options.twitter_handle || undefined,
+      }),
     });
     let data = null;
     try { data = await res.json(); } catch {}

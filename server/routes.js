@@ -20353,6 +20353,27 @@ function validatePlayerClashRewardWallet(playerId, wallet) {
   return { ok: true, wallet: normalized };
 }
 
+function normalizeTournamentTwitterHandle(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { ok: true, handle: null };
+  const handle = raw.replace(/^@+/u, '').trim();
+  if (!/^[A-Za-z0-9_]{1,15}$/u.test(handle)) {
+    return { ok: false, error: 'valid Twitter/X handle required' };
+  }
+  return { ok: true, handle: `@${handle}` };
+}
+
+function tournamentTwitterHandleFromBody(body = {}) {
+  return normalizeTournamentTwitterHandle(
+    body.twitter_handle
+    ?? body.twitterHandle
+    ?? body.twitter
+    ?? body.x_handle
+    ?? body.xHandle
+    ?? '',
+  );
+}
+
 function rewardUsesClashToken(reward) {
   if (!reward || typeof reward !== 'object') return false;
   const currency = String(reward.currency || '').trim().toUpperCase();
@@ -21805,17 +21826,19 @@ router.get('/tournaments', (req, res) => {
   res.json({ tournaments: rows.map(tournamentRowToPublic) });
 });
 
-function ensureLuckyRaiderParticipant(t, player, rewardWallet = null) {
+function ensureLuckyRaiderParticipant(t, player, rewardWallet = null, twitterHandle = null) {
   if (!t?.id || !player?.id) return null;
   const normalizedRewardWallet = rewardWallet ? normalizeRewardSolanaWallet(rewardWallet) : null;
+  const normalizedTwitter = normalizeTournamentTwitterHandle(twitterHandle).handle;
   db.db.prepare(`
-    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, last_activity_at)
-    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, NULL, ?, datetime('now'))
+    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, twitter_handle, last_activity_at)
+    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, NULL, ?, ?, datetime('now'))
     ON CONFLICT(tournament_id, player_id) DO UPDATE SET
       left_at = NULL,
       reward_wallet_evm = COALESCE(excluded.reward_wallet_evm, tournament_participants.reward_wallet_evm),
+      twitter_handle = COALESCE(excluded.twitter_handle, tournament_participants.twitter_handle),
       last_activity_at = datetime('now')
-  `).run(t.id, player.id, normalizedRewardWallet);
+  `).run(t.id, player.id, normalizedRewardWallet, normalizedTwitter);
   return db.db.prepare(`
     SELECT * FROM tournament_participants
     WHERE tournament_id = ? AND player_id = ?
@@ -21889,6 +21912,7 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
       left_at: me.left_at,
       reward_wallet_evm: me.reward_wallet_evm || null,
       reward_wallet_solana: me.reward_wallet_evm || null,
+      twitter_handle: me.twitter_handle || null,
     } : null,
     reward_schedule: rewardSchedule,
   });
@@ -21970,6 +21994,7 @@ router.get('/tournaments/me', auth, (req, res) => {
       team_dex: me.team_dex || null,
       team_label: me.team_dex ? (TOURNAMENT_DEX_LABELS[me.team_dex] || me.team_dex) : null,
       reward_wallet_evm: me.reward_wallet_evm || null,
+      twitter_handle: me.twitter_handle || null,
     } : null,
   });
 });
@@ -21995,6 +22020,7 @@ router.get('/tournaments/history', auth, (req, res) => {
            tp.awarded_points AS my_awarded_points,
            tp.team_dex   AS my_team_dex,
            tp.reward_wallet_evm AS my_reward_wallet_evm,
+           tp.twitter_handle AS my_twitter_handle,
            tp.left_at    AS my_left_at
     FROM tournaments t
     LEFT JOIN tournament_participants tp
@@ -22042,6 +22068,7 @@ router.get('/tournaments/history', auth, (req, res) => {
         team_dex: r.my_team_dex || null,
         team_label: r.my_team_dex ? (TOURNAMENT_DEX_LABELS[r.my_team_dex] || r.my_team_dex) : null,
         reward_wallet_evm: r.my_reward_wallet_evm || null,
+        twitter_handle: r.my_twitter_handle || null,
         left_at: r.my_left_at,
       } : null,
     })),
@@ -22097,20 +22124,23 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   } else if (rewardWallet && rejectBlacklistedWallet(req, res, rewardWallet, 'tournaments.join.reward-wallet')) {
     return;
   }
+  const twitter = tournamentTwitterHandleFromBody(req.body || {});
+  if (!twitter.ok) return res.status(400).json({ error: twitter.error });
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.
   const teamDex = normalizeTournamentMode(t.mode) === 'dex_vs_dex' ? req.player.dex : null;
   db.db.prepare(`
-    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm)
-    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, ?, ?)
+    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, twitter_handle)
+    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, ?, ?, ?)
     ON CONFLICT(tournament_id, player_id) DO UPDATE SET
       joined_at = datetime('now'),
       left_at = NULL,
       trophies = 0, gold = 0, trades_count = 0, volume_usd = 0, pnl_usd = 0,
       team_dex = excluded.team_dex,
       reward_wallet_evm = excluded.reward_wallet_evm,
+      twitter_handle = excluded.twitter_handle,
       last_activity_at = datetime('now')
-  `).run(tid, req.player.id, teamDex, rewardWallet);
+  `).run(tid, req.player.id, teamDex, rewardWallet, twitter.handle);
   const sync = phase === 'live' ? syncFuturesTournamentRows(req.player.id, req.player.dex) : null;
   console.log(`[tournament ${tid} join] player=${req.player.name} (${req.player.dex}) phase=${phase} -> JOINED ${t.name}`);
   res.json({ ok: true, joined: true, phase, sync: sync ? { ok: !!sync.ok } : null });
@@ -22136,32 +22166,47 @@ router.post('/tournaments/:id/reward-wallet', auth, (req, res) => {
   const rewardWalletValidation = validatePlayerClashRewardWallet(req.player.id, rewardWalletInput);
   if (!rewardWalletValidation.ok) return res.status(400).json({ error: rewardWalletValidation.error });
   const rewardWallet = rewardWalletValidation.wallet;
+  const twitterProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'twitter_handle')
+    || Object.prototype.hasOwnProperty.call(req.body || {}, 'twitterHandle')
+    || Object.prototype.hasOwnProperty.call(req.body || {}, 'twitter')
+    || Object.prototype.hasOwnProperty.call(req.body || {}, 'x_handle')
+    || Object.prototype.hasOwnProperty.call(req.body || {}, 'xHandle');
+  const twitter = twitterProvided ? tournamentTwitterHandleFromBody(req.body || {}) : { ok: true, handle: null };
+  if (!twitter.ok) return res.status(400).json({ error: twitter.error });
   const participant = db.db.prepare(`
-    SELECT reward_wallet_evm, left_at
+    SELECT reward_wallet_evm, twitter_handle, left_at
     FROM tournament_participants
     WHERE tournament_id = ? AND player_id = ?
   `).get(tid, req.player.id);
   const isLuckyRaiderEvent = normalizeTournamentEventKind(t.event_kind) === 'lucky_raider';
   if (!participant || participant.left_at !== null) {
     if (isLuckyRaiderEvent) {
-      const me = ensureLuckyRaiderParticipant(t, req.player, rewardWallet);
+      const me = ensureLuckyRaiderParticipant(t, req.player, rewardWallet, twitterProvided ? twitter.handle : null);
       console.log(`[tournament ${tid} reward-wallet] player=${req.player.name} -> ${rewardWallet}`);
       return res.json({
         ok: true,
         joined: !!me && me.left_at === null,
         reward_wallet_evm: rewardWallet,
         reward_wallet_solana: rewardWallet,
+        twitter_handle: me?.twitter_handle || twitter.handle || null,
       });
     }
     return res.status(400).json({ error: 'you are not registered in this tournament' });
   }
   db.db.prepare(`
     UPDATE tournament_participants
-    SET reward_wallet_evm = ?, last_activity_at = datetime('now')
+    SET reward_wallet_evm = ?,
+        twitter_handle = ?,
+        last_activity_at = datetime('now')
     WHERE tournament_id = ? AND player_id = ? AND left_at IS NULL
-  `).run(rewardWallet, tid, req.player.id);
+  `).run(rewardWallet, twitterProvided ? twitter.handle : (participant.twitter_handle || null), tid, req.player.id);
   console.log(`[tournament ${tid} reward-wallet] player=${req.player.name} -> ${rewardWallet}`);
-  res.json({ ok: true, reward_wallet_evm: rewardWallet, reward_wallet_solana: rewardWallet });
+  res.json({
+    ok: true,
+    reward_wallet_evm: rewardWallet,
+    reward_wallet_solana: rewardWallet,
+    twitter_handle: twitterProvided ? twitter.handle : (participant.twitter_handle || null),
+  });
 });
 
 // Soft leave: sets left_at so getActiveTournamentForPlayer stops returning
@@ -22684,7 +22729,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     || normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd') === TOURNAMENT_POINTS_SORT;
   const baseSql = `
     SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd, tp.awarded_points,
-           tp.team_dex, tp.reward_wallet_evm,
+           tp.team_dex, tp.reward_wallet_evm, tp.twitter_handle,
            p.name, p.wallet, p.dex AS player_dex,
            COALESCE((SELECT MAX(level) FROM buildings b WHERE b.player_id = tp.player_id AND b.type = 'town_hall'), 0) AS town_hall_level,
            COALESCE(
@@ -22840,6 +22885,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       prize_rewards: r.mega_sector_id ? (r.mega_prize_rewards || []) : (mode === 'dex_vs_dex' ? [] : (prizeRewardsByRank.get(i + 1) || [])),
       ...(includeRewardWallets ? {
         reward_wallet_evm: r.reward_wallet_evm || null,
+        twitter_handle: r.twitter_handle || null,
         trading_wallet: r.trading_wallet || null,
         trading_account_id: r.trading_account_id || null,
         trading_chain_type: r.trading_chain_type || null,
@@ -23505,6 +23551,97 @@ router.post('/admin/tournaments/:id/participants/:playerId/adjust-trophies', adm
     res.json(result);
   } catch (err) {
     res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'adjust failed').slice(0, 180) });
+  }
+});
+
+function normalizeAdminParticipantRewardWallet(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { ok: true, wallet: null };
+  const solana = normalizeRewardSolanaWallet(raw);
+  if (solana) return { ok: true, wallet: solana };
+  const evm = normalizeRewardEvmWallet(raw);
+  if (evm) return { ok: true, wallet: evm };
+  return { ok: false, error: 'valid reward wallet required' };
+}
+
+router.patch('/admin/tournaments/:id/participants/:playerId/contact', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  const playerId = String(req.params.playerId || '').trim();
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid tournament id' });
+  if (!playerId) return res.status(400).json({ error: 'player id required' });
+  const body = req.body || {};
+  const walletProvided = Object.prototype.hasOwnProperty.call(body, 'reward_wallet')
+    || Object.prototype.hasOwnProperty.call(body, 'reward_wallet_evm')
+    || Object.prototype.hasOwnProperty.call(body, 'rewardWallet')
+    || Object.prototype.hasOwnProperty.call(body, 'rewardWalletEvm');
+  const twitterProvided = Object.prototype.hasOwnProperty.call(body, 'twitter_handle')
+    || Object.prototype.hasOwnProperty.call(body, 'twitterHandle')
+    || Object.prototype.hasOwnProperty.call(body, 'twitter')
+    || Object.prototype.hasOwnProperty.call(body, 'x_handle')
+    || Object.prototype.hasOwnProperty.call(body, 'xHandle');
+  if (!walletProvided && !twitterProvided) {
+    return res.status(400).json({ error: 'reward wallet or Twitter/X handle required' });
+  }
+  try {
+    const result = db.db.transaction(() => {
+      const row = db.db.prepare(`
+        SELECT tp.*, p.name
+        FROM tournament_participants tp
+        JOIN players p ON p.id = tp.player_id
+        WHERE tp.tournament_id = ? AND tp.player_id = ?
+      `).get(tid, playerId);
+      if (!row) {
+        const err = new Error('tournament participant not found');
+        err.status = 404;
+        throw err;
+      }
+      let wallet = row.reward_wallet_evm || null;
+      if (walletProvided) {
+        const normalizedWallet = normalizeAdminParticipantRewardWallet(
+          body.reward_wallet ?? body.reward_wallet_evm ?? body.rewardWallet ?? body.rewardWalletEvm ?? '',
+        );
+        if (!normalizedWallet.ok) {
+          const err = new Error(normalizedWallet.error);
+          err.status = 400;
+          throw err;
+        }
+        if (normalizedWallet.wallet && db.isWalletBlacklisted(normalizedWallet.wallet)) {
+          const err = new Error('reward wallet is not eligible');
+          err.status = 400;
+          throw err;
+        }
+        wallet = normalizedWallet.wallet;
+      }
+      let twitterHandle = row.twitter_handle || null;
+      if (twitterProvided) {
+        const twitter = tournamentTwitterHandleFromBody(body);
+        if (!twitter.ok) {
+          const err = new Error(twitter.error);
+          err.status = 400;
+          throw err;
+        }
+        twitterHandle = twitter.handle;
+      }
+      db.db.prepare(`
+        UPDATE tournament_participants
+           SET reward_wallet_evm = ?,
+               twitter_handle = ?,
+               last_activity_at = datetime('now')
+         WHERE tournament_id = ? AND player_id = ?
+      `).run(wallet, twitterHandle, tid, playerId);
+      return {
+        ok: true,
+        tournament_id: tid,
+        player_id: playerId,
+        name: row.name,
+        reward_wallet_evm: wallet,
+        reward_wallet_solana: wallet,
+        twitter_handle: twitterHandle,
+      };
+    })();
+    res.json(result);
+  } catch (err) {
+    res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'participant contact update failed').slice(0, 180) });
   }
 });
 

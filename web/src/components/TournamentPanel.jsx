@@ -17,6 +17,7 @@ function formatNumber(n, options = {}) {
 
 const fmt = (n) => formatNumber(n, { maximumFractionDigits: 0 });
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const TWITTER_HANDLE_RE = /^@?[A-Za-z0-9_]{1,15}$/;
 const DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -646,6 +647,7 @@ function TournamentPanel({ onClose }) {
   const { dex } = useDex();
   const [busy, setBusy] = useState(false);
   const [rewardWalletEvm, setRewardWalletEvm] = useState('');
+  const [rewardTwitterHandle, setRewardTwitterHandle] = useState('');
   const [rewardWalletEditing, setRewardWalletEditing] = useState(false);
 
   // When the History tab is active and the user clicks a row, swap the
@@ -664,6 +666,7 @@ function TournamentPanel({ onClose }) {
   const myStats = isHistory ? (historyTournament?.me || null) : (tab === 'lucky' ? (luckyMe?.me || null) : (me?.me || null));
   const needsCopRewardWallet = !!t?.rewards_in_cop;
   const storedRewardWallet = String(myStats?.reward_wallet_evm || '').trim();
+  const storedTwitterHandle = String(myStats?.twitter_handle || '').trim();
   const hasRewardWallet = needsCopRewardWallet
     ? SOLANA_WALLET_RE.test(storedRewardWallet)
     : !!storedRewardWallet;
@@ -750,6 +753,10 @@ function TournamentPanel({ onClose }) {
   }, [myStats?.reward_wallet_evm, needsCopRewardWallet]);
 
   useEffect(() => {
+    setRewardTwitterHandle(String(myStats?.twitter_handle || '').trim());
+  }, [myStats?.twitter_handle]);
+
+  useEffect(() => {
     setRewardWalletEditing(false);
   }, [tab, t?.id]);
 
@@ -782,8 +789,16 @@ function TournamentPanel({ onClose }) {
       alert('Enter a valid Solana address for CLASH rewards.');
       return;
     }
+    const twitterHandle = rewardTwitterHandle.trim();
+    if (twitterHandle && !TWITTER_HANDLE_RE.test(twitterHandle)) {
+      alert('Enter a valid Twitter/X handle.');
+      return;
+    }
     setBusy(true);
-    const result = await join(t.id, { rewardWalletEvm: needsCopWallet ? rewardWallet : undefined });
+    const result = await join(t.id, {
+      rewardWalletEvm: needsCopWallet ? rewardWallet : undefined,
+      twitterHandle: twitterHandle || undefined,
+    });
     if (result && result.ok === false) alert(result.error || 'Could not join tournament');
     setBusy(false);
   };
@@ -804,8 +819,13 @@ function TournamentPanel({ onClose }) {
       alert('Enter a valid Solana address for CLASH rewards.');
       return;
     }
+    const twitterHandle = rewardTwitterHandle.trim();
+    if (twitterHandle && !TWITTER_HANDLE_RE.test(twitterHandle)) {
+      alert('Enter a valid Twitter/X handle.');
+      return;
+    }
     setBusy(true);
-    const result = await updateRewardWallet(t.id, rewardWallet);
+    const result = await updateRewardWallet(t.id, rewardWallet, { twitterHandle });
     if (result && result.ok === false) alert(result.error || 'Could not save CLASH reward address');
     else setRewardWalletEditing(false);
     setBusy(false);
@@ -817,8 +837,13 @@ function TournamentPanel({ onClose }) {
       alert('Enter a valid Solana address for CLASH rewards.');
       return;
     }
+    const twitterHandle = rewardTwitterHandle.trim();
+    if (twitterHandle && !TWITTER_HANDLE_RE.test(twitterHandle)) {
+      alert('Enter a valid Twitter/X handle.');
+      return;
+    }
     setBusy(true);
-    const result = await updateLuckyRewardWallet(t.id, rewardWallet);
+    const result = await updateLuckyRewardWallet(t.id, rewardWallet, { twitterHandle });
     if (result && result.ok === false) alert(result.error || 'Could not save CLASH reward address');
     else setRewardWalletEditing(false);
     setBusy(false);
@@ -838,6 +863,7 @@ function TournamentPanel({ onClose }) {
             <div>
               <div style={S.rewardLabel}>CLASH Solana reward address</div>
               <div style={S.rewardCurrent}>{shortWallet(storedRewardWallet)}</div>
+              {storedTwitterHandle ? <div style={S.rewardHelp}>{storedTwitterHandle}</div> : null}
             </div>
             <button
               type="button"
@@ -857,10 +883,18 @@ function TournamentPanel({ onClose }) {
         <div style={S.rewardLabel}>CLASH Solana reward address</div>
         <div style={S.rewardHelp}>{help}</div>
         <input
-          style={S.rewardInput}
+          style={{ ...S.rewardInput, marginTop: 8 }}
           value={rewardWalletEvm}
           onChange={(e) => setRewardWalletEvm(e.target.value)}
           placeholder="Solana wallet address"
+          autoCapitalize="none"
+          spellCheck={false}
+        />
+        <input
+          style={S.rewardInput}
+          value={rewardTwitterHandle}
+          onChange={(e) => setRewardTwitterHandle(e.target.value)}
+          placeholder="Twitter/X handle (optional)"
           autoCapitalize="none"
           spellCheck={false}
         />
@@ -871,6 +905,7 @@ function TournamentPanel({ onClose }) {
               style={S.rewardCancelBtn}
               onClick={() => {
                 setRewardWalletEvm(storedRewardWallet);
+                setRewardTwitterHandle(storedTwitterHandle);
                 setRewardWalletEditing(false);
               }}
               disabled={busy}
@@ -1139,10 +1174,18 @@ function TournamentPanel({ onClose }) {
                     <div style={S.rewardBox}>
                       <div style={S.rewardLabel}>CLASH Solana reward address</div>
                       <input
-                        style={S.rewardInput}
+                        style={{ ...S.rewardInput, marginTop: 8 }}
                         value={rewardWalletEvm}
                         onChange={(e) => setRewardWalletEvm(e.target.value)}
                         placeholder="Solana wallet address"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                      />
+                      <input
+                        style={S.rewardInput}
+                        value={rewardTwitterHandle}
+                        onChange={(e) => setRewardTwitterHandle(e.target.value)}
+                        placeholder="Twitter/X handle (optional)"
                         autoCapitalize="none"
                         spellCheck={false}
                       />

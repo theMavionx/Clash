@@ -1293,6 +1293,7 @@ try {
       awarded_points   REAL NOT NULL DEFAULT 0,
       team_dex         TEXT,
       reward_wallet_evm TEXT,
+      twitter_handle   TEXT,
       last_activity_at TEXT,
       PRIMARY KEY (tournament_id, player_id)
     );
@@ -1301,6 +1302,7 @@ try {
   `);
   try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN team_dex TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN reward_wallet_evm TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN twitter_handle TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN last_activity_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN awarded_points REAL NOT NULL DEFAULT 0`); } catch {}
 } catch (e) { console.warn('[db] tournament_participants migration:', e.message); }

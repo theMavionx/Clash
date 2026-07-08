@@ -2883,6 +2883,52 @@ function LeaderboardDrawer({ data, onClose }) {
   const rows = data.leaderboard || [];
   const t = data.tournament || {};
   const summary = data.summary || {};
+  const [contactDrafts, setContactDrafts] = useState({});
+  const [contactBusy, setContactBusy] = useState('');
+  const [contactMessage, setContactMessage] = useState('');
+  const contactKey = (row) => String(row.player_id || row.rank || '');
+  const contactDraft = (row) => {
+    const key = contactKey(row);
+    return contactDrafts[key] || {
+      wallet: row.reward_wallet_evm || row.reward_wallet_solana || '',
+      twitter: row.twitter_handle || '',
+    };
+  };
+  const setContactDraft = (row, patch) => {
+    const key = contactKey(row);
+    setContactDrafts((prev) => ({
+      ...prev,
+      [key]: { ...contactDraft(row), ...patch },
+    }));
+  };
+  async function saveParticipantContact(row) {
+    const key = contactKey(row);
+    if (!t.id || !row.player_id || contactBusy) return;
+    const draft = contactDraft(row);
+    setContactBusy(key);
+    setContactMessage('');
+    try {
+      const result = await adminPatch(`/admin/tournaments/${t.id}/participants/${encodeURIComponent(row.player_id)}/contact`, {
+        reward_wallet: draft.wallet,
+        twitter_handle: draft.twitter,
+      });
+      row.reward_wallet_evm = result.reward_wallet_evm || '';
+      row.reward_wallet_solana = result.reward_wallet_solana || '';
+      row.twitter_handle = result.twitter_handle || '';
+      setContactDrafts((prev) => ({
+        ...prev,
+        [key]: {
+          wallet: result.reward_wallet_evm || result.reward_wallet_solana || '',
+          twitter: result.twitter_handle || '',
+        },
+      }));
+      setContactMessage(`Saved contact for ${row.name || row.player_id}.`);
+    } catch (err) {
+      setContactMessage(err?.message || 'Contact save failed.');
+    } finally {
+      setContactBusy('');
+    }
+  }
   const visibleTotals = rows.reduce((acc, row) => {
     acc.trades_count += Number(row.trades_count || 0);
     acc.total_volume_usd += Number(row.volume_usd || 0);
@@ -2927,14 +2973,17 @@ function LeaderboardDrawer({ data, onClose }) {
           <div className="admin-stat-label">Trophies</div>
         </div>
       </div>
+      {contactMessage ? <div className={/fail|error|required/i.test(contactMessage) ? 'admin-error' : 'admin-help'} style={{ marginBottom: 12 }}>{contactMessage}</div> : null}
       <div className="admin-table-wrap admin-scroll">
         <table className="admin-table">
-          <thead><tr><th>Rank</th><th>Player</th><th>Sector</th><th>Top DEX</th><th>Team</th><th>Trading wallet</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th><th>Prize</th></tr></thead>
+          <thead><tr><th>Rank</th><th>Player</th><th>Sector</th><th>Top DEX</th><th>Team</th><th>Trading wallet</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th><th>Prize / Contact</th></tr></thead>
           <tbody>
             {rows.map((r) => {
               const rewardWallet = compactWallet(r.reward_wallet_evm || r.reward_wallet_solana);
               const tradingWallet = compactWallet(r.trading_wallet);
               const dexBreakdown = Array.isArray(r.dex_breakdown) ? r.dex_breakdown.slice(0, 4) : [];
+              const draft = contactDraft(r);
+              const busyKey = contactBusy === contactKey(r);
               return (
                 <tr key={r.player_id || r.rank}>
                   <td>{r.rank}</td>
@@ -2967,6 +3016,26 @@ function LeaderboardDrawer({ data, onClose }) {
                   <td>
                     {Number(r.prize_amount || 0) > 0 ? fmtUsd(r.prize_amount, 2) : '-'}
                     {rewardWallet ? <div className="admin-card-sub admin-mono admin-wallet-line">{rewardWallet}</div> : null}
+                    {r.twitter_handle ? <div className="admin-card-sub">{r.twitter_handle}</div> : null}
+                    <div className="admin-grid" style={{ gap: 6, marginTop: 8, minWidth: 220 }}>
+                      <input
+                        className="admin-input admin-mono"
+                        value={draft.wallet}
+                        onChange={(e) => setContactDraft(r, { wallet: e.target.value })}
+                        placeholder="Reward wallet"
+                        style={{ minWidth: 0 }}
+                      />
+                      <input
+                        className="admin-input"
+                        value={draft.twitter}
+                        onChange={(e) => setContactDraft(r, { twitter: e.target.value })}
+                        placeholder="@twitter"
+                        style={{ minWidth: 0 }}
+                      />
+                      <button className="admin-btn" onClick={() => saveParticipantContact(r)} disabled={busyKey}>
+                        {busyKey ? 'Saving...' : 'Save contact'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
