@@ -1472,18 +1472,28 @@ function phoenixMarketToMarginParams(market, priceRow = null) {
   if (!symbol || mark == null || mark <= 0 || !Number.isFinite(tickSizeRaw) || tickSizeRaw <= 0) {
     return null;
   }
+  const riskFactorBps = (row, field, fallback = 0) => {
+    const explicitBps = Number(row?.[`${field}Bps`] ?? row?.[`${field}FactorBps`]);
+    if (Number.isFinite(explicitBps) && explicitBps >= 0) return Math.round(explicitBps);
+    const rawValue = Number(row?.[field]);
+    if (Number.isFinite(rawValue) && rawValue >= 0) {
+      return Math.round(rawValue <= 1000 ? rawValue * 100 : rawValue);
+    }
+    return fallback;
+  };
+  const marketRisk = raw?.riskFactors || {};
   const leverageTiers = (Array.isArray(raw?.leverageTiers) ? raw.leverageTiers : [])
     .map(tier => ({
       upperBoundSize: String(tier?.maxSizeBaseLots ?? tier?.upperBoundSize ?? 0),
       maxLeverage: String(tier?.maxLeverage ?? 1),
-      limitOrderRiskFactorBps: String(tier?.limitOrderRiskFactor ?? tier?.limitOrderRiskFactorBps ?? 100),
+      limitOrderRiskFactorBps: String(riskFactorBps(tier, 'limitOrderRiskFactor', 10000)),
     }))
     .filter(tier => Number(tier.upperBoundSize) > 0);
   if (!leverageTiers.length) {
     leverageTiers.push({
       upperBoundSize: '9007199254740991',
       maxLeverage: String(market?.max_leverage || 1),
-      limitOrderRiskFactorBps: '100',
+      limitOrderRiskFactorBps: '10000',
     });
   }
   return {
@@ -1497,13 +1507,13 @@ function phoenixMarketToMarginParams(market, priceRow = null) {
     baseLotDecimals: Number.isFinite(baseLotsDecimals) ? baseLotsDecimals : 4,
     leverageTiers,
     riskFactors: {
-      maintenanceMarginFactorBps: String(raw?.riskFactors?.maintenance ?? raw?.riskFactors?.maintenanceMarginFactorBps ?? 0),
-      backstopMarginFactorBps: String(raw?.riskFactors?.backstop ?? raw?.riskFactors?.backstopMarginFactorBps ?? 0),
-      highRiskMarginFactorBps: String(raw?.riskFactors?.highRisk ?? raw?.riskFactors?.highRiskMarginFactorBps ?? 0),
+      maintenanceMarginFactorBps: String(riskFactorBps(marketRisk, 'maintenance', Number(marketRisk?.maintenanceMarginFactorBps || 0))),
+      backstopMarginFactorBps: String(riskFactorBps(marketRisk, 'backstop', Number(marketRisk?.backstopMarginFactorBps || 0))),
+      highRiskMarginFactorBps: String(riskFactorBps(marketRisk, 'highRisk', Number(marketRisk?.highRiskMarginFactorBps || 0))),
     },
-    cancelOrderRiskFactorBps: String(raw?.riskFactors?.cancelOrder ?? raw?.cancelOrderRiskFactorBps ?? 0),
-    upnlRiskFactor: String(raw?.riskFactors?.upnl ?? raw?.upnlRiskFactor ?? 100),
-    upnlRiskFactorForWithdrawals: String(raw?.riskFactors?.upnlForWithdrawals ?? raw?.upnlRiskFactorForWithdrawals ?? 100),
+    cancelOrderRiskFactorBps: String(riskFactorBps(marketRisk, 'cancelOrder', Number(raw?.cancelOrderRiskFactorBps || 0))),
+    upnlRiskFactor: String(riskFactorBps(marketRisk, 'upnl', Number(raw?.upnlRiskFactor || 10000))),
+    upnlRiskFactorForWithdrawals: String(riskFactorBps(marketRisk, 'upnlForWithdrawals', Number(raw?.upnlRiskFactorForWithdrawals || 10000))),
     isolatedOnly: !!(raw?.isolatedOnly ?? market?.isolated_only),
   };
 }
@@ -4836,11 +4846,7 @@ export function usePhoenix() {
   const setOneTapTradingEnabled = useCallback(async (nextEnabled) => {
     if (PHOENIX_ONE_TAP_DISABLED) {
       setOneTapTrading(disabledPhoenixOneTapState());
-      if (nextEnabled) {
-        setError('Phoenix one tap trading is temporarily disabled.');
-        return false;
-      }
-      return true;
+      return !nextEnabled;
     }
     if (!walletAddr || !ownerPk) {
       setError('Connect a Solana wallet first');

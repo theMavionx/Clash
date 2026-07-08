@@ -435,17 +435,161 @@ function phoenixQtyFromMargin({ margin, price, leverage, lotSize }) {
   return roundDownToLot((m * lev) / p, lotSize || '0.0001');
 }
 
-function phoenixRequiredMarginForQty({ qty, price, leverage, orderType, takerFeeRate }) {
+function phoenixLimitRiskFactorBps(tier) {
+  const explicitBps = Number(tier?.limitOrderRiskFactorBps);
+  if (Number.isFinite(explicitBps) && explicitBps > 0) return explicitBps;
+  const raw = Number(tier?.limitOrderRiskFactor);
+  if (!Number.isFinite(raw) || raw <= 0) return 10000;
+  return raw <= 1000 ? raw * 100 : raw;
+}
+
+function phoenixLeverageTiers(market) {
+  const raw = market?._phoenix || market || {};
+  const source = Array.isArray(raw?.leverageTiers) ? raw.leverageTiers : [];
+  const fallbackMax = Number(market?.max_leverage || raw?.maxLeverage || 1);
+  const tiers = source
+    .map(tier => ({
+      upperBoundSize: Number(tier?.maxSizeBaseLots ?? tier?.upperBoundSize ?? 0),
+      maxLeverage: Number(tier?.maxLeverage ?? fallbackMax ?? 1),
+      limitOrderRiskFactorBps: phoenixLimitRiskFactorBps(tier),
+    }))
+    .filter(tier => Number.isFinite(tier.upperBoundSize) && tier.upperBoundSize > 0)
+    .sort((a, b) => a.upperBoundSize - b.upperBoundSize);
+  if (tiers.length) return tiers;
+  return [{
+    upperBoundSize: Number.MAX_SAFE_INTEGER,
+    maxLeverage: Number.isFinite(fallbackMax) && fallbackMax > 0 ? fallbackMax : 1,
+    limitOrderRiskFactorBps: 10000,
+  }];
+}
+
+function phoenixBaseLotsFromQty(qty, market) {
+  const q = Number(qty);
+  const raw = market?._phoenix || market || {};
+  const decimals = Number(
+    raw?.units?.baseLotsDecimals
+      ?? raw?.baseLotsDecimals
+      ?? raw?.baseLotDecimals
+      ?? market?._phoenixBaseLotsDecimals
+      ?? 4
+  );
+  const scale = 10 ** Math.min(12, Math.max(0, Number.isFinite(decimals) ? decimals : 4));
+  if (!Number.isFinite(q) || q <= 0 || !Number.isFinite(scale) || scale <= 0) return 0;
+  return Math.max(0, Math.ceil(q * scale - 1e-9));
+}
+
+function phoenixTierForExposure(baseLots, market) {
+  const tiers = phoenixLeverageTiers(market);
+  const lots = Number(baseLots);
+  if (!Number.isFinite(lots) || lots <= 0) return tiers[0];
+  return tiers.find(tier => lots <= tier.upperBoundSize) || tiers[tiers.length - 1];
+}
+
+function phoenixExistingPositionSignedQty(position) {
+  if (!position) return 0;
+  const amount = Number(position.amount ?? position.qty ?? position.size ?? 0);
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return position.side === 'ask' || position.side === 'short' ? -amount : amount;
+}
+
+function phoenixLimitMarginDetailForQty({ qty, price, side, market, currentPosition, takerFeeRate }) {
+  const q = Math.abs(Number(qty));
+  const p = Number(price);
+  if (!Number.isFinite(q) || !Number.isFinite(p) || q <= 0 || p <= 0) {
+    return {
+      requiredMargin: 0,
+      riskMargin: 0,
+      feeMargin: 0,
+      marginPrice: Number.isFinite(p) ? p : null,
+      risk: null,
+    };
+  }
+
+  const signedPosition = phoenixExistingPositionSignedQty(currentPosition);
+  const isBid = side !== 'ask';
+  const newExposureSigned = isBid
+    ? q + signedPosition - Math.abs(signedPosition)
+    : q - signedPosition - Math.abs(signedPosition);
+  const feeRate = Math.max(Number(takerFeeRate) || 0, PHOENIX_DEFAULT_TAKER_FEE_RATE) + PHOENIX_FEE_BUFFER_RATE;
+  const feeMargin = q * p * feeRate;
+
+  if (newExposureSigned <= 0) {
+    return {
+      requiredMargin: feeMargin,
+      riskMargin: 0,
+      feeMargin,
+      marginPrice: p,
+      risk: {
+        exposure_base_lots: 0,
+        max_leverage: null,
+        limit_order_risk_factor_bps: null,
+        reducing: true,
+      },
+    };
+  }
+
+  const totalExposureQty = Math.abs(isBid ? signedPosition + q : signedPosition - q);
+  const existingExposureQty = Math.abs(signedPosition);
+  const totalTier = phoenixTierForExposure(phoenixBaseLotsFromQty(totalExposureQty, market), market);
+  const existingTier = phoenixTierForExposure(phoenixBaseLotsFromQty(existingExposureQty, market), market);
+  const totalLeverage = Math.max(1, Number(totalTier?.maxLeverage) || 1);
+  const existingLeverage = Math.max(1, Number(existingTier?.maxLeverage) || totalLeverage);
+  const totalMargin = (totalExposureQty * p) / totalLeverage;
+  const existingMarginOffset = existingExposureQty > 0 ? (existingExposureQty * p) / existingLeverage : 0;
+  const incrementalMargin = Math.max(0, totalMargin - existingMarginOffset);
+  const riskBps = phoenixLimitRiskFactorBps(totalTier);
+  const riskMargin = incrementalMargin * (riskBps / 10000);
+  return {
+    requiredMargin: riskMargin + feeMargin,
+    riskMargin,
+    feeMargin,
+    marginPrice: p,
+    risk: {
+      exposure_base_lots: phoenixBaseLotsFromQty(totalExposureQty, market),
+      max_leverage: totalLeverage,
+      limit_order_risk_factor_bps: riskBps,
+      existing_position_qty: signedPosition,
+      total_exposure_qty: totalExposureQty,
+      reducing: false,
+    },
+  };
+}
+
+function phoenixRequiredMarginDetailForQty({ qty, price, leverage, orderType, takerFeeRate, side, market, currentPosition }) {
   const q = Number(qty);
   const p = Number(price);
   const lev = Number(leverage);
   if (!Number.isFinite(q) || !Number.isFinite(p) || !Number.isFinite(lev) || q <= 0 || p <= 0 || lev <= 0) {
-    return 0;
+    return {
+      requiredMargin: 0,
+      riskMargin: 0,
+      feeMargin: 0,
+      marginPrice: Number.isFinite(p) ? p : null,
+      risk: null,
+    };
+  }
+  if (orderType === 'limit') {
+    return phoenixLimitMarginDetailForQty({
+      qty: q,
+      price: p,
+      side,
+      market,
+      currentPosition,
+      takerFeeRate,
+    });
   }
   const slippage = orderType === 'market' ? PHOENIX_MARKET_SLIPPAGE_RATE : 0;
   const feeRate = Math.max(Number(takerFeeRate) || 0, PHOENIX_DEFAULT_TAKER_FEE_RATE) + PHOENIX_FEE_BUFFER_RATE;
   const worstNotional = q * p * (1 + slippage);
-  return worstNotional * ((1 / lev) + feeRate);
+  const riskMargin = worstNotional / lev;
+  const feeMargin = worstNotional * feeRate;
+  return {
+    requiredMargin: riskMargin + feeMargin,
+    riskMargin,
+    feeMargin,
+    marginPrice: p,
+    risk: null,
+  };
 }
 
 function phoenixMarginReserveDetails({ balance, leverage, orderType, takerFeeRate }) {
@@ -3780,7 +3924,11 @@ function FuturesPanel() {
   //   amount (token mode) = direct token quantity (no leverage applied here;
   //                         the pair's qty itself is the exposure).
   const tokenAmount = useMemo(() => {
-    const sizingPx = Number(orderSizingPrice || currentPrice);
+    const sizingPx = Number(
+      dex === 'phoenix' && orderType === 'limit'
+        ? (Number(currentPrice) || orderSizingPrice)
+        : (orderSizingPrice || currentPrice)
+    );
     if (!amount || !(sizingPx > 0)) return '';
     if (!amountInUsdc) return amount;
     // Token qty = leveraged position / price. Previously this treated the
@@ -4118,6 +4266,9 @@ function FuturesPanel() {
       // Guard against missing/NaN currentPrice (feed blip).
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
+      const phoenixMarginPrice = dex === 'phoenix'
+        ? (Number(currentPrice) > 0 ? Number(currentPrice) : tradePrice)
+        : tradePrice;
       const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       const attachedTpsl = resolveOpenTpslForSide(side);
       if (!attachedTpsl?.ok) return;
@@ -4165,9 +4316,12 @@ function FuturesPanel() {
         }
         // Avantis and Decibel hooks take USDC collateral directly. The token
         // readout is display math, so do not round collateral through it.
+        const collateralReferencePrice = dex === 'phoenix' && orderType === 'limit'
+          ? phoenixMarginPrice
+          : tradePrice;
         let collateralUsdc = amountInUsdc
           ? parseFloat(amount)
-          : (tradePrice > 0 ? (parseFloat(tokenAmount) * tradePrice) / leverage : 0);
+          : (collateralReferencePrice > 0 ? (parseFloat(tokenAmount) * collateralReferencePrice) / leverage : 0);
         if (dex === 'ostium' && (!Number.isFinite(collateralUsdc) || collateralUsdc < OSTIUM_MIN_MARGIN_USD)) {
           setLocalAlert(`Ostium minimum margin is ${OSTIUM_MIN_MARGIN_USD} USDC. Increase margin before signing.`);
           return;
@@ -4185,21 +4339,27 @@ function FuturesPanel() {
           });
           const maxMargin = reserve.usable_margin;
           const phoenixOrderPrice = orderType === 'limit' ? parseFloat(limitPrice) : tradePrice;
+          const phoenixRiskPrice = orderType === 'limit' ? phoenixMarginPrice : phoenixOrderPrice;
+          const phoenixCurrentPosition = (positions || []).find(p => p?.symbol === symbol && (p?.side === 'bid' || p?.side === 'ask')) || null;
           const requestedQty = amountInUsdc
             ? phoenixQtyFromMargin({
                 margin: collateralUsdc,
-                price: phoenixOrderPrice,
+                price: phoenixRiskPrice,
                 leverage,
                 lotSize,
               })
             : roundDownToLot(parseFloat(tokenAmount), lotSize);
-          const requiredMargin = phoenixRequiredMarginForQty({
+          const requiredDetail = phoenixRequiredMarginDetailForQty({
             qty: requestedQty,
-            price: phoenixOrderPrice,
+            price: phoenixRiskPrice,
             leverage,
             orderType,
             takerFeeRate: phoenixTakerFeeRate,
+            side,
+            market: currentMarket,
+            currentPosition: phoenixCurrentPosition,
           });
+          const requiredMargin = requiredDetail.requiredMargin;
           console.info('[Phoenix UI] margin reserve check', {
             symbol,
             orderType,
@@ -4207,6 +4367,9 @@ function FuturesPanel() {
             requested_margin: collateralUsdc,
             requested_qty: requestedQty,
             required_margin: requiredMargin,
+            required_detail: requiredDetail,
+            order_price: Number.isFinite(phoenixOrderPrice) ? phoenixOrderPrice : null,
+            margin_price: Number.isFinite(phoenixRiskPrice) ? phoenixRiskPrice : null,
             position_usdc: Number.isFinite(positionUsdc) ? positionUsdc : null,
             amount_mode: amountInUsdc ? 'usdc_margin' : 'token_size',
             ...reserve,
@@ -4216,7 +4379,6 @@ function FuturesPanel() {
             return;
           }
           if (Number.isFinite(requiredMargin) && requiredMargin > pacBalance + 1e-6) {
-            const safeMaxMargin = floorUsdCents(maxMargin);
             console.warn('[Phoenix UI] margin blocked by fee/slippage buffer', {
               symbol,
               orderType,
@@ -4224,11 +4386,18 @@ function FuturesPanel() {
               requested_margin: collateralUsdc,
               requested_qty: requestedQty,
               required_margin: requiredMargin,
+              required_detail: requiredDetail,
+              order_price: Number.isFinite(phoenixOrderPrice) ? phoenixOrderPrice : null,
+              margin_price: Number.isFinite(phoenixRiskPrice) ? phoenixRiskPrice : null,
               max_margin: maxMargin,
               ...reserve,
             });
+            const risk = requiredDetail?.risk;
+            const riskSuffix = orderType === 'limit' && risk && risk.reducing !== true
+              ? ` ${symbol} limit orders are checked against Phoenix mark price and risk tier (${risk.max_leverage}x max, ${(risk.limit_order_risk_factor_bps / 100).toFixed(0)}% limit risk).`
+              : '';
             setLocalAlert(
-              `Phoenix needs fee/slippage buffer at ${leverage}x. Use $${safeMaxMargin.toFixed(2)} margin or less from your $${pacBalance.toFixed(2)} free balance.`
+              `Phoenix needs $${requiredMargin.toFixed(2)} collateral for this order; you have $${pacBalance.toFixed(2)} free. Lower size/leverage or add collateral.${riskSuffix}`
             );
             return;
           }
