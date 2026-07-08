@@ -1722,16 +1722,18 @@ function collectionMintRarity(collection, chain, tokenId, entropy = {}) {
   return 'common';
 }
 
-function recordCollectionMintRarities(collection, confirmResult) {
+function recordCollectionMintRarities(collection, confirmResult, options = {}) {
   if (!nftCollectionUsesRarity(collection)) return [];
   const chain = String(confirmResult?.chain || '').toLowerCase();
   const tokenIds = Array.isArray(confirmResult?.tokenIds) ? confirmResult.tokenIds : [];
   if (!chain || !tokenIds.length) return [];
   const rows = [];
   const seed = collectionMintRaritySeed(collection);
+  const onlyMissing = options.onlyMissing === true;
   for (const tokenId of tokenIds) {
     const cleanId = String(tokenId || '').trim();
     if (!cleanId) continue;
+    if (onlyMissing && db.getNftRarity?.(collection.slug, chain, cleanId, { legacyLevel: 1 })) continue;
     const rarity = collectionMintRarity(collection, chain, cleanId, {
       tx: confirmResult.tx,
       reservationId: confirmResult.reservationId,
@@ -1765,6 +1767,98 @@ function recordCollectionMintRarities(collection, confirmResult) {
     if (row) rows.push(row);
   }
   return rows;
+}
+
+function backfillMissingCollectionRarities(collection, options = {}) {
+  if (!nftCollectionUsesRarity(collection)) {
+    const err = new Error(`${collection?.name || 'NFT collection'} does not use rarity reveal`);
+    err.status = 400;
+    throw err;
+  }
+  const apply = options.apply === true;
+  const limit = Math.max(1, Math.min(1000, Math.floor(Number(options.limit || 500))));
+  const rows = db.db.prepare(`
+    SELECT n.player_id, n.collection, n.chain, n.token_id, n.wallet, n.level,
+           n.source, n.tx_hash, n.verified_at, n.last_seen_at, n.updated_at
+      FROM player_nfts n
+      LEFT JOIN nft_rarities r
+        ON r.collection = n.collection
+       AND r.chain = n.chain
+       AND r.token_id = n.token_id
+     WHERE n.collection = ?
+       AND n.active = 1
+       AND n.token_id IS NOT NULL
+       AND n.token_id != ''
+       AND r.token_id IS NULL
+     ORDER BY datetime(n.updated_at) ASC, n.chain ASC, n.token_id ASC
+     LIMIT ?
+  `).all(collection.slug, limit);
+
+  const seed = collectionMintRaritySeed(collection);
+  const planned = rows.map((row) => {
+    const chain = String(row.chain || '').toLowerCase();
+    const tokenId = String(row.token_id || '').trim();
+    const rarity = collectionMintRarity(collection, chain, tokenId, {
+      tx: row.tx_hash || '',
+      buyer: row.wallet || '',
+      reservationId: '',
+    });
+    const snapshotHash = crypto.createHash('sha256').update([
+      collection.slug,
+      chain,
+      tokenId,
+      row.tx_hash || '',
+      row.wallet || '',
+      row.player_id || '',
+    ].join('|')).digest('hex');
+    return {
+      playerId: row.player_id || null,
+      collection: collection.slug,
+      chain,
+      tokenId,
+      ownerWallet: row.wallet || null,
+      rarity,
+      rarityLabel: db.NFT_RARITY_LABELS?.[rarity] || rarity,
+      source: row.source || null,
+      txHash: row.tx_hash || null,
+      updatedAt: row.updated_at || null,
+      snapshotHash,
+    };
+  });
+
+  if (apply && planned.length) {
+    const tx = db.db.transaction((items) => {
+      for (const item of items) {
+        db.upsertNftRarity?.({
+          collection: item.collection,
+          chain: item.chain,
+          tokenId: item.tokenId,
+          rarity: item.rarity,
+          legacyLevel: 1,
+          ownerWallet: item.ownerWallet,
+          playerId: item.playerId,
+          source: 'admin-rarity-backfill',
+          revealSeed: seed,
+          snapshotHash: item.snapshotHash,
+          metadata: {
+            tx: item.txHash,
+            player_nft_source: item.source,
+            player_nft_updated_at: item.updatedAt,
+          },
+        });
+      }
+    });
+    tx(planned);
+  }
+
+  return {
+    apply,
+    collection: collection.slug,
+    seed,
+    missing: rows.length,
+    backfilled: apply ? planned.length : 0,
+    items: planned,
+  };
 }
 
 async function readCollectionGlobalSupply(collection) {
@@ -5246,7 +5340,9 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
       ...resultForRarity,
       playerId: playerForMint?.id || null,
     };
-    const rarities = result.alreadyConfirmed ? [] : recordCollectionMintRarities(collection, resultForRarityWithPlayer);
+    const rarities = recordCollectionMintRarities(collection, resultForRarityWithPlayer, {
+      onlyMissing: result.alreadyConfirmed,
+    });
     const playerInventoryTokens = bindMintedCollectionNftsToPlayer({
       req,
       collection,
@@ -17612,6 +17708,24 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err?.message || 'nft analytics failed' });
+  }
+});
+
+router.post('/admin/nft/:collectionSlug/rarity/backfill', adminAuth, (req, res) => {
+  try {
+    const collection = nftCollectionConfig(req.params.collectionSlug);
+    if (!collection) return res.status(404).json({ error: 'collection not found' });
+    const apply = req.body?.apply === true
+      || req.query?.apply === '1'
+      || String(req.query?.apply || '').toLowerCase() === 'true';
+    const result = backfillMissingCollectionRarities(collection, {
+      apply,
+      limit: req.body?.limit || req.query?.limit,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    return res.status(err?.status || 500).json({ error: (err?.message || 'rarity backfill failed').slice(0, 180) });
   }
 });
 
