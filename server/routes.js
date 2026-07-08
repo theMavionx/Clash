@@ -1093,27 +1093,73 @@ async function upgradeSolanaCoreNftLevel({ req, assetId, owner, level, sourceRef
   }, { label: 'Solana Core NFT upgrade' });
 }
 
-function nftSellerFeeBasisPoints(chain) {
-  if (String(chain || '').toLowerCase() === 'solana') {
-    return Number(process.env.NFT_SOLANA_SELLER_FEE_BASIS_POINTS
-      || process.env.NFT_SOLANA_ROYALTY_BPS
-      || process.env.NFT_SELLER_FEE_BASIS_POINTS
-      || 250);
+function nftRoyaltyChainKey(chain) {
+  const raw = String(chain || '').toLowerCase().replace(/-v\d+$/, '');
+  return ({
+    base: 'base',
+    arbitrum: 'arbitrum',
+    monad: 'monad',
+    ink: 'ink',
+    aptos: 'aptos',
+    solana: 'solana',
+  })[raw] || '';
+}
+
+function nftRoyaltyDeployment(chain) {
+  const chainKey = nftRoyaltyChainKey(chain);
+  const files = {
+    base: 'base-v3-mainnet.json',
+    arbitrum: 'arbitrum-v3-mainnet.json',
+    monad: 'monad-v3-mainnet.json',
+    ink: 'ink-v3-mainnet.json',
+    aptos: 'aptos-mainnet.json',
+    solana: 'solana-mainnet.json',
+  };
+  return files[chainKey]
+    ? (readJsonIfExists(path.join(NFT_ROOT, 'deployments', files[chainKey])) || {})
+    : {};
+}
+
+function firstEnvValue(keys) {
+  for (const key of keys) {
+    if (process.env[key] != null && process.env[key] !== '') return process.env[key];
   }
-  return Number(process.env.NFT_SELLER_FEE_BASIS_POINTS || 0);
+  return '';
+}
+
+function nftSellerFeeBasisPoints(chain) {
+  const chainKey = nftRoyaltyChainKey(chain);
+  const dep = nftRoyaltyDeployment(chainKey);
+  const chainEnv = chainKey ? chainKey.toUpperCase() : '';
+  const envValue = firstEnvValue([
+    chainEnv ? `NFT_${chainEnv}_SELLER_FEE_BASIS_POINTS` : '',
+    chainEnv ? `NFT_${chainEnv}_ROYALTY_BPS` : '',
+    'NFT_SELLER_FEE_BASIS_POINTS',
+    'NFT_ROYALTY_BPS',
+  ].filter(Boolean));
+  const fallback = dep.royaltyBps ?? (chainKey && Object.keys(dep).length ? 250 : 0);
+  return Number(envValue || fallback || 0);
 }
 
 function nftFeeRecipient(chain) {
-  if (String(chain || '').toLowerCase() === 'solana') {
-    const dep = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json')) || {};
-    return process.env.NFT_SOLANA_FEE_RECIPIENT
-      || process.env.NFT_SOLANA_ROYALTY_TREASURY
-      || process.env.NFT_SOLANA_TREASURY
-      || dep.royaltyTreasury
-      || dep.treasury
-      || '';
-  }
-  return process.env.NFT_FEE_RECIPIENT || '';
+  const chainKey = nftRoyaltyChainKey(chain);
+  const dep = nftRoyaltyDeployment(chainKey);
+  const chainEnv = chainKey ? chainKey.toUpperCase() : '';
+  const envValue = firstEnvValue([
+    chainEnv ? `NFT_${chainEnv}_FEE_RECIPIENT` : '',
+    chainEnv ? `NFT_${chainEnv}_ROYALTY_RECEIVER` : '',
+    chainEnv ? `NFT_${chainEnv}_ROYALTY_TREASURY` : '',
+    chainEnv ? `NFT_${chainEnv}_TREASURY` : '',
+    'NFT_FEE_RECIPIENT',
+    'NFT_ROYALTY_RECEIVER',
+    'NFT_ROYALTY_TREASURY',
+  ].filter(Boolean));
+  return envValue
+    || dep.royaltyReceiver
+    || dep.royaltyTreasury
+    || dep.treasury
+    || dep.admin
+    || '';
 }
 
 function attachRoyaltyMetadata(metadata, chain) {
@@ -2221,7 +2267,7 @@ async function sendAptosNftMetadata(req, res, rawTokenId) {
 function sendAptosCollectionMetadata(req, res) {
   const name = process.env.NFT_NAME || 'Demon King';
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
-  res.json({
+  res.json(attachRoyaltyMetadata({
     name,
     symbol: process.env.NFT_SYMBOL || 'DMNK',
     description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
@@ -2236,7 +2282,7 @@ function sendAptosCollectionMetadata(req, res) {
       category: 'image',
       files: [{ uri: nftImageUrl(req), type: 'image/jpeg' }],
     },
-  });
+  }, 'Aptos'));
 }
 
 function nftBaseShopDeployment() {
@@ -5850,14 +5896,12 @@ router.get('/nft/image/:level', (req, res) => {
 router.get('/nft/base/contract', (req, res) => {
   const name = process.env.NFT_NAME || 'Demon King';
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'no-cache, max-age=0, must-revalidate');
-  res.json({
+  res.json(attachRoyaltyMetadata({
     name,
     description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
     image: nftImageUrl(req),
     external_link: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
-    seller_fee_basis_points: Number(process.env.NFT_SELLER_FEE_BASIS_POINTS || 0),
-    fee_recipient: process.env.NFT_FEE_RECIPIENT || '',
-  });
+  }, 'Base'));
 });
 
 async function sendRevealedDemonKingMetadata(req, res) {

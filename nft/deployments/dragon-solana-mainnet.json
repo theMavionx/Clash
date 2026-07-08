@@ -66,7 +66,7 @@
   "saleActivateTx": "2A13wWJsU74GguKCaJEVDyM585hsMoYugBU1LyVAu8aqSW14eA8S6SfTf3AeXcrD7Q4cn2r67of6S4fYxw7Bc3gD",
   "saleActivatedAt": "2026-06-08T15:33:20.429Z",
   "saleActivationConfirmedAt": "2026-06-08T15:40:00.000Z",
-  "updatedAt": "2026-06-21T15:52:00.876Z",
+  "updatedAt": "2026-07-08T16:25:10.827Z",
   "paymentPriceSync": {
     "clash": {
       "priceUsd": "0.0004649",
@@ -79,5 +79,10 @@
       "amountUi": "21510.002152",
       "syncedAt": "2026-06-21T15:52:00.876Z"
     }
-  }
+  },
+  "royaltyBps": 250,
+  "royaltyTreasury": "4dJVN3sQSCjeypkc8knCaRQmeT68upDQwZY7a9s8qjHA",
+  "royaltyRuleSet": "None",
+  "royaltyTx": "4PTyh9sqFffLyDtUWUv7jrMLLqTi4FZhP832nCx9YPkuSgkCBEu8cB2pLeYrq8xzYHwDPo49zjqZrvYaen1ieduR",
+  "royaltyUpdatedAt": "2026-07-08T16:25:10.825Z"
 }

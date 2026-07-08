@@ -6,6 +6,8 @@
   "collection": "0x1a0009da9be37571dc640647220c88bb2158a711289d6603178a8cc169392f92",
   "resourceAccount": "0xa2da8deb2d770cde298bc61036bdbe2d8901eb1de433c2e954a175e810c57593",
   "treasury": "0x00d733ea87112a03b470922bf3bfc62e9948fe254926f1c1a11eef4e406b4627",
+  "royaltyReceiver": "0x00d733ea87112a03b470922bf3bfc62e9948fe254926f1c1a11eef4e406b4627",
+  "royaltyBps": 250,
   "usdcMetadata": "0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b",
   "quoteSignerPubkey": "0xb7d726f4c0d3bf6ad099cc0e0afdd5c875ea90b361d15354bc4a184571acce8b",
   "mintUsdPriceE6": "8900000",

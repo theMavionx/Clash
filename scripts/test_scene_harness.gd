@@ -11,6 +11,11 @@ var _attack_count_labels: Dictionary = {}
 var _attack_level_labels: Dictionary = {}
 var _speed_label: Label
 var _demon_color_preview_root: Node3D
+var _model_scale_list: VBoxContainer
+var _model_scale_labels: Dictionary = {}
+var _model_scale_sliders: Dictionary = {}
+var _model_scale_base_values: Dictionary = {}
+var _model_scale_multipliers: Dictionary = {}
 
 const MAX_VILLAGE_BUILD_ORDER: Array[String] = [
 	"town_hall",
@@ -55,6 +60,9 @@ const TEST_SPEED_PRESETS: Array[float] = [0.5, 1.0, 2.0, 4.0]
 const TEST_SPEED_STEP: float = 0.25
 const TEST_SPEED_MIN: float = 0.25
 const TEST_SPEED_MAX: float = 8.0
+const MODEL_SCALE_MIN: float = 0.10
+const MODEL_SCALE_MAX: float = 1.50
+const MODEL_SCALE_STEP: float = 0.01
 const DEMON_COLOR_TEST_VARIANTS: Array[Dictionary] = [
 	{"label": "Blue", "variant": "blue", "pos": Vector3(-1.6, 0.08, 2.25), "color": Color(0.18, 0.48, 1.0)},
 	{"label": "Purple", "variant": "purple", "pos": Vector3(0.0, 0.08, 2.25), "color": Color(0.58, 0.30, 1.0)},
@@ -192,6 +200,7 @@ func _create_panel() -> void:
 
 	_add_attack_loadout_controls(vbox)
 	_add_speed_controls(vbox)
+	_add_model_scale_controls(vbox)
 	vbox.add_child(_button("Demon King Color Test", spawn_demon_king_color_test))
 
 	var spawn_label := Label.new()
@@ -324,6 +333,285 @@ func _add_speed_controls(vbox: VBoxContainer) -> void:
 	for speed in TEST_SPEED_PRESETS:
 		presets_row.add_child(_small_button(_format_test_speed(speed), Callable(self, "set_test_speed").bind(speed)))
 	_refresh_test_speed_label()
+
+
+func _add_model_scale_controls(vbox: VBoxContainer) -> void:
+	var scale_label := Label.new()
+	scale_label.text = "Model Scale Overrides"
+	scale_label.add_theme_font_size_override("font_size", 17)
+	vbox.add_child(scale_label)
+
+	var help := Label.new()
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	help.text = "Test scene only. 100% uses the current BuildingSystem scale. Move sliders down to shrink models."
+	help.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(help)
+
+	var actions := HBoxContainer.new()
+	actions.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	actions.add_theme_constant_override("separation", 6)
+	vbox.add_child(actions)
+	actions.add_child(_small_button("Reset", reset_model_scale_overrides))
+	actions.add_child(_small_button("Print", print_model_scale_overrides))
+
+	_model_scale_list = VBoxContainer.new()
+	_model_scale_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_model_scale_list.add_theme_constant_override("separation", 8)
+	vbox.add_child(_model_scale_list)
+	call_deferred("_populate_model_scale_controls")
+
+
+func _populate_model_scale_controls() -> void:
+	if not _model_scale_list:
+		return
+	var main_bs: Node = _building_system_for_grid("main")
+	if not main_bs:
+		call_deferred("_populate_model_scale_controls")
+		return
+	for child in _model_scale_list.get_children():
+		child.queue_free()
+	_model_scale_labels.clear()
+	_model_scale_sliders.clear()
+	_model_scale_base_values.clear()
+	_model_scale_multipliers.clear()
+
+	var ids: Array[String] = []
+	for building_id in MAX_VILLAGE_BUILD_ORDER:
+		if not ids.has(building_id):
+			ids.append(building_id)
+	var source_ids: Array = main_bs.building_defs.keys()
+	source_ids.sort()
+	for raw_id in source_ids:
+		var building_id := String(raw_id)
+		if not ids.has(building_id):
+			ids.append(building_id)
+
+	for building_id in ids:
+		var bs: Node = _building_system_for_building(building_id)
+		if not bs or not ("building_defs" in bs) or not bs.building_defs.has(building_id):
+			continue
+		var def: Dictionary = bs.building_defs.get(building_id, {})
+		if def.get("no_shop", false) or building_id == "flag":
+			continue
+		_add_model_scale_section(building_id, def)
+
+
+func _add_model_scale_section(building_id: String, def: Dictionary) -> void:
+	var section := VBoxContainer.new()
+	section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	section.add_theme_constant_override("separation", 4)
+	_model_scale_list.add_child(section)
+
+	var title := Label.new()
+	title.text = String(def.get("name", building_id))
+	title.add_theme_font_size_override("font_size", 15)
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	section.add_child(title)
+
+	var level_count: int = _visual_scale_level_count(def)
+	for level in range(1, level_count + 1):
+		_add_model_scale_row(section, building_id, level, def, level_count)
+
+
+func _add_model_scale_row(parent: VBoxContainer, building_id: String, level: int, def: Dictionary, level_count: int) -> void:
+	var base_scale: float = _base_model_scale_for_def(def, level)
+	var key := _model_scale_key(building_id, level)
+	_model_scale_base_values[key] = base_scale
+	_model_scale_multipliers[key] = 1.0
+
+	var row := VBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 2)
+	parent.add_child(row)
+
+	var label_row := HBoxContainer.new()
+	label_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label_row.add_theme_constant_override("separation", 6)
+	row.add_child(label_row)
+
+	var value_label := Label.new()
+	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	value_label.add_theme_font_size_override("font_size", 13)
+	label_row.add_child(value_label)
+	_model_scale_labels[key] = value_label
+
+	var reset_btn := Button.new()
+	reset_btn.text = "100%"
+	reset_btn.custom_minimum_size = Vector2(52, 28)
+	reset_btn.add_theme_font_size_override("font_size", 12)
+	reset_btn.pressed.connect(Callable(self, "set_model_scale_multiplier").bind(building_id, level, 1.0))
+	label_row.add_child(reset_btn)
+
+	var slider := HSlider.new()
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.min_value = MODEL_SCALE_MIN
+	slider.max_value = MODEL_SCALE_MAX
+	slider.step = MODEL_SCALE_STEP
+	slider.value = 1.0
+	slider.tooltip_text = "Multiplier for %s%s" % [String(def.get("name", building_id)), " L%d" % level if level_count > 1 else ""]
+	slider.value_changed.connect(Callable(self, "_on_model_scale_slider_changed").bind(building_id, level))
+	row.add_child(slider)
+	_model_scale_sliders[key] = slider
+
+	_refresh_model_scale_label(building_id, level)
+
+
+func _on_model_scale_slider_changed(multiplier: float, building_id: String, level: int) -> void:
+	set_model_scale_multiplier(building_id, level, multiplier)
+
+
+func set_model_scale_multiplier(building_id: String, level: int, multiplier: float) -> void:
+	var key := _model_scale_key(building_id, level)
+	var clamped_multiplier: float = clampf(multiplier, MODEL_SCALE_MIN, MODEL_SCALE_MAX)
+	_model_scale_multipliers[key] = clamped_multiplier
+	var slider: HSlider = _model_scale_sliders.get(key, null)
+	if slider and not is_equal_approx(float(slider.value), clamped_multiplier):
+		slider.value = clamped_multiplier
+	_apply_model_scale_overrides(building_id)
+	_refresh_model_scale_label(building_id, level)
+
+
+func reset_model_scale_overrides() -> void:
+	for key in _model_scale_multipliers.keys():
+		_model_scale_multipliers[key] = 1.0
+	for building_id in _model_scale_building_ids():
+		_apply_model_scale_overrides(building_id)
+	for key in _model_scale_labels.keys():
+		var parts := String(key).split(":")
+		if parts.size() == 2:
+			_refresh_model_scale_label(parts[0], int(parts[1]))
+	_refresh_model_scale_sliders()
+	_set_status("Model scale overrides reset to 100%.")
+
+
+func print_model_scale_overrides() -> void:
+	var lines: Array[String] = []
+	for building_id in _model_scale_building_ids():
+		var bs: Node = _building_system_for_building(building_id)
+		if not bs or not ("building_defs" in bs) or not bs.building_defs.has(building_id):
+			continue
+		var def: Dictionary = bs.building_defs[building_id]
+		var level_count: int = _visual_scale_level_count(def)
+		if level_count <= 1:
+			lines.append("%s model_scale=%.4f" % [building_id, _effective_model_scale(building_id, 1)])
+			continue
+		var values: Array[String] = []
+		for level in range(1, level_count + 1):
+			values.append("%.4f" % _effective_model_scale(building_id, level))
+		lines.append("%s model_scales=[%s]" % [building_id, ", ".join(values)])
+	print("[TestHarness] Model scale overrides:\n" + "\n".join(lines))
+	_set_status("Printed current model scales to console.")
+
+
+func _refresh_model_scale_sliders() -> void:
+	for key in _model_scale_sliders.keys():
+		var slider: HSlider = _model_scale_sliders.get(key, null)
+		if slider:
+			slider.value = float(_model_scale_multipliers.get(key, 1.0))
+
+
+func _refresh_model_scale_label(building_id: String, level: int) -> void:
+	var key := _model_scale_key(building_id, level)
+	var label: Label = _model_scale_labels.get(key, null)
+	if not label:
+		return
+	var base_scale: float = float(_model_scale_base_values.get(key, 0.2))
+	var multiplier: float = float(_model_scale_multipliers.get(key, 1.0))
+	var effective: float = base_scale * multiplier
+	var prefix := "L%d " % level if _model_scale_has_multiple_levels(building_id) else ""
+	label.text = "%s%.4f  (%d%% of %.4f)" % [prefix, effective, int(roundf(multiplier * 100.0)), base_scale]
+
+
+func _apply_model_scale_overrides(building_id: String) -> void:
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if not bs or not ("building_defs" in bs) or not bs.building_defs.has(building_id):
+			continue
+		var def: Dictionary = bs.building_defs[building_id]
+		var level_count: int = _visual_scale_level_count(def)
+		if level_count <= 1:
+			def["model_scale"] = _effective_model_scale(building_id, 1)
+			if def.has("model_scales"):
+				def["model_scales"] = [_effective_model_scale(building_id, 1)]
+		else:
+			var scales: Array[float] = []
+			for level in range(1, level_count + 1):
+				scales.append(_effective_model_scale(building_id, level))
+			def["model_scale"] = scales[0]
+			def["model_scales"] = scales
+		bs.building_defs[building_id] = def
+		_apply_model_scale_to_placed_buildings(bs, building_id, def)
+
+
+func _apply_model_scale_to_placed_buildings(bs: Node, building_id: String, def: Dictionary) -> void:
+	if not bs or not ("placed_buildings" in bs):
+		return
+	for b in bs.placed_buildings:
+		if String(b.get("id", "")) != building_id:
+			continue
+		var level: int = int(b.get("level", 1))
+		var node: Node3D = b.get("node", null)
+		if not is_instance_valid(node):
+			continue
+		var visual_model: Node3D = null
+		if bs.has_method("_get_building_visual_model"):
+			visual_model = bs._get_building_visual_model(node)
+		if is_instance_valid(visual_model):
+			var s := _effective_model_scale(building_id, level)
+			visual_model.scale = Vector3(s, s, s)
+		if "_building_aabb_cache" in bs and bs.has_method("_aabb_cache_key"):
+			bs._building_aabb_cache.erase(bs._aabb_cache_key(building_id, level))
+		if bs.has_method("_refresh_building_base_for_level"):
+			bs._refresh_building_base_for_level(node, def, building_id, level)
+
+
+func _model_scale_building_ids() -> Array[String]:
+	var ids: Array[String] = []
+	for key in _model_scale_base_values.keys():
+		var parts := String(key).split(":")
+		if parts.size() != 2:
+			continue
+		if not ids.has(parts[0]):
+			ids.append(parts[0])
+	return ids
+
+
+func _effective_model_scale(building_id: String, level: int) -> float:
+	var key := _model_scale_key(building_id, level)
+	var base_scale: float = float(_model_scale_base_values.get(key, 0.2))
+	var multiplier: float = float(_model_scale_multipliers.get(key, 1.0))
+	return base_scale * multiplier
+
+
+func _base_model_scale_for_def(def: Dictionary, level: int) -> float:
+	var scales: Array = def.get("model_scales", [])
+	if level >= 1 and scales.size() >= level:
+		return float(scales[level - 1])
+	return float(def.get("model_scale", 0.2))
+
+
+func _visual_scale_level_count(def: Dictionary) -> int:
+	var level_count: int = 1
+	if def.has("scenes"):
+		level_count = maxi(level_count, int(def.get("scenes", []).size()))
+	if def.has("model_scales"):
+		level_count = maxi(level_count, int(def.get("model_scales", []).size()))
+	if def.has("model_offsets"):
+		level_count = maxi(level_count, int(def.get("model_offsets", []).size()))
+	return level_count
+
+
+func _model_scale_has_multiple_levels(building_id: String) -> bool:
+	var count: int = 0
+	for key in _model_scale_base_values.keys():
+		if String(key).begins_with(building_id + ":"):
+			count += 1
+			if count > 1:
+				return true
+	return false
+
+
+func _model_scale_key(building_id: String, level: int) -> String:
+	return "%s:%d" % [building_id, level]
 
 
 func spawn_demon_king_color_test() -> void:

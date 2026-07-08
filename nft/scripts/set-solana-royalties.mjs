@@ -12,10 +12,10 @@ function parseArgs(argv) {
 
 function usage() {
   console.log(`Usage:
-  node scripts/set-solana-royalties.mjs [--bps=250] [--treasury=<pubkey>] [--collection=<pubkey>] [--dry-run]
+  node scripts/set-solana-royalties.mjs [--deployment=solana-mainnet.json] [--bps=250] [--treasury=<pubkey>] [--collection=<pubkey>] [--dry-run]
 
-Adds or updates the Metaplex Core Royalties collection plugin for the Demon King Solana collection.
-Defaults: --bps from NFT_SOLANA_ROYALTY_BPS / NFT_SELLER_FEE_BASIS_POINTS / 250, treasury from env or solana-mainnet.json.`);
+Adds or updates the Metaplex Core Royalties collection plugin for a Solana collection.
+Defaults: --deployment=solana-mainnet.json, --bps from NFT_SOLANA_ROYALTY_BPS / NFT_SELLER_FEE_BASIS_POINTS / 250, treasury from env or the deployment file.`);
 }
 
 function sameRoyalties(current, expected) {
@@ -37,9 +37,13 @@ if (args.help || args.h) {
   process.exit(0);
 }
 
-const deploymentPath = path.join(NFT_DIR, 'deployments', 'solana-mainnet.json');
+const deploymentFile = String(args.deployment || 'solana-mainnet.json').trim();
+if (!/^[A-Za-z0-9_.-]+\.json$/.test(deploymentFile)) {
+  throw new Error('--deployment must be a deployment JSON filename, for example solana-mainnet.json or dragon-solana-mainnet.json');
+}
+const deploymentPath = path.join(NFT_DIR, 'deployments', deploymentFile);
 if (!fs.existsSync(deploymentPath)) {
-  throw new Error('Missing nft/deployments/solana-mainnet.json');
+  throw new Error(`Missing nft/deployments/${deploymentFile}`);
 }
 
 const deployment = JSON.parse(fs.readFileSync(deploymentPath, 'utf8'));
@@ -96,6 +100,7 @@ const plugin = {
 };
 
 console.log(`Authority: ${umi.identity.publicKey}`);
+console.log(`Deployment: ${deploymentFile}`);
 console.log(`Collection: ${collectionPubkey}`);
 console.log(`Royalty: ${royaltyBps} bps -> ${treasury}`);
 

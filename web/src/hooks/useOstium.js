@@ -147,6 +147,15 @@ function positivePrice(value) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function openTpslOption(options, keys) {
+  if (!options || typeof options !== 'object') return undefined;
+  for (const key of keys) {
+    const price = positivePrice(options[key]);
+    if (price != null) return String(price);
+  }
+  return undefined;
+}
+
 function pricesNear(a, b) {
   const left = Number(a);
   const right = Number(b);
@@ -1667,7 +1676,7 @@ export function useOstium() {
     return () => { clearTimeout(kickoff); clearInterval(timer); };
   }, [isActiveDex, walletAddr]);
 
-  const buildOpenParams = useCallback((symbol, side, amount, price, type, leverage, slippage = '0.5') => {
+  const buildOpenParams = useCallback((symbol, side, amount, price, type, leverage, slippage = '0.5', options = {}) => {
     const market = findBySymbol(marketsRef.current, symbol);
     if (!market) throw new Error(`Ostium market ${symbol} is not loaded`);
     const collateral = Number(amount);
@@ -1684,7 +1693,7 @@ export function useOstium() {
     if (!Number.isFinite(lev) || lev <= 0) throw new Error('Enter a valid leverage');
     if (!Number.isFinite(entryPrice) || entryPrice <= 0) throw new Error('Ostium price is not available yet');
     const overnight = Number(market.overnight_max_leverage || market.overnightMaxLeverage || 0);
-    return {
+    const params = {
       pairId: market.pair_index ?? market.market_id,
       buy: normalizeSide(side) === 'bid',
       price: String(entryPrice),
@@ -1698,16 +1707,21 @@ export function useOstium() {
         feeBps: OSTIUM_BUILDER_FEE_BPS,
       },
     };
+    const takeProfit = openTpslOption(options, ['takeProfit', 'take_profit', 'tp']);
+    const stopLoss = openTpslOption(options, ['stopLoss', 'stop_loss', 'sl']);
+    if (takeProfit) params.takeProfit = takeProfit;
+    if (stopLoss) params.stopLoss = stopLoss;
+    return params;
   }, []);
 
-  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage = '0.5', leverage = 1) => {
+  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage = '0.5', leverage = 1, options = {}) => {
     setLoading(true);
     setError(null);
     try {
       const beforePositions = positionsRef.current || [];
       const beforeOrders = ordersRef.current || [];
       if (!marketsRef.current.length) await fetchMarkets();
-      const params = buildOpenParams(symbol, side, amount, null, OrderType.Market, leverage, slippage);
+      const params = buildOpenParams(symbol, side, amount, null, OrderType.Market, leverage, slippage, options);
       const fresh = await fetchAccount();
       assertOstiumUsdcBalance(fresh?.account || account, params.collateral);
       const submitted = await submitWithDelegateOrWallet({
@@ -1730,7 +1744,7 @@ export function useOstium() {
     }
   }, [account, buildOpenParams, fetchAccount, fetchMarkets, submitWithDelegateOrWallet, syncRewards, waitForTradeVisible]);
 
-  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
+  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1, options = {}) => {
     void _tif;
     setLoading(true);
     setError(null);
@@ -1738,7 +1752,7 @@ export function useOstium() {
       const beforePositions = positionsRef.current || [];
       const beforeOrders = ordersRef.current || [];
       if (!marketsRef.current.length) await fetchMarkets();
-      const params = buildOpenParams(symbol, side, amount, price, OrderType.Limit, leverage, '0.5');
+      const params = buildOpenParams(symbol, side, amount, price, OrderType.Limit, leverage, '0.5', options);
       const fresh = await fetchAccount();
       assertOstiumUsdcBalance(fresh?.account || account, params.collateral);
       const submitted = await submitWithDelegateOrWallet({
