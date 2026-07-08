@@ -343,6 +343,9 @@ export function useLighter() {
       price: payload?.price,
       leverage: payload?.leverage,
       reduceOnly: !!payload?.reduceOnly,
+      attachedTpsl: !!payload?.attached_tpsl,
+      takeProfit: payload?.takeProfit ?? payload?.take_profit ?? payload?.tp ?? null,
+      stopLoss: payload?.stopLoss ?? payload?.stop_loss ?? payload?.sl ?? null,
       accountIndex: creds?.accountIndex,
       apiKeyIndex: creds?.apiKeyIndex,
     };
@@ -395,6 +398,9 @@ export function useLighter() {
       leverage,
       orderType: 'market',
       reduceOnly: !!options.reduceOnly,
+      attached_tpsl: !!options.attached_tpsl,
+      takeProfit: options.takeProfit ?? options.take_profit ?? options.tp,
+      stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl,
     })
   ), [submitOrder]);
 
@@ -408,6 +414,9 @@ export function useLighter() {
       orderType: 'limit',
       timeInForce: tif,
       reduceOnly: !!options.reduceOnly,
+      attached_tpsl: !!options.attached_tpsl,
+      takeProfit: options.takeProfit ?? options.take_profit ?? options.tp,
+      stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl,
     })
   ), [submitOrder]);
 

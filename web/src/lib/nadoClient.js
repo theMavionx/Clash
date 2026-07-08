@@ -308,6 +308,7 @@ export function buildNadoTriggerOrderParams({
   price,
   triggerPrice,
   triggerRequirementType,
+  dependency,
 }) {
   const params = buildNadoOrderParams({
     market,
@@ -329,6 +330,12 @@ export function buildNadoTriggerOrderParams({
       criteria: {
         type: triggerRequirementType,
         triggerPrice: bn(triggerPrice),
+        ...(dependency?.digest ? {
+          dependency: {
+            digest: String(dependency.digest),
+            onPartialFill: dependency.onPartialFill !== false,
+          },
+        } : {}),
       },
     },
   };

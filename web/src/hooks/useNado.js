@@ -56,6 +56,28 @@ function nadoTriggerRequirement(closeOrderSide, kind) {
   return closeShortSide ? 'oracle_price_above' : 'oracle_price_below';
 }
 
+function nadoTpslOptionValue(options = {}, ...keys) {
+  for (const key of keys) {
+    const value = Number(options?.[key]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return null;
+}
+
+function nadoEntryOrderDigest(result) {
+  return String(
+    result?.data?.digest
+    || result?.digest
+    || result?.order?.digest
+    || result?.orderParams?.digest
+    || '',
+  ).trim();
+}
+
+function nadoEntryOrderError(result) {
+  return String(result?.data?.error || result?.error || '').trim();
+}
+
 function nadoIntegerText(value) {
   if (value == null) return '0';
   if (typeof value === 'bigint') return value.toString();
@@ -921,7 +943,101 @@ export function useNado() {
     return client.market.placeOrder(params);
   }, [ensureLinkedSignerReady, createClient]);
 
-  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage = '0.5', leverage = 1) => {
+  const placeAttachedTpslOrders = useCallback(async ({ entryResult, entryParams, market, symbol, side, options = {} }) => {
+    const takeProfit = nadoTpslOptionValue(options, 'take_profit', 'takeProfit', 'tp');
+    const stopLoss = nadoTpslOptionValue(options, 'stop_loss', 'stopLoss', 'sl');
+    if (!options?.attached_tpsl || (!takeProfit && !stopLoss)) return null;
+
+    const entryError = nadoEntryOrderError(entryResult);
+    if (entryError) throw new Error(`Nado entry order failed: ${entryError}`);
+
+    const dependencyDigest = nadoEntryOrderDigest(entryResult);
+    if (!dependencyDigest) throw new Error('Nado entry order digest is missing; TP/SL was not attached');
+
+    const positionAmount = Number(nadoRawAbsDecimal(entryParams?.order?.amount));
+    if (!Number.isFinite(positionAmount) || positionAmount <= 0) {
+      throw new Error('Nado entry order size is missing; TP/SL was not attached');
+    }
+
+    const cleanSymbol = String(symbol || market?.symbol || '').toUpperCase();
+    const closeOrderSide = closeSide(side);
+    const legs = [
+      { kind: 'tp', price: takeProfit, label: 'take_profit' },
+      { kind: 'sl', price: stopLoss, label: 'stop_loss' },
+    ].filter(leg => Number.isFinite(leg.price) && leg.price > 0);
+
+    const ordersToPlace = legs.map(leg => ({
+      leg,
+      request: buildNadoTriggerOrderParams({
+        market,
+        side: closeOrderSide,
+        amountBase: positionAmount,
+        price: leg.price,
+        triggerPrice: leg.price,
+        triggerRequirementType: nadoTriggerRequirement(closeOrderSide, leg.kind),
+        dependency: {
+          digest: dependencyDigest,
+          onPartialFill: true,
+        },
+      }),
+    }));
+
+    const client = createClient();
+    const result = await client.market.placeTriggerOrders({
+      orders: ordersToPlace.map(x => x.request),
+      stopOnFailure: false,
+    });
+    const responseRows = Array.isArray(result?.data) ? result.data : [];
+    const failures = responseRows.filter(r => r?.error);
+    if (failures.length && failures.length >= ordersToPlace.length) {
+      throw new Error(failures[0]?.error || 'Nado TP/SL placement failed');
+    }
+
+    const now = Date.now();
+    const newCached = ordersToPlace.map(({ leg, request }, index) => {
+      const response = responseRows[index] || {};
+      const digest = response.digest || `${dependencyDigest}:${leg.kind}:${index}`;
+      return {
+        dex: 'nado',
+        is_trigger: true,
+        trigger_kind: leg.kind,
+        symbol: cleanSymbol,
+        side: closeOrderSide,
+        amount: String(positionAmount),
+        initial_amount: String(positionAmount),
+        price: String(leg.price),
+        stop_price: String(leg.price),
+        trigger_price: String(leg.price),
+        order_id: digest,
+        digest,
+        order_type: leg.label,
+        tif: 'trigger',
+        reduce_only: true,
+        pair_index: Number(market?.market_id ?? market?.pair_index),
+        created_at: now,
+        status: 'waiting_dependency',
+        _raw: { entry_digest: dependencyDigest, request, response },
+      };
+    });
+
+    const knownDigests = new Set(newCached.map(o => String(o.order_id || o.digest)));
+    const nextCache = [
+      ...(triggerOrdersRef.current || []).filter(o => !knownDigests.has(String(o?.order_id || o?.digest))),
+      ...newCached,
+    ];
+    const nextTriggers = replaceTriggerOrders(nextCache);
+    clearLegacyTriggerOrders(walletAddr);
+    setPositions(prev => annotatePositionsWithTpsl(prev, nextTriggers));
+    setOrders(prev => mergeOrders(prev || [], nextTriggers, positions));
+    window.setTimeout(() => {
+      fetchTriggerOrdersFromNado().catch((e) => {
+        console.warn('[useNado] post-entry TP/SL sync failed:', e?.message || e);
+      });
+    }, 3000);
+    return { result, orders: newCached };
+  }, [createClient, fetchTriggerOrdersFromNado, positions, replaceTriggerOrders, walletAddr]);
+
+  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage = '0.5', leverage = 1, options = {}) => {
     setLoading(true);
     setError(null);
     try {
@@ -940,9 +1056,21 @@ export function useNado() {
         slippagePercent: Number(slippage),
       });
       const result = await placeOrder(params);
+      const entryError = nadoEntryOrderError(result);
+      if (entryError) throw new Error(entryError);
+      let attachedTpsl = null;
+      try {
+        attachedTpsl = await placeAttachedTpslOrders({ entryResult: result, entryParams: params, market, symbol, side, options });
+      } catch (attachError) {
+        const msg = nadoErrorMessage(attachError, 'Nado TP/SL failed');
+        setError(msg);
+        await fetchAccount();
+        syncRewards('market order');
+        return { success: true, ...result, tpsl_error: msg };
+      }
       await fetchAccount();
       syncRewards('market order');
-      return { success: true, ...result };
+      return { success: true, ...result, attached_tpsl: attachedTpsl };
     } catch (e) {
       const msg = nadoErrorMessage(e, 'Nado market order failed');
       setError(msg);
@@ -950,9 +1078,9 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [findMarket, fetchMarkets, placeOrder, fetchAccount, syncRewards]);
+  }, [findMarket, fetchMarkets, placeOrder, placeAttachedTpslOrders, fetchAccount, syncRewards]);
 
-  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
+  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1, options = {}) => {
     void _tif;
     setLoading(true);
     setError(null);
@@ -971,9 +1099,21 @@ export function useNado() {
         orderType: 'limit',
       });
       const result = await placeOrder(params);
+      const entryError = nadoEntryOrderError(result);
+      if (entryError) throw new Error(entryError);
+      let attachedTpsl = null;
+      try {
+        attachedTpsl = await placeAttachedTpslOrders({ entryResult: result, entryParams: params, market, symbol, side, options });
+      } catch (attachError) {
+        const msg = nadoErrorMessage(attachError, 'Nado TP/SL failed');
+        setError(msg);
+        await fetchAccount();
+        syncRewards('limit order');
+        return { success: true, ...result, tpsl_error: msg };
+      }
       await fetchAccount();
       syncRewards('limit order');
-      return { success: true, ...result };
+      return { success: true, ...result, attached_tpsl: attachedTpsl };
     } catch (e) {
       const msg = nadoErrorMessage(e, 'Nado limit order failed');
       setError(msg);
@@ -981,7 +1121,7 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [findMarket, fetchMarkets, placeOrder, fetchAccount, syncRewards]);
+  }, [findMarket, fetchMarkets, placeOrder, placeAttachedTpslOrders, fetchAccount, syncRewards]);
 
   const closePosition = useCallback(async (symbol, side, amountBase) => {
     setLoading(true);

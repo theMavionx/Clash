@@ -116,7 +116,7 @@ async def _send_and_close(client, tx):
 async def _main():
     try:
         import lighter
-        from lighter.signer_client import decode_and_free
+        from lighter.signer_client import CreateOrderTxReq, decode_and_free
 
         payload = _read_payload()
         action = str(payload.get("action") or "")
@@ -191,6 +191,38 @@ async def _main():
             })
 
         client = _client(lighter, payload)
+        if action == "create_grouped_orders":
+            if not hasattr(client, "sign_create_grouped_orders"):
+                raise RuntimeError("Installed lighter-sdk does not expose grouped order signing")
+            raw_orders = payload.get("orders")
+            if not isinstance(raw_orders, list) or not raw_orders:
+                raise ValueError("orders are required")
+            orders = []
+            for raw in raw_orders:
+                if not isinstance(raw, dict):
+                    raise ValueError("each grouped order must be an object")
+                orders.append(CreateOrderTxReq(
+                    int(raw["market_index"]),
+                    int(raw["client_order_index"]),
+                    int(raw["base_amount"]),
+                    int(raw["price"]),
+                    1 if raw.get("is_ask") else 0,
+                    int(raw["order_type"]),
+                    int(raw["time_in_force"]),
+                    1 if raw.get("reduce_only") else 0,
+                    int(raw.get("trigger_price") or 0),
+                    int(raw.get("order_expiry") if raw.get("order_expiry") is not None else -1),
+                ))
+            tx = _tx_tuple(client.sign_create_grouped_orders(
+                int(payload["grouping_type"]),
+                orders,
+                integrator_account_index=int(payload.get("integrator_account_index") or 0),
+                integrator_taker_fee=int(payload.get("integrator_taker_fee") or 0),
+                integrator_maker_fee=int(payload.get("integrator_maker_fee") or 0),
+                api_key_index=int(payload["api_key_index"]),
+            ))
+            return await _send_and_close(client, tx)
+
         if action == "create_order":
             tx = _tx_tuple(client.sign_create_order(
                 int(payload["market_index"]),

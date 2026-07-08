@@ -419,9 +419,12 @@ export function normalizeHyperliquidPrices(markets) {
 export function parseHyperliquidOrderResponse(result) {
   const statuses = result?.response?.data?.statuses || result?.data?.statuses || [];
   const first = Array.isArray(statuses) ? statuses[0] : null;
+  const failed = Array.isArray(statuses)
+    ? statuses.find(status => status?.error)
+    : null;
   const resting = first?.resting || null;
   const filled = first?.filled || null;
-  const error = first?.error || result?.error || null;
+  const error = failed?.error || first?.error || result?.error || null;
   return {
     ok: !error,
     error: error ? String(error) : null,

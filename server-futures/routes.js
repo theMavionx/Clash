@@ -1808,6 +1808,63 @@ function katanaRouteError(res, e, fallback) {
   });
 }
 
+function recordKatanaSubmittedOrder(playerId, params = {}, result = {}, body = {}) {
+  const rawOrder = result?._raw || {};
+  const rawFills = Array.isArray(rawOrder.fills) ? rawOrder.fills : [];
+  const filledNotional = rawFills.reduce((sum, fill) => sum + Math.abs(Number(fill?.quoteQuantity || 0)), 0);
+  const orderNotional = Math.abs(Number(
+    body?.notional_usd
+    || rawOrder.cumulativeQuoteQuantity
+    || filledNotional
+    || 0,
+  ));
+  const amount = String(
+    params.quantity
+    || result.filled
+    || result.amount
+    || rawOrder.executedQuantity
+    || rawOrder.originalQuantity
+    || '',
+  );
+  const price = String(
+    params.price
+    || result.price
+    || rawOrder.avgExecutionPrice
+    || rawOrder.price
+    || '',
+  );
+  const computedNotional = orderNotional || Math.abs(Number(amount) * Number(price)) || 0;
+  const builderFee = rawFills.find(fill => fill?.builderFee != null || fill?.builder_fee != null)?.builderFee
+    ?? rawFills.find(fill => fill?.builderFee != null || fill?.builder_fee != null)?.builder_fee
+    ?? rawOrder.builderFee
+    ?? rawOrder.builder_fee
+    ?? result.builderFee
+    ?? result.builder_fee
+    ?? null;
+  const exactBuilderFee = builderFee != null && String(builderFee).trim() !== ''
+    ? String(builderFee)
+    : null;
+  db.addTrade(playerId, {
+    symbol: result.symbol || params.symbol || params.market,
+    side: result.side || params.side,
+    orderType: result.type || params.type || 'market',
+    amount,
+    price,
+    orderId: result.order_id || null,
+    clientOrderId: result.client_order_id || params.clientOrderId || null,
+    status: result.status || 'submitted',
+    dex: 'katana',
+    notional_usd: computedNotional,
+    verifiedSource: 'katana_api',
+    fee: exactBuilderFee,
+    proofJson: JSON.stringify({
+      source: exactBuilderFee ? 'katana_builder_fee_exact' : 'katana_perps_sdk',
+      builder_fee: exactBuilderFee,
+      order: result._raw || result,
+    }),
+  });
+}
+
 router.get('/katana/config', auth, (req, res) => {
   if (!ensureKatana(req, res)) return;
   res.json({ ...katana.configStatus(), credentials: katana.credentialStatus(null) });
@@ -1971,66 +2028,43 @@ router.post('/katana/orders/submit', auth, async (req, res) => {
     const result = await katana.submitOrder(creds, req.body || {});
     try {
       const params = req.body?.parameters || {};
-      const rawOrder = result?._raw || {};
-      const rawFills = Array.isArray(rawOrder.fills) ? rawOrder.fills : [];
-      const filledNotional = rawFills.reduce((sum, fill) => sum + Math.abs(Number(fill?.quoteQuantity || 0)), 0);
-      const orderNotional = Math.abs(Number(
-        req.body?.notional_usd
-        || rawOrder.cumulativeQuoteQuantity
-        || filledNotional
-        || 0,
-      ));
-      const amount = String(
-        params.quantity
-        || result.filled
-        || result.amount
-        || rawOrder.executedQuantity
-        || rawOrder.originalQuantity
-        || '',
-      );
-      const price = String(
-        params.price
-        || result.price
-        || rawOrder.avgExecutionPrice
-        || rawOrder.price
-        || '',
-      );
-      const computedNotional = orderNotional || Math.abs(Number(amount) * Number(price)) || 0;
-      const builderFee = rawFills.find(fill => fill?.builderFee != null || fill?.builder_fee != null)?.builderFee
-        ?? rawFills.find(fill => fill?.builderFee != null || fill?.builder_fee != null)?.builder_fee
-        ?? rawOrder.builderFee
-        ?? rawOrder.builder_fee
-        ?? result.builderFee
-        ?? result.builder_fee
-        ?? null;
-      const exactBuilderFee = builderFee != null && String(builderFee).trim() !== ''
-        ? String(builderFee)
-        : null;
-      db.addTrade(req.playerId, {
-        symbol: result.symbol || params.symbol || params.market,
-        side: result.side || params.side,
-        orderType: result.type || params.type || 'market',
-        amount,
-        price,
-        orderId: result.order_id || null,
-        clientOrderId: result.client_order_id || params.clientOrderId || null,
-        status: result.status || 'submitted',
-        dex: 'katana',
-        notional_usd: computedNotional,
-        verifiedSource: 'katana_api',
-        fee: exactBuilderFee,
-        proofJson: JSON.stringify({
-          source: exactBuilderFee ? 'katana_builder_fee_exact' : 'katana_perps_sdk',
-          builder_fee: exactBuilderFee,
-          order: result._raw || result,
-        }),
-      });
+      recordKatanaSubmittedOrder(req.playerId, params, result, req.body || {});
     } catch (dbErr) {
       console.warn('[katana] trade log failed:', dbErr.message);
     }
     res.json(result);
   } catch (e) {
     katanaRouteError(res, e, 'Failed to submit Katana order');
+  }
+});
+
+router.post('/katana/orders/conditional-tpsl/prepare', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    const payload = { ...req.body, wallet: req.body?.wallet || req.playerWallet };
+    res.json(await katana.prepareOrderWithConditionalTpsl(creds, payload));
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to prepare Katana order with TP/SL');
+  }
+});
+
+router.post('/katana/orders/conditional-tpsl/submit', auth, async (req, res) => {
+  try {
+    const creds = requireKatanaOwner(req, res);
+    if (!creds) return;
+    const result = await katana.submitOrderWithConditionalTpsl(creds, req.body || {});
+    try {
+      const params = req.body?.order?.parameters || {};
+      if (result?.order) {
+        recordKatanaSubmittedOrder(req.playerId, params, result.order, req.body || {});
+      }
+    } catch (dbErr) {
+      console.warn('[katana] conditional trade log failed:', dbErr.message);
+    }
+    res.json(result);
+  } catch (e) {
+    katanaRouteError(res, e, 'Failed to submit Katana order with TP/SL');
   }
 });
 
@@ -4863,6 +4897,59 @@ router.post('/grvt/create-order', auth, async (req, res) => {
   } catch (e) {
     console.warn('[grvt] create-order failed:', e.message);
     res.status(502).json({ error: 'Failed to create GRVT order', detail: e.message });
+  }
+});
+
+router.post('/grvt/bulk-orders', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    const signedOrders = Array.isArray(req.body?.orders || req.body?.o)
+      ? (req.body.orders || req.body.o)
+      : [];
+    if (!signedOrders.length) return res.status(400).json({ error: 'signed GRVT orders required' });
+    const result = await grvt.submitSignedOrdersBulk(creds, signedOrders, {
+      time_to_live_ms: req.body?.time_to_live_ms || req.body?.tt,
+    });
+    try {
+      const parentOrder = signedOrders.find(order => {
+        const metadata = order?.metadata || order?.m || {};
+        return !(metadata.trigger || metadata.t) && !(order?.reduce_only ?? order?.ro);
+      }) || signedOrders[0];
+      const leg = Array.isArray(parentOrder.legs || parentOrder.l) ? (parentOrder.legs || parentOrder.l)[0] : {};
+      const metadata = parentOrder.metadata || parentOrder.m || {};
+      const notional = Number(req.body?.notional_usd || 0);
+      const created = Array.isArray(result?.orders) ? result.orders[0] : null;
+      db.addTrade(req.playerId, {
+        symbol: grvtSymbolFromInstrument(leg?.instrument || leg?.i || req.body?.symbol),
+        side: (leg?.is_buying_asset ?? leg?.ib) ? 'bid' : 'ask',
+        orderType: (parentOrder.is_market ?? parentOrder.im) ? 'market' : 'limit',
+        amount: String(leg?.size || leg?.s || ''),
+        price: String(leg?.limit_price ?? leg?.lp ?? ''),
+        orderId: created?.order_id || null,
+        clientOrderId: created?.client_order_id || metadata.client_order_id || metadata.co || null,
+        status: created?.status || 'pending',
+        dex: 'grvt',
+        notional_usd: Number.isFinite(notional) && notional > 0 ? notional : 0,
+        verifiedSource: 'grvt_bulk_signed_order',
+        proofJson: JSON.stringify({
+          source: 'grvt_eip712_bulk_order',
+          builder: parentOrder.builder || null,
+          builder_fee: parentOrder.builder_fee || null,
+          sub_account_id: parentOrder.sub_account_id || null,
+          client_order_id: created?.client_order_id || metadata.client_order_id || metadata.co || null,
+          order_id: created?.order_id || null,
+          order_count: signedOrders.length,
+          submitted_result: result || null,
+        }),
+      });
+    } catch (e) {
+      console.warn('[grvt] local bulk trade record failed:', e.message);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[grvt] bulk-orders failed:', e.message);
+    res.status(502).json({ error: 'Failed to create GRVT bulk orders', detail: e.message });
   }
 });
 

@@ -1123,7 +1123,7 @@ export function useGrvt() {
     return result;
   }, [authedPost]);
 
-  const submitSignedOrder = useCallback(async ({
+  const buildSignedOrder = useCallback(async ({
     symbol,
     side,
     marginUsdc,
@@ -1286,24 +1286,93 @@ export function useGrvt() {
       builder: builderAccount,
       builder_fee: builderFeeRate,
     };
-    const payload = {
+    return {
       order,
       symbol,
       notional_usd: notional,
+      sizeText,
+      instrument,
     };
+  }, [builderConfig, credentials, evmWallet, hasResolvedCredentials, marketForSymbol, oneTapSigner, priceForOrder, setGrvtInitialLeverage, signTypedDataForGrvt, walletAddr]);
+
+  const postSignedGrvtPayload = useCallback(async (path, payload) => {
     try {
-      const result = await authedPost('/api/futures/grvt/create-order', payload);
-      scheduleRewardSync('order');
-      return result;
+      return await authedPost(path, payload);
     } catch (e) {
       const msg = grvtErrorMessage(e);
       if (!/builder is not authorized|7504/i.test(msg)) throw e;
       await authorizeBuilder(true);
-      const result = await authedPost('/api/futures/grvt/create-order', payload);
-      scheduleRewardSync('order');
-      return result;
+      return await authedPost(path, payload);
     }
-  }, [authedPost, authorizeBuilder, builderConfig, credentials, evmWallet, hasResolvedCredentials, marketForSymbol, oneTapSigner, priceForOrder, scheduleRewardSync, setGrvtInitialLeverage, signTypedDataForGrvt, walletAddr]);
+  }, [authedPost, authorizeBuilder]);
+
+  const submitSignedOrder = useCallback(async (args) => {
+    const built = await buildSignedOrder(args);
+    const result = await postSignedGrvtPayload('/api/futures/grvt/create-order', {
+      order: built.order,
+      symbol: built.symbol,
+      notional_usd: built.notional_usd,
+    });
+    scheduleRewardSync('order');
+    return result;
+  }, [buildSignedOrder, postSignedGrvtPayload, scheduleRewardSync]);
+
+  const submitBulkSignedOrders = useCallback(async (builtOrders, { symbol, notionalUsd } = {}) => {
+    const result = await postSignedGrvtPayload('/api/futures/grvt/bulk-orders', {
+      orders: builtOrders.map(item => item.order || item),
+      symbol,
+      notional_usd: notionalUsd,
+      time_to_live_ms: '500',
+    });
+    scheduleRewardSync('order');
+    return result;
+  }, [postSignedGrvtPayload, scheduleRewardSync]);
+
+  const buildGrvtAttachedTpslOrders = useCallback(async ({ symbol, parentSide, parentSize, takeProfit, stopLoss }) => {
+    const closeSide = parentSide === 'bid' || parentSide === 'buy' || parentSide === 'long' ? 'ask' : 'bid';
+    const ordersToBuild = [];
+    if (takeProfit) {
+      ordersToBuild.push({
+        symbol,
+        side: closeSide,
+        amountBase: parentSize,
+        price: takeProfit,
+        tif: 'GTC',
+        isMarket: false,
+        reduceOnly: true,
+        trigger: {
+          type: 'TAKE_PROFIT',
+          price: takeProfit,
+          triggerBy: 'LAST',
+          closePosition: false,
+          isSplitPosition: false,
+        },
+      });
+    }
+    if (stopLoss) {
+      ordersToBuild.push({
+        symbol,
+        side: closeSide,
+        amountBase: parentSize,
+        price: stopLoss,
+        tif: 'GTC',
+        isMarket: false,
+        reduceOnly: true,
+        trigger: {
+          type: 'STOP_LOSS',
+          price: stopLoss,
+          triggerBy: 'LAST',
+          closePosition: false,
+          isSplitPosition: false,
+        },
+      });
+    }
+    const built = [];
+    for (const args of ordersToBuild) {
+      built.push(await buildSignedOrder(args));
+    }
+    return built;
+  }, [buildSignedOrder]);
 
   const placeGrvtMarketOrder = useCallback(async (symbol, side, marginUsdc, _slippage = '0.5', leverage = 1) => {
     try {
@@ -1315,15 +1384,31 @@ export function useGrvt() {
     }
   }, [fetchAccount, submitSignedOrder]);
 
-  const placeGrvtLimitOrder = useCallback(async (symbol, side, price, marginUsdc, tif = 'GTC', leverage = 1) => {
+  const placeGrvtLimitOrder = useCallback(async (symbol, side, price, marginUsdc, tif = 'GTC', leverage = 1, options = {}) => {
     try {
-      const result = await submitSignedOrder({ symbol, side, marginUsdc, price, tif, leverage, isMarket: false });
+      let result;
+      if (options?.attached_tpsl && (options.take_profit || options.stop_loss || options.takeProfit || options.stopLoss)) {
+        const parent = await buildSignedOrder({ symbol, side, marginUsdc, price, tif, leverage, isMarket: false });
+        const tpslOrders = await buildGrvtAttachedTpslOrders({
+          symbol,
+          parentSide: side,
+          parentSize: parent.sizeText,
+          takeProfit: options.take_profit || options.takeProfit || options.tp || null,
+          stopLoss: options.stop_loss || options.stopLoss || options.sl || null,
+        });
+        result = await submitBulkSignedOrders([parent, ...tpslOrders], {
+          symbol,
+          notionalUsd: parent.notional_usd,
+        });
+      } else {
+        result = await submitSignedOrder({ symbol, side, marginUsdc, price, tif, leverage, isMarket: false });
+      }
       await fetchAccount();
       return result;
     } catch (e) {
       return { error: grvtErrorMessage(e, 'GRVT limit order failed') };
     }
-  }, [fetchAccount, submitSignedOrder]);
+  }, [buildGrvtAttachedTpslOrders, buildSignedOrder, fetchAccount, submitBulkSignedOrders, submitSignedOrder]);
 
   const closeGrvtPosition = useCallback(async (symbol, side, amountBase) => {
     try {

@@ -287,6 +287,30 @@ function tpslLimitPriceUnits(triggerUnits, market, isLong, kind = 'tp') {
   // leave a partially-filled position unprotected during a fast move.
   return Math.max(tick, roundPriceUnitsToTick(isLong ? trigger - buffer : trigger + buffer, market));
 }
+function decibelTpslOptionValue(options, ...keys) {
+  if (!options || typeof options !== 'object') return null;
+  for (const key of keys) {
+    const n = Number(options[key]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+function decibelAttachedOrderTpslFields({ options, market, isLong }) {
+  const takeProfit = decibelTpslOptionValue(options, 'take_profit', 'takeProfit', 'tp');
+  const stopLoss = decibelTpslOptionValue(options, 'stop_loss', 'stopLoss', 'sl');
+  const fields = {};
+  if (takeProfit) {
+    const trigger = priceToChainUnits(takeProfit, market);
+    fields.tpTriggerPrice = trigger;
+    fields.tpLimitPrice = tpslLimitPriceUnits(trigger, market, isLong, 'tp');
+  }
+  if (stopLoss) {
+    const trigger = priceToChainUnits(stopLoss, market);
+    fields.slTriggerPrice = trigger;
+    fields.slLimitPrice = tpslLimitPriceUnits(trigger, market, isLong, 'sl');
+  }
+  return { fields, takeProfit, stopLoss };
+}
 function sizeToChainUnits(human, market) {
   const d = Number(market?.sz_decimals ?? market?.szDecimals ?? 6);
   const raw = BigInt(Math.round(Number(human) * Math.pow(10, d)));
@@ -486,6 +510,12 @@ function normalizeOrder(o, markets) {
   const type = orderTypeText(o) || (o.isTrigger || o.is_trigger ? 'STOP_LIMIT' : 'LIMIT');
   const kind = tpslKindFromOrder({ ...o, order_type: type });
   const triggerPrice = kind ? tpslPriceFromOrder(o) : null;
+  const attachedTakeProfit = kind === 'tp'
+    ? triggerPrice
+    : normalizeMaybeChainPrice(o.tp_trigger_price ?? o.tpTriggerPrice ?? o.take_profit ?? o.takeProfit ?? o.tp, m);
+  const attachedStopLoss = kind === 'sl'
+    ? triggerPrice
+    : normalizeMaybeChainPrice(o.sl_trigger_price ?? o.slTriggerPrice ?? o.stop_loss ?? o.stopLoss ?? o.sl, m);
   const price = positiveNumberOrNull(o.price)
     ?? normalizeMaybeChainPrice(o.limit_price ?? o.limitPrice, m)
     ?? triggerPrice
@@ -505,8 +535,10 @@ function normalizeOrder(o, markets) {
     is_tpsl: !!(o.is_tpsl ?? o.isTpsl) || !!kind,
     trigger_condition: o.trigger_condition ?? o.triggerCondition ?? '',
     order_direction: o.order_direction ?? o.orderDirection ?? '',
-    take_profit: kind === 'tp' && triggerPrice != null ? String(triggerPrice) : null,
-    stop_loss: kind === 'sl' && triggerPrice != null ? String(triggerPrice) : null,
+    take_profit: attachedTakeProfit == null ? null : String(attachedTakeProfit),
+    tp_trigger_price: attachedTakeProfit == null ? null : String(attachedTakeProfit),
+    stop_loss: attachedStopLoss == null ? null : String(attachedStopLoss),
+    sl_trigger_price: attachedStopLoss == null ? null : String(attachedStopLoss),
     tif: String(o.timeInForce || o.time_in_force || 'GTC'),
     order_id: String(o.orderId ?? o.order_id ?? o.id ?? ''),
     market_addr: marketId || (m && m.market_addr) || null,
@@ -649,6 +681,8 @@ function summarizeDecibelOrderForLog(order) {
     price: order.price || order.limit_price || order.limitPrice || '',
     stop: order.stop_price || order.stopPrice || order.trigger_condition || order.triggerCondition || '',
     amount: order.amount || order.remaining_size || order.remainingSize || order.orig_size || order.origSize || '',
+    tp: order.tp || order.take_profit || order.tp_trigger_price || order.tpTriggerPrice || '',
+    sl: order.sl || order.stop_loss || order.sl_trigger_price || order.slTriggerPrice || '',
     leverage: order.leverage || order.user_leverage || order.userLeverage || '',
     optimistic: !!order._optimistic,
     reduce_only: !!(order.reduce_only ?? order.reduceOnly ?? order.is_reduce_only),
@@ -2043,7 +2077,7 @@ export function useDecibel() {
   // `amount` here is COLLATERAL in USDC (matching the Avantis/UI contract).
   // Position size = collateral × leverage / mark, computed locally so the
   // chain-units `size` we send to the SDK is correct per-market scaling.
-  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage) => {
+  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage, options = {}) => {
     setLoading(true);
     setError(null);
     const startedAt = performance.now();
@@ -2079,6 +2113,7 @@ export function useDecibel() {
       const size = assertTradableSize(sizeToChainUnits(sizeBase, market), market);
 
       const builderArgs = await builderFields(); checkGen();
+      const attachedTpsl = decibelAttachedOrderTpslFields({ options, market, isLong: isBuy });
       const result = await placeOrderOnServer({
         marketName: market.market_name,
         price: priceToChainUnits(limitPrice, market),
@@ -2092,6 +2127,7 @@ export function useDecibel() {
         tickSize: tickSizeChainUnits(market),
         pxDecimals: market.px_decimals,
         szDecimals: market.sz_decimals,
+        ...attachedTpsl.fields,
         rewardSymbol: symbol,
         rewardOrderType: 'market',
         rewardLeverage: lev,
@@ -2105,6 +2141,9 @@ export function useDecibel() {
         tx_wait_ms: result?.timings?.wait_ms,
         verification: result?.verification?.effect,
         verify_attempts: result?.verification?.attempts,
+        attached_tpsl: !!(attachedTpsl.takeProfit || attachedTpsl.stopLoss),
+        take_profit: attachedTpsl.takeProfit || null,
+        stop_loss: attachedTpsl.stopLoss || null,
       });
 
       const txHash = assertWriteSuccess(result, 'Market order');
@@ -2136,7 +2175,7 @@ export function useDecibel() {
     }
   }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer]);
 
-  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif, leverage) => {
+  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif, leverage, options = {}) => {
     setLoading(true);
     setError(null);
     const startedAt = performance.now();
@@ -2165,6 +2204,7 @@ export function useDecibel() {
       const size = assertTradableSize(sizeToChainUnits(sizeBase, market), market);
 
       const builderArgs = await builderFields(); checkGen();
+      const attachedTpsl = decibelAttachedOrderTpslFields({ options, market, isLong: isBuy });
       const result = await placeOrderOnServer({
         marketName: market.market_name,
         price: priceToChainUnits(priceN, market),
@@ -2176,6 +2216,7 @@ export function useDecibel() {
         tickSize: tickSizeChainUnits(market),
         pxDecimals: market.px_decimals,
         szDecimals: market.sz_decimals,
+        ...attachedTpsl.fields,
         rewardSymbol: symbol,
         rewardOrderType: 'limit',
         rewardLeverage: lev,
@@ -2194,6 +2235,9 @@ export function useDecibel() {
         orders_after: Array.isArray(result?.ordersAfter) ? result.ordersAfter.length : null,
         client_order_id: String(result?.clientOrderId || '').slice(0, 18),
         order_id: String(result?.orderId || result?.order_id || '').slice(0, 18),
+        attached_tpsl: !!(attachedTpsl.takeProfit || attachedTpsl.stopLoss),
+        take_profit: attachedTpsl.takeProfit || null,
+        stop_loss: attachedTpsl.stopLoss || null,
       });
 
       const txHash = assertWriteSuccess(result, 'Limit order');
@@ -2209,11 +2253,18 @@ export function useDecibel() {
         market_addr: market.market_addr,
         market_name: market.market_name,
         client_order_id: result?.clientOrderId || result?.client_order_id || null,
+        take_profit: attachedTpsl.takeProfit || null,
+        stop_loss: attachedTpsl.stopLoss || null,
+        tp_trigger_price: attachedTpsl.takeProfit || null,
+        sl_trigger_price: attachedTpsl.stopLoss || null,
         _raw: {
           market: market.market_addr,
           marketName: market.market_name,
           isBuy,
           client_order_id: result?.clientOrderId || result?.client_order_id || null,
+          attached_tpsl: !!(attachedTpsl.takeProfit || attachedTpsl.stopLoss),
+          take_profit: attachedTpsl.takeProfit || null,
+          stop_loss: attachedTpsl.stopLoss || null,
         },
       });
       applyDecibelOrders([...ordersRef.current, optimisticOrder], 'optimistic-limit', { mergeOnly: true });

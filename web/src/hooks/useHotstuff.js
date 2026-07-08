@@ -5,6 +5,7 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import {
+  buildHotstuffAttachedTpslOrders,
   buildHotstuffTpslOrder,
   buildHotstuffOrder,
   createHotstuffExchangeClient,
@@ -96,6 +97,14 @@ function hotstuffIsolatedMode(row) {
 
 function isDuplicateHotstuffTriggerError(error) {
   return /duplicate\s+trigger/i.test(String(error?.message || error || ''));
+}
+
+function hotstuffOpenTpslValue(options = {}, ...keys) {
+  for (const key of keys) {
+    const value = options?.[key];
+    if (value !== undefined && value !== null && value !== '' && Number(value) > 0) return value;
+  }
+  return null;
 }
 
 function isHotstuffCancelAlreadyGone(error) {
@@ -847,6 +856,18 @@ export function useHotstuff() {
       orderType,
       reduceOnly,
     });
+    const attachedTpslOrders = !reduceOnly && (options?.attached_tpsl || options?.attachedTpsl)
+      ? buildHotstuffAttachedTpslOrders({
+        market,
+        entrySide: side,
+        parentSize: order.size,
+        takeProfit: hotstuffOpenTpslValue(options, 'takeProfit', 'take_profit', 'tp'),
+        stopLoss: hotstuffOpenTpslValue(options, 'stopLoss', 'stop_loss', 'sl'),
+      })
+      : [];
+    const ordersToSubmit = attachedTpslOrders.length
+      ? [{ ...order, grouping: 'normal' }, ...attachedTpslOrders]
+      : [order];
     const brokerConfig = hotstuffBrokerConfig();
     console.info('[Hotstuff UI] submitting order', {
       symbol,
@@ -862,11 +883,18 @@ export function useHotstuff() {
         mark: market?.mark,
         mid: market?.mid,
       },
-      order,
+      orders: ordersToSubmit,
+      attachedTpsl: attachedTpslOrders.map(row => ({
+        cloid: row.cloid,
+        tpsl: row.tpsl,
+        triggerPx: row.triggerPx,
+        grouping: row.grouping,
+        size: row.size,
+      })),
       brokerConfig: brokerConfig ? { ...brokerConfig, broker: brokerConfig.broker } : null,
     });
     const result = await agentExchange(agent).placeOrder({
-      orders: [order],
+      orders: ordersToSubmit,
       ...(brokerConfig ? { brokerConfig } : {}),
       expiresAfter: Date.now() + 60_000,
       nonce: Date.now(),
@@ -876,7 +904,14 @@ export function useHotstuff() {
     }
     setTimeout(() => claimGold(orderType || 'trade'), 2500);
     setTimeout(() => refresh(), 350);
-    return { success: true, result, clientOrderId: order.cloid, orderStatus: hotstuffOrderStatusLabel(result) };
+    return {
+      success: true,
+      result,
+      clientOrderId: order.cloid,
+      clientOrderIds: ordersToSubmit.map(row => row.cloid).filter(Boolean),
+      attachedTpslClientOrderIds: attachedTpslOrders.map(row => row.cloid),
+      orderStatus: hotstuffOrderStatusLabel(result),
+    };
   }, [activate, agentExchange, claimGold, ensureTradingAgent, evmReady, hsWalletAddr, markets, refresh, setupVerified, walletClient]);
 
   const setLeverage = useCallback(async (symbol, leverage) => {

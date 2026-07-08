@@ -707,9 +707,98 @@ export function useKatana() {
     }
   }, [claimGold, credentials, oneTapAuthorized, refresh, signKatanaTypedData, signKatanaTypedDataWithAgent, token, walletAddr]);
 
+  const signedConditionalOrderRequest = useCallback(async (payload) => {
+    if (!token) return disabled('Missing game session token.');
+    if (!walletAddr) return disabled('Connect a Katana wallet first.');
+    const localStatus = credentialStatus(credentials);
+    if (!localStatus.has_credentials) {
+      return disabled(`Missing Katana credentials: ${localStatus.missing_fields.join(', ') || 'api_key, api_secret'}`);
+    }
+    setLoading(true);
+    try {
+      const signer = oneTapAuthorized ? oneTapSignerRef.current : null;
+      const delegatedKey = signer?.address || '';
+      const signTypedData = (typedData) => delegatedKey
+        ? signKatanaTypedDataWithAgent(typedData, signer)
+        : signKatanaTypedData(typedData);
+      logKatana('conditional order prepare start', {
+        wallet: walletAddr,
+        one_tap: !!delegatedKey,
+        delegatedKey,
+        payload,
+      });
+      const prepared = await fetchJson(`${FUTURES_API}/katana/orders/conditional-tpsl/prepare`, {
+        method: 'POST',
+        headers: authHeaders(token, credentials),
+        body: JSON.stringify({
+          ...payload,
+          wallet: walletAddr,
+          ...(delegatedKey ? { delegatedKey } : {}),
+        }),
+      });
+      logKatana('conditional order prepared', {
+        endpoint: prepared?.endpoint,
+        has_order: !!prepared?.order?.typedData,
+        has_tp: !!prepared?.conditionalTakeProfitOrder?.typedData,
+        has_sl: !!prepared?.conditionalStopLossOrder?.typedData,
+        order: prepared?.order?.parameters,
+        tp: prepared?.conditionalTakeProfitOrder?.parameters,
+        sl: prepared?.conditionalStopLossOrder?.parameters,
+      });
+      const orderSignature = await signTypedData(prepared.order.typedData);
+      const tpSignature = prepared.conditionalTakeProfitOrder?.typedData
+        ? await signTypedData(prepared.conditionalTakeProfitOrder.typedData)
+        : '';
+      const slSignature = prepared.conditionalStopLossOrder?.typedData
+        ? await signTypedData(prepared.conditionalStopLossOrder.typedData)
+        : '';
+      const result = await fetchJson(`${FUTURES_API}/katana/orders/conditional-tpsl/submit`, {
+        method: 'POST',
+        headers: authHeaders(token, credentials),
+        body: JSON.stringify({
+          order: {
+            parameters: prepared.order.parameters,
+            signature: orderSignature,
+          },
+          conditionalTakeProfitOrder: prepared.conditionalTakeProfitOrder?.parameters
+            ? {
+              parameters: prepared.conditionalTakeProfitOrder.parameters,
+              signature: tpSignature,
+            }
+            : undefined,
+          conditionalStopLossOrder: prepared.conditionalStopLossOrder?.parameters
+            ? {
+              parameters: prepared.conditionalStopLossOrder.parameters,
+              signature: slSignature,
+            }
+            : undefined,
+          notional_usd: payload.notional_usd,
+        }),
+      });
+      logKatana('conditional order submit result', result);
+      await refresh();
+      window.setTimeout(() => claimGold({ reason: 'conditional_order_submit' }).catch(() => null), 2000);
+      window.setTimeout(() => claimGold({ reason: 'conditional_order_submit_settle' }).catch(() => null), 7000);
+      return result;
+    } catch (e) {
+      logKatana('conditional order failed', { status: e?.status, message: e?.message, data: e?.data, payload });
+      return { error: e?.message || 'Katana conditional order failed' };
+    } finally {
+      setLoading(false);
+    }
+  }, [claimGold, credentials, oneTapAuthorized, refresh, signKatanaTypedData, signKatanaTypedDataWithAgent, token, walletAddr]);
+
   const placeOrder = useCallback((payload) => {
+    const attachedTakeProfit = Number(payload?.takeProfit ?? payload?.take_profit ?? payload?.tp ?? 0);
+    const attachedStopLoss = Number(payload?.stopLoss ?? payload?.stop_loss ?? payload?.sl ?? 0);
+    const hasAttachedTpsl = !!payload?.attached_tpsl
+      && ((Number.isFinite(attachedTakeProfit) && attachedTakeProfit > 0)
+        || (Number.isFinite(attachedStopLoss) && attachedStopLoss > 0));
+    if (hasAttachedTpsl && !payload?.reduceOnly) {
+      return signedConditionalOrderRequest(payload);
+    }
     return signedRequest('/katana/orders/prepare', '/katana/orders/submit', payload);
-  }, [signedRequest]);
+  }, [signedConditionalOrderRequest, signedRequest]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, _slippage, _leverage, options = {}) => {
     return placeOrder({
@@ -719,6 +808,9 @@ export function useKatana() {
       type: 'market',
       reduceOnly: !!options.reduceOnly,
       notional_usd: options.notional_usd,
+      attached_tpsl: !!options.attached_tpsl,
+      takeProfit: options.takeProfit ?? options.take_profit ?? options.tp,
+      stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl,
     });
   }, [placeOrder]);
 
@@ -732,6 +824,9 @@ export function useKatana() {
       timeInForce: String(tif || 'GTC').toLowerCase(),
       reduceOnly: !!options.reduceOnly,
       notional_usd: options.notional_usd,
+      attached_tpsl: !!options.attached_tpsl,
+      takeProfit: options.takeProfit ?? options.take_profit ?? options.tp,
+      stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl,
     });
   }, [placeOrder]);
 

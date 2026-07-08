@@ -319,6 +319,28 @@ function decodeWriteError(e, fallback = 'GMX order failed') {
   return raw.slice(0, 240);
 }
 
+function buildGmxOpenTpsl(options = {}, sizeUsd) {
+  if (!options?.attached_tpsl) return undefined;
+  const takeProfit = options.take_profit || options.takeProfit || options.tp || null;
+  const stopLoss = options.stop_loss || options.stopLoss || options.sl || null;
+  const rows = [];
+  if (takeProfit) {
+    rows.push({
+      type: 'take-profit',
+      triggerPrice: parseUnits(String(takeProfit), 30),
+      size: sizeUsd,
+    });
+  }
+  if (stopLoss) {
+    rows.push({
+      type: 'stop-loss',
+      triggerPrice: parseUnits(String(stopLoss), 30),
+      size: sizeUsd,
+    });
+  }
+  return rows.length ? rows : undefined;
+}
+
 export function useGmx() {
   const { dex } = useDex();
   const isActiveDex = dex === 'gmx';
@@ -886,7 +908,7 @@ export function useGmx() {
    * returns a ready-to-broadcast `{to,data,value}` payload. We approve
    * USDC if needed, then send the tx.
    */
-  const placeMarketOrder = useCallback(async (symbol, side, collateralUsdc, slippage, leverage) => {
+  const placeMarketOrder = useCallback(async (symbol, side, collateralUsdc, slippage, leverage, options = {}) => {
     if (tradeInFlightRef.current) return { error: 'Trade already in progress' };
     tradeInFlightRef.current = true;
     setLoading(true);
@@ -926,12 +948,14 @@ export function useGmx() {
       // popup the very first time and zero on subsequent trades.
       await ensureReferralCodeBound();
 
+      const tpsl = buildGmxOpenTpsl(options, sizeUsd);
       const prepared = await apiSdk.prepareOrder({
         kind: 'increase',
         symbol: marketSymbol,
         direction: isLong ? 'long' : 'short',
         orderType: 'market',
         size: sizeUsd,
+        ...(tpsl ? { tpsl } : {}),
         collateralToPay: { amount: payAmount, token: 'USDC' },
         collateralToken: 'USDC',
         slippage: slippageBps,
@@ -980,7 +1004,7 @@ export function useGmx() {
    * Limit order = increase order with `orderType: 'limit'` and a trigger
    * price. Collateral is deposited now; execution waits for the trigger.
    */
-  const placeLimitOrder = useCallback(async (symbol, side, limitPrice, collateralUsdc, _tif, leverage) => {
+  const placeLimitOrder = useCallback(async (symbol, side, limitPrice, collateralUsdc, _tif, leverage, options = {}) => {
     if (tradeInFlightRef.current) return { error: 'Trade already in progress' };
     tradeInFlightRef.current = true;
     setLoading(true);
@@ -1009,6 +1033,7 @@ export function useGmx() {
       await ensureUsdcAllowance(payAmount);
       await ensureReferralCodeBound();
 
+      const tpsl = buildGmxOpenTpsl(options, sizeUsd);
       const prepared = await apiSdk.prepareOrder({
         kind: 'increase',
         symbol: marketSymbol,
@@ -1016,6 +1041,7 @@ export function useGmx() {
         orderType: 'limit',
         size: sizeUsd,
         triggerPrice: triggerPriceBig,
+        ...(tpsl ? { tpsl } : {}),
         collateralToPay: { amount: payAmount, token: 'USDC' },
         collateralToken: 'USDC',
         slippage: 100,                 // 1% — limit fills tend to be tighter, room for safety

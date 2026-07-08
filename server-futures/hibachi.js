@@ -977,6 +977,21 @@ function normalizeOrderFlags(args = {}) {
   return null;
 }
 
+function normalizeParentOrder(args = {}) {
+  const raw = firstPresent(args.parentOrder, args.parent_order);
+  if (raw && typeof raw === 'object') {
+    const nonce = firstPresent(raw.nonce, raw.parentNonce, raw.parent_nonce);
+    if (nonce != null) return { nonce: String(nonce) };
+    const orderId = firstPresent(raw.orderId, raw.order_id, raw.id);
+    if (orderId != null) return { orderId: String(orderId) };
+  }
+  const nonce = firstPresent(args.parentNonce, args.parent_nonce);
+  if (nonce != null) return { nonce: String(nonce) };
+  const orderId = firstPresent(args.parentOrderId, args.parent_order_id);
+  if (orderId != null) return { orderId: String(orderId) };
+  return null;
+}
+
 function positionMargin(position = {}, context = {}) {
   const directMargin = num(
     position.margin
@@ -1118,6 +1133,84 @@ function orderSignaturePayload({ nonce, contract, quantity, side, price, maxFees
   return price == null
     ? Buffer.concat([nonceBuf, contractBuf, qtyBuf, sideBuf, feeBuf])
     : Buffer.concat([nonceBuf, contractBuf, qtyBuf, sideBuf, priceBytes(price, contract), feeBuf]);
+}
+
+function signedOrderRequest(creds, {
+  nonce,
+  contract,
+  symbol,
+  quantity,
+  hibachiSide,
+  price = null,
+  triggerPrice = null,
+  triggerDirection = null,
+  parentOrder = null,
+  orderFlags = null,
+  maxFeesPercent,
+}) {
+  const payload = orderSignaturePayload({ nonce, contract, quantity, side: hibachiSide, price, maxFeesPercent });
+  return {
+    nonce,
+    symbol,
+    quantity,
+    orderType: price != null ? 'LIMIT' : 'MARKET',
+    side: hibachiSide,
+    maxFeesPercent,
+    signature: signPayload(creds.privateKey, payload),
+    ...(price != null ? { price } : {}),
+    ...(triggerPrice != null ? { triggerPrice, triggerDirection } : {}),
+    ...(parentOrder ? { parentOrder } : {}),
+    ...(orderFlags ? { orderFlags } : {}),
+  };
+}
+
+function attachedTpslLegs(args = {}, parentSide) {
+  const takeProfit = firstPresent(args.takeProfit, args.take_profit, args.tp);
+  const stopLoss = firstPresent(args.stopLoss, args.stop_loss, args.sl);
+  const legs = [];
+  const closeSide = parentSide === 'ASK' ? 'BID' : 'ASK';
+  if (num(takeProfit) > 0) {
+    legs.push({
+      kind: 'tp',
+      side: closeSide,
+      triggerPrice: decimalText(takeProfit),
+      triggerDirection: parentSide === 'ASK' ? 'LOW' : 'HIGH',
+    });
+  }
+  if (num(stopLoss) > 0) {
+    legs.push({
+      kind: 'sl',
+      side: closeSide,
+      triggerPrice: decimalText(stopLoss),
+      triggerDirection: parentSide === 'BID' ? 'LOW' : 'HIGH',
+    });
+  }
+  return legs;
+}
+
+function batchOrderRows(result = {}) {
+  return rows(result?.orders || result?.data?.orders || result?.result?.orders || []);
+}
+
+function batchOrderStatus(row = {}) {
+  return String(firstPresent(row.status, row.orderStatus, row.order_status, row.error, row.message, '')).toLowerCase();
+}
+
+function decorateBatchOrderResult(result, parentNonce) {
+  const orders = batchOrderRows(result);
+  const parent = orders[0] || null;
+  const children = orders.slice(1);
+  const childError = children.find(row => /reject|cancel|fail|error/u.test(batchOrderStatus(row)));
+  return {
+    ...(result && typeof result === 'object' ? result : { result }),
+    orderId: firstPresent(parent?.orderId, parent?.order_id, parent?.id, result?.orderId, result?.order_id),
+    status: firstPresent(parent?.status, parent?.orderStatus, parent?.order_status, result?.status),
+    _clash_nonce: String(parentNonce),
+    _clash_batch: true,
+    _clash_parent_order: parent,
+    _clash_child_orders: children,
+    ...(childError ? { _clash_tpsl_warning: firstPresent(childError.error, childError.message, childError.status, 'Hibachi TP/SL child order was not accepted') } : {}),
+  };
 }
 
 let inventoryCache = { at: 0, payload: null };
@@ -1575,23 +1668,54 @@ async function placeOrder(credsInput, args = {}) {
     throw new Error('Hibachi triggerDirection must be HIGH or LOW for trigger orders');
   }
   const orderFlags = normalizeOrderFlags(args);
+  const parentOrder = normalizeParentOrder(args);
   const nonce = hibachiNonce();
   const maxFeesPercent = decimalText(args.maxFeesPercent || HIBACHI_MAX_FEES_PERCENT);
-  const payload = orderSignaturePayload({ nonce, contract, quantity, side: hibachiSide, price, maxFeesPercent });
-  const body = {
-    accountId: creds.accountId,
+  const parentBody = signedOrderRequest(creds, {
     nonce,
+    contract,
     symbol,
     quantity,
-    orderType,
-    side: hibachiSide,
+    hibachiSide,
+    price,
+    triggerPrice,
+    triggerDirection,
+    parentOrder,
+    orderFlags,
     maxFeesPercent,
-    signature: signPayload(creds.privateKey, payload),
-    ...(price != null ? { price } : {}),
-    ...(triggerPrice != null ? { triggerPrice, triggerDirection } : {}),
-    ...(orderFlags ? { orderFlags } : {}),
-  };
-  const result = await authedSend('POST', '/trade/order', body, creds);
+  });
+  parentBody.orderType = orderType;
+  const tpslLegs = triggerPrice == null && (args.attachedTpsl || args.attached_tpsl || args.takeProfit || args.take_profit || args.tp || args.stopLoss || args.stop_loss || args.sl)
+    ? attachedTpslLegs(args, hibachiSide)
+    : [];
+  tpslLegs.forEach(leg => checkTickSize(leg.triggerPrice, contract.tickSize));
+  let result;
+  if (tpslLegs.length) {
+    const orders = [parentBody];
+    tpslLegs.forEach((leg, index) => {
+      orders.push(signedOrderRequest(creds, {
+        nonce: nonce + index + 1,
+        contract,
+        symbol,
+        quantity,
+        hibachiSide: leg.side,
+        triggerPrice: leg.triggerPrice,
+        triggerDirection: leg.triggerDirection,
+        parentOrder: { nonce: String(nonce) },
+        orderFlags: 'REDUCE_ONLY',
+        maxFeesPercent,
+      }));
+    });
+    result = decorateBatchOrderResult(await authedSend('POST', '/trade/orders', {
+      accountId: creds.accountId,
+      orders,
+    }, creds), nonce);
+  } else {
+    result = await authedSend('POST', '/trade/order', {
+      accountId: creds.accountId,
+      ...parentBody,
+    }, creds);
+  }
   invalidatePrivateReadsAfterMutation(creds);
   accountStream(creds).markStale({ clearSnapshot: true });
   return result && typeof result === 'object'

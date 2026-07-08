@@ -60,6 +60,10 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function firstPresent(...values) {
+  return values.find(value => value !== undefined && value !== null && value !== '');
+}
+
 function normalizeHotstuffAddress(addr) {
   return isHotstuffAddress(addr) ? String(addr || '').trim() : null;
 }
@@ -635,7 +639,7 @@ export function buildHotstuffOrder({ market, side, amountUsd, amountBase, levera
   };
 }
 
-export function buildHotstuffTpslOrder({ market, closeSide, triggerPrice, size, kind }) {
+export function buildHotstuffTpslOrder({ market, closeSide, triggerPrice, size, kind, grouping = 'position' }) {
   const instrumentId = Number(market?._hotstuff?.instrumentId ?? market?.pair_index);
   if (!Number.isInteger(instrumentId) || instrumentId <= 0) throw new Error('Select a valid Hotstuff market');
   const normalizedKind = String(kind || '').toLowerCase();
@@ -656,8 +660,38 @@ export function buildHotstuffTpslOrder({ market, closeSide, triggerPrice, size, 
     triggerPx: formatHotstuffTriggerPrice(trigger, market),
     isMarket: true,
     tpsl: normalizedKind,
-    grouping: 'position',
+    grouping: grouping === 'normal' ? 'normal' : 'position',
   };
+}
+
+export function buildHotstuffAttachedTpslOrders({ market, entrySide, parentSize, takeProfit, stopLoss }) {
+  const closeSide = /short|sell|ask/i.test(String(entrySide)) ? 'bid' : 'ask';
+  const size = String(parentSize || '').trim();
+  if (!(Number(size) > 0)) return [];
+  const orders = [];
+  const tp = firstPresent(takeProfit, null);
+  const sl = firstPresent(stopLoss, null);
+  if (Number(tp) > 0) {
+    orders.push(buildHotstuffTpslOrder({
+      market,
+      closeSide,
+      triggerPrice: tp,
+      size,
+      kind: 'tp',
+      grouping: 'normal',
+    }));
+  }
+  if (Number(sl) > 0) {
+    orders.push(buildHotstuffTpslOrder({
+      market,
+      closeSide,
+      triggerPrice: sl,
+      size,
+      kind: 'sl',
+      grouping: 'normal',
+    }));
+  }
+  return orders;
 }
 
 export function hotstuffErrorMessage(error, fallback = 'Hotstuff request failed') {

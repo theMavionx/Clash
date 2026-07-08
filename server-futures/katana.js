@@ -603,6 +603,38 @@ function orderParams(input = {}, creds, options = {}) {
   return params;
 }
 
+function closeSideForEntry(side) {
+  return normalizeSide(side) === 'buy' ? 'sell' : 'buy';
+}
+
+function positiveOrderPrice(input = {}, ...keys) {
+  for (const key of keys) {
+    const n = Number(input?.[key]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+function conditionalTpslOrderParams(input = {}, creds, marketMeta, kind) {
+  const { OrderType } = sdk();
+  const triggerPrice = kind === 'tp'
+    ? positiveOrderPrice(input, 'takeProfit', 'take_profit', 'tp')
+    : positiveOrderPrice(input, 'stopLoss', 'stop_loss', 'sl');
+  if (!(triggerPrice > 0)) return null;
+  return orderParams({
+    symbol: input.symbol,
+    market: input.market,
+    side: closeSideForEntry(input.side),
+    quantity: input.quantity || input.amount,
+    type: kind === 'tp' ? OrderType.takeProfitMarket : OrderType.stopLossMarket,
+    triggerPrice,
+    triggerType: input.triggerType || input.trigger_type || 'last',
+    reduceOnly: true,
+    wallet: input.wallet,
+    delegatedKey: input.delegatedKey || input.delegated_key,
+  }, creds, { market: true, marketMeta });
+}
+
 function cancelParams(input = {}, creds) {
   const ids = input.orderIds || input.order_ids || input.orderId || input.order_id || input.clientOrderId || input.client_order_id;
   const params = {
@@ -979,6 +1011,55 @@ async function prepareOrder(credsInput, input = {}) {
   };
 }
 
+async function prepareOrderWithConditionalTpsl(credsInput, input = {}) {
+  const creds = credentials(credsInput);
+  const normalizedMarket = marketName(input.market || input.symbol);
+  let marketMeta = null;
+  try {
+    const markets = await getMarketInfo();
+    marketMeta = markets.find(m => String(m.market_name || m.market || '').toUpperCase() === normalizedMarket);
+  } catch (e) {
+    logKatana('market metadata unavailable for conditional order normalization', {
+      market: normalizedMarket,
+      error: e?.message || String(e),
+    });
+  }
+  const entryParams = orderParams(input, creds, {
+    market: String(input.type || input.orderType || '').toLowerCase() === 'market',
+    marketMeta,
+  });
+  const takeProfitParams = conditionalTpslOrderParams(input, creds, marketMeta, 'tp');
+  const stopLossParams = conditionalTpslOrderParams(input, creds, marketMeta, 'sl');
+  if (!takeProfitParams && !stopLossParams) {
+    throw Object.assign(new Error('Katana conditional TP/SL requires takeProfit or stopLoss'), { status: 400 });
+  }
+  logKatana('conditional order params normalized', {
+    entry: entryParams,
+    take_profit: takeProfitParams,
+    stop_loss: stopLossParams,
+  });
+  return {
+    endpoint: '/internal/orders/orderWithConditionalTpSlOrders',
+    method: 'POST',
+    order: {
+      parameters: entryParams,
+      typedData: await typedDataFor(creds, 'createOrder', entryParams),
+    },
+    conditionalTakeProfitOrder: takeProfitParams
+      ? {
+        parameters: takeProfitParams,
+        typedData: await typedDataFor(creds, 'createOrder', takeProfitParams),
+      }
+      : undefined,
+    conditionalStopLossOrder: stopLossParams
+      ? {
+        parameters: stopLossParams,
+        typedData: await typedDataFor(creds, 'createOrder', stopLossParams),
+      }
+      : undefined,
+  };
+}
+
 async function submitOrder(credsInput, body = {}) {
   const client = authenticatedClient(credsInput);
   const parameters = body.parameters || body.params;
@@ -986,6 +1067,52 @@ async function submitOrder(credsInput, body = {}) {
   if (!parameters || !signature) throw Object.assign(new Error('Katana order parameters and signature required'), { status: 400 });
   const result = await client.post('/orders', { parameters, signature });
   return { ...normalizeOrder(result), _raw: result };
+}
+
+async function submitOrderWithConditionalTpsl(credsInput, body = {}) {
+  const client = authenticatedClient(credsInput);
+  const order = body.order;
+  const conditionalTakeProfitOrder = body.conditionalTakeProfitOrder;
+  const conditionalStopLossOrder = body.conditionalStopLossOrder;
+  if (!order?.parameters || !String(order?.signature || '').trim()) {
+    throw Object.assign(new Error('Katana entry order parameters and signature required'), { status: 400 });
+  }
+  const payload = {
+    order: {
+      parameters: order.parameters,
+      signature: String(order.signature).trim(),
+    },
+    conditionalTakeProfitOrder: conditionalTakeProfitOrder?.parameters
+      ? {
+        parameters: conditionalTakeProfitOrder.parameters,
+        signature: String(conditionalTakeProfitOrder.signature || '').trim(),
+      }
+      : undefined,
+    conditionalStopLossOrder: conditionalStopLossOrder?.parameters
+      ? {
+        parameters: conditionalStopLossOrder.parameters,
+        signature: String(conditionalStopLossOrder.signature || '').trim(),
+      }
+      : undefined,
+  };
+  if (payload.conditionalTakeProfitOrder && !payload.conditionalTakeProfitOrder.signature) {
+    throw Object.assign(new Error('Katana take-profit signature required'), { status: 400 });
+  }
+  if (payload.conditionalStopLossOrder && !payload.conditionalStopLossOrder.signature) {
+    throw Object.assign(new Error('Katana stop-loss signature required'), { status: 400 });
+  }
+  const result = await client.post('/internal/orders/orderWithConditionalTpSlOrders', payload);
+  return {
+    ok: true,
+    order: result?.order ? { ...normalizeOrder(result.order), _raw: result.order } : null,
+    conditionalTakeProfitOrder: result?.conditionalTakeProfitOrder
+      ? { ...normalizeOrder(result.conditionalTakeProfitOrder), _raw: result.conditionalTakeProfitOrder }
+      : null,
+    conditionalStopLossOrder: result?.conditionalStopLossOrder
+      ? { ...normalizeOrder(result.conditionalStopLossOrder), _raw: result.conditionalStopLossOrder }
+      : null,
+    _raw: result,
+  };
 }
 
 async function prepareCancelOrders(credsInput, input = {}) {
@@ -1051,9 +1178,11 @@ module.exports = {
   prepareCancelOrders,
   prepareDelegatedKey,
   prepareOrder,
+  prepareOrderWithConditionalTpsl,
   referralUrl,
   submitAssociateWallet,
   submitCancelOrders,
   submitDelegatedKey,
   submitOrder,
+  submitOrderWithConditionalTpsl,
 };

@@ -346,6 +346,48 @@ function builderOrderParams(approval) {
   return builder ? { builder } : {};
 }
 
+function hyperliquidTpslOptionValue(options, ...keys) {
+  if (!options || typeof options !== 'object') return null;
+  for (const key of keys) {
+    const value = num(options[key]);
+    if (value > 0) return value;
+  }
+  return null;
+}
+
+function hyperliquidOrderWithAttachedTpsl({ entryOrder, market, side, size, takeProfit, stopLoss }) {
+  const closeBuy = !isLongSide(side);
+  const orders = [entryOrder];
+  if (takeProfit) {
+    const price = formatHyperliquidPrice(takeProfit);
+    orders.push({
+      a: market._hyperliquid.index,
+      b: closeBuy,
+      p: price,
+      s: size,
+      r: true,
+      t: { trigger: { isMarket: true, triggerPx: price, tpsl: 'tp' } },
+      c: makeHyperliquidCloid(),
+    });
+  }
+  if (stopLoss) {
+    const price = formatHyperliquidPrice(stopLoss);
+    orders.push({
+      a: market._hyperliquid.index,
+      b: closeBuy,
+      p: price,
+      s: size,
+      r: true,
+      t: { trigger: { isMarket: true, triggerPx: price, tpsl: 'sl' } },
+      c: makeHyperliquidCloid(),
+    });
+  }
+  return {
+    orders,
+    grouping: orders.length > 1 ? 'normalTpsl' : 'na',
+  };
+}
+
 async function readHyperliquidBalances(walletAddr, opts = {}) {
   const info = createHyperliquidInfoClient();
   const [perpState, spotState, abstractionMode] = await Promise.all([
@@ -1239,7 +1281,7 @@ export function useHyperliquid() {
 
   const setMarginMode = useCallback(async () => ({ success: true }), []);
 
-  const placeMarketOrder = useCallback(async (symbol, side, collateralUsdc, slippage = '0.5', leverage = 1) => {
+  const placeMarketOrder = useCallback(async (symbol, side, collateralUsdc, slippage = '0.5', leverage = 1, options = {}) => {
     if (tradeInFlightRef.current) return { error: 'Trade already in progress' };
     tradeInFlightRef.current = true;
     setLoading(true);
@@ -1265,17 +1307,19 @@ export function useHyperliquid() {
       const price = mark * (isBuy ? (1 + slip) : (1 - slip));
       const size = formatHyperliquidSize((collateral * lev) / mark, market);
       if (!(num(size) > 0)) throw new Error('Order size is below the market lot size');
+      const takeProfit = hyperliquidTpslOptionValue(options, 'take_profit', 'takeProfit', 'tp');
+      const stopLoss = hyperliquidTpslOptionValue(options, 'stop_loss', 'stopLoss', 'sl');
+      const entryOrder = {
+        a: market._hyperliquid.index,
+        b: isBuy,
+        p: formatHyperliquidPrice(price, { round: isBuy ? 'up' : 'down' }),
+        s: size,
+        r: false,
+        t: { limit: { tif: 'FrontendMarket' } },
+        c: makeHyperliquidCloid(),
+      };
       const result = await client.order({
-        orders: [{
-          a: market._hyperliquid.index,
-          b: isBuy,
-          p: formatHyperliquidPrice(price, { round: isBuy ? 'up' : 'down' }),
-          s: size,
-          r: false,
-          t: { limit: { tif: 'FrontendMarket' } },
-          c: makeHyperliquidCloid(),
-        }],
-        grouping: 'na',
+        ...hyperliquidOrderWithAttachedTpsl({ entryOrder, market, side, size, takeProfit, stopLoss }),
         ...builderOrderParams(builderApprovalResult),
       });
       const parsed = parseHyperliquidOrderResponse(result);
@@ -1293,7 +1337,7 @@ export function useHyperliquid() {
     }
   }, [findMarket, ensureMarkets, tradingExchange, ensurePerpUsdc, ensureBuilderApproved, fetchAccount, syncRewards]);
 
-  const placeLimitOrder = useCallback(async (symbol, side, limitPrice, collateralUsdc, tif = 'GTC', leverage = 1) => {
+  const placeLimitOrder = useCallback(async (symbol, side, limitPrice, collateralUsdc, tif = 'GTC', leverage = 1, options = {}) => {
     if (tradeInFlightRef.current) return { error: 'Trade already in progress' };
     tradeInFlightRef.current = true;
     setLoading(true);
@@ -1318,17 +1362,19 @@ export function useHyperliquid() {
         : String(tif || 'GTC').toUpperCase() === 'ALO'
         ? 'Alo'
         : 'Gtc';
+      const takeProfit = hyperliquidTpslOptionValue(options, 'take_profit', 'takeProfit', 'tp');
+      const stopLoss = hyperliquidTpslOptionValue(options, 'stop_loss', 'stopLoss', 'sl');
+      const entryOrder = {
+        a: market._hyperliquid.index,
+        b: isLongSide(side),
+        p: formatHyperliquidPrice(limit),
+        s: size,
+        r: false,
+        t: { limit: { tif: normalizedTif } },
+        c: makeHyperliquidCloid(),
+      };
       const result = await client.order({
-        orders: [{
-          a: market._hyperliquid.index,
-          b: isLongSide(side),
-          p: formatHyperliquidPrice(limit),
-          s: size,
-          r: false,
-          t: { limit: { tif: normalizedTif } },
-          c: makeHyperliquidCloid(),
-        }],
-        grouping: 'na',
+        ...hyperliquidOrderWithAttachedTpsl({ entryOrder, market, side, size, takeProfit, stopLoss }),
         ...builderOrderParams(builderApprovalResult),
       });
       const parsed = parseHyperliquidOrderResponse(result);

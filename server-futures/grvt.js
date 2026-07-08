@@ -67,6 +67,7 @@ function rows(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.result)) return payload.result;
   if (Array.isArray(payload?.r)) return payload.r;
+  if (Array.isArray(payload?.o)) return payload.o;
   if (Array.isArray(payload?.results)) return payload.results;
   if (Array.isArray(payload?.data)) return payload.data;
   if (Array.isArray(payload?.orders)) return payload.orders;
@@ -118,8 +119,8 @@ function normalizeTickerFundingRate(value) {
   return n / 1_000_000;
 }
 
-async function post(base, endpoint, body = {}, headers = {}, apiMode = 'full') {
-  const r = await fetch(`${base}/${apiMode}/v1/${endpoint}`, {
+async function post(base, endpoint, body = {}, headers = {}, apiMode = 'full', apiVersion = 'v1') {
+  const r = await fetch(`${base}/${apiMode}/${apiVersion}/${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body || {}),
@@ -140,6 +141,18 @@ async function tradePost(endpoint, fullBody = {}, liteBody = fullBody, headers =
   } catch (liteError) {
     try {
       return await post(GRVT_TRADES_API, endpoint, fullBody, headers, 'full');
+    } catch {
+      throw liteError;
+    }
+  }
+}
+
+async function tradePostV2(endpoint, fullBody = {}, liteBody = fullBody, headers = {}) {
+  try {
+    return await post(GRVT_TRADES_API, endpoint, liteBody, headers, 'lite', 'v2');
+  } catch (liteError) {
+    try {
+      return await post(GRVT_TRADES_API, endpoint, fullBody, headers, 'full', 'v2');
     } catch {
       throw liteError;
     }
@@ -695,6 +708,55 @@ async function submitSignedOrder(credsInput, signedOrderInput) {
   };
 }
 
+async function submitSignedOrdersBulk(credsInput, signedOrdersInput, opts = {}) {
+  if (!builderConfigured()) throw new Error('GRVT builder account is not configured');
+  const creds = await resolveCreds(credsInput);
+  const inputOrders = Array.isArray(signedOrdersInput)
+    ? signedOrdersInput
+    : (Array.isArray(signedOrdersInput?.orders || signedOrdersInput?.o)
+      ? (signedOrdersInput.orders || signedOrdersInput.o)
+      : []);
+  const orders = inputOrders.map(order => normalizeSignedOrder(order));
+  if (!orders.length) throw new Error('GRVT bulk order request requires orders');
+  for (const order of orders) {
+    if (String(order.sub_account_id) !== String(creds.subAccountId)) {
+      throw new Error('GRVT signed order subaccount does not match saved credentials');
+    }
+  }
+  const headers = authHeaders(creds);
+  const ttl = String(opts.time_to_live_ms ?? opts.tt ?? '500');
+  const full = {
+    sub_account_id: String(creds.subAccountId),
+    orders,
+    order_ids: [],
+    client_order_ids: [],
+    time_to_live_ms: ttl,
+  };
+  const lite = {
+    sa: String(creds.subAccountId),
+    o: orders.map(toLiteOrder),
+    oi: [],
+    co: [],
+    tt: ttl,
+  };
+  const payload = await tradePostV2('bulk_orders', full, lite, headers);
+  const result = resultOf(payload);
+  const created = rows(result?.orders || result?.o || result);
+  return {
+    success: true,
+    orders: orders.map((order, index) => {
+      const createdOrder = created[index] || {};
+      return {
+        order_id: createdOrder.order_id || createdOrder.oi || order.order_id || null,
+        client_order_id: createdOrder.metadata?.client_order_id || createdOrder.m?.co || order.metadata.client_order_id,
+        status: createdOrder.state?.status || createdOrder.s1?.s || createdOrder.status || 'pending',
+        result: createdOrder,
+      };
+    }),
+    result,
+  };
+}
+
 async function setInitialLeverage(credsInput, opts = {}) {
   const creds = await resolveCreds(credsInput);
   const instrument = String(opts.instrument || opts.i || '').trim();
@@ -1009,6 +1071,7 @@ module.exports = {
   getBuilderFillHistory,
   importFillsForPlayer,
   submitSignedOrder,
+  submitSignedOrdersBulk,
   setInitialLeverage,
   setPositionConfig,
   cancelOrder,

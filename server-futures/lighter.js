@@ -704,6 +704,12 @@ const LIGHTER_ORDER_TYPES = Object.freeze({
   take_profit_limit: 5,
 });
 
+const LIGHTER_GROUPING_TYPES = Object.freeze({
+  one_triggers_the_other: 1,
+  one_cancels_the_other: 2,
+  one_triggers_oco: 3,
+});
+
 function normalizeOrderType(input = {}) {
   const raw = String(input.orderType || input.order_type || '').toLowerCase().replace(/[-\s]+/g, '_');
   if (raw === 'limit') return { name: 'limit', value: LIGHTER_ORDER_TYPES.limit, trigger: false, limit: true };
@@ -724,6 +730,60 @@ function lighterOrderTypeName(value) {
   return 'limit';
 }
 
+function nextClientOrderIndex(offset = 0) {
+  return (Date.now() % 1000000000000) + Math.floor(Math.random() * 1000) + Number(offset || 0);
+}
+
+function positiveNumberFrom(input = {}, ...keys) {
+  for (const key of keys) {
+    const n = Number(input?.[key]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+function buildSignedOrderPayload({
+  market,
+  clientOrderIndex,
+  baseAmount,
+  referencePrice,
+  isAsk,
+  orderType,
+  reduceOnly = false,
+  triggerPriceUi = 0,
+  slippage = 0.005,
+}) {
+  const triggerPrice = orderType.trigger ? integerScale(triggerPriceUi, market.price_decimals) : 0;
+  const signerPrice = !orderType.limit
+    ? Number(referencePrice) * (isAsk ? (1 - slippage) : (1 + slippage))
+    : Number(referencePrice);
+  return {
+    market_index: Number(market.market_id),
+    client_order_index: Number(clientOrderIndex),
+    base_amount: Number(baseAmount),
+    price: integerScale(signerPrice, market.price_decimals),
+    is_ask: !!isAsk,
+    order_type: orderType.value,
+    time_in_force: orderType.limit ? 1 : 0,
+    reduce_only: !!reduceOnly,
+    trigger_price: triggerPrice,
+    order_expiry: orderType.trigger ? -1 : (orderType.limit ? -1 : 0),
+    _ui_price: Number(referencePrice),
+    _ui_trigger_price: orderType.trigger ? Number(triggerPriceUi) : null,
+    _signer_price: signerPrice,
+  };
+}
+
+function stripSignedOrderMeta(order = {}) {
+  const {
+    _ui_price,
+    _ui_trigger_price,
+    _signer_price,
+    ...payload
+  } = order;
+  return payload;
+}
+
 function logSignerResult(label, data = {}) {
   const response = data?.result?.response || data?.response || null;
   console.log(`[lighter] ${label}`, JSON.stringify({
@@ -737,10 +797,120 @@ function logSignerResult(label, data = {}) {
     leverage: data.leverage ?? null,
     tx_type: data.result?.tx_type ?? data.tx_type ?? null,
     tx_hash: data.result?.tx_hash ?? data.tx_hash ?? null,
+    grouped: data.grouped ?? null,
+    order_count: data.order_count ?? null,
     response_code: response && typeof response === 'object' ? response.code ?? null : null,
     response_status: response && typeof response === 'object' ? response.status ?? null : null,
     response_message: response && typeof response === 'object' ? response.message ?? response.error ?? null : null,
   }));
+}
+
+async function createGroupedOrder({
+  creds,
+  market,
+  baseAmount,
+  orderType,
+  isAsk,
+  referencePrice,
+  triggerPriceUi = 0,
+  slippage,
+  input = {},
+}) {
+  const takeProfitUi = positiveNumberFrom(input, 'takeProfit', 'take_profit', 'tp');
+  const stopLossUi = positiveNumberFrom(input, 'stopLoss', 'stop_loss', 'sl');
+  const childCount = (takeProfitUi > 0 ? 1 : 0) + (stopLossUi > 0 ? 1 : 0);
+  if (!childCount) return null;
+
+  const baseClientOrderIndex = Number.isInteger(Number(input.clientOrderIndex))
+    ? Number(input.clientOrderIndex)
+    : nextClientOrderIndex(0);
+  const entryOrder = buildSignedOrderPayload({
+    market,
+    clientOrderIndex: baseClientOrderIndex,
+    baseAmount,
+    referencePrice,
+    isAsk,
+    orderType,
+    reduceOnly: false,
+    triggerPriceUi,
+    slippage,
+  });
+
+  const closeIsAsk = !isAsk;
+  const childSlippage = Math.max(0.0005, Math.min(0.05, Number(input.tpslSlippage || input.tpsl_slippage || 0.01)));
+  const childOrders = [];
+  if (takeProfitUi > 0) {
+    childOrders.push(buildSignedOrderPayload({
+      market,
+      clientOrderIndex: baseClientOrderIndex + childOrders.length + 1,
+      baseAmount,
+      referencePrice: takeProfitUi,
+      isAsk: closeIsAsk,
+      orderType: { name: 'take_profit', value: LIGHTER_ORDER_TYPES.take_profit, trigger: true, limit: false },
+      reduceOnly: true,
+      triggerPriceUi: takeProfitUi,
+      slippage: childSlippage,
+    }));
+  }
+  if (stopLossUi > 0) {
+    childOrders.push(buildSignedOrderPayload({
+      market,
+      clientOrderIndex: baseClientOrderIndex + childOrders.length + 1,
+      baseAmount,
+      referencePrice: stopLossUi,
+      isAsk: closeIsAsk,
+      orderType: { name: 'stop_loss', value: LIGHTER_ORDER_TYPES.stop_loss, trigger: true, limit: false },
+      reduceOnly: true,
+      triggerPriceUi: stopLossUi,
+      slippage: childSlippage,
+    }));
+  }
+
+  const groupingType = childOrders.length > 1
+    ? LIGHTER_GROUPING_TYPES.one_triggers_oco
+    : LIGHTER_GROUPING_TYPES.one_triggers_the_other;
+  const orders = [entryOrder, ...childOrders];
+  const result = await runSigner('create_grouped_orders', {
+    ...creds,
+    grouping_type: groupingType,
+    orders: orders.map(stripSignedOrderMeta),
+    integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
+    integrator_taker_fee: LIGHTER_BUILDER_FEE_VALUE,
+    integrator_maker_fee: LIGHTER_BUILDER_FEE_VALUE,
+  });
+  logSignerResult('grouped order submitted', {
+    account_index: creds.account_index,
+    market: market.symbol,
+    market_id: Number(market.market_id),
+    side: isAsk ? 'ask' : 'bid',
+    order_type: orderType.name,
+    base_amount: decimalFromInteger(baseAmount, market.size_decimals),
+    price: referencePrice,
+    grouped: groupingType,
+    order_count: orders.length,
+    result,
+  });
+  return {
+    ok: true,
+    status: 'submitted',
+    market: market.symbol,
+    market_id: Number(market.market_id),
+    client_order_index: baseClientOrderIndex,
+    base_amount: decimalFromInteger(baseAmount, market.size_decimals),
+    price: referencePrice,
+    trigger_price: orderType.trigger ? triggerPriceUi : null,
+    order_type: orderType.name,
+    reduce_only: false,
+    signer_price: entryOrder._signer_price,
+    builder_fee_value: LIGHTER_BUILDER_FEE_VALUE,
+    integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
+    attached_tpsl: true,
+    grouping_type: groupingType,
+    child_order_count: childOrders.length,
+    take_profit: takeProfitUi > 0 ? takeProfitUi : null,
+    stop_loss: stopLossUi > 0 ? stopLossUi : null,
+    ...result,
+  };
 }
 
 async function createOrder(input = {}) {
@@ -762,23 +932,37 @@ async function createOrder(input = {}) {
   const signerPrice = !orderType.limit
     ? referencePrice * (isAsk ? (1 - slippage) : (1 + slippage))
     : referencePrice;
-  const price = integerScale(signerPrice, market.price_decimals);
-  const triggerPrice = orderType.trigger ? integerScale(triggerPriceUi, market.price_decimals) : 0;
+  if (!orderType.trigger && !input.reduceOnly && !input.reduce_only) {
+    const grouped = await createGroupedOrder({
+      creds,
+      market,
+      baseAmount,
+      orderType,
+      isAsk,
+      referencePrice,
+      triggerPriceUi,
+      slippage,
+      input,
+    });
+    if (grouped) return grouped;
+  }
   const clientOrderIndex = Number.isInteger(Number(input.clientOrderIndex))
     ? Number(input.clientOrderIndex)
-    : (Date.now() % 1000000000000) + Math.floor(Math.random() * 1000);
+    : nextClientOrderIndex();
+  const signedOrder = buildSignedOrderPayload({
+    market,
+    clientOrderIndex,
+    baseAmount,
+    referencePrice,
+    isAsk,
+    orderType,
+    reduceOnly: !!input.reduceOnly || !!input.reduce_only,
+    triggerPriceUi,
+    slippage,
+  });
   const result = await runSigner('create_order', {
     ...creds,
-    market_index: Number(market.market_id),
-    client_order_index: clientOrderIndex,
-    base_amount: baseAmount,
-    price,
-    is_ask: isAsk,
-    order_type: orderType.value,
-    time_in_force: orderType.limit ? 1 : 0,
-    reduce_only: !!input.reduceOnly || !!input.reduce_only,
-    trigger_price: triggerPrice,
-    order_expiry: orderType.trigger ? -1 : (orderType.limit ? -1 : 0),
+    ...stripSignedOrderMeta(signedOrder),
     integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
     integrator_taker_fee: LIGHTER_BUILDER_FEE_VALUE,
     integrator_maker_fee: LIGHTER_BUILDER_FEE_VALUE,

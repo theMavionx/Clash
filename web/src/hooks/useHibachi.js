@@ -49,6 +49,23 @@ function firstPresent(...values) {
   return values.find(value => value !== undefined && value !== null && value !== '');
 }
 
+function hibachiOpenTpslPayload(options = {}) {
+  const takeProfit = firstPresent(options.takeProfit, options.take_profit, options.tp);
+  const stopLoss = firstPresent(options.stopLoss, options.stop_loss, options.sl);
+  const payload = {};
+  if (num(takeProfit) > 0) {
+    payload.takeProfit = takeProfit;
+    payload.take_profit = takeProfit;
+  }
+  if (num(stopLoss) > 0) {
+    payload.stopLoss = stopLoss;
+    payload.stop_loss = stopLoss;
+  }
+  return Object.keys(payload).length
+    ? { attachedTpsl: true, attached_tpsl: true, ...payload }
+    : {};
+}
+
 function hibachiFreeCollateral(account = {}) {
   return Math.max(0, num(firstPresent(
     account.available_to_spend,
@@ -147,6 +164,9 @@ function waitMs(ms) {
 }
 
 function hibachiOrderResultStatus(result) {
+  const parent = Array.isArray(result?.orders)
+    ? result.orders[0]
+    : result?._clash_parent_order;
   return String(
     result?.status
       ?? result?.orderStatus
@@ -154,6 +174,9 @@ function hibachiOrderResultStatus(result) {
       ?? result?.result?.status
       ?? result?.result?.orderStatus
       ?? result?.result?.order_status
+      ?? parent?.status
+      ?? parent?.orderStatus
+      ?? parent?.order_status
       ?? '',
   ).toLowerCase();
 }
@@ -1112,7 +1135,7 @@ export function useHibachi() {
     setDataReady(false);
   }, []);
 
-  const placeMarketOrder = useCallback(async (symbol, side, amount, _slippage = '0.5', leverage = 1) => {
+  const placeMarketOrder = useCallback(async (symbol, side, amount, _slippage = '0.5', leverage = 1, options = {}) => {
     setLoading(true);
     setError(null);
     try {
@@ -1137,11 +1160,13 @@ export function useHibachi() {
       const marketSymbol = market?.market_name || `${symbolOf(symbol)}/USDT-P`;
       const beforePosition = findHibachiPosition(positionsRef.current, marketSymbol, side);
       const beforeAmount = hibachiPositionAmount(beforePosition);
+      const openTpslPayload = hibachiOpenTpslPayload(options);
       const result = await authedPost('/api/futures/hibachi/order', {
         symbol: marketSymbol,
         side,
         quantity: qty,
         orderType: 'market',
+        ...openTpslPayload,
       });
       if (hibachiOrderResultRejected(result)) {
         throw new Error(`Hibachi rejected the order (${hibachiOrderResultStatus(result) || 'rejected'}).`);
@@ -1155,16 +1180,18 @@ export function useHibachi() {
         previousAmount: beforeAmount,
         closeMode: false,
       });
+      if (openTpslPayload.attachedTpsl) await fetchOrders({ forceLive: true });
       schedulePositionReconcile({ acceptEmptySnapshot: false });
       syncRewards('market order');
+      const warning = result?._clash_tpsl_warning ? ` TP/SL warning: ${result._clash_tpsl_warning}` : '';
       return {
         success: true,
         raw: result,
         order_id: result?.orderId || result?.result?.orderId,
         status: confirmed.confirmed ? 'open' : 'submitted',
         info: confirmed.confirmed
-          ? `${side.toUpperCase()} ${symbolOf(symbol)} opened.`
-          : `${side.toUpperCase()} ${symbolOf(symbol)} submitted. Waiting for Hibachi fill.`,
+          ? `${side.toUpperCase()} ${symbolOf(symbol)} opened.${warning}`
+          : `${side.toUpperCase()} ${symbolOf(symbol)} submitted. Waiting for Hibachi fill.${warning}`,
       };
     } catch (e) {
       const msg = hibachiErrorMessage(e, 'Hibachi market order failed');
@@ -1173,9 +1200,9 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, prices, authedPost, syncRewards, schedulePositionReconcile, waitForLivePositionAmount]);
+  }, [assertMarketTradable, findAnyMarket, findMarket, fetchMarkets, prices, authedPost, fetchOrders, syncRewards, schedulePositionReconcile, waitForLivePositionAmount]);
 
-  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
+  const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1, options = {}) => {
     setLoading(true);
     setError(null);
     try {
@@ -1199,12 +1226,14 @@ export function useHibachi() {
       }
       const qty = (requestedMargin * Math.max(1, num(leverage, 1))) / limit;
       const marketSymbol = market?.market_name || `${symbolOf(symbol)}/USDT-P`;
+      const openTpslPayload = hibachiOpenTpslPayload(options);
       const result = await authedPost('/api/futures/hibachi/order', {
         symbol: marketSymbol,
         side,
         quantity: qty,
         price: limit,
         orderType: 'limit',
+        ...openTpslPayload,
       });
       if (hibachiOrderResultRejected(result)) {
         throw new Error(`Hibachi rejected the limit order (${hibachiOrderResultStatus(result) || 'rejected'}).`);
@@ -1218,14 +1247,15 @@ export function useHibachi() {
         throw new Error(`Hibachi rejected the limit order${reason}`);
       }
       if (String(orderStatus?.status || '').toLowerCase() === 'filled') syncRewards('limit fill');
+      const warning = result?._clash_tpsl_warning ? ` TP/SL warning: ${result._clash_tpsl_warning}` : '';
       return {
         success: true,
         raw: result,
         order_id: orderId || result?.orderId || result?.result?.orderId,
         status: String(orderStatus?.status || '').toLowerCase() === 'open' ? 'open' : 'submitted',
         info: String(orderStatus?.status || '').toLowerCase() === 'open'
-          ? `${side.toUpperCase()} ${symbolOf(symbol)} limit placed.`
-          : `${side.toUpperCase()} ${symbolOf(symbol)} limit submitted. Waiting for Hibachi confirmation.`,
+          ? `${side.toUpperCase()} ${symbolOf(symbol)} limit placed.${warning}`
+          : `${side.toUpperCase()} ${symbolOf(symbol)} limit submitted. Waiting for Hibachi confirmation.${warning}`,
       };
     } catch (e) {
       const msg = hibachiErrorMessage(e, 'Hibachi limit order failed');
