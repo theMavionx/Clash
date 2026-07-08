@@ -453,6 +453,7 @@ export function usePacifica() {
   const claimGoldTimersRef = useRef([]);
   const signedOpInFlightRef = useRef(new Map());
   const agentSyncInFlightRef = useRef(new Map());
+  const agentSyncSkipLoggedRef = useRef(new Set());
   const activatedRef = useRef(false);
   const activatingRef = useRef(null);
   const referralClaimInFlightRef = useRef(null);
@@ -539,19 +540,35 @@ export function usePacifica() {
   }, [player?.token]);
 
   const syncPacificaAgentToServer = useCallback(async () => {
-    if (!walletAddr || !signWithAgentKey) return false;
+    const skipLog = (reason) => {
+      const key = `${reason}:${walletAddr || 'no-wallet'}`;
+      if (agentSyncSkipLoggedRef.current.has(key)) return;
+      agentSyncSkipLoggedRef.current.add(key);
+      console.warn('[Pacifica] agent sync skipped', { reason, wallet: walletAddr || null });
+    };
+    if (!walletAddr) {
+      skipLog('no wallet');
+      return false;
+    }
+    if (!signWithAgentKey) {
+      skipLog('agent signer unavailable');
+      return false;
+    }
     const token = tokenRef.current || window._playerToken || null;
     if (!token) {
       console.warn('[Pacifica] agent sync skipped: no game token');
       return false;
     }
     const proof = signWithAgentKey('clash_agent_sync', { account: walletAddr });
-    if (!proof?.agent_wallet || !proof?.signature) return false;
+    if (!proof?.agent_wallet || !proof?.signature) {
+      skipLog('no local agent key');
+      return false;
+    }
     const key = `${walletAddr}:${proof.agent_wallet}:${token}`;
     const existing = agentSyncInFlightRef.current.get(key);
     if (existing) return existing;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2500);
+    const timeout = setTimeout(() => controller.abort(), 8000);
     const run = fetch(`${GAME_API}/pacifica/agent/sync`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'pacifica' },

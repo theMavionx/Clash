@@ -8203,7 +8203,21 @@ function getPlayerByWalletAndDexAnyForm(wallet, dex) {
        FROM players p
        WHERE p.wallet IN (${placeholders}) AND p.dex = ?
        UNION ALL
-       SELECT a.player_id AS id, 1 AS source_priority
+       SELECT i.player_id AS id, 1 AS source_priority
+       FROM player_auth_identities i
+       JOIN players p ON p.id = i.player_id
+       WHERE i.type = ? AND i.identifier IN (${placeholders}) AND p.dex = ?
+       UNION ALL
+       SELECT w.player_id AS id, 2 AS source_priority
+       FROM player_wallets w
+       JOIN players p ON p.id = w.player_id
+       WHERE w.chain_type = ? AND w.address IN (${placeholders}) AND p.dex = ?
+       UNION ALL
+       SELECT a.player_id AS id, 3 AS source_priority
+       FROM player_dex_accounts a
+       WHERE a.chain_type = ? AND a.wallet_address IN (${placeholders}) AND a.dex = ? AND a.status = 'ready'
+       UNION ALL
+       SELECT a.player_id AS id, 9 AS source_priority
        FROM player_dex_accounts a
        WHERE a.chain_type = ? AND a.wallet_address IN (${placeholders}) AND a.dex = ?
      ),
@@ -8233,8 +8247,15 @@ function getPlayerByWalletAndDexAnyForm(wallet, dex) {
        COALESCE(last_seen_at, created_at) DESC,
        created_at ASC,
        id ASC
-     LIMIT 1`
-  ).get(...candidates, dex, chainType, ...candidates, dex, dex);
+      LIMIT 1`
+  ).get(
+    ...candidates, dex,
+    `${chainType}_wallet`, ...candidates, dex,
+    chainType, ...candidates, dex,
+    chainType, ...candidates, dex,
+    chainType, ...candidates, dex,
+    dex,
+  );
 }
 
 // Return ALL DEX-specific accounts a wallet owns. Used by the wallet-only
@@ -8752,13 +8773,71 @@ function dexAcceptsWallet(dex, wallet) {
   return walletChainType(wallet) === required;
 }
 
+function resolveKnownDexWalletForPlayerId(playerId, dex) {
+  const normalizedDex = String(dex || '').toLowerCase();
+  if (!playerId || !VALID_DEXES.has(normalizedDex)) return '';
+  const requiredChain = DEX_REQUIRED_CHAIN[normalizedDex] || null;
+  const tryWallet = (wallet) => {
+    const raw = String(wallet || '').trim();
+    if (!raw || !dexAcceptsWallet(normalizedDex, raw)) return '';
+    return canonicalWalletIdentifier(raw);
+  };
+  try {
+    const row = db.db.prepare(`
+      SELECT wallet_address
+      FROM player_dex_accounts
+      WHERE player_id = ? AND dex = ? AND status = 'ready'
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `).get(playerId, normalizedDex);
+    const wallet = tryWallet(row?.wallet_address);
+    if (wallet) return wallet;
+  } catch {}
+  try {
+    const row = db.db.prepare(
+      'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+    ).get(playerId, normalizedDex);
+    const wallet = tryWallet(row?.wallet);
+    if (wallet) return wallet;
+  } catch {}
+  if (requiredChain) {
+    try {
+      const row = db.db.prepare(`
+        SELECT address
+        FROM player_wallets
+        WHERE player_id = ? AND chain_type = ?
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      `).get(playerId, requiredChain);
+      const wallet = tryWallet(row?.address);
+      if (wallet) return wallet;
+    } catch {}
+  }
+  return '';
+}
+
 function upsertPlayerDexAccountFromLoginWallet(playerId, dex, wallet, status = 'ready', metadata = {}) {
   const venueWallet = dexAcceptsWallet(dex, wallet) ? canonicalWalletIdentifier(wallet) : '';
   const meta = { ...(metadata || {}) };
   if (!venueWallet && wallet && isValidWallet(wallet)) {
-    meta.__clear_wallet = true;
     meta.ignored_wallet = canonicalWalletIdentifier(wallet);
     meta.ignored_chain_type = walletChainType(wallet);
+    const existingVenueWallet = resolveKnownDexWalletForPlayerId(playerId, dex);
+    if (existingVenueWallet) {
+      upsertPlayerDexAccount(
+        playerId,
+        dex,
+        existingVenueWallet,
+        status,
+        {
+          ...meta,
+          preserved_wallet: existingVenueWallet,
+          preserved_because: 'login_wallet_chain_mismatch',
+        },
+      );
+      return;
+    }
+    meta.__clear_wallet = true;
   }
   upsertPlayerDexAccount(
     playerId,
@@ -8775,8 +8854,8 @@ function resolveClaimWalletForDex(player, dex, currentWallet = null) {
     const row = db.db.prepare(`
       SELECT wallet_address
       FROM player_dex_accounts
-      WHERE player_id = ? AND dex = ?
-      ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
+      WHERE player_id = ? AND dex = ? AND status = 'ready'
+      ORDER BY updated_at DESC, id DESC
       LIMIT 1
     `).get(player.id, normalizedDex);
     if (row && dexAcceptsWallet(normalizedDex, row.wallet_address)) {
@@ -13986,6 +14065,16 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       `).run(req.player.id, wallet);
     } catch (e) {
       console.warn('[claim-gold flash] reward wallet upsert failed:', e.message);
+    }
+  }
+  if (wallet && dexAcceptsWallet(dex, wallet)) {
+    try {
+      upsertPlayerDexAccount(req.player.id, dex, wallet, 'ready', {
+        source: 'claim_gold_wallet_repair',
+        repaired_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn(`[claim-gold ${dex}] dex account repair failed:`, e.message);
     }
   }
   const recordClaimTelemetry = (event = {}) => {

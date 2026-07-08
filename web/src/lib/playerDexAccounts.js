@@ -44,6 +44,30 @@ export function playerLoginWallet(player, chainType = '') {
   return wallet;
 }
 
+export function playerLinkedWallet(player, chainType = '') {
+  const chain = String(chainType || '').toLowerCase();
+  const rows = Array.isArray(player?.wallets) ? player.wallets : [];
+  for (const row of rows) {
+    if (chain && String(row?.chain_type || '').toLowerCase() !== chain) continue;
+    const wallet = String(row?.address || '').trim();
+    if (chain === 'evm') {
+      const normalized = normalizeEvmAddress(wallet);
+      if (normalized) return normalized;
+    } else if (chain === 'solana') {
+      const normalized = normalizeSolanaAddress(wallet);
+      if (normalized) return normalized;
+    } else if (chain === 'aptos') {
+      const normalized = normalizeAptosAddress(wallet);
+      if (normalized) return normalized;
+    } else if (wallet) {
+      return wallet;
+    }
+  }
+  return '';
+}
+
 export function registeredDexWallet(player, dex, chainType) {
-  return playerDexWallet(player, dex, chainType) || playerLoginWallet(player, chainType);
+  return playerDexWallet(player, dex, chainType)
+    || playerLinkedWallet(player, chainType)
+    || playerLoginWallet(player, chainType);
 }
