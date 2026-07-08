@@ -2557,6 +2557,13 @@ function mountNftV3Endpoints(router, ctx) {
 
   router.get('/nft/owned/:chain/:address', async (req, res) => {
     try {
+      const requestedCollection = String(req.query?.collection || req.query?.collectionSlug || '').trim();
+      if (requestedCollection) {
+        const collectionSlug = normalizeBridgeCollectionSlug(requestedCollection);
+        if (!BRIDGE_COLLECTIONS[collectionSlug]) return res.status(404).json({ error: 'collection not found' });
+        return handleCollectionOwnedLookup(req, res, collectionSlug);
+      }
+
       const ip = req.ip || 'unknown';
       const rl = readLimit(ip);
       if (!rl.ok) return res.status(429).json({ error: 'rate limited' });
