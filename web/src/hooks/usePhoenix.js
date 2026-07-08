@@ -1769,6 +1769,63 @@ function priceToTicks(price, market) {
   }));
 }
 
+function phoenixTpslOptionValue(options, snakeKey, camelKey, shortKey) {
+  const value = options?.[snakeKey] ?? options?.[camelKey] ?? options?.[shortKey];
+  return value == null || value === '' ? null : value;
+}
+
+function phoenixBuildOpenLimitTpslTriggers({ market, side, takeProfit, stopLoss }) {
+  const tp = takeProfit ? Number(takeProfit) : null;
+  const sl = stopLoss ? Number(stopLoss) : null;
+  if (tp != null && (!Number.isFinite(tp) || tp <= 0)) throw new Error('Enter a positive Phoenix TP price');
+  if (sl != null && (!Number.isFinite(sl) || sl <= 0)) throw new Error('Enter a positive Phoenix SL price');
+  const positionSide = sideToPhoenix(side);
+  const isLong = positionSide === Side.Bid;
+  const closeSide = isLong ? Side.Ask : Side.Bid;
+  const buildTriggerOrder = (price, triggerDirection) => {
+    const n = Number(price);
+    const executionPrice = closeSide === Side.Bid ? n * 1.02 : n * 0.98;
+    return {
+      triggerDirection,
+      tradeSide: closeSide,
+      orderKind: StopLossOrderKind.IOC,
+      triggerPrice: priceToTicks(n, market),
+      executionPrice: priceToTicks(executionPrice, market),
+    };
+  };
+  let greaterTriggerOrder = null;
+  let lessTriggerOrder = null;
+  if (tp != null) {
+    const direction = isLong ? Direction.GreaterThan : Direction.LessThan;
+    const trigger = buildTriggerOrder(tp, direction);
+    if (direction === Direction.GreaterThan) greaterTriggerOrder = trigger;
+    else lessTriggerOrder = trigger;
+  }
+  if (sl != null) {
+    const direction = isLong ? Direction.LessThan : Direction.GreaterThan;
+    const trigger = buildTriggerOrder(sl, direction);
+    if (direction === Direction.GreaterThan) greaterTriggerOrder = trigger;
+    else lessTriggerOrder = trigger;
+  }
+  return {
+    hasTpsl: !!(greaterTriggerOrder || lessTriggerOrder),
+    takeProfit: tp,
+    stopLoss: sl,
+    greaterTriggerOrder,
+    lessTriggerOrder,
+  };
+}
+
+function phoenixTriggerOrderApiRequest(trigger) {
+  if (!trigger) return null;
+  return {
+    side: sideToUi(trigger.tradeSide),
+    orderKind: trigger.orderKind === StopLossOrderKind.Limit ? 'limit' : 'ioc',
+    triggerPriceInTicks: toSafeInstructionNumber(trigger.triggerPrice, 'Phoenix trigger price'),
+    executionPriceInTicks: toSafeInstructionNumber(trigger.executionPrice, 'Phoenix execution price'),
+  };
+}
+
 function activeTriggerPrice(triggers, market) {
   const rows = Array.isArray(triggers) ? triggers : [];
   const row = rows.find(t => !/cancel|disable|fill|execut/i.test(String(t?.status || '')))
@@ -2057,7 +2114,7 @@ function ordersFromSnapshot(group, marketsBySymbol, subaccountIndex = 0) {
   if (!symbol) return [];
   const m = marketsBySymbol.current[symbol];
   const lotDecimals = Number(m?._phoenixBaseLotsDecimals ?? 4);
-  return (group?.orders || []).map(o => {
+  return (group?.orders || []).filter(o => !phoenixOrderIsConditionalTpsl(o)).map(o => {
     const amount = o?.sizeRemainingUnits != null
       ? Number(o.sizeRemainingUnits)
       : Number(o?.sizeRemainingLots || 0) / 10 ** lotDecimals;
@@ -2088,7 +2145,7 @@ function ordersFromTraderView(traderView, marketsBySymbol) {
     const symbol = phoenixSymbol(marketSymbol);
     if (!symbol || !Array.isArray(rows)) return [];
     const m = marketsBySymbol.current[symbol];
-    return rows.map(o => {
+    return rows.filter(o => !phoenixOrderIsConditionalTpsl(o)).map(o => {
       const amount = firstFinite(
         tokenAmountValue(o?.tradeSizeRemaining),
         tokenAmountValue(o?.initialTradeSize),
@@ -2114,6 +2171,19 @@ function ordersFromTraderView(traderView, marketsBySymbol) {
       };
     });
   });
+}
+
+function phoenixOrderIsConditionalTpsl(order) {
+  const conditionalKind = String(
+    order?.conditionalKind
+      ?? order?.conditional_kind
+      ?? order?._raw?.conditionalKind
+      ?? order?._raw?.conditional_kind
+      ?? ''
+  ).toLowerCase();
+  return order?.isConditionalOrder === true
+    || order?._raw?.isConditionalOrder === true
+    || !!conditionalKind;
 }
 
 function tpslOrdersFromPositions(positions) {
@@ -5628,7 +5698,9 @@ export function usePhoenix() {
     const phx = phoenixSymbol(symbol);
     const requestedMarginMode = normalizePhoenixMarginMode(options?.margin_mode ?? options?.marginMode);
     const initialMarginDetail = resolvePhoenixOrderMarginMode(phx, requestedMarginMode);
-    return runOnce(`limit:${walletAddr}:${phx}:${side}:${price}:${amount}:${leverage}:${initialMarginDetail.selected_margin_mode}`, async () => {
+    const takeProfit = phoenixTpslOptionValue(options, 'take_profit', 'takeProfit', 'tp');
+    const stopLoss = phoenixTpslOptionValue(options, 'stop_loss', 'stopLoss', 'sl');
+    return runOnce(`limit:${walletAddr}:${phx}:${side}:${price}:${amount}:${leverage}:${initialMarginDetail.selected_margin_mode}:${takeProfit || ''}:${stopLoss || ''}`, async () => {
       setLoading(true);
       setError(null);
       try {
@@ -5655,6 +5727,12 @@ export function usePhoenix() {
             priceUsd: String(price),
             baseUnits,
           });
+          const attachedTpsl = phoenixBuildOpenLimitTpslTriggers({
+            market,
+            side,
+            takeProfit,
+            stopLoss,
+          });
           if (marginDetail.is_isolated) {
             const isolated = await resolvePhoenixIsolatedSubaccount(orderClient, phx, orderAuthority);
             const requiredOneTapSubaccounts = [0, isolated.subaccountIndex];
@@ -5672,7 +5750,13 @@ export function usePhoenix() {
             const priceInTicks = packet?.priceInTicks == null
               ? undefined
               : toSafeInstructionNumber(packet.priceInTicks, 'limit price');
-            const isolatedInstructions = await orderClient.api.orders().placeIsolatedLimitOrder({
+            let finalIsolatedOneTap = !!isolatedOneTapSession;
+            const conditionalAccountIx = attachedTpsl.hasTpsl
+              ? await ensureConditionalOrdersAccountIx(isolated.subaccountIndex, orderClient, isolatedOneTapSession
+                ? { authority: orderAuthority, payer: isolatedOneTapSession.publicKey }
+                : { authority: orderAuthority })
+              : null;
+            const baseIsolatedRequest = {
               authority: orderAuthority,
               symbol: phx,
               side: sideToUi(sideToPhoenix(side)),
@@ -5682,9 +5766,19 @@ export function usePhoenix() {
               transferAmount,
               pdaIndex: 0,
               allowCrossAndIsolatedForAsset: true,
-            });
+              ...(isolatedOneTapSession ? { feePayer: phoenixAddressText(isolatedOneTapSession.publicKey) } : {}),
+            };
+            const isolatedInstructions = attachedTpsl.hasTpsl
+              ? [
+                  conditionalAccountIx,
+                  ...asPhoenixArray(await orderClient.api.orders().placeIsolatedLimitOrderWithConditionals({
+                    ...baseIsolatedRequest,
+                    greaterTrigger: phoenixTriggerOrderApiRequest(attachedTpsl.greaterTriggerOrder),
+                    lessTrigger: phoenixTriggerOrderApiRequest(attachedTpsl.lessTriggerOrder),
+                  })),
+                ].filter(Boolean)
+              : await orderClient.api.orders().placeIsolatedLimitOrder(baseIsolatedRequest);
             let finalIsolatedInstructions = isolatedInstructions;
-            let finalIsolatedOneTap = !!isolatedOneTapSession;
             if (isolatedOneTapSession) {
               const signerCheck = phoenixCanSessionSignInstructions(isolatedInstructions, isolatedOneTapSession.publicKey);
               if (!signerCheck.ok) {
@@ -5720,6 +5814,9 @@ export function usePhoenix() {
               flight_required: true,
               flight_enabled: isPhoenixFlightEnabled(),
               builder: 'phoenix_api_isolated_limit',
+              attached_tpsl: attachedTpsl.hasTpsl,
+              take_profit: attachedTpsl.takeProfit,
+              stop_loss: attachedTpsl.stopLoss,
               selected_margin_mode: marginDetail.selected_margin_mode,
               isolated_only: !!marginDetail.isolated_only,
             });
@@ -5740,6 +5837,9 @@ export function usePhoenix() {
               transfer_amount_raw: transferAmount,
               builder: 'phoenix_api_isolated_limit',
               tx_label: 'phoenix.limit.isolated',
+              attached_tpsl: attachedTpsl.hasTpsl,
+              take_profit: attachedTpsl.takeProfit,
+              stop_loss: attachedTpsl.stopLoss,
               selected_margin_mode: marginDetail.selected_margin_mode,
               isolated_only: !!marginDetail.isolated_only,
               ...phoenixInstructionDebugSummary(finalIsolatedInstructions),
@@ -5758,24 +5858,46 @@ export function usePhoenix() {
               }
             );
           }
-          let ix = await orderClient.ixs.buildPlaceLimitOrder({
-            authority: orderAuthority,
-            symbol: phx,
-            orderPacket: packet,
-            traderPdaIndex: 0,
-            traderSubaccountIndex: 0,
-          });
+          const conditionalAccountIx = attachedTpsl.hasTpsl
+            ? await ensureConditionalOrdersAccountIx(0, orderClient, oneTapSession
+              ? { authority: orderAuthority, payer: oneTapSession.publicKey }
+              : { authority: orderAuthority })
+            : null;
+          const placeIx = attachedTpsl.hasTpsl
+            ? await orderClient.ixs.buildPlaceLimitOrderWithConditionals({
+                authority: orderAuthority,
+                ...(oneTapSession ? { payer: oneTapSession.publicKey } : {}),
+                symbol: phx,
+                orderPacket: packet,
+                greaterTriggerOrder: attachedTpsl.greaterTriggerOrder,
+                lessTriggerOrder: attachedTpsl.lessTriggerOrder,
+                traderPdaIndex: 0,
+                traderSubaccountIndex: 0,
+              })
+            : await orderClient.ixs.buildPlaceLimitOrder({
+                authority: orderAuthority,
+                symbol: phx,
+                orderPacket: packet,
+                traderPdaIndex: 0,
+                traderSubaccountIndex: 0,
+              });
+          let ix = attachedTpsl.hasTpsl
+            ? [conditionalAccountIx, placeIx].filter(Boolean)
+            : placeIx;
           if (oneTapSession) {
             ix = reportPhoenixOneTapFlightDiagnostics(ix, oneTapSession.publicKey, 'phoenix.limit', {
               symbol: phx,
               subaccount_index: 0,
-              path: 'limit',
+              path: attachedTpsl.hasTpsl ? 'limit_with_conditionals' : 'limit',
             });
           }
           assertPhoenixBuilderRouted(ix, 'phoenix.limit', {
             symbol: phx,
             one_tap: !!oneTapSession,
             subaccount_index: 0,
+            attached_tpsl: attachedTpsl.hasTpsl,
+            take_profit: attachedTpsl.takeProfit,
+            stop_loss: attachedTpsl.stopLoss,
           });
           return sendOrderIxs(ix, 'phoenix.limit', {
             computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT,
@@ -5824,7 +5946,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, getActiveOneTapSession, getOneTapSessionForSubaccounts, importPhoenixHistoryFills, refreshTraderStateSoon, resolvePhoenixIsolatedSubaccount, resolvePhoenixOrderMarginMode, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, ensureConditionalOrdersAccountIx, getActiveOneTapSession, getOneTapSessionForSubaccounts, importPhoenixHistoryFills, refreshTraderStateSoon, resolvePhoenixIsolatedSubaccount, resolvePhoenixOrderMarginMode, runOnce, sendOrderIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
     void _pairIndex;

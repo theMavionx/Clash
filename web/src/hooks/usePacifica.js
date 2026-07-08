@@ -281,6 +281,41 @@ function pacificaTpslRoundMode(positionSide, leg) {
   return 'ceil';
 }
 
+function pacificaTpslOptionValue(options, snakeKey, camelKey, shortKey) {
+  const value = options?.[snakeKey] ?? options?.[camelKey] ?? options?.[shortKey];
+  return value == null || value === '' ? null : value;
+}
+
+function pacificaBuildOrderTpslPayload({ markets, symbol, positionSide, takeProfit, stopLoss }) {
+  if (!takeProfit && !stopLoss) {
+    return { takeProfit: null, stopLoss: null, tick: null, changed: false };
+  }
+  const market = pacificaMarketForSymbol(markets, symbol);
+  const tick = pacificaMarketTickSize(market, symbol);
+  const normalizeTrigger = (value, leg) => {
+    if (!value) return null;
+    if (!tick) return String(value);
+    return roundToStep(value, tick, pacificaTpslRoundMode(positionSide, leg));
+  };
+  const normalizedTakeProfit = normalizeTrigger(takeProfit, 'tp');
+  const normalizedStopLoss = normalizeTrigger(stopLoss, 'sl');
+  return {
+    takeProfit: normalizedTakeProfit,
+    stopLoss: normalizedStopLoss,
+    tick,
+    changed: !!tick && (
+      String(normalizedTakeProfit || '') !== String(takeProfit || '')
+      || String(normalizedStopLoss || '') !== String(stopLoss || '')
+    ),
+  };
+}
+
+function pacificaApplyOrderTpslPayload(payload, tpsl) {
+  if (tpsl?.takeProfit) payload.take_profit = { stop_price: tpsl.takeProfit };
+  if (tpsl?.stopLoss) payload.stop_loss = { stop_price: tpsl.stopLoss };
+  return payload;
+}
+
 // Pacifica on-chain deposit constants
 const PACIFICA_PROGRAM = new PublicKey('PCFA5iYgmqK6MqPhWNKg7Yv7auX7VZ4Cx7T1eJyrAMH');
 const CENTRAL_STATE = new PublicKey('9Gdmhq4Gv1LnNMp7aiS1HSVd7pNnXNMsbuXALCQRmGjY');
@@ -1376,20 +1411,42 @@ export function usePacifica() {
   }, [walletAddr, publicKey, sendTransaction, signTransaction, solWallet, connection, activate, fetchAccount, fetchWalletUsdc, privyActive, privySendTx, privySignTx, privyWalletObj, claimGold]);
 
   // ---------- Trading ----------
-  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage) => {
+  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, _leverage = 1, options = {}) => {
+    void _leverage;
     if (!walletAddr) return;
-    const opKey = `open-market:${walletAddr}:${symbol}:${side}:${amount}:${slippage || '0.5'}`;
+    const takeProfit = pacificaTpslOptionValue(options, 'take_profit', 'takeProfit', 'tp');
+    const stopLoss = pacificaTpslOptionValue(options, 'stop_loss', 'stopLoss', 'sl');
+    const opKey = `open-market:${walletAddr}:${symbol}:${side}:${amount}:${slippage || '0.5'}:${takeProfit || ''}:${stopLoss || ''}`;
     return runSignedOnce(opKey, async () => {
       setLoading(true);
       setError(null);
       try {
         const lot = marketsRef.current.find(m => m.symbol === symbol)?.lot_size;
-        const res = await signedRequestWithActivation('POST', '/orders/create_market', 'create_market_order', {
+        const tpsl = pacificaBuildOrderTpslPayload({
+          markets: marketsRef.current,
+          symbol,
+          positionSide: side,
+          takeProfit,
+          stopLoss,
+        });
+        if (tpsl.changed) {
+          console.info('[Pacifica] normalized attached market TP/SL to tick size', {
+            symbol,
+            position_side: side,
+            tick_size: tpsl.tick,
+            take_profit: takeProfit || null,
+            normalized_take_profit: tpsl.takeProfit,
+            stop_loss: stopLoss || null,
+            normalized_stop_loss: tpsl.stopLoss,
+          });
+        }
+        const payload = pacificaApplyOrderTpslPayload({
           symbol, side, amount: roundToLot(amount, lot),
           slippage_percent: String(slippage || '0.5'),
           reduce_only: false,
           builder_code: BUILDER_CODE,
-        });
+        }, tpsl);
+        const res = await signedRequestWithActivation('POST', '/orders/create_market', 'create_market_order', payload);
         if (res.error) throw new Error(res.error);
         fetchPositions();
         fetchOrders();
@@ -1405,20 +1462,42 @@ export function usePacifica() {
     });
   }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchOrders, fetchAccount, scheduleClaimGold, runSignedOnce]);
 
-  const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif) => {
+  const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif, _leverage = 1, options = {}) => {
+    void _leverage;
     if (!walletAddr) return;
-    const opKey = `open-limit:${walletAddr}:${symbol}:${side}:${price}:${amount}:${tif || 'GTC'}`;
+    const takeProfit = pacificaTpslOptionValue(options, 'take_profit', 'takeProfit', 'tp');
+    const stopLoss = pacificaTpslOptionValue(options, 'stop_loss', 'stopLoss', 'sl');
+    const opKey = `open-limit:${walletAddr}:${symbol}:${side}:${price}:${amount}:${tif || 'GTC'}:${takeProfit || ''}:${stopLoss || ''}`;
     return runSignedOnce(opKey, async () => {
       setLoading(true);
       setError(null);
       try {
         const lot = marketsRef.current.find(m => m.symbol === symbol)?.lot_size;
         const tick = marketsRef.current.find(m => m.symbol === symbol)?.tick_size;
-        const res = await signedRequestWithActivation('POST', '/orders/create', 'create_order', {
+        const tpsl = pacificaBuildOrderTpslPayload({
+          markets: marketsRef.current,
+          symbol,
+          positionSide: side,
+          takeProfit,
+          stopLoss,
+        });
+        if (tpsl.changed) {
+          console.info('[Pacifica] normalized attached limit TP/SL to tick size', {
+            symbol,
+            position_side: side,
+            tick_size: tpsl.tick,
+            take_profit: takeProfit || null,
+            normalized_take_profit: tpsl.takeProfit,
+            stop_loss: stopLoss || null,
+            normalized_stop_loss: tpsl.stopLoss,
+          });
+        }
+        const payload = pacificaApplyOrderTpslPayload({
           symbol, side, price: tick ? roundToLot(price, tick) : String(price), amount: roundToLot(amount, lot),
           tif: tif || 'GTC', reduce_only: false,
           builder_code: BUILDER_CODE,
-        });
+        }, tpsl);
+        const res = await signedRequestWithActivation('POST', '/orders/create', 'create_order', payload);
         if (res.error) throw new Error(res.error);
         fetchOrders();
         fetchAccount();

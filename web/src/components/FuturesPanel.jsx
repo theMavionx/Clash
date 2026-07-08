@@ -112,7 +112,8 @@ const DEX_ERROR_LABELS = {
   phoenix: 'Phoenix',
   risex: 'RISEx',
 };
-const OPEN_TPSL_NATIVE_ATTACH_DEXES = new Set(['avantis', 'flash']);
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'flash', 'pacifica']);
+const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
   'dango',
@@ -1433,7 +1434,7 @@ function OpenTpslEditor({
   orderType,
 }) {
   const entry = firstPositive(metrics?.entryP, pos?.entry_price, metrics?.markP, pos?.mark_price);
-  const isNativeLimitAttach = OPEN_TPSL_NATIVE_ATTACH_DEXES.has(String(dex || '').toLowerCase());
+  const isNativeLimitAttach = OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(String(dex || '').toLowerCase());
   const showLimitNotice = enabled && orderType === 'limit' && !isNativeLimitAttach;
   return (
     <div style={enabled ? S.openTpslBoxActive : S.openTpslBox}>
@@ -4120,7 +4121,7 @@ function FuturesPanel() {
       const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       const attachedTpsl = resolveOpenTpslForSide(side);
       if (!attachedTpsl?.ok) return;
-      if (attachedTpsl?.hasTpsl && orderType === 'limit' && !OPEN_TPSL_NATIVE_ATTACH_DEXES.has(dex)) {
+      if (attachedTpsl?.hasTpsl && orderType === 'limit' && !OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(dex)) {
         setLocalAlert(`${dexErrorLabel(dex)} can attach TP/SL after a limit order fills. For now attach TP/SL directly only works for supported exchanges.`);
         return;
       }
@@ -4451,7 +4452,7 @@ function FuturesPanel() {
         let tpslWarning = '';
         const shouldPostAttachTpsl = attachedTpsl?.hasTpsl
           && orderType === 'market'
-          && !OPEN_TPSL_NATIVE_ATTACH_DEXES.has(dex)
+          && !OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES.has(dex)
           && OPEN_TPSL_POST_MARKET_DEXES.has(dex)
           && typeof setTpsl === 'function';
         if (shouldPostAttachTpsl) {

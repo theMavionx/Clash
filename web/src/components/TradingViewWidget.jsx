@@ -358,6 +358,23 @@ function classifyTriggerOrder(order, positionsForSymbol, triggerPrice) {
   return triggerPrice < reference ? 'tp' : 'sl';
 }
 
+function explicitOrderTpslKind(order) {
+  const type = String(
+    order?.order_type
+      || order?.ot
+      || order?.trigger_type
+      || order?.triggerType
+      || order?._raw?.order_type
+      || order?._raw?.orderType
+      || order?._raw?.trigger_type
+      || order?._raw?.triggerType
+      || ''
+  ).toUpperCase();
+  if (type.includes('TAKE') || type.includes('TP')) return 'tp';
+  if (type.includes('STOP_LOSS') || type.includes('SL')) return 'sl';
+  return '';
+}
+
 function samePendingLineBadges(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
@@ -755,10 +772,12 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         const stopPrice = orderTriggerLinePrice(ord);
         const side = ord.side || ord.d;
         const isBid = side === 'bid';
-        const triggerKind = stopPrice > 0 ? classifyTriggerOrder(ord, symPositions, stopPrice) : null;
+        const explicitTriggerKind = explicitOrderTpslKind(ord);
+        const linePrice = stopPrice > 0 ? stopPrice : rawPrice;
+        const triggerKind = explicitTriggerKind || (stopPrice > 0 ? classifyTriggerOrder(ord, symPositions, stopPrice) : null);
         const isTP = triggerKind === 'tp';
         const isSL = triggerKind === 'sl';
-        const price = stopPrice > 0 ? stopPrice : rawPrice;
+        const price = linePrice;
         if (!price) continue;
         if ((isTP || isSL) && positionTpslLineKeys.has(priceLineKey(triggerKind, price))) continue;
         const pending = !!(ord?._optimistic || ord?._raw?.optimistic);

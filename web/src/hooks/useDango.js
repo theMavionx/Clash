@@ -18,7 +18,7 @@ const POLL_INTERVAL_MS = 30_000;
 const DANGO_QUERY_APP_BLOCK_INTERVAL = 1;
 const DANGO_WS_RECONNECT_MS = 3000;
 const DANGO_WS_QUERY_ERROR_BACKOFF_MS = 30_000;
-const DANGO_PERPS_CONTRACT = '0x7065727073000000000000000000000000000000';
+const DANGO_DEFAULT_PERPS_CONTRACT = '0x90bc84df68d1aa59a857e04ed529e9a26edbea4f';
 const DANGO_QUERY_APP_SUBSCRIPTION = `
   subscription QueryAppSubscription($request: GrugQueryInput!, $interval: Int! = 10) {
     queryApp(request: $request, blockInterval: $interval) {
@@ -807,10 +807,11 @@ export function useDango() {
       realtimeAccount = resolveDangoRealtimeAccount(walletAddr, cfg);
       realtimeAccountRef.current = realtimeAccount;
       const url = cfg?.graphql_ws_url;
+      const perpsContract = normalizeDangoAddress(cfg?.perps_contract) || DANGO_DEFAULT_PERPS_CONTRACT;
       if (stopped || !url || !realtimeAccount) return;
       userStateRequest = {
         wasm_smart: {
-          contract: DANGO_PERPS_CONTRACT,
+          contract: perpsContract,
           msg: {
             user_state_extended: {
               include_all: true,
@@ -827,7 +828,7 @@ export function useDango() {
       };
       ordersRequest = {
         wasm_smart: {
-          contract: DANGO_PERPS_CONTRACT,
+          contract: perpsContract,
           msg: {
             orders_by_user: {
               user: realtimeAccount,
@@ -866,6 +867,7 @@ export function useDango() {
             configLinkedAccount: cfg?.linked_account || null,
             configResolvedAccount: cfg?.resolved_account || null,
             account: realtimeAccount,
+            perpsContract,
             interval: DANGO_QUERY_APP_BLOCK_INTERVAL,
           });
           return;
@@ -891,6 +893,7 @@ export function useDango() {
               sourceWallet: sourceWalletAddr,
               configLinkedAccount: cfg?.linked_account || null,
               configResolvedAccount: cfg?.resolved_account || null,
+              perpsContract,
             });
             if (nextErrorCounts[id] === 1 || nextErrorCounts[id] % 3 === 0) {
               fetchAccount().catch(e => {
