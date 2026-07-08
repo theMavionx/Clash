@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://cvw12yaw2n3rh"
-path="res://.godot/imported/3.gltf-59e4880d927e50c7a5b1784d84ed0955.scn"
+uid="uid://b3404da6hibu"
+path="res://.godot/imported/Town Hall Level 3.glb-86d868853fba4a74ebff1df11b225cbc.scn"
 
 [deps]
 
-source_file="res://Model/Town_Hall/3.gltf"
-dest_files=["res://.godot/imported/3.gltf-59e4880d927e50c7a5b1784d84ed0955.scn"]
+source_file="res://Model/Town_Hall/Town Hall Level 3.glb"
+dest_files=["res://.godot/imported/Town Hall Level 3.glb-86d868853fba4a74ebff1df11b225cbc.scn"]
 
 [params]
 

@@ -3177,6 +3177,22 @@ function mountNftV3Endpoints(router, ctx) {
     };
   }
 
+  async function evmContractBridgeFee(sourceChain, sourceContract, collectionSlugRaw = 'demonking') {
+    if (!EVM_CHAINS.has(sourceChain) || !sourceContract) return null;
+    try {
+      const { createPublicClient, getAddress, http } = await import('viem');
+      const client = createPublicClient({ transport: http(evmRpc(sourceChain, process.env)) });
+      return await client.readContract({
+        address: getAddress(sourceContract),
+        abi: NFT_V3_ABI,
+        functionName: 'bridgeFeeWei',
+      });
+    } catch {
+      const dep = bridgeDeploymentOf(sourceChain, normalizeBridgeCollectionSlug(collectionSlugRaw)) || {};
+      return /^\d+$/.test(String(dep.bridgeFeeWei || '')) ? BigInt(dep.bridgeFeeWei) : null;
+    }
+  }
+
   function aptosBridgeFeeFromDeployment(collectionSlugRaw) {
     const collectionSlug = normalizeBridgeCollectionSlug(collectionSlugRaw || 'demonking');
     const dep = deploymentOf('aptos', collectionSlug) || {};
@@ -3231,6 +3247,17 @@ function mountNftV3Endpoints(router, ctx) {
     const cfg = BRIDGE_NATIVE[sourceChain];
     if (!cfg) return null;
 
+    // Bridge relay is now server-paid. Do not add a dynamic off-chain native
+    // surcharge to burns; only return an unavoidable legacy contract fee while
+    // older source contracts still require msg.value >= bridgeFeeWei.
+    if (process.env.NFT_BRIDGE_NATIVE_FEE_DISABLED !== '0') {
+      const contractFee = await evmContractBridgeFee(sourceChain, sourceContract, options.collection || options.collectionSlug);
+      if (contractFee && contractFee > 0n) {
+        return bridgeNativeFeeResult(sourceChain, contractFee, 'contract.bridgeFeeWei');
+      }
+      return bridgeNativeFeeResult(sourceChain, 0n, 'disabled');
+    }
+
     if (sourceChain === 'aptos') {
       let moduleFee = null;
       try {
@@ -3249,16 +3276,8 @@ function mountNftV3Endpoints(router, ctx) {
     if (explicit) return bridgeNativeFeeResult(sourceChain, explicit.amount, explicit.source);
 
     if (process.env.NFT_BRIDGE_USE_CONTRACT_FEE === '1' && EVM_CHAINS.has(sourceChain) && sourceContract) {
-      try {
-        const { createPublicClient, getAddress, http } = await import('viem');
-        const client = createPublicClient({ transport: http(evmRpc(sourceChain, process.env)) });
-        const feeWei = await client.readContract({
-          address: getAddress(sourceContract), abi: NFT_V3_ABI, functionName: 'bridgeFeeWei',
-        });
-        if (feeWei > 0n) {
-          return bridgeNativeFeeResult(sourceChain, feeWei, 'contract.bridgeFeeWei');
-        }
-      } catch { /* older impl or RPC issue: fall back to USD quote */ }
+      const feeWei = await evmContractBridgeFee(sourceChain, sourceContract, options.collection || options.collectionSlug);
+      if (feeWei && feeWei > 0n) return bridgeNativeFeeResult(sourceChain, feeWei, 'contract.bridgeFeeWei');
     }
 
     const priceUsdE6 = decimalUsdToE6(await ctx.fetchNftUsdPrice(cfg.asset));
@@ -3456,7 +3475,7 @@ function mountNftV3Endpoints(router, ctx) {
         // use the synthetic ids from CHAIN_IDS). EVM dest emits the value into the
         // BridgeBurn event verbatim; the orchestrator's /bridge/confirm cross-checks it.
         const destChainId = destSpec ? destSpec.chainId : CHAIN_IDS[destChain];
-        const bridgeFee = await quoteNativeBridgeFee(sourceChain, sourceProxy);
+        const bridgeFee = await quoteNativeBridgeFee(sourceChain, sourceProxy, { collection: collectionSlug });
         return res.json({
           collection: collectionSlug,
           mode: 'evm-burn',
@@ -3544,7 +3563,9 @@ function mountNftV3Endpoints(router, ctx) {
             rarityLabel: assetInfo.rarity ? (gameDb.NFT_RARITY_LABELS?.[assetInfo.rarity] || assetInfo.rarity) : null,
             edition: assetInfo.edition || null,
             requiredMemo: memo,
-            note: 'Burn the asset, include the signed memo, and pay the bridge fee transfer in the same tx.',
+            note: bridgeFee.amount > 0n
+              ? 'Burn the asset, include the signed memo, and include the source-chain bridge fee in the same tx.'
+              : 'Burn the asset and include the signed memo in the same tx.',
           },
           bridgeFee: bridgeFeeJson(bridgeFee),
           feeTreasury,
@@ -3611,18 +3632,12 @@ function mountNftV3Endpoints(router, ctx) {
           });
         }
         const sourceTx = await client.getTransaction({ hash: burnTxHash });
-        const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceProxyAddress);
+        const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceProxyAddress, { collection: collectionSlug });
         const sourceProxy = getAddress(sourceProxyAddress).toLowerCase();
         const feePaid = [
           BigInt(sourceTx?.value || 0),
           evmBridgeFeePaidFromReceipt(txRcp, sourceProxy, keccak256),
         ].reduce((max, n) => n > max ? n : max, 0n);
-        if (!grandfatheredBridge && feePaid < requiredFee.amount) {
-          return res.status(402).json({
-            error: `Bridge fee under-paid: need ${requiredFee.amount} wei, paid ${feePaid}`,
-            bridgeFee: bridgeFeeJson(requiredFee),
-          });
-        }
         const burnTopic = keccak256(new TextEncoder().encode('BridgeBurn(uint256,address,uint8,uint256)'));
         const log = txRcp.logs.find((l) => l.address.toLowerCase() === sourceProxy && l.topics[0] === burnTopic);
         if (!log) return res.status(404).json({ error: 'BridgeBurn event not in tx logs' });
@@ -3643,12 +3658,6 @@ function mountNftV3Endpoints(router, ctx) {
         if (r.error) return res.status(404).json({ error: `Aptos verify: ${r.error}` });
         const requiredFee = await quoteNativeBridgeFee('aptos', null, { collection: collectionSlug });
         const feePaid = BigInt(r.feePaidOctas || 0);
-        if (!grandfatheredBridge && feePaid < requiredFee.amount) {
-          return res.status(402).json({
-            error: `Bridge fee under-paid: need ${requiredFee.amount} octas, paid ${feePaid}`,
-            bridgeFee: bridgeFeeJson(requiredFee),
-          });
-        }
         burned = {
           kind: 'aptos',
           tokenAddress: r.tokenAddress,
@@ -4050,18 +4059,12 @@ function mountNftV3Endpoints(router, ctx) {
           });
         }
         const sourceTx = await client.getTransaction({ hash: burnTxHash });
-        const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceProxyAddress);
+        const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceProxyAddress, { collection: collectionSlug });
         const sourceProxy = getAddress(sourceProxyAddress).toLowerCase();
         const feePaid = [
           BigInt(sourceTx?.value || 0),
           evmBridgeFeePaidFromReceipt(txRcp, sourceProxy, keccak256),
         ].reduce((max, n) => n > max ? n : max, 0n);
-        if (!grandfatheredBridge && feePaid < requiredFee.amount) {
-          return res.status(402).json({
-            error: `Bridge fee under-paid: need ${requiredFee.amount} wei, paid ${feePaid}`,
-            bridgeFee: bridgeFeeJson(requiredFee),
-          });
-        }
         const burnTopic = keccak256(new TextEncoder().encode('BridgeBurn(uint256,address,uint8,uint256)'));
         const log = txRcp.logs.find((l) => l.address.toLowerCase() === sourceProxy && l.topics[0] === burnTopic);
         if (!log) return res.status(404).json({ error: 'BridgeBurn event not in tx logs' });
@@ -4081,12 +4084,6 @@ function mountNftV3Endpoints(router, ctx) {
         if (r.error) return res.status(404).json({ error: `Aptos verify: ${r.error}` });
         const requiredFee = await quoteNativeBridgeFee('aptos', null, { collection: collectionSlug });
         const feePaid = BigInt(r.feePaidOctas || 0);
-        if (!grandfatheredBridge && feePaid < requiredFee.amount) {
-          return res.status(402).json({
-            error: `Bridge fee under-paid: need ${requiredFee.amount} octas, paid ${feePaid}`,
-            bridgeFee: bridgeFeeJson(requiredFee),
-          });
-        }
         burned = { kind: 'aptos', tokenAddress: r.tokenAddress, owner: r.owner,
           level: r.level, destinationChainId: r.destinationChainId,
           feePaidOctas: feePaid.toString(), bridgeFeeRequiredOctas: requiredFee.amount.toString() };

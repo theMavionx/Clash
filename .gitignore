@@ -23,6 +23,7 @@ server-futures/gmtrade-builder/target/
 *.log
 .local-logs/
 server/reports/
+server/public/town-hall-flags/
 
 # Environment
 .env

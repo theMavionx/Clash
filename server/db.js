@@ -967,6 +967,7 @@ try {
       shield_hours REAL,
       freeze_trophies INTEGER NOT NULL DEFAULT 1,
       min_town_hall_level INTEGER NOT NULL DEFAULT 0,
+      registration_require_twitter INTEGER NOT NULL DEFAULT 0,
       sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50')),
       points_trophy_weight REAL NOT NULL DEFAULT 0,
       points_volume_weight REAL NOT NULL DEFAULT 0,
@@ -1019,6 +1020,8 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN freeze_trophies INTEGER NOT NULL DEFAULT 1`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN min_town_hall_level INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`UPDATE tournaments SET min_town_hall_level = 0 WHERE min_town_hall_level IS NULL OR min_town_hall_level < 0`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_require_twitter INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`UPDATE tournaments SET registration_require_twitter = CASE WHEN registration_require_twitter IS NULL THEN 0 ELSE registration_require_twitter END`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_trophy_weight REAL NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_volume_weight REAL NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_pnl_weight REAL NOT NULL DEFAULT 0`); } catch {}
@@ -1119,6 +1122,8 @@ try {
             trophy_boost REAL NOT NULL DEFAULT 1.0,
             shield_hours REAL,
             freeze_trophies INTEGER NOT NULL DEFAULT 1,
+            min_town_hall_level INTEGER NOT NULL DEFAULT 0,
+            registration_require_twitter INTEGER NOT NULL DEFAULT 0,
             sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50')),
             points_trophy_weight REAL NOT NULL DEFAULT 0,
             points_volume_weight REAL NOT NULL DEFAULT 0,
@@ -1143,7 +1148,7 @@ try {
           );
           INSERT INTO tournaments_new (
             id, event_kind, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost,
-            shield_hours, freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
+            shield_hours, freeze_trophies, min_town_hall_level, registration_require_twitter, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
             scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
             prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
@@ -1166,6 +1171,8 @@ try {
             start_at, end_at, gold_boost, COALESCE(seeker_gold_boost, 1.0), trophy_boost,
             CASE WHEN shield_hours IS NULL THEN NULL ELSE MAX(0, shield_hours) END,
             COALESCE(freeze_trophies, 1),
+            COALESCE(min_town_hall_level, 0),
+            COALESCE(registration_require_twitter, 0),
             CASE WHEN sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50') THEN sort_by ELSE 'pnl_usd' END,
             COALESCE(points_trophy_weight, CASE WHEN sort_by = 'volume_trophies_50_50' THEN 50 ELSE 0 END),
             COALESCE(points_volume_weight, CASE WHEN sort_by = 'volume_trophies_50_50' THEN 50 ELSE 0 END),
@@ -1641,6 +1648,38 @@ try {
     CREATE INDEX IF NOT EXISTS idx_utility_purchases_player ON utility_purchases(player_id, created_at DESC);
   `);
 } catch (e) { console.warn('[db] utility_purchases migration:', e.message); }
+
+// Paid Town Hall flag customization. `player_town_hall_flags` is the current
+// public flag shown on every base snapshot; history makes each paid upload
+// consume exactly one shop purchase.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS player_town_hall_flags (
+      player_id     TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      image_url     TEXT NOT NULL,
+      image_path    TEXT NOT NULL,
+      image_sha256  TEXT NOT NULL,
+      mime_type     TEXT NOT NULL,
+      purchase_id   INTEGER REFERENCES utility_purchases(id),
+      tx_hash       TEXT,
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS player_town_hall_flag_history (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id     TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      purchase_id   INTEGER NOT NULL UNIQUE REFERENCES utility_purchases(id),
+      tx_hash       TEXT,
+      image_url     TEXT NOT NULL,
+      image_path    TEXT NOT NULL,
+      image_sha256  TEXT NOT NULL,
+      mime_type     TEXT NOT NULL,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_town_hall_flag_history_player
+      ON player_town_hall_flag_history(player_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] town hall flag customization migration:', e.message); }
 
 // Referral attribution and commission ledger. Revenue events are immutable and
 // idempotent by source_type/source_id so retrying payment redemption, delivery,
@@ -2400,6 +2439,44 @@ const stmts = {
   `),
   getBuildings: db.prepare(`SELECT * FROM buildings WHERE player_id = ?`),
   getBuildingById: db.prepare(`SELECT * FROM buildings WHERE id = ? AND player_id = ?`),
+  getTownHallFlag: db.prepare(`
+    SELECT player_id, image_url, image_path, image_sha256, mime_type, purchase_id, tx_hash, updated_at
+    FROM player_town_hall_flags
+    WHERE player_id = ?
+  `),
+  getUnconsumedTownHallFlagPurchase: db.prepare(`
+    SELECT u.id, u.player_id, u.utility, u.chain, u.tx_hash, u.payer, u.token, u.amount, u.usd_price_e6, u.created_at
+    FROM utility_purchases u
+    LEFT JOIN player_town_hall_flag_history h ON h.purchase_id = u.id
+    WHERE u.player_id = ?
+      AND u.utility = 'town_hall_flag'
+      AND h.id IS NULL
+      AND (? IS NULL OR u.tx_hash = ?)
+    ORDER BY u.id DESC
+    LIMIT 1
+  `),
+  insertTownHallFlagHistory: db.prepare(`
+    INSERT INTO player_town_hall_flag_history
+      (player_id, purchase_id, tx_hash, image_url, image_path, image_sha256, mime_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `),
+  upsertTownHallFlag: db.prepare(`
+    INSERT INTO player_town_hall_flags
+      (player_id, image_url, image_path, image_sha256, mime_type, purchase_id, tx_hash, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(player_id) DO UPDATE SET
+      image_url = excluded.image_url,
+      image_path = excluded.image_path,
+      image_sha256 = excluded.image_sha256,
+      mime_type = excluded.mime_type,
+      purchase_id = excluded.purchase_id,
+      tx_hash = excluded.tx_hash,
+      updated_at = datetime('now')
+  `),
+  clearTownHallFlag: db.prepare(`
+    DELETE FROM player_town_hall_flags
+    WHERE player_id = ?
+  `),
   upgradeBuilding: db.prepare(`
     UPDATE buildings SET level = ?, hp = ?, max_hp = ? WHERE id = ? AND player_id = ?
   `),
@@ -7903,6 +7980,61 @@ function getPlayerBuildings(playerId) {
   return decorateBuildingsForPlayer(playerId, stmts.getBuildings.all(playerId));
 }
 
+function getTownHallFlag(playerId) {
+  if (!playerId) return null;
+  return stmts.getTownHallFlag.get(playerId) || null;
+}
+
+function getUnconsumedTownHallFlagPurchase(playerId, txHash = null) {
+  if (!playerId) return null;
+  const normalizedTx = txHash ? String(txHash).trim() : null;
+  return stmts.getUnconsumedTownHallFlagPurchase.get(playerId, normalizedTx, normalizedTx) || null;
+}
+
+function setTownHallFlag(playerId, flag = {}) {
+  if (!playerId) return { error: 'player_id required' };
+  const purchaseId = Number(flag.purchaseId || flag.purchase_id || 0);
+  if (!Number.isSafeInteger(purchaseId) || purchaseId <= 0) {
+    return { error: 'purchase_id required' };
+  }
+  const imageUrl = String(flag.imageUrl || flag.image_url || '').trim();
+  const imagePath = String(flag.imagePath || flag.image_path || '').trim();
+  const imageSha256 = String(flag.imageSha256 || flag.image_sha256 || '').trim().toLowerCase();
+  const mimeType = String(flag.mimeType || flag.mime_type || '').trim().toLowerCase();
+  const txHash = String(flag.txHash || flag.tx_hash || '').trim() || null;
+  if (!imageUrl || !imagePath || !/^[a-f0-9]{64}$/.test(imageSha256) || !mimeType) {
+    return { error: 'invalid flag image metadata' };
+  }
+
+  return db.transaction(() => {
+    stmts.insertTownHallFlagHistory.run(
+      playerId,
+      purchaseId,
+      txHash,
+      imageUrl,
+      imagePath,
+      imageSha256,
+      mimeType,
+    );
+    stmts.upsertTownHallFlag.run(
+      playerId,
+      imageUrl,
+      imagePath,
+      imageSha256,
+      mimeType,
+      purchaseId,
+      txHash,
+    );
+    return getTownHallFlag(playerId);
+  })();
+}
+
+function clearTownHallFlag(playerId) {
+  if (!playerId) return { error: 'player_id required' };
+  stmts.clearTownHallFlag.run(playerId);
+  return { ok: true };
+}
+
 function getBattleWins(playerId) {
   return Math.max(0, Number(stmts.getBattleWins.get(playerId)?.battle_wins || 0) || 0);
 }
@@ -8290,9 +8422,10 @@ function getBuildingProductionSnapshot(building, now = new Date(), altarLevels =
 function decorateBuildingsForPlayer(playerId, buildings) {
   const now = new Date();
   const levels = getAltarSkillLevels(playerId);
+  const townHallFlag = getTownHallFlag(playerId);
   const withProduction = buildings.map((building) => {
     const production = getBuildingProductionSnapshot(building, now, levels);
-    return production ? {
+    const decorated = production ? {
       ...building,
       stored: production.stored,
       production_resource: production.resource,
@@ -8300,7 +8433,13 @@ function decorateBuildingsForPlayer(playerId, buildings) {
       production_rate_per_min: production.rate_per_min,
       production_base_rate_per_min: production.base_rate_per_min,
       altar_prosperity_bonus_pct: production.altar_prosperity_bonus_pct,
-    } : building;
+    } : { ...building };
+    if (decorated.type === 'town_hall' && townHallFlag?.image_url) {
+      decorated.town_hall_flag_url = townHallFlag.image_url;
+      decorated.flag_url = townHallFlag.image_url;
+      decorated.town_hall_flag_updated_at = townHallFlag.updated_at || null;
+    }
+    return decorated;
   });
   return applyAltarBuildingBonuses(withProduction, levels);
 }
@@ -9400,11 +9539,18 @@ function getFullPlayerState(playerId) {
     })(),
     metadata_json: undefined,
   }));
+  const townHallFlag = getTownHallFlag(playerId);
   return {
     ...safe,
     wallets,
     dex_accounts: dexAccounts,
     buildings: getPlayerBuildings(playerId),
+    town_hall_flag: townHallFlag ? {
+      image_url: townHallFlag.image_url,
+      updated_at: townHallFlag.updated_at,
+      purchase_id: townHallFlag.purchase_id || null,
+      tx_hash: townHallFlag.tx_hash || null,
+    } : null,
     troop_levels: getTroopLevels(playerId),
     altar_skills: getAltarSkillLevels(playerId),
     resource_caps: getResourceCaps(playerId),
@@ -10437,6 +10583,10 @@ module.exports = {
   moveBuilding,
   removeBuilding,
   getPlayerBuildings,
+  getTownHallFlag,
+  getUnconsumedTownHallFlagPurchase,
+  setTownHallFlag,
+  clearTownHallFlag,
   upgradeTroop,
   getTroopLevels,
   upgradeAltarSkill,

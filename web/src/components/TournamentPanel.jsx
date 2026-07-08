@@ -665,6 +665,8 @@ function TournamentPanel({ onClose }) {
   const joined = tab === 'lucky' ? !!luckyMe?.joined : !!me?.joined;
   const myStats = isHistory ? (historyTournament?.me || null) : (tab === 'lucky' ? (luckyMe?.me || null) : (me?.me || null));
   const needsCopRewardWallet = !!t?.rewards_in_cop;
+  const requiresTwitterHandle = !!t?.registration_require_twitter;
+  const showJoinContactFields = needsCopRewardWallet || requiresTwitterHandle;
   const storedRewardWallet = String(myStats?.reward_wallet_evm || '').trim();
   const storedTwitterHandle = String(myStats?.twitter_handle || '').trim();
   const hasRewardWallet = needsCopRewardWallet
@@ -790,6 +792,10 @@ function TournamentPanel({ onClose }) {
       return;
     }
     const twitterHandle = rewardTwitterHandle.trim();
+    if (requiresTwitterHandle && !twitterHandle) {
+      alert('Enter your Twitter/X handle to register.');
+      return;
+    }
     if (twitterHandle && !TWITTER_HANDLE_RE.test(twitterHandle)) {
       alert('Enter a valid Twitter/X handle.');
       return;
@@ -1170,22 +1176,24 @@ function TournamentPanel({ onClose }) {
 
               {!isHistory && !joined && (
                 <>
-                  {t.rewards_in_cop && (
+                  {showJoinContactFields && (
                     <div style={S.rewardBox}>
-                      <div style={S.rewardLabel}>CLASH Solana reward address</div>
+                      <div style={S.rewardLabel}>{needsCopRewardWallet ? 'CLASH Solana reward address' : 'Tournament registration'}</div>
+                      {needsCopRewardWallet && (
+                        <input
+                          style={{ ...S.rewardInput, marginTop: 8 }}
+                          value={rewardWalletEvm}
+                          onChange={(e) => setRewardWalletEvm(e.target.value)}
+                          placeholder="Solana wallet address"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                        />
+                      )}
                       <input
-                        style={{ ...S.rewardInput, marginTop: 8 }}
-                        value={rewardWalletEvm}
-                        onChange={(e) => setRewardWalletEvm(e.target.value)}
-                        placeholder="Solana wallet address"
-                        autoCapitalize="none"
-                        spellCheck={false}
-                      />
-                      <input
-                        style={S.rewardInput}
+                        style={needsCopRewardWallet ? S.rewardInput : { ...S.rewardInput, marginTop: 8 }}
                         value={rewardTwitterHandle}
                         onChange={(e) => setRewardTwitterHandle(e.target.value)}
-                        placeholder="Twitter/X handle (optional)"
+                        placeholder={requiresTwitterHandle ? 'Twitter/X handle (required)' : 'Twitter/X handle (optional)'}
                         autoCapitalize="none"
                         spellCheck={false}
                       />

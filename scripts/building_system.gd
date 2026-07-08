@@ -81,9 +81,9 @@ var building_defs: Dictionary = {
 		"footprint_extra": 0.3,
 		"color": Color(0.7, 0.55, 0.2, 0.5),
 		"height": 0.5,
-		"scene": "res://Model/Town_Hall/1.gltf",
-		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb", "res://Model/Town_Hall/5.glb"],
-		"model_scale": 0.25,
+		"scene": "res://Model/Town_Hall/Town Hall Level 1.glb",
+		"scenes": ["res://Model/Town_Hall/Town Hall Level 1.glb", "res://Model/Town_Hall/Town Hall Level 2.glb", "res://Model/Town_Hall/Town Hall Level 3.glb", "res://Model/Town_Hall/Town Hall Level 4.glb", "res://Model/Town_Hall/Town Hall Level 5.glb"],
+		"model_scale": 0.05,
 		"hp_levels": [3500, 8000, 16000, 24000, 36000],
 		"is_main": true,
 		"max_count": 1,
@@ -543,6 +543,9 @@ static var _turret_script_res: Script = null
 static var _mage_tower_script_res: Script = null
 static var _mortar_script_res: Script = null
 static var _altar_effect_script_res: Script = null
+static var _town_hall_flag_texture_cache: Dictionary = {}
+static var _town_hall_flag_pending_models: Dictionary = {}
+static var _town_hall_flag_pending_requests: Dictionary = {}
 
 
 static func _load_packed_scene_resource(path: String) -> PackedScene:
@@ -1421,6 +1424,160 @@ func _assign_albedo_recursive(node: Node, mat: Material) -> void:
 		_assign_albedo_recursive(child, mat)
 
 
+func _town_hall_flag_absolute_url(raw_url: String) -> String:
+	var url := raw_url.strip_edges()
+	if url == "":
+		return ""
+	if url.begins_with("http://") or url.begins_with("https://"):
+		return url
+	if url.begins_with("/") and ClassDB.class_exists("JavaScriptBridge"):
+		var origin = JavaScriptBridge.eval("window.location.origin", true)
+		if origin != null and str(origin) != "":
+			return str(origin) + url
+	return url
+
+
+func _is_town_hall_flag_surface(mesh_inst: MeshInstance3D, surface_idx: int) -> bool:
+	if mesh_inst == null:
+		return false
+	if str(mesh_inst.name).findn("flag") != -1:
+		return true
+	var mesh: Mesh = mesh_inst.mesh
+	if mesh == null:
+		return false
+	var mat: Material = mesh_inst.get_surface_override_material(surface_idx)
+	if mat == null:
+		mat = mesh.surface_get_material(surface_idx)
+	if mat == null:
+		return false
+	if str(mat.resource_name).findn("flag") != -1:
+		return true
+	if mat is StandardMaterial3D:
+		var tex: Texture2D = (mat as StandardMaterial3D).albedo_texture
+		if tex != null and str(tex.resource_path).findn("flag") != -1:
+			return true
+	return false
+
+
+func _apply_town_hall_flag_material_recursive(node: Node, texture: Texture2D) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		var mesh: Mesh = mi.mesh
+		var count: int = mesh.get_surface_count() if mesh else 0
+		for i in count:
+			if not _is_town_hall_flag_surface(mi, i):
+				continue
+			var src_mat: Material = mi.get_surface_override_material(i)
+			if src_mat == null:
+				src_mat = mesh.surface_get_material(i)
+			var mat: StandardMaterial3D = null
+			if src_mat is StandardMaterial3D:
+				mat = (src_mat as StandardMaterial3D).duplicate(true) as StandardMaterial3D
+			if mat == null:
+				mat = StandardMaterial3D.new()
+			mat.resource_local_to_scene = true
+			mat.albedo_texture = texture
+			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+			mi.set_surface_override_material(i, mat)
+	for child in node.get_children():
+		_apply_town_hall_flag_material_recursive(child, texture)
+
+
+func _clear_town_hall_flag_material_recursive(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		var mesh: Mesh = mi.mesh
+		var count: int = mesh.get_surface_count() if mesh else 0
+		for i in count:
+			if _is_town_hall_flag_surface(mi, i):
+				mi.set_surface_override_material(i, null)
+	for child in node.get_children():
+		_clear_town_hall_flag_material_recursive(child)
+
+
+func _decode_town_hall_flag_texture(body: PackedByteArray, url: String) -> Texture2D:
+	var image := Image.new()
+	var err := image.load_png_from_buffer(body)
+	if err != OK:
+		err = image.load_jpg_from_buffer(body)
+	if err != OK:
+		err = image.load_webp_from_buffer(body)
+	if err != OK:
+		push_warning("Town Hall flag image decode failed for %s" % url)
+		return null
+	var texture := ImageTexture.create_from_image(image)
+	return texture
+
+
+func _finish_town_hall_flag_request(url: String, texture: Texture2D) -> void:
+	_town_hall_flag_pending_requests.erase(url)
+	if texture != null:
+		_town_hall_flag_texture_cache[url] = texture
+	var models: Array = _town_hall_flag_pending_models.get(url, [])
+	_town_hall_flag_pending_models.erase(url)
+	if texture == null:
+		return
+	for model in models:
+		if is_instance_valid(model):
+			_apply_town_hall_flag_material_recursive(model, texture)
+
+
+func _request_town_hall_flag_texture(url: String) -> void:
+	if _town_hall_flag_pending_requests.has(url):
+		return
+	_town_hall_flag_pending_requests[url] = true
+	var http := HTTPRequest.new()
+	http.timeout = 12.0
+	add_child(http)
+	var request_url := _town_hall_flag_absolute_url(url)
+	http.request_completed.connect(func(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+		if is_instance_valid(http):
+			http.queue_free()
+		if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+			push_warning("Town Hall flag request failed %s result=%s status=%s" % [request_url, result, response_code])
+			_finish_town_hall_flag_request(url, null)
+			return
+		_finish_town_hall_flag_request(url, _decode_town_hall_flag_texture(body, request_url))
+	)
+	var err := http.request(request_url)
+	if err != OK:
+		http.queue_free()
+		push_warning("Town Hall flag request could not start %s error=%s" % [request_url, err])
+		_finish_town_hall_flag_request(url, null)
+
+
+func _apply_town_hall_flag_url(model: Node, raw_url: String) -> void:
+	var url := str(raw_url).strip_edges()
+	if model == null:
+		return
+	if url == "":
+		_clear_town_hall_flag_material_recursive(model)
+		return
+	var cached: Texture2D = _town_hall_flag_texture_cache.get(url, null)
+	if cached != null:
+		_apply_town_hall_flag_material_recursive(model, cached)
+		return
+	var models: Array = _town_hall_flag_pending_models.get(url, [])
+	models.append(model)
+	_town_hall_flag_pending_models[url] = models
+	_request_town_hall_flag_texture(url)
+
+
+func _apply_town_hall_flag_to_building_data(building: Dictionary) -> void:
+	if building.get("id", "") != "town_hall":
+		return
+	var node: Node3D = building.get("node", null)
+	if not is_instance_valid(node):
+		return
+	var has_explicit_flag_key := building.has("town_hall_flag_url") or building.has("flag_url")
+	var url := str(building.get("town_hall_flag_url", building.get("flag_url", ""))).strip_edges()
+	if url == "" and not has_explicit_flag_key and node.has_meta("town_hall_flag_url"):
+		url = str(node.get_meta("town_hall_flag_url", ""))
+	var model := _get_building_visual_model(node)
+	if is_instance_valid(model):
+		_apply_town_hall_flag_url(model, url)
+
+
 func _create_fps_label() -> void:
 	if not canvas:
 		return
@@ -2168,7 +2325,7 @@ func _server_buildings_signature(server_buildings: Array) -> String:
 	for b in server_buildings:
 		if int(b.get("grid_index", 0)) != my_grid_index:
 			continue
-		parts.append("%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
+		parts.append("%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
 			str(b.get("id", "")),
 			str(b.get("type", "")),
 			str(b.get("level", 1)),
@@ -2180,6 +2337,7 @@ func _server_buildings_signature(server_buildings: Array) -> String:
 			str(b.get("has_ship", "")),
 			str(b.get("ship_troops", "")),
 			str(b.get("grid_index", 0)),
+			str(b.get("town_hall_flag_url", b.get("flag_url", ""))),
 		])
 	parts.sort()
 	return "%s|%s" % [player_key, "|".join(PackedStringArray(parts))]
@@ -2293,6 +2451,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				node.add_child(model)
 				_apply_cel_shader(model)
 				_apply_building_albedo(model, def)
+				if building_type == "town_hall":
+					_apply_town_hall_flag_url(model, str(b.get("town_hall_flag_url", b.get("flag_url", ""))))
 				if building_type == "archer_tower":
 					_apply_archer_tower_level_visuals(model, level)
 
@@ -2323,7 +2483,10 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			"hp_fill": hp_bar_data.fill,
 			"server_id": server_id,
 			"stored": stored,
+			"town_hall_flag_url": str(b.get("town_hall_flag_url", b.get("flag_url", ""))),
 		}
+		if node and b_data.town_hall_flag_url != "":
+			node.set_meta("town_hall_flag_url", b_data.town_hall_flag_url)
 		placed_buildings.append(b_data)
 		_apply_building_runtime_level(b_data)
 		# Spawn tower unit (archer on top)
@@ -2367,7 +2530,8 @@ func _sync_react_buildings() -> void:
 				arr.append({
 					"id": bid,
 					"level": b.get("level", 1),
-					"server_id": b.get("server_id", "")
+					"server_id": b.get("server_id", ""),
+					"town_hall_flag_url": b.get("town_hall_flag_url", "")
 				})
 				counts[bid] = counts.get(bid, 0) + 1
 		bridge.send_to_react("state", {"buildings": arr})
@@ -2416,6 +2580,33 @@ func _sync_react_buildings() -> void:
 					if blvl >= lvl_i:
 						done_req += 1
 		bridge.send_to_react("th_info", {"level": th_lvl, "unlock": TH_UNLOCK, "max_counts": max_counts, "progress": done_req, "progress_total": total_req})
+
+
+func _set_player_town_hall_flag(raw_url: String) -> void:
+	var url := str(raw_url).strip_edges()
+	var changed := false
+	for bs in _building_systems:
+		if not is_instance_valid(bs):
+			continue
+		for b in bs.placed_buildings:
+			if b.get("id", "") != "town_hall":
+				continue
+			b["town_hall_flag_url"] = url
+			b["flag_url"] = url
+			var node: Node3D = b.get("node", null)
+			if is_instance_valid(node):
+				if url == "":
+					if node.has_meta("town_hall_flag_url"):
+						node.remove_meta("town_hall_flag_url")
+				else:
+					node.set_meta("town_hall_flag_url", url)
+			bs._apply_town_hall_flag_to_building_data(b)
+			changed = true
+	if changed:
+		_sync_react_buildings()
+		if selected_building.get("id", "") == "town_hall":
+			selected_building["town_hall_flag_url"] = url
+			_select_building(selected_building)
 
 func _port_number_sort(a: Dictionary, b: Dictionary) -> bool:
 	var ai: int = int(a.get("grid_index", 0))
@@ -3633,6 +3824,8 @@ func _select_building(b: Dictionary) -> void:
 			"port_number": bs_port_number,
 			"troop_levels": troop_levels,
 			"altar_skills": altar_skill_levels,
+			"town_hall_flag_url": b.get("town_hall_flag_url", ""),
+			"flag_url": b.get("town_hall_flag_url", ""),
 		})
 
 	# Range indicator for defense buildings
@@ -3922,6 +4115,8 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 				new_model.position = def.get("model_offset", Vector3.ZERO)
 			model.add_child(new_model)
 			_apply_building_albedo(new_model, def)
+			if b.id == "town_hall":
+				_apply_town_hall_flag_url(new_model, str(b.get("town_hall_flag_url", "")))
 			if b.id == "archer_tower":
 				_apply_archer_tower_level_visuals(new_model, b.level)
 			# Recreate HP bar (old one was freed with model children)
@@ -4595,6 +4790,8 @@ func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> v
 			node.add_child(model)
 			_apply_cel_shader(model)
 			_apply_building_albedo(model, def)
+			if building_id == "town_hall":
+				_apply_town_hall_flag_url(model, str(b.get("town_hall_flag_url", "")))
 			if building_id == "archer_tower":
 				_apply_archer_tower_level_visuals(model, lvl)
 

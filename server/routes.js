@@ -3418,6 +3418,20 @@ const GAME_SHOP_PRODUCTS = {
     dailyLimit: 100,
     maxQuantity: 1,
   },
+  town_hall_flag: {
+    id: 'town_hall_flag',
+    sku: 'town_hall_flag',
+    title: 'Town Hall Flag',
+    subtitle: 'Upload a custom Town Hall flag',
+    kind: 'town_hall_flag',
+    usdPriceE6: '5000000',
+    copDiscountBps: 0,
+    maxQuantity: 1,
+    hidden: true,
+    allowedPayments: {
+      solana: ['clash'],
+    },
+  },
   demon_king_upgrade: {
     id: 'demon_king_upgrade',
     sku: 'demon_king_upgrade',
@@ -3451,35 +3465,104 @@ function gameShopUsdPriceE6ForPayment(product, { chain = '', payment = '' } = {}
   return base;
 }
 
+function isGameShopPaymentAllowed(product, { chain = '', payment = '' } = {}) {
+  if (!product?.allowedPayments) return true;
+  const chainKey = String(chain || '').toLowerCase();
+  const paymentKey = String(payment || '').toLowerCase();
+  const allowed = product.allowedPayments[chainKey];
+  return Array.isArray(allowed) && allowed.map((item) => String(item).toLowerCase()).includes(paymentKey);
+}
+
+function gameShopPaymentNotAllowedMessage(product) {
+  if (product?.sku === 'town_hall_flag') {
+    return 'Town Hall flag customization must be paid with CLASH on Solana';
+  }
+  return 'This shop item does not support the selected payment method';
+}
+
+function gameShopProductForClient(product) {
+  if (!product) return null;
+  const copDiscountBps = getGameShopCopDiscountBps(product);
+  const copUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'base', payment: 'cop' });
+  const clashUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'solana', payment: 'clash' });
+  const hasCopPrice = product.copUsdPriceE6 || copDiscountBps != null;
+  return {
+    id: product.id,
+    sku: product.sku,
+    skuBytes32: skuToBytes32(product.sku),
+    title: product.title,
+    subtitle: product.subtitle,
+    kind: product.kind,
+    usdPriceE6: product.usdPriceE6,
+    priceUsd: unitsToDecimalString(BigInt(product.usdPriceE6), 6),
+    copUsdPriceE6: hasCopPrice ? copUsdPriceE6.toString() : null,
+    copPriceUsd: hasCopPrice ? unitsToDecimalString(copUsdPriceE6, 6) : null,
+    clashUsdPriceE6: hasCopPrice ? clashUsdPriceE6.toString() : null,
+    clashPriceUsd: hasCopPrice ? unitsToDecimalString(clashUsdPriceE6, 6) : null,
+    copDiscountBps,
+    durationHours: product.durationHours || null,
+    rewards: product.rewards || null,
+    boosts: product.boosts || null,
+    messageCredits: product.messageCredits || null,
+    copBonusCredits: product.copBonusCredits || null,
+    dailyLimit: product.dailyLimit || null,
+    maxQuantity: product.maxQuantity,
+  };
+}
+
 function gameShopProductsForClient() {
-  return Object.values(GAME_SHOP_PRODUCTS).filter((product) => !product.hidden && !product.retired).map((product) => {
-    const copDiscountBps = getGameShopCopDiscountBps(product);
-    const copUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'base', payment: 'cop' });
-    const clashUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'solana', payment: 'clash' });
-    const hasCopPrice = product.copUsdPriceE6 || copDiscountBps != null;
-    return {
-      id: product.id,
-      sku: product.sku,
-      skuBytes32: skuToBytes32(product.sku),
-      title: product.title,
-      subtitle: product.subtitle,
-      kind: product.kind,
-      usdPriceE6: product.usdPriceE6,
-      priceUsd: unitsToDecimalString(BigInt(product.usdPriceE6), 6),
-      copUsdPriceE6: hasCopPrice ? copUsdPriceE6.toString() : null,
-      copPriceUsd: hasCopPrice ? unitsToDecimalString(copUsdPriceE6, 6) : null,
-      clashUsdPriceE6: hasCopPrice ? clashUsdPriceE6.toString() : null,
-      clashPriceUsd: hasCopPrice ? unitsToDecimalString(clashUsdPriceE6, 6) : null,
-      copDiscountBps,
-      durationHours: product.durationHours || null,
-      rewards: product.rewards || null,
-      boosts: product.boosts || null,
-      messageCredits: product.messageCredits || null,
-      copBonusCredits: product.copBonusCredits || null,
-      dailyLimit: product.dailyLimit || null,
-      maxQuantity: product.maxQuantity,
-    };
-  });
+  return Object.values(GAME_SHOP_PRODUCTS)
+    .filter((product) => !product.hidden && !product.retired)
+    .map(gameShopProductForClient);
+}
+
+const TOWN_HALL_FLAG_UPLOAD_ROOT = path.join(__dirname, 'public', 'town-hall-flags');
+const TOWN_HALL_FLAG_MAX_BYTES = Math.max(64 * 1024, Math.min(1024 * 1024, Number(process.env.TOWN_HALL_FLAG_MAX_BYTES || 512 * 1024)));
+const TOWN_HALL_FLAG_ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+function parseTownHallFlagImagePayload(imageData, explicitMime = '') {
+  const raw = String(imageData || '').trim();
+  let mimeType = String(explicitMime || '').trim().toLowerCase();
+  let base64 = raw;
+  const match = raw.match(/^data:([^;,]+);base64,(.+)$/i);
+  if (match) {
+    mimeType = String(match[1] || '').trim().toLowerCase();
+    base64 = match[2];
+  }
+  if (!TOWN_HALL_FLAG_ALLOWED_MIME.has(mimeType)) {
+    const err = new Error('Flag image must be PNG, JPG, or WEBP');
+    err.status = 400;
+    throw err;
+  }
+  if (!/^[A-Za-z0-9+/=\s]+$/.test(base64 || '')) {
+    const err = new Error('Flag image payload is not valid base64');
+    err.status = 400;
+    throw err;
+  }
+  const buffer = Buffer.from(base64.replace(/\s+/g, ''), 'base64');
+  if (buffer.length < 32 || buffer.length > TOWN_HALL_FLAG_MAX_BYTES) {
+    const err = new Error(`Flag image must be under ${Math.floor(TOWN_HALL_FLAG_MAX_BYTES / 1024)}KB`);
+    err.status = 400;
+    throw err;
+  }
+  const isPng = buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const isJpeg = buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  const isWebp = buffer.length >= 12
+    && buffer.subarray(0, 4).toString('ascii') === 'RIFF'
+    && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+  if ((mimeType === 'image/png' && !isPng)
+      || (mimeType === 'image/jpeg' && !isJpeg)
+      || (mimeType === 'image/webp' && !isWebp)) {
+    const err = new Error('Flag image content does not match its type');
+    err.status = 400;
+    throw err;
+  }
+  const extension = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
+  return { buffer, mimeType, extension };
+}
+
+function townHallFlagPublicUrl(playerId, filename) {
+  return `/api/town-hall-flags/${encodeURIComponent(playerId)}/${encodeURIComponent(filename)}`;
 }
 
 function isRetiredGameShopProduct(product) {
@@ -3770,6 +3853,11 @@ function applyGameShopProduct(playerId, product, quantity, context = {}) {
       quantity,
     });
     return { ai_subscription: { lifetime_daily_limit: product.dailyLimit || 100 }, ai_quota: quota };
+  }
+  if (product.kind === 'town_hall_flag') {
+    return {
+      town_hall_flag_credit: true,
+    };
   }
   return {};
 }
@@ -5920,6 +6008,93 @@ router.get('/shop/config', (req, res) => {
   }
 });
 
+router.get('/town-hall-flags/:playerId/:filename', (req, res) => {
+  const playerId = String(req.params.playerId || '');
+  const filename = String(req.params.filename || '');
+  if (!/^[A-Za-z0-9_-]+$/.test(playerId)
+      || !/^\d+-[a-f0-9]{64}\.(png|jpg|jpeg|webp)$/i.test(filename)) {
+    return res.status(404).end();
+  }
+  const filePath = path.join(TOWN_HALL_FLAG_UPLOAD_ROOT, playerId, filename);
+  const root = path.resolve(TOWN_HALL_FLAG_UPLOAD_ROOT);
+  const resolved = path.resolve(filePath);
+  if (!resolved.startsWith(root + path.sep)) return res.status(404).end();
+  if (!fs.existsSync(resolved)) return res.status(404).end();
+  res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  return res.sendFile(resolved);
+});
+
+router.post('/town-hall-flag', auth, (req, res) => {
+  let savedPath = null;
+  try {
+    const token = req.body || {};
+    const txHash = String(token.txSignature || token.tx_hash || token.txHash || '').trim() || null;
+    const purchase = db.getUnconsumedTownHallFlagPurchase(req.player.id, txHash);
+    if (!purchase) {
+      return res.status(402).json({ error: 'Buy a Town Hall flag upload with CLASH on Solana first' });
+    }
+
+    const parsed = parseTownHallFlagImagePayload(token.imageData || token.image_data, token.mimeType || token.mime_type);
+    const hash = crypto.createHash('sha256').update(parsed.buffer).digest('hex');
+    const safePlayerId = String(req.player.id).replace(/[^A-Za-z0-9_-]/g, '_');
+    const filename = `${purchase.id}-${hash}.${parsed.extension}`;
+    const playerDir = path.join(TOWN_HALL_FLAG_UPLOAD_ROOT, safePlayerId);
+    fs.mkdirSync(playerDir, { recursive: true });
+    savedPath = path.join(playerDir, filename);
+    fs.writeFileSync(savedPath, parsed.buffer, { flag: 'w' });
+
+    const imageUrl = townHallFlagPublicUrl(safePlayerId, filename);
+    const flag = db.setTownHallFlag(req.player.id, {
+      imageUrl,
+      imagePath: savedPath,
+      imageSha256: hash,
+      mimeType: parsed.mimeType,
+      purchaseId: purchase.id,
+      txHash: purchase.tx_hash,
+    });
+    if (flag?.error) {
+      return res.status(400).json({ error: flag.error });
+    }
+    return res.json({
+      success: true,
+      town_hall_flag_url: flag.image_url,
+      town_hall_flag: {
+        image_url: flag.image_url,
+        updated_at: flag.updated_at,
+        purchase_id: flag.purchase_id || null,
+        tx_hash: flag.tx_hash || null,
+      },
+      purchase: {
+        id: purchase.id,
+        tx_hash: purchase.tx_hash,
+        token: purchase.token,
+        amount: purchase.amount,
+      },
+    });
+  } catch (err) {
+    if (savedPath) {
+      try { fs.unlinkSync(savedPath); } catch {}
+    }
+    const message = err?.message || 'Flag upload failed';
+    return res.status(err?.status || 500).json({ error: message.slice(0, 180) });
+  }
+});
+
+router.delete('/town-hall-flag', auth, (req, res) => {
+  try {
+    const cleared = db.clearTownHallFlag(req.player.id);
+    if (cleared?.error) return res.status(400).json({ error: cleared.error });
+    return res.json({
+      success: true,
+      town_hall_flag_url: '',
+      town_hall_flag: null,
+    });
+  } catch (err) {
+    const message = err?.message || 'Flag reset failed';
+    return res.status(500).json({ error: message.slice(0, 180) });
+  }
+});
+
 router.post('/shop/base/quote', auth, async (req, res) => {
   const quoteStartedAt = Date.now();
   const requestedSku = String(req.body?.sku || '').trim();
@@ -5952,6 +6127,9 @@ router.post('/shop/base/quote', auth, async (req, res) => {
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
     if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
+    if (!isGameShopPaymentAllowed(product, { chain: 'base', payment: 'cop' })) {
+      return res.status(400).json({ error: gameShopPaymentNotAllowedMessage(product) });
+    }
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
     }
@@ -6026,7 +6204,7 @@ router.post('/shop/base/quote', auth, async (req, res) => {
       discountBps: productDiscountBps == null ? null : discountBps.toString(),
       fullUsdPriceE6: fullUsdPriceE6.toString(),
       decimals,
-      product: gameShopProductsForClient().find((item) => item.id === product.id),
+      product: gameShopProductForClient(product),
       quantity: quantity.toString(),
       unitPrice: unitPrice.toString(),
       unitPriceFormatted: unitsToDecimalString(unitPrice, decimals),
@@ -6145,6 +6323,9 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
     if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
+    if (!isGameShopPaymentAllowed(product, { chain: 'base', payment: 'cop' })) {
+      return res.status(400).json({ error: gameShopPaymentNotAllowedMessage(product) });
+    }
     const quantity = Number(purchase.quantity);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
       return res.status(400).json({ error: 'Bad purchase quantity' });
@@ -6193,7 +6374,7 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
     });
     res.json({
       success: true,
-      product: gameShopProductsForClient().find((item) => item.id === product.id),
+      product: gameShopProductForClient(product),
       quantity,
       txHash,
       ...grant,
@@ -6508,6 +6689,11 @@ async function verifySolanaShopPurchaseFromTx({
     err.status = 503;
     throw err;
   }
+  if (!isGameShopPaymentAllowed(product, { chain: 'solana', payment })) {
+    const err = new Error(gameShopPaymentNotAllowedMessage(product));
+    err.status = 400;
+    throw err;
+  }
 
   const expectedAmount = BigInt(memoData.amt);
   const expectedMint = payment === 'usdc' ? solana.usdcMint
@@ -6736,7 +6922,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
       });
       return res.json({
         success: true,
-        product: gameShopProductsForClient().find((item) => item.id === paymentInfo.product.id),
+        product: gameShopProductForClient(paymentInfo.product),
         quantity: paymentInfo.quantity,
         txSignature: signature,
         payment: paymentInfo.payment,
@@ -6855,7 +7041,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
 
     res.json({
       success: true,
-      product: gameShopProductsForClient().find((item) => item.id === product.id),
+      product: gameShopProductForClient(product),
       quantity,
       txSignature: signature,
       payment,
@@ -7069,6 +7255,9 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     if (payment === 'clash' && !solana.clashReady) {
       return res.status(503).json({ error: 'CLASH shop is not configured yet - set GAME_SHOP_SOLANA_CLASH_MINT' });
     }
+    if (!isGameShopPaymentAllowed(product, { chain: 'solana', payment })) {
+      return res.status(400).json({ error: gameShopPaymentNotAllowedMessage(product) });
+    }
 
     const buyer = String(req.body?.buyer || '').trim();
     if (!buyer || !SOLANA_WALLET_RE.test(buyer)) {
@@ -7181,7 +7370,7 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
       mint,                                 // null for native SOL transfer
       decimals,
       priceSource,
-      product: gameShopProductsForClient().find((item) => item.id === product.id),
+      product: gameShopProductForClient(product),
       quantity,
       amount: amount.toString(),            // raw units for transfer instruction
       amountFormatted: unitsToDecimalString(amount, decimals),
@@ -7546,7 +7735,7 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
       mint: paymentSpec.kind === 'erc20' ? getAddress(paymentSpec.token) : null,
       decimals: paymentSpec.decimals,
       priceSource,
-      product: gameShopProductsForClient().find((p) => p.id === product.id),
+      product: gameShopProductForClient(product),
       quantity,
       amount: amount.toString(),
       amountFormatted: unitsToDecimalString(amount, paymentSpec.decimals),
@@ -7646,6 +7835,9 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
     if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
+    if (!isGameShopPaymentAllowed(product, { chain: chainKey, payment: String(memoData.pay || 'usdc') })) {
+      return res.status(400).json({ error: gameShopPaymentNotAllowedMessage(product) });
+    }
     const quantity = Number(memoData.qty);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
       return res.status(400).json({ error: 'Bad purchase quantity' });
@@ -7757,7 +7949,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     });
     res.json({
       success: true,
-      product: gameShopProductsForClient().find((p) => p.id === product.id),
+        product: gameShopProductForClient(product),
       quantity,
       chain: chainKey,
       payment: memoPayment,
@@ -7855,6 +8047,9 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
     if (payment !== 'usdc' && payment !== 'apt') {
       return res.status(400).json({ error: 'Bad payment token (usdc or apt)' });
     }
+    if (!isGameShopPaymentAllowed(product, { chain: 'aptos', payment })) {
+      return res.status(400).json({ error: gameShopPaymentNotAllowedMessage(product) });
+    }
 
     const buyer = String(req.body?.buyer || '').trim();
     if (!/^0x[0-9a-fA-F]{1,64}$/.test(buyer)) {
@@ -7931,7 +8126,7 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
       payment,
       decimals,
       priceSource,
-      product: gameShopProductsForClient().find((p) => p.id === product.id),
+      product: gameShopProductForClient(product),
       quantity,
       amount: amount.toString(),
       amountFormatted: unitsToDecimalString(amount, decimals),
@@ -8036,6 +8231,9 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
     const payment = String(memoData.pay || 'usdc');
     if (payment !== 'usdc' && payment !== 'apt') {
       return res.status(400).json({ error: 'Bad payment token' });
+    }
+    if (!isGameShopPaymentAllowed(product, { chain: 'aptos', payment })) {
+      return res.status(400).json({ error: gameShopPaymentNotAllowedMessage(product) });
     }
     const expectedAmount = BigInt(memoData.amt);
     const expectedAsset = normalizeAptosWallet(String(memoData.asset || '').toLowerCase());
@@ -8165,7 +8363,7 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
     });
     res.json({
       success: true,
-      product: gameShopProductsForClient().find((p) => p.id === product.id),
+      product: gameShopProductForClient(product),
       quantity,
       chain: 'aptos',
       txHash,
@@ -21596,6 +21794,10 @@ function tournamentRequiresClashRewardWallet(t) {
   return prizeTiers.some((tier) => rewardsContainClashToken(tier.rewards || []));
 }
 
+function tournamentRequiresTwitterHandle(t) {
+  return !!Number(t?.registration_require_twitter || 0);
+}
+
 function tournamentRowToPublic(t, options = {}) {
   const now = nowSql();
   const phase = tournamentPhase(t, now);
@@ -21680,6 +21882,7 @@ function tournamentRowToPublic(t, options = {}) {
     status: t.status,
     phase,
     preregistration_enabled: !!Number(t.preregistration_enabled || 0),
+    registration_require_twitter: tournamentRequiresTwitterHandle(t),
     registration_opens_at: cleanSqlDate(t.registration_opens_at),
     registration_closes_at: cleanSqlDate(t.registration_closes_at),
     can_join: canJoinTournament(t, now),
@@ -22215,6 +22418,12 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   }
   const twitter = tournamentTwitterHandleFromBody(req.body || {});
   if (!twitter.ok) return res.status(400).json({ error: twitter.error });
+  if (tournamentRequiresTwitterHandle(t) && !twitter.handle) {
+    return res.status(400).json({
+      error: 'Twitter/X handle required to register for this tournament',
+      reason: 'twitter_handle_required',
+    });
+  }
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.
   const teamDex = normalizeTournamentMode(t.mode) === 'dex_vs_dex' ? req.player.dex : null;
@@ -23130,7 +23339,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const {
     name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
-    min_town_hall_level,
+    min_town_hall_level, registration_require_twitter,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
@@ -23232,15 +23441,16 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     return res.status(400).json({ error: e.message });
   }
   const prereg = parseBool(preregistration_enabled) ? 1 : 0;
+  const requireTwitter = parseBool(registration_require_twitter) ? 1 : 0;
   const r = db.db.prepare(`
     INSERT INTO tournaments (
       event_kind, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
       scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
       prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
-      shield_hours, freeze_trophies, min_town_hall_level, preregistration_enabled, registration_opens_at, registration_closes_at
+      shield_hours, freeze_trophies, min_town_hall_level, registration_require_twitter, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     eventKind,
     name.trim(),
@@ -23279,6 +23489,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     shieldHours,
     freeze,
     minTownHallLevel,
+    requireTwitter,
     prereg,
     registrationOpenIso,
     registrationCloseIso
@@ -23296,7 +23507,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const {
     name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
-    min_town_hall_level,
+    min_town_hall_level, registration_require_twitter,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
@@ -23423,6 +23634,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     min_town_hall_level: min_town_hall_level !== undefined
       ? Math.max(0, Math.min(20, Math.floor(Number(min_town_hall_level || 0) || 0)))
       : tournamentTownHallRequirement(t),
+    registration_require_twitter: registration_require_twitter !== undefined
+      ? (parseBool(registration_require_twitter) ? 1 : 0)
+      : Number(t.registration_require_twitter || 0),
     sort_by: nextSortBy,
     points_trophy_weight: pointWeights.trophies,
     points_volume_weight: pointWeights.volume,
@@ -23456,7 +23670,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
                             scoring_mode = ?, daily_pool_points = ?, daily_pool_growth_pct = ?, daily_pool_overrides = ?, daily_pool_enabled_at = ?, daily_pool_award_time_utc = ?,
                             prize_currency = ?, prize_tiers = ?, mega_config = ?, reward_config = ?, rewards_in_cop = ?, seeker_only = ?,
-                            freeze_trophies = ?, min_town_hall_level = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
+                            freeze_trophies = ?, min_town_hall_level = ?, registration_require_twitter = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
   `).run(
     next.event_kind,
@@ -23496,6 +23710,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.seeker_only,
     next.freeze_trophies,
     next.min_town_hall_level,
+    next.registration_require_twitter,
     next.preregistration_enabled,
     next.registration_opens_at,
     next.registration_closes_at,

@@ -572,12 +572,12 @@ export async function buySolanaShopItem({
     deadline: quote.deadline,
   });
 
-  // Shop payments are user-facing and short-lived, so prefer our same-origin
-  // RPC proxy first. Public browser RPCs are useful fallbacks, but on Seeker
-  // / mobile browsers they often fail with CORS/403/closed connections.
+  // Shop payments are user-facing and short-lived, so prefer the paid Alchemy
+  // proxy first. The default Solana proxy can be quota-limited and should only
+  // be a fallback for purchases.
   const shopPrimaryRpcUrls = uniqueStrings([
-    SAME_ORIGIN_SOLANA_RPC_URL,
     SAME_ORIGIN_SOLANA_ALCHEMY_URL,
+    SAME_ORIGIN_SOLANA_RPC_URL,
   ]);
   const shopRpcUrls = uniqueStrings([
     ...shopPrimaryRpcUrls,

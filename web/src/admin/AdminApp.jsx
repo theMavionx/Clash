@@ -2034,6 +2034,10 @@ function TournamentScheduleStep({ form, update }) {
           <DateTimeField label="Registration opens" value={form.registration_opens_at} onChange={(value) => update({ registration_opens_at: value })} />
           <DateTimeField label="Registration closes" value={form.registration_closes_at} onChange={(value) => update({ registration_closes_at: value })} />
         </div>
+        <div className="admin-form-grid three">
+          <label className="admin-field"><span className="admin-label">Twitter/X handle</span><select className="admin-select" value={form.registration_require_twitter ? '1' : '0'} onChange={(e) => update({ registration_require_twitter: e.target.value === '1' })}><option value="0">Optional</option><option value="1">Required to register</option></select></label>
+          <div className="admin-help">When required, players must enter a valid @handle before joining or pre-registering.</div>
+        </div>
         <div className="admin-card nested-card">
           <div className="admin-card-head">
             <div>

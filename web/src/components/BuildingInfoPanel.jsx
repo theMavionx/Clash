@@ -1,12 +1,16 @@
 import { memo, useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePlayer, useResources, useSend, useSelectedBuilding } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
+import { useFarcaster } from '../hooks/useFarcaster';
 import useHydratedNftPlayer from '../hooks/useHydratedNftPlayer';
 import { fetchOwnedNftsForPlayerWallets, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { buySolanaShopItem } from '../lib/gameShop';
+import { openSolanaWallet } from '../lib/solanaWalletUi';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -72,6 +76,8 @@ const CARD_TROOP_STYLE_MAP = {
 
 const TROOP_COST = 100; // gold per unit
 const SLOT_FILLER = '_SLOT_FILLER_';
+const TOWN_HALL_FLAG_SKU = 'town_hall_flag';
+const TOWN_HALL_FLAG_CANVAS_SIZE = 256;
 
 const THUMBNAIL_MAP = {
   mine: imgMine,
@@ -440,6 +446,49 @@ function demonKingDisplayLabel(value, tokens = []) {
   return text ? `#${text}` : '';
 }
 
+function loadTownHallFlagImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not read flag image'));
+    };
+    img.src = url;
+  });
+}
+
+async function prepareTownHallFlagImage(file) {
+  if (!file) throw new Error('Choose a flag image');
+  const type = String(file.type || '').toLowerCase();
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(type)) {
+    throw new Error('Use PNG, JPG, or WEBP');
+  }
+  if (file.size > 4 * 1024 * 1024) {
+    throw new Error('Image is too large');
+  }
+  const img = await loadTownHallFlagImage(file);
+  const canvas = document.createElement('canvas');
+  canvas.width = TOWN_HALL_FLAG_CANVAS_SIZE;
+  canvas.height = TOWN_HALL_FLAG_CANVAS_SIZE;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Image resize is unavailable');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const scale = Math.max(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
+  const w = Math.max(1, img.naturalWidth * scale);
+  const h = Math.max(1, img.naturalHeight * scale);
+  const x = (canvas.width - w) / 2;
+  const y = (canvas.height - h) / 2;
+  ctx.drawImage(img, x, y, w, h);
+  return canvas.toDataURL('image/png');
+}
+
 function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
   const { selectedBuilding: building } = useSelectedBuilding();
@@ -450,6 +499,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
   const solWallet = useSolWallet();
+  const { setVisible: openWalletModal } = useWalletModal();
+  const { isInFrame } = useFarcaster();
   const optionalPrivy = useOptionalPrivy();
   const solAddress = solWallet?.publicKey?.toBase58?.()
     || (optionalPrivy.solanaWallets || []).find((wallet) => wallet?.address)?.address
@@ -477,7 +528,21 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const [altarLevels, setAltarLevels] = useState({ prosperity: 0, ward: 0, glory: 0 });
   const [altarBusy, setAltarBusy] = useState(false);
   const [altarError, setAltarError] = useState('');
+  const [flagFile, setFlagFile] = useState(null);
+  const [flagPreview, setFlagPreview] = useState('');
+  const [flagBusy, setFlagBusy] = useState(false);
+  const [flagStatus, setFlagStatus] = useState('');
   const demonKingPortForceSyncRef = useRef(new Map());
+
+  const openSolanaConnect = useCallback(() => {
+    openSolanaWallet({
+      wallets: solWallet.wallets,
+      select: solWallet.select,
+      connect: solWallet.connect,
+      openWalletModal,
+      inFrame: isInFrame,
+    });
+  }, [isInFrame, openWalletModal, solWallet.connect, solWallet.select, solWallet.wallets]);
 
   useEffect(() => {
     if (building?.open_load_troops) {
@@ -485,7 +550,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
     } else {
       setView('ACTIONS');
     }
-  }, [building?.id, building?.open_load_troops]);
+    setFlagFile(null);
+    setFlagPreview('');
+    setFlagStatus('');
+  }, [building?.id, building?.server_id, building?.open_load_troops]);
 
   useEffect(() => {
     if (building?.altar_skills) {
@@ -706,6 +774,120 @@ function BuildingInfoPanel({ onOpenTroops }) {
     }
   }, [altarBusy, altarLevels, building, canAffordAltarCost, player?.token, sendToGodot]);
 
+  const handleTownHallFlagFile = useCallback(async (event) => {
+    const file = event?.target?.files?.[0] || null;
+    setFlagFile(file);
+    setFlagStatus('');
+    setFlagPreview('');
+    if (!file) return;
+    try {
+      const dataUrl = await prepareTownHallFlagImage(file);
+      setFlagPreview(dataUrl);
+    } catch (err) {
+      setFlagFile(null);
+      setFlagStatus((err?.message || 'Could not prepare image').slice(0, 120));
+    }
+  }, []);
+
+  const applyTownHallFlagLocal = useCallback((url, flagData = null) => {
+    const nextUrl = String(url || '').trim();
+    const nextBuilding = { ...building, town_hall_flag_url: nextUrl, flag_url: nextUrl };
+    window.onGodotMessage?.({ action: 'building_selected', data: nextBuilding });
+    window.dispatchEvent(new CustomEvent('clash-player-patch', {
+      detail: {
+        town_hall_flag: flagData,
+        buildings: Array.isArray(player?.buildings)
+          ? player.buildings.map((row) => {
+              const type = row?.type || row?.id;
+              return type === 'town_hall' ? { ...row, town_hall_flag_url: nextUrl, flag_url: nextUrl } : row;
+            })
+          : player?.buildings,
+      },
+    }));
+    sendToGodot('set_town_hall_flag', { url: nextUrl });
+  }, [building, player?.buildings, sendToGodot]);
+
+  const handleTownHallFlagUpload = useCallback(async () => {
+    if (flagBusy) return;
+    const token = player?.token || window._playerToken;
+    if (!token) {
+      setFlagStatus('Login required');
+      return;
+    }
+    if (!flagFile) {
+      setFlagStatus('Choose a flag image');
+      return;
+    }
+    const buyer = solWallet?.publicKey?.toBase58?.() || '';
+    if (!buyer) {
+      setFlagStatus('Connect a Solana wallet to pay with CLASH');
+      openSolanaConnect();
+      return;
+    }
+    setFlagBusy(true);
+    setFlagStatus('Preparing image...');
+    try {
+      const imageData = flagPreview || await prepareTownHallFlagImage(flagFile);
+      setFlagPreview(imageData);
+      setFlagStatus('Confirm CLASH payment...');
+      const payment = await buySolanaShopItem({
+        solWallet,
+        buyer,
+        token,
+        sku: TOWN_HALL_FLAG_SKU,
+        payment: 'clash',
+        quantity: 1,
+      });
+      setFlagStatus('Uploading flag...');
+      const res = await fetch('/api/town-hall-flag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify({
+          txSignature: payment.signature,
+          imageData,
+          mimeType: 'image/png',
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.error) throw new Error(json.error || `HTTP ${res.status}`);
+      const url = json.town_hall_flag_url || json.town_hall_flag?.image_url;
+      if (!url) throw new Error('Server did not return flag URL');
+      applyTownHallFlagLocal(url, json.town_hall_flag || { image_url: url });
+      setFlagStatus('Flag updated');
+    } catch (err) {
+      setFlagStatus((err?.shortMessage || err?.message || 'Flag upload failed').slice(0, 180));
+    } finally {
+      setFlagBusy(false);
+    }
+  }, [applyTownHallFlagLocal, flagBusy, flagFile, flagPreview, openSolanaConnect, player?.token, solWallet]);
+
+  const handleTownHallFlagReset = useCallback(async () => {
+    if (flagBusy) return;
+    const token = player?.token || window._playerToken;
+    if (!token) {
+      setFlagStatus('Login required');
+      return;
+    }
+    setFlagBusy(true);
+    setFlagStatus('Restoring standard flag...');
+    try {
+      const res = await fetch('/api/town-hall-flag', {
+        method: 'DELETE',
+        headers: { 'x-token': token },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.error) throw new Error(json.error || `HTTP ${res.status}`);
+      setFlagFile(null);
+      setFlagPreview('');
+      applyTownHallFlagLocal('', null);
+      setFlagStatus('Standard flag restored');
+    } catch (err) {
+      setFlagStatus((err?.message || 'Flag reset failed').slice(0, 180));
+    } finally {
+      setFlagBusy(false);
+    }
+  }, [applyTownHallFlagLocal, flagBusy, player?.token]);
+
   if (!building) return null;
 
   const isMaxLevel = building.level >= building.max_level;
@@ -760,6 +942,22 @@ function BuildingInfoPanel({ onOpenTroops }) {
           <svg width={isMobile ? 32 : 40} height={isMobile ? 32 : 40} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="19" x2="12" y2="5"></line>
             <polyline points="5 12 12 5 19 12"></polyline>
+          </svg>
+        </button>
+      )}
+
+      {building.id === 'town_hall' && !building.is_enemy && (
+        <button
+          style={{ ...styles.circleBtn, ...styles.btnFlag }}
+          onClick={() => setView('FLAG')}
+          onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
+          onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
+          onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
+          onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
+        >
+          <svg width={isMobile ? 32 : 38} height={isMobile ? 32 : 38} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 22V4"></path>
+            <path d="M5 4h12l-2 4 2 4H5"></path>
           </svg>
         </button>
       )}
@@ -954,6 +1152,99 @@ function BuildingInfoPanel({ onOpenTroops }) {
       </>
     );
     return renderModal(building.name.toUpperCase(), building.level, leftContent, buildingImg, rightContent, null, null);
+  };
+
+  const renderTownHallFlag = () => {
+    const currentFlag = building.town_hall_flag_url || building.flag_url || player?.town_hall_flag?.image_url || '';
+    const preview = flagPreview || currentFlag;
+    const hasCustomFlag = !!currentFlag;
+    const hasSolanaPaymentWallet = !!solWallet?.publicKey?.toBase58?.();
+    return (
+      <div style={{ ...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {}) }} onClick={handleDeselect}>
+        <div style={{ ...LT.panel, ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : { width: 560 }) }} onClick={e => e.stopPropagation()}>
+          <div style={{ ...LT.header, height: isMobile ? 44 : 54 }}>
+            <span style={{ ...LT.headerTitle, fontSize: isMobile ? 18 : 24 }}>TOWN HALL FLAG</span>
+            <button style={LT.closeBtn} onClick={handleDeselect}>X</button>
+          </div>
+          <div style={{ padding: isMobile ? '14px 16px 18px' : '18px 24px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={styles.flagLibraryHeader}>Library</div>
+            <div style={{ ...styles.flagLibraryGrid, ...(isMobile ? styles.flagLibraryGridMobile : null) }}>
+              <button
+                type="button"
+                style={{
+                  ...styles.flagLibraryCard,
+                  ...(!hasCustomFlag && !flagPreview ? styles.flagLibraryCardActive : null),
+                }}
+                onClick={() => {
+                  if (hasCustomFlag) {
+                    handleTownHallFlagReset();
+                    return;
+                  }
+                  setFlagFile(null);
+                  setFlagPreview('');
+                  setFlagStatus('Standard flag selected');
+                }}
+                disabled={flagBusy}
+              >
+                <div style={styles.flagDefaultThumb}>
+                  <span style={styles.flagDefaultMark}>II</span>
+                </div>
+                <div style={styles.flagLibraryTitle}>Standard</div>
+                <div style={styles.flagLibrarySub}>{hasCustomFlag ? 'Restore original' : 'Current flag'}</div>
+              </button>
+              <div style={{
+                ...styles.flagLibraryCard,
+                ...(hasCustomFlag || flagPreview ? styles.flagLibraryCardActive : null),
+              }}>
+                <div style={styles.flagLibraryImageWrap}>
+                  {preview ? (
+                    <img src={preview} alt="Custom Town Hall flag" style={styles.flagLibraryImage} />
+                  ) : (
+                    <span style={styles.flagLibraryEmpty}>+</span>
+                  )}
+                </div>
+                <div style={styles.flagLibraryTitle}>Custom</div>
+                <div style={styles.flagLibrarySub}>{hasCustomFlag ? 'Your uploaded flag' : 'Upload slot'}</div>
+              </div>
+            </div>
+            <div style={styles.flagCopy}>
+              Standard is free to restore anytime. Uploading a custom square flag costs $5 in CLASH on Solana and is visible to every player who sees your base.
+            </div>
+            <label style={styles.flagFileLabel}>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={handleTownHallFlagFile}
+                disabled={flagBusy}
+                style={styles.flagFileInput}
+              />
+              {flagFile ? flagFile.name : 'Choose image'}
+            </label>
+            {flagStatus && (
+              <div style={{
+                ...styles.flagStatus,
+                ...(['Flag updated', 'Standard flag restored', 'Standard flag selected'].includes(flagStatus) ? styles.flagStatusOk : styles.flagStatusError),
+              }}>
+                {flagStatus}
+              </div>
+            )}
+            <button
+              type="button"
+              style={{
+                ...styles.actionBtn,
+                width: '100%',
+                opacity: flagBusy || !flagFile ? 0.65 : 1,
+                cursor: flagBusy || !flagFile ? 'not-allowed' : 'pointer',
+              }}
+              disabled={flagBusy || !flagFile}
+              onClick={handleTownHallFlagUpload}
+            >
+              {flagBusy ? 'Processing...' : hasSolanaPaymentWallet ? 'Pay $5 CLASH & Upload' : 'Connect Solana Wallet'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const renderUpgrade = () => {
@@ -1642,6 +1933,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
       `}</style>
       {view === 'ACTIONS' && renderActions()}
       {view === 'INFO' && renderInfo()}
+      {view === 'FLAG' && renderTownHallFlag()}
       {view === 'UPGRADE' && renderUpgrade()}
       {view === 'ALTAR_SKILLS' && renderAltarSkills()}
       {view === 'BUY_SHIP' && renderBuyShip()}
@@ -1720,6 +2012,11 @@ const styles = {
     background: 'linear-gradient(180deg, #68d132, #3fa51f)',
     textShadow: '0 2px 2px rgba(0,0,0,0.4)',
     boxShadow: '0 6px 0 rgba(12, 71, 33, 0.55), 0 10px 18px rgba(0,0,0,0.45), inset 0 2px 0 rgba(255,255,255,0.38)',
+  },
+  btnFlag: {
+    background: 'linear-gradient(180deg, #ff9148, #d44a18)',
+    textShadow: '0 2px 2px rgba(0,0,0,0.4)',
+    boxShadow: '0 6px 0 rgba(99, 39, 15, 0.55), 0 10px 18px rgba(0,0,0,0.45), inset 0 2px 0 rgba(255,255,255,0.38)',
   },
   iconLarge: {
     fontSize: 48,
@@ -2362,6 +2659,164 @@ const styles = {
     fontSize: 16,
     fontWeight: 900,
     color: '#1a3c4f',
+  },
+  flagLibraryHeader: {
+    color: '#6d4a2e',
+    fontSize: 13,
+    fontWeight: 1000,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+  },
+  flagLibraryGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 12,
+  },
+  flagLibraryGridMobile: {
+    gap: 9,
+  },
+  flagLibraryCard: {
+    border: '3px solid #b89455',
+    borderRadius: 12,
+    background: 'rgba(255,255,255,0.3)',
+    boxShadow: '0 4px 0 rgba(90,54,22,0.18), inset 0 2px 0 rgba(255,255,255,0.52)',
+    padding: 10,
+    minHeight: 150,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    cursor: 'pointer',
+    color: '#6d4a2e',
+    fontFamily: 'inherit',
+  },
+  flagLibraryCardActive: {
+    borderColor: '#2f9dcc',
+    background: 'rgba(76, 169, 210, 0.13)',
+    boxShadow: '0 4px 0 rgba(30, 90, 125, 0.2), 0 0 0 2px rgba(47,157,204,0.16)',
+  },
+  flagLibraryImageWrap: {
+    width: 84,
+    height: 84,
+    borderRadius: 9,
+    overflow: 'hidden',
+    background: '#fff4d8',
+    border: '2px solid rgba(109,74,46,0.24)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flagLibraryImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
+  },
+  flagLibraryEmpty: {
+    fontSize: 36,
+    fontWeight: 1000,
+    color: '#b89455',
+    lineHeight: 1,
+  },
+  flagDefaultThumb: {
+    width: 84,
+    height: 84,
+    borderRadius: 9,
+    background: 'linear-gradient(135deg, #ff6d22 0%, #f24d13 100%)',
+    border: '2px solid rgba(109,74,46,0.24)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.25)',
+  },
+  flagDefaultMark: {
+    color: '#111',
+    fontSize: 46,
+    fontWeight: 1000,
+    lineHeight: 1,
+    fontFamily: 'Georgia, serif',
+    transform: 'scaleX(1.35)',
+  },
+  flagLibraryTitle: {
+    fontSize: 14,
+    fontWeight: 1000,
+    lineHeight: 1.05,
+    textAlign: 'center',
+  },
+  flagLibrarySub: {
+    fontSize: 11,
+    fontWeight: 800,
+    color: '#8a6a45',
+    textAlign: 'center',
+    lineHeight: 1.15,
+  },
+  flagPreviewWrap: {
+    width: 148,
+    height: 148,
+    alignSelf: 'center',
+    borderRadius: 12,
+    border: '4px solid #b89455',
+    background: '#fff4d8',
+    boxShadow: '0 6px 0 rgba(90,54,22,0.22), inset 0 2px 0 rgba(255,255,255,0.65)',
+    overflow: 'hidden',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flagPreviewImg: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
+  },
+  flagPreviewEmpty: {
+    color: '#7b5b34',
+    fontWeight: 900,
+    fontSize: 22,
+  },
+  flagCopy: {
+    color: '#6d4a2e',
+    fontSize: 14,
+    fontWeight: 800,
+    lineHeight: 1.35,
+    textAlign: 'center',
+  },
+  flagFileLabel: {
+    minHeight: 46,
+    borderRadius: 10,
+    border: '2px dashed #b89455',
+    background: 'rgba(255,255,255,0.34)',
+    color: '#6d4a2e',
+    fontWeight: 900,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '0 14px',
+    cursor: 'pointer',
+    textAlign: 'center',
+    wordBreak: 'break-word',
+  },
+  flagFileInput: {
+    display: 'none',
+  },
+  flagStatus: {
+    borderRadius: 8,
+    padding: '10px 12px',
+    fontSize: 13,
+    fontWeight: 900,
+    textAlign: 'center',
+  },
+  flagStatusOk: {
+    color: '#116234',
+    background: 'rgba(67, 190, 108, 0.18)',
+    border: '1px solid rgba(22, 121, 61, 0.28)',
+  },
+  flagStatusError: {
+    color: '#8c241a',
+    background: 'rgba(255, 91, 65, 0.12)',
+    border: '1px solid rgba(150, 45, 32, 0.24)',
   },
   actionBtn: {
     background: 'linear-gradient(180deg, #FBC02D 0%, #F57F17 100%)',

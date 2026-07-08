@@ -434,7 +434,7 @@ export async function payCustodialOrderOnSolana({
   const [
     { Connection, PublicKey },
     splToken,
-    { SAME_ORIGIN_SOLANA_RPC_URL, DEFAULT_SOLANA_RPC_URL, createSolanaConnection },
+    { SAME_ORIGIN_SOLANA_ALCHEMY_URL, SAME_ORIGIN_SOLANA_RPC_URL, DEFAULT_SOLANA_RPC_URL, createSolanaConnection },
     { sendSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@solana/web3.js'),
@@ -442,7 +442,7 @@ export async function payCustodialOrderOnSolana({
     import('./solanaRpc'),
     import('./solanaTx'),
   ]);
-  const connection = createSolanaConnection(Connection, SAME_ORIGIN_SOLANA_RPC_URL || DEFAULT_SOLANA_RPC_URL, 'confirmed');
+  const connection = createSolanaConnection(Connection, SAME_ORIGIN_SOLANA_ALCHEMY_URL || SAME_ORIGIN_SOLANA_RPC_URL || DEFAULT_SOLANA_RPC_URL, 'confirmed');
   const ownerPk = new PublicKey(owner);
   const mintPk = new PublicKey(payment.tokenAddress);
   const treasuryPk = new PublicKey(payment.treasury);
@@ -653,7 +653,7 @@ export async function depositToken2022NftToCustody({
   const [
     { Connection, PublicKey },
     splToken,
-    { SAME_ORIGIN_SOLANA_RPC_URL, DEFAULT_SOLANA_RPC_URL, createSolanaConnection },
+    { SAME_ORIGIN_SOLANA_ALCHEMY_URL, SAME_ORIGIN_SOLANA_RPC_URL, DEFAULT_SOLANA_RPC_URL, createSolanaConnection },
     { sendSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@solana/web3.js'),
@@ -662,7 +662,7 @@ export async function depositToken2022NftToCustody({
     import('./solanaTx'),
   ]);
 
-  const connection = createSolanaConnection(Connection, SAME_ORIGIN_SOLANA_RPC_URL || DEFAULT_SOLANA_RPC_URL, 'confirmed');
+  const connection = createSolanaConnection(Connection, SAME_ORIGIN_SOLANA_ALCHEMY_URL || SAME_ORIGIN_SOLANA_RPC_URL || DEFAULT_SOLANA_RPC_URL, 'confirmed');
   const ownerPk = new PublicKey(owner);
   const mintPk = new PublicKey(order.assetId);
   const vaultPk = new PublicKey(order.vaultAddress);

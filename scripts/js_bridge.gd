@@ -340,6 +340,10 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			var active = _get_active_building_system()
 			if active:
 				active._upgrade_selected()
+		"set_town_hall_flag":
+			var active = _get_active_building_system()
+			if active and active.has_method("_set_player_town_hall_flag"):
+				active._set_player_town_hall_flag(data.get("url", data.get("town_hall_flag_url", "")))
 		"refresh_troops":
 			if bs:
 				bs._refresh_troop_levels_from_server()

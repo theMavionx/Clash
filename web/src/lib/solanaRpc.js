@@ -114,9 +114,9 @@ const DIRECT_SOLANA_RPC_URLS = [
 ].filter((url) => url && !isBlockedBrowserSolanaRpcUrl(url));
 
 const PROXY_SOLANA_RPC_URLS = [
+  ...(allowProxyFallback && includeAlchemyRpcProxy ? [SAME_ORIGIN_SOLANA_ALCHEMY_URL] : []),
   envProxySolanaRpc,
   ...(allowProxyFallback ? [SAME_ORIGIN_SOLANA_RPC_URL] : []),
-  ...(allowProxyFallback && includeAlchemyRpcProxy ? [SAME_ORIGIN_SOLANA_ALCHEMY_URL] : []),
   ...(allowProxyFallback && includeTatumRpcProxy ? [SAME_ORIGIN_SOLANA_TATUM_URL] : []),
 ];
 
@@ -167,8 +167,8 @@ export const NFT_SOLANA_RPC_URLS = buildRpcFallbackList({
     envProxySolanaRpc,
   ],
   privateUrls: [
-    ...(allowProxyFallback ? [SAME_ORIGIN_SOLANA_RPC_URL] : []),
     ...(allowProxyFallback && includeAlchemyRpcProxy ? [SAME_ORIGIN_SOLANA_ALCHEMY_URL] : []),
+    ...(allowProxyFallback ? [SAME_ORIGIN_SOLANA_RPC_URL] : []),
   ],
 });
 
