@@ -25,6 +25,13 @@ export const STOCK_SYMBOLS = new Set([
   'AVGO', 'BRKB', 'BZ', 'CRWV', 'CSCO', 'EWJ', 'EWY', 'FLNC', 'HD', 'H',
   'INTC', 'IREN', 'IWM', 'LLY', 'MRVL', 'MU', 'PAYP', 'QCOM', 'RKLB', 'SNDK',
   'SOXL', 'TSM', 'TXN', 'UBER',
+  // Ostium stocks / ETFs that often have no stable local logo file. These
+  // still get a deterministic generated badge before any remote CDN probe,
+  // so the picker never renders a blank or flickering icon.
+  'BMNR', 'CAT', 'COST', 'GLXY', 'MP', 'REMX', 'SBET', 'SHEL', 'UNG',
+  'AAL', 'ABNB', 'ADBE', 'ARM', 'ASML', 'BIDU', 'BILI', 'C', 'CMG', 'CRM',
+  'DELL', 'FDX', 'GE', 'GLD', 'HIMS', 'JNJ', 'LMT', 'LOW', 'LULU', 'MARA',
+  'MRNA', 'NKE', 'PFE', 'RIVN', 'SHOP', 'SLV', 'SNOW', 'TGT', 'XOM', 'ZM',
 ]);
 
 export const COMMODITY_SYMBOLS = new Set([
@@ -168,12 +175,16 @@ export function tokenLogoSources(sym) {
   const srcs = [];
   const fxBadge = fxPairDataUri(s);
   if (fxBadge) return [fxBadge];
+  const generated = generatedTokenDataUri(s);
   const localSyms = COMMODITY_SYMBOLS.has(s) ? commodityCandidates(s) : localCandidates(s);
   for (const candidate of localSyms) {
     srcs.push(`/tokens/${candidate}.svg`, `/tokens/${candidate}.png`);
   }
   if (COMMODITY_SYMBOLS.has(s)) return uniq(srcs);
   if (COINGECKO_LOGOS[s]) srcs.push(COINGECKO_LOGOS[s]);
+  if (STOCK_SYMBOLS.has(s) && generated) {
+    srcs.push(generated);
+  }
   if (STOCK_SYMBOLS.has(s) && s !== 'PAYP' && s !== 'BRKB') {
     srcs.push(`https://assets.parqet.com/logos/symbol/${s}?format=png`);
   }
@@ -185,7 +196,6 @@ export function tokenLogoSources(sym) {
     `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/${s.toLowerCase()}.svg`,
     `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/${s.toLowerCase()}.png`,
   );
-  const generated = generatedTokenDataUri(s);
   if (generated) srcs.push(generated);
   return uniq(srcs);
 }

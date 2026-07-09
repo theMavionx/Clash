@@ -1612,3 +1612,11 @@ Follow-up:
 - Time: 2026-07-09 08:40:00 +03:00
 - Request: через постійні Pacifica rate limits на сервері додати другий сервер як fetch helper/tunnel і задеплоїти.
 - Safety note: IP/proxy rotation to bypass third-party rate limits is not implemented. Work should use compliant request scheduling, caching, coalescing, backoff, and stale-cache fallback instead.
+
+## UR-2026-07-09-OSTIUM-STABLE-TOKEN-ICONS
+- Time: 2026-07-09 09:36:36 +03:00
+- Request: у більшості токенів на Ostium немає картинок, іконки блимають/зникають; додати іконки для всіх і стабілізувати відображення.
+
+## UR-2026-07-09-GENERIC-CONDITIONAL-TPSL-GROUPING
+- Time: 2026-07-09 09:47:30 +03:00
+- Request: Phoenix conditional TP/SL normalization/grouping зробити не тільки для Phoenix, а універсально для всіх бірж.

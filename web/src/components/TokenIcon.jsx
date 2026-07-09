@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/tokenLogos';
 
+// v15 = stable generated stock/ETF badges are no longer treated as failed
+//       logos, and the letter fallback stays visible while image probes load.
 // v14 = fixes FX pair normalization/placeholders (USD/JPY, USD/CAD, etc.).
 // v13 = tries local aliases before raw synthetic symbols like 1000BONK,
 //       invalidating sessions that cached those raw symbols as missing.
@@ -23,7 +25,7 @@ import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/t
 // v4 = invalidated entries from before we added local SKR.
 // v3 invalidated MSATS / MET / SYRUP / BRENTOIL aliases. Bump
 // whenever new local /tokens/* are added so users force a fresh probe.
-const LOGO_CACHE_KEY = 'clash_token_logos_v14';
+const LOGO_CACHE_KEY = 'clash_token_logos_v15';
 const LOGO_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const logoCache = new Map();
@@ -71,15 +73,22 @@ export default function TokenIcon({ sym, size = 20, fallbackColor, style }) {
     () => (cached ? [cached, ...allSources.filter(url => url !== cached)] : allSources),
     [cached, allSources]
   );
+  const hasGeneratedSource = useMemo(
+    () => sources.some(url => String(url || '').startsWith('data:image/')),
+    [sources]
+  );
   const [srcIdx, setSrcIdx] = useState(0);
-  const [failed, setFailed] = useState(logoFailed.has(canon) || sources.length === 0);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState((logoFailed.has(canon) && !hasGeneratedSource) || sources.length === 0);
 
   useEffect(() => {
     setSrcIdx(0);
-    setFailed(logoFailed.has(canon) || sources.length === 0);
-  }, [canon, sources.length]);
+    setLoaded(false);
+    setFailed((logoFailed.has(canon) && !hasGeneratedSource) || sources.length === 0);
+  }, [canon, sources.length, hasGeneratedSource]);
 
   const onImgError = useCallback(() => {
+    setLoaded(false);
     if (srcIdx < sources.length - 1) {
       setSrcIdx(srcIdx + 1);
     } else {
@@ -91,44 +100,36 @@ export default function TokenIcon({ sym, size = 20, fallbackColor, style }) {
 
   const onImgLoad = useCallback(() => {
     const url = sources[srcIdx];
+    setLoaded(true);
     if (!url || (url.startsWith('/tokens/') && canon === '')) return;
+    if (url.startsWith('data:image/')) return;
     if (logoCache.get(canon) === url) return;
     logoCache.set(canon, url);
     persistLogoCache();
   }, [sources, srcIdx, canon]);
 
-  // Background colour is only meaningful for the letter-fallback bubble
-  // (we need a coloured disc behind the white letter so it's readable).
-  // Real logos already include their own brand background — wrapping them
-  // in our circle just adds a useless grey ring (most visible on PNGs that
-  // ship with their own coloured plate, e.g. IP, OM, several CG-sourced
-  // tokens). Drop the bg when an image is rendering.
+  const activeSrc = !failed ? sources[srcIdx] : '';
+  const showFallback = failed || !loaded || !activeSrc;
+  // Keep a deterministic fallback under the probing image. The old component
+  // rendered an empty transparent circle until `/tokens/*.svg` failed and the
+  // next source loaded; in fast Ostium polling that read as logo flicker.
   return (
     <div
       style={{
         width: size,
         height: size,
         borderRadius: '50%',
-        background: failed ? bg : 'transparent',
+        background: showFallback ? bg : 'transparent',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
         overflow: 'hidden',
+        position: 'relative',
         ...style,
       }}
     >
-      {!failed ? (
-        <img
-          src={sources[srcIdx]}
-          alt=""
-          width={size}
-          height={size}
-          style={{ borderRadius: '50%', objectFit: 'cover' }}
-          onError={onImgError}
-          onLoad={onImgLoad}
-        />
-      ) : (
+      {showFallback && (
         <span
           style={{
             display: 'flex',
@@ -139,11 +140,32 @@ export default function TokenIcon({ sym, size = 20, fallbackColor, style }) {
             fontSize: fallbackFontSize,
             fontWeight: 900,
             color: '#fff',
+            lineHeight: 1,
           }}
         >
           {fallbackLabel || '?'}
         </span>
       )}
+      {activeSrc ? (
+        <img
+          src={activeSrc}
+          alt=""
+          width={size}
+          height={size}
+          decoding="async"
+          draggable={false}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            borderRadius: '50%',
+            objectFit: 'cover',
+            opacity: loaded ? 1 : 0,
+            transition: 'opacity 120ms ease',
+          }}
+          onError={onImgError}
+          onLoad={onImgLoad}
+        />
+      ) : null}
     </div>
   );
 }

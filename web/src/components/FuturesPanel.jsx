@@ -953,27 +953,74 @@ function formatPositionAmount(amount) {
   return value.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
 }
 
-function orderTpslKind(order) {
-  const raw = String(
-    order?._attachedTpslKind
-      || order?._phoenixTpslKind
-      || order?.tpsl
-      || order?._raw?.tpsl
-      || order?._raw?.tp_sl
-      || order?._raw?.trigger_type
-      || order?._raw?.triggerType
-      || order?._raw?.kind_name
-      || order?.order_type
-      || order?.type
-      || order?.kind
-      || order?.ot
-      || '',
-  ).trim().toLowerCase();
+function tpslKindFromText(value) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return '';
   if (raw.includes('stoplossdecrease')) return 'sl';
   if (raw.includes('limitdecrease')) return 'tp';
   if (raw === 'tp' || raw === 'take_profit' || raw === 'take-profit' || raw.includes('take')) return 'tp';
   if (raw === 'sl' || raw === 'stop_loss' || raw === 'stop-loss' || raw.includes('stop')) return 'sl';
+  if (/(^|[^a-z0-9])tp([^a-z0-9]|$)/u.test(raw)) return 'tp';
+  if (/(^|[^a-z0-9])sl([^a-z0-9]|$)/u.test(raw)) return 'sl';
   return '';
+}
+
+function orderTpslKind(order) {
+  const raw = order?._raw || {};
+  const values = [
+    order?._attachedTpslKind,
+    order?._phoenixTpslKind,
+    order?.tpsl,
+    order?.tp_sl,
+    order?.tpSl,
+    order?.trigger_type,
+    order?.triggerType,
+    order?.conditionalKind,
+    order?.conditional_kind,
+    order?.kind_name,
+    order?.order_type,
+    order?.orderType,
+    order?.type,
+    order?.kind,
+    order?.ot,
+    order?.client_order_id,
+    order?.clientOrderId,
+    order?.cloid,
+    raw.tpsl,
+    raw.tp_sl,
+    raw.tpSl,
+    raw.trigger_type,
+    raw.triggerType,
+    raw.conditionalKind,
+    raw.conditional_kind,
+    raw.kind_name,
+    raw.order_type,
+    raw.orderType,
+    raw.type,
+    raw.kind,
+    raw.ot,
+    raw.client_order_id,
+    raw.clientOrderId,
+    raw.cloid,
+  ];
+  for (const value of values) {
+    const kind = tpslKindFromText(value);
+    if (kind) return kind;
+  }
+  return '';
+}
+
+function truthyOrderFlag(value) {
+  if (value == null) return false;
+  if (value === true) return true;
+  if (value === false) return false;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const raw = value.trim().toLowerCase();
+    if (!raw || raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+    return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+  }
+  return true;
 }
 
 function orderReduceOnlyLike(order) {
@@ -986,11 +1033,15 @@ function orderReduceOnlyLike(order) {
       || order?._raw?.type
       || '',
   ).toLowerCase();
-  return order?.reduce_only === true
-    || order?.reduceOnly === true
-    || order?._raw?.reduce_only === true
-    || order?._raw?.reduceOnly === true
-    || order?._raw?.ro === true
+  return truthyOrderFlag(order?.reduce_only)
+    || truthyOrderFlag(order?.reduceOnly)
+    || truthyOrderFlag(order?.is_reduce_only)
+    || truthyOrderFlag(order?.isReduceOnly)
+    || truthyOrderFlag(order?._raw?.reduce_only)
+    || truthyOrderFlag(order?._raw?.reduceOnly)
+    || truthyOrderFlag(order?._raw?.is_reduce_only)
+    || truthyOrderFlag(order?._raw?.isReduceOnly)
+    || truthyOrderFlag(order?._raw?.ro)
     || !!orderTpslKind(order)
     || rawType.includes('decrease');
 }
@@ -1005,10 +1056,25 @@ function orderTriggerPrice(order) {
       ?? order?.trigger_price_ui
       ?? order?.trigger_px
       ?? order?.triggerPx
+      ?? order?.stopPrice
+      ?? order?.trigger?.price
+      ?? order?.trigger?.trigger_price
+      ?? order?.trigger?.triggerPrice
+      ?? order?.conditional?.trigger_price
+      ?? order?.conditional?.triggerPrice
+      ?? order?._raw?.stop_price
+      ?? order?._raw?.stopPrice
       ?? order?._raw?.triggerPriceUi
       ?? order?._raw?.trigger_price_ui
+      ?? order?._raw?.trigger_price
+      ?? order?._raw?.triggerPrice
       ?? order?._raw?.trigger_px
       ?? order?._raw?.triggerPx
+      ?? order?._raw?.trigger?.price
+      ?? order?._raw?.trigger?.trigger_price
+      ?? order?._raw?.trigger?.triggerPrice
+      ?? order?._raw?.conditional?.trigger_price
+      ?? order?._raw?.conditional?.triggerPrice
       ?? order?.price
       ?? order?.ip
   );
@@ -1787,7 +1853,7 @@ function positionCloseSide(pos) {
 
 function isReadOnlyOrder(order) {
   if (order?._phoenixSyntheticTpsl && order?._phoenixCancelableTpsl) return false;
-  return !!(order?._readOnly || order?._phoenixSyntheticTpsl);
+  return !!(order?._readOnly || order?._attachedTpslInfo || order?._phoenixSyntheticTpsl);
 }
 
 function normalizedOrderIdentity(value) {
@@ -1800,14 +1866,28 @@ function orderIdentityValues(order) {
     order?.order_id,
     order?.i,
     order?.id,
+    order?.digest,
+    order?.key,
+    order?.hash,
     order?.client_order_id,
     order?.clientOrderId,
+    order?.cloid,
     order?.orderSequenceNumber,
+    order?.sequence_number,
+    order?.sequenceNumber,
+    order?.nonce,
     order?._raw?.order_id,
     order?._raw?.id,
+    order?._raw?.digest,
+    order?._raw?.key,
+    order?._raw?.hash,
     order?._raw?.client_order_id,
     order?._raw?.clientOrderId,
+    order?._raw?.cloid,
     order?._raw?.orderSequenceNumber,
+    order?._raw?.sequence_number,
+    order?._raw?.sequenceNumber,
+    order?._raw?.nonce,
   ].map(normalizedOrderIdentity).filter(Boolean);
 }
 
@@ -1815,18 +1895,52 @@ function orderParentIdentityValues(order) {
   return [
     order?.parent_order_id,
     order?.parentOrderId,
+    order?.parent_id,
+    order?.parentId,
     order?.parent_client_order_id,
     order?.parentClientOrderId,
+    order?.parent_digest,
+    order?.parentDigest,
+    order?.parent_hash,
+    order?.parentHash,
+    order?.linked_order_id,
+    order?.linkedOrderId,
+    order?.linked_client_order_id,
+    order?.linkedClientOrderId,
+    order?.oco_order_id,
+    order?.ocoOrderId,
+    order?.origin_order_id,
+    order?.originOrderId,
     order?.dependency_order_id,
     order?.dependencyOrderId,
+    order?.trigger?.parent_order_id,
     order?.trigger?.parentOrderId,
+    order?.trigger?.parent_id,
+    order?.trigger?.parentId,
     order?._raw?.parent_order_id,
     order?._raw?.parentOrderId,
+    order?._raw?.parent_id,
+    order?._raw?.parentId,
     order?._raw?.parent_client_order_id,
     order?._raw?.parentClientOrderId,
+    order?._raw?.parent_digest,
+    order?._raw?.parentDigest,
+    order?._raw?.parent_hash,
+    order?._raw?.parentHash,
+    order?._raw?.linked_order_id,
+    order?._raw?.linkedOrderId,
+    order?._raw?.linked_client_order_id,
+    order?._raw?.linkedClientOrderId,
+    order?._raw?.oco_order_id,
+    order?._raw?.ocoOrderId,
+    order?._raw?.origin_order_id,
+    order?._raw?.originOrderId,
     order?._raw?.dependency_order_id,
     order?._raw?.dependencyOrderId,
+    order?._raw?.trigger?.parent_order_id,
     order?._raw?.trigger?.parentOrderId,
+    order?._raw?.trigger?.parent_id,
+    order?._raw?.trigger?.parentId,
   ].map(normalizedOrderIdentity).filter(Boolean);
 }
 
@@ -1844,12 +1958,12 @@ function ordersShareInstrumentScope(parent, child) {
   const childSymbol = String(child?.symbol || child?.s || '').trim().toUpperCase();
   if (!parentSymbol || !childSymbol || parentSymbol !== childSymbol) return false;
 
-  const parentMarket = orderScopeValue(parent, 'market_addr', 'marketAddress', 'market', 'pair_index', 'pairIndex');
-  const childMarket = orderScopeValue(child, 'market_addr', 'marketAddress', 'market', 'pair_index', 'pairIndex');
+  const parentMarket = orderScopeValue(parent, 'market_addr', 'marketAddress', 'market', 'market_id', 'marketId', 'market_index', 'marketIndex', 'pair_index', 'pairIndex', 'pair_id', 'pairId', 'product_id', 'productId', 'asset_id', 'assetId');
+  const childMarket = orderScopeValue(child, 'market_addr', 'marketAddress', 'market', 'market_id', 'marketId', 'market_index', 'marketIndex', 'pair_index', 'pairIndex', 'pair_id', 'pairId', 'product_id', 'productId', 'asset_id', 'assetId');
   if (parentMarket && childMarket && parentMarket !== childMarket) return false;
 
-  const parentSub = normalizedOrderIdentity(parent?._phoenixSubaccountIndex ?? parent?.subaccount_index ?? parent?.subaccountIndex ?? parent?._raw?.subaccountIndex);
-  const childSub = normalizedOrderIdentity(child?._phoenixSubaccountIndex ?? child?.subaccount_index ?? child?.subaccountIndex ?? child?._raw?.subaccountIndex);
+  const parentSub = normalizedOrderIdentity(parent?._phoenixSubaccountIndex ?? parent?.subaccount_index ?? parent?.subaccountIndex ?? parent?.subaccount_id ?? parent?.subaccountId ?? parent?.account_id ?? parent?.accountId ?? parent?._raw?.subaccountIndex ?? parent?._raw?.subaccount_id ?? parent?._raw?.subaccountId ?? parent?._raw?.account_id ?? parent?._raw?.accountId);
+  const childSub = normalizedOrderIdentity(child?._phoenixSubaccountIndex ?? child?.subaccount_index ?? child?.subaccountIndex ?? child?.subaccount_id ?? child?.subaccountId ?? child?.account_id ?? child?.accountId ?? child?._raw?.subaccountIndex ?? child?._raw?.subaccount_id ?? child?._raw?.subaccountId ?? child?._raw?.account_id ?? child?._raw?.accountId);
   if (parentSub && childSub && parentSub !== childSub) return false;
 
   return true;
@@ -1862,21 +1976,54 @@ function orderExplicitlyAttachedTo(parent, child) {
 }
 
 function orderHasAttachedTpslEvidence(order) {
-  return !!(
-    order?._attachedTpslCandidate
-    || order?._phoenixConditionalOrder
-    || order?.isConditionalOrder
-    || order?._raw?.isConditionalOrder
-    || order?.conditionalKind
-    || order?.conditional_kind
-    || order?._raw?.conditionalKind
-    || order?._raw?.conditional_kind
-  );
+  const raw = order?._raw || {};
+  if (orderTpslKind(order)) return true;
+  if (orderReduceOnlyLike(order) && orderTriggerPrice(order) > 0) return true;
+  if (orderParentIdentityValues(order).length > 0) return true;
+  return [
+    order?._attachedTpslCandidate,
+    order?._phoenixConditionalOrder,
+    order?.is_tpsl,
+    order?.isTpsl,
+    order?.is_tp_sl,
+    order?.isTpSl,
+    order?.is_trigger,
+    order?.isTrigger,
+    order?.is_trigger_order,
+    order?.isTriggerOrder,
+    order?.isConditionalOrder,
+    order?.attached_tpsl,
+    order?.attachedTpsl,
+    order?.tp_sl,
+    order?.tpSl,
+    order?.conditionalKind,
+    order?.conditional_kind,
+    order?.trigger,
+    order?.conditional,
+    raw.is_tpsl,
+    raw.isTpsl,
+    raw.is_tp_sl,
+    raw.isTpSl,
+    raw.is_trigger,
+    raw.isTrigger,
+    raw.is_trigger_order,
+    raw.isTriggerOrder,
+    raw.isConditionalOrder,
+    raw.attached_tpsl,
+    raw.attachedTpsl,
+    raw.tp_sl,
+    raw.tpSl,
+    raw.conditionalKind,
+    raw.conditional_kind,
+    raw.trigger,
+    raw.conditional,
+  ].some(truthyOrderFlag);
 }
 
 function orderIsDisplayTpsl(order, positions = []) {
   const kind = orderTpslKind(order);
   if (kind) return true;
+  if (orderHasAttachedTpslEvidence(order) && orderReduceOnlyLike(order) && orderTriggerPrice(order) > 0) return true;
   const type = orderDisplayType(order, positions).toLowerCase();
   return type.includes('take') || type.includes('stop') || type.includes('tp') || type.includes('sl');
 }
@@ -1911,6 +2058,10 @@ function directAttachedTpslPrice(order, kind) {
         order?.takeProfitPrice,
         order?.tp_price,
         order?.tpPrice,
+        order?.tp_trigger_price,
+        order?.tpTriggerPrice,
+        order?.take_profit_trigger_price,
+        order?.takeProfitTriggerPrice,
         order?.take_profit,
         order?.takeProfit,
         order?.tp,
@@ -1920,6 +2071,10 @@ function directAttachedTpslPrice(order, kind) {
         raw.takeProfitPrice,
         raw.tp_price,
         raw.tpPrice,
+        raw.tp_trigger_price,
+        raw.tpTriggerPrice,
+        raw.take_profit_trigger_price,
+        raw.takeProfitTriggerPrice,
         raw.take_profit,
         raw.takeProfit,
         raw.tp,
@@ -1931,6 +2086,10 @@ function directAttachedTpslPrice(order, kind) {
         order?.stopLossPrice,
         order?.sl_price,
         order?.slPrice,
+        order?.sl_trigger_price,
+        order?.slTriggerPrice,
+        order?.stop_loss_trigger_price,
+        order?.stopLossTriggerPrice,
         order?.stop_loss,
         order?.stopLoss,
         order?.sl,
@@ -1940,6 +2099,10 @@ function directAttachedTpslPrice(order, kind) {
         raw.stopLossPrice,
         raw.sl_price,
         raw.slPrice,
+        raw.sl_trigger_price,
+        raw.slTriggerPrice,
+        raw.stop_loss_trigger_price,
+        raw.stopLossTriggerPrice,
         raw.stop_loss,
         raw.stopLoss,
         raw.sl,
