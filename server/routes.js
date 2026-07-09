@@ -17077,6 +17077,62 @@ router.get('/admin/shop', adminAuth, (req, res) => {
     `).get();
     const revenueTotals = getShopRevenueTotals();
     const h24RevenueTotals = getShopRevenueTotals("WHERE created_at > datetime('now', '-24 hours')");
+    const townHallFlagPurchaseSummary = db.db.prepare(`
+      SELECT
+        COUNT(*) AS purchases,
+        COUNT(DISTINCT player_id) AS unique_buyers,
+        COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+        COUNT(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 END) AS purchases_24h,
+        COUNT(CASE WHEN created_at > datetime('now', '-7 days') THEN 1 END) AS purchases_7d,
+        MIN(created_at) AS first_at,
+        MAX(created_at) AS last_at
+      FROM utility_purchases
+      WHERE utility = 'town_hall_flag'
+    `).get() || {};
+    const townHallFlagUploadSummary = db.db.prepare(`
+      SELECT
+        COUNT(*) AS uploads,
+        COUNT(DISTINCT player_id) AS uploaders,
+        MAX(created_at) AS last_upload_at
+      FROM player_town_hall_flag_history
+    `).get() || {};
+    const townHallFlagActiveSummary = db.db.prepare(`
+      SELECT
+        COUNT(*) AS active_custom_flags,
+        COUNT(DISTINCT player_id) AS active_players,
+        MAX(updated_at) AS last_active_update_at
+      FROM player_town_hall_flags
+    `).get() || {};
+    const townHallFlagPending = db.db.prepare(`
+      SELECT COUNT(*) AS paid_not_uploaded
+      FROM utility_purchases u
+      LEFT JOIN player_town_hall_flag_history h ON h.purchase_id = u.id
+      WHERE u.utility = 'town_hall_flag'
+        AND h.id IS NULL
+    `).get() || {};
+    const townHallFlagRecent = db.db.prepare(`
+      SELECT u.id, u.player_id,
+             COALESCE(p.name, '(deleted)') AS name,
+             COALESCE(p.dex, '-') AS dex,
+             u.chain, u.tx_hash, u.payer, u.token,
+             u.amount, u.usd_price_e6, u.created_at,
+             h.image_url, h.created_at AS uploaded_at,
+             CASE
+               WHEN h.id IS NULL THEN 'paid_not_uploaded'
+               WHEN f.purchase_id = u.id THEN 'active'
+               ELSE 'replaced_or_restored'
+             END AS flag_status
+      FROM utility_purchases u
+      LEFT JOIN players p ON p.id = u.player_id
+      LEFT JOIN player_town_hall_flag_history h ON h.purchase_id = u.id
+      LEFT JOIN player_town_hall_flags f ON f.player_id = u.player_id
+      WHERE u.utility = 'town_hall_flag'
+      ORDER BY u.id DESC
+      LIMIT 100
+    `).all().map((r) => ({
+      ...r,
+      price_usd: (Number(r.usd_price_e6) || 0) / 1_000_000,
+    }));
 
     res.json({
       summary: {
@@ -17104,6 +17160,25 @@ router.get('/admin/shop', adminAuth, (req, res) => {
       by_sku: bySkuEnriched,
       top_buyers: topBuyers,
       recent,
+      town_hall_flags: {
+        summary: {
+          purchases: townHallFlagPurchaseSummary.purchases || 0,
+          unique_buyers: townHallFlagPurchaseSummary.unique_buyers || 0,
+          revenue_usd: (Number(townHallFlagPurchaseSummary.usd_e6_sum) || 0) / 1_000_000,
+          purchases_24h: townHallFlagPurchaseSummary.purchases_24h || 0,
+          purchases_7d: townHallFlagPurchaseSummary.purchases_7d || 0,
+          uploads: townHallFlagUploadSummary.uploads || 0,
+          uploaders: townHallFlagUploadSummary.uploaders || 0,
+          active_custom_flags: townHallFlagActiveSummary.active_custom_flags || 0,
+          active_players: townHallFlagActiveSummary.active_players || 0,
+          paid_not_uploaded: townHallFlagPending.paid_not_uploaded || 0,
+          first_at: townHallFlagPurchaseSummary.first_at || null,
+          last_at: townHallFlagPurchaseSummary.last_at || null,
+          last_upload_at: townHallFlagUploadSummary.last_upload_at || null,
+          last_active_update_at: townHallFlagActiveSummary.last_active_update_at || null,
+        },
+        recent: townHallFlagRecent,
+      },
     });
   } catch (err) {
     res.status(500).json({ error: err?.message || 'shop stats failed' });

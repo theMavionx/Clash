@@ -4308,6 +4308,77 @@ function ReferralDetailsDrawer({ referrer, referrals, events, onClose }) {
   );
 }
 
+function townHallFlagStatusBadge(status) {
+  const value = String(status || '').trim();
+  if (value === 'active') return <span className="admin-badge green">active</span>;
+  if (value === 'paid_not_uploaded') return <span className="admin-badge gold">paid, no upload</span>;
+  if (value === 'replaced_or_restored') return <span className="admin-badge off">replaced / standard</span>;
+  return <span className="admin-badge off">{value || 'unknown'}</span>;
+}
+
+function TownHallFlagPreview({ src }) {
+  if (!src) return <span className="admin-badge off">no image</span>;
+  return (
+    <img
+      src={src}
+      alt="Town Hall flag"
+      style={{
+        width: 42,
+        height: 42,
+        objectFit: 'cover',
+        borderRadius: 6,
+        border: '1px solid rgba(255, 215, 0, 0.45)',
+        background: '#f8fafc',
+        display: 'block',
+      }}
+    />
+  );
+}
+
+function TownHallFlagShopCard({ flags }) {
+  const summary = flags?.summary || {};
+  const recent = flags?.recent || [];
+  return (
+    <div className="admin-card">
+      <div className="admin-card-head">
+        <div>
+          <div className="admin-card-title">Town Hall Flags</div>
+          <div className="admin-card-sub">
+            Paid CLASH flag uploads. Buyers are counted from utility purchases; active flags are players currently showing a custom flag.
+          </div>
+        </div>
+        <span className="admin-badge gold">{num(summary.unique_buyers)} buyers</span>
+      </div>
+      <div className="admin-card-body admin-grid">
+        <StatsGrid stats={[
+          { label: 'Flag buyers', value: num(summary.unique_buyers), tone: 'gold' },
+          { label: 'Purchases', value: num(summary.purchases), tone: 'blue' },
+          { label: 'Active flags', value: num(summary.active_custom_flags), tone: 'green' },
+          { label: 'Paid no upload', value: num(summary.paid_not_uploaded), tone: summary.paid_not_uploaded ? 'gold' : 'green' },
+          { label: 'Revenue', value: fmtMaybeUsd(summary.revenue_usd), tone: 'green' },
+          { label: '24h', value: num(summary.purchases_24h), tone: summary.purchases_24h ? 'blue' : 'off' },
+          { label: '7d', value: num(summary.purchases_7d), tone: summary.purchases_7d ? 'blue' : 'off' },
+          { label: 'Last upload', value: fmtTime(summary.last_upload_at || summary.last_at) },
+        ]} />
+        <CompactTable
+          title="Recent Flag Buyers"
+          subtitle="Newest Town Hall flag purchases and whether each paid upload was consumed."
+          columns={['Time', 'Player', 'Status', 'Preview', 'Chain', 'Price', 'Tx']}
+          rows={recent.map((row) => [
+            fmtTime(row.created_at),
+            <span><strong>{row.name || row.player_id}</strong><div className="admin-card-sub admin-mono">{short(row.player_id, 8, 6)}</div></span>,
+            townHallFlagStatusBadge(row.flag_status),
+            <TownHallFlagPreview src={row.image_url} />,
+            chainBadge(row.chain),
+            fmtMaybeUsd(row.price_usd),
+            <span className="admin-mono">{short(row.tx_hash, 10, 8)}</span>,
+          ])}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ShopPanel({ data }) {
   const shop = data?.shop || {};
   const billing = data?.aiBilling || {};
@@ -4326,6 +4397,7 @@ function ShopPanel({ data }) {
         { label: 'Hermes 24h', value: usageWindows.hermes_events_24h ?? 0, tone: 'blue' },
         { label: 'Hermes Errors 24h', value: usageWindows.hermes_errors_24h ?? 0, tone: usageWindows.hermes_errors_24h ? 'red' : 'green' },
       ]} />
+      <TownHallFlagShopCard flags={shop.town_hall_flags} />
       <div className="admin-grid two">
         <CompactTable title="Products" subtitle="Utility purchase totals by SKU." columns={['SKU', 'Title', 'Purchases', 'Buyers', 'Revenue', 'Last']} rows={(shop.by_sku || []).map((row) => [row.sku, row.title, row.purchases, row.unique_buyers, fmtMaybeUsd(row.revenue_usd), fmtTime(row.last_at)])} />
         <CompactTable title="Top Buyers" subtitle="Highest spenders across utility purchases." columns={['Player', 'DEX', 'Purchases', 'Spent', 'Last']} rows={(shop.top_buyers || []).map((row) => [row.name, DEX_LABELS[row.dex] || row.dex || '-', row.purchases, fmtMaybeUsd(row.spent_usd), fmtTime(row.last_at)])} />
