@@ -784,10 +784,15 @@ const PACIFICA_BUILDER_CODE = process.env.PACIFICA_BUILDER_CODE || 'clashofperps
 const PACIFICA_FETCH_MIN_INTERVAL_MS = Math.max(100, Number(process.env.PACIFICA_FETCH_MIN_INTERVAL_MS || 900));
 const PACIFICA_RATE_LIMIT_COOLDOWN_MS = Math.max(5_000, Number(process.env.PACIFICA_RATE_LIMIT_COOLDOWN_MS || 60_000));
 const PACIFICA_FETCH_CACHE_MS = Math.max(0, Number(process.env.PACIFICA_FETCH_CACHE_MS || 25_000));
+const PACIFICA_FETCH_STALE_CACHE_MS = Math.max(
+  PACIFICA_FETCH_CACHE_MS,
+  Number(process.env.PACIFICA_FETCH_STALE_CACHE_MS || 10 * 60_000)
+);
 let pacificaNextFetchAt = 0;
 let pacificaCooldownUntil = 0;
 const pacificaFetchCache = new Map();
 const pacificaAllTradesInflight = new Map();
+let pacificaFetchQueue = Promise.resolve();
 
 class PacificaFetchError extends Error {
   constructor(message, code = 'PACIFICA_FETCH_FAILED') {
@@ -807,26 +812,43 @@ async function pacePacificaFetch() {
   pacificaNextFetchAt = Date.now() + PACIFICA_FETCH_MIN_INTERVAL_MS;
 }
 
+function enqueuePacificaHttpFetch(url, label, page) {
+  const run = pacificaFetchQueue.then(async () => {
+    await pacePacificaFetch();
+    return fetch(url);
+  });
+  pacificaFetchQueue = run.catch((e) => {
+    console.warn(`[pacifica fetch] queue job failed label=${label} page=${page}:`, e?.message || e);
+  });
+  return run;
+}
+
 function pacificaCacheKey(account, since, maxPages) {
   return `${account}:${Number(since) || 0}:${Number(maxPages) || 0}`;
 }
 
-function getPacificaCached(account, since, maxPages) {
-  if (!PACIFICA_FETCH_CACHE_MS) return null;
+function getPacificaCached(account, since, maxPages, opts = {}) {
+  const stale = !!opts.stale;
+  const ttl = stale ? PACIFICA_FETCH_STALE_CACHE_MS : PACIFICA_FETCH_CACHE_MS;
+  if (!ttl) return null;
   const key = pacificaCacheKey(account, since, maxPages);
   const hit = pacificaFetchCache.get(key);
   if (!hit) return null;
-  if (Date.now() - hit.at > PACIFICA_FETCH_CACHE_MS) {
+  const age = Date.now() - hit.at;
+  if (age > ttl) {
     pacificaFetchCache.delete(key);
     return null;
   }
-  return hit.rows.map(row => ({ ...row }));
+  return hit.rows.map(row => ({
+    ...row,
+    ...(stale && age > PACIFICA_FETCH_CACHE_MS ? { _pacifica_cache_stale: true, _pacifica_cache_age_ms: age } : {}),
+  }));
 }
 
 function setPacificaCached(account, since, maxPages, rows) {
-  if (!PACIFICA_FETCH_CACHE_MS) return;
+  if (!PACIFICA_FETCH_STALE_CACHE_MS) return;
   if (pacificaFetchCache.size > 500) {
-    const cutoff = Date.now() - PACIFICA_FETCH_CACHE_MS;
+    const cutoff = Date.now() - PACIFICA_FETCH_STALE_CACHE_MS;
     for (const [key, value] of pacificaFetchCache) {
       if (value.at < cutoff || pacificaFetchCache.size > 400) pacificaFetchCache.delete(key);
     }
@@ -845,9 +867,19 @@ function isPacificaBuilderTrade(trade) {
   return String(raw).toLowerCase() === PACIFICA_BUILDER_CODE.toLowerCase();
 }
 
-async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA_MAX_PAGES) {
+async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA_MAX_PAGES, opts = {}) {
   const cached = getPacificaCached(account, since, maxPages);
   if (cached) return cached;
+  const allowStale = !!opts.allowStalePacifica;
+  const getStale = (reason, detail = '') => {
+    if (!allowStale) return null;
+    const stale = getPacificaCached(account, since, maxPages, { stale: true });
+    if (stale) {
+      const suffix = detail ? ` ${detail}` : '';
+      console.warn(`[pacifica fetch] ${label} ${reason}; serving stale cache rows=${stale.length}${suffix}`);
+    }
+    return stale;
+  };
   const collected = [];
   let cursor = null;
   let crossedSince = false;
@@ -861,11 +893,16 @@ async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA
     const t0 = Date.now();
     let r, j;
     try {
-      await pacePacificaFetch();
-      r = await fetch(`https://api.pacifica.fi/api/v1/trades/history?${params.toString()}`);
+      r = await enqueuePacificaHttpFetch(
+        `https://api.pacifica.fi/api/v1/trades/history?${params.toString()}`,
+        label,
+        page
+      );
     } catch (e) {
+      const stale = getStale(`page=${page} network error`, e?.message ? `error="${e.message}"` : '');
+      if (stale) return stale;
       console.warn(`[pacifica fetch] ${label} page=${page} network error:`, e.message);
-      break;
+      throw e;
     }
     // Pacifica returns plain-text "Rate limit exceeded" on 429 (not JSON).
     // Read raw text first, then try to parse — so we can log a clean
@@ -875,11 +912,15 @@ async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA
     if (r.status === 429) {
       pacificaCooldownUntil = Date.now() + PACIFICA_RATE_LIMIT_COOLDOWN_MS;
       console.warn(`[pacifica fetch] ${label} page=${page} rate limited (429) — backing off this run`);
+      const stale = getStale(`page=${page} rate limited`);
+      if (stale) return stale;
       throw new PacificaFetchError('Pacifica trade history is rate limited. Wait a minute and retry.', 'PACIFICA_RATE_LIMIT');
     }
     if (!r.ok) {
       const snippet = bodyText.length > 120 ? `${bodyText.slice(0, 120)}…` : bodyText;
       console.warn(`[pacifica fetch] ${label} page=${page} HTTP ${r.status}: ${snippet}`);
+      const stale = getStale(`page=${page} HTTP ${r.status}`);
+      if (stale) return stale;
       break;
     }
     try {
@@ -887,6 +928,8 @@ async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA
     } catch (e) {
       const snippet = bodyText.length > 120 ? `${bodyText.slice(0, 120)}…` : bodyText;
       console.warn(`[pacifica fetch] ${label} page=${page} non-JSON body: ${snippet}`);
+      const stale = getStale(`page=${page} non-JSON response`);
+      if (stale) return stale;
       break;
     }
     const ms = Date.now() - t0;
@@ -990,7 +1033,7 @@ async function fetchPacificaAllTradesUncached(player, opts = {}) {
   for (const account of queryList) {
     const role = account === master ? 'MASTER' : 'AGENT';
     const label = `player=${player.name} ${role}=${account.slice(0,10)}`;
-    results.push(await fetchPacificaPaginated(account, since, label, maxPages));
+    results.push(await fetchPacificaPaginated(account, since, label, maxPages, opts));
   }
 
   // Merge + dedupe by history_id. A trade has a unique history_id across

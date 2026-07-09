@@ -955,7 +955,9 @@ function formatPositionAmount(amount) {
 
 function orderTpslKind(order) {
   const raw = String(
-    order?.tpsl
+    order?._attachedTpslKind
+      || order?._phoenixTpslKind
+      || order?.tpsl
       || order?._raw?.tpsl
       || order?._raw?.tp_sl
       || order?._raw?.trigger_type
@@ -1788,6 +1790,322 @@ function isReadOnlyOrder(order) {
   return !!(order?._readOnly || order?._phoenixSyntheticTpsl);
 }
 
+function normalizedOrderIdentity(value) {
+  const text = String(value ?? '').trim();
+  return text && text !== '0' ? text : '';
+}
+
+function orderIdentityValues(order) {
+  return [
+    order?.order_id,
+    order?.i,
+    order?.id,
+    order?.client_order_id,
+    order?.clientOrderId,
+    order?.orderSequenceNumber,
+    order?._raw?.order_id,
+    order?._raw?.id,
+    order?._raw?.client_order_id,
+    order?._raw?.clientOrderId,
+    order?._raw?.orderSequenceNumber,
+  ].map(normalizedOrderIdentity).filter(Boolean);
+}
+
+function orderParentIdentityValues(order) {
+  return [
+    order?.parent_order_id,
+    order?.parentOrderId,
+    order?.parent_client_order_id,
+    order?.parentClientOrderId,
+    order?.dependency_order_id,
+    order?.dependencyOrderId,
+    order?.trigger?.parentOrderId,
+    order?._raw?.parent_order_id,
+    order?._raw?.parentOrderId,
+    order?._raw?.parent_client_order_id,
+    order?._raw?.parentClientOrderId,
+    order?._raw?.dependency_order_id,
+    order?._raw?.dependencyOrderId,
+    order?._raw?.trigger?.parentOrderId,
+  ].map(normalizedOrderIdentity).filter(Boolean);
+}
+
+function orderScopeValue(order, ...keys) {
+  for (const key of keys) {
+    const value = order?.[key] ?? order?._raw?.[key];
+    const text = normalizedOrderIdentity(value);
+    if (text) return text.toLowerCase();
+  }
+  return '';
+}
+
+function ordersShareInstrumentScope(parent, child) {
+  const parentSymbol = String(parent?.symbol || parent?.s || '').trim().toUpperCase();
+  const childSymbol = String(child?.symbol || child?.s || '').trim().toUpperCase();
+  if (!parentSymbol || !childSymbol || parentSymbol !== childSymbol) return false;
+
+  const parentMarket = orderScopeValue(parent, 'market_addr', 'marketAddress', 'market', 'pair_index', 'pairIndex');
+  const childMarket = orderScopeValue(child, 'market_addr', 'marketAddress', 'market', 'pair_index', 'pairIndex');
+  if (parentMarket && childMarket && parentMarket !== childMarket) return false;
+
+  const parentSub = normalizedOrderIdentity(parent?._phoenixSubaccountIndex ?? parent?.subaccount_index ?? parent?.subaccountIndex ?? parent?._raw?.subaccountIndex);
+  const childSub = normalizedOrderIdentity(child?._phoenixSubaccountIndex ?? child?.subaccount_index ?? child?.subaccountIndex ?? child?._raw?.subaccountIndex);
+  if (parentSub && childSub && parentSub !== childSub) return false;
+
+  return true;
+}
+
+function orderExplicitlyAttachedTo(parent, child) {
+  const parentIds = new Set(orderIdentityValues(parent));
+  if (!parentIds.size) return false;
+  return orderParentIdentityValues(child).some(id => parentIds.has(id));
+}
+
+function orderHasAttachedTpslEvidence(order) {
+  return !!(
+    order?._attachedTpslCandidate
+    || order?._phoenixConditionalOrder
+    || order?.isConditionalOrder
+    || order?._raw?.isConditionalOrder
+    || order?.conditionalKind
+    || order?.conditional_kind
+    || order?._raw?.conditionalKind
+    || order?._raw?.conditional_kind
+  );
+}
+
+function orderIsDisplayTpsl(order, positions = []) {
+  const kind = orderTpslKind(order);
+  if (kind) return true;
+  const type = orderDisplayType(order, positions).toLowerCase();
+  return type.includes('take') || type.includes('stop') || type.includes('tp') || type.includes('sl');
+}
+
+function orderIsGroupParent(order, positions = []) {
+  if (orderIsDisplayTpsl(order, positions) || orderReduceOnlyLike(order)) return false;
+  const type = orderDisplayType(order, positions).toLowerCase();
+  return type.includes('limit') || type.includes('trigger') || type.includes('order');
+}
+
+function priceFromAny(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'object') {
+    return numOrNull(
+      value.stop_price
+        ?? value.stopPrice
+        ?? value.trigger_price
+        ?? value.triggerPrice
+        ?? value.triggerPriceUi
+        ?? value.price
+        ?? value.value
+    );
+  }
+  return numOrNull(value);
+}
+
+function directAttachedTpslPrice(order, kind) {
+  const raw = order?._raw || {};
+  const candidates = kind === 'tp'
+    ? [
+        order?.take_profit_price,
+        order?.takeProfitPrice,
+        order?.tp_price,
+        order?.tpPrice,
+        order?.take_profit,
+        order?.takeProfit,
+        order?.tp,
+        order?.attached_tpsl?.take_profit,
+        order?.attachedTpsl?.takeProfit,
+        raw.take_profit_price,
+        raw.takeProfitPrice,
+        raw.tp_price,
+        raw.tpPrice,
+        raw.take_profit,
+        raw.takeProfit,
+        raw.tp,
+        raw.attached_tpsl?.take_profit,
+        raw.attachedTpsl?.takeProfit,
+      ]
+    : [
+        order?.stop_loss_price,
+        order?.stopLossPrice,
+        order?.sl_price,
+        order?.slPrice,
+        order?.stop_loss,
+        order?.stopLoss,
+        order?.sl,
+        order?.attached_tpsl?.stop_loss,
+        order?.attachedTpsl?.stopLoss,
+        raw.stop_loss_price,
+        raw.stopLossPrice,
+        raw.sl_price,
+        raw.slPrice,
+        raw.stop_loss,
+        raw.stopLoss,
+        raw.sl,
+        raw.attached_tpsl?.stop_loss,
+        raw.attachedTpsl?.stopLoss,
+      ];
+  for (const candidate of candidates) {
+    const price = priceFromAny(candidate);
+    if (price != null && price > 0) return price;
+  }
+  return null;
+}
+
+function inferAttachedTpslKind(child, parent, positions = []) {
+  const explicit = orderTpslKind(child);
+  if (explicit) return explicit;
+  const type = orderDisplayType(child, positions).toLowerCase();
+  if (type.includes('take') || type.includes('tp')) return 'tp';
+  if (type.includes('stop') || type.includes('sl')) return 'sl';
+
+  const childPrice = orderDisplayPrice(child);
+  const parentPrice = orderDisplayPrice(parent);
+  if (!(childPrice > 0) || !(parentPrice > 0)) return '';
+  const parentSide = orderPositionSide(parent);
+  if (parentSide === 'bid') return childPrice > parentPrice ? 'tp' : 'sl';
+  if (parentSide === 'ask') return childPrice < parentPrice ? 'tp' : 'sl';
+  return '';
+}
+
+function attachedTpslRowFromOrder(child, parent, positions = []) {
+  const kind = inferAttachedTpslKind(child, parent, positions);
+  if (kind !== 'tp' && kind !== 'sl') return null;
+  const price = orderDisplayPrice(child);
+  if (!(price > 0)) return null;
+  return {
+    ...child,
+    _attachedTpslKind: kind,
+    _attachedTpslInfo: true,
+    _readOnly: true,
+    price: String(price),
+    order_type: kind === 'tp' ? 'TAKE_PROFIT' : 'STOP_LOSS',
+  };
+}
+
+function directAttachedTpslRows(parent) {
+  const rows = [];
+  const tp = directAttachedTpslPrice(parent, 'tp');
+  if (tp != null && tp > 0) {
+    rows.push({
+      ...parent,
+      _attachedTpslKind: 'tp',
+      _attachedTpslInfo: true,
+      _readOnly: true,
+      price: String(tp),
+      order_type: 'TAKE_PROFIT',
+    });
+  }
+  const sl = directAttachedTpslPrice(parent, 'sl');
+  if (sl != null && sl > 0) {
+    rows.push({
+      ...parent,
+      _attachedTpslKind: 'sl',
+      _attachedTpslInfo: true,
+      _readOnly: true,
+      price: String(sl),
+      order_type: 'STOP_LOSS',
+    });
+  }
+  return rows;
+}
+
+function scoreAttachedTpslParent(parent, child, positions = []) {
+  if (!orderIsGroupParent(parent, positions)) return -1;
+  if (!ordersShareInstrumentScope(parent, child)) return -1;
+  if (orderExplicitlyAttachedTo(parent, child)) return 10_000;
+  if (!orderHasAttachedTpslEvidence(child)) return -1;
+  let score = 100;
+  const parentSide = orderPositionSide(parent);
+  const childSide = orderPositionSide(child);
+  if (parentSide && childSide && parentSide === childSide) score += 8;
+  const kind = inferAttachedTpslKind(child, parent, positions);
+  if (kind) score += 12;
+  const parentPrice = orderDisplayPrice(parent);
+  const childPrice = orderDisplayPrice(child);
+  if (parentPrice > 0 && childPrice > 0) score += Math.max(0, 10 - Math.min(10, Math.abs(childPrice - parentPrice) / Math.max(parentPrice * 0.01, 1)));
+  return score;
+}
+
+function orderAttachedTpslRows(order) {
+  const direct = directAttachedTpslRows(order);
+  const grouped = Array.isArray(order?._attachedTpslRows) ? order._attachedTpslRows : [];
+  const byKind = new Map();
+  for (const row of [...direct, ...grouped]) {
+    const kind = orderTpslKind(row);
+    const price = orderDisplayPrice(row);
+    if ((kind === 'tp' || kind === 'sl') && price > 0 && !byKind.has(kind)) {
+      byKind.set(kind, { ...row, _attachedTpslKind: kind, price: String(price) });
+    }
+  }
+  return ['tp', 'sl'].map(kind => byKind.get(kind)).filter(Boolean);
+}
+
+function groupOrdersForList(orders, positions = []) {
+  const list = Array.isArray(orders) ? orders.filter(Boolean) : [];
+  if (!list.length) return [];
+  const parentEntries = list
+    .map((order, index) => ({ order, index }))
+    .filter(entry => orderIsGroupParent(entry.order, positions));
+  if (!parentEntries.length) {
+    return list.map(order => {
+      const direct = directAttachedTpslRows(order);
+      return direct.length ? { ...order, _attachedTpslRows: direct } : order;
+    });
+  }
+
+  const attachedByParent = new Map();
+  const attachedIndexes = new Set();
+  list.forEach((child, childIndex) => {
+    if (!orderIsDisplayTpsl(child, positions)) return;
+    let best = null;
+    for (const entry of parentEntries) {
+      if (entry.index === childIndex) continue;
+      const score = scoreAttachedTpslParent(entry.order, child, positions);
+      if (score < 0) continue;
+      if (!best || score > best.score) best = { ...entry, score };
+    }
+    if (!best) return;
+    const row = attachedTpslRowFromOrder(child, best.order, positions);
+    if (!row) return;
+    if (!attachedByParent.has(best.index)) attachedByParent.set(best.index, []);
+    attachedByParent.get(best.index).push(row);
+    attachedIndexes.add(childIndex);
+  });
+
+  return list
+    .map((order, index) => {
+      if (attachedIndexes.has(index)) return null;
+      const rows = [...directAttachedTpslRows(order), ...(attachedByParent.get(index) || [])];
+      if (!rows.length) return order;
+      return { ...order, _attachedTpslRows: rows };
+    })
+    .filter(Boolean);
+}
+
+function AttachedTpslSummary({ order, compact = false }) {
+  const rows = orderAttachedTpslRows(order);
+  if (!rows.length) return null;
+  const byKind = Object.fromEntries(rows.map(row => [orderTpslKind(row), row]));
+  const renderLeg = (kind, label) => {
+    const row = byKind[kind];
+    const price = row ? orderDisplayPrice(row) : 0;
+    const color = kind === 'tp' ? '#118a3b' : '#b92727';
+    return (
+      <span style={compact ? {...S.attachedTpslLegCompact, color} : {...S.attachedTpslLeg, color}}>
+        {label}: {price > 0 ? formatOrderPrice(price) : 'None'}
+      </span>
+    );
+  };
+  return (
+    <div style={compact ? S.attachedTpslTableRow : S.attachedTpslRow}>
+      {renderLeg('tp', 'TP')}
+      {renderLeg('sl', 'SL')}
+    </div>
+  );
+}
+
 function useOpenedSortedPositions(positions) {
   const orderRef = useRef({ map: new Map(), nextSeq: 1 });
   return useMemo(() => {
@@ -2566,7 +2884,8 @@ const OstiumWalletFallbackBar = memo(function OstiumWalletFallbackBar({
 
 // ==================== ORDERS LIST (mobile/tab card view) ====================
 const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [], leverageSettings = {} }) {
-  if (!orders.length) {
+  const groupedOrders = useMemo(() => groupOrdersForList(orders, positions), [orders, positions]);
+  if (!groupedOrders.length) {
     return (
       <div style={S.empty}>
         <div style={{opacity: 0.3, color: '#5C3A21'}}>
@@ -2578,7 +2897,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
   }
   return (
     <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
-      {orders.map((o, i) => {
+      {groupedOrders.map((o, i) => {
         const sym = o.symbol || o.s;
         const side = o.side || o.d;
         const price = orderDisplayPrice(o);
@@ -2628,6 +2947,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
               {notionalUsd != null ? <span style={S.detail}>Size: {formatOrderUsd(notionalUsd)}</span> : null}
               {leverageValue != null ? <span style={S.detail}>Lev: {leverageValue}x</span> : null}
             </div>
+            <AttachedTpslSummary order={o} />
           </div>
         );
       })}
@@ -2943,6 +3263,7 @@ const BottomPanel = memo(function BottomPanel({
                 const isSL = type.includes('STOP') || type.includes('SL');
                 const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
                 const pending = isOrderPendingConfirmation(o);
+                const attachedRows = orderAttachedTpslRows(o);
                 return (
                   <tr key={orderStableKey(o, i)} style={S.tr}>
                     <td style={S.td}>{sym}</td>
@@ -2952,6 +3273,7 @@ const BottomPanel = memo(function BottomPanel({
                         {type}
                         {pending ? <OrderPendingBadge /> : null}
                       </span>
+                      {attachedRows.length ? <AttachedTpslSummary order={o} compact /> : null}
                     </td>
                     <td style={S.td}>${fmtPrice(price)}</td>
                     <td style={S.td}>{amt}</td>
@@ -3135,6 +3457,10 @@ function FuturesPanel() {
   const displayOrders = useMemo(
     () => [...dangoPendingOrders, ...(Array.isArray(orders) ? orders : [])],
     [dangoPendingOrders, orders],
+  );
+  const groupedDisplayOrders = useMemo(
+    () => groupOrdersForList(displayOrders, positions),
+    [displayOrders, positions],
   );
   const updateDangoPendingAction = useCallback((id, patch) => {
     setDangoPendingActions(current => current.map(action => (
@@ -5343,7 +5669,7 @@ function FuturesPanel() {
 
   // Apply filters to orders
   const filteredOrders = useMemo(() => {
-    let list = displayOrders;
+    let list = groupedDisplayOrders;
     if (btmFilters.symbol !== 'All') list = list.filter(o => (o.symbol || o.s) === btmFilters.symbol);
     if (btmFilters.side !== 'All') {
       const wantBid = btmFilters.side === 'Long';
@@ -5353,7 +5679,7 @@ function FuturesPanel() {
     if (btmFilters.sortBy === 'symbol') list = [...list].sort((a, b) => dir * (a.symbol || a.s || '').localeCompare(b.symbol || b.s || ''));
     else if (btmFilters.sortBy === 'price') list = [...list].sort((a, b) => dir * (parseFloat(b.price || b.ip || 0) - parseFloat(a.price || a.ip || 0)));
     return list;
-  }, [displayOrders, btmFilters]);
+  }, [groupedDisplayOrders, btmFilters]);
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
 
@@ -8642,7 +8968,7 @@ function FuturesPanel() {
 
   // ==================== ORDERS TAB ====================
   const renderOrders = () => {
-    if (!displayOrders.length) {
+    if (!groupedDisplayOrders.length) {
       return (
         <div style={S.empty}>
           <div style={{opacity: 0.3, color: '#5C3A21'}}>
@@ -8654,7 +8980,7 @@ function FuturesPanel() {
     }
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
-        {displayOrders.map((o, i) => {
+        {groupedDisplayOrders.map((o, i) => {
           const sym = o.symbol || o.s;
           const side = o.side || o.d;
           const price = orderDisplayPrice(o);
@@ -8708,12 +9034,13 @@ function FuturesPanel() {
                 ) : (
                   <span style={S.detail}>Amount: {amt}</span>
                 )}
-                {notionalUsd != null ? <span style={S.detail}>Size: {formatOrderUsd(notionalUsd)}</span> : null}
-                {leverageValue != null ? <span style={S.detail}>Lev: {leverageValue}x</span> : null}
-              </div>
+              {notionalUsd != null ? <span style={S.detail}>Size: {formatOrderUsd(notionalUsd)}</span> : null}
+              {leverageValue != null ? <span style={S.detail}>Lev: {leverageValue}x</span> : null}
             </div>
-          );
-        })}
+            <AttachedTpslSummary order={o} />
+          </div>
+        );
+      })}
       </div>
     );
   };
@@ -10624,6 +10951,34 @@ const S = {
     borderTopColor: '#8a6d2f',
     animation: 'wallet-spin 0.75s linear infinite',
     flexShrink: 0,
+  },
+  attachedTpslRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 8,
+    padding: '5px 7px',
+    borderRadius: 8,
+    background: 'rgba(255, 248, 231, 0.72)',
+    border: '1px solid #d4c8b0',
+  },
+  attachedTpslLeg: {
+    fontSize: 11,
+    fontWeight: 900,
+    lineHeight: 1.15,
+    whiteSpace: 'nowrap',
+  },
+  attachedTpslTableRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 3,
+    color: '#77573d',
+  },
+  attachedTpslLegCompact: {
+    fontSize: 10,
+    fontWeight: 900,
+    lineHeight: 1.1,
+    whiteSpace: 'nowrap',
   },
   input: {
     background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,

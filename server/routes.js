@@ -15212,6 +15212,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   } catch (e) {
     console.error(`[claim-gold pacifica] player=${req.player.name} ERROR:`, e.message, e.stack);
     recordClaimTelemetry({ result: 'error', reason: e.message, metadata: { phase: 'pacifica_claim' } });
+    if (e?.code === 'PACIFICA_RATE_LIMIT') {
+      return res.status(503).json({
+        error: e.message || 'Pacifica trade history is rate limited. Wait a minute and retry.',
+        retryable: true,
+      });
+    }
     res.status(500).json({ error: 'Failed to claim rewards' });
   }
 });
@@ -15446,6 +15452,7 @@ async function prefetchStartedTaskTradesForDex(player, taskList, effectiveDex, r
         headers: requestHeaders,
         singleDex: true,
         pacificaFanoutCap: dex === 'pacifica' ? PACIFICA_TASK_FAST_FANOUT_CAP : undefined,
+        allowStalePacifica: dex === 'pacifica',
       }),
       `player=${player?.name || player?.id} ${label} dex=${dex}`,
       timeoutMs,

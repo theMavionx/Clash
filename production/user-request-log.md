@@ -1591,3 +1591,24 @@ Follow-up:
 ## UR-2026-07-08-TOWN-HALL-FLAG-ADMIN-TRACKING
 - Time: 2026-07-08 23:13:58 +03:00
 - Request: в адмінку також додай прапор щоб слідкувати скільки людей купило і відразу на прод
+
+## UR-2026-07-09-THEO1-PACIFICA-REWARDS
+- Time: 2026-07-09 07:51:48 +03:00
+- Request: but still my volume is not counting and i can't earn golds... First metamask, then i also used Phantom but not helped. Theo1 wallet 5w9V9ukjypors2jgiAoeYXfHuxc3PoGgXgjQbhgCUUnd - розібратися що з ним
+
+## UR-2026-07-09-PACIFICA-SOLANA-TOURNAMENT-AUDIT
+- Time: 2026-07-09 08:04:24 +03:00
+- Request: провести аудит Pacifica: чи всім зараховано об'єми, таски і лідерборд за останні два дні Solana турніру (передостанній на проді).
+
+## UR-2026-07-09-PHOENIX-SOLANA-TOURNAMENT-AUDIT
+- Time: 2026-07-09 08:19:49 +03:00
+- Request: перевірити Phoenix так само: чи весь об'єм зараховано в Solana турнірі за останні два дні.
+
+## UR-2026-07-09-LIMIT-ORDER-TPSL-GROUPED-CARD
+- Time: 2026-07-09 08:32:00 +03:00
+- Request: якщо ордер є limit + TP/SL, показувати TP/SL в одній картці з ліміткою, як це робить Ostium, а не окремими картками.
+
+## UR-2026-07-09-PACIFICA-RATE-LIMIT-STABILIZATION
+- Time: 2026-07-09 08:40:00 +03:00
+- Request: через постійні Pacifica rate limits на сервері додати другий сервер як fetch helper/tunnel і задеплоїти.
+- Safety note: IP/proxy rotation to bypass third-party rate limits is not implemented. Work should use compliant request scheduling, caching, coalescing, backoff, and stale-cache fallback instead.

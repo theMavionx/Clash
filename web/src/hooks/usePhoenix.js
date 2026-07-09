@@ -1871,6 +1871,111 @@ function activeTriggerRow(triggers) {
     || null;
 }
 
+function phoenixConditionalDirectionText(order) {
+  return String(
+    order?.triggerDirection
+      ?? order?.trigger_direction
+      ?? order?.trigger?.triggerDirection
+      ?? order?.trigger?.trigger_direction
+      ?? order?._raw?.triggerDirection
+      ?? order?._raw?.trigger_direction
+      ?? order?.conditionalKind
+      ?? order?.conditional_kind
+      ?? ''
+  ).toLowerCase();
+}
+
+function phoenixConditionalTradeSide(order) {
+  return sideToUi(
+    order?.tradeSide
+      ?? order?.trade_side
+      ?? order?.trigger?.tradeSide
+      ?? order?.trigger?.trade_side
+      ?? order?.side
+  );
+}
+
+function phoenixConditionalPositionSide(order) {
+  const closeSide = phoenixConditionalTradeSide(order);
+  if (closeSide === 'bid') return 'ask';
+  if (closeSide === 'ask') return 'bid';
+  return sideToUi(order?.positionSide ?? order?.position_side ?? order?.side);
+}
+
+function phoenixConditionalTpslKind(order) {
+  const rawKind = String(
+    order?.conditionalKind
+      ?? order?.conditional_kind
+      ?? order?._raw?.conditionalKind
+      ?? order?._raw?.conditional_kind
+      ?? order?.kind
+      ?? order?.type
+      ?? ''
+  ).toLowerCase();
+  if (rawKind.includes('take') || rawKind === 'tp') return 'take_profit';
+  if (rawKind.includes('stop') || rawKind === 'sl') return 'stop_loss';
+
+  const direction = phoenixConditionalDirectionText(order);
+  const positionSide = phoenixConditionalPositionSide(order);
+  const isGreater = direction.includes('greater') || direction.includes('above') || direction === '1';
+  const isLess = direction.includes('less') || direction.includes('below') || direction === '0';
+  if (!isGreater && !isLess) return '';
+  if (positionSide === 'bid') return isGreater ? 'take_profit' : 'stop_loss';
+  if (positionSide === 'ask') return isLess ? 'take_profit' : 'stop_loss';
+  return '';
+}
+
+function phoenixNormalizeOrderRow(order, { symbol, market, subaccountIndex = 0, authority = null } = {}) {
+  const phx = phoenixSymbol(symbol);
+  if (!phx) return null;
+  const isConditional = phoenixOrderIsConditionalTpsl(order);
+  const kind = isConditional ? phoenixConditionalTpslKind(order) : '';
+  const lotDecimals = Number(market?._phoenixBaseLotsDecimals ?? 4);
+  const amount = order?.sizeRemainingUnits != null
+    ? Number(order.sizeRemainingUnits)
+    : firstFinite(
+        tokenAmountValue(order?.tradeSizeRemaining),
+        tokenAmountValue(order?.initialTradeSize),
+        tokenAmountValue(order?.size),
+        Number(order?.sizeRemainingLots || 0) / 10 ** lotDecimals,
+        0
+      ) || 0;
+  const regularPrice = firstFinite(
+    tokenAmountValue(order?.price),
+    order?.priceUsd,
+    order?.price,
+    ticksToUsd(order?.priceTicks, market),
+    0
+  ) || 0;
+  const triggerPrice = isConditional ? (triggerRowPrice(order, market) || regularPrice) : regularPrice;
+  const side = isConditional ? phoenixConditionalPositionSide(order) : sideToUi(order?.side);
+  return {
+    symbol: phx,
+    side,
+    order_direction: side === 'bid' ? 'LONG' : side === 'ask' ? 'SHORT' : '',
+    amount: String(Math.abs(amount || 0)),
+    price: String(triggerPrice || 0),
+    order_type: isConditional
+      ? (kind === 'take_profit' ? 'TAKE_PROFIT' : kind === 'stop_loss' ? 'STOP_LOSS' : 'TRIGGER')
+      : (order?.isStopLoss ? 'STOP' : String(order?.orderType || '').toUpperCase() || 'LIMIT'),
+    tif: isConditional ? 'CONDITIONAL' : 'GTC',
+    order_id: String(order?.orderSequenceNumber ?? order?.id ?? ''),
+    orderSequenceNumber: order?.orderSequenceNumber,
+    reduce_only: isConditional || !!order?.isReduceOnly || !!order?.reduceOnly,
+    market_addr: market?.market_addr || null,
+    market_name: phx,
+    _phoenixSubaccountIndex: Number(subaccountIndex) || 0,
+    ...(authority ? { _phoenixAuthority: authority } : {}),
+    ...(isConditional ? {
+      _phoenixConditionalOrder: true,
+      _attachedTpslCandidate: true,
+      _phoenixTpslKind: kind,
+      _readOnly: true,
+    } : {}),
+    _raw: order,
+  };
+}
+
 function collateralForTraderView(traderView) {
   return firstFinite(
     tokenAmountValue(traderView?.collateralBalance),
@@ -2123,27 +2228,9 @@ function ordersFromSnapshot(group, marketsBySymbol, subaccountIndex = 0) {
   const symbol = phoenixSymbol(group?.symbol);
   if (!symbol) return [];
   const m = marketsBySymbol.current[symbol];
-  const lotDecimals = Number(m?._phoenixBaseLotsDecimals ?? 4);
-  return (group?.orders || []).filter(o => !phoenixOrderIsConditionalTpsl(o)).map(o => {
-    const amount = o?.sizeRemainingUnits != null
-      ? Number(o.sizeRemainingUnits)
-      : Number(o?.sizeRemainingLots || 0) / 10 ** lotDecimals;
-    return {
-      symbol,
-      side: sideToUi(o?.side),
-      amount: String(Math.abs(amount || 0)),
-      price: String(o?.priceUsd ?? o?.price ?? 0),
-      order_type: String(o?.orderType || '').toUpperCase() || 'LIMIT',
-      tif: 'GTC',
-      order_id: String(o?.orderSequenceNumber ?? o?.id ?? ''),
-      orderSequenceNumber: o?.orderSequenceNumber,
-      reduce_only: !!o?.reduceOnly,
-      market_addr: m?.market_addr || null,
-      market_name: symbol,
-      _phoenixSubaccountIndex: Number(subaccountIndex) || 0,
-      _raw: o,
-    };
-  });
+  return (group?.orders || [])
+    .map(o => phoenixNormalizeOrderRow(o, { symbol, market: m, subaccountIndex }))
+    .filter(Boolean);
 }
 
 function ordersFromTraderView(traderView, marketsBySymbol) {
@@ -2155,31 +2242,14 @@ function ordersFromTraderView(traderView, marketsBySymbol) {
     const symbol = phoenixSymbol(marketSymbol);
     if (!symbol || !Array.isArray(rows)) return [];
     const m = marketsBySymbol.current[symbol];
-    return rows.filter(o => !phoenixOrderIsConditionalTpsl(o)).map(o => {
-      const amount = firstFinite(
-        tokenAmountValue(o?.tradeSizeRemaining),
-        tokenAmountValue(o?.initialTradeSize),
-        tokenAmountValue(o?.size),
-        0
-      ) || 0;
-      const price = firstFinite(tokenAmountValue(o?.price), o?.price, 0) || 0;
-      return {
+    return rows
+      .map(o => phoenixNormalizeOrderRow(o, {
         symbol,
-        side: sideToUi(o?.side),
-        amount: String(Math.abs(amount || 0)),
-        price: String(price),
-        order_type: o?.isStopLoss ? 'STOP' : 'LIMIT',
-        tif: 'GTC',
-        order_id: String(o?.orderSequenceNumber ?? o?.id ?? ''),
-        orderSequenceNumber: o?.orderSequenceNumber,
-        reduce_only: !!o?.isReduceOnly || !!o?.reduceOnly,
-        market_addr: m?.market_addr || null,
-        market_name: symbol,
-        _phoenixSubaccountIndex: subaccountIndex,
-        _phoenixAuthority: traderView?.authority || null,
-        _raw: o,
-      };
-    });
+        market: m,
+        subaccountIndex,
+        authority: traderView?.authority || null,
+      }))
+      .filter(Boolean);
   });
 }
 
