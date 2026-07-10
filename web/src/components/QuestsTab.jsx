@@ -732,12 +732,34 @@ function QuestsTab({ markets = [] }) {
           });
           setTimeout(() => setFlash(null), 2500);
         }
+        setTasks(prev => prev.map(task => {
+          if (Number(task.id) !== Number(id)) return task;
+          return {
+            ...task,
+            started: true,
+            claimed_at: j.auto_restarted ? null : new Date().toISOString(),
+            progress_value: j.auto_restarted ? 0 : Number(j.progress_value || task.progress_value || 0),
+            target_value: Number(j.target_value || task.target_value || 0),
+          };
+        }));
+        setTimeout(() => fetchTasks(token), 250);
       } else if (!r.ok) {
         setError(j.error || 'Failed');
       } else if (j.ok === false) {
+        if (j.progress_value != null || j.target_value != null) {
+          setTasks(prev => prev.map(task => (
+            Number(task.id) === Number(id)
+              ? {
+                  ...task,
+                  progress_value: Number(j.progress_value ?? task.progress_value ?? 0),
+                  target_value: Number(j.target_value ?? task.target_value ?? 0),
+                }
+              : task
+          )));
+        }
         setError(j.retryable && j.error ? j.error : 'Not completed yet');
       }
-      await fetchTasks(token);
+      if (!(j.ok && j.completed)) await fetchTasks(token);
     } finally {
       setLoading(false);
       setBusyTask(null);

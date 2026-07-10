@@ -29,10 +29,15 @@ const OSTIUM_RPC_URL = String(
 ).trim();
 const OSTIUM_SUBGRAPH_URL = String(process.env.OSTIUM_SUBGRAPH_URL || '').trim();
 const OSTIUM_BUILDER_API_URL = String(process.env.OSTIUM_BUILDER_API_URL || '').trim();
+const OSTIUM_METADATA_API_URL = String(
+  process.env.OSTIUM_METADATA_API_URL
+  || 'https://metadata-backend.ostium.io',
+).replace(/\/+$/u, '');
 
 let readClient = null;
 let marketCache = { at: 0, rows: [], pairById: new Map() };
 let priceCache = { at: 0, rows: [] };
+let volumeCache = { at: 0, byPairId: new Map() };
 const positionsCache = new Map();
 const ordersCache = new Map();
 const CACHE_TTL_MS = 15_000;
@@ -278,6 +283,7 @@ function normalizeMarket(pair) {
     open_interest: num(pair?.openInterest, 0),
     buy_open_interest: num(pair?.buyOpenInterest, 0),
     sell_open_interest: num(pair?.sellOpenInterest, 0),
+    max_open_interest: num(pair?.maxOpenInterest, 0),
     // Ostium SDK returns rolloverRate as a percent over the 8h window, while
     // the Clash UI contract stores rates as decimal fractions.
     funding_rate: rolloverLongPct / 100,
@@ -292,6 +298,42 @@ function normalizeMarket(pair) {
     builder_address: OSTIUM_BUILDER_ADDRESS,
     _raw: pair,
   };
+}
+
+async function getVolume24hByPairId() {
+  if (Date.now() - volumeCache.at < CACHE_TTL_MS && volumeCache.byPairId.size) return volumeCache.byPairId;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(`${OSTIUM_METADATA_API_URL}/volume/all`, {
+      signal: controller.signal,
+      headers: { accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Ostium volume returned ${res.status}`);
+    const payload = await res.json();
+    const rows = Array.isArray(payload?.data) ? payload.data : (Array.isArray(payload) ? payload : []);
+    const byPairId = new Map();
+    for (const row of rows) {
+      const pairId = row?.pair_id ?? row?.pairId ?? row?.pair_index ?? row?.market_id;
+      const volume = num(row?.last_24h_volume ?? row?.volume_24h ?? row?.volume24h ?? row?.volume, 0);
+      if (pairId == null || volume <= 0) continue;
+      byPairId.set(String(pairId), volume);
+    }
+    volumeCache = { at: Date.now(), byPairId };
+    return byPairId;
+  } catch (e) {
+    if (volumeCache.byPairId.size && Date.now() - volumeCache.at < STALE_CACHE_TTL_MS && isTransientReadError(e)) {
+      console.warn('[ostium] using stale volume cache after read error:', e.message || e);
+      return volumeCache.byPairId;
+    }
+    if (isTransientReadError(e)) {
+      console.warn('[ostium] 24h volume read degraded:', e.message || e);
+      return volumeCache.byPairId;
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function mergeMarketPrices(markets, prices) {
@@ -327,6 +369,21 @@ function mergeMarketPrices(markets, prices) {
   });
 }
 
+function mergeMarketVolumes(markets, volumeByPairId) {
+  if (!Array.isArray(markets) || !markets.length || !volumeByPairId?.size) return markets;
+  return markets.map((market) => {
+    const pairId = market?.pair_index ?? market?.pairIndex ?? market?.market_id ?? market?.marketId;
+    const volume = volumeByPairId.get(String(pairId));
+    if (!(volume > 0)) return market;
+    return {
+      ...market,
+      volume_24h: volume,
+      volume24h: volume,
+      volume_source: 'ostium_metadata_volume_all',
+    };
+  });
+}
+
 async function getPairsFresh() {
   const client = await getReadClient();
   const payload = await client.getPairs();
@@ -353,33 +410,47 @@ async function getMarketContext() {
 
 async function getMarketInfo() {
   const context = await getMarketContext();
+  let rows = context.rows;
   try {
-    return mergeMarketPrices(context.rows, await getPrices())
-      .filter(row => num(row?.mark ?? row?.mid ?? row?.oracle ?? row?.price, 0) > 0);
+    rows = mergeMarketPrices(rows, await getPrices());
   } catch (e) {
     console.warn('[ostium] market price merge failed:', e.message || e);
-    return context.rows.filter(row => num(row?.mark ?? row?.mid ?? row?.oracle ?? row?.price, 0) > 0);
   }
+  try {
+    rows = mergeMarketVolumes(rows, await getVolume24hByPairId());
+  } catch (e) {
+    console.warn('[ostium] market volume merge failed:', e.message || e);
+  }
+  return rows.filter(row => num(row?.mark ?? row?.mid ?? row?.oracle ?? row?.price, 0) > 0);
 }
 
 async function getPrices() {
   if (Date.now() - priceCache.at < CACHE_TTL_MS && priceCache.rows.length) return priceCache.rows;
   try {
     const [client, context] = await Promise.all([getReadClient(), getMarketContext()]);
+    const volumeByPairId = await getVolume24hByPairId().catch((e) => {
+      console.warn('[ostium] prices volume merge failed:', e.message || e);
+      return new Map();
+    });
     const payload = await client.getAllPrices();
     const prices = payload?.prices && typeof payload.prices === 'object' ? payload.prices : {};
     const rows = Object.entries(prices).map(([pairId, price]) => {
       const market = context.pairById.get(String(pairId));
       if (!market) return null;
       const mark = num(price?.mid || price?.midPx || price?.ask || price?.bid, market.mark);
+      const volume24h = volumeByPairId.get(String(pairId)) || num(market.volume_24h, 0);
       return {
         symbol: market.symbol,
         mark: String(mark),
         oracle: String(mark),
         bid: String(num(price?.bid, mark)),
         ask: String(num(price?.ask, mark)),
-        volume_24h: 0,
+        volume_24h: volume24h,
+        volume24h,
         open_interest: String(market.open_interest || 0),
+        buy_open_interest: market.buy_open_interest || 0,
+        sell_open_interest: market.sell_open_interest || 0,
+        max_open_interest: market.max_open_interest || 0,
         pair_index: Number(pairId),
       };
     }).filter(Boolean);

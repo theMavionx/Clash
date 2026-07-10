@@ -1655,3 +1655,6 @@ Follow-up:
 ## UR-2026-07-10-OSTIUM-SLOW-UI-CONFIRMATION
 - Time: 2026-07-10 22:20:53 +03:00
 - Request: перевірити Ostium, бо позиції/ордери дуже довго з'являються в UI після підтвердження транзакції; перевірити WS/polling і виправити затримку UI confirmation.
+### UR-2026-07-11-SOLANA-TOURNAMENT-PACIFICA-PHOENIX-BACKFILL
+- Timestamp: 2026-07-11 Europe/Kyiv
+- Request: "пеевір турнір солана перед останній він донарахуй пацифіка і фенікс весь обєм не дозарахований"

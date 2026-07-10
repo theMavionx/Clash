@@ -15900,8 +15900,21 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   }
   let result;
   try {
+    const cachedProgressValue = Number(pt.progress_value || 0);
+    const cachedTargetValue = Number(pt.target_value || 0);
+    const canUseCachedCompletion = TRADE_HISTORY_TASK_TYPES.has(String(task?.type || ''))
+      && cachedTargetValue > 0
+      && cachedProgressValue >= cachedTargetValue;
     let progressContext = {};
-    if (TRADE_HISTORY_TASK_TYPES.has(String(task?.type || '')) && LIVE_TASK_PROGRESS_DEXES.has(effectiveDex)) {
+    if (canUseCachedCompletion) {
+      result = {
+        progress_value: cachedProgressValue,
+        target_value: cachedTargetValue,
+        completed: true,
+        cached_completed: true,
+      };
+      console.log(`[task ${id} claim] player=${req.player.name} -> CACHED_COMPLETED progress=${cachedProgressValue}/${cachedTargetValue} dex=${effectiveDex}`);
+    } else if (TRADE_HISTORY_TASK_TYPES.has(String(task?.type || '')) && LIVE_TASK_PROGRESS_DEXES.has(effectiveDex)) {
       progressContext = await prefetchStartedTaskTradesForDex(
         req.player,
         [task],
@@ -15911,15 +15924,24 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
         'claim-prefetch',
       );
       if (progressContext.prefetchError) throw progressContext.prefetchError;
+      result = await withTaskProgressTimeoutMs(
+        tasks.verifyTask(taskPlayer, task, snap, {
+          headers: req.headers,
+          prefetchedTrades: progressContext.prefetchedTrades || null,
+        }),
+        `player=${req.player?.name || req.player?.id} task=${id} claim dex=${effectiveDex}`,
+        claimTimeoutMs,
+      );
+    } else {
+      result = await withTaskProgressTimeoutMs(
+        tasks.verifyTask(taskPlayer, task, snap, {
+          headers: req.headers,
+          prefetchedTrades: progressContext.prefetchedTrades || null,
+        }),
+        `player=${req.player?.name || req.player?.id} task=${id} claim dex=${effectiveDex}`,
+        claimTimeoutMs,
+      );
     }
-    result = await withTaskProgressTimeoutMs(
-      tasks.verifyTask(taskPlayer, task, snap, {
-        headers: req.headers,
-        prefetchedTrades: progressContext.prefetchedTrades || null,
-      }),
-      `player=${req.player?.name || req.player?.id} task=${id} claim dex=${effectiveDex}`,
-      claimTimeoutMs,
-    );
   } catch (e) {
     const timedOut = /\btimed out after \d+ms\b/i.test(String(e?.message || ''));
     if (e?.code === 'PACIFICA_RATE_LIMIT' || timedOut) {
@@ -15958,7 +15980,27 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     });
     return res.json({ ok: false, completed: false, progress_value: result.progress_value, target_value: result.target_value, breakdown: result.breakdown });
   }
-  const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(taskPlayer, task, { headers: req.headers }) : null;
+  let nextRepeatableSnapshot = null;
+  if (task.repeatable) {
+    const maxTradeId = Number(result?.max_trade_id || 0);
+    if (TRADE_HISTORY_TASK_TYPES.has(String(task?.type || '')) && maxTradeId > 0) {
+      nextRepeatableSnapshot = {
+        start_time: new Date().toISOString(),
+        type: task.type,
+        dex: effectiveDex,
+        trade_id_start: maxTradeId,
+        snapshot_source: 'claim_verified_max_trade_id',
+      };
+      if (task.type === 'combo_volume_attack') {
+        const winsRow = db.db.prepare(
+          `SELECT COUNT(*) AS c FROM battle_replays WHERE attacker_id = ? AND verified_result = 'accepted'`
+        ).get(req.player.id);
+        nextRepeatableSnapshot.wins_start = winsRow ? winsRow.c : 0;
+      }
+    } else {
+      nextRepeatableSnapshot = await tasks.buildSnapshot(taskPlayer, task, { headers: req.headers });
+    }
+  }
   if (nextRepeatableSnapshot) nextRepeatableSnapshot.strict_after_start_id = true;
 
   // Atomic payout: re-check the snapshot inside the transaction so two

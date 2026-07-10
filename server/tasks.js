@@ -1101,8 +1101,9 @@ async function verifyVolume(player, task, snap, opts = {}) {
     vol += notional;
     matched += 1;
   }
+  const maxHistoryId = trades.reduce((max, t) => Math.max(max, Number(t.history_id || 0) || 0), Number(startId) || 0);
   console.log(`[task ${task.id} volume] player=${player.name} wallet=${wallet || 'NONE'} dex=${player.dex || '?'} trades_total=${trades.length} start_id=${startId} symbol=${symbol} side=${side} matched=${matched} vol=$${vol.toFixed(2)} target=$${target}`);
-  return { progress_value: vol, target_value: target, completed: vol >= target };
+  return { progress_value: vol, target_value: target, completed: vol >= target, max_trade_id: maxHistoryId };
 }
 
 async function verifyPositions(player, task, snap, opts = {}) {
@@ -1129,8 +1130,9 @@ async function verifyPositions(player, task, snap, opts = {}) {
     if (!countClose && c.isClose) continue;
     n += 1;
   }
+  const maxHistoryId = trades.reduce((max, t) => Math.max(max, Number(t.history_id || 0) || 0), Number(startId) || 0);
   console.log(`[task ${task.id} positions] player=${player.name} dex=${player.dex} trades_total=${trades.length} start_id=${startId} symbol=${symbol} side=${side} matched=${n} target=${target}`);
-  return { progress_value: n, target_value: target, completed: n >= target };
+  return { progress_value: n, target_value: target, completed: n >= target, max_trade_id: maxHistoryId };
 }
 
 async function verifyComboVolumeAttack(player, task, snap, opts = {}) {
@@ -1156,6 +1158,7 @@ async function verifyComboVolumeAttack(player, task, snap, opts = {}) {
       : (parseFloat(t.price) || 0) * (parseFloat(t.amount) || 0);
     vol += notional;
   }
+  const maxHistoryId = trades.reduce((max, t) => Math.max(max, Number(t.history_id || 0) || 0), Number(startId) || 0);
 
   const winsRow = db.db.prepare(
     `SELECT COUNT(*) AS c FROM battle_replays WHERE attacker_id = ? AND verified_result = 'accepted'`
@@ -1170,6 +1173,7 @@ async function verifyComboVolumeAttack(player, task, snap, opts = {}) {
     progress_value: progress,
     target_value: 1,
     completed: vol >= targetVol && winsDelta >= targetWins,
+    max_trade_id: maxHistoryId,
     breakdown: { volume: vol, target_volume: targetVol, wins: winsDelta, target_wins: targetWins },
   };
 }

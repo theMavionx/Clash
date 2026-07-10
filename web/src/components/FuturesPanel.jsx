@@ -339,6 +339,48 @@ function formatCompactNumber(value) {
   return '<1';
 }
 
+function formatCompactUsd(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? `$${formatCompactNumber(n)}` : '—';
+}
+
+function marketSideOpenInterest(row = {}) {
+  const raw = row?._raw || {};
+  const long = firstFinite(
+    row.buy_open_interest,
+    row.buyOpenInterest,
+    row.long_open_interest,
+    row.longOpenInterest,
+    raw.buyOpenInterest,
+    raw.buy_open_interest,
+    raw.longOpenInterest,
+    raw.long_open_interest,
+  );
+  const short = firstFinite(
+    row.sell_open_interest,
+    row.sellOpenInterest,
+    row.short_open_interest,
+    row.shortOpenInterest,
+    raw.sellOpenInterest,
+    raw.sell_open_interest,
+    raw.shortOpenInterest,
+    raw.short_open_interest,
+  );
+  const cap = firstFinite(
+    row.max_open_interest,
+    row.maxOpenInterest,
+    raw.maxOpenInterest,
+    raw.max_open_interest,
+  );
+  const hasSide = (long != null && long > 0) || (short != null && short > 0);
+  return {
+    long: long || 0,
+    short: short || 0,
+    cap: cap || 0,
+    hasSide,
+  };
+}
+
 function shortAddr(value) {
   const text = String(value || '');
   return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text;
@@ -5193,8 +5235,19 @@ function FuturesPanel() {
   const change24h = useMemo(() => {
     return marketChange24h(curPriceData);
   }, [curPriceData]);
-  const vol24h = curPriceData ? parseFloat(curPriceData.volume_24h || 0) : 0;
-  const oi = curPriceData ? parseFloat(curPriceData.open_interest || 0) : 0;
+  const vol24h = curPriceData ? marketVolume24h(curPriceData) : 0;
+  const oi = curPriceData ? marketOpenInterest(curPriceData) : 0;
+  const ostiumSideOi = dex === 'ostium' ? marketSideOpenInterest(curPriceData) : null;
+  const hasOstiumSideOi = Boolean(ostiumSideOi?.hasSide);
+  const volume24hText = formatCompactUsd(vol24h);
+  const oiLabel = hasOstiumSideOi ? 'OI L/S' : 'OI';
+  const oiText = hasOstiumSideOi
+    ? `${formatCompactNumber(ostiumSideOi.long)} / ${formatCompactNumber(ostiumSideOi.short)}`
+    : formatCompactUsd(oi);
+  const oiTitle = hasOstiumSideOi
+    ? `Open Interest Long / Short${ostiumSideOi.cap > 0 ? `, cap ${formatCompactUsd(ostiumSideOi.cap)}` : ''}`
+    : 'Open Interest';
+  const fundingInfoLabel = dex === 'ostium' ? 'Net L/S 8h' : fundingLabel;
   const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
   const tradeButtonBlocked = (dex === 'flash' && !!flashMarketBlockReason) || (dex === 'ostium' && !!ostiumMarketBlockMessage);
   const tradeButtonBusy = loading || tradeBusy || tradePhase != null;
@@ -5249,9 +5302,9 @@ function FuturesPanel() {
             <div style={S.infoCell}><span style={S.infoCellLabel}>Mark</span><span style={S.infoCellValue}>{currentPrice ? fmtPrice(parseFloat(currentPrice)) : '—'}</span></div>
             <div style={S.infoCell}><span style={S.infoCellLabel}>Oracle</span><span style={S.infoCellValue}>{oracle > 0 ? fmtPrice(oracle) : '—'}</span></div>
             <div style={S.infoCell}><span style={S.infoCellLabel}>24h</span><span style={{...S.infoCellValue, color: change24h >= 0 ? '#4CAF50' : '#E53935'}}>{change24h >= 0 ? '+' : ''}{change24h.toFixed(2)}%</span></div>
-            <div style={S.infoCell}><span style={S.infoCellLabel}>Volume</span><span style={S.infoCellValue}>${vol24h >= 1e6 ? (vol24h/1e6).toFixed(1)+'M' : vol24h >= 1e3 ? (vol24h/1e3).toFixed(0)+'K' : vol24h.toFixed(0)}</span></div>
-            <div style={S.infoCell}><span style={S.infoCellLabel}>OI</span><span style={S.infoCellValue}>${oi >= 1e6 ? (oi/1e6).toFixed(1)+'M' : oi >= 1e3 ? (oi/1e3).toFixed(0)+'K' : oi.toFixed(0)}</span></div>
-            <div style={S.infoCell}><span style={S.infoCellLabel}>{fundingLabel}</span><span style={{...S.infoCellValue, color: fundingColor}}>{fundingText}</span></div>
+            <div style={S.infoCell}><span style={S.infoCellLabel}>Volume</span><span style={S.infoCellValue}>{volume24hText}</span></div>
+            <div style={{...S.infoCell, ...(hasOstiumSideOi ? S.infoCellWide : null)}} title={oiTitle}><span style={S.infoCellLabel}>{oiLabel}</span><span style={{...S.infoCellValue, ...(hasOstiumSideOi ? S.infoCellValueCompact : null)}}>{oiText}</span></div>
+            <div style={{...S.infoCell, ...(dex === 'ostium' ? S.infoCellWide : null)}}><span style={S.infoCellLabel}>{fundingInfoLabel}</span><span style={{...S.infoCellValue, ...(dex === 'ostium' ? S.infoCellValueCompact : null), color: fundingColor}}>{fundingText}</span></div>
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
@@ -11097,8 +11150,10 @@ const S = {
     overflowX: 'auto', scrollbarWidth: 'none', minHeight: 0,
   },
   infoCell: { display: 'flex', flexDirection: 'column', gap: 0, width: 90, flexShrink: 0 },
+  infoCellWide: { width: 118 },
   infoCellLabel: { fontSize: 9, fontWeight: 700, color: '#a3906a', textTransform: 'uppercase', lineHeight: 1 },
   infoCellValue: { fontSize: 13, fontWeight: 900, color: '#5C3A21', fontFamily: 'monospace', whiteSpace: 'nowrap', lineHeight: 1.2 },
+  infoCellValueCompact: { fontSize: 11 },
   fundingOverlay: {
     position: 'absolute', top: 5, right: 10, zIndex: 10,
     display: 'flex', alignItems: 'center', gap: 6,
