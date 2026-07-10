@@ -102,18 +102,21 @@ function normalizeDashboard(payload) {
   }
 }
 
-function MetricCard({ label, value, accent = 'blue' }) {
+function MetricCard({ label, value, suffix = '', accent = 'blue', size = 'regular' }) {
   return (
-    <article className={`metric-card metric-card--${accent}`}>
+    <article className={`metric-card metric-card--${accent} metric-card--${size}`}>
       <p className="metric-card__label">{label}</p>
-      <p className="metric-card__value">{value}</p>
+      <p className="metric-card__value">
+        <span>{value}</span>
+        {suffix ? <span className="metric-card__suffix">{suffix}</span> : null}
+      </p>
     </article>
   )
 }
 
-function SectionHeading({ eyebrow, title, note, id }) {
+function SectionHeading({ eyebrow, title, note, id, accent = 'blue' }) {
   return (
-    <div className="section-heading">
+    <div className={`section-heading section-heading--${accent}`}>
       <div>
         {eyebrow ? <p className="section-heading__eyebrow">{eyebrow}</p> : null}
         <h2 id={id}>{title}</h2>
@@ -195,7 +198,7 @@ function TransactionsTable({ transactions, symbol }) {
             </div>
             <div className="transaction-card__amount">
               <strong>{formatTokens(transaction.amount_clash)} {symbol}</strong>
-              <span>{formatUsd(transaction.usd_value_usd)}</span>
+              <span><span className="sr-only">USD value: </span>{formatUsd(transaction.usd_value_usd)}</span>
             </div>
             {transaction.public_note ? <p>{transaction.public_note}</p> : null}
             <TransactionLink transaction={transaction} />
@@ -218,24 +221,22 @@ function SkeletonCard() {
 function DashboardSkeleton() {
   return (
     <div className="dashboard-content" aria-busy="true" aria-label="Loading dashboard metrics">
-      <section className="dashboard-section">
-        <div className="skeleton skeleton--heading" aria-hidden="true" />
-        <div className="metric-grid metric-grid--three">
+      <section className="overview-grid" aria-hidden="true">
+        <div className="metric-column">
+          <div className="skeleton skeleton--heading" />
           <SkeletonCard />
+          <div className="metric-subgrid">
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+        </div>
+        <div className="metric-column">
+          <div className="skeleton skeleton--heading" />
           <SkeletonCard />
           <SkeletonCard />
         </div>
-      </section>
-      <section className="dashboard-section">
-        <div className="skeleton skeleton--heading" aria-hidden="true" />
-        <div className="metric-grid metric-grid--two">
-          <SkeletonCard />
-          <SkeletonCard />
-        </div>
-      </section>
-      <section className="dashboard-section">
-        <div className="skeleton skeleton--heading" aria-hidden="true" />
-        <div className="metric-grid metric-grid--two">
+        <div className="metric-column">
+          <div className="skeleton skeleton--heading" />
           <SkeletonCard />
           <SkeletonCard />
         </div>
@@ -256,8 +257,8 @@ function DashboardHeader() {
     <header className="dashboard-header">
       <div className="dashboard-shell dashboard-header__inner">
         <a className="brand" href="/" aria-label="Clash of Perps home">
-          <img src="/icons/icon-192.png" alt="" width="40" height="40" />
-          <span>Clash of Perps</span>
+          <img src="/icons/icon-192.png" alt="" width="32" height="32" />
+          <span><strong>$CLASH</strong> Dashboard</span>
         </a>
         <a className="play-link" href="/">Play Clash</a>
       </div>
@@ -330,6 +331,15 @@ export default function DashboardApp() {
   const retry = () => loadDashboard({ background: Boolean(dashboardRef.current) })
   const symbol = clashSymbol(dashboard?.clash?.symbol)
   const chain = String(dashboard?.clash?.chain || '').trim()
+  const liveStatus = status === 'loading'
+    ? 'Loading dashboard data.'
+    : status === 'error'
+      ? 'Dashboard data is unavailable.'
+      : isRefreshing
+        ? 'Refreshing dashboard data.'
+        : isStale
+          ? 'Showing the last available dashboard snapshot.'
+          : 'Dashboard data loaded and current.'
 
   return (
     <div className="dashboard-app">
@@ -339,9 +349,8 @@ export default function DashboardApp() {
       <main id="dashboard-main" className="dashboard-shell dashboard-main">
         <div className="dashboard-intro">
           <div>
-            <p className="dashboard-intro__eyebrow">Public metrics</p>
-            <h1>Clash Dashboard</h1>
-            <p>Transparent community, trading, and ${symbol} treasury activity.</p>
+            <h1><span>${symbol}</span> Dashboard</h1>
+            <p>Network metrics and tokenomics overview</p>
           </div>
           {dashboard ? (
             <div className="dashboard-updated">
@@ -379,51 +388,80 @@ export default function DashboardApp() {
 
         {status === 'ready' && dashboard ? (
           <div className="dashboard-content">
-            <section className="dashboard-section" aria-labelledby="users-heading">
-              <SectionHeading id="users-heading" title="Users" />
-              <div className="metric-grid metric-grid--three">
-                <MetricCard label="All-time users" value={formatInteger(dashboard.users.total)} />
-                <MetricCard label="Active in 24 hours" value={formatInteger(dashboard.users.active_24h)} />
-                <MetricCard label="Active in 7 days" value={formatInteger(dashboard.users.active_7d)} />
+            <section className="overview-grid" aria-label="Dashboard overview">
+              <div className="metric-column" aria-labelledby="users-heading">
+                <SectionHeading id="users-heading" title="Users" />
+                <MetricCard
+                  label="Total users (all time)"
+                  value={formatInteger(dashboard.users.total)}
+                  size="hero"
+                />
+                <div className="metric-subgrid">
+                  <MetricCard
+                    label="Active today (24h)"
+                    value={formatInteger(dashboard.users.active_24h)}
+                    size="compact"
+                  />
+                  <MetricCard
+                    label="Active (7 days)"
+                    value={formatInteger(dashboard.users.active_7d)}
+                    size="compact"
+                  />
+                </div>
               </div>
-            </section>
 
-            <section className="dashboard-section" aria-labelledby="volume-heading">
-              <SectionHeading
-                id="volume-heading"
-                title="Trading Volume"
-                note={dashboard.volume.coverage_note}
-              />
-              <div className="metric-grid metric-grid--two">
-                <MetricCard label="All-time volume" value={formatUsd(dashboard.volume.all_time_usd)} />
-                <MetricCard label="Last 30 days" value={formatUsd(dashboard.volume.last_30d_usd)} />
+              <div className="metric-column" aria-labelledby="volume-heading">
+                <SectionHeading
+                  id="volume-heading"
+                  title="Volume"
+                  accent="green"
+                />
+                <MetricCard
+                  label="Total volume (all time)"
+                  value={formatUsd(dashboard.volume.all_time_usd)}
+                  accent="green"
+                  size="hero"
+                />
+                <MetricCard
+                  label="30-day volume"
+                  value={formatUsd(dashboard.volume.last_30d_usd)}
+                  accent="green"
+                  size="compact"
+                />
+                {dashboard.volume.coverage_note ? (
+                  <p className="metric-column__note">{dashboard.volume.coverage_note}</p>
+                ) : null}
               </div>
-            </section>
 
-            <section className="dashboard-section" aria-labelledby="clash-heading">
-              <SectionHeading
-                id="clash-heading"
-                eyebrow={chain || undefined}
-                title={`$${symbol} Dashboard`}
-              />
-              <div className="metric-grid metric-grid--two">
+              <div className="metric-column" aria-labelledby="clash-heading">
+                <SectionHeading
+                  id="clash-heading"
+                  eyebrow={chain || undefined}
+                  title={`$${symbol} Tokenomics`}
+                  accent="gold"
+                />
                 <MetricCard
                   label="Tokens bought back"
-                  value={`${formatTokens(dashboard.clash.bought_back_tokens)} ${symbol}`}
+                  value={formatTokens(dashboard.clash.bought_back_tokens)}
+                  suffix={symbol}
                   accent="gold"
+                  size="hero"
                 />
                 <MetricCard
                   label="Tokens burned"
-                  value={`${formatTokens(dashboard.clash.burned_tokens)} ${symbol}`}
-                  accent="gold"
+                  value={formatTokens(dashboard.clash.burned_tokens)}
+                  suffix={symbol}
+                  accent="red"
+                  size="compact"
                 />
               </div>
             </section>
 
-            <section className="dashboard-section" aria-labelledby="transactions-heading">
+            <section className="dashboard-section transactions-section" aria-labelledby="transactions-heading">
               <SectionHeading
                 id="transactions-heading"
                 title="Buyback & Burn Transactions"
+                accent="gold"
                 note="Admin-published treasury records with public Solscan references."
               />
               {dashboard.transactions.length > 0 ? (
@@ -439,10 +477,20 @@ export default function DashboardApp() {
         ) : null}
       </main>
 
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{liveStatus}</p>
+
       <footer className="dashboard-footer">
         <div className="dashboard-shell">
-          <span>Clash of Perps</span>
-          <span>Public treasury records</span>
+          <div className="dashboard-footer__meta">
+            <span>Public treasury records</span>
+            {chain ? <span>Network: {chain}</span> : null}
+          </div>
+          <span className={status !== 'ready'
+            ? 'footer-status footer-status--unknown'
+            : isStale ? 'footer-status footer-status--stale' : 'footer-status'}>
+            <i aria-hidden="true" />
+            {status === 'ready' ? (isStale ? 'Snapshot data' : 'Data live') : 'Dashboard status unavailable'}
+          </span>
         </div>
       </footer>
     </div>

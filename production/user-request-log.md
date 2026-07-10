@@ -1641,3 +1641,8 @@ Follow-up:
 ## UR-2026-07-10-COMMIT-ALL-AND-DEPLOY
 - Time: 2026-07-10 11:27:32 +03:00
 - Request: коміть всі зміни які є в нас і деплой на прод все
+
+## UR-2026-07-10-DASHBOARD-REFERENCE-REDESIGN
+- Time: 2026-07-10 11:38:41 +03:00
+- Request: а модеш переробити дизайн на отакий от +-?
+- Reference: codex-clipboard-80b7d3f5-74e4-4141-916b-72397c7f80f4.png
