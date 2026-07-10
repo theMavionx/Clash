@@ -3540,7 +3540,16 @@ router.post('/withdraw', auth, avantisMigratedGuard, async (req, res) => {
 // ==================== TRADE HISTORY ====================
 
 router.get('/history', auth, (req, res) => {
-  const trades = db.getTrades(req.playerId);
+  const requestedDex = String(req.query.dex || req.dex || '').trim().toLowerCase();
+  const trades = requestedDex
+    ? db.db.prepare(`
+      SELECT *
+      FROM trade_history
+      WHERE player_id = ? AND lower(dex) = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT 100
+    `).all(req.playerId, requestedDex)
+    : db.getTrades(req.playerId);
   res.json(trades);
 });
 

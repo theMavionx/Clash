@@ -11,6 +11,50 @@ import {
 const HYPERLIQUID_API = import.meta.env.VITE_HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz';
 const READ_TIMEOUT_MS = 8000;
 const GRVT_STORAGE_KEY = 'clash_grvt_credentials_v1';
+const HIBACHI_STORAGE_KEY = 'clash_hibachi_credentials_v1';
+const KATANA_STORAGE_KEY = 'clash_katana_credentials_v1';
+
+const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/u;
+const LOCAL_INDEX_HISTORY_DEXES = new Set(['avantis', 'dango', 'gmx', 'gmtrade', 'flash', 'lighter']);
+
+function rows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.fills)) return payload.fills;
+  if (Array.isArray(payload?.trades)) return payload.trades;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.result)) return payload.result;
+  return [];
+}
+
+function playerToken() {
+  return typeof window !== 'undefined' ? (window._playerToken || '') : '';
+}
+
+async function fetchFuturesJson(path, { dex, method = 'GET', body = null, headers = {}, signal } = {}) {
+  const token = playerToken();
+  const res = await fetch(path, {
+    method,
+    headers: {
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { 'x-token': token } : {}),
+      ...(dex ? { 'x-dex': dex } : {}),
+      ...headers,
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    signal,
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text || null; }
+  if (!res.ok) {
+    const msg = data?.detail && data?.error
+      ? `${data.error}: ${data.detail}`
+      : (data?.detail || data?.error || data?.message || `${dex || 'Futures'} history error ${res.status}`);
+    throw new Error(msg);
+  }
+  return data;
+}
 
 function timeMs(value) {
   if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
@@ -267,6 +311,97 @@ async function readGrvtCredentials() {
   return migrated || await readEncryptedCredential(GRVT_STORAGE_KEY);
 }
 
+function normalizeHibachiCredentials(value) {
+  if (!value?.apiKey || !value?.accountId || !value?.privateKey) return null;
+  return {
+    apiKey: String(value.apiKey),
+    accountId: String(value.accountId),
+    privateKey: String(value.privateKey),
+  };
+}
+
+async function readHibachiCredentials() {
+  const migrated = await migratePlainLocalStorageCredential(HIBACHI_STORAGE_KEY, HIBACHI_STORAGE_KEY, normalizeHibachiCredentials);
+  return normalizeHibachiCredentials(migrated || await readEncryptedCredential(HIBACHI_STORAGE_KEY));
+}
+
+function normalizeKatanaCredentials(value) {
+  if (!value?.apiKey || !value?.apiSecret || !value?.wallet) return null;
+  return {
+    apiKey: String(value.apiKey),
+    apiSecret: String(value.apiSecret),
+    wallet: String(value.wallet),
+  };
+}
+
+async function readKatanaCredentials() {
+  const migrated = await migratePlainLocalStorageCredential(KATANA_STORAGE_KEY, KATANA_STORAGE_KEY, normalizeKatanaCredentials);
+  return normalizeKatanaCredentials(migrated || await readEncryptedCredential(KATANA_STORAGE_KEY));
+}
+
+function normalizeGenericTrade(fill, dexName, markets = []) {
+  const rawSymbol = String(
+    fill?.symbol || fill?.market_symbol || fill?.marketSymbol || fill?.coin || fill?.market || fill?.instrument || fill?.pair || ''
+  ).toUpperCase();
+  const marketId = fill?.market_id ?? fill?.marketId ?? fill?.pair_index ?? fill?.pairIndex ?? fill?.product_id ?? fill?.productId;
+  const m = (markets || []).find(x => String(x.symbol || '').toUpperCase() === rawSymbol)
+    || (markets || []).find(x => Number(x.market_id ?? x.pair_index ?? x.product_id) === Number(marketId));
+  const symbol = String(rawSymbol || m?.symbol || '').toUpperCase()
+    .replace(/_USDT?_PERP$/u, '')
+    .replace(/_USD_PERP$/u, '')
+    .replace(/-PERP$/u, '')
+    .replace(/\/USD[TC]?$/u, '');
+  if (!symbol) return null;
+  const sideRaw = String(fill?.side || fill?.action || fill?.direction || fill?.order_type || fill?.orderType || '').toLowerCase();
+  const isClose = sideRaw.includes('close') || fill?.reduce_only === true || fill?.reduceOnly === true;
+  const isShort = sideRaw.includes('short') || sideRaw === 'sell' || sideRaw === 'ask' || sideRaw === 's';
+  const side = sideRaw.includes('close_long') ? 'close_long'
+    : sideRaw.includes('close_short') ? 'close_short'
+    : sideRaw.includes('open_long') ? 'open_long'
+    : sideRaw.includes('open_short') ? 'open_short'
+    : isClose
+      ? (isShort ? 'close_short' : 'close_long')
+      : (isShort ? 'open_short' : 'open_long');
+  const amount = Math.abs(Number(fill?.amount ?? fill?.size ?? fill?.quantity ?? fill?.base_size ?? fill?.baseSize ?? 0));
+  const price = fill?.price ?? fill?.fill_price ?? fill?.fillPrice ?? fill?.execution_price ?? fill?.executionPrice ?? fill?.avgExecutionPrice;
+  const ts = fill?.created_at ?? fill?.createdAt ?? fill?.timestamp ?? fill?.time ?? fill?.event_time ?? fill?.executedAt;
+  return {
+    ...fill,
+    _dex: dexName,
+    id: fill?.id || fill?.fill_id || fill?.fillId || fill?.trade_id || fill?.tradeId || fill?.order_id || fill?.orderId || fill?.client_order_id || `${dexName}:${symbol}:${ts}:${price}:${amount}`,
+    symbol,
+    side,
+    action: side,
+    amount,
+    price,
+    fee: Math.abs(Number(fill?.fee ?? fill?.fee_amount ?? fill?.feeAmount ?? 0)),
+    created_at: ts,
+    realized_pnl_amount: fill?.realized_pnl_amount ?? fill?.realized_pnl ?? fill?.realizedPnl ?? fill?.closed_pnl ?? fill?.pnl,
+  };
+}
+
+function normalizeLocalIndexedTrade(fill, markets) {
+  return normalizeGenericTrade({
+    ...fill,
+    orderType: fill?.order_type,
+    client_order_id: fill?.client_order_id,
+    realized_pnl_amount: fill?.pnl,
+  }, String(fill?.dex || '').toLowerCase() || 'indexed', markets);
+}
+
+function normalizeOstiumTrade(fill, markets) {
+  return normalizeGenericTrade({
+    ...fill,
+    symbol: fill?.symbol || fill?.pair || fill?.market || fill?.marketSymbol || fill?.asset,
+    side: fill?.side || fill?.action || fill?.position_side || fill?.positionSide || fill?.direction,
+    amount: fill?.amount ?? fill?.size ?? fill?.szi ?? fill?.qty,
+    price: fill?.price ?? fill?.fillPrice ?? fill?.openPrice ?? fill?.avgPrice,
+    created_at: fill?.created_at ?? fill?.timestamp ?? fill?.time ?? fill?.blockTimestamp,
+    realized_pnl_amount: fill?.realized_pnl_amount ?? fill?.realizedPnl ?? fill?.realized_pnl ?? fill?.pnl,
+    fee: fill?.fee ?? fill?.fees?.total ?? fill?.totalFee,
+  }, 'ostium', markets);
+}
+
 function normalizeGrvtTrade(fill) {
   const rawSymbol = String(fill?.symbol || fill?.instrument || '').toUpperCase();
   const symbol = rawSymbol
@@ -310,12 +445,6 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
 
   useEffect(() => {
     const addr = dex === 'decibel' ? accountAddr : (accountAddr || walletAddr);
-    if (!addr) {
-      setTrades([]);
-      setError('');
-      setLoading(false);
-      return undefined;
-    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
@@ -327,6 +456,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     async function load() {
       try {
         if (dex === 'decibel') {
+          if (!addr) throw new Error('Decibel subaccount is not ready yet');
           const read = await getReadClient();
           const res = await read.userTradeHistory.getByAddr({
             subAddr: addr,
@@ -348,6 +478,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           return;
         }
         if (dex === 'phoenix') {
+          if (!addr) throw new Error('Phoenix wallet is not connected');
           const d = await phoenixFetch(`/trader/${encodeURIComponent(addr)}/trades-history?limit=100`, {
             signal: controller.signal,
           });
@@ -356,6 +487,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           return;
         }
         if (dex === 'hyperliquid') {
+          if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect an EVM wallet to view Hyperliquid history');
           const r = await fetch(`${HYPERLIQUID_API}/info`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -369,52 +501,81 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           return;
         }
         if (dex === 'risex') {
-          const token = typeof window !== 'undefined' ? window._playerToken : null;
-          const r = await fetch(`/api/futures/risex/trade-history?dex=risex&account=${encodeURIComponent(addr)}&limit=100`, {
-            headers: {
-              ...(token ? { 'x-token': token } : {}),
-              'x-dex': 'risex',
-            },
+          if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect an EVM wallet to view RISEx history');
+          const d = await fetchFuturesJson(`/api/futures/risex/trade-history?dex=risex&account=${encodeURIComponent(addr)}&limit=100`, {
+            dex: 'risex',
             signal: controller.signal,
           });
-          if (!r.ok) throw new Error(`RISEx history error ${r.status}`);
-          const d = await r.json();
-          const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : Array.isArray(d?.fills) ? d.fills : [];
-          if (!cancelled) setTrades(rows.map(t => normalizeRisexTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(d).map(t => normalizeRisexTrade(t, markets)).filter(Boolean));
           return;
         }
         if (dex === 'nado') {
-          const token = typeof window !== 'undefined' ? window._playerToken : null;
-          const r = await fetch(`/api/futures/nado/trade-history?dex=nado&account=${encodeURIComponent(addr)}&limit=100`, {
-            headers: {
-              ...(token ? { 'x-token': token } : {}),
-              'x-dex': 'nado',
-            },
+          if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect an EVM wallet to view Nado history');
+          const d = await fetchFuturesJson(`/api/futures/nado/trade-history?dex=nado&account=${encodeURIComponent(addr)}&limit=100`, {
+            dex: 'nado',
             signal: controller.signal,
           });
-          if (!r.ok) throw new Error(`Nado history error ${r.status}`);
-          const d = await r.json();
-          const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : Array.isArray(d?.fills) ? d.fills : [];
-          if (!cancelled) setTrades(rows.map(t => normalizeNadoTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(d).map(t => normalizeNadoTrade(t, markets)).filter(Boolean));
           return;
         }
         if (dex === 'hotstuff') {
-          const token = typeof window !== 'undefined' ? window._playerToken : null;
-          const r = await fetch(`/api/futures/hotstuff/trade-history?dex=hotstuff&account=${encodeURIComponent(addr)}&limit=100`, {
-            headers: {
-              ...(token ? { 'x-token': token } : {}),
-              'x-dex': 'hotstuff',
+          if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect an EVM wallet to view Hotstuff history');
+          const d = await fetchFuturesJson(`/api/futures/hotstuff/trade-history?dex=hotstuff&account=${encodeURIComponent(addr)}&limit=100`, {
+            dex: 'hotstuff',
+            signal: controller.signal,
+          });
+          if (!cancelled) setTrades(rows(d).map(t => normalizeHotstuffTrade(t, markets)).filter(Boolean));
+          return;
+        }
+        if (dex === 'ostium') {
+          if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect an Arbitrum wallet to view Ostium history');
+          const d = await fetchFuturesJson(`/api/futures/ostium/trade-history?dex=ostium&account=${encodeURIComponent(addr)}&limit=100`, {
+            dex: 'ostium',
+            signal: controller.signal,
+          });
+          if (!cancelled) setTrades(rows(d).map(t => normalizeOstiumTrade(t, markets)).filter(Boolean));
+          return;
+        }
+        if (dex === 'hibachi') {
+          const creds = await readHibachiCredentials();
+          if (!creds) {
+            if (!cancelled) setTrades([]);
+            return;
+          }
+          const d = await fetchFuturesJson('/api/futures/hibachi/trade-history', {
+            dex: 'hibachi',
+            method: 'POST',
+            body: {
+              api_key: creds.apiKey,
+              account_id: creds.accountId,
+              private_key: creds.privateKey,
+              limit: 100,
             },
             signal: controller.signal,
           });
-          if (!r.ok) throw new Error(`Hotstuff history error ${r.status}`);
-          const d = await r.json();
-          const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : Array.isArray(d?.fills) ? d.fills : [];
-          if (!cancelled) setTrades(rows.map(t => normalizeHotstuffTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(d).map(t => normalizeGenericTrade(t, 'hibachi', markets)).filter(Boolean));
+          return;
+        }
+        if (dex === 'katana') {
+          const creds = await readKatanaCredentials();
+          if (creds) {
+            const d = await fetchFuturesJson(`/api/futures/katana/fills?dex=katana&wallet=${encodeURIComponent(creds.wallet || addr || '')}&limit=100`, {
+              dex: 'katana',
+              headers: {
+                'x-katana-api-key': creds.apiKey,
+                'x-katana-api-secret': creds.apiSecret,
+                'x-katana-wallet': creds.wallet,
+              },
+              signal: controller.signal,
+            });
+            if (!cancelled) setTrades(rows(d).map(t => normalizeGenericTrade(t, 'katana', markets)).filter(Boolean));
+            return;
+          }
+          const d = await fetchFuturesJson('/api/futures/history?dex=katana', { dex: 'katana', signal: controller.signal });
+          if (!cancelled) setTrades(rows(d).filter(t => String(t?.dex || '').toLowerCase() === 'katana').map(t => normalizeLocalIndexedTrade(t, markets)).filter(Boolean));
           return;
         }
         if (dex === 'grvt') {
-          const token = typeof window !== 'undefined' ? window._playerToken : null;
           const creds = await readGrvtCredentials();
           if (!creds) {
             if (!cancelled) setTrades([]);
@@ -424,7 +585,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              ...(token ? { 'x-token': token } : {}),
+              ...(playerToken() ? { 'x-token': playerToken() } : {}),
               'x-dex': 'grvt',
             },
             body: JSON.stringify({
@@ -442,7 +603,25 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows.map(normalizeGrvtTrade).filter(Boolean));
           return;
         }
+        if (LOCAL_INDEX_HISTORY_DEXES.has(dex)) {
+          const d = await fetchFuturesJson(`/api/futures/history?dex=${encodeURIComponent(dex)}`, {
+            dex,
+            signal: controller.signal,
+          });
+          if (!cancelled) {
+            setTrades(rows(d)
+              .filter(t => String(t?.dex || '').toLowerCase() === dex)
+              .map(t => normalizeLocalIndexedTrade(t, markets))
+              .filter(Boolean));
+          }
+          return;
+        }
 
+        if (dex !== 'pacifica') {
+          if (!cancelled) setTrades([]);
+          return;
+        }
+        if (!addr) throw new Error('Pacifica wallet is not connected');
         const d = await pacificaFetch(`/trades/history?account=${encodeURIComponent(addr)}`, {
           signal: controller.signal,
         });
@@ -498,12 +677,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'dango' ? 'Dango ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
-  const showPnl = dex === 'decibel' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+  const showPnl = dex === 'decibel' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'dango' || dex === 'avantis' || dex === 'lighter';
 
   return (
     <table style={S.table}>

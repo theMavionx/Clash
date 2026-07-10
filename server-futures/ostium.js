@@ -68,6 +68,11 @@ function trimNumber(value, decimals = 6) {
   return n.toFixed(decimals).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
 }
 
+function ostiumRolloverPct(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function cleanMarketLeg(value) {
   return String(value || '')
     .trim()
@@ -237,6 +242,8 @@ function normalizeMarket(pair) {
   const quote = cleanMarketLeg(pair?.pairTo || pair?.to || pair?.quote) || 'USD';
   const pairName = symbol.includes('/') ? symbol : `${symbol}/${quote}`;
   const mark = num(pair?.midPx || pair?.askPx || pair?.bidPx, 0);
+  const rolloverLongPct = ostiumRolloverPct(pair?.rolloverRate?.long);
+  const rolloverShortPct = ostiumRolloverPct(pair?.rolloverRate?.short);
   return {
     symbol,
     display_symbol: symbol,
@@ -271,8 +278,14 @@ function normalizeMarket(pair) {
     open_interest: num(pair?.openInterest, 0),
     buy_open_interest: num(pair?.buyOpenInterest, 0),
     sell_open_interest: num(pair?.sellOpenInterest, 0),
-    funding_rate: num(pair?.rolloverRate?.long, 0),
-    next_funding_rate: num(pair?.rolloverRate?.short, 0),
+    // Ostium SDK returns rolloverRate as a percent over the 8h window, while
+    // the Clash UI contract stores rates as decimal fractions.
+    funding_rate: rolloverLongPct / 100,
+    next_funding_rate: rolloverShortPct / 100,
+    funding_interval_hours: 8,
+    funding_label: 'NET L/S 8h',
+    rollover_rate_long_pct: rolloverLongPct,
+    rollover_rate_short_pct: rolloverShortPct,
     open_fee_bps: num(pair?.openFee, 0),
     close_fee_bps: num(pair?.closeFee, 0),
     builder_fee_bps: OSTIUM_BUILDER_FEE_BPS,
