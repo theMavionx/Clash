@@ -83,6 +83,12 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function trimNumber(value, decimals = 6) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '0';
+  return n.toFixed(decimals).replace(/0+$/u, '').replace(/\.$/u, '') || '0';
+}
+
 function ostiumAvailableUsdc(account) {
   const fields = [
     account?.usdc_balance,
