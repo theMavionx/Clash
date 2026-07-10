@@ -598,14 +598,18 @@ function solanaCoreAssetLooksRelevant(asset, collection) {
   if (solanaCoreAssetCollection(asset) === collection) return true;
   const name = String(asset?.name || asset?.content?.metadata?.name || '').toLowerCase();
   const uri = String(asset?.uri || asset?.content?.json_uri || asset?.content?.metadata?.uri || '').toLowerCase();
+  if (/\/api\/nft\/(?:dragon|voidspore)\/solana\//u.test(uri)) return false;
   const attrs = [
     asset?.attributes?.attributeList,
     asset?.plugins?.attributes?.attributeList,
     asset?.content?.metadata?.attributes,
     asset?.content?.metadata?.properties?.attributes,
   ].filter(Array.isArray).flat();
-  return (name.includes('demon king') && uri.includes('/api/nft/solana/'))
-    || attrs.some((attr) => String(attr?.key || attr?.trait_type || '').toLowerCase() === 'sourceref');
+  const hasLegacyDemonKingUri = uri.includes('/api/nft/solana/');
+  const hasDemonKingName = name.includes('demon king');
+  const hasSourceRef = attrs.some((attr) => String(attr?.key || attr?.trait_type || '').toLowerCase() === 'sourceref');
+  return (hasDemonKingName && hasLegacyDemonKingUri)
+    || (hasSourceRef && (hasDemonKingName || hasLegacyDemonKingUri));
 }
 
 async function solanaDasRpc(url, method, params, timeoutMs = 10_000) {

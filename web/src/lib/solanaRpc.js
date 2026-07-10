@@ -162,7 +162,10 @@ export const PRIVY_SOLANA_RPC_URLS = buildRpcFallbackList({
 export const DEFAULT_PRIVY_SOLANA_RPC_URL = PRIVY_SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_ALCHEMY_URL;
 
 export const NFT_SOLANA_RPC_URLS = buildRpcFallbackList({
-  publicUrls: DIRECT_SOLANA_RPC_URLS,
+  // NFT mint / marketplace transfers must stay on paid proxy RPCs. Public or
+  // browser-direct Solana endpoints caused paid-but-undelivered marketplace
+  // orders when quota-limited nodes returned 429 during confirmation.
+  publicUrls: [],
   overrideUrls: [
     envProxySolanaRpc,
   ],
@@ -170,6 +173,7 @@ export const NFT_SOLANA_RPC_URLS = buildRpcFallbackList({
     ...(allowProxyFallback && includeAlchemyRpcProxy ? [SAME_ORIGIN_SOLANA_ALCHEMY_URL] : []),
     ...(allowProxyFallback ? [SAME_ORIGIN_SOLANA_RPC_URL] : []),
   ],
+  includePublic: false,
 });
 
 export const DEFAULT_NFT_SOLANA_RPC_URL = NFT_SOLANA_RPC_URLS[0] || DEFAULT_SOLANA_RPC_URL;

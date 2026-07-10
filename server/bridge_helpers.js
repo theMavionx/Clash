@@ -658,14 +658,18 @@ function solanaAssetLooksLikeLegacyBridge(asset, dep, collectionSlug) {
   if (expectedAuthority && authority && authority !== expectedAuthority) return false;
   const name = String(asset?.name || asset?.content?.metadata?.name || '').toLowerCase();
   const uri = String(asset?.uri || asset?.content?.json_uri || asset?.content?.metadata?.uri || '').toLowerCase();
+  if (/\/api\/nft\/(?:dragon|voidspore)\/solana\//u.test(uri)) return false;
   const attrs = [
     asset?.attributes?.attributeList,
     asset?.plugins?.attributes?.attributeList,
     asset?.content?.metadata?.attributes,
     asset?.content?.metadata?.properties?.attributes,
   ].filter(Array.isArray).flat();
-  return (name.includes('demon king') && uri.includes('/api/nft/solana/'))
-    || attrs.some((attr) => String(attr?.key || attr?.trait_type || '').toLowerCase() === 'sourceref');
+  const hasLegacyDemonKingUri = uri.includes('/api/nft/solana/');
+  const hasDemonKingName = name.includes('demon king');
+  const hasSourceRef = attrs.some((attr) => String(attr?.key || attr?.trait_type || '').toLowerCase() === 'sourceref');
+  return (hasDemonKingName && hasLegacyDemonKingUri)
+    || (hasSourceRef && (hasDemonKingName || hasLegacyDemonKingUri));
 }
 
 function bridgeBadRequest(message) {
@@ -782,7 +786,13 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner, opts = {}) {
       if (account.owner && account.owner !== SOLANA_MPL_CORE_PROGRAM) {
         throw bridgeBadRequest(`Solana source address is not a ${collectionLabel} NFT asset. Use the NFT mint/asset address, not a wallet, token account, or transaction signature.`);
       }
-      if (!new RegExp(`Token-2022|token|mint|owner|1-of-1|${collectionLabel.replace(/\s+/g, '\\s+')}`, 'i').test(msg)) throw err;
+      if (account.owner === SOLANA_MPL_CORE_PROGRAM) {
+        // Token-2022 probing can end on a rate-limited fallback RPC even when a
+        // paid RPC already proved this is a Metaplex Core asset. Continue into
+        // the Core path instead of blocking marketplace delivery on that probe.
+      } else if (!new RegExp(`Token-2022|token|mint|owner|1-of-1|${collectionLabel.replace(/\s+/g, '\\s+')}`, 'i').test(msg)) {
+        throw err;
+      }
     }
   }
   const migrated = collectionSlug === 'demonking' ? solanaMigratedCoreAsset(sourceAsset) : null;

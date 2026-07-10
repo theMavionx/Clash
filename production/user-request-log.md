@@ -1620,3 +1620,24 @@ Follow-up:
 ## UR-2026-07-09-GENERIC-CONDITIONAL-TPSL-GROUPING
 - Time: 2026-07-09 09:47:30 +03:00
 - Request: Phoenix conditional TP/SL normalization/grouping зробити не тільки для Phoenix, а універсально для всіх бірж.
+
+## UR-2026-07-09-THEO1-UNREVEALED-DEMON-KING
+- Time: 2026-07-09
+- Request: перевірити Theo1 NFT, який показується як unrevealed Demon King, reveal rarity або виправити причину.
+
+## UR-2026-07-10-BPWH-MARKETPLACE-NFT-DELIVERY
+- Time: 2026-07-10
+- Request: покупець `BPwh3wMpnjnJvDSVePZKBwKUuXd4kLD334wiqtu5ztPL` оплатив marketplace NFT, але не отримав його; виправити доставку і перевірити, щоб NFT флоу використовував paid Solana RPC.
+- Prod recovery: order `2086813e-9a15-4568-a37a-7336acc3d712` був `paid` і падав на Solana RPC `429`. NFT `GwmTBTjujRMYaNAWCnCd5UgqJCNBccMtdLBUwE7LKc6u` доставлено on-chain tx `4yjHKPf3msPKDsqbhKuBXMD9TuvC7Xmnk4dyRWuscKU9VA6NLyRWYN6kdd185S5U9WrB5XBUJrt4uhc7dq8fa2zC`; order позначено `delivered`, buyer inventory bound.
+
+## UR-2026-07-10-PUBLIC-CLASH-DASHBOARD
+- Time: 2026-07-10 10:59:26 +03:00
+- Request: передивись наш проект - нам треба зробити дешборд можна зробити типу clashofperps.fun/dashboard типу наш же сайт використати. Там повинно бути декілька секцій: юзери - їх кількість за весь час активних за день і за 7 днів. потім секція з волюмом: кількість обєма за весь час і за 30 днів. Потім $CLASH dashboard і там кількість відкуплених назад токенів, кількість спалених токенів. і всі транзакції щоб були типу там де відкуплені і спалені токени - додай щоб це можна було додавати в нашій же адмінці. Більшість цих даних є тільки в адмінці через пароль - їх зроби публічними. цю сторінку в мінімалістичному стилі роби
+
+## UR-2026-07-10-DEPLOY-PUBLIC-DASHBOARD
+- Time: 2026-07-10 11:19:07 +03:00
+- Request: деплой на прод - головне нічого не зламай
+
+## UR-2026-07-10-COMMIT-ALL-AND-DEPLOY
+- Time: 2026-07-10 11:27:32 +03:00
+- Request: коміть всі зміни які є в нас і деплой на прод все

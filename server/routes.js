@@ -8646,6 +8646,131 @@ function getAllPlayersByWalletAnyForm(wallet) {
 const _lastSeenBumpAt = new Map(); // playerId -> Date.now()
 const LAST_SEEN_THROTTLE_MS = 60_000;
 
+const CLASH_TOKEN_DECIMALS = 6;
+const CLASH_DASHBOARD_CACHE_MS = 15_000;
+let clashDashboardCache = null;
+let clashDashboardCacheAt = 0;
+
+function exactDecimalToUnits(value, decimals, fieldName, { allowZero = false } = {}) {
+  const raw = String(value ?? '').trim().replace(/,/g, '');
+  const match = raw.match(/^(\d+)(?:\.(\d+))?$/);
+  if (!match) throw new Error(`${fieldName} must be a positive decimal number`);
+  const fraction = match[2] || '';
+  if (fraction.length > decimals) throw new Error(`${fieldName} supports up to ${decimals} decimal places`);
+  const units = BigInt(match[1]) * (10n ** BigInt(decimals))
+    + BigInt((fraction + '0'.repeat(decimals)).slice(0, decimals) || '0');
+  if (allowZero ? units < 0n : units <= 0n) throw new Error(`${fieldName} must be greater than${allowZero ? ' or equal to' : ''} zero`);
+  return units;
+}
+
+function unitsToExactDecimal(value, decimals) {
+  const units = BigInt(String(value || '0'));
+  if (decimals <= 0) return units.toString();
+  const scale = 10n ** BigInt(decimals);
+  const whole = units / scale;
+  const fraction = (units % scale).toString().padStart(decimals, '0').replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+
+function normalizeClashOccurredAt(value) {
+  const date = new Date(String(value || ''));
+  if (!Number.isFinite(date.getTime())) throw new Error('Occurred at must be a valid date and time');
+  if (date.getTime() > Date.now() + 5 * 60_000) throw new Error('Occurred at cannot be in the future');
+  if (date.getTime() < Date.UTC(2020, 0, 1)) throw new Error('Occurred at is too old');
+  return date.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+}
+
+function normalizeClashTxSignature(value) {
+  const signature = String(value || '').trim();
+  try {
+    const bytes = bs58.decode(signature);
+    if (bytes.length !== 64) throw new Error('bad length');
+  } catch {
+    throw new Error('Transaction signature must be a valid Solana signature');
+  }
+  return signature;
+}
+
+function clashTransactionForClient(row) {
+  const decimals = Number(row.token_decimals ?? CLASH_TOKEN_DECIMALS);
+  return {
+    id: Number(row.id),
+    event_type: row.event_type,
+    amount_clash: unitsToExactDecimal(row.amount_base_units, decimals),
+    usd_value_usd: row.usd_value_e6 == null ? null : unitsToExactDecimal(row.usd_value_e6, 6),
+    tx_signature: row.tx_signature,
+    occurred_at: row.occurred_at,
+    public_note: row.public_note || null,
+    explorer_url: `https://solscan.io/tx/${encodeURIComponent(row.tx_signature)}`,
+  };
+}
+
+function readClashLedger() {
+  const rows = db.db.prepare(`
+    SELECT id, event_type, amount_base_units, token_decimals, usd_value_e6,
+           tx_signature, occurred_at, public_note, created_at
+    FROM clash_token_transactions
+    ORDER BY occurred_at DESC, id DESC
+  `).all();
+  let boughtBack = 0n;
+  let burned = 0n;
+  for (const row of rows) {
+    const sourceUnits = BigInt(String(row.amount_base_units || '0'));
+    const sourceDecimals = Number(row.token_decimals ?? CLASH_TOKEN_DECIMALS);
+    const normalized = sourceDecimals === CLASH_TOKEN_DECIMALS
+      ? sourceUnits
+      : sourceDecimals < CLASH_TOKEN_DECIMALS
+        ? sourceUnits * (10n ** BigInt(CLASH_TOKEN_DECIMALS - sourceDecimals))
+        : sourceUnits / (10n ** BigInt(sourceDecimals - CLASH_TOKEN_DECIMALS));
+    if (row.event_type === 'buyback') boughtBack += normalized;
+    if (row.event_type === 'burn') burned += normalized;
+  }
+  return {
+    summary: {
+      symbol: 'CLASH',
+      chain: 'solana',
+      bought_back_tokens: unitsToExactDecimal(boughtBack, CLASH_TOKEN_DECIMALS),
+      burned_tokens: unitsToExactDecimal(burned, CLASH_TOKEN_DECIMALS),
+      transactions_count: rows.length,
+      record_source: 'admin_published',
+    },
+    transactions: rows.map(clashTransactionForClient),
+  };
+}
+
+async function buildPublicDashboardPayload() {
+  const users = db.db.prepare(`
+    SELECT COUNT(CASE WHEN last_seen_at > datetime('now', '-24 hours') THEN 1 END) AS active_24h,
+           COUNT(CASE WHEN last_seen_at > datetime('now', '-7 days') THEN 1 END) AS active_7d
+    FROM players
+    WHERE COALESCE(is_bot, 0) = 0
+  `).get() || {};
+  const allTimeUsers = db.db.prepare(`
+    SELECT value FROM public_counters WHERE key = 'users_all_time'
+  `).get()?.value || 0;
+  const revenue = await earnings.fetchRevenueAnalytics({ mainDb: db.db, tournamentLimit: 1 });
+  const allTime = revenue.windows?.find((row) => row.key === 'all') || {};
+  const last30d = revenue.windows?.find((row) => row.key === '30d') || {};
+  const ledger = readClashLedger();
+  return {
+    generated_at: new Date().toISOString(),
+    users: {
+      total: Number(allTimeUsers),
+      active_24h: Number(users.active_24h || 0),
+      active_7d: Number(users.active_7d || 0),
+      active_window_basis: 'last_seen_at',
+    },
+    volume: {
+      all_time_usd: Number(allTime.total_volume_usd || 0),
+      last_30d_usd: Number(last30d.total_volume_usd || 0),
+      currency: 'USD',
+      coverage_note: 'Indexed verified trading volume recorded by Clash.',
+    },
+    clash: ledger.summary,
+    transactions: ledger.transactions,
+  };
+}
+
 router.get('/public/player-stats', (_req, res) => {
   try {
     const row = db.db.prepare(`
@@ -8653,6 +8778,7 @@ router.get('/public/player-stats', (_req, res) => {
         COUNT(*) AS total_players,
         COUNT(CASE WHEN last_seen_at > datetime('now', '-5 minutes') THEN 1 END) AS online_players
       FROM players
+      WHERE COALESCE(is_bot, 0) = 0
     `).get();
     res.set('Cache-Control', 'public, max-age=15');
     res.json({
@@ -8663,6 +8789,81 @@ router.get('/public/player-stats', (_req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: 'player stats unavailable' });
+  }
+});
+
+router.get('/public/dashboard', async (_req, res) => {
+  try {
+    const now = Date.now();
+    if (!clashDashboardCache || now - clashDashboardCacheAt >= CLASH_DASHBOARD_CACHE_MS) {
+      clashDashboardCache = await buildPublicDashboardPayload();
+      clashDashboardCacheAt = now;
+    }
+    res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=60');
+    res.json(clashDashboardCache);
+  } catch (e) {
+    console.warn('[public/dashboard] failed:', e.message);
+    res.status(500).json({ error: 'Dashboard data is temporarily unavailable' });
+  }
+});
+
+router.get('/admin/clash-transactions', adminAuth, (_req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const ledger = readClashLedger();
+    res.json({ clash: ledger.summary, transactions: ledger.transactions });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Failed to load CLASH transactions' });
+  }
+});
+
+router.post('/admin/clash-transactions', adminAuth, (req, res) => {
+  try {
+    const eventType = String(req.body?.event_type || '').trim().toLowerCase();
+    if (!['buyback', 'burn'].includes(eventType)) throw new Error('Type must be buyback or burn');
+    const amountBaseUnits = exactDecimalToUnits(req.body?.amount_clash, CLASH_TOKEN_DECIMALS, 'CLASH amount');
+    const maxBaseUnits = 10_000_000_000n * (10n ** BigInt(CLASH_TOKEN_DECIMALS));
+    if (amountBaseUnits > maxBaseUnits) throw new Error('CLASH amount exceeds the supported maximum');
+    const usdValueRaw = String(req.body?.usd_value_usd ?? '').trim();
+    const usdValueE6 = usdValueRaw ? exactDecimalToUnits(usdValueRaw, 6, 'USD value', { allowZero: true }) : null;
+    const txSignature = normalizeClashTxSignature(req.body?.tx_signature);
+    const occurredAt = normalizeClashOccurredAt(req.body?.occurred_at);
+    const publicNote = String(req.body?.public_note || '').trim();
+    if (publicNote.length > 180) throw new Error('Public note must be 180 characters or fewer');
+
+    const result = db.db.prepare(`
+      INSERT INTO clash_token_transactions (
+        event_type, amount_base_units, token_decimals, usd_value_e6,
+        tx_signature, occurred_at, public_note, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      eventType,
+      amountBaseUnits.toString(),
+      CLASH_TOKEN_DECIMALS,
+      usdValueE6?.toString() || null,
+      txSignature,
+      occurredAt,
+      publicNote || null,
+      'admin',
+    );
+    clashDashboardCache = null;
+    clashDashboardCacheAt = 0;
+    const row = db.db.prepare(`
+      SELECT id, event_type, amount_base_units, token_decimals, usd_value_e6,
+             tx_signature, occurred_at, public_note, created_at
+      FROM clash_token_transactions
+      WHERE id = ?
+    `).get(result.lastInsertRowid);
+    res.status(201).json({ ok: true, transaction: clashTransactionForClient(row) });
+  } catch (e) {
+    if (String(e.code || '').startsWith('SQLITE_CONSTRAINT_UNIQUE')) {
+      return res.status(409).json({ error: 'This transaction is already published for that type' });
+    }
+    if (String(e.code || '').startsWith('SQLITE_')) {
+      console.warn('[admin/clash-transactions] database write failed:', e.message);
+      return res.status(500).json({ error: 'Failed to publish CLASH transaction' });
+    }
+    res.status(400).json({ error: e.message || 'Invalid CLASH transaction' });
   }
 });
 

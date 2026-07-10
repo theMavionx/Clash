@@ -1538,9 +1538,14 @@ server {
         proxy_set_header Host $host;
     }
 
-    location /dashboard {
-        proxy_pass http://127.0.0.1:4000/api/admin/panel;
-        proxy_set_header Host $host;
+    location = /dashboard {
+        try_files /dashboard.html =404;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
+    }
+
+    location = /dashboard/ {
+        return 308 /dashboard;
     }
 
     location /trading-stats {

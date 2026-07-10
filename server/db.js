@@ -885,6 +885,63 @@ try {
   `);
 } catch (e) { console.warn('[db] player_activity_events migration:', e.message); }
 
+// Public $CLASH treasury history. This ledger is append-only: admin writes
+// publish verifiable Solana buyback/burn transactions, while public dashboard
+// reads expose only the transaction proof and public-facing metadata.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS clash_token_transactions (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type        TEXT NOT NULL CHECK(event_type IN ('buyback', 'burn')),
+      amount_base_units TEXT NOT NULL,
+      token_decimals    INTEGER NOT NULL DEFAULT 6 CHECK(token_decimals BETWEEN 0 AND 18),
+      usd_value_e6      TEXT,
+      tx_signature      TEXT NOT NULL,
+      occurred_at       TEXT NOT NULL,
+      public_note       TEXT,
+      created_by        TEXT,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(event_type, tx_signature)
+    );
+    CREATE INDEX IF NOT EXISTS idx_clash_token_transactions_public
+      ON clash_token_transactions(occurred_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_clash_token_transactions_type
+      ON clash_token_transactions(event_type, occurred_at DESC);
+  `);
+} catch (e) { console.warn('[db] clash_token_transactions migration:', e.message); }
+
+// Durable lifetime account count for the public dashboard. Player rows can be
+// removed by support/admin tooling, so COUNT(players) is not an all-time
+// metric. Initialize from current non-bot rows, then only increment on future
+// real-account inserts; deletes intentionally do not decrement it.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS public_counters (
+      key        TEXT PRIMARY KEY,
+      value      INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT OR IGNORE INTO public_counters (key, value)
+    SELECT 'users_all_time', COUNT(*)
+    FROM players
+    WHERE COALESCE(is_bot, 0) = 0;
+    UPDATE public_counters
+    SET value = MAX(value, (
+          SELECT COUNT(*) FROM players WHERE COALESCE(is_bot, 0) = 0
+        )),
+        updated_at = datetime('now')
+    WHERE key = 'users_all_time';
+    CREATE TRIGGER IF NOT EXISTS trg_public_users_all_time_insert
+    AFTER INSERT ON players
+    WHEN COALESCE(NEW.is_bot, 0) = 0
+    BEGIN
+      UPDATE public_counters
+      SET value = value + 1, updated_at = datetime('now')
+      WHERE key = 'users_all_time';
+    END;
+  `);
+} catch (e) { console.warn('[db] public counters migration:', e.message); }
+
 // Player-submitted feedback and bug reports. Kept separate from client_logs:
 // these are intentional messages with contact details, not telemetry.
 try {

@@ -46,6 +46,7 @@ function setWebStaticHeaders(res, filePath) {
   if (
     rel === 'index.html'
     || rel === 'admin.html'
+    || rel === 'dashboard.html'
     || rel === 'sw.js'
     || rel === 'manifest.json'
     || rel === 'godot/godot-runtime-manifest.json'
@@ -108,6 +109,13 @@ app.use((req, res, next) => {
 
 // Health check — HTML page for browser
 const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+app.get(['/dashboard', '/dashboard/'], (_req, res) => {
+  const dashboard = path.join(WEB_DIST_DIR, 'dashboard.html');
+  if (!fs.existsSync(dashboard)) return res.status(404).send('Dashboard build not found');
+  setNoStoreWebHeaders(res);
+  res.sendFile(dashboard);
+});
 
 app.get('/', dashboardAuth, (req, res) => {
   const db = require('./db');

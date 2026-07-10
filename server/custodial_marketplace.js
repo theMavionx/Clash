@@ -837,12 +837,13 @@ function recoverExpiredReservationPaymentOrder(order, player, config) {
   const events = listEvents(order.id);
   const latestAction = [...events].reverse().find((event) => [
     'buy_intent',
+    'reservation_released',
     'reservation_expired',
     'payment_verified',
     'delivered',
     'cancelled',
   ].includes(event.type));
-  if (latestAction?.type !== 'reservation_expired') return null;
+  if (!['reservation_expired', 'reservation_released'].includes(latestAction?.type)) return null;
   const buyIntent = [...events].reverse().find((event) => event.type === 'buy_intent');
   if (!buyIntent || String(buyIntent.actorPlayerId || '') !== String(player?.id || '')) return null;
   const data = buyIntent.data || {};
@@ -1662,6 +1663,8 @@ async function withSolanaCoreUmi(label, fn) {
   const signer = solanaCustodyKeypair();
   if (!signer) throw httpError(503, 'Solana custody signer is not configured');
   const dep = deploymentOf('solana');
+  const configuredRpcUrls = solanaRpcUrls([dep?.rpcUrl]);
+  const coreRpcUrls = solanaNonHeliusRpcUrls(configuredRpcUrls);
   return withSolanaRpcFallback(async (rpc) => {
     const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
     const { keypairIdentity } = await import('@metaplex-foundation/umi');
@@ -1671,7 +1674,7 @@ async function withSolanaCoreUmi(label, fn) {
     umi.use(keypairIdentity(umiKeypair));
     return fn({ umi, signer, dep });
   }, {
-    urls: solanaRpcUrls([dep?.rpcUrl]),
+    urls: coreRpcUrls.length ? coreRpcUrls : configuredRpcUrls,
     label,
   });
 }

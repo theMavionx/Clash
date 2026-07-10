@@ -83,3 +83,15 @@ Remaining follow-up:
   signed Tx payloads but cannot complete unsigned writes by design.
 - Run a real Dango filled-trade smoke on testnet/mainnet account before calling
   player trading end-to-end complete.
+
+## Public Dashboard Checkpoint (2026-07-10)
+
+- Added a lightweight public `/dashboard` web entry for lifetime users, rolling
+  24h/7d activity, verified indexed trading volume, and published $CLASH
+  buyback/burn totals and transaction references.
+- Added an append-only `$CLASH` transaction ledger plus protected admin review
+  and publish flow. Manual treasury records validate Solana signature format;
+  admins remain responsible for checking transaction meaning before publishing.
+- Added production nginx/Express routing, focused API smoke coverage, frontend
+  lint/build verification, responsive browser rendering, and Quick repo checks.
+- Not deployed; production release still requires explicit owner approval.

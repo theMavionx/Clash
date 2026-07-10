@@ -132,6 +132,7 @@ const NAV = [
   { id: 'replays', label: 'Battle Replays', hint: 'Verification history', icon: 'BR' },
   { id: 'tasks', label: 'Tasks', hint: 'Quest config and progress', icon: 'TS' },
   { id: 'stats', label: 'Stats', hint: 'Activity and devices', icon: 'ST' },
+  { id: 'clash', label: '$CLASH', hint: 'Buybacks and burns', icon: 'CT' },
   { id: 'earnings', label: 'Earnings', hint: 'Revenue analytics', icon: 'ER' },
   { id: 'referrals', label: 'Referrals', hint: 'Invites, commissions, payouts', icon: 'RF' },
   { id: 'shop', label: 'Shop', hint: 'Billing and AI chat', icon: 'SH' },
@@ -155,6 +156,7 @@ const SIMPLE_LOADERS = {
     adminGet('/admin/stats'),
     adminGet('/admin/matchmaking/stats?days=7').catch((error) => ({ error: error.message })),
   ]).then(([stats, matchmaking]) => ({ ...stats, matchmaking })),
+  clash: () => adminGet('/admin/clash-transactions'),
   earnings: () => Promise.all([
     adminGet('/admin/earnings'),
     adminGet('/admin/revenue-analytics').catch((error) => ({ error: error.message })),
@@ -395,6 +397,7 @@ export default function AdminApp() {
             {active === 'tournaments' && <TournamentsPanel tournaments={tournaments} reload={refreshCore} />}
             {active === 'replays' && <ReplaysPanel replays={replays} />}
             {active === 'stats' && <StatsPanel data={simpleData.stats} />}
+            {active === 'clash' && <ClashTransactionsPanel data={simpleData.clash} reload={refreshActive} />}
             {active === 'tasks' && <TasksPanel data={simpleData.tasks} reload={refreshActive} />}
             {active === 'client' && <ClientLogsPanel data={simpleData.client} reload={refreshActive} />}
             {active === 'logs' && <ServerLogsPanel data={simpleData.logs} reload={refreshActive} />}
@@ -406,7 +409,7 @@ export default function AdminApp() {
             {active === 'feedback' && <FeedbackPanel data={simpleData.feedback} />}
             {active === 'ai-reports' && <AiReportsPanel data={simpleData['ai-reports']} reload={refreshActive} />}
             {active === 'elfa' && <ElfaPanel data={simpleData.elfa} />}
-            {!['overview', 'players', 'mm-bots', 'tournaments', 'replays', 'stats', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'elfa'].includes(active) && (
+            {!['overview', 'players', 'mm-bots', 'tournaments', 'replays', 'stats', 'clash', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'elfa'].includes(active) && (
               <GenericDataPanel id={active} data={simpleData[active]} reload={refreshActive} />
             )}
           </section>
@@ -3192,6 +3195,212 @@ function StatsPanel({ data }) {
                     <td>{fmtTime(p.last_action_at)}<div className="admin-card-sub">{p.last_action || '-'}</div></td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function clashDatetimeLocalNow() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
+function fmtClashAmount(value) {
+  const raw = String(value ?? '0').trim() || '0';
+  const [wholeRaw, fractionRaw = ''] = raw.split('.');
+  let whole = wholeRaw;
+  try { whole = BigInt(wholeRaw || '0').toLocaleString('en-US'); } catch { /* keep raw */ }
+  const fraction = fractionRaw.replace(/0+$/, '');
+  return `${whole}${fraction ? `.${fraction}` : ''} CLASH`;
+}
+
+function ClashTransactionsPanel({ data, reload }) {
+  const summary = data?.clash || {};
+  const rows = Array.isArray(data?.transactions) ? data.transactions : [];
+  const [form, setForm] = useState({
+    event_type: 'buyback',
+    amount_clash: '',
+    usd_value_usd: '',
+    tx_signature: '',
+    occurred_at: clashDatetimeLocalNow(),
+    public_note: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  function update(key, value) {
+    setReviewing(false);
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function publish(event) {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    const amount = form.amount_clash.trim();
+    const signature = form.tx_signature.trim();
+    if (!amount || Number(amount) <= 0) return setError('Enter a CLASH amount greater than zero.');
+    if (!signature) return setError('Enter the Solana transaction signature.');
+    const occurredAt = new Date(form.occurred_at);
+    if (!Number.isFinite(occurredAt.getTime())) return setError('Choose a valid transaction date and time.');
+    const label = form.event_type === 'burn' ? 'burn' : 'buyback';
+    if (!reviewing) {
+      setReviewing(true);
+      return;
+    }
+    const confirmation = [
+      `Publish this ${label} transaction publicly?`,
+      `Amount: ${amount} CLASH`,
+      `USD value: ${form.usd_value_usd.trim() || '-'}`,
+      `Occurred: ${occurredAt.toISOString()}`,
+      `Signature: ${signature}`,
+      'This ledger is append-only.',
+    ].join('\n');
+    if (!window.confirm(confirmation)) return;
+    setBusy(true);
+    try {
+      await adminPost('/admin/clash-transactions', {
+        ...form,
+        amount_clash: amount,
+        usd_value_usd: form.usd_value_usd.trim() || null,
+        tx_signature: signature,
+        occurred_at: occurredAt.toISOString(),
+        public_note: form.public_note.trim() || null,
+      });
+      setMessage(`${form.event_type === 'burn' ? 'Burn' : 'Buyback'} transaction published.`);
+      setReviewing(false);
+      setForm((current) => ({
+        ...current,
+        amount_clash: '',
+        usd_value_usd: '',
+        tx_signature: '',
+        occurred_at: clashDatetimeLocalNow(),
+        public_note: '',
+      }));
+      try {
+        await reload();
+      } catch (refreshError) {
+        setMessage(`Transaction published, but history refresh failed: ${refreshError.message || 'refresh unavailable'}`);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to publish transaction.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!data) return <LoadingCard title="$CLASH" />;
+
+  return (
+    <div className="admin-grid">
+      <StatsGrid stats={[
+        { label: 'Tokens bought back', value: fmtClashAmount(summary.bought_back_tokens), tone: 'green' },
+        { label: 'Tokens burned', value: fmtClashAmount(summary.burned_tokens), tone: 'red' },
+        { label: 'Published transactions', value: summary.transactions_count || 0, tone: 'gold' },
+      ]} />
+
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Publish $CLASH transaction</div>
+            <div className="admin-card-sub">Buybacks and burns become public on /dashboard immediately. Published financial history is append-only.</div>
+          </div>
+          <span className="admin-badge gold">Solana mainnet</span>
+        </div>
+        <form className="admin-card-body admin-grid" onSubmit={publish}>
+          <div className="admin-choice-grid">
+            {[
+              { id: 'buyback', label: 'Buyback', hint: 'Tokens purchased back' },
+              { id: 'burn', label: 'Burn', hint: 'Tokens permanently burned' },
+            ].map((option) => (
+              <button
+                key={option.id}
+                className={'admin-choice' + (form.event_type === option.id ? ' active' : '')}
+                type="button"
+                onClick={() => update('event_type', option.id)}
+                aria-pressed={form.event_type === option.id}
+              >
+                <strong>{option.label}</strong><span>{option.hint}</span>
+              </button>
+            ))}
+          </div>
+          <div className="admin-form-grid three">
+            <label className="admin-field">
+              <span className="admin-label">Amount (CLASH)</span>
+              <input className="admin-input" inputMode="decimal" placeholder="1000000" value={form.amount_clash} onChange={(event) => update('amount_clash', event.target.value)} required />
+            </label>
+            <label className="admin-field">
+              <span className="admin-label">{form.event_type === 'buyback' ? 'USD spent (optional)' : 'USD value (optional)'}</span>
+              <input className="admin-input" inputMode="decimal" placeholder="0.00" value={form.usd_value_usd} onChange={(event) => update('usd_value_usd', event.target.value)} />
+            </label>
+            <label className="admin-field">
+              <span className="admin-label">Occurred at</span>
+              <input className="admin-input" type="datetime-local" value={form.occurred_at} onChange={(event) => update('occurred_at', event.target.value)} required />
+            </label>
+          </div>
+          <label className="admin-field">
+            <span className="admin-label">Solana transaction signature</span>
+            <input className="admin-input admin-mono" autoComplete="off" value={form.tx_signature} onChange={(event) => update('tx_signature', event.target.value)} required />
+          </label>
+          <label className="admin-field">
+            <span className="admin-label">Public note (optional, {form.public_note.length}/180)</span>
+            <textarea className="admin-textarea" maxLength={180} value={form.public_note} onChange={(event) => update('public_note', event.target.value)} placeholder="This text will be visible to everyone on the public dashboard." />
+          </label>
+          {reviewing && (
+            <div className="admin-card nested-card" role="region" aria-label="Transaction review">
+              <div className="admin-card-head">
+                <div><div className="admin-card-title">Review before publishing</div><div className="admin-card-sub">Confirm every public value. This financial record cannot be edited or deleted.</div></div>
+                <span className={'admin-badge ' + (form.event_type === 'burn' ? 'red' : 'green')}>{form.event_type === 'burn' ? 'Burn' : 'Buyback'}</span>
+              </div>
+              <div className="admin-card-body admin-grid">
+                <div className="admin-form-grid three">
+                  <div><div className="admin-label">Amount</div><strong>{fmtClashAmount(form.amount_clash)}</strong></div>
+                  <div><div className="admin-label">USD value</div><strong>{form.usd_value_usd.trim() ? fmtUsd(Number(form.usd_value_usd)) : '-'}</strong></div>
+                  <div><div className="admin-label">Occurred</div><strong>{new Date(form.occurred_at).toLocaleString()}</strong></div>
+                </div>
+                <div><div className="admin-label">Transaction signature</div><div className="admin-mono">{form.tx_signature.trim()}</div></div>
+                <div><div className="admin-label">Public note</div><div>{form.public_note.trim() || '-'}</div></div>
+                <div className="admin-help">This is an admin-published treasury record with a public Solscan reference. The server validates the Solana signature format; it does not infer the treasury meaning of the transaction.</div>
+              </div>
+            </div>
+          )}
+          {error && <div className="admin-error" role="alert">{error}</div>}
+          {message && <div className="admin-help" role="status">{message}</div>}
+          <div className="admin-toolbar" style={{ marginBottom: 0 }}>
+            <span className="admin-help">Totals are calculated automatically from published transactions.</span>
+            <div className="admin-filter-row">
+              {reviewing && <button className="admin-btn" type="button" onClick={() => setReviewing(false)} disabled={busy}>Edit</button>}
+              <button className="admin-btn primary" type="submit" disabled={busy}>{busy ? 'Publishing...' : reviewing ? 'Confirm and publish' : 'Review transaction'}</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div><div className="admin-card-title">Published history</div><div className="admin-card-sub">Newest transaction first. Signatures open in Solscan.</div></div>
+        </div>
+        <div className="admin-card-body">
+          <div className="admin-table-wrap admin-scroll">
+            <table className="admin-table">
+              <thead><tr><th>Type</th><th>Amount</th><th>USD value</th><th>Occurred</th><th>Transaction</th><th>Public note</th></tr></thead>
+              <tbody>
+                {rows.length ? rows.map((row) => (
+                  <tr key={row.id}>
+                    <td><span className={'admin-badge ' + (row.event_type === 'burn' ? 'red' : 'green')}>{row.event_type === 'burn' ? 'Burn' : 'Buyback'}</span></td>
+                    <td>{fmtClashAmount(row.amount_clash)}</td>
+                    <td>{row.usd_value_usd == null ? '-' : fmtUsd(Number(row.usd_value_usd))}</td>
+                    <td>{fmtTime(row.occurred_at)}</td>
+                    <td><a className="admin-mono" href={row.explorer_url} target="_blank" rel="noreferrer">{short(row.tx_signature, 10, 8)} ↗</a></td>
+                    <td>{row.public_note || '-'}</td>
+                  </tr>
+                )) : <tr><td colSpan={6}><span className="admin-help">No buyback or burn transactions published yet.</span></td></tr>}
               </tbody>
             </table>
           </div>
