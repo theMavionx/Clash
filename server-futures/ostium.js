@@ -281,6 +281,39 @@ function normalizeMarket(pair) {
   };
 }
 
+function mergeMarketPrices(markets, prices) {
+  if (!Array.isArray(markets) || !markets.length || !Array.isArray(prices) || !prices.length) {
+    return markets;
+  }
+  const byPair = new Map();
+  const bySymbol = new Map();
+  for (const row of prices) {
+    const mark = num(row?.mark ?? row?.mid ?? row?.oracle ?? row?.price, 0);
+    if (mark <= 0) continue;
+    const pairId = row?.pair_index ?? row?.pairIndex ?? row?.market_id ?? row?.marketId;
+    if (pairId != null) byPair.set(String(pairId), { ...row, mark });
+    const symbol = String(row?.symbol || row?.display_symbol || '').toUpperCase();
+    if (symbol) bySymbol.set(symbol, { ...row, mark });
+  }
+  if (!byPair.size && !bySymbol.size) return markets;
+  return markets.map((market) => {
+    const existing = num(market?.mark ?? market?.mid ?? market?.oracle ?? market?.price, 0);
+    if (existing > 0) return market;
+    const match = byPair.get(String(market?.pair_index ?? market?.market_id))
+      || bySymbol.get(String(market?.symbol || market?.display_symbol || '').toUpperCase());
+    if (!match?.mark) return market;
+    return {
+      ...market,
+      mark: match.mark,
+      mid: match.mark,
+      oracle: match.mark,
+      bid: num(match.bid, match.mark),
+      ask: num(match.ask, match.mark),
+      price_source: match.fallback_source || 'ostium_prices',
+    };
+  });
+}
+
 async function getPairsFresh() {
   const client = await getReadClient();
   const payload = await client.getPairs();
@@ -307,7 +340,13 @@ async function getMarketContext() {
 
 async function getMarketInfo() {
   const context = await getMarketContext();
-  return context.rows;
+  try {
+    return mergeMarketPrices(context.rows, await getPrices())
+      .filter(row => num(row?.mark ?? row?.mid ?? row?.oracle ?? row?.price, 0) > 0);
+  } catch (e) {
+    console.warn('[ostium] market price merge failed:', e.message || e);
+    return context.rows.filter(row => num(row?.mark ?? row?.mid ?? row?.oracle ?? row?.price, 0) > 0);
+  }
 }
 
 async function getPrices() {

@@ -641,6 +641,14 @@ function findBySymbol(rows, symbol) {
   )) || null;
 }
 
+function priceFromRows(rows, symbol, pairId = null) {
+  const byPair = pairId != null
+    ? (rows || []).find(row => String(row?.pair_index ?? row?.pairIndex ?? row?.market_id ?? row?.marketId) === String(pairId))
+    : null;
+  const row = byPair || findBySymbol(rows, symbol);
+  return positivePrice(row?.mark ?? row?.mid ?? row?.oracle ?? row?.price ?? row?.last_price);
+}
+
 function symbolRowCount(rows, symbol) {
   return symbolRows(rows, symbol).length;
 }
@@ -768,6 +776,7 @@ export function useOstium() {
   const [oneTapWalletFallback, setOneTapWalletFallback] = useState(null);
 
   const marketsRef = useRef([]);
+  const pricesRef = useRef([]);
   const claimGoldRef = useRef(null);
   const importFillsRef = useRef(null);
   const positionsRef = useRef([]);
@@ -1262,8 +1271,10 @@ export function useOstium() {
   const fetchPrices = useCallback(async () => {
     try {
       const rows = await fetchJson(`${FUTURES_API}/prices?dex=ostium`);
-      setPrices(Array.isArray(rows) ? rows : []);
-      return Array.isArray(rows) ? rows : [];
+      const next = Array.isArray(rows) ? rows : [];
+      pricesRef.current = next;
+      setPrices(next);
+      return next;
     } catch (e) {
       console.warn('[useOstium] prices:', e?.message || e);
       return [];
@@ -1572,7 +1583,11 @@ export function useOstium() {
       if (cancelled || !pendingTicks.size) return;
       const ticks = Array.from(pendingTicks.values());
       pendingTicks.clear();
-      setPrices((prev) => applyOstiumLiveTicksToPrices(prev, ticks));
+      setPrices((prev) => {
+        const next = applyOstiumLiveTicksToPrices(prev, ticks);
+        pricesRef.current = next;
+        return next;
+      });
       setPositions((prev) => {
         const liveRows = applyOstiumLiveTicksToPositions(prev, ticks);
         const next = filterPendingClosedPositions(liveRows, pendingCloseRef.current).rows;
@@ -1860,7 +1875,10 @@ export function useOstium() {
     if (!market) throw new Error(`Ostium market ${symbol} is not loaded`);
     const collateral = Number(amount);
     const lev = Number(leverage);
-    const entryPrice = Number(price || market.mark || market.mid || market.oracle);
+    const pairId = market.pair_index ?? market.market_id;
+    const entryPrice = positivePrice(price)
+      ?? positivePrice(market.mark ?? market.mid ?? market.oracle ?? market.price)
+      ?? priceFromRows(pricesRef.current, symbol, pairId);
     const marketBlockReason = ostiumOpenTradeBlockReason(market, lev);
     if (marketBlockReason) {
       throw new Error(ostiumOpenTradeBlockMessage(market, symbol, lev));
@@ -1873,7 +1891,7 @@ export function useOstium() {
     if (!Number.isFinite(entryPrice) || entryPrice <= 0) throw new Error('Ostium price is not available yet');
     const overnight = Number(market.overnight_max_leverage || market.overnightMaxLeverage || 0);
     const params = {
-      pairId: market.pair_index ?? market.market_id,
+      pairId,
       buy: normalizeSide(side) === 'bid',
       price: String(entryPrice),
       collateral: String(collateral),
@@ -1900,6 +1918,12 @@ export function useOstium() {
       const beforePositions = positionsRef.current || [];
       const beforeOrders = ordersRef.current || [];
       if (!marketsRef.current.length) await fetchMarkets();
+      const market = findBySymbol(marketsRef.current, symbol);
+      const pairId = market?.pair_index ?? market?.market_id;
+      if (!positivePrice(market?.mark ?? market?.mid ?? market?.oracle ?? market?.price)
+        && !priceFromRows(pricesRef.current, symbol, pairId)) {
+        await fetchPrices();
+      }
       const params = buildOpenParams(symbol, side, amount, null, OrderType.Market, leverage, slippage, options);
       const fresh = await fetchAccount();
       assertOstiumUsdcBalance(fresh?.account || account, params.collateral);
@@ -1922,7 +1946,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [account, buildOpenParams, fetchAccount, fetchMarkets, pollTradeVisibleInBackground, rememberOptimisticOpen, submitWithDelegateOrWallet, syncRewards]);
+  }, [account, buildOpenParams, fetchAccount, fetchMarkets, fetchPrices, pollTradeVisibleInBackground, rememberOptimisticOpen, submitWithDelegateOrWallet, syncRewards]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1, options = {}) => {
     void _tif;
@@ -1932,6 +1956,13 @@ export function useOstium() {
       const beforePositions = positionsRef.current || [];
       const beforeOrders = ordersRef.current || [];
       if (!marketsRef.current.length) await fetchMarkets();
+      const market = findBySymbol(marketsRef.current, symbol);
+      const pairId = market?.pair_index ?? market?.market_id;
+      if (!positivePrice(price)
+        && !positivePrice(market?.mark ?? market?.mid ?? market?.oracle ?? market?.price)
+        && !priceFromRows(pricesRef.current, symbol, pairId)) {
+        await fetchPrices();
+      }
       const params = buildOpenParams(symbol, side, amount, price, OrderType.Limit, leverage, '0.5', options);
       const fresh = await fetchAccount();
       assertOstiumUsdcBalance(fresh?.account || account, params.collateral);
@@ -1954,7 +1985,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [account, buildOpenParams, fetchAccount, fetchMarkets, pollTradeVisibleInBackground, rememberOptimisticOpen, submitWithDelegateOrWallet, syncRewards]);
+  }, [account, buildOpenParams, fetchAccount, fetchMarkets, fetchPrices, pollTradeVisibleInBackground, rememberOptimisticOpen, submitWithDelegateOrWallet, syncRewards]);
 
   const closePosition = useCallback(async (symbol, side, amountBase, pairIndex = null, tradeIndex = null, fullClose = false, options = {}) => {
     setLoading(true);
