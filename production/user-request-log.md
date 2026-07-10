@@ -1646,3 +1646,12 @@ Follow-up:
 - Time: 2026-07-10 11:38:41 +03:00
 - Request: а модеш переробити дизайн на отакий от +-?
 - Reference: codex-clipboard-80b7d3f5-74e4-4141-916b-72397c7f80f4.png
+
+## UR-2026-07-10-PHOENIX-DIGGER-CANCEL-LIMIT-ORDERS
+- Time: 2026-07-10 16:40:19 +03:00
+- Request: Digger cant cancel his limit orders це на феніксі перевір що не так виправ задеплой.
+- Reference: Photo 1.jpg
+
+## UR-2026-07-10-OSTIUM-SLOW-UI-CONFIRMATION
+- Time: 2026-07-10 22:20:53 +03:00
+- Request: перевірити Ostium, бо позиції/ордери дуже довго з'являються в UI після підтвердження транзакції; перевірити WS/polling і виправити затримку UI confirmation.

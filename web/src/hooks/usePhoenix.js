@@ -1925,30 +1925,87 @@ function phoenixConditionalTpslKind(order) {
   return '';
 }
 
+function phoenixOrderSequenceNumber(order) {
+  const value = order?.orderSequenceNumber
+    ?? order?.order_sequence_number
+    ?? order?.sequenceNumber
+    ?? order?.sequence_number
+    ?? order?.id
+    ?? order?._raw?.orderSequenceNumber
+    ?? order?._raw?.order_sequence_number
+    ?? order?._raw?.sequenceNumber
+    ?? order?._raw?.sequence_number
+    ?? order?._raw?.id;
+  const text = String(value ?? '').trim();
+  return text && text !== '0' ? text : '';
+}
+
+function phoenixOrderPriceUsd(order, market) {
+  return firstFinite(
+    tokenAmountValue(order?.price),
+    order?.priceUsd,
+    order?.price_usd,
+    order?.price,
+    ticksToUsd(
+      order?.priceTicks
+        ?? order?.price_ticks
+        ?? order?.priceInTicks
+        ?? order?.price_in_ticks
+        ?? order?.orderId?.priceInTicks
+        ?? order?.order_id?.priceInTicks
+        ?? order?._raw?.priceTicks
+        ?? order?._raw?.price_ticks
+        ?? order?._raw?.priceInTicks
+        ?? order?._raw?.price_in_ticks
+        ?? order?._raw?.orderId?.priceInTicks
+        ?? order?._raw?.order_id?.priceInTicks,
+      market,
+    ),
+    0,
+  ) || 0;
+}
+
+function phoenixOrderSizeUnits(order, market) {
+  const lotDecimals = Number(market?._phoenixBaseLotsDecimals ?? 4);
+  const lots = firstFinite(
+    order?.sizeRemainingLots,
+    order?.size_remaining_lots,
+    order?.tradeSizeRemainingLots,
+    order?.trade_size_remaining_lots,
+    order?._raw?.sizeRemainingLots,
+    order?._raw?.size_remaining_lots,
+    order?._raw?.tradeSizeRemainingLots,
+    order?._raw?.trade_size_remaining_lots,
+  );
+  return firstFinite(
+    order?.sizeRemainingUnits,
+    order?.size_remaining_units,
+    tokenAmountValue(order?.tradeSizeRemaining),
+    tokenAmountValue(order?.initialTradeSize),
+    tokenAmountValue(order?.size),
+    order?._raw?.sizeRemainingUnits,
+    order?._raw?.size_remaining_units,
+    tokenAmountValue(order?._raw?.tradeSizeRemaining),
+    tokenAmountValue(order?._raw?.initialTradeSize),
+    tokenAmountValue(order?._raw?.size),
+    lots != null ? Number(lots) / 10 ** lotDecimals : null,
+    0,
+  ) || 0;
+}
+
 function phoenixNormalizeOrderRow(order, { symbol, market, subaccountIndex = 0, authority = null } = {}) {
   const phx = phoenixSymbol(symbol);
   if (!phx) return null;
   const isConditional = phoenixOrderIsConditionalTpsl(order);
   const kind = isConditional ? phoenixConditionalTpslKind(order) : '';
-  const lotDecimals = Number(market?._phoenixBaseLotsDecimals ?? 4);
-  const amount = order?.sizeRemainingUnits != null
-    ? Number(order.sizeRemainingUnits)
-    : firstFinite(
-        tokenAmountValue(order?.tradeSizeRemaining),
-        tokenAmountValue(order?.initialTradeSize),
-        tokenAmountValue(order?.size),
-        Number(order?.sizeRemainingLots || 0) / 10 ** lotDecimals,
-        0
-      ) || 0;
-  const regularPrice = firstFinite(
-    tokenAmountValue(order?.price),
-    order?.priceUsd,
-    order?.price,
-    ticksToUsd(order?.priceTicks, market),
-    0
-  ) || 0;
+  const amount = phoenixOrderSizeUnits(order, market);
+  const regularPrice = phoenixOrderPriceUsd(order, market);
   const triggerPrice = isConditional ? (triggerRowPrice(order, market) || regularPrice) : regularPrice;
   const side = isConditional ? phoenixConditionalPositionSide(order) : sideToUi(order?.side);
+  const sequenceNumber = phoenixOrderSequenceNumber(order);
+  if (!isConditional && !sequenceNumber && !(regularPrice > 0 && Math.abs(amount || 0) > 0)) {
+    return null;
+  }
   return {
     symbol: phx,
     side,
@@ -1959,8 +2016,8 @@ function phoenixNormalizeOrderRow(order, { symbol, market, subaccountIndex = 0, 
       ? (kind === 'take_profit' ? 'TAKE_PROFIT' : kind === 'stop_loss' ? 'STOP_LOSS' : 'TRIGGER')
       : (order?.isStopLoss ? 'STOP' : String(order?.orderType || '').toUpperCase() || 'LIMIT'),
     tif: isConditional ? 'CONDITIONAL' : 'GTC',
-    order_id: String(order?.orderSequenceNumber ?? order?.id ?? ''),
-    orderSequenceNumber: order?.orderSequenceNumber,
+    order_id: sequenceNumber,
+    orderSequenceNumber: sequenceNumber,
     reduce_only: isConditional || !!order?.isReduceOnly || !!order?.reduceOnly,
     market_addr: market?.market_addr || null,
     market_name: phx,
@@ -6276,11 +6333,31 @@ export function usePhoenix() {
             return { success: true, signature };
           }
           const signature = await withFreshPhoenixMetadataRetry('phoenix.cancel', phx, async (orderClient) => {
-            const ix = existing?.price
+            const market = marketsBySymbolRef.current[phx];
+            const sequenceNumber = phoenixOrderSequenceNumber(existing);
+            const cancelPrice = firstFinite(
+              Number(existing?.price),
+              phoenixOrderPriceUsd(existing?._raw || existing, market),
+            ) || 0;
+            const canCancelById = !!sequenceNumber && Number.isFinite(cancelPrice) && cancelPrice > 0;
+            if (!canCancelById) {
+              try {
+                reportClientEvent('phoenix.cancel.fallback_all', {
+                  symbol: phx,
+                  order_id: orderId || null,
+                  normalized_order_id: existing?.order_id || null,
+                  sequence_number: sequenceNumber || null,
+                  price: existing?.price || null,
+                  subaccount_index: subaccountIndex,
+                  reason: existing ? 'missing_sequence_or_price' : 'order_not_found',
+                }, { level: 'warn', dedupeMs: 1_000 });
+              } catch {}
+            }
+            const ix = canCancelById
               ? await orderClient.ixs.buildCancelOrdersById({
                   authority: orderAuthority,
                   symbol: phx,
-                  orders: [{ price: Number(existing.price), orderSequenceNumber: existing.orderSequenceNumber || orderId }],
+                  orders: [{ price: cancelPrice, orderSequenceNumber: sequenceNumber }],
                 traderPdaIndex: 0,
                 traderSubaccountIndex: subaccountIndex,
               })

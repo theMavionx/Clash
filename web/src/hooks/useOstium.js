@@ -41,12 +41,15 @@ const TX_TIMEOUT_MS = 120_000;
 const CLAIM_LOOKBACK_ATTEMPTS = 5;
 const ORDER_VISIBLE_TIMEOUT_MS = 45_000;
 const ORDER_VISIBLE_POLL_MS = 800;
+const ORDER_VISIBLE_BACKGROUND_TIMEOUT_MS = 60_000;
+const ORDER_VISIBLE_BACKGROUND_POLL_MS = 1_000;
 const CLOSE_SYNC_TIMEOUT_MS = 18_000;
 const CLOSE_SYNC_POLL_MS = 900;
 const TPSL_SYNC_TIMEOUT_MS = 20_000;
 const TPSL_SYNC_POLL_MS = 1_000;
 const PENDING_TPSL_TTL_MS = 120_000;
 const PENDING_CLOSE_TTL_MS = 60_000;
+const OSTIUM_OPTIMISTIC_ROW_TTL_MS = 75_000;
 const OSTIUM_PRICE_STREAM_WS = 'wss://builder.ostium.io/v1/prices/stream';
 const OSTIUM_LIVE_PRICE_FLUSH_MS = 750;
 const OSTIUM_LIVE_PRICE_RECONNECT_MS = 2_500;
@@ -162,6 +165,17 @@ function pricesNear(a, b) {
   if (!Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0) return false;
   const tolerance = Math.max(0.000001, Math.abs(right) * 0.00001);
   return Math.abs(left - right) <= tolerance;
+}
+
+function optimisticRowKey(prefix, symbol, side, txHash = '', extra = '') {
+  return [
+    prefix,
+    normalizeSymbol(symbol),
+    normalizeSide(side),
+    String(txHash || ''),
+    String(extra || ''),
+    Date.now(),
+  ].join(':');
 }
 
 function pendingTpslKey({ symbol, pairIndex, tradeIndex }) {
@@ -646,6 +660,51 @@ function symbolExposure(rows, symbol) {
   }, 0);
 }
 
+function trimOstiumOptimisticRows(map, actualRows, matcher, now = Date.now()) {
+  if (!map?.size) return [];
+  for (const [key, row] of map.entries()) {
+    if (!row || Number(row._optimisticExpiresAt || 0) <= now) {
+      map.delete(key);
+      continue;
+    }
+    if ((actualRows || []).some(actual => matcher(actual, row))) {
+      map.delete(key);
+    }
+  }
+  return Array.from(map.values());
+}
+
+function ostiumOptimisticPositionMatches(actual, pending) {
+  if (!actual || !pending) return false;
+  const actualSymbol = normalizeSymbol(actual.symbol || actual.display_symbol || actual.pair || actual.market_name);
+  const pendingSymbol = normalizeSymbol(pending.symbol || pending.display_symbol || pending.pair || pending.market_name);
+  if (actualSymbol && pendingSymbol && actualSymbol !== pendingSymbol) return false;
+  const actualSide = normalizeSide(actual.side || actual.raw_side);
+  const pendingSide = normalizeSide(pending.side || pending.raw_side);
+  if (actualSide && pendingSide && actualSide !== pendingSide) return false;
+  const actualPair = numericId(actual.pair_index ?? actual.pairIndex);
+  const pendingPair = numericId(pending.pair_index ?? pending.pairIndex);
+  if (actualPair != null && pendingPair != null && actualPair !== pendingPair) return false;
+  return Boolean(actualSymbol || actualPair != null);
+}
+
+function ostiumOptimisticOrderMatches(actual, pending) {
+  if (!actual || !pending) return false;
+  const actualSymbol = normalizeSymbol(actual.symbol || actual.display_symbol || actual.pair || actual.market_name);
+  const pendingSymbol = normalizeSymbol(pending.symbol || pending.display_symbol || pending.pair || pending.market_name);
+  if (actualSymbol && pendingSymbol && actualSymbol !== pendingSymbol) return false;
+  const actualSide = normalizeSide(actual.side || actual.raw_side);
+  const pendingSide = normalizeSide(pending.side || pending.raw_side);
+  if (actualSide && pendingSide && actualSide !== pendingSide) return false;
+  const actualPair = numericId(actual.pair_index ?? actual.pairIndex);
+  const pendingPair = numericId(pending.pair_index ?? pending.pairIndex);
+  if (actualPair != null && pendingPair != null && actualPair !== pendingPair) return false;
+  const actualPrice = positivePrice(actual.price ?? actual.limit_price ?? actual.trigger_price);
+  const pendingPrice = positivePrice(pending.price ?? pending.limit_price ?? pending.trigger_price);
+  if (actualPrice != null && pendingPrice != null && !pricesNear(actualPrice, pendingPrice)) return false;
+  return Boolean(actualSymbol || actualPair != null);
+}
+
 async function fetchJson(url, options = {}) {
   const res = await fetch(url, options);
   const data = await res.json().catch(() => ({}));
@@ -710,6 +769,8 @@ export function useOstium() {
   const delegateSignerRef = useRef(null);
   const pendingTpslRef = useRef(new Map());
   const pendingCloseRef = useRef(new Map());
+  const optimisticPositionsRef = useRef(new Map());
+  const optimisticOrdersRef = useRef(new Map());
   const submissionLocksRef = useRef(new Set());
 
   const token = useMemo(() => (
@@ -1228,12 +1289,23 @@ export function useOstium() {
       ]);
       const mergedPositions = mergePendingTpslRows(Array.isArray(pos) ? pos : [], pendingTpslRef.current);
       const closeFiltered = filterPendingClosedPositions(mergedPositions, pendingCloseRef.current);
-      const nextPositions = closeFiltered.rows;
+      const optimisticPositions = trimOstiumOptimisticRows(
+        optimisticPositionsRef.current,
+        closeFiltered.rows,
+        ostiumOptimisticPositionMatches,
+      );
+      const nextPositions = closeFiltered.rows.concat(optimisticPositions);
       const nextAccount = acct && closeFiltered.suppressed > 0
         ? { ...acct, positions_count: nextPositions.length }
         : (acct || null);
       setAccount(nextAccount);
-      const nextOrders = Array.isArray(ord) ? ord : [];
+      const baseOrders = Array.isArray(ord) ? ord : [];
+      const optimisticOrders = trimOstiumOptimisticRows(
+        optimisticOrdersRef.current,
+        baseOrders,
+        ostiumOptimisticOrderMatches,
+      );
+      const nextOrders = baseOrders.concat(optimisticOrders);
       positionsRef.current = nextPositions;
       ordersRef.current = nextOrders;
       setPositions(nextPositions);
@@ -1261,14 +1333,14 @@ export function useOstium() {
     }
   }, [walletAddr]);
 
-  const waitForTradeVisible = useCallback(async ({ symbol, kind, beforePositions, beforeOrders }) => {
+  const waitForTradeVisible = useCallback(async ({ symbol, kind, beforePositions, beforeOrders, timeoutMs = ORDER_VISIBLE_TIMEOUT_MS, pollMs = ORDER_VISIBLE_POLL_MS }) => {
     const startedAt = Date.now();
     const beforePositionCount = symbolRowCount(beforePositions, symbol);
     const beforeOrderCount = symbolRowCount(beforeOrders, symbol);
     const beforePositionExposure = symbolExposure(beforePositions, symbol);
     let lastFresh = null;
 
-    while (Date.now() - startedAt < ORDER_VISIBLE_TIMEOUT_MS) {
+    while (Date.now() - startedAt < timeoutMs) {
       lastFresh = await fetchAccount();
       const freshPositions = lastFresh?.positions || positionsRef.current || [];
       const freshOrders = lastFresh?.orders || ordersRef.current || [];
@@ -1283,13 +1355,114 @@ export function useOstium() {
         if (nextCount > beforeOrderCount) return lastFresh;
         if (beforeOrderCount === 0 && findBySymbol(freshOrders, symbol)) return lastFresh;
       }
-      await sleep(ORDER_VISIBLE_POLL_MS);
+      await sleep(pollMs);
     }
 
     // Keep the latest refresh in state even if Ostium indexing is slower
     // than usual. The tx is already confirmed; background polling will catch up.
     return lastFresh;
   }, [fetchAccount]);
+
+  const pollTradeVisibleInBackground = useCallback((args) => {
+    const startedAt = Date.now();
+    let stopped = false;
+    const run = async () => {
+      if (stopped || Date.now() - startedAt >= ORDER_VISIBLE_BACKGROUND_TIMEOUT_MS) return;
+      try {
+        await fetchAccount();
+        const map = args?.kind === 'position' ? optimisticPositionsRef.current : optimisticOrdersRef.current;
+        if (args?.optimisticKey && !map.has(args.optimisticKey)) return;
+      } catch (e) {
+        console.warn('[useOstium] post-submit visibility poll failed:', e?.message || e);
+      }
+      if (!stopped) setTimeout(run, ORDER_VISIBLE_BACKGROUND_POLL_MS);
+    };
+    setTimeout(run, 250);
+    return () => { stopped = true; };
+  }, [fetchAccount]);
+
+  const rememberOptimisticOpen = useCallback(({ kind, symbol, side, params, txHash }) => {
+    const market = findBySymbol(marketsRef.current, symbol)
+      || marketsRef.current.find(row => String(row?.pair_index) === String(params?.pairId));
+    const entry = positivePrice(params?.price || market?.mark || market?.mid || market?.oracle);
+    const margin = num(params?.collateral, 0);
+    const leverage = num(params?.leverage, 1);
+    const sizeUsd = margin > 0 && leverage > 0 ? margin * leverage : 0;
+    const amount = entry ? sizeUsd / entry : 0;
+    const normalizedSymbol = normalizeSymbol(symbol || market?.symbol || market?.display_symbol);
+    const normalizedSide = normalizeSide(side);
+    const now = Date.now();
+    const base = {
+      dex: 'ostium',
+      symbol: normalizedSymbol,
+      side: normalizedSide,
+      amount,
+      amount_display: trimNumber(amount, 6),
+      size_usd: sizeUsd,
+      margin,
+      leverage,
+      entry_price: entry || 0,
+      mark_price: entry || 0,
+      price: entry || 0,
+      take_profit: positivePrice(params?.takeProfit) || null,
+      stop_loss: positivePrice(params?.stopLoss) || null,
+      pair_index: numericId(params?.pairId),
+      is_isolated: true,
+      status: 'pending',
+      tx_hash: txHash || null,
+      _optimistic: true,
+      _optimistic_at: now,
+      _optimisticExpiresAt: now + OSTIUM_OPTIMISTIC_ROW_TTL_MS,
+      _raw: { optimistic: true, source: 'ostium_post_receipt', txHash: txHash || null, params },
+    };
+
+    if (kind === 'position') {
+      const key = optimisticRowKey('ostium-position', normalizedSymbol, normalizedSide, txHash, params?.pairId);
+      const row = {
+        ...base,
+        id: key,
+        position_id: key,
+        pnl_usd: 0,
+        pnl_pct: 0,
+        return_on_equity: 0,
+      };
+      optimisticPositionsRef.current.set(key, row);
+      setPositions((prev) => {
+        const actual = Array.isArray(prev)
+          ? prev.filter(item => !(item?._optimistic && ostiumOptimisticPositionMatches(item, row)))
+          : [];
+        const next = actual.concat(row);
+        positionsRef.current = next;
+        return next;
+      });
+      setAccount((prev) => prev ? { ...prev, positions_count: Math.max(Number(prev.positions_count || 0), positionsRef.current.length) } : prev);
+      return row;
+    }
+
+    const key = optimisticRowKey('ostium-order', normalizedSymbol, normalizedSide, txHash, params?.price || params?.pairId);
+    const row = {
+      ...base,
+      id: key,
+      order_id: key,
+      idx: key,
+      type: 'limit',
+      order_type: 'limit',
+      tif: 'GTC',
+      price: entry || 0,
+      limit_price: entry || 0,
+    };
+    optimisticOrdersRef.current.set(key, row);
+    setOrders((prev) => {
+      const actual = Array.isArray(prev)
+        ? prev.filter(item => !(item?._optimistic && ostiumOptimisticOrderMatches(item, row)))
+        : [];
+      const next = actual.concat(row);
+      ordersRef.current = next;
+      return next;
+    });
+    setAccount((prev) => prev ? { ...prev, orders_count: Math.max(Number(prev.orders_count || 0), ordersRef.current.length) } : prev);
+    return row;
+  }, []);
 
   const rememberPendingClose = useCallback((pending) => {
     if (!pending?.key) return null;
@@ -1732,9 +1905,10 @@ export function useOstium() {
         buildDelegateTx: (client) => client.getOpenTradeTx(params),
         submitDelegate: (client) => client.openTrade(params),
       });
-      await waitForTradeVisible({ symbol, kind: 'position', beforePositions, beforeOrders });
+      const optimistic = rememberOptimisticOpen({ kind: 'position', symbol, side, params, txHash: submitted.txHash });
+      pollTradeVisibleInBackground({ symbol, kind: 'position', beforePositions, beforeOrders, optimisticKey: optimistic?.id });
       syncRewards('market order');
-      return { success: true, status: 'submitted', txHash: submitted.txHash };
+      return { success: true, status: 'submitted', txHash: submitted.txHash, info: 'Ostium market order confirmed. Syncing position.' };
     } catch (e) {
       const msg = errorMessage(e, 'Ostium market order failed');
       setError(msg);
@@ -1742,7 +1916,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [account, buildOpenParams, fetchAccount, fetchMarkets, submitWithDelegateOrWallet, syncRewards, waitForTradeVisible]);
+  }, [account, buildOpenParams, fetchAccount, fetchMarkets, pollTradeVisibleInBackground, rememberOptimisticOpen, submitWithDelegateOrWallet, syncRewards]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1, options = {}) => {
     void _tif;
@@ -1763,9 +1937,10 @@ export function useOstium() {
         buildDelegateTx: (client) => client.getOpenTradeTx(params),
         submitDelegate: (client) => client.openTrade(params),
       });
-      await waitForTradeVisible({ symbol, kind: 'order', beforePositions, beforeOrders });
+      const optimistic = rememberOptimisticOpen({ kind: 'order', symbol, side, params, txHash: submitted.txHash });
+      pollTradeVisibleInBackground({ symbol, kind: 'order', beforePositions, beforeOrders, optimisticKey: optimistic?.order_id });
       syncRewards('limit order');
-      return { success: true, status: 'submitted', txHash: submitted.txHash };
+      return { success: true, status: 'submitted', txHash: submitted.txHash, info: 'Ostium limit order confirmed. Syncing order.' };
     } catch (e) {
       const msg = errorMessage(e, 'Ostium limit order failed');
       setError(msg);
@@ -1773,7 +1948,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [account, buildOpenParams, fetchAccount, fetchMarkets, submitWithDelegateOrWallet, syncRewards, waitForTradeVisible]);
+  }, [account, buildOpenParams, fetchAccount, fetchMarkets, pollTradeVisibleInBackground, rememberOptimisticOpen, submitWithDelegateOrWallet, syncRewards]);
 
   const closePosition = useCallback(async (symbol, side, amountBase, pairIndex = null, tradeIndex = null, fullClose = false, options = {}) => {
     setLoading(true);
