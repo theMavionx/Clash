@@ -591,7 +591,14 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
           <strong>{selected?.dex.label || 'Select an exchange'}</strong>
           <small>{selected ? `${selected.dex.chain} · ${selected.status}` : 'Configured venues and connections'}</small>
         </span>
-        <span style={{ ...S.exchangeChevron, transform: open ? 'rotate(180deg)' : 'none' }} aria-hidden="true">⌄</span>
+        <svg
+          viewBox="0 0 20 20"
+          style={S.exchangeChevron}
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path d="M5.5 7.5 10 12l4.5-4.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
       </button>
       {open && (
         <div
@@ -3812,10 +3819,10 @@ const S = {
     fontSize: 14,
   },
   exchangeChevron: {
+    width: 20,
+    height: 20,
+    flexShrink: 0,
     color: '#77573D',
-    fontSize: 20,
-    fontWeight: 900,
-    transition: 'transform 0.16s ease',
   },
   exchangeListbox: {
     position: 'absolute',
