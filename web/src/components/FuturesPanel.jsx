@@ -3688,12 +3688,13 @@ function FuturesPanel() {
     setDangoPendingActions(current => current.filter(action => action.id !== id));
   }, []);
   const beginDangoPendingClose = useCallback((pos, amount, fullClose) => {
-    if (dex !== 'dango') return null;
-    const id = `dango-close-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    if (dex !== 'dango' && dex !== 'ostium') return null;
+    const id = `${dex}-close-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const action = {
       id,
       kind: 'close',
-      phase: 'preparing',
+      dex,
+      phase: dex === 'ostium' ? 'closing' : 'preparing',
       createdAt: Date.now(),
       positionKey: positionStableKey(pos),
       symbol: String(pos?.symbol || pos?.s || '').toUpperCase(),
@@ -3704,6 +3705,9 @@ function FuturesPanel() {
       orders: [],
     };
     setDangoPendingActions(current => [...current.filter(row => !(row.kind === 'close' && row.positionKey === action.positionKey)), action]);
+    if (dex === 'ostium') {
+      return { id, options: undefined };
+    }
     return {
       id,
       options: {
@@ -3738,13 +3742,14 @@ function FuturesPanel() {
     };
   }, [dex, updateDangoPendingAction]);
   useEffect(() => {
-    if (dex !== 'dango') {
+    if (dex !== 'dango' && dex !== 'ostium') {
       setDangoPendingActions([]);
       return;
     }
     const now = Date.now();
     setDangoPendingActions(current => current.filter(action => {
       if (now - Number(action.createdAt || 0) > DANGO_PENDING_ACTION_TTL_MS) return false;
+      if (action.dex && action.dex !== dex) return false;
       if (action.kind === 'tpsl') return !dangoPendingTpslConfirmed(action, orders);
       if (action.kind === 'close') return !dangoPendingCloseConfirmed(action, positions);
       return true;

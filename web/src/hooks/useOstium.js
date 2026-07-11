@@ -1634,6 +1634,16 @@ export function useOstium() {
     return pending;
   }, []);
 
+  const findPendingCloseForPosition = useCallback((position) => {
+    if (!position) return null;
+    const now = Date.now();
+    for (const pending of pendingCloseRef.current.values()) {
+      if (pending?.expiresAt && pending.expiresAt <= now) continue;
+      if (positionMatchesPendingClose(position, pending)) return pending;
+    }
+    return null;
+  }, []);
+
   const verifyPendingClose = useCallback(async (pending) => {
     if (!pending?.key) return null;
     const startedAt = Date.now();
@@ -2133,6 +2143,15 @@ export function useOstium() {
         && (tradeIndex == null || Number(pos?.trade_index ?? pos?.idx) === Number(tradeIndex))
       )) || findBySymbol(positions, symbol);
       if (!position) throw new Error('Ostium position not found');
+      const existingPendingClose = findPendingCloseForPosition(position);
+      if (existingPendingClose) {
+        return {
+          success: true,
+          status: 'pending',
+          txHash: existingPendingClose.txHash || null,
+          info: 'Ostium close is already submitted. Syncing position.',
+        };
+      }
       const market = findBySymbol(marketsRef.current, symbol) || marketsRef.current.find(m => Number(m?.pair_index) === Number(position?.pair_index));
       const price = Number(market?.mark || market?.mid || position?.mark_price || position?.entry_price);
       const currentAmount = Math.abs(Number(position?.amount || 0));
@@ -2197,7 +2216,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [fetchAccount, fetchMarkets, positions, rememberPendingClose, submitWithDelegateOrWallet, syncRewards, verifyPendingClose]);
+  }, [fetchAccount, fetchMarkets, findPendingCloseForPosition, positions, rememberPendingClose, submitWithDelegateOrWallet, syncRewards, verifyPendingClose]);
 
   const executeOneTapWalletFallback = useCallback(async () => {
     const action = oneTapWalletFallback;
