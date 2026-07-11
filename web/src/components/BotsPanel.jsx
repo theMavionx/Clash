@@ -968,6 +968,15 @@ function BotsPanel({ onClose }) {
     };
   }), [configuredInstances, syncedAccounts]);
 
+  const accountExchangeOptions = useMemo(() => getAvailableDexConfigs()
+    .filter((dex) => supportsGameWalletSync(dex.id)
+      || syncedAccounts.some((account) => account.exchange?.toLowerCase() === dex.id))
+    .map((dex) => ({
+      dex,
+      syncedAccount: syncedAccounts.find((account) => account.exchange?.toLowerCase() === dex.id) || null,
+      balance: exchangeBalances[dex.id] || null,
+    })), [syncedAccounts, exchangeBalances]);
+
   const selectedExchangeOption = useMemo(
     () => exchangeOptions.find((option) => option.dex.id === selectedExchangeId) || null,
     [exchangeOptions, selectedExchangeId],
@@ -1086,6 +1095,17 @@ function BotsPanel({ onClose }) {
     resetLaunch();
     setView('launch');
   }, [resetLaunch]);
+
+  const openAccounts = useCallback(() => {
+    setNotice('');
+    setView('accounts');
+    const currentExists = accountExchangeOptions.some((option) => option.dex.id === selectedExchangeId);
+    const nextExchange = currentExists ? selectedExchangeId : accountExchangeOptions[0]?.dex.id || '';
+    if (nextExchange) {
+      setSelectedExchangeId(nextExchange);
+      setNewAccExchange(nextExchange);
+    }
+  }, [accountExchangeOptions, selectedExchangeId]);
 
   const applyPortfolioPayload = useCallback((data) => {
     if (!data) return;
@@ -1357,7 +1377,7 @@ function BotsPanel({ onClose }) {
   }, [playerForBots, syncedAccounts, gameSyncWalletCtx]);
 
   useEffect(() => {
-    if (view !== 'launch' || step !== 'exchange') return;
+    if (view !== 'accounts' && (view !== 'launch' || step !== 'exchange')) return;
     if (selectedExchangeId) setNewAccExchange(selectedExchangeId);
     refreshGameAuthScan();
   }, [view, step, selectedExchangeId, refreshGameAuthScan, playerDexAccounts]);
@@ -2198,6 +2218,9 @@ function BotsPanel({ onClose }) {
           <button type="button" style={{ ...S.segmentButton, ...S.segmentActive }} onClick={() => setView('dashboard')}>
             Dashboard
           </button>
+          <button type="button" style={S.segmentButton} onClick={openAccounts}>
+            Accounts
+          </button>
           <button type="button" style={S.segmentButton} onClick={() => setView('history')}>
             History
           </button>
@@ -2286,6 +2309,13 @@ function BotsPanel({ onClose }) {
           </button>
           <button
             type="button"
+            style={S.segmentButton}
+            onClick={openAccounts}
+          >
+            Accounts
+          </button>
+          <button
+            type="button"
             style={{ ...S.segmentButton, ...S.segmentActive }}
             onClick={() => setView('history')}
           >
@@ -2331,6 +2361,156 @@ function BotsPanel({ onClose }) {
         ))}
       </div>
     </>
+    );
+  };
+
+  const renderAccounts = () => {
+    const selectedAccountOption = accountExchangeOptions.find((option) => option.dex.id === selectedExchangeId) || null;
+    const connectedCount = accountExchangeOptions.filter((option) => option.syncedAccount?.status === 'active').length;
+    return (
+      <>
+        {notice && (
+          <button type="button" style={{ ...S.notice, ...(noticeIsError ? S.noticeError : {}) }} onClick={() => setNotice('')}>
+            {notice}
+            <span style={S.noticeClose}>x</span>
+          </button>
+        )}
+        <div style={S.toolbar}>
+          <div style={S.segment}>
+            <button type="button" style={S.segmentButton} onClick={() => setView('dashboard')}>
+              Dashboard
+            </button>
+            <button type="button" style={{ ...S.segmentButton, ...S.segmentActive }} onClick={openAccounts}>
+              Accounts
+            </button>
+            <button type="button" style={S.segmentButton} onClick={() => setView('history')}>
+              History
+            </button>
+          </div>
+          <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.launchButton }} onClick={openLaunch}>
+            <RobotGlyph size={22} color="#fff" />
+            Launch New Bot
+          </button>
+        </div>
+
+        <div style={S.accountsHero}>
+          <div>
+            <h3 style={S.accountsHeroTitle}>Exchange Accounts</h3>
+            <p style={S.accountsHeroCopy}>Connect, reconnect, and check balances before launching market maker bots.</p>
+          </div>
+          <strong style={S.accountsHeroStat}>{connectedCount}/{accountExchangeOptions.length} active</strong>
+        </div>
+
+        <div style={S.accountsGrid}>
+          {accountExchangeOptions.map(({ dex, syncedAccount, balance }) => {
+            const authRow = gameAuthRows.find((row) => row.exchange === dex.id);
+            const active = syncedAccount?.status === 'active';
+            const selected = selectedExchangeId === dex.id;
+            const balFmt = formatExchangeBalance(balance);
+            const statusStyle = active
+              ? S.connectionActive
+              : syncedAccount
+                ? S.connectionInactive
+                : authRow?.ready
+                  ? S.connectionReady
+                  : authRow?.partial
+                    ? S.connectionPartial
+                    : S.connectionMissing;
+            const statusLabel = active
+              ? 'ACTIVE'
+              : syncedAccount
+                ? 'INACTIVE'
+                : authRow?.ready
+                  ? 'READY'
+                  : authRow?.partial
+                    ? 'NEEDS KEY'
+                    : 'MISSING';
+            return (
+              <div key={dex.id} style={{ ...S.accountExchangeCard, ...(selected ? S.accountExchangeCardActive : {}) }}>
+                <button
+                  type="button"
+                  style={S.accountExchangeMain}
+                  onClick={() => {
+                    setSelectedExchangeId(dex.id);
+                    setNewAccExchange(dex.id);
+                  }}
+                >
+                  <img src={dex.logo} alt="" style={S.exchangeOptionLogo} />
+                  <div style={S.exchangeTriggerText}>
+                    <strong>{dex.label}</strong>
+                    <small>{dex.chain} · {balFmt.label}</small>
+                    {balFmt.detail ? <small style={S.accountBalanceDetail}>{balFmt.detail}</small> : null}
+                  </div>
+                  <span style={{ ...S.connectionPill, ...statusStyle }}>{statusLabel}</span>
+                </button>
+                <div style={S.accountQuickActions}>
+                  {!syncedAccount && (
+                    <button
+                      type="button"
+                      disabled={gameAuthBusy}
+                      onClick={() => {
+                        setSelectedExchangeId(dex.id);
+                        setNewAccExchange(dex.id);
+                        connectGameWalletAccount(dex.id);
+                      }}
+                      style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.accountActionButton }}
+                    >
+                      Connect
+                    </button>
+                  )}
+                  {syncedAccount && (
+                    <button
+                      type="button"
+                      disabled={gameAuthBusy}
+                      onClick={() => reconnectGameWalletAccount(dex.id)}
+                      style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.accountActionButton }}
+                    >
+                      Reconnect
+                    </button>
+                  )}
+                  {syncedAccount && (
+                    <button
+                      type="button"
+                      disabled={gameAuthBusy}
+                      onClick={() => toggleExchangeActive(dex.id, !active)}
+                      style={{
+                        ...cartoonBtn(active ? '#8D6E63' : '#43A047', active ? '#6D4C41' : '#2E7D32'),
+                        ...S.accountActionButton,
+                      }}
+                    >
+                      {active ? 'Disable' : 'Enable'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!syncedAccount || gameAuthProbing === dex.id}
+                    onClick={() => testGameExchangeBalance(dex.id)}
+                    style={{ ...cartoonBtn('#F9A825', '#F57F17'), ...S.accountActionButton }}
+                  >
+                    {gameAuthProbing === dex.id ? '...' : 'Balance'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {selectedAccountOption && (
+          <div style={S.inlineConnectionCard}>
+            <div style={S.inlineConnectionHeader}>
+              <img src={selectedAccountOption.dex.logo} alt="" style={S.exchangeOptionLogo} />
+              <div style={S.exchangeTriggerText}>
+                <strong>{selectedAccountOption.dex.label}</strong>
+                <small>{selectedAccountOption.dex.chain}</small>
+              </div>
+              <span style={{ ...S.connectionPill, ...selectedConnectionState.style }}>
+                {selectedConnectionState.label}
+              </span>
+            </div>
+            {renderInlineAccountSetup()}
+          </div>
+        )}
+      </>
     );
   };
 
@@ -3004,7 +3184,13 @@ function BotsPanel({ onClose }) {
         </button>
       </div>
       <div style={S.body}>
-        {view === 'launch' ? renderLaunch() : view === 'history' ? renderHistory() : renderDashboard()}
+        {view === 'launch'
+          ? renderLaunch()
+          : view === 'history'
+            ? renderHistory()
+            : view === 'accounts'
+              ? renderAccounts()
+              : renderDashboard()}
       </div>
     </div>
   );
@@ -4108,6 +4294,92 @@ const S = {
     flexDirection: 'column',
     gap: 12,
     marginTop: 10,
+  },
+  accountsHero: {
+    background: 'linear-gradient(180deg, #E8DFC8 0%, #F4EEDC 100%)',
+    border: '3px solid #D4C8B0',
+    borderRadius: 16,
+    padding: '12px 14px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  accountsHeroTitle: {
+    margin: 0,
+    color: '#5C3A21',
+    fontSize: 18,
+    fontWeight: 900,
+    lineHeight: 1.1,
+  },
+  accountsHeroCopy: {
+    margin: '4px 0 0',
+    color: '#77573D',
+    fontSize: 12,
+    fontWeight: 700,
+    lineHeight: 1.35,
+  },
+  accountsHeroStat: {
+    flexShrink: 0,
+    color: '#1565C0',
+    background: 'rgba(30,136,229,0.12)',
+    border: '2px solid rgba(30,136,229,0.25)',
+    borderRadius: 999,
+    padding: '6px 9px',
+    fontSize: 12,
+    fontWeight: 900,
+    whiteSpace: 'nowrap',
+  },
+  accountsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+    gap: 10,
+  },
+  accountExchangeCard: {
+    background: '#F4EEDC',
+    border: '2px solid #C9B896',
+    borderRadius: 14,
+    padding: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    minWidth: 0,
+  },
+  accountExchangeCardActive: {
+    borderColor: '#1E88E5',
+    boxShadow: '0 0 0 2px rgba(30,136,229,0.12)',
+  },
+  accountExchangeMain: {
+    border: 'none',
+    background: 'transparent',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 9,
+    width: '100%',
+    padding: 0,
+    textAlign: 'left',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    minWidth: 0,
+  },
+  accountBalanceDetail: {
+    color: '#8B7655',
+    fontSize: 10,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    maxWidth: '100%',
+  },
+  accountQuickActions: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(86px, 1fr))',
+    gap: 6,
+  },
+  accountActionButton: {
+    minHeight: 30,
+    padding: '5px 7px',
+    borderRadius: 10,
+    fontSize: 11,
   },
   gameAuthCard: {
     background: '#efe6cf',
