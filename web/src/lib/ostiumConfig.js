@@ -29,7 +29,17 @@ export const OSTIUM_ALCHEMY_WS_URL = (
   || sameOriginWsUrl('/rpc/arb-alchemy-ws')
 );
 
-export const OSTIUM_SUBGRAPH_URL = (
+function sameOriginHttpUrl(pathOrUrl) {
+  const value = String(pathOrUrl || '').trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return new URL(value.startsWith('/') ? value : `/${value}`, window.location.origin).toString();
+  }
+  return value;
+}
+
+export const OSTIUM_SUBGRAPH_URL = sameOriginHttpUrl(
   import.meta.env.VITE_OSTIUM_SUBGRAPH_URL
   || '/api/futures/ostium/subgraph/gn'
 );
