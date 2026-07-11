@@ -4383,6 +4383,10 @@ function FuturesPanel() {
   const fundingText = hasOstiumRollover
     ? `${formatRatePct(ostiumLongRolloverPct)} / ${formatRatePct(ostiumShortRolloverPct)}`
     : `${fr >= 0 ? '+' : ''}${(fr * 100).toFixed(4)}%`;
+  const fundingOverlayLabel = hasOstiumRollover ? '' : fundingLabel;
+  const fundingOverlayText = hasOstiumRollover
+    ? `${formatRatePct(ostiumLongRolloverPct)}/${formatRatePct(ostiumShortRolloverPct)}`
+    : fundingText;
   const fundingColor = hasOstiumRollover
     ? '#5C3A21'
     : (fr >= 0 ? '#4CAF50' : '#E53935');
@@ -8724,10 +8728,10 @@ function FuturesPanel() {
   const renderTrade = () => {
     // Funding / borrow rate badge (top-right of chart).
     const fundingBadge = currentMarket ? (
-      <div style={S.fundingOverlay}>
-        <span style={S.fundingOLabel}>{fundingLabel}</span>
-        <span style={{...S.fundingOValue, color: fundingColor}}>
-          {fundingText}
+      <div style={{ ...S.fundingOverlay, ...(hasOstiumRollover ? S.fundingOverlayCompact : null) }}>
+        {fundingOverlayLabel ? <span style={S.fundingOLabel}>{fundingOverlayLabel}</span> : null}
+        <span style={{ ...S.fundingOValue, ...(hasOstiumRollover ? S.fundingOValueCompact : null), color: fundingColor }}>
+          {fundingOverlayText}
         </span>
       </div>
     ) : null;
@@ -11164,8 +11168,10 @@ const S = {
     display: 'flex', alignItems: 'center', gap: 6,
     pointerEvents: 'none',
   },
+  fundingOverlayCompact: { right: 6, gap: 3 },
   fundingOLabel: { fontSize: 10, fontWeight: 800, color: '#a3906a', letterSpacing: '0.04em' },
   fundingOValue: { fontSize: 11, fontWeight: 900, fontFamily: 'monospace' },
+  fundingOValueCompact: { fontSize: 10 },
   // Common
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   label: { color: '#5C3A21', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' },
