@@ -1673,3 +1673,13 @@ Follow-up:
 - Timestamp: 2026-07-11 Europe/Kyiv
 - Request: "добре роби свіжий годот експорт і коміт деплой всіх змін навітьб не твоїх на прод - дививсь щоб на прод потрапила мейн сцена не тестова"
 - Explicit authorization: commit and deploy every current source change, including changes made outside the warmup task, using a fresh production Godot export with `scenes/Main.tscn`.
+
+### UR-2026-07-11-MM-BOTS-UI-REDESIGN
+- Timestamp: 2026-07-11 Europe/Kyiv
+- Request: "давай переробимо юай мм ботів там не повинно бути темплейтів активних і не активних - там мають бути тільки мої стовренні боти. далі я натискаю кнопку launch new bot вибираю спочатку біржу бери їх з декс пікер тільки зроби красивий якийсь дроп давн щоб все було чотко. Потім я вибираю стратегію - їх має бути дві - symmetric та delta neutral для другої роби її сірою і пиши soon потім натискаю сіметрік і вже вибираю з усіма повзунками які в мене єтам вже розмір позиції і так далі. і запускаю бота. всюди мінімалістичний красивий юай в стиль нашої гри. мої боти так само відображаються там в децборді. головне не зламай ніяк апі яке використовується"
+
+### UR-2026-07-11-COMMIT-AND-DEPLOY-ALL-MM-BOTS
+- Timestamp: 2026-07-11 Europe/Kyiv
+- Request: "зроби коміт та деплой на прод всіх змін навіть не твоїх - в нас там є скрипт локальний з деплоєм"
+- Follow-up: "можеш не тестувати юай зміни локально"
+- Explicit authorization: commit and deploy every current worktree change, including changes made outside the MM Bots UI task; local UI verification may be skipped.

@@ -5,6 +5,7 @@ import { colors, shared } from './basic/styles';
 import { usePlayer } from '../hooks/useGodot';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { DEX_CONFIG, getAvailableDexConfigs } from '../contexts/DexContext';
 import {
   authorizeGrvtBuilderForGame,
   probeExchangeBalance,
@@ -86,6 +87,10 @@ const BOT_TYPES = [
   },
 ];
 
+const LAUNCH_BOT_TYPES = ['symmetric_mm', 'delta_neutral']
+  .map((id) => BOT_TYPES.find((bot) => bot.id === id))
+  .filter(Boolean);
+
 const PRESETS = {
   calm: {
     label: 'Calm',
@@ -103,7 +108,13 @@ const DEFAULT_HISTORY = [
   { id: 'h-1', time: '12:00', bot: 'System', event: 'MM Bot controller initialized', value: 'Ready' },
 ];
 
-const STEPS = ['strategy', 'risk', 'review'];
+const STEPS = ['exchange', 'strategy', 'settings', 'review'];
+const STEP_LABELS = {
+  exchange: 'Exchange',
+  strategy: 'Strategy',
+  settings: 'Settings',
+  review: 'Review',
+};
 
 function money(value) {
   const n = Number(value);
@@ -119,7 +130,8 @@ function signedMoney(value) {
 }
 
 function getBotType(type) {
-  return BOT_TYPES.find((bot) => bot.id === type) || BOT_TYPES[0];
+  return BOT_TYPES.find((bot) => bot.id === type)
+    || BOT_TYPES.find((bot) => bot.id === 'symmetric_mm');
 }
 
 function formatApiError(error, fallback = 'unknown error') {
@@ -302,26 +314,6 @@ function accountActiveForExchange(accounts, exchange) {
   );
 }
 
-function canStartBot(bot, syncedAccounts) {
-  const parsed = parseStrategyInstanceId(bot.id);
-  if (parsed.exchanges.length === 0) return false;
-  if (parsed.kind === 'delta_neutral') {
-    return parsed.exchanges.every((ex) => accountActiveForExchange(syncedAccounts, ex));
-  }
-  return parsed.exchanges.some((ex) => accountActiveForExchange(syncedAccounts, ex));
-}
-
-function missingExchangesForBot(bot, syncedAccounts) {
-  const parsed = parseStrategyInstanceId(bot.id);
-  if (parsed.kind === 'delta_neutral') {
-    return parsed.exchanges.filter((ex) => !accountActiveForExchange(syncedAccounts, ex));
-  }
-  if (parsed.exchanges.some((ex) => accountActiveForExchange(syncedAccounts, ex))) {
-    return [];
-  }
-  return parsed.exchanges;
-}
-
 const getBotConfigDetails = (id) => {
   const key = String(id || '');
   if (key.includes('grvt') && key.includes('ping_pong')) return { tradeSize: 10, maxPosition: 100, preset: 'calm' };
@@ -393,12 +385,15 @@ const mapHandleToBot = (
   const inventory = formatInventory(rt);
   const unrealizedPnl = bal?.unrealized != null ? bal.unrealized : null;
 
-  let status = isRunning ? 'Running' : 'Template';
+  const hasSavedConfig = Object.prototype.hasOwnProperty.call(overrides, handle.id);
+  let status = isRunning ? 'Running' : (hasSavedConfig ? 'Stopped' : 'Template');
   if (isRunning && inBackoff) status = 'Paused';
 
   let lastAction;
-  if (!isRunning) {
-    lastAction = 'Press ▶ Start — only works if exchange account is ACTIVE';
+  if (!isRunning && hasSavedConfig) {
+    lastAction = 'Ready to start with your saved settings';
+  } else if (!isRunning) {
+    lastAction = 'Connect an active exchange account before starting';
   } else if (inBackoff) {
     const parts = backoffSymbols.map(
       (s) => `${s.symbol} (~${s.pause_secs_remaining ?? '?'}s)`,
@@ -452,9 +447,9 @@ const mapHandleToBot = (
       ? (inBackoff
         ? `Paused · ${cycles} cycles`
         : (cycles > 0 ? `${cycles} cycles` : 'Starting…'))
-      : 'Not started',
+      : (hasSavedConfig ? 'Stopped' : 'Not started'),
     lastAction,
-    isTemplate: !isRunning,
+    isTemplate: !isRunning && !hasSavedConfig,
     activeOrdersGlobal,
   };
 };
@@ -488,17 +483,154 @@ function RobotButtonMark({ size = 48 }) {
 function StepDots({ activeStep }) {
   const index = Math.max(0, STEPS.indexOf(activeStep));
   return (
-    <div style={shared.stepDots}>
+    <ol style={S.stepTrack} aria-label="Bot launch progress">
       {STEPS.map((step, i) => (
-        <div
+        <li
           key={step}
-          style={{
-            ...shared.dot,
-            ...(i === index ? shared.dotActive : {}),
-            ...(i < index ? shared.dotDone : {}),
-          }}
-        />
+          style={{ ...S.stepTrackItem, ...(i <= index ? S.stepTrackItemActive : {}) }}
+          aria-current={i === index ? 'step' : undefined}
+        >
+          <span style={{ ...S.stepNumber, ...(i <= index ? S.stepNumberActive : {}) }}>
+            {i < index ? '✓' : i + 1}
+          </span>
+          <span style={S.stepLabel}>{STEP_LABELS[step]}</span>
+        </li>
       ))}
+    </ol>
+  );
+}
+
+function ExchangeDropdown({ options, value, onChange, disabled = false }) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const rootRef = useRef(null);
+  const listboxRef = useRef(null);
+  const selected = options.find((option) => option.dex.id === value) || null;
+
+  const findNextReady = useCallback((start, direction) => {
+    if (options.length === 0) return -1;
+    for (let offset = 0; offset < options.length; offset += 1) {
+      const index = (start + direction * offset + options.length) % options.length;
+      if (options[index]?.launchable) return index;
+    }
+    return -1;
+  }, [options]);
+
+  const openListbox = useCallback(() => {
+    if (disabled) return;
+    const selectedIndex = options.findIndex((option) => option.dex.id === value && option.launchable);
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : findNextReady(0, 1));
+    setOpen(true);
+  }, [disabled, findNextReady, options, value]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointerDown = (event) => {
+      if (!rootRef.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    const frame = requestAnimationFrame(() => listboxRef.current?.focus());
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      cancelAnimationFrame(frame);
+    };
+  }, [open]);
+
+  const handleListKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setOpen(false);
+      requestAnimationFrame(() => rootRef.current?.querySelector('button')?.focus());
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      setActiveIndex((current) => findNextReady(current + direction, direction));
+      return;
+    }
+    if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      setActiveIndex(findNextReady(event.key === 'Home' ? 0 : options.length - 1, event.key === 'Home' ? 1 : -1));
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && options[activeIndex]?.launchable) {
+      event.preventDefault();
+      onChange(options[activeIndex].dex.id);
+      setOpen(false);
+      requestAnimationFrame(() => rootRef.current?.querySelector('button')?.focus());
+    }
+  };
+
+  return (
+    <div ref={rootRef} style={S.exchangeDropdownRoot}>
+      <button
+        type="button"
+        className="bots-focusable"
+        style={S.exchangeDropdownTrigger}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls="bot-exchange-listbox"
+        aria-describedby="bot-exchange-status"
+        disabled={disabled}
+        onClick={() => (open ? setOpen(false) : openListbox())}
+        onKeyDown={(event) => {
+          if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+            event.preventDefault();
+            openListbox();
+          }
+        }}
+      >
+        {selected ? <img src={selected.dex.logo} alt="" style={S.exchangeTriggerLogo} /> : <RobotGlyph size={24} />}
+        <span style={S.exchangeTriggerText}>
+          <strong>{selected?.dex.label || 'Select an exchange'}</strong>
+          <small>{selected ? `${selected.dex.chain} · ${selected.status}` : 'Configured venues and connections'}</small>
+        </span>
+        <span style={{ ...S.exchangeChevron, transform: open ? 'rotate(180deg)' : 'none' }} aria-hidden="true">⌄</span>
+      </button>
+      {open && (
+        <div
+          id="bot-exchange-listbox"
+          ref={listboxRef}
+          role="listbox"
+          tabIndex={0}
+          className="bots-focusable"
+          style={S.exchangeListbox}
+          aria-label="Exchange"
+          aria-activedescendant={activeIndex >= 0 ? `bot-exchange-option-${options[activeIndex].dex.id}` : undefined}
+          onKeyDown={handleListKeyDown}
+        >
+          {options.map((option, index) => (
+            <div
+              id={`bot-exchange-option-${option.dex.id}`}
+              key={option.dex.id}
+              role="option"
+              aria-selected={value === option.dex.id}
+              aria-disabled={!option.launchable}
+              style={{
+                ...S.exchangeOption,
+                ...(index === activeIndex ? S.exchangeOptionActive : {}),
+                ...(!option.launchable ? S.exchangeOptionDisabled : {}),
+              }}
+              onMouseEnter={() => option.launchable && setActiveIndex(index)}
+              onClick={() => {
+                if (!option.launchable) return;
+                onChange(option.dex.id);
+                setOpen(false);
+              }}
+            >
+              <img src={option.dex.logo} alt="" style={S.exchangeOptionLogo} />
+              <span style={S.exchangeOptionText}>
+                <strong>{option.dex.label}</strong>
+                <small>{option.dex.chain} · {option.dex.description}</small>
+              </span>
+              <span style={{ ...S.exchangeOptionStatus, ...(option.launchable ? S.exchangeOptionStatusReady : {}) }}>
+                {option.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -539,6 +671,8 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
     ? S.statusRunning
     : bot.status === 'Paused'
       ? S.statusPaused
+      : bot.status === 'Stopped'
+        ? S.statusStopped
       : bot.status === 'Template'
         ? S.statusTemplate
         : S.statusPaused;
@@ -618,7 +752,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
         </div>
       )}
       {expanded && (
-        <div style={S.expandPanel}>
+        <div className="bots-expand-panel" style={S.expandPanel}>
           <div style={S.detailGrid}>
             <div style={S.detailCard}>
               <span style={S.metricLabel}>Strategy intent</span>
@@ -732,14 +866,14 @@ function BotsPanel({ onClose }) {
   ]);
 
   const [view, setView] = useState('dashboard');
-  const [step, setStep] = useState('strategy');
+  const [step, setStep] = useState('exchange');
   const [history, setHistory] = useState(DEFAULT_HISTORY);
   const [orderHistory, setOrderHistory] = useState([]);
   const [expandedBotId, setExpandedBotId] = useState(null);
   const userCollapsedRef = useRef(false);
   const portfolioFetchInFlight = useRef(false);
   const balanceFallbackAt = useRef(0);
-  const [selectedType, setSelectedType] = useState('delta_neutral');
+  const [selectedType, setSelectedType] = useState('symmetric_mm');
   const [tradeSize, setTradeSize] = useState(20);
   const [maxPosition, setMaxPosition] = useState(200);
   const [preset, setPreset] = useState('calm');
@@ -751,8 +885,11 @@ function BotsPanel({ onClose }) {
   const [runningInstances, setRunningInstances] = useState([]);
   const [runtimeById, setRuntimeById] = useState({});
   const [globalActiveOrders, setGlobalActiveOrders] = useState(0);
-  const [configuredCount, setConfiguredCount] = useState(0);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
+  const [selectedExchangeId, setSelectedExchangeId] = useState('');
+  const [instancesLoading, setInstancesLoading] = useState(true);
+  const [launching, setLaunching] = useState(false);
+  const stepHeadingRef = useRef(null);
 
   const [syncedAccounts, setSyncedAccounts] = useState([]);
   const [availableExchanges, setAvailableExchanges] = useState([
@@ -807,34 +944,51 @@ function BotsPanel({ onClose }) {
     return { ...player, dex_accounts: dexAccounts };
   }, [player, playerDexAccounts]);
 
-  const instancesForSelectedType = useMemo(
-    () => configuredInstances.filter((inst) => inst.kind === selectedType),
-    [configuredInstances, selectedType],
+  const exchangeOptions = useMemo(() => getAvailableDexConfigs().map((dex) => {
+    const instances = configuredInstances.filter((inst) => {
+      if (inst.kind !== 'symmetric_mm') return false;
+      return parseStrategyInstanceId(inst.id).exchanges.some(
+        (exchange) => exchange.toLowerCase() === dex.id.toLowerCase(),
+      );
+    });
+    const accountActive = accountActiveForExchange(syncedAccounts, dex.id);
+    return {
+      dex,
+      instances,
+      launchable: instances.length > 0 && accountActive,
+      status: instances.length === 0 ? 'Unavailable' : accountActive ? 'Ready' : 'Not connected',
+    };
+  }), [configuredInstances, syncedAccounts]);
+
+  const selectedExchangeOption = useMemo(
+    () => exchangeOptions.find((option) => option.dex.id === selectedExchangeId) || null,
+    [exchangeOptions, selectedExchangeId],
   );
 
-  const filteredInstances = useMemo(() => {
-    return instancesForSelectedType.filter((inst) => {
-      const parsed = parseStrategyInstanceId(inst.id);
-      if (parsed.exchanges.length === 0) return false;
-      if (inst.kind === 'delta_neutral') {
-        return parsed.exchanges.every((ex) => accountActiveForExchange(syncedAccounts, ex));
-      }
-      return parsed.exchanges.some((ex) => accountActiveForExchange(syncedAccounts, ex));
-    });
-  }, [instancesForSelectedType, syncedAccounts]);
+  const selectedExchangeInstances = selectedExchangeOption?.instances || [];
+
+  const handleExchangeSelect = useCallback((exchangeId) => {
+    const option = exchangeOptions.find((candidate) => candidate.dex.id === exchangeId);
+    if (!option?.launchable) return;
+    setSelectedExchangeId(exchangeId);
+    setSelectedInstanceId(option.instances.length === 1 ? option.instances[0].id : '');
+  }, [exchangeOptions]);
 
   useEffect(() => {
-    if (instancesForSelectedType.length > 0) {
-      const preferred = filteredInstances.find((inst) => inst.id === selectedInstanceId)
-        || filteredInstances[0]
-        || instancesForSelectedType[0];
-      if (preferred && preferred.id !== selectedInstanceId) {
-        setSelectedInstanceId(preferred.id);
-      }
-    } else {
-      setSelectedInstanceId('');
-    }
-  }, [selectedType, filteredInstances, instancesForSelectedType, selectedInstanceId]);
+    if (view !== 'launch') return undefined;
+    const frame = requestAnimationFrame(() => stepHeadingRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [step, view]);
+
+  useEffect(() => {
+    setConfiguredInstances([]);
+    setRunningInstances([]);
+    setRuntimeById({});
+    setOverridesById({});
+    setGlobalActiveOrders(0);
+    setExpandedBotId(null);
+    setInstancesLoading(Boolean(token));
+  }, [token]);
 
   const selectedBot = useMemo(() => getBotType(selectedType), [selectedType]);
 
@@ -845,7 +999,16 @@ function BotsPanel({ onClose }) {
         allHandles.push(r);
       }
     });
-    return allHandles.map((h) => mapHandleToBot(
+    Object.keys(overridesById).forEach((id) => {
+      if (allHandles.some((handle) => handle.id === id)) return;
+      const parsed = parseStrategyInstanceId(id);
+      allHandles.push({ id, kind: parsed.kind, symbols: parsed.symbols });
+    });
+    const userBotIds = new Set([
+      ...runningInstances.map((instance) => instance.id),
+      ...Object.keys(overridesById),
+    ]);
+    return allHandles.filter((handle) => userBotIds.has(handle.id)).map((h) => mapHandleToBot(
       h,
       runningInstances,
       runtimeById,
@@ -864,25 +1027,16 @@ function BotsPanel({ onClose }) {
     orderHistory,
   ]);
 
-  const activeCount = runningInstances.length
-    || bots.filter((bot) => bot.status === 'Running' || bot.status === 'Paused').length;
+  const activeCount = bots.filter((bot) => bot.status === 'Running' || bot.status === 'Paused').length;
   const mockPnl = portfolioPnl != null ? portfolioPnl : totalPnl;
-  const totalFills = useMemo(
-    () => orderHistory.filter((row) => String(row.value || '').toLowerCase().includes('filled')).length,
-    [orderHistory],
-  );
-  const runningBots = bots.filter((b) => b.status === 'Running' || b.status === 'Paused');
-  const templateBots = bots.filter((b) => b.status === 'Template');
-  const startableTemplates = templateBots.filter((b) => canStartBot(b, syncedAccounts));
-  const blockedTemplates = templateBots.filter((b) => !canStartBot(b, syncedAccounts));
-
   const resetLaunch = useCallback(() => {
-    setStep('strategy');
-    setSelectedType('delta_neutral');
+    setStep('exchange');
+    setSelectedType('symmetric_mm');
     setTradeSize(20);
     setMaxPosition(200);
     setPreset('calm');
     setSelectedInstanceId('');
+    setSelectedExchangeId('');
   }, []);
 
   const openLaunch = useCallback(() => {
@@ -1693,7 +1847,6 @@ function BotsPanel({ onClose }) {
       setRuntimeById(runtime || {});
       setOverridesById(overrides || {});
       setGlobalActiveOrders(Number(activeOrders) || 0);
-      setConfiguredCount(Number(res.data.configured_count) || configured.length);
       if (res.data.exchange_balances) {
         applyPortfolioPayload({
           exchanges: (res.data.exchange_balances.exchanges || []).map((row) => ({
@@ -1723,6 +1876,8 @@ function BotsPanel({ onClose }) {
     } catch (err) {
       console.error('fetch instances failed:', err);
       setNotice('Cannot reach bot API — check the configured bot endpoint is reachable.');
+    } finally {
+      setInstancesLoading(false);
     }
   }, [token, applyPortfolioPayload]);
 
@@ -1795,67 +1950,78 @@ function BotsPanel({ onClose }) {
   }, [token, fetchInstances, appendHistory]);
 
   const launchBot = useCallback(async () => {
+    if (launching) return;
     if (!token || !selectedInstanceId) {
       setNotice('Please select a strategy and exchange instance first.');
       return;
     }
+    setLaunching(true);
     const parsed = parseStrategyInstanceId(selectedInstanceId);
     const missing = parsed.exchanges.filter((ex) => !accountActiveForExchange(syncedAccounts, ex));
     if (missing.length > 0) {
       setNotice(`Connect ${missing.map((e) => e.toUpperCase()).join(' + ')} in Accounts before launch.`);
+      setLaunching(false);
       return;
     }
     if (parsed.exchanges.some((ex) => ex.toLowerCase() === 'grvt')) {
-      const auth = await authorizeGrvtBuilder({ silent: true });
-      if (!auth.ok) {
-        setNotice(`Authorize Builder required before Launch on GRVT: ${auth.error}`);
+      try {
+        const auth = await authorizeGrvtBuilder({ silent: true });
+        if (!auth.ok) {
+          setNotice(`Authorize Builder required before Launch on GRVT: ${auth.error}`);
+          setLaunching(false);
+          return;
+        }
+      } catch (error) {
+        setNotice(`Authorize Builder required before Launch on GRVT: ${formatApiError(error)}`);
+        setLaunching(false);
         return;
       }
     }
     const spreadBps = preset === 'aggressive' ? 4 : 8;
-
-    fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/config`), {
-      method: 'PUT',
-      headers: botAuthHeaders(token, { 'content-type': 'application/json' }),
-      body: JSON.stringify({
-        order_size_usd: String(tradeSize),
-        position_size_usd: String(maxPosition),
-        spread_bps: spreadBps,
-        min_funding_diff_bps: spreadBps,
-      })
-    })
-      .then((r) => r.json())
-      .then((cfgRes) => {
-        if (!cfgRes?.success) {
-          throw new Error(formatApiError(cfgRes?.error, 'config save failed'));
-        }
-        return fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/start`), {
-          method: 'POST',
-          headers: botAuthHeaders(token)
-        }).then((r) => r.json()).then((startRes) => ({ cfgRes, startRes }));
-      })
-      .then(({ cfgRes, startRes: res }) => {
-        if (res?.data?.status === 'started') {
-          const cfgNote = cfgRes?.data?.updated
-            ? ` Config: $${tradeSize} trade, spread ${spreadBps} bps.`
-            : '';
-          setNotice(`Launched ${getBotType(selectedType).name} on ${getExchangeName(selectedInstanceId)} successfully!${cfgNote}`);
-          appendHistory('Strategy started', getExchangeName(selectedInstanceId), getBotType(selectedType).name);
-          userCollapsedRef.current = false;
-          setExpandedBotId(selectedInstanceId);
-          setView('dashboard');
-          fetchInstances();
-          fetchOrderHistory();
-          resetLaunch();
-        } else {
-          setNotice(`Launch failed: ${formatApiError(res?.error)}`);
-        }
-      })
-      .catch((err) => {
-        console.error('launch failed:', err);
-        setNotice('Network error launching strategy');
+    try {
+      const configResponse = await fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/config`), {
+        method: 'PUT',
+        headers: botAuthHeaders(token, { 'content-type': 'application/json' }),
+        body: JSON.stringify({
+          order_size_usd: String(tradeSize),
+          position_size_usd: String(maxPosition),
+          spread_bps: spreadBps,
+          min_funding_diff_bps: spreadBps,
+        }),
       });
-  }, [selectedInstanceId, token, tradeSize, maxPosition, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder]);
+      const cfgRes = await configResponse.json();
+      if (!cfgRes?.success) {
+        throw new Error(formatApiError(cfgRes?.error, 'config save failed'));
+      }
+
+      const startResponse = await fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/start`), {
+        method: 'POST',
+        headers: botAuthHeaders(token),
+      });
+      const res = await startResponse.json();
+      if (res?.data?.status !== 'started') {
+        setNotice(`Launch failed: ${formatApiError(res?.error)}`);
+        return;
+      }
+
+      const cfgNote = cfgRes?.data?.updated
+        ? ` Config: $${tradeSize} trade, spread ${spreadBps} bps.`
+        : '';
+      setNotice(`Launched ${getBotType(selectedType).name} on ${getExchangeName(selectedInstanceId)} successfully!${cfgNote}`);
+      appendHistory('Strategy started', getExchangeName(selectedInstanceId), getBotType(selectedType).name);
+      userCollapsedRef.current = false;
+      setExpandedBotId(selectedInstanceId);
+      setView('dashboard');
+      fetchInstances();
+      fetchOrderHistory();
+      resetLaunch();
+    } catch (err) {
+      console.error('launch failed:', err);
+      setNotice('Network error launching strategy');
+    } finally {
+      setLaunching(false);
+    }
+  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder]);
 
   // Real-time WebSocket updates via Clash game backend mediator
   const [wsConnected, setWsConnected] = useState(false);
@@ -2043,108 +2209,16 @@ function BotsPanel({ onClose }) {
           <span style={S.noticeClose}>x</span>
         </button>
       )}
-      <p style={S.templateHint}>
-        These are not 5 separate bots — they are <strong>5 templates</strong> from <code>strategies.toml</code>.
-        Launch/Start <strong>does not add a new row</strong> — it only runs one template for your wallet.
-        After Launch the card shows <strong>your</strong> trade size and spread (saved in Phantom).
-        Templates cannot be removed from the UI. A new bot type requires a server config change.
-        {(Object.keys(exchangeBalances).length > 0 || portfolioTotals) && (
-          <> Balances (live):{' '}
-            {Object.entries(exchangeBalances).map(([ex, bal]) => {
-              const fmt = formatExchangeBalance(bal);
-              return (
-                <span key={ex} title={fmt.detail || undefined}>
-                  {' '}{ex.toUpperCase()}:{' '}
-                  <strong style={{
-                    color: fmt.tone === 'error' ? '#C62828'
-                      : fmt.tone === 'warn' ? '#E65100' : undefined,
-                  }}>
-                    {fmt.label}
-                  </strong>
-                </span>
-              );
-            })}
-            {portfolioTotals?.available != null && (
-              <> · Total available <strong>${portfolioTotals.available.toFixed(2)}</strong></>
-            )}
-            {grvtBalanceUsd != null && (
-              <> — GRVT MM needs ~$130 min notional/order on small accounts.</>
-            )}
-          </>
-        )}
-      </p>
-      <div style={S.summaryGrid}>
-        <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Running</span>
-          <strong style={S.summaryValue}>{activeCount}</strong>
-        </div>
-        <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Templates</span>
-          <strong style={S.summaryValue}>{configuredCount || configuredInstances.length}</strong>
-        </div>
-        <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Open Quotes</span>
-          <strong style={S.summaryValue}>{globalActiveOrders}</strong>
-        </div>
-        <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Total Margin</span>
-          <strong style={S.summaryValue}>
-            {portfolioTotals?.available != null
-              ? money(portfolioTotals.available)
-              : '—'}
-          </strong>
-        </div>
-        <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Net PnL</span>
-          <strong style={{ ...S.summaryValue, color: mockPnl >= 0 ? colors.long : colors.short }}>
-            {portfolioPnl != null ? signedMoney(mockPnl) : '—'}
-          </strong>
-        </div>
-        <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Fills (tracked)</span>
-          <strong style={S.summaryValue}>{totalFills}</strong>
-        </div>
-        <div style={{ ...S.summaryCard, borderColor: wsConnected ? '#43A047' : '#E53935' }}>
-          <span style={S.metricLabel}>Live Feed</span>
-          <strong style={{ ...S.summaryValue, fontSize: 12, color: wsConnected ? '#43A047' : '#E53935' }}>
-            {wsConnected ? '● Connected' : '○ Polling (WS offline)'}
-          </strong>
-        </div>
-      </div>
-
-      <p style={{
-        margin: '0 0 10px',
-        fontSize: 12,
-        fontWeight: 700,
-        color: '#6b5340',
-        lineHeight: 1.45,
-      }}>
-        Configured = fixed templates from <code style={{ fontSize: 11 }}>strategies.toml</code> (always 5 for your wallet).
-        Launch/Start activates one template — it does not add a new row. Running bots show live cycle counts from Phantom backend.
-        {globalActiveOrders > 0 ? ` Phantom tracks ${globalActiveOrders} open order(s) right now.` : ' No open orders tracked yet.'}
-      </p>
 
       <div style={S.toolbar}>
         <div style={S.segment}>
-          <button
-            type="button"
-            style={{ ...S.segmentButton, ...(view === 'dashboard' ? S.segmentActive : {}) }}
-            onClick={() => setView('dashboard')}
-          >
+          <button type="button" style={{ ...S.segmentButton, ...S.segmentActive }} onClick={() => setView('dashboard')}>
             Dashboard
           </button>
-          <button
-            type="button"
-            style={{ ...S.segmentButton, ...(view === 'accounts' ? S.segmentActive : {}) }}
-            onClick={() => setView('accounts')}
-          >
+          <button type="button" style={S.segmentButton} onClick={() => setView('accounts')}>
             Accounts
           </button>
-          <button
-            type="button"
-            style={{ ...S.segmentButton, ...(view === 'history' ? S.segmentActive : {}) }}
-            onClick={() => setView('history')}
-          >
+          <button type="button" style={S.segmentButton} onClick={() => setView('history')}>
             History
           </button>
         </div>
@@ -2154,11 +2228,40 @@ function BotsPanel({ onClose }) {
         </button>
       </div>
 
-      {runningBots.length > 0 && (
+      {instancesLoading ? (
+        <div style={S.dashboardLoading} role="status" aria-live="polite">
+          <span className="bots-spinner" style={S.loadingSpinner} aria-hidden="true" />
+          <strong>Loading your bots…</strong>
+          <span>Syncing saved settings and live status.</span>
+        </div>
+      ) : (
         <>
-          <h3 style={S.sectionTitle}>Running now ({runningBots.length})</h3>
+      <div style={S.summaryGrid} aria-label="Bot summary">
+        <div style={S.summaryCard}>
+          <span style={S.metricLabel}>My Bots</span>
+          <strong style={S.summaryValue}>{bots.length}</strong>
+        </div>
+        <div style={S.summaryCard}>
+          <span style={S.metricLabel}>Running</span>
+          <strong style={S.summaryValue}>{activeCount}</strong>
+        </div>
+        <div style={S.summaryCard}>
+          <span style={S.metricLabel}>Open Quotes</span>
+          <strong style={S.summaryValue}>{globalActiveOrders}</strong>
+        </div>
+        <div style={S.summaryCard}>
+          <span style={S.metricLabel}>Net PnL</span>
+          <strong style={{ ...S.summaryValue, color: mockPnl >= 0 ? colors.long : colors.short }}>
+            {portfolioPnl != null ? signedMoney(mockPnl) : '—'}
+          </strong>
+        </div>
+      </div>
+
+      {bots.length > 0 ? (
+        <section aria-labelledby="my-bots-heading">
+          <h3 id="my-bots-heading" style={S.myBotsTitle}>My Bots</h3>
           <div style={S.botGrid}>
-            {runningBots.map((bot) => (
+            {bots.map((bot) => (
               <BotCard
                 key={bot.id}
                 bot={bot}
@@ -2169,70 +2272,18 @@ function BotsPanel({ onClose }) {
               />
             ))}
           </div>
-        </>
+        </section>
+      ) : (
+        <div style={S.emptyLaunchState}>
+          <div style={S.emptyLaunchIcon}><RobotGlyph size={40} color="#5C3A21" /></div>
+          <h3 style={S.emptyLaunchTitle}>Launch your first market maker</h3>
+          <p style={S.emptyLaunchCopy}>Choose an exchange, set your limits, and your bot will appear here.</p>
+          <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.emptyLaunchButton }} onClick={openLaunch}>
+            Launch New Bot
+          </button>
+        </div>
       )}
-
-      {startableTemplates.length > 0 && (
-        <>
-          <h3 style={S.sectionTitle}>Ready to start now ({startableTemplates.length})</h3>
-          <div style={S.botGrid}>
-            {startableTemplates.map((bot) => (
-              <BotCard
-                key={bot.id}
-                bot={bot}
-                expanded={expandedBotId === bot.id}
-                onToggle={handleToggleBot}
-                onStart={handleStartBot}
-                onStop={handleStopBot}
-              />
-            ))}
-          </div>
         </>
-      )}
-
-      {blockedTemplates.length > 0 && (
-        <>
-          <h3 style={S.sectionTitle}>Needs another account ({blockedTemplates.length})</h3>
-          <p style={S.blockedHint}>These templates will not start until you connect the matching exchange in Accounts.</p>
-          <div style={S.botGrid}>
-            {blockedTemplates.map((bot) => (
-              <div key={bot.id} style={S.blockedCard}>
-                <BotCard
-                  bot={{
-                    ...bot,
-                    lastAction: `Needs: ${missingExchangesForBot(bot, syncedAccounts).map((e) => e.toUpperCase()).join(' + ') || 'account'}`,
-                  }}
-                  expanded={false}
-                  onToggle={() => setView('accounts')}
-                  onStart={() => setView('accounts')}
-                  onStop={() => {}}
-                />
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {startableTemplates.length === 0 && blockedTemplates.length === 0 && templateBots.length > 0 && (
-        <>
-          <h3 style={S.sectionTitle}>Available templates ({templateBots.length})</h3>
-          <div style={S.botGrid}>
-            {templateBots.map((bot) => (
-              <BotCard
-                key={bot.id}
-                bot={bot}
-                expanded={expandedBotId === bot.id}
-                onToggle={handleToggleBot}
-                onStart={handleStartBot}
-                onStop={handleStopBot}
-              />
-            ))}
-          </div>
-        </>
-      )}
-
-      {bots.length === 0 && (
-        <div style={S.emptyState}>No strategy templates loaded from Phantom API.</div>
       )}
     </>
   );
@@ -2840,8 +2891,11 @@ function BotsPanel({ onClose }) {
 
   const renderLaunch = () => (
     <div style={S.launchShell}>
+      <div style={S.visuallyHidden} aria-live="polite" aria-atomic="true">
+        Step {STEPS.indexOf(step) + 1} of {STEPS.length}: {STEP_LABELS[step]}
+      </div>
       <div style={S.launchHeader}>
-        <button type="button" style={S.backButton} onClick={goBack} aria-label="Back">
+        <button type="button" className="bots-focusable" style={S.backButton} onClick={goBack} aria-label="Back" disabled={launching}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6" />
           </svg>
@@ -2850,129 +2904,125 @@ function BotsPanel({ onClose }) {
         <div style={shared.spacer36} />
       </div>
 
-      {step === 'strategy' && (
-        <div style={S.stepPage}>
+      {step === 'exchange' && (
+        <div className="bots-step-page" style={S.stepPage}>
           <div>
-            <h2 style={S.stepTitle}>Choose Bot Strategy</h2>
-            <p style={S.stepCopy}>Select the market-making strategy kind you want to coordinate.</p>
+            <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Choose Exchange</h2>
+            <p style={S.stepCopy}>Select where your market-making bot will trade.</p>
+          </div>
+          <div style={S.exchangePickerCard}>
+            <span style={S.label}>Exchange</span>
+            <ExchangeDropdown
+              options={exchangeOptions}
+              value={selectedExchangeId}
+              onChange={handleExchangeSelect}
+              disabled={launching}
+            />
+            <div id="bot-exchange-status" style={S.exchangeStatus} aria-live="polite">
+              {selectedExchangeOption ? (
+                <>
+                  <span style={{ ...S.exchangeStatusDot, background: selectedExchangeOption.launchable ? '#43A047' : '#A3906A' }} />
+                  <span>
+                    <strong>{selectedExchangeOption.dex.label}</strong>
+                    {' · '}{selectedExchangeOption.dex.description}
+                    {' · '}{selectedExchangeOption.status}
+                  </span>
+                </>
+              ) : (
+                <span>Only configured exchanges with an active synced account can launch.</span>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="bots-focusable"
+            disabled={!selectedExchangeOption?.launchable}
+            style={{
+              ...cartoonBtn(selectedExchangeOption?.launchable ? '#1E88E5' : '#A3906A', selectedExchangeOption?.launchable ? '#1565C0' : '#8C7D5C'),
+              ...S.nextButton,
+              ...(!selectedExchangeOption?.launchable ? S.disabledButton : {}),
+            }}
+            onClick={() => setStep('strategy')}
+          >
+            Continue to Strategy
+          </button>
+        </div>
+      )}
+
+      {step === 'strategy' && (
+        <div className="bots-step-page" style={S.stepPage}>
+          <div>
+            <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Choose Strategy</h2>
+            <p style={S.stepCopy}>Pick how the bot manages quotes and market exposure.</p>
           </div>
           <div style={S.strategyGrid}>
-            {BOT_TYPES.map((bot) => {
+            {LAUNCH_BOT_TYPES.map((bot) => {
               const active = selectedType === bot.id;
+              const disabled = bot.id === 'delta_neutral';
               return (
                 <button
                   key={bot.id}
                   type="button"
-                  style={{ ...S.strategyCard, ...(active ? { borderColor: bot.accent, boxShadow: `0 0 0 3px ${bot.accent}22, 0 4px 0 #d4c8b0` } : {}) }}
-                  onClick={() => setSelectedType(bot.id)}
+                  className="bots-focusable"
+                  disabled={disabled}
+                  aria-pressed={!disabled && active}
+                  style={{
+                    ...S.strategyCard,
+                    ...(active ? S.strategyCardActive : {}),
+                    ...(disabled ? S.strategyCardDisabled : {}),
+                  }}
+                  onClick={() => !disabled && setSelectedType(bot.id)}
                 >
-                  <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
+                  <div style={{ ...S.botAvatar, background: disabled ? '#B8B1A4' : `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
                     <RobotGlyph size={28} color="#fff" />
                   </div>
                   <div style={S.strategyText}>
-                    <strong>{bot.name}</strong>
-                    <code>{bot.code}</code>
+                    <div style={S.strategyTitleRow}>
+                      <strong>{bot.name}</strong>
+                      {disabled && <span style={S.soonBadge}>Soon</span>}
+                    </div>
                     <span>{bot.description}</span>
-                    <small>{bot.bestFor}</small>
                   </div>
                 </button>
               );
             })}
           </div>
-          {selectedType && instancesForSelectedType.length > 0 && (
-            <div style={{
-              background: '#e8dfc8',
-              border: '3px solid #d4c8b0',
-              borderRadius: 12,
-              padding: 12,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-              marginTop: 12,
-              boxSizing: 'border-box',
-            }}>
-              <span style={S.label}>Select Exchange Venue</span>
-              <select
-                value={selectedInstanceId}
-                onChange={(e) => setSelectedInstanceId(e.target.value)}
-                style={{
-                  border: '2px solid #bba882',
-                  background: '#fdf8e7',
-                  borderRadius: 10,
-                  color: '#5C3A21',
-                  fontSize: 14,
-                  fontWeight: 900,
-                  padding: '9px 10px',
-                  cursor: 'pointer',
-                  width: '100%',
-                  fontFamily: 'inherit',
-                  outline: 'none',
-                }}
-              >
-                {filteredInstances.map((inst) => (
-                  <option key={inst.id} value={inst.id}>
-                    {getExchangeName(inst.id)} ({inst.symbols.join(', ')})
-                  </option>
-                ))}
-              </select>
-              {filteredInstances.length === 0 && instancesForSelectedType.length > 0 && (
-                <span style={{ fontSize: 12, fontWeight: 700, color: '#8a6d3b' }}>
-                  Templates exist in strategies.toml but no synced account for this exchange. Accounts → Setup & Sync.
-                </span>
-              )}
-              {filteredInstances.length === 0 && instancesForSelectedType.length === 0 && (
-                <span style={{ fontSize: 12, fontWeight: 700, color: '#8a6d3b' }}>
-                  No venue for this strategy in strategies.toml (restart Phantom bot after config change).
-                </span>
-              )}
-              {filteredInstances.length > 0 && (
-                <span style={{ fontSize: 11, fontWeight: 600, color: '#8a6d3b' }}>
-                  Showing only exchanges with an active account in Accounts.
-                </span>
-              )}
-            </div>
-          )}
-          {selectedType && instancesForSelectedType.length === 0 && (
-            <div style={{
-              background: '#f8d7da',
-              border: '3px solid #f5c6cb',
-              borderRadius: 12,
-              padding: 12,
-              color: '#721c24',
-              fontSize: 13,
-              fontWeight: 800,
-              marginTop: 12,
-              boxSizing: 'border-box',
-            }}>
-              {!token
-                ? 'Sign in to the game first — bot strategies load after wallet login.'
-                : configuredInstances.length === 0
-                  ? 'Could not load strategies from the bot API. Ensure Clash server (:4000) and Phantom (:8080) are running.'
-                  : 'No configured exchange instances for this strategy found in strategies.toml.'}
-            </div>
-          )}
           <button
             type="button"
-            disabled={!selectedInstanceId || filteredInstances.length === 0}
-            style={{
-              ...cartoonBtn(selectedInstanceId ? '#1E88E5' : '#a3906a', selectedInstanceId ? '#1565C0' : '#8c7d5c'),
-              ...S.nextButton,
-              opacity: (selectedInstanceId && filteredInstances.length > 0) ? 1 : 0.6,
-              cursor: (selectedInstanceId && filteredInstances.length > 0) ? 'pointer' : 'not-allowed',
-            }}
-            onClick={() => setStep('risk')}
+            className="bots-focusable"
+            style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.nextButton }}
+            onClick={() => setStep('settings')}
           >
-            Continue
+            Continue to Settings
           </button>
         </div>
       )}
 
-      {step === 'risk' && (
-        <div style={S.stepPage}>
+      {step === 'settings' && (
+        <div className="bots-step-page" style={S.stepPage}>
           <div>
-            <h2 style={S.stepTitle}>Set Risk Limits</h2>
-            <p style={S.stepCopy}>Configure controls: deal size, maximum position, and behavior preset.</p>
+            <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Bot Settings</h2>
+            <p style={S.stepCopy}>Set position limits and choose how actively the bot quotes.</p>
           </div>
+          {selectedExchangeInstances.length > 1 && (
+            <div style={S.marketPickerCard}>
+              <label htmlFor="bot-market" style={S.label}>Market</label>
+              <select
+                id="bot-market"
+                className="bots-market-select bots-focusable"
+                value={selectedInstanceId}
+                onChange={(event) => setSelectedInstanceId(event.target.value)}
+              >
+                <option value="">Select a market</option>
+                {selectedExchangeInstances.map((instance) => (
+                  <option key={instance.id} value={instance.id}>
+                    {(instance.symbols || []).map((symbol) => String(symbol).toUpperCase()).join(', ') || instance.id}
+                  </option>
+                ))}
+              </select>
+              <span style={S.marketPickerHint}>Each market launches its exact configured bot instance.</span>
+            </div>
+          )}
           <SliderField
             label="Trade Size"
             min={5}
@@ -2992,12 +3042,13 @@ function BotsPanel({ onClose }) {
             onChange={setMaxPosition}
           />
           <div style={S.presetCard}>
-            <span style={S.label}>Preset</span>
+            <span style={S.label}>Bot Behavior</span>
             <div style={S.presetToggle}>
               {Object.entries(PRESETS).map(([id, option]) => (
                 <button
                   key={id}
                   type="button"
+                  className="bots-focusable"
                   style={{ ...S.presetButton, ...(preset === id ? S.presetActive : {}) }}
                   onClick={() => setPreset(id)}
                 >
@@ -3008,17 +3059,23 @@ function BotsPanel({ onClose }) {
             <strong style={S.detailTitle}>{PRESETS[preset].title}</strong>
             <p style={S.detailCopy}>{PRESETS[preset].copy}</p>
           </div>
-          <button type="button" style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.nextButton }} onClick={() => setStep('review')}>
+          <button
+            type="button"
+            className="bots-focusable"
+            disabled={!selectedInstanceId}
+            style={{ ...cartoonBtn(selectedInstanceId ? '#1E88E5' : '#A3906A', selectedInstanceId ? '#1565C0' : '#8C7D5C'), ...S.nextButton, ...(!selectedInstanceId ? S.disabledButton : {}) }}
+            onClick={() => setStep('review')}
+          >
             Review Bot
           </button>
         </div>
       )}
 
       {step === 'review' && (
-        <div style={S.stepPage}>
+        <div className="bots-step-page" style={S.stepPage}>
           <div>
-            <h2 style={S.stepTitle}>Review and Launch</h2>
-            <p style={S.stepCopy}>Review your strategy parameters before spinning up the MM bots.</p>
+            <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Review and Launch</h2>
+            <p style={S.stepCopy}>Check your setup before starting the bot.</p>
           </div>
           <div style={S.reviewCard}>
             <div style={S.cardTop}>
@@ -3032,7 +3089,7 @@ function BotsPanel({ onClose }) {
             </div>
             <p style={S.detailCopy}>{selectedBot.description}</p>
             <div style={S.reviewRows}>
-              <span>Exchange <strong>{getExchangeName(selectedInstanceId)}</strong></span>
+              <span>Exchange <strong>{DEX_CONFIG[selectedExchangeId]?.label || getExchangeName(selectedInstanceId)}</strong></span>
               <span>Market <strong>{configuredInstances.find(i => i.id === selectedInstanceId)?.symbols?.join(', ') || ''}</strong></span>
               <span>Trade Size <strong>{money(tradeSize)}</strong></span>
               <span>Maximum Position <strong>{money(maxPosition)}</strong></span>
@@ -3040,8 +3097,15 @@ function BotsPanel({ onClose }) {
               <span>Status <strong>Ready to launch</strong></span>
             </div>
           </div>
-          <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.nextButton }} onClick={launchBot}>
-            Launch Bot
+          <button
+            type="button"
+            className="bots-focusable"
+            disabled={launching || !selectedInstanceId}
+            aria-busy={launching}
+            style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.nextButton, ...(launching ? S.disabledButton : {}) }}
+            onClick={launchBot}
+          >
+            {launching ? 'Launching…' : 'Launch Bot'}
           </button>
         </div>
       )}
@@ -3080,6 +3144,37 @@ const STYLE = `
   }
   .bots-range::-webkit-slider-thumb {
     box-shadow: 0 2px 0 rgba(0,0,0,0.28);
+  }
+  .bots-market-select {
+    width: 100%;
+    min-height: 44px;
+    border: 2px solid #BBA882;
+    border-radius: 10px;
+    background: #FDF8E7;
+    color: #5C3A21;
+    cursor: pointer;
+    font: 900 14px/1.2 "Inter", "Segoe UI", sans-serif;
+    padding: 0 10px;
+  }
+  .bots-focusable:focus-visible,
+  .bots-step-page h2:focus-visible {
+    outline: 3px solid #1E88E5 !important;
+    outline-offset: 3px;
+  }
+  .bots-spinner {
+    animation: botsSpin 0.8s linear infinite;
+  }
+  @keyframes botsSpin { to { transform: rotate(360deg); } }
+  @media (max-width: 560px) {
+    .bots-market-select { font-size: 13px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bots-step-page,
+    .bots-expand-panel,
+    .bots-spinner {
+      animation: none !important;
+      transition: none !important;
+    }
   }
 `;
 
@@ -3207,7 +3302,7 @@ const S = {
   },
   summaryGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
     gap: 8,
   },
   summaryCard: {
@@ -3225,6 +3320,25 @@ const S = {
     fontSize: 22,
     fontWeight: 900,
     lineHeight: 1,
+  },
+  dashboardLoading: {
+    flex: 1,
+    minHeight: 250,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    color: '#77573D',
+    textAlign: 'center',
+  },
+  loadingSpinner: {
+    width: 34,
+    height: 34,
+    borderRadius: '50%',
+    border: '4px solid #D4C8B0',
+    borderTopColor: '#43A047',
+    marginBottom: 5,
   },
   toolbar: {
     display: 'flex',
@@ -3272,6 +3386,57 @@ const S = {
     gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
     gap: 10,
     alignItems: 'start',
+  },
+  myBotsTitle: {
+    margin: '12px 0 8px',
+    color: '#5C3A21',
+    fontSize: 17,
+    fontWeight: 900,
+  },
+  emptyLaunchState: {
+    flex: 1,
+    minHeight: 250,
+    padding: '32px 18px',
+    border: '2px dashed #C9B896',
+    borderRadius: 16,
+    background: 'linear-gradient(180deg, rgba(232,223,200,0.42), rgba(253,248,231,0.75))',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    textAlign: 'center',
+    boxSizing: 'border-box',
+  },
+  emptyLaunchIcon: {
+    width: 68,
+    height: 68,
+    borderRadius: 18,
+    background: '#E8DFC8',
+    border: '3px solid #D4C8B0',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  emptyLaunchTitle: {
+    margin: 0,
+    color: '#5C3A21',
+    fontSize: 20,
+    fontWeight: 900,
+  },
+  emptyLaunchCopy: {
+    maxWidth: 380,
+    margin: '7px 0 18px',
+    color: '#77573D',
+    fontSize: 13,
+    fontWeight: 700,
+    lineHeight: 1.45,
+  },
+  emptyLaunchButton: {
+    minHeight: 44,
+    padding: '10px 18px',
+    borderRadius: 13,
+    fontSize: 14,
   },
   botCard: {
     background: '#e8dfc8',
@@ -3391,6 +3556,11 @@ const S = {
     background: 'rgba(232,184,48,0.22)',
     color: '#8B6500',
     border: '1px solid rgba(232,184,48,0.65)',
+  },
+  statusStopped: {
+    background: 'rgba(120,144,156,0.14)',
+    color: '#455A64',
+    border: '1px solid rgba(120,144,156,0.38)',
   },
   statusTemplate: {
     background: 'rgba(120,144,156,0.18)',
@@ -3543,12 +3713,72 @@ const S = {
     display: 'flex',
     flexDirection: 'column',
   },
+  visuallyHidden: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    padding: 0,
+    margin: -1,
+    overflow: 'hidden',
+    clip: 'rect(0, 0, 0, 0)',
+    whiteSpace: 'nowrap',
+    border: 0,
+  },
   launchHeader: {
     display: 'flex',
     alignItems: 'center',
     gap: 10,
     padding: '4px 2px 10px',
     flexShrink: 0,
+  },
+  stepTrack: {
+    flex: 1,
+    minWidth: 0,
+    margin: 0,
+    padding: 0,
+    listStyle: 'none',
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+    gap: 4,
+  },
+  stepTrackItem: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 3,
+    color: '#A3906A',
+  },
+  stepTrackItemActive: {
+    color: '#5C3A21',
+  },
+  stepNumber: {
+    width: 22,
+    height: 22,
+    borderRadius: '50%',
+    border: '2px solid #C9B896',
+    background: '#E8DFC8',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 10,
+    fontWeight: 900,
+    boxSizing: 'border-box',
+  },
+  stepNumberActive: {
+    borderColor: '#43A047',
+    background: '#43A047',
+    color: '#FFF',
+  },
+  stepLabel: {
+    maxWidth: '100%',
+    fontSize: 9,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+    letterSpacing: 0.25,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   backButton: {
     width: 36,
@@ -3609,11 +3839,179 @@ const S = {
     minWidth: 0,
     color: '#5C3A21',
   },
+  strategyCardActive: {
+    borderColor: '#43A047',
+    background: '#F4EEDC',
+    boxShadow: '0 0 0 3px rgba(67,160,71,0.12), 0 4px 0 #D4C8B0',
+  },
+  strategyCardDisabled: {
+    cursor: 'not-allowed',
+    opacity: 0.68,
+    filter: 'grayscale(0.8)',
+  },
+  strategyTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  soonBadge: {
+    borderRadius: 999,
+    background: '#7A746B',
+    color: '#FFF',
+    padding: '3px 7px',
+    fontSize: 9,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
   strategyText: {
     display: 'flex',
     flexDirection: 'column',
     gap: 4,
     minWidth: 0,
+  },
+  exchangePickerCard: {
+    background: '#E8DFC8',
+    border: '3px solid #D4C8B0',
+    borderRadius: 14,
+    padding: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  exchangeDropdownRoot: {
+    position: 'relative',
+  },
+  exchangeDropdownTrigger: {
+    width: '100%',
+    minHeight: 56,
+    border: '2px solid #BBA882',
+    borderRadius: 12,
+    background: '#FDF8E7',
+    color: '#5C3A21',
+    padding: '8px 12px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    textAlign: 'left',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  exchangeTriggerLogo: {
+    width: 32,
+    height: 32,
+    objectFit: 'contain',
+    flexShrink: 0,
+  },
+  exchangeTriggerText: {
+    minWidth: 0,
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    fontSize: 14,
+  },
+  exchangeChevron: {
+    color: '#77573D',
+    fontSize: 20,
+    fontWeight: 900,
+    transition: 'transform 0.16s ease',
+  },
+  exchangeListbox: {
+    position: 'absolute',
+    zIndex: 20,
+    top: 'calc(100% + 6px)',
+    left: 0,
+    right: 0,
+    maxHeight: 280,
+    overflowY: 'auto',
+    padding: 6,
+    border: '2px solid #BBA882',
+    borderRadius: 12,
+    background: '#FDF8E7',
+    boxShadow: '0 12px 26px rgba(92,58,33,0.24)',
+  },
+  exchangeOption: {
+    minHeight: 48,
+    borderRadius: 9,
+    padding: '7px 8px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 9,
+    color: '#5C3A21',
+    cursor: 'pointer',
+    boxSizing: 'border-box',
+  },
+  exchangeOptionActive: {
+    background: 'rgba(30,136,229,0.12)',
+    boxShadow: 'inset 0 0 0 2px rgba(30,136,229,0.32)',
+  },
+  exchangeOptionDisabled: {
+    opacity: 0.58,
+    cursor: 'not-allowed',
+  },
+  exchangeOptionLogo: {
+    width: 30,
+    height: 30,
+    objectFit: 'contain',
+    flexShrink: 0,
+  },
+  exchangeOptionText: {
+    minWidth: 0,
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    fontSize: 12,
+  },
+  exchangeOptionStatus: {
+    flexShrink: 0,
+    borderRadius: 999,
+    padding: '3px 6px',
+    background: '#DDD5C4',
+    color: '#6E655A',
+    fontSize: 9,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+  },
+  exchangeOptionStatusReady: {
+    background: 'rgba(67,160,71,0.16)',
+    color: '#2E7D32',
+  },
+  exchangeStatus: {
+    minHeight: 18,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 7,
+    color: '#77573D',
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: 1.35,
+  },
+  exchangeStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    flexShrink: 0,
+  },
+  disabledButton: {
+    opacity: 0.58,
+    cursor: 'not-allowed',
+  },
+  marketPickerCard: {
+    background: '#E8DFC8',
+    border: '3px solid #D4C8B0',
+    borderRadius: 12,
+    padding: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+  },
+  marketPickerHint: {
+    color: '#77573D',
+    fontSize: 11,
+    fontWeight: 700,
   },
   sliderCard: {
     background: '#e8dfc8',

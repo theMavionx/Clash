@@ -5105,6 +5105,24 @@ router.get('/ostium/config', (_req, res) => {
   res.json(ostium.config());
 });
 
+router.post('/ostium/subgraph/gn', async (req, res) => {
+  try {
+    const result = await ostium.proxySubgraph(req.body || {});
+    res.set('Cache-Control', result.cache === 'hit' || result.cache === 'stale' ? 'private, max-age=1' : 'no-store');
+    res.set('X-Ostium-Subgraph-Cache', result.cache || 'unknown');
+    res.set('X-Ostium-Subgraph-Kind', result.kind || 'unknown');
+    return res.status(result.status || 200).json(result.data ?? {});
+  } catch (e) {
+    const status = Number(e?.status || 0);
+    const code = status >= 400 && status < 600 ? status : 502;
+    if (status === 429) res.set('Retry-After', '2');
+    console.warn('[ostium] subgraph proxy failed:', e.message || e);
+    return res.status(code).json(e?.data || {
+      errors: [{ message: e?.message || 'Ostium subgraph proxy failed' }],
+    });
+  }
+});
+
 router.get('/ostium/trade-history', auth, async (req, res) => {
   try {
     const verified = requireOstiumOwner(req, res);

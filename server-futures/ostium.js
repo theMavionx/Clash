@@ -33,11 +33,23 @@ const OSTIUM_METADATA_API_URL = String(
   process.env.OSTIUM_METADATA_API_URL
   || 'https://metadata-backend.ostium.io',
 ).replace(/\/+$/u, '');
+const OSTIUM_UPSTREAM_SUBGRAPH_URL = String(
+  process.env.OSTIUM_UPSTREAM_SUBGRAPH_URL
+  || 'https://builder.ostium.io/v1/subgraph/gn',
+).trim();
+const OSTIUM_SUBGRAPH_PROXY_TIMEOUT_MS = Math.max(1000, Math.min(15_000, Number(process.env.OSTIUM_SUBGRAPH_PROXY_TIMEOUT_MS || 8000)));
+const OSTIUM_SUBGRAPH_PAIR_TTL_MS = Math.max(10_000, Math.min(10 * 60_000, Number(process.env.OSTIUM_SUBGRAPH_PAIR_TTL_MS || 5 * 60_000)));
+const OSTIUM_SUBGRAPH_PAIR_STALE_MS = Math.max(60_000, Math.min(60 * 60_000, Number(process.env.OSTIUM_SUBGRAPH_PAIR_STALE_MS || 30 * 60_000)));
+const OSTIUM_SUBGRAPH_LIVE_TTL_MS = Math.max(0, Math.min(10_000, Number(process.env.OSTIUM_SUBGRAPH_LIVE_TTL_MS || 1200)));
+const OSTIUM_SUBGRAPH_LIVE_STALE_MS = Math.max(5_000, Math.min(2 * 60_000, Number(process.env.OSTIUM_SUBGRAPH_LIVE_STALE_MS || 30_000)));
+const OSTIUM_SUBGRAPH_CACHE_MAX_ENTRIES = Math.max(10, Math.min(250, Number(process.env.OSTIUM_SUBGRAPH_CACHE_MAX_ENTRIES || 100)));
 
 let readClient = null;
 let marketCache = { at: 0, rows: [], pairById: new Map() };
 let priceCache = { at: 0, rows: [] };
 let volumeCache = { at: 0, byPairId: new Map() };
+const subgraphProxyCache = new Map();
+const subgraphProxyInflight = new Map();
 const positionsCache = new Map();
 const ordersCache = new Map();
 const CACHE_TTL_MS = 15_000;
@@ -152,6 +164,90 @@ function isTransientReadError(error) {
     || status === 502
     || status === 503
     || /429|too many requests|rate limit|timeout|fetch failed|econnreset|temporar/i.test(text);
+}
+
+function stableJson(value) {
+  if (value == null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+}
+
+function classifySubgraphQuery(body = {}) {
+  const text = String(body.query || body.document || '').toLowerCase();
+  const variables = body.variables && typeof body.variables === 'object' ? body.variables : {};
+  const hasUserVariables = Boolean(
+    variables.user
+    || variables.trader
+    || variables.traders
+    || variables.users
+    || variables.orderIds
+    || variables.initiatedTxHashes
+  );
+  if (!hasUserVariables && /pairs|groups|getpairs/i.test(text)) {
+    return { kind: 'pairs', ttlMs: OSTIUM_SUBGRAPH_PAIR_TTL_MS, staleMs: OSTIUM_SUBGRAPH_PAIR_STALE_MS };
+  }
+  return { kind: 'live', ttlMs: OSTIUM_SUBGRAPH_LIVE_TTL_MS, staleMs: OSTIUM_SUBGRAPH_LIVE_STALE_MS };
+}
+
+function cacheSubgraphResponse(cacheKey, value) {
+  if (subgraphProxyCache.has(cacheKey)) subgraphProxyCache.delete(cacheKey);
+  while (subgraphProxyCache.size >= OSTIUM_SUBGRAPH_CACHE_MAX_ENTRIES) {
+    const oldestKey = subgraphProxyCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    subgraphProxyCache.delete(oldestKey);
+  }
+  subgraphProxyCache.set(cacheKey, value);
+}
+
+async function proxySubgraph(body = {}) {
+  if (!OSTIUM_UPSTREAM_SUBGRAPH_URL) throw new Error('Ostium upstream subgraph is not configured');
+  const classification = classifySubgraphQuery(body);
+  const cacheKey = `${classification.kind}:${stableJson(body)}`;
+  const now = Date.now();
+  const cached = subgraphProxyCache.get(cacheKey);
+  if (cached && now - cached.at <= classification.ttlMs) {
+    return { status: cached.status, data: cached.data, cache: 'hit', kind: classification.kind };
+  }
+  const inflight = subgraphProxyInflight.get(cacheKey);
+  if (inflight) return inflight;
+  const request = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), OSTIUM_SUBGRAPH_PROXY_TIMEOUT_MS);
+    try {
+      const res = await fetch(OSTIUM_UPSTREAM_SUBGRAPH_URL, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body || {}),
+      });
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : null; } catch { data = { error: text || `Ostium subgraph returned ${res.status}` }; }
+      if (!res.ok) {
+        const err = new Error(`Ostium subgraph returned ${res.status}`);
+        err.status = res.status;
+        err.data = data;
+        throw err;
+      }
+      const payload = { status: res.status, data, cache: 'miss', kind: classification.kind };
+      cacheSubgraphResponse(cacheKey, { at: Date.now(), status: res.status, data });
+      return payload;
+    } catch (e) {
+      if (cached && now - cached.at <= classification.staleMs && isTransientReadError(e)) {
+        console.warn('[ostium] using stale subgraph proxy cache:', e.message || e);
+        return { status: cached.status, data: cached.data, cache: 'stale', kind: classification.kind };
+      }
+      throw e;
+    } finally {
+      clearTimeout(timeout);
+      subgraphProxyInflight.delete(cacheKey);
+    }
+  })();
+  subgraphProxyInflight.set(cacheKey, request);
+  return request;
 }
 
 function pairSymbolFromFeed(item) {
@@ -747,6 +843,7 @@ module.exports = {
   getOrdersByAddress,
   getAccountTradeHistory,
   importFillsForPlayer,
+  proxySubgraph,
   isEvmAddress,
   normalizeAddress,
 };

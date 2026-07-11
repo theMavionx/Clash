@@ -29,7 +29,10 @@ export const OSTIUM_ALCHEMY_WS_URL = (
   || sameOriginWsUrl('/rpc/arb-alchemy-ws')
 );
 
-export const OSTIUM_SUBGRAPH_URL = import.meta.env.VITE_OSTIUM_SUBGRAPH_URL || '';
+export const OSTIUM_SUBGRAPH_URL = (
+  import.meta.env.VITE_OSTIUM_SUBGRAPH_URL
+  || '/api/futures/ostium/subgraph/gn'
+);
 export const OSTIUM_BUILDER_API_URL = import.meta.env.VITE_OSTIUM_BUILDER_API_URL || '';
 export const OSTIUM_TRADING_CALLBACKS_ADDRESS = (
   import.meta.env.VITE_OSTIUM_TRADING_CALLBACKS_ADDRESS

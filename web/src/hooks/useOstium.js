@@ -52,6 +52,7 @@ const TPSL_SYNC_POLL_MS = 1_000;
 const PENDING_TPSL_TTL_MS = 120_000;
 const PENDING_CLOSE_TTL_MS = 60_000;
 const OSTIUM_OPTIMISTIC_ROW_TTL_MS = 75_000;
+const OSTIUM_SDK_CLIENT_CACHE_MS = 2 * 60_000;
 const OSTIUM_PRICE_STREAM_WS = 'wss://builder.ostium.io/v1/prices/stream';
 const OSTIUM_LIVE_PRICE_FLUSH_MS = 750;
 const OSTIUM_LIVE_PRICE_RECONNECT_MS = 2_500;
@@ -79,7 +80,6 @@ const OSTIUM_TRADING_DELEGATION_ABI = [
     type: 'function',
   },
 ];
-
 function num(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -796,6 +796,8 @@ export function useOstium() {
   const optimisticPositionsRef = useRef(new Map());
   const optimisticOrdersRef = useRef(new Map());
   const submissionLocksRef = useRef(new Set());
+  const selfClientCacheRef = useRef({ key: null, at: 0, promise: null });
+  const delegatedClientCacheRef = useRef(new Map());
 
   const token = useMemo(() => (
     (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null
@@ -847,20 +849,53 @@ export function useOstium() {
     if (!isActiveDex || !walletAddr) setOneTapWalletFallback(null);
   }, [isActiveDex, walletAddr]);
 
+  useEffect(() => {
+    selfClientCacheRef.current = { key: null, at: 0, promise: null };
+    delegatedClientCacheRef.current.clear();
+  }, [walletAddr]);
+
   const createBuildClient = useCallback(async () => {
     if (!walletAddr || !isEvmAddress(walletAddr)) throw new Error('Connect your EVM wallet first');
-    return OstiumClient.createSelfAndSelf(ostiumClientConfig({
+    const key = String(walletAddr).toLowerCase();
+    const cached = selfClientCacheRef.current;
+    if (cached.promise && cached.key === key && Date.now() - cached.at < OSTIUM_SDK_CLIENT_CACHE_MS) {
+      return cached.promise;
+    }
+    const promise = OstiumClient.createSelfAndSelf(ostiumClientConfig({
       traderAddress: walletAddr,
     }));
+    selfClientCacheRef.current = { key, at: Date.now(), promise };
+    try {
+      return await promise;
+    } catch (e) {
+      if (selfClientCacheRef.current.promise === promise) {
+        selfClientCacheRef.current = { key: null, at: 0, promise: null };
+      }
+      throw e;
+    }
   }, [walletAddr]);
 
   const createDelegatedClient = useCallback(async (signer = delegateSignerRef.current) => {
     if (!walletAddr || !isEvmAddress(walletAddr)) throw new Error('Connect your EVM wallet first');
     if (!signer?.privateKey) throw new Error('Ostium one tap signer is not ready');
-    return OstiumClient.createDelegatedAndSelf(ostiumClientConfig({
+    const key = `${String(walletAddr).toLowerCase()}:${String(signer.address || '').toLowerCase()}`;
+    const cached = delegatedClientCacheRef.current.get(key);
+    if (cached?.promise && Date.now() - cached.at < OSTIUM_SDK_CLIENT_CACHE_MS) {
+      return cached.promise;
+    }
+    const promise = OstiumClient.createDelegatedAndSelf(ostiumClientConfig({
       traderAddress: walletAddr,
       delegatePrivateKey: signer.privateKey,
     }));
+    delegatedClientCacheRef.current.set(key, { at: Date.now(), promise });
+    try {
+      return await promise;
+    } catch (e) {
+      if (delegatedClientCacheRef.current.get(key)?.promise === promise) {
+        delegatedClientCacheRef.current.delete(key);
+      }
+      throw e;
+    }
   }, [walletAddr]);
 
   const requireOstiumWalletClient = useCallback(async () => {
