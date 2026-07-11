@@ -24,6 +24,8 @@ import {
   clearOstiumDelegate,
   ensureOstiumDelegate,
   loadOstiumDelegate,
+  loadOstiumDelegates,
+  saveOstiumDelegate,
 } from '../lib/ostiumDelegateWallet';
 import {
   validateOstiumStopLossDirection,
