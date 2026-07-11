@@ -1,7 +1,7 @@
 @tool
 extends Node3D
 
-enum DragonSkin { RED, BLACK, PURPLE }
+enum DragonSkin { BLACK }
 
 const ANIMATION_PATHS: Dictionary = {
 	"bite_attack": "res://Model/Characters/FireDragon/Animations/fire_dragon_bite_attack.fbx",
@@ -26,11 +26,9 @@ const ANIMATION_PATHS: Dictionary = {
 	"walk": "res://Model/Characters/FireDragon/Animations/fire_dragon_walk.fbx",
 }
 
-const RED_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_red.tga")
-const BLACK_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_black.tga")
-const PURPLE_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_purple.tga")
+const SKIN_TEXTURE_PATH: String = "res://Model/Characters/FireDragon/Textures/fire_dragon_black.tga"
 
-@export var skin: DragonSkin = DragonSkin.RED:
+@export var skin: DragonSkin = DragonSkin.BLACK:
 	set(value):
 		skin = value
 		if is_inside_tree():
@@ -39,6 +37,7 @@ const PURPLE_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Tex
 @export var default_animation: String = ""
 
 var animation_player: AnimationPlayer = null
+static var _shared_skin_texture: Texture2D = null
 
 
 func _ready() -> void:
@@ -84,20 +83,16 @@ func play_dragon_animation(animation_name: String) -> void:
 
 func _apply_skin() -> void:
 	var body_material := StandardMaterial3D.new()
-	body_material.albedo_texture = _texture_for_skin(skin)
+	body_material.albedo_texture = _get_skin_texture()
 	body_material.roughness = 0.8
 	body_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_assign_material_recursive(self, body_material)
 
 
-func _texture_for_skin(skin_value: DragonSkin) -> Texture2D:
-	match skin_value:
-		DragonSkin.BLACK:
-			return BLACK_TEXTURE
-		DragonSkin.PURPLE:
-			return PURPLE_TEXTURE
-		_:
-			return RED_TEXTURE
+func _get_skin_texture() -> Texture2D:
+	if _shared_skin_texture == null:
+		_shared_skin_texture = ResourceLoader.load(SKIN_TEXTURE_PATH, "Texture2D") as Texture2D
+	return _shared_skin_texture
 
 
 func _assign_material_recursive(node: Node, material: Material) -> void:

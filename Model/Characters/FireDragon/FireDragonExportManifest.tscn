@@ -1,4 +1,4 @@
-[gd_scene load_steps=30 format=3]
+[gd_scene load_steps=28 format=3]
 
 [ext_resource type="PackedScene" path="res://Model/Characters/FireDragon/FireDragon.tscn" id="1"]
 [ext_resource type="PackedScene" path="res://Model/Characters/FireDragon/Model/fire_dragon.fbx" id="2"]
@@ -23,12 +23,10 @@
 [ext_resource type="PackedScene" path="res://Model/Characters/FireDragon/Animations/fire_dragon_take_damage.fbx" id="21"]
 [ext_resource type="PackedScene" path="res://Model/Characters/FireDragon/Animations/fire_dragon_walk.fbx" id="22"]
 [ext_resource type="Texture2D" path="res://Model/Characters/FireDragon/Textures/fire_dragon_black.tga" id="23"]
-[ext_resource type="Texture2D" path="res://Model/Characters/FireDragon/Textures/fire_dragon_purple.tga" id="24"]
-[ext_resource type="Texture2D" path="res://Model/Characters/FireDragon/Textures/fire_dragon_red.tga" id="25"]
-[ext_resource type="Texture2D" path="res://Model/Characters/FireDragon/Textures/fx_fire_breath.tga" id="26"]
-[ext_resource type="Texture2D" path="res://Model/Characters/FireDragon/Textures/fx_sparks.tga" id="27"]
-[ext_resource type="Script" path="res://scripts/fire_dragon_model.gd" id="28"]
-[ext_resource type="Script" path="res://scripts/fire_dragon.gd" id="29"]
+[ext_resource type="Texture2D" path="res://Model/Characters/FireDragon/Textures/fx_fire_breath.tga" id="24"]
+[ext_resource type="Texture2D" path="res://Model/Characters/FireDragon/Textures/fx_sparks.tga" id="25"]
+[ext_resource type="Script" path="res://scripts/fire_dragon_model.gd" id="26"]
+[ext_resource type="Script" path="res://scripts/fire_dragon.gd" id="27"]
 
 [node name="FireDragonExportManifest" type="ResourcePreloader"]
-resources = [PackedStringArray("scene", "model", "bite_attack", "cast_spell", "die", "fire_breath_attack", "fly_bite_attack_high", "fly_bite_attack_low", "fly_cast_spell", "fly_die", "fly_fire_breath_attack_high", "fly_fire_breath_attack_low", "fly_forward", "fly_idle", "fly_projectile_attack_high", "fly_projectile_attack_low", "fly_take_damage", "idle", "projectile_attack", "run", "take_damage", "walk", "texture_black", "texture_purple", "texture_red", "fx_fire_breath", "fx_sparks", "model_script", "troop_script"), [ExtResource("1"), ExtResource("2"), ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6"), ExtResource("7"), ExtResource("8"), ExtResource("9"), ExtResource("10"), ExtResource("11"), ExtResource("12"), ExtResource("13"), ExtResource("14"), ExtResource("15"), ExtResource("16"), ExtResource("17"), ExtResource("18"), ExtResource("19"), ExtResource("20"), ExtResource("21"), ExtResource("22"), ExtResource("23"), ExtResource("24"), ExtResource("25"), ExtResource("26"), ExtResource("27"), ExtResource("28"), ExtResource("29")]]
+resources = [PackedStringArray("scene", "model", "bite_attack", "cast_spell", "die", "fire_breath_attack", "fly_bite_attack_high", "fly_bite_attack_low", "fly_cast_spell", "fly_die", "fly_fire_breath_attack_high", "fly_fire_breath_attack_low", "fly_forward", "fly_idle", "fly_projectile_attack_high", "fly_projectile_attack_low", "fly_take_damage", "idle", "projectile_attack", "run", "take_damage", "walk", "texture_black", "fx_fire_breath", "fx_sparks", "model_script", "troop_script"), [ExtResource("1"), ExtResource("2"), ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6"), ExtResource("7"), ExtResource("8"), ExtResource("9"), ExtResource("10"), ExtResource("11"), ExtResource("12"), ExtResource("13"), ExtResource("14"), ExtResource("15"), ExtResource("16"), ExtResource("17"), ExtResource("18"), ExtResource("19"), ExtResource("20"), ExtResource("21"), ExtResource("22"), ExtResource("23"), ExtResource("24"), ExtResource("25"), ExtResource("26"), ExtResource("27")]]

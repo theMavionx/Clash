@@ -10,7 +10,7 @@
 // walletClient.writeContract(...) and a signing popup appears.
 
 import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
-import { createPublicClient, createWalletClient, http, custom, fallback } from 'viem';
+import { createPublicClient, createWalletClient, http, custom, fallback, encodeFunctionData } from 'viem';
 import { base, arbitrum, mainnet } from 'viem/chains';
 import { BASE_CHAIN_ID, BASE_RPC_URLS, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS, ensureArbitrumChain } from '../lib/gmxConfig';
@@ -493,17 +493,6 @@ export function EvmWalletProvider({ children }) {
     };
   }, [provider]);
 
-  // viem walletClient bound to the selected provider. Recreated whenever the
-  // provider swaps. Caller uses walletClient.writeContract({...}).
-  const walletClient = useMemo(() => {
-    if (!provider || !address) return null;
-    return createWalletClient({
-      account: address,
-      chain: base,
-      transport: custom(provider),
-    });
-  }, [provider, address]);
-
   // Chain-switch helper — defaults to Base for back-compat with existing
   // Avantis call sites. New callers should pass the chainId they need.
   const ensureChain = useCallback(async (targetChainId = BASE_CHAIN_ID) => {
@@ -559,20 +548,6 @@ export function EvmWalletProvider({ children }) {
     setChainId(currentId);
   }, [provider]);
 
-  // Build a viem walletClient bound to a SPECIFIC chain. GMX needs Arbitrum
-  // chain in its walletClient or sdk.orders.long() will misroute to Base.
-  // We only build on demand (no useMemo cache) since callers pass the
-  // chainId per-trade — plus the SDK caches its own internal client anyway.
-  const getWalletClient = useCallback((targetChainId = BASE_CHAIN_ID) => {
-    if (!provider || !address) return null;
-    const chain = CHAIN_BY_ID[Number(targetChainId)] || base;
-    return createWalletClient({
-      account: address,
-      chain,
-      transport: custom(provider),
-    });
-  }, [provider, address]);
-
   const getPublicClient = useCallback((targetChainId = BASE_CHAIN_ID) => {
     return PUBLIC_CLIENT_BY_ID[Number(targetChainId)] || publicClient;
   }, []);
@@ -581,11 +556,92 @@ export function EvmWalletProvider({ children }) {
     if (source !== 'privy' || !privyAddress || typeof evmSendTransaction !== 'function') {
       throw new Error('Privy embedded wallet transaction sender is not available');
     }
-    return evmSendTransaction(tx, {
+    const targetChainId = Number(
+      tx?.chainId
+      || tx?.chain?.id
+      || options?.chainId
+      || BASE_CHAIN_ID,
+    );
+    await ensureChain(targetChainId);
+    const { account: _account, chain: _chain, chainId: _chainId, ...txForPrivy } = tx || {};
+    return evmSendTransaction({
+      ...txForPrivy,
+      chainId: targetChainId,
+    }, {
       address: privyAddress,
       ...options,
     });
-  }, [source, privyAddress, evmSendTransaction]);
+  }, [source, privyAddress, evmSendTransaction, ensureChain]);
+
+  const createPrivyWalletClient = useCallback((targetChainId = BASE_CHAIN_ID) => {
+    if (!provider || !address || source !== 'privy') return null;
+    const chain = CHAIN_BY_ID[Number(targetChainId)] || base;
+    const baseClient = createWalletClient({
+      account: address,
+      chain,
+      transport: custom(provider),
+    });
+    const resolveHash = (result) => result?.hash || result?.txHash || result;
+    return {
+      ...baseClient,
+      account: address,
+      chain,
+      sendTransaction: async (request = {}) => {
+        const result = await sendTransaction({
+          ...request,
+          chainId: Number(chain.id),
+        }, {
+          uiOptions: { showWalletUIs: false },
+        });
+        return resolveHash(result);
+      },
+      writeContract: async (request = {}) => {
+        const contractAddress = request.address;
+        if (!contractAddress) throw new Error('Contract address is required');
+        const data = encodeFunctionData({
+          abi: request.abi,
+          functionName: request.functionName,
+          args: request.args || [],
+        });
+        const result = await sendTransaction({
+          to: contractAddress,
+          data,
+          value: request.value,
+          gas: request.gas,
+          chainId: Number(chain.id),
+        }, {
+          uiOptions: { showWalletUIs: false },
+        });
+        return resolveHash(result);
+      },
+    };
+  }, [address, provider, sendTransaction, source]);
+
+  // viem walletClient bound to the selected provider. For Privy embedded
+  // wallets, writes are routed through Privy's sender instead of raw
+  // provider eth_sendTransaction, which can hang for email-created wallets.
+  const walletClient = useMemo(() => {
+    if (!provider || !address) return null;
+    if (source === 'privy') return createPrivyWalletClient(BASE_CHAIN_ID);
+    return createWalletClient({
+      account: address,
+      chain: base,
+      transport: custom(provider),
+    });
+  }, [provider, address, source, createPrivyWalletClient]);
+
+  // Build a viem walletClient bound to a specific chain. For Privy, the
+  // returned client preserves the viem surface but routes writes through Privy.
+  const getWalletClient = useCallback((targetChainId = BASE_CHAIN_ID) => {
+    if (!provider || !address) return null;
+    const chain = CHAIN_BY_ID[Number(targetChainId)] || base;
+    if (source === 'privy') return createPrivyWalletClient(chain.id);
+    return createWalletClient({
+      account: address,
+      chain,
+      transport: custom(provider),
+    });
+  }, [provider, address, source, createPrivyWalletClient]);
 
   // Disconnect for the custom modal path. Privy disconnect is managed by
   // Privy itself (logout button in RegisterPanel).

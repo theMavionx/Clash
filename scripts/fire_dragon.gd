@@ -4,7 +4,7 @@ extends BaseTroop
 ## applies its rarity multiplier over two Mages at the same troop level.
 
 
-enum DragonSkin { RED, BLACK, PURPLE }
+enum DragonSkin { BLACK }
 
 const MAGE_LEVEL_STATS: Dictionary = {
 	1: {"hp": 150, "damage": 58, "atk_speed": 1.25},
@@ -38,9 +38,7 @@ const ANIMATION_PATHS: Dictionary = {
 	"idle": "res://Model/Characters/FireDragon/Animations/fire_dragon_idle.fbx",
 }
 
-const RED_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_red.tga")
-const BLACK_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_black.tga")
-const PURPLE_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fire_dragon_purple.tga")
+const SKIN_TEXTURE_PATH: String = "res://Model/Characters/FireDragon/Textures/fire_dragon_black.tga"
 const FIRE_BREATH_TEXTURE: Texture2D = preload("res://Model/Characters/FireDragon/Textures/fx_fire_breath.tga")
 const FIRE_BREATH_DURATION: float = 0.74
 const FIRE_BREATH_WIDTH: float = 0.28
@@ -65,7 +63,7 @@ const FIRE_BREATH_STANDOFF_CORRECTION_SPEED: float = 0.52
 const FIRE_BREATH_VISUAL_OVERSHOOT: float = 0.18
 const DRAGON_SPAWN_SCALE: float = 0.015
 
-@export var skin: DragonSkin = DragonSkin.RED
+@export var skin: DragonSkin = DragonSkin.BLACK
 @export var flight_height: float = 0.34
 @export var flight_bob_height: float = 0.035
 @export var flight_bob_speed: float = 2.2
@@ -87,6 +85,7 @@ static var _shared_body_materials: Dictionary = {}
 static var _shared_fire_color_ramps: Dictionary = {}
 static var _shared_fire_color_ramp_textures: Dictionary = {}
 static var _shared_fire_particle_materials: Dictionary = {}
+static var _shared_skin_texture: Texture2D = null
 
 
 func _init_stats() -> void:
@@ -912,26 +911,22 @@ func _apply_skin() -> void:
 	_assign_material_recursive(self, _get_body_material_for_skin(skin))
 
 
-func _get_body_material_for_skin(skin_value: DragonSkin) -> StandardMaterial3D:
-	var key := str(int(skin_value))
-	if _shared_body_materials.has(key):
-		return _shared_body_materials[key] as StandardMaterial3D
+func _get_body_material_for_skin(_skin_value: DragonSkin) -> StandardMaterial3D:
+	const KEY := "black"
+	if _shared_body_materials.has(KEY):
+		return _shared_body_materials[KEY] as StandardMaterial3D
 	var body_material := StandardMaterial3D.new()
-	body_material.albedo_texture = _texture_for_skin(skin_value)
+	body_material.albedo_texture = _get_skin_texture()
 	body_material.roughness = 0.8
 	body_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_shared_body_materials[key] = body_material
+	_shared_body_materials[KEY] = body_material
 	return body_material
 
 
-func _texture_for_skin(skin_value: DragonSkin) -> Texture2D:
-	match skin_value:
-		DragonSkin.BLACK:
-			return BLACK_TEXTURE
-		DragonSkin.PURPLE:
-			return PURPLE_TEXTURE
-		_:
-			return RED_TEXTURE
+func _get_skin_texture() -> Texture2D:
+	if _shared_skin_texture == null:
+		_shared_skin_texture = ResourceLoader.load(SKIN_TEXTURE_PATH, "Texture2D") as Texture2D
+	return _shared_skin_texture
 
 
 func _assign_material_recursive(node: Node, material: Material) -> void:

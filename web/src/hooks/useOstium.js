@@ -743,7 +743,14 @@ async function waitForReceipt(publicClient, hash) {
 export function useOstium() {
   const { dex } = useDex();
   const isActiveDex = dex === 'ostium';
-  const { address, getWalletClient, getPublicClient, ensureChain } = useEvmWallet();
+  const {
+    address,
+    getWalletClient,
+    getPublicClient,
+    ensureChain,
+    source: walletSource,
+    sendTransaction: sendPrivyTransaction,
+  } = useEvmWallet();
   const player = usePlayer();
   const walletAddr = address || null;
 
@@ -863,6 +870,51 @@ export function useOstium() {
     return walletClient;
   }, [ensureChain, getWalletClient]);
 
+  const sendWalletTransaction = useCallback(async ({
+    to,
+    data,
+    value = 0n,
+    gas,
+    label = 'ostium.tx',
+    uiOptions = {},
+  }) => {
+    if (walletSource === 'privy') {
+      if (typeof ensureChain === 'function') await ensureChain(OSTIUM_CHAIN_ID);
+      if (typeof sendPrivyTransaction !== 'function') {
+        throw new Error('Privy embedded wallet transaction sender is not ready');
+      }
+      const tx = {
+        to,
+        ...(data ? { data } : {}),
+        ...(value != null ? { value } : {}),
+        ...(gas ? { gas } : {}),
+        chainId: OSTIUM_CHAIN_ID,
+      };
+      console.info('[useOstium] privy tx send', {
+        label,
+        to,
+        hasData: Boolean(data),
+        valueEth: formatEthAmount(value || 0n),
+        gas: gas ? gas.toString() : null,
+      });
+      const result = await sendPrivyTransaction(tx, {
+        uiOptions: {
+          showWalletUIs: false,
+          ...uiOptions,
+        },
+      });
+      return result?.hash || result?.txHash || result;
+    }
+    const walletClient = await requireOstiumWalletClient();
+    return walletClient.sendTransaction({
+      account: walletAddr,
+      to,
+      data,
+      value,
+      ...(gas ? { gas } : {}),
+    });
+  }, [ensureChain, requireOstiumWalletClient, sendPrivyTransaction, walletAddr, walletSource]);
+
   const estimateWalletTxGas = useCallback(async ({ account, to, data, value = 0n, label = 'ostium.tx', fallback = 180_000n }) => {
     const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
     if (!publicClient?.estimateGas) return gasWithBuffer(fallback, fallback);
@@ -886,7 +938,6 @@ export function useOstium() {
     if (tx?.from && String(tx.from).toLowerCase() !== String(walletAddr).toLowerCase()) {
       throw new Error('Ostium transaction signer does not match connected wallet');
     }
-    const walletClient = await requireOstiumWalletClient();
     const value = tx.value || 0n;
     const gas = await estimateWalletTxGas({
       account: walletAddr,
@@ -903,18 +954,18 @@ export function useOstium() {
       valueEth: formatEthAmount(value),
       gas: gas.toString(),
     });
-    const hash = await walletClient.sendTransaction({
-      account: walletAddr,
+    const hash = await sendWalletTransaction({
       to: tx.to,
       data: tx.data,
       value,
       gas,
+      label,
     });
     const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
     const receipt = await waitForReceipt(publicClient, hash);
     if (receipt?.status && receipt.status !== 'success') throw new Error(`${label} reverted`);
     return { txHash: hash, receipt };
-  }, [estimateWalletTxGas, getPublicClient, requireOstiumWalletClient, walletAddr]);
+  }, [estimateWalletTxGas, getPublicClient, sendWalletTransaction, walletAddr]);
 
   const waitForSubmittedTx = useCallback(async (result, label = 'ostium.delegate_tx') => {
     const hash = result?.txHash || result?.hash;
@@ -1011,7 +1062,6 @@ export function useOstium() {
     const target = DELEGATE_GAS_TARGET_WEI > DELEGATE_GAS_MIN_WEI ? DELEGATE_GAS_TARGET_WEI : DELEGATE_GAS_MIN_WEI;
     const amount = current == null ? target : target - current;
     if (amount <= 0n) return { skipped: true, balanceWei: current, balanceEth: formatEther(current || 0n) };
-    const walletClient = await requireOstiumWalletClient();
     const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
     const walletBalance = publicClient?.getBalance
       ? await publicClient.getBalance({ address: walletAddr }).catch(() => null)
@@ -1049,11 +1099,11 @@ export function useOstium() {
       requiredEth: formatEthAmount(required),
       gas: gasLimit.toString(),
     });
-    const hash = await walletClient.sendTransaction({
-      account: walletAddr,
+    const hash = await sendWalletTransaction({
       to: delegateAddress,
       value: amount,
       gas: gasLimit,
+      label: 'ostium.delegate_gas_top_up',
     });
     const receipt = await waitForReceipt(publicClient, hash);
     if (receipt?.status && receipt.status !== 'success') throw new Error('Ostium delegate gas top-up reverted');
@@ -1064,7 +1114,7 @@ export function useOstium() {
       balanceWei: current == null ? null : current + amount,
       balanceEth: current == null ? null : formatEther(current + amount),
     };
-  }, [delegateGasBalance, getPublicClient, requireOstiumWalletClient, walletAddr]);
+  }, [delegateGasBalance, getPublicClient, sendWalletTransaction, walletAddr]);
 
   const ensureMaxAllowance = useCallback(async (client) => {
     const allowance = await client.checkUsdcAllowance(OSTIUM_MAX_ALLOWANCE_CHECK_USD);
@@ -2257,11 +2307,20 @@ export function useOstium() {
     }
   }, [ensureChain, ensureOneTapReady, fetchAccount]);
 
-  const unsupported = useCallback(async () => {
-    const msg = 'Ostium deposits and withdrawals are handled by the connected Arbitrum wallet / Ostium app.';
-    setError(msg);
-    return { error: msg };
-  }, []);
+  const openOstiumApp = useCallback(async () => {
+    const url = walletAddr && isEvmAddress(walletAddr)
+      ? `https://app.ostium.io/?address=${encodeURIComponent(walletAddr)}`
+      : 'https://app.ostium.io/';
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+    return {
+      success: true,
+      status: 'opened',
+      url,
+      info: 'Opened Ostium app. Use the connected Arbitrum wallet there to deposit or withdraw USDC.',
+    };
+  }, [walletAddr]);
 
   return {
     connected: !!walletAddr,
@@ -2294,8 +2353,8 @@ export function useOstium() {
     setTpsl,
     setLeverage: async () => ({ success: true }),
     setMarginMode: async () => ({ success: true }),
-    depositToPacifica: unsupported,
-    withdraw: unsupported,
+    depositToPacifica: openOstiumApp,
+    withdraw: openOstiumApp,
     fetchAccount,
     activate: activateOstium,
     switchToRise: switchToArbitrum,

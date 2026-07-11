@@ -22,8 +22,8 @@ extends Node3D
 ## by hidden pre-draw work; the nodes below already exercise each material
 ## variant on the first few frames.
 const HOME_WARMUP_FRAMES: int = 4
-const COMBAT_WARMUP_FRAMES: int = 14
-const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [4, 10]
+const COMBAT_WARMUP_FRAMES: int = 6
+const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [4]
 ## Sub-pixel scales (< ~0.005) are frustum-culled by both renderers — the draw
 ## call never reaches the GPU and the pipeline isn't compiled. 0.02 is small
 ## enough to be invisible against the water/sky but big enough to rasterize.
@@ -76,6 +76,7 @@ func _ready() -> void:
 	_last_report_ticks = _started_ticks
 	position = WARMUP_POS
 	scale = WARMUP_SCALE
+	print("[WARMUP_PROFILE] start mode=", mode, " frames=", COMBAT_WARMUP_FRAMES if mode == "combat" else HOME_WARMUP_FRAMES)
 	if mode == "combat":
 		_frames_left = COMBAT_WARMUP_FRAMES
 		_spawn_combat_warmup_nodes()
@@ -90,6 +91,14 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if mode == "combat":
 		_combat_frames_elapsed += 1
+		var now := Time.get_ticks_msec()
+		print(
+			"[WARMUP_PROFILE] render_frame frame=", _combat_frames_elapsed,
+			"/", COMBAT_WARMUP_FRAMES,
+			" frame_ms=", now - _last_report_ticks,
+			" total_ms=", now - _started_ticks
+		)
+		_last_report_ticks = now
 		_process_fire_dragon_prewarm_frames()
 	_frames_left -= 1
 	if mode != "combat":
@@ -102,6 +111,7 @@ func _process(_delta: float) -> void:
 		var progress: int = 82 + int(round((float(completed) / float(total)) * 6.0))
 		_report_loading_progress(progress, "home_warmup_frames")
 	if _frames_left <= 0:
+		var finished_ticks := Time.get_ticks_msec()
 		if mode == "combat":
 			_combat_warmup_done = true
 			_combat_warmup_active = false
@@ -109,6 +119,12 @@ func _process(_delta: float) -> void:
 		else:
 			_report_loading_progress(88, "home_warmup_done")
 		_clear_runtime_warmup_nodes()
+		print(
+			"[WARMUP_PROFILE] finish mode=", mode,
+			" total_ms=", Time.get_ticks_msec() - _started_ticks,
+			" render_frames=", _combat_frames_elapsed,
+			" cleanup_ms=", Time.get_ticks_msec() - finished_ticks
+		)
 		if not _finished_emitted:
 			_finished_emitted = true
 			finished.emit()
@@ -131,24 +147,47 @@ func _spawn_home_warmup_nodes() -> void:
 
 
 func _spawn_combat_warmup_nodes() -> void:
+	_run_profiled_combat_step("defense_resources", "_warmup_defense_resources")
+	_run_profiled_combat_step("hp_bar", "_warmup_hp_bar")
+	_run_profiled_combat_step("additive_billboard_plain", "_warmup_additive_billboard_plain")
+	_run_profiled_combat_step("additive_billboard_textured", "_warmup_additive_billboard_textured")
+	_run_profiled_combat_step("turret_trail", "_warmup_turret_trail")
+	_run_profiled_combat_step("target_ring", "_warmup_target_ring")
+	_run_profiled_combat_step("rally_marker", "_warmup_rally_marker")
+	_run_profiled_combat_step("magic_orb", "_warmup_magic_orb")
+	_run_profiled_combat_step("troop_models_and_scripts", "_warmup_one_troop_glb")
+	_run_profiled_combat_step("demon_king", "_warmup_demon_king")
+	_run_profiled_combat_step("fire_dragon", "_warmup_fire_dragon_attack")
+	_run_profiled_combat_step("mage_tower", "_warmup_mage_tower")
+	_run_profiled_combat_step("flag", "_warmup_flag_glb")
+	_run_profiled_combat_step("ships", "_warmup_ship_glbs")
+	_run_profiled_combat_step("troop_animation_libraries", "_prewarm_troop_anim_libraries")
+	_run_profiled_combat_step("weapon_scenes", "_prewarm_weapon_scenes")
+	_run_profiled_combat_step("fire_bomb", "_warmup_fire_bomb")
+	_run_profiled_combat_step("building_destruction", "_warmup_building_destruction")
+
+
+func _run_profiled_combat_step(step: String, method_name: StringName) -> void:
+	var started := Time.get_ticks_msec()
+	print(
+		"[WARMUP_PROFILE] step_start step=", step,
+		" total_ms=", started - _started_ticks
+	)
+	call(method_name)
+	var finished := Time.get_ticks_msec()
+	print(
+		"[WARMUP_PROFILE] step_done step=", step,
+		" step_ms=", finished - started,
+		" total_ms=", finished - _started_ticks
+	)
+
+
+func _warmup_defense_resources() -> void:
 	BuildingSystem._preload_defense_resources()
-	_warmup_hp_bar()
-	_warmup_additive_billboard_plain()
-	_warmup_additive_billboard_textured()
-	_warmup_turret_trail()
-	_warmup_target_ring()
-	_warmup_rally_marker()
-	_warmup_magic_orb()
-	_warmup_one_troop_glb()
-	_warmup_demon_king()
-	_warmup_fire_dragon_attack()
-	_warmup_mage_tower()
-	_warmup_flag_glb()
-	_warmup_ship_glbs()
-	_prewarm_troop_anim_libraries()
-	_prewarm_weapon_scenes()
+
+
+func _warmup_fire_bomb() -> void:
 	BaseTroop._preload_fire_bomb()
-	_warmup_building_destruction()
 
 
 func _report_loading_progress(progress: int, phase: String, meta: Dictionary = {}) -> void:
@@ -246,10 +285,8 @@ func _warmup_upgrade_outline() -> void:
 func _prewarm_weapon_scenes() -> void:
 	const WEAPON_PATHS: Array[String] = [
 		"res://Model/Characters/Assets/sword_1handed.gltf",
-		"res://Model/Characters/Assets/axe_1handed.gltf",
 		"res://Model/Characters/Assets/staff.gltf",
 		"res://Model/Characters/Assets/bow_withString.gltf",
-		"res://Model/Characters/Assets/crossbow_1handed.gltf",
 		"res://Model/Characters/Assets/arrow_bow.gltf",
 	]
 	var loaded := 0
@@ -572,8 +609,11 @@ func _process_fire_dragon_prewarm_frames() -> void:
 	var frame_target: int = int(FIRE_DRAGON_PREWARM_REPEAT_FRAMES[_fire_dragon_repeat_index])
 	if _combat_frames_elapsed < frame_target:
 		return
+	var started := Time.get_ticks_msec()
+	print("[WARMUP_PROFILE] dragon_repeat_start frame=", _combat_frames_elapsed, " total_ms=", started - _started_ticks)
 	if _fire_dragon_warmup_inst.has_method("prewarm_fire_breath_vfx"):
 		_fire_dragon_warmup_inst.call("prewarm_fire_breath_vfx")
+	print("[WARMUP_PROFILE] dragon_repeat_done frame=", _combat_frames_elapsed, " step_ms=", Time.get_ticks_msec() - started)
 	_fire_dragon_repeat_index += 1
 
 

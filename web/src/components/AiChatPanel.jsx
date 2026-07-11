@@ -9,12 +9,14 @@ import { useAvantis } from '../hooks/useAvantis';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
+import { useOptionalPrivy } from './PrivyAuthProvider';
 import EvmWalletModal from './EvmWalletModal';
 import { BASE_CHAIN_ID, TRADING_ADDRESS, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { INK_CHAIN_ID, ensureInkChain, inkChain } from '../lib/nadoConfig';
 import { fetchGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
+import { makePrivySolanaWallet, pickPrivySolanaWallet } from '../lib/privySolanaWallet';
 import {
   avantisPlaceOrderSignature,
   duplicateAvantisPlaceOrderMessage,
@@ -1127,7 +1129,14 @@ function AiChatPanel({ onClose }) {
   const avantisTrading = useAvantis();
   const player = usePlayer();
   const tradingEvmWallet = useEvmWallet();
-  const solWallet = useSolWallet();
+  const adapterSolWallet = useSolWallet();
+  const optionalPrivy = useOptionalPrivy();
+  const privySolanaWalletObj = pickPrivySolanaWallet(optionalPrivy);
+  const privySolWallet = useMemo(
+    () => makePrivySolanaWallet(privySolanaWalletObj, optionalPrivy.solanaSignTransaction),
+    [privySolanaWalletObj, optionalPrivy.solanaSignTransaction],
+  );
+  const solWallet = adapterSolWallet?.publicKey ? adapterSolWallet : (privySolWallet || adapterSolWallet);
   const { setVisible: setSolanaModalVisible } = useWalletModal();
   const aptosWallet = useAptosWallet();
   const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);

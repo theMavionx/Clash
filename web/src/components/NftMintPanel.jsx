@@ -1,8 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
-import { useSignTransaction as usePrivySolanaSignTransaction } from '@privy-io/react-auth/solana';
 import { createPublicClient, createWalletClient, custom, http } from 'viem';
 import { arbitrum, base } from 'viem/chains';
 import EvmWalletModal from './EvmWalletModal';
@@ -21,6 +19,7 @@ import { fetchGameShopConfig, getCachedGameShopConfig, buySolanaShopItem, buyEvm
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
 import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
+import { makePrivySolanaWallet, pickPrivySolanaWallet } from '../lib/privySolanaWallet';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
@@ -39,7 +38,6 @@ const nftBasePublicClient = createPublicClient({ chain: base, transport: http(BA
 const nftArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport: http() });
 const nftMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
 const nftInkPublicClient = createPublicClient({ chain: inkChain, transport: http() });
-const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const MAX_BATCH_QUANTITY = 10;
 
 const EVM_CHAIN_ID_BY_NFT_CHAIN = {
@@ -217,34 +215,6 @@ function makeNftEvmWallet(provider, address) {
 // reflects this so an Arbitrum trader sees "Arbitrum" not "Base".
 // Chains where mint endpoints aren't deployed (arb/monad/aptos) render
 // a "bridge from Base to mint here" path inside the payment view.
-function makePrivySolanaWallet(privyWallet, signTransaction) {
-  if (!privyWallet?.address || !signTransaction) return null;
-  const publicKey = new PublicKey(privyWallet.address);
-  const signOne = async (tx) => {
-    const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
-    const result = await signTransaction({
-      transaction: new Uint8Array(serialized),
-      wallet: privyWallet,
-    });
-    const raw = new Uint8Array(result?.signedTransaction || result);
-    try {
-      return Transaction.from(raw);
-    } catch {
-      return VersionedTransaction.deserialize(raw);
-    }
-  };
-  return {
-    publicKey,
-    walletClientType: privyWallet.walletClientType || 'privy',
-    source: 'privy',
-    signTransaction: signOne,
-    signAllTransactions: async (txs) => Promise.all(txs.map(signOne)),
-    signMessage: async () => {
-      throw new Error('Privy Solana wallet cannot sign messages in the shop flow');
-    },
-  };
-}
-
 const DEX_TO_NFT_CHAIN = {
   avantis:  'base',
   pacifica: 'solana',
@@ -547,12 +517,6 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const tradingEvmWallet = useEvmWallet();
   const adapterSolWallet = useSolWallet();
   const optionalPrivy = useOptionalPrivy();
-  let privySolanaSignTransaction = null;
-  if (PRIVY_ENABLED) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    const { signTransaction } = usePrivySolanaSignTransaction();
-    privySolanaSignTransaction = signTransaction;
-  }
   const aptosWallet = useAptosWallet();
   const { setVisible: setSolanaModalVisible } = useWalletModal();
   const { isInFrame } = useFarcaster();
@@ -594,13 +558,10 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   );
   const evmWallet = localEvmWallet || tradingEvmWallet;
   const usingLocalEvmWallet = !!localEvmWallet;
-  const privySolanaWalletObj = optionalPrivy.authenticated
-    ? (optionalPrivy.solanaWallets || []).find(w => w?.walletClientType === 'privy')
-      || (optionalPrivy.solanaWallets || [])[0]
-    : null;
+  const privySolanaWalletObj = pickPrivySolanaWallet(optionalPrivy);
   const privySolWallet = useMemo(
-    () => makePrivySolanaWallet(privySolanaWalletObj, privySolanaSignTransaction),
-    [privySolanaWalletObj, privySolanaSignTransaction],
+    () => makePrivySolanaWallet(privySolanaWalletObj, optionalPrivy.solanaSignTransaction),
+    [privySolanaWalletObj, optionalPrivy.solanaSignTransaction],
   );
   const solWallet = adapterSolWallet?.publicKey ? adapterSolWallet : (privySolWallet || adapterSolWallet);
   const usingPrivySolWallet = !adapterSolWallet?.publicKey && !!privySolWallet;

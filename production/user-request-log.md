@@ -1658,3 +1658,18 @@ Follow-up:
 ### UR-2026-07-11-SOLANA-TOURNAMENT-PACIFICA-PHOENIX-BACKFILL
 - Timestamp: 2026-07-11 Europe/Kyiv
 - Request: "пеевір турнір солана перед останній він донарахуй пацифіка і фенікс весь обєм не дозарахований"
+
+### UR-2026-07-11-BATTLE-ENTRY-WARMUP-PERFORMANCE
+- Timestamp: 2026-07-11 Europe/Kyiv
+- Request: "передивись проект у нас є проблема - дуже довга загрузка при пошуку опонента, я хз чого так нам треба зменшити прогрів там і так далі якось, там найбільше певно забирає дракон часу на пргрів"
+- Follow-up: "видали не потрібні скіни дракона які не використвоуються в грі взагалі в нас тільки чорний використовуєьться оригінальний"
+- Follow-up: "додай також побільше логів щоб було видно щоб в даний момент прогрівається і як швидко щоб то все звіряти"
+- Follow-up: "запусти гру в хромі тільки без авторизації там у нас є ніби тестова сцена і протестуй час прогріву і так далі"
+- Follow-up: "так оптимізовуй тестуй і також потім заміри фпс проводь, перевір чи не почало сильніше лагати і виснути все то діло з драконом і іншими юнітами"
+- Follow-up: reported invalid external texture UID warnings for Town Hall levels 1 and 4 in the browser console.
+- Verification requirement: final FPS result must be measured in Chrome/WebGL, not inferred from native Godot performance.
+
+### UR-2026-07-11-COMMIT-ALL-FRESH-GODOT-DEPLOY
+- Timestamp: 2026-07-11 Europe/Kyiv
+- Request: "добре роби свіжий годот експорт і коміт деплой всіх змін навітьб не твоїх на прод - дививсь щоб на прод потрапила мейн сцена не тестова"
+- Explicit authorization: commit and deploy every current source change, including changes made outside the warmup task, using a fresh production Godot export with `scenes/Main.tscn`.

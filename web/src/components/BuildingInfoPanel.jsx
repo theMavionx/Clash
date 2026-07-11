@@ -10,6 +10,7 @@ import { useFarcaster } from '../hooks/useFarcaster';
 import useHydratedNftPlayer from '../hooks/useHydratedNftPlayer';
 import { fetchOwnedNftsForPlayerWallets, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 import { buySolanaShopItem } from '../lib/gameShop';
+import { makePrivySolanaWallet, pickPrivySolanaWallet } from '../lib/privySolanaWallet';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 
 import goldIcon from '../assets/resources/gold_bar.png';
@@ -502,9 +503,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame } = useFarcaster();
   const optionalPrivy = useOptionalPrivy();
-  const solAddress = solWallet?.publicKey?.toBase58?.()
-    || (optionalPrivy.solanaWallets || []).find((wallet) => wallet?.address)?.address
-    || null;
+  const privySolanaWalletObj = pickPrivySolanaWallet(optionalPrivy);
+  const privySolWallet = useMemo(
+    () => makePrivySolanaWallet(privySolanaWalletObj, optionalPrivy.solanaSignTransaction),
+    [privySolanaWalletObj, optionalPrivy.solanaSignTransaction],
+  );
+  const paymentSolWallet = solWallet?.publicKey ? solWallet : (privySolWallet || solWallet);
+  const solAddress = paymentSolWallet?.publicKey?.toBase58?.() || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
   const demonKingSyncTarget = useMemo(() => resolveDemonKingPlayerInventorySyncTarget({
@@ -818,7 +823,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
       setFlagStatus('Choose a flag image');
       return;
     }
-    const buyer = solWallet?.publicKey?.toBase58?.() || '';
+    const buyer = paymentSolWallet?.publicKey?.toBase58?.() || '';
     if (!buyer) {
       setFlagStatus('Connect a Solana wallet to pay with CLASH');
       openSolanaConnect();
@@ -831,7 +836,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
       setFlagPreview(imageData);
       setFlagStatus('Confirm CLASH payment...');
       const payment = await buySolanaShopItem({
-        solWallet,
+        solWallet: paymentSolWallet,
         buyer,
         token,
         sku: TOWN_HALL_FLAG_SKU,
@@ -859,7 +864,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     } finally {
       setFlagBusy(false);
     }
-  }, [applyTownHallFlagLocal, flagBusy, flagFile, flagPreview, openSolanaConnect, player?.token, solWallet]);
+  }, [applyTownHallFlagLocal, flagBusy, flagFile, flagPreview, openSolanaConnect, paymentSolWallet, player?.token]);
 
   const handleTownHallFlagReset = useCallback(async () => {
     if (flagBusy) return;

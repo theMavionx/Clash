@@ -36,6 +36,11 @@ Acceptance criteria:
 
 Next checkpoint:
 
+- Battle-entry performance checkpoint completed 2026-07-11: Chrome combat warmup
+  fell from 10.26 s to 1.75 s, black-only Fire Dragon assets reduced the Web PCK by
+  about 3.82 MiB, and the active mixed-unit Chrome test measured 60 FPS idle versus
+  40 FPS combat median with no game errors. See
+  `production/reports/battle-entry-warmup-performance-2026-07-11.md`.
 - Audit the current bot/matchmaking implementation and list what is already working,
   what is missing, and what needs tuning.
 

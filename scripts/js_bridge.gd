@@ -86,7 +86,8 @@ func _send_perf_data() -> void:
 
 	var ships: int = 0
 	var deployed_types: Dictionary = {}
-	var attack_sys: Node = get_tree().current_scene.get_node_or_null("AttackSystem")
+	var current_scene: Node = get_tree().current_scene
+	var attack_sys: Node = current_scene.get_node_or_null("AttackSystem") if current_scene != null else null
 	if attack_sys and "_deployed_types" in attack_sys:
 		ships = attack_sys._total_ships_launched
 		deployed_types = attack_sys._deployed_types

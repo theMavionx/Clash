@@ -103,7 +103,7 @@ var _returning_home: bool = false
 const REPLAY_TELEMETRY_MAX_EVENTS: int = 2500
 const REPLAY_SYNC_FPS: int = 60
 const REPLAY_SYNC_MAX_PHYSICS_STEPS: int = 16
-const COMBAT_WARMUP_MAX_WAIT_SEC: float = 10.0
+const COMBAT_WARMUP_MAX_WAIT_SEC: float = 4.0
 
 var _had_troops: bool = false
 var _skeleton_respawn_timer: float = 0.0
@@ -742,10 +742,16 @@ func _on_find_pressed() -> void:
 	if audio and audio.has_method("play_pre_attack"):
 		audio.play_pre_attack()
 	_find_in_progress = true
+	if bs.find_button:
+		bs.find_button.disabled = true
+		bs.find_button.text = "Preparing..."
+	# Begin the rendered-frame warmup before fleet refresh, boarding, sailing,
+	# and cloud animation. Those existing waits now hide the warmup frames
+	# instead of adding them after the transition has already closed.
+	var combat_warmup: Node = _start_hidden_combat_warmup()
 	# Snapshot the fleet BEFORE anything is freed or destroyed
 	_saved_fleet = await bs._build_fleet()
 	if bs.find_button:
-		bs.find_button.disabled = true
 		bs.find_button.text = "Boarding..."
 	var pending_count: int = 0
 	for ht in bs._home_troops:
@@ -784,7 +790,6 @@ func _on_find_pressed() -> void:
 	cloud.close()
 	await _await_signal_or_timeout(cloud, "close_finished", 2.5, "cloud_close")
 	print("[BATTLE_ENTRY] cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
-	var combat_warmup: Node = _start_hidden_combat_warmup()
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Searching..."
@@ -838,9 +843,12 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	if audio and audio.has_method("play_pre_attack"):
 		audio.play_pre_attack()
 	_find_in_progress = true
-	_saved_fleet = await bs._build_fleet()
 	if bs.find_button:
 		bs.find_button.disabled = true
+		bs.find_button.text = "Preparing..."
+	var combat_warmup: Node = _start_hidden_combat_warmup()
+	_saved_fleet = await bs._build_fleet()
+	if bs.find_button:
 		bs.find_button.text = "Boarding..."
 	var pending_count: int = 0
 	for ht in bs._home_troops:
@@ -879,7 +887,6 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	cloud.close()
 	await _await_signal_or_timeout(cloud, "close_finished", 2.5, "revenge_cloud_close")
 	print("[BATTLE_ENTRY] revenge_cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
-	var combat_warmup: Node = _start_hidden_combat_warmup()
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Revenge..."

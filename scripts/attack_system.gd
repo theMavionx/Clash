@@ -60,6 +60,7 @@ const TROOP_DEFS: Dictionary = {
 	"DemonKing": {"model": "res://Model/Characters/Model/DemonKing_Body.fbx",   "script": "res://scripts/demon_king.gd"},
 	"FireDragon": {"model": "res://Model/Characters/FireDragon/FireDragon.tscn", "script": "res://scripts/fire_dragon.gd"},
 }
+const ACTIVE_PRELOAD_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "DemonKing", "FireDragon"]
 
 ## Legacy constant kept for replay compatibility
 const SHIP_TROOPS = [
@@ -100,15 +101,40 @@ static func _load_script_resource(path: String) -> Script:
 ## defensive fallback when entering attack/replay mode.
 static func _preload_combat_resources() -> void:
 	if _combat_preload_done:
+		print("[COMBAT_PRELOAD] cache_hit ships=", _ship_model_cache.size(), " troops=", _troop_res_cache.size())
 		return
+	var preload_started := Time.get_ticks_msec()
+	print("[COMBAT_PRELOAD] start")
 	_combat_preload_done = true
 	_preload_ship_resources()
-	for troop_name in TROOP_DEFS.keys():
-		var tdef: Dictionary = TROOP_DEFS[troop_name]
-		_troop_res_cache[troop_name] = {
-			"model": _load_packed_scene_resource(tdef.model),
-			"script": _load_script_resource(tdef.script),
-		}
+	for troop_name in ACTIVE_PRELOAD_TROOPS:
+		_get_or_load_troop_resources(troop_name)
+	print(
+		"[COMBAT_PRELOAD] finish total_ms=", Time.get_ticks_msec() - preload_started,
+		" ships=", _ship_model_cache.size(),
+		" troops=", _troop_res_cache.size()
+	)
+
+
+static func _get_or_load_troop_resources(troop_name: String) -> Dictionary:
+	if _troop_res_cache.has(troop_name):
+		return _troop_res_cache[troop_name]
+	var tdef: Dictionary = TROOP_DEFS.get(troop_name, {})
+	if tdef.is_empty():
+		return {}
+	var troop_started := Time.get_ticks_msec()
+	var entry := {
+		"model": _load_packed_scene_resource(tdef.model),
+		"script": _load_script_resource(tdef.script),
+	}
+	_troop_res_cache[troop_name] = entry
+	print(
+		"[COMBAT_PRELOAD] troop_done troop=", troop_name,
+		" step_ms=", Time.get_ticks_msec() - troop_started,
+		" model_ok=", entry.get("model") != null,
+		" script_ok=", entry.get("script") != null
+	)
+	return entry
 
 
 static func _get_ship_model_resource(model_idx: int) -> Resource:
@@ -118,8 +144,14 @@ static func _get_ship_model_resource(model_idx: int) -> Resource:
 		_ship_model_cache.append(null)
 	var cached: Resource = _ship_model_cache[model_idx]
 	if cached == null:
+		var load_started := Time.get_ticks_msec()
 		cached = _load_packed_scene_resource(SHIP_MODELS[model_idx])
 		_ship_model_cache[model_idx] = cached
+		print(
+			"[COMBAT_PRELOAD] ship_done level=", model_idx + 1,
+			" step_ms=", Time.get_ticks_msec() - load_started,
+			" model_ok=", cached != null
+		)
 	return cached
 
 
@@ -952,7 +984,7 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 		if tdef.is_empty():
 			continue
 		# Pull from cache populated in _ready() — zero I/O in combat.
-		var cached: Dictionary = _troop_res_cache.get(troop_key, {})
+		var cached: Dictionary = _get_or_load_troop_resources(troop_key)
 		var model_res: Resource = cached.get("model", null)
 		var script_res: Resource = cached.get("script", null)
 		if model_res == null or script_res == null:
@@ -1007,7 +1039,7 @@ func _spawn_troops_at_pos(troop_names: Array, recorded_levels: Dictionary, spawn
 		var tdef: Dictionary = TROOP_DEFS.get(troop_key, {})
 		if tdef.is_empty():
 			continue
-		var cached: Dictionary = _troop_res_cache.get(troop_key, {})
+		var cached: Dictionary = _get_or_load_troop_resources(troop_key)
 		var model_res: Resource = cached.get("model", null)
 		var script_res: Resource = cached.get("script", null)
 		if model_res == null or script_res == null:

@@ -1,6 +1,12 @@
 import { createContext, useContext, useEffect, useMemo, useRef } from 'react';
 import { PrivyProvider, usePrivy, useSendTransaction, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
-import { toSolanaWalletConnectors, useCreateWallet as useCreateSolanaWallet, useWallets as usePrivySolanaWallets } from '@privy-io/react-auth/solana';
+import {
+  toSolanaWalletConnectors,
+  useCreateWallet as useCreateSolanaWallet,
+  useSignAndSendTransaction as usePrivySolanaSignAndSendTransaction,
+  useSignTransaction as usePrivySolanaSignTransaction,
+  useWallets as usePrivySolanaWallets,
+} from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { base, arbitrum, mainnet } from 'viem/chains';
 import { monadChain } from '../lib/monadConfig';
@@ -36,6 +42,8 @@ const OPTIONAL_PRIVY_DEFAULT = {
   evmWallets: [],
   solanaWallets: [],
   evmSendTransaction: null,
+  solanaSignTransaction: null,
+  solanaSignAndSendTransaction: null,
 };
 const OptionalPrivyContext = createContext(OPTIONAL_PRIVY_DEFAULT);
 
@@ -49,6 +57,8 @@ function PrivyStateBridge({ children }) {
   const { sendTransaction: evmSendTransaction } = useSendTransaction();
   const { ready: solanaReady, wallets: solanaWallets } = usePrivySolanaWallets();
   const { createWallet: createSolanaWallet } = useCreateSolanaWallet();
+  const { signTransaction: solanaSignTransaction } = usePrivySolanaSignTransaction();
+  const { signAndSendTransaction: solanaSignAndSendTransaction } = usePrivySolanaSignAndSendTransaction();
   const solanaCreateTriedRef = useRef(false);
 
   useEffect(() => {
@@ -75,7 +85,20 @@ function PrivyStateBridge({ children }) {
     evmWallets: evmWallets || [],
     solanaWallets: solanaWallets || [],
     evmSendTransaction,
-  }), [ready, authenticated, user, login, logout, evmWallets, solanaWallets, evmSendTransaction]);
+    solanaSignTransaction,
+    solanaSignAndSendTransaction,
+  }), [
+    ready,
+    authenticated,
+    user,
+    login,
+    logout,
+    evmWallets,
+    solanaWallets,
+    evmSendTransaction,
+    solanaSignTransaction,
+    solanaSignAndSendTransaction,
+  ]);
   return (
     <OptionalPrivyContext.Provider value={value}>
       {children}

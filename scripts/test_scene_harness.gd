@@ -9,6 +9,7 @@ var _attack_counts: Dictionary = {}
 var _attack_levels: Dictionary = {}
 var _attack_count_labels: Dictionary = {}
 var _attack_level_labels: Dictionary = {}
+var _fps_profile_active: bool = false
 var _speed_label: Label
 var _demon_color_preview_root: Node3D
 var _model_scale_list: VBoxContainer
@@ -56,6 +57,9 @@ const TEST_ATTACK_MAX_LEVEL: Dictionary = {
 	"FireDragon": 7,
 }
 const TEST_ATTACK_SHIP_LEVEL: int = 3
+const FPS_PROFILE_IDLE_SECONDS: float = 6.0
+const FPS_PROFILE_COMBAT_SECONDS: float = 12.0
+const FPS_PROFILE_SETTLE_SECONDS: float = 2.0
 const TEST_SPEED_PRESETS: Array[float] = [0.5, 1.0, 2.0, 4.0]
 const TEST_SPEED_STEP: float = 0.25
 const TEST_SPEED_MIN: float = 0.25
@@ -95,6 +99,8 @@ func _ready() -> void:
 	call_deferred("_set_status", "Scene ready. F1 panel, 1 build random village.")
 	if OS.get_cmdline_args().has("--capture-demon-colors"):
 		call_deferred("_capture_demon_king_color_test")
+	if OS.get_cmdline_user_args().has("--auto-fps-profile"):
+		call_deferred("run_mixed_fps_profile")
 
 
 func _exit_tree() -> void:
@@ -304,6 +310,7 @@ func _add_attack_loadout_controls(vbox: VBoxContainer) -> void:
 	presets.add_child(_small_button("Clear", clear_test_attack_loadout))
 	presets.add_child(_small_button("Mixed x1", mixed_test_attack_loadout))
 	presets.add_child(_small_button("Start", start_test_attack))
+	presets.add_child(_small_button("FPS Test", run_mixed_fps_profile))
 
 
 func _add_speed_controls(vbox: VBoxContainer) -> void:
@@ -1055,6 +1062,14 @@ func start_test_attack() -> void:
 		_set_status("Choose at least one attacker.")
 		return
 	_apply_test_troop_levels()
+	var warmup_started := Time.get_ticks_msec()
+	var warmup_script: Script = load("res://scripts/warmup.gd")
+	if warmup_script != null:
+		var warmup: Node = warmup_script.start_combat_warmup(get_parent())
+		if warmup != null and is_instance_valid(warmup):
+			_set_status("Combat warmup running - see [WARMUP_PROFILE] logs.")
+			await warmup.finished
+	print("[TestHarness] combat_warmup_elapsed_ms=", Time.get_ticks_msec() - warmup_started)
 	attack.enter_attack_mode(fleet)
 	var total_troops: int = 0
 	for ship in fleet:
@@ -1062,6 +1077,140 @@ func start_test_attack() -> void:
 			if troop_name != "_SLOT_FILLER_":
 				total_troops += 1
 	_set_status("Attack ready: %d troops on %d ships. Click ship water." % [total_troops, fleet.size()])
+
+
+func run_mixed_fps_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	var attack := get_node_or_null("../AttackSystem")
+	if not attack or not attack.has_method("_try_place_ship"):
+		_set_status("AttackSystem does not support automatic FPS test deployment.")
+		return
+
+	_fps_profile_active = true
+	Engine.time_scale = 1.0
+	print("[FPS_PROFILE] start scenario=isolated_town_hall_mixed_x1 idle_seconds=", FPS_PROFILE_IDLE_SECONDS,
+		" combat_seconds=", FPS_PROFILE_COMBAT_SECONDS)
+	_set_status("FPS profile: building isolated Town Hall target...")
+	reset_sandbox()
+	await get_tree().process_frame
+	var target_spawned: bool = await spawn_building_level("town_hall", 1)
+	if not target_spawned:
+		_set_status("FPS profile failed: Town Hall target did not spawn.")
+		_fps_profile_active = false
+		return
+	await get_tree().create_timer(FPS_PROFILE_SETTLE_SECONDS).timeout
+
+	_set_status("FPS profile: measuring idle baseline...")
+	var idle_metrics: Dictionary = await _sample_fps_profile("idle", FPS_PROFILE_IDLE_SECONDS)
+
+	mixed_test_attack_loadout()
+	_set_status("FPS profile: warming combat assets...")
+	await start_test_attack()
+	var placed: bool = attack._try_place_ship(attack.plane_center)
+	print("[FPS_PROFILE] auto_deploy placed=", placed, " position=", attack.plane_center)
+	if not placed:
+		_set_status("FPS profile failed: automatic ship deployment was rejected.")
+		_fps_profile_active = false
+		return
+
+	var deploy_wait: float = float(attack.sail_duration) + float(attack.troop_spawn_delay) * 7.0 + FPS_PROFILE_SETTLE_SECONDS
+	print("[FPS_PROFILE] deploy_wait seconds=", deploy_wait)
+	await get_tree().create_timer(deploy_wait).timeout
+	_set_status("FPS profile: measuring mixed combat...")
+	var combat_metrics: Dictionary = await _sample_fps_profile("combat", FPS_PROFILE_COMBAT_SECONDS)
+
+	var idle_avg: float = float(idle_metrics.get("avg_fps", 0.0))
+	var combat_avg: float = float(combat_metrics.get("avg_fps", 0.0))
+	var idle_median: float = float(idle_metrics.get("median_fps", 0.0))
+	var combat_median: float = float(combat_metrics.get("median_fps", 0.0))
+	var drop_pct: float = 0.0
+	if idle_median > 0.0:
+		drop_pct = maxf(0.0, (idle_median - combat_median) / idle_median * 100.0)
+	print("[FPS_PROFILE] summary idle_avg=%.1f idle_median=%.1f idle_min=%.1f idle_p95_frame_ms=%.2f idle_max_frame_ms=%.2f" % [
+		idle_avg,
+		idle_median,
+		float(idle_metrics.get("min_fps", 0.0)),
+		float(idle_metrics.get("p95_frame_ms", 0.0)),
+		float(idle_metrics.get("max_frame_ms", 0.0)),
+	])
+	print("[FPS_PROFILE] summary combat_avg=%.1f combat_median=%.1f combat_min=%.1f combat_p95_frame_ms=%.2f combat_max_frame_ms=%.2f drop_pct=%.1f" % [
+		combat_avg,
+		combat_median,
+		float(combat_metrics.get("min_fps", 0.0)),
+		float(combat_metrics.get("p95_frame_ms", 0.0)),
+		float(combat_metrics.get("max_frame_ms", 0.0)),
+		drop_pct,
+	])
+	_set_status("FPS done: idle median %.1f, combat median %.1f, drop %.1f%%. See [FPS_PROFILE]." % [idle_median, combat_median, drop_pct])
+	_fps_profile_active = false
+	if OS.get_cmdline_user_args().has("--auto-fps-profile"):
+		await get_tree().process_frame
+		get_tree().quit()
+
+
+func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
+	var started_us: int = Time.get_ticks_usec()
+	var previous_frame_us: int = started_us
+	var next_report_us: int = started_us + 1000000
+	var duration_us: int = int(duration_seconds * 1000000.0)
+	var fps_samples: Array[float] = []
+	var frame_times_ms: Array[float] = []
+	var report_index: int = 0
+
+	while Time.get_ticks_usec() - started_us < duration_us:
+		await get_tree().process_frame
+		var now_us: int = Time.get_ticks_usec()
+		var frame_ms: float = float(now_us - previous_frame_us) / 1000.0
+		previous_frame_us = now_us
+		if frame_ms > 0.0 and frame_ms < 1000.0:
+			frame_times_ms.append(frame_ms)
+		if now_us >= next_report_us:
+			report_index += 1
+			var fps: float = Engine.get_frames_per_second()
+			fps_samples.append(fps)
+			var troops: int = get_tree().get_nodes_in_group("troops").size()
+			var draw_calls: int = int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
+			var objects: int = int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME))
+			print("[FPS_PROFILE] sample phase=", phase, " second=", report_index,
+				" fps=", fps, " troops=", troops, " draw_calls=", draw_calls, " objects=", objects)
+			next_report_us += 1000000
+
+	var avg_fps: float = 0.0
+	var min_fps: float = 0.0
+	var median_fps: float = 0.0
+	if not fps_samples.is_empty():
+		min_fps = fps_samples[0]
+		for fps in fps_samples:
+			avg_fps += fps
+			min_fps = minf(min_fps, fps)
+		avg_fps /= float(fps_samples.size())
+		var sorted_fps: Array[float] = fps_samples.duplicate()
+		sorted_fps.sort()
+		var middle: int = sorted_fps.size() / 2
+		if sorted_fps.size() % 2 == 0:
+			median_fps = (sorted_fps[middle - 1] + sorted_fps[middle]) * 0.5
+		else:
+			median_fps = sorted_fps[middle]
+
+	var p95_frame_ms: float = 0.0
+	var max_frame_ms: float = 0.0
+	if not frame_times_ms.is_empty():
+		frame_times_ms.sort()
+		var p95_index: int = clampi(int(ceil(float(frame_times_ms.size()) * 0.95)) - 1, 0, frame_times_ms.size() - 1)
+		p95_frame_ms = frame_times_ms[p95_index]
+		max_frame_ms = frame_times_ms[-1]
+
+	return {
+		"avg_fps": avg_fps,
+		"median_fps": median_fps,
+		"min_fps": min_fps,
+		"p95_frame_ms": p95_frame_ms,
+		"max_frame_ms": max_frame_ms,
+		"fps_samples": fps_samples.size(),
+		"frame_samples": frame_times_ms.size(),
+	}
 
 
 func _build_test_attack_fleet() -> Array:
