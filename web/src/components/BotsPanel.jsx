@@ -24,7 +24,6 @@ import {
   reconnectGameAccountToPhantom,
   supportsGameWalletSync,
   syncGameAccountToPhantom,
-  UNSUPPORTED_GAME_WALLET_EXCHANGES,
 } from '../lib/botGameCredentials';
 import { botApiUrl, botAuthHeaders, botWsUrl, fetchBotApiJson, botApiPathCandidates } from '../lib/botApiClient';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
@@ -276,7 +275,7 @@ function formatExchangeBalance(bal) {
     return {
       label: '$0.00',
       tone: 'warn',
-      detail: 'zero balance — deposit margin or fix API keys (try Accounts → re-sync)',
+      detail: 'zero balance — deposit margin or reconnect this exchange when launching a bot',
     };
   }
   let detail = staleNote ? shortenError(staleNote) : null;
@@ -410,7 +409,7 @@ const mapHandleToBot = (
     } else if (String(exchange).toUpperCase().includes('GRVT')) {
       lastAction = 'Bot runs but GRVT has 0 quotes — min ~$130/order; need margin + builder auth';
     } else if (exchangeKey === 'katana') {
-      lastAction = 'Katana: 0 quotes — check API key/secret + one-tap signer in Accounts';
+      lastAction = 'Katana: 0 quotes — reconnect API key/secret + one-tap signer from Launch New Bot';
     } else if (balFmt.tone === 'warn') {
       lastAction = 'Bot runs but account balance is $0 — deposit margin before quoting';
     } else {
@@ -511,14 +510,14 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
     if (options.length === 0) return -1;
     for (let offset = 0; offset < options.length; offset += 1) {
       const index = (start + direction * offset + options.length) % options.length;
-      if (options[index]?.launchable) return index;
+      if (options[index]?.strategyAvailable) return index;
     }
     return -1;
   }, [options]);
 
   const openListbox = useCallback(() => {
     if (disabled) return;
-    const selectedIndex = options.findIndex((option) => option.dex.id === value && option.launchable);
+    const selectedIndex = options.findIndex((option) => option.dex.id === value && option.strategyAvailable);
     setActiveIndex(selectedIndex >= 0 ? selectedIndex : findNextReady(0, 1));
     setOpen(true);
   }, [disabled, findNextReady, options, value]);
@@ -535,6 +534,12 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
       cancelAnimationFrame(frame);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    document.getElementById(`bot-exchange-option-${options[activeIndex]?.dex.id}`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex, open, options]);
 
   const handleListKeyDown = (event) => {
     if (event.key === 'Escape') {
@@ -554,7 +559,7 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
       setActiveIndex(findNextReady(event.key === 'Home' ? 0 : options.length - 1, event.key === 'Home' ? 1 : -1));
       return;
     }
-    if ((event.key === 'Enter' || event.key === ' ') && options[activeIndex]?.launchable) {
+    if ((event.key === 'Enter' || event.key === ' ') && options[activeIndex]?.strategyAvailable) {
       event.preventDefault();
       onChange(options[activeIndex].dex.id);
       setOpen(false);
@@ -599,6 +604,9 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
           aria-label="Exchange"
           aria-activedescendant={activeIndex >= 0 ? `bot-exchange-option-${options[activeIndex].dex.id}` : undefined}
           onKeyDown={handleListKeyDown}
+          onBlur={(event) => {
+            if (!rootRef.current?.contains(event.relatedTarget)) setOpen(false);
+          }}
         >
           {options.map((option, index) => (
             <div
@@ -606,15 +614,15 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
               key={option.dex.id}
               role="option"
               aria-selected={value === option.dex.id}
-              aria-disabled={!option.launchable}
+              aria-disabled={!option.strategyAvailable}
               style={{
                 ...S.exchangeOption,
                 ...(index === activeIndex ? S.exchangeOptionActive : {}),
-                ...(!option.launchable ? S.exchangeOptionDisabled : {}),
+                ...(!option.strategyAvailable ? S.exchangeOptionDisabled : {}),
               }}
-              onMouseEnter={() => option.launchable && setActiveIndex(index)}
+              onMouseEnter={() => option.strategyAvailable && setActiveIndex(index)}
               onClick={() => {
-                if (!option.launchable) return;
+                if (!option.strategyAvailable) return;
                 onChange(option.dex.id);
                 setOpen(false);
               }}
@@ -624,7 +632,7 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
                 <strong>{option.dex.label}</strong>
                 <small>{option.dex.chain} · {option.dex.description}</small>
               </span>
-              <span style={{ ...S.exchangeOptionStatus, ...(option.launchable ? S.exchangeOptionStatusReady : {}) }}>
+              <span style={{ ...S.exchangeOptionStatus, ...(option.readyForLaunch ? S.exchangeOptionStatusReady : {}) }}>
                 {option.status}
               </span>
             </div>
@@ -892,19 +900,6 @@ function BotsPanel({ onClose }) {
   const stepHeadingRef = useRef(null);
 
   const [syncedAccounts, setSyncedAccounts] = useState([]);
-  const [availableExchanges, setAvailableExchanges] = useState([
-    { id: 'hyperliquid', name: 'Hyperliquid' },
-    { id: 'hotstuff', name: 'Hotstuff' },
-    { id: 'grvt', name: 'GRVT' },
-    { id: 'nado', name: 'Nado' },
-    { id: 'pacifica', name: 'Pacifica' },
-    { id: 'flash', name: 'Flash Trade' },
-    { id: 'katana', name: 'Katana' },
-    { id: 'hibachi', name: 'Hibachi' },
-    { id: 'avantis', name: 'Avantis' },
-    { id: 'decibel', name: 'Decibel' },
-    { id: 'mock', name: 'Mock' },
-  ]);
   const [newAccExchange, setNewAccExchange] = useState('hyperliquid');
   const [newAccLabel, setNewAccLabel] = useState('My Live Account');
   const [newAccSubId, setNewAccSubId] = useState('0');
@@ -918,6 +913,9 @@ function BotsPanel({ onClose }) {
   const [portfolioTotals, setPortfolioTotals] = useState(null);
   const [overridesById, setOverridesById] = useState({});
   const [gameAuthRows, setGameAuthRows] = useState([]);
+  const [gameAuthScanning, setGameAuthScanning] = useState(false);
+  const [scanCompleted, setScanCompleted] = useState(false);
+  const gameAuthScanIdRef = useRef(0);
   const [grvtOneTapInput, setGrvtOneTapInput] = useState('');
   const [katanaOneTapInput, setKatanaOneTapInput] = useState('');
   const [katanaApiKeyInput, setKatanaApiKeyInput] = useState('');
@@ -952,11 +950,14 @@ function BotsPanel({ onClose }) {
       );
     });
     const accountActive = accountActiveForExchange(syncedAccounts, dex.id);
+    const setupSupported = supportsGameWalletSync(dex.id);
     return {
       dex,
       instances,
-      launchable: instances.length > 0 && accountActive,
-      status: instances.length === 0 ? 'Unavailable' : accountActive ? 'Ready' : 'Not connected',
+      strategyAvailable: instances.length > 0 && (setupSupported || accountActive),
+      readyForLaunch: instances.length > 0 && accountActive,
+      setupSupported,
+      status: instances.length === 0 || (!setupSupported && !accountActive) ? 'UNAVAILABLE' : accountActive ? 'READY' : 'NOT CONNECTED',
     };
   }), [configuredInstances, syncedAccounts]);
 
@@ -966,11 +967,45 @@ function BotsPanel({ onClose }) {
   );
 
   const selectedExchangeInstances = selectedExchangeOption?.instances || [];
+  const selectedSyncedAccount = syncedAccounts.find(
+    (account) => account.exchange?.toLowerCase() === selectedExchangeId,
+  ) || null;
+  const selectedGameAuthRow = useMemo(() => (
+    gameAuthRows.find((row) => row.exchange === selectedExchangeId)
+      || (selectedSyncedAccount ? {
+        exchange: selectedExchangeId,
+        label: DEX_CONFIG[selectedExchangeId]?.label || selectedExchangeId.toUpperCase(),
+        synced: true,
+        ready: false,
+        partial: false,
+      } : null)
+  ), [gameAuthRows, selectedExchangeId, selectedSyncedAccount]);
+
+  const selectedConnectionState = useMemo(() => {
+    if (gameAuthScanning || !scanCompleted) {
+      return { id: 'checking', label: 'CHECKING', hint: 'Checking browser credentials and synced account…', style: S.connectionChecking };
+    }
+    if (selectedExchangeOption?.readyForLaunch || selectedSyncedAccount?.status === 'active') {
+      return { id: 'active', label: 'ACTIVE', hint: 'Account is active. Continue when you are ready.', style: S.connectionActive };
+    }
+    if (selectedSyncedAccount) {
+      return { id: 'inactive', label: 'INACTIVE', hint: 'This synced account is disabled. Enable it to continue.', style: S.connectionInactive };
+    }
+    if (selectedGameAuthRow?.ready) {
+      return { id: 'ready', label: 'READY TO SYNC', hint: selectedGameAuthRow.hint || 'Credentials found. Connect the bot to sync them.', style: S.connectionReady };
+    }
+    if (selectedGameAuthRow?.partial) {
+      return { id: 'partial', label: 'PARTIAL', hint: selectedGameAuthRow.error || 'Complete the missing credential below.', style: S.connectionPartial };
+    }
+    return { id: 'missing', label: 'MISSING', hint: selectedGameAuthRow?.error || 'No credentials found. Complete setup below.', style: S.connectionMissing };
+  }, [gameAuthScanning, scanCompleted, selectedExchangeOption, selectedSyncedAccount, selectedGameAuthRow]);
 
   const handleExchangeSelect = useCallback((exchangeId) => {
     const option = exchangeOptions.find((candidate) => candidate.dex.id === exchangeId);
-    if (!option?.launchable) return;
+    if (!option?.strategyAvailable) return;
+    setScanCompleted(false);
     setSelectedExchangeId(exchangeId);
+    setNewAccExchange(exchangeId);
     setSelectedInstanceId(option.instances.length === 1 ? option.instances[0].id : '');
   }, [exchangeOptions]);
 
@@ -1044,20 +1079,6 @@ function BotsPanel({ onClose }) {
     resetLaunch();
     setView('launch');
   }, [resetLaunch]);
-
-  const fetchExchanges = useCallback(() => {
-    if (!token) return;
-    fetch(botApiUrl('/api/v1/exchanges'), { headers: botAuthHeaders(token) })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
-          setAvailableExchanges(
-            res.data.map((ex) => ({ id: ex.id, name: ex.name || ex.id })),
-          );
-        }
-      })
-      .catch((err) => console.error('fetch exchanges failed:', err));
-  }, [token]);
 
   const applyPortfolioPayload = useCallback((data) => {
     if (!data) return;
@@ -1306,22 +1327,33 @@ function BotsPanel({ onClose }) {
   }, [token, newAccExchange, newAccSubId, newAccLabel, newAccPrivateKey, keyTransMethod, fetchAccounts]);
 
   const refreshGameAuthScan = useCallback(async () => {
+    const scanId = gameAuthScanIdRef.current + 1;
+    gameAuthScanIdRef.current = scanId;
+    setGameAuthScanning(true);
     if (!playerForBots) {
       setGameAuthRows([]);
+      setScanCompleted(true);
+      setGameAuthScanning(false);
       return;
     }
     try {
       const rows = await scanGameCredentialStatuses(playerForBots, syncedAccounts, gameSyncWalletCtx);
-      setGameAuthRows(rows);
+      if (scanId === gameAuthScanIdRef.current) setGameAuthRows(rows);
     } catch (err) {
       console.error('game auth scan failed:', err);
+    } finally {
+      if (scanId === gameAuthScanIdRef.current) {
+        setScanCompleted(true);
+        setGameAuthScanning(false);
+      }
     }
   }, [playerForBots, syncedAccounts, gameSyncWalletCtx]);
 
   useEffect(() => {
-    if (view !== 'accounts') return;
+    if (view !== 'launch' || step !== 'exchange') return;
+    if (selectedExchangeId) setNewAccExchange(selectedExchangeId);
     refreshGameAuthScan();
-  }, [view, refreshGameAuthScan, playerDexAccounts]);
+  }, [view, step, selectedExchangeId, refreshGameAuthScan, playerDexAccounts]);
 
   const formatSetupResultNotice = useCallback((result, exchangeLabel) => {
     if (!result?.ok) return result?.error || 'Setup failed';
@@ -1491,61 +1523,6 @@ function BotsPanel({ onClose }) {
     fetchAccounts,
     refreshGameAuthScan,
   ]);
-
-  const syncAllReadyGameAccounts = useCallback(async () => {
-    if (!token || gameAuthBusy) return;
-    const ready = gameAuthRows.filter((row) => row.ready && !row.synced);
-    const partial = gameAuthRows.filter((row) => row.partial && !row.synced);
-    if (ready.length === 0) {
-      if (partial.length > 0) {
-        const names = partial.map((row) => row.label).join(', ');
-        setNotice(
-          `Partial setup (${names}): add credentials manually in the exchange row (Save + Sync).`,
-        );
-      } else {
-        const missing = gameAuthRows.filter((row) => !row.synced && !row.ready && !row.partial);
-        if (missing.length > 0) {
-          const names = missing.map((row) => row.label).join(', ');
-          setNotice(
-            `No browser credentials for: ${names}. Paste credentials manually in the exchange row or complete setup in Futures again.`,
-          );
-        } else {
-        const hasSynced = gameAuthRows.some((row) => row.synced);
-        const hasReadyUnsynced = gameAuthRows.some((row) => row.ready && !row.synced);
-        setNotice(
-          hasSynced && !hasReadyUnsynced
-            ? 'All ready exchanges are already synced to Phantom.'
-            : 'No new ready exchanges to sync — paste keys manually or complete setup in Futures.',
-        );
-        }
-      }
-      return;
-    }
-    setGameAuthBusy(true);
-    let ok = 0;
-    const failed = [];
-    for (const row of ready) {
-      const result = await setupAndSyncGameAccount({
-        token,
-        exchangeId: row.exchange,
-        player: playerForBots,
-        encryptSecret,
-        keyTransMethod,
-        probeBalance: false,
-        ...gameSetupSyncOpts,
-      });
-      if (result.ok) ok += 1;
-      else failed.push(`${row.label}: ${result.error}`);
-    }
-    await fetchAccounts();
-    await refreshGameAuthScan();
-    setGameAuthBusy(false);
-    if (failed.length === 0) {
-      setNotice(`Synced ${ok} exchange(s) from the game.`);
-    } else {
-      setNotice(`Sync: ${ok} ok, ${failed.length} fail. ${failed[0]}`);
-    }
-  }, [token, gameAuthBusy, gameAuthRows, playerForBots, keyTransMethod, gameSetupSyncOpts, fetchAccounts, refreshGameAuthScan]);
 
   const resolveEvmWallet = useCallback((dex = '') => {
     const fromCtx = String(evmWallet?.address || '').trim().toLowerCase();
@@ -1897,7 +1874,7 @@ function BotsPanel({ onClose }) {
     const parsed = parseStrategyInstanceId(id);
     const missing = parsed.exchanges.filter((ex) => !accountActiveForExchange(syncedAccounts, ex));
     if (missing.length > 0) {
-      setNotice(`Connect an active ${missing.map((e) => e.toUpperCase()).join(' + ')} account in Accounts first.`);
+      setNotice(`Connect an active ${missing.map((e) => e.toUpperCase()).join(' + ')} account from Launch New Bot first.`);
       return;
     }
     if (parsed.exchanges.some((ex) => ex.toLowerCase() === 'grvt')) {
@@ -1959,7 +1936,7 @@ function BotsPanel({ onClose }) {
     const parsed = parseStrategyInstanceId(selectedInstanceId);
     const missing = parsed.exchanges.filter((ex) => !accountActiveForExchange(syncedAccounts, ex));
     if (missing.length > 0) {
-      setNotice(`Connect ${missing.map((e) => e.toUpperCase()).join(' + ')} in Accounts before launch.`);
+      setNotice(`Connect ${missing.map((e) => e.toUpperCase()).join(' + ')} in the Exchange step before launch.`);
       setLaunching(false);
       return;
     }
@@ -2040,7 +2017,6 @@ function BotsPanel({ onClose }) {
     if (!token) return;
     fetchInstances();
     fetchAccounts();
-    fetchExchanges();
     fetchOrderHistory();
     fetchPortfolio();
 
@@ -2190,7 +2166,7 @@ function BotsPanel({ onClose }) {
         ws.close();
       }
     };
-  }, [token, fetchInstances, fetchAccounts, fetchExchanges, fetchOrderHistory, fetchPortfolio]);
+  }, [token, fetchInstances, fetchAccounts, fetchOrderHistory, fetchPortfolio]);
 
   const goBack = useCallback(() => {
     const index = STEPS.indexOf(step);
@@ -2214,9 +2190,6 @@ function BotsPanel({ onClose }) {
         <div style={S.segment}>
           <button type="button" style={{ ...S.segmentButton, ...S.segmentActive }} onClick={() => setView('dashboard')}>
             Dashboard
-          </button>
-          <button type="button" style={S.segmentButton} onClick={() => setView('accounts')}>
-            Accounts
           </button>
           <button type="button" style={S.segmentButton} onClick={() => setView('history')}>
             History
@@ -2354,122 +2327,44 @@ function BotsPanel({ onClose }) {
     );
   };
 
-  const renderAccounts = () => (
-    <>
-      {notice && (
-        <button type="button" style={S.notice} onClick={() => setNotice('')}>
-          {notice}
-          <span style={S.noticeClose}>x</span>
-        </button>
-      )}
-      <div style={S.toolbar}>
-        <div style={S.segment}>
-          <button
-            type="button"
-            style={S.segmentButton}
-            onClick={() => setView('dashboard')}
-          >
-            Dashboard
-          </button>
-          <button
-            type="button"
-            style={{ ...S.segmentButton, ...S.segmentActive }}
-            onClick={() => setView('accounts')}
-          >
-            Accounts
-          </button>
-          <button
-            type="button"
-            style={S.segmentButton}
-            onClick={() => setView('history')}
-          >
-            History
-          </button>
-        </div>
-        <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.launchButton }} onClick={openLaunch}>
-          <RobotGlyph size={22} color="#fff" />
-          Launch New Bot
-        </button>
-      </div>
-
-      <div style={S.accountsContainer}>
-        <div style={S.gameAuthCard}>
-          <div style={S.gameAuthHeader}>
-            <div>
-              <strong style={S.sectionTitle}>Auto-auth from game (Futures)</strong>
-              <p style={S.sectionDesc}>
-                One Connect bot button: read credentials from Futures browser storage, or run the same wallet one-tap flow inline → sync to Phantom → (GRVT: builder auth) → balance probe.
-              </p>
-            </div>
-            <div style={S.gameAuthActions}>
+  const renderInlineAccountSetup = () => (
+      <div className="bots-inline-setup" style={S.inlineSetupBody} role="region" aria-label="Exchange bot connection" aria-busy={gameAuthBusy || gameAuthScanning}>
+          <div style={S.inlineSetupToolbar}>
+            <span style={S.sectionDesc}>{selectedConnectionState.hint}</span>
               <button
                 type="button"
-                disabled={gameAuthBusy}
+                disabled={gameAuthBusy || gameAuthScanning}
                 onClick={refreshGameAuthScan}
                 style={{ ...cartoonBtn('#8D6E63', '#6D4C41'), fontSize: 11, padding: '6px 10px' }}
               >
-                Scan
+                {gameAuthScanning ? 'Checking…' : 'Scan'}
               </button>
-              <button
-                type="button"
-                disabled={gameAuthBusy}
-                onClick={syncAllReadyGameAccounts}
-                style={{ ...cartoonBtn('#1E88E5', '#1565C0'), fontSize: 11, padding: '6px 10px' }}
-              >
-                Sync all ready
-              </button>
-            </div>
           </div>
-          <p style={{ ...S.sectionDesc, margin: '0 0 10px', fontSize: 11 }}>
-            If Sync cannot find keys after Futures setup — paste credentials manually in the exchange row (Save + Sync).
-            {' '}Stage C: Phoenix (one-tap from Futures).
-            {UNSUPPORTED_GAME_WALLET_EXCHANGES.length > 0 && (
-              <> Temporarily disabled in Bots: {UNSUPPORTED_GAME_WALLET_EXCHANGES.map((row) => row.label).join(', ')}.</>
-            )}
-          </p>
+          {gameAuthBusy && (
+            <div style={S.inlineBusyRow} role="status" aria-live="polite">
+              <span className="bots-spinner" style={S.inlineBusySpinner} aria-hidden="true" />
+              <span>{notice || `Working on ${DEX_CONFIG[selectedExchangeId]?.label || 'exchange'} setup…`}</span>
+            </div>
+          )}
           <div style={S.gameAuthList}>
-            {gameAuthRows.length === 0 ? (
-              <div style={S.emptyState}>Open Futures in the game, complete exchange setup, then click Scan.</div>
+            {!scanCompleted || gameAuthScanning ? (
+              <div style={S.emptyState}>Checking connection…</div>
+            ) : !selectedGameAuthRow ? (
+              <div style={S.emptyState}>No browser credentials found yet. Complete setup below or scan again.</div>
             ) : (
-              gameAuthRows.map((row) => {
-                const status = row.synced
-                  ? 'synced'
-                  : row.ready
-                    ? 'ready'
-                    : row.partial
-                      ? 'partial'
-                      : 'missing';
-                const statusStyle = status === 'synced'
-                  ? S.gameAuthStatusSynced
-                  : status === 'ready'
-                    ? S.gameAuthStatusReady
-                    : status === 'partial'
-                      ? S.gameAuthStatusPartial
-                      : S.gameAuthStatusMissing;
-                const statusLabel = status === 'synced'
-                  ? 'SYNCED'
-                  : status === 'ready'
-                    ? 'READY'
-                    : status === 'partial'
-                      ? 'PARTIAL'
-                      : 'MISSING';
+              [selectedGameAuthRow].map((row) => {
+                const syncedAccount = syncedAccounts.find((account) => account.exchange?.toLowerCase() === row.exchange);
+                const isActive = syncedAccount?.status === 'active';
                 return (
-                  <div key={row.exchange} style={S.gameAuthRow}>
-                    <div style={S.gameAuthRowMain}>
-                      <strong style={{ color: '#5C3A21', fontSize: 13 }}>{row.label}</strong>
-                      <span style={{ ...S.gameAuthStatusPill, ...statusStyle }}>{statusLabel}</span>
-                    </div>
+                  <div key={row.exchange} style={S.inlineSetupSection}>
                     <div style={S.gameAuthRowHint}>
-                      {row.synced
-                        ? 'Account already in Phantom — you can test balance and Launch.'
-                        : row.ready
-                          ? (row.hint || 'Credentials found in browser.')
-                          : (row.error || 'Complete setup in Futures.')}
+                      {selectedConnectionState.hint}
                     </div>
                     {row.exchange === 'hotstuff' && !row.synced && !row.ready && (
-                      <div style={S.grvtOneTapRow}>
+                      <div className="bots-inline-row" style={S.grvtOneTapRow}>
                         <input
                           type="password"
+                          aria-label="Hotstuff agent private key"
                           value={hotstuffAgentInput}
                           onChange={(e) => setHotstuffAgentInput(e.target.value)}
                           placeholder="Hotstuff agent private key (0x…)"
@@ -2506,6 +2401,7 @@ function BotsPanel({ onClose }) {
                           <div style={{ ...S.grvtOneTapRow, marginTop: 6 }}>
                             <input
                               type="password"
+                              aria-label="Avantis smart-wallet delegate key"
                               value={avantisDelegateInput}
                               onChange={(e) => setAvantisDelegateInput(e.target.value)}
                               placeholder="Avantis smart-wallet delegate key (0x…)"
@@ -2544,6 +2440,7 @@ function BotsPanel({ onClose }) {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
                         <input
                           type="password"
+                          aria-label="Hibachi API key"
                           value={hibachiApiKeyInput}
                           onChange={(e) => setHibachiApiKeyInput(e.target.value)}
                           placeholder="Hibachi API key"
@@ -2552,15 +2449,17 @@ function BotsPanel({ onClose }) {
                         />
                         <input
                           type="text"
+                          aria-label="Hibachi account id"
                           value={hibachiAccountIdInput}
                           onChange={(e) => setHibachiAccountIdInput(e.target.value)}
                           placeholder="Hibachi account id"
                           style={S.credentialInput}
                           autoComplete="off"
                         />
-                        <div style={S.grvtOneTapRow}>
+                        <div className="bots-inline-row" style={S.grvtOneTapRow}>
                           <input
                             type="password"
+                            aria-label="Hibachi signing private key"
                             value={hibachiPrivateKeyInput}
                             onChange={(e) => setHibachiPrivateKeyInput(e.target.value)}
                             placeholder="Hibachi signing private key (0x…)"
@@ -2579,9 +2478,10 @@ function BotsPanel({ onClose }) {
                       </div>
                     )}
                     {row.exchange === 'risex' && !row.synced && (
-                      <div style={S.grvtOneTapRow}>
+                      <div className="bots-inline-row" style={S.grvtOneTapRow}>
                         <input
                           type="password"
+                          aria-label="RISEx session private key"
                           value={risexSessionInput}
                           onChange={(e) => setRisexSessionInput(e.target.value)}
                           placeholder="RISEx session private key (0x…)"
@@ -2608,6 +2508,7 @@ function BotsPanel({ onClose }) {
                           <>
                             <input
                               type="password"
+                              aria-label="Katana API key"
                               value={katanaApiKeyInput}
                               onChange={(e) => setKatanaApiKeyInput(e.target.value)}
                               placeholder="Katana API key"
@@ -2616,6 +2517,7 @@ function BotsPanel({ onClose }) {
                             />
                             <input
                               type="password"
+                              aria-label="Katana API secret"
                               value={katanaApiSecretInput}
                               onChange={(e) => setKatanaApiSecretInput(e.target.value)}
                               placeholder="Katana API secret"
@@ -2624,15 +2526,17 @@ function BotsPanel({ onClose }) {
                             />
                             <input
                               type="text"
+                              aria-label="Katana wallet address"
                               value={katanaWalletInput}
                               onChange={(e) => setKatanaWalletInput(e.target.value)}
                               placeholder={`Katana wallet (0x…) ${resolveEvmWallet('katana') ? `— default ${resolveEvmWallet('katana').slice(0, 8)}…` : ''}`}
                               style={S.credentialInput}
                               autoComplete="off"
                             />
-                            <div style={S.grvtOneTapRow}>
+                            <div className="bots-inline-row" style={S.grvtOneTapRow}>
                               <input
                                 type="password"
+                                aria-label="Katana delegated private key"
                                 value={katanaOneTapInput}
                                 onChange={(e) => setKatanaOneTapInput(e.target.value)}
                                 placeholder="Katana delegated private key (one-tap)"
@@ -2653,9 +2557,10 @@ function BotsPanel({ onClose }) {
                       </div>
                     )}
                     {row.exchange === 'nado' && !row.synced && !row.ready && (
-                      <div style={S.grvtOneTapRow}>
+                      <div className="bots-inline-row" style={S.grvtOneTapRow}>
                         <input
                           type="password"
+                          aria-label="Nado linked signer private key"
                           value={nadoLinkedInput}
                           onChange={(e) => setNadoLinkedInput(e.target.value)}
                           placeholder="Nado linked signer private key (0x…)"
@@ -2673,9 +2578,10 @@ function BotsPanel({ onClose }) {
                       </div>
                     )}
                     {row.exchange === 'phoenix' && !row.synced && (
-                      <div style={S.grvtOneTapRow}>
+                      <div className="bots-inline-row" style={S.grvtOneTapRow}>
                         <input
                           type="password"
+                          aria-label="Phoenix one-tap Solana secret"
                           value={phoenixSecretInput}
                           onChange={(e) => setPhoenixSecretInput(e.target.value)}
                           placeholder="Phoenix one-tap Solana secret (base58)"
@@ -2696,6 +2602,7 @@ function BotsPanel({ onClose }) {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
                         <input
                           type="password"
+                          aria-label="GRVT secret private key"
                           value={grvtOneTapInput}
                           onChange={(e) => setGrvtOneTapInput(e.target.value)}
                           placeholder="GRVT Secret Private Key (from grvt.io)"
@@ -2717,7 +2624,8 @@ function BotsPanel({ onClose }) {
                         Retry builder authorization
                       </button>
                     )}
-                    <div style={S.gameAuthRowActions}>
+                    <div className="bots-inline-actions" style={S.gameAuthRowActions}>
+                      {!(row.synced || syncedAccount) && (
                       <button
                         type="button"
                         disabled={gameAuthBusy}
@@ -2728,7 +2636,18 @@ function BotsPanel({ onClose }) {
                           ? 'Connect bot'
                           : 'Setup & Sync'}
                       </button>
-                      {row.synced && (
+                      )}
+                      {syncedAccount && !isActive && (
+                        <button
+                          type="button"
+                          disabled={gameAuthBusy}
+                          onClick={() => toggleExchangeActive(row.exchange, true)}
+                          style={{ ...cartoonBtn('#43A047', '#2E7D32'), fontSize: 11, padding: '5px 8px' }}
+                        >
+                          Enable
+                        </button>
+                      )}
+                      {(row.synced || syncedAccount) && (
                         <button
                           type="button"
                           disabled={gameAuthBusy}
@@ -2741,7 +2660,7 @@ function BotsPanel({ onClose }) {
                       )}
                       <button
                         type="button"
-                        disabled={!row.synced || gameAuthProbing === row.exchange}
+                        disabled={!(row.synced || syncedAccount) || gameAuthProbing === row.exchange}
                         onClick={() => testGameExchangeBalance(row.exchange)}
                         style={{ ...cartoonBtn('#F9A825', '#F57F17'), fontSize: 11, padding: '5px 8px' }}
                       >
@@ -2753,39 +2672,19 @@ function BotsPanel({ onClose }) {
               })
             )}
           </div>
-        </div>
 
-        {/* Form to add/sync new account */}
-        <div style={S.accountFormCard}>
+        {!selectedSyncedAccount && scanCompleted && !gameAuthScanning && (
+        <>
+        <div style={S.inlineManualSection}>
           <strong style={S.sectionTitle}>Manual key (fallback)</strong>
           <p style={S.sectionDesc}>
-            Manual key — for any exchange. Or sync credentials from Futures (one-tap / API key) if you already completed setup in the game.
+            Use this only when the guided setup above cannot read your existing credentials.
           </p>
-          {supportsGameWalletSync(newAccExchange) && (
-            <button
-              type="button"
-              onClick={() => connectGameWalletAccount(newAccExchange)}
-              style={{ ...cartoonBtn('#1E88E5', '#1565C0'), marginBottom: 12, width: '100%', py: 2, borderRadius: 12 }}
-            >
-              Use game wallet — Setup & Sync ({newAccExchange.toUpperCase()})
-            </button>
-          )}
-          <div style={S.formGrid}>
+          <div className="bots-inline-form-grid" style={S.formGrid}>
             <div style={S.formField}>
-              <span style={S.label}>Exchange Venue</span>
-              <select
-                value={newAccExchange}
-                onChange={(e) => setNewAccExchange(e.target.value)}
-                style={S.formSelect}
-              >
-                {availableExchanges.map((ex) => (
-                  <option key={ex.id} value={ex.id}>{ex.name}</option>
-                ))}
-              </select>
-            </div>
-            <div style={S.formField}>
-              <span style={S.label}>Account Label</span>
+              <label htmlFor="bot-account-label" style={S.label}>Account Label</label>
               <input
+                id="bot-account-label"
                 type="text"
                 placeholder="My Trading Wallet"
                 value={newAccLabel}
@@ -2794,8 +2693,9 @@ function BotsPanel({ onClose }) {
               />
             </div>
             <div style={S.formField}>
-              <span style={S.label}>Sub-Account ID (0 = main wallet with your USDC)</span>
+              <label htmlFor="bot-subaccount" style={S.label}>Sub-Account ID (0 = main wallet)</label>
               <input
+                id="bot-subaccount"
                 type="text"
                 placeholder="0"
                 value={newAccSubId}
@@ -2804,8 +2704,9 @@ function BotsPanel({ onClose }) {
               />
             </div>
             <div style={S.formField}>
-              <span style={S.label}>Transmission Method</span>
+              <label htmlFor="bot-transmission" style={S.label}>Transmission Method</label>
               <select
+                id="bot-transmission"
                 value={keyTransMethod}
                 onChange={(e) => setKeyTransMethod(e.target.value)}
                 style={S.formSelect}
@@ -2816,8 +2717,9 @@ function BotsPanel({ onClose }) {
             </div>
           </div>
           <div style={{ ...S.formField, marginTop: 10 }}>
-            <span style={S.label}>Private Key / Secret API Key</span>
+            <label htmlFor="bot-manual-secret" style={S.label}>Private Key / Secret API Key</label>
             <input
+              id="bot-manual-secret"
               type="password"
               placeholder="0x... or EVM private key"
               value={newAccPrivateKey}
@@ -2827,73 +2729,26 @@ function BotsPanel({ onClose }) {
           </div>
           <button
             type="button"
+            disabled={gameAuthBusy || !newAccPrivateKey.trim()}
             onClick={addAccount}
             style={{ ...cartoonBtn('#43A047', '#2E7D32'), marginTop: 12, width: '100%', py: 2, borderRadius: 12 }}
           >
             Connect & Sync Account
           </button>
         </div>
-
-        {/* List of synced accounts */}
-        <div style={S.accountsListCard}>
-          <strong style={S.sectionTitle}>Synced Wallets & API Keys</strong>
-          <p style={S.sectionDesc}>Active exchange keys matching your player tenant ID.</p>
-          <div style={S.syncedList}>
-            {syncedAccounts.length === 0 ? (
-              <div style={S.emptyState}>No synced accounts found. Add one above.</div>
-            ) : (
-              syncedAccounts.map((acc) => (
-                <div key={acc.id} style={acc.status === 'active' ? S.accountRowActive : S.accountRow}>
-                  <div style={S.accountAvatar}>
-                    <RobotGlyph size={22} color="#5C3A21" />
-                  </div>
-                  <div style={S.accountDetails}>
-                    <strong style={{ color: '#5C3A21' }}>{acc.label || 'Unnamed Account'}</strong>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: '#8b7655' }}>
-                      {acc.exchange.toUpperCase()} (Sub #{acc.sub_account})
-                    </span>
-                  </div>
-                  <div style={S.accountStatus}>
-                    <span
-                      style={{
-                        ...S.statusPill,
-                        ...(acc.status === 'active' ? S.statusRunning : S.statusPaused),
-                      }}
-                    >
-                      {acc.status}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => toggleExchangeActive(acc.exchange, acc.status !== 'active')}
-                      style={{
-                        background: acc.status === 'active' ? '#E53935' : '#43A047',
-                        border: '2px solid #fff',
-                        borderRadius: 8,
-                        color: '#fff',
-                        fontSize: 11,
-                        fontWeight: 900,
-                        padding: '4px 8px',
-                        cursor: 'pointer',
-                        marginLeft: 8,
-                      }}
-                    >
-                      {acc.status === 'active' ? 'Disable' : 'Enable'}
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+        </>
+        )}
       </div>
-    </>
   );
+
+  const noticeIsError = /fail|error|missing|cannot|could not|required|network|invalid/i.test(String(notice || ''));
 
   const renderLaunch = () => (
     <div style={S.launchShell}>
       <div style={S.visuallyHidden} aria-live="polite" aria-atomic="true">
         Step {STEPS.indexOf(step) + 1} of {STEPS.length}: {STEP_LABELS[step]}
       </div>
+      {notice && <div style={{ ...S.notice, ...(noticeIsError ? S.noticeError : {}) }} role="alert" aria-live="assertive">{notice}</div>}
       <div style={S.launchHeader}>
         <button type="button" className="bots-focusable" style={S.backButton} onClick={goBack} aria-label="Back" disabled={launching}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2921,26 +2776,40 @@ function BotsPanel({ onClose }) {
             <div id="bot-exchange-status" style={S.exchangeStatus} aria-live="polite">
               {selectedExchangeOption ? (
                 <>
-                  <span style={{ ...S.exchangeStatusDot, background: selectedExchangeOption.launchable ? '#43A047' : '#A3906A' }} />
+                  <span style={{ ...S.exchangeStatusDot, background: selectedExchangeOption.readyForLaunch ? '#43A047' : '#A3906A' }} />
                   <span>
                     <strong>{selectedExchangeOption.dex.label}</strong>
                     {' · '}{selectedExchangeOption.dex.description}
-                    {' · '}{selectedExchangeOption.status}
                   </span>
                 </>
               ) : (
-                <span>Only configured exchanges with an active synced account can launch.</span>
+                <span>Select a supported exchange with a configured Symmetric strategy.</span>
               )}
             </div>
           </div>
+          {selectedExchangeOption?.strategyAvailable && selectedExchangeOption.setupSupported && (
+            <div style={S.inlineConnectionCard}>
+              <div style={S.inlineConnectionHeader}>
+                <img src={selectedExchangeOption.dex.logo} alt="" style={S.exchangeOptionLogo} />
+                <div style={S.exchangeTriggerText}>
+                  <strong>{selectedExchangeOption.dex.label}</strong>
+                  <small>{selectedExchangeOption.dex.chain}</small>
+                </div>
+                <span style={{ ...S.connectionPill, ...selectedConnectionState.style }}>
+                  {selectedConnectionState.label}
+                </span>
+              </div>
+              {renderInlineAccountSetup()}
+            </div>
+          )}
           <button
             type="button"
             className="bots-focusable"
-            disabled={!selectedExchangeOption?.launchable}
+            disabled={!selectedExchangeOption?.readyForLaunch}
             style={{
-              ...cartoonBtn(selectedExchangeOption?.launchable ? '#1E88E5' : '#A3906A', selectedExchangeOption?.launchable ? '#1565C0' : '#8C7D5C'),
+              ...cartoonBtn(selectedExchangeOption?.readyForLaunch ? '#1E88E5' : '#A3906A', selectedExchangeOption?.readyForLaunch ? '#1565C0' : '#8C7D5C'),
               ...S.nextButton,
-              ...(!selectedExchangeOption?.launchable ? S.disabledButton : {}),
+              ...(!selectedExchangeOption?.readyForLaunch ? S.disabledButton : {}),
             }}
             onClick={() => setStep('strategy')}
           >
@@ -3128,7 +2997,7 @@ function BotsPanel({ onClose }) {
         </button>
       </div>
       <div style={S.body}>
-        {view === 'launch' ? renderLaunch() : view === 'history' ? renderHistory() : view === 'accounts' ? renderAccounts() : renderDashboard()}
+        {view === 'launch' ? renderLaunch() : view === 'history' ? renderHistory() : renderDashboard()}
       </div>
     </div>
   );
@@ -3161,12 +3030,37 @@ const STYLE = `
     outline: 3px solid #1E88E5 !important;
     outline-offset: 3px;
   }
+  .bots-inline-setup button,
+  .bots-inline-setup input,
+  .bots-inline-setup select {
+    min-height: 44px;
+  }
+  .bots-inline-setup button:focus-visible,
+  .bots-inline-setup input:focus-visible,
+  .bots-inline-setup select:focus-visible {
+    outline: 3px solid #1E88E5 !important;
+    outline-offset: 2px;
+  }
   .bots-spinner {
     animation: botsSpin 0.8s linear infinite;
   }
   @keyframes botsSpin { to { transform: rotate(360deg); } }
   @media (max-width: 560px) {
     .bots-market-select { font-size: 13px; }
+    .bots-inline-form-grid {
+      grid-template-columns: 1fr !important;
+    }
+    .bots-inline-row,
+    .bots-inline-actions {
+      display: grid !important;
+      grid-template-columns: 1fr !important;
+      width: 100%;
+    }
+    .bots-inline-row > *,
+    .bots-inline-actions > * {
+      width: 100% !important;
+      box-sizing: border-box;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
     .bots-step-page,
@@ -3299,6 +3193,11 @@ const S = {
   noticeClose: {
     fontWeight: 900,
     opacity: 0.7,
+  },
+  noticeError: {
+    borderColor: '#D98B8B',
+    background: '#FBE2E2',
+    color: '#9F2D2D',
   },
   summaryGrid: {
     display: 'grid',
@@ -3993,6 +3892,94 @@ const S = {
     width: 8,
     height: 8,
     borderRadius: '50%',
+    flexShrink: 0,
+  },
+  inlineConnectionCard: {
+    background: '#F4EEDC',
+    border: '2px solid #C9B896',
+    borderRadius: 14,
+    padding: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  inlineConnectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 9,
+    padding: '2px 2px 6px',
+    borderBottom: '1px solid #D4C8B0',
+  },
+  connectionPill: {
+    flexShrink: 0,
+    borderRadius: 999,
+    padding: '4px 7px',
+    fontSize: 9,
+    fontWeight: 900,
+    letterSpacing: 0.35,
+  },
+  connectionChecking: {
+    background: '#E4DED2',
+    color: '#655E54',
+  },
+  connectionActive: {
+    background: 'rgba(67,160,71,0.16)',
+    color: '#2E7D32',
+  },
+  connectionInactive: {
+    background: 'rgba(232,184,48,0.22)',
+    color: '#795A00',
+  },
+  connectionReady: {
+    background: 'rgba(30,136,229,0.14)',
+    color: '#1565C0',
+  },
+  connectionPartial: {
+    background: 'rgba(249,168,37,0.18)',
+    color: '#9A4D00',
+  },
+  connectionMissing: {
+    background: '#FBE2E2',
+    color: '#9F2D2D',
+  },
+  inlineSetupBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  inlineSetupSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+    padding: '4px 0',
+  },
+  inlineManualSection: {
+    paddingTop: 10,
+    borderTop: '1px solid #D4C8B0',
+  },
+  inlineSetupToolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  inlineBusyRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 10px',
+    borderRadius: 10,
+    background: 'rgba(30,136,229,0.1)',
+    color: '#1565C0',
+    fontSize: 11,
+    fontWeight: 800,
+  },
+  inlineBusySpinner: {
+    width: 16,
+    height: 16,
+    borderRadius: '50%',
+    border: '2px solid rgba(30,136,229,0.25)',
+    borderTopColor: '#1E88E5',
     flexShrink: 0,
   },
   disabledButton: {

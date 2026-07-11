@@ -1683,3 +1683,8 @@ Follow-up:
 - Request: "зроби коміт та деплой на прод всіх змін навіть не твоїх - в нас там є скрипт локальний з деплоєм"
 - Follow-up: "можеш не тестувати юай зміни локально"
 - Explicit authorization: commit and deploy every current worktree change, including changes made outside the MM Bots UI task; local UI verification may be skipped.
+
+### UR-2026-07-11-MM-BOTS-INLINE-EXCHANGE-SETUP
+- Timestamp: 2026-07-11 Europe/Kyiv
+- Request: "так ні, якщо він не законекчений то має зявитися кнопка синку ну чи як там в кожного акаунта по різному - наша задача прибрати вкладку акаунтс - прибирай її і перенось весь функціонал в оцей новий юай я вибираю біржу і потім або синкаю або створюю смарт волет ввожу апі ключі і так далі все як і там"
+- Reference: `codex-clipboard-3dff855a-4985-4c79-b9b2-5fba36851a6a.png`.
