@@ -1133,6 +1133,50 @@ export function useOstium() {
     return sendBuiltTx(tx, 'ostium.approve_usdc');
   }, [sendBuiltTx]);
 
+  const loadDelegateCandidates = useCallback(async (preferredSigner = null) => {
+    const rows = [];
+    const push = (signer) => {
+      if (!signer?.privateKey || !signer?.address) return;
+      const key = String(signer.address).toLowerCase();
+      if (rows.some(row => String(row.address).toLowerCase() === key)) return;
+      rows.push(signer);
+    };
+    push(preferredSigner);
+    push(delegateSignerRef.current);
+    const stored = await loadOstiumDelegates(walletAddr).catch(() => []);
+    stored.forEach(push);
+    return rows;
+  }, [walletAddr]);
+
+  const promoteDelegateSigner = useCallback(async (signer, reason = 'unknown') => {
+    if (!signer?.privateKey) return null;
+    setDelegateSigner(signer);
+    delegateSignerRef.current = signer;
+    await saveOstiumDelegate(walletAddr, signer).catch((e) => {
+      console.warn('[useOstium] failed to save promoted delegate:', e?.message || e);
+    });
+    console.info('[useOstium] one tap delegate selected', {
+      reason,
+      delegate: signer.address,
+      wallet: walletAddr,
+    });
+    return signer;
+  }, [walletAddr]);
+
+  const findRegisteredDelegateSigner = useCallback(async (client, preferredSigner = null) => {
+    const candidates = await loadDelegateCandidates(preferredSigner);
+    if (!candidates.length) return { signer: null, registered: null, candidates };
+    const registered = await readRegisteredDelegate(client, candidates[0].address);
+    const registeredKey = String(registered || '').toLowerCase();
+    const signer = registeredKey
+      ? candidates.find(row => String(row.address).toLowerCase() === registeredKey) || null
+      : null;
+    if (signer && String(preferredSigner?.address || '').toLowerCase() !== registeredKey) {
+      await promoteDelegateSigner(signer, 'registered_on_chain');
+    }
+    return { signer, registered, candidates };
+  }, [loadDelegateCandidates, promoteDelegateSigner, readRegisteredDelegate]);
+
   const refreshDelegateStatus = useCallback(async (providedSigner = null) => {
     if (!walletAddr || !isEvmAddress(walletAddr)) {
       setDelegateSigner(null);
@@ -1150,7 +1194,12 @@ export function useOstium() {
       return null;
     }
     try {
-      const signer = providedSigner || delegateSignerRef.current || await loadOstiumDelegate(walletAddr);
+      const client = await createBuildClient();
+      const registeredMatch = await findRegisteredDelegateSigner(client, providedSigner);
+      const signer = registeredMatch.signer
+        || providedSigner
+        || delegateSignerRef.current
+        || await loadOstiumDelegate(walletAddr);
       if (!signer?.privateKey) {
         setDelegateSigner(null);
         delegateSignerRef.current = null;
@@ -1168,9 +1217,8 @@ export function useOstium() {
       }
       setDelegateSigner(signer);
       delegateSignerRef.current = signer;
-      const client = await createBuildClient();
       const [registered, gasWei, allowance] = await Promise.all([
-        readRegisteredDelegate(client, signer.address),
+        Promise.resolve(registeredMatch.registered || readRegisteredDelegate(client, signer.address)),
         delegateGasBalance(signer.address),
         client.checkUsdcAllowance(OSTIUM_MAX_ALLOWANCE_CHECK_USD).catch(() => null),
       ]);
@@ -1208,18 +1256,18 @@ export function useOstium() {
       }));
       return null;
     }
-  }, [createBuildClient, delegateGasBalance, readRegisteredDelegate, walletAddr]);
+  }, [createBuildClient, delegateGasBalance, findRegisteredDelegateSigner, readRegisteredDelegate, walletAddr]);
 
   const ensureOneTapReady = useCallback(async ({ topUpGas = true, requireAllowance = true, setupIfNeeded = true } = {}) => {
     if (!walletAddr || !isEvmAddress(walletAddr)) throw new Error('Connect your EVM wallet first');
     if (typeof ensureChain === 'function') await ensureChain(OSTIUM_CHAIN_ID);
-    const signer = setupIfNeeded
-      ? await ensureOstiumDelegate(walletAddr)
-      : (delegateSignerRef.current || await loadOstiumDelegate(walletAddr));
-    if (!signer?.privateKey) throw new Error('Ostium one tap is not enabled');
-    setDelegateSigner(signer);
-    delegateSignerRef.current = signer;
     const selfClient = await createBuildClient();
+    const registeredMatch = await findRegisteredDelegateSigner(selfClient);
+    const signer = registeredMatch.signer || (setupIfNeeded
+      ? await ensureOstiumDelegate(walletAddr)
+      : (delegateSignerRef.current || await loadOstiumDelegate(walletAddr)));
+    if (!signer?.privateKey) throw new Error('Ostium one tap is not enabled');
+    await promoteDelegateSigner(signer, registeredMatch.signer ? 'ensure_ready_registered' : 'ensure_ready_active');
     if (requireAllowance) {
       if (setupIfNeeded) {
         await ensureMaxAllowance(selfClient);
@@ -1228,7 +1276,7 @@ export function useOstium() {
         if (allowance?.sufficient !== true) throw new Error('Ostium one tap needs USDC allowance approval before opening trades.');
       }
     }
-    const registered = await readRegisteredDelegate(selfClient, signer.address);
+    const registered = registeredMatch.registered || await readRegisteredDelegate(selfClient, signer.address);
     if (String(registered || '').toLowerCase() !== String(signer.address).toLowerCase()) {
       if (!setupIfNeeded) throw new Error('Ostium one tap delegate is not approved on-chain.');
       const tx = selfClient.getSetDelegateTx(signer.address);
@@ -1241,7 +1289,7 @@ export function useOstium() {
     if (topUpGas && setupIfNeeded) await topUpDelegateGas(signer.address);
     await refreshDelegateStatus(signer);
     return signer;
-  }, [createBuildClient, delegateGasBalance, ensureChain, ensureMaxAllowance, readRegisteredDelegate, refreshDelegateStatus, sendBuiltTx, topUpDelegateGas, walletAddr]);
+  }, [createBuildClient, delegateGasBalance, ensureChain, ensureMaxAllowance, findRegisteredDelegateSigner, promoteDelegateSigner, readRegisteredDelegate, refreshDelegateStatus, sendBuiltTx, topUpDelegateGas, walletAddr]);
 
   const submitWithDelegateOrWallet = useCallback(async ({
     buildSelfTx,
