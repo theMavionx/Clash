@@ -1693,3 +1693,9 @@ Follow-up:
 - Timestamp: 2026-07-11 Europe/Kyiv
 - Request: "отут ще виправи значок щоб він не крутився а адекватним був"
 - Reference: `codex-clipboard-83721af8-8fdf-46e6-b0b7-18bbef2833eb.png`.
+
+### UR-2026-07-11-MM-BOTS-GAME-SCROLLBAR
+- Timestamp: 2026-07-11 Europe/Kyiv
+- Request: "отут стилізуй слайдер як в нас в юай в грі пошукай є класи під це"
+- Reference: `codex-clipboard-964cae7e-7bd2-46ee-8ffc-771c6e5a1670.png`.
+- Follow-up: production deploy explicitly cancelled by the owner.

@@ -606,7 +606,7 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
           ref={listboxRef}
           role="listbox"
           tabIndex={0}
-          className="bots-focusable"
+          className="bots-focusable parchment-scroll"
           style={S.exchangeListbox}
           aria-label="Exchange"
           aria-activedescendant={activeIndex >= 0 ? `bot-exchange-option-${options[activeIndex].dex.id}` : undefined}
