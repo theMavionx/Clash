@@ -731,8 +731,8 @@ function normalizeFillForDb(fill, marketsById = new Map()) {
   const notional = Math.abs(num(fill?.ntl || fill?.notional || fill?.sizeUsd, 0));
   const side = sideToPanel(fill?.side ?? fill?.buy);
   const legacySide = legacySideToPanelForClientOrderId(fill?.side ?? fill?.buy);
-  const orderId = fill?.orderId ?? fill?.idx ?? fill?.id ?? null;
-  const txHash = fill?.txHash || fill?.initiatedTx || fill?.transactionHash || null;
+  const orderId = fill?.orderId ?? fill?.oid ?? fill?.idx ?? fill?.id ?? null;
+  const txHash = fill?.txHash || fill?.hash || fill?.initiatedTx || fill?.transactionHash || null;
   const timestampSeconds = Number(fill?.timestamp || fill?.time || fill?.executedAt || 0);
   const createdAt = Number.isFinite(timestampSeconds) && timestampSeconds > 0
     ? new Date(timestampSeconds > 1e12 ? timestampSeconds : timestampSeconds * 1000).toISOString()
@@ -751,7 +751,7 @@ function normalizeFillForDb(fill, marketsById = new Map()) {
     dex: 'ostium',
     notional_usd: notional,
     verifiedSource: 'ostium_api',
-    pnl: fill?.realizedPnl || fill?.pnl || null,
+    pnl: fill?.realizedPnl ?? fill?.closedPnl ?? fill?.pnl ?? null,
     fee: fill?.fees?.total || fill?.fee || null,
     proofJson: JSON.stringify({
       source: 'ostium_get_fills',
@@ -843,6 +843,7 @@ module.exports = {
   getOrdersByAddress,
   getAccountTradeHistory,
   importFillsForPlayer,
+  normalizeFillForDb,
   proxySubgraph,
   isEvmAddress,
   normalizeAddress,
