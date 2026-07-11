@@ -672,6 +672,23 @@ func _await_signal_or_timeout(source: Object, signal_name: String, timeout_sec: 
 	return false
 
 
+func _await_cloud_cover_presented(cloud: Node, log_label: String, started_ticks: int) -> void:
+	var closed: bool = await _await_signal_or_timeout(cloud, "close_finished", 2.5, log_label)
+	if not closed and cloud.has_method("cover_instant"):
+		cloud.cover_instant()
+		print("[BATTLE_ENTRY] ", log_label, "_forced_cover elapsed_ms=", Time.get_ticks_msec() - started_ticks)
+	# `close_finished` is emitted during frame processing. Wait until that fully
+	# covered frame has actually reached the browser before doing synchronous
+	# resource setup or shader compilation.
+	await RenderingServer.frame_post_draw
+	print("[BATTLE_ENTRY] ", log_label, "_presented elapsed_ms=", Time.get_ticks_msec() - started_ticks)
+
+
+func _start_cloud_covered_combat_warmup(log_label: String, started_ticks: int) -> Node:
+	print("[BATTLE_ENTRY] combat_warmup_start cover=presented label=", log_label, " elapsed_ms=", Time.get_ticks_msec() - started_ticks)
+	return _start_hidden_combat_warmup()
+
+
 func _clear_battle_entry_overlay(reason: String) -> void:
 	var bridge: Node = bs._bridge if bs else null
 	if bridge:
@@ -745,10 +762,6 @@ func _on_find_pressed() -> void:
 	if bs.find_button:
 		bs.find_button.disabled = true
 		bs.find_button.text = "Preparing..."
-	# Begin the rendered-frame warmup before fleet refresh, boarding, sailing,
-	# and cloud animation. Those existing waits now hide the warmup frames
-	# instead of adding them after the transition has already closed.
-	var combat_warmup: Node = _start_hidden_combat_warmup()
 	# Snapshot the fleet BEFORE anything is freed or destroyed
 	_saved_fleet = await bs._build_fleet()
 	if bs.find_button:
@@ -788,8 +801,9 @@ func _on_find_pressed() -> void:
 		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Finding opponent..."})
 	var cloud: Node = bs._get_or_create_cloud()
 	cloud.close()
-	await _await_signal_or_timeout(cloud, "close_finished", 2.5, "cloud_close")
+	await _await_cloud_cover_presented(cloud, "cloud_close", entry_started_ticks)
 	print("[BATTLE_ENTRY] cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
+	var combat_warmup: Node = _start_cloud_covered_combat_warmup("find_enemy", entry_started_ticks)
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Searching..."
@@ -846,7 +860,6 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	if bs.find_button:
 		bs.find_button.disabled = true
 		bs.find_button.text = "Preparing..."
-	var combat_warmup: Node = _start_hidden_combat_warmup()
 	_saved_fleet = await bs._build_fleet()
 	if bs.find_button:
 		bs.find_button.text = "Boarding..."
@@ -885,8 +898,9 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Finding opponent..."})
 	var cloud: Node = bs._get_or_create_cloud()
 	cloud.close()
-	await _await_signal_or_timeout(cloud, "close_finished", 2.5, "revenge_cloud_close")
+	await _await_cloud_cover_presented(cloud, "revenge_cloud_close", entry_started_ticks)
 	print("[BATTLE_ENTRY] revenge_cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
+	var combat_warmup: Node = _start_cloud_covered_combat_warmup("revenge", entry_started_ticks)
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Revenge..."
@@ -1054,8 +1068,8 @@ func _switch_to_enemy_island() -> void:
 		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Loading opponent..."})
 	var cloud = bs._get_or_create_cloud()
 	cloud.close()
-	await _await_signal_or_timeout(cloud, "close_finished", 2.5, "direct_switch_cloud_close")
-	var combat_warmup: Node = _start_hidden_combat_warmup()
+	await _await_cloud_cover_presented(cloud, "direct_switch_cloud_close", switch_started_ticks)
+	var combat_warmup: Node = _start_cloud_covered_combat_warmup("direct_switch", switch_started_ticks)
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs._cannon and bs._cannon.has_method("_preload_explosion_textures"):
 		bs._cannon._preload_explosion_textures()
@@ -1827,8 +1841,9 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 			ht.node.visible = false
 	var cloud = bs._get_or_create_cloud()
 	cloud.close()
-	await cloud.close_finished
-	var combat_warmup: Node = _start_hidden_combat_warmup()
+	var replay_started_ticks: int = Time.get_ticks_msec()
+	await _await_cloud_cover_presented(cloud, "replay_cloud_close", replay_started_ticks)
+	var combat_warmup: Node = _start_cloud_covered_combat_warmup("replay", replay_started_ticks)
 	await _await_hidden_combat_warmup(combat_warmup)
 	bs._cannon._preload_explosion_textures()
 	for bsys in bs._building_systems:

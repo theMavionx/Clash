@@ -6070,12 +6070,6 @@ func _get_random_grid_world_pos() -> Vector3:
 
 func _on_attack_pressed() -> void:
 	var fleet: Array = await _build_fleet()
-	var warmup_script: Script = load("res://scripts/warmup.gd")
-	if warmup_script != null:
-		# Keep the representatives alive while the player aims/places the first
-		# ship. Waiting for all warmup frames here only delays the UI; the costly
-		# synchronous resource setup has already completed in start_combat_warmup.
-		warmup_script.start_combat_warmup(self)
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
 		attack_system.enter_attack_mode(fleet)
