@@ -764,6 +764,17 @@ function normalizeFillForDb(fill, marketsById = new Map()) {
   };
 }
 
+function isFillEligibleSince(createdAt, since) {
+  if (!since) return true;
+  const normalizedSince = String(since).includes('T')
+    ? String(since)
+    : `${String(since).replace(' ', 'T')}Z`;
+  const sinceMs = Date.parse(normalizedSince);
+  if (!Number.isFinite(sinceMs)) return true;
+  const fillMs = Date.parse(createdAt || '');
+  return Number.isFinite(fillMs) && fillMs >= sinceMs;
+}
+
 async function getAccountTradeHistory(address, opts = {}) {
   const account = normalizeAddress(address);
   if (!account) throw new Error('valid EVM address required');
@@ -797,6 +808,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
     for (const fill of lastRows) {
       const row = normalizeFillForDb(fill, context.pairById);
       if (!Number.isFinite(row.notional_usd) || row.notional_usd <= 0) continue;
+      if (!isFillEligibleSince(row.createdAt, opts.since)) continue;
       const result = db.addTrade(playerId, row);
       if (result.changes > 0) {
         imported += result.changes;
@@ -843,6 +855,7 @@ module.exports = {
   getOrdersByAddress,
   getAccountTradeHistory,
   importFillsForPlayer,
+  isFillEligibleSince,
   normalizeFillForDb,
   proxySubgraph,
   isEvmAddress,

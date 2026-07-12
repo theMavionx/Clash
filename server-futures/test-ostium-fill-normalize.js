@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { normalizeFillForDb } = require('./ostium');
+const { isFillEligibleSince, normalizeFillForDb } = require('./ostium');
 
 const fill = {
   pairId: '0',
@@ -30,5 +30,8 @@ assert.strictEqual(
   row.clientOrderId,
   'ostium:0xb1466e5ad0e33617500de93a344d3d0976f3d8c05a0bb9b4c989e4d2b8355ad4:2152716:bid',
 );
+assert.strictEqual(isFillEligibleSince(row.createdAt, '2026-07-11 12:31:12'), true);
+assert.strictEqual(isFillEligibleSince(row.createdAt, '2026-07-11 12:31:13'), true);
+assert.strictEqual(isFillEligibleSince(row.createdAt, '2026-07-11 12:31:14'), false);
 
 console.log('ostium fill normalization: ok');

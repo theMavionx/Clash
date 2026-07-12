@@ -14,7 +14,7 @@ const ostium = require(ostiumPath);
 
 const rows = main.prepare(`
   WITH ranked_accounts AS (
-    SELECT player_id, lower(wallet_address) AS wallet,
+    SELECT player_id, lower(wallet_address) AS wallet, created_at AS linked_at,
            ROW_NUMBER() OVER (
              PARTITION BY player_id
              ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END,
@@ -26,7 +26,7 @@ const rows = main.prepare(`
       AND wallet_address IS NOT NULL
       AND wallet_address != ''
   )
-  SELECT tp.player_id, p.name, a.wallet
+  SELECT tp.player_id, p.name, a.wallet, a.linked_at
   FROM tournament_participants tp
   JOIN players p ON p.id=tp.player_id
   JOIN ranked_accounts a ON a.player_id=tp.player_id AND a.account_rank=1
@@ -37,7 +37,11 @@ const rows = main.prepare(`
   const results = [];
   for (const row of rows) {
     try {
-      const result = await ostium.importFillsForPlayer(row.player_id, row.wallet, { limit: 250, attempts: 2 });
+      const result = await ostium.importFillsForPlayer(row.player_id, row.wallet, {
+        limit: 250,
+        attempts: 2,
+        since: row.linked_at,
+      });
       results.push({ player: row.name, player_id: row.player_id, wallet: row.wallet, ...result });
     } catch (error) {
       results.push({ player: row.name, player_id: row.player_id, wallet: row.wallet, error: error.message || String(error) });
