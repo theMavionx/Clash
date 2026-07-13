@@ -4013,11 +4013,35 @@ func _upgrade_selected() -> void:
 	var target_level = level + 1
 	_run_upgrade_sequence(b, def, target_level)
 
+
+func _apply_authoritative_upgrade_state(b: Dictionary, def: Dictionary, server_new_level: int) -> void:
+	# The server has already committed the upgrade. Apply that state before any
+	# presentation awaits so an interrupted animation cannot leave progression
+	# checks reading the previous building level.
+	var hp_levels: Array = def.get("hp_levels", [])
+	var applied_level: int = maxi(1, server_new_level)
+	if not hp_levels.is_empty():
+		applied_level = mini(applied_level, hp_levels.size())
+	var new_max_hp: int = _get_hp_for(def, applied_level)
+	b["level"] = applied_level
+	b["max_hp"] = new_max_hp
+	b["hp"] = new_max_hp
+
+
 func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int) -> void:
+	_apply_authoritative_upgrade_state(b, def, server_new_level)
+	var new_max_hp: int = int(b.get("max_hp", _get_hp_for(def, server_new_level)))
+
 	if not is_instance_valid(b.get("node")):
 		b["is_upgrading"] = false
+		_sync_react_buildings()
+		if typeof(selected_building) == TYPE_DICTIONARY and selected_building == b:
+			_select_building(b)
 		return
-		
+
+	# Progression and React state are authoritative immediately. The animation
+	# below may finish later, but it no longer controls the building level.
+	_sync_react_buildings()
 	var model = b.node
 	
 	if typeof(selected_building) == TYPE_DICTIONARY and selected_building == b:
@@ -4067,15 +4091,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	if not is_instance_valid(self) or not is_instance_valid(model):
 		return
 
-	# --- UPGRADE APPLIED ---
-	b["level"] = server_new_level
-	var new_max_hp = _get_hp_for(def, b.level)
-	b["max_hp"] = new_max_hp
-	b["hp"] = new_max_hp
-
-	# Update TH progress bar in React immediately (before animations that may bail)
-	_sync_react_buildings()
-
+	# --- UPGRADE VISUAL APPLIED ---
 	# Update UI if this building is still selected
 	if current_building_id == b.id and building_panel and building_panel.visible:
 		if building_panel_title:
