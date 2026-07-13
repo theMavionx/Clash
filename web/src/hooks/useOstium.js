@@ -56,6 +56,7 @@ const OSTIUM_SDK_CLIENT_CACHE_MS = 2 * 60_000;
 const OSTIUM_PRICE_STREAM_WS = 'wss://builder.ostium.io/v1/prices/stream';
 const OSTIUM_LIVE_PRICE_FLUSH_MS = 750;
 const OSTIUM_LIVE_PRICE_RECONNECT_MS = 2_500;
+const OSTIUM_LIVE_PRICE_RECONNECT_MAX_MS = 60_000;
 const OSTIUM_LIVE_SUBSCRIPTION_LIMIT = 48;
 const OSTIUM_CLOSE_PERCENT_FULL = 10_000n;
 const OSTIUM_OPEN_EXECUTED_EVENT = parseAbiItem(
@@ -1717,6 +1718,7 @@ export function useOstium() {
     if (!isActiveDex || !ostiumLivePairKey || typeof WebSocket === 'undefined') return undefined;
     let cancelled = false;
     let reconnectTimer = null;
+    let reconnectAttempt = 0;
     let flushTimer = null;
     let ws = null;
     const pairs = ostiumLivePairKey.split('|').filter(Boolean);
@@ -1757,7 +1759,21 @@ export function useOstium() {
     };
 
     const handlePayload = (payload) => {
+      reconnectAttempt = 0;
       for (const tick of ostiumTicksFromPayload(payload)) enqueueTick(tick);
+    };
+
+    const scheduleReconnect = () => {
+      if (cancelled || reconnectTimer) return;
+      const delay = Math.min(
+        OSTIUM_LIVE_PRICE_RECONNECT_MAX_MS,
+        OSTIUM_LIVE_PRICE_RECONNECT_MS * (2 ** Math.min(reconnectAttempt, 5)),
+      );
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
     };
 
     const connect = () => {
@@ -1775,13 +1791,13 @@ export function useOstium() {
           } catch {}
         });
         ws.addEventListener('close', () => {
-          if (!cancelled) reconnectTimer = window.setTimeout(connect, OSTIUM_LIVE_PRICE_RECONNECT_MS);
+          scheduleReconnect();
         });
         ws.addEventListener('error', () => {
           try { ws?.close(); } catch {}
         });
       } catch {
-        if (!cancelled) reconnectTimer = window.setTimeout(connect, OSTIUM_LIVE_PRICE_RECONNECT_MS);
+        scheduleReconnect();
       }
     };
 

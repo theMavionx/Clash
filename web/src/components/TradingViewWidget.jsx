@@ -605,6 +605,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     if (dex !== 'ostium' || !seriesRef.current || typeof WebSocket === 'undefined') return undefined;
     let cancelled = false;
     let reconnectTimer = null;
+    let reconnectAttempt = 0;
     let ws = null;
     const pair = ostiumStreamPair(symbol);
     const bucketSeconds = INTERVAL_SECONDS[interval] || 300;
@@ -635,11 +636,22 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     };
 
     const handlePayload = (payload) => {
+      reconnectAttempt = 0;
       if (payload?.type === 'snapshot' && Array.isArray(payload.data)) {
         for (const tick of payload.data) applyTick(tick);
         return;
       }
       if (payload?.type === 'tick') applyTick(payload.data);
+    };
+
+    const scheduleReconnect = () => {
+      if (cancelled || reconnectTimer) return;
+      const delay = Math.min(60_000, 2_500 * (2 ** Math.min(reconnectAttempt, 5)));
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
     };
 
     const connect = () => {
@@ -657,13 +669,13 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           } catch {}
         });
         ws.addEventListener('close', () => {
-          if (!cancelled) reconnectTimer = window.setTimeout(connect, 2500);
+          scheduleReconnect();
         });
         ws.addEventListener('error', () => {
           try { ws?.close(); } catch {}
         });
       } catch {
-        if (!cancelled) reconnectTimer = window.setTimeout(connect, 2500);
+        scheduleReconnect();
       }
     };
 
