@@ -4356,11 +4356,11 @@ function awardTournamentDailyPoolDay(tournamentId, dayInput, options = {}) {
         const value = Number(row[cat.column]) || 0;
         return value < 0 ? sum + Math.abs(value) : sum;
       }, 0);
-      // PnL is positive-only. Losing players never reduce another player's raw
-      // share, but the PnL bucket is not awarded at all on net-losing days.
+      // PnL is positive-only: losing players contribute zero and never reduce
+      // the pool shared by profitable players.
       const disabledReason = cat.key === 'pnl' && totalRaw <= 0
         ? 'no_positive_pnl'
-        : (cat.key === 'pnl' && signedTotal <= 0 ? 'net_pnl_not_positive' : null);
+        : null;
       details.categories[cat.key] = {
         pool: Number(catPool.toFixed(6)),
         raw_total: Number(totalRaw.toFixed(6)),

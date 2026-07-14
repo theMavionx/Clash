@@ -211,6 +211,23 @@ function resolveWalletForDex(player, dex, currentWallet = null) {
   return currentWallet ? canonicalWallet(currentWallet) : null;
 }
 
+function resolveImportSince(player, dex) {
+  if (!player?.id) return null;
+  const normalizedDex = String(dex || player.dex || '').toLowerCase();
+  try {
+    const row = db.db.prepare(`
+      SELECT created_at
+      FROM player_dex_accounts
+      WHERE player_id = ? AND dex = ?
+      ORDER BY CASE WHEN status = 'ready' THEN 0 ELSE 1 END, updated_at DESC, id DESC
+      LIMIT 1
+    `).get(player.id, normalizedDex);
+    return row?.created_at || player.created_at || null;
+  } catch {
+    return player.created_at || null;
+  }
+}
+
 function sqlQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
@@ -414,7 +431,13 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
   if (dex === 'ostium') {
     const ostium = require('../server-futures/ostium');
     if (!ostium.isEvmAddress(wallet)) return { ok: false, skipped: 'invalid_evm_wallet', dex };
-    return { dex, ...(await ostium.importFillsForPlayer(playerId, wallet, { limit })) };
+    return {
+      dex,
+      ...(await ostium.importFillsForPlayer(playerId, wallet, {
+        limit,
+        since: opts.since || resolveImportSince(player, dex),
+      })),
+    };
   }
 
   if (dex === 'nado') {

@@ -2499,6 +2499,15 @@ function readFuturesWindowStats(fdb, dex, windowDef) {
     tradeSourceWhereForAnalytics(dex),
   ];
   const params = [dex];
+  if (dex === 'ostium') {
+    where.push(`EXISTS (
+      SELECT 1
+      FROM temp.analytics_account_links link
+      WHERE link.player_id = trade_history.player_id
+        AND link.dex = trade_history.dex
+        AND datetime(trade_history.created_at) >= datetime(link.linked_at)
+    )`);
+  }
   if (windowDef.sqlite) {
     where.push("created_at >= datetime('now', ?)");
     params.push(windowDef.sqlite);
@@ -2531,6 +2540,32 @@ function readFuturesWindowStats(fdb, dex, windowDef) {
   }
 }
 
+function prepareAnalyticsAccountLinks(fdb, mainDb) {
+  fdb.exec(`
+    CREATE TEMP TABLE IF NOT EXISTS analytics_account_links (
+      player_id TEXT NOT NULL,
+      dex TEXT NOT NULL,
+      linked_at TEXT NOT NULL,
+      PRIMARY KEY (player_id, dex)
+    );
+    DELETE FROM analytics_account_links;
+  `);
+  if (!mainDb) return;
+  const rows = mainDb.prepare(`
+    SELECT player_id, LOWER(dex) AS dex, MIN(created_at) AS linked_at
+    FROM player_dex_accounts
+    WHERE created_at IS NOT NULL AND created_at != ''
+    GROUP BY player_id, LOWER(dex)
+  `).all();
+  const insert = fdb.prepare(`
+    INSERT INTO temp.analytics_account_links (player_id, dex, linked_at)
+    VALUES (?, ?, ?)
+  `);
+  fdb.transaction((items) => {
+    for (const row of items) insert.run(row.player_id, row.dex, row.linked_at);
+  })(rows);
+}
+
 function readWindowRevenueAnalytics(mainDb) {
   const Db = loadSqlite();
   let fdb = null;
@@ -2543,6 +2578,7 @@ function readWindowRevenueAnalytics(mainDb) {
     }
   }
   try {
+    if (fdb) prepareAnalyticsAccountLinks(fdb, mainDb);
     return ANALYTICS_WINDOWS.map((windowDef) => {
       const dexes = {};
       let totalVolume = 0;
