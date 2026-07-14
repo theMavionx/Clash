@@ -20,6 +20,13 @@ import {
   enableAvantisSmartWallet,
   refreshAvantisSmartWalletStatus,
 } from './avantisSmartWalletSetup';
+import { readOstiumSmartWalletDelegate } from './ostiumSmartWallet';
+import { loadOstiumDelegate } from './ostiumDelegateWallet';
+import {
+  enableOstiumOneTap,
+  refreshOstiumOneTapStatus,
+} from './ostiumOneTapSetup';
+import { OSTIUM_CHAIN_ID } from './ostiumConfig';
 
 const DECIBEL_SUBACCOUNT_PREFIX = 'clash_decibel_subaccount:';
 const DECIBEL_SUBACCOUNT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -231,6 +238,90 @@ async function ensureNadoReady(player, ctx = {}) {
   }
 }
 
+async function ensureOstiumReady(player, ctx = {}) {
+  const wallets = evmWalletsForPlayer(player, 'ostium', ctx);
+  const primary = (ctx.walletAddress || ctx.evmWalletAddress || wallets[0] || '').toLowerCase();
+  const ordered = primary ? [primary, ...wallets.filter((w) => w !== primary)] : wallets;
+  const publicClient = ctx.getPublicClient?.(OSTIUM_CHAIN_ID) || ctx.publicClient;
+  const walletClient = ctx.getWalletClient?.(OSTIUM_CHAIN_ID) || ctx.walletClient;
+  const ensureChain = ctx.ensureChain
+    ? () => ctx.ensureChain(OSTIUM_CHAIN_ID)
+    : null;
+
+  for (const w of ordered) {
+    const futuresDelegate = await loadOstiumDelegate(w).catch(() => null);
+    const legacy = readOstiumSmartWalletDelegate(w);
+    const hasKey = !!(futuresDelegate?.privateKey || legacy?.privateKey);
+    if (!hasKey) continue;
+    if (publicClient) {
+      const status = await refreshOstiumOneTapStatus(publicClient, w);
+      if (status?.active && !status.needsEth) {
+        return { ok: true, wallet: w };
+      }
+      // Active but gas empty — fall through to enableOstiumOneTap (top-up).
+      if (status?.active && status.needsEth && walletClient) {
+        break;
+      }
+      if (status?.active && status.needsEth && !walletClient) {
+        return {
+          ok: false,
+          error:
+            `One-tap delegate needs ETH for gas (${status.address || 'delegate'}). `
+            + 'Connect MetaMask and click «Top up one-tap gas».',
+        };
+      }
+    } else {
+      return { ok: true, wallet: w };
+    }
+  }
+
+  if (!primary) {
+    return {
+      ok: false,
+      error: 'Connect your Arbitrum wallet in Bots (same as Futures → Ostium).',
+    };
+  }
+
+  if (!walletClient || !publicClient) {
+    return {
+      ok: false,
+      error: 'Connect Arbitrum MetaMask. Click One tap + Sync — setDelegate, USDC approve, and gas top-up.',
+    };
+  }
+
+  try {
+    const result = await enableOstiumOneTap({
+      walletClient,
+      walletAddr: primary,
+      publicClient,
+      ensureChain,
+      topUpGas: true,
+    });
+    if (!result?.active && !result?.address) {
+      return { ok: false, error: 'Ostium one-tap setup finished but delegate was not saved.' };
+    }
+    const out = { ok: true, wallet: primary };
+    if (result.needsEth || result.needs_eth) {
+      const addr = String(result.address || '');
+      const short = addr ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : 'delegate';
+      return {
+        ok: false,
+        error:
+          `One-tap gas still low on ${short}. `
+          + 'Confirm MetaMask has Arbitrum ETH, then click «Top up one-tap gas». '
+          + 'Bot orders fail with “insufficient funds for gas” until the delegate is funded.',
+      };
+    }
+    return out;
+  } catch (e) {
+    const msg = String(e?.message || e || '');
+    if (/user rejected|denied/i.test(msg)) {
+      return { ok: false, error: 'Signature cancelled in wallet.' };
+    }
+    return { ok: false, error: msg || 'Ostium one-tap setup failed' };
+  }
+}
+
 async function ensureAvantisReady(player, ctx = {}) {
   const wallets = evmWalletsForPlayer(player, 'avantis', ctx);
   const primary = (ctx.walletAddress || ctx.evmWalletAddress || wallets[0] || '').toLowerCase();
@@ -417,6 +508,7 @@ export async function ensureGameExchangeReady(exchangeId, player, ctx = {}) {
   if (ex === 'hotstuff') return ensureHotstuffReady(player, ctx);
   if (ex === 'nado') return ensureNadoReady(player, ctx);
   if (ex === 'avantis') return ensureAvantisReady(player, ctx);
+  if (ex === 'ostium') return ensureOstiumReady(player, ctx);
   if (ex === 'decibel') return ensureDecibelReady(player, ctx);
   if (ex === 'katana') return ensureKatanaReady(player, ctx);
   return { ok: true };
