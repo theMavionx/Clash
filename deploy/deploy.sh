@@ -126,6 +126,25 @@ validate_source_dir() {
     fi
 }
 
+validate_source_is_clean() {
+    if [ "${CLASH_ALLOW_DIRTY_SOURCE:-0}" = "1" ]; then
+        log "Dirty source check explicitly bypassed with CLASH_ALLOW_DIRTY_SOURCE=1."
+        return 0
+    fi
+
+    local dirty_paths
+    dirty_paths="$(
+        git -C "$SOURCE_DIR" status --porcelain --untracked-files=all \
+            | grep -Ev '^\?\? (\.deploy\.lock|\.godot-source-backup-|\.godot-upload-)' \
+            || true
+    )"
+
+    if [ -n "$dirty_paths" ]; then
+        echo "$dirty_paths" >&2
+        die "Source checkout contains uncommitted runtime files. Commit or stash them before deploying."
+    fi
+}
+
 detect_godot_changes() {
     case "${GODOT_CHANGED:-auto}" in
         0|1)
@@ -1828,6 +1847,7 @@ main() {
     require_root
     acquire_deploy_lock
     validate_source_dir
+    validate_source_is_clean
     detect_godot_changes
     log "=== Atomic deploy $DOMAIN ($RELEASE_ID) ==="
     log "Source: $SOURCE_DIR"

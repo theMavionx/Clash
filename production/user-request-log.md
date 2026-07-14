@@ -1705,3 +1705,9 @@ Follow-up:
 - Request: "стилізуй в ботів юай нормально ... На 2 картинці баг з обводкою ... замість іконки бота показуй іконку біржі ... accounts теж стилізуй красивіше"
 - Follow-up: "потім коміт деплой зроби"
 - Explicit authorization: commit the focused MM Bots UI changes and deploy them to production without a Godot export.
+
+### UR-2026-07-14-MM-BOTS-STALE-PRODUCTION-UI
+- Timestamp: 2026-07-14 Europe/Kyiv
+- Request: "в мене чомусь старий юай все ще"
+- Finding: a later production release was built from the correct commit plus uncommitted server-side MM Bots files, restoring the old UI despite a fresh browser bundle.
+- Resolution: integrate the parallel bot-auth merge, fix its misplaced component brace, redeploy the clean committed UI, and reject dirty production source checkouts in future atomic deploys.
