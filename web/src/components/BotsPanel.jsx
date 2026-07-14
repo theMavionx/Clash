@@ -596,7 +596,7 @@ function RobotButtonMark({ size = 48 }) {
   );
 }
 
-function ExchangeMark({ exchangeId, size = 40 }) {
+function ExchangeMark({ exchangeId, size = 40, framed = true }) {
   const dex = DEX_CONFIG[String(exchangeId || '').toLowerCase()];
   const label = dex?.label || String(exchangeId || '?').toUpperCase();
   const initials = label.replace(/[^a-z0-9]/gi, '').slice(0, 2).toUpperCase() || '?';
@@ -607,10 +607,13 @@ function ExchangeMark({ exchangeId, size = 40 }) {
     <span
       style={{
         ...S.exchangeMark,
+        ...(!framed ? S.exchangeMarkBare : {}),
         width: size,
         height: size,
-        borderColor: dex?.borderColor || '#BBA882',
-        background: dex?.colorLight || '#F4EEDC',
+        ...(framed ? {
+          borderColor: dex?.borderColor || '#BBA882',
+          background: dex?.colorLight || '#F4EEDC',
+        } : {}),
       }}
       title={label}
       aria-label={label}
@@ -620,7 +623,7 @@ function ExchangeMark({ exchangeId, size = 40 }) {
         <img
           src={logoSrc}
           alt=""
-          style={S.exchangeMarkImage}
+          style={{ ...S.exchangeMarkImage, ...(!framed ? S.exchangeMarkImageBare : {}) }}
           onError={() => setFailedLogo(logoSrc)}
         />
       ) : null}
@@ -628,14 +631,14 @@ function ExchangeMark({ exchangeId, size = 40 }) {
   );
 }
 
-function ExchangeMarkStack({ exchangeIds, size = 44 }) {
+function ExchangeMarkStack({ exchangeIds, size = 44, framed = true }) {
   const ids = [...new Set((exchangeIds || []).filter(Boolean))].slice(0, 2);
-  if (ids.length <= 1) return <ExchangeMark exchangeId={ids[0]} size={size} />;
+  if (ids.length <= 1) return <ExchangeMark exchangeId={ids[0]} size={size} framed={framed} />;
   return (
     <span style={{ ...S.exchangeMarkStack, width: size + 17, height: size }} aria-label="Bot exchanges">
       {ids.map((id, index) => (
-        <span key={id} style={{ ...S.exchangeMarkStackItem, left: index * 17, zIndex: ids.length - index }}>
-          <ExchangeMark exchangeId={id} size={size} />
+        <span key={id} style={{ ...S.exchangeMarkStackItem, ...(!framed ? S.exchangeMarkStackItemBare : {}), left: index * 17, zIndex: ids.length - index }}>
+          <ExchangeMark exchangeId={id} size={size} framed={framed} />
         </span>
       ))}
     </span>
@@ -975,7 +978,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
     <div style={{ ...S.botCard, ...(expanded ? S.botCardExpanded : {}) }}>
       <button type="button" style={S.cardMainButton} onClick={() => onToggle(bot.id)} aria-expanded={expanded}>
         <div style={S.cardTop}>
-          <ExchangeMarkStack exchangeIds={bot.exchangeKeys} size={44} />
+          <ExchangeMarkStack exchangeIds={bot.exchangeKeys} size={44} framed={false} />
           <div style={S.cardTitleBlock}>
             <div style={S.cardTitleRow}>
               <strong style={S.cardTitle}>{type.name}</strong>
@@ -3832,12 +3835,24 @@ const STYLE = `
     outline-offset: 3px;
   }
   .bots-segment-button {
-    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    border-color: transparent !important;
+    outline: none !important;
     -webkit-tap-highlight-color: transparent;
   }
+  .bots-segment-button:focus,
+  .bots-segment-button:active {
+    border-color: transparent !important;
+    outline: none !important;
+  }
   .bots-segment-button:focus-visible {
-    outline: 2px solid #1E88E5 !important;
-    outline-offset: 2px;
+    border-color: transparent !important;
+    outline: none !important;
+    box-shadow: inset 0 -2px 0 #1E88E5 !important;
+  }
+  .bots-segment-button[aria-current="page"]:focus-visible {
+    box-shadow: inset 0 -2px 0 #1E88E5, 0 1px 2px rgba(92,58,33,0.08) !important;
   }
   .bots-inline-setup button,
   .bots-inline-setup input,
@@ -4736,6 +4751,12 @@ const S = {
     borderRadius: 8,
     boxSizing: 'border-box',
   },
+  exchangeMarkBare: {
+    overflow: 'visible',
+    border: 0,
+    borderRadius: 0,
+    background: 'transparent',
+  },
   exchangeMarkFallback: {
     color: '#5C3A21',
     fontSize: 11,
@@ -4748,6 +4769,11 @@ const S = {
     height: 'calc(100% - 8px)',
     objectFit: 'contain',
   },
+  exchangeMarkImageBare: {
+    inset: 0,
+    width: '100%',
+    height: '100%',
+  },
   exchangeMarkStack: {
     position: 'relative',
     display: 'inline-block',
@@ -4757,6 +4783,9 @@ const S = {
     position: 'absolute',
     top: 0,
     filter: 'drop-shadow(2px 0 0 #E8DFC8)',
+  },
+  exchangeMarkStackItemBare: {
+    filter: 'none',
   },
   exchangeOptionText: {
     minWidth: 0,

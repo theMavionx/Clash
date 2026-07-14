@@ -1724,3 +1724,15 @@ Follow-up:
 - Reference: `codex-clipboard-d627f80a-6417-4928-990b-c8aa26ba4d04.png`.
 - Follow-up: "коміт деплой".
 - Explicit authorization: commit the focused MM Bots picker changes and deploy them to production without a Godot export.
+
+### UR-2026-07-14-MM-BOTS-FRAMELESS-EXCHANGE-ICONS
+- Timestamp: 2026-07-14 Europe/Kyiv
+- Request: remove the colored frames and backgrounds behind exchange icons on MM bot dashboard cards, leaving only the exchange logo.
+- Reference: `codex-clipboard-7e902134-b411-4fd6-8450-28f04e40e482.png`.
+
+### UR-2026-07-14-MM-BOTS-SEGMENT-FOCUS-FRAME
+- Timestamp: 2026-07-14 Europe/Kyiv
+- Request: remove the black browser focus frame that appears around Dashboard/Accounts tabs after switching views.
+- Reference: `codex-clipboard-d3dc8f14-d892-493e-84d9-54bdb0dbc3bb.png`.
+- Follow-up: commit all current changes without deploying them.
+- Explicit authorization: commit the frameless exchange icons and segment focus styling; do not deploy.
