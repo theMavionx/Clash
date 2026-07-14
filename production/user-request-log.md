@@ -1717,3 +1717,10 @@ Follow-up:
 - Requests: "чомусь під іконкою ще якийсь текст є" and "отут все ще проблема з обводкою".
 - References: `codex-clipboard-411bdb6c-dbf8-4d79-ad0b-bf8fcd87938a.png`, `codex-clipboard-2ee6803f-3ad1-4852-8420-a2cee2e63035.png`.
 - Resolution: render exchange initials only when the logo fails, remove the active-tab outline, and preserve keyboard focus with a separate blue indicator.
+
+### UR-2026-07-14-MM-BOTS-EXCHANGE-SEARCH-AND-SORT
+- Timestamp: 2026-07-14 Europe/Kyiv
+- Request: prioritize active and connected exchanges in the bot launch picker and add a search field so users do not need to scroll through the full venue list.
+- Reference: `codex-clipboard-d627f80a-6417-4928-990b-c8aa26ba4d04.png`.
+- Follow-up: "коміт деплой".
+- Explicit authorization: commit the focused MM Bots picker changes and deploy them to production without a Godot export.

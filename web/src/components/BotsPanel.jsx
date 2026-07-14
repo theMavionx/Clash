@@ -674,25 +674,45 @@ function StepDots({ activeStep }) {
 function ExchangeDropdown({ options, value, onChange, disabled = false }) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [searchQuery, setSearchQuery] = useState('');
   const rootRef = useRef(null);
-  const listboxRef = useRef(null);
+  const searchInputRef = useRef(null);
   const selected = options.find((option) => option.dex.id === value) || null;
+  const visibleOptions = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return options;
+    return options.filter((option) => [
+      option.dex.id,
+      option.dex.label,
+      option.dex.chain,
+      option.dex.description,
+      option.status,
+    ].some((field) => String(field || '').toLowerCase().includes(query)));
+  }, [options, searchQuery]);
 
   const findNextReady = useCallback((start, direction) => {
-    if (options.length === 0) return -1;
-    for (let offset = 0; offset < options.length; offset += 1) {
-      const index = (start + direction * offset + options.length) % options.length;
-      if (options[index]?.strategyAvailable) return index;
+    if (visibleOptions.length === 0) return -1;
+    for (let offset = 0; offset < visibleOptions.length; offset += 1) {
+      const index = (start + direction * offset + visibleOptions.length) % visibleOptions.length;
+      if (visibleOptions[index]?.strategyAvailable) return index;
     }
     return -1;
-  }, [options]);
+  }, [visibleOptions]);
 
   const openListbox = useCallback(() => {
     if (disabled) return;
+    setSearchQuery('');
     const selectedIndex = options.findIndex((option) => option.dex.id === value && option.strategyAvailable);
-    setActiveIndex(selectedIndex >= 0 ? selectedIndex : findNextReady(0, 1));
+    const firstReadyIndex = options.findIndex((option) => option.strategyAvailable);
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : firstReadyIndex);
     setOpen(true);
-  }, [disabled, findNextReady, options, value]);
+  }, [disabled, options, value]);
+
+  const closeListbox = useCallback(() => {
+    setOpen(false);
+    setSearchQuery('');
+    requestAnimationFrame(() => rootRef.current?.querySelector('button')?.focus());
+  }, []);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -700,7 +720,7 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
       if (!rootRef.current?.contains(event.target)) setOpen(false);
     };
     document.addEventListener('pointerdown', handlePointerDown);
-    const frame = requestAnimationFrame(() => listboxRef.current?.focus());
+    const frame = requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown);
       cancelAnimationFrame(frame);
@@ -708,16 +728,23 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
   }, [open]);
 
   useEffect(() => {
-    if (!open || activeIndex < 0) return;
-    document.getElementById(`bot-exchange-option-${options[activeIndex]?.dex.id}`)
-      ?.scrollIntoView({ block: 'nearest' });
-  }, [activeIndex, open, options]);
+    if (!open) return;
+    const selectedIndex = visibleOptions.findIndex(
+      (option) => option.dex.id === value && option.strategyAvailable,
+    );
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : findNextReady(0, 1));
+  }, [findNextReady, open, value, visibleOptions]);
 
-  const handleListKeyDown = (event) => {
+  useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    document.getElementById(`bot-exchange-option-${visibleOptions[activeIndex]?.dex.id}`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex, open, visibleOptions]);
+
+  const handleListKeyDown = (event, fromSearch = false) => {
     if (event.key === 'Escape') {
       event.preventDefault();
-      setOpen(false);
-      requestAnimationFrame(() => rootRef.current?.querySelector('button')?.focus());
+      closeListbox();
       return;
     }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -726,16 +753,15 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
       setActiveIndex((current) => findNextReady(current + direction, direction));
       return;
     }
-    if (event.key === 'Home' || event.key === 'End') {
+    if (!fromSearch && (event.key === 'Home' || event.key === 'End')) {
       event.preventDefault();
-      setActiveIndex(findNextReady(event.key === 'Home' ? 0 : options.length - 1, event.key === 'Home' ? 1 : -1));
+      setActiveIndex(findNextReady(event.key === 'Home' ? 0 : visibleOptions.length - 1, event.key === 'Home' ? 1 : -1));
       return;
     }
-    if ((event.key === 'Enter' || event.key === ' ') && options[activeIndex]?.strategyAvailable) {
+    if ((event.key === 'Enter' || (!fromSearch && event.key === ' ')) && visibleOptions[activeIndex]?.strategyAvailable) {
       event.preventDefault();
-      onChange(options[activeIndex].dex.id);
-      setOpen(false);
-      requestAnimationFrame(() => rootRef.current?.querySelector('button')?.focus());
+      onChange(visibleOptions[activeIndex].dex.id);
+      closeListbox();
     }
   };
 
@@ -774,48 +800,75 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
       </button>
       {open && (
         <div
-          id="bot-exchange-listbox"
-          ref={listboxRef}
-          role="listbox"
-          tabIndex={0}
-          className="bots-focusable parchment-scroll"
-          style={S.exchangeListbox}
-          aria-label="Exchange"
-          aria-activedescendant={activeIndex >= 0 ? `bot-exchange-option-${options[activeIndex].dex.id}` : undefined}
-          onKeyDown={handleListKeyDown}
-          onBlur={(event) => {
-            if (!rootRef.current?.contains(event.relatedTarget)) setOpen(false);
+          style={S.exchangeListboxPanel}
+          onBlur={() => {
+            requestAnimationFrame(() => {
+              if (!rootRef.current?.contains(document.activeElement)) setOpen(false);
+            });
           }}
         >
-          {options.map((option, index) => (
-            <div
-              id={`bot-exchange-option-${option.dex.id}`}
-              key={option.dex.id}
-              role="option"
-              aria-selected={value === option.dex.id}
-              aria-disabled={!option.strategyAvailable}
-              style={{
-                ...S.exchangeOption,
-                ...(index === activeIndex ? S.exchangeOptionActive : {}),
-                ...(!option.strategyAvailable ? S.exchangeOptionDisabled : {}),
-              }}
-              onMouseEnter={() => option.strategyAvailable && setActiveIndex(index)}
-              onClick={() => {
-                if (!option.strategyAvailable) return;
-                onChange(option.dex.id);
-                setOpen(false);
-              }}
-            >
-              <img src={option.dex.logo} alt="" style={S.exchangeOptionLogo} />
-              <span style={S.exchangeOptionText}>
-                <strong>{option.dex.label}</strong>
-                <small>{option.dex.chain} · {option.dex.description}</small>
-              </span>
-              <span style={{ ...S.exchangeOptionStatus, ...(option.readyForLaunch ? S.exchangeOptionStatusReady : {}) }}>
-                {option.status}
-              </span>
-            </div>
-          ))}
+          <div style={S.exchangeSearchBox}>
+            <svg viewBox="0 0 24 24" style={S.exchangeSearchIcon} aria-hidden="true" focusable="false">
+              <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" strokeWidth="2" />
+              <path d="m16 16 4 4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <input
+              ref={searchInputRef}
+              className="bots-focusable"
+              type="search"
+              value={searchQuery}
+              placeholder="Search exchanges"
+              aria-label="Search exchanges"
+              aria-controls="bot-exchange-listbox"
+              aria-activedescendant={activeIndex >= 0 ? `bot-exchange-option-${visibleOptions[activeIndex]?.dex.id}` : undefined}
+              style={S.exchangeSearchInput}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => handleListKeyDown(event, true)}
+            />
+          </div>
+          <div
+            id="bot-exchange-listbox"
+            role="listbox"
+            tabIndex={-1}
+            className="parchment-scroll"
+            style={S.exchangeListbox}
+            aria-label="Exchange"
+            aria-activedescendant={activeIndex >= 0 ? `bot-exchange-option-${visibleOptions[activeIndex]?.dex.id}` : undefined}
+            onKeyDown={handleListKeyDown}
+          >
+            {visibleOptions.length === 0 && (
+              <div style={S.exchangeEmptyState}>No exchanges found</div>
+            )}
+            {visibleOptions.map((option, index) => (
+              <div
+                id={`bot-exchange-option-${option.dex.id}`}
+                key={option.dex.id}
+                role="option"
+                aria-selected={value === option.dex.id}
+                aria-disabled={!option.strategyAvailable}
+                style={{
+                  ...S.exchangeOption,
+                  ...(index === activeIndex ? S.exchangeOptionActive : {}),
+                  ...(!option.strategyAvailable ? S.exchangeOptionDisabled : {}),
+                }}
+                onMouseEnter={() => option.strategyAvailable && setActiveIndex(index)}
+                onClick={() => {
+                  if (!option.strategyAvailable) return;
+                  onChange(option.dex.id);
+                  closeListbox();
+                }}
+              >
+                <img src={option.dex.logo} alt="" style={S.exchangeOptionLogo} />
+                <span style={S.exchangeOptionText}>
+                  <strong>{option.dex.label}</strong>
+                  <small>{option.dex.chain} · {option.dex.description}</small>
+                </span>
+                <span style={{ ...S.exchangeOptionStatus, ...(option.readyForLaunch ? S.exchangeOptionStatusReady : {}) }}>
+                  {option.status}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -1190,16 +1243,33 @@ function BotsPanel({ onClose }) {
         (exchange) => exchange.toLowerCase() === dex.id.toLowerCase(),
       );
     });
+    const syncedAccount = syncedAccounts.find(
+      (account) => account.exchange?.toLowerCase() === dex.id.toLowerCase(),
+    ) || null;
     const accountActive = accountActiveForExchange(syncedAccounts, dex.id);
     const setupSupported = supportsGameWalletSync(dex.id);
     return {
       dex,
       instances,
+      syncedAccount,
+      accountActive,
       strategyAvailable: instances.length > 0 && (setupSupported || accountActive),
       readyForLaunch: instances.length > 0 && accountActive,
       setupSupported,
-      status: instances.length === 0 || (!setupSupported && !accountActive) ? 'UNAVAILABLE' : accountActive ? 'READY' : 'NOT CONNECTED',
+      status: instances.length === 0
+        ? (syncedAccount ? 'CONNECTED' : 'UNAVAILABLE')
+        : (!setupSupported && !accountActive) ? 'UNAVAILABLE' : accountActive ? 'READY' : 'NOT CONNECTED',
     };
+  }).sort((a, b) => {
+    const rank = (option) => {
+      if (option.readyForLaunch) return 0;
+      if (option.accountActive) return 1;
+      if (option.syncedAccount) return 2;
+      if (option.strategyAvailable) return 3;
+      return 4;
+    };
+    return rank(a) - rank(b)
+      || String(a.dex.label || a.dex.id).localeCompare(String(b.dex.label || b.dex.id));
   }), [configuredInstances, syncedAccounts]);
 
   const accountExchangeOptions = useMemo(() => getAvailableDexConfigs()
@@ -4582,19 +4652,53 @@ const S = {
     flexShrink: 0,
     color: '#77573D',
   },
-  exchangeListbox: {
+  exchangeListboxPanel: {
     position: 'absolute',
     zIndex: 20,
     top: 'calc(100% + 6px)',
     left: 0,
     right: 0,
-    maxHeight: 280,
-    overflowY: 'auto',
     padding: 6,
     border: '2px solid #BBA882',
     borderRadius: 12,
     background: '#FDF8E7',
     boxShadow: '0 12px 26px rgba(92,58,33,0.24)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  exchangeSearchBox: {
+    minHeight: 38,
+    border: '2px solid #D4C8B0',
+    borderRadius: 9,
+    background: '#FFFDF5',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 7,
+    padding: '0 10px',
+    color: '#8A7459',
+  },
+  exchangeSearchIcon: {
+    width: 17,
+    height: 17,
+    flexShrink: 0,
+  },
+  exchangeSearchInput: {
+    width: '100%',
+    minWidth: 0,
+    height: 34,
+    border: 0,
+    outline: 0,
+    background: 'transparent',
+    color: '#5C3A21',
+    fontFamily: 'inherit',
+    fontSize: 13,
+    fontWeight: 700,
+  },
+  exchangeListbox: {
+    maxHeight: 248,
+    overflowY: 'auto',
+    outline: 0,
   },
   exchangeOption: {
     minHeight: 48,
@@ -4675,6 +4779,15 @@ const S = {
   exchangeOptionStatusReady: {
     background: 'rgba(67,160,71,0.16)',
     color: '#2E7D32',
+  },
+  exchangeEmptyState: {
+    minHeight: 72,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#8A7459',
+    fontSize: 12,
+    fontWeight: 800,
   },
   exchangeStatus: {
     minHeight: 18,
