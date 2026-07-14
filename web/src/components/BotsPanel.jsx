@@ -3421,7 +3421,6 @@ function BotsPanel({ onClose }) {
         )}
       </div>
   );
-  };
 
 
   const renderLaunch = () => (
