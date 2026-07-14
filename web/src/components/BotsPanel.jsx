@@ -378,6 +378,11 @@ const mapHandleToBot = (
     .join(', ');
   const exchange = getExchangeName(handle.id);
   const exchangeKey = getExchangeKey(handle.id);
+  const exchangeKeys = [...new Set(
+    parseStrategyInstanceId(handle.id).exchanges
+      .map((item) => String(item || '').toLowerCase())
+      .filter(Boolean),
+  )];
   const bal = exchangeBalances[exchangeKey];
   const balFmt = formatExchangeBalance(bal);
   const fills = countFillsForExchange(orderHistory, exchange);
@@ -425,6 +430,7 @@ const mapHandleToBot = (
     market: market,
     exchange: exchange,
     exchangeKey,
+    exchangeKeys: exchangeKeys.length ? exchangeKeys : [exchangeKey].filter(Boolean),
     status,
     tradeSize: Number.isFinite(tradeSize) ? tradeSize : details.tradeSize,
     maxPosition: Number.isFinite(maxPosition) ? maxPosition : details.maxPosition,
@@ -476,6 +482,58 @@ function RobotButtonMark({ size = 48 }) {
         <RobotGlyph size={Math.round(size * 0.56)} color="#fff" />
       </div>
     </div>
+  );
+}
+
+function ExchangeMark({ exchangeId, size = 40 }) {
+  const dex = DEX_CONFIG[String(exchangeId || '').toLowerCase()];
+  const label = dex?.label || String(exchangeId || '?').toUpperCase();
+  const initials = label.replace(/[^a-z0-9]/gi, '').slice(0, 2).toUpperCase() || '?';
+  return (
+    <span
+      style={{
+        ...S.exchangeMark,
+        width: size,
+        height: size,
+        borderColor: dex?.borderColor || '#BBA882',
+        background: dex?.colorLight || '#F4EEDC',
+      }}
+      title={label}
+      aria-label={label}
+    >
+      <span style={S.exchangeMarkFallback}>{initials}</span>
+      {dex?.logo ? (
+        <img
+          src={dex.logo}
+          alt=""
+          style={S.exchangeMarkImage}
+          onError={(event) => { event.currentTarget.style.display = 'none'; }}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+function ExchangeMarkStack({ exchangeIds, size = 44 }) {
+  const ids = [...new Set((exchangeIds || []).filter(Boolean))].slice(0, 2);
+  if (ids.length <= 1) return <ExchangeMark exchangeId={ids[0]} size={size} />;
+  return (
+    <span style={{ ...S.exchangeMarkStack, width: size + 17, height: size }} aria-label="Bot exchanges">
+      {ids.map((id, index) => (
+        <span key={id} style={{ ...S.exchangeMarkStackItem, left: index * 17, zIndex: ids.length - index }}>
+          <ExchangeMark exchangeId={id} size={size} />
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function RefreshGlyph({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20 11a8 8 0 1 0 2 5.3" />
+      <path d="M20 4v7h-7" />
+    </svg>
   );
 }
 
@@ -695,9 +753,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
     <div style={{ ...S.botCard, ...(expanded ? S.botCardExpanded : {}) }}>
       <button type="button" style={S.cardMainButton} onClick={() => onToggle(bot.id)} aria-expanded={expanded}>
         <div style={S.cardTop}>
-          <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${type.accent} 0%, ${type.accentDark} 100%)` }}>
-            <RobotGlyph size={26} color="#fff" />
-          </div>
+          <ExchangeMarkStack exchangeIds={bot.exchangeKeys} size={44} />
           <div style={S.cardTitleBlock}>
             <div style={S.cardTitleRow}>
               <strong style={S.cardTitle}>{type.name}</strong>
@@ -2213,15 +2269,15 @@ function BotsPanel({ onClose }) {
         </button>
       )}
 
-      <div style={S.toolbar}>
-        <div style={S.segment}>
-          <button type="button" style={{ ...S.segmentButton, ...S.segmentActive }} onClick={() => setView('dashboard')}>
+      <div className="bots-toolbar" style={S.toolbar}>
+        <div className="bots-segment" style={S.segment}>
+          <button type="button" className="bots-segment-button" aria-current="page" style={{ ...S.segmentButton, ...S.segmentActive }} onClick={() => setView('dashboard')}>
             Dashboard
           </button>
-          <button type="button" style={S.segmentButton} onClick={openAccounts}>
+          <button type="button" className="bots-segment-button" style={S.segmentButton} onClick={openAccounts}>
             Accounts
           </button>
-          <button type="button" style={S.segmentButton} onClick={() => setView('history')}>
+          <button type="button" className="bots-segment-button" style={S.segmentButton} onClick={() => setView('history')}>
             History
           </button>
         </div>
@@ -2280,7 +2336,7 @@ function BotsPanel({ onClose }) {
         <div style={S.emptyLaunchState}>
           <div style={S.emptyLaunchIcon}><RobotGlyph size={40} color="#5C3A21" /></div>
           <h3 style={S.emptyLaunchTitle}>Launch your first market maker</h3>
-          <p style={S.emptyLaunchCopy}>Choose an exchange, set your limits, and your bot will appear here.</p>
+          <p className="bots-empty-copy" style={S.emptyLaunchCopy}>Choose an exchange, set your limits, and your bot will appear here.</p>
           <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.emptyLaunchButton }} onClick={openLaunch}>
             Launch New Bot
           </button>
@@ -2298,10 +2354,11 @@ function BotsPanel({ onClose }) {
     ];
     return (
     <>
-      <div style={S.toolbar}>
-        <div style={S.segment}>
+      <div className="bots-toolbar" style={S.toolbar}>
+        <div className="bots-segment" style={S.segment}>
           <button
             type="button"
+            className="bots-segment-button"
             style={S.segmentButton}
             onClick={() => setView('dashboard')}
           >
@@ -2309,6 +2366,7 @@ function BotsPanel({ onClose }) {
           </button>
           <button
             type="button"
+            className="bots-segment-button"
             style={S.segmentButton}
             onClick={openAccounts}
           >
@@ -2316,6 +2374,8 @@ function BotsPanel({ onClose }) {
           </button>
           <button
             type="button"
+            className="bots-segment-button"
+            aria-current="page"
             style={{ ...S.segmentButton, ...S.segmentActive }}
             onClick={() => setView('history')}
           >
@@ -2375,15 +2435,15 @@ function BotsPanel({ onClose }) {
             <span style={S.noticeClose}>x</span>
           </button>
         )}
-        <div style={S.toolbar}>
-          <div style={S.segment}>
-            <button type="button" style={S.segmentButton} onClick={() => setView('dashboard')}>
+        <div className="bots-toolbar" style={S.toolbar}>
+          <div className="bots-segment" style={S.segment}>
+            <button type="button" className="bots-segment-button" style={S.segmentButton} onClick={() => setView('dashboard')}>
               Dashboard
             </button>
-            <button type="button" style={{ ...S.segmentButton, ...S.segmentActive }} onClick={openAccounts}>
+            <button type="button" className="bots-segment-button" aria-current="page" style={{ ...S.segmentButton, ...S.segmentActive }} onClick={openAccounts}>
               Accounts
             </button>
-            <button type="button" style={S.segmentButton} onClick={() => setView('history')}>
+            <button type="button" className="bots-segment-button" style={S.segmentButton} onClick={() => setView('history')}>
               History
             </button>
           </div>
@@ -2396,7 +2456,7 @@ function BotsPanel({ onClose }) {
         <div style={S.accountsHero}>
           <div>
             <h3 style={S.accountsHeroTitle}>Exchange Accounts</h3>
-            <p style={S.accountsHeroCopy}>Connect, reconnect, and check balances before launching market maker bots.</p>
+            <p style={S.accountsHeroCopy}>Connection status and trading balance for every venue.</p>
           </div>
           <strong style={S.accountsHeroStat}>{connectedCount}/{accountExchangeOptions.length} active</strong>
         </div>
@@ -2426,16 +2486,24 @@ function BotsPanel({ onClose }) {
                     ? 'NEEDS KEY'
                     : 'MISSING';
             return (
-              <div key={dex.id} style={{ ...S.accountExchangeCard, ...(selected ? S.accountExchangeCardActive : {}) }}>
+              <div
+                key={dex.id}
+                style={{
+                  ...S.accountExchangeCard,
+                  borderLeftColor: dex.borderColor || '#BBA882',
+                  ...(selected ? { ...S.accountExchangeCardActive, borderColor: dex.borderColor || '#1E88E5' } : {}),
+                }}
+              >
                 <button
                   type="button"
+                  className="bots-focusable"
                   style={S.accountExchangeMain}
                   onClick={() => {
                     setSelectedExchangeId(dex.id);
                     setNewAccExchange(dex.id);
                   }}
                 >
-                  <img src={dex.logo} alt="" style={S.exchangeOptionLogo} />
+                  <ExchangeMark exchangeId={dex.id} size={38} />
                   <div style={S.exchangeTriggerText}>
                     <strong>{dex.label}</strong>
                     <small>{dex.chain} · {balFmt.label}</small>
@@ -2443,7 +2511,7 @@ function BotsPanel({ onClose }) {
                   </div>
                   <span style={{ ...S.connectionPill, ...statusStyle }}>{statusLabel}</span>
                 </button>
-                <div style={S.accountQuickActions}>
+                <div className="bots-account-actions" style={S.accountQuickActions}>
                   {!syncedAccount && (
                     <button
                       type="button"
@@ -2496,12 +2564,12 @@ function BotsPanel({ onClose }) {
         </div>
 
         {selectedAccountOption && (
-          <div style={S.inlineConnectionCard}>
+          <div style={{ ...S.inlineConnectionCard, borderLeftColor: selectedAccountOption.dex.borderColor || '#BBA882' }}>
             <div style={S.inlineConnectionHeader}>
-              <img src={selectedAccountOption.dex.logo} alt="" style={S.exchangeOptionLogo} />
+              <ExchangeMark exchangeId={selectedAccountOption.dex.id} size={40} />
               <div style={S.exchangeTriggerText}>
                 <strong>{selectedAccountOption.dex.label}</strong>
-                <small>{selectedAccountOption.dex.chain}</small>
+                <small>{selectedAccountOption.dex.chain} connection</small>
               </div>
               <span style={{ ...S.connectionPill, ...selectedConnectionState.style }}>
                 {selectedConnectionState.label}
@@ -2520,10 +2588,13 @@ function BotsPanel({ onClose }) {
             <span style={S.sectionDesc}>{selectedConnectionState.hint}</span>
               <button
                 type="button"
+                className="bots-focusable"
                 disabled={gameAuthBusy || gameAuthScanning}
                 onClick={refreshGameAuthScan}
-                style={{ ...cartoonBtn('#8D6E63', '#6D4C41'), fontSize: 11, padding: '6px 10px' }}
+                style={S.scanButton}
+                title="Check connection again"
               >
+                {!gameAuthScanning && <RefreshGlyph size={15} />}
                 {gameAuthScanning ? 'Checking…' : 'Scan'}
               </button>
           </div>
@@ -2544,9 +2615,6 @@ function BotsPanel({ onClose }) {
                 const isActive = syncedAccount?.status === 'active';
                 return (
                   <div key={row.exchange} style={S.inlineSetupSection}>
-                    <div style={S.gameAuthRowHint}>
-                      {selectedConnectionState.hint}
-                    </div>
                     {row.exchange === 'hotstuff' && !row.synced && !row.ready && (
                       <div className="bots-inline-row" style={S.grvtOneTapRow}>
                         <input
@@ -2975,9 +3043,9 @@ function BotsPanel({ onClose }) {
             </div>
           </div>
           {selectedExchangeOption?.strategyAvailable && selectedExchangeOption.setupSupported && (
-            <div style={S.inlineConnectionCard}>
+            <div style={{ ...S.inlineConnectionCard, borderLeftColor: selectedExchangeOption.dex.borderColor || '#BBA882' }}>
               <div style={S.inlineConnectionHeader}>
-                <img src={selectedExchangeOption.dex.logo} alt="" style={S.exchangeOptionLogo} />
+                <ExchangeMark exchangeId={selectedExchangeOption.dex.id} size={40} />
                 <div style={S.exchangeTriggerText}>
                   <strong>{selectedExchangeOption.dex.label}</strong>
                   <small>{selectedExchangeOption.dex.chain}</small>
@@ -3223,6 +3291,14 @@ const STYLE = `
     outline: 3px solid #1E88E5 !important;
     outline-offset: 3px;
   }
+  .bots-segment-button {
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .bots-segment-button:focus-visible {
+    outline: 2px solid #1E88E5 !important;
+    outline-offset: 2px;
+  }
   .bots-inline-setup button,
   .bots-inline-setup input,
   .bots-inline-setup select {
@@ -3240,6 +3316,19 @@ const STYLE = `
   @keyframes botsSpin { to { transform: rotate(360deg); } }
   @media (max-width: 560px) {
     .bots-market-select { font-size: 13px; }
+    .bots-toolbar {
+      align-items: stretch !important;
+    }
+    .bots-segment {
+      display: grid !important;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .bots-segment-button {
+      min-width: 0;
+      padding-inline: 6px !important;
+    }
     .bots-inline-form-grid {
       grid-template-columns: 1fr !important;
     }
@@ -3253,6 +3342,14 @@ const STYLE = `
     .bots-inline-actions > * {
       width: 100% !important;
       box-sizing: border-box;
+    }
+    .bots-account-actions {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    .bots-empty-copy {
+      max-width: 290px !important;
+      font-size: 12px !important;
+      padding-inline: 8px;
     }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -3441,27 +3538,28 @@ const S = {
   },
   segment: {
     display: 'flex',
-    gap: 4,
-    padding: 4,
+    gap: 3,
+    padding: 3,
     background: '#e8dfc8',
-    border: '2px solid #d4c8b0',
-    borderRadius: 12,
+    border: '1px solid #C9B896',
+    borderRadius: 8,
   },
   segmentButton: {
-    border: '2px solid transparent',
+    border: '1px solid transparent',
     background: 'transparent',
     color: '#77573d',
     fontSize: 12,
     fontWeight: 900,
-    borderRadius: 8,
-    padding: '7px 10px',
+    borderRadius: 6,
+    padding: '8px 11px',
     cursor: 'pointer',
+    fontFamily: 'inherit',
   },
   segmentActive: {
     background: '#fdf8e7',
-    borderColor: '#bba882',
+    borderColor: '#8B7655',
     color: '#5C3A21',
-    boxShadow: '0 2px 0 #bba882',
+    boxShadow: '0 1px 2px rgba(92,58,33,0.12)',
   },
   launchButton: {
     minHeight: 38,
@@ -3518,11 +3616,15 @@ const S = {
   },
   emptyLaunchCopy: {
     maxWidth: 380,
+    width: '100%',
+    boxSizing: 'border-box',
     margin: '7px 0 18px',
     color: '#77573D',
     fontSize: 13,
     fontWeight: 700,
     lineHeight: 1.45,
+    whiteSpace: 'normal',
+    overflowWrap: 'break-word',
   },
   emptyLaunchButton: {
     minHeight: 44,
@@ -3532,8 +3634,8 @@ const S = {
   },
   botCard: {
     background: '#e8dfc8',
-    border: '3px solid #d4c8b0',
-    borderRadius: 12,
+    border: '2px solid #d4c8b0',
+    borderRadius: 8,
     padding: '10px 12px',
     display: 'flex',
     flexDirection: 'column',
@@ -4049,6 +4151,39 @@ const S = {
     objectFit: 'contain',
     flexShrink: 0,
   },
+  exchangeMark: {
+    position: 'relative',
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    border: '2px solid #BBA882',
+    borderRadius: 8,
+    boxSizing: 'border-box',
+  },
+  exchangeMarkFallback: {
+    color: '#5C3A21',
+    fontSize: 11,
+    fontWeight: 900,
+  },
+  exchangeMarkImage: {
+    position: 'absolute',
+    inset: 4,
+    width: 'calc(100% - 8px)',
+    height: 'calc(100% - 8px)',
+    objectFit: 'contain',
+  },
+  exchangeMarkStack: {
+    position: 'relative',
+    display: 'inline-block',
+    flexShrink: 0,
+  },
+  exchangeMarkStackItem: {
+    position: 'absolute',
+    top: 0,
+    filter: 'drop-shadow(2px 0 0 #E8DFC8)',
+  },
   exchangeOptionText: {
     minWidth: 0,
     flex: 1,
@@ -4089,18 +4224,19 @@ const S = {
   },
   inlineConnectionCard: {
     background: '#F4EEDC',
-    border: '2px solid #C9B896',
-    borderRadius: 14,
-    padding: 10,
+    border: '1px solid #C9B896',
+    borderLeft: '4px solid #BBA882',
+    borderRadius: 8,
+    padding: 12,
     display: 'flex',
     flexDirection: 'column',
-    gap: 8,
+    gap: 10,
   },
   inlineConnectionHeader: {
     display: 'flex',
     alignItems: 'center',
     gap: 9,
-    padding: '2px 2px 6px',
+    padding: '0 0 9px',
     borderBottom: '1px solid #D4C8B0',
   },
   connectionPill: {
@@ -4155,6 +4291,23 @@ const S = {
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  scanButton: {
+    minHeight: 34,
+    padding: '6px 10px',
+    border: '1px solid #A3906A',
+    borderRadius: 7,
+    background: '#FFFDF5',
+    color: '#5C3A21',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    flexShrink: 0,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    fontSize: 11,
+    fontWeight: 900,
   },
   inlineBusyRow: {
     display: 'flex',
@@ -4296,10 +4449,10 @@ const S = {
     marginTop: 10,
   },
   accountsHero: {
-    background: 'linear-gradient(180deg, #E8DFC8 0%, #F4EEDC 100%)',
-    border: '3px solid #D4C8B0',
-    borderRadius: 16,
-    padding: '12px 14px',
+    background: '#E8DFC8',
+    border: '1px solid #C9B896',
+    borderRadius: 8,
+    padding: '11px 12px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -4323,7 +4476,7 @@ const S = {
     flexShrink: 0,
     color: '#1565C0',
     background: 'rgba(30,136,229,0.12)',
-    border: '2px solid rgba(30,136,229,0.25)',
+    border: '1px solid rgba(30,136,229,0.25)',
     borderRadius: 999,
     padding: '6px 9px',
     fontSize: 12,
@@ -4332,22 +4485,23 @@ const S = {
   },
   accountsGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-    gap: 10,
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: 8,
   },
   accountExchangeCard: {
     background: '#F4EEDC',
-    border: '2px solid #C9B896',
-    borderRadius: 14,
-    padding: 10,
+    border: '1px solid #C9B896',
+    borderLeft: '4px solid #BBA882',
+    borderRadius: 8,
+    padding: 9,
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
     minWidth: 0,
   },
   accountExchangeCardActive: {
-    borderColor: '#1E88E5',
-    boxShadow: '0 0 0 2px rgba(30,136,229,0.12)',
+    background: '#FFFDF5',
+    boxShadow: '0 0 0 2px rgba(30,136,229,0.09)',
   },
   accountExchangeMain: {
     border: 'none',
@@ -4372,13 +4526,15 @@ const S = {
   },
   accountQuickActions: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(86px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(78px, 1fr))',
     gap: 6,
+    paddingTop: 7,
+    borderTop: '1px solid #D4C8B0',
   },
   accountActionButton: {
-    minHeight: 30,
+    minHeight: 34,
     padding: '5px 7px',
-    borderRadius: 10,
+    borderRadius: 7,
     fontSize: 11,
   },
   gameAuthCard: {

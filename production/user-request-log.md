@@ -1699,3 +1699,9 @@ Follow-up:
 - Request: "отут стилізуй слайдер як в нас в юай в грі пошукай є класи під це"
 - Reference: `codex-clipboard-964cae7e-7bd2-46ee-8ffc-771c6e5a1670.png`.
 - Follow-up: production deploy explicitly cancelled by the owner.
+
+### UR-2026-07-14-MM-BOTS-ACCOUNTS-UI-POLISH
+- Timestamp: 2026-07-14 Europe/Kyiv
+- Request: "стилізуй в ботів юай нормально ... На 2 картинці баг з обводкою ... замість іконки бота показуй іконку біржі ... accounts теж стилізуй красивіше"
+- Follow-up: "потім коміт деплой зроби"
+- Explicit authorization: commit the focused MM Bots UI changes and deploy them to production without a Godot export.
