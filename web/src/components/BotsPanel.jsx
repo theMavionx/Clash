@@ -600,6 +600,9 @@ function ExchangeMark({ exchangeId, size = 40 }) {
   const dex = DEX_CONFIG[String(exchangeId || '').toLowerCase()];
   const label = dex?.label || String(exchangeId || '?').toUpperCase();
   const initials = label.replace(/[^a-z0-9]/gi, '').slice(0, 2).toUpperCase() || '?';
+  const logoSrc = dex?.logo || '';
+  const [failedLogo, setFailedLogo] = useState('');
+  const showLogo = Boolean(logoSrc && failedLogo !== logoSrc);
   return (
     <span
       style={{
@@ -612,13 +615,13 @@ function ExchangeMark({ exchangeId, size = 40 }) {
       title={label}
       aria-label={label}
     >
-      <span style={S.exchangeMarkFallback}>{initials}</span>
-      {dex?.logo ? (
+      {!showLogo && <span style={S.exchangeMarkFallback}>{initials}</span>}
+      {showLogo ? (
         <img
-          src={dex.logo}
+          src={logoSrc}
           alt=""
           style={S.exchangeMarkImage}
-          onError={(event) => { event.currentTarget.style.display = 'none'; }}
+          onError={() => setFailedLogo(logoSrc)}
         />
       ) : null}
     </span>
@@ -4024,9 +4027,9 @@ const S = {
   },
   segmentActive: {
     background: '#fdf8e7',
-    borderColor: '#8B7655',
+    borderColor: '#C9B896',
     color: '#5C3A21',
-    boxShadow: '0 1px 2px rgba(92,58,33,0.12)',
+    boxShadow: 'inset 0 -2px 0 rgba(187,168,130,0.28), 0 1px 2px rgba(92,58,33,0.1)',
   },
   launchButton: {
     minHeight: 38,

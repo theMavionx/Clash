@@ -1711,3 +1711,9 @@ Follow-up:
 - Request: "в мене чомусь старий юай все ще"
 - Finding: a later production release was built from the correct commit plus uncommitted server-side MM Bots files, restoring the old UI despite a fresh browser bundle.
 - Resolution: integrate the parallel bot-auth merge, fix its misplaced component brace, redeploy the clean committed UI, and reject dirty production source checkouts in future atomic deploys.
+
+### UR-2026-07-14-MM-BOTS-ICON-AND-TAB-POLISH
+- Timestamp: 2026-07-14 Europe/Kyiv
+- Requests: "чомусь під іконкою ще якийсь текст є" and "отут все ще проблема з обводкою".
+- References: `codex-clipboard-411bdb6c-dbf8-4d79-ad0b-bf8fcd87938a.png`, `codex-clipboard-2ee6803f-3ad1-4852-8420-a2cee2e63035.png`.
+- Resolution: render exchange initials only when the logo fails, and replace the dark active-tab border with the restrained UI border treatment.
