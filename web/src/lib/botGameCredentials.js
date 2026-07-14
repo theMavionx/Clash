@@ -11,6 +11,12 @@ import {
 import { getFlashOneTapAgent } from './flashOneTap';
 import { readRisexSigner, rememberRisexSigner, RISEX_SIGNER_STORAGE_PREFIX, RISEX_SIGNER_TTL_SECONDS } from './risexClient';
 import { readAvantisSmartWalletDelegate, importAvantisSmartWalletDelegate } from './avantisSmartWallet';
+import { readOstiumSmartWalletDelegate, importOstiumSmartWalletDelegate } from './ostiumSmartWallet';
+import {
+  loadOstiumDelegate,
+  saveOstiumDelegate as persistOstiumDelegateWallet,
+  ostiumDelegateFromPrivateKey,
+} from './ostiumDelegateWallet';
 import { registeredDexWallet, playerLoginWallet } from './playerDexAccounts';
 import { readPacificaAgent, findAnyPacificaAgent, listStoredPacificaMasters } from './pacificaAgentStorage';
 import { NADO_SUBACCOUNT_NAME } from './nadoConfig';
@@ -33,6 +39,8 @@ const KATANA_STORAGE_KEY = 'clash_katana_credentials_v1';
 const KATANA_ONE_TAP_PREFIX = 'clash_katana_one_tap_signer_v1';
 const NADO_LINKED_PREFIX = 'clash_nado_linked_signer_v1';
 const AVANTIS_DELEGATE_PREFIX = 'clash_avantis_smart_wallet_delegate_v1:';
+const OSTIUM_DELEGATE_PREFIX = 'clash_ostium_delegate_wallet_v1:';
+const OSTIUM_SMART_WALLET_PREFIX = 'clash_ostium_smart_wallet_delegate_v1:';
 const GMX_ONE_TAP_KEY = 'clash_gmx_one_tap_signer_v1';
 const GMTRADE_ONE_TAP_PREFIX = 'clash_gmtrade_one_tap_signer_v1';
 const PERPL_ONE_TAP_PREFIX = 'clash_perpl_one_tap_signer_v1';
@@ -311,6 +319,24 @@ export function saveAvantisDelegate(privateKey, wallet) {
   };
 }
 
+/** Save Ostium Futures-parity delegate for Bots (same storage as one-tap). */
+export async function saveOstiumDelegateForBots(privateKey, wallet) {
+  const owner = String(wallet || '').trim().toLowerCase();
+  if (!isEvmAddress(owner)) {
+    throw new Error('Connect your Arbitrum wallet (0x…) for Ostium.');
+  }
+  const signer = ostiumDelegateFromPrivateKey(privateKey);
+  await persistOstiumDelegateWallet(owner, signer);
+  // Keep legacy smart-wallet key in sync for older gather paths.
+  try { importOstiumSmartWalletDelegate(owner, signer.privateKey); } catch { /* optional */ }
+  return {
+    privateKey: signer.privateKey,
+    subAccount: '0',
+    metadata: { source: 'manual_delegate', wallet: owner, delegate: signer.address, exchange: 'ostium' },
+    hint: 'Ostium one-tap delegate',
+  };
+}
+
 /** Save Hibachi API key + account id + signing key for Bots. */
 export async function saveHibachiBotCredentials({ apiKey, accountId, privateKey }) {
   const key = String(apiKey || '').trim();
@@ -501,7 +527,7 @@ function readNadoLinkedSigner(owner) {
 }
 
 /** Temporarily disabled in Bots — broken auth or needs access codes. */
-export const BOTS_DISABLED_EXCHANGES = ['gmx', 'gmtrade', 'perpl', 'phoenix', 'risex'];
+export const BOTS_DISABLED_EXCHANGES = ['gmx', 'gmtrade', 'perpl', 'phoenix', 'risex', 'flash'];
 
 /** Exchanges Bots can sync from game-local credential storage. */
 export const GAME_WALLET_EXCHANGES = [
@@ -509,11 +535,11 @@ export const GAME_WALLET_EXCHANGES = [
   'hotstuff',
   'grvt',
   'avantis',
+  'ostium',
   'hibachi',
   'katana',
   'nado',
   'pacifica',
-  'flash',
   'decibel',
 ];
 
@@ -522,6 +548,7 @@ export const GAME_WALLET_EXCHANGE_LABELS = {
   hotstuff: 'Hotstuff',
   grvt: 'GRVT',
   avantis: 'Avantis',
+  ostium: 'Ostium',
   hibachi: 'Hibachi',
   risex: 'RISEx',
   katana: 'Katana',
@@ -542,6 +569,7 @@ export const UNSUPPORTED_GAME_WALLET_EXCHANGES = [
   { id: 'perpl', label: 'Perpl', reason: 'temporarily disabled — delegate auth required' },
   { id: 'phoenix', label: 'Phoenix', reason: 'temporarily disabled — one-tap via foreign wallet not working' },
   { id: 'risex', label: 'RISEx', reason: 'temporarily disabled — access codes required' },
+  { id: 'flash', label: 'Flash Trade', reason: 'temporarily disabled — contract migration in progress' },
   { id: 'mock', label: 'Mock', reason: 'dev tests only' },
 ];
 
@@ -879,6 +907,54 @@ export async function gatherGameCredentials(exchangeId, player, ctx = {}) {
     return {
       ok: false,
       error: 'No Avantis smart-wallet delegate. Click Smart Wallet + Sync in Bots (setDelegate + USDC approve).',
+    };
+  }
+
+  if (ex === 'ostium') {
+    const wallets = [
+      ...evmCandidateWallets(player, 'ostium', ctx, OSTIUM_DELEGATE_PREFIX),
+      ...evmCandidateWallets(player, 'ostium', ctx, OSTIUM_SMART_WALLET_PREFIX),
+    ].filter((w, i, arr) => arr.indexOf(w) === i);
+    if (wallets.length === 0) {
+      return { ok: false, error: 'Connect Arbitrum wallet in the game (Ostium).' };
+    }
+    for (const w of wallets) {
+      const futuresDelegate = await loadOstiumDelegate(w).catch(() => null);
+      if (futuresDelegate?.privateKey) {
+        return {
+          ok: true,
+          privateKey: futuresDelegate.privateKey,
+          subAccount: '0',
+          metadata: {
+            source: 'game_delegate',
+            wallet: w,
+            delegate: futuresDelegate.address,
+            exchange: ex,
+            mode: 'futures_one_tap',
+          },
+          hint: 'Ostium Futures one-tap delegate',
+        };
+      }
+      const legacy = readOstiumSmartWalletDelegate(w);
+      if (legacy?.privateKey) {
+        return {
+          ok: true,
+          privateKey: legacy.privateKey,
+          subAccount: '0',
+          metadata: {
+            source: 'game_delegate',
+            wallet: w,
+            delegate: legacy.address,
+            exchange: ex,
+            mode: 'legacy_smart_wallet',
+          },
+          hint: 'Ostium smart-wallet delegate',
+        };
+      }
+    }
+    return {
+      ok: false,
+      error: 'No Ostium delegate. Click One tap + Sync in Bots (setDelegate + USDC approve + gas), same as Futures.',
     };
   }
 
@@ -1328,8 +1404,14 @@ export async function syncGameAccountToPhantom({
     return {
       ok: false,
       error: createRes.body?.error?.message
-        || createRes.body?.error?.code
-        || createRes.body?.error
+        || (typeof createRes.body?.error?.code === 'string' ? createRes.body.error.code : null)
+        || (createRes.body?.error?.code != null
+          ? `Something went wrong (code ${createRes.body.error.code}). Check Accounts sync / one-tap gas.`
+          : null)
+        || (typeof createRes.body?.error === 'string' ? createRes.body.error : null)
+        || (typeof createRes.body?.error === 'number'
+          ? `Something went wrong (code ${createRes.body.error}). Check Accounts sync / one-tap gas.`
+          : null)
         || `account create failed (HTTP ${createRes.status})`,
     };
   }
@@ -1406,8 +1488,14 @@ export async function syncDirectAccountToPhantom({
     return {
       ok: false,
       error: createRes.body?.error?.message
-        || createRes.body?.error?.code
-        || createRes.body?.error
+        || (typeof createRes.body?.error?.code === 'string' ? createRes.body.error.code : null)
+        || (createRes.body?.error?.code != null
+          ? `Something went wrong (code ${createRes.body.error.code}). Check Accounts sync / one-tap gas.`
+          : null)
+        || (typeof createRes.body?.error === 'string' ? createRes.body.error : null)
+        || (typeof createRes.body?.error === 'number'
+          ? `Something went wrong (code ${createRes.body.error}). Check Accounts sync / one-tap gas.`
+          : null)
         || `account create failed (HTTP ${createRes.status})`,
     };
   }

@@ -14,6 +14,7 @@ import {
   saveKatanaBotCredentials,
   saveHotstuffAgent,
   saveAvantisDelegate,
+  saveOstiumDelegateForBots,
   saveHibachiBotCredentials,
   saveRisexSessionSigner,
   saveNadoLinkedSigner,
@@ -24,9 +25,24 @@ import {
   reconnectGameAccountToPhantom,
   supportsGameWalletSync,
   syncGameAccountToPhantom,
+  UNSUPPORTED_GAME_WALLET_EXCHANGES,
 } from '../lib/botGameCredentials';
 import { botApiUrl, botAuthHeaders, botWsUrl, fetchBotApiJson, botApiPathCandidates } from '../lib/botApiClient';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
+import { topUpOstiumDelegateGas, refreshOstiumOneTapStatus } from '../lib/ostiumOneTapSetup';
+import { OSTIUM_CHAIN_ID } from '../lib/ostiumConfig';
+import {
+  describeOstiumBotAction,
+  normalizeOstiumErrorText,
+  classifyOstiumIssue,
+} from '../lib/ostiumBotUx';
+import {
+  AGGRESSIVE_VOLUME_SLIDER,
+  formatVolumeUsd,
+  impliedDailyVolumeFromSize,
+  observedCostPer1M,
+  planAggressiveVolume,
+} from '../lib/aggressiveVolumePlan';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import { keccak256 } from 'js-sha3';
 
@@ -94,12 +110,12 @@ const PRESETS = {
   calm: {
     label: 'Calm',
     title: 'Calm preset',
-    copy: 'Slower refresh, tighter inventory guardrails, fewer order changes.',
+    copy: 'Slower refresh, steady inventory. Aim for ~0 PnL or a small plus while still printing volume.',
   },
   aggressive: {
     label: 'Aggressive',
-    title: 'Aggressive preset',
-    copy: 'Faster refresh, wider working range, more quote updates.',
+    title: 'Aggressive — volume target',
+    copy: 'Set how much notional volume you want per day. We estimate deposit, average leverage, and farming cost per $1M.',
   },
 };
 
@@ -134,10 +150,26 @@ function getBotType(type) {
 }
 
 function formatApiError(error, fallback = 'unknown error') {
-  if (!error) return fallback;
-  if (typeof error === 'string') return error;
-  if (typeof error.message === 'string' && error.message) return error.message;
-  if (typeof error.code === 'string' && error.code) return error.code;
+  if (error == null || error === '') return fallback;
+  if (typeof error === 'number') {
+    return `Something went wrong (code ${error}). Check one-tap gas / sync and try again.`;
+  }
+  if (typeof error === 'string') {
+    const t = error.trim();
+    if (/^\d+$/.test(t)) {
+      return `Something went wrong (code ${t}). Check one-tap gas / sync and try again.`;
+    }
+    return t;
+  }
+  if (typeof error === 'object') {
+    if (typeof error.message === 'string' && error.message.trim()) return error.message.trim();
+    if (typeof error.reason === 'string' && error.reason.trim()) return error.reason.trim();
+    if (error.code != null && (error.message == null || error.message === '')) {
+      const classified = classifyOstiumIssue(error);
+      if (classified) return `${classified.title}: ${classified.hint}`;
+      return `Something went wrong (code ${error.code}). Re-check Accounts sync and try again.`;
+    }
+  }
   try {
     return JSON.stringify(error);
   } catch {
@@ -253,7 +285,60 @@ function getExchangeKey(id) {
 function shortenError(msg, max = 80) {
   const t = String(msg || '').replace(/\s+/g, ' ').trim();
   if (!t) return 'unknown error';
+  if (/^\d+$/.test(t)) return `error code ${t}`;
   return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+/** Pre-flight for Ostium Start/Launch — block when one-tap gas is empty. */
+async function assertOstiumGasReadyForLaunch(evmWallet, walletHint = '') {
+  const publicClient = evmWallet?.getPublicClient?.(OSTIUM_CHAIN_ID) || evmWallet?.publicClient;
+  const walletAddr = String(
+    walletHint
+    || evmWallet?.address
+    || '',
+  ).toLowerCase();
+  if (!publicClient || !walletAddr) {
+    return {
+      ok: false,
+      error:
+        'Connect Arbitrum MetaMask, then Accounts → Ostium → One tap + Sync '
+        + '(and Top up one-tap gas if needed) before Start.',
+    };
+  }
+  try {
+    const status = await refreshOstiumOneTapStatus(publicClient, walletAddr);
+    if (!status?.address) {
+      return {
+        ok: false,
+        error: 'Ostium one-tap not set up. Accounts → Ostium → One tap + Sync.',
+      };
+    }
+    if (!status.active) {
+      return {
+        ok: false,
+        error:
+          'Ostium one-tap not synced on-chain. Accounts → Ostium → One tap + Sync '
+          + '(MetaMask: setDelegate + USDC approve + gas).',
+      };
+    }
+    if (status.needsEth) {
+      const eth = Number(status.eth);
+      const ethLabel = Number.isFinite(eth) ? eth.toFixed(6) : '?';
+      return {
+        ok: false,
+        error:
+          `One-tap gas too low (${ethLabel} ETH on delegate). `
+          + 'Click «Top up one-tap gas» — MetaMask sends ~0.0003 ETH. '
+          + 'Without this the bot fails with “insufficient funds for gas”.',
+      };
+    }
+    return { ok: true, status };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e?.message || 'Could not check Ostium one-tap gas. Reconnect MetaMask and retry.',
+    };
+  }
 }
 
 function formatExchangeBalance(bal) {
@@ -319,6 +404,8 @@ const getBotConfigDetails = (id) => {
   if (key.includes('grvt')) return { tradeSize: 10, maxPosition: 100, preset: 'calm' };
   if (key.includes('hyperliquid') && key.includes('symmetric_mm')) return { tradeSize: 10, maxPosition: 50, preset: 'aggressive' };
   if (key.includes('pacifica')) return { tradeSize: 50, maxPosition: 50, preset: 'calm' };
+  if (key.includes('ostium')) return { tradeSize: 50, maxPosition: 500, preset: 'calm' };
+  if (key.includes('decibel')) return { tradeSize: 50, maxPosition: 150, preset: 'calm' };
   if (key.includes('avantis')) return { tradeSize: 2000, maxPosition: 20000, preset: 'calm' };
   if (key.includes('avantis')) return { tradeSize: 1500, maxPosition: 15000, preset: 'calm' };
   if (key.includes('mock')) return { tradeSize: 50, maxPosition: 500, preset: 'calm' };
@@ -398,12 +485,36 @@ const mapHandleToBot = (
     lastAction = 'Ready to start with your saved settings';
   } else if (!isRunning) {
     lastAction = 'Connect an active exchange account before starting';
+  } else if (exchangeKey === 'ostium') {
+    const rejectFromBackoff = (Array.isArray(backoffSymbols) ? backoffSymbols : [])
+      .map((s) => s.last_reject_reason)
+      .find(Boolean);
+    const described = describeOstiumBotAction({
+      quotes: openQuotes,
+      cycles,
+      availableUsd: typeof bal?.available === 'number' ? bal.available : null,
+      lastError: normalizeOstiumErrorText(
+        rt.last_reject_reason || rejectFromBackoff || rt.creds_pause_reason || '',
+      ),
+      inBackoff,
+      backoffSymbols,
+      credsPaused: rt.creds_paused === true,
+      credsPauseReason: rt.creds_pause_reason || '',
+    });
+    lastAction = described.message;
   } else if (inBackoff) {
     const parts = backoffSymbols.map(
       (s) => `${s.symbol} (~${s.pause_secs_remaining ?? '?'}s)`,
     );
+    const why = normalizeOstiumErrorText(
+      rt.last_reject_reason
+      || backoffSymbols.map((s) => s.last_reject_reason).find(Boolean)
+      || '',
+    );
     lastAction = `Circuit breaker active${parts.length ? `: ${parts.join(', ')}` : ''}. `
-      + 'Fix API keys / margin, then wait for cooldown.';
+      + (why
+        ? `Last reject: ${shortenError(why, 120)}`
+        : 'Fix API keys / margin / gas, then wait for cooldown.');
   } else if (bal?.error && (bal.available ?? 0) <= 0 && (bal.equity ?? 0) <= 0) {
     lastAction = `Exchange balance error: ${shortenError(bal.error)}`;
   } else if (openQuotes > 0) {
@@ -709,12 +820,22 @@ function ExchangeDropdown({ options, value, onChange, disabled = false }) {
 }
 
 // Bounded slider card matching premium styling
-function SliderField({ label, value, min, max, step, onChange, defaultValue }) {
+function SliderField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  defaultValue,
+  formatValue = money,
+  formatBound = money,
+}) {
   return (
     <div style={S.sliderCard}>
       <div style={S.sliderTop}>
         <span style={S.label}>{label}</span>
-        <strong style={S.sliderValue}>{money(value)}</strong>
+        <strong style={S.sliderValue}>{formatValue(value)}</strong>
       </div>
       <input
         className="bots-range"
@@ -727,10 +848,55 @@ function SliderField({ label, value, min, max, step, onChange, defaultValue }) {
         aria-label={label}
       />
       <div style={S.sliderLabels}>
-        <span>{money(min)}</span>
-        <span>Default {money(defaultValue)}</span>
-        <span>{money(max)}</span>
+        <span>{formatBound(min)}</span>
+        <span>Default {formatBound(defaultValue)}</span>
+        <span>{formatBound(max)}</span>
       </div>
+    </div>
+  );
+}
+
+function AggressivePlanCard({ plan, liveCostPer1M }) {
+  if (!plan) return null;
+  const costLabel = liveCostPer1M != null && Number.isFinite(liveCostPer1M)
+    ? `~$${Math.round(liveCostPer1M)}/$1M (live)`
+    : `~$${Math.round(plan.costPer1MUsd)}/$1M (est.)`;
+  return (
+    <div style={S.aggressivePlanCard}>
+      <span style={S.label}>Volume plan</span>
+      <div style={S.aggressivePlanGrid}>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Deposit</span>
+          <strong style={S.aggressivePlanVal}>{money(plan.depositUsd)}</strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Avg leverage</span>
+          <strong style={S.aggressivePlanVal}>{plan.avgLeverage}×</strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Cost</span>
+          <strong style={S.aggressivePlanVal}>{costLabel}</strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Trade size</span>
+          <strong style={S.aggressivePlanVal}>{money(plan.tradeSizeUsd)}</strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Max position</span>
+          <strong style={S.aggressivePlanVal}>{money(plan.maxPositionUsd)}</strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Est. daily cost</span>
+          <strong style={S.aggressivePlanVal}>
+            {`−$${Number(plan.expectedDailyCostUsd || 0).toFixed(2)}`}
+          </strong>
+        </div>
+      </div>
+      <p style={S.aggressivePlanHint}>
+        Model: ~{plan.roundTripsPerDay} round-trips/day → size = volume ÷ (2×RTs).
+        Deposit covers dual quotes + inventory at {plan.avgLeverage}× (cap {plan.maxLeverage}×).
+        Cost mixes maker/taker fees + ~{plan.adverseBps} bps bleed (1 bps ≈ $100/$1M).
+      </p>
     </div>
   );
 }
@@ -947,6 +1113,7 @@ function BotsPanel({ onClose }) {
   const [selectedType, setSelectedType] = useState('symmetric_mm');
   const [tradeSize, setTradeSize] = useState(20);
   const [maxPosition, setMaxPosition] = useState(200);
+  const [dailyVolumeUsd, setDailyVolumeUsd] = useState(AGGRESSIVE_VOLUME_SLIDER.defaultValue);
   const [preset, setPreset] = useState('calm');
   const [notice, setNotice] = useState('');
   const [totalPnl, setTotalPnl] = useState(0);
@@ -968,6 +1135,13 @@ function BotsPanel({ onClose }) {
   const [newAccSubId, setNewAccSubId] = useState('0');
   const [newAccPrivateKey, setNewAccPrivateKey] = useState('');
   const [keyTransMethod, setKeyTransMethod] = useState('encrypt');
+  const availableExchanges = useMemo(
+    () => getAvailableDexConfigs().map((dex) => ({
+      id: dex.id,
+      name: dex.label || dex.name || dex.id,
+    })),
+    [],
+  );
   const [hlBalanceUsd, setHlBalanceUsd] = useState(null);
   const [grvtBalanceUsd, setGrvtBalanceUsd] = useState(null);
   /** Per-exchange balance from GET /api/v1/portfolio/summary */
@@ -986,6 +1160,7 @@ function BotsPanel({ onClose }) {
   const [katanaWalletInput, setKatanaWalletInput] = useState('');
   const [hotstuffAgentInput, setHotstuffAgentInput] = useState('');
   const [avantisDelegateInput, setAvantisDelegateInput] = useState('');
+  const [ostiumDelegateInput, setOstiumDelegateInput] = useState('');
   const [hibachiApiKeyInput, setHibachiApiKeyInput] = useState('');
   const [hibachiAccountIdInput, setHibachiAccountIdInput] = useState('');
   const [hibachiPrivateKeyInput, setHibachiPrivateKeyInput] = useState('');
@@ -1078,7 +1253,13 @@ function BotsPanel({ onClose }) {
     setScanCompleted(false);
     setSelectedExchangeId(exchangeId);
     setNewAccExchange(exchangeId);
-    setSelectedInstanceId(option.instances.length === 1 ? option.instances[0].id : '');
+    const instanceId = option.instances.length === 1 ? option.instances[0].id : '';
+    setSelectedInstanceId(instanceId);
+    const details = getBotConfigDetails(instanceId || exchangeId);
+    setTradeSize(details.tradeSize);
+    setMaxPosition(details.maxPosition);
+    setDailyVolumeUsd(impliedDailyVolumeFromSize(details.tradeSize));
+    setPreset(details.preset || 'calm');
   }, [exchangeOptions]);
 
   useEffect(() => {
@@ -1136,11 +1317,36 @@ function BotsPanel({ onClose }) {
 
   const activeCount = bots.filter((bot) => bot.status === 'Running' || bot.status === 'Paused').length;
   const mockPnl = portfolioPnl != null ? portfolioPnl : totalPnl;
+
+  const aggressivePlan = useMemo(() => {
+    if (preset !== 'aggressive') return null;
+    return planAggressiveVolume({
+      dailyVolumeUsd,
+      exchangeId: selectedExchangeId,
+    });
+  }, [preset, dailyVolumeUsd, selectedExchangeId]);
+
+  const liveCostPer1M = useMemo(
+    () => observedCostPer1M(fillsCount, mockPnl),
+    [fillsCount, mockPnl],
+  );
+
+  const applyAggressiveVolume = useCallback((volumeUsd, exchangeId = selectedExchangeId) => {
+    const plan = planAggressiveVolume({
+      dailyVolumeUsd: volumeUsd,
+      exchangeId,
+    });
+    setDailyVolumeUsd(volumeUsd);
+    setTradeSize(plan.tradeSizeUsd);
+    setMaxPosition(plan.maxPositionUsd);
+    return plan;
+  }, [selectedExchangeId]);
   const resetLaunch = useCallback(() => {
     setStep('exchange');
     setSelectedType('symmetric_mm');
     setTradeSize(20);
     setMaxPosition(200);
+    setDailyVolumeUsd(AGGRESSIVE_VOLUME_SLIDER.defaultValue);
     setPreset('calm');
     setSelectedInstanceId('');
     setSelectedExchangeId('');
@@ -1607,6 +1813,61 @@ function BotsPanel({ onClose }) {
     refreshGameAuthScan,
   ]);
 
+  const syncAllReadyGameAccounts = useCallback(async () => {
+    if (!token || gameAuthBusy) return;
+    const ready = gameAuthRows.filter((row) => row.ready && !row.synced);
+    const partial = gameAuthRows.filter((row) => row.partial && !row.synced);
+    if (ready.length === 0) {
+      if (partial.length > 0) {
+        const names = partial.map((row) => row.label).join(', ');
+        setNotice(
+          `Partial setup (${names}): add credentials manually in the exchange row (Save + Sync).`,
+        );
+      } else {
+        const missing = gameAuthRows.filter((row) => !row.synced && !row.ready && !row.partial);
+        if (missing.length > 0) {
+          const names = missing.map((row) => row.label).join(', ');
+          setNotice(
+            `No browser credentials for: ${names}. Paste credentials manually in the exchange row or complete setup in Futures again.`,
+          );
+        } else {
+        const hasSynced = gameAuthRows.some((row) => row.synced);
+        const hasReadyUnsynced = gameAuthRows.some((row) => row.ready && !row.synced);
+        setNotice(
+          hasSynced && !hasReadyUnsynced
+            ? 'All ready exchanges are already synced to Phantom.'
+            : 'No new ready exchanges to sync — paste keys manually or complete setup in Futures.',
+        );
+        }
+      }
+      return;
+    }
+    setGameAuthBusy(true);
+    let ok = 0;
+    const failed = [];
+    for (const row of ready) {
+      const result = await setupAndSyncGameAccount({
+        token,
+        exchangeId: row.exchange,
+        player: playerForBots,
+        encryptSecret,
+        keyTransMethod,
+        probeBalance: false,
+        ...gameSetupSyncOpts,
+      });
+      if (result.ok) ok += 1;
+      else failed.push(`${row.label}: ${result.error}`);
+    }
+    await fetchAccounts();
+    await refreshGameAuthScan();
+    setGameAuthBusy(false);
+    if (failed.length === 0) {
+      setNotice(`Synced ${ok} exchange(s) from the game.`);
+    } else {
+      setNotice(`Sync: ${ok} ok, ${failed.length} fail. ${failed[0]}`);
+    }
+  }, [token, gameAuthBusy, gameAuthRows, playerForBots, keyTransMethod, gameSetupSyncOpts, fetchAccounts, refreshGameAuthScan]);
+
   const resolveEvmWallet = useCallback((dex = '') => {
     const fromCtx = String(evmWallet?.address || '').trim().toLowerCase();
     if (/^0x[0-9a-f]{40}$/.test(fromCtx)) return fromCtx;
@@ -1735,6 +1996,73 @@ function BotsPanel({ onClose }) {
       'AVANTIS',
     ).then(() => setAvantisDelegateInput(''));
   }, [completeManualExchangeAndSync, avantisDelegateInput, resolveEvmWallet]);
+
+  const completeOstiumAndSync = useCallback(() => {
+    const wallet = resolveEvmWallet('ostium');
+    if (!ostiumDelegateInput.trim()) {
+      setNotice('Paste Ostium delegate private key.');
+      return;
+    }
+    if (!wallet) {
+      setNotice('Connect Arbitrum MetaMask (trader with USDC) for Ostium.');
+      return;
+    }
+    completeManualExchangeAndSync(
+      'ostium',
+      () => saveOstiumDelegateForBots(ostiumDelegateInput, wallet),
+      'OSTIUM',
+    ).then(() => setOstiumDelegateInput(''));
+  }, [completeManualExchangeAndSync, ostiumDelegateInput, resolveEvmWallet]);
+
+  const topUpOstiumGasClick = useCallback(async () => {
+    if (gameAuthBusy) return;
+    const wallet = resolveEvmWallet('ostium') || evmWallet?.address;
+    if (!wallet) {
+      setNotice('Connect Arbitrum MetaMask to top up one-tap gas.');
+      return;
+    }
+    if (!evmWallet?.isReady) {
+      setNotice('Connect MetaMask (Arbitrum) first.');
+      return;
+    }
+    setGameAuthBusy(true);
+    setNotice('Ostium: MetaMask will send ~0.0003 ETH to the one-tap delegate…');
+    try {
+      const publicClient = evmWallet?.getPublicClient?.(OSTIUM_CHAIN_ID) || evmWallet?.publicClient;
+      const walletClient = evmWallet?.getWalletClient?.(OSTIUM_CHAIN_ID) || evmWallet?.walletClient;
+      const result = await topUpOstiumDelegateGas({
+        walletClient,
+        walletAddr: wallet,
+        publicClient,
+        ensureChain: evmWallet?.ensureChain
+          ? () => evmWallet.ensureChain(OSTIUM_CHAIN_ID)
+          : null,
+        force: true,
+      });
+      const short = result.address
+        ? `${result.address.slice(0, 6)}…${result.address.slice(-4)}`
+        : 'delegate';
+      if (result.gas_top_up?.skipped) {
+        setNotice(`Ostium one-tap ${short} already has gas (${Number(result.eth || 0).toFixed(6)} ETH).`);
+      } else {
+        setNotice(
+          `Ostium gas topped up → ${short} now has ${Number(result.eth || 0).toFixed(6)} ETH. Restart the bot if it was running.`,
+        );
+      }
+    } catch (err) {
+      const msg = String(err?.message || err || '').trim();
+      if (/gas required exceeds allowance|intrinsic gas too low/i.test(msg)) {
+        setNotice(
+          'Ostium gas top-up failed: Arbitrum gas limit was too low (fixed). '
+          + 'Hard-refresh the page (Ctrl+Shift+R), then click «Top up one-tap gas» again.',
+        );
+        return;
+      }
+      setNotice(msg || 'Ostium gas top-up failed.');
+    } finally {
+      setGameAuthBusy(false);
+    }
+  }, [gameAuthBusy, resolveEvmWallet, evmWallet]);
 
   const completeHibachiAndSync = useCallback(() => {
     if (!hibachiApiKeyInput.trim() || !hibachiAccountIdInput.trim() || !hibachiPrivateKeyInput.trim()) {
@@ -1967,6 +2295,16 @@ function BotsPanel({ onClose }) {
         return;
       }
     }
+    if (parsed.exchanges.some((ex) => ex.toLowerCase() === 'ostium')) {
+      const gas = await assertOstiumGasReadyForLaunch(
+        evmWallet,
+        resolveEvmWallet?.('ostium') || '',
+      );
+      if (!gas.ok) {
+        setNotice(gas.error);
+        return;
+      }
+    }
     fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(id)}/start`), {
       method: 'POST',
       headers: botAuthHeaders(token)
@@ -1985,7 +2323,7 @@ function BotsPanel({ onClose }) {
         console.error('start bot failed:', err);
         setNotice('Network error starting bot — check the configured bot endpoint.');
       });
-  }, [token, fetchInstances, syncedAccounts, appendHistory, authorizeGrvtBuilder]);
+  }, [token, fetchInstances, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet]);
 
   const handleStopBot = useCallback((id) => {
     if (!token) return;
@@ -2037,6 +2375,17 @@ function BotsPanel({ onClose }) {
         return;
       }
     }
+    if (parsed.exchanges.some((ex) => ex.toLowerCase() === 'ostium')) {
+      const gas = await assertOstiumGasReadyForLaunch(
+        evmWallet,
+        resolveEvmWallet?.('ostium') || '',
+      );
+      if (!gas.ok) {
+        setNotice(gas.error);
+        setLaunching(false);
+        return;
+      }
+    }
     const spreadBps = preset === 'aggressive' ? 4 : 8;
     try {
       const configResponse = await fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/config`), {
@@ -2047,6 +2396,11 @@ function BotsPanel({ onClose }) {
           position_size_usd: String(maxPosition),
           spread_bps: spreadBps,
           min_funding_diff_bps: spreadBps,
+          preset,
+          profile: preset,
+          ...(preset === 'aggressive'
+            ? { target_daily_volume_usd: String(dailyVolumeUsd) }
+            : {}),
         }),
       });
       const cfgRes = await configResponse.json();
@@ -2065,7 +2419,9 @@ function BotsPanel({ onClose }) {
       }
 
       const cfgNote = cfgRes?.data?.updated
-        ? ` Config: $${tradeSize} trade, spread ${spreadBps} bps.`
+        ? (preset === 'aggressive'
+          ? ` Config: ${formatVolumeUsd(dailyVolumeUsd)}/day target → $${tradeSize} trade @ ~${aggressivePlan?.avgLeverage || '?'}×, ~$${Math.round(aggressivePlan?.costPer1MUsd || 0)}/$1M.`
+          : ` Config: $${tradeSize} trade, spread ${spreadBps} bps.`)
         : '';
       setNotice(`Launched ${getBotType(selectedType).name} on ${getExchangeName(selectedInstanceId)} successfully!${cfgNote}`);
       appendHistory('Strategy started', getExchangeName(selectedInstanceId), getBotType(selectedType).name);
@@ -2081,7 +2437,7 @@ function BotsPanel({ onClose }) {
     } finally {
       setLaunching(false);
     }
-  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder]);
+  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, dailyVolumeUsd, aggressivePlan, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet]);
 
   // Real-time WebSocket updates via Clash game backend mediator
   const [wsConnected, setWsConnected] = useState(false);
@@ -2307,6 +2663,16 @@ function BotsPanel({ onClose }) {
         <div style={S.summaryCard}>
           <span style={S.metricLabel}>Open Quotes</span>
           <strong style={S.summaryValue}>{globalActiveOrders}</strong>
+        </div>
+        <div style={S.summaryCard}>
+          <span style={S.metricLabel}>Vol 24h</span>
+          <strong style={S.summaryValue}>{fillsCount > 0 ? formatVolumeUsd(fillsCount) : '—'}</strong>
+        </div>
+        <div style={S.summaryCard}>
+          <span style={S.metricLabel}>Cost / $1M</span>
+          <strong style={S.summaryValue}>
+            {liveCostPer1M != null ? `~$${Math.round(liveCostPer1M)}` : '—'}
+          </strong>
         </div>
         <div style={S.summaryCard}>
           <span style={S.metricLabel}>Net PnL</span>
@@ -2675,15 +3041,73 @@ function BotsPanel({ onClose }) {
                         </details>
                       </div>
                     )}
-                    {row.exchange === 'flash' && !row.synced && !row.ready && (
-                      <div style={{ marginTop: 6, fontSize: 10, opacity: 0.8, lineHeight: 1.35 }}>
-                        Connect Solana Phantom, then click Connect bot — Flash one-tap will be enabled (same GPL session as Futures).
-                        {' '}Keep ~0.005 SOL in Phantom for one-time session rent + fee (not USDC on Flash).
-                      </div>
-                    )}
-                    {row.exchange === 'flash' && !row.synced && row.ready && (
-                      <div style={{ marginTop: 6, fontSize: 10, opacity: 0.85, lineHeight: 1.35, color: '#166534' }}>
-                        Flash session ready in browser — click Connect bot to sync.
+                    {row.exchange === 'ostium' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                        {!row.synced && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={gameAuthBusy || !evmWallet?.isReady}
+                              onClick={() => connectGameWalletAccount('ostium')}
+                              style={{ ...cartoonBtn('#1565C0', '#0D47A1'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                            >
+                              One tap + Sync
+                            </button>
+                            <div style={{ fontSize: 10, opacity: 0.75, lineHeight: 1.35 }}>
+                              Same as Futures Ostium: setDelegate + USDC approve + gas top-up from MetaMask (Arbitrum).
+                            </div>
+                            <details>
+                              <summary style={{ fontSize: 10, cursor: 'pointer', opacity: 0.8 }}>
+                                Fallback: paste delegate key manually
+                              </summary>
+                              <div style={{ ...S.grvtOneTapRow, marginTop: 6 }}>
+                                <input
+                                  type="password"
+                                  aria-label="Ostium delegate key"
+                                  value={ostiumDelegateInput}
+                                  onChange={(e) => setOstiumDelegateInput(e.target.value)}
+                                  placeholder="Ostium delegate key (0x…)"
+                                  style={{ ...S.credentialInput, ...S.credentialInputInRow }}
+                                  autoComplete="off"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={gameAuthBusy || !ostiumDelegateInput.trim()}
+                                  onClick={completeOstiumAndSync}
+                                  style={{ ...cartoonBtn('#00897B', '#00695C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                                >
+                                  Save + Sync
+                                </button>
+                              </div>
+                            </details>
+                          </>
+                        )}
+                        {row.synced && (
+                          <>
+                            <div style={{ fontSize: 10, opacity: 0.85, lineHeight: 1.35, color: '#166534' }}>
+                              Ostium synced — bot signs with browser delegate (trader USDC stays in your wallet).
+                              If place_order fails with «insufficient funds for gas», the one-tap
+                              delegate needs ETH — click Top up (MetaMask pays). USDC stays on your trader.
+                            </div>
+                            <button
+                              type="button"
+                              disabled={gameAuthBusy || !evmWallet?.isReady}
+                              onClick={topUpOstiumGasClick}
+                              style={{ ...cartoonBtn('#EF6C00', '#E65100'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                              title="MetaMask sends ~0.0003 ETH to the Ostium one-tap delegate"
+                            >
+                              Top up one-tap gas
+                            </button>
+                            <button
+                              type="button"
+                              disabled={gameAuthBusy || !evmWallet?.isReady}
+                              onClick={() => connectGameWalletAccount('ostium')}
+                              style={{ ...cartoonBtn('#1565C0', '#0D47A1'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                            >
+                              Re-run One tap + Sync
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                     {row.exchange === 'decibel' && !row.synced && (
@@ -2998,6 +3422,600 @@ function BotsPanel({ onClose }) {
 
   const noticeIsError = /fail|error|missing|cannot|could not|required|network|invalid/i.test(String(notice || ''));
 
+  const renderAccounts = () => (
+    <>
+      {notice && (
+        <button type="button" style={S.notice} onClick={() => setNotice('')}>
+          {notice}
+          <span style={S.noticeClose}>x</span>
+        </button>
+      )}
+      <div style={S.toolbar}>
+        <div style={S.segment}>
+          <button
+            type="button"
+            style={S.segmentButton}
+            onClick={() => setView('dashboard')}
+          >
+            Dashboard
+          </button>
+          <button
+            type="button"
+            style={{ ...S.segmentButton, ...S.segmentActive }}
+            onClick={() => setView('accounts')}
+          >
+            Accounts
+          </button>
+          <button
+            type="button"
+            style={S.segmentButton}
+            onClick={() => setView('history')}
+          >
+            History
+          </button>
+        </div>
+        <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.launchButton }} onClick={openLaunch}>
+          <RobotGlyph size={22} color="#fff" />
+          Launch New Bot
+        </button>
+      </div>
+
+      <div style={S.accountsContainer}>
+        <div style={S.gameAuthCard}>
+          <div style={S.gameAuthHeader}>
+            <div>
+              <strong style={S.sectionTitle}>Auto-auth from game (Futures)</strong>
+              <p style={S.sectionDesc}>
+                One Connect bot button: read credentials from Futures browser storage, or run the same wallet one-tap flow inline → sync to Phantom → (GRVT: builder auth) → balance probe.
+              </p>
+            </div>
+            <div style={S.gameAuthActions}>
+              <button
+                type="button"
+                disabled={gameAuthBusy}
+                onClick={refreshGameAuthScan}
+                style={{ ...cartoonBtn('#8D6E63', '#6D4C41'), fontSize: 11, padding: '6px 10px' }}
+              >
+                Scan
+              </button>
+              <button
+                type="button"
+                disabled={gameAuthBusy}
+                onClick={syncAllReadyGameAccounts}
+                style={{ ...cartoonBtn('#1E88E5', '#1565C0'), fontSize: 11, padding: '6px 10px' }}
+              >
+                Sync all ready
+              </button>
+            </div>
+          </div>
+          <p style={{ ...S.sectionDesc, margin: '0 0 10px', fontSize: 11 }}>
+            If Sync cannot find keys after Futures setup — paste credentials manually in the exchange row (Save + Sync).
+            {' '}Stage C: Phoenix (one-tap from Futures).
+            {UNSUPPORTED_GAME_WALLET_EXCHANGES.length > 0 && (
+              <> Temporarily disabled in Bots: {UNSUPPORTED_GAME_WALLET_EXCHANGES.map((row) => row.label || row.id).join(', ')}.</>
+            )}
+          </p>
+          <div style={S.gameAuthList}>
+            {gameAuthRows.length === 0 ? (
+              <div style={S.emptyState}>Open Futures in the game, complete exchange setup, then click Scan.</div>
+            ) : (
+              gameAuthRows.map((row) => {
+                const status = row.synced
+                  ? 'synced'
+                  : row.ready
+                    ? 'ready'
+                    : row.partial
+                      ? 'partial'
+                      : 'missing';
+                const statusStyle = status === 'synced'
+                  ? S.gameAuthStatusSynced
+                  : status === 'ready'
+                    ? S.gameAuthStatusReady
+                    : status === 'partial'
+                      ? S.gameAuthStatusPartial
+                      : S.gameAuthStatusMissing;
+                const statusLabel = status === 'synced'
+                  ? 'SYNCED'
+                  : status === 'ready'
+                    ? 'READY'
+                    : status === 'partial'
+                      ? 'PARTIAL'
+                      : 'MISSING';
+                return (
+                  <div key={row.exchange} style={S.gameAuthRow}>
+                    <div style={S.gameAuthRowMain}>
+                      <strong style={{ color: '#5C3A21', fontSize: 13 }}>{row.label}</strong>
+                      <span style={{ ...S.gameAuthStatusPill, ...statusStyle }}>{statusLabel}</span>
+                    </div>
+                    <div style={S.gameAuthRowHint}>
+                      {row.synced
+                        ? 'Account already in Phantom — you can test balance and Launch.'
+                        : row.ready
+                          ? (row.hint || 'Credentials found in browser.')
+                          : (row.error || 'Complete setup in Futures.')}
+                    </div>
+                    {row.exchange === 'hotstuff' && !row.synced && !row.ready && (
+                      <div style={S.grvtOneTapRow}>
+                        <input
+                          type="password"
+                          value={hotstuffAgentInput}
+                          onChange={(e) => setHotstuffAgentInput(e.target.value)}
+                          placeholder="Hotstuff agent private key (0x…)"
+                          style={{ ...S.credentialInput, ...S.credentialInputInRow }}
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          disabled={gameAuthBusy || !hotstuffAgentInput.trim()}
+                          onClick={completeHotstuffAndSync}
+                          style={{ ...cartoonBtn('#5D4037', '#3E2723'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                        >
+                          Save + Sync
+                        </button>
+                      </div>
+                    )}
+                    {row.exchange === 'avantis' && !row.synced && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                        <button
+                          type="button"
+                          disabled={gameAuthBusy || !evmWallet?.isReady}
+                          onClick={() => connectGameWalletAccount('avantis')}
+                          style={{ ...cartoonBtn('#7B1FA2', '#6A1B9A'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                        >
+                          Smart Wallet + Sync
+                        </button>
+                        <div style={{ fontSize: 10, opacity: 0.75, lineHeight: 1.35 }}>
+                          One click: setDelegate + USDC approve (same as Futures). Delegate key stays in the browser — the bot trades without your signature.
+                        </div>
+                        <details>
+                          <summary style={{ fontSize: 10, cursor: 'pointer', opacity: 0.8 }}>
+                            Fallback: paste delegate key manually
+                          </summary>
+                          <div style={{ ...S.grvtOneTapRow, marginTop: 6 }}>
+                            <input
+                              type="password"
+                              value={avantisDelegateInput}
+                              onChange={(e) => setAvantisDelegateInput(e.target.value)}
+                              placeholder="Avantis smart-wallet delegate key (0x…)"
+                              style={{ ...S.credentialInput, ...S.credentialInputInRow }}
+                              autoComplete="off"
+                            />
+                            <button
+                              type="button"
+                              disabled={gameAuthBusy || !avantisDelegateInput.trim()}
+                              onClick={completeAvantisAndSync}
+                              style={{ ...cartoonBtn('#00897B', '#00695C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                            >
+                              Save + Sync
+                            </button>
+                          </div>
+                        </details>
+                      </div>
+                    )}
+
+                    {row.exchange === 'ostium' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                        {!row.synced && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={gameAuthBusy || !evmWallet?.isReady}
+                              onClick={() => connectGameWalletAccount('ostium')}
+                              style={{ ...cartoonBtn('#1565C0', '#0D47A1'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                            >
+                              One tap + Sync
+                            </button>
+                            <div style={{ fontSize: 10, opacity: 0.75, lineHeight: 1.35 }}>
+                              Same as Futures Ostium: setDelegate + USDC approve + gas top-up from MetaMask (Arbitrum).
+                            </div>
+                            <details>
+                              <summary style={{ fontSize: 10, cursor: 'pointer', opacity: 0.8 }}>
+                                Fallback: paste delegate key manually
+                              </summary>
+                              <div style={{ ...S.grvtOneTapRow, marginTop: 6 }}>
+                                <input
+                                  type="password"
+                                  value={ostiumDelegateInput}
+                                  onChange={(e) => setOstiumDelegateInput(e.target.value)}
+                                  placeholder="Ostium delegate key (0x…)"
+                                  style={{ ...S.credentialInput, ...S.credentialInputInRow }}
+                                  autoComplete="off"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={gameAuthBusy || !ostiumDelegateInput.trim()}
+                                  onClick={completeOstiumAndSync}
+                                  style={{ ...cartoonBtn('#00897B', '#00695C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                                >
+                                  Save + Sync
+                                </button>
+                              </div>
+                            </details>
+                          </>
+                        )}
+                        {row.synced && (
+                          <>
+                            <div style={{ fontSize: 10, opacity: 0.85, lineHeight: 1.35, color: '#166534' }}>
+                              Ostium synced — bot signs with browser delegate (trader USDC stays in your wallet).
+                              If place_order fails with «insufficient funds for gas», the one-tap
+                              delegate needs ETH — click Top up (MetaMask pays). USDC stays on your trader.
+                            </div>
+                            <button
+                              type="button"
+                              disabled={gameAuthBusy || !evmWallet?.isReady}
+                              onClick={topUpOstiumGasClick}
+                              style={{ ...cartoonBtn('#EF6C00', '#E65100'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                              title="MetaMask sends ~0.0003 ETH to the Ostium one-tap delegate"
+                            >
+                              Top up one-tap gas
+                            </button>
+                            <button
+                              type="button"
+                              disabled={gameAuthBusy || !evmWallet?.isReady}
+                              onClick={() => connectGameWalletAccount('ostium')}
+                              style={{ ...cartoonBtn('#1565C0', '#0D47A1'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                            >
+                              Re-run One tap + Sync
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {row.exchange === 'decibel' && !row.synced && (
+                      <div style={{ marginTop: 6, fontSize: 10, opacity: 0.8, lineHeight: 1.35 }}>
+                        Signing via server API wallet on VPS (not your private key). First Futures → Decibel → enable fast trading, then Setup & Sync.
+                      </div>
+                    )}
+                    {row.exchange === 'hibachi' && !row.synced && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                        <input
+                          type="password"
+                          value={hibachiApiKeyInput}
+                          onChange={(e) => setHibachiApiKeyInput(e.target.value)}
+                          placeholder="Hibachi API key"
+                          style={S.credentialInput}
+                          autoComplete="off"
+                        />
+                        <input
+                          type="text"
+                          value={hibachiAccountIdInput}
+                          onChange={(e) => setHibachiAccountIdInput(e.target.value)}
+                          placeholder="Hibachi account id"
+                          style={S.credentialInput}
+                          autoComplete="off"
+                        />
+                        <div style={S.grvtOneTapRow}>
+                          <input
+                            type="password"
+                            value={hibachiPrivateKeyInput}
+                            onChange={(e) => setHibachiPrivateKeyInput(e.target.value)}
+                            placeholder="Hibachi signing private key (0x…)"
+                            style={{ ...S.credentialInput, ...S.credentialInputInRow }}
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            disabled={gameAuthBusy || !hibachiApiKeyInput.trim() || !hibachiAccountIdInput.trim() || !hibachiPrivateKeyInput.trim()}
+                            onClick={completeHibachiAndSync}
+                            style={{ ...cartoonBtn('#C62828', '#B71C1C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                          >
+                            Save + Sync
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {row.exchange === 'risex' && !row.synced && (
+                      <div style={S.grvtOneTapRow}>
+                        <input
+                          type="password"
+                          value={risexSessionInput}
+                          onChange={(e) => setRisexSessionInput(e.target.value)}
+                          placeholder="RISEx session private key (0x…)"
+                          style={{ ...S.credentialInput, ...S.credentialInputInRow }}
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          disabled={gameAuthBusy || !risexSessionInput.trim()}
+                          onClick={completeRisexAndSync}
+                          style={{ ...cartoonBtn('#6A1B9A', '#4A148C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                        >
+                          Save + Sync
+                        </button>
+                      </div>
+                    )}
+                    {row.exchange === 'katana' && !row.synced && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                        {row.partial ? (
+                          <p style={{ ...S.sectionDesc, margin: 0, fontSize: 11 }}>
+                            Katana API credentials found. Click <strong>Connect bot</strong> — your wallet will sign one-tap enable (no key paste).
+                          </p>
+                        ) : (
+                          <>
+                            <input
+                              type="password"
+                              value={katanaApiKeyInput}
+                              onChange={(e) => setKatanaApiKeyInput(e.target.value)}
+                              placeholder="Katana API key"
+                              style={S.credentialInput}
+                              autoComplete="off"
+                            />
+                            <input
+                              type="password"
+                              value={katanaApiSecretInput}
+                              onChange={(e) => setKatanaApiSecretInput(e.target.value)}
+                              placeholder="Katana API secret"
+                              style={S.credentialInput}
+                              autoComplete="off"
+                            />
+                            <input
+                              type="text"
+                              value={katanaWalletInput}
+                              onChange={(e) => setKatanaWalletInput(e.target.value)}
+                              placeholder={`Katana wallet (0x…) ${resolveEvmWallet('katana') ? `— default ${resolveEvmWallet('katana').slice(0, 8)}…` : ''}`}
+                              style={S.credentialInput}
+                              autoComplete="off"
+                            />
+                            <div style={S.grvtOneTapRow}>
+                              <input
+                                type="password"
+                                value={katanaOneTapInput}
+                                onChange={(e) => setKatanaOneTapInput(e.target.value)}
+                                placeholder="Katana delegated private key (one-tap)"
+                                style={{ ...S.credentialInput, ...S.credentialInputInRow }}
+                                autoComplete="off"
+                              />
+                              <button
+                                type="button"
+                                disabled={gameAuthBusy || !katanaApiKeyInput.trim() || !katanaApiSecretInput.trim() || !katanaOneTapInput.trim()}
+                                onClick={completeKatanaFullAndSync}
+                                style={{ ...cartoonBtn('#E65100', '#BF360C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                              >
+                                Save + Sync
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {row.exchange === 'nado' && !row.synced && !row.ready && (
+                      <div style={S.grvtOneTapRow}>
+                        <input
+                          type="password"
+                          value={nadoLinkedInput}
+                          onChange={(e) => setNadoLinkedInput(e.target.value)}
+                          placeholder="Nado linked signer private key (0x…)"
+                          style={{ ...S.credentialInput, ...S.credentialInputInRow }}
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          disabled={gameAuthBusy || !nadoLinkedInput.trim()}
+                          onClick={completeNadoAndSync}
+                          style={{ ...cartoonBtn('#0277BD', '#01579B'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                        >
+                          Save + Sync
+                        </button>
+                      </div>
+                    )}
+                    {row.exchange === 'phoenix' && !row.synced && (
+                      <div style={S.grvtOneTapRow}>
+                        <input
+                          type="password"
+                          value={phoenixSecretInput}
+                          onChange={(e) => setPhoenixSecretInput(e.target.value)}
+                          placeholder="Phoenix one-tap Solana secret (base58)"
+                          style={{ ...S.credentialInput, ...S.credentialInputInRow }}
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          disabled={gameAuthBusy || !phoenixSecretInput.trim()}
+                          onClick={completePhoenixAndSync}
+                          style={{ ...cartoonBtn('#AD1457', '#880E4F'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                        >
+                          Save + Sync
+                        </button>
+                      </div>
+                    )}
+                    {row.exchange === 'grvt' && row.partial && !row.synced && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                        <input
+                          type="password"
+                          value={grvtOneTapInput}
+                          onChange={(e) => setGrvtOneTapInput(e.target.value)}
+                          placeholder="GRVT Secret Private Key (from grvt.io)"
+                          style={S.credentialInput}
+                          autoComplete="off"
+                        />
+                        <p style={{ ...S.sectionDesc, margin: 0, fontSize: 11 }}>
+                          Paste the secret key from API key creation, then click <strong>Connect bot</strong> — sync + builder authorization in one step.
+                        </p>
+                      </div>
+                    )}
+                    {row.exchange === 'grvt' && row.synced && (
+                      <button
+                        type="button"
+                        disabled={gameAuthBusy}
+                        onClick={authorizeGrvtBuilderClick}
+                        style={{ ...cartoonBtn('#7B1FA2', '#6A1B9A'), fontSize: 11, padding: '5px 8px', marginTop: 6, width: '100%' }}
+                      >
+                        Retry builder authorization
+                      </button>
+                    )}
+                    <div style={S.gameAuthRowActions}>
+                      <button
+                        type="button"
+                        disabled={gameAuthBusy}
+                        onClick={() => connectGameWalletAccount(row.exchange)}
+                        style={{ ...cartoonBtn('#43A047', '#2E7D32'), fontSize: 11, padding: '5px 8px' }}
+                      >
+                        {(row.ready && !row.synced) || (row.partial && (row.exchange === 'grvt' || row.exchange === 'katana'))
+                          ? 'Connect bot'
+                          : 'Setup & Sync'}
+                      </button>
+                      {row.synced && (
+                        <button
+                          type="button"
+                          disabled={gameAuthBusy}
+                          onClick={() => reconnectGameWalletAccount(row.exchange)}
+                          style={{ ...cartoonBtn('#1E88E5', '#1565C0'), fontSize: 11, padding: '5px 8px' }}
+                          title="Clear Phantom cache and re-sync credentials from the game"
+                        >
+                          Reconnect
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={!row.synced || gameAuthProbing === row.exchange}
+                        onClick={() => testGameExchangeBalance(row.exchange)}
+                        style={{ ...cartoonBtn('#F9A825', '#F57F17'), fontSize: 11, padding: '5px 8px' }}
+                      >
+                        {gameAuthProbing === row.exchange ? '…' : 'Balance'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Form to add/sync new account */}
+        <div style={S.accountFormCard}>
+          <strong style={S.sectionTitle}>Manual key (fallback)</strong>
+          <p style={S.sectionDesc}>
+            Manual key — for any exchange. Or sync credentials from Futures (one-tap / API key) if you already completed setup in the game.
+          </p>
+          {supportsGameWalletSync(newAccExchange) && (
+            <button
+              type="button"
+              onClick={() => connectGameWalletAccount(newAccExchange)}
+              style={{ ...cartoonBtn('#1E88E5', '#1565C0'), marginBottom: 12, width: '100%', py: 2, borderRadius: 12 }}
+            >
+              Use game wallet — Setup & Sync ({newAccExchange.toUpperCase()})
+            </button>
+          )}
+          <div style={S.formGrid}>
+            <div style={S.formField}>
+              <span style={S.label}>Exchange Venue</span>
+              <select
+                value={newAccExchange}
+                onChange={(e) => setNewAccExchange(e.target.value)}
+                style={S.formSelect}
+              >
+                {availableExchanges.map((ex) => (
+                  <option key={ex.id} value={ex.id}>{ex.name}</option>
+                ))}
+              </select>
+            </div>
+            <div style={S.formField}>
+              <span style={S.label}>Account Label</span>
+              <input
+                type="text"
+                placeholder="My Trading Wallet"
+                value={newAccLabel}
+                onChange={(e) => setNewAccLabel(e.target.value)}
+                style={S.formInput}
+              />
+            </div>
+            <div style={S.formField}>
+              <span style={S.label}>Sub-Account ID (0 = main wallet with your USDC)</span>
+              <input
+                type="text"
+                placeholder="0"
+                value={newAccSubId}
+                onChange={(e) => setNewAccSubId(e.target.value)}
+                style={S.formInput}
+              />
+            </div>
+            <div style={S.formField}>
+              <span style={S.label}>Transmission Method</span>
+              <select
+                value={keyTransMethod}
+                onChange={(e) => setKeyTransMethod(e.target.value)}
+                style={S.formSelect}
+              >
+                <option value="encrypt">XOR Encrypted (Recommended)</option>
+                <option value="raw">Literal (Plain Text)</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ ...S.formField, marginTop: 10 }}>
+            <span style={S.label}>Private Key / Secret API Key</span>
+            <input
+              type="password"
+              placeholder="0x... or EVM private key"
+              value={newAccPrivateKey}
+              onChange={(e) => setNewAccPrivateKey(e.target.value)}
+              style={S.formInput}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={addAccount}
+            style={{ ...cartoonBtn('#43A047', '#2E7D32'), marginTop: 12, width: '100%', py: 2, borderRadius: 12 }}
+          >
+            Connect & Sync Account
+          </button>
+        </div>
+
+        {/* List of synced accounts */}
+        <div style={S.accountsListCard}>
+          <strong style={S.sectionTitle}>Synced Wallets & API Keys</strong>
+          <p style={S.sectionDesc}>Active exchange keys matching your player tenant ID.</p>
+          <div style={S.syncedList}>
+            {syncedAccounts.length === 0 ? (
+              <div style={S.emptyState}>No synced accounts found. Add one above.</div>
+            ) : (
+              syncedAccounts.map((acc) => (
+                <div key={acc.id} style={acc.status === 'active' ? S.accountRowActive : S.accountRow}>
+                  <div style={S.accountAvatar}>
+                    <RobotGlyph size={22} color="#5C3A21" />
+                  </div>
+                  <div style={S.accountDetails}>
+                    <strong style={{ color: '#5C3A21' }}>{acc.label || 'Unnamed Account'}</strong>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#8b7655' }}>
+                      {String(acc.exchange || 'unknown').toUpperCase()} (Sub #{acc.sub_account ?? '0'})
+                    </span>
+                  </div>
+                  <div style={S.accountStatus}>
+                    <span
+                      style={{
+                        ...S.statusPill,
+                        ...(acc.status === 'active' ? S.statusRunning : S.statusPaused),
+                      }}
+                    >
+                      {acc.status}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => toggleExchangeActive(acc.exchange, acc.status !== 'active')}
+                      style={{
+                        background: acc.status === 'active' ? '#E53935' : '#43A047',
+                        border: '2px solid #fff',
+                        borderRadius: 8,
+                        color: '#fff',
+                        fontSize: 11,
+                        fontWeight: 900,
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                        marginLeft: 8,
+                      }}
+                    >
+                      {acc.status === 'active' ? 'Disable' : 'Enable'}
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
+
   const renderLaunch = () => (
     <div style={S.launchShell}>
       <div style={S.visuallyHidden} aria-live="polite" aria-atomic="true">
@@ -3126,7 +4144,11 @@ function BotsPanel({ onClose }) {
         <div className="bots-step-page" style={S.stepPage}>
           <div>
             <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Bot Settings</h2>
-            <p style={S.stepCopy}>Set position limits and choose how actively the bot quotes.</p>
+            <p style={S.stepCopy}>
+              {preset === 'aggressive'
+                ? 'Pick Aggressive, set daily volume — we estimate deposit, leverage, and cost per $1M.'
+                : 'Calm: set Trade Size / Max Position for steady quotes near break-even.'}
+            </p>
           </div>
           {selectedExchangeInstances.length > 1 && (
             <div style={S.marketPickerCard}>
@@ -3147,24 +4169,6 @@ function BotsPanel({ onClose }) {
               <span style={S.marketPickerHint}>Each market launches its exact configured bot instance.</span>
             </div>
           )}
-          <SliderField
-            label="Trade Size"
-            min={5}
-            max={500}
-            step={5}
-            value={tradeSize}
-            defaultValue={20}
-            onChange={setTradeSize}
-          />
-          <SliderField
-            label="Maximum Position"
-            min={50}
-            max={5000}
-            step={50}
-            value={maxPosition}
-            defaultValue={200}
-            onChange={setMaxPosition}
-          />
           <div style={S.presetCard}>
             <span style={S.label}>Bot Behavior</span>
             <div style={S.presetToggle}>
@@ -3174,7 +4178,13 @@ function BotsPanel({ onClose }) {
                   type="button"
                   className="bots-focusable"
                   style={{ ...S.presetButton, ...(preset === id ? S.presetActive : {}) }}
-                  onClick={() => setPreset(id)}
+                  onClick={() => {
+                    if (id === preset) return;
+                    if (id === 'aggressive' && preset === 'calm') {
+                      applyAggressiveVolume(impliedDailyVolumeFromSize(tradeSize));
+                    }
+                    setPreset(id);
+                  }}
                 >
                   {option.label}
                 </button>
@@ -3183,6 +4193,43 @@ function BotsPanel({ onClose }) {
             <strong style={S.detailTitle}>{PRESETS[preset].title}</strong>
             <p style={S.detailCopy}>{PRESETS[preset].copy}</p>
           </div>
+          {preset === 'aggressive' ? (
+            <>
+              <SliderField
+                label="Daily volume target"
+                min={AGGRESSIVE_VOLUME_SLIDER.min}
+                max={AGGRESSIVE_VOLUME_SLIDER.max}
+                step={AGGRESSIVE_VOLUME_SLIDER.step}
+                value={dailyVolumeUsd}
+                defaultValue={AGGRESSIVE_VOLUME_SLIDER.defaultValue}
+                onChange={(v) => applyAggressiveVolume(v)}
+                formatValue={formatVolumeUsd}
+                formatBound={formatVolumeUsd}
+              />
+              <AggressivePlanCard plan={aggressivePlan} liveCostPer1M={liveCostPer1M} />
+            </>
+          ) : (
+            <>
+              <SliderField
+                label="Trade Size"
+                min={5}
+                max={500}
+                step={5}
+                value={tradeSize}
+                defaultValue={20}
+                onChange={setTradeSize}
+              />
+              <SliderField
+                label="Maximum Position"
+                min={50}
+                max={5000}
+                step={50}
+                value={maxPosition}
+                defaultValue={200}
+                onChange={setMaxPosition}
+              />
+            </>
+          )}
           <button
             type="button"
             className="bots-focusable"
@@ -3215,8 +4262,21 @@ function BotsPanel({ onClose }) {
             <div style={S.reviewRows}>
               <span>Exchange <strong>{DEX_CONFIG[selectedExchangeId]?.label || getExchangeName(selectedInstanceId)}</strong></span>
               <span>Market <strong>{configuredInstances.find(i => i.id === selectedInstanceId)?.symbols?.join(', ') || ''}</strong></span>
-              <span>Trade Size <strong>{money(tradeSize)}</strong></span>
-              <span>Maximum Position <strong>{money(maxPosition)}</strong></span>
+              {preset === 'aggressive' ? (
+                <>
+                  <span>Daily volume <strong>{formatVolumeUsd(dailyVolumeUsd)}</strong></span>
+                  <span>Deposit (est.) <strong>{money(aggressivePlan?.depositUsd || 0)}</strong></span>
+                  <span>Avg leverage <strong>{aggressivePlan?.avgLeverage || '—'}×</strong></span>
+                  <span>Cost / $1M <strong>~${Math.round(aggressivePlan?.costPer1MUsd || 0)}</strong></span>
+                  <span>Trade Size <strong>{money(tradeSize)}</strong></span>
+                  <span>Max position <strong>{money(maxPosition)}</strong></span>
+                </>
+              ) : (
+                <>
+                  <span>Trade Size <strong>{money(tradeSize)}</strong></span>
+                  <span>Maximum Position <strong>{money(maxPosition)}</strong></span>
+                </>
+              )}
               <span>Preset <strong>{PRESETS[preset].label}</strong></span>
               <span>Status <strong>Ready to launch</strong></span>
             </div>
@@ -4389,6 +5449,50 @@ const S = {
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
+  },
+  aggressivePlanCard: {
+    background: '#fdf8e7',
+    border: '3px solid #d4c8b0',
+    borderRadius: 12,
+    padding: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  aggressivePlanGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: 8,
+  },
+  aggressivePlanCell: {
+    background: '#e8dfc8',
+    borderRadius: 10,
+    padding: '8px 9px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+    minWidth: 0,
+  },
+  aggressivePlanKey: {
+    color: '#a3906a',
+    fontSize: 10,
+    fontWeight: 800,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  aggressivePlanVal: {
+    color: '#5C3A21',
+    fontSize: 13,
+    fontWeight: 900,
+    lineHeight: 1.2,
+    wordBreak: 'break-word',
+  },
+  aggressivePlanHint: {
+    margin: 0,
+    color: '#77573d',
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: 1.35,
   },
   presetToggle: {
     display: 'grid',
