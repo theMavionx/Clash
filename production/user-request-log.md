@@ -1716,4 +1716,4 @@ Follow-up:
 - Timestamp: 2026-07-14 Europe/Kyiv
 - Requests: "чомусь під іконкою ще якийсь текст є" and "отут все ще проблема з обводкою".
 - References: `codex-clipboard-411bdb6c-dbf8-4d79-ad0b-bf8fcd87938a.png`, `codex-clipboard-2ee6803f-3ad1-4852-8420-a2cee2e63035.png`.
-- Resolution: render exchange initials only when the logo fails, and replace the dark active-tab border with the restrained UI border treatment.
+- Resolution: render exchange initials only when the logo fails, remove the active-tab outline, and preserve keyboard focus with a separate blue indicator.

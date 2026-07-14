@@ -4027,9 +4027,9 @@ const S = {
   },
   segmentActive: {
     background: '#fdf8e7',
-    borderColor: '#C9B896',
+    borderColor: 'transparent',
     color: '#5C3A21',
-    boxShadow: 'inset 0 -2px 0 rgba(187,168,130,0.28), 0 1px 2px rgba(92,58,33,0.1)',
+    boxShadow: 'inset 0 -2px 0 #BBA882, 0 1px 2px rgba(92,58,33,0.08)',
   },
   launchButton: {
     minHeight: 38,
