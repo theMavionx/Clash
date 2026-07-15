@@ -74,9 +74,14 @@ function loadIncrementalTournamentTrades(options = {}) {
   const creditedTradeIds = Array.from(new Set((options.creditedTradeIds || [])
     .map((value) => String(value || '').trim())
     .filter((value) => /^\d+$/u.test(value))));
-  const reconciliationSourceWhere = creditedTradeIds.length
-    ? `(${sourceWhere} OR id IN (${creditedTradeIds.join(',')}))`
-    : sourceWhere;
+  const reconciliationEligibilityWhere = creditedTradeIds.length
+    ? `((${sourceWhere}
+        AND datetime(created_at) >= datetime(?)
+        AND datetime(created_at) <= datetime(?))
+       OR id IN (${creditedTradeIds.join(',')}))`
+    : `(${sourceWhere}
+       AND datetime(created_at) >= datetime(?)
+       AND datetime(created_at) <= datetime(?))`;
   const updatedAtSupported = tradeHistorySupportsUpdatedAt(fdb);
   const updatedAtSelect = updatedAtSupported ? 'updated_at' : 'created_at AS updated_at';
   const initialLastTradeId = Math.max(0, Number(state?.last_trade_id) || 0);
@@ -116,9 +121,7 @@ function loadIncrementalTournamentTrades(options = {}) {
         FROM trade_history
         WHERE player_id = ? AND dex = ? AND id <= ?
           AND status = 'filled'
-          AND ${reconciliationSourceWhere}
-          AND datetime(created_at) >= datetime(?)
-          AND datetime(created_at) <= datetime(?)
+          AND ${reconciliationEligibilityWhere}
           AND (
             julianday(updated_at) > julianday(?)
             OR (julianday(updated_at) = julianday(?) AND id > ?)
@@ -152,9 +155,7 @@ function loadIncrementalTournamentTrades(options = {}) {
       FROM trade_history
       WHERE player_id = ? AND dex = ? AND id <= ?
         AND status = 'filled'
-        AND ${reconciliationSourceWhere}
-        AND datetime(created_at) >= datetime(?)
-        AND datetime(created_at) <= datetime(?)
+        AND ${reconciliationEligibilityWhere}
       ORDER BY id DESC
       LIMIT ?
     `).all(playerId, dex, initialLastTradeId, startAt, endAt, fallbackOverlapRows).reverse();

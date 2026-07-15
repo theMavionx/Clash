@@ -121,5 +121,25 @@ const creditedException = loadIncrementalTournamentTrades({
 assert.deepStrictEqual(creditedException.rows.map((row) => row.id), [4, 5]);
 assert.strictEqual(creditedException.rows.find((row) => row.id === 4).pnl, '-2.5');
 
+// A legacy credit can predate joined_at after an explicit/manual correction.
+// Keep its ledger row reconcilable without admitting a new pre-window trade.
+const creditedOutsideWindowState = {
+  last_trade_id: 5,
+  last_updated_at: '2026-07-15T15:01:00.000Z',
+  last_updated_trade_id: 5,
+};
+fdb.prepare(`
+  UPDATE trade_history
+  SET pnl = '-3.5', updated_at = '2026-07-15 15:02:00.000'
+  WHERE id = 1
+`).run();
+const creditedOutsideWindow = loadIncrementalTournamentTrades({
+  ...base,
+  state: creditedOutsideWindowState,
+  creditedTradeIds: ['1'],
+});
+assert.deepStrictEqual(creditedOutsideWindow.rows.map((row) => row.id), [1]);
+assert.strictEqual(creditedOutsideWindow.rows[0].pnl, '-3.5');
+
 fdb.close();
 console.log('tournament trade cursor: ok');
