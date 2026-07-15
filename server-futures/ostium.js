@@ -63,6 +63,7 @@ const subgraphProxyInflight = new Map();
 const subgraphUpstreamCooldown = new Map();
 const positionsCache = new Map();
 const ordersCache = new Map();
+const fillsCache = new Map();
 const CACHE_TTL_MS = 15_000;
 const STALE_CACHE_TTL_MS = 10 * 60_000;
 const FIAT_SYMBOLS = new Set([
@@ -83,6 +84,18 @@ function isEvmAddress(addr) {
 function normalizeAddress(addr) {
   const s = String(addr || '').trim();
   return isEvmAddress(s) ? s.toLowerCase() : null;
+}
+
+function accountMatchesLinkedWallet(account, linkedWallet) {
+  const normalizedAccount = normalizeAddress(account);
+  const normalizedLinkedWallet = normalizeAddress(linkedWallet);
+  return !!normalizedAccount
+    && !!normalizedLinkedWallet
+    && normalizedAccount === normalizedLinkedWallet;
+}
+
+function fillBelongsToAccount(fill, account) {
+  return accountMatchesLinkedWallet(fill?.trader, account);
 }
 
 function num(value, fallback = 0) {
@@ -907,8 +920,42 @@ async function getAccountTradeHistory(address, opts = {}) {
   const account = normalizeAddress(address);
   if (!account) throw new Error('valid EVM address required');
   const limit = Math.max(1, Math.min(250, Number(opts.limit || OSTIUM_FILL_LOOKBACK_LIMIT)));
-  const client = await getReadClient();
-  return client.getFills({ user: account, limit });
+  try {
+    const client = await getReadClient();
+    const receivedRows = await client.getFills({ user: account, limit });
+    const received = Array.isArray(receivedRows) ? receivedRows : [];
+    const scoped = received.filter(fill => fillBelongsToAccount(fill, account));
+    fillsCache.set(account, { at: Date.now(), rows: scoped });
+    return opts.includeMismatched === true ? received : scoped;
+  } catch (e) {
+    if (!isTransientReadError(e)) throw e;
+    console.warn('[ostium] trade history read degraded:', e.message || e);
+    const cached = fillsCache.get(account);
+    if (cached && Date.now() - cached.at <= STALE_CACHE_TTL_MS) {
+      return cached.rows.map(row => ({ ...row, stale_read: true }));
+    }
+    try {
+      const indexed = db.db.prepare(`
+        SELECT proof_json
+        FROM trade_history
+        WHERE dex = 'ostium'
+          AND status = 'filled'
+          AND verified_source = 'ostium_api'
+          AND json_valid(COALESCE(proof_json, ''))
+          AND lower(COALESCE(json_extract(proof_json, '$.fill.trader'), '')) = ?
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT ?
+      `).all(account, limit).map(row => {
+        try { return JSON.parse(row.proof_json || '{}')?.fill || null; } catch { return null; }
+      }).filter(fill => fillBelongsToAccount(fill, account));
+      if (indexed.length) {
+        return indexed.map(row => ({ ...row, stale_read: true, history_source: 'local_index' }));
+      }
+    } catch (fallbackError) {
+      console.warn('[ostium] indexed trade history fallback failed:', fallbackError.message || fallbackError);
+    }
+    throw e;
+  }
 }
 
 async function importFillsForPlayer(playerId, wallet, opts = {}) {
@@ -917,6 +964,8 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   const attempts = Math.max(1, Math.min(10, Number(opts.attempts || 1)));
   const delayMs = Math.max(250, Math.min(5000, Number(opts.delayMs || opts.delay_ms || OSTIUM_IMPORT_RETRY_DELAY_MS)));
   let lastRows = [];
+  let receivedRowsCount = 0;
+  let rejectedRowsCount = 0;
   let imported = 0;
   let volume = 0;
   let lastError = null;
@@ -924,7 +973,10 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     let rows;
     try {
-      rows = await getAccountTradeHistory(account, { limit: opts.limit || OSTIUM_FILL_LOOKBACK_LIMIT });
+      rows = await getAccountTradeHistory(account, {
+        limit: opts.limit || OSTIUM_FILL_LOOKBACK_LIMIT,
+        includeMismatched: true,
+      });
       lastError = null;
     } catch (e) {
       lastError = e;
@@ -932,7 +984,17 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       await new Promise(resolve => setTimeout(resolve, delayMs));
       continue;
     }
-    lastRows = Array.isArray(rows) ? rows : [];
+    const receivedRows = Array.isArray(rows) ? rows : [];
+    receivedRowsCount = receivedRows.length;
+    // A builder address can receive builder-wide history from Ostium. Scope
+    // attribution by the verified fill trader, not only by the API query.
+    lastRows = receivedRows.filter(fill => fillBelongsToAccount(fill, account));
+    rejectedRowsCount = receivedRows.length - lastRows.length;
+    if (rejectedRowsCount > 0) {
+      console.warn(
+        `[ostium] rejected ${rejectedRowsCount} fill(s) whose trader does not match wallet=${account.slice(0, 10)}...`,
+      );
+    }
     for (const fill of lastRows) {
       const row = normalizeFillForDb(fill, context.pairById);
       if (!Number.isFinite(row.notional_usd) || row.notional_usd <= 0) continue;
@@ -949,6 +1011,8 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   return {
     imported,
     rows: lastRows.length,
+    received_rows: receivedRowsCount,
+    rejected_wallet_mismatch_rows: rejectedRowsCount,
     volume_usd: volume,
     wallet: account,
     ok: !lastError,
@@ -989,4 +1053,6 @@ module.exports = {
   isTransientReadError,
   isEvmAddress,
   normalizeAddress,
+  accountMatchesLinkedWallet,
+  fillBelongsToAccount,
 };

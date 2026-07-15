@@ -3657,6 +3657,8 @@ function recordTournamentTrade(playerId, volumeUsd, pnlUsd, count = 1, opts = {}
   if (c <= 0) return;
   const t = getPlayerActiveTournament(playerId);
   if (!t) return;
+  const activityDex = resolveTournamentActivityDex(t, opts);
+  if (firstPresentTournamentDex([opts.dex, opts.trading_dex]) !== null && !activityDex) return;
   stmts.bumpTournamentTrade.run(
     c,
     Number(volumeUsd) || 0,
@@ -3671,7 +3673,7 @@ function recordTournamentTrade(playerId, volumeUsd, pnlUsd, count = 1, opts = {}
   }, {
     source: 'trade_summary',
     eventId: `summary:${playerId}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
-    dex: resolveTournamentActivityDex(t, opts),
+    dex: activityDex,
   });
 }
 
@@ -3857,16 +3859,29 @@ function tournamentCreditDexAllowed(t, dex) {
   return tournamentEligibleCreditDexes(t).includes(normalized) ? normalized : null;
 }
 
+function firstPresentTournamentDex(values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim()) return value;
+  }
+  return null;
+}
+
 function resolveTournamentCreditDex(t, row = {}, opts = {}) {
-  const candidates = [
+  // A concrete trade DEX is authoritative. If it is outside the tournament,
+  // reject the row instead of relabelling it as the tournament's only DEX.
+  const explicitDex = firstPresentTournamentDex([
     opts.dex,
     opts.trading_dex,
     row?.dex,
     row?.trading_dex,
+  ]);
+  if (explicitDex !== null) return tournamentCreditDexAllowed(t, explicitDex);
+
+  const participantDexes = [
     row?.team_dex,
     row?.player_dex,
   ];
-  for (const candidate of candidates) {
+  for (const candidate of participantDexes) {
     const dex = tournamentCreditDexAllowed(t, candidate);
     if (dex) return dex;
   }
@@ -3874,8 +3889,10 @@ function resolveTournamentCreditDex(t, row = {}, opts = {}) {
 }
 
 function resolveTournamentActivityDex(t, opts = {}) {
-  const dex = tournamentCreditDexAllowed(t, opts.dex || opts.trading_dex || opts.team_dex || opts.player_dex);
-  return dex || tournamentSingleCreditDex(t);
+  const explicitDex = firstPresentTournamentDex([opts.dex, opts.trading_dex]);
+  if (explicitDex !== null) return tournamentCreditDexAllowed(t, explicitDex);
+  const participantDex = firstPresentTournamentDex([opts.team_dex, opts.player_dex]);
+  return tournamentCreditDexAllowed(t, participantDex) || tournamentSingleCreditDex(t);
 }
 
 function dailyPoolWeights(t) {
@@ -3900,6 +3917,7 @@ function recordTournamentDailyActivity(t, playerId, metrics = {}, opts = {}) {
   if (enabledMs && eventMs && eventMs < enabledMs) return false;
   const day = opts.day || tournamentActivityDayForEvent(t, eventMs ?? Date.now());
   const activityDex = resolveTournamentActivityDex(t, opts);
+  if (firstPresentTournamentDex([opts.dex, opts.trading_dex]) !== null && !activityDex) return false;
   const r = stmts.insertTournamentDailyActivity.run(
     t.tournament_id || t.id,
     day,

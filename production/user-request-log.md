@@ -1736,3 +1736,41 @@ Follow-up:
 - Reference: `codex-clipboard-d3dc8f14-d892-493e-84d9-54bdb0dbc3bb.png`.
 - Follow-up: commit all current changes without deploying them.
 - Explicit authorization: commit the frameless exchange icons and segment focus styling; do not deploy.
+
+### UR-2026-07-15-OSTIUM-XUNDER-DEX-ATTRIBUTION
+- Timestamp: 2026-07-15 Europe/Kyiv
+- Request: "так виправ у xunder проблему а також пошукай по клієнським логам чому зарахувало обєм без білдер коду нашого"
+- Scope: prevent explicit non-eligible DEX trades from falling back to the tournament's single DEX, correct XUnder's wrongly attributed GMTrade tournament volume, and audit client logs for Ostium trades whose on-chain builder is zero.
+- Explicit authorization: correct the confirmed XUnder production tournament data; no commit or production deploy requested in this message.
+
+### UR-2026-07-15-OSTIUM-TOURNAMENT-ALL-PLAYER-ATTRIBUTION-AUDIT
+- Timestamp: 2026-07-15 Europe/Kyiv
+- Request: "а з іншими гравцями що чому не зарахувало в них перевір клієнські логи"
+- Scope: audit every Ostium tournament participant for missing or wrongly attributed volume, distinguish opening builder fees from zero-builder closes/TP, and inspect transaction-adjacent client logs for affected players.
+- Local prevention: require the requested Ostium account to match the game account's linked EVM wallet and discard builder-wide API fills whose `fill.trader` does not match the requested wallet.
+- No additional production mutation, commit, or deployment authorization was given in this message.
+
+### UR-2026-07-15-OSTIUM-TOURNAMENT-BUILDER-ELIGIBILITY-REPAIR
+- Timestamp: 2026-07-15 Europe/Kyiv
+- Request: "виправ тоді і далі не зараховуй такий обєм як у амір але його обєм можеш лишити і виправ всіх інших гравців"
+- Scope: require an Ostium position to be opened through the configured Clash builder before its open/close/TP/SL fills can drive future rewards, tasks, or tournament volume; preserve Ameer Pirate's existing historical tournament credits; repair wallet attribution and remove non-builder tournament credits for every other affected participant.
+- Explicit authorization: correct the affected production tournament data while preserving Ameer Pirate history. No commit or production deployment was requested.
+
+### UR-2026-07-15-OSTIUM-TRADE-HISTORY
+- Timestamp: 2026-07-15 Europe/Kyiv
+- Request: "history tab doent work in pstium trading pannel check their api and fix"
+- Scope: verify the live Ostium fills API, normalize the official fill schema for the trading History tab, and retain scoped cached/indexed history during transient upstream failures.
+- No commit or production deployment authorization was given in this message.
+
+### UR-2026-07-15-OSTIUM-ONE-TAP-CANCEL-RACE
+- Timestamp: 2026-07-15 Europe/Kyiv
+- Request: investigate `ostium.cancel_order.delegated` reverting during one-tap cancellation.
+- Finding: the BTC limit order had already executed before cancellation; the UI retained a stale order and sent the delegated transaction even after `estimateGas` reverted with the equivalent of `NoTradeFound`.
+- Scope: preserve order index `0`, resolve the exact pair/index, verify the order is still open, remove stale rows as an idempotent success, and never broadcast a cancel transaction after a failed preflight.
+- No commit or production deployment authorization was given in this message.
+
+### UR-2026-07-15-OSTIUM-RELEASE
+- Timestamp: 2026-07-15 Europe/Kyiv
+- Request: "коміт деплой на прод"
+- Scope: commit and deploy the reviewed Ostium builder attribution, tournament DEX attribution, trade History, and stale one-tap cancellation fixes, together with the already committed MM bot dashboard polish.
+- Explicit authorization: commit, push, and deploy the current reviewed release to production.

@@ -3139,7 +3139,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
               ) : isReadOnlyOrder(o) ? (
                 <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>On position</span>
               ) : (
-                <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
+                <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id ?? o.i, o.pair_index, o.trade_index)}>✕</button>
               )}
             </div>
             <div style={{...S.row, justifyContent: 'flex-start', flexWrap: 'wrap', gap: '4px 10px'}}>
@@ -3492,7 +3492,7 @@ const BottomPanel = memo(function BottomPanel({
                           style={S.tblCloseBtn}
                           onClick={() => dex === 'hotstuff'
                             ? cancelOrder(o)
-                            : cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}
+                            : cancelOrder(sym, o.order_id ?? o.i, o.pair_index, o.trade_index)}
                         >
                           Cancel
                         </button>
@@ -9266,7 +9266,7 @@ function FuturesPanel() {
                     style={S.cancelBtn}
                     onClick={() => dex === 'hotstuff'
                       ? cancelOrder(o)
-                      : cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}
+                      : cancelOrder(sym, o.order_id ?? o.i, o.pair_index, o.trade_index)}
                   >
                     ✕
                   </button>

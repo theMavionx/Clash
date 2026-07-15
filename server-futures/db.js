@@ -175,6 +175,25 @@ try {
 }
 // Index for /claim-gold lookup — main server reads WHERE player_id=? AND dex=? AND id>? frequently.
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_player_dex ON trade_history(player_id, dex, id)"); } catch {}
+// Ostium closes inherit routing eligibility from the matching Open fill by
+// trader + position id. Keep that lookup indexed as fill history grows.
+try {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_trade_history_ostium_position_route
+    ON trade_history (
+      lower(json_extract(proof_json, '$.fill.trader')),
+      CAST(json_extract(proof_json, '$.fill.pid') AS TEXT),
+      lower(json_extract(proof_json, '$.fill.action')),
+      lower(json_extract(proof_json, '$.fill.builder'))
+    )
+    WHERE dex = 'ostium'
+      AND status = 'filled'
+      AND verified_source = 'ostium_api'
+      AND json_valid(COALESCE(proof_json, ''))
+  `);
+} catch (e) {
+  console.warn('[futures.db] Ostium position route index warning:', e.message);
+}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_decibel_order_proofs_order ON decibel_order_proofs(order_id) WHERE order_id IS NOT NULL"); } catch {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_decibel_order_proofs_client ON decibel_order_proofs(client_order_id) WHERE client_order_id IS NOT NULL"); } catch {}
 try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_decibel_order_proofs_order_unique ON decibel_order_proofs(order_id) WHERE order_id IS NOT NULL"); } catch {}

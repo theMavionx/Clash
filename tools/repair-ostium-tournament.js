@@ -7,7 +7,19 @@ const Database = require('better-sqlite3');
 
 const tournamentId = Number(process.argv.find(v => v.startsWith('--tournament='))?.split('=')[1] || 0);
 const apply = process.argv.includes('--apply');
+const enforceBuilderRouting = process.argv.includes('--enforce-builder-routing');
+const normalizeClientOrderIds = process.argv.includes('--normalize-client-order-ids');
+const preservePlayerArgs = process.argv
+  .filter(value => value.startsWith('--preserve-player='))
+  .map(value => value.slice('--preserve-player='.length).trim().toLowerCase())
+  .filter(Boolean);
 if (!tournamentId) throw new Error('Use --tournament=<id> [--apply]');
+
+const OSTIUM_BUILDER_ADDRESS = String(
+  process.env.OSTIUM_BUILDER_ADDRESS
+  || process.env.VITE_OSTIUM_BUILDER_ADDRESS
+  || '0xB36402e87a86206D3a114a98B53f31362291fe1B',
+).trim().toLowerCase();
 
 const mainPath = process.env.CLASH_MAIN_DB || path.join(__dirname, '..', 'server', 'clash.db');
 const futuresPath = process.env.CLASH_FUTURES_DB || path.join(__dirname, '..', 'server-futures', 'futures.db');
@@ -25,6 +37,18 @@ const participants = main.prepare(`
   WHERE tp.tournament_id = ? AND tp.left_at IS NULL
 `).all(tournamentId);
 const participantById = new Map(participants.map(p => [p.player_id, p]));
+const preservedPlayerIds = new Set(participants
+  .filter(row => preservePlayerArgs.includes(String(row.player_id).toLowerCase())
+    || preservePlayerArgs.includes(String(row.name || '').toLowerCase()))
+  .map(row => row.player_id));
+if (preservePlayerArgs.length !== preservedPlayerIds.size) {
+  const resolved = new Set([...preservedPlayerIds].map(id => String(id).toLowerCase()));
+  for (const row of participants) {
+    if (preservedPlayerIds.has(row.player_id)) resolved.add(String(row.name || '').toLowerCase());
+  }
+  const missing = preservePlayerArgs.filter(value => !resolved.has(value));
+  if (missing.length) throw new Error(`Preserved player not found in tournament: ${missing.join(', ')}`);
+}
 const walletOwnerCandidates = new Map();
 for (const row of main.prepare(`
   SELECT lower(wallet_address) wallet, player_id, status FROM player_dex_accounts
@@ -97,6 +121,8 @@ const tradeRows = futures.prepare(`
   SELECT id, player_id, dex, status, verified_source, client_order_id, notional_usd, pnl, created_at, proof_json
   FROM trade_history WHERE dex = 'ostium' AND status = 'filled' AND verified_source = 'ostium_api'
 `).all();
+const credits = main.prepare(`SELECT * FROM tournament_trade_credits WHERE tournament_id = ? AND source = 'trade_history'`).all(tournamentId);
+const existingCreditKeys = new Set(credits.map(row => `${row.player_id}:${String(row.trade_id)}`));
 const duplicateTradeIds = new Set();
 const byCanonicalFill = new Map();
 for (const row of tradeRows) {
@@ -128,19 +154,56 @@ for (const row of tradeRows) {
   }
 }
 
+function positionKey(row) {
+  const fill = proofFill(row);
+  const trader = String(fill?.trader || '').toLowerCase();
+  const pid = String(fill?.pid ?? '');
+  return trader && pid ? `${trader}:${pid}` : null;
+}
+function fillAction(row) {
+  return String(proofFill(row)?.action || '').trim().toLowerCase();
+}
+function isBuilderOpen(row) {
+  const fill = proofFill(row);
+  return fillAction(row) === 'open'
+    && String(fill?.builder || '').trim().toLowerCase() === OSTIUM_BUILDER_ADDRESS;
+}
+const builderRoutedPositions = new Set(
+  tradeRows
+    .filter(row => !duplicateTradeIds.has(String(row.id)) && isBuilderOpen(row))
+    .map(positionKey)
+    .filter(Boolean)
+);
+function isBuilderRouted(row) {
+  return isBuilderOpen(row) || (fillAction(row) !== 'open' && builderRoutedPositions.has(positionKey(row)));
+}
+function preservesExistingCredit(row, playerId) {
+  return preservedPlayerIds.has(playerId) && existingCreditKeys.has(`${playerId}:${String(row.id)}`);
+}
+
 const valid = new Map();
 for (const row of tradeRows) {
   if (duplicateTradeIds.has(String(row.id))) continue;
   const playerId = provenOwnerByTrade.get(String(row.id)) || row.player_id;
   const participant = participantById.get(playerId);
-  if (participant && inWindow(row, participant)) valid.set(String(row.id), { ...row, player_id: playerId });
+  const routingEligible = !enforceBuilderRouting
+    || isBuilderRouted(row)
+    || preservesExistingCredit(row, playerId);
+  if (participant && inWindow(row, participant) && routingEligible) {
+    valid.set(String(row.id), { ...row, player_id: playerId });
+  }
 }
-const credits = main.prepare(`SELECT * FROM tournament_trade_credits WHERE tournament_id = ? AND source = 'trade_history'`).all(tournamentId);
 const invalidCredits = credits.filter(c => {
   const row = valid.get(String(c.trade_id));
   return !row || row.player_id !== c.player_id;
 });
 const missingCredits = [...valid.values()].filter(row => !credits.some(c => String(c.trade_id) === String(row.id) && c.player_id === row.player_id));
+const routingExcludedCredits = invalidCredits.filter(credit => {
+  const row = tradeRows.find(candidate => String(candidate.id) === String(credit.trade_id));
+  if (!row) return false;
+  const playerId = provenOwnerByTrade.get(String(row.id)) || row.player_id;
+  return enforceBuilderRouting && !isBuilderRouted(row) && !preservesExistingCredit(row, playerId);
+});
 const clientOrderUpdates = [];
 for (const row of tradeRows) {
   if (duplicateTradeIds.has(String(row.id))) continue;
@@ -177,6 +240,12 @@ for (const c of invalidCredits) {
     affectedDays.add(row.day_utc);
   }
 }
+for (const transfer of transfers) {
+  for (const row of main.prepare(`SELECT day_utc FROM tournament_daily_activity WHERE tournament_id=? AND source='trade_history' AND event_id=?`).all(tournamentId, String(transfer.trade_id))) {
+    affectedDays.add(row.day_utc);
+  }
+}
+for (const row of missingCredits) affectedDays.add(activityDay(row.created_at));
 const awardedPointMismatches = main.prepare(`
   SELECT tp.player_id, p.name, tp.awarded_points,
          COALESCE((SELECT SUM(a.points) FROM tournament_daily_awards a WHERE a.tournament_id=tp.tournament_id AND a.player_id=tp.player_id),0) ledger_points
@@ -190,9 +259,20 @@ const summary = {
   participants: participants.length,
   verified_rows_in_window: valid.size,
   duplicate_trade_ids: [...duplicateTradeIds],
+  builder_routing_enforced: enforceBuilderRouting,
+  builder_address: OSTIUM_BUILDER_ADDRESS,
+  preserved_players: [...preservedPlayerIds].map(id => ({
+    player_id: id,
+    name: participantById.get(id)?.name || id,
+  })),
   transfers,
   invalid_credits: invalidCredits.map(c => ({ trade_id: c.trade_id, player: participantById.get(c.player_id)?.name || c.player_id, volume_usd: c.volume_usd })),
   missing_credits: missingCredits.map(r => ({ trade_id: r.id, player: participantById.get(r.player_id)?.name || r.player_id, volume_usd: r.notional_usd, created_at: r.created_at })),
+  routing_excluded_credits: routingExcludedCredits.map(c => ({
+    trade_id: c.trade_id,
+    player: participantById.get(c.player_id)?.name || c.player_id,
+    volume_usd: c.volume_usd,
+  })),
   pnl_updates: pnlUpdates,
   client_order_updates: clientOrderUpdates,
   unlinked_credited_rows: unlinkedCreditedRows,
@@ -204,7 +284,28 @@ const summary = {
 if (apply) {
   const backupDir = process.env.CLASH_AUDIT_BACKUP_DIR || '/tmp';
   const backupPath = path.join(backupDir, `ostium-t${tournamentId}-repair-${Date.now()}.json`);
-  fs.writeFileSync(backupPath, JSON.stringify({ tournament, participants, credits, transfers, invalidCredits, missingCredits }, null, 2));
+  const dailyActivityBackup = main.prepare(
+    'SELECT * FROM tournament_daily_activity WHERE tournament_id = ? ORDER BY day_utc, player_id, source, event_id'
+  ).all(tournamentId);
+  const dailyAwardsBackup = main.prepare(
+    'SELECT * FROM tournament_daily_awards WHERE tournament_id = ? ORDER BY day_utc, player_id, category'
+  ).all(tournamentId);
+  const dailyRunsBackup = main.prepare(
+    'SELECT * FROM tournament_daily_point_runs WHERE tournament_id = ? ORDER BY day_utc'
+  ).all(tournamentId);
+  fs.writeFileSync(backupPath, JSON.stringify({
+    tournament,
+    participants,
+    credits,
+    daily_activity: dailyActivityBackup,
+    daily_awards: dailyAwardsBackup,
+    daily_runs: dailyRunsBackup,
+    futures_trade_rows: tradeRows,
+    transfers,
+    invalidCredits,
+    missingCredits,
+    routingExcludedCredits,
+  }, null, 2));
   const tx = main.transaction(() => {
     for (const tradeId of duplicateTradeIds) {
       const dailyRows = main.prepare(`SELECT day_utc FROM tournament_daily_activity WHERE tournament_id=? AND source='trade_history' AND event_id=?`).all(tournamentId, tradeId);
@@ -247,8 +348,10 @@ if (apply) {
       main.prepare(`UPDATE tournament_daily_activity SET pnl_usd=? WHERE tournament_id=? AND source='trade_history' AND event_id=? AND player_id=?`)
         .run(update.to, tournamentId, String(update.trade_id), update.player_id);
     }
-    for (const update of clientOrderUpdates) {
-      futures.prepare('UPDATE trade_history SET client_order_id=? WHERE id=?').run(update.to, update.trade_id);
+    if (normalizeClientOrderIds) {
+      for (const update of clientOrderUpdates) {
+        futures.prepare('UPDATE trade_history SET client_order_id=? WHERE id=?').run(update.to, update.trade_id);
+      }
     }
     main.prepare(`
       UPDATE tournament_participants SET

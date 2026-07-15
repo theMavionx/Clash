@@ -7,6 +7,10 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import {
+  ostiumOrderMatchesTarget,
+  resolveOstiumCancelTarget,
+} from '../lib/ostiumOrderCancel';
+import {
   OSTIUM_BUILDER_ADDRESS,
   OSTIUM_BUILDER_FEE_BPS,
   OSTIUM_CHAIN_ID,
@@ -953,7 +957,7 @@ export function useOstium() {
     });
   }, [ensureChain, requireOstiumWalletClient, sendPrivyTransaction, walletAddr, walletSource]);
 
-  const estimateWalletTxGas = useCallback(async ({ account, to, data, value = 0n, label = 'ostium.tx', fallback = 180_000n }) => {
+  const estimateWalletTxGas = useCallback(async ({ account, to, data, value = 0n, label = 'ostium.tx', fallback = 180_000n, requireSuccess = false }) => {
     const publicClient = typeof getPublicClient === 'function' ? getPublicClient(OSTIUM_CHAIN_ID) : null;
     if (!publicClient?.estimateGas) return gasWithBuffer(fallback, fallback);
     try {
@@ -966,11 +970,17 @@ export function useOstium() {
       return gasWithBuffer(estimated, fallback);
     } catch (e) {
       console.warn(`[useOstium] ${label} gas estimate failed:`, e?.message || e);
+      if (requireSuccess) {
+        const error = new Error(`${label} preflight reverted`);
+        error.code = 'OSTIUM_TX_PREFLIGHT_FAILED';
+        error.cause = e;
+        throw error;
+      }
       return gasWithBuffer(fallback, fallback);
     }
   }, [getPublicClient]);
 
-  const sendBuiltTx = useCallback(async (tx, label = 'ostium.tx') => {
+  const sendBuiltTx = useCallback(async (tx, label = 'ostium.tx', { requireSuccessfulEstimate = false } = {}) => {
     if (!walletAddr) throw new Error('Connect your EVM wallet first');
     if (tx?.kind !== 'eoa') throw new Error('Ostium returned a non-EOA transaction. This integration supports EOA wallet signing only.');
     if (tx?.from && String(tx.from).toLowerCase() !== String(walletAddr).toLowerCase()) {
@@ -984,6 +994,7 @@ export function useOstium() {
       value,
       label,
       fallback: tx?.data ? 180_000n : 30_000n,
+      requireSuccess: requireSuccessfulEstimate,
     });
     console.info('[useOstium] wallet tx send', {
       label,
@@ -1044,7 +1055,7 @@ export function useOstium() {
     return publicClient.getBalance({ address: delegateAddress });
   }, [getPublicClient]);
 
-  const sendDelegateBuiltTx = useCallback(async (tx, signer, label = 'ostium.delegate_tx') => {
+  const sendDelegateBuiltTx = useCallback(async (tx, signer, label = 'ostium.delegate_tx', { requireSuccessfulEstimate = false } = {}) => {
     if (!signer?.privateKey) throw new Error('Ostium one tap signer is not ready');
     if (tx?.kind !== 'eoa') throw new Error('Ostium delegate transaction must be an EOA transaction');
     const delegateAccount = privateKeyToAccount(signer.privateKey);
@@ -1062,6 +1073,12 @@ export function useOstium() {
         value,
       }).then((estimated) => gasWithBuffer(estimated, 180_000n)).catch((e) => {
         console.warn(`[useOstium] ${label} delegate gas estimate failed:`, e?.message || e);
+        if (requireSuccessfulEstimate) {
+          const error = new Error(`${label} preflight reverted`);
+          error.code = 'OSTIUM_TX_PREFLIGHT_FAILED';
+          error.cause = e;
+          throw error;
+        }
         return gasWithBuffer(180_000n, 180_000n);
       });
     }
@@ -1339,6 +1356,7 @@ export function useOstium() {
     topUpGas = true,
     forceWallet = false,
     dedupeKey = null,
+    requireSuccessfulEstimate = false,
   }) => {
     const lockKey = dedupeKey || label;
     if (submissionLocksRef.current.has(lockKey)) {
@@ -1350,7 +1368,7 @@ export function useOstium() {
         const selfClient = await createBuildClient();
         if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
         const tx = buildSelfTx(selfClient);
-        return sendBuiltTx(tx, `${label}.wallet`);
+        return sendBuiltTx(tx, `${label}.wallet`, { requireSuccessfulEstimate });
       }
       const existingSigner = delegateSignerRef.current || await loadOstiumDelegate(walletAddr).catch(() => null);
       const hadOneTapEnabled = !!existingSigner?.privateKey;
@@ -1362,7 +1380,7 @@ export function useOstium() {
           // attribution after the tx hash, and that endpoint is user-visible
           // as noisy 429s in the browser console.
           const tx = buildDelegateTx(delegatedClient);
-          return await sendDelegateBuiltTx(tx, signer, `${label}.delegated`);
+          return await sendDelegateBuiltTx(tx, signer, `${label}.delegated`, { requireSuccessfulEstimate });
         }
         const result = await submitDelegate(delegatedClient);
         return await waitForSubmittedTx(result, `${label}.delegated`);
@@ -1383,7 +1401,7 @@ export function useOstium() {
         const selfClient = await createBuildClient();
         if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
         const tx = buildSelfTx(selfClient);
-        return sendBuiltTx(tx, `${label}.self`);
+        return sendBuiltTx(tx, `${label}.self`, { requireSuccessfulEstimate });
       }
     } finally {
       submissionLocksRef.current.delete(lockKey);
@@ -2248,30 +2266,92 @@ export function useOstium() {
     );
   }, [closePosition, oneTapWalletFallback]);
 
+  const discardOrder = useCallback((target) => {
+    if (!target) return;
+    for (const [key, row] of optimisticOrdersRef.current.entries()) {
+      if (ostiumOrderMatchesTarget(row, target)) optimisticOrdersRef.current.delete(key);
+    }
+    const next = (ordersRef.current || []).filter(row => !ostiumOrderMatchesTarget(row, target));
+    ordersRef.current = next;
+    setOrders(next);
+    setAccount(prev => (prev ? { ...prev, orders_count: next.length } : prev));
+  }, []);
+
+  const readLiveCancelTarget = useCallback(async ({ symbol, orderId, pairIndex }) => {
+    const client = await createBuildClient();
+    const liveOrders = await client.getOpenOrders({ user: walletAddr });
+    return resolveOstiumCancelTarget(liveOrders, { symbol, orderId, pairIndex });
+  }, [createBuildClient, walletAddr]);
+
   const cancelOrder = useCallback(async (symbol, orderId, pairIndex = null) => {
     setLoading(true);
     setError(null);
     try {
-      const order = (orders || []).find(row => (
-        String(row?.order_id ?? row?.idx ?? '') === String(orderId ?? '')
-        || (pairIndex != null && Number(row?.pair_index) === Number(pairIndex))
-      ));
+      let target = resolveOstiumCancelTarget(ordersRef.current, { symbol, orderId, pairIndex });
+      let liveTarget = null;
+      let liveReadSucceeded = false;
+      try {
+        liveTarget = await readLiveCancelTarget({ symbol, orderId, pairIndex });
+        liveReadSucceeded = true;
+      } catch (readError) {
+        console.warn('[useOstium] cancel preflight order read failed:', readError?.message || readError);
+      }
+      if (liveTarget) target = liveTarget;
+      else if (target && liveReadSucceeded) {
+        // A successful empty live read means the cached/UI order already filled or was cancelled.
+        discardOrder(target);
+        await fetchAccount();
+        return { success: true, status: 'already_resolved', noop: true };
+      }
+      if (!target) {
+        if (!liveReadSucceeded) {
+          throw new Error('Ostium could not verify this order before cancellation. Refresh and try again.');
+        }
+        await fetchAccount();
+        return { success: true, status: 'already_resolved', noop: true };
+      }
       const params = {
         type: CancelOrderType.Limit,
-        pairId: order?.pair_index ?? pairIndex,
-        idx: Number(order?.idx ?? orderId),
+        pairId: target.pairId,
+        idx: target.idx,
       };
-      const submitted = await submitWithDelegateOrWallet({
-        label: 'ostium.cancel_order',
-        dedupeKey: `cancel:${params.type}:${params.pairId}:${params.idx}`,
-        buildSelfTx: (client) => client.getCancelOrderTx(params),
-        buildDelegateTx: (client) => client.getCancelOrderTx(params),
-        submitDelegate: (client) => client.cancelOrder(params),
-        allowWalletFallback: 'when_one_tap_enabled',
-        requireAllowance: false,
-        setupIfNeeded: false,
-        topUpGas: false,
-      });
+      let submitted;
+      try {
+        submitted = await submitWithDelegateOrWallet({
+          label: 'ostium.cancel_order',
+          dedupeKey: `cancel:${params.type}:${params.pairId}:${params.idx}`,
+          buildSelfTx: (client) => client.getCancelOrderTx(params),
+          buildDelegateTx: (client) => client.getCancelOrderTx(params),
+          submitDelegate: (client) => client.cancelOrder(params),
+          allowWalletFallback: true,
+          requireAllowance: false,
+          setupIfNeeded: false,
+          topUpGas: false,
+          requireSuccessfulEstimate: true,
+        });
+      } catch (submitError) {
+        if (submitError?.code === 'OSTIUM_TX_PREFLIGHT_FAILED') {
+          let stillOpen = null;
+          let postFailureReadSucceeded = false;
+          try {
+            stillOpen = await readLiveCancelTarget({
+              symbol,
+              orderId: params.idx,
+              pairIndex: params.pairId,
+            });
+            postFailureReadSucceeded = true;
+          } catch (readError) {
+            console.warn('[useOstium] cancel post-failure order read failed:', readError?.message || readError);
+          }
+          if (postFailureReadSucceeded && !stillOpen) {
+            discardOrder(params);
+            await fetchAccount();
+            return { success: true, status: 'already_resolved', noop: true };
+          }
+        }
+        throw submitError;
+      }
+      discardOrder(params);
       await fetchAccount();
       return { success: true, status: 'submitted', txHash: submitted.txHash };
     } catch (e) {
@@ -2281,7 +2361,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [fetchAccount, orders, submitWithDelegateOrWallet]);
+  }, [discardOrder, fetchAccount, readLiveCancelTarget, submitWithDelegateOrWallet]);
 
   const setTpsl = useCallback(async (symbol, _closeOrderSide, takeProfit, stopLoss, pairIndex = null, tradeIndex = null) => {
     setLoading(true);

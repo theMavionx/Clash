@@ -97,6 +97,13 @@ const REASON_COOLDOWNS_MS = {
   stats: Math.max(30_000, Number(process.env.TRADE_RECONCILE_STATS_MS || 120_000)),
 };
 
+const DEFAULT_OSTIUM_BUILDER_ADDRESS = '0xB36402e87a86206D3a114a98B53f31362291fe1B';
+const OSTIUM_BUILDER_ADDRESS = String(
+  process.env.OSTIUM_BUILDER_ADDRESS
+  || process.env.VITE_OSTIUM_BUILDER_ADDRESS
+  || DEFAULT_OSTIUM_BUILDER_ADDRESS,
+).trim().toLowerCase();
+
 const memoryCooldown = new Map();
 
 let _futuresDbReadonly = null;
@@ -232,8 +239,37 @@ function sqlQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
+function ostiumBuilderEligibilityClause() {
+  const proof = 'trade_history.proof_json';
+  const action = `CASE WHEN json_valid(COALESCE(${proof}, '')) THEN lower(COALESCE(json_extract(${proof}, '$.fill.action'), '')) ELSE '' END`;
+  const builder = `CASE WHEN json_valid(COALESCE(${proof}, '')) THEN lower(COALESCE(json_extract(${proof}, '$.fill.builder'), '')) ELSE '' END`;
+  const trader = `CASE WHEN json_valid(COALESCE(${proof}, '')) THEN lower(COALESCE(json_extract(${proof}, '$.fill.trader'), '')) ELSE '' END`;
+  const positionId = `CASE WHEN json_valid(COALESCE(${proof}, '')) THEN COALESCE(CAST(json_extract(${proof}, '$.fill.pid') AS TEXT), '') ELSE '' END`;
+  const builderAddress = sqlQuote(OSTIUM_BUILDER_ADDRESS);
+  return `(
+    (${action} = 'open' AND ${builder} = ${builderAddress})
+    OR
+    (${action} != 'open' AND ${positionId} != '' AND EXISTS (
+      SELECT 1
+      FROM trade_history AS ostium_open
+      WHERE ostium_open.dex = 'ostium'
+        AND ostium_open.status = 'filled'
+        AND ostium_open.verified_source = 'ostium_api'
+        AND json_valid(COALESCE(ostium_open.proof_json, ''))
+        AND lower(COALESCE(json_extract(ostium_open.proof_json, '$.fill.action'), '')) = 'open'
+        AND lower(COALESCE(json_extract(ostium_open.proof_json, '$.fill.builder'), '')) = ${builderAddress}
+        AND lower(COALESCE(json_extract(ostium_open.proof_json, '$.fill.trader'), '')) = ${trader}
+        AND COALESCE(CAST(json_extract(ostium_open.proof_json, '$.fill.pid') AS TEXT), '') = ${positionId}
+    ))
+  )`;
+}
+
 function verifiedSourceClauseForDex(dex) {
-  const sources = VERIFIED_SOURCES_BY_DEX[String(dex || '').toLowerCase()] || ['worker'];
+  const normalizedDex = String(dex || '').toLowerCase();
+  const sources = VERIFIED_SOURCES_BY_DEX[normalizedDex] || ['worker'];
+  if (normalizedDex === 'ostium') {
+    return `verified_source = ${sqlQuote(sources[0])} AND ${ostiumBuilderEligibilityClause()}`;
+  }
   if (sources.length === 1) return `verified_source = ${sqlQuote(sources[0])}`;
   return `verified_source IN (${sources.map(sqlQuote).join(', ')})`;
 }

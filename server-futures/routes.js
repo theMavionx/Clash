@@ -899,7 +899,7 @@ function auth(req, res, next) {
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
   let linkedForAsked = null;
-  if (playerDexAccountStmt && normalizedAsked !== storedDex) {
+  if (playerDexAccountStmt) {
     try {
       linkedForAsked = playerDexAccountStmt.get(player.id, normalizedAsked) || null;
     } catch (e) {
@@ -5096,6 +5096,19 @@ function requireOstiumOwner(req, res) {
   const account = ostium.normalizeAddress(req.body?.account || req.query?.account || req.query?.address);
   if (!account) {
     res.status(400).json({ error: 'account required (0x...)' });
+    return null;
+  }
+  const linkedWallet = ostium.normalizeAddress(req.dexWallet || req.playerWallet);
+  if (!linkedWallet) {
+    res.status(409).json({
+      error: 'Ostium EVM wallet is not linked to this game account. Reconnect the wallet before loading or importing trades.',
+    });
+    return null;
+  }
+  if (!ostium.accountMatchesLinkedWallet(account, linkedWallet)) {
+    res.status(409).json({
+      error: 'Ostium request wallet does not match the wallet linked to this game account. Reconnect the correct wallet.',
+    });
     return null;
   }
   return { account };

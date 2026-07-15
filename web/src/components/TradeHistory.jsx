@@ -3,6 +3,7 @@ import { getReadClient } from '../lib/decibel';
 import { fetchPerplFills } from '../lib/perplClient';
 import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
 import { pacificaFetch } from '../lib/pacificaClient';
+import { normalizeOstiumTrade } from '../lib/ostiumTradeHistory';
 import {
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
@@ -387,19 +388,6 @@ function normalizeLocalIndexedTrade(fill, markets) {
     client_order_id: fill?.client_order_id,
     realized_pnl_amount: fill?.pnl,
   }, String(fill?.dex || '').toLowerCase() || 'indexed', markets);
-}
-
-function normalizeOstiumTrade(fill, markets) {
-  return normalizeGenericTrade({
-    ...fill,
-    symbol: fill?.symbol || fill?.pair || fill?.market || fill?.marketSymbol || fill?.asset,
-    side: fill?.side || fill?.action || fill?.position_side || fill?.positionSide || fill?.direction,
-    amount: fill?.amount ?? fill?.size ?? fill?.szi ?? fill?.qty,
-    price: fill?.price ?? fill?.fillPrice ?? fill?.openPrice ?? fill?.avgPrice,
-    created_at: fill?.created_at ?? fill?.timestamp ?? fill?.time ?? fill?.blockTimestamp,
-    realized_pnl_amount: fill?.realized_pnl_amount ?? fill?.realizedPnl ?? fill?.realized_pnl ?? fill?.pnl,
-    fee: fill?.fee ?? fill?.fees?.total ?? fill?.totalFee,
-  }, 'ostium', markets);
 }
 
 function normalizeGrvtTrade(fill) {
