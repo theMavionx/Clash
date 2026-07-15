@@ -19,6 +19,7 @@ const OSTIUM_BUILDER_FEE_BPS = clampBuilderFee(
 );
 const OSTIUM_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.env.OSTIUM_FILL_LOOKBACK_LIMIT || 100)));
 const OSTIUM_IMPORT_RETRY_DELAY_MS = Math.max(250, Math.min(5000, Number(process.env.OSTIUM_IMPORT_RETRY_DELAY_MS || 1500)));
+const OSTIUM_ORACLE_FEE_USD = Math.max(0, Math.min(10, Number(process.env.OSTIUM_ORACLE_FEE_USD || 0.10)));
 const OSTIUM_RPC_URL = String(
   process.env.OSTIUM_ARBITRUM_RPC_URL
   || process.env.ARBITRUM_RPC_URL
@@ -70,6 +71,27 @@ const FIAT_SYMBOLS = new Set([
   'AUD', 'BRL', 'CAD', 'CHF', 'CNH', 'EUR', 'GBP', 'IDR', 'INR', 'JPY', 'KRW',
   'MXN', 'NZD', 'SEK', 'SGD', 'TRY', 'TWD', 'USD', 'ZAR',
 ]);
+const OSTIUM_CLOSING_ACTIONS = new Set(['close', 'stoploss', 'takeprofit', 'closedaytrade', 'liquidation']);
+const OSTIUM_EXECUTED_FILLS_QUERY = `
+  query ClashExecutedFills($trader: String!, $skip: Int!, $first: Int!) {
+    orders(
+      where: { isPending: false, isCancelled: false, trader: $trader }
+      skip: $skip
+      first: $first
+      orderBy: executedAt
+      orderDirection: desc
+    ) {
+      id tradeID trader
+      pair { id from to group { id name } }
+      orderAction orderType isBuy
+      collateral notional tradeNotional
+      priceAfterImpact priceImpactP
+      vaultFee devFee oracleFee rolloverFee liquidationFee
+      builder builderFee totalProfitPercent amountSentToTrader closePercent
+      executedTx executedAt
+    }
+  }
+`;
 
 function clampBuilderFee(value) {
   const fee = Number(value);
@@ -101,6 +123,138 @@ function fillBelongsToAccount(fill, account) {
 function num(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function scaled(value, decimals) {
+  return num(value, 0) / (10 ** decimals);
+}
+
+function formatRawOstiumFill(raw) {
+  const action = String(raw?.orderAction || '');
+  const actionKey = action.trim().toLowerCase();
+  const collateral = scaled(raw?.collateral, 6);
+  const notional = scaled(raw?.notional, 6);
+  const tradeNotional = scaled(raw?.tradeNotional, 18);
+  const price = scaled(raw?.priceAfterImpact, 18);
+  const priceImpactPct = scaled(raw?.priceImpactP, 18);
+  const devFee = scaled(raw?.devFee, 6);
+  const vaultFee = scaled(raw?.vaultFee, 6);
+  const oracleFee = scaled(raw?.oracleFee, 6);
+  const rolloverFee = scaled(raw?.rolloverFee, 6);
+  const liquidationFee = scaled(raw?.liquidationFee, 6);
+  const builderFee = scaled(raw?.builderFee, 6);
+  const totalProfitPercent = scaled(raw?.totalProfitPercent, 6);
+  const amountSentToTrader = scaled(raw?.amountSentToTrader, 6);
+  const isClosingAction = OSTIUM_CLOSING_ACTIONS.has(actionKey);
+  const closedPnl = isClosingAction
+    ? (collateral * totalProfitPercent / 100) - devFee - vaultFee - oracleFee
+    : 0;
+  const priceBeforeImpact = raw?.isBuy
+    ? price / (1 + priceImpactPct / 100)
+    : price / (1 - priceImpactPct / 100);
+  const priceImpactFee = Number.isFinite(priceBeforeImpact)
+    ? Math.abs((price - priceBeforeImpact) * tradeNotional)
+    : 0;
+  const timestamp = Number.parseInt(String(raw?.executedAt || '0'), 10) || 0;
+
+  return {
+    pairTo: String(raw?.pair?.to || ''),
+    pairFrom: String(raw?.pair?.from || ''),
+    pairId: String(raw?.pair?.id || ''),
+    oid: raw?.id,
+    pid: raw?.tradeID,
+    trader: String(raw?.trader || '').toLowerCase(),
+    side: raw?.isBuy ? 'B' : 'S',
+    action,
+    type: raw?.orderType,
+    px: String(price),
+    szi: String(tradeNotional),
+    ntl: String(notional),
+    collateralUsed: String(collateral),
+    builder: String(raw?.builder || '').toLowerCase(),
+    fees: {
+      opening: String(actionKey === 'open' ? devFee + vaultFee : 0),
+      rollover: String(isClosingAction ? rolloverFee : 0),
+      liquidation: String(actionKey === 'liquidation' ? liquidationFee : 0),
+      builder: String(builderFee),
+      priceImpact: String(priceImpactFee),
+      oracle: String(oracleFee),
+    },
+    closedPnl: String(closedPnl),
+    settlementPnl: isClosingAction ? String(amountSentToTrader - collateral) : '0',
+    amountSentToTrader: String(amountSentToTrader),
+    closePercent: raw?.closePercent == null ? null : String(raw.closePercent),
+    hash: String(raw?.executedTx || '').toLowerCase(),
+    time: timestamp,
+    timestamp,
+  };
+}
+
+async function getRawExecutedFills(account, limit) {
+  const response = await proxySubgraph({
+    query: OSTIUM_EXECUTED_FILLS_QUERY,
+    variables: { trader: account, skip: 0, first: limit },
+  });
+  const payload = response?.data;
+  if (Array.isArray(payload?.errors) && payload.errors.length) {
+    throw new Error(payload.errors.map(error => error?.message || String(error)).join('; '));
+  }
+  const rows = payload?.data?.orders;
+  if (!Array.isArray(rows)) throw new Error('Ostium fills response is missing orders');
+  return rows.map(formatRawOstiumFill);
+}
+
+function ostiumFillAccounting(fill) {
+  const action = String(fill?.action || fill?.orderAction || '').trim().toLowerCase();
+  const grossPnl = num(fill?.realizedPnl ?? fill?.closedPnl ?? fill?.pnl, 0);
+  const settlementPnl = num(fill?.settlementPnl ?? fill?.settlement_pnl, grossPnl);
+  const opening = Math.max(0, num(fill?.fees?.opening, 0));
+  const builder = Math.max(0, num(fill?.fees?.builder, 0));
+  const liquidation = Math.max(0, num(fill?.fees?.liquidation, 0));
+  const oracle = action === 'open'
+    ? Math.max(OSTIUM_ORACLE_FEE_USD, num(fill?.fees?.oracle, 0))
+    : 0;
+
+  // settlementPnl is derived from the collateral actually returned, so it
+  // includes rollover, price impact, partial-close fees, and full-close oracle
+  // refunds. Opening-side costs remain separate and are deducted exactly once.
+  const chargedFee = action === 'open'
+    ? opening + builder + oracle
+    : builder;
+
+  return {
+    version: 'ostium_net_pnl_v1',
+    grossPnl,
+    settlementPnl,
+    netPnl: settlementPnl - chargedFee,
+    chargedFee,
+    components: {
+      opening,
+      builder,
+      oracle,
+      closeOracleSettlement: settlementPnl - grossPnl,
+      liquidationEmbedded: action === 'liquidation' ? liquidation : 0,
+      rolloverEmbedded: num(fill?.fees?.rollover, 0),
+      priceImpactEmbedded: Math.max(0, num(fill?.fees?.priceImpact, 0)),
+    },
+  };
+}
+
+function enrichOstiumFillAccounting(fill) {
+  if (!fill || typeof fill !== 'object') return fill;
+  const accounting = ostiumFillAccounting(fill);
+  return {
+    ...fill,
+    fees: {
+      ...(fill.fees && typeof fill.fees === 'object' ? fill.fees : {}),
+      oracle: String(fill?.fees?.oracle ?? accounting.components.oracle),
+    },
+    grossPnl: String(accounting.grossPnl),
+    settlementPnl: String(accounting.settlementPnl),
+    netPnl: String(accounting.netPnl),
+    fee: String(accounting.chargedFee),
+    accounting,
+  };
 }
 
 function trimNumber(value, decimals = 6) {
@@ -878,6 +1032,7 @@ function normalizeFillForDb(fill, marketsById = new Map()) {
   const createdAt = Number.isFinite(timestampSeconds) && timestampSeconds > 0
     ? new Date(timestampSeconds > 1e12 ? timestampSeconds : timestampSeconds * 1000).toISOString()
     : null;
+  const accounting = ostiumFillAccounting(fill);
   return {
     symbol,
     side,
@@ -892,13 +1047,14 @@ function normalizeFillForDb(fill, marketsById = new Map()) {
     dex: 'ostium',
     notional_usd: notional,
     verifiedSource: 'ostium_api',
-    pnl: fill?.realizedPnl ?? fill?.closedPnl ?? fill?.pnl ?? null,
-    fee: fill?.fees?.total || fill?.fee || null,
+    pnl: accounting.netPnl,
+    fee: accounting.chargedFee,
     proofJson: JSON.stringify({
       source: 'ostium_get_fills',
       builder: fill?.builder || null,
       builder_address: OSTIUM_BUILDER_ADDRESS,
       builder_fee_bps: OSTIUM_BUILDER_FEE_BPS,
+      accounting,
       fill,
     }),
     createdAt,
@@ -921,9 +1077,9 @@ async function getAccountTradeHistory(address, opts = {}) {
   if (!account) throw new Error('valid EVM address required');
   const limit = Math.max(1, Math.min(250, Number(opts.limit || OSTIUM_FILL_LOOKBACK_LIMIT)));
   try {
-    const client = await getReadClient();
-    const receivedRows = await client.getFills({ user: account, limit });
-    const received = Array.isArray(receivedRows) ? receivedRows : [];
+    const receivedRows = await getRawExecutedFills(account, limit);
+    const received = (Array.isArray(receivedRows) ? receivedRows : [])
+      .map(enrichOstiumFillAccounting);
     const scoped = received.filter(fill => fillBelongsToAccount(fill, account));
     fillsCache.set(account, { at: Date.now(), rows: scoped });
     return opts.includeMismatched === true ? received : scoped;
@@ -967,6 +1123,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   let receivedRowsCount = 0;
   let rejectedRowsCount = 0;
   let imported = 0;
+  let updated = 0;
   let volume = 0;
   let lastError = null;
   const context = await getMarketContext();
@@ -999,17 +1156,19 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       const row = normalizeFillForDb(fill, context.pairById);
       if (!Number.isFinite(row.notional_usd) || row.notional_usd <= 0) continue;
       if (!isFillEligibleSince(row.createdAt, opts.since)) continue;
-      const result = db.addTrade(playerId, row);
-      if (result.changes > 0) {
-        imported += result.changes;
+      const result = db.upsertVerifiedTrade(playerId, row);
+      if (result.inserted > 0) {
+        imported += result.inserted;
         volume += row.notional_usd;
       }
+      updated += result.updated || 0;
     }
-    if (imported > 0 || attempt >= attempts - 1) break;
+    if (imported > 0 || updated > 0 || attempt >= attempts - 1) break;
     await new Promise(resolve => setTimeout(resolve, delayMs));
   }
   return {
     imported,
+    updated,
     rows: lastRows.length,
     received_rows: receivedRowsCount,
     rejected_wallet_mismatch_rows: rejectedRowsCount,
@@ -1038,6 +1197,7 @@ module.exports = {
   OSTIUM_BUILDER_ADDRESS,
   OSTIUM_BUILDER_FEE_BPS,
   OSTIUM_CHAIN_ID,
+  OSTIUM_ORACLE_FEE_USD,
   config,
   getBuildClient,
   getMarketInfo,
@@ -1049,6 +1209,9 @@ module.exports = {
   importFillsForPlayer,
   isFillEligibleSince,
   normalizeFillForDb,
+  formatRawOstiumFill,
+  ostiumFillAccounting,
+  enrichOstiumFillAccounting,
   proxySubgraph,
   isTransientReadError,
   isEvmAddress,

@@ -279,6 +279,44 @@ const stmts = {
     INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source, pnl, fee, proof_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
   `),
+  refreshVerifiedTradeByClientOrderId: db.prepare(`
+    UPDATE trade_history
+    SET symbol = @symbol,
+        side = @side,
+        order_type = @order_type,
+        amount = @amount,
+        price = @price,
+        order_id = @order_id,
+        status = @status,
+        notional_usd = @notional_usd,
+        verified_source = @verified_source,
+        pnl = @pnl,
+        fee = @fee,
+        proof_json = @proof_json,
+        updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+    WHERE player_id = @player_id
+      AND dex = @dex
+      AND client_order_id = @client_order_id
+      AND (
+        symbol IS NOT @symbol
+        OR side IS NOT @side
+        OR order_type IS NOT @order_type
+        OR amount IS NOT @amount
+        OR price IS NOT @price
+        OR order_id IS NOT @order_id
+        OR status IS NOT @status
+        OR notional_usd IS NOT @notional_usd
+        OR verified_source IS NOT @verified_source
+        OR pnl IS NOT @pnl
+        OR fee IS NOT @fee
+        OR proof_json IS NOT @proof_json
+      )
+  `),
+  getTradeByClientOrderId: db.prepare(`
+    SELECT id FROM trade_history
+    WHERE player_id = ? AND dex = ? AND client_order_id = ?
+    LIMIT 1
+  `),
   recordDecibelOrderProof: db.prepare(`
     INSERT OR IGNORE INTO decibel_order_proofs (
       player_id, subaccount, order_id, client_order_id, symbol, side, order_type,
@@ -431,6 +469,48 @@ function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, c
     createdAt != null ? String(createdAt) : null
   );
   return { id: info.changes ? info.lastInsertRowid : null, changes: info.changes };
+}
+
+function upsertVerifiedTrade(playerId, trade) {
+  const inserted = addTrade(playerId, trade);
+  if (inserted.changes > 0 || !trade?.clientOrderId) {
+    return {
+      id: inserted.id,
+      changes: inserted.changes,
+      inserted: inserted.changes,
+      updated: 0,
+    };
+  }
+
+  const params = {
+    player_id: String(playerId),
+    dex: String(trade.dex || 'pacifica'),
+    client_order_id: String(trade.clientOrderId),
+    symbol: String(trade.symbol),
+    side: String(trade.side),
+    order_type: String(trade.orderType),
+    amount: String(trade.amount),
+    price: trade.price == null || trade.price === '' ? null : String(trade.price),
+    order_id: trade.orderId == null || trade.orderId === '' ? null : trade.orderId,
+    status: String(trade.status || 'pending'),
+    notional_usd: Number(trade.notional_usd) || 0,
+    verified_source: String(trade.verifiedSource || 'server'),
+    pnl: trade.pnl == null ? null : String(trade.pnl),
+    fee: trade.fee == null ? null : String(trade.fee),
+    proof_json: trade.proofJson == null ? null : String(trade.proofJson),
+  };
+  const refreshed = stmts.refreshVerifiedTradeByClientOrderId.run(params);
+  const existing = stmts.getTradeByClientOrderId.get(
+    params.player_id,
+    params.dex,
+    params.client_order_id,
+  );
+  return {
+    id: existing?.id || null,
+    changes: refreshed.changes,
+    inserted: 0,
+    updated: refreshed.changes,
+  };
 }
 
 function getDexWorkerState(dex, key, fallback = null) {
@@ -601,6 +681,7 @@ module.exports = {
   addDeposit,
   getDeposits,
   addTrade,
+  upsertVerifiedTrade,
   getDexWorkerState,
   setDexWorkerState,
   getTrades,

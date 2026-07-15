@@ -1,3 +1,5 @@
+import { OSTIUM_ORACLE_FEE_BUFFER_USD } from './ostiumConfig';
+
 function finiteNumber(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -13,8 +15,13 @@ function ostiumFillFee(fill) {
   if (fill?.fee != null && Number.isFinite(Number(fill.fee))) return Math.abs(Number(fill.fee));
   const fees = fill?.fees;
   if (!fees || typeof fees !== 'object') return 0;
-  return ['opening', 'rollover', 'liquidation', 'builder']
-    .reduce((total, key) => total + Math.abs(finiteNumber(fees[key], 0)), 0);
+  const action = String(fill?.action || fill?.orderAction || '').trim().toLowerCase();
+  if (action === 'open') {
+    return Math.max(0, finiteNumber(fees.opening, 0))
+      + Math.max(0, finiteNumber(fees.builder, 0))
+      + Math.max(0, finiteNumber(fees.oracle, OSTIUM_ORACLE_FEE_BUFFER_USD));
+  }
+  return Math.max(0, finiteNumber(fees.builder, 0));
 }
 
 export function normalizeOstiumTrade(fill, markets = []) {
@@ -63,7 +70,9 @@ export function normalizeOstiumTrade(fill, markets = []) {
     fee: ostiumFillFee(fill),
     created_at: timestamp,
     realized_pnl_amount: finiteNumber(
-      fill.closedPnl
+      fill.netPnl
+      ?? fill.net_pnl
+      ?? fill.closedPnl
       ?? fill.realizedPnl
       ?? fill.realized_pnl
       ?? fill.pnl,

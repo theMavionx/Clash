@@ -5159,8 +5159,11 @@ router.post('/ostium/import-fills', auth, async (req, res) => {
       delayMs: req.body?.delay_ms,
       limit: req.body?.limit,
     });
-    if (result.imported > 0) {
-      console.log(`[ostium] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${verified.account.slice(0, 10)}...`);
+    if (result.imported > 0 || result.updated > 0) {
+      console.log(
+        `[ostium] imported ${result.imported} new and refreshed ${result.updated || 0} fill(s) `
+        + `for player=${req.playerName} wallet=${verified.account.slice(0, 10)}...`,
+      );
     }
     res.json(result);
   } catch (e) {
