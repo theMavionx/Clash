@@ -82,6 +82,9 @@ function loadIncrementalTournamentTrades(options = {}) {
     : `(${sourceWhere}
        AND datetime(created_at) >= datetime(?)
        AND datetime(created_at) <= datetime(?))`;
+  const reconciliationIdWhere = creditedTradeIds.length
+    ? `(id <= ? OR id IN (${creditedTradeIds.join(',')}))`
+    : 'id <= ?';
   const updatedAtSupported = tradeHistorySupportsUpdatedAt(fdb);
   const updatedAtSelect = updatedAtSupported ? 'updated_at' : 'created_at AS updated_at';
   const initialLastTradeId = Math.max(0, Number(state?.last_trade_id) || 0);
@@ -113,13 +116,13 @@ function loadIncrementalTournamentTrades(options = {}) {
 
   let reconciledRows = [];
   let updateCursor = { ...initialUpdateCursor };
-  if (updatedAtSupported && initialLastTradeId > 0 && initialUpdateCursor.updatedAt) {
+  if (updatedAtSupported && (initialLastTradeId > 0 || creditedTradeIds.length > 0) && initialUpdateCursor.updatedAt) {
     const updatedResult = fetchPages({
       fdb,
       sql: `
         SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex, updated_at
         FROM trade_history
-        WHERE player_id = ? AND dex = ? AND id <= ?
+        WHERE player_id = ? AND dex = ? AND ${reconciliationIdWhere}
           AND status = 'filled'
           AND ${reconciliationEligibilityWhere}
           AND (
@@ -146,14 +149,14 @@ function loadIncrementalTournamentTrades(options = {}) {
     });
     reconciledRows = updatedResult.rows;
     updateCursor = updatedResult.cursor;
-  } else if (!updatedAtSupported && initialLastTradeId > 0) {
+  } else if (!updatedAtSupported && (initialLastTradeId > 0 || creditedTradeIds.length > 0)) {
     // Compatibility path during a rolling deploy. Once server-futures adds
     // updated_at, this bounded overlap is replaced by the indexed update cursor.
     reconciledRows = fdb.prepare(`
       SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex,
              created_at AS updated_at
       FROM trade_history
-      WHERE player_id = ? AND dex = ? AND id <= ?
+      WHERE player_id = ? AND dex = ? AND ${reconciliationIdWhere}
         AND status = 'filled'
         AND ${reconciliationEligibilityWhere}
       ORDER BY id DESC

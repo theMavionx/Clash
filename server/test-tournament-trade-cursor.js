@@ -104,7 +104,7 @@ assert.strictEqual(withMixedTimestampFormats.rows[0].pnl, '8.5');
 // New rows still obey source eligibility, but an already-credited historical
 // row must remain reconcilable even if the current source filter excludes it.
 const creditedExceptionState = {
-  last_trade_id: 4,
+  last_trade_id: 3,
   last_updated_at: '2026-07-15T15:00:00.000Z',
   last_updated_trade_id: 4,
 };
@@ -140,6 +140,21 @@ const creditedOutsideWindow = loadIncrementalTournamentTrades({
 });
 assert.deepStrictEqual(creditedOutsideWindow.rows.map((row) => row.id), [1]);
 assert.strictEqual(creditedOutsideWindow.rows[0].pnl, '-3.5');
+
+// A ledger credit is still authoritative when no eligible-source cursor was
+// ever established for that player.
+insert.run(444, '0', 'filled', 'client', '2026-07-03 12:00:00', '2026-07-15 15:03:00.000');
+const creditedWithoutSourceCursor = loadIncrementalTournamentTrades({
+  ...base,
+  state: {
+    last_trade_id: 0,
+    last_updated_at: '2026-07-15T15:02:00.000Z',
+    last_updated_trade_id: 0,
+  },
+  creditedTradeIds: ['6'],
+});
+assert.ok(creditedWithoutSourceCursor.rows.some((row) => row.id === 6));
+assert.strictEqual(creditedWithoutSourceCursor.rows.find((row) => row.id === 6).notional_usd, 444);
 
 fdb.close();
 console.log('tournament trade cursor: ok');
