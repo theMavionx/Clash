@@ -4084,6 +4084,14 @@ function tournamentTradeCreditsForRows(tournamentId, source, playerId, rows) {
   return credits;
 }
 
+function listTournamentTradeCreditIds(tournamentId, source, playerId) {
+  return db.prepare(`
+    SELECT trade_id
+    FROM tournament_trade_credits
+    WHERE tournament_id = ? AND source = ? AND player_id = ?
+  `).all(tournamentId, source, playerId).map((row) => String(row.trade_id));
+}
+
 // Idempotently credits concrete futures trade_history rows into the active
 // tournament. This is separate from trading_rewards.last_trade_id because some
 // venues, especially Decibel, emit realised PnL later than the instant server
@@ -10824,6 +10832,7 @@ module.exports = {
   applyGoldReward,
   recordTournamentTrade,
   recordTournamentTradeRows,
+  listTournamentTradeCreditIds,
   getTournamentTradeSyncState,
   setTournamentTradeSyncState,
   luckyRaiderAttackStatsForPlayer,

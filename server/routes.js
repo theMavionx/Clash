@@ -22454,6 +22454,7 @@ function syncFuturesTournamentRows(playerId, dex, opts = {}) {
     const sourceWhere = tournamentTradeSourceWhere(normalizedDex);
     const source = 'trade_history';
     const state = db.getTournamentTradeSyncState(tournamentId, playerId, normalizedDex, source);
+    const creditedTradeIds = db.listTournamentTradeCreditIds(tournamentId, source, playerId);
     const incremental = loadIncrementalTournamentTrades({
       fdb,
       playerId,
@@ -22462,6 +22463,7 @@ function syncFuturesTournamentRows(playerId, dex, opts = {}) {
       startAt,
       endAt,
       state,
+      creditedTradeIds,
       pageSize: process.env.TOURNAMENT_TRADE_SYNC_PAGE_SIZE || 500,
       maxRows: process.env.TOURNAMENT_TRADE_SYNC_MAX_ROWS || 10_000,
       fallbackOverlapRows: process.env.TOURNAMENT_TRADE_SYNC_FALLBACK_OVERLAP || 100,

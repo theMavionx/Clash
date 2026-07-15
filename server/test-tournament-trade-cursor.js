@@ -101,5 +101,25 @@ assert.deepStrictEqual(withMixedTimestampFormats.rows.map((row) => row.id), [2])
 assert.strictEqual(withMixedTimestampFormats.reconciledRows, 1);
 assert.strictEqual(withMixedTimestampFormats.rows[0].pnl, '8.5');
 
+// New rows still obey source eligibility, but an already-credited historical
+// row must remain reconcilable even if the current source filter excludes it.
+const creditedExceptionState = {
+  last_trade_id: 4,
+  last_updated_at: '2026-07-15T15:00:00.000Z',
+  last_updated_trade_id: 4,
+};
+fdb.prepare(`
+  UPDATE trade_history
+  SET pnl = '-2.5', updated_at = '2026-07-15 15:01:00.000'
+  WHERE id = 4
+`).run();
+const creditedException = loadIncrementalTournamentTrades({
+  ...base,
+  state: creditedExceptionState,
+  creditedTradeIds: ['4'],
+});
+assert.deepStrictEqual(creditedException.rows.map((row) => row.id), [4, 5]);
+assert.strictEqual(creditedException.rows.find((row) => row.id === 4).pnl, '-2.5');
+
 fdb.close();
 console.log('tournament trade cursor: ok');
