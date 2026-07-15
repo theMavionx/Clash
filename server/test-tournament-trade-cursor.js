@@ -1,0 +1,88 @@
+'use strict';
+
+const assert = require('assert');
+const Database = require('better-sqlite3');
+const { loadIncrementalTournamentTrades } = require('./tournament_trade_sync');
+
+const fdb = new Database(':memory:');
+fdb.exec(`
+  CREATE TABLE trade_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id TEXT NOT NULL,
+    dex TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    notional_usd REAL NOT NULL DEFAULT 0,
+    pnl TEXT,
+    status TEXT NOT NULL,
+    verified_source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_trade_history_player_dex ON trade_history(player_id, dex, id);
+  CREATE INDEX idx_trade_history_player_dex_updated ON trade_history(player_id, dex, updated_at, id);
+`);
+
+const insert = fdb.prepare(`
+  INSERT INTO trade_history (
+    player_id, dex, symbol, side, amount, notional_usd, pnl,
+    status, verified_source, created_at, updated_at
+  ) VALUES ('player-a', 'ostium', 'BTC', 'long', '1', ?, ?, ?, ?, ?, ?)
+`);
+insert.run(50, '0', 'filled', 'ostium_api', '2026-06-30 23:59:00', '2026-06-30 23:59:00.000');
+insert.run(100, '0', 'filled', 'ostium_api', '2026-07-02 10:00:00', '2026-07-02 10:00:00.000');
+insert.run(200, '0', 'filled', 'ostium_api', '2026-07-03 10:00:00', '2026-07-03 10:00:00.000');
+insert.run(999, '0', 'filled', 'client', '2026-07-03 11:00:00', '2026-07-03 11:00:00.000');
+
+const base = {
+  fdb,
+  playerId: 'player-a',
+  dex: 'ostium',
+  sourceWhere: "verified_source = 'ostium_api'",
+  startAt: '2026-07-01 00:00:00',
+  endAt: '2026-07-31 00:00:00',
+  pageSize: 1,
+};
+
+const bootstrap = loadIncrementalTournamentTrades(base);
+assert.deepStrictEqual(bootstrap.rows.map((row) => row.id), [2, 3]);
+assert.strictEqual(bootstrap.newRows, 2);
+assert.strictEqual(bootstrap.reconciledRows, 0);
+assert.strictEqual(bootstrap.cursor.last_trade_id, 3);
+assert.strictEqual(bootstrap.cursor.last_updated_at, '2026-07-03 10:00:00.000');
+
+const state = {
+  last_trade_id: bootstrap.cursor.last_trade_id,
+  last_updated_at: bootstrap.cursor.last_updated_at,
+  last_updated_trade_id: bootstrap.cursor.last_updated_trade_id,
+};
+const unchanged = loadIncrementalTournamentTrades({ ...base, state });
+assert.strictEqual(unchanged.rows.length, 0);
+assert.strictEqual(unchanged.newRows, 0);
+assert.strictEqual(unchanged.reconciledRows, 0);
+
+insert.run(300, '0', 'filled', 'ostium_api', '2026-07-04 10:00:00', '2026-07-04 10:00:00.000');
+const withNewFill = loadIncrementalTournamentTrades({ ...base, state });
+assert.deepStrictEqual(withNewFill.rows.map((row) => row.id), [5]);
+assert.strictEqual(withNewFill.newRows, 1);
+assert.strictEqual(withNewFill.cursor.last_trade_id, 5);
+
+const afterNewState = {
+  last_trade_id: withNewFill.cursor.last_trade_id,
+  last_updated_at: withNewFill.cursor.last_updated_at,
+  last_updated_trade_id: withNewFill.cursor.last_updated_trade_id,
+};
+fdb.prepare(`
+  UPDATE trade_history
+  SET pnl = '7.5', updated_at = '2026-07-05 09:00:00.000'
+  WHERE id = 2
+`).run();
+const withDelayedPnl = loadIncrementalTournamentTrades({ ...base, state: afterNewState });
+assert.deepStrictEqual(withDelayedPnl.rows.map((row) => row.id), [2]);
+assert.strictEqual(withDelayedPnl.newRows, 0);
+assert.strictEqual(withDelayedPnl.reconciledRows, 1);
+assert.strictEqual(withDelayedPnl.rows[0].pnl, '7.5');
+
+fdb.close();
+console.log('tournament trade cursor: ok');

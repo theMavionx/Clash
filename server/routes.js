@@ -16,6 +16,7 @@ const diag = require('./diag');
 const earnings = require('./earnings');
 const { MAX_SHIPS } = require('./combat_defs');
 const tradeRecon = require('./trade_reconciliation');
+const { loadIncrementalTournamentTrades } = require('./tournament_trade_sync');
 const luckyRaiderPayouts = require('./lucky_raider_payouts');
 const { broadcastToPlayer, consumePendingAgentEvents } = require('./websocket');
 const {
@@ -9568,6 +9569,7 @@ function markPlayerSeekerIfPresent(playerId, body) {
 
 router.post('/players/register', async (req, res) => {
   const { name, wallet, dex, fid } = req.body;
+  const renameRequested = req.body?.renameRequested === true || req.body?.rename_requested === true;
   const localGuestWallet = isLocalGuestWallet(wallet);
   if (wallet && rejectBlacklistedWallet(req, res, wallet, 'players.register')) return;
   if (localGuestWallet && !isLocalDevelopmentRequest(req)) {
@@ -9612,10 +9614,12 @@ router.post('/players/register', async (req, res) => {
 
     if (existing) {
       if (db.isPlayerBanned(existing)) return rejectBannedPlayer(res, existing);
-      // Optional rename on re-login (same as before, scoped to this row).
+      // Login payloads may carry a cached display name. Never interpret a
+      // stale login cache as rename intent; profile renames use PATCH
+      // /players/name, while legacy callers must opt in explicitly.
       const trimmed = normalizePlayerNameInput(name);
       const looksAutoDerived = /^player_[0-9a-f]{4,}$/i.test(trimmed);
-      if (!localGuestWallet && trimmed.length >= 2 && !looksAutoDerived && trimmed !== existing.name) {
+      if (renameRequested && !localGuestWallet && trimmed.length >= 2 && !looksAutoDerived && trimmed !== existing.name) {
         const validation = validatePlayerNameInput(trimmed);
         if (validation.error) return res.status(400).json({ error: validation.error });
         const rename = db.renamePlayer(existing.id, validation.name, {
@@ -22432,17 +22436,38 @@ function syncFuturesTournamentRows(playerId, dex, opts = {}) {
   const fdb = futuresDbReadonly();
   if (!fdb) return { ok: false, reason: 'futures db unavailable' };
   try {
+    const requestedTournamentId = Number(opts.tournamentId || opts.tournament_id);
+    const tournament = Number.isFinite(requestedTournamentId) && requestedTournamentId > 0
+      ? db.getPlayerTournamentById(playerId, requestedTournamentId)
+      : db.getPlayerActiveTournament(playerId);
+    if (!tournament?.tournament_id) {
+      return { ok: true, skipped: 'no_active_tournament' };
+    }
+    const tournamentId = Number(tournament.tournament_id);
+    const startCandidates = [cleanSqlDate(tournament.start_at), cleanSqlDate(tournament.joined_at)]
+      .filter(Boolean)
+      .sort();
+    const startAt = startCandidates[startCandidates.length - 1];
+    const endAt = cleanSqlDate(tournament.end_at) || nowSql();
+    if (!startAt) return { ok: false, reason: 'tournament sync window unavailable' };
+
     const sourceWhere = tournamentTradeSourceWhere(normalizedDex);
-    let rows = fdb.prepare(`
-      SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex
-      FROM trade_history
-      WHERE player_id = ? AND dex = ? AND status = 'filled'
-        AND ${sourceWhere}
-      ORDER BY id ASC
-      LIMIT 2000
-    `).all(playerId, normalizedDex);
-    const main = db.recordTournamentTradeRows(playerId, rows, {
-      tournamentId: opts.tournamentId || opts.tournament_id,
+    const source = 'trade_history';
+    const state = db.getTournamentTradeSyncState(tournamentId, playerId, normalizedDex, source);
+    const incremental = loadIncrementalTournamentTrades({
+      fdb,
+      playerId,
+      dex: normalizedDex,
+      sourceWhere,
+      startAt,
+      endAt,
+      state,
+      pageSize: process.env.TOURNAMENT_TRADE_SYNC_PAGE_SIZE || 500,
+      maxRows: process.env.TOURNAMENT_TRADE_SYNC_MAX_ROWS || 10_000,
+      fallbackOverlapRows: process.env.TOURNAMENT_TRADE_SYNC_FALLBACK_OVERLAP || 100,
+    });
+    const main = db.recordTournamentTradeRows(playerId, incremental.rows, {
+      tournamentId,
       source: 'trade_history',
       dex: normalizedDex,
       count: true,
@@ -22451,8 +22476,30 @@ function syncFuturesTournamentRows(playerId, dex, opts = {}) {
       // app-attributable, so it is intentionally excluded here.
       pnl: normalizedDex !== 'decibel',
     });
+    const cursor = db.setTournamentTradeSyncState({
+      tournamentId,
+      playerId,
+      dex: normalizedDex,
+      source,
+      ...incremental.cursor,
+      lastReconciledAt: nowSql(),
+    });
     const pnl = { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
-    return { ok: true, rows: rows.length, main, pnl };
+    return {
+      ok: true,
+      rows: incremental.rows.length,
+      new_rows: incremental.newRows,
+      reconciled_rows: incremental.reconciledRows,
+      bootstrap: !state,
+      updated_at_supported: incremental.updatedAtSupported,
+      cursor: cursor ? {
+        last_trade_id: Number(cursor.last_trade_id || 0),
+        last_updated_at: cursor.last_updated_at || null,
+        last_updated_trade_id: Number(cursor.last_updated_trade_id || 0),
+      } : null,
+      main,
+      pnl,
+    };
   } catch (e) {
     console.warn(`[tournament-sync ${normalizedDex}] failed for player=${String(playerId).slice(0, 8)}:`, e.message);
     return { ok: false, reason: e.message };
@@ -22493,6 +22540,7 @@ function syncFuturesTournamentRowsForParticipant(playerId, tournament, participa
 }
 
 function syncFuturesTournamentParticipants(tournament, opts = {}) {
+  const startedAt = Date.now();
   const t = tournament && typeof tournament === 'object'
     ? tournament
     : db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(parseInt(tournament, 10));
@@ -22533,42 +22581,48 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
     skipped: 0,
     by_dex: {},
   };
-  for (const participant of participants) {
-    const syncDexes = tournamentParticipantSyncDexes(t, participant);
-    if (!syncDexes.length) {
-      summary.skipped++;
-      continue;
-    }
-    for (const syncDex of syncDexes) {
-      if (!summary.by_dex[syncDex]) summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, updated: 0, dex_updated: 0, pnl_delta_usd: 0, activity_events: 0, failed: 0 };
-      summary.by_dex[syncDex].players++;
-      const result = syncFuturesTournamentRows(participant.player_id, syncDex, { tournamentId: t.id });
-      if (!result?.ok) {
-        summary.failed++;
-        summary.by_dex[syncDex].failed++;
+  // The first run bootstraps a persistent cursor for each participant. Keep
+  // that one-time write batch atomic; later runs normally process only a few
+  // new or updated fills and retain the same transaction boundary.
+  db.db.transaction(() => {
+    for (const participant of participants) {
+      const syncDexes = tournamentParticipantSyncDexes(t, participant);
+      if (!syncDexes.length) {
+        summary.skipped++;
         continue;
       }
-      const rows = Number(result.rows || 0);
-      const inserted = Number(result.main?.inserted || result.main?.credited_rows || 0);
-      const updated = Number(result.main?.updated_rows || 0);
-      const dexUpdated = Number(result.main?.dex_updated_rows || 0);
-      const pnlDelta = Number(result.main?.pnl_delta_usd || 0);
-      const activityEvents = Number(result.main?.activity_events || result.main?.credited_rows || 0);
-      summary.rows += rows;
-      summary.inserted += inserted;
-      summary.updated += updated;
-      summary.dex_updated += dexUpdated;
-      summary.pnl_delta_usd += pnlDelta;
-      summary.activity_events += activityEvents;
-      summary.by_dex[syncDex].rows += rows;
-      summary.by_dex[syncDex].inserted += inserted;
-      summary.by_dex[syncDex].updated += updated;
-      summary.by_dex[syncDex].dex_updated += dexUpdated;
-      summary.by_dex[syncDex].pnl_delta_usd += pnlDelta;
-      summary.by_dex[syncDex].activity_events += activityEvents;
+      for (const syncDex of syncDexes) {
+        if (!summary.by_dex[syncDex]) summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, updated: 0, dex_updated: 0, pnl_delta_usd: 0, activity_events: 0, failed: 0 };
+        summary.by_dex[syncDex].players++;
+        const result = syncFuturesTournamentRows(participant.player_id, syncDex, { tournamentId: t.id });
+        if (!result?.ok) {
+          summary.failed++;
+          summary.by_dex[syncDex].failed++;
+          continue;
+        }
+        const rows = Number(result.rows || 0);
+        const inserted = Number(result.main?.inserted || result.main?.credited_rows || 0);
+        const updated = Number(result.main?.updated_rows || 0);
+        const dexUpdated = Number(result.main?.dex_updated_rows || 0);
+        const pnlDelta = Number(result.main?.pnl_delta_usd || 0);
+        const activityEvents = Number(result.main?.activity_events || result.main?.credited_rows || 0);
+        summary.rows += rows;
+        summary.inserted += inserted;
+        summary.updated += updated;
+        summary.dex_updated += dexUpdated;
+        summary.pnl_delta_usd += pnlDelta;
+        summary.activity_events += activityEvents;
+        summary.by_dex[syncDex].rows += rows;
+        summary.by_dex[syncDex].inserted += inserted;
+        summary.by_dex[syncDex].updated += updated;
+        summary.by_dex[syncDex].dex_updated += dexUpdated;
+        summary.by_dex[syncDex].pnl_delta_usd += pnlDelta;
+        summary.by_dex[syncDex].activity_events += activityEvents;
+      }
     }
-  }
-  if (summary.inserted || summary.updated || summary.dex_updated || summary.failed) {
+  })();
+  summary.duration_ms = Date.now() - startedAt;
+  if (summary.inserted || summary.updated || summary.dex_updated || summary.failed || summary.duration_ms >= 1000) {
     console.log('[tournament-sync] participants', JSON.stringify(summary));
   }
   return summary;
@@ -22727,7 +22781,7 @@ router.get('/tournaments/me', auth, (req, res) => {
     WHERE tournament_id = ? AND player_id = ?
   `).get(t.id, req.player.id);
   if (me && me.left_at === null && pub.phase === 'live') {
-    const sync = syncFuturesTournamentRows(req.player.id, dex);
+    const sync = syncFuturesTournamentRows(req.player.id, dex, { tournamentId: t.id });
     if (sync?.ok && ((sync.main?.credited_rows || 0) > 0 || (sync.pnl?.credited_rows || 0) > 0)) {
       me = db.db.prepare(`
         SELECT * FROM tournament_participants
@@ -22922,7 +22976,7 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
       twitter_handle = excluded.twitter_handle,
       last_activity_at = datetime('now')
   `).run(tid, req.player.id, teamDex, rewardWallet, twitter.handle);
-  const sync = phase === 'live' ? syncFuturesTournamentRows(req.player.id, req.player.dex) : null;
+  const sync = phase === 'live' ? syncFuturesTournamentRows(req.player.id, req.player.dex, { tournamentId: tid }) : null;
   console.log(`[tournament ${tid} join] player=${req.player.name} (${req.player.dex}) phase=${phase} -> JOINED ${t.name}`);
   res.json({ ok: true, joined: true, phase, sync: sync ? { ok: !!sync.ok } : null });
 });

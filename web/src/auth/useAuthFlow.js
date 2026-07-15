@@ -41,18 +41,17 @@ import {
   useEvmContextResolver,
   usePrivyEvmCandidate,
 } from './resolvers';
+import {
+  readAccountProbeCache,
+  walletCacheKey,
+  writeAccountProbeCache,
+} from './accountProbeCache';
 import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
 const MANUAL_RECONNECT_KEY = 'clash_manual_reconnect_required';
 const REFERRAL_STORAGE_KEY = 'clash_referral_code_v1';
-// Account probe cache is scoped by wallet + DEX. The server authorizes
-// futures endpoints against the DEX stored on the active player row, so a
-// cached Pacifica probe must not be reused after the user picks Dango.
-const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_account_cache_v3';
-const ACCOUNT_PROBE_POSITIVE_TTL_MS = 24 * 60 * 60 * 1000;
-const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
 const ACCOUNT_PROBE_TIMEOUT_MS = 10000;
 const ACCOUNT_PROBE_MAX_RETRIES = 3;
 const ACCOUNT_PROBE_UI_WAIT_MS = 4500;
@@ -246,50 +245,6 @@ function hasStoredGameAuth() {
   } catch {
     return false;
   }
-}
-
-function walletCacheKey(wallet, dex) {
-  const raw = String(wallet || '').trim();
-  const w = raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
-  if (!w) return '';
-  const d = String(dex || 'account').toLowerCase();
-  return `${d}:${w}`;
-}
-
-function readAccountProbeCache(wallet, dex) {
-  try {
-    const key = walletCacheKey(wallet, dex);
-    if (!key) return undefined;
-    const raw = localStorage.getItem(ACCOUNT_PROBE_CACHE_KEY);
-    if (!raw) return undefined;
-    const all = JSON.parse(raw);
-    const entry = all?.[key];
-    if (!entry || typeof entry.ts !== 'number') return undefined;
-    const ttl = entry.exists ? ACCOUNT_PROBE_POSITIVE_TTL_MS : ACCOUNT_PROBE_NEGATIVE_TTL_MS;
-    if (Date.now() - entry.ts > ttl) {
-      delete all[key];
-      localStorage.setItem(ACCOUNT_PROBE_CACHE_KEY, JSON.stringify(all));
-      return undefined;
-    }
-    return entry.exists ? (entry.name || null) : null;
-  } catch {
-    return undefined;
-  }
-}
-
-function writeAccountProbeCache(wallet, dex, name) {
-  try {
-    const key = walletCacheKey(wallet, dex);
-    if (!key) return;
-    const raw = localStorage.getItem(ACCOUNT_PROBE_CACHE_KEY);
-    const all = raw ? JSON.parse(raw) : {};
-    all[key] = {
-      exists: !!name,
-      name: name || '',
-      ts: Date.now(),
-    };
-    localStorage.setItem(ACCOUNT_PROBE_CACHE_KEY, JSON.stringify(all));
-  } catch { /* storage disabled */ }
 }
 
 export function useAuthFlow() {

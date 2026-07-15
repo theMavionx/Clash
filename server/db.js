@@ -1391,6 +1391,25 @@ try {
 
 try {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS tournament_trade_sync_state (
+      tournament_id         INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      player_id             TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      dex                   TEXT NOT NULL,
+      source                TEXT NOT NULL DEFAULT 'trade_history',
+      last_trade_id         INTEGER NOT NULL DEFAULT 0,
+      last_updated_at       TEXT,
+      last_updated_trade_id INTEGER NOT NULL DEFAULT 0,
+      last_reconciled_at    TEXT,
+      last_synced_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (tournament_id, player_id, dex, source)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ttss_tournament
+      ON tournament_trade_sync_state(tournament_id, last_synced_at);
+  `);
+} catch (e) { console.warn('[db] tournament_trade_sync_state migration:', e.message); }
+
+try {
+  db.exec(`
     CREATE TABLE IF NOT EXISTS tournament_daily_activity (
       tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
       day_utc       TEXT NOT NULL,
@@ -3283,6 +3302,25 @@ const stmts = {
     WHERE tournament_id = ? AND source = ? AND trade_id = ?
     LIMIT 1
   `),
+  getTournamentTradeSyncState: db.prepare(`
+    SELECT tournament_id, player_id, dex, source, last_trade_id,
+           last_updated_at, last_updated_trade_id, last_reconciled_at, last_synced_at
+    FROM tournament_trade_sync_state
+    WHERE tournament_id = ? AND player_id = ? AND dex = ? AND source = ?
+    LIMIT 1
+  `),
+  upsertTournamentTradeSyncState: db.prepare(`
+    INSERT INTO tournament_trade_sync_state (
+      tournament_id, player_id, dex, source, last_trade_id,
+      last_updated_at, last_updated_trade_id, last_reconciled_at, last_synced_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(tournament_id, player_id, dex, source) DO UPDATE SET
+      last_trade_id = excluded.last_trade_id,
+      last_updated_at = excluded.last_updated_at,
+      last_updated_trade_id = excluded.last_updated_trade_id,
+      last_reconciled_at = excluded.last_reconciled_at,
+      last_synced_at = datetime('now')
+  `),
   updateTournamentTradeCreditPnl: db.prepare(`
     UPDATE tournament_trade_credits
     SET pnl_usd = ?
@@ -3992,6 +4030,60 @@ function safeUsd(v, maxAbs = 10_000_000) {
   return n;
 }
 
+function getTournamentTradeSyncState(tournamentId, playerId, dex, source = 'trade_history') {
+  const tid = Number(tournamentId);
+  const normalizedDex = String(dex || '').trim().toLowerCase();
+  const normalizedSource = String(source || 'trade_history').trim() || 'trade_history';
+  if (!Number.isFinite(tid) || tid <= 0 || !playerId || !normalizedDex) return null;
+  return stmts.getTournamentTradeSyncState.get(tid, String(playerId), normalizedDex, normalizedSource) || null;
+}
+
+function setTournamentTradeSyncState(input = {}) {
+  const tid = Number(input.tournamentId ?? input.tournament_id);
+  const playerId = String(input.playerId ?? input.player_id ?? '').trim();
+  const dex = String(input.dex || '').trim().toLowerCase();
+  const source = String(input.source || 'trade_history').trim() || 'trade_history';
+  if (!Number.isFinite(tid) || tid <= 0 || !playerId || !dex) {
+    throw new Error('invalid tournament trade sync state');
+  }
+  const lastTradeId = Math.max(0, Math.floor(Number(input.lastTradeId ?? input.last_trade_id) || 0));
+  const lastUpdatedAt = String(input.lastUpdatedAt ?? input.last_updated_at ?? '').trim() || null;
+  const lastUpdatedTradeId = Math.max(0, Math.floor(Number(input.lastUpdatedTradeId ?? input.last_updated_trade_id) || 0));
+  const lastReconciledAt = String(input.lastReconciledAt ?? input.last_reconciled_at ?? '').trim() || null;
+  stmts.upsertTournamentTradeSyncState.run(
+    tid,
+    playerId,
+    dex,
+    source,
+    lastTradeId,
+    lastUpdatedAt,
+    lastUpdatedTradeId,
+    lastReconciledAt
+  );
+  return getTournamentTradeSyncState(tid, playerId, dex, source);
+}
+
+function tournamentTradeCreditsForRows(tournamentId, source, playerId, rows) {
+  const tradeIds = [...new Set(rows
+    .map((row) => row?.id ?? row?.history_id ?? row?.trade_id)
+    .filter((tradeId) => tradeId !== undefined && tradeId !== null && tradeId !== '')
+    .map(String))];
+  const credits = new Map();
+  const chunkSize = 500;
+  for (let offset = 0; offset < tradeIds.length; offset += chunkSize) {
+    const chunk = tradeIds.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map(() => '?').join(',');
+    const matches = db.prepare(`
+      SELECT trade_id, player_id, dex, trades_count, volume_usd, pnl_usd
+      FROM tournament_trade_credits
+      WHERE tournament_id = ? AND source = ? AND player_id = ?
+        AND trade_id IN (${placeholders})
+    `).all(tournamentId, source, playerId, ...chunk);
+    for (const credit of matches) credits.set(String(credit.trade_id), credit);
+  }
+  return credits;
+}
+
 // Idempotently credits concrete futures trade_history rows into the active
 // tournament. This is separate from trading_rewards.last_trade_id because some
 // venues, especially Decibel, emit realised PnL later than the instant server
@@ -4020,6 +4112,7 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
   let insertedTradesCount = 0;
   let insertedVolumeUsd = 0;
   let insertedPnlUsd = 0;
+  const existingCredits = tournamentTradeCreditsForRows(t.tournament_id, source, playerId, rows);
 
   for (const row of rows) {
     if (row?.reward_duplicate) continue;
@@ -4031,25 +4124,44 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
     const count = creditCount ? 1 : 0;
     const volume = creditVolume ? Math.max(0, safeUsd(row.notional_usd ?? row.volume_usd ?? row.volume)) : 0;
     const pnl = creditPnl ? safeUsd(row.pnl ?? row.pnl_usd ?? row.realized_pnl ?? row.realised_pnl) : 0;
-    const r = stmts.insertTournamentTradeCredit.run(
-      t.tournament_id,
-      source,
-      String(tradeId),
-      playerId,
-      creditDex,
-      count,
-      volume,
-      pnl
-    );
-    if (!r.changes) {
-      const existing = stmts.getTournamentTradeCredit.get(t.tournament_id, source, String(tradeId));
+    const tradeKey = String(tradeId);
+    let existing = existingCredits.get(tradeKey) || null;
+    let inserted = false;
+    if (!existing) {
+      const r = stmts.insertTournamentTradeCredit.run(
+        t.tournament_id,
+        source,
+        tradeKey,
+        playerId,
+        creditDex,
+        count,
+        volume,
+        pnl
+      );
+      inserted = !!r.changes;
+      if (inserted) {
+        existingCredits.set(tradeKey, {
+          trade_id: tradeKey,
+          player_id: playerId,
+          dex: creditDex,
+          trades_count: count,
+          volume_usd: volume,
+          pnl_usd: pnl,
+        });
+      } else {
+        // The unique key is tournament/source/trade_id, so a conflicting
+        // credit may belong to another player and is intentionally ignored.
+        existing = stmts.getTournamentTradeCredit.get(t.tournament_id, source, tradeKey);
+      }
+    }
+    if (!inserted) {
       if (existing?.player_id === playerId) {
         if (normalizeTournamentCreditDex(existing.dex) !== creditDex) {
           const changedDex = stmts.updateTournamentTradeCreditDex.run(
             creditDex,
             t.tournament_id,
             source,
-            String(tradeId),
+            tradeKey,
             playerId,
             creditDex
           )?.changes || 0;
@@ -4058,10 +4170,11 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
               creditDex,
               t.tournament_id,
               source,
-              String(tradeId),
+              tradeKey,
               playerId,
               creditDex
             );
+            existing.dex = creditDex;
             dexUpdatedRows += changedDex;
           }
         }
@@ -4085,7 +4198,7 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
             targetPnl,
             t.tournament_id,
             source,
-            String(tradeId),
+            tradeKey,
             playerId
           )?.changes || 0;
           if (changed) {
@@ -4096,7 +4209,7 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
               pnlDelta,
               t.tournament_id,
               source,
-              String(tradeId),
+              tradeKey,
               playerId
             )?.changes || 0;
             if (!dailyChanged) {
@@ -4106,11 +4219,14 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
                 pnl_usd: targetPnl,
               }, {
                 source,
-                eventId: String(tradeId),
+                eventId: tradeKey,
                 dex: creditDex,
                 created_at: row.created_at,
               });
             }
+            existing.trades_count = targetCount;
+            existing.volume_usd = targetVolume;
+            existing.pnl_usd = targetPnl;
             updatedRows++;
             tradesCount += countDelta;
             volumeUsd += volumeDelta;
@@ -4127,7 +4243,7 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
       pnl_usd: pnl,
     }, {
       source,
-      eventId: String(tradeId),
+      eventId: tradeKey,
       dex: creditDex,
       created_at: row.created_at,
     });
@@ -10703,10 +10819,13 @@ module.exports = {
   // server-futures rewards-workers can credit volume / pnl into
   // tournament_participants alongside the normal flow.
   getPlayerActiveTournament,
+  getPlayerTournamentById,
   applyTrophyDelta,
   applyGoldReward,
   recordTournamentTrade,
   recordTournamentTradeRows,
+  getTournamentTradeSyncState,
+  setTournamentTradeSyncState,
   luckyRaiderAttackStatsForPlayer,
   awardTournamentDailyPoolDay,
   awardLatestClosedTournamentDailyPoolDay,

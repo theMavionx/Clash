@@ -101,7 +101,8 @@ db.exec(`
     client_order_id TEXT,
     status         TEXT NOT NULL DEFAULT 'pending',
     pnl            TEXT,
-    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
   );
 
   CREATE TABLE IF NOT EXISTS decibel_order_proofs (
@@ -161,6 +162,33 @@ try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL D
 try { db.exec("ALTER TABLE trade_history ADD COLUMN verified_source TEXT NOT NULL DEFAULT 'client'"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN fee TEXT"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN proof_json TEXT"); } catch {}
+try { db.exec("ALTER TABLE trade_history ADD COLUMN updated_at TEXT"); } catch {}
+try { db.exec("UPDATE trade_history SET updated_at = COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%f', 'now')) WHERE updated_at IS NULL"); } catch {}
+try {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_trade_history_set_updated_at_insert
+    AFTER INSERT ON trade_history
+    FOR EACH ROW
+    WHEN NEW.updated_at IS NULL
+    BEGIN
+      UPDATE trade_history
+      SET updated_at = COALESCE(NEW.created_at, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+      WHERE id = NEW.id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_trade_history_touch_updated_at
+    AFTER UPDATE ON trade_history
+    FOR EACH ROW
+    WHEN NEW.updated_at IS OLD.updated_at
+    BEGIN
+      UPDATE trade_history
+      SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+      WHERE id = NEW.id;
+    END;
+  `);
+} catch (e) {
+  console.warn('[futures.db] trade history timestamp trigger warning:', e.message);
+}
 // Dedup: trade_history.client_order_id was nullable + non-unique, so
 // client-reported opens (order_id = tx_hash) and worker-recorded closes
 // (order_id = 'closed_...') for the same underlying trade could both land,
@@ -175,6 +203,7 @@ try {
 }
 // Index for /claim-gold lookup — main server reads WHERE player_id=? AND dex=? AND id>? frequently.
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_player_dex ON trade_history(player_id, dex, id)"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_player_dex_updated ON trade_history(player_id, dex, updated_at, id)"); } catch {}
 // Ostium closes inherit routing eligibility from the matching Open fill by
 // trader + position id. Keep that lookup indexed as fill history grows.
 try {

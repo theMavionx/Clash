@@ -28,6 +28,7 @@ import { cartoonBtn } from '../styles/theme';
 import EvmWalletModal from './EvmWalletModal';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { readSoundEnabled, writeSoundEnabled } from '../lib/soundSettings';
+import { writeAccountProbeCache } from '../auth/accountProbeCache';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
@@ -411,6 +412,13 @@ function ProfileModal({ onClose }) {
         throw new Error(message);
       }
       const savedName = d?.name || nextName;
+      const cachedWallets = new Set([player?.wallet, activeWallet].filter(Boolean));
+      const cachedDexes = new Set([player?.dex, dex].filter(Boolean));
+      cachedWallets.forEach((wallet) => {
+        cachedDexes.forEach((accountDex) => {
+          writeAccountProbeCache(wallet, accountDex, savedName);
+        });
+      });
       window.dispatchEvent(new CustomEvent('clash-player-patch', {
         detail: { player_name: savedName, name: savedName },
       }));
@@ -422,7 +430,7 @@ function ProfileModal({ onClose }) {
     } finally {
       setNameBusy(false);
     }
-  }, [currentName, nameBusy, nameDraft, player?.token, sendToGodot]);
+  }, [activeWallet, currentName, dex, nameBusy, nameDraft, player?.dex, player?.token, player?.wallet, sendToGodot]);
 
   const { buildingDefs } = useBuildingDefs();
   // Use same source as HUD (PlayerInfo) — buildingDefs.th_level is authoritative.

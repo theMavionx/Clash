@@ -2935,7 +2935,13 @@ function BotsPanel({ onClose }) {
                 style={{
                   ...S.accountExchangeCard,
                   borderLeftColor: dex.borderColor || '#BBA882',
-                  ...(selected ? { ...S.accountExchangeCardActive, borderColor: dex.borderColor || '#1E88E5' } : {}),
+                  ...(selected ? {
+                    ...S.accountExchangeCardActive,
+                    borderTopColor: dex.borderColor || '#1E88E5',
+                    borderRightColor: dex.borderColor || '#1E88E5',
+                    borderBottomColor: dex.borderColor || '#1E88E5',
+                    borderLeftColor: dex.borderColor || '#1E88E5',
+                  } : {}),
                 }}
               >
                 <button
@@ -3660,6 +3666,7 @@ function BotsPanel({ onClose }) {
                   key={id}
                   type="button"
                   className="bots-focusable"
+                  aria-pressed={preset === id}
                   style={{ ...S.presetButton, ...(preset === id ? S.presetActive : {}) }}
                   onClick={() => {
                     if (id === preset) return;
@@ -3780,7 +3787,7 @@ function BotsPanel({ onClose }) {
   );
 
   return (
-    <div style={{ ...S.panel, ...(isMobile ? S.panelMobile : {}) }}>
+    <div className="bots-panel" style={{ ...S.panel, ...(isMobile ? S.panelMobile : {}) }}>
       <style>{STYLE}</style>
       <div style={S.header}>
         <div style={S.headerBrand}>
@@ -3810,6 +3817,16 @@ function BotsPanel({ onClose }) {
 export default memo(BotsPanel);
 
 const STYLE = `
+  .bots-panel button {
+    appearance: none;
+    -webkit-appearance: none;
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .bots-panel button:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(30, 136, 229, 0.32) !important;
+  }
   .bots-range {
     width: 100%;
     accent-color: #1E88E5;
@@ -3829,9 +3846,12 @@ const STYLE = `
     font: 900 14px/1.2 "Inter", "Segoe UI", sans-serif;
     padding: 0 10px;
   }
-  .bots-focusable:focus-visible,
+  .bots-focusable:focus-visible {
+    outline: none !important;
+    box-shadow: 0 0 0 3px rgba(30, 136, 229, 0.32) !important;
+  }
   .bots-step-page h2:focus-visible {
-    outline: 3px solid #1E88E5 !important;
+    outline: 3px solid #1E88E5;
     outline-offset: 3px;
   }
   .bots-segment-button {
@@ -3862,8 +3882,8 @@ const STYLE = `
   .bots-inline-setup button:focus-visible,
   .bots-inline-setup input:focus-visible,
   .bots-inline-setup select:focus-visible {
-    outline: 3px solid #1E88E5 !important;
-    outline-offset: 2px;
+    outline: none !important;
+    box-shadow: 0 0 0 3px rgba(30, 136, 229, 0.32) !important;
   }
   .bots-spinner {
     animation: botsSpin 0.8s linear infinite;
@@ -4021,7 +4041,9 @@ const S = {
     background: '#fdf8e7',
   },
   notice: {
-    border: '2px solid #43A047',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: '#43A047',
     borderRadius: 10,
     background: 'rgba(67,160,71,0.14)',
     color: '#2E7D32',
@@ -4100,7 +4122,9 @@ const S = {
     borderRadius: 8,
   },
   segmentButton: {
-    border: '1px solid transparent',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: 'transparent',
     background: 'transparent',
     color: '#77573d',
     fontSize: 12,
@@ -4505,7 +4529,9 @@ const S = {
     width: 22,
     height: 22,
     borderRadius: '50%',
-    border: '2px solid #C9B896',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: '#C9B896',
     background: '#E8DFC8',
     display: 'flex',
     alignItems: 'center',
@@ -4576,7 +4602,9 @@ const S = {
   },
   strategyCard: {
     background: '#e8dfc8',
-    border: '3px solid #d4c8b0',
+    borderWidth: 3,
+    borderStyle: 'solid',
+    borderColor: '#d4c8b0',
     borderRadius: 12,
     padding: 10,
     display: 'flex',
@@ -4747,13 +4775,15 @@ const S = {
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    border: '2px solid #BBA882',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: '#BBA882',
     borderRadius: 8,
     boxSizing: 'border-box',
   },
   exchangeMarkBare: {
     overflow: 'visible',
-    border: 0,
+    borderWidth: 0,
     borderRadius: 0,
     background: 'transparent',
   },
@@ -4836,8 +4866,15 @@ const S = {
   },
   inlineConnectionCard: {
     background: '#F4EEDC',
-    border: '1px solid #C9B896',
-    borderLeft: '4px solid #BBA882',
+    borderTopWidth: 1,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderLeftWidth: 4,
+    borderStyle: 'solid',
+    borderTopColor: '#C9B896',
+    borderRightColor: '#C9B896',
+    borderBottomColor: '#C9B896',
+    borderLeftColor: '#BBA882',
     borderRadius: 8,
     padding: 12,
     display: 'flex',
@@ -5052,7 +5089,9 @@ const S = {
     gap: 7,
   },
   presetButton: {
-    border: '2px solid #bba882',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: '#bba882',
     background: '#d4c8b0',
     borderRadius: 10,
     color: '#5C3A21',
@@ -5146,8 +5185,15 @@ const S = {
   },
   accountExchangeCard: {
     background: '#F4EEDC',
-    border: '1px solid #C9B896',
-    borderLeft: '4px solid #BBA882',
+    borderTopWidth: 1,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderLeftWidth: 4,
+    borderStyle: 'solid',
+    borderTopColor: '#C9B896',
+    borderRightColor: '#C9B896',
+    borderBottomColor: '#C9B896',
+    borderLeftColor: '#BBA882',
     borderRadius: 8,
     padding: 9,
     display: 'flex',
