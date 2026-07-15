@@ -25,7 +25,17 @@ function laterUpdateCursor(current, row) {
   const updatedAt = String(row?.updated_at || row?.created_at || '').trim();
   const id = Math.max(0, Number(row?.id) || 0);
   if (!updatedAt) return current;
-  if (!current.updatedAt || updatedAt > current.updatedAt) return { updatedAt, id };
+  if (!current.updatedAt) return { updatedAt, id };
+  const updatedAtMs = Date.parse(updatedAt.includes('T') ? updatedAt : `${updatedAt.replace(' ', 'T')}Z`);
+  const currentMs = Date.parse(current.updatedAt.includes('T')
+    ? current.updatedAt
+    : `${current.updatedAt.replace(' ', 'T')}Z`);
+  if (Number.isFinite(updatedAtMs) && Number.isFinite(currentMs)) {
+    if (updatedAtMs > currentMs) return { updatedAt, id };
+    if (updatedAtMs === currentMs && id > current.id) return { updatedAt, id };
+    return current;
+  }
+  if (updatedAt > current.updatedAt) return { updatedAt, id };
   if (updatedAt === current.updatedAt && id > current.id) return { updatedAt, id };
   return current;
 }
@@ -103,8 +113,11 @@ function loadIncrementalTournamentTrades(options = {}) {
           AND ${sourceWhere}
           AND datetime(created_at) >= datetime(?)
           AND datetime(created_at) <= datetime(?)
-          AND (updated_at > ? OR (updated_at = ? AND id > ?))
-        ORDER BY updated_at ASC, id ASC
+          AND (
+            julianday(updated_at) > julianday(?)
+            OR (julianday(updated_at) = julianday(?) AND id > ?)
+          )
+        ORDER BY julianday(updated_at) ASC, id ASC
         LIMIT ?
       `,
       paramsForCursor: (cursor) => [

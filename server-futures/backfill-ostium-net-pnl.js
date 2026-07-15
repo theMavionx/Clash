@@ -68,7 +68,7 @@ async function refreshFromApi(rows, { limit, delayMs, since }) {
 function backfillRows(rows, { dryRun }) {
   const update = db.db.prepare(`
     UPDATE trade_history
-    SET pnl = ?, fee = ?, proof_json = ?, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+    SET pnl = ?, fee = ?, proof_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE id = ?
   `);
   const summary = {

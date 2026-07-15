@@ -84,5 +84,22 @@ assert.strictEqual(withDelayedPnl.newRows, 0);
 assert.strictEqual(withDelayedPnl.reconciledRows, 1);
 assert.strictEqual(withDelayedPnl.rows[0].pnl, '7.5');
 
+// Production historically mixed SQLite timestamps (`YYYY-MM-DD HH:mm:ss`)
+// with ISO cursors (`YYYY-MM-DDTHH:mm:ssZ`). Compare them as instants, not text.
+const isoCursorState = {
+  last_trade_id: withNewFill.cursor.last_trade_id,
+  last_updated_at: '2026-07-15T12:30:09.000Z',
+  last_updated_trade_id: withNewFill.cursor.last_updated_trade_id,
+};
+fdb.prepare(`
+  UPDATE trade_history
+  SET pnl = '8.5', updated_at = '2026-07-15 14:39:56.916'
+  WHERE id = 2
+`).run();
+const withMixedTimestampFormats = loadIncrementalTournamentTrades({ ...base, state: isoCursorState });
+assert.deepStrictEqual(withMixedTimestampFormats.rows.map((row) => row.id), [2]);
+assert.strictEqual(withMixedTimestampFormats.reconciledRows, 1);
+assert.strictEqual(withMixedTimestampFormats.rows[0].pnl, '8.5');
+
 fdb.close();
 console.log('tournament trade cursor: ok');
