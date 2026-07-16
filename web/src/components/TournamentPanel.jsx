@@ -677,6 +677,7 @@ function TournamentPanel({ onClose }) {
   const phase = t?.phase || me?.phase || null;
   const preregistration = !isHistory && phase === 'preregistration';
   const live = !isHistory && phase === 'live';
+  const paused = !isHistory && phase === 'paused';
   const canJoin = !isHistory && !!me?.can_join;
   const joinBlockedByTownHall = !isHistory && me?.can_join_reason === 'town_hall_requirement_not_met';
   const joinTownHallRequirement = me?.town_hall_requirement || null;
@@ -1095,7 +1096,7 @@ function TournamentPanel({ onClose }) {
                   {t.mode === 'dex_vs_dex' && <span style={S.tag}>Player payout: {t.team_member_reward_label || 'Volume'}</span>}
                   {isHistory
                     ? <span style={S.endedTag}>ENDED</span>
-                    : <span style={preregistration ? S.phaseTagBlue : live ? S.phaseTagGreen : S.tag}>{phase || t.status}</span>
+                    : <span style={paused ? S.phaseTagPaused : preregistration ? S.phaseTagBlue : live ? S.phaseTagGreen : S.tag}>{phase || t.status}</span>
                   }
                   {Number(t.gold_boost) !== 1 && <span style={S.boostTag}>×{t.gold_boost} GOLD</span>}
                   {Number(t.seeker_gold_boost || 1) !== 1 && <span style={S.boostTag}>Seeker ×{t.seeker_gold_boost} GOLD</span>}
@@ -1115,6 +1116,16 @@ function TournamentPanel({ onClose }) {
                   {t.end_at && <span style={S.tag}>{isHistory ? 'Ended' : 'Ends'} {fmtDate(t.end_at)}</span>}
                 </div>
               </div>
+
+              {paused && (
+                <div style={S.pausedBanner} role="status">
+                  <strong style={S.pausedTitle}>Tournament paused</strong>
+                  <span style={S.pausedText}>
+                    Scoring and new registrations are temporarily stopped. Current standings remain visible.
+                  </span>
+                  {t.pause_reason && <span style={S.pausedReason}>{t.pause_reason}</span>}
+                </div>
+              )}
 
               {joined && renderRewardWalletControl()}
 
@@ -1176,7 +1187,7 @@ function TournamentPanel({ onClose }) {
 
               {!isHistory && !joined && (
                 <>
-                  {showJoinContactFields && (
+                  {showJoinContactFields && !paused && (
                     <div style={S.rewardBox}>
                       <div style={S.rewardLabel}>{needsCopRewardWallet ? 'CLASH Solana reward address' : 'Tournament registration'}</div>
                       {needsCopRewardWallet && (
@@ -1200,7 +1211,7 @@ function TournamentPanel({ onClose }) {
                     </div>
                   )}
                   <button style={{ ...S.joinBtn, opacity: canJoin ? 1 : 0.6 }} onClick={handleJoin} disabled={busy || !canJoin}>
-                    {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? (joinBlockedByTownHall ? `TH ${joinTownHallRequirement?.required || t.min_town_hall_level} REQUIRED` : 'REGISTRATION CLOSED') : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
+                    {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (paused ? 'TOURNAMENT PAUSED' : !canJoin ? (joinBlockedByTownHall ? `TH ${joinTownHallRequirement?.required || t.min_town_hall_level} REQUIRED` : 'REGISTRATION CLOSED') : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
                   </button>
                   {joinBlockedByTownHall && (
                     <TownHallRequirementBlock
@@ -1255,7 +1266,7 @@ function TournamentPanel({ onClose }) {
                 </div>
               )}
 
-              {joined && live && myStats && (
+              {joined && (live || paused) && myStats && (
                 <div style={S.myCard}>
                   <div style={S.myCardHeader}>
                     <span style={S.myCardLabel}>Your standing</span>
@@ -1277,7 +1288,9 @@ function TournamentPanel({ onClose }) {
                     />
                   </div>
                   <div style={S.freezeNote}>
-                    {isDailyPoolTournament(t) ? (
+                    {paused ? (
+                      <>Scoring is paused. Battles and trades made during this pause will not be added to the tournament.</>
+                    ) : isDailyPoolTournament(t) ? (
                       <>Score is awarded from the daily pool after each UTC day closes. Current battle, volume, and PnL activity is tracked live.</>
                     ) : t.freeze_trophies === false ? (
                       <>Main trophies keep updating while joined. Battle wins/losses also count toward this tournament.</>
@@ -1735,6 +1748,25 @@ const S = {
     fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
     background: '#dcfce7', border: '2px solid #22c55e', color: '#15803d',
     textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  phaseTagPaused: {
+    fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
+    background: '#fef3c7', border: '2px solid #f59e0b', color: '#92400e',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  pausedBanner: {
+    display: 'flex', flexDirection: 'column', gap: 3,
+    padding: '9px 10px', borderRadius: 8,
+    background: '#fef3c7', border: '2px solid #f59e0b',
+  },
+  pausedTitle: {
+    color: '#78350f', fontSize: 12, fontWeight: 900, textTransform: 'uppercase',
+  },
+  pausedText: {
+    color: '#7c5a3a', fontSize: 11, fontWeight: 700, lineHeight: 1.35,
+  },
+  pausedReason: {
+    color: '#92400e', fontSize: 10, fontWeight: 800, lineHeight: 1.3,
   },
   boostTag: {
     fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,

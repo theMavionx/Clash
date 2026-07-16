@@ -22223,6 +22223,7 @@ function tournamentPhase(t, now = nowSql()) {
   if (!t) return null;
   if (t.status === 'ended') return 'ended';
   if (t.status === 'draft') return 'draft';
+  if (t.paused_at) return 'paused';
   const start = cleanSqlDate(t.start_at);
   const end = cleanSqlDate(t.end_at);
   if (end && end <= now) return 'ended';
@@ -22342,6 +22343,10 @@ function tournamentRowToPublic(t, options = {}) {
     daily_pool_award_time_utc: dailyPoolAwardTimeUtc,
     start_at: cleanSqlDate(t.start_at),
     end_at: cleanSqlDate(t.end_at),
+    paused: !!t.paused_at,
+    paused_at: cleanSqlDate(t.paused_at),
+    pause_reason: t.paused_at ? String(t.pause_reason || '') : '',
+    resumed_at: cleanSqlDate(t.resumed_at),
     gold_boost: Number(t.gold_boost),
     seeker_gold_boost: normalizeTournamentBoost(t.seeker_gold_boost, 1),
     trophy_boost: Number(t.trophy_boost),
@@ -22549,6 +22554,9 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
   if (!t?.id) {
     return { ok: true, skipped: true };
   }
+  if (t.paused_at) {
+    return { ok: true, skipped: 'paused' };
+  }
   if (opts.liveOnly !== false && tournamentPhase(t) !== 'live') {
     return { ok: true, skipped: 'not_live' };
   }
@@ -22644,7 +22652,7 @@ router.get('/tournaments', (req, res) => {
     SELECT * FROM tournaments
     WHERE status = 'active'
       AND COALESCE(event_kind, 'standard') = 'standard'
-      AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND (paused_at IS NOT NULL OR end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND (
         replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
         OR preregistration_enabled = 1
@@ -22689,7 +22697,7 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
         OR instr(COALESCE(eligible_dexes, '[]'), '"' || ? || '"') > 0
       )
       AND (COALESCE(seeker_only, 0) = 0 OR ? = 1)
-      AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND (paused_at IS NOT NULL OR end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
     ORDER BY id DESC
     LIMIT 10
@@ -22708,7 +22716,7 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
   `).get(t.id, req.player.id);
   const storedRewardWallet = normalizeRewardSolanaWallet(me?.reward_wallet_evm);
   const hasValidRewardWallet = !needsClashRewardWallet || (!!storedRewardWallet && !db.isWalletBlacklisted(storedRewardWallet));
-  if (!needsClashRewardWallet || hasValidRewardWallet) {
+  if ((!needsClashRewardWallet || hasValidRewardWallet) && tournamentPhase(t) !== 'paused') {
     me = ensureLuckyRaiderParticipant(t, req.player);
   }
   if (me && me.left_at === null && tournamentPhase(t) === 'live' && isTournamentForDex(t, req.player.dex)) {
@@ -22765,7 +22773,7 @@ router.get('/tournaments/me', auth, (req, res) => {
         OR instr(COALESCE(eligible_dexes, '[]'), '"' || ? || '"') > 0
       )
       AND (COALESCE(seeker_only, 0) = 0 OR ? = 1)
-      AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND (paused_at IS NOT NULL OR end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND (
         replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
         OR preregistration_enabled = 1
@@ -22926,6 +22934,9 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   const now = nowSql();
   if (cleanSqlDate(t.end_at) && cleanSqlDate(t.end_at) <= now) return res.status(400).json({ error: 'tournament has ended' });
   const phase = tournamentPhase(t, now);
+  if (phase === 'paused') {
+    return res.status(409).json({ error: 'tournament is paused', reason: 'tournament_paused' });
+  }
   if (phase === 'scheduled') return res.status(400).json({ error: 'pre-registration is not open' });
   if (phase === 'preregistration' && !isTournamentPreregOpen(t, now)) {
     return res.status(400).json({ error: 'pre-registration is closed' });
@@ -24255,11 +24266,113 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.registration_closes_at,
     tid
   );
+  if (next.status !== 'active' && t.paused_at) {
+    const stoppedAt = nowSql();
+    db.db.transaction(() => {
+      db.db.prepare(`
+        UPDATE tournament_pause_periods
+           SET resumed_at = ?
+         WHERE tournament_id = ? AND resumed_at IS NULL
+      `).run(stoppedAt, tid);
+      db.db.prepare(`
+        UPDATE tournaments
+           SET paused_at = NULL, resumed_at = ?
+         WHERE id = ?
+      `).run(stoppedAt, tid);
+    })();
+  }
   if (normalizeTournamentScoringMode(t.scoring_mode, 'live') !== 'daily_pool' && next.scoring_mode === 'daily_pool') {
     try { db.seedTournamentDailyPoolBaseline(tid); } catch (e) { console.warn('[tournament daily pool seed]', e.message); }
   }
   const updated = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   res.json({ ok: true, tournament: tournamentRowToPublic(updated) });
+});
+
+router.post('/admin/tournaments/:id/pause', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const tournament = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!tournament) return res.status(404).json({ error: 'tournament not found' });
+  if (tournament.status !== 'active') {
+    return res.status(409).json({ error: 'only active tournaments can be paused' });
+  }
+  const reason = String(req.body?.reason || tournament.pause_reason || 'Paused by tournament admin').trim().slice(0, 240);
+  if (tournament.paused_at) {
+    db.db.transaction(() => {
+      db.db.prepare('UPDATE tournaments SET pause_reason = ? WHERE id = ?').run(reason, tid);
+      db.db.prepare(`
+        UPDATE tournament_pause_periods
+           SET reason = ?
+         WHERE tournament_id = ? AND resumed_at IS NULL
+      `).run(reason, tid);
+    })();
+    const unchanged = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+    return res.json({ ok: true, changed: false, tournament: tournamentRowToPublic(unchanged) });
+  }
+
+  const pausedAt = nowSql();
+  db.db.transaction(() => {
+    db.db.prepare(`
+      UPDATE tournaments
+         SET paused_at = ?, pause_reason = ?
+       WHERE id = ? AND status = 'active' AND paused_at IS NULL
+    `).run(pausedAt, reason, tid);
+    db.db.prepare(`
+      UPDATE tournament_pause_periods
+         SET resumed_at = ?
+       WHERE tournament_id = ? AND resumed_at IS NULL
+    `).run(pausedAt, tid);
+    db.db.prepare(`
+      INSERT INTO tournament_pause_periods (tournament_id, paused_at, reason)
+      VALUES (?, ?, ?)
+    `).run(tid, pausedAt, reason);
+  })();
+  tournamentParticipantSyncCache.delete(`${tid}:participants`);
+  const updated = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  res.json({ ok: true, changed: true, tournament: tournamentRowToPublic(updated) });
+});
+
+router.post('/admin/tournaments/:id/resume', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const tournament = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!tournament) return res.status(404).json({ error: 'tournament not found' });
+  if (tournament.status !== 'active') {
+    return res.status(409).json({ error: 'only active tournaments can be resumed' });
+  }
+  if (!tournament.paused_at) {
+    return res.json({ ok: true, changed: false, tournament: tournamentRowToPublic(tournament) });
+  }
+  const resumedAt = nowSql();
+  const endAt = cleanSqlDate(tournament.end_at);
+  if (endAt && endAt <= resumedAt) {
+    return res.status(409).json({
+      error: 'tournament end time has passed; extend end_at before resuming',
+      reason: 'tournament_end_time_passed',
+    });
+  }
+
+  db.db.transaction(() => {
+    const closed = db.db.prepare(`
+      UPDATE tournament_pause_periods
+         SET resumed_at = ?
+       WHERE tournament_id = ? AND resumed_at IS NULL
+    `).run(resumedAt, tid);
+    if (!closed.changes) {
+      db.db.prepare(`
+        INSERT INTO tournament_pause_periods (tournament_id, paused_at, resumed_at, reason)
+        VALUES (?, ?, ?, ?)
+      `).run(tid, cleanSqlDate(tournament.paused_at) || resumedAt, resumedAt, tournament.pause_reason || null);
+    }
+    db.db.prepare(`
+      UPDATE tournaments
+         SET paused_at = NULL, resumed_at = ?
+       WHERE id = ? AND status = 'active'
+    `).run(resumedAt, tid);
+  })();
+  tournamentParticipantSyncCache.delete(`${tid}:participants`);
+  const updated = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  res.json({ ok: true, changed: true, tournament: tournamentRowToPublic(updated) });
 });
 
 // Force-end a tournament: sets status='ended' so it disappears from
@@ -24269,15 +24382,24 @@ router.post('/admin/tournaments/:id/end', adminAuth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const endedAt = nowSql();
-  db.db.prepare(`
-    UPDATE tournaments
-       SET status = 'ended',
-           end_at = CASE
-             WHEN end_at IS NULL OR end_at = '' OR end_at > ? THEN ?
-             ELSE end_at
-           END
-     WHERE id = ?
-  `).run(endedAt, endedAt, tid);
+  db.db.transaction(() => {
+    db.db.prepare(`
+      UPDATE tournament_pause_periods
+         SET resumed_at = ?
+       WHERE tournament_id = ? AND resumed_at IS NULL
+    `).run(endedAt, tid);
+    db.db.prepare(`
+      UPDATE tournaments
+         SET status = 'ended',
+             resumed_at = CASE WHEN paused_at IS NOT NULL THEN ? ELSE resumed_at END,
+             paused_at = NULL,
+             end_at = CASE
+               WHEN end_at IS NULL OR end_at = '' OR end_at > ? THEN ?
+               ELSE end_at
+             END
+       WHERE id = ?
+    `).run(endedAt, endedAt, endedAt, tid);
+  })();
   let daily_pool_result = null;
   try {
     daily_pool_result = db.awardTournamentFinalDailyPoolDay(tid);
@@ -24291,6 +24413,9 @@ router.post('/admin/tournaments/:id/end', adminAuth, (req, res) => {
 router.post('/admin/tournaments/:id/daily-points/run', adminAuth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const tournament = db.db.prepare('SELECT paused_at FROM tournaments WHERE id = ?').get(tid);
+  if (!tournament) return res.status(404).json({ error: 'tournament not found' });
+  if (tournament.paused_at) return res.status(409).json({ error: 'tournament is paused', reason: 'tournament_paused' });
   try {
     const explicitDay = req.body?.day || req.query?.day;
     const options = {
@@ -24308,6 +24433,9 @@ router.post('/admin/tournaments/:id/daily-points/run', adminAuth, (req, res) => 
 router.post('/admin/tournaments/:id/daily-points/finalize', adminAuth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const tournament = db.db.prepare('SELECT paused_at FROM tournaments WHERE id = ?').get(tid);
+  if (!tournament) return res.status(404).json({ error: 'tournament not found' });
+  if (tournament.paused_at) return res.status(409).json({ error: 'tournament is paused', reason: 'tournament_paused' });
   try {
     const result = db.awardTournamentFinalDailyPoolDay(tid, {
       force: parseBool(req.body?.force || req.query?.force),
@@ -24678,6 +24806,7 @@ function syncTournamentAwardInputs() {
     SELECT *
       FROM tournaments
      WHERE status = 'active'
+       AND paused_at IS NULL
        AND (
          COALESCE(scoring_mode, 'live') = 'daily_pool'
          OR COALESCE(event_kind, 'standard') = 'lucky_raider'

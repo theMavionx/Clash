@@ -1557,13 +1557,26 @@ function TournamentsPanel({ tournaments, reload }) {
   const normalEvents = tournaments.filter((t) => t.event_kind !== 'lucky_raider');
   const visibleEvents = viewMode === 'lucky_raider' ? luckyEvents : normalEvents;
   const filtered = visibleEvents.filter((t) => `${t.name || ''} ${t.id} ${t.dex || ''} ${t.status || ''}`.toLowerCase().includes(query.toLowerCase()));
-  const active = tournaments.filter((t) => t.status === 'active').length;
+  const active = tournaments.filter((t) => t.status === 'active' && !t.paused_at).length;
+  const paused = tournaments.filter((t) => t.status === 'active' && !!t.paused_at).length;
   const draft = tournaments.filter((t) => t.status === 'draft').length;
   const ended = tournaments.filter((t) => t.status === 'ended').length;
 
   async function forceEnd(id) {
     if (!window.confirm(`Force-end tournament #${id}?`)) return;
     await adminPost(`/admin/tournaments/${id}/end`, {});
+    await reload();
+  }
+
+  async function pauseTournament(tournament) {
+    if (!window.confirm(`Pause tournament #${tournament.id} ${tournament.name}? Scoring and registrations will stop.`)) return;
+    await adminPost(`/admin/tournaments/${tournament.id}/pause`, { reason: 'Temporarily paused by tournament admin' });
+    await reload();
+  }
+
+  async function resumeTournament(tournament) {
+    if (!window.confirm(`Resume tournament #${tournament.id} ${tournament.name}?`)) return;
+    await adminPost(`/admin/tournaments/${tournament.id}/resume`, {});
     await reload();
   }
 
@@ -1599,6 +1612,7 @@ function TournamentsPanel({ tournaments, reload }) {
         { label: 'Tournaments', value: tournaments.length },
         { label: 'Lucky Raiders', value: luckyEvents.length, tone: 'blue' },
         { label: 'Active', value: active, tone: 'green' },
+        { label: 'Paused', value: paused, tone: 'gold' },
         { label: 'Draft', value: draft, tone: 'gold' },
         { label: 'Ended', value: ended },
       ]} />
@@ -1666,7 +1680,10 @@ function TournamentsPanel({ tournaments, reload }) {
                         return minTh > 0 ? <span className="admin-badge gold">TH {minTh}+</span> : <span className="admin-card-sub">Any TH</span>;
                       })()}
                     </td>
-                    <td><span className={'admin-badge ' + (t.status === 'active' ? 'green' : t.status === 'draft' ? 'gold' : 'off')}>{t.phase || t.status}</span></td>
+                    <td>
+                      <span className={'admin-badge ' + (t.phase === 'paused' ? 'gold' : t.status === 'active' ? 'green' : t.status === 'draft' ? 'gold' : 'off')}>{t.phase || t.status}</span>
+                      {t.paused_at && <div className="admin-card-sub">Since {fmtTime(t.paused_at)}</div>}
+                    </td>
                     <td>{t.participants || 0}<div className="admin-card-sub">{t.registered || 0} registered</div></td>
                     <td className="admin-mono">{fmtTime(t.start_at)}<br />{fmtTime(t.end_at)}</td>
                     <td><PrizeSummary tournament={t} /></td>
@@ -1674,6 +1691,8 @@ function TournamentsPanel({ tournaments, reload }) {
                       <div className="admin-filter-row">
                         <button className="admin-btn" onClick={() => setEditing(tournamentToForm(t))}>Edit</button>
                         <button className="admin-btn" onClick={() => openLeaderboard(t)}>Leaderboard</button>
+                        {t.status === 'active' && !t.paused_at && <button className="admin-btn" onClick={() => pauseTournament(t)}>Pause</button>}
+                        {t.status === 'active' && !!t.paused_at && <button className="admin-btn green" onClick={() => resumeTournament(t)}>Resume</button>}
                         {t.status !== 'ended' && <button className="admin-btn danger" onClick={() => forceEnd(t.id)}>End</button>}
                         <button className="admin-btn danger" onClick={() => deleteTournament(t.id)}>Delete</button>
                       </div>

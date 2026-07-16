@@ -1042,6 +1042,9 @@ try {
       rewards_in_cop INTEGER NOT NULL DEFAULT 0,
       seeker_only  INTEGER NOT NULL DEFAULT 0,
       status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
+      paused_at    TEXT,
+      pause_reason TEXT,
+      resumed_at   TEXT,
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_tournaments_dex_status ON tournaments(dex, status);
@@ -1136,6 +1139,9 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_gold_boost REAL NOT NULL DEFAULT 1.0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN shield_hours REAL`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN paused_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN pause_reason TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN resumed_at TEXT`); } catch {}
   try { db.exec(`UPDATE tournaments SET seeker_gold_boost = 1.0 WHERE seeker_gold_boost IS NULL OR seeker_gold_boost <= 0`); } catch {}
   try { db.exec(`UPDATE tournaments SET shield_hours = 0 WHERE shield_hours IS NOT NULL AND shield_hours < 0`); } catch {}
   try {
@@ -1198,6 +1204,9 @@ try {
             rewards_in_cop INTEGER NOT NULL DEFAULT 0,
             seeker_only  INTEGER NOT NULL DEFAULT 0,
             status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
+            paused_at    TEXT,
+            pause_reason TEXT,
+            resumed_at   TEXT,
             created_at   TEXT NOT NULL DEFAULT (datetime('now')),
             preregistration_enabled INTEGER NOT NULL DEFAULT 0,
             registration_opens_at TEXT,
@@ -1207,7 +1216,7 @@ try {
             id, event_kind, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost,
             shield_hours, freeze_trophies, min_town_hall_level, registration_require_twitter, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
             scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
-            prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
+            prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only, status, paused_at, pause_reason, resumed_at, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
             id,
@@ -1253,6 +1262,9 @@ try {
             COALESCE(rewards_in_cop, 0),
             COALESCE(seeker_only, 0),
             CASE WHEN status IN ('active','ended','draft') THEN status ELSE 'active' END,
+            paused_at,
+            pause_reason,
+            resumed_at,
             created_at,
             COALESCE(preregistration_enabled, 0),
             registration_opens_at,
@@ -1288,6 +1300,9 @@ try { db.exec(`ALTER TABLE tournaments ADD COLUMN attack_match_policy TEXT NOT N
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_gold_boost REAL NOT NULL DEFAULT 1.0`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN shield_hours REAL`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN paused_at TEXT`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN pause_reason TEXT`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN resumed_at TEXT`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN scoring_mode TEXT NOT NULL DEFAULT 'live'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_points REAL NOT NULL DEFAULT 1000`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_growth_pct REAL NOT NULL DEFAULT 0`); } catch {}
@@ -1370,6 +1385,24 @@ try {
   try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN last_activity_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN awarded_points REAL NOT NULL DEFAULT 0`); } catch {}
 } catch (e) { console.warn('[db] tournament_participants migration:', e.message); }
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tournament_pause_periods (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      paused_at     TEXT NOT NULL,
+      resumed_at    TEXT,
+      reason        TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_tournament_pause_periods_window
+      ON tournament_pause_periods(tournament_id, paused_at, resumed_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tournament_pause_periods_open
+      ON tournament_pause_periods(tournament_id)
+      WHERE resumed_at IS NULL;
+  `);
+} catch (e) { console.warn('[db] tournament_pause_periods migration:', e.message); }
 
 try {
   db.exec(`
@@ -3204,6 +3237,7 @@ const stmts = {
     WHERE p.player_id = ?
       AND p.left_at IS NULL
       AND t.status = 'active'
+      AND t.paused_at IS NULL
       AND COALESCE(t.event_kind, 'standard') = 'standard'
       AND (
         COALESCE(t.dex_scope, 'single') = 'all'
@@ -3236,6 +3270,7 @@ const stmts = {
       AND p.player_id = ?
       AND p.left_at IS NULL
       AND t.status = 'active'
+      AND t.paused_at IS NULL
       AND (t.end_at IS NULL OR replace(replace(t.end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
     LIMIT 1
@@ -3253,6 +3288,7 @@ const stmts = {
       AND COALESCE(t.mode, 'individual') = 'dex_vs_dex'
       AND COALESCE(t.attack_match_policy, 'all') != 'all'
       AND t.status = 'active'
+      AND t.paused_at IS NULL
       AND (
         COALESCE(t.dex_scope, 'single') = 'all'
         OR t.dex = pl.dex
@@ -3733,6 +3769,26 @@ function tradeInTournamentWindow(t, row) {
   return tradeMs >= startMs && tradeMs <= endMs;
 }
 
+function tournamentPausePeriods(tournamentId) {
+  if (!tournamentId) return [];
+  return db.prepare(`
+    SELECT paused_at, resumed_at
+    FROM tournament_pause_periods
+    WHERE tournament_id = ?
+    ORDER BY paused_at ASC, id ASC
+  `).all(tournamentId).map((period) => ({
+    startMs: sqlDateMs(period.paused_at) ?? -Infinity,
+    endMs: sqlDateMs(period.resumed_at) ?? Infinity,
+  }));
+}
+
+function tradeFallsInTournamentPause(periods, row) {
+  if (!periods.length) return false;
+  const tradeMs = sqlDateMs(row?.created_at);
+  if (tradeMs === null) return false;
+  return periods.some((period) => tradeMs >= period.startMs && tradeMs < period.endMs);
+}
+
 function utcDayFromMs(ms) {
   const d = new Date(Number.isFinite(ms) ? ms : Date.now());
   return d.toISOString().slice(0, 10);
@@ -4001,6 +4057,7 @@ function recordStandaloneLuckyRaiderAttackWin(playerId, eventId) {
     SELECT *
     FROM tournaments
     WHERE status = 'active'
+      AND paused_at IS NULL
       AND COALESCE(event_kind, 'standard') = 'lucky_raider'
       AND (COALESCE(seeker_only, 0) = 0 OR COALESCE(?, 0) = 1)
       AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
@@ -4121,10 +4178,12 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
   let insertedVolumeUsd = 0;
   let insertedPnlUsd = 0;
   const existingCredits = tournamentTradeCreditsForRows(t.tournament_id, source, playerId, rows);
+  const pausePeriods = tournamentPausePeriods(t.tournament_id);
 
   for (const row of rows) {
     if (row?.reward_duplicate) continue;
     if (!tradeInTournamentWindow(t, row)) continue;
+    if (tradeFallsInTournamentPause(pausePeriods, row)) continue;
     const tradeId = row?.id ?? row?.history_id ?? row?.trade_id;
     if (tradeId === undefined || tradeId === null || tradeId === '') continue;
     const creditDex = resolveTournamentCreditDex(t, row, opts);
@@ -5415,7 +5474,8 @@ function awardPendingTournamentDailyPools(options = {}) {
   const tournaments = db.prepare(`
     SELECT *
       FROM tournaments
-     WHERE status IN ('active','ended')
+     WHERE status = 'ended'
+        OR (status = 'active' AND paused_at IS NULL)
   `).all();
   const results = [];
   for (const t of tournaments) {
