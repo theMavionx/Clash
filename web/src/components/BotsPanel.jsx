@@ -43,6 +43,10 @@ import {
   observedCostPer1M,
   planAggressiveVolume,
 } from '../lib/aggressiveVolumePlan';
+import {
+  CALM_VOLUME_TARGET,
+  planCalmFromBalance,
+} from '../lib/calmVolumePlan';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import { keccak256 } from 'js-sha3';
 
@@ -110,7 +114,7 @@ const PRESETS = {
   calm: {
     label: 'Calm',
     title: 'Calm preset',
-    copy: 'Slower refresh, steady inventory. Aim for ~0 PnL or a small plus while still printing volume.',
+    copy: 'Safe sizing from your free margin. Default aim ~$100k/day volume near break-even — we show max safe params for your balance, or how much to deposit if the target needs more.',
   },
   aggressive: {
     label: 'Aggressive',
@@ -273,6 +277,10 @@ function mergeExchangeBalance(prev, incoming) {
   }
   if (!incomingHasFunds && prevHasFunds && !incoming.error) {
     return prev;
+  }
+  // Balance snapshots omit unrealized — never wipe a live portfolio uPnL with null.
+  if (incoming.unrealized == null && prev.unrealized != null) {
+    return { ...incoming, unrealized: prev.unrealized };
   }
   return incoming;
 }
@@ -474,7 +482,12 @@ const mapHandleToBot = (
   const balFmt = formatExchangeBalance(bal);
   const fills = countFillsForExchange(orderHistory, exchange);
   const inventory = formatInventory(rt);
-  const unrealizedPnl = bal?.unrealized != null ? bal.unrealized : null;
+  const unrealizedRaw = bal?.unrealized != null ? bal.unrealized : null;
+  // Stopped + flat: "—" (not $0.00) so users don't think the feed is stuck.
+  // Running / non-zero: show live exchange unrealized.
+  const unrealizedPnl = (unrealizedRaw != null && (isRunning || unrealizedRaw !== 0))
+    ? unrealizedRaw
+    : null;
 
   const hasSavedConfig = Object.prototype.hasOwnProperty.call(overrides, handle.id);
   let status = isRunning ? 'Running' : (hasSavedConfig ? 'Stopped' : 'Template');
@@ -960,6 +973,63 @@ function AggressivePlanCard({ plan, liveCostPer1M }) {
   );
 }
 
+function CalmPlanCard({ plan, onApply }) {
+  if (!plan) return null;
+  const tone = plan.hitsTarget ? '#2E7D32' : '#B45309';
+  return (
+    <div style={S.aggressivePlanCard}>
+      <span style={S.label}>Calm size from balance</span>
+      <div style={S.aggressivePlanGrid}>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Your free</span>
+          <strong style={S.aggressivePlanVal}>
+            {plan.availableUsd == null ? '—' : money(plan.availableUsd)}
+          </strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Safe trade</span>
+          <strong style={S.aggressivePlanVal}>{money(plan.tradeSizeUsd)}</strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Max position</span>
+          <strong style={S.aggressivePlanVal}>{money(plan.maxPositionUsd)}</strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Safe volume/day</span>
+          <strong style={{ ...S.aggressivePlanVal, color: tone }}>
+            {formatVolumeUsd(plan.achievableDailyVolumeUsd)}
+          </strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Target volume</span>
+          <strong style={S.aggressivePlanVal}>{formatVolumeUsd(plan.targetDailyVolumeUsd)}</strong>
+        </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Need for target</span>
+          <strong style={S.aggressivePlanVal}>{money(plan.depositForTargetUsd)}</strong>
+        </div>
+      </div>
+      <p style={S.aggressivePlanHint}>{plan.hint}</p>
+      {typeof onApply === 'function' && (
+        <button
+          type="button"
+          className="bots-focusable"
+          style={{
+            ...cartoonBtn('#43A047', '#2E7D32'),
+            width: '100%',
+            minHeight: 40,
+            fontSize: 13,
+            fontWeight: 900,
+          }}
+          onClick={onApply}
+        >
+          Apply safe Calm params
+        </button>
+      )}
+    </div>
+  );
+}
+
 function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
   const type = getBotType(bot.type);
   const pnlKnown = bot.pnl != null && Number.isFinite(Number(bot.pnl));
@@ -1173,10 +1243,14 @@ function BotsPanel({ onClose }) {
   const [tradeSize, setTradeSize] = useState(20);
   const [maxPosition, setMaxPosition] = useState(200);
   const [dailyVolumeUsd, setDailyVolumeUsd] = useState(AGGRESSIVE_VOLUME_SLIDER.defaultValue);
+  const [calmTargetVolumeUsd, setCalmTargetVolumeUsd] = useState(CALM_VOLUME_TARGET.defaultValue);
   const [preset, setPreset] = useState('calm');
   const [notice, setNotice] = useState('');
   const [totalPnl, setTotalPnl] = useState(0);
-  const [fillsCount, setFillsCount] = useState(0);
+  /** Session notional volume USD from bot tracker (UI label: Vol 24h). */
+  const [volume24hUsd, setVolume24hUsd] = useState(0);
+  /** Backend fee cost /$1M; preferred over |netPnl|/volume heuristic. */
+  const [costPer1MUsd, setCostPer1MUsd] = useState(null);
 
   const [configuredInstances, setConfiguredInstances] = useState([]);
   const [runningInstances, setRunningInstances] = useState([]);
@@ -1332,11 +1406,27 @@ function BotsPanel({ onClose }) {
     const instanceId = option.instances.length === 1 ? option.instances[0].id : '';
     setSelectedInstanceId(instanceId);
     const details = getBotConfigDetails(instanceId || exchangeId);
-    setTradeSize(details.tradeSize);
-    setMaxPosition(details.maxPosition);
-    setDailyVolumeUsd(impliedDailyVolumeFromSize(details.tradeSize));
-    setPreset(details.preset || 'calm');
-  }, [exchangeOptions]);
+    const presetId = details.preset || 'calm';
+    setPreset(presetId);
+    const bal = exchangeBalances[String(exchangeId).toLowerCase()];
+    const availRaw = bal?.available ?? bal?.equity;
+    const avail = availRaw != null && Number.isFinite(Number(availRaw)) ? Number(availRaw) : null;
+    if (presetId === 'calm') {
+      const plan = planCalmFromBalance({
+        availableUsd: avail,
+        exchangeId,
+        targetDailyVolumeUsd: CALM_VOLUME_TARGET.defaultValue,
+      });
+      setCalmTargetVolumeUsd(CALM_VOLUME_TARGET.defaultValue);
+      setTradeSize(plan.tradeSizeUsd);
+      setMaxPosition(plan.maxPositionUsd);
+      setDailyVolumeUsd(impliedDailyVolumeFromSize(plan.tradeSizeUsd));
+    } else {
+      setTradeSize(details.tradeSize);
+      setMaxPosition(details.maxPosition);
+      setDailyVolumeUsd(impliedDailyVolumeFromSize(details.tradeSize));
+    }
+  }, [exchangeOptions, exchangeBalances]);
 
   useEffect(() => {
     if (view !== 'launch') return undefined;
@@ -1402,10 +1492,29 @@ function BotsPanel({ onClose }) {
     });
   }, [preset, dailyVolumeUsd, selectedExchangeId]);
 
-  const liveCostPer1M = useMemo(
-    () => observedCostPer1M(fillsCount, mockPnl),
-    [fillsCount, mockPnl],
-  );
+  const selectedFreeMarginUsd = useMemo(() => {
+    if (!selectedExchangeId) return null;
+    const bal = exchangeBalances[String(selectedExchangeId).toLowerCase()];
+    if (!bal) return null;
+    const avail = bal.available ?? bal.equity;
+    return avail != null && Number.isFinite(Number(avail)) ? Number(avail) : null;
+  }, [selectedExchangeId, exchangeBalances]);
+
+  const calmPlan = useMemo(() => {
+    if (preset !== 'calm') return null;
+    return planCalmFromBalance({
+      availableUsd: selectedFreeMarginUsd,
+      exchangeId: selectedExchangeId,
+      targetDailyVolumeUsd: calmTargetVolumeUsd,
+    });
+  }, [preset, selectedFreeMarginUsd, selectedExchangeId, calmTargetVolumeUsd]);
+
+  const liveCostPer1M = useMemo(() => {
+    if (costPer1MUsd != null && Number.isFinite(costPer1MUsd) && volume24hUsd > 0) {
+      return costPer1MUsd;
+    }
+    return observedCostPer1M(volume24hUsd, mockPnl);
+  }, [costPer1MUsd, volume24hUsd, mockPnl]);
 
   const applyAggressiveVolume = useCallback((volumeUsd, exchangeId = selectedExchangeId) => {
     const plan = planAggressiveVolume({
@@ -1417,12 +1526,28 @@ function BotsPanel({ onClose }) {
     setMaxPosition(plan.maxPositionUsd);
     return plan;
   }, [selectedExchangeId]);
+
+  const applyCalmPlan = useCallback((opts = {}) => {
+    const plan = planCalmFromBalance({
+      availableUsd: opts.availableUsd ?? selectedFreeMarginUsd,
+      exchangeId: opts.exchangeId ?? selectedExchangeId,
+      targetDailyVolumeUsd: opts.targetDailyVolumeUsd ?? calmTargetVolumeUsd,
+    });
+    if (opts.targetDailyVolumeUsd != null) {
+      setCalmTargetVolumeUsd(opts.targetDailyVolumeUsd);
+    }
+    setTradeSize(plan.tradeSizeUsd);
+    setMaxPosition(plan.maxPositionUsd);
+    return plan;
+  }, [selectedFreeMarginUsd, selectedExchangeId, calmTargetVolumeUsd]);
+
   const resetLaunch = useCallback(() => {
     setStep('exchange');
     setSelectedType('symmetric_mm');
     setTradeSize(20);
     setMaxPosition(200);
     setDailyVolumeUsd(AGGRESSIVE_VOLUME_SLIDER.defaultValue);
+    setCalmTargetVolumeUsd(CALM_VOLUME_TARGET.defaultValue);
     setPreset('calm');
     setSelectedInstanceId('');
     setSelectedExchangeId('');
@@ -1498,6 +1623,14 @@ function BotsPanel({ onClose }) {
       const net = parseDecimalField(data.net_pnl_usd);
       setPortfolioPnl(net);
       setTotalPnl(net);
+    }
+    const vol = parseDecimalField(data.daily_volume_usd);
+    if (vol != null && vol >= 0) {
+      setVolume24hUsd(vol);
+    }
+    const cost = parseDecimalField(data.cost_per_million_usd);
+    if (cost != null && Number.isFinite(cost)) {
+      setCostPer1MUsd(cost);
     }
   }, []);
 
@@ -2312,16 +2445,16 @@ function BotsPanel({ onClose }) {
       setOverridesById(overrides || {});
       setGlobalActiveOrders(Number(activeOrders) || 0);
       if (res.data.exchange_balances) {
+        // Balance snapshots have equity/available only — do NOT hardcode
+        // unrealized=0 (that wiped live portfolio uPnL every 5s).
         applyPortfolioPayload({
           exchanges: (res.data.exchange_balances.exchanges || []).map((row) => ({
             exchange: row.exchange,
             balance: row.balance,
             balance_error: row.balance_error,
-            unrealized_pnl_usd: 0,
           })),
           total_equity_usd: res.data.exchange_balances.total_equity_usd,
           total_available_usd: res.data.exchange_balances.total_available_usd,
-          total_unrealized_pnl_usd: 0,
         });
       }
       setExpandedBotId((current) => {
@@ -2610,10 +2743,24 @@ function BotsPanel({ onClose }) {
               fetchPortfolio();
             }
           } else if (msg.type === 'pnl_snapshot') {
-            setTotalPnl(Number(msg.data?.net_pnl_usd) || 0);
-            setPortfolioPnl(Number(msg.data?.net_pnl_usd) || 0);
+            const net = Number(msg.data?.net_pnl_usd);
+            if (Number.isFinite(net)) {
+              setTotalPnl(net);
+              setPortfolioPnl(net);
+            }
+            const cost = Number(msg.data?.cost_per_million_usd);
+            if (Number.isFinite(cost)) {
+              setCostPer1MUsd(cost);
+            }
+            const vol = Number(msg.data?.daily_volume_usd);
+            if (Number.isFinite(vol) && vol >= 0) {
+              setVolume24hUsd(vol);
+            }
           } else if (msg.type === 'volume_stats') {
-            setFillsCount(Number(msg.data?.total_volume_usd_24h) || 0);
+            const vol = Number(msg.data?.total_volume_usd_24h);
+            if (Number.isFinite(vol) && vol >= 0) {
+              setVolume24hUsd(vol);
+            }
           } else if (msg.type === 'position_update') {
             fetchInstances();
             fetchPortfolio();
@@ -2744,7 +2891,7 @@ function BotsPanel({ onClose }) {
         </div>
         <div style={S.summaryCard}>
           <span style={S.metricLabel}>Vol 24h</span>
-          <strong style={S.summaryValue}>{fillsCount > 0 ? formatVolumeUsd(fillsCount) : '—'}</strong>
+          <strong style={S.summaryValue}>{volume24hUsd > 0 ? formatVolumeUsd(volume24hUsd) : '—'}</strong>
         </div>
         <div style={S.summaryCard}>
           <span style={S.metricLabel}>Cost / $1M</span>
@@ -3636,7 +3783,7 @@ function BotsPanel({ onClose }) {
             <p style={S.stepCopy}>
               {preset === 'aggressive'
                 ? 'Pick Aggressive, set daily volume — we estimate deposit, leverage, and cost per $1M.'
-                : 'Calm: set Trade Size / Max Position for steady quotes near break-even.'}
+                : 'Calm: we size Trade Size / Max Position from your free margin. Default target $100k/day — if balance is too small we show the safe volume and deposit needed.'}
             </p>
           </div>
           {selectedExchangeInstances.length > 1 && (
@@ -3673,6 +3820,9 @@ function BotsPanel({ onClose }) {
                     if (id === 'aggressive' && preset === 'calm') {
                       applyAggressiveVolume(impliedDailyVolumeFromSize(tradeSize));
                     }
+                    if (id === 'calm' && preset === 'aggressive') {
+                      applyCalmPlan({ targetDailyVolumeUsd: CALM_VOLUME_TARGET.defaultValue });
+                    }
                     setPreset(id);
                   }}
                 >
@@ -3701,12 +3851,24 @@ function BotsPanel({ onClose }) {
           ) : (
             <>
               <SliderField
+                label="Daily volume wish (Calm)"
+                min={CALM_VOLUME_TARGET.min}
+                max={CALM_VOLUME_TARGET.max}
+                step={CALM_VOLUME_TARGET.step}
+                value={calmTargetVolumeUsd}
+                defaultValue={CALM_VOLUME_TARGET.defaultValue}
+                onChange={(v) => applyCalmPlan({ targetDailyVolumeUsd: v })}
+                formatValue={formatVolumeUsd}
+                formatBound={formatVolumeUsd}
+              />
+              <CalmPlanCard plan={calmPlan} onApply={() => applyCalmPlan()} />
+              <SliderField
                 label="Trade Size"
                 min={5}
                 max={500}
                 step={5}
                 value={tradeSize}
-                defaultValue={20}
+                defaultValue={calmPlan?.tradeSizeUsd || 20}
                 onChange={setTradeSize}
               />
               <SliderField
@@ -3715,7 +3877,7 @@ function BotsPanel({ onClose }) {
                 max={5000}
                 step={50}
                 value={maxPosition}
-                defaultValue={200}
+                defaultValue={calmPlan?.maxPositionUsd || 200}
                 onChange={setMaxPosition}
               />
             </>
@@ -3763,6 +3925,9 @@ function BotsPanel({ onClose }) {
                 </>
               ) : (
                 <>
+                  <span>Volume wish <strong>{formatVolumeUsd(calmTargetVolumeUsd)}</strong></span>
+                  <span>Safe volume/day <strong>{formatVolumeUsd(calmPlan?.achievableDailyVolumeUsd || 0)}</strong></span>
+                  <span>Need for target <strong>{money(calmPlan?.depositForTargetUsd || 0)}</strong></span>
                   <span>Trade Size <strong>{money(tradeSize)}</strong></span>
                   <span>Maximum Position <strong>{money(maxPosition)}</strong></span>
                 </>
